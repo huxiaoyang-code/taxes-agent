@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>记账与报表工作台</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">记账 · 报表</div>
+    <div class="set-picker">
+      <label>账套</label>
+      <select id="accountSetSelect"></select>
+      <button id="btnNewSet" class="ghost">+ 新建账套</button>
+    </div>
+    <div class="meta" id="setMeta"></div>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="vouchers" class="active">凭证</button>
+    <button data-tab="accounts">科目</button>
+    <button data-tab="opening">期初余额</button>
+    <button data-tab="reports">报表</button>
+    <button data-tab="periods">期间</button>
+  </nav>
+
+  <main>
+    <!-- 凭证 -->
+    <section id="tab-vouchers" class="panel active">
+      <div class="row">
+        <label>期间 <input type="month" id="vPeriod" /></label>
+        <label>状态
+          <select id="vStatus"><option value="">全部</option><option value="draft">草稿</option><option value="posted">已过账</option></select>
+        </label>
+        <button id="btnLoadVouchers">查询</button>
+        <button id="btnNewVoucher" class="primary">+ 录入凭证</button>
+      </div>
+      <div id="voucherEditor" class="card hidden"></div>
+      <div id="voucherList" class="card"></div>
+    </section>
+
+    <!-- 科目 -->
+    <section id="tab-accounts" class="panel">
+      <div class="row">
+        <button id="btnAddAccount" class="primary">+ 新增科目</button>
+        <span class="hint">内置小企业会计准则科目；如需明细科目可在此新增。</span>
+      </div>
+      <div id="accountList" class="card"></div>
+    </section>
+
+    <!-- 期初 -->
+    <section id="tab-opening" class="panel">
+      <div class="row">
+        <span class="hint">期初余额为账套启用期间的期初数（借贷合计应相等）。</span>
+        <button id="btnSaveOpening" class="primary">保存期初</button>
+      </div>
+      <div id="openingList" class="card"></div>
+    </section>
+
+    <!-- 报表 -->
+    <section id="tab-reports" class="panel">
+      <div class="row">
+        <label>期间 <input type="month" id="rPeriod" /></label>
+        <label>报表
+          <select id="rKind">
+            <option value="trial-balance">科目余额表 / 试算平衡</option>
+            <option value="balance-sheet">资产负债表</option>
+            <option value="income-statement">利润表</option>
+            <option value="ledger">明细账</option>
+          </select>
+        </label>
+        <label id="rCodeWrap" class="hidden">科目 <select id="rCode"></select></label>
+        <button id="btnRunReport" class="primary">生成</button>
+        <button id="btnPrint" class="ghost">打印</button>
+      </div>
+      <div id="reportOut" class="card"></div>
+    </section>
+
+    <!-- 期间 -->
+    <section id="tab-periods" class="panel">
+      <div class="row">
+        <label>新增期间 <input type="month" id="pPeriod" /></label>
+        <button id="btnAddPeriod" class="primary">登记</button>
+        <span class="hint">结账后该期间不可再录入凭证。</span>
+      </div>
+      <div id="periodList" class="card"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
