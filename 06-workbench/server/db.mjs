@@ -75,4 +75,38 @@ CREATE TABLE IF NOT EXISTS voucher_entries (
 CREATE INDEX IF NOT EXISTS idx_vouchers_set_period ON vouchers(account_set_id, period, status);
 CREATE INDEX IF NOT EXISTS idx_entries_voucher ON voucher_entries(voucher_id);
 CREATE INDEX IF NOT EXISTS idx_entries_code ON voucher_entries(code);
+
+-- 固定资产 / 无形资产卡片
+CREATE TABLE IF NOT EXISTS asset_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'fixed',            -- fixed | intangible
+  name TEXT NOT NULL,
+  original_cost REAL NOT NULL,
+  residual_rate REAL NOT NULL DEFAULT 0.05,      -- 残值率（无形资产默认 0）
+  useful_life_months INTEGER NOT NULL,
+  start_period TEXT NOT NULL,                    -- 开始计提期间 'YYYY-MM'
+  asset_account TEXT NOT NULL,                   -- 1601 / 1701
+  accum_account TEXT NOT NULL,                   -- 1602 / 1702
+  expense_account TEXT NOT NULL DEFAULT '5602',  -- 折旧/摊销计入的费用科目
+  created_at TEXT NOT NULL
+);
+
+-- 已计提记录（防重复计提，并用于累计额）
+CREATE TABLE IF NOT EXISTS asset_depreciation_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+  asset_id INTEGER NOT NULL REFERENCES asset_cards(id) ON DELETE CASCADE,
+  period TEXT NOT NULL,
+  amount REAL NOT NULL,
+  voucher_id INTEGER,
+  created_at TEXT NOT NULL,
+  UNIQUE (account_set_id, asset_id, period)
+);
 `);
+
+// ---- 轻量迁移：老库补 vouchers.kind ----
+const voucherCols = db.prepare(`PRAGMA table_info(vouchers)`).all().map((c) => c.name);
+if (!voucherCols.includes("kind")) {
+  db.exec(`ALTER TABLE vouchers ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal'`);
+}

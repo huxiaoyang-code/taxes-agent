@@ -6,7 +6,7 @@
 |---|---|---|
 | 📊 分析归档 | `00-recon/` … `04-report/` + `REPORT.md` | REA 工具产出的证据、报告、原始脚本 |
 | 🧩 复刻方案 | `05-reconstruction/` | 从 bundle 提取的 Agent 契约 + Codex/MCP 骨架 |
-| ⚙️ 复刻工程 | `06-workbench/` | **可运行的记账 + 报表 MVP**（Node + SQLite） |
+| ⚙️ 复刻工程 | `06-workbench/` | **可运行的记账 + 报表 MVP**（Node + SQLite；含结转损益/折旧摊销/现金流量表） |
 | 📚 工程索引 | `docs/` | 代码管理索引、规范、变更日志、路线图 |
 
 > 目标站点身份：有数云（YOUSURE）· 司书财税大模型 · AI 财税工作台。
@@ -19,7 +19,7 @@
 # 记账 + 报表工作台
 cd 06-workbench
 npm start            # = node server/server.mjs  → http://127.0.0.1:8787/
-npm test             # 端到端冒烟测试（自动建临时库，不影响 data/）
+npm test             # 端到端测试 22 用例（自动建临时库，不影响 data/）
 
 # Codex / MCP 打通（工作台需先启动）
 cd 05-reconstruction/codex/mcp/finance-mcp

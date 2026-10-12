@@ -70,13 +70,33 @@ async function api(req, res, url, m) {
     if (m === "POST" && op === "post") return json(res, 200, A.postVoucher(id, vid));
     if (m === "POST" && op === "unpost") return json(res, 200, A.unpostVoucher(id, vid));
   }
-  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/reports\/(trial-balance|balance-sheet|income-statement)$/))) {
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/reports\/(trial-balance|balance-sheet|income-statement|cash-flow-statement)$/))) {
     const id = +match[1], kind = match[2], period = url.searchParams.get("period");
     if (m !== "GET") return json(res, 405, { error: "method_not_allowed" });
     if (!period) return json(res, 400, { error: "period_required" });
     if (kind === "trial-balance") return json(res, 200, A.trialBalance(id, period));
     if (kind === "balance-sheet") return json(res, 200, A.balanceSheet(id, period));
-    return json(res, 200, A.incomeStatement(id, period));
+    if (kind === "income-statement") return json(res, 200, A.incomeStatement(id, period));
+    return json(res, 200, A.cashFlowStatement(id, period));
+  }
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/carry-forward$/)) && m === "POST") {
+    const b = await readBody(req);
+    return json(res, 201, A.carryForwardProfit(+match[1], b.period, { yearEnd: !!b.yearEnd }));
+  }
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/assets$/))) {
+    const id = +match[1];
+    if (m === "GET") return json(res, 200, A.listAssetCards(id));
+    if (m === "POST") return json(res, 201, A.addAssetCard(id, await readBody(req)));
+  }
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/assets\/(\d+)$/)) && m === "DELETE") {
+    return json(res, 200, A.deleteAssetCard(+match[1], +match[2]));
+  }
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/depreciation$/)) && m === "POST") {
+    const b = await readBody(req);
+    return json(res, 201, A.generateDepreciation(+match[1], b.period));
+  }
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/depreciation-runs$/)) && m === "GET") {
+    return json(res, 200, A.listDepreciationRuns(+match[1], { period: url.searchParams.get("period") || undefined }));
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/ledger$/))) {
     const id = +match[1], code = url.searchParams.get("code"), period = url.searchParams.get("period");
@@ -107,7 +127,7 @@ async function agentTool(name, args = {}) {
       case "voucher.detail": return A.getVoucher(setId, +(args.params?.voucherId || args.voucherId));
       case "report.balance_sheet": return A.balanceSheet(setId, period);
       case "report.income_statement": return A.incomeStatement(setId, period);
-      case "report.cash_flow_statement": return { not_implemented: true, nodeId };
+      case "report.cash_flow_statement": return A.cashFlowStatement(setId, period);
       case "period_end.summary": return { periods: A.listPeriods(setId), trial_balance: A.trialBalance(setId, period) };
       default:
         if (String(nodeId).match(/^(invoice|fund|enterprise_account\.(bank|business|personnel|tax))/))
@@ -129,6 +149,14 @@ async function agentTool(name, args = {}) {
       return { accountSetId: setId, ...A.checkVoucher(setId, args.entries || []) };
     case "voucher_create":
       return A.createVoucher(setId, args);
+    case "carry_forward_profit":
+      return A.carryForwardProfit(setId, args.period, { yearEnd: !!args.yearEnd });
+    case "asset_list":
+      return A.listAssetCards(setId);
+    case "asset_create":
+      return A.addAssetCard(setId, args);
+    case "depreciation_run":
+      return A.generateDepreciation(setId, args.period);
     case "finance_task_status":
       return { status: "completed", note: "本地记账无异步任务" };
     case "update_plan":

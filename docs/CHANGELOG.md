@@ -6,9 +6,35 @@
 ## [Unreleased]
 
 ### Planned
-- 期末自动结转损益、自动计提折旧/摊销
-- 现金流量表（间接法）
-- 发票 / 申报工具对接（当前返回 `not_implemented`）
+- 辅助核算（客户/供应商/部门/项目）
+- 导入旧账（Excel）、银行流水对账
+- 打印/导出（PDF/Excel）
+- 发票 / 申报工具对接
+
+---
+
+## [0.3.0] - 2026-10-12
+
+### Added — P1 会计闭环
+- **期末结转损益** `carryForwardProfit(setId, period, {yearEnd})`
+  - 各损益科目余额结转到 `3103 本年利润`，`yearEnd=true` 再结转 `3103 → 3104`
+  - 结转凭证 `kind='carryforward'`，**不计入利润表发生额**，避免重复计算
+  - 同期重复结转被拒绝（`already_carried_forward`）
+- **固定资产折旧 / 无形资产摊销**
+  - 新增资产卡片表 `asset_cards`（直线法、残值率、使用月数、起提期间、费用科目）
+  - `generateDepreciation(setId, period)`：一键计提、生成凭证、记录 `asset_depreciation_runs`
+  - 同期幂等；提足/未到计提期自动跳过
+- **现金流量表** `cashFlowStatement(setId, period)`
+  - 直接法（按货币资金对方科目分类为经营/投资/筹资）+ 与货币资金变动勾稽
+  - 附「净利润 → 经营活动净额」的**间接法补充资料**
+- 凭证新增 `kind` 字段（`normal` / `carryforward` / `depreciation`），含老库自动迁移
+- 网页新增「资产」页签、现金流量表、「结转本期损益」按钮
+- Agent 工具新增：`carry_forward_profit`、`asset_list`、`asset_create`、`depreciation_run`；
+  `finance_query` 的 `report.cash_flow_statement` 改为真实实现
+- 端到端测试扩到 **22 例**（新增折旧、结转、现金流量表、勾稽等），全部通过
+
+### Changed
+- 资产负债表「未分配利润」= `3104 + 3103 + 尚未结转的本年损益`（兼容已结转/未结转两种状态）
 
 ---
 
@@ -50,5 +76,6 @@
   - `extract_catalog.py`、`generate_skill_stubs.py` 可复现脚本
 
 [Unreleased]: #unreleased
+[0.3.0]: #030---2026-10-12
 [0.2.0]: #020---2026-10-12
 [0.1.0]: #010---2026-10-12

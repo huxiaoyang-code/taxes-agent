@@ -19,17 +19,17 @@
 | 端到端测试 | ✅ | `06-workbench/test/smoke.test.mjs` |
 | 工程索引与规范 | ✅ | `docs/` |
 
-## P1 · 记账报表增强（下一步）
+## P1 · 记账报表增强
 
-| 项 | 优先级 | 说明 | 触点 |
-|---|---|---|---|
-| 期末自动结转损益 | 高 | 月末损益类科目结转到 3103 本年利润，自动生成凭证 | `accounting.mjs` 新增 `closePeriodWithCarryover()` |
-| 固定资产折旧 / 无形资产摊销计提 | 高 | 按卡片自动计提，生成凭证 | 新增 `assets` 表 + `depreciation.mjs` |
-| 现金流量表（间接法） | 中 | 由资产负债表/利润表 + 科目发生额推导 | `accounting.mjs` + `nodeId: report.cash_flow_statement` |
-| 辅助核算（客户/供应商/部门/项目） | 中 | 分录挂辅助维度，报表可下钻 | `voucher_entries` 加维度字段 |
-| 导入旧账（Excel） | 中 | 科目余额 + 历史凭证导入 | 对应 `legacy-book-import` 子智能体 |
-| 银行流水对账 | 中 | 导入流水、匹配、自动生成凭证 | 对应 `fund.unbooked.*` |
-| 打印/导出（PDF/Excel） | 低 | 报表另存 | `public/app.js` |
+| 项 | 优先级 | 状态 | 说明 | 触点 |
+|---|---|---|---|---|
+| 期末自动结转损益 | 高 | ✅ | 损益→3103，年末→3104；结转凭证不计入利润表 | `accounting.mjs: carryForwardProfit()` |
+| 固定资产折旧 / 无形资产摊销 | 高 | ✅ | 直线法，资产卡片 + 一键计提 + 幂等 | `accounting.mjs: generateDepreciation()`、`asset_cards` |
+| 现金流量表 | 中 | ✅ | 直接法（对方科目分类）+ 间接法补充，与货币资金勾稽 | `accounting.mjs: cashFlowStatement()` |
+| 辅助核算（客户/供应商/部门/项目） | 中 | ⬜ | 分录挂辅助维度，报表可下钻 | `voucher_entries` 加维度字段 |
+| 导入旧账（Excel） | 中 | ⬜ | 科目余额 + 历史凭证导入 | 对应 `legacy-book-import` 子智能体 |
+| 银行流水对账 | 中 | ⬜ | 导入流水、匹配、自动生成凭证 | 对应 `fund.unbooked.*` |
+| 打印/导出（PDF/Excel） | 低 | ⬜ | 报表另存 | `public/app.js` |
 
 ## P2 · 发票与申报（后期，自研或接第三方）
 
@@ -63,5 +63,5 @@
 | M1 · 证据归档 | REA 分析完成 | ✅ |
 | M2 · 契约与客户端 | Codex/MCP 打通 | ✅ |
 | M3 · 记账报表可用 | 本 MVP | ✅ |
-| M4 · 会计闭环 | P1 全部完成，可出完整月结报表 | ⬜ |
+| M4 · 会计闭环 | 结转损益 + 折旧摊销 + 现金流量表 + 试算平衡 | ✅ |
 | M5 · 财税全链路 | P2 完成 | ⬜ |

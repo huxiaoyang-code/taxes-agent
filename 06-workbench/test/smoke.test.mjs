@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * 端到端冒烟测试：独立临时库 + 随机端口，不触碰 06-workbench/data/。
- * 运行：npm test   （或 node test/smoke.test.mjs）
+ * 端到端测试：独立临时库 + 随机端口，不触碰 06-workbench/data/。
+ * 覆盖：账套/科目、期初、凭证校验与过账、报表、P1（折旧摊销/结转损益/现金流量表）、Agent 工具。
+ * 运行：npm test
  */
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -71,7 +72,7 @@ try {
     ] });
   });
 
-  await test("凭证借贷不平应被拒绝", async () => {
+  await test("凭证借贷不平被拒绝", async () => {
     await assert.rejects(
       api("POST", `/api/account-sets/${setId}/vouchers`, {
         period: "2026-01", summary: "不平衡", status: "posted",
@@ -110,7 +111,7 @@ try {
     assert.equal(tb.totals.closing_debit, 111300);
   });
 
-  await test("资产负债表平衡：资产 = 负债 + 权益", async () => {
+  await test("资产负债表平衡（计提前）", async () => {
     const bs = await api("GET", `/api/account-sets/${setId}/reports/balance-sheet?period=2026-01`);
     assert.equal(bs.balanced, true);
     assert.equal(bs.totals.assets, bs.totals.liabilities + bs.totals.equity);
@@ -123,6 +124,87 @@ try {
     assert.equal(is.current["净利润"], 8000);
   });
 
+  // ---------------- P1: 固定资产折旧 ----------------
+  let asset;
+  await test("P1 资产卡片：新增固定资产（60000 / 5% / 60 期）", async () => {
+    asset = await api("POST", `/api/account-sets/${setId}/assets`, {
+      kind: "fixed", name: "办公设备", original_cost: 60000,
+      residual_rate: 0.05, useful_life_months: 60, start_period: "2026-01",
+    });
+    assert.equal(asset.monthly, 950);
+    assert.equal(asset.depreciable, 57000);
+    assert.equal(asset.remaining, 57000);
+  });
+
+  await test("P1 计提折旧：生成凭证并记录 run", async () => {
+    const r = await api("POST", `/api/account-sets/${setId}/depreciation`, { period: "2026-01" });
+    assert.ok(r.voucher, "应生成折旧凭证");
+    assert.equal(r.voucher.total_debit, 950);
+    assert.equal(r.runs.length, 1);
+  });
+
+  await test("P1 折旧不可重复计提（同期幂等）", async () => {
+    const r = await api("POST", `/api/account-sets/${setId}/depreciation`, { period: "2026-01" });
+    assert.equal(r.voucher, null);
+  });
+
+  await test("P1 计提后利润表含折旧费用（净利 7050）", async () => {
+    const is = await api("GET", `/api/account-sets/${setId}/reports/income-statement?period=2026-01`);
+    assert.equal(is.current["管理费用"], 2950);
+    assert.equal(is.current["净利润"], 7050);
+  });
+
+  await test("P1 计提后资产负债表仍平衡", async () => {
+    const bs = await api("GET", `/api/account-sets/${setId}/reports/balance-sheet?period=2026-01`);
+    assert.equal(bs.balanced, true);
+    assert.equal(bs.totals.assets, 108350);
+  });
+
+  // ---------------- P1: 现金流量表 ----------------
+  await test("P1 现金流量表：与货币资金变动勾稽", async () => {
+    const cf = await api("GET", `/api/account-sets/${setId}/reports/cash-flow-statement?period=2026-01`);
+    assert.equal(cf.reconciles, true);
+    assert.equal(cf.totals.operating, -2000);
+    assert.equal(cf.cash.begin, 100000);
+    assert.equal(cf.cash.end, 98000);
+    assert.equal(cf.cash.change, -2000);
+    assert.equal(cf.supplement_indirect["净利润"], 7050);
+    assert.equal(cf.supplement_indirect["加_折旧与摊销"], 950);
+  });
+
+  // ---------------- P1: 期末结转损益 ----------------
+  await test("P1 结转损益：生成结转凭证并年度结转 3103→3104", async () => {
+    const r = await api("POST", `/api/account-sets/${setId}/carry-forward`, { period: "2026-01", yearEnd: true });
+    assert.ok(r.voucher, "应生成结转损益凭证");
+    assert.equal(r.voucher.kind, "carryforward");
+    assert.equal(r.profit, 7050);
+    assert.ok(r.yearEndVoucher, "应生成结转本年利润凭证");
+  });
+
+  await test("P1 结转不重复：同期再次结转被拒绝", async () => {
+    await assert.rejects(
+      api("POST", `/api/account-sets/${setId}/carry-forward`, { period: "2026-01" }),
+      /already_carried_forward/
+    );
+  });
+
+  await test("P1 结转凭证不计入利润表（净利润仍 7050）", async () => {
+    const is = await api("GET", `/api/account-sets/${setId}/reports/income-statement?period=2026-01`);
+    assert.equal(is.current["营业收入"], 10000);
+    assert.equal(is.current["净利润"], 7050);
+  });
+
+  await test("P1 结转后损益类科目余额归零，未分配利润 = 7050", async () => {
+    const tb = await api("GET", `/api/account-sets/${setId}/reports/trial-balance?period=2026-01`);
+    const pl = tb.lines.filter((l) => ["5001", "5602", "5403"].includes(l.code));
+    for (const l of pl) assert.equal(l.closing_debit + l.closing_credit, 0, `${l.code} 应归零`);
+    const bs = await api("GET", `/api/account-sets/${setId}/reports/balance-sheet?period=2026-01`);
+    assert.equal(bs.balanced, true);
+    const undistributed = bs.liabilities.find((l) => l.label === "未分配利润");
+    assert.equal(undistributed.value, 7050);
+  });
+
+  // ---------------- 期间与 Agent ----------------
   await test("结账后禁止录入凭证", async () => {
     await api("POST", `/api/account-sets/${setId}/periods`, { period: "2026-01", status: "closed" });
     await assert.rejects(
@@ -138,7 +220,14 @@ try {
     const r = await api("POST", "/agent/tools/finance_query", {
       nodeId: "report.income_statement", accountSetId: setId, period: "2026-01",
     });
-    assert.equal(r.data.current["净利润"], 8000);
+    assert.equal(r.data.current["净利润"], 7050);
+  });
+
+  await test("Agent 工具：finance_query 出现金流量表", async () => {
+    const r = await api("POST", "/agent/tools/finance_query", {
+      nodeId: "report.cash_flow_statement", accountSetId: setId, period: "2026-01",
+    });
+    assert.equal(r.data.reconciles, true);
   });
 
   await test("Agent 工具：未实现的发票返回 not_implemented", async () => {

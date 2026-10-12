@@ -150,12 +150,13 @@ export function createVoucher(setId, v = {}) {
     throw err;
   }
   const status = v.status === "posted" ? "posted" : "draft";
+  const kind = v.kind || "normal";
   const word = v.word || "记";
   const number = v.number || nextNumber(setId, period, word);
   const info = run(
-    `INSERT INTO vouchers (account_set_id, period, voucher_date, word, number, summary, status, created_at)
-     VALUES (?,?,?,?,?,?,?,?)`,
-    setId, period, v.voucher_date || `${period}-01`, word, number, v.summary || "", status, now()
+    `INSERT INTO vouchers (account_set_id, period, voucher_date, word, number, summary, status, kind, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    setId, period, v.voucher_date || `${period}-01`, word, number, v.summary || "", status, kind, now()
   );
   const vid = Number(info.lastInsertRowid);
   const ins = db.prepare(
@@ -252,7 +253,7 @@ function netForRange(setId, codes, fromPeriod, toPeriod) {
   const r = row(
     `SELECT COALESCE(SUM(e.debit),0) d, COALESCE(SUM(e.credit),0) c
        FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
-      WHERE v.account_set_id=? AND v.status='posted' AND v.period BETWEEN ? AND ?
+      WHERE v.account_set_id=? AND v.status='posted' AND v.kind<>'carryforward' AND v.period BETWEEN ? AND ?
         AND e.code IN (${ph})`,
     setId, fromPeriod, toPeriod, ...codes
   );
@@ -326,8 +327,10 @@ export function balanceSheet(setId, period) {
   const 盈余公积 = sum(["3101"]);
   const 已分配利润 = sum(["3104"]);
   const 损益科目 = listAccounts(setId).filter((a) => a.category === "损益").map((a) => a.code);
-  // 本年利润 = 贷方(收入) - 借方(成本费用) = -Σ(borrow-credit)
-  const 本年利润 = r2(-损益科目.reduce((s, c) => s + (bal.get(c)?.net || 0), 0));
+  // 未分配利润 = 利润分配 + 本年利润(3103) + 尚未结转的本年损益
+  // 尚未结转损益 = 贷方(收入) - 借方(成本费用) = -Σ(debit-credit)
+  const 未结转损益 = r2(-损益科目.reduce((s, c) => s + (bal.get(c)?.net || 0), 0));
+  const 本年利润 = r2((bal.get("3103")?.natural || 0) + 未结转损益);
   const 未分配利润 = r2(已分配利润 + 本年利润);
   const 所有者权益合计 = r2(实收资本 + 盈余公积 + 未分配利润);
 
@@ -417,5 +420,250 @@ export function generalLedger(setId, code, period) {
     code, name: acc.name, direction: acc.direction, period,
     opening: { debit: r2(o.debit), credit: r2(o.credit) },
     items,
+  };
+}
+
+// ================================================================ P1 能力
+
+const pad2 = (n) => String(n).padStart(2, "0");
+function lastDay(period) {
+  const [y, m] = period.split("-").map(Number);
+  return `${y}-${pad2(m)}-${new Date(Date.UTC(y, m, 0)).getUTCDate()}`;
+}
+function prevPeriod(period) {
+  const [y, m] = period.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 2, 1));
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
+}
+
+// ---------------------------------------------------------------- 期末结转损益
+/**
+ * 结转本期损益到 3103 本年利润；yearEnd=true 时再结转 3103 -> 3104。
+ * 结转凭证 kind='carryforward'，不计入利润表发生额，避免重复计算。
+ */
+export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
+  getAccountSet(setId);
+  ensurePeriod(setId, period);
+  if (periodStatus(setId, period) === "closed") throw new Error("period_closed");
+  if (row(`SELECT id FROM vouchers WHERE account_set_id=? AND period=? AND kind='carryforward'`, setId, period))
+    throw new Error("already_carried_forward");
+
+  const bal = accountBalances(setId, period);
+  const entries = [];
+  let revenue = 0, expense = 0;
+  for (const a of listAccounts(setId).filter((x) => x.category === "损益")) {
+    const b = bal.get(a.code);
+    if (!b || Math.abs(b.natural) < EPS) continue;
+    if (a.direction === "credit") {
+      revenue = r2(revenue + b.natural);
+      entries.push({ code: a.code, summary: "结转本期损益", debit: b.natural, credit: 0 });
+    } else {
+      expense = r2(expense + b.natural);
+      entries.push({ code: a.code, summary: "结转本期损益", debit: 0, credit: b.natural });
+    }
+  }
+  if (!entries.length) return { voucher: null, note: "本期无损益发生额" };
+
+  const profit = r2(revenue - expense);
+  entries.push(profit >= 0
+    ? { code: "3103", summary: "结转本期损益", debit: 0, credit: profit }
+    : { code: "3103", summary: "结转本期损益", debit: -profit, credit: 0 });
+
+  const voucher = createVoucher(setId, {
+    period, voucher_date: lastDay(period), summary: "结转本期损益",
+    kind: "carryforward", status: "posted", entries,
+  });
+
+  let yearEndVoucher = null;
+  if (yearEnd) {
+    const p3103 = accountBalances(setId, period).get("3103")?.natural || 0;
+    if (Math.abs(p3103) >= EPS) {
+      const es = p3103 > 0
+        ? [{ code: "3103", debit: p3103, credit: 0, summary: "结转本年利润" },
+           { code: "3104", debit: 0, credit: p3103, summary: "结转本年利润" }]
+        : [{ code: "3103", debit: 0, credit: -p3103, summary: "结转本年利润" },
+           { code: "3104", debit: -p3103, credit: 0, summary: "结转本年利润" }];
+      yearEndVoucher = createVoucher(setId, {
+        period, voucher_date: lastDay(period), summary: "结转本年利润",
+        kind: "carryforward", status: "posted", entries: es,
+      });
+    }
+  }
+  return { voucher, yearEndVoucher, revenue, expense, profit };
+}
+
+// ---------------------------------------------------------------- 资产卡片
+export function listAssetCards(setId) {
+  getAccountSet(setId);
+  return rows(
+    `SELECT c.*, COALESCE((SELECT SUM(r.amount) FROM asset_depreciation_runs r WHERE r.asset_id=c.id),0) AS accumulated
+       FROM asset_cards c WHERE c.account_set_id=? ORDER BY c.id`, setId
+  ).map((c) => ({
+    ...c,
+    depreciable: r2(c.original_cost * (1 - c.residual_rate)),
+    monthly: r2((c.original_cost * (1 - c.residual_rate)) / c.useful_life_months),
+    remaining: r2(c.original_cost * (1 - c.residual_rate) - c.accumulated),
+    months_done: row(`SELECT COUNT(*) n FROM asset_depreciation_runs WHERE asset_id=?`, c.id).n,
+  }));
+}
+
+export function addAssetCard(setId, c = {}) {
+  getAccountSet(setId);
+  const kind = c.kind === "intangible" ? "intangible" : "fixed";
+  const name = String(c.name || "").trim();
+  const cost = Number(c.original_cost);
+  const life = parseInt(c.useful_life_months, 10);
+  if (!name) throw new Error("name_required");
+  if (!(cost > 0)) throw new Error("original_cost_invalid");
+  if (!(life >= 1)) throw new Error("useful_life_months_invalid");
+  const start_period = String(c.start_period || "");
+  if (!/^\d{4}-\d{2}$/.test(start_period)) throw new Error("start_period_invalid");
+  const residual = c.residual_rate === undefined ? (kind === "fixed" ? 0.05 : 0) : Number(c.residual_rate);
+  if (residual < 0 || residual >= 1) throw new Error("residual_rate_invalid");
+  const asset_account = c.asset_account || (kind === "fixed" ? "1601" : "1701");
+  const accum_account = c.accum_account || (kind === "fixed" ? "1602" : "1702");
+  const expense_account = c.expense_account || "5602";
+  for (const code of [asset_account, accum_account, expense_account]) {
+    if (!row(`SELECT 1 FROM accounts WHERE account_set_id=? AND code=?`, setId, code))
+      throw new Error(`account_not_found:${code}`);
+  }
+  const info = run(
+    `INSERT INTO asset_cards (account_set_id, kind, name, original_cost, residual_rate, useful_life_months,
+       start_period, asset_account, accum_account, expense_account, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    setId, kind, name, r2(cost), residual, life, start_period, asset_account, accum_account, expense_account, now()
+  );
+  return listAssetCards(setId).find((x) => x.id === Number(info.lastInsertRowid));
+}
+
+export function deleteAssetCard(setId, id) {
+  getAccountSet(setId);
+  const used = row(`SELECT COUNT(*) n FROM asset_depreciation_runs WHERE account_set_id=? AND asset_id=?`, setId, id).n;
+  if (used) throw new Error("asset_has_depreciation_runs");
+  run(`DELETE FROM asset_cards WHERE account_set_id=? AND id=?`, setId, id);
+  return { deleted: id };
+}
+
+export function listDepreciationRuns(setId, { period } = {}) {
+  getAccountSet(setId);
+  const where = ["account_set_id=?"]; const args = [setId];
+  if (period) { where.push("period=?"); args.push(period); }
+  return rows(`SELECT * FROM asset_depreciation_runs WHERE ${where.join(" AND ")} ORDER BY period DESC, id`, ...args);
+}
+
+// ---------------------------------------------------------------- 折旧/摊销计提
+/** 按直线法对全部资产卡计提指定期间折旧/摊销，生成一张凭证并记录 runs。 */
+export function generateDepreciation(setId, period) {
+  getAccountSet(setId);
+  ensurePeriod(setId, period);
+  if (periodStatus(setId, period) === "closed") throw new Error("period_closed");
+  const cards = rows(`SELECT * FROM asset_cards WHERE account_set_id=? ORDER BY id`, setId);
+  const entries = [];
+  const pending = [];
+  for (const c of cards) {
+    if (c.start_period > period) continue;
+    if (row(`SELECT 1 FROM asset_depreciation_runs WHERE account_set_id=? AND asset_id=? AND period=?`, setId, c.id, period))
+      continue;
+    const depreciable = r2(c.original_cost * (1 - c.residual_rate));
+    const monthly = r2(depreciable / c.useful_life_months);
+    const done = r2(row(`SELECT COALESCE(SUM(amount),0) s FROM asset_depreciation_runs WHERE asset_id=?`, c.id).s);
+    const remaining = r2(depreciable - done);
+    if (remaining <= EPS) continue;
+    const amount = Math.min(monthly, remaining);
+    const label = c.kind === "fixed" ? "折旧" : "摊销";
+    entries.push({ code: c.expense_account, summary: `计提${label}-${c.name}`, debit: amount, credit: 0 });
+    entries.push({ code: c.accum_account, summary: `计提${label}-${c.name}`, debit: 0, credit: amount });
+    pending.push({ asset_id: c.id, amount });
+  }
+  if (!entries.length) return { voucher: null, runs: [], note: "本期无需计提（已提足或未到计提期）" };
+  const voucher = createVoucher(setId, {
+    period, voucher_date: lastDay(period), summary: "计提折旧与摊销",
+    kind: "depreciation", status: "posted", entries,
+  });
+  const ins = db.prepare(
+    `INSERT INTO asset_depreciation_runs (account_set_id, asset_id, period, amount, voucher_id, created_at)
+     VALUES (?,?,?,?,?,?)`
+  );
+  for (const p of pending) ins.run(setId, p.asset_id, period, p.amount, voucher.id, now());
+  return { voucher, runs: pending };
+}
+
+// ---------------------------------------------------------------- 现金流量表
+/**
+ * 现金流量表：以货币资金科目的对方科目分类（经营/投资/筹资），
+ * 并附「净利润 -> 经营活动净额」的间接法补充资料。
+ */
+export function cashFlowStatement(setId, period) {
+  getAccountSet(setId);
+  if (!/^\d{4}-\d{2}$/.test(String(period || ""))) throw new Error("period_invalid");
+  const CASH = new Set(["1001", "1002", "1012"]);
+  const classify = (code) => {
+    if (/^(1101|1501|1511|1601|1602|1604|1606|1701|1702|1801)/.test(code)) return "investing";
+    if (/^(2001|2231|2232|2501|2701|3001|3002|3101|3103|3104)/.test(code)) return "financing";
+    return "operating";
+  };
+  const names = new Map(listAccounts(setId).map((a) => [a.code, a.name]));
+  const bucket = { operating: new Map(), investing: new Map(), financing: new Map() };
+
+  for (const v of rows(
+    `SELECT id FROM vouchers WHERE account_set_id=? AND status='posted' AND kind<>'carryforward' AND period=?`,
+    setId, period)) {
+    const es = rows(`SELECT code, debit, credit FROM voucher_entries WHERE voucher_id=?`, v.id);
+    let cashDelta = 0;
+    const others = [];
+    for (const e of es) {
+      if (CASH.has(e.code)) cashDelta += e.debit - e.credit;
+      else others.push(e);
+    }
+    if (Math.abs(cashDelta) < EPS) continue;
+    const othersMag = others.reduce((s, e) => s + Math.abs(e.debit) + Math.abs(e.credit), 0);
+    if (othersMag < EPS) continue;
+    for (const e of others) {
+      const mag = Math.abs(e.debit) + Math.abs(e.credit);
+      const part = cashDelta * (mag / othersMag);
+      const cat = classify(e.code);
+      bucket[cat].set(e.code, r2((bucket[cat].get(e.code) || 0) + part));
+    }
+  }
+
+  const toLines = (cat) => [...bucket[cat].entries()]
+    .filter(([, v]) => Math.abs(v) >= EPS)
+    .map(([code, value]) => ({ code, name: names.get(code) || code, value }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const operating = toLines("operating"), investing = toLines("investing"), financing = toLines("financing");
+  const sum = (a) => r2(a.reduce((s, l) => s + l.value, 0));
+  const opT = sum(operating), inT = sum(investing), fiT = sum(financing), net = r2(opT + inT + fiT);
+
+  const balEnd = accountBalances(setId, period);
+  const balBegin = accountBalances(setId, prevPeriod(period));
+  const cashAt = (bal) => r2(["1001", "1002", "1012"].reduce((s, c) => s + (bal.get(c)?.natural || 0), 0));
+  const cash_begin = cashAt(balBegin), cash_end = cashAt(balEnd);
+
+  const is = incomeStatement(setId, period);
+  const dep = r2(row(
+    `SELECT COALESCE(SUM(e.credit),0) c FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
+      WHERE v.account_set_id=? AND v.status='posted' AND v.kind<>'carryforward' AND v.period=?
+        AND e.code IN ('1602','1702')`, setId, period).c);
+  const natSum = (bal, codes) => r2(codes.reduce((s, c) => s + (bal.get(c)?.natural || 0), 0));
+  const RECV = ["1121", "1122", "1123", "1131", "1132", "1221"];
+  const INV = ["1401", "1402", "1403", "1405", "1408", "1411"];
+  const PAY = ["2201", "2202", "2203", "2211", "2221", "2231", "2232", "2241"];
+  const dRecv = r2(natSum(balEnd, RECV) - natSum(balBegin, RECV));
+  const dInv = r2(natSum(balEnd, INV) - natSum(balBegin, INV));
+  const dPay = r2(natSum(balEnd, PAY) - natSum(balBegin, PAY));
+
+  return {
+    period, method: "直接法（按对方科目分类）",
+    operating, investing, financing,
+    totals: { operating: opT, investing: inT, financing: fiT, net_increase: net },
+    cash: { begin: cash_begin, end: cash_end, change: r2(cash_end - cash_begin) },
+    reconciles: Math.abs(net - (cash_end - cash_begin)) < EPS,
+    supplement_indirect: {
+      净利润: is.current["净利润"],
+      加_折旧与摊销: dep,
+      减_经营性应收的增加: dRecv,
+      减_存货的增加: dInv,
+      加_经营性应付的增加: dPay,
+      经营活动产生的现金流量净额: opT,
+    },
   };
 }

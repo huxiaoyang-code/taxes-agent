@@ -43,8 +43,8 @@ async function selectSet() {
   SET = SET_ID ? await api(`/api/account-sets/${SET_ID}`) : null;
   ACCOUNTS = SET_ID ? await api(`/api/account-sets/${SET_ID}/accounts`) : [];
   $("#setMeta").textContent = SET ? `启用期间 ${SET.start_period} · ${SET.accounting_standard}` : "请先新建账套";
-  for (const id of ["#vPeriod", "#rPeriod"]) { const el = $(id); if (!el.value) el.value = SET?.start_period || thisMonth(); }
-  renderAccounts(); renderOpening(); await loadVouchers(); renderPeriods();
+  for (const id of ["#vPeriod", "#rPeriod", "#aPeriod", "#pPeriod"]) { const el = $(id); if (!el.value) el.value = SET?.start_period || thisMonth(); }
+  renderAccounts(); renderOpening(); await loadVouchers(); renderPeriods(); await renderAssets();
   fillCodeSelect();
 }
 function newSetDialog() {
@@ -209,6 +209,58 @@ function openEditor(v) {
   recalc();
 }
 
+// ------------------------------------------------------------------ 资产
+async function renderAssets() {
+  if (!SET_ID) return $("#assetList").innerHTML = "";
+  const list = await api(`/api/account-sets/${SET_ID}/assets`);
+  $("#assetList").innerHTML = !list.length ? `<p class="hint">暂无资产卡片</p>` :
+    `<table><thead><tr><th>ID</th><th>类型</th><th>名称</th><th class="num">原值</th><th class="num">残值率</th>
+      <th class="num">月计提</th><th class="num">已提</th><th class="num">剩余</th><th>起提</th><th>操作</th></tr></thead><tbody>
+      ${list.map((a) => `<tr><td>${a.id}</td><td>${a.kind === "fixed" ? "固定资产" : "无形资产"}</td><td>${esc(a.name)}</td>
+        <td class="num">${money(a.original_cost)}</td><td class="num">${(a.residual_rate * 100).toFixed(0)}%</td>
+        <td class="num">${money(a.monthly)}</td><td class="num">${money(a.accumulated)}</td><td class="num">${money(a.remaining)}</td>
+        <td>${a.start_period}</td><td><button class="danger" data-del="${a.id}">删除</button></td></tr>`).join("")}</tbody></table>`;
+  $("#assetList").onclick = guard(async (ev) => {
+    const b = ev.target.closest("button[data-del]"); if (!b) return;
+    if (!confirm("确认删除该资产卡片？")) return;
+    await api(`/api/account-sets/${SET_ID}/assets/${b.dataset.del}`, { method: "DELETE" });
+    await renderAssets(); toast("已删除");
+  });
+  await renderDepRuns();
+}
+async function renderDepRuns() {
+  if (!SET_ID) return;
+  const runs = await api(`/api/account-sets/${SET_ID}/depreciation-runs`);
+  $("#depRunList").innerHTML = !runs.length ? "" :
+    `<h4>计提记录</h4><table><thead><tr><th>期间</th><th>资产ID</th><th class="num">金额</th><th>凭证ID</th></tr></thead><tbody>
+     ${runs.slice(0, 60).map((r) => `<tr><td>${r.period}</td><td>${r.asset_id}</td><td class="num">${money(r.amount)}</td><td>${r.voucher_id ?? ""}</td></tr>`).join("")}</tbody></table>`;
+}
+function addAssetDialog() {
+  if (!SET_ID) return toast("请先新建账套", true);
+  const d = document.createElement("dialog");
+  d.innerHTML = `<h3>新增资产</h3>
+    <div class="row"><label>类型 <select id="asKind"><option value="fixed">固定资产</option><option value="intangible">无形资产</option></select></label>
+      <label>名称 <input id="asName" /></label></div>
+    <div class="row"><label>原值 <input type="number" step="0.01" id="asCost" /></label>
+      <label>残值率 <input type="number" step="0.01" id="asResidual" value="0.05" /></label>
+      <label>使用月数 <input type="number" id="asLife" value="60" /></label></div>
+    <div class="row"><label>起提期间 <input type="month" id="asStart" value="${$("#aPeriod").value || SET.start_period}" /></label>
+      <label>费用科目 <select id="asExpense"></select></label></div>
+    <div class="row" style="justify-content:flex-end"><button id="asCancel">取消</button><button id="asOk" class="primary">新增</button></div>`;
+  document.body.appendChild(d); d.showModal();
+  $("#asExpense", d).innerHTML = ACCOUNTS.filter((a) => a.category === "损益")
+    .map((a) => `<option value="${a.code}">${a.code} ${esc(a.name)}</option>`).join("");
+  $("#asExpense", d).value = "5602";
+  $("#asCancel", d).onclick = () => d.close(); d.addEventListener("close", () => d.remove());
+  $("#asOk", d).onclick = guard(async () => {
+    await api(`/api/account-sets/${SET_ID}/assets`, { method: "POST", body: {
+      kind: $("#asKind", d).value, name: $("#asName", d).value.trim(), original_cost: Number($("#asCost", d).value),
+      residual_rate: Number($("#asResidual", d).value), useful_life_months: Number($("#asLife", d).value),
+      start_period: $("#asStart", d).value, expense_account: $("#asExpense", d).value } });
+    d.close(); await renderAssets(); toast("资产卡片已新增");
+  });
+}
+
 // ------------------------------------------------------------------ 报表
 function fillCodeSelect() { $("#rCode").innerHTML = ACCOUNTS.map((a) => `<option value="${a.code}">${a.code} ${esc(a.name)}</option>`).join(""); }
 async function runReport() {
@@ -243,6 +295,25 @@ async function runReport() {
     $("#reportOut").innerHTML = `<h3>资产负债表 · ${period} ${d.balanced ? "" : '<span style="color:#d03050">（不平衡，请检查期初/凭证）</span>'}</h3>
       <div class="two-col"><table><thead><tr><th>资产</th><th class="num">期末余额</th></tr></thead><tbody>${rowsOf(d.assets)}</tbody></table>
       <table><thead><tr><th>负债和所有者权益</th><th class="num">期末余额</th></tr></thead><tbody>${rowsOf(d.liabilities)}</tbody></table></div>`;
+    return;
+  }
+  if (kind === "cash-flow-statement") {
+    const rowsOf = (arr) => arr.map((l) => `<tr><td>${esc(l.code)} ${esc(l.name)}</td><td class="num">${money(l.value)}</td></tr>`).join("");
+    const sec = (title, arr, total) => `<tr class="strong"><td colspan="2">${title}</td></tr>${rowsOf(arr)}
+      <tr class="total"><td>小计</td><td class="num">${money(total)}</td></tr>`;
+    $("#reportOut").innerHTML = `<h3>现金流量表 · ${period} · ${esc(d.method)}${d.reconciles ? "" : ' <span style="color:#d03050">（与货币资金变动不平）</span>'}</h3>
+      <div class="two-col">
+        <table><thead><tr><th>项目</th><th class="num">金额</th></tr></thead><tbody>
+          ${sec("一、经营活动产生的现金流量", d.operating, d.totals.operating)}
+          ${sec("二、投资活动产生的现金流量", d.investing, d.totals.investing)}
+          ${sec("三、筹资活动产生的现金流量", d.financing, d.totals.financing)}
+          <tr class="total"><td>四、现金及现金等价物净增加额</td><td class="num">${money(d.totals.net_increase)}</td></tr>
+          <tr><td>期初现金及现金等价物余额</td><td class="num">${money(d.cash.begin)}</td></tr>
+          <tr><td>期末现金及现金等价物余额</td><td class="num">${money(d.cash.end)}</td></tr>
+        </tbody></table>
+        <table><thead><tr><th>补充资料（间接法）</th><th class="num">金额</th></tr></thead><tbody>
+          ${Object.entries(d.supplement_indirect).map(([k, v]) => `<tr><td>${esc(k.replace(/_/g, "："))}</td><td class="num">${money(v)}</td></tr>`).join("")}
+        </tbody></table></div>`;
     return;
   }
   const R = (label, k) => `<tr><td>${label}</td><td class="num">${money(d.current[k])}</td><td class="num">${money(d.ytd[k])}</td></tr>`;
@@ -282,6 +353,19 @@ $("#btnNewSet").onclick = newSetDialog;
 $("#btnLoadVouchers").onclick = guard(loadVouchers);
 $("#btnNewVoucher").onclick = () => { if (!SET_ID) return toast("请先新建账套", true); openEditor(null); };
 $("#btnAddAccount").onclick = addAccountDialog;
+$("#btnAddAsset").onclick = addAssetDialog;
+$("#btnDepreciate").onclick = guard(async () => {
+  const p = $("#aPeriod").value; if (!p) return toast("请选择计提期间", true);
+  const r = await api(`/api/account-sets/${SET_ID}/depreciation`, { method: "POST", body: { period: p } });
+  await renderAssets(); await loadVouchers();
+  toast(r.voucher ? `已计提，凭证 记-${r.voucher.number}` : (r.note || "无计提"));
+});
+$("#btnCarryForward").onclick = guard(async () => {
+  const p = $("#pPeriod").value; if (!p) return toast("请选择期间", true);
+  const r = await api(`/api/account-sets/${SET_ID}/carry-forward`, { method: "POST", body: { period: p } });
+  await loadVouchers(); await renderPeriods();
+  toast(r.voucher ? `已结转损益，净利润 ${money(r.profit)}` : (r.note || "无损益"));
+});
 $("#btnSaveOpening").onclick = saveOpening;
 $("#btnRunReport").onclick = guard(runReport);
 $("#btnPrint").onclick = () => window.print();
