@@ -1,0 +1,173 @@
+{
+  "source_bundle": "02-scripts/work/index-yoSd2Nx7.js",
+  "source_bundle_sha256": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e",
+  "runtime": "OpenAI Codex app-server (WebSocket subprotocol codex-runtime-ticket.<ticket>)",
+  "runtime_protocol": {
+    "ticket_endpoint": "POST /api/agent/runtime-ticket  (override: window.__WEB_CHAT_CONFIG__.runtimeTicketUrl)",
+    "transport": "WebSocket, subprotocol `codex-runtime-ticket.${ticket}`",
+    "client_error_type": "CodexAppServerRpcError",
+    "native_item_types": [
+      "userMessage",
+      "agentMessage",
+      "reasoning",
+      "plan",
+      "commandExecution",
+      "fileChange",
+      "mcpToolCall",
+      "dynamicToolCall",
+      "collabAgentToolCall",
+      "subAgentActivity",
+      "webSearch",
+      "imageView",
+      "imageGeneration",
+      "contextCompaction",
+      "sleep",
+      "enteredReviewMode",
+      "exitedReviewMode",
+      "hookPrompt",
+      "functionCallOutput"
+    ],
+    "native_error_codes": [
+      "app_server_unavailable",
+      "app_server_closed",
+      "thread_bridge_closed",
+      "thread_bridge_disconnected",
+      "thread_bridge_unavailable",
+      "thread_bridge_stalled"
+    ],
+    "delegation_envelope": "<codex_delegation><source_thread_id>..</source_thread_id><input>..</input></codex_delegation>",
+    "subagent_spawn_kind": "subAgentThreadSpawn (parent_thread_id / thread_spawn)",
+    "approval_kind": "codex_approval_kind=mcp_tool_call; elicitation mode openai/form with requestedSchema",
+    "model_api": "OpenAI Responses API (/v1/responses, api.openai.com)",
+    "sentry_release": "codex2-verified-release-20261011 / service codex2-web"
+  },
+  "subagents": [
+    {
+      "runtimeName": "legacy-book-import",
+      "displayName": "导入旧账",
+      "description": "导入 Excel 旧账、历史凭证、科目余额和期初余额，并支持账套初始化。"
+    },
+    {
+      "runtimeName": "tax-filing",
+      "displayName": "全税种申报",
+      "description": "处理增值税、附加税、企业所得税、印花税、年度申报及申报状态。"
+    },
+    {
+      "runtimeName": "individual-income-tax-filing",
+      "displayName": "个税申报",
+      "description": "完成人员报送、工资薪金个税计算、申报、缴款及申报状态查询。"
+    },
+    {
+      "runtimeName": "bookkeeping",
+      "displayName": "智能核算",
+      "description": "处理原始单据入账、凭证、工资与固定资产核算，以及期末结转和结账。"
+    },
+    {
+      "runtimeName": "invoice-issuing",
+      "displayName": "智能开票",
+      "description": "提取并校验开票信息，选择税收分类编码，并按确认后的完整参数正式开票。"
+    }
+  ],
+  "dynamic_tools": {
+    "account_context": "核对账套和期间",
+    "finance_context_resolve": "核对账套和期间",
+    "finance_query": "查询财务数据",
+    "finance_query_catalog": "查找财务查询能力",
+    "finance_task_status": "查询财税任务结果",
+    "invoice_collect": "采集发票",
+    "invoice_file": "获取发票文件",
+    "invoice_issue": "开具发票",
+    "invoice_issue_result": "查询开票结果",
+    "invoice_precheck": "执行开票预检",
+    "invoice_red_apply": "申请红字信息表",
+    "invoice_red_issue": "开具红字发票",
+    "invoice_red_status": "查询红字状态",
+    "invoice_tax_code": "筛选税收分类编码",
+    "declaration_query": "查询申报状态",
+    "exec": "运行命令",
+    "list": "查找可用能力",
+    "read": "读取业务规则",
+    "tax_declaration_query": "查询申报状态",
+    "update_plan": "更新处理计划",
+    "voucher_check": "检查凭证",
+    "voucher_create": "创建凭证"
+  },
+  "finance_query_catalog": {
+    "enterprise_account.account_set": "查询账套信息",
+    "enterprise_account.bank": "查询银行信息",
+    "enterprise_account.business": "查询工商信息",
+    "enterprise_account.personnel": "查询人员信息",
+    "enterprise_account.tax_assessment": "查询税种核定",
+    "enterprise_account.tax": "查询税务信息",
+    "enterprise_account.auxiliary_accounting.all": "查询辅助核算",
+    "enterprise_account.subject_system.all": "查询科目体系",
+    "fund.unbooked.list": "查询未入账银行流水",
+    "fund.unbooked.summary": "查询未入账银行流水",
+    "invoice.detail": "读取发票详情",
+    "invoice.unbooked.list": "查询未入账发票",
+    "invoice.unbooked.summary": "查询未入账发票",
+    "report.balance_sheet": "查询资产负债表",
+    "report.cash_flow_statement": "查询现金流量表",
+    "report.income_statement": "查询利润表",
+    "period_end.summary": "盘点期末状态",
+    "voucher.detail": "读取凭证详情",
+    "voucher.draft.summary": "查询草稿凭证",
+    "voucher.generated.list": "查询已生成凭证",
+    "voucher.generated.summary": "查询已生成凭证"
+  },
+  "skill_files": {
+    "bookkeeping/SKILL.md": "读取做账总则",
+    "bookkeeping/references/invoice-bookkeeping.md": "读取发票入账规则",
+    "bookkeeping/references/bank-transaction-bookkeeping.md": "读取银行流水入账规则",
+    "bookkeeping/references/reimbursement-bookkeeping.md": "读取报销入账规则",
+    "bookkeeping/references/payroll-bookkeeping.md": "读取工资入账规则",
+    "bookkeeping/references/fixed-asset-bookkeeping.md": "读取固定资产入账规则",
+    "bookkeeping/references/other-business-bookkeeping.md": "读取其他业务入账规则",
+    "bookkeeping/references/period-end-bookkeeping.md": "读取期末做账规则",
+    "invoice-issuing/SKILL.md": "读取开票总则",
+    "invoice-issuing/references/native-tool-map.md": "读取开票工具规则",
+    "invoice-issuing/references/tax-code-filtering.md": "读取本地赋码规则",
+    "individual-income-tax-filing/SKILL.md": "读取个税申报总则",
+    "individual-income-tax-filing/references/native-tool-map.md": "读取个税工具规则",
+    "individual-income-tax-filing/references/workflow-state.md": "读取个税续办规则",
+    "tax-filing/SKILL.md": "读取报税总则",
+    "tax-filing/references/enterprise-tax.md": "读取企业税申报规则",
+    "tax-filing/references/individual-income-tax.md": "读取个税申报路由",
+    "tax-filing/references/declaration-data-query.md": "读取申报数据查询规则",
+    "tax-filing/references/correction-cancel.md": "读取申报更正与作废规则",
+    "tax-filing/references/annual-tax.md": "读取年度申报规则",
+    "legacy-book-import/SKILL.md": "读取旧账导入规则"
+  },
+  "activity_labels": {
+    "commandExecution": "运行检查",
+    "custom_tool_call": "运行命令",
+    "custom_tool_call_output": "运行命令",
+    "fileChange": "更新文件",
+    "mcpToolCall": "调用业务能力",
+    "dynamicToolCall": "处理业务数据",
+    "approval": "等待确认",
+    "automaticApprovalReview": "检查工具调用",
+    "elicitation": "等待输入",
+    "imageView": "查看图片",
+    "error": "工具执行失败",
+    "function_call": "处理业务数据",
+    "function_call_output": "处理业务数据",
+    "tool_search_call": "查找可用能力"
+  },
+  "skill_market_scopes": {
+    "user": "用户 Skill",
+    "repo": "项目 Skill",
+    "system": "内置 Skill",
+    "admin": "管理员 Skill"
+  },
+  "backends": {
+    "work": {
+      "base_url": "/api",
+      "note": "axios baseURL='/api', withCredentials=true, timeout=30s"
+    },
+    "finance": {
+      "base_url": "/finance-api",
+      "note": "auth/signup app"
+    }
+  }
+}

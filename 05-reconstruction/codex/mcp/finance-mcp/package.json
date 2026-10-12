@@ -1,0 +1,12 @@
+{
+  "name": "finance-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "财税工作台 MCP Server 骨架（有数云 /work 业务域复刻）",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "smoke": "node smoke-test.mjs"
+  }
+}
