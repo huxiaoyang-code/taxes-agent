@@ -40,6 +40,17 @@ const SCHEMAS = {
     type: "object",
     properties: { resource: { type: "string", description: "Skill 文件相对路径，例如 bookkeeping/SKILL.md" } },
     required: ["resource"]
+  },
+  legacy_book_import: {
+    type: "object",
+    properties: {
+      dryRun: { type: "boolean", description: "true=仅预检不落库（默认）；false=正式导入" },
+      payload: { type: "object", description: "结构化 payload：{account_set, accounts, opening_balances, vouchers}" },
+      texts: { type: "object", description: "CSV 文本：{meta, accounts, openings, vouchers}" },
+      files: { type: "object", description: "CSV base64：{meta, accounts, openings, vouchers}" },
+      encoding: { type: "string", description: "files 解码编码，如 utf-8 / gbk" },
+      meta: { type: "object", description: "覆盖账套信息：{name, taxpayer_type, accounting_standard, start_period}" }
+    }
   }
 };
 
@@ -58,6 +69,7 @@ for (const [name, label] of Object.entries(CATALOG.dynamic_tools)) {
 TOOLS.push({ name: "finance_query_catalog", description: "列出全部可用的财务查询能力 nodeId", inputSchema: SCHEMAS.finance_query_catalog });
 TOOLS.push({ name: "skills_list", description: "查找可用财税业务规则(Skill)文件", inputSchema: SCHEMAS.skills_list });
 TOOLS.push({ name: "skills_read", description: "读取业务规则(Skill) Markdown 正文", inputSchema: SCHEMAS.skills_read });
+TOOLS.push({ name: "legacy_book_import", description: "导入旧账：账套信息 + 科目 + 期初余额 + 历史凭证（默认仅预检）", inputSchema: SCHEMAS.legacy_book_import });
 
 // ------------------------------------------------------------------ resources
 function listSkillFiles(dir = SKILLS_DIR, base = SKILLS_DIR) {

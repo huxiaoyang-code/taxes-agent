@@ -19,7 +19,7 @@
 # 记账 + 报表工作台
 cd 06-workbench
 npm start            # = node server/server.mjs  → http://127.0.0.1:8787/
-npm test             # 端到端测试 22 用例（自动建临时库，不影响 data/）
+npm test             # 端到端测试 28 用例（自动建临时库，不影响 data/）
 
 # Codex / MCP 打通（工作台需先启动）
 cd 05-reconstruction/codex/mcp/finance-mcp

@@ -70,6 +70,89 @@ function newSetDialog() {
   });
 }
 
+// ------------------------------------------------------------------ 导入账套
+function readFileText(file, encoding) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(new Error("文件读取失败"));
+    r.readAsText(file, encoding);
+  });
+}
+function downloadText(name, text) {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function importSetDialog() {
+  const d = document.createElement("dialog");
+  d.style.minWidth = "640px";
+  d.innerHTML = `
+    <h3>导入账套</h3>
+    <p class="hint">两种方式：① 一个 JSON 文件（最稳）；② 四张 CSV（账套/科目/期初余额/凭证，Excel 另存为 CSV）。
+    导入前先预检，借贷不平、科目不存在会明确报错。</p>
+    <div class="row">
+      <label>CSV 编码 <select id="impEnc"><option value="utf-8">UTF-8</option><option value="gbk">GBK / GB18030（中文 Excel 常见）</option></select></label>
+      <button id="impTpl" class="ghost">下载 CSV 模板</button>
+    </div>
+    <div class="row"><label>① JSON 文件 <input type="file" id="impJson" accept=".json,application/json" /></label></div>
+    <div class="row" style="gap:10px">
+      <label>账套.csv <input type="file" id="impMeta" accept=".csv,.txt" /></label>
+      <label>科目.csv <input type="file" id="impAccounts" accept=".csv,.txt" /></label>
+    </div>
+    <div class="row" style="gap:10px">
+      <label>期初余额.csv <input type="file" id="impOpenings" accept=".csv,.txt" /></label>
+      <label>凭证.csv <input type="file" id="impVouchers" accept=".csv,.txt" /></label>
+    </div>
+    <div id="impResult" class="card hidden" style="max-height:280px"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button id="impCancel">取消</button>
+      <button id="impPreview">预检</button>
+      <button id="impConfirm" class="primary" disabled>确认导入</button>
+    </div>`;
+  document.body.appendChild(d); d.showModal();
+  let payload = null;
+  d.addEventListener("close", () => d.remove());
+  $("#impCancel", d).onclick = () => d.close();
+  $("#impTpl", d).onclick = guard(async () => {
+    const t = await api("/api/import/templates");
+    downloadText("账套.csv", t.meta); downloadText("科目.csv", t.accounts);
+    downloadText("期初余额.csv", t.openings); downloadText("凭证.csv", t.vouchers);
+    toast("已下载 4 个 CSV 模板");
+  });
+  const showValidation = (v) => {
+    const el = $("#impResult", d); el.classList.remove("hidden");
+    el.innerHTML = `<div><b>${v.ok ? "✅ 预检通过" : "❌ 预检未通过"}</b></div>
+      <div class="hint">账套：${esc(v.summary.account_set || "—")} · 启用 ${esc(v.summary.start_period || "—")} ·
+      额外科目 ${v.summary.accounts} · 期初 ${v.summary.opening_balances} · 凭证 ${v.summary.vouchers}（${v.summary.entries} 分录）</div>
+      ${v.errors.length ? `<div style="color:#d03050"><b>错误（${v.errors.length}）</b><ul>${v.errors.slice(0, 30).map((e) => `<li>${esc(e)}</li>`).join("")}</ul></div>` : ""}
+      ${v.warnings.length ? `<div style="color:#e6a23c"><b>提示（${v.warnings.length}）</b><ul>${v.warnings.slice(0, 20).map((e) => `<li>${esc(e)}</li>`).join("")}</ul></div>` : ""}`;
+  };
+  $("#impPreview", d).onclick = guard(async () => {
+    const enc = $("#impEnc", d).value;
+    const jsonFile = $("#impJson", d).files[0];
+    if (jsonFile) {
+      payload = JSON.parse(await readFileText(jsonFile, "utf-8"));
+      const r = await api("/api/import/account-set", { method: "POST", body: { payload, dryRun: true } });
+      showValidation(r.validation); $("#impConfirm", d).disabled = !r.validation.ok; return;
+    }
+    const files = { meta: $("#impMeta", d).files[0], accounts: $("#impAccounts", d).files[0],
+      openings: $("#impOpenings", d).files[0], vouchers: $("#impVouchers", d).files[0] };
+    if (!Object.values(files).some(Boolean)) return toast("请选择 JSON 或至少一张 CSV", true);
+    const texts = {};
+    for (const [k, f] of Object.entries(files)) if (f) texts[k] = await readFileText(f, enc);
+    const r = await api("/api/import/parse", { method: "POST", body: { texts } });
+    payload = r.payload; showValidation(r.validation); $("#impConfirm", d).disabled = !r.validation.ok;
+    if (r.validation.ok) toast("预检通过，可确认导入"); else toast("预检未通过，见下方错误", true);
+  });
+  $("#impConfirm", d).onclick = guard(async () => {
+    const r = await api("/api/import/account-set", { method: "POST", body: { payload, dryRun: false } });
+    d.close(); await loadSets(r.created.id);
+    toast(`账套已导入：${r.created.name}（凭证 ${r.created.vouchers} 张）`);
+  });
+}
+
 // ------------------------------------------------------------------ 科目
 function renderAccounts() {
   if (!SET_ID) return $("#accountList").innerHTML = `<p class="hint">请先新建账套</p>`;
@@ -350,6 +433,7 @@ $$(".tabs button").forEach((b) => b.onclick = () => {
 });
 $("#accountSetSelect").onchange = guard(async () => { SET_ID = +$("#accountSetSelect").value; await selectSet(); });
 $("#btnNewSet").onclick = newSetDialog;
+$("#btnImportSet").onclick = importSetDialog;
 $("#btnLoadVouchers").onclick = guard(loadVouchers);
 $("#btnNewVoucher").onclick = () => { if (!SET_ID) return toast("请先新建账套", true); openEditor(null); };
 $("#btnAddAccount").onclick = addAccountDialog;

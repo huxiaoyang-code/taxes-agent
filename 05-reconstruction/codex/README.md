@@ -53,6 +53,7 @@ codex mcp list          # 应看到 finance ... enabled
 | “帮我核一下账套 1 的资产负债表平不平” | `finance_query(report.balance_sheet)` |
 | “把运输车辆 2026-03 的折旧计提了” | `depreciation_run` |
 | “结转 2026-01 损益” | `carry_forward_profit` |
+| “把 D:/旧账 下的 4 个 CSV 导入成新账套” | `legacy_book_import`（默认仅预检） |
 
 ### 无头自检（不打开 UI）
 

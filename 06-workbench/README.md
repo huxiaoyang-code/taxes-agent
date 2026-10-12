@@ -7,6 +7,7 @@
 - 记账：复式借贷、凭证（草稿/过账/反过账）、期初余额、期间结账
 - 报表：科目余额表（试算平衡）、资产负债表、利润表、**现金流量表**、明细账/总账
 - **P1 会计闭环**：期末结转损益（3103→3104）、固定资产折旧/无形资产摊销计提
+- **导入旧账**：JSON 或 4 张 CSV（账套/科目/期初/凭证），支持 GBK 中文 Excel，预检+事务
 - 同时对外暴露：**网页 REST** 与 **Codex Agent 工具入口**（`/agent/tools/:name`）
 
 ## 启动
@@ -18,13 +19,18 @@ node server/server.mjs
 ```
 
 数据库文件：`06-workbench/data/workbench.db`（SQLite，WAL）。
-重置：停服务后删除该文件再启动即可。
+
+```bash
+npm run seed            # 空库时生成「已知可验收」的演示账套
+npm run seed -- --force # 清空后重建（重置自增，账套 id 回到 1）
+# 完全重置：停服务 → 删除 data/workbench.db* → npm run seed
+```
 
 ## 网页功能
 
 | 页签 | 说明 |
 |---|---|
-| 账套 | 新建账套，自动载入《小企业会计准则》标准科目表（可扩展） |
+| 账套 | 新建账套（自动载入标准科目表）；**导入账套**（JSON / 4 CSV，预检+事务） |
 | 凭证 | 多分录录入，实时借贷平衡校验；存草稿 / 保存并过账 / 反过账 / 删除 |
 | 科目 | 查看、新增科目（资产/负债/权益/成本/损益，借或贷） |
 | 期初余额 | 按科目录入期初借方/贷方 |
@@ -58,6 +64,11 @@ POST   /api/account-sets/:id/assets               {kind,name,original_cost,resid
 DELETE /api/account-sets/:id/assets/:aid
 POST   /api/account-sets/:id/depreciation         {period}             # 计提折旧/摊销
 GET    /api/account-sets/:id/depreciation-runs?period=
+
+GET    /api/import/templates                                          # 4 张 CSV 模板
+POST   /api/import/parse         {texts:{meta,accounts,openings,vouchers}}  # 解析+预检
+POST   /api/import/parse         {files:<base64 映射>, encoding:"gbk"}      # 也支持编码+base64
+POST   /api/import/account-set   {payload, dryRun}                    # 导入（dryRun 默认预检）
 ```
 
 ## Codex / MCP 集成（已打通）
@@ -83,11 +94,59 @@ node smoke-test.mjs
 | `carry_forward_profit` | 期末结转损益（`yearEnd` 时结转 3103→3104） |
 | `asset_list` / `asset_create` | 资产卡片查询/新增 |
 | `depreciation_run` | 计提折旧/摊销并生成凭证 |
+| `legacy_book_import` | 导入旧账（默认 `dryRun=true` 仅预检；`payload` / `texts` / `files`） |
 | `update_plan` | 保存处理计划 |
 | 其他（`invoice_*`/`declaration_query`/…） | 返回 `not_implemented` |
 
 > 注：`carry_forward_profit` / `asset_*` / `depreciation_run` 为本复刻工程**扩展工具**（原站契约未包含），
 > 已在本工作台与 MCP Server 注册；`05-reconstruction/catalog.json` 保留原站提取结果不变。
+
+## 导入账套（旧账）
+
+网页顶部 **↓ 导入账套**；也可用 Agent 工具 `legacy_book_import`。
+
+### 方式 ①：一个 JSON 文件（最稳）
+
+```json
+{
+  "account_set": { "name": "某某贸易有限公司", "taxpayer_type": "小规模纳税人",
+                   "accounting_standard": "小企业会计准则", "start_period": "2026-01" },
+  "accounts":          [ { "code": "1002", "name": "银行存款", "category": "资产", "direction": "debit" } ],
+  "opening_balances":  [ { "code": "1002", "debit": 100000, "credit": 0 },
+                         { "code": "3001", "debit": 0, "credit": 100000 } ],
+  "vouchers":          [ { "period": "2026-01", "date": "2026-01-10", "word": "记", "number": 1,
+                           "summary": "销售商品",
+                           "entries": [ { "code": "1122", "debit": 11300, "credit": 0 },
+                                        { "code": "5001", "debit": 0, "credit": 10000 },
+                                        { "code": "2221", "debit": 0, "credit": 1300 } ] } ]
+}
+```
+
+### 方式 ②：四张 CSV（Excel 另存为 CSV）
+
+| 文件 | 列（带表头，顺序可识别中文名） |
+|---|---|
+| `账套.csv` | `键,值`（账套名称 / 纳税人性质 / 会计准则 / 启用期间） |
+| `科目.csv` | `科目编码,科目名称,类别,方向`（类别：资产/负债/权益/成本/损益；方向：借/贷） |
+| `期初余额.csv` | `科目编码,借方,贷方` |
+| `凭证.csv` | `期间,日期,字号,凭证号,摘要,科目编码,借方,贷方`（一张凭证多行分录） |
+
+- 支持 **UTF-8** 与 **GBK/GB18030**（中文 Excel 常见）；页面上选编码。
+- 可点「下载 CSV 模板」拿到样例。
+- 未在标准科目表中的编码会**自动新增**（如企业会计准则的 `6602 管理费用`）。
+- 规则：期初借贷必须相等；每张凭证借贷必须相等；科目必须存在；预检失败**不会落库**。
+
+### 命令行 / Agent
+
+```bash
+# 预检
+curl -s -X POST http://127.0.0.1:8787/api/import/parse \
+  -H 'content-type: application/json' \
+  -d '{"texts":{"meta":"键,值\n账套名称,测试\n启用期间,2026-01\n","openings":"科目编码,借方,贷方\n1002,100,0\n3001,0,100\n"}}'
+
+# Agent 一句话（默认仅预检，confirm 后落库）
+# “把 D:/旧账/ 下的 4 个 CSV 导入成新账套” → legacy_book_import
+```
 
 ## 会计口径（重要，可按需调整）
 
@@ -111,7 +170,7 @@ node smoke-test.mjs
 1. 发票：采集/查验/开票/红冲（`invoice_*`）。
 2. 申报：增值税/附加税/企业所得税/个税（`declaration_query`、`tax_declaration_query`）。
 3. 辅助核算（客户/供应商/部门/项目）、多币种。
-4. 导入旧账（Excel）与银行流水对账。
+4. 银行流水对账、导入旧账的**金蝶/用友专用格式**适配。
 5. 打印/导出（PDF/Excel）。
 6. 用户与权限、审计日志、多租户。
 

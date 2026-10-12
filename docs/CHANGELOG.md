@@ -7,9 +7,30 @@
 
 ### Planned
 - 辅助核算（客户/供应商/部门/项目）
-- 导入旧账（Excel）、银行流水对账
+- 银行流水对账
 - 打印/导出（PDF/Excel）
 - 发票 / 申报工具对接
+
+---
+
+## [0.4.0] - 2026-10-12
+
+### Added — 导入旧账
+- **导入账套**：一次导入「账套信息 + 科目 + 期初余额 + 历史凭证」
+  - `parseImportTexts()`：解析 4 张 CSV（账套/科目/期初余额/凭证），支持 GBK/GB18030 中文 Excel 导出
+  - `validateImportPayload()`：借贷不平、科目不存在、类别/方向非法均显著报错
+  - `importAccountSet(payload, {dryRun})`：先预检后落库，**事务包表失败回滚**
+  - 支持新增非标准科目（如企业会计准则 6602）
+- API：`POST /api/import/parse`、`POST /api/import/account-set`、`GET /api/import/templates`
+- Agent 工具：`legacy_book_import`（默认 `dryRun=true` 仅预检），对应原子智能体 `legacy-book-import`
+- 网页：顶部「↓ 导入账套」（JSON 或 4 CSV + 编码选择 + 预检结果 + 下载模板）
+
+### Fixed
+- 利润表改为按**科目名称/编码尾号**归集（兼容小企业 5xxx 与企业准则 6xxx），
+  修复导入的非标准损益科目不计入利润表的问题；未匹配的损益科目归入「其他收入/其他费用」
+
+### Tests
+- 端到端测试 22 → **28 例**（新增 CSV 解析/预检、期初不平、科目不存在、事务导入、导入后报表）
 
 ---
 
@@ -76,6 +97,7 @@
   - `extract_catalog.py`、`generate_skill_stubs.py` 可复现脚本
 
 [Unreleased]: #unreleased
+[0.4.0]: #040---2026-10-12
 [0.3.0]: #030---2026-10-12
 [0.2.0]: #020---2026-10-12
 [0.1.0]: #010---2026-10-12

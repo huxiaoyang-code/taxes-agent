@@ -377,24 +377,55 @@ export function incomeStatement(setId, period) {
   const s = getAccountSet(setId);
   const year = String(period).slice(0, 4);
   const ytdStart = s.start_period > `${year}-01` ? s.start_period : `${year}-01`;
-  const N = (list, from, to) => naturalRange(setId, list, from, to);
+  const plAccounts = listAccounts(setId).filter((a) => a.category === "损益");
+
+  // 按科目名称/编码尾号归集，兼容小企业(5xxx)与企业会计准则(6xxx)两套编码
+  const TAIL = {
+    "001": "营业收入", "051": "营业收入", "111": "投资收益", "301": "营业外收入",
+    "401": "营业成本", "402": "营业成本", "403": "税金及附加", "601": "销售费用",
+    "602": "管理费用", "603": "财务费用", "711": "营业外支出", "801": "所得税费用",
+  };
+  const lineOf = (a) => {
+    const n = a.name || "";
+    if (/主营业务收入|其他业务收入/.test(n)) return "营业收入";
+    if (/主营业务成本|其他业务成本/.test(n)) return "营业成本";
+    if (/税金及附加/.test(n)) return "税金及附加";
+    if (/销售费用/.test(n)) return "销售费用";
+    if (/管理费用/.test(n)) return "管理费用";
+    if (/财务费用/.test(n)) return "财务费用";
+    if (/投资收益/.test(n)) return "投资收益";
+    if (/营业外收入/.test(n)) return "营业外收入";
+    if (/营业外支出/.test(n)) return "营业外支出";
+    if (/所得税费用/.test(n)) return "所得税费用";
+    if (TAIL[a.code.slice(-3)]) return TAIL[a.code.slice(-3)];
+    return a.direction === "credit" ? "其他收入" : "其他费用";
+  };
 
   const build = (from, to) => {
-    const 营业收入 = r2(N(["5001"], from, to) + N(["5051"], from, to));
-    const 营业成本 = r2(N(["5401"], from, to) + N(["5402"], from, to));
-    const 税金及附加 = N(["5403"], from, to);
-    const 销售费用 = N(["5601"], from, to);
-    const 管理费用 = N(["5602"], from, to);
-    const 财务费用 = N(["5603"], from, to);
-    const 投资收益 = N(["5111"], from, to);
+    const acc = {};
+    for (const a of plAccounts) {
+      const v = naturalRange(setId, [a.code], from, to);
+      if (Math.abs(v) < EPS) continue;
+      const line = lineOf(a);
+      acc[line] = r2((acc[line] || 0) + v);
+    }
+    const g = (k) => acc[k] || 0;
+    const 其他收入 = g("其他收入"), 其他费用 = g("其他费用");
+    const 营业收入 = r2(g("营业收入") + 其他收入);
+    const 营业成本 = r2(g("营业成本") + 其他费用);
+    const 税金及附加 = g("税金及附加");
+    const 销售费用 = g("销售费用");
+    const 管理费用 = g("管理费用");
+    const 财务费用 = g("财务费用");
+    const 投资收益 = g("投资收益");
     const 营业利润 = r2(营业收入 - 营业成本 - 税金及附加 - 销售费用 - 管理费用 - 财务费用 + 投资收益);
-    const 营业外收入 = N(["5301"], from, to);
-    const 营业外支出 = N(["5711"], from, to);
+    const 营业外收入 = g("营业外收入");
+    const 营业外支出 = g("营业外支出");
     const 利润总额 = r2(营业利润 + 营业外收入 - 营业外支出);
-    const 所得税费用 = N(["5801"], from, to);
+    const 所得税费用 = g("所得税费用");
     const 净利润 = r2(利润总额 - 所得税费用);
     return { 营业收入, 营业成本, 税金及附加, 销售费用, 管理费用, 财务费用, 投资收益,
-             营业利润, 营业外收入, 营业外支出, 利润总额, 所得税费用, 净利润 };
+             其他收入, 其他费用, 营业利润, 营业外收入, 营业外支出, 利润总额, 所得税费用, 净利润 };
   };
   return { period, current: build(period, period), ytd: build(ytdStart, period) };
 }
@@ -666,4 +697,215 @@ export function cashFlowStatement(setId, period) {
       经营活动产生的现金流量净额: opT,
     },
   };
+}
+
+// ================================================================ 导入旧账
+
+const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/[\s_\u3000]/g, "");
+
+export function parseCsv(text) {
+  const s = String(text ?? "").replace(/^\uFEFF/, "");
+  const rows = [];
+  let row = [], field = "", inQ = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQ) {
+      if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (c !== "\r") field += c;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((x) => String(x).trim() !== ""));
+}
+
+const numOr0 = (v) => {
+  const n = Number(String(v ?? "").replace(/[,\s\u00a5\uffe5]/g, ""));
+  return Number.isFinite(n) ? r2(n) : 0;
+};
+const DIRECTIONS = { 借: "debit", debit: "debit", d: "debit", 借方: "debit", 贷: "credit", credit: "credit", c: "credit", 贷方: "credit" };
+
+function headerMap(rows, synonyms, positions) {
+  const first = (rows[0] || []).map(normKey);
+  const idx = {}; let matched = 0;
+  for (const key of Object.keys(synonyms)) {
+    const i = first.findIndex((h) => synonyms[key].includes(h));
+    if (i >= 0) { idx[key] = i; matched++; }
+  }
+  if (matched >= 2) return { idx, start: 1 };
+  const pos = {}; Object.keys(synonyms).forEach((k, n) => { pos[k] = positions[n]; });
+  return { idx: pos, start: 0 };
+}
+
+const CSV_COLS = {
+  accounts: {
+    code: ["科目编码", "科目代码", "编码", "code"],
+    name: ["科目名称", "名称", "name"],
+    category: ["类别", "科目类别", "category"],
+    direction: ["方向", "余额方向", "direction"],
+  },
+  openings: {
+    code: ["科目编码", "科目代码", "编码", "code"],
+    debit: ["借方", "期初借方", "借方余额", "debit"],
+    credit: ["贷方", "期初贷方", "贷方余额", "credit"],
+  },
+  vouchers: {
+    period: ["期间", "会计期间", "period"],
+    date: ["日期", "凭证日期", "date"],
+    word: ["字号", "凭证字", "word"],
+    number: ["凭证号", "号码", "number"],
+    summary: ["摘要", "summary"],
+    code: ["科目编码", "科目代码", "code"],
+    debit: ["借方", "借方金额", "debit"],
+    credit: ["贷方", "贷方金额", "credit"],
+  },
+};
+const META_KEYS = {
+  账套名称: "name", 名称: "name", name: "name",
+  纳税人性质: "taxpayer_type", 纳税人类型: "taxpayer_type", taxpayer_type: "taxpayer_type",
+  会计准则: "accounting_standard", accounting_standard: "accounting_standard",
+  启用期间: "start_period", start_period: "start_period",
+};
+
+/** 把 4 张 CSV 文本解析成导入 payload（不落库）。 */
+export function parseImportTexts(texts = {}, metaOverride = {}) {
+  const payload = { account_set: { ...metaOverride }, accounts: [], opening_balances: [], vouchers: [] };
+  if (texts.meta) {
+    for (const r of parseCsv(texts.meta)) {
+      if (r.length < 2) continue;
+      const key = META_KEYS[normKey(r[0])];
+      if (key) payload.account_set[key] = String(r[1]).trim();
+    }
+  }
+  if (texts.accounts) {
+    const rows = parseCsv(texts.accounts);
+    const { idx, start } = headerMap(rows, CSV_COLS.accounts, [0, 1, 2, 3]);
+    for (let i = start; i < rows.length; i++) {
+      const row = rows[i];
+      payload.accounts.push({
+        code: String(row[idx.code] ?? "").trim(), name: String(row[idx.name] ?? "").trim(),
+        category: String(row[idx.category] ?? "").trim(),
+        direction: DIRECTIONS[normKey(row[idx.direction])] || String(row[idx.direction] ?? "").trim(),
+      });
+    }
+  }
+  if (texts.openings) {
+    const rows = parseCsv(texts.openings);
+    const { idx, start } = headerMap(rows, CSV_COLS.openings, [0, 1, 2]);
+    for (let i = start; i < rows.length; i++) {
+      const row = rows[i];
+      payload.opening_balances.push({ code: String(row[idx.code] ?? "").trim(), debit: numOr0(row[idx.debit]), credit: numOr0(row[idx.credit]) });
+    }
+  }
+  if (texts.vouchers) {
+    const rows = parseCsv(texts.vouchers);
+    const { idx, start } = headerMap(rows, CSV_COLS.vouchers, [0, 1, 2, 3, 4, 5, 6, 7]);
+    const groups = new Map();
+    for (let i = start; i < rows.length; i++) {
+      const row = rows[i];
+      const period = String(row[idx.period] ?? "").trim();
+      const word = String(row[idx.word] ?? "").trim() || "记";
+      const number = parseInt(row[idx.number], 10) || 1;
+      const key = `${period}|${word}|${number}`;
+      if (!groups.has(key)) groups.set(key, {
+        period, word, number,
+        date: String(row[idx.date] ?? "").trim(), summary: String(row[idx.summary] ?? "").trim(), entries: [],
+      });
+      groups.get(key).entries.push({
+        code: String(row[idx.code] ?? "").trim(), summary: String(row[idx.summary] ?? "").trim(),
+        debit: numOr0(row[idx.debit]), credit: numOr0(row[idx.credit]),
+      });
+    }
+    payload.vouchers = [...groups.values()];
+  }
+  return payload;
+}
+
+/** 校验导入 payload，返回错误/警告/统计。 */
+export function validateImportPayload(payload = {}) {
+  const errors = [], warnings = [];
+  const meta = payload.account_set || {};
+  if (!String(meta.name || "").trim()) errors.push("缺少账套名称");
+  if (!/^\d{4}-\d{2}$/.test(String(meta.start_period || ""))) errors.push("启用期间格式应为 YYYY-MM");
+
+  const coaCodes = new Set(COA.map((a) => a.code));
+  const accs = payload.accounts || [];
+  accs.forEach((a, i) => {
+    if (!a.code || !a.name) return errors.push(`科目第 ${i + 1} 行缺少编码或名称`);
+    if (a.direction && !["debit", "credit"].includes(a.direction)) errors.push(`科目 ${a.code} 方向非法：${a.direction}`);
+    if (a.category && !["资产", "负债", "权益", "成本", "损益"].includes(a.category)) errors.push(`科目 ${a.code} 类别非法：${a.category}`);
+    if (coaCodes.has(String(a.code))) warnings.push(`科目 ${a.code} 已存在标准科目，将保留标准名称`);
+  });
+  const codes = new Set([...coaCodes, ...accs.map((a) => String(a.code))]);
+
+  let od = 0, oc = 0;
+  (payload.opening_balances || []).forEach((o, i) => {
+    if (!codes.has(String(o.code))) errors.push(`期初余额第 ${i + 1} 行科目不存在：${o.code}`);
+    od += Number(o.debit) || 0; oc += Number(o.credit) || 0;
+  });
+  if (Math.abs(od - oc) > EPS) errors.push(`期初余额借贷不平：借 ${r2(od)} / 贷 ${r2(oc)}`);
+
+  let entryCount = 0;
+  (payload.vouchers || []).forEach((v, i) => {
+    if (!/^\d{4}-\d{2}$/.test(String(v.period || ""))) return errors.push(`凭证 ${i + 1} 期间非法：${v.period}`);
+    const es = v.entries || []; entryCount += es.length;
+    if (es.length < 2) errors.push(`凭证 ${i + 1}（${v.period} ${v.word}-${v.number}）至少两条分录`);
+    let d = 0, c = 0;
+    es.forEach((e) => {
+      if (!codes.has(String(e.code))) errors.push(`凭证 ${i + 1} 科目不存在：${e.code}`);
+      d += Number(e.debit) || 0; c += Number(e.credit) || 0;
+    });
+    if (Math.abs(d - c) > EPS) errors.push(`凭证 ${i + 1}（${v.period} ${v.word}-${v.number}）借贷不平：借 ${r2(d)} / 贷 ${r2(c)}`);
+  });
+
+  return {
+    ok: errors.length === 0, errors, warnings,
+    summary: {
+      account_set: meta.name || null, start_period: meta.start_period || null,
+      accounts: accs.length, opening_balances: (payload.opening_balances || []).length,
+      vouchers: (payload.vouchers || []).length, entries: entryCount,
+    },
+  };
+}
+
+/** 先预检（dryRun）再落库；落库在一个事务里，失败回滚。 */
+export function importAccountSet(payload = {}, { dryRun = false } = {}) {
+  const validation = validateImportPayload(payload);
+  if (dryRun || !validation.ok) return { dryRun: true, validation, created: null };
+  const meta = payload.account_set || {};
+  db.exec("BEGIN");
+  try {
+    const set = createAccountSet({
+      name: meta.name, taxpayer_type: meta.taxpayer_type || "小规模纳税人",
+      accounting_standard: meta.accounting_standard || "小企业会计准则", start_period: meta.start_period,
+    });
+    const have = new Set(listAccounts(set.id).map((a) => a.code));
+    for (const a of payload.accounts || []) {
+      if (have.has(String(a.code))) continue;
+      addAccount(set.id, { code: a.code, name: a.name, category: a.category, direction: a.direction });
+      have.add(String(a.code));
+    }
+    if ((payload.opening_balances || []).length) setOpeningBalances(set.id, payload.opening_balances);
+    let vcount = 0;
+    for (const v of payload.vouchers || []) {
+      createVoucher(set.id, {
+        period: v.period, voucher_date: v.date || `${v.period}-01`, word: v.word || "记",
+        number: v.number, summary: v.summary, kind: "normal", status: "posted", entries: v.entries,
+      });
+      vcount++;
+    }
+    db.exec("COMMIT");
+    return {
+      dryRun: false, validation,
+      created: {
+        id: set.id, name: set.name, start_period: set.start_period,
+        accounts: listAccounts(set.id).length, opening_balances: getOpeningBalances(set.id).length, vouchers: vcount,
+      },
+    };
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
 }

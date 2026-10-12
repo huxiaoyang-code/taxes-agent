@@ -27,7 +27,7 @@
 | 固定资产折旧 / 无形资产摊销 | 高 | ✅ | 直线法，资产卡片 + 一键计提 + 幂等 | `accounting.mjs: generateDepreciation()`、`asset_cards` |
 | 现金流量表 | 中 | ✅ | 直接法（对方科目分类）+ 间接法补充，与货币资金勾稽 | `accounting.mjs: cashFlowStatement()` |
 | 辅助核算（客户/供应商/部门/项目） | 中 | ⬜ | 分录挂辅助维度，报表可下钻 | `voucher_entries` 加维度字段 |
-| 导入旧账（Excel） | 中 | ⬜ | 科目余额 + 历史凭证导入 | 对应 `legacy-book-import` 子智能体 |
+| 导入旧账（Excel/CSV） | 中 | ✅ | JSON 或 4 CSV（账套/科目/期初/凭证），GBK 支持，预检+事务 | `accounting.mjs: importAccountSet()` |
 | 银行流水对账 | 中 | ⬜ | 导入流水、匹配、自动生成凭证 | 对应 `fund.unbooked.*` |
 | 打印/导出（PDF/Excel） | 低 | ⬜ | 报表另存 | `public/app.js` |
 

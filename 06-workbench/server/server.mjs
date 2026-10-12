@@ -98,6 +98,19 @@ async function api(req, res, url, m) {
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/depreciation-runs$/)) && m === "GET") {
     return json(res, 200, A.listDepreciationRuns(+match[1], { period: url.searchParams.get("period") || undefined }));
   }
+  if (p === "/api/import/parse" && m === "POST") {
+    const b = await readBody(req);
+    const texts = b.texts || decodeFiles(b.files, b.encoding);
+    const payload = A.parseImportTexts(texts, b.meta || {});
+    return json(res, 200, { payload, validation: A.validateImportPayload(payload) });
+  }
+  if (p === "/api/import/account-set" && m === "POST") {
+    const b = await readBody(req);
+    return json(res, 201, A.importAccountSet(b.payload || b, { dryRun: !!b.dryRun }));
+  }
+  if (p === "/api/import/templates" && m === "GET") {
+    return json(res, 200, TEMPLATES);
+  }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/ledger$/))) {
     const id = +match[1], code = url.searchParams.get("code"), period = url.searchParams.get("period");
     if (!code || !period) return json(res, 400, { error: "code_and_period_required" });
@@ -157,6 +170,13 @@ async function agentTool(name, args = {}) {
       return A.addAssetCard(setId, args);
     case "depreciation_run":
       return A.generateDepreciation(setId, args.period);
+    case "legacy_book_import": {
+      const payload = args.payload
+        || (args.texts ? A.parseImportTexts(args.texts, args.meta || {}) : null)
+        || (args.files ? A.parseImportTexts(decodeFiles(args.files, args.encoding), args.meta || {}) : null);
+      if (!payload) return { error: "payload_or_texts_or_files_required" };
+      return A.importAccountSet(payload, { dryRun: args.dryRun !== false });
+    }
     case "finance_task_status":
       return { status: "completed", note: "本地记账无异步任务" };
     case "update_plan":
@@ -183,6 +203,22 @@ const SUBAGENTS = [
   { runtimeName: "bookkeeping", displayName: "智能核算" },
   { runtimeName: "legacy-book-import", displayName: "导入旧账" },
 ];
+
+/** 把 base64 文件按指定编码解码成文本（供 CLI/Agent 直传文件用）。 */
+function decodeFiles(files = {}, encoding = "utf-8") {
+  const out = {};
+  for (const [k, v] of Object.entries(files)) {
+    if (typeof v === "string" && v) out[k] = new TextDecoder(encoding).decode(Buffer.from(v, "base64"));
+  }
+  return out;
+}
+
+const TEMPLATES = {
+  meta: "\uFEFF键,值\n账套名称,示例贸易有限公司\n纳税人性质,小规模纳税人\n会计准则,小企业会计准则\n启用期间,2026-01\n",
+  accounts: "\uFEFF科目编码,科目名称,类别,方向\n1002,银行存款,资产,借\n5001,主营业务收入,损益,贷\n",
+  openings: "\uFEFF科目编码,借方,贷方\n1002,100000,0\n3001,0,100000\n",
+  vouchers: "\uFEFF期间,日期,字号,凭证号,摘要,科目编码,借方,贷方\n2026-01,2026-01-10,记,1,销售商品,1122,11300,0\n2026-01,2026-01-10,记,1,销售商品,5001,0,10000\n2026-01,2026-01-10,记,1,销售商品,2221,0,1300\n",
+};
 
 // ------------------------------------------------------------------ 静态文件
 async function serveStatic(res, pathname) {

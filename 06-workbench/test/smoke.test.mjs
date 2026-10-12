@@ -235,6 +235,66 @@ try {
     assert.equal(r.not_implemented, true);
   });
 
+  // ---------------- 导入账套 ----------------
+  const csv = {
+    meta: "键,值\n账套名称,导入测试公司\n纳税人性质,一般纳税人\n会计准则,小企业会计准则\n启用期间,2026-01\n",
+    accounts: "科目编码,科目名称,类别,方向\n6602,管理费用,损益,借\n",
+    openings: "科目编码,借方,贷方\n1002,50000,0\n3001,0,50000\n",
+    vouchers: "期间,日期,字号,凭证号,摘要,科目编码,借方,贷方\n"
+      + "2026-01,2026-01-15,记,1,报销办公费,6602,300,0\n"
+      + "2026-01,2026-01-15,记,1,报销办公费,1002,0,300\n",
+  };
+
+  await test("导入：CSV 预检通过并解析出结构", async () => {
+    const r = await api("POST", "/api/import/parse", { texts: csv });
+    assert.equal(r.validation.ok, true, JSON.stringify(r.validation.errors));
+    assert.equal(r.validation.summary.account_set, "导入测试公司");
+    assert.equal(r.validation.summary.vouchers, 1);
+    assert.equal(r.validation.summary.entries, 2);
+    assert.equal(r.payload.accounts[0].code, "6602");
+  });
+
+  await test("导入：期初借贷不平应预检失败", async () => {
+    const bad = { ...csv, openings: "科目编码,借方,贷方\n1002,50000,0\n3001,0,40000\n" };
+    const r = await api("POST", "/api/import/parse", { texts: bad });
+    assert.equal(r.validation.ok, false);
+    assert.ok(r.validation.errors.some((e) => e.includes("期初余额借贷不平")));
+  });
+
+  await test("导入：科目不存在应预检失败", async () => {
+    const bad = { ...csv, vouchers: csv.vouchers.replace("6602,300,0", "9999,300,0") };
+    const r = await api("POST", "/api/import/parse", { texts: bad });
+    assert.equal(r.validation.ok, false);
+    assert.ok(r.validation.errors.some((e) => e.includes("科目不存在")));
+  });
+
+  let importedSetId;
+  await test("导入：正式导入并落库（含新增科目/期初/凭证）", async () => {
+    const parsed = await api("POST", "/api/import/parse", { texts: csv });
+    const r = await api("POST", "/api/import/account-set", { payload: parsed.payload, dryRun: false });
+    importedSetId = r.created.id;
+    assert.equal(r.created.name, "导入测试公司");
+    assert.equal(r.created.vouchers, 1);
+    assert.equal(r.created.opening_balances, 2);
+    const accs = await api("GET", `/api/account-sets/${importedSetId}/accounts`);
+    assert.ok(accs.find((a) => a.code === "6602"), "新增科目 6602 应存在");
+  });
+
+  await test("导入：导入后报表正确（平衡 / 净利 -300）", async () => {
+    const bs = await api("GET", `/api/account-sets/${importedSetId}/reports/balance-sheet?period=2026-01`);
+    assert.equal(bs.balanced, true);
+    assert.equal(bs.totals.assets, 49700);
+    const is = await api("GET", `/api/account-sets/${importedSetId}/reports/income-statement?period=2026-01`);
+    assert.equal(is.current["净利润"], -300);
+  });
+
+  await test("导入：Agent 工具 legacy_book_import 默认仅预检", async () => {
+    const r = await api("POST", "/agent/tools/legacy_book_import", { texts: csv });
+    assert.equal(r.dryRun, true);
+    assert.equal(r.validation.ok, true);
+    assert.equal(r.created, null);
+  });
+
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;

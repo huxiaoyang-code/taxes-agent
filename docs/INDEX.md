@@ -4,7 +4,7 @@
 > 维护约定：新增/移动模块、改变入口或命令时，**必须同步更新本文件**。
 
 - 仓库：`有数云fork` — 有数云「代账 / 财税工作台」逆向分析 + 复刻工程
-- 骨架版本：`0.3.0`（见 [CHANGELOG](CHANGELOG.md)）
+- 骨架版本：`0.4.0`（见 [CHANGELOG](CHANGELOG.md)）
 - 运行时：Node.js ≥ 22.5（`node:sqlite` 内置）、Python 3（仅分析脚本）
 - 约束：**零第三方 npm 依赖**；前端零构建
 
@@ -70,7 +70,9 @@
 │   ├── app.js            前端逻辑（SPA，原生 DOM）
 │   └── styles.css        样式
 ├── test/
-│   └── smoke.test.mjs    端到端测试（临时库+随机端口，22 用例）
+│   └── smoke.test.mjs    端到端测试（临时库+随机端口，28 用例）
+├── scripts/
+│   └── seed-demo.mjs     演示数据种子（--force 重建，账套 id=1）
 └── data/                 运行期 SQLite（已 gitignore）
 ```
 
@@ -80,7 +82,7 @@
 |---|---|---|---|
 | `db.mjs` | `db` | 建表/连接（account_sets, accounts, opening_balances, periods, vouchers(**kind**), voucher_entries, asset_cards, asset_depreciation_runs）含老库自动迁移 | `node:sqlite` |
 | `coa.mjs` | `COA`, `STANDARDS` | 标准科目表（60+，含备抵科目标记 `contra`） | — |
-| `accounting.mjs` | 账套/科目/期初/期间：`createAccountSet` `listAccounts` `setOpeningBalances` `ensurePeriod` `setPeriodStatus`；凭证：`checkVoucher` `createVoucher` `listVouchers` `getVoucher` `postVoucher` `unpostVoucher` `deleteVoucher`；报表：`accountBalances` `trialBalance` `balanceSheet` `incomeStatement` `generalLedger` `cashFlowStatement`；**P1**：`carryForwardProfit` `listAssetCards` `addAssetCard` `deleteAssetCard` `listDepreciationRuns` `generateDepreciation` | 全部记账与报表算法 | `db.mjs`, `coa.mjs` |
+| `accounting.mjs` | 账套/科目/期初/期间：`createAccountSet` `listAccounts` `setOpeningBalances` `ensurePeriod` `setPeriodStatus`；凭证：`checkVoucher` `createVoucher` `listVouchers` `getVoucher` `postVoucher` `unpostVoucher` `deleteVoucher`；报表：`accountBalances` `trialBalance` `balanceSheet` `incomeStatement` `generalLedger` `cashFlowStatement`；**P1**：`carryForwardProfit` `listAssetCards` `addAssetCard` `deleteAssetCard` `listDepreciationRuns` `generateDepreciation`；**导入**：`parseCsv` `parseImportTexts` `validateImportPayload` `importAccountSet` | 全部记账与报表算法 | `db.mjs`, `coa.mjs` |
 
 ### 3.2 接口层 `server/`
 
@@ -208,8 +210,9 @@ Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──�
 |---|---|
 | REA 证据归档 | ✅ 完成（冻结） |
 | 复刻契约与 MCP 骨架 | ✅ 可运行 |
-| 记账 + 报表 MVP | ✅ 可运行，22/22 测试通过 |
+| 记账 + 报表 MVP | ✅ 可运行，28/28 测试通过 |
 | P1 会计闭环（结转损益/折旧摊销/现金流量表） | ✅ 完成 |
-| 辅助核算 / 导入旧账 / 银行对账 / 导出 | ⬜ 待办（ROADMAP P1 剩余） |
+| 导入旧账（JSON/CSV，GBK 支持） | ✅ 完成 |
+| 辅助核算 / 银行对账 / 导出 | ⬜ 待办（ROADMAP P1 剩余） |
 | 发票 / 申报 | ⬜ 待办（ROADMAP P2，返回 `not_implemented`） |
 | 多用户 / 权限 / 审计 | ⬜ 待办（ROADMAP P3） |
