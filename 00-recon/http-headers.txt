@@ -1,0 +1,15 @@
+GET / HTTP/1.1
+Host: daizhang.youshu.yun
+
+HTTP/1.1 302 Moved Temporarily
+Server: nginx
+Location: https://daizhang.youshu.yun/work/
+
+GET /work/ HTTP/1.1
+
+HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: 2225
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer

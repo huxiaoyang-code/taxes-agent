@@ -1,0 +1,14 @@
+{
+  "finance_routes_observed": [
+    "/",
+    "/account-sets",
+    "/login",
+    "/signup/onboarding",
+    "/init-detail",
+    "/as/:id/*",
+    "*"
+  ],
+  "work_entry": "/work/",
+  "auth_redirect": "/finance/login?redirect=<original>",
+  "evidence": "ev_66f34fbf3a16eb24431d8ad24f58769b4315e27f65d8ed84227505cb819b6962"
+}

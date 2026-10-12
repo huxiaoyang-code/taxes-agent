@@ -1,0 +1,572 @@
+{
+  "note": "Statically discovered request paths. 'base' is the axios baseURL observed in each bundle (work app baseURL='/api', finance app baseURL='/finance-api'). Paths are candidates; static strings do not prove runtime execution.",
+  "evidence": {
+    "work_analysis": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0",
+    "finance_analysis": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84",
+    "live_page": "ev_5cf4d9b1e50fc3c9ac5368b003cd4c3095854144637c0a478fe8781101189311"
+  },
+  "endpoints": [
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/account-sets",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/account-sets",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/account-sets/employees",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/captcha",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/current-user",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/login",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/login/phone",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/login/phone-code",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/logout",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/referral/resolve",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/signup/create-agency",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/signup/defer",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/signup/profile",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/system/tax-deadline-config",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "POST",
+      "path": "/wechat-login/complete",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/wechat-login/status",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "finance",
+      "base": "/finance-api",
+      "method": "GET",
+      "path": "/wechat-login/url",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_777535033dbadd0cf3825cfde692652d5cbd3ea6947ff1719b0673d25d644c84"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/account/account-sets",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "PUT",
+      "path": "/account/phone",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/account/phone-code",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "PUT",
+      "path": "/account/profile",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/agent/model-usage/availability",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "ANY",
+      "path": "/api/agent/runtime-ticket",
+      "provenance": "literal string search of exported bundle",
+      "evidence_id": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "ANY",
+      "path": "/api/agent/thread-title",
+      "provenance": "literal string search of exported bundle",
+      "evidence_id": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "ANY",
+      "path": "/api/attachments/",
+      "provenance": "literal string search of exported bundle",
+      "evidence_id": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "ANY",
+      "path": "/api/attachments/raw-upload",
+      "provenance": "literal string search of exported bundle",
+      "evidence_id": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "ANY",
+      "path": "/api/attachments/{id}",
+      "provenance": "literal string search of exported bundle",
+      "evidence_id": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "ANY",
+      "path": "/api/speech/iat/session",
+      "provenance": "literal string search of exported bundle",
+      "evidence_id": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/auth/current-user",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/auth/logout",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/auth/wechat/status",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/auth/wechat/url",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/auth/welcome-bundle/claim",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/capabilities",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/payment-orders",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/payment-orders/invoice-applications",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/billing/payment-orders/invoice-applications",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/payment-orders/invoice-profile",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/billing/token/account-set-products/orders",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/billing/token/orders",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/token/products",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/token/summary",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/billing/token/team-seats/orders",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/billing/token/team-seats/quote",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/billing/usage/conversations",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/channels/clawbot/login",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/channels/clawbot/login/status",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/channels/wecom/bind/phone-code",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/channels/wecom/bind/verify",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/channels/wecom/config",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "PUT",
+      "path": "/channels/wecom/config",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/channels/wecom/validate",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/daily-checkin",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/daily-checkin",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/finance-jobs",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/finance/business-batches",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/models/available",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/models/catalog",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/preferences/runtime",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "PUT",
+      "path": "/preferences/runtime",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/product-control/policy",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/referral/share",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "GET",
+      "path": "/referral/stats",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "/api",
+      "method": "POST",
+      "path": "/yousure/sso",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "CALL",
+      "path": "thread/read",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "CALL",
+      "path": "thread/resume",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    },
+    {
+      "app": "work",
+      "base": "",
+      "method": "CALL",
+      "path": "thread/turns/list",
+      "provenance": "REA static analysis",
+      "evidence_id": "ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0"
+    }
+  ],
+  "live_observed": [
+    {
+      "method": "GET",
+      "url": "https://daizhang.youshu.yun/finance-api/wechat-login/status?state=1791789723.74170eb76835d8e0.d55fd5a34e64ad67d6aa5cfb",
+      "status": 200,
+      "resource_type": "XHR"
+    },
+    {
+      "method": "GET",
+      "url": "https://daizhang.youshu.yun/finance-api/wechat-login/status?state=1791789723.74170eb76835d8e0.d55fd5a34e64ad67d6aa5cfb",
+      "status": 200,
+      "resource_type": "XHR"
+    },
+    {
+      "method": "GET",
+      "url": "https://daizhang.youshu.yun/finance-api/wechat-login/status?state=1791789723.74170eb76835d8e0.d55fd5a34e64ad67d6aa5cfb",
+      "status": 200,
+      "resource_type": "XHR"
+    },
+    {
+      "method": "GET",
+      "url": "https://daizhang.youshu.yun/finance-api/wechat-login/status?state=1791789723.74170eb76835d8e0.d55fd5a34e64ad67d6aa5cfb",
+      "status": 200,
+      "resource_type": "XHR"
+    }
+  ]
+}

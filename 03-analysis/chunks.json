@@ -1,0 +1,97 @@
+{
+  "chunks": [
+    {
+      "script_key": "scr_106ee2d25f4a7f1ce4489dddabca2fcc4d21d996880a837ed6e0c042a80f1196",
+      "url": "https://daizhang.youshu.yun/finance/assets/index-D9q6l-Ms.js",
+      "artifact_sha256": "6348f795c777dbda46ffa6c3adf56115cd341d6eac137fd4fabf1ad4fb29102d",
+      "bytes": 128036
+    },
+    {
+      "script_key": "scr_40be28e991f97e47f386e775fa3b0dfe73dbe3a247515613064153d7ed2e6c90",
+      "url": "https://daizhang.youshu.yun/finance/assets/Login-CmT9YCWA.js",
+      "artifact_sha256": "865809b9763f2308c888f56b9ae8978a5a3b44e05b84b93d8659bfb7d78c2583",
+      "bytes": 8444
+    },
+    {
+      "script_key": "scr_444e70948f023ed6939e8753740dca25f6bfe43dc7ba53ba1ed60083841f201c",
+      "url": "https://daizhang.youshu.yun/finance/assets/monitoring-sdk-H-W2b3rW.js",
+      "artifact_sha256": "b04e5d876d15094f9663e96d1a98c1342e49c471b0250cc7b98359d9f945f925",
+      "bytes": 424393
+    },
+    {
+      "script_key": "scr_6dca748841757ff58d80f5f36d636b1ac5d992cc5451b32b6e7092e86f72c253",
+      "url": "https://daizhang.youshu.yun/finance/assets/antd-vendor-DDiEsgky.js",
+      "artifact_sha256": "8ff0846db5a0b007945f56972a5f5ba890e1d0563a8a882e2f4307c1215a7b23",
+      "bytes": 1153391
+    },
+    {
+      "script_key": "scr_739c068083fa5ff3a10937b0d0f4d76e04ecfc8276e3d25304cc50b48fae00a5",
+      "url": "https://daizhang.youshu.yun/finance/assets/antd-date-vendor-BI5LfP24.js",
+      "artifact_sha256": "b33728045464f89c96e23c565cd86b9a05dd6bb61a5da9acebb53817b02e66a1",
+      "bytes": 16770
+    },
+    {
+      "script_key": "scr_912a30a712d41216af219a872eb4553e836358397b5aa7aa4cf139667c71fec4",
+      "url": "https://daizhang.youshu.yun/finance/assets/pointControls-0Xz9vSYC.js",
+      "artifact_sha256": "146c314d0de9ab116f6a5026789d51039d2fe09cdef8d96fa545fb5328569a7b",
+      "bytes": 4401
+    },
+    {
+      "script_key": "scr_b13309be071ea941b96db76a9353fcff02cf69d939bb2cd98623047c777c2d4a",
+      "url": "https://daizhang.youshu.yun/finance/assets/react-vendor-esBf9nI-.js",
+      "artifact_sha256": "f06ce1b3b320207efeeec1f4050cb5f788aa1c13fdd1a564d299f5c81e2b3f6a",
+      "bytes": 230387
+    }
+  ],
+  "artifacts": [
+    {
+      "sha256": "6348f795c777dbda46ffa6c3adf56115cd341d6eac137fd4fabf1ad4fb29102d",
+      "bytes": 128036,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    },
+    {
+      "sha256": "865809b9763f2308c888f56b9ae8978a5a3b44e05b84b93d8659bfb7d78c2583",
+      "bytes": 8444,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    },
+    {
+      "sha256": "b04e5d876d15094f9663e96d1a98c1342e49c471b0250cc7b98359d9f945f925",
+      "bytes": 424393,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    },
+    {
+      "sha256": "8ff0846db5a0b007945f56972a5f5ba890e1d0563a8a882e2f4307c1215a7b23",
+      "bytes": 1153391,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    },
+    {
+      "sha256": "b33728045464f89c96e23c565cd86b9a05dd6bb61a5da9acebb53817b02e66a1",
+      "bytes": 16770,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    },
+    {
+      "sha256": "146c314d0de9ab116f6a5026789d51039d2fe09cdef8d96fa545fb5328569a7b",
+      "bytes": 4401,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    },
+    {
+      "sha256": "f06ce1b3b320207efeeec1f4050cb5f788aa1c13fdd1a564d299f5c81e2b3f6a",
+      "bytes": 230387,
+      "media_type": "text/javascript",
+      "charset": "utf-8",
+      "text_available": true
+    }
+  ]
+}
