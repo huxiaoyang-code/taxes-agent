@@ -27,12 +27,40 @@ node smoke-test.mjs
 #          skill files: 21
 ```
 
-## 接入 Codex
+## 接入 Codex（已实测）
 
-1. 复制 `config.toml` 里的 `[mcp_servers.finance]` 段到 `%USERPROFILE%\.codex\config.toml`。
-2. 设置 `FINANCE_API_BASE` 指向你的财税后端。
-3. 重启 Codex，`/mcp` 应能看到 `finance` 及其工具。
-4. 在会话里提出财税任务，Codex 会自动调用 `finance_query` / `voucher_create` / `invoice_issue` 等。
+前置：先启动工作台 `06-workbench`（`FINANCE_API_BASE` 默认就是它：`http://127.0.0.1:8787`）。
+
+```bash
+# 一条命令注册（官方 CLI，自动写入 ~/.codex/config.toml）
+codex mcp add finance \
+  --env FINANCE_API_BASE=http://127.0.0.1:8787 \
+  --env FINANCE_SKILLS_DIR=D:/有数云fork/05-reconstruction/codex/skills \
+  -- "D:\\node.exe" "D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"
+
+codex mcp list          # 应看到 finance ... enabled
+```
+
+> Windows 下 `command` 用绝对路径（Codex 的 PATH 里没有 node）；也可照 `config.toml` 手工合并。
+
+**重启 Codex 客户端**（桌面版 / IDE）后，在会话里用一句话即可驱动财税作业：
+
+| 你说 | Codex 调用 |
+|---|---|
+| “查一下 2026-02 的净利润” | `finance_query(report.income_statement)` |
+| “出现金流量表” | `finance_query(report.cash_flow_statement)` |
+| “记一笔：2026-03-05 支付办公费 800，借管理费用贷银行存款” | `voucher_create` |
+| “帮我核一下账套 1 的资产负债表平不平” | `finance_query(report.balance_sheet)` |
+| “把运输车辆 2026-03 的折旧计提了” | `depreciation_run` |
+| “结转 2026-01 损益” | `carry_forward_profit` |
+
+### 无头自检（不打开 UI）
+
+```bash
+codex exec --skip-git-repo-check -C . --dangerously-bypass-approvals-and-sandbox \
+  "只做一件事：调用 finance MCP 的 finance_query 工具，参数 nodeId=report.income_statement, accountSetId=1, period=2026-02；然后只回复净利润数字。"
+# 实测输出：账套 1 在 2026-02 的净利润为 -6900。
+```
 
 ## 工具层（23 个）
 

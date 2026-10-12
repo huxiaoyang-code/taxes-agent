@@ -1,20 +1,19 @@
-# Codex CLI 配置示例：注册财税工作台 MCP Server
+# Codex MCP 配置（已验证格式）
 #
-# 放置位置：%USERPROFILE%\.codex\config.toml （或 $CODEX_HOME/config.toml）
-# 把下面这段合并进你已有的 config.toml，不要整文件覆盖。
+# 推荐直接用官方命令注册，避免手改 TOML：
+#
+#   codex mcp add finance \
+#     --env FINANCE_API_BASE=http://127.0.0.1:8787 \
+#     --env FINANCE_SKILLS_DIR=D:/有数云fork/05-reconstruction/codex/skills \
+#     -- "D:\\node.exe" "D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"
+#
+# 下面是与 `codex mcp add` 生成一致的配置，供手工合并到 %USERPROFILE%\.codex\config.toml。
+# Windows 下 command 建议用绝对路径（node 不在 Codex 的 PATH 里）。
 
 [mcp_servers.finance]
-command = "node"
+command = 'D:\node.exe'
 args = ["D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"]
-# 后端地址与 Skill 目录（按需修改）
-env = { FINANCE_API_BASE = "http://127.0.0.1:8787", FINANCE_API_TOKEN = "", FINANCE_SKILLS_DIR = "D:/有数云fork/05-reconstruction/codex/skills" }
-# 启动超时（毫秒），慢机器可调大
-startup_timeout_ms = 20000
 
-# 可选：财税场景建议开启审批，避免模型擅自开票/申报
-# approval_policy = "on-request"      # 由 Codex 在需要时向你确认
-# sandbox_mode = "read-only"          # 只读起步；写操作走 MCP 工具而非本地文件
-
-# 可选：内置工具裁剪，让模型优先用财税工具
-# [tools]
-# web_search = false
+[mcp_servers.finance.env]
+FINANCE_API_BASE = "http://127.0.0.1:8787"
+FINANCE_SKILLS_DIR = "D:/有数云fork/05-reconstruction/codex/skills"
