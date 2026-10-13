@@ -10,6 +10,7 @@
  *   - limited     ：可调用但行为受限（例如 update_plan 只回显、不持久化）；
  *   - unavailable ：本地未实现，调用必须返回 isError，绝不伪装成功。
  */
+import { TAX_TOOLS } from "./tax-tools.mjs";
 
 export class ToolCallError extends Error {
   constructor(code, message, details = null) {
@@ -189,7 +190,7 @@ const LOCAL_TOOLS = [
     obj({ resource: { type: "string", description: "Skill 相对路径，例如 bookkeeping/SKILL.md" } }, ["resource"]), "local"),
 ];
 
-export const TOOLS = [...LOCAL_TOOLS, ...BACKEND_TOOLS, ...PLACEHOLDER_TOOLS];
+export const TOOLS = [...LOCAL_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS];
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 /** 本地自己处理、不转发后端的工具。 */
