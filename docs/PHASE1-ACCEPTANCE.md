@@ -2,7 +2,7 @@
 
 本文是第一期记账/报表闭环的**可复现验收说明**：命令、覆盖范围、独立预期值与能力边界。
 它不替代 `docs/CAPABILITY-AUDIT-2026-10-13.md`（现状盘点）或 `docs/handoffs/STATE.md`（阶段状态），
-后两者由管理者维护。核验日期：2026-10-13；基线：main `91b623a`。
+后两者由管理者维护。核验日期：2026-10-13；开发基线：`91b623a`；管理者验收基线包含 TAX 合并 `f4d9f82`。
 
 ## 1. 验收目标
 
@@ -17,7 +17,7 @@
 ## 2. 命令与工作目录
 
 ```bash
-# 全套回归（推荐）：guards → derived → 原 smoke → MCP contract → workflow →（若存在）tax
+# 全套回归（推荐）：guards → derived → 原 smoke → MCP contract → workflow → tax（必跑）
 cd 06-workbench
 npm test                       # = node scripts/test-all.mjs
 npm run test:smoke             # 只跑原工作台端到端
@@ -42,7 +42,7 @@ node workflow-test.mjs
 | smoke | `06-workbench/test/smoke.test.mjs` | 工作台端到端（账套/凭证/报表/折旧/结转/结账/Agent 工具/导入） |
 | contract | `05-reconstruction/codex/mcp/finance-mcp/contract-test.mjs` | MCP 工具契约、错误路径、导入默认预检、后端不可达 |
 | workflow | `05-reconstruction/codex/mcp/finance-mcp/workflow-test.mjs` | 临时账套业务闭环 + 独立预期金额勾稽 |
-| tax | `05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs` | 税务网关契约（**待 TAX PR 合并**，存在才执行） |
+| tax | `05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs` | 税务网关契约与异步状态机（本地假适配器，已纳入必跑） |
 
 ## 4. workflow 的独立预期值（可审计）
 
@@ -92,7 +92,7 @@ node workflow-test.mjs
 | 旧账导入（JSON/4 CSV、UTF-8/GBK、预检+事务、本机 `paths`） | ✅ 可用，**非幂等**，每次新建账套 |
 | Excel→CSV | ⚠️ 需单独运行 `05-reconstruction/tools/xlsx-to-csv.py`；`exec` 未实现 |
 | 发票采集/查验/开票/红冲、银行流水、工资与个税计算、全税种申报、辅助核算、正式导出 | ⬜ 未实现，工具返回 `not_implemented` |
-| 电子税务局登录/真实税局通道 | ⬜ 未实现 |
+| 电子税务局 | 7 个接口已预留，真实地区接入数 0；见 TAX-INTEGRATION.md |
 | 完整会计准则适配、正式申报、报表文件导出 | ⬜ 未承诺 |
 
 - 发票/银行/工资入账只能基于**用户提供的已核实结构化数据**手工记账；源系统采集与自动计算尚不支持。
@@ -107,7 +107,9 @@ node workflow-test.mjs
 | 命令 | 工作目录 | 结果 |
 |---|---|---|
 | `node workflow-test.mjs` | `05-reconstruction/codex/mcp/finance-mcp` | 23/23 通过，退出码 0 |
-| `node scripts/test-all.mjs` | `06-workbench` | guards 23/23、derived 31/31、smoke 28/28、contract 44/44、workflow 23/23，全部通过；tax 明确跳过 |
+| `node scripts/test-all.mjs` | `06-workbench` | 管理者独立验证 guards 23/23、derived 31/31、smoke 28/28、contract 44/44、workflow 23/23、tax 59/59，共 208/208，exit 0 |
 
 > 独立预期值由 `workflow-test.mjs` 内对示例 CSV 的原始列算术 + 手写业务常量给出；
 > 结论只覆盖上述命令与场景，不覆盖第 6 节未实现能力。
+
+已知导入限制：CSV 非法金额文本目前会被按 0 处理，预检不完整覆盖金额/期间等约束；导入规则要求先核对原始数据，严格校验改造列入后续优先任务。
