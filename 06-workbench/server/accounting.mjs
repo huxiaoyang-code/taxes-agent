@@ -114,9 +114,10 @@ export function setOpeningBalances(setId, items = []) {
     const rawDebit = Number(it?.debit ?? 0);
     const rawCredit = Number(it?.credit ?? 0);
     if (!Number.isFinite(rawDebit) || !Number.isFinite(rawCredit)) throw new Error(`opening_amount_invalid:${code}`);
+    // 负数必须在舍入前判定：-0.001 经 round2 会变成 -0（不 < 0）而被误接受。
+    if (rawDebit < 0 || rawCredit < 0) throw new Error(`opening_amount_invalid:${code}`);
     const debit = r2(rawDebit);
     const credit = r2(rawCredit);
-    if (debit < 0 || credit < 0) throw new Error(`opening_amount_invalid:${code}`);
     if (debit > 0 && credit > 0) throw new Error(`opening_borrow_lend_conflict:${code}`);
     resolved.push({ code, debit, credit });
   }
@@ -280,14 +281,59 @@ export function getVoucher(setId, id) {
   return hydrate(v);
 }
 
+/**
+ * 派生折旧/摊销凭证重新过账约束：
+ * 恢复一张被反过账的折旧凭证时，核验「该资产其他已过账计提出累计 + 本凭证计提」
+ * 不超过可折旧额。一旦超出则整单拒绝，绝不部分过账；合法的未超额反过账/重过账
+ * 以及删除重算均不受影响。
+ * 该约束堵住如下漏洞：先 unpost 旧期折旧、再跨期计提（已过账累计变 0 会重新算满额）、
+ * 最后重新过账旧凭证，从而使累计计提超过可折旧额（remaining 为负）。
+ */
+function assertDepreciationPostable(setId, v) {
+  if (v.kind !== "depreciation") return;
+  const runs = rows(
+    `SELECT r.asset_id, r.amount, c.original_cost, c.residual_rate
+       FROM asset_depreciation_runs r
+       JOIN asset_cards c ON c.id = r.asset_id
+      WHERE r.account_set_id=? AND r.voucher_id=?`,
+    setId, v.id
+  );
+  if (!runs.length) return;
+  const perAsset = new Map();
+  for (const r of runs) {
+    const info = perAsset.get(r.asset_id) || {
+      posting: 0,
+      depreciable: r2(r.original_cost * (1 - r.residual_rate)),
+    };
+    info.posting = r2(info.posting + r.amount);
+    perAsset.set(r.asset_id, info);
+  }
+  for (const [assetId, info] of perAsset) {
+    const posted = r2(row(
+      `SELECT COALESCE(SUM(r.amount),0) s FROM asset_depreciation_runs r
+         JOIN vouchers v ON v.id = r.voucher_id
+        WHERE r.account_set_id=? AND r.asset_id=? AND v.status='posted' AND r.voucher_id<>?`,
+      setId, assetId, v.id
+    ).s);
+    if (posted + info.posting > info.depreciable + EPS) {
+      const err = new Error("depreciation_exceeds_depreciable");
+      err.details = { asset_id: assetId, depreciable: info.depreciable, posted, posting: info.posting };
+      throw err;
+    }
+  }
+}
+
 export function postVoucher(setId, id) {
   const v = getVoucher(setId, id);
   if (v.status === "posted") return v;
   if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   const chk = checkVoucher(setId, v.entries);
   if (!chk.ok) { const e = new Error("voucher_invalid"); e.details = chk; throw e; }
-  run(`UPDATE vouchers SET status='posted' WHERE id=?`, id);
-  return getVoucher(setId, id);
+  assertDepreciationPostable(setId, v);
+  return withSavepoint(() => {
+    run(`UPDATE vouchers SET status='posted' WHERE id=?`, id);
+    return getVoucher(setId, id);
+  });
 }
 export function unpostVoucher(setId, id) {
   const v = getVoucher(setId, id);
@@ -299,8 +345,16 @@ export function deleteVoucher(setId, id) {
   const v = getVoucher(setId, id);
   if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   if (v.status === "posted") throw new Error("posted_voucher_requires_unpost");
-  run(`DELETE FROM vouchers WHERE id=?`, id);
-  return { deleted: id };
+  return withSavepoint(() => {
+    deleteVoucherRow(setId, id);
+    return { deleted: id };
+  });
+}
+
+/** 删除凭证及其关联的折旧计提记录（不经状态/封账校验，供内部重算使用）。 */
+function deleteVoucherRow(setId, id) {
+  run(`DELETE FROM asset_depreciation_runs WHERE account_set_id=? AND voucher_id=?`, setId, id);
+  run(`DELETE FROM vouchers WHERE account_set_id=? AND id=?`, setId, id);
 }
 
 // ---------------------------------------------------------------- 余额
@@ -357,8 +411,22 @@ function naturalRange(setId, codes, fromPeriod, toPeriod) {
   return r2(d === "debit" ? debit - credit : credit - debit);
 }
 
-const codes = (setId, prefixList) =>
-  listAccounts(setId).filter((a) => prefixList.some((p) => a.code.startsWith(p))).map((a) => a.code);
+// ---- 科目编码层级归集 ----------------------------------------------------
+// 同一编码被视为“父/子”关系：编码完全相等，或某编码是另一个的前缀（如 1002 与 100201）。
+// 归集时按科目逐个判断，保证“父科目直接发生 + 子科目发生”既不重复也不遗漏。
+const underPrefix = (code, prefix) => code === prefix || String(code).startsWith(prefix);
+
+/** 汇总 bal 中命中任一编码前缀的科目 natural 余额；每个科目只计一次。 */
+function sumByPrefix(bal, prefixList) {
+  let total = 0;
+  for (const [code, b] of bal) {
+    if (prefixList.some((p) => underPrefix(code, p))) total += b.natural;
+  }
+  return r2(total);
+}
+
+/** 判断科目编码是否属于给定的一组顶层编码及其下级明细。 */
+const codeUnderAny = (code, prefixList) => prefixList.some((p) => underPrefix(code, p));
 
 // ---------------------------------------------------------------- 报表
 export function trialBalance(setId, period) {
@@ -382,8 +450,8 @@ export function trialBalance(setId, period) {
 
 export function balanceSheet(setId, period) {
   const bal = accountBalances(setId, period);
-  const nat = (code) => bal.get(code)?.natural || 0;
-  const sum = (list) => r2(list.reduce((s, c) => s + nat(c), 0));
+  // 按编码层级归集：列表给出顶层科目，自动包含其下明细科目。
+  const sum = (list) => sumByPrefix(bal, list);
 
   const 货币资金 = sum(["1001", "1002", "1012"]);
   const 短期投资 = sum(["1101"]);
@@ -391,7 +459,7 @@ export function balanceSheet(setId, period) {
   const 应收账款 = sum(["1122"]);
   const 预付账款 = sum(["1123"]);
   const 其他应收款 = sum(["1131", "1132", "1221"]);
-  const 存货 = sum(codes(setId, ["1401", "1402", "1403", "1405", "1408", "1411"]));
+  const 存货 = sum(["1401", "1402", "1403", "1405", "1408", "1411"]);
   const 固定资产原价 = sum(["1601"]);
   const 累计折旧 = sum(["1602"]);
   const 固定资产 = r2(固定资产原价 - 累计折旧);
@@ -421,7 +489,7 @@ export function balanceSheet(setId, period) {
   // 未分配利润 = 利润分配 + 本年利润(3103) + 尚未结转的本年损益
   // 尚未结转损益 = 贷方(收入) - 借方(成本费用) = -Σ(debit-credit)
   const 未结转损益 = r2(-损益科目.reduce((s, c) => s + (bal.get(c)?.net || 0), 0));
-  const 本年利润 = r2((bal.get("3103")?.natural || 0) + 未结转损益);
+  const 本年利润 = r2(sumByPrefix(bal, ["3103"]) + 未结转损益);
   const 未分配利润 = r2(已分配利润 + 本年利润);
   const 所有者权益合计 = r2(实收资本 + 盈余公积 + 未分配利润);
 
@@ -470,12 +538,25 @@ export function incomeStatement(setId, period) {
   const ytdStart = s.start_period > `${year}-01` ? s.start_period : `${year}-01`;
   const plAccounts = listAccounts(setId).filter((a) => a.category === "损益");
 
-  // 按科目名称/编码尾号归集，兼容小企业(5xxx)与企业会计准则(6xxx)两套编码
+  // 按科目名称/编码层级归集，兼容小企业(5xxx)与企业会计准则(6xxx)两套编码；
+  // 明细科目（如 560201）按其顶层编码（5602）归类，而不是只看名称/尾号。
   const TAIL = {
     "001": "营业收入", "051": "营业收入", "111": "投资收益", "301": "营业外收入",
     "401": "营业成本", "402": "营业成本", "403": "税金及附加", "601": "销售费用",
     "602": "管理费用", "603": "财务费用", "711": "营业外支出", "801": "所得税费用",
   };
+  const PL_PREFIX = [
+    ["5001", "营业收入"], ["5051", "营业收入"], ["6001", "营业收入"], ["6051", "营业收入"],
+    ["5401", "营业成本"], ["5402", "营业成本"], ["6401", "营业成本"], ["6402", "营业成本"],
+    ["5403", "税金及附加"], ["6403", "税金及附加"],
+    ["5601", "销售费用"], ["6601", "销售费用"],
+    ["5602", "管理费用"], ["6602", "管理费用"],
+    ["5603", "财务费用"], ["6603", "财务费用"],
+    ["5111", "投资收益"], ["6111", "投资收益"],
+    ["5301", "营业外收入"], ["6301", "营业外收入"],
+    ["5711", "营业外支出"], ["6711", "营业外支出"],
+    ["5801", "所得税费用"], ["6801", "所得税费用"],
+  ];
   const lineOf = (a) => {
     const n = a.name || "";
     if (/主营业务收入|其他业务收入/.test(n)) return "营业收入";
@@ -488,7 +569,9 @@ export function incomeStatement(setId, period) {
     if (/营业外收入/.test(n)) return "营业外收入";
     if (/营业外支出/.test(n)) return "营业外支出";
     if (/所得税费用/.test(n)) return "所得税费用";
-    if (TAIL[a.code.slice(-3)]) return TAIL[a.code.slice(-3)];
+    const byPrefix = PL_PREFIX.find(([p]) => underPrefix(a.code, p));
+    if (byPrefix) return byPrefix[1];
+    if (TAIL[String(a.code).slice(0, 4).slice(-3)]) return TAIL[String(a.code).slice(0, 4).slice(-3)];
     return a.direction === "credit" ? "其他收入" : "其他费用";
   };
 
@@ -525,15 +608,27 @@ export function generalLedger(setId, code, period) {
   const s = getAccountSet(setId);
   const acc = row(`SELECT * FROM accounts WHERE account_set_id=? AND code=?`, setId, code);
   if (!acc) throw new Error("account_not_found");
-  const o = row(`SELECT debit, credit FROM opening_balances WHERE account_set_id=? AND code=?`, setId, code) || { debit: 0, credit: 0 };
+  // 父科目明细账：若存在下级科目，一并纳入（保持返回结构不变，仍逐笔展示）。
+  const children = rows(
+    `SELECT code FROM accounts WHERE account_set_id=? AND code<>? AND code LIKE ? ORDER BY code`,
+    setId, code, `${code}%`
+  ).map((r) => r.code);
+  const group = [code, ...children];
+  const ph = group.map(() => "?").join(",");
+  const o = row(
+    `SELECT COALESCE(SUM(debit),0) debit, COALESCE(SUM(credit),0) credit
+       FROM opening_balances WHERE account_set_id=? AND code IN (${ph})`,
+    setId, ...group
+  ) || { debit: 0, credit: 0 };
   let running = r2(o.debit - o.credit);
   const items = rows(
     `SELECT v.period, v.voucher_date, v.word, v.number, v.summary AS vsummary,
             e.summary, e.debit, e.credit, v.id AS voucher_id
        FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
-      WHERE v.account_set_id=? AND v.status='posted' AND v.period BETWEEN ? AND ? AND e.code=?
+      WHERE v.account_set_id=? AND v.status='posted' AND v.period BETWEEN ? AND ?
+        AND e.code IN (${ph})
       ORDER BY v.period, v.number, e.line_no`,
-    setId, s.start_period, period, code
+    setId, s.start_period, period, ...group
   ).map((it) => {
     running = r2(running + it.debit - it.credit);
     return { ...it, balance: running };
@@ -562,70 +657,122 @@ function prevPeriod(period) {
 /**
  * 结转本期损益到 3103 本年利润；yearEnd=true 时再结转 3103 -> 3104。
  * 结转凭证 kind='carryforward'，不计入利润表发生额，避免重复计算。
+ *
+ * 规则：
+ * - 已过账的损益结转凭证视为“本期已结转”，再次结转损益报 already_carried_forward；
+ * - 已过账的 3103→3104 年末结转不允许重复，报 already_year_end_carried；
+ * - 未过账（草稿）的旧结转凭证在重算时先删除，避免残留草稿再次过账造成重复；
+ * - 反过账/删除后可重新结转（不会永久阻止重算）；
+ * - 本期无损益但 3103 有余额时，yearEnd=true 仍可做年末结转；
+ * - 年末结转与资产负债表口径一致：3103 及其下级明细逐个转出到 3104，不遗漏明细；
+ * - 期间登记（ensurePeriod）在保存点内执行，失败不留下新建的空期间。
  */
 export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
   getAccountSet(setId);
-  ensurePeriod(setId, period);
-  if (periodStatus(setId, period) === "closed") throw new Error("period_closed");
-  if (row(`SELECT id FROM vouchers WHERE account_set_id=? AND period=? AND kind='carryforward'`, setId, period))
-    throw new Error("already_carried_forward");
+  const p = requirePeriod(period);
+  if (periodStatus(setId, p) === "closed") throw new Error("period_closed");
 
-  const bal = accountBalances(setId, period);
-  const entries = [];
-  let revenue = 0, expense = 0;
-  for (const a of listAccounts(setId).filter((x) => x.category === "损益")) {
-    const b = bal.get(a.code);
-    if (!b || Math.abs(b.natural) < EPS) continue;
-    if (a.direction === "credit") {
-      revenue = r2(revenue + b.natural);
-      entries.push({ code: a.code, summary: "结转本期损益", debit: b.natural, credit: 0 });
-    } else {
-      expense = r2(expense + b.natural);
-      entries.push({ code: a.code, summary: "结转本期损益", debit: 0, credit: b.natural });
+  const plCodes = new Set(listAccounts(setId).filter((x) => x.category === "损益").map((x) => x.code));
+  const isProfitCarry = (v) => v.entries.some((e) => plCodes.has(e.code));
+  const carries = listVouchers(setId, { period: p }).filter((v) => v.kind === "carryforward");
+  const plCarries = carries.filter(isProfitCarry);
+  const yearEndCarries = carries.filter((v) => !isProfitCarry(v));
+  const postedPL = plCarries.some((v) => v.status === "posted");
+  const postedYE = yearEndCarries.some((v) => v.status === "posted");
+  if (postedPL && !yearEnd) throw new Error("already_carried_forward");
+  if (postedYE && yearEnd) throw new Error("already_year_end_carried");
+
+  return withSavepoint(() => {
+    // 期间登记纳入同一保存点：后续任一步失败都不留下新建的空期间。
+    ensurePeriod(setId, p);
+    // 先清掉可能残留的草稿结转凭证（含被反过账的），避免其日后过账造成重复入账。
+    for (const v of [...plCarries, ...yearEndCarries]) {
+      if (v.status !== "posted") deleteVoucherRow(setId, v.id);
     }
-  }
-  if (!entries.length) return { voucher: null, note: "本期无损益发生额" };
 
-  const profit = r2(revenue - expense);
-  entries.push(profit >= 0
-    ? { code: "3103", summary: "结转本期损益", debit: 0, credit: profit }
-    : { code: "3103", summary: "结转本期损益", debit: -profit, credit: 0 });
+    // ---- 1. 结转本期损益到 3103 ----
+    let voucher = null, revenue = 0, expense = 0, profit = 0;
+    if (!postedPL) {
+      const bal = accountBalances(setId, p);
+      const entries = [];
+      for (const a of listAccounts(setId).filter((x) => x.category === "损益")) {
+        const natural = bal.get(a.code)?.natural || 0;
+        if (Math.abs(natural) < EPS) continue;
+        // 按余额符号生成相反的合法分录，绝不写负数金额。
+        if (a.direction === "credit") {
+          revenue = r2(revenue + natural);
+          entries.push(natural > 0
+            ? { code: a.code, summary: "结转本期损益", debit: natural, credit: 0 }
+            : { code: a.code, summary: "结转本期损益", debit: 0, credit: -natural });
+        } else {
+          expense = r2(expense + natural);
+          entries.push(natural > 0
+            ? { code: a.code, summary: "结转本期损益", debit: 0, credit: natural }
+            : { code: a.code, summary: "结转本期损益", debit: -natural, credit: 0 });
+        }
+      }
+      if (entries.length) {
+        profit = r2(revenue - expense);
+        // 利润为 0 时不加 3103 零金额行（借贷已自然平衡）。
+        if (profit > EPS) entries.push({ code: "3103", summary: "结转本期损益", debit: 0, credit: profit });
+        else if (profit < -EPS) entries.push({ code: "3103", summary: "结转本期损益", debit: -profit, credit: 0 });
+        voucher = createVoucher(setId, {
+          period: p, voucher_date: lastDay(p), summary: "结转本期损益",
+          kind: "carryforward", status: "posted", entries,
+        });
+      }
+    }
 
-  const voucher = createVoucher(setId, {
-    period, voucher_date: lastDay(period), summary: "结转本期损益",
-    kind: "carryforward", status: "posted", entries,
+    // ---- 2. 年末结转 3103 -> 3104（本期无损益但 3103 有余额也可执行）----
+    // 与资产负债表口径一致：按 3103 前缀（含下级明细）逐个科目转出，不静默只取根余额。
+    let yearEndVoucher = null;
+    if (yearEnd && !postedYE) {
+      const bal = accountBalances(setId, p);
+      const lines = [];
+      for (const [code, b] of bal) {
+        if (!underPrefix(code, "3103")) continue;
+        if (Math.abs(b.natural) < EPS) continue;
+        lines.push({ code, natural: b.natural });
+      }
+      if (lines.length) {
+        const total = r2(lines.reduce((s, l) => s + l.natural, 0));
+        const es = [];
+        for (const l of lines) {
+          if (l.natural > 0) es.push({ code: l.code, debit: l.natural, credit: 0, summary: "结转本年利润" });
+          else es.push({ code: l.code, debit: 0, credit: -l.natural, summary: "结转本年利润" });
+        }
+        // 明细互抵后净额为零时，不需要 3104 对账行，分录本身已平衡。
+        if (Math.abs(total) >= EPS) {
+          if (total > 0) es.push({ code: "3104", debit: 0, credit: total, summary: "结转本年利润" });
+          else es.push({ code: "3104", debit: -total, credit: 0, summary: "结转本年利润" });
+        }
+        yearEndVoucher = createVoucher(setId, {
+          period: p, voucher_date: lastDay(p), summary: "结转本年利润",
+          kind: "carryforward", status: "posted", entries: es,
+        });
+      }
+    }
+    return { voucher, yearEndVoucher, revenue, expense, profit };
   });
-
-  let yearEndVoucher = null;
-  if (yearEnd) {
-    const p3103 = accountBalances(setId, period).get("3103")?.natural || 0;
-    if (Math.abs(p3103) >= EPS) {
-      const es = p3103 > 0
-        ? [{ code: "3103", debit: p3103, credit: 0, summary: "结转本年利润" },
-           { code: "3104", debit: 0, credit: p3103, summary: "结转本年利润" }]
-        : [{ code: "3103", debit: 0, credit: -p3103, summary: "结转本年利润" },
-           { code: "3104", debit: -p3103, credit: 0, summary: "结转本年利润" }];
-      yearEndVoucher = createVoucher(setId, {
-        period, voucher_date: lastDay(period), summary: "结转本年利润",
-        kind: "carryforward", status: "posted", entries: es,
-      });
-    }
-  }
-  return { voucher, yearEndVoucher, revenue, expense, profit };
 }
 
 // ---------------------------------------------------------------- 资产卡片
 export function listAssetCards(setId) {
   getAccountSet(setId);
+  // accumulated / months_done 仅统计已过账的计提记录，与总账余额保持一致。
   return rows(
-    `SELECT c.*, COALESCE((SELECT SUM(r.amount) FROM asset_depreciation_runs r WHERE r.asset_id=c.id),0) AS accumulated
+    `SELECT c.*, COALESCE((SELECT SUM(r.amount) FROM asset_depreciation_runs r
+        JOIN vouchers v ON v.id=r.voucher_id
+       WHERE r.asset_id=c.id AND v.status='posted'),0) AS accumulated
        FROM asset_cards c WHERE c.account_set_id=? ORDER BY c.id`, setId
   ).map((c) => ({
     ...c,
     depreciable: r2(c.original_cost * (1 - c.residual_rate)),
     monthly: r2((c.original_cost * (1 - c.residual_rate)) / c.useful_life_months),
     remaining: r2(c.original_cost * (1 - c.residual_rate) - c.accumulated),
-    months_done: row(`SELECT COUNT(*) n FROM asset_depreciation_runs WHERE asset_id=?`, c.id).n,
+    months_done: row(
+      `SELECT COUNT(*) n FROM asset_depreciation_runs r JOIN vouchers v ON v.id=r.voucher_id
+        WHERE r.asset_id=? AND v.status='posted'`, c.id).n,
   }));
 }
 
@@ -673,40 +820,61 @@ export function listDepreciationRuns(setId, { period } = {}) {
 }
 
 // ---------------------------------------------------------------- 折旧/摊销计提
-/** 按直线法对全部资产卡计提指定期间折旧/摊销，生成一张凭证并记录 runs。 */
+/**
+ * 按直线法对全部资产卡计提指定期间折旧/摊销，生成一张凭证并记录 runs。
+ * - 累计已提只认「已过账」计提：反过账后累计自动减少，重新过账恢复；
+ * - 同一期间已过账的计提视为幂等，跳过；
+ * - 同一期间存在未过账的计提（残留草稿/孤儿 run）时明确拒绝，
+ *   要求先删除或恢复该草稿，绝不与残留草稿双重入账；
+ * - 凭证 + runs 在一个保存点内原子写入，失败全回滚。
+ */
 export function generateDepreciation(setId, period) {
   getAccountSet(setId);
-  ensurePeriod(setId, period);
   if (periodStatus(setId, period) === "closed") throw new Error("period_closed");
-  const cards = rows(`SELECT * FROM asset_cards WHERE account_set_id=? ORDER BY id`, setId);
-  const entries = [];
-  const pending = [];
-  for (const c of cards) {
-    if (c.start_period > period) continue;
-    if (row(`SELECT 1 FROM asset_depreciation_runs WHERE account_set_id=? AND asset_id=? AND period=?`, setId, c.id, period))
-      continue;
-    const depreciable = r2(c.original_cost * (1 - c.residual_rate));
-    const monthly = r2(depreciable / c.useful_life_months);
-    const done = r2(row(`SELECT COALESCE(SUM(amount),0) s FROM asset_depreciation_runs WHERE asset_id=?`, c.id).s);
-    const remaining = r2(depreciable - done);
-    if (remaining <= EPS) continue;
-    const amount = Math.min(monthly, remaining);
-    const label = c.kind === "fixed" ? "折旧" : "摊销";
-    entries.push({ code: c.expense_account, summary: `计提${label}-${c.name}`, debit: amount, credit: 0 });
-    entries.push({ code: c.accum_account, summary: `计提${label}-${c.name}`, debit: 0, credit: amount });
-    pending.push({ asset_id: c.id, amount });
-  }
-  if (!entries.length) return { voucher: null, runs: [], note: "本期无需计提（已提足或未到计提期）" };
-  const voucher = createVoucher(setId, {
-    period, voucher_date: lastDay(period), summary: "计提折旧与摊销",
-    kind: "depreciation", status: "posted", entries,
+  return withSavepoint(() => {
+    ensurePeriod(setId, period);
+    // 同期存在未过账的 run 时明确拒绝，避免与残留草稿双重入账。
+    const residual = row(
+      `SELECT COUNT(*) n FROM asset_depreciation_runs r
+         LEFT JOIN vouchers v ON v.id=r.voucher_id
+        WHERE r.account_set_id=? AND r.period=? AND (v.id IS NULL OR v.status<>'posted')`,
+      setId, period).n;
+    if (residual > 0) throw new Error("depreciation_draft_exists");
+
+    const cards = rows(`SELECT * FROM asset_cards WHERE account_set_id=? ORDER BY id`, setId);
+    const entries = [];
+    const pending = [];
+    for (const c of cards) {
+      if (c.start_period > period) continue;
+      if (row(`SELECT 1 FROM asset_depreciation_runs r JOIN vouchers v ON v.id=r.voucher_id
+               WHERE r.account_set_id=? AND r.asset_id=? AND r.period=? AND v.status='posted'`, setId, c.id, period))
+        continue;
+      const depreciable = r2(c.original_cost * (1 - c.residual_rate));
+      const monthly = r2(depreciable / c.useful_life_months);
+      const done = r2(row(
+        `SELECT COALESCE(SUM(r.amount),0) s FROM asset_depreciation_runs r
+           JOIN vouchers v ON v.id=r.voucher_id
+          WHERE r.asset_id=? AND v.status='posted'`, c.id).s);
+      const remaining = r2(depreciable - done);
+      if (remaining <= EPS) continue;
+      const amount = Math.min(monthly, remaining);
+      const label = c.kind === "fixed" ? "折旧" : "摊销";
+      entries.push({ code: c.expense_account, summary: `计提${label}-${c.name}`, debit: amount, credit: 0 });
+      entries.push({ code: c.accum_account, summary: `计提${label}-${c.name}`, debit: 0, credit: amount });
+      pending.push({ asset_id: c.id, amount });
+    }
+    if (!entries.length) return { voucher: null, runs: [], note: "本期无需计提（已提足或未到计提期）" };
+    const voucher = createVoucher(setId, {
+      period, voucher_date: lastDay(period), summary: "计提折旧与摊销",
+      kind: "depreciation", status: "posted", entries,
+    });
+    const ins = db.prepare(
+      `INSERT INTO asset_depreciation_runs (account_set_id, asset_id, period, amount, voucher_id, created_at)
+       VALUES (?,?,?,?,?,?)`
+    );
+    for (const p of pending) ins.run(setId, p.asset_id, period, p.amount, voucher.id, now());
+    return { voucher, runs: pending };
   });
-  const ins = db.prepare(
-    `INSERT INTO asset_depreciation_runs (account_set_id, asset_id, period, amount, voucher_id, created_at)
-     VALUES (?,?,?,?,?,?)`
-  );
-  for (const p of pending) ins.run(setId, p.asset_id, period, p.amount, voucher.id, now());
-  return { voucher, runs: pending };
 }
 
 // ---------------------------------------------------------------- 现金流量表
@@ -717,7 +885,9 @@ export function generateDepreciation(setId, period) {
 export function cashFlowStatement(setId, period) {
   getAccountSet(setId);
   if (!/^\d{4}-\d{2}$/.test(String(period || ""))) throw new Error("period_invalid");
-  const CASH = new Set(["1001", "1002", "1012"]);
+  // 货币资金及其下级明细（如 100201 银行明细）均为现金科目。
+  const CASH_PREFIX = ["1001", "1002", "1012"];
+  const isCash = (code) => codeUnderAny(code, CASH_PREFIX);
   const classify = (code) => {
     if (/^(1101|1501|1511|1601|1602|1604|1606|1701|1702|1801)/.test(code)) return "investing";
     if (/^(2001|2231|2232|2501|2701|3001|3002|3101|3103|3104)/.test(code)) return "financing";
@@ -733,7 +903,7 @@ export function cashFlowStatement(setId, period) {
     let cashDelta = 0;
     const others = [];
     for (const e of es) {
-      if (CASH.has(e.code)) cashDelta += e.debit - e.credit;
+      if (isCash(e.code)) cashDelta += e.debit - e.credit;
       else others.push(e);
     }
     if (Math.abs(cashDelta) < EPS) continue;
@@ -757,15 +927,16 @@ export function cashFlowStatement(setId, period) {
 
   const balEnd = accountBalances(setId, period);
   const balBegin = accountBalances(setId, prevPeriod(period));
-  const cashAt = (bal) => r2(["1001", "1002", "1012"].reduce((s, c) => s + (bal.get(c)?.natural || 0), 0));
+  const cashAt = (bal) => sumByPrefix(bal, CASH_PREFIX);
   const cash_begin = cashAt(balBegin), cash_end = cashAt(balEnd);
 
   const is = incomeStatement(setId, period);
+  // 折旧/摊销只认已过账凭证，且含累计折旧/摊销的下级明细。
   const dep = r2(row(
     `SELECT COALESCE(SUM(e.credit),0) c FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
       WHERE v.account_set_id=? AND v.status='posted' AND v.kind<>'carryforward' AND v.period=?
-        AND e.code IN ('1602','1702')`, setId, period).c);
-  const natSum = (bal, codes) => r2(codes.reduce((s, c) => s + (bal.get(c)?.natural || 0), 0));
+        AND (e.code LIKE '1602%' OR e.code LIKE '1702%')`, setId, period).c);
+  const natSum = (bal, list) => sumByPrefix(bal, list);
   const RECV = ["1121", "1122", "1123", "1131", "1132", "1221"];
   const INV = ["1401", "1402", "1403", "1405", "1408", "1411"];
   const PAY = ["2201", "2202", "2203", "2211", "2221", "2231", "2232", "2241"];
