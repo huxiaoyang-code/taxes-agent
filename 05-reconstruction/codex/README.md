@@ -63,6 +63,68 @@ codex exec --skip-git-repo-check -C . --dangerously-bypass-approvals-and-sandbox
 # 实测输出：账套 1 在 2026-02 的净利润为 -6900。
 ```
 
+## 本地复现：导入旧账（Codex 作为客户端）
+
+线上有数云 `/work?page=account-sets` 的“导入”由子智能体 `legacy-book-import` 完成
+（逆向结论见 [`../../04-report/10-account-set-import.md`](../../04-report/10-account-set-import.md)）。
+本地复现**只用本仓库的 `06-workbench`**，不需要有数云任何服务：
+
+```
+你的 Codex  ──MCP stdio──▶  finance-mcp  ──HTTP /agent/tools──▶  06-workbench(SQLite)
+     ▲
+     └─ skills_read legacy-book-import/SKILL.md（业务规则）
+```
+
+### 1) 启动后端（工作台）
+
+```bash
+cd 06-workbench
+npm start            # http://127.0.0.1:8787
+```
+
+### 2) 注册 MCP（见上方“接入 Codex”）后**重启 Codex 客户端**
+
+### 3) 让 Codex 跑一遍（直接说人话）
+
+> 先 `skills_read` 读规则，再做预检导入：
+
+```
+先调用 finance MCP 的 skills_read 读取 legacy-book-import/SKILL.md；
+然后用 legacy_book_import 预检导入
+D:/有数云fork/05-reconstruction/examples/legacy-book 下的 4 个 CSV
+（paths={meta,accounts,openings,vouchers}, dryRun=true），只汇报校验结果和汇总。
+```
+
+确认无误后：
+
+```
+用 dryRun=false 正式导入，然后告诉我账套 id，并查 2026-01 资产负债表是否平衡、生成了几张凭证。
+```
+
+### 4) 不想开 Codex？先验证链路
+
+```bash
+cd 05-reconstruction/codex/mcp/finance-mcp
+FINANCE_API_BASE=http://127.0.0.1:8787 node import-demo.mjs
+# [1] 读规则 OK  [2] 预检  [3] 正式导入 created.id  [4] 资产负债表 balanced=true
+```
+
+### Excel（.xlsx）旧账怎么办
+
+本地工具链只吃 CSV；先用 `05-reconstruction/tools/xlsx-to-csv.py` 摊平，再让 Codex 导入：
+
+```bash
+python 05-reconstruction/tools/xlsx-to-csv.py 旧账.xlsx -o out/ --list
+python 05-reconstruction/tools/xlsx-to-csv.py 旧账.xlsx -o out/ \
+  --map openings=科目余额表 --map vouchers=凭证分录
+```
+
+### 关于 `paths`
+
+`legacy_book_import` 除 `payload` / `texts` / `files`(base64) 外，额外支持 `paths`：
+MCP Server（与 Codex 同机）直接读本地 CSV，免去把内容塞进 JSON。
+线上有数云走的是附件管道（`artifactHandle`），本地用 `paths` 更直接。
+
 ## 工具层（23 个）
 
 22 个来自有数云 bundle 的 Dynamic Tools + `finance_query_catalog` / `skills_list` / `skills_read`

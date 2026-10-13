@@ -17,6 +17,8 @@
 | 跑起来看效果 | [§6 命令速查](#6-命令速查) → `06-workbench` |
 | 看线上站点分析结论 | [`../REPORT.md`](../REPORT.md) |
 | 看复刻总体方案 | [`../05-reconstruction/ARCHITECTURE.md`](../05-reconstruction/ARCHITECTURE.md) |
+| 看哪些功能真正可用、哪些需要补齐 | [本机 Codex 功能盘点（2026-10-13）](CAPABILITY-AUDIT-2026-10-13.md) |
+| 看并发分工、需求和验收规则 | [团队实施计划](TEAM-PLAN.md) |
 | 改记账/报表逻辑 | [§3.1 领域层](#31-领域层server) → `server/accounting.mjs` |
 | 加接口 / 加 Agent 工具 | [§3.2 接口层](#32-接口层server) → `server/server.mjs` |
 | 接发票 / 申报 | [ROADMAP](ROADMAP.md) → `agentTool()` 分支 |
@@ -48,7 +50,7 @@
 | `01-capture/` | REA 被动抓取：页面/DOM/网络/截图 | 证据 | `inspect-web-page.json` | ✅ 冻结 |
 | `02-scripts/` | 前端脚本：`work/`(工作台)、`finance/`(登录) | 证据 | `*/index.html` | ✅ 冻结 |
 | `03-analysis/` | REA 原始证据 JSON（应用图、接口、分包） | 证据 | `api-endpoints.json` | ✅ 冻结 |
-| `04-report/` | 主题报告 01–09 + 报告生成脚本 | 文档 | `build_report.py` | ✅ |
+| `04-report/` | 主题报告 01–10 + 报告生成脚本 | 文档 | `build_report.py` | ✅ |
 | `05-reconstruction/` | 复刻契约 + Codex MCP 骨架 | 方案+代码 | `ARCHITECTURE.md` | 🚧 |
 | `06-workbench/` | 记账 + 报表 MVP | 工程 | `server/server.mjs` | 🚧 |
 
@@ -108,9 +110,12 @@
 | `codex/config.toml` | Codex MCP 注册示例 |
 | `codex/.env.example` | 后端地址 / Skill 目录 |
 | `codex/README.md` | Codex 集成说明 |
-| `codex/mcp/finance-mcp/server.mjs` | MCP stdio Server（22 工具 + skills 资源） |
+| `codex/mcp/finance-mcp/server.mjs` | MCP stdio Server（23 工具 + skills 资源；`legacy_book_import` 支持 `paths` 本地路径） |
 | `codex/mcp/finance-mcp/backend.mjs` | 后端适配器（默认指向 `http://127.0.0.1:8787`） |
 | `codex/mcp/finance-mcp/smoke-test.mjs` | MCP 冒烟（在线时直连工作台） |
+| `codex/mcp/finance-mcp/import-demo.mjs` | 本地复现「导入旧账」端到端演示（读取示例 CSV → 预检 → 导入 → 勾稽） |
+| `examples/legacy-book/**` | 导入旧账示例数据集（4 张 CSV） |
+| `tools/xlsx-to-csv.py` | 旧账 Excel(.xlsx) → CSV 转换器（openpyxl） |
 | `codex/skills/**` | 5 个子智能体、21 份业务规则模板（待填正文） |
 
 ---
@@ -145,6 +150,7 @@
 | `07-security-observations.md` | 响应头/会话/监控 |
 | `08-method-and-evidence.md` | 方法与证据对照 |
 | `09-unknowns-and-limits.md` | 未知与覆盖边界 |
+| `10-account-set-import.md` | 账套导入实现（page=account-sets）：建账向导旧账文件 + `legacy-book-import` 子智能体 |
 | `build_report.py` | 由 `03-analysis/*.json` 重新生成以上报告 |
 
 ---
@@ -155,12 +161,16 @@
 # —— 工程：记账 + 报表 ——
 cd 06-workbench
 npm start                 # 启动 → http://127.0.0.1:8787/
-npm test                  # 端到端测试（11 用例）
+npm test                  # 端到端测试（28 用例）
 
 # —— 方案：Codex / MCP（工作台需先启动）——
 cd 05-reconstruction/codex/mcp/finance-mcp
-node smoke-test.mjs       # MCP 工具清单 + finance_query 实调
+node smoke-test.mjs       # MCP 工具清单 + skills_read + finance_query 实调
+node import-demo.mjs      # 导入旧账端到端演示（示例 CSV → 预检 → 导入 → 勾稽）
 node server.mjs           # 单独起 MCP（一般由 Codex 拉起）
+
+# —— 旧账 Excel → CSV ——
+python 05-reconstruction/tools/xlsx-to-csv.py 旧账.xlsx -o out/ --list
 
 # —— 证据：重新生成报告 / 契约 ——
 python 04-report/build_report.py

@@ -11,7 +11,7 @@
 import { createInterface } from "node:readline";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { callBackend, localOnly } from "./backend.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,7 @@ const SCHEMAS = {
       dryRun: { type: "boolean", description: "true=仅预检不落库（默认）；false=正式导入" },
       payload: { type: "object", description: "结构化 payload：{account_set, accounts, opening_balances, vouchers}" },
       texts: { type: "object", description: "CSV 文本：{meta, accounts, openings, vouchers}" },
+      paths: { type: "object", description: "本地 CSV 文件路径（MCP Server 直接读盘，免 base64）：{meta, accounts, openings, vouchers}" },
       files: { type: "object", description: "CSV base64：{meta, accounts, openings, vouchers}" },
       encoding: { type: "string", description: "files 解码编码，如 utf-8 / gbk" },
       meta: { type: "object", description: "覆盖账套信息：{name, taxpayer_type, accounting_standard, start_period}" }
@@ -85,8 +86,13 @@ function listSkillFiles(dir = SKILLS_DIR, base = SKILLS_DIR) {
 
 function readSkill(resource) {
   const normalized = String(resource || "").replaceAll("\\", "/").split(/[?#]/)[0];
-  const full = join(SKILLS_DIR, normalized);
-  if (!full.startsWith(SKILLS_DIR) || !existsSync(full)) {
+  const root = resolve(SKILLS_DIR);
+  const full = resolve(root, normalized);
+  // Windows 下环境变量常用正斜杠，join 会输出反斜杠，直接用 startsWith 会误判；用 resolve + 分隔符比较。
+  if (full !== root && !full.startsWith(root + sep)) {
+    throw new Error(`skill_not_found: ${normalized}`);
+  }
+  if (!existsSync(full)) {
     throw new Error(`skill_not_found: ${normalized}`);
   }
   return readFileSync(full, "utf8");
@@ -105,6 +111,17 @@ async function callTool(name, args = {}) {
   }
   if (localOnly(name)) {
     return { ok: true, tool: name, result: localOnly(name)(args) };
+  }
+  // 本地便利：允许直接传 CSV 文件路径，由 MCP Server（与 Codex 同机）读盘后转发。
+  // 线上有数云走附件管道（artifactHandle），本地复刻用本机路径更直接。
+  if (name === "legacy_book_import" && args.paths && typeof args.paths === "object") {
+    const texts = { ...(args.texts || {}) };
+    for (const key of ["meta", "accounts", "openings", "vouchers"]) {
+      const p = args.paths[key];
+      if (!p) continue;
+      texts[key] = new TextDecoder(args.encoding || "utf-8").decode(readFileSync(String(p)));
+    }
+    return callBackend(name, { ...args, texts }, CATALOG);
   }
   // 其余全部交给后端适配器
   return callBackend(name, args, CATALOG);

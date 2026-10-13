@@ -94,7 +94,7 @@ node smoke-test.mjs
 | `carry_forward_profit` | 期末结转损益（`yearEnd` 时结转 3103→3104） |
 | `asset_list` / `asset_create` | 资产卡片查询/新增 |
 | `depreciation_run` | 计提折旧/摊销并生成凭证 |
-| `legacy_book_import` | 导入旧账（默认 `dryRun=true` 仅预检；`payload` / `texts` / `files`） |
+| `legacy_book_import` | 导入旧账（默认 `dryRun=true` 仅预检；`payload` / `texts` / `files` / `paths`） |
 | `update_plan` | 保存处理计划 |
 | 其他（`invoice_*`/`declaration_query`/…） | 返回 `not_implemented` |
 
@@ -147,6 +147,10 @@ curl -s -X POST http://127.0.0.1:8787/api/import/parse \
 # Agent 一句话（默认仅预检，confirm 后落库）
 # “把 D:/旧账/ 下的 4 个 CSV 导入成新账套” → legacy_book_import
 ```
+
+> 用 **Codex 作客户端**完整复现（含示例数据与 Excel→CSV 转换），
+> 见 [`../05-reconstruction/codex/README.md`](../05-reconstruction/codex/README.md) 的「本地复现：导入旧账」；
+> 一键链路自测：`cd 05-reconstruction/codex/mcp/finance-mcp && node import-demo.mjs`。
 
 ## 会计口径（重要，可按需调整）
 

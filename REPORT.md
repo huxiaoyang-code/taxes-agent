@@ -64,7 +64,8 @@ D:/有数云fork/
     ├── 07-security-observations.md
     ├── 08-method-and-evidence.md
     ├── 09-unknowns-and-limits.md
-    └── build_report.py           由原始 JSON 重新生成以上报告
+    └── 10-account-set-import.md     账套导入实现（page=account-sets）
+    build_report.py                 由原始 JSON 重新生成以上报告
 
 ├── 05-reconstruction/           业务域复刻（Codex 作为客户端）
     ├── ARCHITECTURE.md           ★ 复刻方案与证据（先读这个）
@@ -136,6 +137,7 @@ cd 06-workbench && node server/server.mjs   # → http://127.0.0.1:8787/
 | `ev_ad4fac8e260b2234518c88fa9d3345b023703c1cfd585f2dea8044444f2011c0` | `analyze_javascript_application` | shipped-artifact / derived | /work 静态应用图（subject sha256 `c39a1f31…`） |
 | `ev_7f835b30fd5c538787813255527a00039addde094442d0096a5d1fc2d7d0754d` | `discover_webmcp_tools` | observed | 0 个工具 |
 | `ev_4e3f22c872cc3ec4e6e191a213435ef41368d55324ae0dea23991120046cf2c2` | `export_web_scripts` | observed | 导出 7 个 /finance 脚本 |
+| `curl /work/assets/index-CiSnIgwe.js`（sha256 `691cf9c2…b0e26`） | 公开静态资源复核 | shipped-artifact / observed | 账套导入行为与归档版一致；见 `04-report/10`、`03-analysis/account-set-import.json` |
 
 ---
 

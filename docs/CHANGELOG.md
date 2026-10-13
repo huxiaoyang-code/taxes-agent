@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+### Added — 逆向分析：账套导入
+- 新增主题报告 [`04-report/10-account-set-import.md`](04-report/10-account-set-import.md)：
+  `page=account-sets` 的导入实现（建账向导“期初旧账/旧账文件” + `legacy-book-import` 子智能体）
+- 新增证据 [`03-analysis/account-set-import.json`](03-analysis/account-set-import.json)：向导字段/默认值/接口契约/附件管道/状态机
+- 归档实时复核 bundle `02-scripts/work/index-CiSnIgwe.js`（sha256 `691cf9c2…`），与旧版 `index-yoSd2Nx7.js` 行为一致
+- 关键结论：向导中的 `openingBalanceFile` 被提交前丢弃，`createAccountSet` 零调用；导入由 Agent 附件管道完成
+
+### Added — 本地复现「导入旧账」（Codex 客户端）
+- `finance-mcp` 修复 Windows 下 `skills_read` 路径误判（正/反斜杠）
+- `legacy_book_import` 新增 `paths` 参数：MCP Server 直接读本地 CSV，免 base64
+- 新增 `codex/mcp/finance-mcp/import-demo.mjs`：读规则 → 预检 → 导入 → 报表勾稽 一条龙演示
+- 新增 `examples/legacy-book/` 示例旧账（4 张 CSV）与 `tools/xlsx-to-csv.py`（openpyxl，Excel → CSV）
+- `codex/README.md` 新增「本地复现：导入旧账」步骤（工作台 + MCP + Codex 提示词）
+
 ### Planned
 - 辅助核算（客户/供应商/部门/项目）
 - 银行流水对账

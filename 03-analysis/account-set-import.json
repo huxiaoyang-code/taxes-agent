@@ -1,0 +1,147 @@
+{
+  "topic": "account-set-import / 账套导入（page=account-sets）",
+  "method": "static analysis of the public /work Vite bundle + diff with the archived capture; passive only, no login, no form submission",
+  "evidence": {
+    "user_url": "https://daizhang.youshu.yun/work/?threadId=<id>&page=account-sets",
+    "archived_capture": {
+      "path": "02-scripts/work/index-yoSd2Nx7.js",
+      "url": "https://daizhang.youshu.yun/work/assets/index-yoSd2Nx7.js",
+      "sha256": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e",
+      "bytes": 2476382
+    },
+    "live_recheck_2026_10_12": {
+      "path": "02-scripts/work/index-CiSnIgwe.js",
+      "url": "https://daizhang.youshu.yun/work/assets/index-CiSnIgwe.js",
+      "sha256": "691cf9c2ae6878b7f09431983ca1e69e2eaa5614e5d061a76321d76db46b0e26",
+      "bytes": 2483463,
+      "result": "same account-set import behavior: `openingBalanceFile` still appears exactly once and is still never uploaded"
+    },
+    "finance_side_probe": {
+      "note": "optional cross-check of /finance assets; no `导入` string exists in /finance main or its lazy chunks (InitDetailPage/Workspace/payload)",
+      "main_sha256": "6d1e9e... (re-fetched; not archived)",
+      "endpoints_seen": [
+        "GET/POST /account-sets",
+        "GET /account-sets/{id}/subjects",
+        "GET /account-sets/{id}/subjects/opening-balances",
+        "POST /account-sets/{id}/subjects/opening-balances"
+      ]
+    }
+  },
+  "conclusion": {
+    "one_line": "工作台页面 `page=account-sets` 没有独立的‘导入账套’接口；导入旧账由 AI 子智能体 legacy-book-import 在会话中完成，建账向导里的‘期初旧账/旧账文件’只是未接线的 UI 占位（文件从不发送到服务端）。",
+    "confidence": "observed (code) + inferred (intent)"
+  },
+  "observed": {
+    "wizard": {
+      "component": "NIe (function NIe({api,onRefresh,onAuthRequired}))",
+      "route_const": "/account-set-center",
+      "steps_create": ["新建公司", "补全信息"],
+      "steps_edit": ["账套信息", "财务信息"],
+      "draft_localStorage_key": "account_set_create_wizard_draft_v1",
+      "defaults": {
+        "currency": "CNY",
+        "startYear/startMonth": "上个月",
+        "status": "active",
+        "declarationType": "zero",
+        "accountingStandard": "small_enterprise",
+        "hasOpeningBalance": "none",
+        "taxHandlerIdentity": "legal_rep",
+        "verifyCodeMode": "hosted",
+        "personalTaxAuthMode": "2"
+      },
+      "fields": {
+        "step0": ["companyName", "taxNumber", "accountantId", "startYear", "startMonth"],
+        "step1": ["taxLoginProfileId", "personalTaxAuthMode", "personalTaxPassword | personalTaxLoginProfileId", "hasOpeningBalance", "openingBalanceFile?"]
+      },
+      "old_book_field": {
+        "name": "openingBalanceFile",
+        "label": "旧账文件",
+        "shown_when": "hasOpeningBalance === 'yes'",
+        "accept": ".xls,.xlsx,.csv",
+        "beforeUpload": "() => false  (手动/不自动上传)",
+        "maxCount": 1,
+        "hint": "请上传启用账期前的科目余额表",
+        "required": true
+      },
+      "orphan_finding": "`openingBalanceFile` 与 `hasOpeningBalance` 在提交前被显式从 payload 删除；`Kn()`（同步企业信息）只发送公司/税号/地区/办税档案字段；`createAccountSet`(POST /account-set-center/account-sets) 在 bundle 中定义了但从未被调用（0 次）。"
+    },
+    "subagent": {
+      "runtimeName": "legacy-book-import",
+      "displayName": "导入旧账",
+      "description": "导入 Excel 旧账、历史凭证、科目余额和期初余额，并支持账套初始化。",
+      "skill_ref": "legacy-book-import/SKILL.md",
+      "skill_label": "读取旧账导入规则",
+      "external_task_type": "legacy_book_import (account task / business-batches businessType)"
+    },
+    "attachment_pipeline": {
+      "upload": "POST /api/attachments/raw-upload  (multipart field `files`)",
+      "limits": { "max_files": 6, "max_single": "20MB", "max_total": "32MB" },
+      "response": "{ attachments: [{ artifactHandle, name, mimeType, size }] }",
+      "fetch": "GET /api/attachments/{artifactHandle}",
+      "agent_message_header": "# Files mentioned by the user:",
+      "agent_message_line": "## {name} (artifactHandle: {handle})",
+      "agent_message_footer": "## My request for Codex:",
+      "content_reading": "xlsx/xls/csv 仅传元数据；文本可用 finance_artifact_read；PDF/Office/图片正文当前不支持直接读取"
+    },
+    "task_center": {
+      "list": "GET /finance/business-batches?threadId=&cursor=&limit=",
+      "get": "GET /finance/business-batches/{batchId}",
+      "archive": "POST /finance/business-batches/{batchId}/archive"
+    }
+  },
+  "api_contract": {
+    "account_set_center_base": "/account-set-center",
+    "endpoints": [
+      "GET  /account-set-center/account-sets",
+      "GET  /account-set-center/account-sets/{id}?taxSettings=1",
+      "POST /account-set-center/account-sets                       (defined, never called)",
+      "POST /account-set-center/account-sets/checkout/quote        {services, couponIds}",
+      "POST /account-set-center/account-sets/checkout/company      {..., checkoutRequestId, quoteVersion}",
+      "POST /account-set-center/account-sets/checkout/{id}/capabilities",
+      "PUT  /account-set-center/account-sets/{id}",
+      "DELETE /account-set-center/account-sets/{id}",
+      "GET  /account-set-center/account-sets/employees",
+      "GET  /account-set-center/account-sets/demo-provisioning",
+      "POST /account-set-center/enterprise-info-validation/start",
+      "POST /account-set-center/enterprise-info-validation/continue",
+      "POST /account-set-center/enterprise-info-validation/query",
+      "GET  /account-set-center/account-sets/{id}/enterprise-info-validation/status",
+      "GET  /account-set-center/qixin/search?keyword=",
+      "GET  /account-set-center/tax-login-profiles",
+      "POST /account-set-center/tax-login-profiles",
+      "POST /account-set-center/tax-login-profiles/onboarding-candidate",
+      "POST /account-set-center/tax-login-profiles/verify-personal-create",
+      "POST /account-set-center/tax-login-profiles/{id}/verify-enterprise",
+      "POST /account-set-center/tax-login-profiles/{id}/verify-enterprise-sms",
+      "POST /account-set-center/tax-login-profiles/{id}/verify-personal",
+      "POST /account-set-center/tax-login-profiles/account-set/{id}/verify-personal-password",
+      "POST /account-set-center/tax-login-profiles/{id}/password-reset/send-sms",
+      "POST /account-set-center/tax-login-profiles/{id}/password-reset/submit"
+    ],
+    "create_company_payload_kept": [
+      "companyName", "taxNumber", "region", "accountantId", "startYear", "startMonth",
+      "currency", "accountingStandard", "taxpayerType", "industry", "businessScope",
+      "status", "declarationType", "checkoutRequestId", "quoteVersion"
+    ],
+    "create_company_payload_deleted": [
+      "hasOpeningBalance", "openingBalanceFile",
+      "taxLoginProfileId", "personalTaxLoginProfileId",
+      "taxHandlerName", "taxHandlerIdentity", "taxHandlerPhone",
+      "verifyCodeMode", "nationalTaxPassword",
+      "personalTaxAuthMode", "personalTaxPassword",
+      "personalTaxRealNameAccount", "personalTaxRealNamePassword"
+    ]
+  },
+  "account_set_states": {
+    "pending_activation": "待启用（fc()，未完成企业信息同步/初始化）",
+    "onboardingStatus=pending_profile": "资料待补全",
+    "active": "正常",
+    "disabled": "停用"
+  },
+  "unknowns": [
+    "是否存在未在客户端声明的服务端‘导入旧账’动态工具（如 legacy_book_import / finance_artifact_read 的完整 schema）",
+    "旧账 Excel 的模板列定义、科目映射与校验规则（服务端 SKILL.md 正文未随 bundle 下发）",
+    "导入任务与 account task (legacy_book_import) 的状态机字段",
+    "‘期初旧账/旧账文件’UI 是否为灰度中功能，后续版本是否接线到上传接口"
+  ]
+}

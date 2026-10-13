@@ -8,6 +8,22 @@ description: 导入 Excel 旧账、历史凭证、科目余额和期初余额，
 > 模板：原文案在有数云服务端，需按你的实现补全。此文件对应
 > `catalog.json -> skill_files -> "legacy-book-import/SKILL.md"`。
 
+## 逆向结论（观察 · 2026-10-12）
+
+> 来源：`04-report/10-account-set-import.md`、`03-analysis/account-set-import.json`。
+> 这些是**客户端可见**的事实；服务端 SKILL 正文未随 bundle 下发。
+
+- 该子智能体在线上是**会话式附件导入**：用户在 `/work` 上传 `.xls/.xlsx/.csv`，
+  文件经 `POST /api/attachments/raw-upload` 得到 `artifactHandle`，再以
+  `# Files mentioned by the user:` 注入用户消息（最多 6 个，单个 ≤ 20MB，合计 ≤ 32MB）。
+- xlsx/xls/csv 默认只传元数据；纯文本可用 `finance_artifact_read`，Office/PDF/图片正文
+  “当前不支持直接读取”，因此旧账需**用 `exec` 解析**后再录入。
+- 任务类型为 `legacy_book_import`，进度经 `/finance/business-batches` 展示。
+- 建账向导 `page=account-sets` 里的“期初旧账/旧账文件”是**未接线**的 UI 占位：
+  `openingBalanceFile` 在提交前被删除，`POST /account-set-center/account-sets` 零调用。
+- 导入前应对齐 `finance_query(enterprise_account.subject_system.all)`，导入后用
+  `report.balance_sheet` / `report.income_statement` 做勾稽。
+
 ## 目标
 
 导入 Excel 旧账、历史凭证、科目余额和期初余额，并支持账套初始化。
