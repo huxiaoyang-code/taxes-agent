@@ -1,35 +1,48 @@
 /**
- * backend.mjs — 财税工具的后端适配器（骨架）
+ * backend.mjs — 财税工具的后端适配器
  *
- * 所有 22 个业务工具默认都转发到你的财税系统。你需要在这里：
- *   1) 设置 FINANCE_API_BASE / FINANCE_API_TOKEN（见 codex/.env.example）
- *   2) 按你的后端路由实现 callBackend()
+ * MCP 工具调用统一翻译成 HTTP：POST {FINANCE_API_BASE}/agent/tools/{toolName}
+ * （路由实现在 06-workbench/server/server.mjs，执行层在 agent-tools.mjs）
  *
- * 之所以默认转发而不是内置逻辑：有数云的记账/发票/申报引擎在服务端，
- * 前端包里没有业务实现（见 ../ARCHITECTURE.md 第六节）。
+ * 环境变量：
+ *   FINANCE_API_BASE        后端地址，默认 http://127.0.0.1:8787
+ *   FINANCE_API_TOKEN       可选 Bearer Token
+ *   FINANCE_API_TIMEOUT_MS  单次请求超时，默认 15000
  */
 
-const API_BASE = process.env.FINANCE_API_BASE || "http://127.0.0.1:8787";
+const API_BASE = String(process.env.FINANCE_API_BASE ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
 const API_TOKEN = process.env.FINANCE_API_TOKEN || "";
+const TIMEOUT_MS = Number(process.env.FINANCE_API_TIMEOUT_MS || 15000);
+
+/** 后端调用失败（不可达 / 超时 / 非 2xx / 非 JSON）统一用这个错误类型。 */
+export class BackendError extends Error {
+  constructor(code, message, details = null) {
+    super(message || code);
+    this.name = "BackendError";
+    this.code = code;
+    this.details = details;
+  }
+}
 
 /** 少量不需要后端的工具可在这里实现；返回 undefined 表示交给后端。 */
 export function localOnly(name) {
-  const table = {
-    // 示例：update_plan: (args) => ({ plan: args.plan ?? [] }),
-  };
+  const table = {};
   return table[name];
+}
+
+export function backendInfo() {
+  return { apiBase: API_BASE, timeoutMs: TIMEOUT_MS, hasToken: !!API_TOKEN };
 }
 
 /**
  * 把 MCP 工具调用翻译成后端 HTTP 调用。
- * 约定路由（可改）：POST {API_BASE}/agent/tools/{toolName}
+ * 失败时抛 BackendError（带 code），由 MCP 层转成 isError 的结构化内容。
  */
 export async function callBackend(name, args, catalog) {
   if (!API_BASE) {
-    throw new Error(
-      `backend_not_configured: 工具 ${name} 需要财税后端。` +
-      `请设置 FINANCE_API_BASE（当前为空）。可用查询能力 nodeId 见 finance_query_catalog，` +
-      `子智能体见 catalog.subagents。`
+    throw new BackendError(
+      "backend_not_configured",
+      `工具 ${name} 需要财税后端，但 FINANCE_API_BASE 为空。请设置后重试。`
     );
   }
 
@@ -39,24 +52,51 @@ export async function callBackend(name, args, catalog) {
     const prefixes = ["invoice.", "voucher.", "ledger.", "report.", "fund.", "period_end.", "enterprise_account."];
     const id = String(args?.nodeId || "");
     if (catalogIds.size && !catalogIds.has(id) && !prefixes.some((p) => id.startsWith(p))) {
-      throw new Error(`unknown_node_id: ${id}（先用 finance_query_catalog 查看）`);
+      throw new BackendError("unknown_node_id", `未知查询能力：${id}（先用 finance_query_catalog 查看）`, { nodeId: id });
     }
   }
 
-  const res = await fetch(`${API_BASE.replace(/\/$/, "")}/agent/tools/${encodeURIComponent(name)}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {})
-    },
-    body: JSON.stringify(args ?? {})
-  });
+  const url = `${API_BASE}/agent/tools/${encodeURIComponent(name)}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(args ?? {}),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
+    const reason = timedOut
+      ? `请求超时（${TIMEOUT_MS}ms）`
+      : String(e?.cause?.code || e?.message || e);
+    throw new BackendError(
+      "backend_unreachable",
+      `无法连接财税后端 ${API_BASE}：${reason}。请确认 06-workbench 已启动，且 FINANCE_API_BASE 指向它。`,
+      { apiBase: API_BASE, tool: name }
+    );
+  }
 
   const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  let data = null;
+  let parsed = true;
+  try { data = text ? JSON.parse(text) : null; } catch { parsed = false; }
+
   if (!res.ok) {
-    throw new Error(`backend_http_${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
+    const code = (parsed && data && (data.error || data.code)) || `backend_http_${res.status}`;
+    const message = (parsed && data && (data.message || data.error))
+      || `后端返回 HTTP ${res.status}：${text.slice(0, 200)}`;
+    throw new BackendError(code, message, parsed ? data : { raw: text.slice(0, 500) });
+  }
+  if (!parsed) {
+    throw new BackendError(
+      "backend_invalid_json",
+      `后端返回非 JSON（HTTP ${res.status}）：${text.slice(0, 200)}`,
+      { tool: name }
+    );
   }
   return data;
 }
