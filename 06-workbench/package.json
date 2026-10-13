@@ -7,7 +7,8 @@
   "engines": { "node": ">=22.5.0" },
   "scripts": {
     "start": "node server/server.mjs",
-    "test": "node test/smoke.test.mjs",
+    "test": "node scripts/test-all.mjs",
+    "test:smoke": "node test/smoke.test.mjs",
     "seed": "node scripts/seed-demo.mjs"
   }
 }
