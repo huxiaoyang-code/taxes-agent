@@ -31,3 +31,7 @@ Thumbs.db
 .rea/
 chrome-profile/
 rea-chrome-*/
+
+# ---- 本地并发开发工作区与执行日志 ----
+.worktrees/
+.agent-runs/
