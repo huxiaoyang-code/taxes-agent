@@ -10,17 +10,47 @@ const row = (sql, ...args) => db.prepare(sql).get(...args);
 const rows = (sql, ...args) => db.prepare(sql).all(...args);
 const run = (sql, ...args) => db.prepare(sql).run(...args);
 
+// 期间校验：YYYY-MM 且月份 01-12；createAccountSet/ensurePeriod/createVoucher 共用。
+const PERIOD_RE = /^(\d{4})-(\d{2})$/;
+function parsePeriod(period) {
+  const m = PERIOD_RE.exec(String(period ?? ""));
+  if (!m) return null;
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return `${m[1]}-${m[2]}`;
+}
+function requirePeriod(period, code = "period_invalid") {
+  const p = parsePeriod(period);
+  if (!p) throw new Error(code);
+  return p;
+}
+
+// 嵌套安全的事务保存点：可在外层 BEGIN 内使用，失败时回滚到保存点。
+let savepointSeq = 0;
+function withSavepoint(fn) {
+  const sp = `sp_${++savepointSeq}`;
+  db.exec(`SAVEPOINT ${sp}`);
+  try {
+    const out = fn();
+    db.exec(`RELEASE ${sp}`);
+    return out;
+  } catch (e) {
+    try { db.exec(`ROLLBACK TO ${sp}`); db.exec(`RELEASE ${sp}`); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------- 账套
 export function createAccountSet({ name, taxpayer_type, accounting_standard, start_period }) {
   if (!name) throw new Error("name_required");
-  if (!/^\d{4}-\d{2}$/.test(String(start_period || ""))) throw new Error("start_period_invalid");
+  const startPeriod = requirePeriod(start_period, "start_period_invalid");
   const info = run(
     `INSERT INTO account_sets (name, taxpayer_type, accounting_standard, start_period, created_at)
      VALUES (?,?,?,?,?)`,
     name,
     taxpayer_type || "小规模纳税人",
     accounting_standard || "小企业会计准则",
-    start_period,
+    startPeriod,
     now()
   );
   const id = Number(info.lastInsertRowid);
@@ -29,7 +59,7 @@ export function createAccountSet({ name, taxpayer_type, accounting_standard, sta
      VALUES (?,?,?,?,?,?,1)`
   );
   for (const a of COA) insAcc.run(id, a.code, a.name, a.category, a.direction, a.contra ? 1 : 0);
-  ensurePeriod(id, start_period);
+  ensurePeriod(id, startPeriod);
   return getAccountSet(id);
 }
 
@@ -66,18 +96,53 @@ export function addAccount(setId, { code, name, category, direction, parent_code
 // ---------------------------------------------------------------- 期初
 export function setOpeningBalances(setId, items = []) {
   getAccountSet(setId);
-  const del = db.prepare(`DELETE FROM opening_balances WHERE account_set_id=? AND code=?`);
-  const ins = db.prepare(
-    `INSERT INTO opening_balances (account_set_id, code, debit, credit) VALUES (?,?,?,?)`
-  );
+  if (!Array.isArray(items)) throw new Error("opening_items_invalid");
+
+  // 已有已过账凭证或封账期间时，禁止改写期初。
+  const posted = row(`SELECT COUNT(*) n FROM vouchers WHERE account_set_id=? AND status='posted'`, setId).n;
+  if (posted > 0) throw new Error("opening_rewrite_after_posting");
+  const closed = row(`SELECT COUNT(*) n FROM periods WHERE account_set_id=? AND status='closed'`, setId).n;
+  if (closed > 0) throw new Error("opening_rewrite_period_closed");
+
+  // 先全量预校验，再动数据库；避免部分写入。
+  const resolved = [];
   for (const it of items) {
-    const code = String(it.code);
-    const acc = row(`SELECT * FROM accounts WHERE account_set_id=? AND code=?`, setId, code);
+    const code = String(it?.code ?? "");
+    if (!code) throw new Error("opening_code_required");
+    const acc = row(`SELECT 1 FROM accounts WHERE account_set_id=? AND code=?`, setId, code);
     if (!acc) throw new Error(`account_not_found:${code}`);
-    del.run(setId, code);
-    ins.run(setId, code, r2(it.debit), r2(it.credit));
+    const rawDebit = Number(it?.debit ?? 0);
+    const rawCredit = Number(it?.credit ?? 0);
+    if (!Number.isFinite(rawDebit) || !Number.isFinite(rawCredit)) throw new Error(`opening_amount_invalid:${code}`);
+    const debit = r2(rawDebit);
+    const credit = r2(rawCredit);
+    if (debit < 0 || credit < 0) throw new Error(`opening_amount_invalid:${code}`);
+    if (debit > 0 && credit > 0) throw new Error(`opening_borrow_lend_conflict:${code}`);
+    resolved.push({ code, debit, credit });
   }
-  return getOpeningBalances(setId);
+
+  // 与已有期初合并后的整体必须借贷平衡。
+  const merged = new Map(getOpeningBalances(setId).map((o) => [o.code, { debit: r2(o.debit), credit: r2(o.credit) }]));
+  for (const it of resolved) merged.set(it.code, { debit: it.debit, credit: it.credit });
+  let td = 0, tc = 0;
+  for (const v of merged.values()) { td += v.debit; tc += v.credit; }
+  if (Math.abs(r2(td) - r2(tc)) > EPS) {
+    const err = new Error("opening_unbalanced");
+    err.details = { total_debit: r2(td), total_credit: r2(tc) };
+    throw err;
+  }
+
+  return withSavepoint(() => {
+    const del = db.prepare(`DELETE FROM opening_balances WHERE account_set_id=? AND code=?`);
+    const ins = db.prepare(
+      `INSERT INTO opening_balances (account_set_id, code, debit, credit) VALUES (?,?,?,?)`
+    );
+    for (const it of resolved) {
+      del.run(setId, it.code);
+      ins.run(setId, it.code, it.debit, it.credit);
+    }
+    return getOpeningBalances(setId);
+  });
 }
 export function getOpeningBalances(setId) {
   getAccountSet(setId);
@@ -90,16 +155,36 @@ export function listPeriods(setId) {
   return rows(`SELECT period, status FROM periods WHERE account_set_id=? ORDER BY period`, setId);
 }
 export function ensurePeriod(setId, period) {
-  if (!/^\d{4}-\d{2}$/.test(String(period || ""))) throw new Error("period_invalid");
-  run(`INSERT OR IGNORE INTO periods (account_set_id, period, status) VALUES (?,?,'open')`, setId, period);
-  return row(`SELECT period, status FROM periods WHERE account_set_id=? AND period=?`, setId, period);
+  const s = getAccountSet(setId);
+  const p = requirePeriod(period);
+  if (p < s.start_period) throw new Error("period_before_start");
+  run(`INSERT OR IGNORE INTO periods (account_set_id, period, status) VALUES (?,?,'open')`, setId, p);
+  return row(`SELECT period, status FROM periods WHERE account_set_id=? AND period=?`, setId, p);
 }
 export function setPeriodStatus(setId, period, status) {
   if (!["open", "closed"].includes(status)) throw new Error("status_invalid");
-  const p = row(`SELECT * FROM periods WHERE account_set_id=? AND period=?`, setId, period);
-  if (!p) throw new Error("period_not_found");
-  run(`UPDATE periods SET status=? WHERE account_set_id=? AND period=?`, status, setId, period);
-  return { period, status };
+  const s = getAccountSet(setId);
+  const p = requirePeriod(period);
+  if (p < s.start_period) throw new Error("period_before_start");
+  const existing = row(`SELECT * FROM periods WHERE account_set_id=? AND period=?`, setId, p);
+
+  if (status === "open") {
+    // 反结账：已登记则置 open；未登记则新建期间。
+    if (!existing) ensurePeriod(setId, p);
+    else if (existing.status !== "open")
+      run(`UPDATE periods SET status='open' WHERE account_set_id=? AND period=?`, setId, p);
+    return { period: p, status: "open" };
+  }
+
+  // 结账：期间须已存在，当期无草稿且试算平衡（不强制已做损益结转）。
+  if (!existing) throw new Error("period_not_found");
+  const drafts = row(`SELECT COUNT(*) n FROM vouchers WHERE account_set_id=? AND period=? AND status='draft'`, setId, p).n;
+  if (drafts > 0) throw new Error("period_has_draft_vouchers");
+  const tb = trialBalance(setId, p);
+  if (Math.abs(tb.totals.closing_debit - tb.totals.closing_credit) > EPS) throw new Error("period_unbalanced");
+  if (existing.status !== "closed")
+    run(`UPDATE periods SET status='closed' WHERE account_set_id=? AND period=?`, setId, p);
+  return { period: p, status: "closed" };
 }
 /** 返回 set/period 的期间状态；未登记过则按 open 处理。 */
 export function periodStatus(setId, period) {
@@ -138,9 +223,10 @@ function nextNumber(setId, period, word) {
 }
 
 export function createVoucher(setId, v = {}) {
-  getAccountSet(setId);
-  const period = String(v.period || "");
-  ensurePeriod(setId, period);
+  const s = getAccountSet(setId);
+  // 先校验，后落库：校验失败不产生期间/凭证等副作用。
+  const period = requirePeriod(v.period);
+  if (period < s.start_period) throw new Error("period_before_start");
   if (periodStatus(setId, period) === "closed") throw new Error("period_closed");
   const entries = v.entries || [];
   const chk = checkVoucher(setId, entries);
@@ -149,21 +235,24 @@ export function createVoucher(setId, v = {}) {
     err.details = chk;
     throw err;
   }
-  const status = v.status === "posted" ? "posted" : "draft";
-  const kind = v.kind || "normal";
-  const word = v.word || "记";
-  const number = v.number || nextNumber(setId, period, word);
-  const info = run(
-    `INSERT INTO vouchers (account_set_id, period, voucher_date, word, number, summary, status, kind, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
-    setId, period, v.voucher_date || `${period}-01`, word, number, v.summary || "", status, kind, now()
-  );
-  const vid = Number(info.lastInsertRowid);
-  const ins = db.prepare(
-    `INSERT INTO voucher_entries (voucher_id, line_no, code, summary, debit, credit) VALUES (?,?,?,?,?,?)`
-  );
-  entries.forEach((e, i) => ins.run(vid, i + 1, String(e.code), e.summary || v.summary || "", r2(e.debit), r2(e.credit)));
-  return getVoucher(setId, vid);
+  return withSavepoint(() => {
+    ensurePeriod(setId, period);
+    const status = v.status === "posted" ? "posted" : "draft";
+    const kind = v.kind || "normal";
+    const word = v.word || "记";
+    const number = v.number || nextNumber(setId, period, word);
+    const info = run(
+      `INSERT INTO vouchers (account_set_id, period, voucher_date, word, number, summary, status, kind, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      setId, period, v.voucher_date || `${period}-01`, word, number, v.summary || "", status, kind, now()
+    );
+    const vid = Number(info.lastInsertRowid);
+    const ins = db.prepare(
+      `INSERT INTO voucher_entries (voucher_id, line_no, code, summary, debit, credit) VALUES (?,?,?,?,?,?)`
+    );
+    entries.forEach((e, i) => ins.run(vid, i + 1, String(e.code), e.summary || v.summary || "", r2(e.debit), r2(e.credit)));
+    return getVoucher(setId, vid);
+  });
 }
 
 export function listVouchers(setId, { period, status } = {}) {
@@ -201,12 +290,14 @@ export function postVoucher(setId, id) {
   return getVoucher(setId, id);
 }
 export function unpostVoucher(setId, id) {
-  getVoucher(setId, id);
+  const v = getVoucher(setId, id);
+  if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   run(`UPDATE vouchers SET status='draft' WHERE id=?`, id);
   return getVoucher(setId, id);
 }
 export function deleteVoucher(setId, id) {
   const v = getVoucher(setId, id);
+  if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   if (v.status === "posted") throw new Error("posted_voucher_requires_unpost");
   run(`DELETE FROM vouchers WHERE id=?`, id);
   return { deleted: id };
