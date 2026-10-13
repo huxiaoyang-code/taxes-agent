@@ -8,6 +8,7 @@
 //   - 未实现：返回 { not_implemented: true, ... }（HTTP 200，由 MCP 层转成 isError）。
 //   - 参数/领域错误：抛 ToolError 或领域异常，由 HTTP 层映射成 4xx 结构化错误。
 import * as A from "./accounting.mjs";
+import { TaxGateway, TaxError } from "./tax-gateway.mjs";
 
 export class ToolError extends Error {
   constructor(code, message, details = null) {
@@ -183,6 +184,31 @@ const NOT_IMPLEMENTED = dict({
   finance_task_status: "本地工作台没有异步任务系统，无法按 taskId 查询真实任务状态",
 });
 
+// ------------------------------------------------------------------ 税务适配层（第一期：仅接口预留）
+// 默认注册表为空：生产环境不会加载任何适配器，也就不会有任何地区被标成「已接入」，
+// 登录类调用一律返回结构化未接入错误。适配器只能由代码显式 registerAdapter 注入（测试用），
+// 不提供任何通过 HTTP / 环境变量加载模块或执行任意代码的入口。
+// 账套存在性由 accounting 校验后注入，网关自身不访问数据库。
+export const taxGateway = new TaxGateway({
+  accountSetExists: (id) => { A.getAccountSet(id); return true; },
+});
+
+/**
+ * 把网关的 TaxError 归一成后端工具错误（保留 code 供 MCP 客户端判定）。
+ * 网关的会话类方法都是 async（适配器允许返回 Promise），因此这里必须 await：
+ * 只有 await 才能捕获 Promise 的拒绝（异步 TaxError），否则会漏成 unhandled rejection。
+ */
+function taxHandler(fn) {
+  return async (args) => {
+    try {
+      return await fn(args);
+    } catch (e) {
+      if (e instanceof TaxError) throw new ToolError(e.code, e.message, e.details);
+      throw e;
+    }
+  };
+}
+
 // ------------------------------------------------------------------ 已实现工具
 const HANDLERS = dict({
   finance_query_catalog: () => ({
@@ -302,6 +328,15 @@ const HANDLERS = dict({
   asset_create: (args) => A.addAssetCard(requireAccountSetId(args), args),
   depreciation_run: (args) => A.generateDepreciation(requireAccountSetId(args), requirePeriod(args)),
   carry_forward_profit: (args) => A.carryForwardProfit(requireAccountSetId(args), requirePeriod(args), { yearEnd: !!args.yearEnd }),
+
+  // ---- 全国电子税务局适配层（第一期：接口预留，默认未接入任何地区）----
+  tax_regions: taxHandler((args) => taxGateway.listRegions(args)),
+  tax_capabilities: taxHandler((args) => taxGateway.listCapabilities(args ?? {})),
+  tax_login_start: taxHandler((args) => taxGateway.startLogin(args ?? {})),
+  tax_login_status: taxHandler((args) => taxGateway.getStatus(args ?? {})),
+  tax_login_challenge: taxHandler((args) => taxGateway.submitChallenge(args ?? {})),
+  tax_logout: taxHandler((args) => taxGateway.logout(args ?? {})),
+  tax_info_query: taxHandler((args) => taxGateway.infoQuery(args ?? {})),
 
   // ---- 兼容入口：不再谎报持久化 / 完成任务 ----
   update_plan: (args) => ({
