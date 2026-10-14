@@ -38,10 +38,9 @@ analysis(evidence): 归档 /work 与 /finance 应用图
 | 分支 | 用途 |
 |---|---|
 | `main` | 可运行主线，始终 `npm test` 通过 |
-| `feat/<name>` | 功能分支 |
-| `fix/<name>` | 修复分支 |
+| `codex/<name>` | 功能、修复、文档、Skill 等所有分支统一前缀 |
 
-合并前：`06-workbench` 必须 `npm test` 全绿。
+不再使用 `feat/<name>`、`fix/<name>` 分支前缀；一个分支对应一个完整部分。合并前：代码变更在 `06-workbench` 跑受影响测试；关键合并基线跑全套 `npm test`。
 
 ## 3. 版本
 
@@ -63,8 +62,9 @@ analysis(evidence): 归档 /work 与 /finance 应用图
 - 新增分析脚本 → 放在所属阶段目录（如 `04-report/build_report.py`）。
 - 新增前端产物/证据 → 只写 `02-scripts/`、`03-analysis/`，不改动原始字节。
 - 运行期数据一律进 `06-workbench/data/`（已 gitignore），**不得提交**。
-- 新增工具/查询能力 → 同步三处：`server.mjs` 的 `agentTool()` 与 `CATALOG_QUERIES`、
-  `05-reconstruction/catalog.json`。
+- 新增工具/查询能力 → 同步 `06-workbench/server/agent-tools.mjs` 与
+  `05-reconstruction/codex/mcp/finance-mcp/tools.mjs`（税务工具在 `tax-tools.mjs`）及契约测试。
+  原站 `05-reconstruction/catalog.json` 是逆向证据，**冻结不修改**；本地能力独立标注。
 
 ## 6. 文档维护
 
@@ -72,6 +72,9 @@ analysis(evidence): 归档 /work 与 /finance 应用图
 - 交付功能/修复 ⇒ 更新 [`CHANGELOG.md`](CHANGELOG.md)。
 - 计划调整 ⇒ 更新 [`ROADMAP.md`](ROADMAP.md)。
 - 分析与复刻产出 ⇒ 标注证据 ID 与“观察 / 推断 / 未知”，不得把静态结论写成运行时事实。
+- 验证强度按变更类型：**文档-only** 变更只需核对实际 diff、链接可达和 Skill 格式
+  （`quick_validate.py`），不要求重复跑 208 项业务回归；代码变更跑受影响测试；
+  关键合并基线按章程跑全套。不得为凑数重复扩大测试。
 
 ## 7. 不提交清单
 

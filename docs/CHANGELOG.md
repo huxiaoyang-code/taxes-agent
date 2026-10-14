@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+### Changed — 方向修正为本机单用户批量 + 工作范式技能（2026-10-14）
+
+- 明确产品为**本机单用户**工具，目标支持多个企业 / 账套的批量处理（批量队列与管理尚待开发）；删除 SaaS、多租户、租户权限平台方向，保留账套隔离、操作日志、备份恢复、凭据安全等本机实际需要。涉及 `AGENTS.md`、PROJECT-CHARTER、TEAM-PLAN、ROADMAP、INDEX、CONVENTIONS 及 README。
+- 新增仓库权威技能 `team-skills/local-agent-first/SKILL.md`（含 `references/windows-launch.md`）：本地 pi / Claude Code 实施，Codex 只派工、审查、Git/PR 与合并；模型仍锁定 GLM 5.3 / DeepSeek V4.1 Flash。员工维护仓库副本，Codex 全局技能由管理者审查后安装；不直接修改用户全局技能与 Codex 配置。本机安装与校验结果见 [新会话入口](handoffs/NEXT-SESSION.md)。
+- 新增 [新会话入口](handoffs/NEXT-SESSION.md) 并更新 [阶段状态](handoffs/STATE.md)：固定“每部分验收+合并+交接后关闭员工会话、下一部分新进程新会话”的交接方式。
+- 分支前缀统一为 `codex/`；原站 `catalog.json` 保持冻结，本地能力改在 `agent-tools.mjs` / `tools.mjs` / `tax-tools.mjs` 维护。
+- 纯文档与 Skill 变更，未改业务代码或算法，不重复整套 208 项回归。
+
 ### Added / Fixed — 第一期可靠性与本机 Agent 接入（2026-10-13）
 
 - MCP 补齐账套、科目、期初、期间、凭证状态、查账、资产、折旧和结转入口；工具/查询目录如实说明可用状态，未实现不再伪报成功，导入默认预检。
