@@ -119,7 +119,7 @@ const BACKEND_TOOLS = [
     }, ["accountSetId", "items"]), "local"),
   available("period_list", "列出账套已登记的期间及状态。",
     obj({ accountSetId: ACCOUNT_SET_ID }, ["accountSetId"]), "local"),
-  available("period_set_status", "结账/反结账：把期间状态设为 closed 或 open。仅对本账套已登记的期间生效。",
+  available("period_set_status", "结账/反结账：closed 关闭已登记期间；open 重开或登记新期间。期间不得早于账套启用期间。",
     obj({
       accountSetId: ACCOUNT_SET_ID,
       period: PERIOD,

@@ -19,7 +19,7 @@
 # 记账 + 报表工作台
 cd 06-workbench
 npm start            # = node server/server.mjs  → http://127.0.0.1:8787/
-npm test             # 端到端测试 28 用例（自动建临时库，不影响 data/）
+npm test             # 全套回归、MCP 契约与完整闭环（自动建临时库，不影响 data/）
 
 # Codex / MCP 打通（工作台需先启动）
 cd 05-reconstruction/codex/mcp/finance-mcp
@@ -34,6 +34,8 @@ node smoke-test.mjs
 - 工作台说明：[`06-workbench/README.md`](06-workbench/README.md)
 - 变更日志：[`docs/CHANGELOG.md`](docs/CHANGELOG.md) ｜ 路线图：[`docs/ROADMAP.md`](docs/ROADMAP.md)
 - 协作规范：[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md)
+- 总流程与阶段重置：[`docs/PROJECT-CHARTER.md`](docs/PROJECT-CHARTER.md) ｜ [阶段交接](docs/handoffs/STATE.md)
+- 本轮功能与验收：[`docs/PHASE1-ACCEPTANCE.md`](docs/PHASE1-ACCEPTANCE.md) ｜ [电子税务局接口边界](docs/TAX-INTEGRATION.md)
 
 ## 目录一览
 

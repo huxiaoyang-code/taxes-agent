@@ -18,11 +18,12 @@
 | 看线上站点分析结论 | [`../REPORT.md`](../REPORT.md) |
 | 看复刻总体方案 | [`../05-reconstruction/ARCHITECTURE.md`](../05-reconstruction/ARCHITECTURE.md) |
 | 看哪些功能真正可用、哪些需要补齐 | [本机 Codex 功能盘点（2026-10-13）](CAPABILITY-AUDIT-2026-10-13.md) |
+| 看本轮交付和可重复验收 | [第一期验收](PHASE1-ACCEPTANCE.md) · [税务适配契约](TAX-INTEGRATION.md) |
 | 看并发分工、需求和验收规则 | [团队实施计划](TEAM-PLAN.md) |
 | 看总流程、阶段重置与恢复工作 | [项目执行章程](PROJECT-CHARTER.md) · [阶段状态](handoffs/STATE.md) |
 | 改记账/报表逻辑 | [§3.1 领域层](#31-领域层server) → `server/accounting.mjs` |
 | 加接口 / 加 Agent 工具 | [§3.2 接口层](#32-接口层server) → `server/server.mjs` |
-| 接发票 / 申报 | [ROADMAP](ROADMAP.md) → `agentTool()` 分支 |
+| 接发票 / 申报 | [ROADMAP](ROADMAP.md) → `agent-tools.mjs` 注册表 |
 | 找原始证据 | [§5 分析与证据](#5-分析与证据-0004) |
 
 ---
@@ -65,6 +66,8 @@
 ├── README.md             使用说明（启动、API、口径、TODO）
 ├── server/               后端（ESM，零依赖）
 │   ├── server.mjs        接口层：REST + /agent/tools + 静态资源
+│   ├── agent-tools.mjs   工具注册与输入校验、真实能力目录
+│   ├── tax-gateway.mjs   税务会话/地区适配契约（真实接入数 0）
 │   ├── accounting.mjs    领域层：账套/科目/期初/期间/凭证/余额/报表
 │   ├── coa.mjs           领域数据：小企业会计准则科目表
 │   └── db.mjs            持久层：SQLite 建表与连接
@@ -73,8 +76,11 @@
 │   ├── app.js            前端逻辑（SPA，原生 DOM）
 │   └── styles.css        样式
 ├── test/
-│   └── smoke.test.mjs    端到端测试（临时库+随机端口，28 用例）
+│   ├── smoke.test.mjs    原有端到端测试（28 用例）
+│   ├── accounting-guards.test.mjs  封账/期初/期间（23 用例）
+│   └── accounting-derived.test.mjs 明细/折旧/结转（31 用例）
 ├── scripts/
+│   ├── test-all.mjs      全套测试入口（含 MCP、税务、完整闭环）
 │   └── seed-demo.mjs     演示数据种子（--force 重建，账套 id=1）
 └── data/                 运行期 SQLite（已 gitignore）
 ```
@@ -93,10 +99,10 @@
 
 1. **网页 REST** — `/api/...`，见 [`../06-workbench/README.md`](../06-workbench/README.md) 的 API 表。
 2. **Agent 工具** — `POST /agent/tools/:name`，被 `05-reconstruction/codex/mcp/finance-mcp/backend.mjs` 调用，
-   使 Codex 能直接记账出报表。工具映射见 `server.mjs` 的 `agentTool()`。
+  使 Codex 能直接记账出报表。工具映射见 `agent-tools.mjs` 的注册表。
 
-> ⚠️ 加新工具/新查询能力时，必须同时更新：`agentTool()`、`CATALOG_QUERIES`、
-> [`../05-reconstruction/catalog.json`](../05-reconstruction/catalog.json)（保持契约一致）。
+> 加本地工具/查询时同步更新 `agent-tools.mjs`、MCP `tools.mjs`（税务工具在 `tax-tools.mjs`）及契约测试。
+> [`../05-reconstruction/catalog.json`](../05-reconstruction/catalog.json) 是原站证据，保持冻结；本地能力独立标注。
 
 ---
 
@@ -111,13 +117,15 @@
 | `codex/config.toml` | Codex MCP 注册示例 |
 | `codex/.env.example` | 后端地址 / Skill 目录 |
 | `codex/README.md` | Codex 集成说明 |
-| `codex/mcp/finance-mcp/server.mjs` | MCP stdio Server（23 工具 + skills 资源；`legacy_book_import` 支持 `paths` 本地路径） |
+| `codex/mcp/finance-mcp/server.mjs` | MCP stdio Server（45 个入口，含不可用兼容入口；真实状态以 tools/list 为准） |
+| `codex/mcp/finance-mcp/tools.mjs` / `tax-tools.mjs` | 本地工具 schema、可用状态；税务接口已预留，未接真实税局 |
+| `codex/mcp/finance-mcp/contract-test.mjs` / `tax-contract-test.mjs` / `workflow-test.mjs` | 临时后端上的 MCP 契约、税务状态机与业务闭环验收 |
 | `codex/mcp/finance-mcp/backend.mjs` | 后端适配器（默认指向 `http://127.0.0.1:8787`） |
 | `codex/mcp/finance-mcp/smoke-test.mjs` | MCP 冒烟（在线时直连工作台） |
 | `codex/mcp/finance-mcp/import-demo.mjs` | 本地复现「导入旧账」端到端演示（读取示例 CSV → 预检 → 导入 → 勾稽） |
 | `examples/legacy-book/**` | 导入旧账示例数据集（4 张 CSV） |
 | `tools/xlsx-to-csv.py` | 旧账 Excel(.xlsx) → CSV 转换器（openpyxl） |
-| `codex/skills/**` | 5 个子智能体、21 份业务规则模板（待填正文） |
+| `codex/skills/**` | 记账及其 7 份规则、旧账导入已补齐；发票/申报等其余内容仍待开发 |
 
 ---
 
@@ -162,7 +170,8 @@
 # —— 工程：记账 + 报表 ——
 cd 06-workbench
 npm start                 # 启动 → http://127.0.0.1:8787/
-npm test                  # 端到端测试（28 用例）
+npm test                  # 全套领域回归 + MCP/税务契约 + 完整闭环（临时库）
+npm run test:smoke        # 原有 28 项端到端测试
 
 # —— 方案：Codex / MCP（工作台需先启动）——
 cd 05-reconstruction/codex/mcp/finance-mcp
@@ -221,7 +230,8 @@ Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──�
 |---|---|
 | REA 证据归档 | ✅ 完成（冻结） |
 | 复刻契约与 MCP 骨架 | ✅ 可运行 |
-| 记账 + 报表 MVP | ✅ 可运行，28/28 测试通过 |
+| 记账 + 报表 MVP | ✅ 可运行，六项可靠性修复已交付；测试见第一期验收 |
+| 全国电子税务局 | 🚧 7 个接口入口和地区路由已预留，真实接入 0 个地区 |
 | P1 会计闭环（结转损益/折旧摊销/现金流量表） | ✅ 完成 |
 | 导入旧账（JSON/CSV，GBK 支持） | ✅ 完成 |
 | 辅助核算 / 银行对账 / 导出 | ⬜ 待办（ROADMAP P1 剩余） |

@@ -1,6 +1,6 @@
 # FLOW 交接
 
-- 状态：管理者验收通过，待 PR 合并；员工会话已退出。
+- 状态：已合并；员工会话已退出。PR [#7](https://github.com/huxiaoyang-code/youshu-fork/pull/7)，合并 SHA `03eba00c4fefd065d30f021d19f17f02d48d5d65`。
 - 目标：记账/旧账导入真实规则，MCP 到临时后端的业务闭环及统一测试入口。
 - 执行者：pi / 显式 tokenhub/deepseek-v4.1-flash，新会话，不继承 CORE 日志。
 - 分支 / worktree：codex/workflow-acceptance / .worktrees/flow。
@@ -14,4 +14,4 @@
 - 未验证：真实账套、现有 8787 后端、网页 UI、实际 Excel 转换、真实税局登录。
 - 限制：导入非幂等；CSV 非法金额仍会被转为 0，必须先核对原始金额，预检成功不是完整保证；财务报表及税务生产能力边界见 PHASE1-ACCEPTANCE。
 - 技能资料由 21 增至 22 份，原站 catalog 保持冻结。
-- 下一部分：管理者 ACCEPT 做 main 最终验收并记录 PR/合并 SHA 到 STATE；今后员工新会话只读取章程、STATE、该部分交接与必要源码。
+- 管理者 ACCEPT 已在合并后 main 运行 npm test：208/208，exit 0，见 STATE；今后员工新会话只读取章程、STATE、该部分交接与必要源码。

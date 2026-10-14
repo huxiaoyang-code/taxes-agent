@@ -100,7 +100,9 @@ node workflow-test.mjs
 - 具体记账规则见 `05-reconstruction/codex/skills/bookkeeping/SKILL.md` 及 7 份 reference，
   导入规则见 `05-reconstruction/codex/skills/legacy-book-import/`。
 
-## 7. 本次实测结果（执行者自测）
+## 7. 本次实测结果
+
+管理者最终复核：2026-10-14，main `03eba00c4fefd065d30f021d19f17f02d48d5d65`，在 `06-workbench` 运行 `npm test`，6 套 208 项全部通过、exit 0。本轮文档交付只更新说明，不改变业务算法。
 
 环境：Windows，Node v24.15.0（`node:sqlite` 内置）。数据目录在系统临时目录，后端端口为随机空闲端口。
 
@@ -113,3 +115,7 @@ node workflow-test.mjs
 > 结论只覆盖上述命令与场景，不覆盖第 6 节未实现能力。
 
 已知导入限制：CSV 非法金额文本目前会被按 0 处理，预检不完整覆盖金额/期间等约束；导入规则要求先核对原始数据，严格校验改造列入后续优先任务。
+
+当前工具清单共 45 个入口：31 个 available（包含 7 个税务接口）、1 个 limited、13 个 unavailable。全国真实税务连接为 0；会话和凭据生产要求见 [税务接口说明](TAX-INTEGRATION.md)。
+
+两份主 Skill 已通过 `skill-creator/scripts/quick_validate.py` 格式检查；本轮未验收网页 UI、真实 Excel 文件转换或现有业务库。已有运行进程不会因合并自动重载，使用新增能力需要重启工作台及 MCP。
