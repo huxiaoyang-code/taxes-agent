@@ -19,6 +19,7 @@
 | 看复刻总体方案 | [`../05-reconstruction/ARCHITECTURE.md`](../05-reconstruction/ARCHITECTURE.md) |
 | 看哪些功能真正可用、哪些需要补齐 | [本机 Codex 功能盘点（2026-10-13）](CAPABILITY-AUDIT-2026-10-13.md) |
 | 看本轮交付和可重复验收 | [第一期验收](PHASE1-ACCEPTANCE.md) · [税务适配契约](TAX-INTEGRATION.md) |
+| 开新对话继续工作 | [新会话入口](handoffs/NEXT-SESSION.md) · [阶段状态](handoffs/STATE.md) · [本地优先技能](../team-skills/local-agent-first/SKILL.md) |
 | 看并发分工、需求和验收规则 | [团队实施计划](TEAM-PLAN.md) |
 | 看总流程、阶段重置与恢复工作 | [项目执行章程](PROJECT-CHARTER.md) · [阶段状态](handoffs/STATE.md) |
 | 改记账/报表逻辑 | [§3.1 领域层](#31-领域层server) → `server/accounting.mjs` |
@@ -199,8 +200,10 @@ python 05-reconstruction/generate_skill_stubs.py
 网页(public)  ──REST /api──▶  server.mjs  ──▶  accounting.mjs  ──▶  db.mjs(SQLite)
 Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──▶  server.mjs
                                    ▲
-05-reconstruction/catalog.json ────┘（工具契约来源）
+原站 catalog.json（冻结） + 本地能力定义 ──┘（工具契约来源）
 ```
+
+- 原站 `05-reconstruction/catalog.json` 是逆向证据，**保持冻结、不修改**；本地新增/调整工具写入 `06-workbench/server/agent-tools.mjs` 与 `05-reconstruction/codex/mcp/finance-mcp/tools.mjs`（税务工具 `tax-tools.mjs`）并同步契约测试。
 
 - 外部依赖：**无**（无 npm 包）。Codex 由使用者自行安装。
 - 运行期数据：`06-workbench/data/workbench.db`（不入库）。
@@ -236,4 +239,6 @@ Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──�
 | 导入旧账（JSON/CSV，GBK 支持） | ✅ 完成 |
 | 辅助核算 / 银行对账 / 导出 | ⬜ 待办（ROADMAP P1 剩余） |
 | 发票 / 申报 | ⬜ 待办（ROADMAP P2，返回 `not_implemented`） |
-| 多用户 / 权限 / 审计 | ⬜ 待办（ROADMAP P3） |
+| 导入严格校验 / 幂等（IMPORT-STRICT / IMPORT-IDEMPOTENCY） | ⬜ 待办（ROADMAP P1） |
+| 本机批量任务队列 / 管理（BATCH-QUEUE / BATCH-MANAGEMENT） | ⬜ 待办（ROADMAP P1） |
+| 账套隔离 / 操作日志 / 备份恢复 / 凭据安全 | ⬜ 待办（ROADMAP P3 本机化；**不做多租户**） |

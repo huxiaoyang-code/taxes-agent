@@ -9,6 +9,8 @@
 | ⚙️ 复刻工程 | `06-workbench/` | **可运行的记账 + 报表 MVP**（Node + SQLite；含结转损益/折旧摊销/现金流量表） |
 | 📚 工程索引 | `docs/` | 代码管理索引、规范、变更日志、路线图 |
 
+> 产品形态：**本机单用户**财税工作台，目标支持对多个企业 / 账套的批量处理（批量队列与管理尚待开发）；**不是多租户 / SaaS**（无账户体系、无对外服务、无权限平台）。全国电子税务局是产品目标，当前只预留接口，真实接入地区为 0。
+>
 > 目标站点身份：有数云（YOUSURE）· 司书财税大模型 · AI 财税工作台。
 > 用户原始地址 `daizhang.youshu.yuork` 不存在，实际分析目标为 `daizhang.youshu.yun`
 > （更正证据见 [`00-recon/dns-corrected-url.md`](00-recon/dns-corrected-url.md)）。
@@ -34,7 +36,8 @@ node smoke-test.mjs
 - 工作台说明：[`06-workbench/README.md`](06-workbench/README.md)
 - 变更日志：[`docs/CHANGELOG.md`](docs/CHANGELOG.md) ｜ 路线图：[`docs/ROADMAP.md`](docs/ROADMAP.md)
 - 协作规范：[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md)
-- 总流程与阶段重置：[`docs/PROJECT-CHARTER.md`](docs/PROJECT-CHARTER.md) ｜ [阶段交接](docs/handoffs/STATE.md)
+- 总流程与阶段重置：[`docs/PROJECT-CHARTER.md`](docs/PROJECT-CHARTER.md) ｜ [阶段交接](docs/handoffs/STATE.md) ｜ [新会话入口](docs/handoffs/NEXT-SESSION.md)
+- 本地执行 / Codex 管理范式：[`team-skills/local-agent-first/SKILL.md`](team-skills/local-agent-first/SKILL.md)
 - 本轮功能与验收：[`docs/PHASE1-ACCEPTANCE.md`](docs/PHASE1-ACCEPTANCE.md) ｜ [电子税务局接口边界](docs/TAX-INTEGRATION.md)
 
 ## 目录一览
@@ -44,9 +47,11 @@ node smoke-test.mjs
 ├── REPORT.md                 分析总索引（结论/证据台账/如何复现）
 ├── docs/                     ★ 代码管理索引目录
 │   ├── INDEX.md              代码与产物索引（总入口）
-│   ├── CONVENTIONS.md        提交/分支/风格约定
+│   ├── CONVENTIONS.md        提交 / 分支 / 风格约定
 │   ├── CHANGELOG.md          版本变更
-│   └── ROADMAP.md            待办与优先级
+│   ├── ROADMAP.md            待办与优先级
+│   └── handoffs/             阶段状态、任务交接与新会话入口
+├── team-skills/              仓库权威技能（local-agent-first）
 ├── 00-recon/                 侦察：域名更正、HTTP 头、首页 HTML
 ├── 01-capture/               REA 被动抓取：页面/DOM/网络/截图
 ├── 02-scripts/               前端脚本：work（工作台）/ finance（登录）
