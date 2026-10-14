@@ -13,7 +13,7 @@
 | CORE-B | 明细报表、零利润/年末结转与折旧一致性 | [#5](https://github.com/huxiaoyang-code/youshu-fork/pull/5) | 91b623a | 派生 31 + 保护 23 + 原有 28 + MCP 44 项；见 [交接](CORE-B.md) |
 | TAX | 全国税务接口、异步会话和地区目录，真实接入数 0 | [#6](https://github.com/huxiaoyang-code/youshu-fork/pull/6) | f4d9f82 | 税务 59 + MCP 44 + 原有 28；见 [交接](TAX.md) |
 | FLOW | 记账/导入规则、MCP 闭环与统一测试入口 | [#7](https://github.com/huxiaoyang-code/youshu-fork/pull/7) | 03eba00 | 6 套 208 项全部通过；见 [交接](FLOW.md) |
-| ACCEPT | 管理者 main 验收与交付文档 | 随本次交付 PR 归档 | 业务验收提交 03eba00 | 在 main 运行 npm test：208/208；两份技能格式验证通过 |
+| ACCEPT | 管理者 main 验收与交付文档 | [#8](https://github.com/huxiaoyang-code/youshu-fork/pull/8) | 业务验收提交 03eba00；文档合并 SHA 见 PR | 在 main 运行 npm test：208/208；两份技能格式验证通过 |
 
 这些员工会话已经结束。后续部分采用全新会话，读取当前代码和任务包。
 
