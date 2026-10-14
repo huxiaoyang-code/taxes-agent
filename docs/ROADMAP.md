@@ -28,6 +28,7 @@
 | 现金流量表 | 中 | ✅ | 直接法（对方科目分类）+ 间接法补充，与货币资金勾稽 | `accounting.mjs: cashFlowStatement()` |
 | 辅助核算（客户/供应商/部门/项目） | 中 | ⬜ | 分录挂辅助维度，报表可下钻 | `voucher_entries` 加维度字段 |
 | 导入旧账（Excel/CSV） | 中 | ✅ | JSON 或 4 CSV（账套/科目/期初/凭证），GBK 支持，预检+事务 | `accounting.mjs: importAccountSet()` |
+| 导入严格校验与去重 | 高 | ⬜ | 非法金额拒绝、预检与写入约束一致、幂等重试；当前规则要求先核对原始数据 | `parseImportTexts` / `validateImportPayload` |
 | 银行流水对账 | 中 | ⬜ | 导入流水、匹配、自动生成凭证 | 对应 `fund.unbooked.*` |
 | 打印/导出（PDF/Excel） | 低 | ⬜ | 报表另存 | `public/app.js` |
 

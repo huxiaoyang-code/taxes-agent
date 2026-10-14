@@ -137,7 +137,7 @@ MCP Server（与 Codex 同机）直接读本地 CSV，免去把内容塞进 JSON
 
 ## 业务规则层（Skill）
 
-`skills/` 下 21 份 Markdown 与有数云原始目录结构一一对应（`catalog.json -> skill_files`）。
+原站映射为 21 份 Markdown（`catalog.json -> skill_files`），本地增加导入参考后共 22 份；原始映射保持冻结。
 记账主规则、7 份业务参考和旧账导入主规则已按本地实现补齐；发票、企业申报、个税等仍待开发。
 这些规则为本地编写，原站服务端 Skill 正文未被提取。
 

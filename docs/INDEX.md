@@ -23,7 +23,7 @@
 | 看总流程、阶段重置与恢复工作 | [项目执行章程](PROJECT-CHARTER.md) · [阶段状态](handoffs/STATE.md) |
 | 改记账/报表逻辑 | [§3.1 领域层](#31-领域层server) → `server/accounting.mjs` |
 | 加接口 / 加 Agent 工具 | [§3.2 接口层](#32-接口层server) → `server/server.mjs` |
-| 接发票 / 申报 | [ROADMAP](ROADMAP.md) → `agentTool()` 分支 |
+| 接发票 / 申报 | [ROADMAP](ROADMAP.md) → `agent-tools.mjs` 注册表 |
 | 找原始证据 | [§5 分析与证据](#5-分析与证据-0004) |
 
 ---
