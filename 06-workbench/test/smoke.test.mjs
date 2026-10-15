@@ -13,15 +13,15 @@ import assert from "node:assert/strict";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(join(tmpdir(), "wb-test-"));
-const PORT = 8000 + Math.floor(Math.random() * 1000);
-const BASE = `http://127.0.0.1:${PORT}`;
-
+// PORT=0：端口由子进程分配，必须从它的 stdout 读取实际端口，避免与现有真实后端碰撞后误连。
 const child = spawn(process.execPath, [join(here, "..", "server", "server.mjs")], {
   stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, PORT: String(PORT), WORKBENCH_DATA_DIR: dataDir },
+  env: { ...process.env, PORT: "0", WORKBENCH_DATA_DIR: dataDir },
 });
 child.stderr.on("data", (d) => process.stderr.write(`[server] ${d}`));
+const childExit = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
 
+let BASE = "";
 const api = async (method, path, body) => {
   const res = await fetch(BASE + path, {
     method,
@@ -33,13 +33,18 @@ const api = async (method, path, body) => {
   return data;
 };
 
-async function waitReady(timeoutMs = 10000) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try { await api("GET", "/api/meta"); return; } catch { /* retry */ }
-    if (Date.now() > deadline) throw new Error("server_not_ready");
-    await new Promise((r) => setTimeout(r, 150));
-  }
+// 等待子进程自己打印实际监听端口；同时监听超时与提前退出，不盲目轮询固定端口。
+function waitReady(timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => reject(new Error("server_not_ready_timeout")), timeoutMs);
+    child.stdout.on("data", (d) => {
+      buf += d.toString();
+      const m = /127\.0\.0\.1:(\d+)\//.exec(buf);
+      if (m) { clearTimeout(timer); BASE = `http://127.0.0.1:${Number(m[1])}`; resolve(); }
+    });
+    child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`server_exited_before_ready code=${code}`)); });
+  });
 }
 
 const results = [];
@@ -303,5 +308,7 @@ try {
   process.exitCode = 1;
 } finally {
   child.kill();
-  setTimeout(() => { try { rmSync(dataDir, { recursive: true, force: true }); } catch {} }, 300);
+  // 等子进程真正退出后再删临时目录，避免端口/文件残留或连到旧进程。
+  await childExit;
+  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 }

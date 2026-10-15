@@ -39,6 +39,7 @@ node workflow-test.mjs
 |---|---|---|
 | guards | `06-workbench/test/accounting-guards.test.mjs` | 期初校验/原子性、封账读写保护、期间校验 |
 | derived | `06-workbench/test/accounting-derived.test.mjs` | 明细归集、结转（含零利润/年末/重算/原子性）、折旧状态一致性 |
+| import-strict | `06-workbench/test/import-strict.test.mjs` | 导入严格校验（非法/合法金额、负数与超界舍入前判定、空白策略、日期逐行与不一致、凭证号、形状/类型、重复期初、科目/期初/凭证约束、预检与正式一致、完整内容快照不污染、CSV 辅助字段不得绕过 `date`/`number`、parse→JSON 往返正例、HTTP/Agent 入口集成、事务回滚） |
 | smoke | `06-workbench/test/smoke.test.mjs` | 工作台端到端（账套/凭证/报表/折旧/结转/结账/Agent 工具/导入） |
 | contract | `05-reconstruction/codex/mcp/finance-mcp/contract-test.mjs` | MCP 工具契约、错误路径、导入默认预检、后端不可达 |
 | workflow | `05-reconstruction/codex/mcp/finance-mcp/workflow-test.mjs` | 临时账套业务闭环 + 独立预期金额勾稽 |
@@ -114,7 +115,10 @@ node workflow-test.mjs
 > 独立预期值由 `workflow-test.mjs` 内对示例 CSV 的原始列算术 + 手写业务常量给出；
 > 结论只覆盖上述命令与场景，不覆盖第 6 节未实现能力。
 
-已知导入限制：CSV 非法金额文本目前会被按 0 处理，预检不完整覆盖金额/期间等约束；导入规则要求先核对原始数据，严格校验改造列入后续优先任务。
+已知导入限制：IMPORT-STRICT 已在 `codex/import-strict` 分支实现严格校验（拒绝非法金额文本与极小负值/超界原值，预检与正式写入同一套约束，失败不落库，预检只读无写入、仅正式写入事务回滚），
+管理者首审不通过（7 项阻塞）后已两轮返工自测（金额舍入前校验、重复期初规则、形状/meta 类型校验、CSV 日期/编号逐行校验、完整内容快照、HTTP/Agent 集成、共享金额合计，以及 CSV 辅助字段 `dates`/`numberRaw` 不得绕过原字段、CSV parse→JSON 往返正例、测试临时 HTTP 服务 `PORT=0` 防端口碰撞），
+**二次返工自测已完成（员工报告 `import-strict` 54 项、`npm test` 7 套 262/262、`npm run test:smoke` 28/28，均 exit 0）、待管理者复审**；本文件记录的 208 项是基线提交 `03eba00` 的**历史验收事实**，
+不随新分支自动更新，新分支结果以管理者复审与后续交接为准。
 
 当前工具清单共 45 个入口：31 个 available（包含 7 个税务接口）、1 个 limited、13 个 unavailable。全国真实税务连接为 0；会话和凭据生产要求见 [税务接口说明](TAX-INTEGRATION.md)。
 

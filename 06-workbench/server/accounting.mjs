@@ -6,6 +6,16 @@ const now = () => new Date().toISOString();
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const EPS = 0.005;
 
+/**
+ * 共享金额合计：所有导入/记账路径都先在末尾统一 r2，避免各处累加顺序不同
+ * 造成「预检通过、正式写入却借贷不平」的不一致。
+ */
+function sumMoney(values) {
+  let s = 0;
+  for (const v of values) s += Number(v) || 0;
+  return r2(s);
+}
+
 const row = (sql, ...args) => db.prepare(sql).get(...args);
 const rows = (sql, ...args) => db.prepare(sql).all(...args);
 const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -125,11 +135,12 @@ export function setOpeningBalances(setId, items = []) {
   // 与已有期初合并后的整体必须借贷平衡。
   const merged = new Map(getOpeningBalances(setId).map((o) => [o.code, { debit: r2(o.debit), credit: r2(o.credit) }]));
   for (const it of resolved) merged.set(it.code, { debit: it.debit, credit: it.credit });
-  let td = 0, tc = 0;
-  for (const v of merged.values()) { td += v.debit; tc += v.credit; }
-  if (Math.abs(r2(td) - r2(tc)) > EPS) {
+  const mergedValues = [...merged.values()];
+  const td = sumMoney(mergedValues.map((v) => v.debit));
+  const tc = sumMoney(mergedValues.map((v) => v.credit));
+  if (Math.abs(td - tc) > EPS) {
     const err = new Error("opening_unbalanced");
-    err.details = { total_debit: r2(td), total_credit: r2(tc) };
+    err.details = { total_debit: td, total_credit: tc };
     throw err;
   }
 
@@ -196,11 +207,12 @@ export function periodStatus(setId, period) {
 // ---------------------------------------------------------------- 凭证
 export function checkVoucher(setId, entries = []) {
   const errors = [];
-  if (!Array.isArray(entries) || entries.length < 2) errors.push("至少需要两条分录");
-  let td = 0, tc = 0;
-  entries.forEach((e, i) => {
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length < 2) errors.push("至少需要两条分录");
+  const dList = [], cList = [];
+  list.forEach((e, i) => {
     const d = r2(e.debit), c = r2(e.credit);
-    td += d; tc += c;
+    dList.push(d); cList.push(c);
     if (d < 0 || c < 0) errors.push(`第${i + 1}行金额不能为负`);
     if (d > 0 && c > 0) errors.push(`第${i + 1}行借贷不能同时有值`);
     if (d === 0 && c === 0) errors.push(`第${i + 1}行金额不能为 0`);
@@ -211,8 +223,9 @@ export function checkVoucher(setId, entries = []) {
       errors.push(`第${i + 1}行缺少科目`);
     }
   });
-  if (Math.abs(td - tc) > EPS) errors.push(`借贷不平：借方 ${r2(td)} / 贷方 ${r2(tc)}`);
-  return { ok: errors.length === 0, errors, total_debit: r2(td), total_credit: r2(tc) };
+  const td = sumMoney(dList), tc = sumMoney(cList);
+  if (Math.abs(td - tc) > EPS) errors.push(`借贷不平：借方 ${td} / 贷方 ${tc}`);
+  return { ok: errors.length === 0, errors, total_debit: td, total_credit: tc };
 }
 
 function nextNumber(setId, period, word) {
@@ -983,11 +996,85 @@ export function parseCsv(text) {
   return rows.filter((r) => r.some((x) => String(x).trim() !== ""));
 }
 
-const numOr0 = (v) => {
-  const n = Number(String(v ?? "").replace(/[,\s\u00a5\uffe5]/g, ""));
-  return Number.isFinite(n) ? r2(n) : 0;
-};
 const DIRECTIONS = { 借: "debit", debit: "debit", d: "debit", 借方: "debit", 贷: "credit", credit: "credit", c: "credit", 贷方: "credit" };
+
+// 金额上限：12 位整数 + 2 位小数；超过按超界拒绝，不截断、不归 0。
+const AMOUNT_MAX = 999999999999.99;
+// 允许的金额文本：可带前导 ¥/￥、正负号、千分位与小数；不含内部空白、指数、单位。
+const AMOUNT_TEXT_RE = /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/;
+const CURRENCY_PREFIX_RE = /^[¥￥]\s*/;
+const ACCOUNT_CATEGORIES = ["资产", "负债", "权益", "成本", "损益"];
+
+/**
+ * 严格金额解析（先核对原始类型/数值范围/符号，再归一化到 2 位小数）。
+ * - 只允许 number / string / null / undefined；对象、数组、布尔一律拒绝，
+ *   不允许 String([100]) 之类被强制成 "100" 或 "[object Object]"。
+ * - 有限 number 直接采用；number 型 NaN/Infinity 拒绝。
+ * - 空白/缺失（""/undefined/null）按 0 处理，这是允许的输入格式。
+ * - 文本必须匹配 AMOUNT_TEXT_RE；垃圾文本、部分可解析文本一律拒绝，不再按 0 吞掉。
+ * - 先判断原始数值的绝对值是否超界、是否带负号，再 r2；不允许超界原值/极小负值
+ *   因舍入被接受。
+ * 返回 { ok: true, value, rawValue, negative } 或 { ok: false, error }。
+ */
+export function parseImportAmount(raw) {
+  if (raw === undefined || raw === null) return { ok: true, value: 0, rawValue: 0, negative: false };
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return { ok: false, error: "金额必须是有限数字（不允许 NaN/Infinity）" };
+    return boundImportAmount(raw, String(raw));
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: `金额类型非法（只允许数字或文本）：${fmtRaw(raw)}` };
+  }
+  const text = raw.trim();
+  if (text === "") return { ok: true, value: 0, rawValue: 0, negative: false };
+  const body = text.replace(CURRENCY_PREFIX_RE, "").trim();
+  if (!AMOUNT_TEXT_RE.test(body)) return { ok: false, error: `金额文本非法：${text}` };
+  const n = Number(body.replace(/,/g, ""));
+  if (!Number.isFinite(n)) return { ok: false, error: `金额文本非法：${text}` };
+  return boundImportAmount(n, text);
+}
+function boundImportAmount(n, source) {
+  if (!Number.isFinite(n)) return { ok: false, error: `金额非法：${source}` };
+  // 超界与负号都在 r2 之前判定：-0.001 不得被舍入成 -0，999999999999.994 不得被舍入进界内。
+  if (Math.abs(n) > AMOUNT_MAX) return { ok: false, error: `金额超界（绝对值上限 ${AMOUNT_MAX}）：${source}` };
+  return { ok: true, value: r2(n), rawValue: n, negative: n < 0 };
+}
+
+// 凭证日期：仅接受 YYYY-MM-DD 的真实日历日期；空白表示缺省为期间首日。
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+function parseImportDate(raw) {
+  if (raw === undefined || raw === null) return { ok: true, value: "" };
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    return { ok: false, error: `日期类型非法（只允许文本或数字）：${fmtRaw(raw)}` };
+  }
+  const text = String(raw).trim();
+  if (text === "") return { ok: true, value: "" };
+  const m = DATE_RE.exec(text);
+  if (!m) return { ok: false, error: `日期格式应为 YYYY-MM-DD：${text}` };
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
+    return { ok: false, error: `日期不是真实日历日：${text}` };
+  }
+  return { ok: true, value: `${m[1]}-${m[2]}-${m[3]}` };
+}
+
+const normDirection = (raw) => {
+  const s = String(raw ?? "").trim();
+  return s ? (DIRECTIONS[normKey(s)] || s) : "";
+};
+const fmtRaw = (v) => {
+  if (v === undefined || v === null || v === "") return "(空)";
+  if (typeof v === "object") { try { return JSON.stringify(v); } catch { return "[对象]"; } }
+  return String(v);
+};
+// 文本字段只允许 string/number/null/undefined；对象/数组/布尔不得被 String() 成垃圾文本。
+function coerceText(raw) {
+  if (raw === undefined || raw === null) return { ok: true, value: "" };
+  if (typeof raw === "string") return { ok: true, value: raw.trim() };
+  if (typeof raw === "number" && Number.isFinite(raw)) return { ok: true, value: String(raw) };
+  return { ok: false, error: `文本类型非法：${fmtRaw(raw)}` };
+}
 
 function headerMap(rows, synonyms, positions) {
   const first = (rows[0] || []).map(normKey);
@@ -1058,7 +1145,11 @@ export function parseImportTexts(texts = {}, metaOverride = {}) {
     const { idx, start } = headerMap(rows, CSV_COLS.openings, [0, 1, 2]);
     for (let i = start; i < rows.length; i++) {
       const row = rows[i];
-      payload.opening_balances.push({ code: String(row[idx.code] ?? "").trim(), debit: numOr0(row[idx.debit]), credit: numOr0(row[idx.credit]) });
+      // 保留原始金额文本，由 validateImportPayload / importAccountSet 统一严格校验，避免静默归 0。
+      payload.opening_balances.push({
+        code: String(row[idx.code] ?? "").trim(),
+        debit: String(row[idx.debit] ?? "").trim(), credit: String(row[idx.credit] ?? "").trim(),
+      });
     }
   }
   if (texts.vouchers) {
@@ -1069,15 +1160,26 @@ export function parseImportTexts(texts = {}, metaOverride = {}) {
       const row = rows[i];
       const period = String(row[idx.period] ?? "").trim();
       const word = String(row[idx.word] ?? "").trim() || "记";
-      const number = parseInt(row[idx.number], 10) || 1;
-      const key = `${period}|${word}|${number}`;
+      // 保留原始编号文本；合法显式编号按数值归一化分组，非法编号单独成组交由校验拒绝，
+      // 不再用 parseInt 吞掉 `1oops` 这类坏数据。
+      const numberRaw = String(row[idx.number] ?? "").trim();
+      const validNumber = /^\d+$/.test(numberRaw) && Number.isSafeInteger(Number(numberRaw)) && Number(numberRaw) > 0;
+      const numberKey = numberRaw === "" ? "1" : (validNumber ? String(Number(numberRaw)) : `bad:${numberRaw}`);
+      const key = `${period}|${word}|${numberKey}`;
       if (!groups.has(key)) groups.set(key, {
-        period, word, number,
-        date: String(row[idx.date] ?? "").trim(), summary: String(row[idx.summary] ?? "").trim(), entries: [],
+        period, word,
+        numberRaw,
+        // 合法缺省编号保持原契约（默认 1）；显式编号在预检中必须为安全正整数。
+        number: validNumber ? Number(numberRaw) : (numberRaw === "" ? 1 : undefined),
+        date: String(row[idx.date] ?? "").trim(), dates: [],
+        summary: String(row[idx.summary] ?? "").trim(), entries: [],
       });
-      groups.get(key).entries.push({
+      const g = groups.get(key);
+      // 保留同一凭证每一行的原始日期，避免只留首行而漏掉后续行的非法日期。
+      g.dates.push(String(row[idx.date] ?? "").trim());
+      g.entries.push({
         code: String(row[idx.code] ?? "").trim(), summary: String(row[idx.summary] ?? "").trim(),
-        debit: numOr0(row[idx.debit]), credit: numOr0(row[idx.credit]),
+        debit: String(row[idx.debit] ?? "").trim(), credit: String(row[idx.credit] ?? "").trim(),
       });
     }
     payload.vouchers = [...groups.values()];
@@ -1085,58 +1187,298 @@ export function parseImportTexts(texts = {}, metaOverride = {}) {
   return payload;
 }
 
-/** 校验导入 payload，返回错误/警告/统计。 */
-export function validateImportPayload(payload = {}) {
+/**
+ * 共享导入预检：先核对原始数据/文本，再归一化成可写入的值。
+ * 预检与正式写入共用本函数，保证「预检通过后正式写入不会因同一静态约束失败」。
+ * 本函数只读，不产生任何业务写入；错误带行号/凭证/科目/字段上下文。
+ * 返回 { ok, errors, warnings, normalized, summary }。
+ */
+export function normalizeImportPayload(payload = {}) {
   const errors = [], warnings = [];
-  const meta = payload.account_set || {};
-  if (!String(meta.name || "").trim()) errors.push("缺少账套名称");
-  if (!/^\d{4}-\d{2}$/.test(String(meta.start_period || ""))) errors.push("启用期间格式应为 YYYY-MM");
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      ok: false,
+      errors: [`导入数据格式非法（payload 应为对象）：${fmtRaw(payload)}`],
+      warnings,
+      normalized: { account_set: {}, accounts: [], opening_balances: [], vouchers: [] },
+      summary: { account_set: null, start_period: null, accounts: 0, opening_balances: 0, vouchers: 0, entries: 0 },
+    };
+  }
+  const p = payload;
+  if (p.account_set !== undefined && p.account_set !== null
+    && (typeof p.account_set !== "object" || Array.isArray(p.account_set))) {
+    errors.push(`账套信息 account_set 格式非法（应为对象）：${fmtRaw(p.account_set)}`);
+  }
+  const meta = (p.account_set && typeof p.account_set === "object" && !Array.isArray(p.account_set)) ? p.account_set : {};
 
+  // ---- 账套 meta：所有会写入 SQLite 的字段先核对类型，再归一化 ----
+  const nameT = coerceText(meta.name);
+  const name = nameT.ok ? nameT.value : "";
+  if (!nameT.ok) errors.push(`账套名称 name 类型非法：${fmtRaw(meta.name)}`);
+  else if (!name) errors.push("缺少账套名称");
+  const taxT = coerceText(meta.taxpayer_type);
+  if (!taxT.ok) errors.push(`纳税人性质 taxpayer_type 类型非法：${fmtRaw(meta.taxpayer_type)}`);
+  const stdT = coerceText(meta.accounting_standard);
+  if (!stdT.ok) errors.push(`会计准则 accounting_standard 类型非法：${fmtRaw(meta.accounting_standard)}`);
+  const startRaw = meta.start_period;
+  let startPeriod = null;
+  if (startRaw !== undefined && startRaw !== null && typeof startRaw !== "string" && typeof startRaw !== "number") {
+    errors.push(`启用期间 start_period 类型非法：${fmtRaw(startRaw)}`);
+  } else {
+    startPeriod = parsePeriod(startRaw);
+    if (!startPeriod) errors.push(`启用期间非法（应为 YYYY-MM 且月份 01-12）：${fmtRaw(startRaw)}`);
+  }
+
+  // 三个集合：缺失（undefined/null）按空集合；显式给了错误类型必须报错，不能静默丢弃。
+  const readCollection = (key) => {
+    const v = p[key];
+    if (v === undefined || v === null) return [];
+    if (!Array.isArray(v)) { errors.push(`导入数据 ${key} 格式非法（应为数组）：${fmtRaw(v)}`); return []; }
+    return v;
+  };
+  const accountsIn = readCollection("accounts");
+  const openingsIn = readCollection("opening_balances");
+  const vouchersIn = readCollection("vouchers");
+
+  // ---- 科目 ----
   const coaCodes = new Set(COA.map((a) => a.code));
-  const accs = payload.accounts || [];
-  accs.forEach((a, i) => {
-    if (!a.code || !a.name) return errors.push(`科目第 ${i + 1} 行缺少编码或名称`);
-    if (a.direction && !["debit", "credit"].includes(a.direction)) errors.push(`科目 ${a.code} 方向非法：${a.direction}`);
-    if (a.category && !["资产", "负债", "权益", "成本", "损益"].includes(a.category)) errors.push(`科目 ${a.code} 类别非法：${a.category}`);
-    if (coaCodes.has(String(a.code))) warnings.push(`科目 ${a.code} 已存在标准科目，将保留标准名称`);
-  });
-  const codes = new Set([...coaCodes, ...accs.map((a) => String(a.code))]);
+  const accountCodes = new Set(coaCodes);
+  const normalizedAccounts = [];
+  const seenCodes = new Set();
+  accountsIn.forEach((a, i) => {
+    const line = i + 1;
+    if (a === null || typeof a !== "object" || Array.isArray(a)) {
+      errors.push(`科目第 ${line} 行格式非法（应为对象）：${fmtRaw(a)}`); return;
+    }
+    const codeT = coerceText(a.code), nameT2 = coerceText(a.name);
+    const dirT = coerceText(a.direction), catT = coerceText(a.category);
+    if (!codeT.ok) errors.push(`科目第 ${line} 行科目编码类型非法：${fmtRaw(a.code)}`);
+    if (!nameT2.ok) errors.push(`科目第 ${line} 行科目名称类型非法：${fmtRaw(a.name)}`);
+    if (!dirT.ok) errors.push(`科目第 ${line} 行方向类型非法：${fmtRaw(a.direction)}`);
+    if (!catT.ok) errors.push(`科目第 ${line} 行类别类型非法：${fmtRaw(a.category)}`);
+    const code = codeT.ok ? codeT.value : "";
+    const aname = nameT2.ok ? nameT2.value : "";
+    const rawDir = dirT.ok ? dirT.value : "";
+    const rawCat = catT.ok ? catT.value : "";
+    const direction = normDirection(rawDir);
+    if (!code) errors.push(`科目第 ${line} 行缺少科目编码`);
+    else if (!aname) errors.push(`科目第 ${line} 行（编码 ${code}）缺少科目名称`);
+    if (rawDir && !["debit", "credit"].includes(direction)) errors.push(`科目第 ${line} 行（编码 ${code || "空"}）方向非法：${rawDir}`);
+    if (rawCat && !ACCOUNT_CATEGORIES.includes(rawCat)) errors.push(`科目第 ${line} 行（编码 ${code || "空"}）类别非法：${rawCat}`);
 
-  let od = 0, oc = 0;
-  (payload.opening_balances || []).forEach((o, i) => {
-    if (!codes.has(String(o.code))) errors.push(`期初余额第 ${i + 1} 行科目不存在：${o.code}`);
-    od += Number(o.debit) || 0; oc += Number(o.credit) || 0;
-  });
-  if (Math.abs(od - oc) > EPS) errors.push(`期初余额借贷不平：借 ${r2(od)} / 贷 ${r2(oc)}`);
+    const isStandard = !!code && coaCodes.has(code);
+    const isDuplicate = !!code && seenCodes.has(code);
+    if (isStandard) warnings.push(`科目 ${code} 已存在标准科目，将保留标准名称`);
+    if (isDuplicate) warnings.push(`科目 ${code} 重复出现，仅保留首行`);
+    if (code) { seenCodes.add(code); accountCodes.add(code); }
 
+    // 只有会真正新增的科目才强制方向/类别；标准科目写入时被跳过，不因此拒绝历史输入。
+    if (code && !isStandard && !isDuplicate) {
+      if (!["debit", "credit"].includes(direction)) errors.push(`科目 ${code} 方向缺失或非法（新增科目必须为 debit/credit）：${rawDir || "(空)"}`);
+      if (!ACCOUNT_CATEGORIES.includes(rawCat)) errors.push(`科目 ${code} 类别缺失或非法（新增科目必须为 资产/负债/权益/成本/损益）：${rawCat || "(空)"}`);
+    }
+    normalizedAccounts.push({ code, name: aname, category: rawCat, direction });
+  });
+
+  // ---- 期初余额 ----
+  const normalizedOpenings = [];
+  const seenOpeningCodes = new Set();
+  const odValues = [], ocValues = [];
+  let openingHasError = false;
+  openingsIn.forEach((o, i) => {
+    const line = i + 1;
+    if (o === null || typeof o !== "object" || Array.isArray(o)) {
+      errors.push(`期初余额第 ${line} 行格式非法（应为对象）：${fmtRaw(o)}`); openingHasError = true; return;
+    }
+    const codeT = coerceText(o.code);
+    if (!codeT.ok) { errors.push(`期初余额第 ${line} 行科目编码类型非法：${fmtRaw(o.code)}`); openingHasError = true; }
+    const code = codeT.ok ? codeT.value : "";
+    if (!code) { errors.push(`期初余额第 ${line} 行缺少科目编码`); openingHasError = true; return; }
+    // 重复期初必须拒绝：数据库按期初科目覆盖写入，汇总与覆盖语义不同会导致预检/写入不一致。
+    if (seenOpeningCodes.has(code)) {
+      errors.push(`期初余额第 ${line} 行（科目 ${code}）重复出现，请合并为一行`); openingHasError = true; return;
+    }
+    seenOpeningCodes.add(code);
+    if (!accountCodes.has(code)) { errors.push(`期初余额第 ${line} 行科目不存在：${code}`); openingHasError = true; return; }
+    const d = parseImportAmount(o.debit);
+    const c = parseImportAmount(o.credit);
+    if (!d.ok) { errors.push(`期初余额第 ${line} 行（科目 ${code}）借方金额非法：${fmtRaw(o.debit)}（${d.error}）`); openingHasError = true; }
+    if (!c.ok) { errors.push(`期初余额第 ${line} 行（科目 ${code}）贷方金额非法：${fmtRaw(o.credit)}（${c.error}）`); openingHasError = true; }
+    if (!d.ok || !c.ok) return;
+    if (d.negative) { errors.push(`期初余额第 ${line} 行（科目 ${code}）借方不能为负：${fmtRaw(o.debit)}`); openingHasError = true; }
+    if (c.negative) { errors.push(`期初余额第 ${line} 行（科目 ${code}）贷方不能为负：${fmtRaw(o.credit)}`); openingHasError = true; }
+    if (d.value > 0 && c.value > 0) { errors.push(`期初余额第 ${line} 行（科目 ${code}）借贷不能同时有值`); openingHasError = true; }
+    odValues.push(d.value); ocValues.push(c.value);
+    normalizedOpenings.push({ code, debit: d.value, credit: c.value });
+  });
+  const od = sumMoney(odValues), oc = sumMoney(ocValues);
+  if (!openingHasError && Math.abs(od - oc) > EPS) errors.push(`期初余额借贷不平：借 ${od} / 贷 ${oc}`);
+
+  // ---- 凭证 ----
+  const normalizedVouchers = [];
   let entryCount = 0;
-  (payload.vouchers || []).forEach((v, i) => {
-    if (!/^\d{4}-\d{2}$/.test(String(v.period || ""))) return errors.push(`凭证 ${i + 1} 期间非法：${v.period}`);
-    const es = v.entries || []; entryCount += es.length;
-    if (es.length < 2) errors.push(`凭证 ${i + 1}（${v.period} ${v.word}-${v.number}）至少两条分录`);
-    let d = 0, c = 0;
-    es.forEach((e) => {
-      if (!codes.has(String(e.code))) errors.push(`凭证 ${i + 1} 科目不存在：${e.code}`);
-      d += Number(e.debit) || 0; c += Number(e.credit) || 0;
+  vouchersIn.forEach((v, i) => {
+    const line = i + 1;
+    if (v === null || typeof v !== "object" || Array.isArray(v)) {
+      errors.push(`凭证第 ${line} 张格式非法（应为对象）：${fmtRaw(v)}`); return;
+    }
+    const wordT = coerceText(v.word);
+    const summaryT = coerceText(v.summary);
+    const periodT = coerceText(v.period);
+    if (!wordT.ok) errors.push(`凭证第 ${line} 张字号类型非法：${fmtRaw(v.word)}`);
+    if (!summaryT.ok) errors.push(`凭证第 ${line} 张摘要类型非法：${fmtRaw(v.summary)}`);
+    if (!periodT.ok) errors.push(`凭证第 ${line} 张期间类型非法：${fmtRaw(v.period)}`);
+    const word = (wordT.ok && wordT.value) || "记";
+    const period = periodT.ok ? parsePeriod(periodT.value) : null;
+
+    // 凭证编号：number 与 numberRaw 各自严格类型/语法校验；两者同时存在时必须一致，
+    // 辅助字段 numberRaw 不得经 String() 掩盖 number 的错误或本身类型非法。
+    // 兼容 CSV 缺省编号默认 1、JSON 无编号自动取号，以及合法 CSV parse->JSON 序列化往返。
+    let number, numberError = null;
+    const numberErrors = [];
+    let rawNumber, fieldNumber;
+    const hasNumberRaw = v.numberRaw !== undefined && v.numberRaw !== null;
+    const hasNumber = v.number !== undefined && v.number !== null && v.number !== "";
+    if (hasNumberRaw) {
+      if (typeof v.numberRaw !== "string") {
+        numberErrors.push(`凭证编号 numberRaw 类型非法（应为文本）：${fmtRaw(v.numberRaw)}`);
+      } else {
+        const raw = v.numberRaw.trim();
+        if (raw === "") rawNumber = 1;
+        else if (/^\d+$/.test(raw) && Number.isSafeInteger(Number(raw)) && Number(raw) > 0) rawNumber = Number(raw);
+        else numberErrors.push(`凭证编号非法（应为安全正整数）：${fmtRaw(v.numberRaw)}`);
+      }
+    }
+    if (hasNumber) {
+      const nv = v.number;
+      if (typeof nv === "number" && Number.isSafeInteger(nv) && nv > 0) fieldNumber = nv;
+      else if (typeof nv === "string" && /^\d+$/.test(nv.trim()) && Number.isSafeInteger(Number(nv)) && Number(nv) > 0) fieldNumber = Number(nv);
+      else numberErrors.push(`凭证编号非法（应为安全正整数）：${fmtRaw(nv)}`);
+    }
+    if (rawNumber !== undefined && fieldNumber !== undefined && rawNumber !== fieldNumber) {
+      numberErrors.push(`凭证编号 number 与 numberRaw 不一致：${fieldNumber} / ${fmtRaw(v.numberRaw)}`);
+    }
+    number = hasNumberRaw ? rawNumber : fieldNumber;
+    if (numberErrors.length) numberError = numberErrors.join("；");
+    const numberLabel = number !== undefined ? number
+      : (typeof v.numberRaw === "string" && v.numberRaw.trim() ? v.numberRaw.trim() : "自动");
+    const label = `${periodT.ok ? (periodT.value || "(空)") : fmtRaw(v.period)} ${word}-${numberLabel}`;
+    if (!period) errors.push(`凭证第 ${line} 张（${label}）期间非法：${fmtRaw(v.period)}`);
+    else if (startPeriod && period < startPeriod) errors.push(`凭证第 ${line} 张（${label}）期间不得早于启用期间 ${startPeriod}：${period}`);
+    if (numberError) errors.push(`凭证第 ${line} 张（${label}）${numberError}`);
+
+    // 日期：date 本身始终校验，不能被 dates 覆盖率或替代；dates 若存在必须为数组并逐项校验，
+    // 且与 date 已填值一致（同凭证内不得出现多个不同日期）。
+    const dateValues = [];
+    let dateHasError = false;
+    const checkDate = (raw) => {
+      const dp = parseImportDate(raw);
+      if (!dp.ok) { errors.push(`凭证第 ${line} 张（${label}）日期非法：${dp.error}`); dateHasError = true; }
+      else if (dp.value) dateValues.push(dp.value);
+    };
+    checkDate(v.date);
+    if (v.dates !== undefined && v.dates !== null) {
+      if (!Array.isArray(v.dates)) {
+        errors.push(`凭证第 ${line} 张（${label}）辅助日期 dates 格式非法（应为数组）：${fmtRaw(v.dates)}`);
+        dateHasError = true;
+      } else {
+        for (const dRaw of v.dates) checkDate(dRaw);
+      }
+    }
+    const distinctDates = new Set(dateValues);
+    if (distinctDates.size > 1) {
+      errors.push(`凭证第 ${line} 张（${label}）同一凭证日期不一致：${[...distinctDates].join("、")}`);
+      dateHasError = true;
+    }
+    const dateValue = distinctDates.size ? [...distinctDates][0] : "";
+    if (!dateHasError && dateValue && period && dateValue.slice(0, 7) !== period) {
+      warnings.push(`凭证第 ${line} 张（${label}）日期 ${dateValue} 与期间 ${period} 不在同一月份`);
+    }
+
+    // 分录：非数组要报形状错误，不能当空数组吞掉。
+    const esRaw = v.entries;
+    let entryHasError = false;
+    if (esRaw !== undefined && esRaw !== null && !Array.isArray(esRaw)) {
+      errors.push(`凭证第 ${line} 张（${label}）分录 entries 格式非法（应为数组）：${fmtRaw(esRaw)}`);
+      entryHasError = true;
+    }
+    const es = Array.isArray(esRaw) ? esRaw : [];
+    entryCount += es.length;
+    const normalizedEntries = [];
+    const vdValues = [], vcValues = [];
+    if (es.length < 2) errors.push(`凭证第 ${line} 张（${label}）至少两条分录`);
+    es.forEach((e, j) => {
+      const eline = j + 1;
+      if (e === null || typeof e !== "object" || Array.isArray(e)) {
+        errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行格式非法（应为对象）：${fmtRaw(e)}`);
+        entryHasError = true; return;
+      }
+      const codeT = coerceText(e.code), esumT = coerceText(e.summary);
+      if (!codeT.ok) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行科目编码类型非法：${fmtRaw(e.code)}`); entryHasError = true; }
+      if (!esumT.ok) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行摘要类型非法：${fmtRaw(e.summary)}`); entryHasError = true; }
+      const code = codeT.ok ? codeT.value : "";
+      if (!code) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行缺少科目`); entryHasError = true; return; }
+      if (!accountCodes.has(code)) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行科目不存在：${code}`); entryHasError = true; }
+      const d = parseImportAmount(e.debit);
+      const c = parseImportAmount(e.credit);
+      if (!d.ok) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借方金额非法：${fmtRaw(e.debit)}（${d.error}）`); entryHasError = true; }
+      if (!c.ok) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行贷方金额非法：${fmtRaw(e.credit)}（${c.error}）`); entryHasError = true; }
+      if (!d.ok || !c.ok) return;
+      if (d.negative) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借方不能为负：${fmtRaw(e.debit)}`); entryHasError = true; }
+      if (c.negative) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行贷方不能为负：${fmtRaw(e.credit)}`); entryHasError = true; }
+      if (d.value > 0 && c.value > 0) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借贷不能同时有值`); entryHasError = true; }
+      if (d.value === 0 && c.value === 0) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行金额不能为 0`); entryHasError = true; }
+      vdValues.push(d.value); vcValues.push(c.value);
+      let eSummary = esumT.ok ? esumT.value : "";
+      if ((e.summary === undefined || e.summary === null) && summaryT.ok) eSummary = summaryT.value;
+      normalizedEntries.push({ code, summary: eSummary, debit: d.value, credit: c.value });
     });
-    if (Math.abs(d - c) > EPS) errors.push(`凭证 ${i + 1}（${v.period} ${v.word}-${v.number}）借贷不平：借 ${r2(d)} / 贷 ${r2(c)}`);
+    const vd = sumMoney(vdValues), vc = sumMoney(vcValues);
+    if (!entryHasError && Math.abs(vd - vc) > EPS) errors.push(`凭证第 ${line} 张（${label}）借贷不平：借 ${vd} / 贷 ${vc}`);
+    normalizedVouchers.push({
+      period: period || (periodT.ok ? periodT.value : ""), date: dateValue,
+      word, number, summary: summaryT.ok ? summaryT.value : "", entries: normalizedEntries,
+    });
   });
 
   return {
-    ok: errors.length === 0, errors, warnings,
+    ok: errors.length === 0,
+    errors, warnings,
+    normalized: {
+      account_set: {
+        name,
+        taxpayer_type: taxT.ok ? taxT.value : "",
+        accounting_standard: stdT.ok ? stdT.value : "",
+        start_period: startPeriod || (typeof startRaw === "string" ? startRaw : ""),
+      },
+      accounts: normalizedAccounts,
+      opening_balances: normalizedOpenings,
+      vouchers: normalizedVouchers,
+    },
     summary: {
-      account_set: meta.name || null, start_period: meta.start_period || null,
-      accounts: accs.length, opening_balances: (payload.opening_balances || []).length,
-      vouchers: (payload.vouchers || []).length, entries: entryCount,
+      account_set: name || null,
+      start_period: startPeriod || (typeof startRaw === "string" ? startRaw : null),
+      accounts: accountsIn.length,
+      opening_balances: openingsIn.length,
+      vouchers: vouchersIn.length,
+      entries: entryCount,
     },
   };
 }
 
-/** 先预检（dryRun）再落库；落库在一个事务里，失败回滚。 */
+/** 校验导入 payload，返回错误/警告/统计（向后兼容入口，内部与正式写入共用同一约束）。 */
+export function validateImportPayload(payload = {}) {
+  const r = normalizeImportPayload(payload);
+  return { ok: r.ok, errors: r.errors, warnings: r.warnings, summary: r.summary };
+}
+
+/** 先预检（dryRun）再落库；预检与落库共用 normalizeImportPayload 的同一套约束，失败不落库。 */
 export function importAccountSet(payload = {}, { dryRun = false } = {}) {
-  const validation = validateImportPayload(payload);
-  if (dryRun || !validation.ok) return { dryRun: true, validation, created: null };
-  const meta = payload.account_set || {};
+  const normalized = normalizeImportPayload(payload);
+  const validation = { ok: normalized.ok, errors: normalized.errors, warnings: normalized.warnings, summary: normalized.summary };
+  if (dryRun || !normalized.ok) return { dryRun: true, validation, created: null };
+  const n = normalized.normalized;
+  const meta = n.account_set;
   db.exec("BEGIN");
   try {
     const set = createAccountSet({
@@ -1144,16 +1486,16 @@ export function importAccountSet(payload = {}, { dryRun = false } = {}) {
       accounting_standard: meta.accounting_standard || "小企业会计准则", start_period: meta.start_period,
     });
     const have = new Set(listAccounts(set.id).map((a) => a.code));
-    for (const a of payload.accounts || []) {
+    for (const a of n.accounts) {
       if (have.has(String(a.code))) continue;
       addAccount(set.id, { code: a.code, name: a.name, category: a.category, direction: a.direction });
       have.add(String(a.code));
     }
-    if ((payload.opening_balances || []).length) setOpeningBalances(set.id, payload.opening_balances);
+    if (n.opening_balances.length) setOpeningBalances(set.id, n.opening_balances);
     let vcount = 0;
-    for (const v of payload.vouchers || []) {
+    for (const v of n.vouchers) {
       createVoucher(set.id, {
-        period: v.period, voucher_date: v.date || `${v.period}-01`, word: v.word || "记",
+        period: v.period, voucher_date: v.date || `${v.period}-01`, word: v.word,
         number: v.number, summary: v.summary, kind: "normal", status: "posted", entries: v.entries,
       });
       vcount++;
