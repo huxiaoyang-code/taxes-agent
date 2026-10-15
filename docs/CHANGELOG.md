@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### Changed — 报表闭环优先级与补全方案（2026-10-15）
+
+- 用户明确最终交付为**报表闭环**（办税员账号登录 → 授权企业 / 账套 → 财务操作 → 出报表），且**两类报表都需要**：内部资产负债表 / 利润表 / 现金流量表 + 余额表 / 明细账，以及税局财务报表申报格式；前端展示次要。新增 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md) 与 [REPORT-CLOSURE 交接](handoffs/REPORT-CLOSURE.md)，把现行排序从「IMPORT-IDEMPOTENCY 第一优先」切换为 **RC-0 ~ RC-6**（IMPORT-IDEMPOTENCY 并入 RC-2，泛用批量队列后排）。
+- 更新 [项目章程](PROJECT-CHARTER.md)、[路线图](ROADMAP.md)（新增 P1.5 报表闭环里程碑）、[团队实施计划](TEAM-PLAN.md)、[阶段状态](handoffs/STATE.md)、[新会话入口](handoffs/NEXT-SESSION.md)，并同步本索引与本变更日志；已完成表补记 PR #11（IMPORT-STRICT 交接文档归档，`cc6e789`）。
+- 首审返工修订：RC-0 拆「代码审查 / 合成验证」与「用户本机人工可行性」两步（原 tax-browser 只读保留，隔离工作区仅复制源码 / 补丁与基线快照，不复制 DB / 凭据 / 临时 profile / 日志；先复现旧草稿测试再在最新 main 复用必要改动）；RC-1 补实际账号 / 凭据入口、适配器与最少 UI（凭据与验证码只由用户本机输入；模型侧 MCP / Agent 仅收安全引用与不含真实业务 / 身份原文的状态摘要，本机 UI 专用回环通道可处理瞬时凭据 / OTP，不送模型）；RC-2 补目标账套定向导入、标准 DTO 转换、完整性与映射预检、稳定业务键与最小恢复能力；报表验收补独立预期金额 / 会计口径；范围弹性与未知源数据边界明确。
+- 纯文档变更，未改业务代码、算法或测试，不重复整套 208 / 262 项回归。**整体不宣称报表闭环已达成**。
+
 ### Changed — 方向修正为本机单用户批量 + 工作范式技能（2026-10-14）
 
 - 明确产品为**本机单用户**工具，目标支持多个企业 / 账套的批量处理（批量队列与管理尚待开发）；删除 SaaS、多租户、租户权限平台方向，保留账套隔离、操作日志、备份恢复、凭据安全等本机实际需要。涉及 `AGENTS.md`、PROJECT-CHARTER、TEAM-PLAN、ROADMAP、INDEX、CONVENTIONS 及 README。
@@ -24,9 +31,9 @@
 - 验收命令、结果及限制见 [第一期验收](PHASE1-ACCEPTANCE.md)，PR 与阶段状态见 [交接](handoffs/STATE.md)。
 
 ### Added — 逆向分析：账套导入
-- 新增主题报告 [`04-report/10-account-set-import.md`](04-report/10-account-set-import.md)：
+- 新增主题报告 [`04-report/10-account-set-import.md`](../04-report/10-account-set-import.md)：
   `page=account-sets` 的导入实现（建账向导“期初旧账/旧账文件” + `legacy-book-import` 子智能体）
-- 新增证据 [`03-analysis/account-set-import.json`](03-analysis/account-set-import.json)：向导字段/默认值/接口契约/附件管道/状态机
+- 新增证据 [`03-analysis/account-set-import.json`](../03-analysis/account-set-import.json)：向导字段/默认值/接口契约/附件管道/状态机
 - 归档实时复核 bundle `02-scripts/work/index-CiSnIgwe.js`（sha256 `691cf9c2…`），与旧版 `index-yoSd2Nx7.js` 行为一致
 - 关键结论：向导中的 `openingBalanceFile` 被提交前丢弃，`createAccountSet` 零调用；导入由 Agent 附件管道完成
 
@@ -38,6 +45,7 @@
 - `codex/README.md` 新增「本地复现：导入旧账」步骤（工作台 + MCP + Codex 提示词）
 
 ### Planned
+- 报表闭环工作包 RC-1 ~ RC-6（见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)）
 - 辅助核算（客户/供应商/部门/项目）
 - 银行流水对账
 - 打印/导出（PDF/Excel）
