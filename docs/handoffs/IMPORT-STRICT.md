@@ -1,6 +1,6 @@
 # IMPORT-STRICT 交接
 
-- 状态：**管理者首审不通过（7 项阻塞）、二轮复审阻塞（CSV 辅助字段绕过），员工两轮返工自测完成，待管理者复审**。未提交、未 PR、未合并；本文件不代表管理者复审通过或 PR 合并。
+- 状态：**已由管理者独立复验并合并**。PR [#10](https://github.com/huxiaoyang-code/youshu-fork/pull/10) 于 2026-10-15 合并，merge SHA `67f5e4541fd05878e3d681638dcb95a9c33b799b`；管理者 `git diff` 已证明 merge tree 等于已验证 head。此前「首审不通过（7 项阻塞）+ 二轮复审阻塞（CSV 辅助字段绕过）+ 两轮返工」作为**过程历史**保留于下文，不再阻塞。
 - 目标：旧账导入严格校验——拒绝非法金额文本；预检与正式写入使用同一套约束，失败不落库；覆盖金额、日期/期间、凭证/期初会计约束；保持有效历史输入兼容。
 - 明确不做（非目标）：幂等批次 / 重复导入识别（留给 IMPORT-IDEMPOTENCY）、批量队列、UI 重构、税局适配、多租户。
 - 开发基线：`origin/main` `8279477ad3e49ef1e37cd965db3bb12d719674c9`（`docs: 固化本地执行工作范式与单机批量交接 (#9)`，PR #9 已合并）；分支 `codex/import-strict`，worktree `D:/有数云fork/.worktrees/import-strict`。
@@ -38,7 +38,7 @@
 - CSV 缺省凭证号保持原契约默认 `1`；JSON 缺省编号仍自动取号（原契约）。
 - 预检失败且 `dryRun:false` 时沿用既有 `{ dryRun:true, validation, created:null }` 返回形态，`validation.ok=false` 且无任何写入。
 
-## 自测命令与结果（员工在临时数据目录运行，退出码 0）
+## 自测命令与结果（员工返工在临时数据目录运行；管理者已按同命令独立复验）
 
 - `node test/import-strict.test.mjs` → **54/54 通过**，exit 0（新增/返工套件，含 HTTP/Agent 集成与辅助字段回归）。
 - `node test/accounting-guards.test.mjs` → 23/23；`node test/accounting-derived.test.mjs` → 31/31。
@@ -46,25 +46,34 @@
 - `npm test`（= `node scripts/test-all.mjs`）→ guards 23 + derived 31 + import-strict 54 + smoke 28 + contract 44 + workflow 23 + tax 59 = **262/262，7/7 套件，exit 0**。
 - `git diff --check` → 通过（exit 0）。
 - 自测只用 `WORKBENCH_DATA_DIR` 临时目录与临时数据，未触碰工程 `data/`、真实账套、真实税务凭据或真实系统联网；未使用其他 worktree 成果；未触碰 `.worktrees/tax-browser`。
+- 上述员工自测数已由管理者于 2026-10-15 在 `D:/有数云fork/.worktrees/import-strict/06-workbench` **独立复跑并通过**（7 套 262/262、smoke 28/28，均 exit 0），随后合并 PR #10。
 
 ## 未完成项 / 风险 / 下一部分输入
 
-- **待管理者复审**：以上测试数为员工两轮返工自测，管理者尚未复跑；PR 尚未创建 / 合并。首审 7 项阻塞与二轮 `dates`/`numberRaw` 绕过均逐条修复并补回归，等待复审确认。
+- **复审已完成并合并**：管理者于 2026-10-15 独立阅读最终 diff，并在 `D:/有数云fork/.worktrees/import-strict/06-workbench` 复跑 `npm test`（7 套 262/262）与 `npm run test:smoke`（28/28），均 exit 0；随后合并 PR #10。首审 7 项阻塞与二轮 `dates`/`numberRaw` 绕过均逐条修复并补回归。
 - 预检（`normalizeImportPayload`）只读、不产生任何业务写入，因此不存在「预检写入回滚」；只有正式写入（`importAccountSet` 显式 `dryRun:false`）在单个 `BEGIN ... COMMIT` 内执行，异常时 `ROLLBACK`，保证失败不部分落库。
-- 旧账导入每次新建账套，不修改既有账套；封账 / 既有已过账凭证等既有动态约束仍由现有事务与数据库约束负责，本部分未改变这些行为。
+- 旧账导入每次**只新建账套，不修改既有账套**：不读取、不锁定、不校验既有账套，因此**已有账套的封账 / 既有凭证状态等不构成本导入的动态约束**；本导入自身的原子性由单个事务保证，本部分未改变既有行为。
 - 非幂等仍是已知限制；重复导入识别属 IMPORT-IDEMPOTENCY，本轮未做。
 - 下一部分 `IMPORT-IDEMPOTENCY` 需要批次标识 / 去重键，输入为本交接 + 章程 + STATE。
 
 ## 仍运行进程 / 会话 / 日志
 
-- 本机无为本任务保留的后台服务进程；测试子进程（含 HTTP 集成临时后端）均随测试结束。
-- 日志与任务包在 Git 忽略目录 `.agent-runs/`（本机），不作为下一会话默认上下文。
+- 本机无为本任务保留的后台服务进程；测试子进程（含 HTTP 集成临时后端）均随测试结束。本部分 pi 初稿 / 返工 1 / 返工 2 三个实施会话均已实际结束，管理者核对各退出码为 0；**没有本任务仍在运行的实施进程**。管理者亦已核对「IMPORT-STRICT 合并后交接收尾」文档会话初稿进程实际退出（`.agent-runs/pi-import-strict-handoff.exit` = 0）；本次最后文字修订不递归记录会话状态，**后续文档修订的实时进程状态恢复时另行核对**，本文件不预报本进程退出。
+- 日志与任务包在 Git 忽略目录 `.agent-runs/`（本机），不作为下一会话默认上下文。管理者复验日志：`import-strict-manager-tests-approved.log`、`import-strict-manager-smoke.log`；最初受沙箱影响（本机 HTTP fetch 失败）的日志 `import-strict-manager-tests.log`；锁定文件清单 `import-strict-verified-files.json`。
 
 ## 上下文
 
-- 本返工会话结束后，复审通过并由管理者合并后，下一部分须用新进程、新会话（`--no-session` / `--no-session-persistence`），只读取章程、STATE、本交接与必要源码。
+- 本部分已复审通过并由管理者合并（PR #10）；下一部分 `IMPORT-IDEMPOTENCY` 须用新进程、新会话（`--no-session` / `--no-session-persistence`），只读取章程、STATE、本交接与必要源码。
 - 授权继承自项目章程与用户后续指示；真实账套数据与税务凭据不发到模型服务。
 
-## 管理者复审记录（待填写，暂不预报通过）
+## 管理者复审记录（已填写）
 
-> 本节由管理者复审后填写：复跑的完整 SHA、命令、通过项 / 失败项、发现与结论。在填写前，本部分不得视为复审通过或已合并。
+管理者于 2026-10-15 独立阅读最终 diff 并复验，**复审通过并已合并**。
+
+- 复验工作目录：`D:/有数云fork/.worktrees/import-strict/06-workbench`。
+- 复验命令与结果：`npm test` → 7 套 262/262，exit 0（guards 23 + derived 31 + import-strict 54 + smoke 28 + contract 44 + workflow 23 + tax 59）；`npm run test:smoke` → 28/28，exit 0。
+- 验证基线 main：`8279477ad3e49ef1e37cd965db3bb12d719674c9`（PR #9）。验证后文件 SHA256 锁定（清单 `.agent-runs/import-strict-verified-files.json`），提交前后内容一致；最终验证提交 `aa9f08d33baace25fccf8f4e704de2dbc09d4731`。
+- 合并：PR [#10](https://github.com/huxiaoyang-code/youshu-fork/pull/10) 于 2026-10-15 合并，merge SHA `67f5e4541fd05878e3d681638dcb95a9c33b799b`；管理者 `git diff` 已证明 merge tree 等于已验证 head，主工作区 main 已 ff 更新。
+- 首审 7 项阻塞与二轮 `dates`/`numberRaw` 绕过均已逐条修复并补回归；首审不通过与两次返工作为过程历史保留，**不代表当前仍阻塞**。
+- 过程说明（不隐去）：管理者原沙箱内测试最初因**本机 HTTP fetch 失败**未通过，另一次审批因**额度耗尽**未执行（**非安全拒绝**）。用户要求继续后，审批获准的全套复验通过；该失败属本机沙箱 / 审批环境问题，**不是业务代码错误**。
+- 验证日志（本机 Git 忽略目录）：`.agent-runs/import-strict-manager-tests-approved.log`、`.agent-runs/import-strict-manager-smoke.log`；最初受沙箱影响的日志为 `.agent-runs/import-strict-manager-tests.log`。

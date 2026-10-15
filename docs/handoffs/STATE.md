@@ -1,6 +1,6 @@
 # 阶段状态
 
-更新时间：2026-10-14（本机批量方向修订；追加 IMPORT-STRICT 两轮返工待复审）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
+更新时间：2026-10-15（IMPORT-STRICT 已验收合并，转入 IMPORT-IDEMPOTENCY 待派）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
 
 ## 方向（不可漂移）
 
@@ -20,13 +20,15 @@
 | TAX | 全国税务接口、异步会话和地区目录，真实接入数 0 | [#6](https://github.com/huxiaoyang-code/youshu-fork/pull/6) | f4d9f82 | 税务 59 + MCP 44 + 原有 28；见 [交接](TAX.md) |
 | FLOW | 记账/导入规则、MCP 闭环与统一测试入口 | [#7](https://github.com/huxiaoyang-code/youshu-fork/pull/7) | 03eba00 | 6 套 208 项全部通过；见 [交接](FLOW.md) |
 | ACCEPT | 管理者 main 验收与交付文档 | [#8](https://github.com/huxiaoyang-code/youshu-fork/pull/8) | 9783420（PR #8 合并提交；业务验收提交 03eba00） | 在业务提交 `03eba00` 运行 npm test：208/208；技能格式验证通过 |
+| LOCAL-BATCH-HANDOFF | 本地执行工作范式与单机批量交接（文档 / Skill） | [#9](https://github.com/huxiaoyang-code/youshu-fork/pull/9) | 8279477 | 文档 / Skill 差异、链接与授权核对；未重跑业务测试 |
+| IMPORT-STRICT | 导入严格校验：拒绝非法金额文本，预检与正式写入同一套约束，失败不落库 | [#10](https://github.com/huxiaoyang-code/youshu-fork/pull/10) | 67f5e45 | 2026-10-15 管理者独立复验：`npm test` 7 套 262/262、`npm run test:smoke` 28/28，均 exit 0；见 [交接](IMPORT-STRICT.md) |
 
-上表 PR #1–#8 各部分的员工会话在各自验收与合并后已结束（此为**历史阶段**事实，不代表全仓已无未提交的本地工作，见下文「未完成现场」）。后续部分采用全新会话，读取当前代码和任务包。
+上表 PR #1–#10 各部分的员工会话在各自验收与合并后已结束（此为**历史阶段**事实，不代表全仓已无未提交的本地工作，见下文「未完成现场」）。后续部分采用全新会话，读取当前代码和任务包。
 
 ## 本期收尾与恢复
 
-- 就上表第一阶段（PR #1–#8）而言，实现均已通过审查并合并，相关员工会话已结束；pi FLOW 与 Claude TAX 最后进程退出码均为 0。该结论**只限定上述历史阶段**，不覆盖下文「未完成现场」中未提交、未经管理者审查的本地实现。保留各 worktree 供追溯，不复用旧聊天。
-- 管理者最终验证的 main 完整 SHA：`03eba00c4fefd065d30f021d19f17f02d48d5d65`。工作目录 `D:/有数云fork/06-workbench`，命令 `npm test`，6 套共 208 项通过、exit 0。PR #8 只同步文档和期间工具说明，不改业务算法。
+- 就第一阶段（PR #1–#8）而言，实现均已通过审查并合并，相关员工会话已结束；pi FLOW 与 Claude TAX 最后进程退出码均为 0。该结论**只限定该历史阶段**，不覆盖下文「未完成现场」中未提交、未经管理者审查的本地实现。PR #9（文档 / Skill）与 PR #10（IMPORT-STRICT）也已合并（见「已完成」与「本轮 IMPORT-STRICT」）。保留各 worktree 供追溯，不复用旧聊天。
+- 第一阶段（PR #1–#8）管理者最终验证的 main 完整 SHA：`03eba00c4fefd065d30f021d19f17f02d48d5d65`。工作目录 `D:/有数云fork/06-workbench`，命令 `npm test`，6 套共 208 项通过、exit 0。PR #8 只同步文档和期间工具说明，不改业务算法。（IMPORT-STRICT 合并后为 7 套 262 项，见「本轮 IMPORT-STRICT」。）
 - 本地复核日志 `.agent-runs/main-final-acceptance.log`；任务日志 `pi-flow-review.jsonl` / `claude-tax-review2.jsonl`。原始日志不作为新会话默认上下文。
 - 实际工具目录 45 个入口：31 标 available（其中 7 个是税务预留接口）、1 个 limited、13 个 unavailable。入口数量不等于真实税务连接数。
 
@@ -42,8 +44,9 @@
 - 员工交接：`D:/有数云fork/.worktrees/tax-browser/docs/handoffs/TAX-BROWSER.md`
 - 证据边界：员工交接**自报** 7 套 272 项通过、真实税局未验收；管理者**未独立复跑**该套件，**真实登录未验收**
 - 进程日志：`D:/有数云fork/.agent-runs/pi-tax-browser.jsonl`；**尚未核实退出码，不能声称 exit 0**，也不要整读该日志
+- 本轮核实：该 worktree 原 **14 个未提交文件的内容哈希与本轮开工时一致**，分支 / worktree 保持原样；本轮文档收尾**未触碰**该目录。
 
-新会话派工前先核对上述现场，避免重复派工或误报已完成。`IMPORT-STRICT` 已实现并二次返工自测，列为**待管理者复审**（未合并）；`TAX-BROWSER` 列为**独立待审队列**（本段不重排既定顺序，也不虚构用户未做的排序决定）。
+新会话派工前先核对上述现场，避免重复派工或误报已完成。`IMPORT-STRICT` 已验收合并（PR #10），不再是待审队列；`TAX-BROWSER` 列为**独立待审队列**（本段不重排既定顺序，也不虚构用户未做的排序决定）。
 
 ## 本轮 LOCAL-BATCH-HANDOFF（文档 / Skill，已核验）
 
@@ -54,13 +57,15 @@
 - **PR 状态（已核实）**：LOCAL-BATCH-HANDOFF 已由管理者创建并合并为 PR [#9](https://github.com/huxiaoyang-code/youshu-fork/pull/9)，main 合并提交 `8279477ad3e49ef1e37cd965db3bb12d719674c9`（`docs: 固化本地执行工作范式与单机批量交接 (#9)`）。恢复时仍以分支、`git log`、远端与 PR 平台**实际状态**为准。
 - 安装路径与全局技能校验均为**本机信息**，不承诺其他电脑已安装；换机器需按章程与交接重新核对授权与安装。
 
-## 本轮 IMPORT-STRICT（导入严格校验，管理者首审不通过、二次返工自测完成待复审）
+## 本轮 IMPORT-STRICT（导入严格校验，已验收合并）
 
 - worktree：`D:/有数云fork/.worktrees/import-strict`，分支 `codex/import-strict`，基线 main `8279477ad3e49ef1e37cd965db3bb12d719674c9`。
-- 状态：**管理者首审不通过（7 项阻塞），员工两轮返工自测完成、待管理者复审**；**未提交、未 PR、未合并**；员工交接见 [IMPORT-STRICT](IMPORT-STRICT.md)。本段不预报复审通过。
+- 状态：**已由管理者独立复验并合并**。PR [#10](https://github.com/huxiaoyang-code/youshu-fork/pull/10) 于 2026-10-15 合并，merge SHA `67f5e4541fd05878e3d681638dcb95a9c33b799b`；管理者 `git diff` 已证明 merge tree 等于已验证 head，主工作区 main 已 ff 更新。员工交接见 [IMPORT-STRICT](IMPORT-STRICT.md)。
+- 过程历史（保留但不阻塞）：员工初稿→管理者首审不通过（7 项阻塞）→员工返工 1→二轮复审发现 CSV 辅助字段 `dates`/`numberRaw` 绕过→员工返工 2；三轮实施会话均已实际结束，管理者核对退出码为 0。
 - 内容：旧账导入严格校验——拒绝非法金额文本（垃圾/部分可解析/`NaN`/`Infinity`/超界/极小负值），负数与超界在舍入前判定；预检与正式写入共用 `normalizeImportPayload` 同一套约束，失败不落库；覆盖金额类型、日期逐行与不一致、凭证号、形状/meta 类型、重复期初、科目/期初/凭证会计约束；保留原始文本后再归一化，不再把非法输入按 0 吞掉。
-- 返工要点：完整内容快照断言不污染既有账套；HTTP/Agent 真实入口非法 CSV/JSON 集成回归；共享 `sumMoney` 统一合计；重复期初预检拒绝；金额数组/对象/布尔拒绝；meta 对象不被 String 成垃圾写入；CSV 辅助字段 `dates`/`numberRaw` 不得绕过 `date`/`number`（各自严格类型与语法、两者一致），补 CSV parse→JSON 往返正例；测试用 `PORT=0` 从子进程 stdout 读取实际端口并等子进程退出后清理，避免端口碰撞误连真实后端。
-- 员工二次返工自测（临时数据目录，员工报告，**管理者未独立复跑**）：`import-strict` 54 项；`npm test` 7 套 262/262（guards 23 + derived 31 + import-strict 54 + smoke 28 + contract 44 + workflow 23 + tax 59）、`npm run test:smoke` 28/28，均退出码 0；`git diff --check` 通过。
+- 返工要点：完整内容快照断言不污染既有账套；HTTP/Agent 真实入口非法 CSV/JSON 集成回归；共享 `sumMoney` 统一合计；重复期初预检拒绝；金额数组/对象/布尔拒绝；meta 对象不被 String 成垃圾写入；CSV 辅助字段 `dates`/`numberRaw` 不得绕过 `date`/`number`（各自严格类型与语法、两者一致），补 CSV parse→JSON 往返正例；测试用 `PORT=0` 从子进程 stdout 读取实际端口并等子进程退出后清理。
+- 管理者复验（事实）：工作目录 `D:/有数云fork/.worktrees/import-strict/06-workbench`；`npm test` 7 套 262/262（guards 23 + derived 31 + import-strict 54 + smoke 28 + contract 44 + workflow 23 + tax 59），exit 0；`npm run test:smoke` 28/28，exit 0；验证后文件 SHA256 锁定（提交前后内容相同），最终验证提交 `aa9f08d33baace25fccf8f4e704de2dbc09d4731`。
+- 过程说明（不隐去）：管理者原沙箱内测试最初因本机 HTTP fetch 失败未通过，另一次审批因额度耗尽未执行（非安全拒绝）；用户要求继续后审批获准的全套复验通过。属本机沙箱 / 审批环境问题，不是业务代码错误。
 - 不改：幂等 / 批次去重（留给 IMPORT-IDEMPOTENCY）、批量队列、UI、税局适配、多租户。
 
 
@@ -70,13 +75,13 @@
 
 | 顺序 | 任务 ID | 目标 | 依赖 | 备注 |
 |---|---|---|---|---|
-| 1 | IMPORT-STRICT | 拒绝非法金额文本；预检与正式写入使用同一套约束，失败不落库 | 无（当前 main） | 管理者首审不通过、员工二次返工自测完成待复审（见 [IMPORT-STRICT](IMPORT-STRICT.md)）；**未合并** |
-| 2 | IMPORT-IDEMPOTENCY | 重复导入同一批次不重复建账 / 过账，可安全重试 | IMPORT-STRICT | 需要批次标识 / 去重键 |
-| 3 | BATCH-QUEUE | 本机持久任务队列与作业项：并发上限、同账套串行、跨账套允许并行、重启恢复、可取消未开始项、失败继续且只重试失败项、幂等、防重复过账，状态明确区分已成功 / 待处理 / 失败 / 取消 | IMPORT-IDEMPOTENCY | 本机单用户；不引入多租户 |
-| 4 | BATCH-MANAGEMENT | 本机批量任务查询 / 状态 / 结果汇总与可操作错误、进度 / 日志 | BATCH-QUEUE | MCP 与本地 UI 是否分两 PR 可由管理者建议 |
-| 5 | TAX 真实适配 | 逐地区接入真实电子税务局：凭据生命周期、人工验证、企业授权验证、会话回收 | 获授权的地区与联调资料 | 全国为长期目标；当前 0 接入，不能缩水为单省 |
+| ~~1~~ | IMPORT-STRICT | 拒绝非法金额文本；预检与正式写入使用同一套约束，失败不落库 | 无（已并入 main） | ✅ 已验收合并（PR #10，merge `67f5e45`，2026-10-15）；见 [IMPORT-STRICT](IMPORT-STRICT.md) |
+| 1 | IMPORT-IDEMPOTENCY | 重复导入同一批次不重复建账 / 过账，可安全重试 | IMPORT-STRICT（已合并） | **当前第一个可派任务**；需要批次标识 / 去重键 |
+| 2 | BATCH-QUEUE | 本机持久任务队列与作业项：并发上限、同账套串行、跨账套允许并行、重启恢复、可取消未开始项、失败继续且只重试失败项、幂等、防重复过账，状态明确区分已成功 / 待处理 / 失败 / 取消 | IMPORT-IDEMPOTENCY | 本机单用户；不引入多租户 |
+| 3 | BATCH-MANAGEMENT | 本机批量任务查询 / 状态 / 结果汇总与可操作错误、进度 / 日志 | BATCH-QUEUE | MCP 与本地 UI 是否分两 PR 可由管理者建议 |
+| 4 | TAX 真实适配 | 逐地区接入真实电子税务局：凭据生命周期、人工验证、企业授权验证、会话回收 | 获授权的地区与联调资料 | 全国为长期目标；当前 0 接入，不能缩水为单省 |
 
-并行说明：IMPORT-STRICT 与 TAX 前置资料准备互不依赖；BATCH-QUEUE 必须等导入幂等，否则重启重试会重复过账。派工前写清基线完整 SHA、文件所有权、接口契约、验收命令与数据边界。
+并行说明：IMPORT-IDEMPOTENCY 与 TAX 前置资料准备互不依赖；BATCH-QUEUE 必须等导入幂等，否则重启重试会重复过账。派工前写清基线完整 SHA、文件所有权、接口契约、验收命令与数据边界。
 
 ## 恢复与会话
 

@@ -115,10 +115,11 @@ node workflow-test.mjs
 > 独立预期值由 `workflow-test.mjs` 内对示例 CSV 的原始列算术 + 手写业务常量给出；
 > 结论只覆盖上述命令与场景，不覆盖第 6 节未实现能力。
 
-已知导入限制：IMPORT-STRICT 已在 `codex/import-strict` 分支实现严格校验（拒绝非法金额文本与极小负值/超界原值，预检与正式写入同一套约束，失败不落库，预检只读无写入、仅正式写入事务回滚），
-管理者首审不通过（7 项阻塞）后已两轮返工自测（金额舍入前校验、重复期初规则、形状/meta 类型校验、CSV 日期/编号逐行校验、完整内容快照、HTTP/Agent 集成、共享金额合计，以及 CSV 辅助字段 `dates`/`numberRaw` 不得绕过原字段、CSV parse→JSON 往返正例、测试临时 HTTP 服务 `PORT=0` 防端口碰撞），
-**二次返工自测已完成（员工报告 `import-strict` 54 项、`npm test` 7 套 262/262、`npm run test:smoke` 28/28，均 exit 0）、待管理者复审**；本文件记录的 208 项是基线提交 `03eba00` 的**历史验收事实**，
-不随新分支自动更新，新分支结果以管理者复审与后续交接为准。
+已知导入限制的状态（当前）：IMPORT-STRICT 严格校验（拒绝非法金额文本与极小负值/超界原值，预检与正式写入同一套约束，失败不落库；预检只读无写入、仅正式写入事务回滚）已在 PR [#10](https://github.com/huxiaoyang-code/youshu-fork/pull/10) 于 2026-10-15 合并，merge SHA `67f5e4541fd05878e3d681638dcb95a9c33b799b`。
+管理者复验：在 `D:/有数云fork/.worktrees/import-strict/06-workbench` 运行 `npm test` 7 套 262/262（guards 23 + derived 31 + import-strict 54 + smoke 28 + contract 44 + workflow 23 + tax 59）、`npm run test:smoke` 28/28，均 exit 0；验证后文件 SHA256 锁定（提交前后内容相同），最终验证提交 `aa9f08d33baace25fccf8f4e704de2dbc09d4731`。
+管理者原沙箱内测试最初因本机 HTTP fetch 失败未通过、另一次审批因额度耗尽未执行（非安全拒绝），用户要求继续后审批获准的全套复验通过；不隐藏该过程，也不将其记为业务代码错误。
+过程历史：管理者首审不通过（7 项阻塞）+ 二轮复审阻塞（CSV 辅助字段 `dates`/`numberRaw` 绕过），员工两轮返工逐条修复（金额舍入前校验、重复期初规则、形状/meta 类型校验、CSV 日期/编号逐行校验、完整内容快照、HTTP/Agent 集成、共享金额合计、测试临时 HTTP 服务 `PORT=0` 防端口碰撞）。
+上表共 208 项的记录仍是基线提交 `03eba00` 的**历史验收事实**（6 套），不随新分支自动更新；IMPORT-STRICT 合并后仓库共 7 套 262 项（锚定合并提交 `67f5e45`），导入仍是**非幂等**——每次新建账套，不修改既有账套，重复导入识别属后续 IMPORT-IDEMPOTENCY。
 
 当前工具清单共 45 个入口：31 个 available（包含 7 个税务接口）、1 个 limited、13 个 unavailable。全国真实税务连接为 0；会话和凭据生产要求见 [税务接口说明](TAX-INTEGRATION.md)。
 
