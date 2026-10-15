@@ -1,6 +1,6 @@
 # 阶段状态
 
-更新时间：2026-10-14（本机批量方向修订）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
+更新时间：2026-10-14（本机批量方向修订；追加 IMPORT-STRICT 两轮返工待复审）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
 
 ## 方向（不可漂移）
 
@@ -43,7 +43,7 @@
 - 证据边界：员工交接**自报** 7 套 272 项通过、真实税局未验收；管理者**未独立复跑**该套件，**真实登录未验收**
 - 进程日志：`D:/有数云fork/.agent-runs/pi-tax-browser.jsonl`；**尚未核实退出码，不能声称 exit 0**，也不要整读该日志
 
-新会话派工前先核对上述现场，避免重复派工或误报已完成。`IMPORT-STRICT` 仍是下一实现任务；`TAX-BROWSER` 列为**独立待审队列**（本段不重排既定顺序，也不虚构用户未做的排序决定）。
+新会话派工前先核对上述现场，避免重复派工或误报已完成。`IMPORT-STRICT` 已实现并二次返工自测，列为**待管理者复审**（未合并）；`TAX-BROWSER` 列为**独立待审队列**（本段不重排既定顺序，也不虚构用户未做的排序决定）。
 
 ## 本轮 LOCAL-BATCH-HANDOFF（文档 / Skill，已核验）
 
@@ -51,8 +51,18 @@
 
 - 已验证事实（管理者本机核对）：仓库权威技能已安装到本机 Codex 技能目录 `C:/Users/35007/.codex/skills/local-agent-first/`；本机两处文件 SHA256 与仓库副本一致；`quick_validate.py` 对仓库副本与全局版本均通过；新增 27 个本地 Markdown 链接检查通过；`git diff --check` 通过。安装前的原技能备份在 Git 忽略目录 `.agent-runs/local-agent-first-before-20261014-150009.md`。
 - 本轮 pi 初稿 / 返工 / 最后修订 / 未完成现场补充、Claude 独立情境审查均已实际退出、退出码 0；本轮新进程退出码由管理者在该进程结束后核对。tax-browser 历史会话退出码仍**未核实**，不归于本轮。
-- **PR 状态**：本部分尚未由管理者创建 / 合并。恢复时以分支、`git log`、远端与 PR 平台**实际状态**为准，不得据本文件伪称已合并。
+- **PR 状态（已核实）**：LOCAL-BATCH-HANDOFF 已由管理者创建并合并为 PR [#9](https://github.com/huxiaoyang-code/youshu-fork/pull/9)，main 合并提交 `8279477ad3e49ef1e37cd965db3bb12d719674c9`（`docs: 固化本地执行工作范式与单机批量交接 (#9)`）。恢复时仍以分支、`git log`、远端与 PR 平台**实际状态**为准。
 - 安装路径与全局技能校验均为**本机信息**，不承诺其他电脑已安装；换机器需按章程与交接重新核对授权与安装。
+
+## 本轮 IMPORT-STRICT（导入严格校验，管理者首审不通过、二次返工自测完成待复审）
+
+- worktree：`D:/有数云fork/.worktrees/import-strict`，分支 `codex/import-strict`，基线 main `8279477ad3e49ef1e37cd965db3bb12d719674c9`。
+- 状态：**管理者首审不通过（7 项阻塞），员工两轮返工自测完成、待管理者复审**；**未提交、未 PR、未合并**；员工交接见 [IMPORT-STRICT](IMPORT-STRICT.md)。本段不预报复审通过。
+- 内容：旧账导入严格校验——拒绝非法金额文本（垃圾/部分可解析/`NaN`/`Infinity`/超界/极小负值），负数与超界在舍入前判定；预检与正式写入共用 `normalizeImportPayload` 同一套约束，失败不落库；覆盖金额类型、日期逐行与不一致、凭证号、形状/meta 类型、重复期初、科目/期初/凭证会计约束；保留原始文本后再归一化，不再把非法输入按 0 吞掉。
+- 返工要点：完整内容快照断言不污染既有账套；HTTP/Agent 真实入口非法 CSV/JSON 集成回归；共享 `sumMoney` 统一合计；重复期初预检拒绝；金额数组/对象/布尔拒绝；meta 对象不被 String 成垃圾写入；CSV 辅助字段 `dates`/`numberRaw` 不得绕过 `date`/`number`（各自严格类型与语法、两者一致），补 CSV parse→JSON 往返正例；测试用 `PORT=0` 从子进程 stdout 读取实际端口并等子进程退出后清理，避免端口碰撞误连真实后端。
+- 员工二次返工自测（临时数据目录，员工报告，**管理者未独立复跑**）：`import-strict` 54 项；`npm test` 7 套 262/262（guards 23 + derived 31 + import-strict 54 + smoke 28 + contract 44 + workflow 23 + tax 59）、`npm run test:smoke` 28/28，均退出码 0；`git diff --check` 通过。
+- 不改：幂等 / 批次去重（留给 IMPORT-IDEMPOTENCY）、批量队列、UI、税局适配、多租户。
+
 
 ## 后续可执行任务表（依赖顺序）
 
@@ -60,7 +70,7 @@
 
 | 顺序 | 任务 ID | 目标 | 依赖 | 备注 |
 |---|---|---|---|---|
-| 1 | IMPORT-STRICT | 拒绝非法金额文本；预检与正式写入使用同一套约束，失败不落库 | 无（当前 main） | **第一可派**；导入规则要求先核对原始数据 |
+| 1 | IMPORT-STRICT | 拒绝非法金额文本；预检与正式写入使用同一套约束，失败不落库 | 无（当前 main） | 管理者首审不通过、员工二次返工自测完成待复审（见 [IMPORT-STRICT](IMPORT-STRICT.md)）；**未合并** |
 | 2 | IMPORT-IDEMPOTENCY | 重复导入同一批次不重复建账 / 过账，可安全重试 | IMPORT-STRICT | 需要批次标识 / 去重键 |
 | 3 | BATCH-QUEUE | 本机持久任务队列与作业项：并发上限、同账套串行、跨账套允许并行、重启恢复、可取消未开始项、失败继续且只重试失败项、幂等、防重复过账，状态明确区分已成功 / 待处理 / 失败 / 取消 | IMPORT-IDEMPOTENCY | 本机单用户；不引入多租户 |
 | 4 | BATCH-MANAGEMENT | 本机批量任务查询 / 状态 / 结果汇总与可操作错误、进度 / 日志 | BATCH-QUEUE | MCP 与本地 UI 是否分两 PR 可由管理者建议 |

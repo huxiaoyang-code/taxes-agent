@@ -9,6 +9,7 @@ const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-
 const steps = [
   { name: "guards", file: join(WORKBENCH, "test", "accounting-guards.test.mjs"), cwd: WORKBENCH },
   { name: "derived", file: join(WORKBENCH, "test", "accounting-derived.test.mjs"), cwd: WORKBENCH },
+  { name: "import-strict", file: join(WORKBENCH, "test", "import-strict.test.mjs"), cwd: WORKBENCH },
   { name: "smoke", file: join(WORKBENCH, "test", "smoke.test.mjs"), cwd: WORKBENCH },
   { name: "contract", file: join(MCP, "contract-test.mjs"), cwd: MCP },
   { name: "workflow", file: join(MCP, "workflow-test.mjs"), cwd: MCP },
@@ -29,5 +30,6 @@ for (const step of steps) {
 console.log("\n=== 汇总 ===");
 for (const r of results) console.log(`${r.status === 0 ? "✓" : "✗"} ${r.name} — exit=${r.status}`);
 const failed = results.filter((r) => r.status !== 0).length;
-console.log(failed ? `${failed} 个套件未通过` : "全部 6 个套件通过");
+const passed = results.length - failed;
+console.log(failed ? `${failed} 个套件未通过` : `全部 ${results.length} 个套件通过（${passed}/${results.length}）`);
 process.exitCode = failed ? 1 : 0;

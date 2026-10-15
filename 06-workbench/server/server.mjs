@@ -181,6 +181,8 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`记账+报表工作台:  http://127.0.0.1:${PORT}/`);
-  console.log(`Agent 工具入口:   http://127.0.0.1:${PORT}/agent/tools/<name>`);
+  // 实际监听端口：PORT=0 时由系统分配，日志必须报告实际端口，测试才能连到本进程。
+  const actualPort = server.address().port;
+  console.log(`记账+报表工作台:  http://127.0.0.1:${actualPort}/`);
+  console.log(`Agent 工具入口:   http://127.0.0.1:${actualPort}/agent/tools/<name>`);
 });
