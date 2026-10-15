@@ -46,6 +46,10 @@ async function selectSet() {
   for (const id of ["#vPeriod", "#rPeriod", "#aPeriod", "#pPeriod"]) { const el = $(id); if (!el.value) el.value = SET?.start_period || thisMonth(); }
   renderAccounts(); renderOpening(); await loadVouchers(); renderPeriods(); await renderAssets();
   fillCodeSelect();
+  $("#btnExportReport").disabled = !SET_ID;
+  $("#reportExportStatus").textContent = "";
+  $("#reportOut").innerHTML = "";
+  $("#reportWarnings").textContent = "";
 }
 function newSetDialog() {
   const d = document.createElement("dialog");
@@ -346,30 +350,78 @@ function addAssetDialog() {
 
 // ------------------------------------------------------------------ 报表
 function fillCodeSelect() { $("#rCode").innerHTML = ACCOUNTS.map((a) => `<option value="${a.code}">${a.code} ${esc(a.name)}</option>`).join(""); }
+async function downloadReport() {
+  const status = $("#reportExportStatus"), button = $("#btnExportReport");
+  status.textContent = "";
+  if (!SET_ID) { status.textContent = "请先选择或新建账套"; return; }
+  const kind = $("#rKind").value, period = $("#rPeriod").value, code = $("#rCode").value;
+  const source = `${SET?.name || `账套 ${SET_ID}`} · ${period}`;
+  if (!period) { status.textContent = "请选择报表期间"; return; }
+  if (kind === "ledger" && !code) { status.textContent = "请选择明细账科目"; return; }
+  const query = new URLSearchParams({ period, format: "csv" });
+  if (kind === "ledger") query.set("code", code);
+  button.disabled = true;
+  status.textContent = "正在生成 CSV…";
+  try {
+    const response = await fetch(`/api/account-sets/${SET_ID}/reports/${kind}/export?${query}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const messages = {
+        period_required: "请选择报表期间", period_invalid: "报表期间格式不正确", period_before_start: "期间早于账套启用期间",
+        period_not_registered: "该期间尚未登记，请先在期间页登记", account_set_not_found: "账套不存在，请重新选择",
+        account_code_required: "请选择明细账科目", account_not_found: "所选科目不存在，请重新选择",
+        report_kind_unsupported: "不支持此报表类型", report_format_unsupported: "不支持此导出格式",
+      };
+      throw new Error(messages[error.error] || error.message || `导出失败（HTTP ${response.status}）`);
+    }
+    if (!/^text\/csv\b/i.test(response.headers.get("content-type") || "")) throw new Error("服务器未返回 CSV，下载已取消");
+    const disposition = response.headers.get("content-disposition") || "";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const filename = encodedName ? decodeURIComponent(encodedName) : `${kind}-${period}.csv`;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob), link = document.createElement("a");
+    link.href = url; link.download = filename;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status.textContent = `${source}：CSV 已生成并开始下载（仅供内部使用）`;
+  } catch (e) {
+    status.textContent = `${source}：导出失败：${e.message}`;
+    toast(status.textContent, true);
+  } finally {
+    button.disabled = !SET_ID;
+  }
+}
 async function runReport() {
   if (!SET_ID) return toast("请先新建账套", true);
   const kind = $("#rKind").value, period = $("#rPeriod").value;
   $("#rCodeWrap").classList.toggle("hidden", kind !== "ledger");
+  $("#reportOut").innerHTML = "";
+  $("#reportWarnings").textContent = "";
+  const query = new URLSearchParams({ period });
+  if (kind === "ledger") query.set("code", $("#rCode").value);
+  const report = await api(`/api/account-sets/${SET_ID}/reports/${kind}/export-data?${query}`);
+  const d = report.data;
+  $("#reportWarnings").textContent = report.warnings.map((warning) => warning.message).join(" ");
   if (kind === "ledger") {
-    const code = $("#rCode").value;
-    const d = await api(`/api/account-sets/${SET_ID}/ledger?code=${code}&period=${period}`);
-    $("#reportOut").innerHTML = `<h3>明细账 · ${esc(d.code)} ${esc(d.name)}</h3>
-      <table><thead><tr><th>期间</th><th>凭证</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th class="num">余额</th></tr></thead><tbody>
-      <tr class="strong"><td colspan="3">期初余额</td><td class="num">${money(d.opening.debit)}</td><td class="num">${money(d.opening.credit)}</td><td class="num"></td></tr>
-      ${d.items.map((it) => `<tr><td>${it.period}</td><td>${it.word}-${String(it.number).padStart(3, "0")}</td><td>${esc(it.summary || it.vsummary)}</td>
+    const summary = (label, values, balance = "") => `<tr class="strong"><td colspan="3">${label}</td><td class="num">${money(values.debit)}</td><td class="num">${money(values.credit)}</td><td class="num">${balance}</td></tr>`;
+    $("#reportOut").innerHTML = `<h3>明细账 · ${esc(d.period)} · ${esc(d.code)} ${esc(d.name)}</h3>
+      <table><thead><tr><th>日期 / 科目</th><th>凭证</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th class="num">余额（借正贷负）</th></tr></thead><tbody>
+      ${summary("期间期初余额", d.opening, money(d.opening.debit - d.opening.credit))}
+      ${d.items.map((it) => `<tr><td>${esc(it.voucher_date)} / ${esc(it.code)}</td><td>${esc(it.word)}-${esc(String(it.number).padStart(3, "0"))}</td><td>${esc(it.summary)}</td>
         <td class="num">${money(it.debit)}</td><td class="num">${money(it.credit)}</td><td class="num">${money(it.balance)}</td></tr>`).join("")}
+      ${summary("本期发生合计", d.current)}${summary("本年累计发生", d.ytd)}${summary("期末余额", d.closing, money(d.closing.debit - d.closing.credit))}
       </tbody></table>`;
     return;
   }
-  const d = await api(`/api/account-sets/${SET_ID}/reports/${kind}?period=${period}`);
   if (kind === "trial-balance") {
-    $("#reportOut").innerHTML = `<h3>科目余额表 · ${period}</h3>
-      <table><thead><tr><th>编码</th><th>名称</th><th class="num">期初借</th><th class="num">期初贷</th>
-      <th class="num">本期借</th><th class="num">本期贷</th><th class="num">期末借</th><th class="num">期末贷</th></tr></thead><tbody>
-      ${d.lines.map((l) => `<tr><td>${l.code}</td><td>${esc(l.name)}</td><td class="num">${money(l.opening_debit)}</td><td class="num">${money(l.opening_credit)}</td>
-        <td class="num">${money(l.period_debit)}</td><td class="num">${money(l.period_credit)}</td><td class="num">${money(l.closing_debit)}</td><td class="num">${money(l.closing_credit)}</td></tr>`).join("")}
+    $("#reportOut").innerHTML = `<h3>科目余额表 · ${esc(period)}</h3>
+      <table><thead><tr><th>编码</th><th>名称</th><th class="num">期间期初借</th><th class="num">期间期初贷</th>
+      <th class="num">本期借</th><th class="num">本期贷</th><th class="num">本年累计借</th><th class="num">本年累计贷</th><th class="num">期末借</th><th class="num">期末贷</th></tr></thead><tbody>
+      ${d.lines.map((l) => `<tr><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td class="num">${money(l.opening_debit)}</td><td class="num">${money(l.opening_credit)}</td>
+        <td class="num">${money(l.period_debit)}</td><td class="num">${money(l.period_credit)}</td><td class="num">${money(l.ytd_debit)}</td><td class="num">${money(l.ytd_credit)}</td><td class="num">${money(l.closing_debit)}</td><td class="num">${money(l.closing_credit)}</td></tr>`).join("")}
       <tr class="total"><td colspan="2">合计</td><td class="num">${money(d.totals.opening_debit)}</td><td class="num">${money(d.totals.opening_credit)}</td>
         <td class="num">${money(d.totals.period_debit)}</td><td class="num">${money(d.totals.period_credit)}</td>
+        <td class="num">${money(d.totals.ytd_debit)}</td><td class="num">${money(d.totals.ytd_credit)}</td>
         <td class="num">${money(d.totals.closing_debit)}</td><td class="num">${money(d.totals.closing_credit)}</td></tr></tbody></table>`;
     return;
   }
@@ -452,6 +504,8 @@ $("#btnCarryForward").onclick = guard(async () => {
 });
 $("#btnSaveOpening").onclick = saveOpening;
 $("#btnRunReport").onclick = guard(runReport);
+$("#btnExportReport").onclick = guard(downloadReport);
+$("#rKind").onchange = () => { $("#rCodeWrap").classList.toggle("hidden", $("#rKind").value !== "ledger"); };
 $("#btnPrint").onclick = () => window.print();
 $("#btnAddPeriod").onclick = guard(async () => {
   const p = $("#pPeriod").value; if (!p) return toast("请选择期间", true);

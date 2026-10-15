@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import { extname, join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as A from "./accounting.mjs";
+import { buildReportExport } from "./report-export.mjs";
+import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, decodeFiles, ToolError } from "./agent-tools.mjs";
 
@@ -28,6 +30,18 @@ const readBody = (req) => new Promise((resolve, reject) => {
   req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { reject(new Error("invalid_json")); } });
   req.on("error", reject);
 });
+
+// RFC 6266/5987: safe ASCII fallback plus the original Unicode download name.
+function attachmentName(filename) {
+  const name = String(filename).replace(/[\u0000-\u001f\u007f/\\]/g, "_");
+  const ascii = name.replace(/[^\x20-\x7e]|[";]/g, "_");
+  const utf8 = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+const REPORT_INPUT_ERRORS = new Set([
+  "report_options_invalid", "period_required", "period_invalid", "period_before_start", "period_not_registered",
+  "report_kind_unsupported", "report_format_unsupported", "account_code_required",
+]);
 
 // ------------------------------------------------------------------ 路由表
 async function api(req, res, url, m) {
@@ -70,6 +84,61 @@ async function api(req, res, url, m) {
     if (m === "DELETE" && !op) return json(res, 200, A.deleteVoucher(id, vid));
     if (m === "POST" && op === "post") return json(res, 200, A.postVoucher(id, vid));
     if (m === "POST" && op === "unpost") return json(res, 200, A.unpostVoucher(id, vid));
+  }
+  if (p === "/api/tax-report-templates" || (match = p.match(/^\/api\/account-sets\/(\d+)\/tax-reports\/(readiness|export)$/))) {
+    res.setHeader("cache-control", "no-store");
+    if (m !== "GET") {
+      res.setHeader("allow", "GET");
+      return json(res, 405, { error: "method_not_allowed", message: "Only GET is supported", details: null });
+    }
+    if (p === "/api/tax-report-templates") return json(res, 200, listTaxReportTemplates());
+    try {
+      const id = +match[1], operation = match[2], accountSet = A.getAccountSet(id);
+      const options = Object.fromEntries(["period", "region", "templateId", "templateVersion", "format"].map((key) => [key, url.searchParams.get(key)]));
+      // Account metadata is authoritative; query flags cannot claim a different standard or verified template.
+      options.accountingStandard = accountSet.accounting_standard;
+      if (operation === "readiness") return json(res, 200, assessTaxReportReadiness(id, options));
+      buildTaxReportExport(id, options);
+      // No upload adapter is verified. Never turn a future accidental return into a downloadable file.
+      return json(res, 422, { error: "tax_template_unverified", message: "税局申报格式尚未核实", details: null });
+    } catch (e) {
+      const code = e?.code || e?.message;
+      const status = code === "account_set_not_found" ? 404 : code === "tax_template_unverified" ? 422 : 500;
+      return json(res, status, {
+        error: status === 500 ? "tax_report_failed" : code,
+        message: status === 500 ? "税局格式检查失败" : e.message,
+        details: status === 500 ? null : e.details ?? null,
+      });
+    }
+  }
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/reports\/([^/]+)\/(export|export-data)$/))) {
+    res.setHeader("cache-control", "no-store");
+    if (m !== "GET") {
+      res.setHeader("allow", "GET");
+      return json(res, 405, { error: "method_not_allowed", message: "Only GET is supported", details: null });
+    }
+    try {
+      const result = buildReportExport(+match[1], {
+        kind: match[2], period: url.searchParams.get("period"),
+        format: url.searchParams.get("format") ?? "csv", code: url.searchParams.get("code"),
+      });
+      if (match[3] === "export-data") return json(res, 200, result.report);
+      // Complete generation before sending headers: failures must remain JSON, never partial files.
+      const body = Buffer.from(result.body, "utf8");
+      res.writeHead(200, {
+        "content-type": result.contentType, "content-length": body.length,
+        "content-disposition": attachmentName(result.filename), "x-content-type-options": "nosniff",
+      });
+      return res.end(body);
+    } catch (e) {
+      const code = e?.code;
+      const status = ["account_set_not_found", "account_not_found"].includes(code) ? 404 : code === "report_data_invalid" ? 422 : REPORT_INPUT_ERRORS.has(code) ? 400 : 500;
+      return json(res, status, {
+        error: status === 500 ? "report_export_failed" : code,
+        message: status === 500 ? "报表导出失败，请稍后重试" : e.message,
+        details: status === 500 ? null : e.details ?? null,
+      });
+    }
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/reports\/(trial-balance|balance-sheet|income-statement|cash-flow-statement)$/))) {
     const id = +match[1], kind = match[2], period = url.searchParams.get("period");

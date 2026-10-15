@@ -1,5 +1,7 @@
 # 新会话入口 · NEXT SESSION
 
+> 当前 RC-B 报表导出进展优先查看 [RC-B-REPORTS 交接](RC-B-REPORTS.md) 与 [任务单](../tasks/RC-B-REPORTS.md)：B0/B1 已实现，最终 PR/合并以实际记录为准；B2 的可上传申报文件及 RC-3/RC-6 尚未完成。本任务用户明确授权 Codex Subagent 实施、主 Codex 审核/提交/合并，不据旧执行器限制重新阻塞本任务。
+
 > 本文件是新 Codex 对话的最小入口。先读本文件，再读 [项目章程](../PROJECT-CHARTER.md)、[阶段状态](STATE.md) 和 [本地优先技能](../../team-skills/local-agent-first/SKILL.md) 即可继续；历史日志（`.agent-runs/`）默认不作为新会话上下文，只在排查具体故障时按需查阅相关日志。
 
 ## 当前基线（可核验事实）

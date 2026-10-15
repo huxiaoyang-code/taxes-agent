@@ -87,8 +87,13 @@
         </label>
         <label id="rCodeWrap" class="hidden">科目 <select id="rCode"></select></label>
         <button id="btnRunReport" class="primary">生成</button>
+        <button id="btnExportReport">下载 CSV</button>
         <button id="btnPrint" class="ghost">打印</button>
       </div>
+      <p class="hint">CSV 为内部报表，按当前账套、期间和科目导出；数据完整性未经确认，不是税局申报文件。</p>
+      <p class="hint">税局申报格式：官方上传模板及完整字段映射尚未核实，当前不可导出申报文件。</p>
+      <p id="reportExportStatus" role="status" aria-live="polite"></p>
+      <div id="reportWarnings" class="hint"></div>
       <div id="reportOut" class="card"></div>
     </section>
 
