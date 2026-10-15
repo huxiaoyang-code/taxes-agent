@@ -19,6 +19,7 @@
 | 看复刻总体方案 | [`../05-reconstruction/ARCHITECTURE.md`](../05-reconstruction/ARCHITECTURE.md) |
 | 看哪些功能真正可用、哪些需要补齐 | [本机 Codex 功能盘点（2026-10-13）](CAPABILITY-AUDIT-2026-10-13.md) |
 | 看本轮交付和可重复验收 | [第一期验收](PHASE1-ACCEPTANCE.md) · [税务适配契约](TAX-INTEGRATION.md) |
+| 看当前优先级与补全计划 | [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)（RC-0 ~ RC-6，当前首包 RC-0） |
 | 开新对话继续工作 | [新会话入口](handoffs/NEXT-SESSION.md) · [阶段状态](handoffs/STATE.md) · [本地优先技能](../team-skills/local-agent-first/SKILL.md) |
 | 看并发分工、需求和验收规则 | [团队实施计划](TEAM-PLAN.md) |
 | 看总流程、阶段重置与恢复工作 | [项目执行章程](PROJECT-CHARTER.md) · [阶段状态](handoffs/STATE.md) |
@@ -237,8 +238,10 @@ Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──�
 | 全国电子税务局 | 🚧 7 个接口入口和地区路由已预留，真实接入 0 个地区 |
 | P1 会计闭环（结转损益/折旧摊销/现金流量表） | ✅ 完成 |
 | 导入旧账（JSON/CSV，GBK 支持） | ✅ 完成 |
-| 辅助核算 / 银行对账 / 导出 | ⬜ 待办（ROADMAP P1 剩余） |
-| 发票 / 申报 | ⬜ 待办（ROADMAP P2，返回 `not_implemented`） |
-| 导入严格校验 / 幂等（IMPORT-STRICT / IMPORT-IDEMPOTENCY） | ⬜ 待办（ROADMAP P1） |
-| 本机批量任务队列 / 管理（BATCH-QUEUE / BATCH-MANAGEMENT） | ⬜ 待办（ROADMAP P1） |
-| 账套隔离 / 操作日志 / 备份恢复 / 凭据安全 | ⬜ 待办（ROADMAP P3 本机化；**不做多租户**） |
+| 导入严格校验（IMPORT-STRICT） | ✅ 完成（PR #10，merge `67f5e45`） |
+| 报表闭环（当前优先级，RC-0 ~ RC-6） | ⬜ 待办；顺序与门槛见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)。首包 RC-0（tax-browser 草稿审查 + 登录与数据链路可行性），其后为登录与账套关联、目标账套定向导入与重试、财务流水线、内部报表导出、税局申报格式导出、端到端交付 |
+| 辅助核算 / 银行对账 / 导出 | ⬜ 待办（导出中「内部 3 表 + 余额表/明细账」属闭环 RC-4，为当前目标；其余辅助核算 / 银行对账后排） |
+| 发票 / 申报 | ⬜ 待办（ROADMAP P2，返回 `not_implemented`）；税局申报格式导出属闭环 RC-5 |
+| 历史上排：导入幂等（IMPORT-IDEMPOTENCY） | ⬜ 已并入报表闭环 **RC-2**（不再是第一优先） |
+| 后排：本机泛用批量任务队列 / 管理（BATCH-QUEUE / BATCH-MANAGEMENT） | ⬜ 报表闭环完成后再定归属；本阶段不先行搭建泛用批量平台 |
+| 账套隔离 / 操作日志 / 备份恢复 / 凭据安全 | ⬜ 待办（ROADMAP P3 本机化；**不做多租户**）；闭环必需的最小恢复能力见 RC-2 / RC-3 |
