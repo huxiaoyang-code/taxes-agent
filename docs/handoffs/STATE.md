@@ -1,8 +1,10 @@
 # 阶段状态
 
-> 2026-10-15 RC-B 当前补充：B0 口径/契约与 B1 内部五类 CSV 已实现，详见 [RC-B-REPORTS](RC-B-REPORTS.md) 的实际测试和 PR 状态。B2 真实上传格式、RC-3/RC-6 整体整合仍未完成。本任务按用户本轮授权使用 Codex Subagent，旧阶段执行器记录保留。以下历史阶段结论不因此改写。
+> 2026-10-16 团队交接与 PR #15 当前补充：同事 PR #15 已合并（main `c2d561994377d9123a1cd5b8b67dfa8a16a5d2b0`，mergedAt `2026-10-15T15:40:41Z` 即北京时间 10-15 23:40），B0 / B1 五类内部 CSV、HTTP 下载与页面预览已交付；B2 税局可上传申报文件、RC-3 / RC-6 仍未完成。**以下历史阶段结论不因此改写；旧交接中「报表无法导出」的旧表述一律按历史记录看待。** 实际测试与 PR 状态见 [RC-B-REPORTS](RC-B-REPORTS.md)。
 
-更新时间：2026-10-15（第二轮：用户在 IMPORT-STRICT 合并后明确把最终交付定为报表闭环，完成方案与交接，转入 RC-0 首包待派）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
+更新时间：2026-10-16（第四轮：多人跨电脑协作交接 + 同事 PR #15 合并）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
+
+> **先识别自己是谁**：本仓库已支持**多成员跨电脑协作**。开工前先确认自己的**人类成员身份与已分配任务**（见 [任务看板](../tasks/README.md) 与本人任务单），**不要默认所有机器都接 RC-0**，避免重复派工。负责人 `huxiaoyang-code` 接 [RC-A-LOGIN-DATA](../tasks/RC-A-LOGIN-DATA.md)（总任务 [Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)）；同事 `xiaoyihaishiaini` 接 [RC-B-REPORTS](../tasks/RC-B-REPORTS.md)（总任务 [Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)，RC-B B0 / B1 已交）。角色 / 权限 / 文件所有权见 [团队协作协议](../TEAM-COLLABORATION.md)。
 
 ## 方向（不可漂移）
 
@@ -25,8 +27,10 @@
 | LOCAL-BATCH-HANDOFF | 本地执行工作范式与单机批量交接（文档 / Skill） | [#9](https://github.com/huxiaoyang-code/youshu-fork/pull/9) | 8279477 | 文档 / Skill 差异、链接与授权核对；未重跑业务测试 |
 | IMPORT-STRICT | 导入严格校验：拒绝非法金额文本，预检与正式写入同一套约束，失败不落库 | [#10](https://github.com/huxiaoyang-code/youshu-fork/pull/10) | 67f5e45 | 2026-10-15 管理者独立复验：`npm test` 7 套 262/262、`npm run test:smoke` 28/28，均 exit 0；见 [交接](IMPORT-STRICT.md) |
 | IMPORT-STRICT 交接归档 | IMPORT-STRICT 验收合并与下一任务交接文档 | [#11](https://github.com/huxiaoyang-code/youshu-fork/pull/11) | cc6e789 | 文档变更；管理员已合并（PR #11，2026-10-15），未重跑业务测试 |
+| REPORT-CLOSURE-PLAN 重排 | 报表闭环补全方案与交接（RC-0 ~ RC-6） | [#12](https://github.com/huxiaoyang-code/youshu-fork/pull/12) | 8ebc739 | 文档变更；管理员已合并（PR #12，2026-10-15），未重跑业务测试；见 [交接](REPORT-CLOSURE.md) |
+| RC-B 报表导出（B0 / B1） | 五类内部 CSV 导出、HTTP 下载与页面预览；税表法定结构参考与就绪性阻断（B2 未完成） | [#15](https://github.com/huxiaoyang-code/youshu-fork/pull/15) | c2d5619 | 同事 PR，mergedAt `2026-10-15T15:40:41Z`（北京时间 10-15 23:40；2026-10-16 为复验 / 核实日期）；管理者复验 `npm test` 10 套 336 项、exit 0（合成临时库无真实数据）；见 [RC-B 交接](RC-B-REPORTS.md) |
 
-上表 PR #1–#10 各部分的员工会话在各自验收与合并后已结束（此为**历史阶段**事实，不代表全仓已无未提交的本地工作，见下文「未完成现场」）。后续部分采用全新会话，读取当前代码和任务包。
+**PR #1–#12 与 #15 已合并；Issue #13 / #14 仍 OPEN（不是 PR）**。上表 PR #1–#10 各部分的员工会话在各自验收与合并后已结束（此为**历史阶段**事实，不代表全仓已无未提交的本地工作，也不推断同事电脑进程是否退出；对方 PR 合并 ≠ 该机无运行进程，见下文「未完成现场」）。后续部分采用全新会话，读取当前代码和任务包。
 
 ## 本期收尾与恢复
 
@@ -71,7 +75,21 @@
 - 过程说明（不隐去）：管理者原沙箱内测试最初因本机 HTTP fetch 失败未通过，另一次审批因额度耗尽未执行（非安全拒绝）；用户要求继续后审批获准的全套复验通过。属本机沙箱 / 审批环境问题，不是业务代码错误。
 - 不改：幂等 / 批次去重（已归入报表闭环 **RC-2**）、批量队列、UI、税局适配、多租户。
 
-## 本轮 REPORT-CLOSURE-PLAN（文档，待审）
+## 本轮 TEAM-HANDOFF（多人协作，文档 / 模板）
+
+用户本轮明确确认：先接入一位同事（GitHub `xiaoyihaishiaini`）；负责人 `huxiaoyang-code` 负责税局登录与数据接入（RC-0 / RC-1 / RC-2a / RC-2b 及数据处理集成，协调 RC-3），同事负责两类报表口径核对与导出（RC-4 / RC-5）。**目前登记并经项目负责人授权的成员为这两人**；各人自己的 Codex 可派本地员工、独立审查验收、提交 / 推送 PR 并**自动合并自己的 PR**（该授权不从通用文档推给新贡献者）。**开发多人不等于产品多租户**。
+
+- 新增（8）：`docs/TEAM-COLLABORATION.md`（团队协议）、`docs/handoffs/MEMBER-ONBOARDING.md`（同事入场包）、`docs/tasks/{README.md,TEMPLATE.md,RC-A-LOGIN-DATA.md}`、`docs/handoffs/TEAM-HANDOFF.md`、`.github/pull_request_template.md`、`.github/ISSUE_TEMPLATE/requirement.md`。
+- 修改（10）：`AGENTS.md`、`docs/PROJECT-CHARTER.md`、`docs/TEAM-PLAN.md`、`docs/REPORT-CLOSURE-PLAN.md`、`docs/INDEX.md`、`docs/CHANGELOG.md`、本文件、`docs/handoffs/NEXT-SESSION.md`、`docs/handoffs/TEMPLATE.md`、`docs/tasks/RC-B-REPORTS.md`。
+- **文件分类说明**：`docs/tasks/RC-B-REPORTS.md` 是 **PR #15 已有任务单的本轮修改**，**不是本轮新增**；本次共 **10 修改 + 8 新增 = 18**，**不新增任何 B 任务单**。
+- **本地员工未重跑业务回归作为本变更的证据**；**管理者已在本轮独立复验 PR #15 基线**（`c2d5619`，`npm test` 10 套 336 项、exit 0，合成临时库无真实数据）。
+- 任务初始状态为「已分配 / 待开工」，但**不使已交付部分退回**（B0 / B1 已完成，下一阶段 B2）；**本轮本地员工未代发 Issue**；总任务 [Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)（负责人）/ [#14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)（同事，已绑定 assignee）已由管理者建立并分配。
+- 远端事实（2026-10-16 实测，未改设置）：private、`owner.type = User`、owner `admin = true`、`main` protected=false、rulesets API 403（需 GitHub Pro 或公开仓库）；本机无 `.github` 工作流，**不称 CI 已存在**；GitHub 写权限技术上也能直接推 main，约定不能技术阻止。同事 `xiaoyihaishiaini` 的 write 权限经管理者 GitHub API 实测。
+- 保留：`tax-browser` 14 个未提交文件哈希未变、RC-0 真实接入 0 与 `tax-browser` 原件不变。
+
+本部分员工 pi 会话日志 `D:/有数云fork/.agent-runs/pi-team-handoff-current.jsonl`、退出码文件 `pi-team-handoff-current.exit`（**本机可查，不作为同事先决**）；管理者已核实统一执行 session80422 结果 `exit=0`，即 `pi-team-handoff-current.exit=0`（进程已自然结束，未主动终止任何进程）。tax-browser 历史退出码仍**未核实**，不归于本轮。
+
+## 本轮 REPORT-CLOSURE-PLAN（文档，已由 PR #12 合并）
 
 用户在 IMPORT-STRICT 合并后明确新目标：最终交付为**报表闭环**（导入办税员账号 → 接收并输入验证码 → 登录 → 获取名下企业 / 账套 → 完成所需财务操作 → 生成报表），且**两类报表都需要**：内部 3 表 + 余额表 / 明细账，以及税局财务报表申报格式；前端展示次要。本轮只重新制定代码补全方案并交接，**不实现下一阶段功能**。
 
@@ -90,17 +108,19 @@
 
 ## 后续可执行任务表（依赖顺序）
 
-任务状态以代码、可重复测试和联调证据为准，**不承诺未实现的批量能力**。下表是 2026-10-15 新方案（报表闭环）的现行顺序，**已替代**此前「IMPORT-IDEMPOTENCY 第一优先」的排序；详细完成标准、必要测试、数据可得性门槛与验收场景见 [报表闭环补全方案](../REPORT-CLOSURE-PLAN.md)。具体契约由管理者派工时写进任务单。
+任务状态以代码、可重复测试和联调证据为准，**不承诺未实现的批量能力**。下表是 2026-10-15 / 2026-10-16 现行顺序（报表闭环 + 多人分工），**已替代**此前「IMPORT-IDEMPOTENCY 第一优先」的排序；详细完成标准、必要测试、数据可得性门槛与验收场景见 [报表闭环补全方案](../REPORT-CLOSURE-PLAN.md)。具体契约由管理者派工时写进任务单。
 
-| 顺序 | 任务 ID | 目标 | 依赖 | 备注 |
-|---|---|---|---|---|
-| 1 | **RC-0** `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF` | 新隔离工作区形成可核验快照（只复制源码 14 文件 / 补丁与基线，不复制 DB / 凭据 / 临时 profile / 日志），复现旧草稿测试并在最新 main 复用必要改动；再由用户本机真实登录验证账号 / 验证码 / 授权企业 / 实际财务数据来源，填写数据可得性矩阵 | 无（首包） | **当前第一个可派任务**；分两步，无真实配合时先完成第一步并记录第二步待验；结论必须明确「数据链路成立 / 不成立」 |
-| 2 | RC-1 登录会话与账套关联 | 办税员身份 → 授权企业 → 本地账套关联；**含实际账号 / 凭据入口、适配器与最少 UI**；覆盖过期、验证码错误 / 超时、二次人机验证、授权撤销、企业切换与串账 | RC-0 | 区分身份 / 授权企业 / 税局登记申报数据 / 本地账套会计明细四层；凭据与验证码只由用户本机输入，**模型侧 MCP / Agent 仅收安全引用与状态摘要，本机 UI 专用回环通道方可处理瞬时凭据 / OTP，不送模型** |
-| 3 | RC-2 目标账套定向导入、数据落地与重试 | 标准 DTO 转换、完整性与科目映射预检、稳定业务键 / 内容版本、单账套原子事务与跨企业逐项结果、审计与最小恢复；**分 RC-2a 首次建账 / 填空账套与 RC-2b 已绑定账套后续开放期间追加**（同一绑定范围不得重复建账，不新增「一企一账套」产品限制） | RC-1 | 旧 IMPORT-IDEMPOTENCY 在此归位；现有 `importAccountSet` 总是新建账套，需补 RC-1 绑定账套 → 定向导入缺口 |
-| 4 | RC-3 财务流水线完整性 | 科目映射 / 期初 / 凭证 / 计提摊销 / 校验 / 结转结账，并核实报表算法与口径缺口；**影响目标准则 / 数据 / 报表的缺口必须补齐或显式阻止产出** | RC-2 | 不因函数已存在就宣称报表合规；`cashFlowStatement` 间接法末行为直接法净额、两套准则共用同一 COA 等缺口须逐项结论 |
-| 5 | RC-4 内部报表导出 | 资产负债表 / 利润表 / 现金流量表 / 余额表（含各科目）/ 明细账可下载导出；**独立预期金额 / 会计口径验收** | RC-3 | 不只与 API / 页面同源互比；无法只导出总试算合计；CSV 首步，Excel/PDF 为交付决策项 |
-| 6 | RC-5 税局申报格式导出 | 按官方模板与字段映射导出可申报文件，并做勾稽校验；**官方模板核实自 RC-0 并行** | RC-4 + 官方模板核实 | **生成可申报文件 ≠ 向税局正式提交**；税局格式以真实官方支持格式为准，不默认通用 CSV 可申报 |
-| 7 | RC-6 端到端联调与交付 | 用功能验收场景串起 RC-0~RC-5 并由用户实际验收；**含连续两个月验收**（RC-2a 首次 + RC-2b 后续追加） | RC-4、RC-5 | 不以 UI 页面数作为完成指标；真实联调只用用户本机数据 |
+**成员分工（2026-10-16）**：RC-0 / RC-1 / RC-2a / RC-2b 与数据处理集成 → 负责人 `huxiaoyang-code`（[RC-A-LOGIN-DATA](../tasks/RC-A-LOGIN-DATA.md)）；RC-4 / RC-5 与报表口径盘点 → 同事 `xiaoyihaishiaini`（[RC-B-REPORTS](../tasks/RC-B-REPORTS.md)）；RC-3 由负责人统一协调（根据 B 的发现另开聚焦任务）；RC-6 由负责人统一协调。
+
+| 顺序 | 任务 ID | 负责 | 目标 | 依赖 | 备注 |
+|---|---|---|---|---|---|
+| 1 | **RC-0** `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF` | 负责人 A | 新隔离工作区形成可核验快照（只复制源码 14 文件 / 补丁与基线，不复制 DB / 凭据 / 临时 profile / 日志），复现旧草稿测试并在最新 main 复用必要改动；再由用户本机真实登录验证账号 / 验证码 / 授权企业 / 实际财务数据来源，填写数据可得性矩阵 | 无（首包） | **A 当前第一个可派任务**；分两步，无真实配合时先完成第一步并记录第二步待验；**不得假定企业列表等于财务凭证**；整合时检查 PR #15 对 `server.mjs` / `public/*` / `scripts/test-all.mjs` 的冲突 |
+| 2 | RC-1 登录会话与账套关联 | 负责人 A | 办税员身份 → 授权企业 → 本地账套关联；**含实际账号 / 凭据入口、适配器与最少 UI**；覆盖过期、验证码错误 / 超时、二次人机验证、授权撤销、企业切换与串账 | RC-0 | 区分身份 / 授权企业 / 税局登记申报数据 / 本地账套会计明细四层；凭据与验证码只由用户本机输入，**模型侧 MCP / Agent 仅收安全引用与状态摘要，本机 UI 专用回环通道方可处理瞬时凭据 / OTP，不送模型** |
+| 3 | RC-2 目标账套定向导入、数据落地与重试 | 负责人 A | 标准 DTO 转换、完整性与科目映射预检、稳定业务键 / 内容版本、单账套原子事务与跨企业逐项结果、审计与最小恢复；**分 RC-2a 首次建账 / 填空账套与 RC-2b 已绑定账套后续开放期间追加**（同一绑定范围不得重复建账，不新增「一企一账套」产品限制） | RC-1 | 旧 IMPORT-IDEMPOTENCY 在此归位；现有 `importAccountSet` 总是新建账套，需补 RC-1 绑定账套 → 定向导入缺口 |
+| 4 | RC-3 财务流水线完整性 | 负责人 A 统一协调 | 科目映射 / 期初 / 凭证 / 计提摊销 / 校验 / 结转结账，并核实报表算法与口径缺口；**影响目标准则 / 数据 / 报表的缺口必须补齐或显式阻止产出** | RC-2 | 不因函数已存在就宣称报表合规；`cashFlowStatement` 间接法末行为直接法净额、两套准则共用同一 COA 等缺口须逐项结论；**根据 B 的发现另开聚焦任务** |
+| 5 | RC-4 内部报表导出 | 同事 B | 资产负债表 / 利润表 / 现金流量表 / 余额表（含各科目）/ 明细账可下载导出；**独立预期金额 / 会计口径验收** | RC-3 | **B1 五类内部 CSV 已随 PR #15 交付**（[REPORT-EXPORT](../REPORT-EXPORT.md)）；完整 RC-4 验收仍依赖 RC-3 接线；Excel/PDF 未实现 |
+| 6 | RC-5 税局申报格式导出 | 同事 B | 按官方模板与字段映射导出可申报文件，并做勾稽校验；**官方模板核实自 RC-0 并行** | RC-4 + 官方模板核实 | **B2 未完成**：缺适用地区 / 准则 / 模板版本 / 上传格式，当前导出返回 422 `tax_template_unverified`；**生成可申报文件 ≠ 向税局正式提交**；内部 CSV ≠ 申报可用 |
+| 7 | RC-6 端到端联调与交付 | 负责人 A 统一协调 | 用功能验收场景串起 RC-0~RC-5 并由用户实际验收；**含连续两个月验收**（RC-2a 首次 + RC-2b 后续追加） | RC-4、RC-5 | 不以 UI 页面数作为完成指标；真实联调只用用户本机数据 |
 
 历史任务表（已替代，仅留追溯）：IMPORT-STRICT ✅（PR #10，merge `67f5e45`）；IMPORT-IDEMPOTENCY → 并入 **RC-2**；BATCH-QUEUE / BATCH-MANAGEMENT → 报表闭环完成后再定归属，本计划不先行搭建泛用批量平台与展示大屏；TAX 真实适配 → 并入 **RC-1 / RC-5**（全国为长期目标，当前 0 接入）。
 

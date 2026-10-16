@@ -5,8 +5,20 @@
 
 ## [Unreleased]
 
-### Added — RC-B 内部报表导出与模板前置核验（2026-10-15）
+### Changed — 多人跨电脑协作与任务分配（2026-10-15，2026-10-16 更新状态）
 
+- 用户明确确认多人协作方式：同事账号 `xiaoyihaishiaini`（个人私有仓库协作者）已**接受** write 邀请（邀请 ID `337920044`），管理者 2026-10-16 通过 GitHub API 实测 `permission = write`。负责人 `huxiaoyang-code` 负责税局登录与数据接入（RC-0 / RC-1 / RC-2a / RC-2b 及数据处理集成，协调 RC-3），同事负责两类报表口径核对与导出（RC-4 / RC-5）。**开发多人不等于产品多租户**：产品仍为本机单用户、可多账套批量。
+- 已建立总任务 [Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)（RC-A-LOGIN-DATA，assignee `huxiaoyang-code`）与 [Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)（RC-B-REPORTS，已实际绑定 assignee `xiaoyihaishiaini`），均 OPEN。子 PR 用 `Refs #13` / `Refs #14`，**不因 A0 / B0 完成就 Closes 总任务**；新子需求可另开 Issue 链接总任务。
+- 新增 [团队协作协议](TEAM-COLLABORATION.md)（双层角色、权限、共享同步、交接契约、文件所有权矩阵、任务生命周期 / 认领、跨成员评审、凭据与数据边界，以及官方资料短摘要）、[成员入场包](handoffs/MEMBER-ONBOARDING.md)（可直接转发同事）、[任务看板](tasks/README.md)、[任务单模板](tasks/TEMPLATE.md)、[RC-A-LOGIN-DATA](tasks/RC-A-LOGIN-DATA.md)、[TEAM-HANDOFF 交接](handoffs/TEAM-HANDOFF.md)，以及 `.github/pull_request_template.md` 与 `.github/ISSUE_TEMPLATE/requirement.md`（**8 个新增**；`RC-B-REPORTS` 任务单不在此列——它是 PR #15 已有、本轮修改）。
+- 修改 `AGENTS.md`、[项目章程](PROJECT-CHARTER.md)、[团队实施计划](TEAM-PLAN.md)、[报表闭环补全方案](REPORT-CLOSURE-PLAN.md)、[阶段状态](handoffs/STATE.md)、[新会话入口](handoffs/NEXT-SESSION.md)、[索引](INDEX.md)、[交接模板](handoffs/TEMPLATE.md)、[RC-B-REPORTS 任务单](tasks/RC-B-REPORTS.md) 与本文（**10 修改**，共 **18 文件**）；**新增「先识别自己成员与已分配任务」**，避免所有机器默认接 RC-0 导致重复派工。
+- **2026-10-16 已接受（已核实）**：本轮团队协作文档已被管理者接受；同事 `xiaoyihaishiaini` 已接受 write 邀请，管理者经 GitHub API 实测 `permission = write`；总任务 [Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14) 已实际绑定 assignee `xiaoyihaishiaini`（OPEN）。`docs/tasks/RC-B-REPORTS.md` 属 PR #15 已有任务单的本轮修改，**不是新增，也不新增任何 B 任务单**。
+- **新任务**初始状态为**「已分配 / 待开工」**（不是「开发完成」）；但不使已有进展退回：**RC-B B0 / B1 已随 PR #15 交付，B2 继续推进**，A 的 RC-0 等仍为待开工。本轮本地员工**未代发 Issue**，总任务 Issue #13 / #14 已由管理者建立（#14 已绑定 assignee）。成员可在满足验收与整合约束后自动合并自己的 PR；本机 Codex 审查不冒充 GitHub 第二账号批准。
+- 本轮**不新增 GitHub Actions / CODEOWNERS / 规则集，不声称已有 CI / 分支保护；未改任何远端设置；未改 `team-skills/`；未改业务代码 / 测试**。这是本轮实现范围，不是永久禁止后续经负责人授权的治理变更。
+- 团队文档变更不要求员工重跑业务回归；**管理者已在本轮对新基线 `c2d5619` 独立复验 `npm test` 10 套 336 项、exit 0**（合成临时库，未读真实数据），见 [TEAM-HANDOFF 交接](handoffs/TEAM-HANDOFF.md)。
+
+### Added — RC-B 内部报表导出与模板前置核验（PR #15，2026-10-15）
+
+- 同事 PR [#15](https://github.com/huxiaoyang-code/youshu-fork/pull/15)（head `843cad08c0e42e0614459bbbfc77160eadf498ad`，代码验证提交 `b913409d420cdd1d8264ad0d64a474880604c90f`）合并入 main `c2d561994377d9123a1cd5b8b67dfa8a16a5d2b0`；见 [RC-B 交接](handoffs/RC-B-REPORTS.md)。
 - 新增五类内部 CSV 下载及同口径预览：三表、各科目余额表、按科目/期间追踪的明细账。区分期间期初、本月发生、本年累计、期末；只读已过账范围，封账可读，拒绝未登记期间及非法参数。中文 BOM、CSV 转义、公式注入防护、试算与现金流勾稽标志、数据完整性未核实和算法限制随文件输出。
 - 新增 21 项独立金额验收，预先手算跨月/跨年、父子科目、结转/折旧及简单混合现金流的预期值，同时校验下载 CSV 关键行；覆盖草稿/反过账、年中启用、空账、异常请求、封账只读、账套隔离及非有限金额。旧断言不变；实际全套复验结果见 [交接](handoffs/RC-B-REPORTS.md)。
 - 新增官方小企业报表法定结构参考及校验，实际电子税局上传模板未核实，因此 **B2 仍未完成**。三表算法继续沿用现有核心，复杂混合现金流、准则映射和来源完整性等 RC-3 / RC-6 工作尚需整合；不宣称整个报表闭环或税局申报文件已完成。详见 [导出说明](REPORT-EXPORT.md)、[税局格式研究](TAX-REPORT-FORMAT.md)。
@@ -18,6 +30,7 @@
 - 更新 [项目章程](PROJECT-CHARTER.md)、[路线图](ROADMAP.md)（新增 P1.5 报表闭环里程碑）、[团队实施计划](TEAM-PLAN.md)、[阶段状态](handoffs/STATE.md)、[新会话入口](handoffs/NEXT-SESSION.md)，并同步本索引与本变更日志；已完成表补记 PR #11（IMPORT-STRICT 交接文档归档，`cc6e789`）。
 - 首审返工修订：RC-0 拆「代码审查 / 合成验证」与「用户本机人工可行性」两步（原 tax-browser 只读保留，隔离工作区仅复制源码 / 补丁与基线快照，不复制 DB / 凭据 / 临时 profile / 日志；先复现旧草稿测试再在最新 main 复用必要改动）；RC-1 补实际账号 / 凭据入口、适配器与最少 UI（凭据与验证码只由用户本机输入；模型侧 MCP / Agent 仅收安全引用与不含真实业务 / 身份原文的状态摘要，本机 UI 专用回环通道可处理瞬时凭据 / OTP，不送模型）；RC-2 补目标账套定向导入、标准 DTO 转换、完整性与映射预检、稳定业务键与最小恢复能力；报表验收补独立预期金额 / 会计口径；范围弹性与未知源数据边界明确。
 - 纯文档变更，未改业务代码、算法或测试，不重复整套 208 / 262 项回归。**整体不宣称报表闭环已达成**。
+- 该方案已由 PR [#12](https://github.com/huxiaoyang-code/youshu-fork/pull/12) 合并入 main `8ebc73917123b7057dec7d00f28f5651b6fd8a4a`（2026-10-15，文档变更，未重跑业务测试）；后续团队协作交接以该 SHA 为基线。
 
 ### Changed — 方向修正为本机单用户批量 + 工作范式技能（2026-10-14）
 

@@ -21,7 +21,8 @@
 | 看本轮交付和可重复验收 | [第一期验收](PHASE1-ACCEPTANCE.md) · [税务适配契约](TAX-INTEGRATION.md) |
 | 看当前优先级与补全计划 | [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)（RC-0 ~ RC-6，当前首包 RC-0） |
 | 开新对话继续工作 | [新会话入口](handoffs/NEXT-SESSION.md) · [阶段状态](handoffs/STATE.md) · [本地优先技能](../team-skills/local-agent-first/SKILL.md) |
-| 看并发分工、需求和验收规则 | [团队实施计划](TEAM-PLAN.md) |
+| 看并发分工、需求和验收规则 | [团队实施计划](TEAM-PLAN.md) · [任务看板](tasks/README.md) |
+| 多人协作 / 分角色 / 新成员加入 | [团队协作协议](TEAM-COLLABORATION.md) · [成员入场包](handoffs/MEMBER-ONBOARDING.md) · [任务单模板](tasks/TEMPLATE.md) · [TEAM-HANDOFF 交接](handoffs/TEAM-HANDOFF.md) |
 | 看总流程、阶段重置与恢复工作 | [项目执行章程](PROJECT-CHARTER.md) · [阶段状态](handoffs/STATE.md) |
 | 改记账/报表逻辑 | [§3.1 领域层](#31-领域层server) → `server/accounting.mjs` |
 | 下载内部五类报表 / 看导出口径 | [REPORT-EXPORT](REPORT-EXPORT.md) · `06-workbench/server/report-export.mjs` · [RC-B 交接](handoffs/RC-B-REPORTS.md) |
@@ -241,8 +242,9 @@ Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──�
 | P1 会计闭环（结转损益/折旧摊销/现金流量表） | ✅ 完成 |
 | 导入旧账（JSON/CSV，GBK 支持） | ✅ 完成 |
 | 导入严格校验（IMPORT-STRICT） | ✅ 完成（PR #10，merge `67f5e45`） |
-| 报表闭环（当前优先级，RC-0 ~ RC-6） | ⬜ 待办；顺序与门槛见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)。首包 RC-0（tax-browser 草稿审查 + 登录与数据链路可行性），其后为登录与账套关联、目标账套定向导入与重试、财务流水线、内部报表导出、税局申报格式导出、端到端交付 |
-| 辅助核算 / 银行对账 / 导出 | ⬜ 待办（导出中「内部 3 表 + 余额表/明细账」属闭环 RC-4，为当前目标；其余辅助核算 / 银行对账后排） |
+| 报表闭环（当前优先级，RC-0 ~ RC-6） | 🚧 进行中；顺序与门槛见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)。**B1 内部五类 CSV 导出已由 PR #15 交付（RC-4 前置）；B2 税局申报可用文件、RC-3 财务流水线完整性、RC-1/RC-2 登录与定向导入、RC-6 端到端均未完成**；首包 RC-0（tax-browser 草稿审查 + 登录与数据链路可行性） |
+| 多人跨电脑协作（成员 / 文件所有权 / 任务看板） | ✅ 已建立（文档与模板）：[团队协作协议](TEAM-COLLABORATION.md) · [成员入场包](handoffs/MEMBER-ONBOARDING.md) · [任务看板](tasks/README.md) · [交接](handoffs/TEAM-HANDOFF.md)；分工：负责人 RC-0/1/2 与数据处理（[Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)，OPEN），同事 RC-4/5 与报表口径（[Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)，OPEN）。本轮共 18 文件（10 修改 + 8 新增），**已完成管理者终审返工**；**是否已提交 / 已合并以 Git、PR 与远端实际状态为准**，本索引不预报合并 |
+| 辅助核算 / 银行对账 / 导出 | 🚧 部分：内部 3 表 + 余额表 / 明细账 CSV 导出已由 PR #15 交付（RC-4 前置）；辅助核算 / 银行对账仍未实现，Excel/PDF 未实现 |
 | 发票 / 申报 | ⬜ 待办（ROADMAP P2，返回 `not_implemented`）；税局申报格式导出属闭环 RC-5 |
 | 历史上排：导入幂等（IMPORT-IDEMPOTENCY） | ⬜ 已并入报表闭环 **RC-2**（不再是第一优先） |
 | 后排：本机泛用批量任务队列 / 管理（BATCH-QUEUE / BATCH-MANAGEMENT） | ⬜ 报表闭环完成后再定归属；本阶段不先行搭建泛用批量平台 |
