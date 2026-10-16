@@ -1,55 +1,57 @@
 # 新会话入口 · NEXT SESSION
 
-> 当前 RC-B 报表导出进展优先查看 [RC-B-REPORTS 交接](RC-B-REPORTS.md) 与 [任务单](../tasks/RC-B-REPORTS.md)：B0/B1 已实现，最终 PR/合并以实际记录为准；B2 的可上传申报文件及 RC-3/RC-6 尚未完成。本任务用户明确授权 Codex Subagent 实施、主 Codex 审核/提交/合并，不据旧执行器限制重新阻塞本任务。
-
+> **先识别自己是谁**：本仓库已支持**多成员跨电脑协作**。开工前先按 [任务看板](../tasks/README.md) 与 [团队协作协议](../TEAM-COLLABORATION.md) 确认自己的**人类成员身份与已分配任务**，**不要默认所有机器都接 RC-0**。当前分工：负责人 `huxiaoyang-code` → [RC-A-LOGIN-DATA](../tasks/RC-A-LOGIN-DATA.md)（总任务 [Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)）；同事 `xiaoyihaishiaini` → [RC-B-REPORTS](../tasks/RC-B-REPORTS.md)（总任务 [Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)）。
+>
 > 本文件是新 Codex 对话的最小入口。先读本文件，再读 [项目章程](../PROJECT-CHARTER.md)、[阶段状态](STATE.md) 和 [本地优先技能](../../team-skills/local-agent-first/SKILL.md) 即可继续；历史日志（`.agent-runs/`）默认不作为新会话上下文，只在排查具体故障时按需查阅相关日志。
 
 ## 当前基线（可核验事实）
 
-- 最近一次已知文档/业务合并是 main 提交 `cc6e789b6b398e78034d17b1e143bcf1bd58053b`（`docs: 归档 IMPORT-STRICT 验收合并与下一任务 (#11)`，PR #11 于 2026-10-15 合并）。**这是报表闭环方案的起点，不是新对话必须停留的 HEAD**；恢复时先核对当前 main / 远端，后续 PR 合入后以实际最新提交为准。
-- PR #1–#11 已合并。业务实现合并提交为 `03eba00`（PR #7）；#8 为文档归档，#9 为本地执行范式与单机批量交接（文档 / Skill），#10 为 IMPORT-STRICT 导入严格校验（业务代码），#11 为 IMPORT-STRICT 交接文档归档。
-- 208 项测试是**既有验收事实**（管理者在 main `03eba00` 上运行 `npm test`，6 套 208/208、exit 0），**不是本轮新跑**。IMPORT-STRICT 合并后为 **7 套 262 项**（管理者在 PR #10 验证头 `aa9f08d3` 复跑 `npm test` 262/262、`npm run test:smoke` 28/28，均 exit 0；见 [IMPORT-STRICT](IMPORT-STRICT.md)）。本报表闭环方案为文档变更，未重跑业务测试。
+- 最新已知 main 提交：`c2d561994377d9123a1cd5b8b67dfa8a16a5d2b0`（PR #15 合并，mergedAt `2026-10-15T15:40:41Z`，即北京时间 2026-10-15 23:40；2026-10-16 是本次文档复验 / 核实日期）。**恢复时先核对当前 main / 远端**，后续 PR 合入后以实际最新提交为准。
+- **PR #1–#12 与 #15 已合并；Issue #13 / #14 仍 OPEN（不是 PR）**。业务实现合并提交为 `03eba00`（PR #7）；#10 IMPORT-STRICT（业务代码，`67f5e45`）；#11 IMPORT-STRICT 交接归档（`cc6e789`）；#12 报表闭环方案重排（`8ebc739`）；**#15 内部五类 CSV 导出与税表参考校验**（同事 PR，`c2d5619`，head `843cad08c0e42e0614459bbbfc77160eadf498ad`，代码验证提交 `b913409d420cdd1d8264ad0d64a474880604c90f`）。
+- **测试事实**：208 项（6 套，业务提交 `03eba00`）、262 项（7 套，`67f5e45`）是既有验收事实；**当前 main `c2d5619` 为 10 套 336 项**（管理者 2026-10-16 独立复验 `npm test`、exit 0，合成临时数据库，未读真实数据）。**团队文档变更不重复业务回归。**
 - 工具入口共 45 个：31 available（其中 7 个是税务预留接口）、1 limited、13 unavailable。**真实税局接入数 0**；入口数量不等于真实连接数。
 
 ## 未完成现场（先核对，勿重复派工）
 
-- worktree `D:/有数云fork/.worktrees/tax-browser`，分支 `codex/tax-browser-import`，基线 main `9783420a84dae2fe8a4c4b3021c07947b66fec00`。
-- 状态：**未提交、未 PR、未合并**；为福建漳州浏览器登录后读取企业 / 批量新建或绑定账套的本地草稿，**不能代表全国接入**。
+- worktree `D:/有数云fork/.worktrees/tax-browser`，分支 `codex/tax-browser-import`，基线 main `9783420a84dae2fe8a4c4b3021c07947b66fec00`（**负责人本机现场；同事不需寻找或重做**）。
+- 状态：**未提交、未 PR、未合并**；为福建漳州浏览器登录后读取企业 / 批量新建或绑定账套的本地草稿，**不能代表全国接入**，**企业列表不等于财务凭证**。
 - 员工交接 `D:/有数云fork/.worktrees/tax-browser/docs/handoffs/TAX-BROWSER.md`；员工**自报** 272 项通过，管理者**未独立复跑**，**真实税局登录未验收**。
 - 日志 `D:/有数云fork/.agent-runs/pi-tax-browser.jsonl` 退出码**尚未核实**，不能声称 exit 0；该历史退出码与本轮文档部分、与 IMPORT-STRICT 的 exit 0 均**不能混同**。
-- 保留原目录，不重置 / 删除 / 覆盖 / 重做；新版方案已把草稿复审列为**首包 RC-0**（`TAX-BROWSER-REVIEW`，可合理与 `LOGIN-DATA-PROOF` 统一为一个 ID）：在新隔离工作区复审 / 整合，保留原件，检查与最新 main 的冲突。本轮核实：其原 **14 个未提交文件内容哈希与本轮清单一致**（`.agent-runs/import-strict-tax-preservation.json`，逐文件 SHA256 全部命中），分支 / worktree 保持原样，本轮未触碰该目录。
+- 保留原目录，不重置 / 删除 / 覆盖 / 重做；**RC-0** 在新隔离工作区复审 / 整合，保留原件，检查与最新 main 的冲突（**PR #15 改了 `server.mjs` / `public/*` / `scripts/test-all.mjs` / `test/*`，整合须逐项检查冲突**）。14 个未提交文件内容哈希与 `.agent-runs/import-strict-tax-preservation.json` 清单一致。
 
 ## 方向（不可漂移）
 
-本机**单用户**财税工作台，可对多个企业 / 账套批量处理；**不做多租户 / SaaS / 租户权限平台 / 对外服务**。只保留账套隔离、操作日志、备份恢复、凭据安全等本机需要。全国电子税务局是产品目标，当前只有预留接口、真实接入 0。详见 [章程](../PROJECT-CHARTER.md) 与 [ROADMAP](../ROADMAP.md)。
+本机**单用户**财税工作台，可对多个企业 / 账套批量处理；**不做多租户 / SaaS / 租户权限平台 / 对外服务**（开发多人不改变产品形态）。只保留账套隔离、操作日志、备份恢复、凭据安全等本机需要。全国电子税务局是产品目标，当前只有预留接口、真实接入 0。详见 [章程](../PROJECT-CHARTER.md) 与 [ROADMAP](../ROADMAP.md)。
 
 ## 已完成
 
-- 记账、三大报表、试算、明细账、折旧/摊销、结转损益、封账/反结账、期间登记、旧账导入（JSON / 4 CSV，预检 + 事务，**严格校验**：拒绝非法金额文本、负数与超界在舍入前判定，预检与正式写入同一套约束，失败不落库）。
+- 记账、三大报表、试算、明细账、折旧/摊销、结转损益、封账/反结账、期间登记、旧账导入（JSON / 4 CSV，预检 + 事务，**严格校验**）。
 - MCP 45 入口与真实能力目录；全国税务适配层与异步会话契约（本地假适配器测试，未联网）。
-- 6 套 208 项整体验收通过（既有验收事实，锚定业务提交 `03eba00`，不是本轮新跑）；IMPORT-STRICT 合并后 7 套 262 项（锚定合并提交 `67f5e45`，管理者复验）。
+- **RC-B B0 / B1（PR #15）**：五类内部 CSV 导出（资产负债表、利润表、现金流量表、各科目余额表、明细账）、HTTP 下载与同口径页面 / JSON 预览；详见 [REPORT-EXPORT](../REPORT-EXPORT.md) 与 [RC-B 交接](RC-B-REPORTS.md)。
+- 当前 main `c2d5619` 上 10 套 336 项（管理者复验，合成临时库）。
 
 ## 明确限制（未实现，不承诺）
 
-- 旧账导入**非幂等**（每次新建账套，**不修改既有账套**，也不涉及既有账套的封账 / 既有凭证状态）→ 在报表闭环中归入 **RC-2**。
-- 无本机批量任务队列与管理（并发上限、重启恢复、取消、失败重试等）→ 报表闭环完成后再定归属（本计划不先行搭建泛用批量平台与展示大屏）。
-- 真实电子税务局 0 接入；辅助核算、银行对账、发票、申报、正式导出均未实现。
-- **报表无法下载导出**（仅网页查看；`downloadText` 只用于导入模板）；**无任何税局申报模板 / 字段映射 / 勾稽实现**。
-- 税局是否提供科目 / 期初 / 凭证 / 银行 / 发票**不可先行承诺**；若仅有企业列表 / 申报汇总，**不能完成自动财务闭环**。
-- 文档-only 变更不要求重跑 208 / 262 项；代码变更按受影响测试，关键合并基线跑全套。
+- 旧账导入**非幂等**（每次新建账套，**不修改既有账套**）→ 归入 **RC-2**。
+- 无本机批量任务队列与管理 → 报表闭环完成后再定归属（本计划不先行搭建泛用批量平台与展示大屏）。
+- 真实电子税务局 0 接入；辅助核算、银行对账、发票、申报均未实现。
+- **RC-B 已交付内部五类 CSV 下载**；但 **B2 税局可上传申报文件未完成**：缺适用地区 / 准则 / 模板版本 / 上传格式，当前税表导出返回 422 `tax_template_unverified`。**内部 CSV ≠ 税局申报可用文件**；已有税表法定结构参考 / 勾稽校验与就绪性阻断，见 [TAX-REPORT-FORMAT](../TAX-REPORT-FORMAT.md)。
+- **XLSX / PDF 未实现**；浏览器下载落盘在同事会话未确认（HTTP 附件已由接口套件验证）。
+- RC-3 财务流水线完整性、RC-6 端到端交付未完成；税局是否提供科目 / 期初 / 凭证 / 银行 / 发票**不可先行承诺**；若仅有企业列表 / 申报汇总，**不能完成自动财务闭环**。
+- 文档-only 变更不要求重跑 336 项；代码变更按受影响测试，关键合并基线跑全套。
 
-## 下一任务（只明确第一个可派）
+## 下一任务（按自己成员身份选择）
 
-- **`RC-0` = `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF`（可合理统一为一个 ID）**：在新隔离工作区复审 `tax-browser` 草稿（复跑其套件、检查与最新 main 冲突、审计安全边界），并**用真实登录**验证「账号 → 验证码 → 授权企业 → 实际财务数据来源」是否成立，填写数据可得性矩阵。依赖：无（首包）。**RC-0 分两步**：无账号时先做代码审查 / 合成复验（第一步），真实验证待用户本机参与（第二步）；不会等账号才开始审查。
-- 完整工作包 RC-0 ~ RC-6、数据可得性门槛、分类结论与验收场景见 [报表闭环补全方案](../REPORT-CLOSURE-PLAN.md)；依赖任务表见 [阶段状态 §后续可执行任务表](STATE.md)。
+- **A（负责人 `huxiaoyang-code`）**：先做 **RC-0 第一步**（`TAX-BROWSER-REVIEW`）：在新隔离 worktree 复审 `tax-browser` 草稿，复跑其套件并记录实际结果，检查与最新 main 冲突，审计安全边界；整合 PR #15 的共享文件改动时逐项检查冲突。**不得假定企业列表等于财务凭证。** 真实验证（账号 → 验证码 → 授权企业 → 实际财务数据来源）需用户本机参与，为第二步。
+- **B（同事 `xiaoyihaishiaini`）**：**不退回 B0 待开工**；当前阶段是 **B2 模板研究与正式导出成功路径**（取得适用地区 / 准则 / 模板版本 / 上传格式证据），并向负责人汇总 **RC-3 核心缺口**；RC-2 / RC-6 整合由负责人协调。
+- 完整工作包 RC-0 ~ RC-6、数据可得性门槛、分类结论与验收场景见 [报表闭环补全方案](../REPORT-CLOSURE-PLAN.md)；成员分工与依赖任务表见 [阶段状态 §后续可执行任务表](STATE.md)。
 - 已替代：旧序「IMPORT-IDEMPOTENCY 第一优先」已失效；IMPORT-IDEMPOTENCY **并入 RC-2**，不再是首包。
-- **本次交接本身不主动继续开发**：本文件只描述入口，RC-0 由管理者按任务单派工，本地员工不得抢跑。
+- **本次交接本身不主动继续开发**：本文件只描述入口，各任务由管理者按任务单派工，本地员工不得抢跑。
 
 ## 必要命令
 
 ```powershell
-# 每段命令都从仓库根独立运行；需要切换目录时用 Push-Location / Pop-Location 成对使用，
-# 不要在多行里连续 cd 同一个子目录（第二次 cd 会在已进入目录后再拼接相对路径而失败）。
+# 每段命令都从仓库根独立运行；需要切换目录时用 Push-Location / Pop-Location 成对使用。
 # 文档变更自查：范围 / 链接（按需）
 git diff --stat
 git diff --check
@@ -57,7 +59,7 @@ git diff --check
 python -X utf8 <ABS_QUICK_VALIDATE>/scripts/quick_validate.py team-skills/local-agent-first
 # 代码变更 / 复审时从仓库根运行：
 Push-Location 06-workbench
-npm test          # 全套（IMPORT-STRICT 合并后为 7 套 262 项；更早基线为 6 套 208 项）
+npm test          # 全套（当前 main c2d5619 为 10 套 336 项；历史基线 262 / 208 项）
 npm run test:smoke
 Pop-Location
 ```
@@ -67,45 +69,70 @@ Pop-Location
 - 用户已授权：将本项目必要源码 / 任务说明 / 测试错误发送到已配置 tokenhub；验收通过后自动合并 PR。范围见章程与 [STATE](STATE.md)。
 - 新仓库需重新核对当时授权范围；通用 Skill 不复制这些授权，也不推导外传授权。
 - 禁止用真实账套 / 凭据做自动测试；真实账套数据与税务凭据不发到模型服务，开发所需源码 / 任务说明 / 测试错误仅按本项目已授权范围发送到 tokenhub；不绕过沙箱。
+- **执行员工只允许 GLM 5.3 或 DeepSeek V4.1 Flash（主 / 回退显式锁定）**；该约束不限制各成员本机 Codex 自身的模型。团队默认范式仍为本地 pi / Claude Code 执行、Codex 管理。
+- **同事 RC-B 会话的例外记录（不泛化）**：同事交接 [RC-B-REPORTS](RC-B-REPORTS.md) 记载其该会话用户允许 **Codex Subagent 实施**，属**该任务内的例外**；保留来源与限定，**不冒充本会话新授权**，也不泛化给后续任务。
 
 ## 会话状态
 
-- **IMPORT-STRICT 本部分是代码变更**（不是文档-only）：员工返工自测 `import-strict` 54/54、`npm test` 7 套 262/262、`npm run test:smoke` 28/28；管理者已于 2026-10-15 在 `D:/有数云fork/.worktrees/import-strict/06-workbench` **独立复跑并通过**（同结果、exit 0），随后合并 PR #10。IMPORT-STRICT 的 pi 初稿 / 返工 1 / 返工 2 三个实施会话均已实际结束，管理者核对各退出码为 0。
-- 「IMPORT-STRICT 合并后交接收尾」文档会话初稿进程已由管理者核对实际退出，`.agent-runs/pi-import-strict-handoff.exit` = 0；本文件不预报当前文档修订进程的退出码，实时进程状态恢复时另行核对。
-- **本轮 REPORT-CLOSURE-PLAN 为文档变更**（新增 2 个文档 + 更新 7 个既有文档，共 9 个）：**未改业务代码 / 测试 / Skill、未重跑业务测试**。进程与退出事实**见 [REPORT-CLOSURE 交接](REPORT-CLOSURE.md)**（避免重复长日志）：本方案**初稿**、`review`、`review2` 三次实施会话均已实际退出码 0（**管理者已核实**），本次 **final** 进程的实时状态由管理者在其结束后另行核对，本文件不预报。IMPORT-STRICT 的**两个交接会话**亦均退出 0（管理者已核实）。
+- **本轮 TEAM-HANDOFF（多人协作）为纯文档 / 模板变更**，共 18 个文件：**10 修改**（`AGENTS.md`、`docs/PROJECT-CHARTER.md`、`docs/TEAM-PLAN.md`、`docs/REPORT-CLOSURE-PLAN.md`、`docs/INDEX.md`、`docs/CHANGELOG.md`、`docs/handoffs/STATE.md`、`docs/handoffs/NEXT-SESSION.md`、`docs/handoffs/TEMPLATE.md`、`docs/tasks/RC-B-REPORTS.md`——其中 **`RC-B-REPORTS` 任务单为 PR #15 已有，本轮是修改不是新增**）+ **8 新增**（`docs/TEAM-COLLABORATION.md`、`docs/handoffs/MEMBER-ONBOARDING.md`、`docs/handoffs/TEAM-HANDOFF.md`、`docs/tasks/README.md`、`docs/tasks/TEMPLATE.md`、`docs/tasks/RC-A-LOGIN-DATA.md`、`.github/pull_request_template.md`、`.github/ISSUE_TEMPLATE/requirement.md`）；**未改业务代码 / 测试 / Skill、未加 CI / CODEOWNERS / 规则集；员工未重跑业务回归，管理者已独立复验 PR #15 基线（`c2d5619`，10 套 336 项、exit 0，合成临时库）**。员工会话日志 `.agent-runs/pi-team-handoff-current.jsonl`、退出码文件 `pi-team-handoff-current.exit`（**本机可查，不作为同事先决**）；管理者已核实统一执行 session80422 结果 `pi-team-handoff-current.exit=0`。
+- **PR #15（同事 RC-B）为业务代码变更**：管理者在 `c2d5619` 复验 `npm test` 10 套 336 项、exit 0（合成临时库）。同事 PR **没有 CI / 正式 GitHub review 记录**，**不称 CI 通过**。
+- **IMPORT-STRICT 本部分是代码变更**：员工返工自测 262/262 + smoke 28/28；管理者 2026-10-15 独立复跑通过并合并 PR #10，退出码 0。
+- **本轮 REPORT-CLOSURE-PLAN 为文档变更**：进程与退出事实见 [REPORT-CLOSURE 交接](REPORT-CLOSURE.md)。
 - tax-browser 会话的**历史**退出码尚未核实，见「未完成现场」，不得据此声称 exit 0，也不得与本任务的 exit 0 混同。
-- 仓库权威技能 `team-skills/local-agent-first/SKILL.md` 已由管理者审查并安装到**本机** Codex 技能目录 `C:/Users/35007/.codex/skills/local-agent-first/`：本机两处文件 SHA256 与仓库副本一致，`quick_validate.py` 对仓库副本与全局版本均通过，新增 27 个本地 Markdown 链接检查通过，`git diff --check` 通过。安装路径与校验均为**本机信息**，不承诺其他电脑已安装。
-- 安装前的原技能备份在 Git 忽略目录 `.agent-runs/local-agent-first-before-20261014-150009.md`，只在本机存在。
+- 仓库权威技能 `team-skills/local-agent-first/SKILL.md` 已由管理者审查并安装到**负责人本机** Codex 技能目录 `C:/Users/35007/.codex/skills/local-agent-first/`（两处文件 SHA256 与仓库副本一致，`quick_validate.py` 通过）。**这是负责人本机信息，不是通用硬编码路径**（官方通用用户技能目录为 `~/.agents/skills`）；同事在自己的 Codex 审查后自行安装，先检查同名避免覆盖。安装前备份在 Git 忽略目录 `.agent-runs/local-agent-first-before-20261014-150009.md`，只在本机存在。
 
 ---
 
-## 可直接复制给新 Codex 的开场提示
+## 可直接复制给新 Codex 的开场提示（A：负责人）
 
 ```text
-请先读 docs/handoffs/NEXT-SESSION.md、docs/PROJECT-CHARTER.md、docs/handoffs/STATE.md
-和 team-skills/local-agent-first/SKILL.md；历史日志默认不读，只在排查具体故障时按需查 .agent-runs/。
-恢复时先核对当前 main / 远端：本文件记录的最新已核实基线是 cc6e789b6b398e78034d17b1e143bcf1bd58053b
-（PR #11，IMPORT-STRICT 交接文档归档），它不是新对话必须停留的 HEAD，以实际最新提交为准。
-PR1-11 已合并；208 项为既有验收事实（锚定业务提交 03eba00，6 套），IMPORT-STRICT 合并后为 7 套 262 项
-（管理者在 PR #10 验证头 aa9f08d3 复跑，262/262 + smoke 28/28，均 exit 0）；报表闭环方案为文档变更，未重跑业务测试。
+我是项目负责人 huxiaoyang-code（成员 A）。请先读 docs/handoffs/NEXT-SESSION.md、docs/PROJECT-CHARTER.md、
+docs/handoffs/STATE.md、docs/tasks/RC-A-LOGIN-DATA.md 和 team-skills/local-agent-first/SKILL.md；
+历史日志默认不读，只在排查具体故障时按需查 .agent-runs/。
+恢复时先核对当前 main / 远端：本文件记录的最新已核实基线是 c2d561994377d9123a1cd5b8b67dfa8a16a5d2b0
+（PR #15 合并），它不是新对话必须停留的 HEAD，以实际最新提交为准。
+PR #1–#12 与 #15 已合并；Issue #13 / #14 仍 OPEN（不是 PR），子 PR 用 Refs。
+当前 main 10 套 336 项为管理者复验事实（合成临时库）；员工未重跑业务回归，管理者已独立复验该基线。
 
-用户最新目标已覆盖旧优先级：最终交付是**报表闭环**
-（导入办税员账号 → 接收并输入验证码 → 登录 → 获取名下企业 / 账套 → 完成所需财务操作 → 生成报表），
-且**两类报表都要**：内部资产负债表 / 利润表 / 现金流量表 + 余额表 / 明细账，以及税局财务报表申报格式。
-前端展示次要，功能优先。完整方案、工作包 RC-0~RC-6、数据可得性门槛与验收场景见 docs/REPORT-CLOSURE-PLAN.md，
-本轮交接见 docs/handoffs/REPORT-CLOSURE.md。
+我的任务是 A0 = RC-0 第一步（TAX-BROWSER-REVIEW）：在新隔离 worktree 复审 tax-browser 草稿，
+保留原目录只读，复跑其套件并记录实际结果与退出码（员工自报 272 不作为结论），
+检查与最新 main 的冲突（PR #15 已改 server.mjs / public/* / scripts/test-all.mjs / test/*，逐项检查），
+审计安全边界；不得假定企业列表等于财务凭证。
+真实验证（账号 → 验证码 → 授权企业 → 实际财务数据来源）是第二步，需我在本机参与；
+验证码只从实际接收渠道取得并在本机输入，不进模型 / 日志 / Git。
 
-方向仍为本机单用户、可多账套批量；不做多租户 / SaaS / 对外服务。全国电子税务局是长期目标，**当前真实接入 0**；
-税局是否提供科目 / 期初 / 凭证 / 银行 / 发票不可先行承诺；若仅有企业列表 / 申报汇总，不能完成自动财务闭环。
-验证码默认由用户从实际接收渠道取得并在本机输入；凭据与会话留本机，不进模型 / 日志 / Git。
-
-下一个可派任务是 **RC-0 = TAX-BROWSER-REVIEW + LOGIN-DATA-PROOF**（可合理统一为一个 ID）：
-分两步——无账号时先做代码审查 / 合成复验，真实验证待用户本机参与；不会等账号才开始审查。
-在新隔离 worktree 复审 `.worktrees/tax-browser` 草稿（复跑其套件并记录实际结果、检查与最新 main 冲突、审计安全边界），
-并用真实登录验证「账号 → 验证码 → 授权企业 → 实际财务数据来源」能否成立；结论必须明确「数据链路成立 / 不成立」。
-派工前先核对「未完成现场」：该 worktree 仍是未提交实现（未 PR 未合并，员工自报 272 项未经复验，
-真实登录未验收，历史退出码未核实），必须保留原件，不重置 / 删除 / 覆盖 / 重做，也不视为已完成。
-IMPORT-IDEMPOTENCY 已并入 RC-2，**不从它开始**；不要续用旧会话。
-你只负责审查验收、Git/PR 与合并，不直接写业务代码 / 测试 / 交付文档；
+方向仍为本机单用户、可多账套批量；不做多租户 / SaaS / 对外服务。全国电子税务局真实接入 0。
+执行员工只允许 GLM 5.3 / DeepSeek V4.1 Flash（主 / 回退显式锁定），该约束不限制你自己的模型。
+你（本机 Codex）负责审查验收、Git/PR 与合并，不直接写业务代码 / 测试 / 交付文档；
 只有缺必要范围或授权时才问我。
+```
+
+## 可直接复制给新 Codex 的开场提示（B：同事）
+
+```text
+我是成员 xiaoyihaishiaini（同事 B）。请先读 docs/handoffs/MEMBER-ONBOARDING.md、
+docs/TEAM-COLLABORATION.md、docs/tasks/RC-B-REPORTS.md、docs/handoffs/RC-B-REPORTS.md、
+docs/REPORT-EXPORT.md、docs/TAX-REPORT-FORMAT.md、docs/PROJECT-CHARTER.md、docs/handoffs/STATE.md
+和 team-skills/local-agent-first/SKILL.md。
+我的总任务是 Issue #14（RC-B-REPORTS）；子 PR 用 Refs #14，不因 B0/B1 完成就 Closes #14。
+
+现状：B0 口径/契约与 B1 五类内部 CSV 已随 PR #15 合并（main c2d5619）；
+不退回 B0 待开工。当前阶段是 B2 模板研究与正式导出成功路径：
+必须取得适用地区 / 准则 / 模板版本 / 上传格式证据后才能生成声称可申报的文件；
+当前导出返回 422 tax_template_unverified，拒绝输出本身不算 B2 交付。
+同时向负责人汇总 RC-3 核心缺口（如间接法末行、两套准则共用同一 COA、复杂混合现金流）。
+
+边界：产品本机单用户、可多账套批量；不做多租户 / SaaS / 对外服务；全国电子税务局真实接入 0；
+税局是否提供科目 / 期初 / 凭证 / 银行 / 发票不可先行承诺。
+我用自己的 GitHub / Codex / 模型服务凭据，不复制负责人 token / config / session / 账套 DB。
+我的本地执行员工只允许 GLM 5.3 或 DeepSeek V4.1 Flash（主 / 回退显式锁定）；不用其他模型或子 agent；
+该约束不限制你（Codex）自身的模型。本地员工只做实现与自测，不执行 Git 提交 / 推送 / 合并。
+我的新模块 report-export 与 tax-report-format.mjs 归我；tax* / import* 采集与导入归负责人；
+共享接线走独立集成 PR 或先申请短期所有权。
+我可以按团队协议自动合并我自己的 PR（用户已授权），前提是通过验收与整合约束，
+合并前拉最新 origin/main、重验受影响范围、锁定已验证 head。
+不要新建 GitHub Actions / CODEOWNERS / 规则集，不声称已有 CI 或分支保护，不擅自改远端设置。
+不用 npm install（零第三方依赖）；用临时合成数据目录跑测试，绝不覆盖生产库。
+请先核实我的环境与任务范围没有冲突，然后直接开始 B2 前置（现行模板证据 / 格式 / 映射 / 成功出口）并派本地员工；
+只有确实缺必要输入或需要扩大授权时才来问我。
 ```

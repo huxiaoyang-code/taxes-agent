@@ -6,9 +6,9 @@
 > 方案起点为文档提交 `cc6e789b6b398e78034d17b1e143bcf1bd58053b`（PR #11，IMPORT-STRICT 交接）；
 > 新会话必须重新核对当时的 main / 远端，不得把该 SHA 当作必须停留的 HEAD。
 
-生效日期：2026-10-15；2026-10-15 经管理者首审返工修订。依据用户当轮明确目标与项目章程制定；用户后续指示优先于本文件。
+生效日期：2026-10-15；2026-10-15 经管理者首审返工修订；2026-10-16 按 PR #15（RC-B B0 / B1 已交付）更新当前状态。依据用户当轮明确目标与项目章程制定；用户后续指示优先于本文件。
 
-**整体边界：本方案不宣称报表闭环已经达成。** 当前真实税务接入数为 0，工作包 RC-0 ~ RC-6 均为待办；
+**整体边界：本方案不宣称报表闭环已经达成。** 当前真实税务接入数为 0；工作包 RC-0 ~ RC-6 中，**仅 RC-B B0 / B1（内部五类 CSV 导出）已由 PR #15 交付**，其余仍待办；
 只有每个工作包的完成标准由独立证据（测试实际结果、用户本机人工验收摘要、官方模板核实）满足后，才可逐包标记完成。
 
 ---
@@ -28,7 +28,8 @@
 前端展示次要，功能优先。**两类报表都不得缩减为其中一类**；任一类的失败或降级都必须显式记录，不能以另一类代替。
 
 本文件把该目标拆成**按依赖顺序、可独立 PR 验收的工作包**，并明确每一包当前真实起点、
-数据可得性门槛、验收场景与失败路径。**本轮不实现任何一包功能。**
+数据可得性门槛、验收场景与失败路径。**本文件编写时（2026-10-15）不实现任何一包功能**；
+后续 RC-B B0 / B1 已由同事 PR #15 实现并合并（见各包当前状态）。
 
 ---
 
@@ -42,11 +43,11 @@
 | 凭证全生命周期 | 同文件：`checkVoucher` `createVoucher` `postVoucher` `unpostVoucher` `deleteVoucher`，`kind ∈ normal/carryforward/depreciation` | 已验收（CORE-A、CORE-B） |
 | 资产计提 / 摊销 | 同文件：`addAssetCard` `generateDepreciation` `listAssetCards`（直线法、同期幂等、反过账后再计算约束） | 已验收（CORE-B、FLOW） |
 | 期末结转 | 同文件：`carryForwardProfit(setId, period, {yearEnd})`（3103→3104，结转凭证不计入利润表） | 已验收（CORE-B、FLOW） |
-| 内部报表算法 | 同文件：`trialBalance` `balanceSheet` `incomeStatement` `cashFlowStatement` `generalLedger` | 已有实现，**口径未按官方申报模板逐项核对**（见 §3 RC-3、RC-4） |
+| 内部报表算法 | 同文件：`trialBalance` `balanceSheet` `incomeStatement` `cashFlowStatement` `generalLedger` | 已有实现，**口径未按官方申报模板逐项核对**（见 §3 RC-3、RC-4）；内部 CSV 导出已由 PR #15 交付（RC-4 前置） |
 | 旧账导入（严格校验） | 同文件：`parseImportTexts` `normalizeImportPayload` `validateImportPayload` `importAccountSet`；HTTP `/api/import/parse`、`/api/import/account-set`；Agent `legacy_book_import` | 已验收（IMPORT-STRICT，PR #10，merge `67f5e45`） |
 | Agent / MCP 工具层 | `06-workbench/server/agent-tools.mjs`（`QUERY` / `HANDLERS` 注册表）；`05-reconstruction/codex/mcp/finance-mcp/{tools.mjs,backend.mjs,server.mjs}` | 已验收（MCP、FLOW） |
 | 税务统一契约（未接入） | `06-workbench/server/tax-gateway.mjs`：`TaxGateway`、`registerAdapter`、会话状态机、DTO 白名单与脱敏、地区目录（31 省 + 5 计划单列市） | 已验收为**接口预留**；真实接入 0（PR #6） |
-| 前端报表展示 | `06-workbench/public/app.js`：`runReport()`（三表 + 试算 + 明细账渲染）、`downloadText()`（仅用于下载导入模板 CSV） | 已验收（展示）；**无报表导出** |
+| 前端报表展示 | `06-workbench/public/app.js`：`runReport()`（三表 + 试算 + 明细账渲染）、报表下载入口（CSV） | 已验收（展示 + B1 内部 CSV 导出，PR #15） |
 
 **严格导入的现状边界（不得夸大）**：IMPORT-STRICT 只保证「**已经给出的**导入数据」在金额文本、日期、凭证号、形状等静态约束上严格校验；
 它**不校验整份数据是否完整**——若来源根本没有某期间、某张凭证或某个科目，严格导入不会报错，也**不会**凭空补 0。
@@ -73,8 +74,8 @@
 
 ### 2.3 缺失（本方案要补的）
 
-1. **税局财务报表申报格式**：无官方模板版本、字段映射、勾稽校验、合法导出格式的任何实现（`declaration_query` / `tax_declaration_query` 仍返回 `not_implemented`）。
-2. **报表导出**：`server.mjs` 无导出路由；`public/app.js` 的 `downloadText` 只用于导入模板；内部 3 表 + 余额表 / 明细账**无法下载**（仅浏览器打印）。
+1. **税局财务报表申报格式**：**已有** 2011 历史法定表式参考与行次金额 / 勾稽校验（[TAX-REPORT-FORMAT](TAX-REPORT-FORMAT.md)，随 PR #15 交付）；**缺少**现行适用上传模板、完整账套行次映射与可上传文件的**成功路径**（`declaration_query` / `tax_declaration_query` 仍返回 `not_implemented`）。不得把已有法定结构参考 / 勾稽校验抹去当作「无任何实现」。
+2. **报表导出**：B1 已实现内部五类 CSV 与 HTTP / 页面下载（PR #15）；**税局申报可用文件仍未达成**。
 3. **纳税人身份 / 授权企业 / 税局登记数据 / 本地账套 / 会计明细的贯通**：`tax-gateway.mjs` 的 `TAX_RESOURCES` 只声明 `identity` / `authorized_enterprises` / `enterprise_profile` / `tax_assessments` / `declaration_status`——**契约层面不含科目、期初、凭证、银行、发票**；草稿的 `tax_enterprise_bindings` 只绑定企业档案，不携带任何会计数据。
 4. **真实账号 / 凭据入口与适配器**：`tax-gateway.mjs` 有状态机与 `registerAdapter`，但**没有任何真实适配器，也没有让用户本机输入账号 / 密码 / 验证码的可信入口**。
 5. **目标账套定向导入**：现有 `importAccountSet` **总是新建账套**（草稿同样如此），无法把解析出的财务数据写入 RC-1 已绑定的目标账套；无从「来源采集 / 文件解析」到标准财务数据 DTO 的转换、完整性预检、来源 / 证据摘要。
@@ -94,6 +95,19 @@
 ## 3. 工作包（依赖顺序，可独立 PR 验收）
 
 命名前缀 `RC`（Report Closure）。每包：目标 → 允许改动 → 依赖 → 输入 / 输出 → 完成标准 → 必要测试 → 失败路径 → 仍需用户提供。
+
+### 成员分工（2026-10-15 用户确认）
+
+多人协作的角色 / 权限、文件所有权矩阵、任务认领与合并协调见 [团队协作协议](TEAM-COLLABORATION.md)；任务分配看板见 [任务看板](tasks/README.md)。
+
+| 工作包 | 负责成员 | 任务单 | 备注 |
+|---|---|---|---|
+| RC-0 / RC-1 / RC-2a / RC-2b（及数据处理集成） | 项目负责人 `huxiaoyang-code` | [RC-A-LOGIN-DATA](tasks/RC-A-LOGIN-DATA.md) | 税局登录与数据接入 |
+| RC-3（会计核心改动与口径缺口） | 项目负责人**统一协调** | [RC-A-LOGIN-DATA](tasks/RC-A-LOGIN-DATA.md) | 根据 B 的报表口径发现**另开聚焦任务**；**不得** B 和 A 各改一份 `accounting.mjs` |
+| RC-4 / RC-5（两类报表口径核对与导出）及报表现状盘点 | 同事 `xiaoyihaishiaini` | [RC-B-REPORTS](tasks/RC-B-REPORTS.md) | B0 / B1 已随 PR #15 完成；**下一阶段 B2**（现行模板证据 / 格式 / 映射 / 成功出口），不退回 B0 待开工 |
+| RC-6（端到端集成与交付） | 项目负责人统一协调 | — | 使用经审查的 RC-0~RC-5 成果 |
+
+**并行与完整验收的区别**：RC-4 / RC-5 的**完整验收**依赖 RC-3 与真实官方模板；B0 / B1 已完成，**B2 的模板证据与成功出口**以及纯导出模块契约与合成 DTO 测试**可以并行做前置**，**不等于已经通过完整闭环**。
 
 ### RC-0 · `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF`（首包，可行性与草稿审查）
 
@@ -279,6 +293,8 @@
 
 ### RC-4 · 内部报表导出（3 表 + 余额表 / 明细账）
 
+> **当前状态（2026-10-16）**：**B1 五类内部 CSV 与 HTTP / 页面预览已随 PR #15 交付**（[REPORT-EXPORT](REPORT-EXPORT.md)）；本包**完整验收仍待** RC-3 接线与连续期间验收。以下是原完整完成标准，仍作为后续验收依据。
+
 **目标**：报表**可下载**，不只是网页查看；导出结果**独立可核验**。
 
 **允许改动**：`server.mjs`（新增导出路由，如 `/api/account-sets/:id/reports/:kind/export?period=&format=`）、新模块 `report-export.mjs`、`public/app.js`（下载按钮）、`test/*.test.mjs`；不改报表算法本身。
@@ -301,6 +317,8 @@
 ---
 
 ### RC-5 · 税局财务报表申报格式（导出，不等于报送）
+
+> **当前状态（2026-10-16）**：**B2 未完成**。已交付税表法定结构参考 / 勾稽校验与就绪性阻断（[TAX-REPORT-FORMAT](TAX-REPORT-FORMAT.md)），但缺适用地区 / 准则 / 模板版本 / 上传格式，实际导出返回 422 `tax_template_unverified`；生成可上传申报文件的**成功路径**仍未完成。拒绝输出不构成 B2 交付。
 
 **目标**：按税局要求的报表模板导出**可申报文件**，并明确合规边界。
 
@@ -361,7 +379,7 @@
 
 **B. 未验收草稿（原只读保留，待 RC-0 隔离快照复审）**：`tax-browser.mjs` / `tax-browser-http.mjs` / `tax-import.mjs` / `test/tax-browser.test.mjs` / `docs/TAX-BROWSER.md` / `docs/handoffs/TAX-BROWSER.md` + 8 个修改文件（合计 14 个未提交文件，见 §2.2）。**不得直接当作已交付**；14 文件哈希本轮核对一致（见 §2.2）。
 
-**C. 缺失**：§2.3 七项，对应 RC-1 ~ RC-5。
+**C. 缺失**：§2.3 七项，对应 RC-1 ~ RC-5（其中「报表导出」已部分由 PR #15 B1 交付；税局可申报成功路径仍缺）。
 
 ---
 

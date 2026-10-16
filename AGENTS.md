@@ -8,6 +8,14 @@
 - 批量处理多个账套 **不等于多租户**。本项目不做 SaaS、多租户、租户权限平台、对外服务或账户体系；只保留本机实际需要的账套数据隔离、操作日志 / 审计留痕、备份恢复与凭据安全。
 - 全国电子税务局是产品目标；当前只有预留接口、真实接入数为 0，预留不等于已接入。
 
+## 团队协作（多成员跨电脑）
+
+- 本项目支持**多名人类成员**各自在自己电脑上工作，每人配自己的本机 Codex 与本机执行员工（pi / Claude Code）。**开发多人不等于产品多租户**：产品仍是本机单用户、可多账套批量。
+- 角色与权限、文件所有权矩阵、任务认领与合并协调见 [`docs/TEAM-COLLABORATION.md`](docs/TEAM-COLLABORATION.md)；任务看板见 [`docs/tasks/README.md`](docs/tasks/README.md)。
+- 每名成员使用自己的 GitHub / Codex / 模型服务凭据，**绝不复制负责人 token / config / session / 账套 DB**；跨电脑同步只走 GitHub 仓库 + 按任务 Issue / PR + 版本化任务文档，**不共享**本机路径、端口或进程 ID。
+- **开工前先识别自己是谁**：确认自己的人类成员身份与已分配任务（见任务看板与本人任务单），**不要默认所有机器都接 RC-0**，避免重复派工。
+- **目前登记且经项目负责人授权的成员为 `huxiaoyang-code` 与 `xiaoyihaishiaini`**；该两人及其已分配任务可在满足验收与整合约束后**自动合并自己的 PR**（用户已授权）。本授权**不从通用文档推给新贡献者**；新成员需先经项目负责人登记并授权。本机 Codex 审查是独立于员工的内容审查，**不冒充 GitHub 第二账号批准**。
+
 ## 工作范式：本地执行，Codex 管理
 
 固定范式为「本地 agent 执行实现，Codex 只管理 / 审核 / 提交 PR / 合并」，权威技能见 [`team-skills/local-agent-first/SKILL.md`](team-skills/local-agent-first/SKILL.md)（员工维护仓库副本，由管理者审查后安装到 Codex 技能目录，不直接改用户全局技能；本轮环境安装结果见 `docs/handoffs/NEXT-SESSION.md`）。
