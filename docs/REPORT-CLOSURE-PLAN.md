@@ -58,12 +58,13 @@
 
 ### 2.2 未验收草稿（原目录只读保留，禁改原目录）
 
-- 目录：`D:/有数云fork/.worktrees/tax-browser`（worktree 外，**不在本工作区**）
+- 目录：`<repo>/.worktrees/tax-browser`（**历史负责人本机路径**，worktree 外，**不在本工作区**；`<repo>` 为本地克隆根）
 - 分支 / 基线：`codex/tax-browser-import`，基线 main `9783420`；**未提交、未 PR、未合并**
 - 内容：福建省漳州市浏览器人工登录后读取「办税员可访问企业」、批量新建空账套 / 绑定空账套
 - 文件：`06-workbench/server/tax-browser.mjs`、`tax-browser-http.mjs`、`tax-import.mjs`、`06-workbench/test/tax-browser.test.mjs`、`docs/TAX-BROWSER.md`、`docs/handoffs/TAX-BROWSER.md` + 8 个修改文件（共 14 个未提交文件）
-- 证据边界：员工**自报** 7 套 272 项通过；管理者**未独立复跑**；**真实税局登录未验收**；历史退出码**未核实**
-- 本轮独立核对（只读）：14 个未提交文件 SHA256 与 `D:/有数云fork/.agent-runs/import-strict-tax-preservation.json` 清单**全部一致**，分支 / worktree 保持原样；本工作区未触碰该目录
+- 证据边界：员工**自报** 7 套 272 项通过；管理者**后来于 2026-10-16 获批复跑为 7 套 272 项、exit 0**（沙箱首跑 5 套失败为 EACCES 回环限制，两轮分别保留）；**真实税局登录仍未验收**；历史退出码**未核实**。
+- 本轮独立核对（只读）：14 个未提交文件 SHA256 与 `<repo>/.agent-runs/import-strict-tax-preservation.json` 清单**全部一致**，分支 / worktree 保持原样；本工作区未触碰该目录。
+- RC-0 现状（2026-10-17）：隔离工作区 `rc-a0-review`（基线 `d0221df`）已完成选择性整合，**第一步本机独立验收通过（15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`）**；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR [#19](https://github.com/huxiaoyang-code/youshu-fork/pull/19)（未合并、待跨成员复核）；见 [RC-A0 审查报告](REVIEW-TAX-BROWSER.md) 与 [RC0-SNAPSHOT](handoffs/RC0-SNAPSHOT.md)。
 
 **原目录只读保留，禁止写回原件 / 不重做 / 不重置 / 不删除**；允许按 §3 RC-0 规则把**源码**复制到**新的隔离工作区**形成可核验快照用于复审（复制到隔离快照不等于修改原件）。
 
@@ -118,7 +119,7 @@
 **允许改动（只读原件 + 隔离快照）**
 - 新增 `docs/REVIEW-TAX-BROWSER.md`（审查报告）、`docs/DATA-AVAILABILITY.md`（数据可得性矩阵）、`docs/handoffs/RC0-SNAPSHOT.md`（快照与复验记录）。
 - 复审工作区为**新隔离 worktree + `codex/` 分支**，以当时最新 main 为基线。
-- **原 `D:/有数云fork/.worktrees/tax-browser` 只读保留，不写入 / 不重做 / 不重置 / 不删除**。
+- **原 `<repo>/.worktrees/tax-browser`（历史负责人本机路径）只读保留，不写入 / 不重做 / 不重置 / 不删除**。
 - 管理者可在隔离工作区形成**可核验快照**：**只复制源码 14 个文件 / 补丁及其基线元数据**（文件清单 + SHA256 + 分支 / 基线 SHA）。
   **不复制**：运行期 SQLite / DB、任何凭据或密钥、浏览器临时 profile、日志文件。
   快照内文件哈希必须与 `.agent-runs/import-strict-tax-preservation.json` 清单逐条比对并在 `RC0-SNAPSHOT.md` 记录。
@@ -377,7 +378,7 @@
 
 **A. 已验收可复用**：§2.1 全部条目（账套 / 科目 / 期初 / 期间 / 凭证 / 计提 / 结转 / 内部报表算法 / 严格导入 / MCP 工具层 / 税务契约骨架 / 前端展示）。复用时**不改其既有算法**，如需变更须单独 PR 并跑受影响回归。
 
-**B. 未验收草稿（原只读保留，待 RC-0 隔离快照复审）**：`tax-browser.mjs` / `tax-browser-http.mjs` / `tax-import.mjs` / `test/tax-browser.test.mjs` / `docs/TAX-BROWSER.md` / `docs/handoffs/TAX-BROWSER.md` + 8 个修改文件（合计 14 个未提交文件，见 §2.2）。**不得直接当作已交付**；14 文件哈希本轮核对一致（见 §2.2）。
+**B. 未验收草稿（原只读保留；RC-0 已完成选择性整合，第一步本机独立验收通过、代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR #19、待跨成员复核）**：`tax-browser.mjs` / `tax-browser-http.mjs` / `tax-import.mjs` / `test/tax-browser.test.mjs` / `docs/TAX-BROWSER.md` / `docs/handoffs/TAX-BROWSER.md` + 8 个修改文件（合计 14 个未提交文件，见 §2.2）。**草稿本身未合并**；整合分支 15 套 496 项 + smoke 28/28 已由本机管理者复跑通过（exit 0），但**跨成员复核未获得、PR #19 未合并**，不能当作已交付。
 
 **C. 缺失**：§2.3 七项，对应 RC-1 ~ RC-5（其中「报表导出」已部分由 PR #15 B1 交付；税局可申报成功路径仍缺）。
 

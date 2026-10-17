@@ -35,7 +35,7 @@
 
 | 任务 ID | 负责人 | 范围 | 状态 | 依赖 | 任务单 |
 |---|---|---|---|---|---|
-| RC-A · RC-0 第一步 | 项目负责人 `huxiaoyang-code` | `TAX-BROWSER-REVIEW` 隔离快照与合成复验 | 已分配 / 待开工 | 无 | [RC-A-LOGIN-DATA](RC-A-LOGIN-DATA.md) |
+| RC-A · RC-0 第一步 | 项目负责人 `huxiaoyang-code` | `TAX-BROWSER-REVIEW` 隔离快照与合成复验 | **第一步本机独立验收通过**（15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）、PR [#19](https://github.com/huxiaoyang-code/youshu-fork/pull/19)，未合并、待跨成员复核；见 [RC0-SNAPSHOT](../handoffs/RC0-SNAPSHOT.md)） | 无 | [RC-A-LOGIN-DATA](RC-A-LOGIN-DATA.md) |
 | RC-A · RC-1 | 项目负责人 | 登录会话、办税员身份 → 授权企业 → 账套关联 | 已分配 / 待开工 | RC-0 第一步 + 第二步 | 同上 |
 | RC-A · RC-2a / RC-2b | 项目负责人 | 目标账套定向导入、数据落地与重试、最小恢复 | 已分配 / 待开工 | RC-1 | 同上 |
 | RC-B · B0 | 同事 `xiaoyihaishiaini` | 报表现状 / 独立金额样例 / 官方模板来源盘点；导出 DTO / 错误契约 | **已交付**（随 PR #15 合并，见 [RC-B 交接](../handoffs/RC-B-REPORTS.md)） | 无 | [RC-B-REPORTS](RC-B-REPORTS.md) |
@@ -54,7 +54,7 @@
 
 - **共享受控**：`accounting.mjs` / `coa.mjs` / `db.mjs` / `server.mjs` / `agent-tools.mjs` / MCP 注册 / `scripts/test-all.mjs` / `package.json` / `public/*` / 共享状态索引；同一时刻唯一编辑责任人。
 - **B 专属**：`report-export`（RC-4）、**`tax-report-format.mjs`**（RC-5，`tax*` 规则的模块名专属例外）。
-- **A 负责**：`tax*` 税务采集 / 登录 / 会话（`tax-gateway.mjs`、`tax-browser*.mjs`、`tax-import.mjs`）与 `import*` 定向导入。
+- **A 负责**：`tax*` 税务采集 / 登录 / 会话（`tax-gateway.mjs`、`tax-browser*.mjs`、`tax-import.mjs`）与 `import*` 定向导入；共享接线 `server.mjs` / `public/*` / `scripts/test-all.mjs` 本轮由 A 的 RC-A0 整合。
 - 完整规则见 [团队协作协议 §6](../TEAM-COLLABORATION.md)；共享接线走独立集成 PR 或申请短期文件所有权。
 
 ## 7. 合并协调

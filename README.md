@@ -39,6 +39,7 @@ node smoke-test.mjs
 - 总流程与阶段重置：[`docs/PROJECT-CHARTER.md`](docs/PROJECT-CHARTER.md) ｜ [阶段交接](docs/handoffs/STATE.md) ｜ [新会话入口](docs/handoffs/NEXT-SESSION.md)
 - 本地执行 / Codex 管理范式：[`team-skills/local-agent-first/SKILL.md`](team-skills/local-agent-first/SKILL.md)
 - 本轮功能与验收：[`docs/PHASE1-ACCEPTANCE.md`](docs/PHASE1-ACCEPTANCE.md) ｜ [电子税务局接口边界](docs/TAX-INTEGRATION.md)
+- RC-A0 tax-browser 草稿复审（第一步本机独立验收通过：15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR [#19](https://github.com/huxiaoyang-code/youshu-fork/pull/19)，未合并、待跨成员复核）：[审查报告](docs/REVIEW-TAX-BROWSER.md) ｜ [数据可得性](docs/DATA-AVAILABILITY.md) ｜ [快照](docs/handoffs/RC0-SNAPSHOT.md) ｜ [税局浏览器导入接口概述](docs/TAX-BROWSER.md)
 
 ## 目录一览
 

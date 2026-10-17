@@ -27,6 +27,7 @@
 | 改记账/报表逻辑 | [§3.1 领域层](#31-领域层server) → `server/accounting.mjs` |
 | 下载内部五类报表 / 看导出口径 | [REPORT-EXPORT](REPORT-EXPORT.md) · `06-workbench/server/report-export.mjs` · [RC-B 交接](handoffs/RC-B-REPORTS.md) |
 | 看税局模板来源与未完成项 | [TAX-REPORT-FORMAT](TAX-REPORT-FORMAT.md) · `06-workbench/server/tax-report-format.mjs`（B2 实际上传成功路径未完成） |
+| 看 tax-browser 草稿复审 / 数据可得性 / 快照 | [RC-A0 第一步验收报告](REVIEW-TAX-BROWSER.md) · [数据可得性](DATA-AVAILABILITY.md) · [RC0-SNAPSHOT](handoffs/RC0-SNAPSHOT.md) · [税局浏览器导入接口概述](TAX-BROWSER.md) |
 | 加接口 / 加 Agent 工具 | [§3.2 接口层](#32-接口层server) → `server/server.mjs` |
 | 接发票 / 申报 | [ROADMAP](ROADMAP.md) → `agent-tools.mjs` 注册表 |
 | 找原始证据 | [§5 分析与证据](#5-分析与证据-0004) |
@@ -242,7 +243,7 @@ Codex         ──MCP stdio─▶  finance-mcp  ──HTTP /agent/tools──�
 | P1 会计闭环（结转损益/折旧摊销/现金流量表） | ✅ 完成 |
 | 导入旧账（JSON/CSV，GBK 支持） | ✅ 完成 |
 | 导入严格校验（IMPORT-STRICT） | ✅ 完成（PR #10，merge `67f5e45`） |
-| 报表闭环（当前优先级，RC-0 ~ RC-6） | 🚧 进行中；顺序与门槛见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)。**B1 内部五类 CSV 导出已由 PR #15 交付（RC-4 前置）；B2 税局申报可用文件、RC-3 财务流水线完整性、RC-1/RC-2 登录与定向导入、RC-6 端到端均未完成**；首包 RC-0（tax-browser 草稿审查 + 登录与数据链路可行性） |
+| 报表闭环（当前优先级，RC-0 ~ RC-6） | 🚧 进行中；顺序与门槛见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)。**B1 内部五类 CSV 导出已由 PR #15 交付（RC-4 前置）；B2 税局申报可用文件、RC-3 财务流水线完整性、RC-1/RC-2 登录与定向导入、RC-6 端到端均未完成**；首包 RC-0（tax-browser 草稿审查 + 登录与数据链路可行性）**第一步本机独立验收通过（15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`）；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR [#19](https://github.com/huxiaoyang-code/youshu-fork/pull/19)，未合并、待跨成员 Codex 复核**：[审查报告](REVIEW-TAX-BROWSER.md) · [数据可得性](DATA-AVAILABILITY.md) · [快照](handoffs/RC0-SNAPSHOT.md) |
 | 多人跨电脑协作（成员 / 文件所有权 / 任务看板） | ✅ 已建立（文档与模板）：[团队协作协议](TEAM-COLLABORATION.md) · [成员入场包](handoffs/MEMBER-ONBOARDING.md) · [任务看板](tasks/README.md) · [交接](handoffs/TEAM-HANDOFF.md)；分工：负责人 RC-0/1/2 与数据处理（[Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)，OPEN），同事 RC-4/5 与报表口径（[Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)，OPEN）。本轮共 18 文件（10 修改 + 8 新增），**已完成管理者终审返工**；**是否已提交 / 已合并以 Git、PR 与远端实际状态为准**，本索引不预报合并 |
 | 辅助核算 / 银行对账 / 导出 | 🚧 部分：内部 3 表 + 余额表 / 明细账 CSV 导出已由 PR #15 交付（RC-4 前置）；辅助核算 / 银行对账仍未实现，Excel/PDF 未实现 |
 | 发票 / 申报 | ⬜ 待办（ROADMAP P2，返回 `not_implemented`）；税局申报格式导出属闭环 RC-5 |
