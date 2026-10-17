@@ -29,6 +29,8 @@ const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
 // 合成账套：证明子进程用的是本临时库，且服务在畸形请求后仍能正常操作真实存储。
 A.createAccountSet({ name: "合成边界测试公司", start_period: "2026-01" });
+// 恶意 Origin 探针账套：证明旧 REST 数据出口无法被跨源读取（管理者实际复现的绕过点）。
+A.createAccountSet({ name: "SYNTHETIC_ORIGIN_PROBE", start_period: "2026-01" });
 
 let child, exited, port;
 
@@ -63,16 +65,25 @@ after(async () => {
   }
 });
 
-/** 原生 HTTP 请求：可传任意 Host 头（fetch 会拒绝设置 Host）。 */
-function raw({ host, method = "GET", path = "/api/meta" } = {}) {
+/** 原生 HTTP 请求：可传任意 Host/Origin 头与 JSON 体（fetch 会拒绝设置 Host）。 */
+function raw({ host, method = "GET", path = "/api/meta", origin, contentType = "application/json", body } = {}) {
+  const payload = body === undefined ? null : (typeof body === "string" ? body : JSON.stringify(body));
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: "127.0.0.1", port, method, path, headers: { host }, agent: false }, (res) => {
+    const req = httpRequest({
+      host: "127.0.0.1", port, method, path, agent: false,
+      headers: {
+        host,
+        ...(origin !== undefined ? { origin } : {}),
+        ...(payload !== null ? { "content-type": contentType, "content-length": Buffer.byteLength(payload) } : {}),
+      },
+    }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") }));
     });
     req.setTimeout(10000, () => req.destroy(new Error("request timeout")));
     req.on("error", reject);
+    if (payload !== null) req.write(payload);
     req.end();
   });
 }
@@ -130,4 +141,130 @@ test("回环 Host 的税局只读接口正常（服务边界未误伤正常路�
   assert.equal(res.headers["access-control-allow-origin"], undefined);
   const body = JSON.parse(res.body);
   assert.equal(typeof body.loginToken, "string");
+});
+
+// ------------------------------------------------ 旧 REST / Agent 入口的同源保护（RC-A0 补口）
+// 管理者实际复现：临时库先建 SYNTHETIC_ORIGIN_PROBE，再带 Origin:https://evil.example
+// GET /api/account-sets 返回 200 + CORS:* + 合成企业名——旧 REST 数据出口绕过同源校验。
+// 以下专项测试证明：恶意 Origin 既拿不到合成数据，也不能写库，且无任何 CORS 放行。
+
+/** 断言响应为统一的固定 403 拒绝：无 CORS、无回显。*/
+function assertForbidden(res, forbidden = []) {
+  assert.equal(res.status, 403);
+  assert.match(res.headers["content-type"] ?? "", /^application\/json/);
+  assert.equal(res.headers["access-control-allow-origin"], undefined, "拒绝时不得发送 CORS 放行头");
+  assert.equal(res.headers["cache-control"], "no-store");
+  assert.deepEqual(JSON.parse(res.body), { error: "forbidden", message: "请求来源不被允许" });
+  for (const needle of forbidden) assert.equal(res.body.includes(needle), false, `不得回显 ${needle}`);
+}
+
+const EVIL_ORIGIN = "https://evil.example";
+
+let probeSetId;
+before(() => {
+  const probe = A.listAccountSets().find((s) => s.name === "SYNTHETIC_ORIGIN_PROBE");
+  assert.ok(probe, "前置：临时库已建 SYNTHETIC_ORIGIN_PROBE");
+  probeSetId = probe.id;
+});
+
+const countAccountSets = () => A.listAccountSets().length;
+
+for (const method of ["GET", "POST"]) {
+  test(`恶意 Origin ${method} /api/account-sets（旧 REST 数据出口）：403、无 CORS、无合成企业名` , async () => {
+    const before = countAccountSets();
+    const res = await raw({
+      host: `127.0.0.1:${port}`, method, path: "/api/account-sets", origin: EVIL_ORIGIN,
+      body: method === "POST" ? { name: "跨站写入公司", start_period: "2026-01" } : undefined,
+    });
+    assertForbidden(res, ["SYNTHETIC_ORIGIN_PROBE", "evil.example"]);
+    assert.equal(countAccountSets(), before, "恶意 Origin 不得修改数据库");
+    assert.equal(A.listAccountSets().some((s) => s.name === "跨站写入公司"), false);
+  });
+}
+
+for (const [label, make] of [
+  ["同源 Origin", () => ({ host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` })],
+  ["无 Origin（本机 CLI/MCP）", () => ({ host: `127.0.0.1:${port}`, origin: undefined })],
+  ["localhost 别名同源", () => ({ host: `localhost:${port}`, origin: `http://localhost:${port}` })],
+]) {
+  test(`本机 ${label} GET /api/account-sets 保持 200 且无 CORS 头`, async () => {
+    const { host, origin } = make();
+    const res = await raw({ host, path: "/api/account-sets", origin });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers["access-control-allow-origin"], undefined, "同源/CLI 也不需要 CORS；绝不发通配头");
+    const body = JSON.parse(res.body);
+    assert.ok(Array.isArray(body));
+    assert.ok(body.some((s) => s.name === "SYNTHETIC_ORIGIN_PROBE"), "本机同源可正常读取");
+  });
+}
+
+test("恶意 Origin 写旧 REST（POST 建账 / PUT 期初 / POST 凭证）：403 且 DB 未变", async () => {
+  const before = countAccountSets();
+  const create = await raw({ host: `127.0.0.1:${port}`, method: "POST", path: "/api/account-sets", origin: EVIL_ORIGIN,
+    body: { name: "跨站注入公司", start_period: "2026-01" } });
+  assertForbidden(create, ["跨站注入公司", "evil.example"]);
+  const opening = await raw({ host: `127.0.0.1:${port}`, method: "PUT", path: `/api/account-sets/${probeSetId}/opening-balances`, origin: EVIL_ORIGIN,
+    body: { items: [{ code: "1002", debit: 1 }] } });
+  assertForbidden(opening);
+  const voucher = await raw({ host: `127.0.0.1:${port}`, method: "POST", path: `/api/account-sets/${probeSetId}/vouchers`, origin: EVIL_ORIGIN,
+    body: { period: "2026-01", status: "posted", entries: [{ code: "1001", debit: 1 }, { code: "1002", credit: 1 }] } });
+  assertForbidden(voucher);
+  assert.equal(countAccountSets(), before, "恶意 Origin 不得创建账套");
+  assert.equal(A.getOpeningBalances(probeSetId).length, 0, "恶意 Origin 不得写入期初");
+  assert.equal(A.listVouchers(probeSetId).length, 0, "恶意 Origin 不得写入凭证");
+});
+
+test("JSON text/plain 简单请求（可绕过预检）带恶意 Origin 也不能改数据", async () => {
+  const before = countAccountSets();
+  const res = await raw({ host: `127.0.0.1:${port}`, method: "POST", path: "/api/account-sets", origin: EVIL_ORIGIN,
+    contentType: "text/plain", body: JSON.stringify({ name: "简单请求公司", start_period: "2026-01" }) });
+  assertForbidden(res, ["简单请求公司"]);
+  assert.equal(countAccountSets(), before);
+});
+
+for (const tool of ["account_context", "finance_context_resolve", "finance_query"]) {
+  test(`恶意 Origin 真实 Agent 入口 /agent/tools/${tool}：403、无 CORS、无合成企业名`, async () => {
+    const res = await raw({ host: `127.0.0.1:${port}`, method: "POST", path: `/agent/tools/${tool}`, origin: EVIL_ORIGIN,
+      body: tool === "finance_query" ? { nodeId: "report.income_statement", accountSetId: probeSetId, period: "2026-01" } : {} });
+    assertForbidden(res, ["SYNTHETIC_ORIGIN_PROBE", "evil.example"]);
+  });
+}
+
+test("跨站 OPTIONS 预检（旧 REST / agent）：固定 403 且无任何 CORS 放行头", async () => {
+  for (const path of ["/api/account-sets", "/agent/tools/account_context", "/api/meta"]) {
+    const res = await raw({ host: `127.0.0.1:${port}`, method: "OPTIONS", path, origin: EVIL_ORIGIN });
+    assertForbidden(res, ["evil.example"]);
+  }
+});
+
+test("本机同源 OPTIONS 预检放行（204），且不发送任何 CORS 头", async () => {
+  const res = await raw({ host: `127.0.0.1:${port}`, method: "OPTIONS", path: "/api/account-sets", origin: `http://127.0.0.1:${port}` });
+  assert.equal(res.status, 204);
+  assert.equal(res.headers["access-control-allow-origin"], undefined);
+  assert.equal(res.headers["access-control-allow-methods"], undefined, "同源 UI 不需要 CORS 授权");
+});
+
+test("非本机 Host 访问旧 REST：403 固定拒绝、无 CORS、不泄漏数据", async () => {
+  for (const host of ["evil.example", "evil.example:8787", "attacker.test"]) {
+    const list = await raw({ host, path: "/api/account-sets", origin: EVIL_ORIGIN });
+    assertForbidden(list, ["SYNTHETIC_ORIGIN_PROBE", host]);
+    const write = await raw({ host, method: "POST", path: "/api/account-sets", origin: EVIL_ORIGIN,
+      body: { name: "敌对Host公司", start_period: "2026-01" } });
+    assertForbidden(write, ["敌对Host公司"]);
+  }
+  assert.equal(A.listAccountSets().some((s) => s.name === "敌对Host公司"), false);
+});
+
+test("无 Origin 的本机 Agent 工具照常可用（CLI/MCP 未被误伤）", async () => {
+  const res = await raw({ host: `127.0.0.1:${port}`, method: "POST", path: "/agent/tools/account_context", body: {} });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers["access-control-allow-origin"], undefined);
+  const body = JSON.parse(res.body);
+  assert.ok(body.account_sets.some((s) => s.name === "SYNTHETIC_ORIGIN_PROBE"));
+});
+
+test("静态文件（不含业务数据）回环访问不受影响", async () => {
+  const res = await raw({ host: `127.0.0.1:${port}`, path: "/" });
+  assert.equal(res.status, 200);
+  assert.match(res.headers["content-type"] ?? "", /^text\/html/);
 });

@@ -11,7 +11,7 @@ import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, decodeFiles, ToolError } from "./agent-tools.mjs";
 import { TaxBrowserService } from "./tax-browser.mjs";
 import { importFromTaxBrowser } from "./tax-import.mjs";
-import { createTaxBrowserRoutes } from "./tax-browser-http.mjs";
+import { createTaxBrowserRoutes, isLoopbackAddress, checkLocalOrigin } from "./tax-browser-http.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, "..", "public");
@@ -29,10 +29,11 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
   ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
 
+// 本地 JSON 响应：绝不发送任何 CORS 放行头（同源 UI 不需要 CORS，跨源一律不可读）。
 const json = (res, code, data) => {
   const body = JSON.stringify(data, null, 2);
   res.writeHead(code, { "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body), "access-control-allow-origin": "*" });
+    "content-length": Buffer.byteLength(body) });
   res.end(body);
 };
 // 请求地址（请求目标 / Host）无法安全解析时的本地错误：固定 400 JSON，
@@ -44,6 +45,17 @@ const jsonBadRequest = (res) => {
     "x-content-type-options": "nosniff" });
   res.end(body);
 };
+// 本机边界拒绝：远端连接 / 非回环 Host / 恶意 Origin 统一固定 403 JSON，
+// 不回显原始 Host/Origin、不发任何 CORS 放行头。
+const jsonForbidden = (res) => {
+  const body = JSON.stringify({ error: "forbidden", message: "请求来源不被允许" }, null, 2);
+  res.writeHead(403, { "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body), "cache-control": "no-store",
+    "x-content-type-options": "nosniff" });
+  res.end(body);
+};
+const localBoundaryOk = (req) =>
+  isLoopbackAddress(req.socket?.remoteAddress) && checkLocalOrigin(req).ok;
 const readBody = (req) => new Promise((resolve, reject) => {
   let b = "";
   req.on("data", (c) => { b += c; if (b.length > 5e6) reject(new Error("body_too_large")); });
@@ -72,6 +84,11 @@ async function api(req, res, url, m) {
   if (p === "/api/tax-browser" || p.startsWith("/api/tax-browser/")) {
     return await taxBrowserRoutes(req, res, url, m);
   }
+
+  // -------- 本机边界（其它所有 /api/* 与 /agent/*）：在执行任何读写/发放信息前，
+  // 校验真实 socket 为回环、Host 为回环、Origin（若存在）精确同源。绝不信任 X-Forwarded-*。
+  // 无 Origin 的本机 CLI/MCP 照常放行；恶意 Origin / 远端 / 非本机 Host 统一固定 403。
+  if (!localBoundaryOk(req)) return jsonForbidden(res);
 
   if (m === "GET" && p === "/api/meta") return json(res, 200, { standards: STANDARDS, coa: COA });
 
@@ -274,8 +291,10 @@ const server = createServer(async (req, res) => {
       res.writeHead(204, { allow: "GET,POST,OPTIONS" });
       return res.end();
     }
-    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,authorization" });
+    // 预检同样必须先检查来源：跨站预检统一拒绝（403，无任何 CORS 放行头）；
+    // 本机同源 / 无 Origin 的预检才放行（204，同样不发 CORS 头，同源 UI 不需预检）。
+    if (!localBoundaryOk(req)) return jsonForbidden(res);
+    res.writeHead(204, { allow: "GET,POST,PUT,DELETE,OPTIONS" });
     return res.end();
   }
   try {
