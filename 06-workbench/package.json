@@ -9,6 +9,7 @@
     "start": "node server/server.mjs",
     "test": "node scripts/test-all.mjs",
     "test:smoke": "node test/smoke.test.mjs",
+    "test:taxbrowser": "node test/tax-browser.test.mjs",
     "seed": "node scripts/seed-demo.mjs"
   }
 }

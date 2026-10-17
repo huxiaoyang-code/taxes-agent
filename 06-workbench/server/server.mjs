@@ -9,10 +9,21 @@ import { buildReportExport } from "./report-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, decodeFiles, ToolError } from "./agent-tools.mjs";
+import { TaxBrowserService } from "./tax-browser.mjs";
+import { importFromTaxBrowser } from "./tax-import.mjs";
+import { createTaxBrowserRoutes } from "./tax-browser-http.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || "127.0.0.1"; // 默认只绑回环，税局浏览器导入等敏感接口仅本机访问
+
+// 税局浏览器导入服务：真实浏览器实现 + 真实导入落库（生产无任何 fake 开关）。
+const taxBrowserService = new TaxBrowserService({
+  importer: importFromTaxBrowser,
+  log: (msg) => console.log(msg),
+});
+const taxBrowserRoutes = createTaxBrowserRoutes(taxBrowserService);
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
@@ -22,6 +33,15 @@ const json = (res, code, data) => {
   const body = JSON.stringify(data, null, 2);
   res.writeHead(code, { "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body), "access-control-allow-origin": "*" });
+  res.end(body);
+};
+// 请求地址（请求目标 / Host）无法安全解析时的本地错误：固定 400 JSON，
+// 绝不回显原始 url/host/error，也不发送任何 CORS 放行头。
+const jsonBadRequest = (res) => {
+  const body = JSON.stringify({ error: "bad_request", message: "请求地址不合法" }, null, 2);
+  res.writeHead(400, { "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body), "cache-control": "no-store",
+    "x-content-type-options": "nosniff" });
   res.end(body);
 };
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -47,6 +67,11 @@ const REPORT_INPUT_ERRORS = new Set([
 async function api(req, res, url, m) {
   const p = url.pathname;
   let match;
+
+  // -------- 税局浏览器导入（/api/tax-browser/*）：回环 + 同源令牌 + 无通配 CORS
+  if (p === "/api/tax-browser" || p.startsWith("/api/tax-browser/")) {
+    return await taxBrowserRoutes(req, res, url, m);
+  }
 
   if (m === "GET" && p === "/api/meta") return json(res, 200, { standards: STANDARDS, coa: COA });
 
@@ -234,9 +259,21 @@ async function serveStatic(res, pathname) {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  let url;
+  try {
+    // 畸形 Host / 请求目标会让 URL 解析抛错；必须在路由前拦截为固定 400，
+    // 否则未捕获异常会冒泡出请求处理器并终止整个服务进程。
+    url = new URL(req.url, `http://${req.headers.host}`);
+  } catch {
+    return jsonBadRequest(res);
+  }
   const method = req.method.toUpperCase();
   if (method === "OPTIONS") {
+    // tax-browser 接口不发任何 CORS 放行头：跨源预检必然失败，同源 UI 不需要预检。
+    if (url.pathname === "/api/tax-browser" || url.pathname.startsWith("/api/tax-browser/")) {
+      res.writeHead(204, { allow: "GET,POST,OPTIONS" });
+      return res.end();
+    }
     res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
       "access-control-allow-headers": "content-type,authorization" });
     return res.end();
@@ -249,9 +286,17 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+// 退出时关闭浏览器采集会话、清理临时 profile（不留后台浏览器窗口/临时目录）。
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, async () => {
+    try { await taxBrowserService.destroy(); } catch { /* ignore */ }
+    process.exit(0);
+  });
+}
+
+server.listen(PORT, HOST, () => {
   // 实际监听端口：PORT=0 时由系统分配，日志必须报告实际端口，测试才能连到本进程。
   const actualPort = server.address().port;
-  console.log(`记账+报表工作台:  http://127.0.0.1:${actualPort}/`);
-  console.log(`Agent 工具入口:   http://127.0.0.1:${actualPort}/agent/tools/<name>`);
+  console.log(`记账+报表工作台:  http://${HOST === "127.0.0.1" ? "127.0.0.1" : HOST}:${actualPort}/`);
+  console.log(`Agent 工具入口:   http://${HOST === "127.0.0.1" ? "127.0.0.1" : HOST}:${actualPort}/agent/tools/<name>`);
 });
