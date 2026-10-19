@@ -1,6 +1,6 @@
 # 阶段状态
 
-> **2026-10-20 当前包：[TAX-SESSION-DISCOVERY](../tasks/TAX-SESSION-DISCOVERY.md)** · [交接](TAX-SESSION-DISCOVERY.md)。基线 `17a053bfb66b482064ed92aa343ab42c41d47825`，分支 `codex/huxiaoyang-code/tax-session-discovery`。专用 Edge open / probe / close 与 DTO 去重修复已完成，管理者 `npm test` 17 套全部 exit 0；独立代码复验 59 / 46 / 4 项通过、无代码阻塞。草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已创建，待完整候选最终复核 / 合并，不预报合并。
+> **2026-10-20 当前包：[TAX-SESSION-DISCOVERY](../tasks/TAX-SESSION-DISCOVERY.md)** · [交接](TAX-SESSION-DISCOVERY.md)。原基线 `17a053bfb66b482064ed92aa343ab42c41d47825`，实施分支 `codex/huxiaoyang-code/tax-session-discovery`。专用 Edge 通道与 DTO 去重修复已随 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 于北京时间 **2026-10-20 01:00:33** 合并，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`；完整 head `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 17 文件独立最终复核通过、无剩余阻塞，fetch 后树一致，不冒充第二账号批准。全量 17 套 exit 0、独立 59 / 46 / 4 项及额外复验通过；纯文档收尾分支 `codex/huxiaoyang-code/tax-session-handoff` 基于该 merge。
 >
 > 实机 MCP → HTTP → Agent → 专用 Edge 已验 open=`needs_login`、probe=`login_required` 且 `requestPerformed=false`、close=`closed` 且 profile 清理成功。**业务请求 0、业务成功 0、第二遍业务采集未运行，企业 / 期间未取得，真实接入仍为 0。** 专用 Edge / 临时后端已关闭，原官方页保留；用户反馈登录遇到问题、稍后说明，当前等具体问题，不要求点击探索。解决后优先后端专用窗口人工登录一次继续业务取数；安全索引和边界见交接，[扩展范围已登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)。下方旧入口保留追溯。
 
