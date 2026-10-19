@@ -1,5 +1,9 @@
 # 任务看板 · TASK BOARD
 
+> **2026-10-19 当前优先任务：[TAX-DATA-FIRST](TAX-DATA-FIRST.md)**，负责人 `huxiaoyang-code`，关联 Issue #20 / #13 / #14 / #17。状态：**方案已形成、待真实取数验证**；用户已提供本机登录页，Edge 菜单已观察，网络 CDP 连续超时，**新业务响应 0、真实采集未完成**。按新账号 / 新公司申报准备目标获取数据、准备材料、预填校验，冻结版本经用户确认后正式提交；缺账务先用现有本地账套，其余列补项。详见[完整方案](../TAX-DATA-ACQUISITION-PLAN.md)。
+>
+> 会计核心、持续导入、文件报表等本地扩建暂停，旧 16 包保留为后备；A1、PR #22 / #23 已合并，439 项只作历史验证。本次纯文档不重跑业务测试，PR #18 Draft / #19 OPEN、Issue #20 / #13 / #14 / #17 OPEN 保留。下文“当前任务”与暂停说明均为旧时点记录，不能覆盖本入口；有限只读盘点已有授权，无需再次请求同一恢复授权，自动点击仍禁用。
+
 > **2026-10-19 接管首包已合并、业务修复已交付**：[VOUCHER-AMOUNT-GUARDS](VOUCHER-AMOUNT-GUARDS.md)（[Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)，唯一负责人 `huxiaoyang-code`）；[本包交接](../handoffs/VOUCHER-AMOUNT-GUARDS.md)；[16 包接管计划](../DEVELOPMENT-TAKEOVER-PLAN.md)。[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 于北京时间 2026-10-19 22:12:36 合并，merge `0dee7655ab348e20293fed006fc6075c02a42ad4`。管理者独立全套 11 套 439 项、exit 0；按用户本轮明确授权，由未参与实现、无历史上下文的另一个独立 subagent 复核最终 head 后合并，证据详见交接，不宣称跨人类成员或 GitHub 第二账号批准。其余包未完成，本轮不启动新包；Issue #13 / #14 / #17 / #20 仍 OPEN，真实税局 checkpoint 继续暂停。本条为当前首包索引，下文旧分工和“仅交接文档”状态保留作历史记录。
 
 > 本文件是**任务分配与认领的权威规则**；具体任务单在 `docs/tasks/`，远端载体是 GitHub **Issue**（模板 `.github/ISSUE_TEMPLATE/requirement.md`）与 **PR**。
