@@ -3,6 +3,16 @@
 > 本文件是**任务分配与认领的权威规则**；具体任务单在 `docs/tasks/`，远端载体是 GitHub **Issue**（模板 `.github/ISSUE_TEMPLATE/requirement.md`）与 **PR**。
 > 任务状态以 **GitHub Issue / PR + 本看板 + 版本化交接** 为准，**不以聊天、本机磁盘或 `.agent-runs/` 为准**。
 
+## 0. 全量开发接管入口（2026-10-19 用户最新指示，优先于下文历史分工）
+
+用户已把**全部后续开发**交给同事在**另一台电脑**的 Codex 接手，继续向同一私有仓库 `https://github.com/huxiaoyang-code/youshu-fork` 提交；**沿用 `huxiaoyang-code` 账号**，不另找用户名、不 fork、不另建仓库。**不复制**原机器 token / config / session / 账套 DB；目标机由用户自行登录、按已有授权独立配置。
+
+- 接管任务单：[FULL-DEVELOPMENT-TAKEOVER](FULL-DEVELOPMENT-TAKEOVER.md)；自足交接：[../handoffs/FULL-DEVELOPMENT-TAKEOVER.md](../handoffs/FULL-DEVELOPMENT-TAKEOVER.md)；税局登录后 checkpoint：[../handoffs/TAX-POSTLOGIN-CHECKPOINT.md](../handoffs/TAX-POSTLOGIN-CHECKPOINT.md)。
+- 交付目标为**最新业务 PRD 全部范围**（[PR #18](https://github.com/huxiaoyang-code/youshu-fork/pull/18) head `346e1c307379e9a6bf96ef34244dee154558777f`，Draft，未合并进 main）；漳州先验收 ≠ 全国完成。
+- 远端载体：**总接管 [Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)**（OPEN，assignee `huxiaoyang-code`）；业务 Issue #13 / #14 / #17 仍 OPEN（旧 assignee 未变、未关闭）；子 PR 用 `Refs #20` 并按业务 `Refs #13` / `Refs #14` / `Refs #17`。
+- **旧 A / B 分工与本看板下文现有分工属历史快照**，不再限制接手者；Issue #13 / #14 / #17 保留、**不自动关闭**，也**不假定**旧机器已停止；开工前在 GitHub 核对在途 PR 并登记同名文件，**接管授权已由用户确认，不需要再次确认切换审批**，只在发现实际冲突或未停的同文件实施时协调，**不因同一 GitHub 账户推断技术互斥**。
+- `huxiaoyang-code` 既有自动合并授权继续有效，仍须独立内容审查 / 影响验证 / 共享变更串行整合；**不是** GitHub 第二账号 review；真实外部提交仍按 PRD 操作前批次确认。自动点击浏览器 / 点击脚本路线已被用户**永久否决**。
+
 ## 1. 权威认领规则
 
 1. **远端可见**：每个任务对应一个 GitHub Issue；开工前查看其 **assignee / 标签 / 状态 / 关联 PR**。

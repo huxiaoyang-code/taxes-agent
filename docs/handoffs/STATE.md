@@ -1,5 +1,14 @@
 # 阶段状态
 
+> **2026-10-19 全量开发接管入口（用户最新指示，优先于下文全部历史内容）**：用户已把**全部后续开发**交给同事在另一台电脑的 Codex 接手，继续向同一私有仓库 `https://github.com/huxiaoyang-code/youshu-fork` 提交；**沿用 `huxiaoyang-code` 账号**，不 fork、不换用户名、不新建仓库；**不复制**原机器 token / config / session / 账套 DB。本次**只交接文档，原机器不新开业务实现**。
+>
+> - 接管交接（自足）：[FULL-DEVELOPMENT-TAKEOVER](FULL-DEVELOPMENT-TAKEOVER.md)；任务单：[tasks/FULL-DEVELOPMENT-TAKEOVER](../tasks/FULL-DEVELOPMENT-TAKEOVER.md)；税局登录后 checkpoint：[TAX-POSTLOGIN-CHECKPOINT](TAX-POSTLOGIN-CHECKPOINT.md)。
+> - 交付目标为**最新业务 PRD 全部范围**（[PR #18](https://github.com/huxiaoyang-code/youshu-fork/pull/18) head `346e1c307379e9a6bf96ef34244dee154558777f`，Draft，未合并进 main；只读查看命令见接管交接）；漳州先验收 ≠ 全国完成。
+> - `huxiaoyang-code` 既有「自审验收后自动合并」授权继续有效，但须独立内容审查 + 影响验证 + 共享变更整合约束，**不是** GitHub 第二账号 review；真实外部提交仍按 PRD 在操作前批次确认。**自动点击浏览器 / 点击脚本路线已被用户永久否决。**
+> - 远端载体：**总接管 [Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)**（OPEN，assignee `huxiaoyang-code`）；业务 Issue #13 / #14 / #17 仍 OPEN（旧 assignee 未变、未关闭）；子 PR 用 `Refs #20` 并按业务 `Refs #13` / `Refs #14` / `Refs #17`。
+> - **下文的 A / B 分工与旧现场状态属历史快照**：不得当作最新事实；Issue #13 / #14 / #17 保留、**不自动关闭**，也**不假定**旧机器工作已停止；开工前须在 GitHub 核对在途 PR / 成果并登记同名文件；**接管授权已由用户确认，不需要再次确认切换审批**，只在发现实际冲突或未停的同文件实施时协调。
+> - 可核验现状（管理者已核对）：main `d0221df1d18e2bfcbd7db2cc9aa0875ab32a7fd4`，2026-10-19 在 `06-workbench` 跑 `npm test` 为 10 套 336 项、exit 0（合成临时库，无真实 DB；**不是 CI**）；本次仅文档，不重复跑业务套件。PR #18（Draft，head `346e1c3…`）与 PR #19（OPEN，head `a47a53c…`）均在途，不合并进本交接任务。
+
 > 2026-10-16 团队交接与 PR #15 当前补充：同事 PR #15 已合并（main `c2d561994377d9123a1cd5b8b67dfa8a16a5d2b0`，mergedAt `2026-10-15T15:40:41Z` 即北京时间 10-15 23:40），B0 / B1 五类内部 CSV、HTTP 下载与页面预览已交付；B2 税局可上传申报文件、RC-3 / RC-6 仍未完成。**以下历史阶段结论不因此改写；旧交接中「报表无法导出」的旧表述一律按历史记录看待。** 实际测试与 PR 状态见 [RC-B-REPORTS](RC-B-REPORTS.md)。
 
 更新时间：2026-10-16（第四轮：多人跨电脑协作交接 + 同事 PR #15 合并）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。

@@ -10,7 +10,19 @@
 
 功能状态只能依据代码、可重复测试与实际联调证据，区分已实现、仅有接口、待开发。不得把模板、模拟适配器、工具名称或测试假数据当成真实能力。
 
-### 当前优先级（2026-10-15 用户明确更新）
+### 全量开发接管入口（2026-10-19 用户最新指示，优先于下述旧分工）
+
+用户已把**全部后续开发**交给同事在**另一台电脑**的 Codex 接手，继续向同一个私有仓库 `https://github.com/huxiaoyang-code/youshu-fork` 提交；**沿用 `huxiaoyang-code` 账号**，不另找用户名、不 fork、不另建仓库。**不复制**原机器 token / config / session / 账套 DB；目标机由用户自行登录、按已有授权独立配置。
+
+- 接管交接：[docs/handoffs/FULL-DEVELOPMENT-TAKEOVER.md](handoffs/FULL-DEVELOPMENT-TAKEOVER.md)（自足）；任务单：[docs/tasks/FULL-DEVELOPMENT-TAKEOVER.md](tasks/FULL-DEVELOPMENT-TAKEOVER.md)；税局登录后 checkpoint：[docs/handoffs/TAX-POSTLOGIN-CHECKPOINT.md](handoffs/TAX-POSTLOGIN-CHECKPOINT.md)。
+- 远端载体：**总接管 [Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)**（OPEN，assignee `huxiaoyang-code`）；业务总任务 Issue [#13](https://github.com/huxiaoyang-code/youshu-fork/issues/13) / [#14](https://github.com/huxiaoyang-code/youshu-fork/issues/14) / [#17](https://github.com/huxiaoyang-code/youshu-fork/issues/17) 仍 OPEN（旧 assignee 未变、未关闭）；子 PR 用 `Refs #20` 并按业务 `Refs #13` / `Refs #14` / `Refs #17`。
+- 最终交付以**最新业务 PRD 全部范围**为准（远端固定证据见 [PR #18](https://github.com/huxiaoyang-code/youshu-fork/pull/18) head `346e1c307379e9a6bf96ef34244dee154558777f` 的 `docs/PRODUCT-PRD.md`）；漳州先验收 ≠ 全国完成。
+- `huxiaoyang-code` 既有「本机 Codex 自审验收后自动合并」授权**继续有效**，但仍须独立内容审查、影响验证与共享变更整合约束；**不是** GitHub 第二账号 review，**不伪造 review**；真实外部提交仍按 PRD 在操作前批次确认。
+- **旧 A / B 分工与旧现场状态为历史快照**：本文「团队与权限」以及 [TEAM-COLLABORATION](TEAM-COLLABORATION.md)、[REPORT-CLOSURE-PLAN](REPORT-CLOSURE-PLAN.md)、[tasks/RC-A-LOGIN-DATA](tasks/RC-A-LOGIN-DATA.md)、[tasks/RC-B-REPORTS](tasks/RC-B-REPORTS.md) 中的 A / B 归属**不再限制接手者**，只保留历史与验收追溯；Issue #13 / #14 / #17 保留、**不自动关闭**，也**不假定**旧机器工作已停止。
+- 接管授权已由用户确认（用户明确「用我的 GitHub 账户，他全面接手开发任务」），**不需要再次确认切换审批**；开工前只需在 GitHub 核对并登记在途 PR / 同名文件，只在发现实际冲突或未停的同文件实施时协调，不覆盖他人未提交成果；**不因同一 GitHub 账户推断技术互斥**。
+- 线上真实操作边界不变：**自动点击浏览器 / 点击脚本路线已被用户永久否决**。
+
+### 当前优先级（2026-10-15 用户明确更新；历史快照，见上方 2026-10-19 接管入口）
 
 当前最终交付是**报表闭环**：导入一个办税员账号 → 接收并输入验证码 → 登录 → 获取该办税员名下企业 / 账套 → 对所需账务数据完成财务操作 → 生成报表。用户明确要求**两类报表都需要**：内部资产负债表 / 利润表 / 现金流量表（附余额表 / 明细账），以及税局财务报表申报格式。前端展示次要，功能优先。工作包顺序与数据可得性门槛见 [报表闭环补全方案](REPORT-CLOSURE-PLAN.md)；该方案职责是重新制定补全计划，不改变本章程的角色、授权与验收规则。旧任务表（IMPORT-IDEMPOTENCY 第一优先）已被新方案替代。
 
