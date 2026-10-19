@@ -1,6 +1,6 @@
 # 任务看板 · TASK BOARD
 
-> **2026-10-20 当前包：[TAX-SESSION-DISCOVERY](TAX-SESSION-DISCOVERY.md)**（[交接](../handoffs/TAX-SESSION-DISCOVERY.md)），负责人 `huxiaoyang-code`；分支 `codex/huxiaoyang-code/tax-session-discovery`，基线 `17a053bfb66b482064ed92aa343ab42c41d47825`。连接前置与 DTO 去重修复已实现，17 套全量通过；独立代码复验无阻塞，**草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27)，待完整候选最终复核 / 合并**。实际 MCP → 后端 → 专用 Edge open / 未登录 probe / close 已通过，但业务请求 / 成功 0、第二遍业务采集未运行，真实专项未完成。用户登录遇到问题待说明，专用 Edge / 临时后端已关闭，原官方页保留；不要求点击探索。范围见[原登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272100523)与[扩展登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)，下方旧入口保留追溯。
+> **2026-10-20 当前包：[TAX-SESSION-DISCOVERY](TAX-SESSION-DISCOVERY.md)**（[交接](../handoffs/TAX-SESSION-DISCOVERY.md)），负责人 `huxiaoyang-code`；原实施分支 `codex/huxiaoyang-code/tax-session-discovery`、基线 `17a053bfb66b482064ed92aa343ab42c41d47825`。连接前置与 DTO 去重修复已随 **[PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 于北京时间 2026-10-20 01:00:33 合并**，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`；完整 head `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 17 文件独立最终复核通过、无剩余阻塞，17 套全量通过，不冒充第二账号批准。实际 MCP → 后端 → 专用 Edge open / 未登录 probe / close 已通过，但业务请求 / 成功 0、第二遍业务采集未运行，真实专项未完成。用户登录遇到问题待说明，专用 Edge / 临时后端已关闭，原官方页保留；不要求点击探索。范围见[原登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272100523)与[扩展登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)，下方旧入口保留追溯。
 
 > **2026-10-19 当前实施包：[TAX-READONLY-TOOLS](TAX-READONLY-TOOLS.md)**（[交接](../handoffs/TAX-READONLY-TOOLS.md)），负责人 `huxiaoyang-code`，原实施分支 `codex/huxiaoyang-code/tax-readonly-tools`，分叉基线 `158e266b3cb931b91d03a6e548a2d49dc8188481`。状态：**工具前置包已合并交付；真实身份读取失败，专项未完成**。[PR #25](https://github.com/huxiaoyang-code/youshu-fork/pull/25) 于北京时间 2026-10-19 23:52:57 合并，merge `6df9404bab79e001526d30c21cccbc5679a88a80`；15 套 530 项通过，独立复核候选 `64f66f94024104e3f1a57f0396360b49baabb708` 的18 文件无剩余阻塞，不冒充第二账号批准。文档收尾分支 `codex/huxiaoyang-code/tax-readonly-handoff` 基于该 merge；原[范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6270683815)保留。
 >
@@ -57,7 +57,7 @@
 
 | 任务 ID | 负责人 | 范围 | 状态 | 依赖 | 任务单 |
 |---|---|---|---|---|---|
-| TAX-SESSION-DISCOVERY | `huxiaoyang-code` | 本机专用 Edge 后端通道、真实会话探索、DTO 去重修复 | 审查中；17 套通过，草稿 PR #27 待完整候选最终复核 / 合并；真实业务未取得 | 用户登录问题、有效企业 / 期间与实际业务契约 | [TAX-SESSION-DISCOVERY](TAX-SESSION-DISCOVERY.md) |
+| TAX-SESSION-DISCOVERY | `huxiaoyang-code` | 本机专用 Edge 后端通道、真实会话探索、DTO 去重修复 | 连接前置已合并 PR #27；17 套通过，真实业务未取得 | 用户登录问题、有效企业 / 期间与实际业务契约 | [TAX-SESSION-DISCOVERY](TAX-SESSION-DISCOVERY.md) |
 | TAX-READONLY-TOOLS | `huxiaoyang-code` | 真实只读探索、agent / MCP 准备工具、合成验收 | 工具前置已合并 PR #25；530 项通过，真实专项未完成 | 当前身份 / 期间及真实契约 | [TAX-READONLY-TOOLS](TAX-READONLY-TOOLS.md) |
 | RC-A · RC-0 第一步 | 项目负责人 `huxiaoyang-code` | `TAX-BROWSER-REVIEW` 隔离快照与合成复验 | 已分配 / 待开工 | 无 | [RC-A-LOGIN-DATA](RC-A-LOGIN-DATA.md) |
 | RC-A · RC-1 | 项目负责人 | 登录会话、办税员身份 → 授权企业 → 账套关联 | 已分配 / 待开工 | RC-0 第一步 + 第二步 | 同上 |

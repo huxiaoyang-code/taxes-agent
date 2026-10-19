@@ -1,16 +1,17 @@
 # TAX-SESSION-DISCOVERY · 登录态探索与取数发现
 
-日期：2026-10-20。负责人：`huxiaoyang-code`；[任务单](../tasks/TAX-SESSION-DISCOVERY.md)。**连接前置与 DTO 去重修复已通过合成及实机通道验证，草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27)，待完整候选最终复核 / 合并；真实企业 / 期间 / 业务资料未取得，后端第二遍业务采集未运行。** 本文仅保存安全摘要，无标签页标识、调试端口、用户名、凭据、身份 / 金额原文。
+日期：2026-10-20。负责人：`huxiaoyang-code`；[任务单](../tasks/TAX-SESSION-DISCOVERY.md)。**连接前置通过实机通道验证，DTO 去重通过合成回归，完整候选已通过独立最终复核并随 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 合并交付；真实企业 / 期间 / 业务资料未取得，后端第二遍业务采集未运行。** 本文仅保存安全摘要，无标签页标识、调试端口、用户名、凭据、身份 / 金额原文。
 
 ## 恢复基线与当前目标
 
 - 分叉基线：`origin/main` `17a053bfb66b482064ed92aa343ab42c41d47825`；分支：`codex/huxiaoyang-code/tax-session-discovery`，独立 worktree。
 - [Issue #20 本包范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272100523)已完成；文件唯一负责人见任务单，评论不等于技术互斥。
-- [扩展范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)包含服务 / MCP 生命周期接线及 3 个当前入口文档。管理者再次 fetch 核对 main 仍为上述完整基线；PR #18 仍 Draft、head `346e1c307379e9a6bf96ef34244dee154558777f`，PR #19 仍 OPEN、head `a47a53c3e7b077edcf827ee34aa40450cc3694ff`，未发现新在途 PR。
+- [扩展范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)包含服务 / MCP 生命周期接线及 3 个当前入口文档。实施阶段核对 main 当时仍为上述完整基线；PR #18 仍 Draft、head `346e1c307379e9a6bf96ef34244dee154558777f`，PR #19 仍 OPEN、head `a47a53c3e7b077edcf827ee34aa40450cc3694ff`，当时未发现新在途 PR。PR #27 合并后的主线以本节合并记录为准。
 - 上包工具与限制：[TAX-READONLY-TOOLS](TAX-READONLY-TOOLS.md)。PR #25 已交付元信息工具前置，不代表真实税局已连接；其 530 项为上包合成验收，不作本包验证。
 - 用户明确继续充分探索，要求现有本机有效登录态 → 企业 / 报税业务信息 → 本机后端 / MCP 可重复读取。不能交空工具替代；当前不声称完成。
-- 本包验证及独立冻结代码复验已通过，草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已创建；待完整候选最终复核 / 合并，不预报合并。
-- 已验证代码 / 测试版本：`6f05afd07493b28da6c758ad95f243637973c128`，12 个代码 / 测试文件单独提交；本次 5 个文档后续独立提交，不把代码提交误称为完整 PR 最终 head。
+- [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已于北京时间 **2026-10-20 01:00:33**（`2026-10-19T17:00:33Z`）合并；最终 head `a07c93a3657a9aaade5d44562a85f615327a82dd`，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`。独立最终 reviewer 对完整候选 17 文件正式通过、无剩余阻塞，管理者已 fetch 核实主线且树与验收候选一致。
+- 已验证代码 / 测试版本：`6f05afd07493b28da6c758ad95f243637973c128`，12 个代码 / 测试文件单独提交，随后 5 个文档纳入完整候选；不把代码提交误称为完整 PR 最终 head。
+- 纯文档收尾分支 `codex/huxiaoyang-code/tax-session-handoff`，base 为上述 merge；原分叉基线 / 实施分支保留追溯，不预报收尾 PR 自身合并。
 
 ## 本轮发现及证明边界
 
@@ -32,6 +33,8 @@
 ## 当前会话与后端连接状态
 
 用户已回复原官方页“登录遇到问题，稍后说明”，当前等待具体问题；不重复要求其点击探索。有效会话是继续取得企业信息所需条件，不是重新索取有限只读授权。登录问题解决后，优先通过已实现的后端专用窗口人工登录一次，重新核实有效企业作用域与实际响应，再继续有限只读发现；不复制原窗口凭据。
+
+管理者已对原用户官方页执行 `Network.disable` 并成功返回，原页保留；该旧扩展调用实际约 417 秒，传入的 10 秒命令 / 60 秒工具超时未限制住耗时，不代表专用后端性能，期间未读取登录请求 / 凭据或新增业务。
 
 当前原 Edge 页仅能经扩展 CDP 观察，未取得可供现有产品后端使用的调试端口。**Codex 的扩展 CDP 通道不等于产品后端已经能连接**，不能把浏览器内 fetch / XHR 称作后端第二遍采集。
 
@@ -85,6 +88,6 @@ integration_path 的 6 个生产文件已完成冻结：2 个新模块、Agent /
 | 浏览器通道模块 / 独立复验 | `06-workbench`：`node test/tax-browser-session.test.mjs` | **46/46**，真实空临时目录 ACL 断言保留并通过 |
 | 合成 MCP 链 / 独立复验 | `05-reconstruction/codex/mcp/finance-mcp`：`node tax-browser-session-test.mjs` | **4/4** |
 
-独立审查发现并修复 SPA 同文档导航迟到、初始化失败清理 owner 丢失、open 超时恢复与 shutdown 新 open 竞态；冻结代码复验无代码阻塞，额外真实 `CdpConnection` + fake WebSocket 的迟到 attach 和多阶段 cleanup 失败恢复均通过。独立 reviewer 未参与实现、不继承实施上下文；**仍待最终候选 head 与文档终审，不冒充 GitHub 第二账号批准**。草稿 PR #27 已创建，待完整候选最终复核 / 合并，不预报合并。
+独立审查发现并修复 SPA 同文档导航迟到、初始化失败清理 owner 丢失、open 超时恢复与 shutdown 新 open 竞态；冻结代码复验无代码阻塞，额外真实 `CdpConnection` + fake WebSocket 的迟到 attach 和多阶段 cleanup 失败恢复均通过。独立 reviewer 未参与实现、不继承实施上下文，对完整候选 `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 **17 文件正式通过、无剩余阻塞**；这是独立内容审查，不冒充 GitHub 第二账号批准。PR #27 已合并。
 
-本包可交付连接前置与必要去重修复，专项真实企业 / 期间 / 业务资料仍未取得，不能声称专项完成。真实数据和凭据留本机，模型仅接收 schema、合成样例、安全引用、缺项与覆盖摘要；正式申报、缴款、更正、作废和备案变更均不在执行范围内。
+本包已交付连接前置与必要去重修复，专项真实企业 / 期间 / 业务资料仍未取得，不能声称专项完成。真实数据和凭据留本机，模型仅接收 schema、合成样例、安全引用、缺项与覆盖摘要；正式申报、缴款、更正、作废和备案变更均不在执行范围内。

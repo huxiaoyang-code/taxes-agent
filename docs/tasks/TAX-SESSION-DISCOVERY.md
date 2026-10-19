@@ -1,7 +1,7 @@
 # TAX-SESSION-DISCOVERY · 本机登录态与真实业务取数
 
 - 日期：2026-10-20；负责人：`huxiaoyang-code`。
-- 状态：**连接前置与必要 DTO 去重修复已实现并通过验证，草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27)，待完整候选最终复核 / 合并；真实取数未完成**。用户已反馈“登录遇到问题，稍后说明”，当前等具体问题；不重复要求点击探索。
+- 状态：**连接前置与必要 DTO 去重修复已通过独立最终复核并随 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 合并交付；真实取数未完成**。用户已反馈“登录遇到问题，稍后说明”，当前等具体问题；不重复要求点击探索。
 - 本包基线：最新 `origin/main` `17a053bfb66b482064ed92aa343ab42c41d47825`；独立分支 `codex/huxiaoyang-code/tax-session-discovery`，复用已隔离 worktree，不直接修改 main。
 - 关联：`Refs #20`；[本包范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272100523)、[扩展文件范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)。按业务引用 #13 / #14 / #17，总任务保持开放。已有 PR #18 / #19 不盲合并。
 - 必读：[章程](../PROJECT-CHARTER.md)、[STATE](../handoffs/STATE.md)、[业务方案](../TAX-DATA-ACQUISITION-PLAN.md)、[上一包交接](../handoffs/TAX-READONLY-TOOLS.md)、[本包发现交接](../handoffs/TAX-SESSION-DISCOVERY.md)。
@@ -50,4 +50,4 @@ Codex subagent 并行实施，覆盖本包旧 pi / Claude Code 范式；不改�
 
 已实现 3 个工具：`tax_browser_open({region:'350000'})`、`tax_browser_probe({connectionId})`、`tax_browser_close({connectionId})`。本机受限临时 profile 启动专用 Edge，用户人工登录；固定已观察身份路径，安全结构 / 状态输出，不导出 Cookie、不自动点击、不创建 gateway 会话 / 真实适配器、不持久化业务证据。登录问题解决后优先经此后端专用窗口人工登录一次，继续真实 schema / 企业 / 业务采集；不会复制原窗口凭据。
 
-管理者 `npm test` **17 套全部通过，exit 0**；独立复验 DTO **59/59**、浏览器模块 **46/46**、MCP 合成 **4/4**，额外迟到 attach / 多阶段清理失败恢复验证通过，已无代码阻塞，最终候选 head / 文档终审仍待完成。管理者另经真实 MCP → HTTP → Agent → 专用 Edge 验证 open=`needs_login`、probe=`login_required` 且 `requestPerformed=false`、close=`closed` 且 profile 清理成功；这是实机通道验证，**业务请求 0、业务成功 0、第二遍业务采集未运行**。安全证据引用见交接，草稿 PR #27 已创建，待完整候选最终复核 / 合并，不预报合并。回退通过新 revert PR，不重写 main 历史。
+管理者 `npm test` **17 套全部通过，exit 0**；独立复验 DTO **59/59**、浏览器模块 **46/46**、MCP 合成 **4/4**，额外迟到 attach / 多阶段清理失败恢复验证通过。完整候选 `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 17 文件已获独立最终复核通过、无剩余阻塞；PR #27 于北京时间 **2026-10-20 01:00:33** 合并，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`，fetch 后树与验收候选一致，不冒充第二 GitHub 账号批准。管理者另经真实 MCP → HTTP → Agent → 专用 Edge 验证 open=`needs_login`、probe=`login_required` 且 `requestPerformed=false`、close=`closed` 且 profile 清理成功；这是实机通道验证，**业务请求 0、业务成功 0、第二遍业务采集未运行**。安全证据引用见交接。回退通过新 revert PR，不重写 main 历史。

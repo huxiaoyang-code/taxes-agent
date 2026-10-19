@@ -1,6 +1,6 @@
 # 新会话入口 · NEXT SESSION
 
-> **2026-10-20 优先恢复：[TAX-SESSION-DISCOVERY 任务](../tasks/TAX-SESSION-DISCOVERY.md)与[交接](TAX-SESSION-DISCOVERY.md)**。负责人 `huxiaoyang-code`；基线 `17a053bfb66b482064ed92aa343ab42c41d47825`，分支 `codex/huxiaoyang-code/tax-session-discovery`，恢复先核对最新 main / PR。3 个专用 Edge 工具与 DTO 去重修复已完成，17 套全量通过，独立代码复验无阻塞；草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已创建，待完整候选最终复核 / 合并，不能假定已合并。
+> **2026-10-20 优先恢复：[TAX-SESSION-DISCOVERY 任务](../tasks/TAX-SESSION-DISCOVERY.md)与[交接](TAX-SESSION-DISCOVERY.md)**。负责人 `huxiaoyang-code`；[PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已于北京时间 **2026-10-20 01:00:33** 合并，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`，完整候选 `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 17 文件独立最终复核通过、无剩余阻塞，fetch 后树一致。3 个专用 Edge 工具与 DTO 去重修复已交付，17 套全量及独立 59 / 46 / 4 项通过；纯文档收尾分支 `codex/huxiaoyang-code/tax-session-handoff` 基于该 merge，恢复仍先核对最新 main / PR，原分叉基线及实施分支见交接。
 >
 > 实机 MCP → 后端 → 专用 Edge 已验证 open / 未登录 probe / close；**业务请求与成功均为 0，企业 / 期间未取得，后端第二遍业务采集未运行，专项未完成**。专用 Edge、临时 profile 和临时后端已清理，原官方页保留；不要沿用旧 connection / tab 标识。用户反馈登录遇到问题、稍后说明，当前等具体问题，不要求点击探索；解决后优先后端专用官方窗口人工登录一次，继续真实 schema / 企业 / 业务采集，不复制原窗口凭据。
 >
