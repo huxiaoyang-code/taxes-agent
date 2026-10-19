@@ -4,7 +4,7 @@
 >
 > **本轮最新现场**：用户释放占用页后领取成功；用户不希望点击探索，改从已加载脚本 / performance 证实 `GET /mhzx/api/mh/mhsy/getUserInfo`，3 次限量浏览器请求均 HTTP 200，但 `Response.Data` 仅 code / msg、code `9997`，缺身份字段。错误码含义未知，不能推定过期或无权限；首次业务成功 0，后端第二遍未运行，当前企业 / 期间未取得。Network 启用曾耗时 143 秒、后续 CDP 多次约 42 秒且读事件超时重置，恢复后可读静态资源；现已 `Network.disable`，观察结束，官方页保持打开，无导航 / 点击。完整无敏感接口矩阵与忽略目录安全索引见本包交接；下方旧响应 0 / 等待手动查询均按历史阅读。
 >
-> 文件范围已在 [Issue #20 评论](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6270683815) 登记；管理者 `npm test` **15 套 530 项 exit 0**，含本包 91 项与真实 stdio MCP 合成链路。5 个工具仅提供进程内安全元信息 / 缺项，`metadataOnly=true`、`evidencePersisted=false`，没有真实适配器、持久业务证据或可提交包。最终独审 / PR 待完成；PR #18 Draft / #19 OPEN 保留，不盲合并，总任务 #20 / #13 / #14 / #17 不关闭。下述旧“本次纯文档”不描述当前实施包。
+> **工具前置包已交付**：[PR #25](https://github.com/huxiaoyang-code/youshu-fork/pull/25) 于北京时间 2026-10-19 23:52:57 合并，merge `6df9404bab79e001526d30c21cccbc5679a88a80`，主线已 fetch 核实。独立最终复核通过候选 `64f66f94024104e3f1a57f0396360b49baabb708`（18 文件、无剩余阻塞），管理者 `npm test` **15 套 530 项 exit 0**，不是 GitHub 第二账号批准。5 工具仅进程内元信息 / 缺项，`metadataOnly=true`、`evidencePersisted=false`，没有真实适配器、持久业务证据或可提交包；真实专项仍未完成。PR #18 Draft / #19 OPEN 保留，总任务 #20 / #13 / #14 / #17 不关闭。收尾分支 `codex/huxiaoyang-code/tax-readonly-handoff` 基于上述 merge；下述旧“本次纯文档”不描述本实施包。
 
 > **2026-10-19 当前优先入口：真实数据到申报准备**。[TAX-DATA-FIRST](../tasks/TAX-DATA-FIRST.md) · [详细方案](../TAX-DATA-ACQUISITION-PLAN.md) · [checkpoint](TAX-POSTLOGIN-CHECKPOINT.md)。负责人 `huxiaoyang-code`；暂停会计核心、持续导入、文件报表等本地扩建，先按新账号 / 新公司申报准备目标盘点真实可取数据，再确定首条闭环。首期获取数据、准备材料、预填校验，冻结版本由用户确认后正式提交；税局缺账务资料优先现有本地账套，缺项由用户补。
 >

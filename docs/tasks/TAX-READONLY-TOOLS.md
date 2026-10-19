@@ -1,7 +1,7 @@
 # TAX-READONLY-TOOLS · 真实只读取数与申报准备工具
 
 - 日期：2026-10-19；负责人 / GitHub：`huxiaoyang-code`。
-- 状态：工具实现已通过管理者 15 套 530 项合成验证，待最终独立复核 / PR；真实浏览器只读尝试 3 次均未取得身份，首次业务成功 0，后端第二遍未运行。用户不希望点击探索，已改读取已加载代码 / performance 证据；当前观察已结束、Network.disable 成功，官方页保持打开，无导航 / 点击。
+- 状态：**工具前置包已独立验收并随 [PR #25](https://github.com/huxiaoyang-code/youshu-fork/pull/25) 合并交付**，管理者 15 套 530 项合成验证通过；真实浏览器只读尝试 3 次均未取得身份，首次业务成功 0，后端第二遍未运行。用户不希望点击探索，已改读取已加载代码 / performance 证据；当前观察已结束、Network.disable 成功，官方页保持打开，无导航 / 点击。
 - 分叉基线：`158e266b3cb931b91d03a6e548a2d49dc8188481`（PR #24 merge）；分支：`codex/huxiaoyang-code/tax-readonly-tools`；独立 worktree，不修改 main。
 - 认领：[Issue #20 评论](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6270683815)；子 PR 使用 `Refs #20`，按业务引用 #13 / #14 / #17，不关闭总任务。
 - 入口：[项目章程](../PROJECT-CHARTER.md)、[阶段状态](../handoffs/STATE.md)、[专项方案](../TAX-DATA-ACQUISITION-PLAN.md)、[上游任务](TAX-DATA-FIRST.md)、[现场 checkpoint](../handoffs/TAX-POSTLOGIN-CHECKPOINT.md)、[协作协议](../TEAM-COLLABORATION.md)、[本包交接](../handoffs/TAX-READONLY-TOOLS.md)。
@@ -49,4 +49,4 @@
 4. 当前企业事项：认定、待办 / 已报、历史、事件与有效规则共同判断；资料不全只能返回缺项 / 待确认，不能宣布申报准备已完成。
 5. 独立复核、验证、PR、已验证 head 合并及交接。代码交付与真实接入分别记状态；工具前置合并不表示整个专项完成。
 
-管理者已实际运行 `npm test`，15 套 530 项 exit 0（原 439 项本次重跑，加本包 91 项）；合成 MCP 链路亦在其中，不能证明真实接入。最终独立结论、head、PR / merge 在[交接](../handoffs/TAX-READONLY-TOOLS.md)实际核对后补录。采集仅进程内元信息，`metadataOnly=true` / `evidencePersisted=false`，未实现真实业务持久证据、适用规则与可提交包。回退通过新的 revert PR，不重写 main 历史。
+管理者已实际运行 `npm test`，15 套 530 项 exit 0（原 439 项本次重跑，加本包 91 项）；独立最终复核通过候选 `64f66f94024104e3f1a57f0396360b49baabb708`，18 文件无剩余阻塞，不冒充第二账号批准。[PR #25](https://github.com/huxiaoyang-code/youshu-fork/pull/25) 于北京时间 2026-10-19 23:52:57 合并，merge `6df9404bab79e001526d30c21cccbc5679a88a80`，管理者已 fetch 核实。采集仅进程内元信息，`metadataOnly=true` / `evidencePersisted=false`；合成 MCP 链路不证明真实接入，未实现真实业务持久证据、适用规则与可提交包。回退通过新的 revert PR，不重写 main 历史。
