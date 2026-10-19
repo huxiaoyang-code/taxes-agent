@@ -205,27 +205,77 @@ export function periodStatus(setId, period) {
 }
 
 // ---------------------------------------------------------------- 凭证
-export function checkVoucher(setId, entries = []) {
+// 直接凭证仅接受普通十进制文本；导入的货币前缀/千分位语法仍由导入解析器负责。
+const VOUCHER_AMOUNT_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+function parseVoucherAmount(raw) {
+  if (raw === undefined || raw === null) return { ok: true, value: 0 };
+  let n;
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (text === "") return { ok: true, value: 0 };
+    if (!VOUCHER_AMOUNT_RE.test(text)) return { ok: false, error: "金额文本必须是普通十进制数字" };
+    // 先看原始符号，防止极小负数在 Number 转换时下溢成 -0。
+    if (text.startsWith("-") && /[1-9]/.test(text)) return { ok: false, error: "金额不能为负" };
+    // 文本精确比较上限，防止转换丢失尾数后把超界原值误判为边界值。
+    const [whole, fraction = ""] = text.replace(/^[+-]/, "").split(".");
+    const integer = whole.replace(/^0+/, "") || "0";
+    const [maxInteger, maxFraction] = String(AMOUNT_MAX).split(".");
+    if (integer.length > maxInteger.length ||
+        (integer.length === maxInteger.length && (integer > maxInteger ||
+          (integer === maxInteger && fraction.replace(/0+$/, "").padEnd(maxFraction.length, "0") > maxFraction)))) {
+      return { ok: false, error: `金额超界（上限 ${AMOUNT_MAX}）` };
+    }
+    n = Number(text);
+  } else if (typeof raw === "number") {
+    n = raw;
+  } else {
+    return { ok: false, error: "金额类型非法（只允许数字或文本）" };
+  }
+  if (!Number.isFinite(n)) return { ok: false, error: "金额必须是有限数字" };
+  if (n < 0) return { ok: false, error: "金额不能为负" };
+  if (n > AMOUNT_MAX) return { ok: false, error: `金额超界（上限 ${AMOUNT_MAX}）` };
+  return { ok: true, value: r2(n) };
+}
+
+// 校验与保存共享一次归一化结果；归一化分录不进入公开预检响应。
+function normalizeVoucher(setId, entries = []) {
   const errors = [];
   const list = Array.isArray(entries) ? entries : [];
+  if (!Array.isArray(entries)) errors.push("分录必须是数组");
   if (list.length < 2) errors.push("至少需要两条分录");
-  const dList = [], cList = [];
-  list.forEach((e, i) => {
-    const d = r2(e.debit), c = r2(e.credit);
+  const normalized = [], dList = [], cList = [];
+  // 索引迭代会检查空槽，避免稀疏数组被 forEach 静默跳过。
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (!e || typeof e !== "object" || Array.isArray(e)) {
+      errors.push(`第${i + 1}行分录必须是对象`);
+      continue;
+    }
+    const debit = parseVoucherAmount(e.debit), credit = parseVoucherAmount(e.credit);
+    if (!debit.ok) errors.push(`第${i + 1}行借方${debit.error}`);
+    if (!credit.ok) errors.push(`第${i + 1}行贷方${credit.error}`);
+    const d = debit.ok ? debit.value : 0, c = credit.ok ? credit.value : 0;
     dList.push(d); cList.push(c);
-    if (d < 0 || c < 0) errors.push(`第${i + 1}行金额不能为负`);
     if (d > 0 && c > 0) errors.push(`第${i + 1}行借贷不能同时有值`);
     if (d === 0 && c === 0) errors.push(`第${i + 1}行金额不能为 0`);
-    if (e.code) {
-      const acc = row(`SELECT * FROM accounts WHERE account_set_id=? AND code=?`, setId, String(e.code));
-      if (!acc) errors.push(`第${i + 1}行科目不存在：${e.code}`);
+    const rawCode = e.code;
+    const code = rawCode ? String(rawCode) : "";
+    if (code) {
+      const acc = row(`SELECT * FROM accounts WHERE account_set_id=? AND code=?`, setId, code);
+      if (!acc) errors.push(`第${i + 1}行科目不存在：${code}`);
     } else {
       errors.push(`第${i + 1}行缺少科目`);
     }
-  });
+    normalized.push({ code, summary: e.summary, debit: d, credit: c });
+  }
   const td = sumMoney(dList), tc = sumMoney(cList);
+  if (!Number.isFinite(td) || !Number.isFinite(tc)) errors.push("借贷合计必须是有限数字");
   if (Math.abs(td - tc) > EPS) errors.push(`借贷不平：借方 ${td} / 贷方 ${tc}`);
-  return { ok: errors.length === 0, errors, total_debit: td, total_credit: tc };
+  return { check: { ok: errors.length === 0, errors, total_debit: td, total_credit: tc }, entries: normalized };
+}
+
+export function checkVoucher(setId, entries = []) {
+  return normalizeVoucher(setId, entries).check;
 }
 
 function nextNumber(setId, period, word) {
@@ -242,8 +292,7 @@ export function createVoucher(setId, v = {}) {
   const period = requirePeriod(v.period);
   if (period < s.start_period) throw new Error("period_before_start");
   if (periodStatus(setId, period) === "closed") throw new Error("period_closed");
-  const entries = v.entries || [];
-  const chk = checkVoucher(setId, entries);
+  const { check: chk, entries } = normalizeVoucher(setId, v.entries);
   if (!chk.ok) {
     const err = new Error("voucher_invalid");
     err.details = chk;
@@ -264,7 +313,7 @@ export function createVoucher(setId, v = {}) {
     const ins = db.prepare(
       `INSERT INTO voucher_entries (voucher_id, line_no, code, summary, debit, credit) VALUES (?,?,?,?,?,?)`
     );
-    entries.forEach((e, i) => ins.run(vid, i + 1, String(e.code), e.summary || v.summary || "", r2(e.debit), r2(e.credit)));
+    entries.forEach((e, i) => ins.run(vid, i + 1, e.code, e.summary || v.summary || "", e.debit, e.credit));
     return getVoucher(setId, vid);
   });
 }

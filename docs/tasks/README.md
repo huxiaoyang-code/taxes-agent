@@ -1,5 +1,7 @@
 # 任务看板 · TASK BOARD
 
+> **2026-10-19 接管首包审查中**：[VOUCHER-AMOUNT-GUARDS](VOUCHER-AMOUNT-GUARDS.md)（[Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)，唯一负责人 `huxiaoyang-code`）；[本包交接](../handoffs/VOUCHER-AMOUNT-GUARDS.md)；[全范围接管计划](../DEVELOPMENT-TAKEOVER-PLAN.md)。本轮用户明确授权并发 Codex subagent 替代本地 agent；实现、管理者内容审查及独立验证完成（11 套 439 项、exit 0），[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 已创建（OPEN、未合并），跨成员复核条件待满足。本条为当前首包索引，下文旧分工和“仅交接文档”状态保留作历史记录。
+
 > 本文件是**任务分配与认领的权威规则**；具体任务单在 `docs/tasks/`，远端载体是 GitHub **Issue**（模板 `.github/ISSUE_TEMPLATE/requirement.md`）与 **PR**。
 > 任务状态以 **GitHub Issue / PR + 本看板 + 版本化交接** 为准，**不以聊天、本机磁盘或 `.agent-runs/` 为准**。
 
