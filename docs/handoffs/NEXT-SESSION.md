@@ -1,5 +1,13 @@
 # 新会话入口 · NEXT SESSION
 
+> **2026-10-19 全量开发接管（用户最新指示，优先）**：全部后续开发已交给同事在**另一台电脑**的 Codex 接手，继续向同一私有仓库提交，**沿用 `huxiaoyang-code` 账号**（不 fork / 不换用户名 / 不新建仓库），**不复制**原机器 token / config / session / 账套 DB。本次**仅交接文档**。
+>
+> - 先读 [全量接管交接](FULL-DEVELOPMENT-TAKEOVER.md)（自足：代码地图、状态矩阵、在途资源、缺陷与顺序、命令、首日清单、可复制启动提示）与 [全量接管任务单](../tasks/FULL-DEVELOPMENT-TAKEOVER.md)；税局登录后 checkpoint 见 [TAX-POSTLOGIN-CHECKPOINT](TAX-POSTLOGIN-CHECKPOINT.md)。
+> - 交付目标为**最新业务 PRD 全部范围**：[PR #18](https://github.com/huxiaoyang-code/youshu-fork/pull/18) head `346e1c307379e9a6bf96ef34244dee154558777f`（Draft，未合并进 main，需 `git fetch` 后只读查看，并先核对 head）。
+> - 远端载体：**总接管 [Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)**（OPEN，assignee `huxiaoyang-code`）；业务 Issue #13 / #14 / #17 仍 OPEN（旧 assignee 未变、未关闭）；子 PR 用 `Refs #20` 并按业务 `Refs #13` / `Refs #14` / `Refs #17`。
+> - **下文 A / B 分工与旧现场描述属历史快照**，不再限制接手者；Issue #13 / #14 / #17 保留、不自动关闭；开工前在 GitHub 核对在途 PR 并登记同名文件；**接管授权已由用户确认，不需要再次确认切换审批**，只在发现实际冲突或未停的同文件实施时协调。
+> - 自动点击浏览器 / 点击脚本路线已被用户**永久否决**；`huxiaoyang-code` 的自审自动合并授权继续有效，但须独立审查 + 影响验证 + 串行整合，**不伪造 GitHub review**。
+
 > **先识别自己是谁**：本仓库已支持**多成员跨电脑协作**。开工前先按 [任务看板](../tasks/README.md) 与 [团队协作协议](../TEAM-COLLABORATION.md) 确认自己的**人类成员身份与已分配任务**，**不要默认所有机器都接 RC-0**。当前分工：负责人 `huxiaoyang-code` → [RC-A-LOGIN-DATA](../tasks/RC-A-LOGIN-DATA.md)（总任务 [Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)）；同事 `xiaoyihaishiaini` → [RC-B-REPORTS](../tasks/RC-B-REPORTS.md)（总任务 [Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)）。
 >
 > 本文件是新 Codex 对话的最小入口。先读本文件，再读 [项目章程](../PROJECT-CHARTER.md)、[阶段状态](STATE.md) 和 [本地优先技能](../../team-skills/local-agent-first/SKILL.md) 即可继续；历史日志（`.agent-runs/`）默认不作为新会话上下文，只在排查具体故障时按需查阅相关日志。
