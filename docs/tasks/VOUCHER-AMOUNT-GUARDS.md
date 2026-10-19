@@ -1,6 +1,6 @@
 # VOUCHER-AMOUNT-GUARDS · 直接凭证金额校验
 
-- 状态：实现、管理者内容审查及独立验证完成；[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 已创建（OPEN、未合并），跨成员复核条件待满足。
+- 状态：**已合并，业务修复已交付**；[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 于北京时间 2026-10-19 22:12:36 合并，merge `0dee7655ab348e20293fed006fc6075c02a42ad4`。
 - 日期：2026-10-19；负责人及唯一文件责任人：`huxiaoyang-code`。
 - 基线：`654a403b78f9fe91166d5c8de62d8f15103065b7`；分支：`codex/huxiaoyang-code/voucher-amount-guards`，独立 worktree。
 - 总任务：[Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)，子 PR 使用 `Refs #20` / `Refs #17`，不关闭总任务。
@@ -10,7 +10,9 @@
 
 用户本轮明确要求“直接起并发用 subagent 去执行，不需要用本地 agent 执行了”。该授权后，本包改由 Codex subagent 分别负责实现、回归测试和文档，管理者独立审查、验证及执行 Git / PR，不再启动 pi / Claude Code。此前本地 pi 的失败或被停止运行不计交付证据。该授权优先于旧任务包的执行者限制，仅记录本轮，不修改全局技能或将其泛化为永久章程变更。三个 subagent 不构成另一名人类成员的本机 Codex 复核。
 
-当前验证：管理者已阅读实际代码、测试、三份新文档及索引 diff，并独立在 `06-workbench` 运行 `npm test`：**11 套 439 项全部通过，exit 0**。已验证提交与后续 PR 信息见交接；尚不标记本包已合并。
+用户随后明确授权：“只要不是完成代码的subagent复核就行，用另一个独立subagent，不要有上下文污染复查并且合并代码”。本包跨成员要求据此由新的独立 subagent 复核替代，仅适用于本包 / 本轮，不改变其他任务要求，也不代表另一名人类成员或 GitHub 第二账号批准。
+
+完成验证：管理者已阅读实际 diff，并独立在 `06-workbench` 运行 `npm test`：**11 套 439 项全部通过，exit 0**。未参与实现的 `clean_pr22_review` 以 `fork_turns=none` 启动，不继承聊天或接收前序审查结论，独立复核最终 head `147e71f7f783af086ad136808ebb6cc3f7d2d262`，新套件 **103/103、exit 0**，额外合成边界验证通过，无可信阻塞。管理者已核对该 head 与 merge 的完整树一致。证据详见交接；本次收尾仅改文档并检查链接 / 格式，不重复业务测试。
 
 ## 问题与契约
 
@@ -42,7 +44,7 @@
 2. 覆盖领域 `checkVoucher` / `createVoucher` / `postVoucher`、真实本机 HTTP REST 和 `POST /agent/tools/voucher_check`、`voucher_create`。不能用 JSON 序列化后已变成 `null` 的 `NaN` 冒充非有限值测试。
 3. 用临时合成数据库及实际分配的本机端口；用完整内容快照证明非法创建无副作用。注入非法既有凭证只发生在合成库，检查过账失败且内容不变。合法正例独立手算并核对落库值。
 4. 子进程关闭并确认退出后清理临时库；运行 `06-workbench` 下 `npm test`，保留旧断言，记录实际套件数、项数与退出码。
-5. 管理者读实际 diff、独立复验、检查当前 main 与待合并 head；会计核心按 [团队协议 §8](../TEAM-COLLABORATION.md#8-跨成员评审安排) 由至少另一名成员的本机 Codex 独立复核。当前此证据待满足，不伪造 GitHub 第二账号批准。
-6. 满足门槛后按已有授权自动合并，补录 PR / head / merge SHA 后才标记完成。回退使用新的 revert PR。
+5. 管理者读实际 diff、独立复验、检查当前 main 与待合并 head；原 [团队协议 §8](../TEAM-COLLABORATION.md#8-跨成员评审安排) 的本包跨成员要求已按上述用户明确授权调整，并由未参与实现、无历史上下文的独立 subagent 完成复核。不伪造 GitHub 第二账号批准。
+6. 已按授权合并并补录 PR / head / merge SHA；回退使用新的 revert PR。其他业务包继续按接管计划推进，本轮不启动新包。
 
 全程仅使用合成数据；真实税局 checkpoint 继续暂停，不恢复登录或采集。真实数据、凭据、会话不进模型、Git 或日志；外部真实提交仍须操作者操作前按批次确认。
