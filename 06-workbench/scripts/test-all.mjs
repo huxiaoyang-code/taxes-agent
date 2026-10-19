@@ -19,6 +19,8 @@ const steps = [
   { name: "tax", file: join(MCP, "tax-contract-test.mjs"), cwd: MCP },
   { name: "voucher-amount-guards", file: join(WORKBENCH, "test", "voucher-amount-guards.test.mjs"), cwd: WORKBENCH },
   { name: "tax-acquisition", file: join(WORKBENCH, "test", "tax-acquisition.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-browser-session", file: join(WORKBENCH, "test", "tax-browser-session.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-browser-session-mcp", file: join(MCP, "tax-browser-session-test.mjs"), cwd: MCP },
   { name: "tax-preparation", file: join(WORKBENCH, "test", "tax-preparation.test.mjs"), cwd: WORKBENCH },
   { name: "tax-acquisition-mcp", file: join(MCP, "tax-acquisition-test.mjs"), cwd: MCP },
   { name: "server-local-boundary", file: join(WORKBENCH, "test", "server-local-boundary.test.mjs"), cwd: WORKBENCH },

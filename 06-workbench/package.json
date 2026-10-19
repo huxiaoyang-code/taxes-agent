@@ -10,6 +10,7 @@
     "test": "node scripts/test-all.mjs",
     "test:smoke": "node test/smoke.test.mjs",
     "test:tax-acquisition": "node test/tax-acquisition.test.mjs && node test/tax-preparation.test.mjs && node ../05-reconstruction/codex/mcp/finance-mcp/tax-acquisition-test.mjs && node test/server-local-boundary.test.mjs",
+    "test:tax-browser": "node test/tax-browser-session.test.mjs && node ../05-reconstruction/codex/mcp/finance-mcp/tax-browser-session-test.mjs",
     "seed": "node scripts/seed-demo.mjs"
   }
 }

@@ -57,6 +57,9 @@ export async function callBackend(name, args, catalog) {
   }
 
   const url = `${API_BASE}/agent/tools/${encodeURIComponent(name)}`;
+  // ACL verification + dedicated Edge startup + CDP connect are bounded but
+  // can exceed the ordinary 15 s request budget. Repeating open is idempotent.
+  const requestTimeoutMs = name === "tax_browser_open" ? 60000 : TIMEOUT_MS;
   let res;
   try {
     res = await fetch(url, {
@@ -66,12 +69,12 @@ export async function callBackend(name, args, catalog) {
         ...(API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {}),
       },
       body: JSON.stringify(args ?? {}),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(requestTimeoutMs),
     });
   } catch (e) {
     const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
     const reason = timedOut
-      ? `请求超时（${TIMEOUT_MS}ms）`
+      ? `请求超时（${requestTimeoutMs}ms）`
       : String(e?.cause?.code || e?.message || e);
     throw new BackendError(
       "backend_unreachable",

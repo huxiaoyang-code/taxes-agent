@@ -10,6 +10,8 @@
 import * as A from "./accounting.mjs";
 import { TaxGateway, TaxError } from "./tax-gateway.mjs";
 import { TaxAcquisition } from "./tax-acquisition.mjs";
+import { FujianBrowserSessions } from "./tax-fujian-session.mjs";
+import { TaxBrowserError } from "./tax-browser-transport.mjs";
 
 export class ToolError extends Error {
   constructor(code, message, details = null) {
@@ -194,6 +196,8 @@ export const taxGateway = new TaxGateway({
   accountSetExists: (id) => { A.getAccountSet(id); return true; },
 });
 export const taxAcquisition = new TaxAcquisition({ gateway: taxGateway, accounting: A });
+// Opens nothing until the explicit tax_browser_open tool is invoked.
+export const taxBrowserSessions = new FujianBrowserSessions();
 
 /**
  * 把网关的 TaxError 归一成后端工具错误（保留 code 供 MCP 客户端判定）。
@@ -205,7 +209,7 @@ function taxHandler(fn) {
     try {
       return await fn(args);
     } catch (e) {
-      if (e instanceof TaxError) throw new ToolError(e.code, e.message, e.details);
+      if (e instanceof TaxError || e instanceof TaxBrowserError) throw new ToolError(e.code, e.message, e.details);
       throw e;
     }
   };
@@ -213,6 +217,9 @@ function taxHandler(fn) {
 
 // ------------------------------------------------------------------ 已实现工具
 const HANDLERS = dict({
+  tax_browser_open: taxHandler((args) => taxBrowserSessions.open(args ?? {})),
+  tax_browser_probe: taxHandler((args) => taxBrowserSessions.probe(args ?? {})),
+  tax_browser_close: taxHandler((args) => taxBrowserSessions.close(args ?? {})),
   finance_query_catalog: () => ({
     capabilities: Object.keys(QUERY),
     local_extensions: Object.keys(QUERY).filter((id) => QUERY[id].local),
