@@ -13,6 +13,8 @@
 
 更新时间：2026-10-16（第四轮：多人跨电脑协作交接 + 同事 PR #15 合并）。恢复时先核对 Git、PR 和进程；本文件是交接索引，不是实时进程监控。新对话最小入口见 [NEXT-SESSION](NEXT-SESSION.md)。
 
+> **2026-10-17 RC-A0 收尾（负责人 A）**：tax-browser 草稿复审与选择性整合在隔离 worktree `<repo>/.worktrees/rc-a0-review`（分支 `codex/huxiaoyang-code/rc-a0-review`，基线 `d0221df1d18e2bfcbd7db2cc9aa0875ab32a7fd4`）。**第一步本机独立验收通过（15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`）；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR #19（**未合并**，创建时为 draft、实时 draft/ready 以 GitHub 为准）。新增 [REVIEW-TAX-BROWSER](../REVIEW-TAX-BROWSER.md)、[DATA-AVAILABILITY](../DATA-AVAILABILITY.md)、[RC0-SNAPSHOT](RC0-SNAPSHOT.md)；当前草稿接口概述 [TAX-BROWSER](../TAX-BROWSER.md)；草稿原稿降为历史记录 [TAX-BROWSER 交接](TAX-BROWSER.md)。已核实：原件 14/14 哈希一致；旧草稿复验（**2026-10-16**）7 套 272 项 exit 0（沙箱首跑 5 套失败为 EACCES 回环限制，两轮分别保留）；main `c2d5619` 基线 10 套 336 项 exit 0（2026-10-16 既有事实）。按 [团队协作协议 §8](../TEAM-COLLABORATION.md) **待另一成员 Codex 复核**，未冒称已合并。**A0 未完成，不因 A0 关闭 Issue #13；真实登录未验收，真实接入 0**。详见本文件「未完成现场」与 [RC0-SNAPSHOT](RC0-SNAPSHOT.md)。
+>
 > **先识别自己是谁**：本仓库已支持**多成员跨电脑协作**。开工前先确认自己的**人类成员身份与已分配任务**（见 [任务看板](../tasks/README.md) 与本人任务单），**不要默认所有机器都接 RC-0**，避免重复派工。负责人 `huxiaoyang-code` 接 [RC-A-LOGIN-DATA](../tasks/RC-A-LOGIN-DATA.md)（总任务 [Issue #13](https://github.com/huxiaoyang-code/youshu-fork/issues/13)）；同事 `xiaoyihaishiaini` 接 [RC-B-REPORTS](../tasks/RC-B-REPORTS.md)（总任务 [Issue #14](https://github.com/huxiaoyang-code/youshu-fork/issues/14)，RC-B B0 / B1 已交）。角色 / 权限 / 文件所有权见 [团队协作协议](../TEAM-COLLABORATION.md)。
 
 ## 方向（不可漂移）
@@ -39,7 +41,7 @@
 | REPORT-CLOSURE-PLAN 重排 | 报表闭环补全方案与交接（RC-0 ~ RC-6） | [#12](https://github.com/huxiaoyang-code/youshu-fork/pull/12) | 8ebc739 | 文档变更；管理员已合并（PR #12，2026-10-15），未重跑业务测试；见 [交接](REPORT-CLOSURE.md) |
 | RC-B 报表导出（B0 / B1） | 五类内部 CSV 导出、HTTP 下载与页面预览；税表法定结构参考与就绪性阻断（B2 未完成） | [#15](https://github.com/huxiaoyang-code/youshu-fork/pull/15) | c2d5619 | 同事 PR，mergedAt `2026-10-15T15:40:41Z`（北京时间 10-15 23:40；2026-10-16 为复验 / 核实日期）；管理者复验 `npm test` 10 套 336 项、exit 0（合成临时库无真实数据）；见 [RC-B 交接](RC-B-REPORTS.md) |
 
-**PR #1–#12 与 #15 已合并；Issue #13 / #14 仍 OPEN（不是 PR）**。上表 PR #1–#10 各部分的员工会话在各自验收与合并后已结束（此为**历史阶段**事实，不代表全仓已无未提交的本地工作，也不推断同事电脑进程是否退出；对方 PR 合并 ≠ 该机无运行进程，见下文「未完成现场」）。后续部分采用全新会话，读取当前代码和任务包。
+**PR #1–#12 / #15 / #16 已合并；Issue #13 / #14 仍 OPEN（不是 PR）**。上表 PR #1–#10 各部分的员工会话在各自验收与合并后已结束（此为**历史阶段**事实，不代表全仓已无未提交的本地工作，也不推断同事电脑进程是否退出；对方 PR 合并 ≠ 该机无运行进程，见下文「未完成现场」）。后续部分采用全新会话，读取当前代码和任务包。
 
 ## 本期收尾与恢复
 
@@ -50,19 +52,29 @@
 
 上述临时任务包和日志被 Git 忽略，只在本机存在；跨机器恢复以 PR、源码和本文件中的阻塞说明为准。
 
-## 未完成现场（未提交，待独立审查）
+## 未完成现场（未合并草稿，只读保留）
 
 管理者现场发现一处既有未提交实现，**保留原地**、不重置 / 不删除 / 不覆盖 / 不重做，本轮也不把它纳入文档 PR：
 
-- worktree：`D:/有数云fork/.worktrees/tax-browser`
+- worktree `<repo>/.worktrees/tax-browser`（**负责人本机历史现场路径**；`<repo>` 为本地克隆根，同事不需寻找 / 重做）
 - 分支 / 基线：`codex/tax-browser-import`，基线 main `9783420a84dae2fe8a4c4b3021c07947b66fec00`
 - 状态：**未提交、未 PR、未合并**；内容为福建漳州浏览器登录后读取企业、批量新建或绑定账套的本地草稿，只覆盖该地区，**不能代表全国接入**
-- 员工交接：`D:/有数云fork/.worktrees/tax-browser/docs/handoffs/TAX-BROWSER.md`
-- 证据边界：员工交接**自报** 7 套 272 项通过、真实税局未验收；管理者**未独立复跑**该套件，**真实登录未验收**
-- 进程日志：`D:/有数云fork/.agent-runs/pi-tax-browser.jsonl`；**尚未核实退出码，不能声称 exit 0**，也不要整读该日志
+- 员工交接：`<repo>/.worktrees/tax-browser/docs/handoffs/TAX-BROWSER.md`（负责人本机历史路径）
+- 证据边界：员工交接**自报** 7 套 272 项；**2026-10-16 复跑为 7 套 272 项、exit 0**（沙箱首跑 exit 1 / 5 套失败为 EACCES 回环限制，两轮分别保留）；**真实登录未验收**，历史员工退出码未核实。
+- 进程日志：`<repo>/.agent-runs/pi-tax-browser.jsonl`；**尚未核实退出码，不能声称 exit 0**，也不要整读该日志
+- 本轮 A0 核实（**2026-10-16 原件保留与旧草稿复验；2026-10-17 本 A0 收尾**）：原目录 14 个未提交文件 SHA256 与 `.agent-runs/import-strict-tax-preservation.json` 清单**全部一致**；隔离旧副本 `rc-a0-reproduce` 14/14 亦一致。历史员工进程退出码**仍未知**，不与复跑 exit 0 混同。当前 A0 分支整合与安全修复**已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR #19（未合并）**，第一步本机独立验收通过（15 套 496 项），待跨成员复核。
 - 本轮核实：该 worktree 原 **14 个未提交文件的内容哈希与本轮开工时一致**（逐文件 SHA256 与 `.agent-runs/import-strict-tax-preservation.json` 清单全部命中），分支 / worktree 保持原样；本轮文档收尾**未触碰**该目录。
 
 新会话派工前先核对上述现场，避免重复派工或误报已完成。`IMPORT-STRICT` 已验收合并（PR #10），不再是待审队列；`TAX-BROWSER` 草稿的复审已列为现行首包 **RC-0**（见下文「后续可执行任务表」），但**草稿本身仍未验收、未合并**，不得当已交付。
+
+## 本轮 RC-A0（tax-browser 复审与整合，本机独立验收通过，待跨成员复核）
+
+- 隔离工作区 `<repo>/.worktrees/rc-a0-review`，分支 `codex/huxiaoyang-code/rc-a0-review`，基线 `d0221df1d18e2bfcbd7db2cc9aa0875ab32a7fd4`（含 PR #15 报表 + PR #16 团队文档）；状态 **第一步本机独立验收通过（2026-10-17，15 套 496 项）；已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR [#19](https://github.com/huxiaoyang-code/youshu-fork/pull/19)，未合并，待跨成员 Codex 复核**。
+- 产出（本轮活文档）：[REVIEW-TAX-BROWSER](../REVIEW-TAX-BROWSER.md)（冲突矩阵 / 安全修复 / 已确认与待验证）、[DATA-AVAILABILITY](../DATA-AVAILABILITY.md)（数据可得性矩阵，真实均未验证）、[RC0-SNAPSHOT](RC0-SNAPSHOT.md)（基线 / 14 hash / 验证 / 限制 / 下一步）、[TAX-BROWSER](../TAX-BROWSER.md)（当前接口概述）；草稿原稿降为历史记录 [TAX-BROWSER 交接](TAX-BROWSER.md)（**非接口全文迁移**，草稿接口全文仍在只读原件 / 副本）。
+- 已验证事实：原件 14/14 SHA256 与清单一致；旧草稿复跑（**2026-10-16**）**7 套 272 项 exit 0**（沙箱首跑 exit 1、5 套失败为 EACCES 回环限制，两轮分别保留）；main `c2d5619` 基线 10 套 336 项 exit 0（2026-10-16 既有管理者复验）。
+- **本机独立验收（2026-10-17，最终 `0293ed2`）**：`npm test` **15 套 496 项、exit 0**（guards 23、derived 31、import-strict 54、report-export 21、report-export-http 29、tax-report-format 24、smoke 28、tax-browser 64、tax-browser-security 18、tax-browser-lifecycle 26、tax-browser-ui 24、server-local-boundary **28**、contract 44、workflow 23、tax 59）；`npm run test:smoke` **28/28、exit 0**。**仅 `server-local-boundary` 由初轮 13 增至 28（追加 15 项），其他分套不变；初轮 `866fc30` 为 15 套 481 项（历史）。** 验证前后 `server` / `public` / `scripts` / `test` / `package` 共 29 文件 SHA256 一致；原件 14/14 仍一致；`accounting` / `coa` / 报表模块与原有主线测试、MCP 均无 diff。
+- 未完成：**跨成员 Codex 复核未获得**（PR #19 未合并，创建时为 draft、实时 draft/ready 以 GitHub 为准）；文档后续提交不改已提交代码，最终 PR head 以 PR 当前提交为准；真实登录未验收，真实接入 0。**A0 未完成，不得因 A0 而关闭总 Issue #13**（保持 OPEN）。
+- 员工进程交接摘要：本轮执行员工均已结束，管理者核实 **exit 0**：stage1-retry、http、browser、ui、docs、ui-review、runner、ui-review2、logfix、rootfix；`browser-review` 被管理者**停止（exit -1）且无该次修改**，后拆为 logfix / rootfix 完成，**不算成功**；**历史草稿员工退出码仍未知**。日志只留本机 `.agent-runs/`（忽略）。
 
 ## 本轮 LOCAL-BATCH-HANDOFF（文档 / Skill，已核验）
 
@@ -109,7 +121,7 @@
 
 - 初稿后经**管理者首审返工**（本分支第二次交付）：RC-0 拆为「代码审查 / 合成验证」与「用户本机人工可行性」两步；RC-1 补实际账号 / 凭据入口、适配器与最少 UI；RC-2 补目标账套定向导入与最小恢复能力；报表验收补独立预期金额 / 会计口径；范围弹性与未知源数据边界明确；`INDEX` / `CHANGELOG` 本轮同步。
 - 方案给出按依赖顺序、可独立 PR 验收的工作包 **RC-0 ~ RC-6**：首包 RC-0 为 `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF`（复审 tax-browser 草稿 + 真实验证账号 / 验证码 / 授权企业 / 实际财务数据来源，可合理统一为一个 ID）；其后依次为登录与账套关联、数据落地与重试（幂等）、财务流水线、内部报表导出、税局申报格式导出、端到端交付。
-- 现场核对（只读，未触碰）：`D:/有数云fork/.worktrees/tax-browser` 的 14 个未提交文件 SHA256 与 `.agent-runs/import-strict-tax-preservation.json` **仍全部一致**；该草稿仍为**未提交 / 未 PR / 未合并**，员工自报 272 项未经管理者复验（**272 为自报数，新 main 整合测试以实际为准**），**真实登录未验收，历史退出码未核实**。
+- 现场核对（只读，未触碰）：`D:/有数云fork/.worktrees/tax-browser`（历史负责人本机路径）的 14 个未提交文件 SHA256 与 `.agent-runs/import-strict-tax-preservation.json` **仍全部一致**；该草稿仍为**未提交 / 未 PR / 未合并**，员工自报 272 项已由管理者 **2026-10-16 获批复跑为 7 套 272 项 exit 0**（**272 自报与复跑一致，但以管理者复跑为准**），**真实登录未验收，历史退出码未核实**。
 - 数据边界：税局是否提供科目 / 期初 / 凭证 / 银行 / 发票**不可先行承诺**；若仅有企业列表 / 申报汇总，**不能完成自动财务闭环**，必须由用户提供本地资料并标识来源；不把未知 / 缺失当 0 或凭空生成凭证。
 - 待办（超出本文件所有权，保留历史原文）：`docs/PHASE1-ACCEPTANCE.md`、`docs/CAPABILITY-AUDIT-2026-10-13.md`、`docs/handoffs/IMPORT-STRICT.md` 未改（历史验收 / 盘点文档保留历史）；其中最后一件的「下一部分 IMPORT-IDEMPOTENCY」为**历史记录**，已由本文件与 NEXT-SESSION 的现行排序替代。**`docs/INDEX.md` 与 `docs/CHANGELOG.md` 本轮已同步**（本工作区本轮允许修改）。
 - 会话事实（已核实，不预报本次 final 实时状态）：本方案**初稿**、**首审返工（review）**、**二审返工（review2）** 三次实施会话均已实际结束，退出码均为 **0**（`pi-report-closure-plan.exit` / `pi-report-closure-plan-review.exit` / `pi-report-closure-plan-review2.exit`，**管理者已核实**）；IMPORT-STRICT 的**两个交接会话**亦均退出 **0**（均为管理者已核实）。**本次 final** 的会话日志 `D:/有数云fork/.agent-runs/pi-report-closure-plan-final.jsonl`、退出码文件 `pi-report-closure-plan-final.exit`（**由管理者后来实际核对**，不预报）。
@@ -123,7 +135,7 @@
 
 | 顺序 | 任务 ID | 负责 | 目标 | 依赖 | 备注 |
 |---|---|---|---|---|---|
-| 1 | **RC-0** `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF` | 负责人 A | 新隔离工作区形成可核验快照（只复制源码 14 文件 / 补丁与基线，不复制 DB / 凭据 / 临时 profile / 日志），复现旧草稿测试并在最新 main 复用必要改动；再由用户本机真实登录验证账号 / 验证码 / 授权企业 / 实际财务数据来源，填写数据可得性矩阵 | 无（首包） | **A 当前第一个可派任务**；分两步，无真实配合时先完成第一步并记录第二步待验；**不得假定企业列表等于财务凭证**；整合时检查 PR #15 对 `server.mjs` / `public/*` / `scripts/test-all.mjs` 的冲突 |
+| 1 | **RC-0** `TAX-BROWSER-REVIEW` + `LOGIN-DATA-PROOF` | 负责人 A | 新隔离工作区形成可核验快照（只复制源码 14 文件 / 补丁与基线，不复制 DB / 凭据 / 临时 profile / 日志），复现旧草稿测试并在最新 main 复用必要改动；再由用户本机真实登录验证账号 / 验证码 / 授权企业 / 实际财务数据来源，填写数据可得性矩阵 | 无（首包） | **A 当前第一个可派任务**；分两步，无真实配合时先完成第一步并记录第二步待验；**第一步本机独立验收通过（15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`），已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR #19，未合并、待跨成员复核**；**不得假定企业列表等于财务凭证**；整合时检查 **PR #9–#16 完整基线（含 PR #10 `accounting.mjs`、PR #15 `server.mjs` / `public/*` / `scripts/test-all.mjs`）** 的冲突；含共享接线与数据边界，**待另一名成员 Codex 复核**；**不得因 A0 而关闭总 Issue #13** |
 | 2 | RC-1 登录会话与账套关联 | 负责人 A | 办税员身份 → 授权企业 → 本地账套关联；**含实际账号 / 凭据入口、适配器与最少 UI**；覆盖过期、验证码错误 / 超时、二次人机验证、授权撤销、企业切换与串账 | RC-0 | 区分身份 / 授权企业 / 税局登记申报数据 / 本地账套会计明细四层；凭据与验证码只由用户本机输入，**模型侧 MCP / Agent 仅收安全引用与状态摘要，本机 UI 专用回环通道方可处理瞬时凭据 / OTP，不送模型** |
 | 3 | RC-2 目标账套定向导入、数据落地与重试 | 负责人 A | 标准 DTO 转换、完整性与科目映射预检、稳定业务键 / 内容版本、单账套原子事务与跨企业逐项结果、审计与最小恢复；**分 RC-2a 首次建账 / 填空账套与 RC-2b 已绑定账套后续开放期间追加**（同一绑定范围不得重复建账，不新增「一企一账套」产品限制） | RC-1 | 旧 IMPORT-IDEMPOTENCY 在此归位；现有 `importAccountSet` 总是新建账套，需补 RC-1 绑定账套 → 定向导入缺口 |
 | 4 | RC-3 财务流水线完整性 | 负责人 A 统一协调 | 科目映射 / 期初 / 凭证 / 计提摊销 / 校验 / 结转结账，并核实报表算法与口径缺口；**影响目标准则 / 数据 / 报表的缺口必须补齐或显式阻止产出** | RC-2 | 不因函数已存在就宣称报表合规；`cashFlowStatement` 间接法末行为直接法净额、两套准则共用同一 COA 等缺口须逐项结论；**根据 B 的发现另开聚焦任务** |

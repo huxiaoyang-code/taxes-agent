@@ -12,11 +12,12 @@
 - 同时对外暴露：**网页 REST** 与 **Codex Agent 工具入口**（`/agent/tools/:name`）
 - 可靠性：封账保护、平衡期初与写入原子性、新期间登记、明细汇总、零利润结转、折旧反向操作回归已覆盖。
 - 全国电子税务局：已预留地区/能力目录、登录、人工验证、查询和退出接口；默认无真实适配器，见 [接口说明](../docs/TAX-INTEGRATION.md)。
+- 税局浏览器导入（福建漳州，**RC-A0 第一步本机独立验收通过（15 套 496 项 + smoke 28/28、exit 0，代码验证 head `0293ed2`）；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）并开 PR [#19](https://github.com/huxiaoyang-code/youshu-fork/pull/19)，未合并、待跨成员复核（创建时为 draft，实时 draft/ready 以 GitHub 为准）**）：本机官方 Edge/Chrome 人工登录后只读识别企业列表并建/绑**空账套**（新建时载入标准科目表，但无期初/凭证）；企业列表 ≠ 财务数据，真实接入 0。合成测试已纳入统一入口（本机复跑 15 套 496 项、exit 0）。见 [接口概述](../docs/TAX-BROWSER.md) · [审查报告](../docs/REVIEW-TAX-BROWSER.md)。
 - 定位：**本机单用户**工具，目标支持对多个企业 / 账套的批量处理（批量队列与管理尚待开发）；**不做多租户 / SaaS**。不同账套数据互相隔离。
 
 ## 本轮验收
 
-RC-B 新增独立金额测试：`node test/report-export.test.mjs`（21 项），覆盖五类 CSV 手算金额、跨月跨年、明细科目、结转/折旧、已过账范围、中文与公式防护。新 HTTP 与税局格式参考测试纳入统一入口。B2 的实际可上传申报文件与 RC-3 / RC-6 整体闭环尚未完成；详见 [RC-B 交接](../docs/handoffs/RC-B-REPORTS.md) 和 [税局格式证据](../docs/TAX-REPORT-FORMAT.md)。
+RC-A0 已在统一入口纳入 tax-browser、tax-browser-security、tax-browser-lifecycle、tax-browser-ui、server-local-boundary 五套（合计 15 套）；本机管理者 2026-10-17 复跑 `npm test` **15 套 496 项、exit 0**（代码验证 head `0293ed2`；初轮 `866fc30` 为 481 项，属历史），`npm run test:smoke` **28/28、exit 0**；代码已提交（初轮 `866fc30` + 收尾修复 `0293ed2`）、PR #19 未合并、待跨成员复核。RC-B 新增独立金额测试：`node test/report-export.test.mjs`（21 项），覆盖五类 CSV 手算金额、跨月跨年、明细科目、结转/折旧、已过账范围、中文与公式防护。新 HTTP 与税局格式参考测试纳入统一入口。B2 的实际可上传申报文件与 RC-3 / RC-6 整体闭环尚未完成；详见 [RC-B 交接](../docs/handoffs/RC-B-REPORTS.md) 和 [税局格式证据](../docs/TAX-REPORT-FORMAT.md)。
 
 在本目录运行 `npm test`，自动启动临时后端、临时账套，完成领域回归、MCP 与税务契约、导入到结账的闭环验收；`npm run test:smoke` 只运行原有冒烟测试。具体金额和能力边界见 [第一期验收](../docs/PHASE1-ACCEPTANCE.md)。
 

@@ -60,17 +60,32 @@ function newSetDialog() {
     <div class="row"><label>会计准则 <select id="nsStd">${META.standards.map((s) => `<option>${s}</option>`).join("")}</select></label></div>
     <div class="row"><label>启用期间 <input type="month" id="nsStart" value="${thisMonth()}" /></label></div>
     <div class="row" style="justify-content:flex-end">
-      <button id="nsCancel">取消</button><button id="nsOk" class="primary">创建</button>
+      <button id="nsCancel">取消</button>
+      <button id="nsTaxBrowser" class="ghost">创建后从税局导入</button>
+      <button id="nsOk" class="primary">创建</button>
     </div>`;
   document.body.appendChild(d);
   d.showModal();
   $("#nsCancel", d).onclick = () => d.close();
   d.addEventListener("close", () => d.remove());
-  $("#nsOk", d).onclick = guard(async () => {
+  // 普通返回/抛错的内部 async 函数：创建失败时抛错，由最外层 handler 统一处理；
+  // 失败不继续 loadSets、也不打开税局 dialog，因此不会重复创建账套。
+  const create = async () => {
     const set = await api("/api/account-sets", { method: "POST", body: {
       name: $("#nsName", d).value.trim(), taxpayer_type: $("#nsTax", d).value,
       accounting_standard: $("#nsStd", d).value, start_period: $("#nsStart", d).value } });
-    d.close(); await loadSets(set.id); toast("账套已创建，已载入标准科目表");
+    d.close();
+    return set;
+  };
+  $("#nsOk", d).onclick = guard(async () => {
+    const set = await create();
+    await loadSets(set.id); toast("账套已创建，已载入标准科目表");
+  });
+  $("#nsTaxBrowser", d).onclick = guard(async () => {
+    const set = await create();
+    await loadSets(set.id);
+    toast("空账套已创建，请在税局导入窗口中绑定企业基本信息");
+    taxBrowserDialog({ bindSetId: set.id });
   });
 }
 
@@ -478,6 +493,383 @@ async function renderPeriods() {
   });
 }
 
+// ------------------------------------------------------------------ 税局导入企业（福建省漳州市，人工登录）
+// 采集草稿：真实登录尚未实测。全局单一会话 + 单一 dialog；所有税局操作串行（TB.busy）；
+// 关闭（按钮或 Esc）结束本地会话、清空 preview/勾选/导入结果并移除 dialog；
+// 每次异步写回前复核 dialog 生命周期（TB.lifecycle）与 sid，迟到响应不得污染新会话；
+// 启动中取消时，迟到的会话返回后立即关闭；关闭失败保留安全重试引用（TB.pendingClose）。
+const TB = {
+  config: null, token: null, sessionId: null, session: null, preview: [], checked: new Set(),
+  dialog: null, busy: false, closed: false,
+  lifecycle: 0,            // dialog 生命周期序号：close / 新建 dialog 时递增，作废所有在途异步写回
+  pendingClose: new Map(), // sid -> { attempts, inflight }：服务端关闭的安全引用（普通错误保留；inflight 为在途 close 请求，重开需先等待其确认）
+};
+
+const TB_TERMINAL_CODES = new Set([
+  "tax_browser_session_closed", "tax_browser_session_expired", "tax_browser_session_not_found",
+]);
+/** 终态（404/409closed/410）：会话已关闭/过期/已清理，本地状态必须清空。 */
+const tbIsTerminal = (e) => !!e && (TB_TERMINAL_CODES.has(e.code) || e.status === 404 || e.status === 410);
+
+async function tbApi(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "content-type": "application/json" },
+    ...opts,
+    body: opts.body === undefined ? (opts.method === "POST" ? JSON.stringify({}) : undefined) : JSON.stringify(opts.body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || `HTTP ${res.status}`);
+    err.code = typeof data.error === "string" ? data.error : ""; // 结构化错误码，不靠中文正则判断
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+async function tbFetchConfig() {
+  const cfg = await tbApi("/api/tax-browser/config");
+  TB.config = cfg;
+  TB.token = cfg.loginToken;
+  return cfg;
+}
+
+const tbCurrent = (d) => !!d && TB.dialog === d && d.isConnected !== false;
+function tbStatus(d, text) { const el = tbCurrent(d) ? $("#tbStatus", d) : null; if (el) el.textContent = text || ""; }
+function tbError(d, msg) { const el = tbCurrent(d) ? $("#tbError", d) : null; if (el) el.textContent = msg ? `⚠ ${msg}` : ""; }
+const dlgOf = (btn) => btn.closest("dialog");
+
+/** 清空本地采集会话状态（sessionId/session/preview/勾选），不触碰服务端。 */
+function tbClearSession() { TB.sessionId = null; TB.session = null; TB.preview = []; TB.checked = new Set(); }
+function tbHideImportResult(d) { const el = tbCurrent(d) ? $("#tbImportResult", d) : null; if (el) { el.classList.add("hidden"); el.textContent = ""; } }
+
+/** 记录未确认关闭的安全引用（仅普通网络错误）；不自动重试，只在用户重开/重试时再试一次。 */
+function tbTrackPendingClose(sid, rec) {
+  if (!sid) return;
+  const r = rec || TB.pendingClose.get(sid) || { attempts: 0 };
+  r.attempts += 1;
+  r.inflight = null; // 失败后清除在途标记，保留待办等待用户重开时再试一次
+  TB.pendingClose.set(sid, r);
+}
+/** 真正发送 close 请求：发请求前已把该 sid（inflight 占位）登记进 pendingClose，
+ *  使关闭未确认期间的「重开」必须先等待本确认。成功或终态（closed/expired/notfound）
+ *  视为已清理；普通错误保留待办并返回 false。 */
+function tbSendClose(sid) {
+  const rec = TB.pendingClose.get(sid) || { attempts: 0 };
+  rec.inflight = null;
+  TB.pendingClose.set(sid, rec); // 发请求前登记在途引用：新开必须先 await，绝不并发绕过清理
+  rec.inflight = (async () => {
+    try {
+      await tbApi(`/api/tax-browser/sessions/${sid}/close`, { method: "POST", body: {} });
+      TB.pendingClose.delete(sid);
+      return true;
+    } catch (e) {
+      if (tbIsTerminal(e)) { TB.pendingClose.delete(sid); return true; } // 终态即已清理
+      tbTrackPendingClose(sid, rec);
+      return false;
+    }
+  })();
+  return rec.inflight;
+}
+/** 关闭单个已捕获会话：同一 sid 已有在途请求时复用之（等待其结果），绝不并发重复 close。 */
+function tbTryClose(sid) {
+  if (!sid) return Promise.resolve(true);
+  const rec = TB.pendingClose.get(sid);
+  if (rec && rec.inflight) return rec.inflight;
+  return tbSendClose(sid);
+}
+/** 新开会话前清理所有待确认关闭引用（含在途，等待其确认）；仍有失败则返回 false，由调用方明确阻止新开。 */
+async function tbFlushPendingCloses() {
+  if (!TB.pendingClose.size) return true;
+  let allOk = true;
+  for (const sid of [...TB.pendingClose.keys()]) {
+    if (!(await tbTryClose(sid))) allOk = false;
+  }
+  return allOk;
+}
+
+/** 统一 busy：同一时刻只允许一个税局操作，避免并发/交错覆盖同一会话。 */
+async function withBusy(btn, fn) {
+  if (TB.busy) return;
+  TB.busy = true;
+  const d = dlgOf(btn);
+  const life = TB.lifecycle; // 捕获本次操作所属生命周期，迟到错误不得污染新会话
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = "处理中…";
+  try { await fn(); }
+  catch (e) { tbFail(d, e, life); }
+  finally {
+    TB.busy = false;
+    // dialog 已在操作期间关闭时不再恢复按钮，避免更新已移除的旧 dialog
+    if (tbCurrent(d)) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+
+/** 失败处理：终态清空本地会话与预览，避免孤儿数据残留；普通错误保留可重试的 sessionId。
+ *  life 为发起操作时捕获的生命周期；与当前不一致说明 dialog/session 已更换，只提示、绝不清理新状态。 */
+function tbFail(d, e, life) {
+  const stale = life !== undefined && life !== TB.lifecycle;
+  if (!stale && tbIsTerminal(e)) { tbClearSession(); tbHideImportResult(d); tbRenderPreview(d); }
+  if (tbCurrent(d)) tbError(d, e.message || String(e)); else toast(e.message || String(e), true);
+}
+
+async function tbOpenSession(d) {
+  const life = TB.lifecycle; // 捕获入口 dialog 生命周期：清理/取令牌期间被取消则不得再开新会话
+  const alive = () => TB.lifecycle === life && !TB.closed && tbCurrent(d);
+  if (TB.sessionId) { tbStatus(d, "采集会话已打开：请直接读取企业页；如需重开请先关闭当前会话。"); return; }
+  // 新开会话前先等待/重试未确认关闭的旧会话（含在途）；仍失败则明确阻止，避免同时留下多个难以回收的会话
+  if (!(await tbFlushPendingCloses())) {
+    throw new Error("上一次采集会话尚未确认关闭，已重试仍失败；请稍后再试，确认清理后再开启新会话。");
+  }
+  if (!alive()) return; // 清理期间窗口已关闭/换新：取消后不得在清理完成后继续打开
+  const body = { region: "350000", city: "350600" };
+  const start = (loginToken) => tbApi("/api/tax-browser/sessions", { method: "POST", body: { ...body, loginToken } });
+  let res;
+  try {
+    const token = TB.token || (await tbFetchConfig()).loginToken;
+    if (!alive()) return; // 取令牌后、发 sessions POST 前复核：取消期间不得打开新浏览器
+    res = await start(token);
+  } catch (e) {
+    // 一次性令牌失效按结构化错误码重取一次；其余错误（含暂时网络错误）原样抛出，不掩盖
+    if (e.code !== "tax_browser_login_token_invalid") throw e;
+    const token = (await tbFetchConfig()).loginToken;
+    if (!alive()) return; // 重取令牌后、发 sessions POST 前复核：取消期间不得打开新浏览器
+    res = await start(token);
+  }
+  TB.token = null; // 已消费
+  // 启动期间用户可能已关闭 dialog/取消：迟到的会话必须立刻关闭；关闭失败要记录待办，绝不静默留孤儿
+  if (TB.closed || !tbCurrent(d)) {
+    const ok = await tbTryClose(res.sessionId);
+    if (!ok) toast("新会话启动期间窗口已关闭，且服务端关闭未确认；已保留重试引用，重开时会先重试。", true);
+    return;
+  }
+  TB.sessionId = res.sessionId;
+  TB.session = res;
+  TB.preview = [];
+  TB.checked = new Set();
+  tbHideImportResult(d);
+  tbRenderPreview(d);
+  tbError(d, "");
+  const tips = (res.manualLogin && res.manualLogin.instructions ? res.manualLogin.instructions : []).join(" ");
+  tbStatus(d, `已打开官方登录窗口（真实登录尚未验收）。${tips}`);
+}
+
+async function tbRead(d) {
+  const life = TB.lifecycle;
+  const sid = TB.sessionId;
+  if (TB.closed || !tbCurrent(d)) return;
+  if (!sid) throw new Error("请先点击「打开官方登录窗口」");
+  const res = await tbApi(`/api/tax-browser/sessions/${sid}/read`, { method: "POST", body: {} });
+  // 异步写回前复核：本次 dialog 生命周期未变、会话仍是同一 sid；关闭/换会话后不得复活旧数据
+  if (TB.lifecycle !== life || TB.closed || !tbCurrent(d) || TB.sessionId !== sid) return;
+  TB.session = res.session;
+  TB.preview = res.read.items || [];
+  // 保留此前勾选（候选 ID 稳定，按税号合并）
+  const known = new Set(TB.preview.map((it) => it.candidateId));
+  TB.checked = new Set([...TB.checked].filter((cid) => known.has(cid)));
+  tbRenderPreview(d);
+  tbError(d, "");
+  const notAll = res.read.note || "";
+  tbStatus(d, `已读取 ${res.read.pagesRead} 次页面 · 累计识别 ${res.read.count} 家企业（本次新增 ${res.newCount}）· 来源 ${res.read.source || "—"}。${notAll}候选企业仅为页面采集草稿，不代表税局全部企业或财务数据。`);
+}
+
+/** 关闭本地采集会话：清空 session/preview/勾选/导入结果，立即移除 dialog，再通知服务端关闭。
+ *  关闭失败仍清空本地状态并移除 dialog，但把 sid 记入安全重试引用（不吞掉、可重开时重试）。 */
+async function tbClose(d) {
+  TB.closed = true;
+  TB.lifecycle += 1; // 作废所有在途异步写回（read/import/open），防止关闭后内存重新出现企业
+  const sid = TB.sessionId;
+  tbClearSession();
+  tbHideImportResult(d);
+  tbRenderPreview(d);
+  tbError(d, "");
+  tbRemoveDialog(d); // 先移除 dialog，避免关闭请求慢时“重新打开”被旧 dialog 覆盖
+  if (sid) {
+    const ok = await tbTryClose(sid);
+    if (!ok) toast("本地会话已清除；服务端关闭未确认，已保留安全重试引用，重开时会先重试。", true);
+  }
+}
+
+function tbRemoveDialog(d) {
+  if (TB.dialog === d) TB.dialog = null;
+  if (d.open) d.close(); else d.remove();
+}
+
+function tbRenderPreview(d) {
+  if (!tbCurrent(d)) return;
+  const el = $("#tbPreview", d);
+  if (!el) return;
+  if (!TB.preview.length) {
+    el.innerHTML = `<p class="hint">尚未识别到企业：请在浏览器窗口登录并打开「办税员可访问企业」列表页，再点「读取当前企业页」；可翻页后多次读取，按税号合并。</p>`;
+    return;
+  }
+  const allChecked = TB.preview.every((it) => TB.checked.has(it.candidateId));
+  el.innerHTML = `<table><thead><tr>
+      <th><input type="checkbox" id="tbAll" ${allChecked ? "checked" : ""} /></th>
+      <th>企业名称</th><th>纳税人识别号</th><th>出现页次</th><th>首次读取</th></tr></thead><tbody>
+    ${TB.preview.map((it) => `<tr>
+      <td><input type="checkbox" data-cid="${esc(it.candidateId)}" ${TB.checked.has(it.candidateId) ? "checked" : ""} /></td>
+      <td>${esc(it.name)}</td><td>${esc(it.taxpayerId)}</td><td>${it.occurrences}</td>
+      <td>${esc(String(it.firstSeenAt || "").replace("T", " ").slice(0, 19))}</td></tr>`).join("")}
+    </tbody></table>`;
+  $("#tbAll", el).onchange = (ev) => {
+    TB.checked = ev.target.checked ? new Set(TB.preview.map((it) => it.candidateId)) : new Set();
+    tbRenderPreview(d);
+  };
+  el.onclick = (ev) => {
+    const cb = ev.target.closest("input[data-cid]");
+    if (!cb) return;
+    if (cb.checked) TB.checked.add(cb.dataset.cid); else TB.checked.delete(cb.dataset.cid);
+  };
+}
+
+function tbShowResult(d, r) {
+  if (!tbCurrent(d)) return;
+  const el = $("#tbImportResult", d);
+  el.classList.remove("hidden");
+  const s = r.summary || {};
+  const lines = (r.results || []).map((x) =>
+    `${x.action === "created" ? "新建空账套" : x.action === "existing" ? "已存在（跳过）" : x.action === "bind" ? "绑定空账套" : x.action === "bound_idempotent" ? "已绑定（幂等）" : x.action} · ${x.name}（${x.taxpayerId}） → 账套 #${x.accountSetId}${x.nameChange ? ` · 名称「${x.nameChange.from}」→「${x.nameChange.to}」` : ""}`
+  ).join("\n");
+  el.textContent = `导入完成：新建 ${s.created ?? 0} / 已存在 ${s.existing ?? 0} / 绑定 ${s.bound ?? 0}。\n${lines}\n提示：本次仅建立企业基本档案，历史凭证、期初余额需另行导入。`;
+}
+
+async function tbImport(d) {
+  if (TB.closed || !tbCurrent(d)) return;
+  if (!TB.sessionId) throw new Error("请先打开官方登录窗口并读取企业");
+  const life = TB.lifecycle;
+  const sid = TB.sessionId;
+  // 每次异步返回后复核：dialog 生命周期/会话未变，才能继续弹确认或实际导入；成功结果也不回填已关闭/其他 dialog
+  const alive = () => TB.lifecycle === life && !TB.closed && tbCurrent(d) && TB.sessionId === sid;
+  const cids = [...TB.checked];
+  if (!cids.length) throw new Error("请先勾选要导入的企业");
+  const mode = $("#tbMode", d).value;
+  const path = `/api/tax-browser/sessions/${sid}/import`;
+  if (mode === "create") {
+    const create = {
+      start_period: $("#tbStart", d).value,
+      accounting_standard: $("#tbStd", d).value,
+      taxpayer_type: $("#tbType", d).value,
+    };
+    if (!create.start_period) throw new Error("请先选择启用期间（建账参数由您确认，非税局数据）");
+    const prev = await tbApi(path, { method: "POST", body: { candidateIds: cids, mode: "create", create, dryRun: true } });
+    if (!alive()) return; // dryRun 返回时已关闭/换会话：不再弹确认、不再实际导入
+    const ok = confirm(
+      `确认导入勾选的 ${cids.length} 家企业？\n` +
+      `新建空账套 ${prev.summary.created} 个；税号已存在跳过 ${prev.summary.existing} 个。\n` +
+      `启用期间 ${create.start_period} · ${create.accounting_standard} · ${create.taxpayer_type}（本地选择，非税局数据）\n` +
+      `仅建立企业基本档案，不生成凭证与期初。`
+    );
+    if (!ok) return;
+    if (!alive()) return;
+    const r = await tbApi(path, { method: "POST", body: { candidateIds: cids, mode: "create", create } });
+    if (!alive()) return; // 成功结果到达时 dialog 已关闭/换会话：不回填、不刷新、不提示
+    tbShowResult(d, r);
+    await loadSets().catch(() => {}); // 账套列表刷新失败不丢失已完成的导入结果
+    toast(`已从税局导入 ${r.summary.created} 家企业（新建空账套）`);
+  } else {
+    if (cids.length !== 1) throw new Error("绑定模式一次只能勾选 1 家企业（批量请用「批量新建空账套」）");
+    const accountSetId = Number($("#tbBindSet", d).value);
+    if (!accountSetId) throw new Error("请选择要绑定的空账套");
+    const prev = await tbApi(path, { method: "POST", body: { candidateIds: cids, mode: "bind", accountSetId, dryRun: true } });
+    if (!alive()) return;
+    let r;
+    if (prev.idempotent) {
+      r = prev;
+    } else {
+      const change = prev.results && prev.results[0] && prev.results[0].nameChange;
+      if (change) {
+        const ok = confirm(`账套名称将与税局登记名称同步：\n「${change.from}」 →「${change.to}」\n确认修改账套名称？`);
+        if (!ok) return;
+        if (!alive()) return;
+        r = await tbApi(path, { method: "POST", body: { candidateIds: cids, mode: "bind", accountSetId, confirmNameChange: true } });
+      } else {
+        r = await tbApi(path, { method: "POST", body: { candidateIds: cids, mode: "bind", accountSetId } });
+      }
+    }
+    if (!alive()) return;
+    tbShowResult(d, r);
+    await loadSets().catch(() => {}); // 账套列表刷新失败不丢失已完成的导入结果
+    toast("已绑定企业基本信息");
+  }
+}
+
+function taxBrowserDialog({ bindSetId = null } = {}) {
+  if (TB.dialog) { // 单一 dialog：重复打开只复用当前窗口，不叠加、不覆盖 sessionId
+    if (!TB.dialog.open) TB.dialog.showModal();
+    return TB.dialog;
+  }
+  const d = document.createElement("dialog");
+  TB.dialog = d;
+  TB.closed = false; // 新的 dialog 生命周期：允许开启新的采集会话
+  TB.lifecycle += 1; // 新生命周期起点，作废上一 dialog 的在途异步写回
+  d.style.minWidth = "780px";
+  d.innerHTML = `
+    <h3>税局导入企业（电子税务局 · 人工登录）</h3>
+    <div class="hint">【福建漳州试用】登录与企业读取尚未实测；本次只建立企业档案/空账套，凭证与期初余额需另行导入。</div>
+    <div class="row">
+      <label>地区
+        <select id="tbRegion" disabled>
+          <option value="350000/350600">福建省 · 漳州市</option>
+        </select>
+      </label>
+      <span class="hint">其他地区未支持；全国接入是后续目标，当前不代表已接入税局。</span>
+    </div>
+    <h4>建账参数（由您本地确认，非税局返回数据）</h4>
+    <div class="row">
+      <label>启用期间 <input type="month" id="tbStart" /></label>
+      <label>会计准则 <select id="tbStd">${META.standards.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+      <label>纳税人类型 <select id="tbType"><option>小规模纳税人</option><option>一般纳税人</option></select></label>
+    </div>
+    <div class="row">
+      <button id="tbLogin" class="primary">打开官方登录窗口</button>
+      <button id="tbRead">我已登录，读取当前企业页</button>
+      <button id="tbCloseBtn" class="danger">关闭本地采集会话</button>
+    </div>
+    <div id="tbStatus" class="hint"></div>
+    <div id="tbError" style="color:#d03050;white-space:pre-wrap"></div>
+    <div id="tbPreview" class="card"></div>
+    <h4>导入方式</h4>
+    <div class="row">
+      <label>方式
+        <select id="tbMode">
+          <option value="create">勾选企业批量新建空账套</option>
+          <option value="bind" ${bindSetId ? "selected" : ""}>绑定到已有空账套</option>
+        </select>
+      </label>
+      <label id="tbBindWrap" class="${bindSetId ? "" : "hidden"}">目标账套 <select id="tbBindSet"></select></label>
+    </div>
+    <div id="tbImportResult" class="card hidden" style="white-space:pre-wrap"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button id="tbCancel">关闭</button>
+      <button id="tbImport" class="primary">导入所选企业</button>
+    </div>`;
+  document.body.appendChild(d);
+  d.showModal();
+  d.addEventListener("close", () => { d.remove(); if (TB.dialog === d) TB.dialog = null; });
+  // Esc / 点 X：先结束本地会话、清空预览与导入结果，再移除 dialog（不依赖按钮状态恢复）
+  d.addEventListener("cancel", (ev) => { ev.preventDefault?.(); void tbClose(d); });
+  $("#tbCancel", d).onclick = () => void tbClose(d);
+  $("#tbMode", d).onchange = () => {
+    const bind = $("#tbMode", d).value === "bind";
+    $("#tbBindWrap", d).classList.toggle("hidden", !bind);
+  };
+  const fillBindSets = () => {
+    $("#tbBindSet", d).innerHTML = SETS.length
+      ? SETS.map((s) => `<option value="${s.id}">${esc(s.name)}（${esc(s.start_period)}）</option>`).join("")
+      : `<option value="">（暂无账套）</option>`;
+    if (bindSetId) $("#tbBindSet", d).value = String(bindSetId);
+  };
+  fillBindSets();
+  tbRenderPreview(d);
+  tbStatus(d, "尚未打开采集会话。先选择建账参数（导入时确认），再点「打开官方登录窗口」。");
+  $("#tbLogin", d).onclick = (ev) => withBusy(ev.target, () => tbOpenSession(d));
+  $("#tbRead", d).onclick = (ev) => withBusy(ev.target, () => tbRead(d));
+  $("#tbCloseBtn", d).onclick = () => void tbClose(d); // 关闭本地采集会话并移除 dialog
+  $("#tbImport", d).onclick = (ev) => withBusy(ev.target, () => tbImport(d));
+  return d;
+}
+
 // ------------------------------------------------------------------ 事件
 $$(".tabs button").forEach((b) => b.onclick = () => {
   $$(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
@@ -486,6 +878,7 @@ $$(".tabs button").forEach((b) => b.onclick = () => {
 $("#accountSetSelect").onchange = guard(async () => { SET_ID = +$("#accountSetSelect").value; await selectSet(); });
 $("#btnNewSet").onclick = newSetDialog;
 $("#btnImportSet").onclick = importSetDialog;
+$("#btnTaxImport").onclick = () => taxBrowserDialog();
 $("#btnLoadVouchers").onclick = guard(loadVouchers);
 $("#btnNewVoucher").onclick = () => { if (!SET_ID) return toast("请先新建账套", true); openEditor(null); };
 $("#btnAddAccount").onclick = addAccountDialog;

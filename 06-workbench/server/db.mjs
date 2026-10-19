@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS asset_depreciation_runs (
   created_at TEXT NOT NULL,
   UNIQUE (account_set_id, asset_id, period)
 );
+
+-- 税局浏览器导入的企业绑定（本地可追溯：税号/地区/来源/导入时间；1 账套 ↔ 1 税号）
+CREATE TABLE IF NOT EXISTS tax_enterprise_bindings (
+  account_set_id INTEGER NOT NULL UNIQUE REFERENCES account_sets(id) ON DELETE CASCADE,
+  taxpayer_id TEXT NOT NULL UNIQUE,
+  region TEXT NOT NULL,
+  city TEXT NOT NULL,
+  source TEXT NOT NULL,
+  imported_at TEXT NOT NULL
+);
 `);
 
 // ---- 轻量迁移：老库补 vouchers.kind ----
