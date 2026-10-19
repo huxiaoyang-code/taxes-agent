@@ -9,6 +9,7 @@
 //   - 参数/领域错误：抛 ToolError 或领域异常，由 HTTP 层映射成 4xx 结构化错误。
 import * as A from "./accounting.mjs";
 import { TaxGateway, TaxError } from "./tax-gateway.mjs";
+import { TaxAcquisition } from "./tax-acquisition.mjs";
 
 export class ToolError extends Error {
   constructor(code, message, details = null) {
@@ -192,6 +193,7 @@ const NOT_IMPLEMENTED = dict({
 export const taxGateway = new TaxGateway({
   accountSetExists: (id) => { A.getAccountSet(id); return true; },
 });
+export const taxAcquisition = new TaxAcquisition({ gateway: taxGateway, accounting: A });
 
 /**
  * 把网关的 TaxError 归一成后端工具错误（保留 code 供 MCP 客户端判定）。
@@ -337,6 +339,11 @@ const HANDLERS = dict({
   tax_login_challenge: taxHandler((args) => taxGateway.submitChallenge(args ?? {})),
   tax_logout: taxHandler((args) => taxGateway.logout(args ?? {})),
   tax_info_query: taxHandler((args) => taxGateway.infoQuery(args ?? {})),
+  tax_session_verify: taxHandler((args) => taxAcquisition.verifySession(args ?? {})),
+  tax_resource_collect: taxHandler((args) => taxAcquisition.collect(args ?? {})),
+  tax_resource_coverage: taxHandler((args) => taxAcquisition.coverage(args ?? {})),
+  tax_account_set_link: taxHandler((args) => taxAcquisition.linkAccountSet(args ?? {})),
+  tax_preparation_build: taxHandler((args) => taxAcquisition.prepare(args ?? {})),
 
   // ---- 兼容入口：不再谎报持久化 / 完成任务 ----
   update_plan: (args) => ({

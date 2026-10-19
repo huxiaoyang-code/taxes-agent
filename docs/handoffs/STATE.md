@@ -1,5 +1,11 @@
 # 阶段状态
 
+> **2026-10-19 当前实施包：[TAX-READONLY-TOOLS](../tasks/TAX-READONLY-TOOLS.md)** · [本包交接](TAX-READONLY-TOOLS.md)。负责人 `huxiaoyang-code`，从 PR #24 merge `158e266b3cb931b91d03a6e548a2d49dc8188481` 建独立 `codex/huxiaoyang-code/tax-readonly-tools` 分支；本轮按用户明确指示由 Codex subagent 并行实现，最终由未参与实现且不继承实施上下文的 subagent 复核。只交付读取、准备与校验，不执行正式申报、报送、缴款、更正、作废或备案变更。
+>
+> **本轮最新现场**：用户释放占用页后领取成功；用户不希望点击探索，改从已加载脚本 / performance 证实 `GET /mhzx/api/mh/mhsy/getUserInfo`，3 次限量浏览器请求均 HTTP 200，但 `Response.Data` 仅 code / msg、code `9997`，缺身份字段。错误码含义未知，不能推定过期或无权限；首次业务成功 0，后端第二遍未运行，当前企业 / 期间未取得。Network 启用曾耗时 143 秒、后续 CDP 多次约 42 秒且读事件超时重置，恢复后可读静态资源；现已 `Network.disable`，观察结束，官方页保持打开，无导航 / 点击。完整无敏感接口矩阵与忽略目录安全索引见本包交接；下方旧响应 0 / 等待手动查询均按历史阅读。
+>
+> 文件范围已在 [Issue #20 评论](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6270683815) 登记；管理者 `npm test` **15 套 530 项 exit 0**，含本包 91 项与真实 stdio MCP 合成链路。5 个工具仅提供进程内安全元信息 / 缺项，`metadataOnly=true`、`evidencePersisted=false`，没有真实适配器、持久业务证据或可提交包。最终独审 / PR 待完成；PR #18 Draft / #19 OPEN 保留，不盲合并，总任务 #20 / #13 / #14 / #17 不关闭。下述旧“本次纯文档”不描述当前实施包。
+
 > **2026-10-19 当前优先入口：真实数据到申报准备**。[TAX-DATA-FIRST](../tasks/TAX-DATA-FIRST.md) · [详细方案](../TAX-DATA-ACQUISITION-PLAN.md) · [checkpoint](TAX-POSTLOGIN-CHECKPOINT.md)。负责人 `huxiaoyang-code`；暂停会计核心、持续导入、文件报表等本地扩建，先按新账号 / 新公司申报准备目标盘点真实可取数据，再确定首条闭环。首期获取数据、准备材料、预填校验，冻结版本由用户确认后正式提交；税局缺账务资料优先现有本地账套，缺项由用户补。
 >
 > 用户已明确授权有限只读盘点并提供本机登录页。当前 Edge 已观察到办税 / 查询 / 发票 / 数字账户 / 财报菜单，未见重新登录提示；**网络 CDP 连续超时，新业务响应 0，未完成登录态全面验证或首次 / 二次采集**。旧暂停为历史，当前等网络证据通道恢复，不再索取同一只读盘点的恢复授权；自动点击仍禁用，真实原文 / 凭据不进模型。

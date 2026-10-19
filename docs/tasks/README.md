@@ -1,5 +1,9 @@
 # 任务看板 · TASK BOARD
 
+> **2026-10-19 当前实施包：[TAX-READONLY-TOOLS](TAX-READONLY-TOOLS.md)**（[交接](../handoffs/TAX-READONLY-TOOLS.md)），负责人 `huxiaoyang-code`，分支 `codex/huxiaoyang-code/tax-readonly-tools`，基线 `158e266b3cb931b91d03a6e548a2d49dc8188481`。状态：**审查中；管理者 15 套 530 项通过，最终独审 / PR 待完成；真实身份读取失败**。用户明确授权 Codex subagent 并行实施及无实施上下文的独立最终复核；后端工具、规则 / 合成测试、文档各有唯一负责人，详见任务单和 [Issue #20 范围登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6270683815)。
+>
+> 用户不希望点击探索，当前已依据加载代码 / performance 证实身份读取路径，3 次限量浏览器请求均 HTTP 200 / code `9997`，但缺身份字段；不猜码意、首次业务成功 0、后端第二遍未运行，企业 / 期间未知。Network.disable 成功，观察结束，官方页保持打开，无导航 / 点击；不再等待人工点击。5 工具仅进程内元信息 / 缺项，真实适配器、持久业务证据与可提交包均未交付，接入数仍 0。本包不执行正式申报、财报报送、缴款、更正、作废或备案变更，PR #18 / #19 与总任务均保留。下方旧响应 0 / 等待点击 / 纯文档等按历史阅读。
+
 > **2026-10-19 当前优先任务：[TAX-DATA-FIRST](TAX-DATA-FIRST.md)**，负责人 `huxiaoyang-code`，关联 Issue #20 / #13 / #14 / #17。状态：**方案已形成、待真实取数验证**；用户已提供本机登录页，Edge 菜单已观察，网络 CDP 连续超时，**新业务响应 0、真实采集未完成**。按新账号 / 新公司申报准备目标获取数据、准备材料、预填校验，冻结版本经用户确认后正式提交；缺账务先用现有本地账套，其余列补项。详见[完整方案](../TAX-DATA-ACQUISITION-PLAN.md)。
 >
 > 会计核心、持续导入、文件报表等本地扩建暂停，旧 16 包保留为后备；A1、PR #22 / #23 已合并，439 项只作历史验证。本次纯文档不重跑业务测试，PR #18 Draft / #19 OPEN、Issue #20 / #13 / #14 / #17 OPEN 保留。下文“当前任务”与暂停说明均为旧时点记录，不能覆盖本入口；有限只读盘点已有授权，无需再次请求同一恢复授权，自动点击仍禁用。
@@ -51,6 +55,7 @@
 
 | 任务 ID | 负责人 | 范围 | 状态 | 依赖 | 任务单 |
 |---|---|---|---|---|---|
+| TAX-READONLY-TOOLS | `huxiaoyang-code` | 真实只读探索、agent / MCP 准备工具、合成验收 | 审查中；530 项通过，真实身份读取失败 | TAX-DATA-FIRST、当前身份 / 期间及真实契约 | [TAX-READONLY-TOOLS](TAX-READONLY-TOOLS.md) |
 | RC-A · RC-0 第一步 | 项目负责人 `huxiaoyang-code` | `TAX-BROWSER-REVIEW` 隔离快照与合成复验 | 已分配 / 待开工 | 无 | [RC-A-LOGIN-DATA](RC-A-LOGIN-DATA.md) |
 | RC-A · RC-1 | 项目负责人 | 登录会话、办税员身份 → 授权企业 → 账套关联 | 已分配 / 待开工 | RC-0 第一步 + 第二步 | 同上 |
 | RC-A · RC-2a / RC-2b | 项目负责人 | 目标账套定向导入、数据落地与重试、最小恢复 | 已分配 / 待开工 | RC-1 | 同上 |

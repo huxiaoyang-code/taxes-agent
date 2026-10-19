@@ -1,6 +1,10 @@
 # TAX-POSTLOGIN-CHECKPOINT · 税局登录后只读研究 checkpoint
 
-日期：2026-10-19。当前状态：**已获有限只读盘点授权；页面菜单已观察，网络证据通道超时，新业务响应 0；未交付、旧线索待复验**。
+日期：2026-10-19。当前状态：**已获有限只读盘点授权；3 次实际浏览器身份读取均 HTTP 200 / code 9997，但无身份字段，首次业务成功 0；后端第二遍未运行。当前观察已结束，Network.disable 成功；旧线索待复验**。
+
+> **最新实施事实优先**：[TAX-READONLY-TOOLS 任务](../tasks/TAX-READONLY-TOOLS.md) · [接口矩阵及两阶段索引](TAX-READONLY-TOOLS.md)。用户释放目标页后已领取，Network.enable 成功但曾耗时约 143 秒；后续 CDP 多次约 42 秒、读事件超时重置，恢复后静态 / CDP 可用。用户不希望点击探索，改读取当前 `loginb.b0e10b4f.js` 与 performance XHR，证实 `GET /mhzx/api/mh/mhsy/getUserInfo`，无 body、封装有 JSON / `t` 时间戳；3 种限量浏览器请求均 HTTP 200，`Response.Data={code:number,msg:string}` 且 code `9997`、Error 缺失、身份 / 企业字段缺失。**不猜错误码含义，不证明过期或权限，不算业务成功或后端采集**。无导航 / 点击，官方页保持打开；Network.disable 已成功，观察结束。企业 / 期间仍未知，旧占用 / 0 响应窗口 / 等待人工点击均是过程历史。
+>
+> 本轮按用户明确指示由 Codex subagent 实现、另一无实施上下文的 subagent 最终复核。一个执行者独占真实会话，其余只用安全契约和合成数据。第一阶段 `observed_attempt_failed`，第二阶段 `backend_not_run`，无可比成功批次；本机忽略目录安全索引仅含结构 / 失败状态。管理者已验 15 套 530 项，最终独审待完成；仅读取 / 准备 / 校验，**不执行正式申报、报送、缴款、更正、作废、备案变更**。工具接线或合成测试不能升级本 checkpoint 的真实证据等级。
 
 > **当前指示优先**：用户已提供本机登录页，明确先盘点真实可取数据，并按新账号 / 新公司申报准备目标倒推采集。首期获取数据、准备材料、预填校验，冻结版本由用户确认后正式提交；账务缺口优先现有本地账套，其余列清单由用户补。当前已获有限只读盘点授权，不再询问是否恢复同一请求；自动点击 / 点击脚本仍禁用，正式外部写操作按批次确认。任务：[TAX-DATA-FIRST](../tasks/TAX-DATA-FIRST.md)；[详细方案](../TAX-DATA-ACQUISITION-PLAN.md)。
 

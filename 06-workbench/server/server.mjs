@@ -9,10 +9,12 @@ import { buildReportExport } from "./report-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, decodeFiles, ToolError } from "./agent-tools.mjs";
+import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || "127.0.0.1";
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
@@ -21,7 +23,7 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 const json = (res, code, data) => {
   const body = JSON.stringify(data, null, 2);
   res.writeHead(code, { "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body), "access-control-allow-origin": "*" });
+    "content-length": Buffer.byteLength(body), "cache-control": "no-store", "x-content-type-options": "nosniff" });
   res.end(body);
 };
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -234,12 +236,20 @@ async function serveStatic(res, pathname) {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host}`); }
+  catch { return json(res, 400, { error: "bad_request", message: "请求地址不合法" }); }
+  if (!isLoopbackAddress(req.socket?.remoteAddress) || !checkLocalOrigin(req).ok) {
+    return json(res, 403, { error: "forbidden", message: "请求来源不被允许" });
+  }
   const method = req.method.toUpperCase();
   if (method === "OPTIONS") {
-    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,authorization" });
+    res.writeHead(204, { allow: "GET,POST,PUT,DELETE,OPTIONS" });
     return res.end();
+  }
+  if (url.pathname.startsWith("/agent/tools/tax_") && method === "POST"
+      && !/^application\/json(?:\s*;|$)/i.test(req.headers["content-type"] || "")) {
+    return json(res, 415, { error: "json_content_type_required", message: "工具调用必须使用 application/json" });
   }
   try {
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/agent/")) return await api(req, res, url, method);
@@ -249,7 +259,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   // 实际监听端口：PORT=0 时由系统分配，日志必须报告实际端口，测试才能连到本进程。
   const actualPort = server.address().port;
   console.log(`记账+报表工作台:  http://127.0.0.1:${actualPort}/`);
