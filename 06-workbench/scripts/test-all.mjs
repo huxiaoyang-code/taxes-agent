@@ -17,6 +17,7 @@ const steps = [
   { name: "contract", file: join(MCP, "contract-test.mjs"), cwd: MCP },
   { name: "workflow", file: join(MCP, "workflow-test.mjs"), cwd: MCP },
   { name: "tax", file: join(MCP, "tax-contract-test.mjs"), cwd: MCP },
+  { name: "voucher-amount-guards", file: join(WORKBENCH, "test", "voucher-amount-guards.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
