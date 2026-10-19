@@ -1,5 +1,11 @@
 # 新会话入口 · NEXT SESSION
 
+> **2026-10-20 优先恢复：[TAX-SESSION-DISCOVERY 任务](../tasks/TAX-SESSION-DISCOVERY.md)与[交接](TAX-SESSION-DISCOVERY.md)**。负责人 `huxiaoyang-code`；基线 `17a053bfb66b482064ed92aa343ab42c41d47825`，分支 `codex/huxiaoyang-code/tax-session-discovery`，恢复先核对最新 main / PR。3 个专用 Edge 工具与 DTO 去重修复已完成，17 套全量通过，独立代码复验无阻塞；草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已创建，待完整候选最终复核 / 合并，不能假定已合并。
+>
+> 实机 MCP → 后端 → 专用 Edge 已验证 open / 未登录 probe / close；**业务请求与成功均为 0，企业 / 期间未取得，后端第二遍业务采集未运行，专项未完成**。专用 Edge、临时 profile 和临时后端已清理，原官方页保留；不要沿用旧 connection / tab 标识。用户反馈登录遇到问题、稍后说明，当前等具体问题，不要求点击探索；解决后优先后端专用官方窗口人工登录一次，继续真实 schema / 企业 / 业务采集，不复制原窗口凭据。
+>
+> 本包用户明确采用 Codex subagent 并行实施与无实施上下文的独立最终复核，覆盖下方旧员工范式；root 独占真实会话，其余仅安全契约 / 合成数据。自动点击仍禁用，真实资料不进模型，正式申报 / 缴款等不执行；Issue #20 / #13 / #14 / #17 保留。旧入口与测试按历史阅读，不用旧 530 项或本包通道成功冒充真实接入。
+
 > **2026-10-19 全量开发接管（用户最新指示，优先）**：全部后续开发已交给同事在**另一台电脑**的 Codex 接手，继续向同一私有仓库提交，**沿用 `huxiaoyang-code` 账号**（不 fork / 不换用户名 / 不新建仓库），**不复制**原机器 token / config / session / 账套 DB。本次**仅交接文档**。
 >
 > - 先读 [全量接管交接](FULL-DEVELOPMENT-TAKEOVER.md)（自足：代码地图、状态矩阵、在途资源、缺陷与顺序、命令、首日清单、可复制启动提示）与 [全量接管任务单](../tasks/FULL-DEVELOPMENT-TAKEOVER.md)；税局登录后 checkpoint 见 [TAX-POSTLOGIN-CHECKPOINT](TAX-POSTLOGIN-CHECKPOINT.md)。

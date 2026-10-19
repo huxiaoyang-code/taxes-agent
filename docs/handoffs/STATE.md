@@ -1,5 +1,9 @@
 # 阶段状态
 
+> **2026-10-20 当前包：[TAX-SESSION-DISCOVERY](../tasks/TAX-SESSION-DISCOVERY.md)** · [交接](TAX-SESSION-DISCOVERY.md)。基线 `17a053bfb66b482064ed92aa343ab42c41d47825`，分支 `codex/huxiaoyang-code/tax-session-discovery`。专用 Edge open / probe / close 与 DTO 去重修复已完成，管理者 `npm test` 17 套全部 exit 0；独立代码复验 59 / 46 / 4 项通过、无代码阻塞。草稿 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已创建，待完整候选最终复核 / 合并，不预报合并。
+>
+> 实机 MCP → HTTP → Agent → 专用 Edge 已验 open=`needs_login`、probe=`login_required` 且 `requestPerformed=false`、close=`closed` 且 profile 清理成功。**业务请求 0、业务成功 0、第二遍业务采集未运行，企业 / 期间未取得，真实接入仍为 0。** 专用 Edge / 临时后端已关闭，原官方页保留；用户反馈登录遇到问题、稍后说明，当前等具体问题，不要求点击探索。解决后优先后端专用窗口人工登录一次继续业务取数；安全索引和边界见交接，[扩展范围已登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)。下方旧入口保留追溯。
+
 > **2026-10-19 当前实施包：[TAX-READONLY-TOOLS](../tasks/TAX-READONLY-TOOLS.md)** · [本包交接](TAX-READONLY-TOOLS.md)。负责人 `huxiaoyang-code`，从 PR #24 merge `158e266b3cb931b91d03a6e548a2d49dc8188481` 建独立 `codex/huxiaoyang-code/tax-readonly-tools` 分支；本轮按用户明确指示由 Codex subagent 并行实现，最终由未参与实现且不继承实施上下文的 subagent 复核。只交付读取、准备与校验，不执行正式申报、报送、缴款、更正、作废或备案变更。
 >
 > **本轮最新现场**：用户释放占用页后领取成功；用户不希望点击探索，改从已加载脚本 / performance 证实 `GET /mhzx/api/mh/mhsy/getUserInfo`，3 次限量浏览器请求均 HTTP 200，但 `Response.Data` 仅 code / msg、code `9997`，缺身份字段。错误码含义未知，不能推定过期或无权限；首次业务成功 0，后端第二遍未运行，当前企业 / 期间未取得。Network 启用曾耗时 143 秒、后续 CDP 多次约 42 秒且读事件超时重置，恢复后可读静态资源；现已 `Network.disable`，观察结束，官方页保持打开，无导航 / 点击。完整无敏感接口矩阵与忽略目录安全索引见本包交接；下方旧响应 0 / 等待手动查询均按历史阅读。
