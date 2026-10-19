@@ -6,7 +6,7 @@
 
 ## 接管事实与执行方式
 
-管理者已核对基线 `654a403b78f9fe91166d5c8de62d8f15103065b7`，Node `v24.15.0` / `node:sqlite` 可用，基线 `06-workbench` 下 `npm test` 为 10 套 336 项、exit 0。首包 [VOUCHER-AMOUNT-GUARDS](tasks/VOUCHER-AMOUNT-GUARDS.md) 已完成实现、管理者内容审查与独立验证：`npm test` **11 套 439 项全部通过、exit 0**；跨成员复核条件待满足，PR 待创建、未合并。这不是最终产品验收。
+管理者已核对基线 `654a403b78f9fe91166d5c8de62d8f15103065b7`，Node `v24.15.0` / `node:sqlite` 可用，基线 `06-workbench` 下 `npm test` 为 10 套 336 项、exit 0。首包 [VOUCHER-AMOUNT-GUARDS](tasks/VOUCHER-AMOUNT-GUARDS.md) 已完成实现、管理者内容审查与独立验证：`npm test` **11 套 439 项全部通过、exit 0**；[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 已创建（OPEN、未合并），跨成员复核条件待满足。这不是最终产品验收。
 
 用户本轮要求直接启用并发 subagent，不再使用本地 agent。本轮按文件分别派实现、测试与文档，管理者独立审查与 Git / PR；不修改全局技能或将本轮授权扩展成永久章程。会计核心、共享接线及数据边界仍按团队协议安排另一名成员本机 Codex 复核；当前首包该证据待满足。
 

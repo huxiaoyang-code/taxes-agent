@@ -1,6 +1,6 @@
 # VOUCHER-AMOUNT-GUARDS · 首包交接
 
-日期：2026-10-19。状态：**实现、管理者内容审查及独立验证完成；跨成员复核条件待满足，PR 待创建、未合并**。任务与文件所有权见 [任务单](../tasks/VOUCHER-AMOUNT-GUARDS.md)，全量后续安排见 [开发接管计划](../DEVELOPMENT-TAKEOVER-PLAN.md)。
+日期：2026-10-19。状态：**实现、管理者内容审查及独立验证完成；[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 已创建（OPEN、未合并），跨成员复核条件待满足**。任务与文件所有权见 [任务单](../tasks/VOUCHER-AMOUNT-GUARDS.md)，全量后续安排见 [开发接管计划](../DEVELOPMENT-TAKEOVER-PLAN.md)。
 
 ## 基线与授权
 
@@ -24,8 +24,9 @@
 | 实现后的新增回归及全套测试 | 执行者在 `06-workbench` 运行 `node test/voucher-amount-guards.test.mjs`：103/103 通过，exit 0；本机日志 `.agent-runs/voucher-amount-subagent-green.log`。管理者独立全套结果见下一行 |
 | 管理者实际 diff 审查及独立复验 | 已阅读实际代码 / 测试、三份新文档及索引 diff；独立在 `06-workbench` 运行 `npm test`：**11 套 439 项全部通过，exit 0**。日志位于主仓库忽略目录 `.agent-runs/voucher-amount-independent-all.log`，退出码记录为同名 `.exit` 文件 |
 | 另一名成员本机 Codex 复核 | 待满足；本轮并发 subagent 不能替代跨成员证据 |
-| 已审核代码提交 SHA | `dcfe9c2549e07b49bb1ad4ad0b7a4b2c409a6219`（三个代码 / 测试文件）；最终含文档的 PR head 待创建 PR 后核对 |
-| 本包 PR / merge SHA | 待创建 / 待合并 |
+| 已审核代码提交 SHA | `dcfe9c2549e07b49bb1ad4ad0b7a4b2c409a6219`（三个代码 / 测试文件） |
+| PR 首版已审核 head | `78dbcfcbe73f0ce90e0b1e154249792e65a06a04`（已验证代码及后续文档提交）；这是创建 PR 时的已审首版，后续元数据提交会改变 head，合并前仍须核对最终版本 |
+| 本包 PR / merge SHA | [#22](https://github.com/huxiaoyang-code/youshu-fork/pull/22)，OPEN / 未合并，merge SHA 待完成 |
 
 实现 subagent 自测：`06-workbench` 下分别运行 `node test/accounting-guards.test.mjs`（23/23）、`node test/accounting-derived.test.mjs`（31/31）、`node test/import-strict.test.mjs`（54/54），均 exit 0；`git diff --check` exit 0。此为执行者自测，不代替管理者验收。此前本地 pi 的失败或被停止运行不计交付证据。
 
@@ -34,6 +35,8 @@
 提交前，管理者复核三个代码 / 测试文件的 SHA256，**3/3 与独立验收内容一致**；随后仅删除新增测试文件末尾一个空白行，无逻辑变化。该差异已审查，未因此重复业务测试；暂存差异 `git diff --cached --check` 通过。上述代码提交可追溯到已验证内容，文档提交另行记录。
 
 额外 `independent_review` subagent 已只读复核实际代码、测试及三份新文档，未发现可信的阻塞问题或必须补充的遗漏；其未运行测试。该复核是本轮独立内容审查的补充，**不构成另一名人类成员的本机 Codex 复核**，不能据此宣称跨成员门槛已满足。
+
+合并仍须满足跨成员复核，或由用户明确调整本轮要求。截至本记录，尚未取得该项调整授权；不能把并发实施授权或尚未答复的选择题视作已允许替代跨成员复核。
 
 ## 恢复与下游输入
 

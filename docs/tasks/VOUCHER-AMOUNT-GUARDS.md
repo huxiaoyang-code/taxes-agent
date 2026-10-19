@@ -1,6 +1,6 @@
 # VOUCHER-AMOUNT-GUARDS · 直接凭证金额校验
 
-- 状态：实现、管理者内容审查及独立验证完成；跨成员复核条件待满足，PR 待创建、合并待完成。
+- 状态：实现、管理者内容审查及独立验证完成；[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 已创建（OPEN、未合并），跨成员复核条件待满足。
 - 日期：2026-10-19；负责人及唯一文件责任人：`huxiaoyang-code`。
 - 基线：`654a403b78f9fe91166d5c8de62d8f15103065b7`；分支：`codex/huxiaoyang-code/voucher-amount-guards`，独立 worktree。
 - 总任务：[Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)，子 PR 使用 `Refs #20` / `Refs #17`，不关闭总任务。
