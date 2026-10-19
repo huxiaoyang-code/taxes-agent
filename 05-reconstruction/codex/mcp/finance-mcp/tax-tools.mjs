@@ -3,7 +3,8 @@
  *
  * 第一期只预留接口：这些工具在后端注册表（06-workbench/server/agent-tools.mjs）里已经实现，
  * 但默认没有任何地区适配器被注册，因此登录类调用会返回结构化「未接入」错误，
- * 不会伪造会话、不会返回假数据、也不会连接任何真实税务系统。
+ * 不会伪造会话或返回假数据。专用浏览器工具可打开官方登录窗口并发起固定只读请求，
+ * 但只返回结构摘要，不代表已验证业务适配器。
  *
  * 契约状态用 available（本地已实现该接口），origin 用 local（本地扩展，不在原站 catalog 内）。
  * 「是否已接入某地区」由 tax_regions / tax_capabilities 的真实返回值表达，不写死在这里。
@@ -24,6 +25,12 @@ const available = (name, description, inputSchema) =>
   ({ name, description, inputSchema, status: "available", origin: "local" });
 
 export const TAX_TOOLS = [
+  available("tax_browser_open", "打开本机专用 Edge 官方窗口，需操作者人工登录。使用独立临时目录，不复制已有登录态；仅返回连接引用，不创建已认证税务会话。",
+    { ...obj({ region: { type: "string", enum: ["350000"] } }, ["region"]), additionalProperties: false }),
+  available("tax_browser_probe", "检查专用窗口并对已观察的福建身份读取路径发起一次实际只读请求。仅返回安全结构与状态，schema_unverified 不代表登录或业务成功。",
+    { ...obj({ connectionId: { type: "string", pattern: "^taxb_[a-f0-9]{48}$" } }, ["connectionId"]), additionalProperties: false }),
+  available("tax_browser_close", "关闭本工具自己启动的专用浏览器并清理本次临时目录；不等于税局服务端退出，不关闭其他浏览器。",
+    { ...obj({ connectionId: { type: "string", pattern: "^taxb_[a-f0-9]{48}$" } }, ["connectionId"]), additionalProperties: false }),
   available("tax_session_verify", "实际验证当前会话企业与授权范围；只返回安全引用。无已验证适配器则明确拒绝。",
     { ...obj({ sessionId: SESSION_ID }, ["sessionId"]), additionalProperties: false }),
   available("tax_resource_collect", "按已验证只读契约重新采集指定期间资源，只返回覆盖摘要与来源引用。无真实适配器时不伪造成功。",

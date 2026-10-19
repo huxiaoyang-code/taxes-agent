@@ -480,6 +480,11 @@ export class TaxGateway {
     for (const a of challengeActions) {
       if (!SAFE_CODE_RE.test(a)) throw new TaxError("tax_adapter_invalid", `验证动作标识非法：${a}`);
     }
+    for (const evidence of Object.values(adapter.readonlyEvidence || {})) {
+      if (evidence && Object.hasOwn(evidence, "recordIdentity") && evidence.recordIdentity !== "adapter_key") {
+        throw new TaxError("tax_adapter_invalid", "只读记录标识契约无效");
+      }
+    }
     const normalized = {
       adapterId,
       region,
@@ -961,7 +966,7 @@ export class TaxGateway {
     this.#assertScope(session, stamp);
     const sourceRef = `read_${randomBytes(18).toString("hex")}`;
     let count = 0, total = null, pages = 0;
-    const seen = new Set();
+    const seen = new Map();
     const pageSize = 500;
     for (let page = 1; page <= 20; page++) {
       let result;
@@ -1007,11 +1012,30 @@ export class TaxGateway {
             || (resource === "declaration_status" && row.period !== period)) {
           throw new TaxError("tax_scope_mismatch", "记录企业或期间不一致");
         }
-        // Only a digest is retained during this call; records never enter the tool result.
+        // Optional code-registered contract: recordIdentity: "adapter_key" requires
+        // an own recordKey string of 1..256 UTF-16 code units, with no surrounding
+        // whitespace or control characters. The adapter supplies a stable key, not
+        // a page/row position; different filing versions must have different keys.
+        // Without opt-in, retain legacy DTO-content identity. Neither raw keys nor
+        // their digests leave this call; only digests are retained for comparison.
         const canonical = Object.keys(fields).sort().map((key) => [key, row[key] ?? null]);
-        const key = createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
-        if (seen.has(key)) throw new TaxError("tax_pagination_duplicate", "分页记录重复，覆盖完整性未证实");
-        seen.add(key);
+        const contentDigest = createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+        let key = contentDigest;
+        if (evidence.recordIdentity === "adapter_key") {
+          if (!Object.hasOwn(row, "recordKey") || typeof row.recordKey !== "string"
+              || !row.recordKey || row.recordKey.length > 256 || row.recordKey !== row.recordKey.trim()
+              || /[\u0000-\u001f\u007f-\u009f]/.test(row.recordKey)) {
+            throw new TaxError("tax_record_key_invalid", "记录标识缺失或不符合只读契约");
+          }
+          key = createHash("sha256").update(JSON.stringify(row.recordKey)).digest("hex");
+        }
+        if (seen.has(key)) {
+          if (seen.get(key) !== contentDigest) {
+            throw new TaxError("tax_record_conflict", "同一记录标识的资源字段冲突，覆盖完整性未证实");
+          }
+          throw new TaxError("tax_pagination_duplicate", "分页记录重复，覆盖完整性未证实");
+        }
+        seen.set(key, contentDigest);
       }
       count += rows.length;
       pages++;

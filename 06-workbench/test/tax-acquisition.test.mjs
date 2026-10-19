@@ -283,3 +283,124 @@ test('whitespace alias cannot bypass a concurrent acquisition operation token', 
   const cov = await service.coverage({ sessionId: args.sessionId, period });
   assert.equal(cov.resources.find((r) => r.resource === resource).sourceRef, result.sourceRef);
 });
+
+// Synthetic adapter keys stay inside the trusted adapter/gateway boundary.
+async function setupRecordRows(rows, { explicit = true, rowsPerPage = 1 } = {}) {
+  const base = adapter();
+  return setup({
+    readonlyEvidence: { [resource]: { ...base.readonlyEvidence[resource], ...(explicit ? { recordIdentity: 'adapter_key' } : {}) } },
+    queryPage(ctx, p) {
+      const start = (p.page - 1) * rowsPerPage;
+      return { ...base.queryPage(ctx, p), data: rows.slice(start, start + rowsPerPage),
+        pagination: { page: p.page, pageSize: p.pageSize, total: rows.length, hasMore: start + rowsPerPage < rows.length } };
+    },
+  });
+}
+
+test('explicit stable keys distinguish records whose legacy DTO fields are identical', async () => {
+  const { service, args } = await setupRecordRows([
+    { taxType: 'synthetic-tax', recordKey: 'PRIVATE_SYNTHETIC_KEY_A', effectiveTo: '2026-09-30' },
+    { taxType: 'synthetic-tax', recordKey: 'PRIVATE_SYNTHETIC_KEY_B', effectiveTo: '2026-12-31' },
+  ]);
+  const result = await service.collect(args);
+  assert.equal(result.count, 2); assert.equal(result.complete, true); assert.equal(result.pages, 2);
+  const coverage = await service.coverage({ sessionId: args.sessionId, period });
+  assert.equal(coverage.resources.find((r) => r.resource === resource).count, 2);
+  assert.doesNotMatch(JSON.stringify({ result, coverage }), /PRIVATE_SYNTHETIC_KEY|recordKey/);
+});
+
+for (const rowsPerPage of [1, 2]) {
+  for (const conflicting of [false, true]) {
+    test(`explicit key ${conflicting ? 'conflict' : 'duplicate'} fails closed ${rowsPerPage === 1 ? 'across pages' : 'within a page'}`, async () => {
+      const rows = [{ taxType: 'synthetic-tax', recordKey: 'PRIVATE_SYNTHETIC_DUPLICATE_KEY', status: 'active' }];
+      const { service, args } = await setupRecordRows(rows, { rowsPerPage });
+      await service.collect(args);
+      rows.push({ ...rows[0], status: conflicting ? 'inactive' : 'active' });
+      await assert.rejects(() => service.collect(args), (error) => {
+        assert.equal(error.code, conflicting ? 'tax_record_conflict' : 'tax_pagination_duplicate');
+        assert.doesNotMatch(`${error.message}\n${error.stack}\n${JSON.stringify(error)}`, /PRIVATE_SYNTHETIC_DUPLICATE_KEY/);
+        return true;
+      });
+      const coverage = await service.coverage({ sessionId: args.sessionId, period });
+      const result = coverage.resources.find((r) => r.resource === resource);
+      assert.equal(result.complete, false); assert.equal(result.count, null);
+      assert.equal(result.status, 'failed'); assert.equal(result.sourceRef, null);
+      assert.equal(result.errorCode, conflicting ? 'tax_record_conflict' : 'tax_pagination_duplicate');
+      assert.doesNotMatch(JSON.stringify(coverage), /PRIVATE_SYNTHETIC_DUPLICATE_KEY|recordKey/);
+    });
+  }
+}
+
+test('explicit keys allow distinct filing versions chosen by the adapter', async () => {
+  const { service, args } = await setupRecordRows([
+    { taxType: 'synthetic-tax', recordKey: 'synthetic-record:original', status: 'accepted' },
+    { taxType: 'synthetic-tax', recordKey: 'synthetic-record:correction-1', status: 'accepted' },
+  ]);
+  const result = await service.collect(args);
+  assert.equal(result.count, 2); assert.equal(result.complete, true);
+});
+
+test('explicit key validation rejects missing, invalid and inherited keys without falling back', async () => {
+  const badRows = [
+    { taxType: 'synthetic-tax' },
+    ...[undefined, null, 3, false, {}, [], '', ' ', ' leading', 'trailing ', 'line\nbreak', 'null\0byte', 'delete\x7f', 'control\x85', 'x'.repeat(257)]
+      .map((recordKey) => ({ taxType: 'synthetic-tax', recordKey })),
+    Object.assign(Object.create({ recordKey: 'PRIVATE_SYNTHETIC_INHERITED_KEY' }), { taxType: 'synthetic-tax' }),
+  ];
+  for (const row of badRows) {
+    const { service, args } = await setupRecordRows([row]);
+    await assert.rejects(() => service.collect(args), code('tax_record_key_invalid'));
+    const coverage = await service.coverage({ sessionId: args.sessionId, period });
+    const result = coverage.resources.find((r) => r.resource === resource);
+    assert.equal(result.complete, false); assert.equal(result.count, null);
+  }
+});
+
+test('explicit key length boundary is accepted and a later missing key invalidates all pages', async () => {
+  const rows = [{ taxType: 'synthetic-tax', recordKey: 'x'.repeat(256) }];
+  const { service, args } = await setupRecordRows(rows);
+  assert.equal((await service.collect(args)).count, 1);
+  rows.push({ taxType: 'other-synthetic-tax' });
+  await assert.rejects(() => service.collect(args), code('tax_record_key_invalid'));
+  const coverage = await service.coverage({ sessionId: args.sessionId, period });
+  assert.equal(coverage.resources.find((r) => r.resource === resource).count, null);
+});
+
+test('legacy adapters retain DTO-content identity even if rows contain recordKey', async () => {
+  const duplicate = await setupRecordRows([
+    { taxType: 'synthetic-tax', recordKey: 'A' },
+    { taxType: 'synthetic-tax', recordKey: 'B' },
+  ], { explicit: false });
+  await assert.rejects(() => duplicate.service.collect(duplicate.args), code('tax_pagination_duplicate'));
+  const distinct = await setupRecordRows([
+    { taxType: 'synthetic-tax', recordKey: 'A', status: 'active' },
+    { taxType: 'synthetic-tax', recordKey: 'A', status: 'inactive' },
+  ], { explicit: false });
+  assert.equal((await distinct.service.collect(distinct.args)).count, 2);
+});
+
+test('unknown record identity contracts cannot silently downgrade to legacy mode', () => {
+  for (const recordIdentity of [undefined, null, '', 'adapter_keey', 'PRIVATE_SYNTHETIC_BAD_MODE', true, {}, []]) {
+    const gateway = new TaxGateway();
+    const base = adapter();
+    assert.throws(() => gateway.registerAdapter(adapter({
+      readonlyEvidence: { [resource]: { ...base.readonlyEvidence[resource], recordIdentity } },
+    })), (error) => {
+      assert.equal(error.code, 'tax_adapter_invalid');
+      assert.doesNotMatch(`${error.message}\n${JSON.stringify(error)}`, /PRIVATE_SYNTHETIC_BAD_MODE/);
+      return true;
+    });
+    assert.equal(gateway.listRegions().summary.adaptersTotal, 0);
+  }
+});
+
+test('explicit record keys cannot bypass the existing read-only evidence gate', async () => {
+  let calls = 0;
+  const base = adapter();
+  const { service, args } = await setup({
+    readonlyEvidence: { [resource]: { ...base.readonlyEvidence[resource], sideEffectFree: false, recordIdentity: 'adapter_key' } },
+    queryPage() { calls++; },
+  });
+  await assert.rejects(() => service.collect(args), code('tax_resource_unsupported'));
+  assert.equal(calls, 0);
+});

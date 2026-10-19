@@ -8,7 +8,7 @@ import * as A from "./accounting.mjs";
 import { buildReportExport } from "./report-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
-import { callAgentTool, decodeFiles, ToolError } from "./agent-tools.mjs";
+import { callAgentTool, decodeFiles, ToolError, taxBrowserSessions } from "./agent-tools.mjs";
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -265,3 +265,26 @@ server.listen(PORT, HOST, () => {
   console.log(`记账+报表工作台:  http://127.0.0.1:${actualPort}/`);
   console.log(`Agent 工具入口:   http://127.0.0.1:${actualPort}/agent/tools/<name>`);
 });
+
+// Normal shutdown closes only browser processes owned by this backend.
+// Abrupt OS termination cannot guarantee cleanup and is not reported as such.
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close();
+  const deadline = setTimeout(() => {
+    console.error("tax_browser_shutdown_timeout");
+    process.exit(1);
+  }, 60000);
+  void taxBrowserSessions.closeAll().then(() => {
+    clearTimeout(deadline);
+    process.exit(0);
+  }).catch(() => {
+    clearTimeout(deadline);
+    console.error("tax_browser_cleanup_failed");
+    process.exit(1);
+  });
+}
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
