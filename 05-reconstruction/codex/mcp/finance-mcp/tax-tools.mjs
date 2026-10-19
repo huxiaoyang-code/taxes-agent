@@ -24,6 +24,16 @@ const available = (name, description, inputSchema) =>
   ({ name, description, inputSchema, status: "available", origin: "local" });
 
 export const TAX_TOOLS = [
+  available("tax_session_verify", "实际验证当前会话企业与授权范围；只返回安全引用。无已验证适配器则明确拒绝。",
+    { ...obj({ sessionId: SESSION_ID }, ["sessionId"]), additionalProperties: false }),
+  available("tax_resource_collect", "按已验证只读契约重新采集指定期间资源，只返回覆盖摘要与来源引用。无真实适配器时不伪造成功。",
+    { ...obj({ sessionId: SESSION_ID, resource: { type: "string" }, period: { type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$" } }, ["sessionId", "resource", "period"]), additionalProperties: false }),
+  available("tax_resource_coverage", "查询当前企业期间的资源覆盖、未取得和不支持状态，不返回企业身份或金额。",
+    { ...obj({ sessionId: SESSION_ID, period: { type: "string" } }, ["sessionId", "period"]), additionalProperties: false }),
+  available("tax_account_set_link", "关联操作者明确指定的已有本地账套；仅内存引用，不建账、不导入，不声称自动核对企业身份。",
+    { ...obj({ sessionId: SESSION_ID, accountSetId: ACCOUNT_SET_ID }, ["sessionId", "accountSetId"]), additionalProperties: false }),
+  available("tax_preparation_build", "读取关联账套可得性并生成申报准备缺项和校验摘要。规则与表单尚未验证时严格阻断，永不执行申报或缴款。",
+    { ...obj({ sessionId: SESSION_ID, period: { type: "string" } }, ["sessionId", "period"]), additionalProperties: false }),
   available("tax_regions",
     "查询税务接口契约与区域接入状态。大陆税务服务目录 = 31 个省级行政区 + 5 个计划单列市；"
     + "全国（CN）只是产品入口、不是税务目标；港澳台单列为 out_of_scope（不同税务管辖体系）。"

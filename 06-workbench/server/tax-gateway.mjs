@@ -15,7 +15,7 @@
 //   adapterId  同一地区可有多个适配器（如不同登录通道），用 adapterId 区分。
 //   capabilities 适配器自报的能力声明：支持的登录方式、可查询资源、可处理的验证动作。
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 
 /** 网关结构化错误。server 侧会转成 ToolError，保留 code 供 MCP 客户端判断。 */
 export class TaxError extends Error {
@@ -262,6 +262,12 @@ const DTO_SPEC = {
   },
 };
 
+const REQUIRED_READ_FIELDS = {
+  identity: ["subjectId"], authorized_enterprises: ["enterpriseId"],
+  enterprise_profile: ["enterpriseId"], tax_assessments: ["taxType"],
+  declaration_status: ["period", "taxType", "status"],
+};
+
 function pickFields(src, spec, secrets = []) {
   if (!src || typeof src !== "object" || Array.isArray(src)) return null;
   const out = {};
@@ -305,7 +311,8 @@ export function sanitizeResource(resource, value, secrets = []) {
   if (!spec) return { item: null, items: [], note: `未定义 DTO 白名单的资源类型：${resource}` };
   if (spec.kind === "array") {
     if (!Array.isArray(value)) return { items: [], note: "适配器未返回数组数据" };
-    return { items: value.slice(0, 500).map((x) => pickFields(x, spec.item, secrets)).filter((x) => x !== null) };
+    if (value.length > 500) throw new TaxError("tax_result_limit_exceeded", "资源超过 500 条，必须通过已验证的分页接口采集；未返回截断结果");
+    return { items: value.map((x) => pickFields(x, spec.item, secrets)).filter((x) => x !== null) };
   }
   const item = pickFields(value, spec.fields, secrets);
   return item ? { item } : { item: null, note: "适配器未返回该资源数据" };
@@ -428,10 +435,14 @@ export class TaxGateway {
    * @param {number}   options.defaultSessionTtlMs 适配器未给 expiresAt 时的默认有效期。
    * @param {Function} options.now             取当前时间的函数（测试可注入）。
    */
-  constructor({ accountSetExists = null, defaultSessionTtlMs = 30 * 60 * 1000, now = () => Date.now() } = {}) {
+  constructor({ accountSetExists = null, defaultSessionTtlMs = 30 * 60 * 1000, requestTimeoutMs = 5000, now = () => Date.now() } = {}) {
     this.accountSetExists = accountSetExists;
     this.defaultSessionTtlMs = defaultSessionTtlMs;
     this.now = now;
+    if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 30000) {
+      throw new TaxError("tax_timeout_invalid", "请求时限必须为 1 至 30000 毫秒");
+    }
+    this.requestTimeoutMs = requestTimeoutMs;
     /** @type {Map<string, object>} 已注册适配器，键为 `${region}::${adapterId}` */
     this.adapters = new Map();
     /** @type {Map<string, object>} 登录会话，进程内内存态，不落库 */
@@ -484,6 +495,9 @@ export class TaxGateway {
       submitChallenge: typeof adapter.submitChallenge === "function" ? adapter.submitChallenge.bind(adapter) : null,
       logout: typeof adapter.logout === "function" ? adapter.logout.bind(adapter) : null,
       query: typeof adapter.query === "function" ? adapter.query.bind(adapter) : null,
+      verifyScope: typeof adapter.verifyScope === "function" ? adapter.verifyScope.bind(adapter) : null,
+      queryPage: typeof adapter.queryPage === "function" ? adapter.queryPage.bind(adapter) : null,
+      readonlyEvidence: structuredClone(adapter.readonlyEvidence || {}),
     };
     this.adapters.set(adapterKey(region, adapterId), normalized);
     return describeAdapter(normalized);
@@ -631,6 +645,7 @@ export class TaxGateway {
     const nowMs = this.now();
     const session = {
       sessionId,
+      scopeRef: `scope_${randomBytes(18).toString("hex")}`,
       region,
       adapterId: adapter.adapterId,
       accountSetId,
@@ -845,6 +860,7 @@ export class TaxGateway {
       throw new TaxError("tax_resource_unknown", `未定义的信息资源：${resource}`, { resource });
     }
     const adapter = this.adapters.get(adapterKey(session.region, session.adapterId));
+    if (adapter?.queryPage) throw new TaxError("tax_summary_tool_required", "只读采集适配器仅通过安全摘要工具返回结果");
     if (!adapter || !adapter.capabilities.resources.includes(resource)) {
       throw new TaxError("tax_resource_unsupported", `地区 ${session.region} 的适配器 ${session.adapterId} 未声明支持资源：${resource}`, {
         ...this.#failureDetails(session), resource, supported: adapter?.capabilities.resources ?? [],
@@ -855,6 +871,7 @@ export class TaxGateway {
     }
 
     let raw;
+    const scope = this.#scopeStamp(session);
     try {
       raw = await adapter.query(this.#context(session), { resource, params });
     } catch (error) {
@@ -867,6 +884,8 @@ export class TaxGateway {
     // 迟到结果保护：查询期间会话退出/过期，绝不输出任何数据。
     if (this.#guardTerminal(session)) throw this.#terminalError(session);
 
+    this.#assertScope(session, scope);
+
     const sanitized = sanitizeResource(resource, raw, this.secrets);
     return {
       sessionId: session.sessionId,
@@ -876,8 +895,188 @@ export class TaxGateway {
       resource,
       fetchedAt: iso(this.now()),
       data: sanitized,
+      coverage: { complete: false, status: "unverified", evidenceLevel: "unverified" },
       note: "字段按网关 DTO 白名单输出；适配器原始 cookies/token 等一律不透传。",
     };
+  }
+
+  // A verified read requires business success, authority and exact enterprise scope.
+  // This contract is code registered only. No browser/network implementation is enabled by default.
+  async verifyScope({ sessionId } = {}) {
+    const session = this.#authenticatedSession(sessionId);
+    const stamp = this.#scopeStamp(session);
+    const adapter = this.adapters.get(adapterKey(session.region, session.adapterId));
+    if (session.verifiedStamp && session.verifiedStamp !== stamp) {
+      throw new TaxError("tax_scope_changed", "已验证会话的企业范围变化，须创建新会话");
+    }
+    if (!session.enterprise?.enterpriseId || !adapter?.verifyScope) {
+      throw new TaxError("tax_scope_unsupported", "尚无经过验证的企业作用域读取能力");
+    }
+    let result;
+    try { result = await this.#read((signal) => adapter.verifyScope(this.#context(session), { signal })); }
+    catch (error) {
+      if (error instanceof TaxError && error.code === "tax_request_timeout") throw error;
+      throw new TaxError("tax_scope_verification_failed", "企业作用域验证失败；原始错误未回显");
+    }
+    this.#assertScope(session, stamp);
+    this.#businessResult(session, result);
+    if (result.authorized !== true || result.enterpriseId !== session.enterprise.enterpriseId) {
+      throw new TaxError("tax_scope_mismatch", "当前企业或授权范围未验证");
+    }
+    if (typeof result.scopeRevision !== "string" || !result.scopeRevision || result.scopeRevision.length > 256) {
+      throw new TaxError("tax_response_invalid", "适配器未提供会话与授权代际");
+    }
+    const revision = createHash("sha256").update(result.scopeRevision).digest("hex");
+    if (session.verifiedRevision && session.verifiedRevision !== revision) {
+      session.status = "expired";
+      this.#forgetSecrets(session);
+      throw new TaxError("tax_scope_changed", "会话身份或授权代际变化，旧引用失效");
+    }
+    session.verifiedRevision = revision;
+    session.verifiedStamp = stamp;
+    const supportedResources = adapter.queryPage ? adapter.capabilities.resources.filter((resource) => {
+      const evidence = adapter.readonlyEvidence[resource];
+      return evidence?.sideEffectFree === true && ["synthetic", "observed", "repeated"].includes(evidence.evidenceLevel)
+        && /^[a-zA-Z0-9._-]{1,64}$/.test(evidence.contractVersion || "");
+    }) : [];
+    return { sessionId, scopeRef: session.scopeRef, region: session.region, status: "verified",
+      boundAccountSetId: session.accountSetId, supportedResources };
+  }
+
+  async collectResource({ sessionId, resource, period } = {}) {
+    if (typeof period !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) {
+      throw new TaxError("tax_period_invalid", "必须提供合法 YYYY-MM 期间");
+    }
+    const session = this.#authenticatedSession(sessionId);
+    const stamp = this.#scopeStamp(session);
+    const adapter = this.adapters.get(adapterKey(session.region, session.adapterId));
+    const evidence = adapter?.readonlyEvidence?.[resource];
+    if (!RESOURCE_IDS.has(resource) || !adapter?.capabilities.resources.includes(resource)
+        || !adapter.queryPage || evidence?.sideEffectFree !== true
+        || !["synthetic", "observed", "repeated"].includes(evidence.evidenceLevel)
+        || !/^[a-zA-Z0-9._-]{1,64}$/.test(evidence.contractVersion || "")) {
+      throw new TaxError("tax_resource_unsupported", "该资源没有已验证的只读采集契约");
+    }
+    const scope = await this.verifyScope({ sessionId });
+    this.#assertScope(session, stamp);
+    const sourceRef = `read_${randomBytes(18).toString("hex")}`;
+    let count = 0, total = null, pages = 0;
+    const seen = new Set();
+    const pageSize = 500;
+    for (let page = 1; page <= 20; page++) {
+      let result;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        this.#assertScope(session, stamp);
+        try { result = await this.#read((signal) => adapter.queryPage(this.#context(session), { resource, period, page, pageSize, signal })); }
+        catch (error) {
+          if (error instanceof TaxError && error.code === "tax_request_timeout") throw error;
+          throw new TaxError("tax_query_failed", "采集请求失败；原始错误未回显");
+        }
+        this.#assertScope(session, stamp);
+        if (!(result?.businessOk === false && result.errorCode === "transient" && attempt === 0)) break;
+      }
+      this.#businessResult(session, result);
+      if (result.enterpriseId !== session.enterprise.enterpriseId || result.period !== period
+          || typeof result.scopeRevision !== "string"
+          || createHash("sha256").update(result.scopeRevision).digest("hex") !== session.verifiedRevision) {
+        throw new TaxError("tax_scope_mismatch", "采集结果企业或期间不一致");
+      }
+      const pagination = result.pagination;
+      if (!pagination || pagination.page !== page || pagination.pageSize !== pageSize
+          || !Number.isSafeInteger(pagination.total) || pagination.total < 0
+          || typeof pagination.hasMore !== "boolean" || (total !== null && total !== pagination.total)) {
+        throw new TaxError("tax_pagination_invalid", "分页元信息缺失或不一致");
+      }
+      const spec = DTO_SPEC[resource];
+      const data = result.data;
+      if ((spec.kind === "array" && (!Array.isArray(data) || data.length > pageSize))
+          || (spec.kind === "object" && (!data || typeof data !== "object" || Array.isArray(data)))) {
+        throw new TaxError("tax_response_invalid", "资源结构不匹配");
+      }
+      const rows = spec.kind === "array" ? data : [data];
+      for (const row of rows) {
+        const fields = spec.item || spec.fields;
+        if (!row || typeof row !== "object" || Array.isArray(row)
+            || REQUIRED_READ_FIELDS[resource].some((key) => typeof row[key] !== "string" || !row[key].trim())
+            || Object.entries(fields).some(([key, kind]) => Object.hasOwn(row, key) && row[key] !== null
+              && (kind === "stringArray" ? !Array.isArray(row[key]) || row[key].some((value) => typeof value !== "string")
+                : typeof row[key] !== "string"))) {
+          throw new TaxError("tax_response_invalid", "记录缺少资源字段");
+        }
+        if ((resource === "enterprise_profile" && row.enterpriseId !== session.enterprise.enterpriseId)
+            || (resource === "declaration_status" && row.period !== period)) {
+          throw new TaxError("tax_scope_mismatch", "记录企业或期间不一致");
+        }
+        // Only a digest is retained during this call; records never enter the tool result.
+        const canonical = Object.keys(fields).sort().map((key) => [key, row[key] ?? null]);
+        const key = createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+        if (seen.has(key)) throw new TaxError("tax_pagination_duplicate", "分页记录重复，覆盖完整性未证实");
+        seen.add(key);
+      }
+      count += rows.length;
+      pages++;
+      total = pagination.total;
+      if (count > total || (pagination.hasMore && (rows.length === 0 || count >= total))
+          || (!pagination.hasMore && count !== total) || (spec.kind === "object" && pagination.hasMore)) {
+        throw new TaxError("tax_pagination_incomplete", "记录数量与分页声明不一致");
+      }
+      if (!pagination.hasMore) {
+        this.#assertScope(session, stamp);
+        return { scopeRef: scope.scopeRef, companyRef: scope.scopeRef, resource, period, status: count ? "success" : "no_records",
+          complete: true, count, pages, evidenceLevel: evidence.evidenceLevel,
+          contractVersion: evidence.contractVersion, sourceRef, fetchedAt: iso(this.now()),
+          metadataOnly: true, evidencePersisted: false };
+      }
+    }
+    throw new TaxError("tax_pagination_limit", "超过受控分页上限，未宣称完整采集");
+  }
+
+  #authenticatedSession(id) {
+    const session = this.#requireSession(id);
+    if (this.#guardTerminal(session)) throw this.#terminalError(session);
+    if (session.status !== "authenticated") throw new TaxError("tax_session_not_authenticated", "会话尚未认证");
+    return session;
+  }
+
+  async #read(operation) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => operation(controller.signal)),
+        new Promise((_, reject) => { timer = setTimeout(() => {
+          controller.abort();
+          reject(new TaxError("tax_request_timeout", "只读请求超时，未采纳迟到结果"));
+        }, this.requestTimeoutMs); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+
+  #scopeStamp(session) {
+    return JSON.stringify([session.region, session.adapterId, session.accountSetId, session.enterprise, session.scopeRef]);
+  }
+
+  #assertScope(session, stamp) {
+    this.#authenticatedSession(session.sessionId);
+    if (this.sessions.get(session.sessionId) !== session || this.#scopeStamp(session) !== stamp) {
+      throw new TaxError("tax_scope_changed", "会话作用域已变化，丢弃迟到结果");
+    }
+  }
+
+  #businessResult(session, result) {
+    if (result?.businessOk === false && result.errorCode === "session_expired") {
+      session.status = "expired";
+      this.#forgetSecrets(session);
+      throw new TaxError("tax_session_expired", "税局会话已过期，请在本机重新登录");
+    }
+    if (result?.businessOk !== true || result.errorCode || result.error || result.errors) {
+      throw new TaxError(result?.errorCode === "permission_denied" ? "tax_permission_denied" : "tax_business_error",
+        "业务成功条件未满足；未采用响应数据");
+    }
+    if (!Number.isInteger(result.httpStatus) || result.httpStatus < 200 || result.httpStatus >= 300
+        || result.schemaValidated !== true || result.businessCodeValidated !== true) {
+      throw new TaxError("tax_response_invalid", "传输、业务码或结构验证合同未满足");
+    }
   }
 
   // -------------------------------------------------------- 内部
@@ -981,7 +1180,7 @@ export class TaxGateway {
       region: session.region,
       adapterId: session.adapterId,
       accountSetId: session.accountSetId,
-      enterprise: session.enterprise,
+      enterprise: session.enterprise ? Object.freeze({ ...session.enterprise }) : null,
       credentialRef: session.credentialRef,
       status: session.status,
     };
@@ -1214,6 +1413,8 @@ function describeAdapter(adapter) {
       submitChallenge: !!adapter.submitChallenge,
       logout: !!adapter.logout,
       query: !!adapter.query,
+      verifyScope: !!adapter.verifyScope,
+      queryPage: !!adapter.queryPage,
     },
   };
 }
