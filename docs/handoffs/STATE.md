@@ -1,5 +1,11 @@
 # 阶段状态
 
+> **2026-10-19 当前优先入口：真实数据到申报准备**。[TAX-DATA-FIRST](../tasks/TAX-DATA-FIRST.md) · [详细方案](../TAX-DATA-ACQUISITION-PLAN.md) · [checkpoint](TAX-POSTLOGIN-CHECKPOINT.md)。负责人 `huxiaoyang-code`；暂停会计核心、持续导入、文件报表等本地扩建，先按新账号 / 新公司申报准备目标盘点真实可取数据，再确定首条闭环。首期获取数据、准备材料、预填校验，冻结版本由用户确认后正式提交；税局缺账务资料优先现有本地账套，缺项由用户补。
+>
+> 用户已明确授权有限只读盘点并提供本机登录页。当前 Edge 已观察到办税 / 查询 / 发票 / 数字账户 / 财报菜单，未见重新登录提示；**网络 CDP 连续超时，新业务响应 0，未完成登录态全面验证或首次 / 二次采集**。旧暂停为历史，当前等网络证据通道恢复，不再索取同一只读盘点的恢复授权；自动点击仍禁用，真实原文 / 凭据不进模型。
+>
+> 旧 16 包保留为暂停 / 后备路线，A1 与 PR #22 / #23 已合并；439 项是首包历史验证，本次纯文档不重跑业务测试。PR #18 Draft / #19 OPEN、Issue #20 / #13 / #14 / #17 OPEN 保留，不关闭。以下首包状态、旧分工和暂停说明均按其时点追溯，以本条及当前任务为优先入口。
+
 > **2026-10-19 接管首包已合并、业务修复已交付**：[VOUCHER-AMOUNT-GUARDS 交接](VOUCHER-AMOUNT-GUARDS.md) · [任务单](../tasks/VOUCHER-AMOUNT-GUARDS.md) · [16 包接管计划](../DEVELOPMENT-TAKEOVER-PLAN.md)。唯一负责人 `huxiaoyang-code`；[PR #22](https://github.com/huxiaoyang-code/youshu-fork/pull/22) 最终审核 head `147e71f7f783af086ad136808ebb6cc3f7d2d262`，merge `0dee7655ab348e20293fed006fc6075c02a42ad4`，北京时间 2026-10-19 22:12:36 合并，管理者已核对两者完整树一致。独立全套 11 套 439 项、exit 0；按用户本轮明确授权，由未参与实现、无历史上下文的另一个独立 subagent 完成最终复核，新套件 103/103、exit 0，额外合成边界验证通过，不宣称跨人类成员或 GitHub 第二账号批准。其余包未完成，本轮仅文档收尾，不启动新包；Issue #13 / #14 / #17 / #20 仍 OPEN，真实税局 checkpoint 继续暂停。下文“仅交接文档”及旧机器现场均为历史记录，不代表当前首包状态。
 
 > **2026-10-19 全量开发接管入口（用户最新指示，优先于下文全部历史内容）**：用户已把**全部后续开发**交给同事在另一台电脑的 Codex 接手，继续向同一私有仓库 `https://github.com/huxiaoyang-code/youshu-fork` 提交；**沿用 `huxiaoyang-code` 账号**，不 fork、不换用户名、不新建仓库；**不复制**原机器 token / config / session / 账套 DB。本次**只交接文档，原机器不新开业务实现**。
