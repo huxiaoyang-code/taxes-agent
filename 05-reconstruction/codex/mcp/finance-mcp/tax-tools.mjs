@@ -25,6 +25,10 @@ const available = (name, description, inputSchema) =>
   ({ name, description, inputSchema, status: "available", origin: "local" });
 
 export const TAX_TOOLS = [
+  available("tax_history_collect", "按本机管理员绑定的contextRef取回固定已观察历史申报查询，仅返回安全引用和覆盖摘要。默认关闭；不推断待办、稳定业务身份或全历史。",
+    {...obj({contextRef:{type:"string",pattern:"^taxhistorycontext_[a-f0-9]{48}$"}},["contextRef"]),additionalProperties:false}),
+  available("tax_history_compare", "比较同一上下文两个独立取回的私有历史查询白名单投影和内容多重集，仅返回计数和布尔，不认定业务身份或更正关系。",
+    {...obj({leftRef:{type:"string",pattern:"^taxhistoryrun_[a-f0-9]{48}$"},rightRef:{type:"string",pattern:"^taxhistoryrun_[a-f0-9]{48}$"}},["leftRef","rightRef"]),additionalProperties:false}),
   available("tax_live_collect", "按本机管理员新导航形成的sourceRef重复只读采集当前企业上下文与当前申报清单，仅返回安全引用、企业一致性与部分覆盖。默认关闭；期间仍待核实。",
     {...obj({sourceRef:{type:"string",pattern:"^taxsource_[a-f0-9]{48}$"}},["sourceRef"]),additionalProperties:false}),
   available("tax_live_compare", "本机比较两次只读采集的白名单投影，只返回企业相等、清单相等及覆盖状态，不返回业务原值。",
