@@ -1,6 +1,8 @@
 # TAX-COLLECTION-REBASE · 真实税局采集重整
 
-日期：2026-10-20。负责人：`huxiaoyang-code`。本包“门户契约 + 真实复采”已有实际验收证据，待最终 head 一致性核对与 PR 合并；整个企业报税资料采集专项仍未完成。
+核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
+
+日期：2026-10-20。负责人：`huxiaoyang-code`。本包“门户契约 + 真实复采”已验收并随 PR #29 合并；整个企业报税资料采集专项仍未完成。
 
 - 基线：`0345046ce40b644f26d4ea52adb362d040533bc2`；独立分支：`codex/huxiaoyang-code/tax-collection-rebase`。
 - 关联总任务：Refs #20，按业务 Refs #13 / #14 / #17；不关闭总任务，不盲合并旧 PR。
@@ -51,4 +53,4 @@
 
 行字段异构，曾观察到行字段数最大 32，`zspmDm` 仅 4 / 6 行存在。`documentScopeVerified = true`，但 `businessScopeVerified`、`enterpriseVerified`、`periodVerified`、`projectionComplete` 均 false；仍缺 `business_period`、`full_enterprise_profile`、`full_business_fields`。早期 provisional 已废弃，`scope_cleanup` 与废弃新锁恢复仅是历史，当前无该锁阻塞。后续已授权沿真实同源业务页补期间与资料，不是等待用户输入。
 
-管理者最终 `npm test` **23 / 23 套 exit 0**，本包新增合成回归 **54 项 exit 0**。未参与实现、`fork_turns=none` 的独立 reviewer 已审当前代码无剩余阻塞，待最终 head 一致性核对。PR / head / merge 实际值尚未记录，不预报合并，也不因未知自身 SHA 延误收尾。安全引用可由工具返回模型，但不写 Git / PR；凭据、业务原值、原始本机标识及调试信息不进入模型或 Git。本次六份文档最终所有权已由管理者从 collection_contract 交接给 backend_collection，原文档实施者已停写。
+管理者最终 `npm test` **23 / 23 套 exit 0**，本包新增合成回归 **54 项 exit 0**。未参与实现、`fork_turns=none` 的独立 reviewer 已审当前代码无剩余阻塞，最终独审与 head 一致性核对已通过，核心 PR #29 已合并。实际 PR / head / merge 已补录；本轮只做合并后交接收尾。安全引用可由工具返回模型，但不写 Git / PR；凭据、业务原值、原始本机标识及调试信息不进入模型或 Git。本次六份文档最终所有权已由管理者从 collection_contract 交接给 backend_collection，原文档实施者已停写。

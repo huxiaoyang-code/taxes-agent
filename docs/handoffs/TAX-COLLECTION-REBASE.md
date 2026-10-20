@@ -1,6 +1,8 @@
 # TAX-COLLECTION-REBASE · 门户真实复采与继续入口
 
-日期：2026-10-20。负责人 `huxiaoyang-code`；[任务单](../tasks/TAX-COLLECTION-REBASE.md)、[采集契约](../TAX-COLLECTION-CONTRACT.md)。**本包已取得门户只读资料及两次实际后端复采，待最终验收 / PR 合并；整个企业报税资料采集专项仍未完成。** 本文不含真实企业、期间、金额、凭据、运行引用、端口、进程或标签页标识。
+核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
+
+日期：2026-10-20。负责人 `huxiaoyang-code`；[任务单](../tasks/TAX-COLLECTION-REBASE.md)、[采集契约](../TAX-COLLECTION-CONTRACT.md)。**本包门户只读资料与两次实际后端复采已验收并随 PR #29 合并；整个企业报税资料采集专项仍未完成。** 本文不含真实企业、期间、金额、凭据、运行引用、端口、进程或标签页标识。
 
 ## 当前已核验与恢复入口
 
@@ -48,13 +50,20 @@
 | `06-workbench` | `node --test test/tax-collection-recovery.test.mjs` | 13 / 13，exit 0 |
 | `06-workbench` | `node --test test/tax-browser-inventory.test.mjs test/tax-browser-diagnostic.test.mjs` | 合计 7 / 7，exit 0 |
 
-同一冻结代码合计 **54 项 exit 0**，涵盖真实 store 完整持久链、双 clear / 任一业务请求门槛、reply 前后 hash 往返、私有字段泄漏、非法 recipe / source、独立 fresh proof、串企 / scope 变化、过期、错误响应、保留锁与显式恢复。管理者最终 `npm test` **23 / 23 套 exit 0**；未参与实现且 `fork_turns=none` 的独立 reviewer 已审当前代码无剩余阻塞，待最终 head 一致性核对。PR / head / merge 实际值尚未记录，不预报合并，不因未知自身 SHA 等候。旧 19 项未提交文件哈希均未改变，旧 owner / browser / quarantine 保留。
+同一冻结代码合计 **54 项 exit 0**，涵盖真实 store 完整持久链、双 clear / 任一业务请求门槛、reply 前后 hash 往返、私有字段泄漏、非法 recipe / source、独立 fresh proof、串企 / scope 变化、过期、错误响应、保留锁与显式恢复。管理者最终 `npm test` **23 / 23 套 exit 0**；未参与实现且 `fork_turns=none` 的独立 reviewer 已审当前代码无剩余阻塞，最终独审与 head 一致性核对已通过，核心 PR #29 已合并。实际 PR / head / merge 已补录；本轮只做合并后交接收尾。旧 19 项未提交文件哈希均未改变，旧 owner / browser / quarantine 保留。
 
-安全引用可由工具返回模型，但不写 Git / PR；原始本机标识、调试信息、业务原值与凭据不进入模型或 Git。当前新采集锁已正常释放，没有历史废弃锁阻塞。
+安全引用可由工具返回模型，但不写 Git / PR；原始本机标识、调试信息、业务原值与凭据不进入模型或 Git。核心门户采集锁已正常释放，没有其历史废弃锁阻塞；后续原型锁状态另见下文。
 
+## 合并后当前后续阶段
+
+本次纯交接分支为 `codex/huxiaoyang-code/tax-collection-handoff`，基线为上述 PR #29 merge；管理者另开交接 PR，不改已冻结生产 / 测试代码。核心 EOF 空行仅为独立审查记录的非阻塞样式项，不据此宣称 `diff --check` 全绿。
+
+新 source 刷新成功，实际 4 passive + 1 active identity verify。`candidate_only` 忽略目录原型经独立审查、49 项合成通过后，管理者真实 prepare 在 `identity_before` 失败；performed 计数 0 不等于未尝试。没有导航、没有 candidates，新 `business_page_prepare` scope 锁保留，当前正在审查安全诊断 / 受控 reload 恢复。
+
+该锁属于后续原型，不是核心历史废弃锁复发，不推翻核心两次 MCP 六个实际请求及比较结论；合成通过也不提升原型实际取数状态。仍只从本机 checkpoint 恢复，不写实际 refs / PID / 端口，不盲解除锁或重启原 owner / browser。
 ## 后续工作与收尾
 
-1. 本包按“门户契约 + 真实复采”提交 PR，核对最终 head 与已验收树一致后按已有授权合并；不因本包通过关闭整个采集专项。合并后据实记录完整 head / merge SHA，并使用新的 revert PR 回退，不重写 main。
+1. 核心 PR #29 已验收合并；本次仅补实际合并与当前后续状态，由管理者另开交接 PR。整个采集专项保持未完成，回退仍使用新的 revert PR，不重写 main。
 2. 后续已授权从本机已观察行链接的静态消费者与已确认官方同源页面继续正常导航，先证明期间和完整企业业务作用域，再补税费种认定、备案 / 表单、当前义务与必要业务材料；不是等待用户输入，不猜隐藏接口，不调用带状态写入 / 票据副作用的依赖。
 3. 补充资源逐项形成实际请求契约和本机证据，再经现有 MCP 后端独立复采；分别验证分页、稳定业务键、完整字段与企业 / 期间绑定。门户投影相等不代替后续业务覆盖。
 4. 旧现场继续保留，不盲改旧窗口或后端。每部分验收 / PR 合并 / 交接后再结束其实施会话，下一部分用新会话载入最小任务包；真实资料不进入模型或 Git。

@@ -1,5 +1,7 @@
 # 当前企业与待办期间的真实采集契约
 
+核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
+
 日期：2026-10-20。适用任务：[TAX-COLLECTION-REBASE](tasks/TAX-COLLECTION-REBASE.md)。本契约描述采集与验收边界，不代表表中业务资源已经取得。全国税局尚无可据此宣布的真实接入完成结果。
 
 ## 证据等级与执行门槛
@@ -59,7 +61,7 @@ wire 结构已由官方静态封装与实际请求共同确认：调用层 `{csb
 
 早期 provisional 已废弃；hash 守卫缺陷、`scope_cleanup` 误拒及废弃新锁恢复仅作历史。管理者受控恢复未改旧 registry / quarantine，当前新锁已正常释放，没有历史锁阻塞。正常 bootstrap 只在匹配本次初始 frame 尚未消费且任何新文档业务请求之前有界允许两次 context clear；后续 clear、第三次 clear、任意 hash 往返仍拒绝。
 
-管理者最终 `npm test` 23 / 23 套 exit 0，本包新增采集合成回归 54 项 exit 0。未参与实现、`fork_turns=none` 的独立 reviewer 已审当前代码无剩余阻塞，待最终 head 一致性核对。先按“门户契约 + 真实复采”PR 验收合并，PR / head / merge 据实补录，不预报；整个专项未完成，后续已经授权沿真实官方同源业务页补期间、企业资料及完整字段，不是等待用户输入。旧 19 项未提交文件哈希均未变，旧 owner / browser / quarantine 保留。
+管理者最终 `npm test` 23 / 23 套 exit 0，本包新增采集合成回归 54 项 exit 0。未参与实现、`fork_turns=none` 的独立 reviewer 已审当前代码无剩余阻塞，最终独审与 head 一致性核对已通过，核心 PR #29 已合并。核心“门户契约 + 真实复采”已随 PR #29 验收合并；整个专项未完成，后续已经授权沿真实官方同源业务页补期间、企业资料及完整字段，不是等待用户输入。旧 19 项未提交文件哈希均未变，旧 owner / browser / quarantine 保留。
 ## 沿实际申报行继续正常页面导航
 
 官方 `main-listb` 静态消费者能证明下列导航来源，不能证明目标页面加载必然纯展示。仅由真实已观察行在本机形成链接，经官方 origin 与固定技术 route 核验后正常导航；不把运行时完整 URL、query / hash 值或业务文字传到模型，不执行点击处理函数本身。
