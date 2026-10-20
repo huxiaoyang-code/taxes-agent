@@ -1,5 +1,7 @@
 # TAX-BUSINESS-COLLECTION · 企业资料与申报期间实采
 
+> **最新用户指示已覆盖本任务旧优先顺序**：本期已报，后续按[月度项目与资料链路](../TAX-MONTHLY-DATA-CHAIN.md)、[新任务](TAX-MONTHLY-DATA-CHAIN.md)和[新交接](../handoffs/TAX-MONTHLY-DATA-CHAIN.md)执行，不以当前未报待办作为唯一前置。下文为历史任务和验收时点，不能据其“已登录 / 正调整”恢复真实会话；PR #35 仍独立 Draft，最新登录与旧链状态见新交接。
+
 日期：2026-10-20。负责人：`huxiaoyang-code`。Refs #20 / #13 / #14 / #17，不关闭总任务。分支 `codex/huxiaoyang-code/tax-business-collection`，基线 [PR #33](https://github.com/huxiaoyang-code/youshu-fork/pull/33) merge `f05c7a1a6a9412ab873f4b282a76ee773baff2f7`，该 PR head `9a9191f968548cbf2f5010e20f46df035f566bd6` 已审查、验证并合并。本包期间字段修复已完成独立验证与最终两轮真实 MCP，待 root 锁 head / PR 交付；已进入纳税人信息查询页，业务数据捕获不足，总任务未完成。
 
 必读：[章程](../PROJECT-CHARTER.md)、[STATE](../handoffs/STATE.md)、[采集契约](../TAX-COLLECTION-CONTRACT.md)、[本包交接](../handoffs/TAX-BUSINESS-COLLECTION.md)。历史退役语义只查[前包交接](../handoffs/TAX-READONLY-ABANDON.md)，不恢复旧 source，不沿用前包窗口引用。

@@ -1,5 +1,7 @@
 # TAX-BUSINESS-COLLECTION · 当前交接
 
+> **最新入口：[月度链路交接](TAX-MONTHLY-DATA-CHAIN.md)** · [主文档](../TAX-MONTHLY-DATA-CHAIN.md) · [任务](../tasks/TAX-MONTHLY-DATA-CHAIN.md)。用户本期已报，优先已报项目的本期 / 往期资料与官网确有下载，不以未报待办作为唯一前置。下文为历史快照；PR #35 独立 Draft 未合并，旧链不可消费，用户正重登但未告知完成，恢复以新交接为准。
+
 日期：2026-10-20。负责人：`huxiaoyang-code`。分支 `codex/huxiaoyang-code/tax-business-collection`。必读：[任务](../tasks/TAX-BUSINESS-COLLECTION.md)、[契约](../TAX-COLLECTION-CONTRACT.md)、[章程](../PROJECT-CHARTER.md)。期间字段修复独立验证与最终两轮真实 MCP 已完成，root 待锁 head / PR 交付；已进入纳税人信息查询页，业务数据捕获不足，不能宣布整体采集完成。
 
 ## 基线与现场
