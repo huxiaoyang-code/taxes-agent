@@ -1,6 +1,6 @@
 # 企业月度申报与支撑资料取数链路
 
-> **2026-10-20 当前能力更新：[历史查询子包](TAX-HISTORY-COLLECTION.md)** · [任务](tasks/TAX-HISTORY-COLLECTION.md) · [交接](handoffs/TAX-HISTORY-COLLECTION.md)。固定 `DescribeSbmxcx2` 九键 / 十三字段查询现已实现私有持久账册，现有 MCP → HTTP → Agent → 生产 collector 两轮各 3 fresh / 3 complete、6 行 / 2 期间，unknown 0、无保留锁，capture / run 与 run / run 四项比较均相等；仅捕获固定查询范围闭合，不支持猜分页或证明全历史。用户已登录完成、新链已建；受限 M1 子包代码与真实验证通过，本包 PR 尚未创建 / 合并。完整 M1 的项目 / 稳定身份版本 / 表字段依赖、M2–M5 及 preparation 接线仍未完成；安全资料对照表见子包主文档。PR #35 仍独立 Draft（已追加退役提交 `ebd018c2ce7b0f9abb18ecd236d07def10cadc98`），企业三 API 未因此成为已复采。下文原月度文档与能力审计保留 PR #36 时点历史，其中“仅 observed / 新链未建 / 未登录完成”等不覆盖本条。
+> **2026-10-20 当前能力更新：[历史查询子包](TAX-HISTORY-COLLECTION.md)** · [任务](tasks/TAX-HISTORY-COLLECTION.md) · [交接](handoffs/TAX-HISTORY-COLLECTION.md)。固定 `DescribeSbmxcx2` 九键 / 十三字段查询现已实现私有持久账册，现有 MCP → HTTP → Agent → 生产 collector 两轮各 3 fresh / 3 complete、6 行 / 2 期间，unknown 0、无保留锁，capture / run 与 run / run 四项比较均相等；仅捕获固定查询范围闭合，不支持猜分页或证明全历史。用户已登录完成、新链已建；受限 M1 子包代码与真实验证通过，本包已独立审查并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并。完整 M1 的项目 / 稳定身份版本 / 表字段依赖、M2–M5 及 preparation 接线仍未完成；安全资料对照表见子包主文档。PR #35 仍独立 Draft（已追加退役提交 `ebd018c2ce7b0f9abb18ecd236d07def10cadc98`），企业三 API 未因此成为已复采。下文原月度文档与能力审计保留 PR #36 时点历史，其中“仅 observed / 新链未建 / 未登录完成”等不覆盖本条。
 
 日期：2026-10-20。负责人：`huxiaoyang-code`。关联 Issue #20 / #13 / #14 / #17。
 

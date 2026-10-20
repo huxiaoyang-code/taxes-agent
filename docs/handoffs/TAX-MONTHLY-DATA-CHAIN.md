@@ -1,6 +1,6 @@
 # TAX-MONTHLY-DATA-CHAIN · 交接与新任务入口
 
-> **2026-10-20 最新恢复：[TAX-HISTORY-COLLECTION 交接](TAX-HISTORY-COLLECTION.md)** · [使用契约 / 安全资料对照表](../TAX-HISTORY-COLLECTION.md) · [任务](../tasks/TAX-HISTORY-COLLECTION.md)。用户已登录完成、新链已建，固定历史查询现有 MCP 两轮各 3 fresh / 3 complete、6 行 / 2 期间，unknown 0、无保留锁，独立比较一致；受限 M1 查询子包代码与真实验证通过，本包 PR 尚未创建 / 合并。完整 M1 的项目 / 稳定身份版本 / 表字段依赖和 M2–M5 仍待办，无详情 / 下载 / preparation 接线。旧链 target_absent 已本机审计退役、旧结果永久禁用，server 请求终止 unknown，owner / browser 保留；退役代码为 PR #35 的 `ebd018c2ce7b0f9abb18ecd236d07def10cadc98`，该 PR 仍独立 Draft 未合并。下文为 PR #36 文档包时点，不将当时 head、登录 / 新链状态作为当前事实。
+> **2026-10-20 最新恢复：[TAX-HISTORY-COLLECTION 交接](TAX-HISTORY-COLLECTION.md)** · [使用契约 / 安全资料对照表](../TAX-HISTORY-COLLECTION.md) · [任务](../tasks/TAX-HISTORY-COLLECTION.md)。用户已登录完成、新链已建，固定历史查询现有 MCP 两轮各 3 fresh / 3 complete、6 行 / 2 期间，unknown 0、无保留锁，独立比较一致；受限 M1 查询子包代码与真实验证通过，本包已独立审查并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并。完整 M1 的项目 / 稳定身份版本 / 表字段依赖和 M2–M5 仍待办，无详情 / 下载 / preparation 接线。旧链 target_absent 已本机审计退役、旧结果永久禁用，server 请求终止 unknown，owner / browser 保留；退役代码为 PR #35 的 `ebd018c2ce7b0f9abb18ecd236d07def10cadc98`，该 PR 仍独立 Draft 未合并。下文为 PR #36 文档包时点，不将当时 head、登录 / 新链状态作为当前事实。
 
 日期：2026-10-20。负责人：`huxiaoyang-code`。Refs #20 / #13 / #14 / #17，总任务保留。
 
