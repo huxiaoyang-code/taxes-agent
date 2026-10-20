@@ -1,5 +1,7 @@
 # TAX-MONTHLY-DATA-CHAIN · 月度项目与资料链路实施任务
 
+> **2026-10-20 M1 进展：[TAX-HISTORY-COLLECTION](TAX-HISTORY-COLLECTION.md)** · [契约 / 安全资料对照表](../TAX-HISTORY-COLLECTION.md) · [交接](../handoffs/TAX-HISTORY-COLLECTION.md)。固定历史查询受限子包代码与两轮真实 MCP 验证已通过，各 3 fresh / 3 complete、6 行 / 2 期间，unknown 0 / 无保留锁；本包 PR 尚未创建 / 合并。项目确认、稳定身份 / 版本 / 更正 / 筛选语义与实际表字段依赖仍待核，完整 M1 未完成；M2–M5 仍待办，未接 preparation。用户已登录完成、新链已建，旧链已本机 target_absent 审计退役且永久禁用，server 终止 unknown、owner / browser 保留；PR #35 仍独立 Draft。下文任务设计与登录状态保留原文档时点，实际当前状态按新交接恢复。
+
 日期：2026-10-20。负责人：`huxiaoyang-code`。Refs #20 / #13 / #14 / #17，不关闭总任务。文档分支 `codex/huxiaoyang-code/tax-monthly-data-chain`，基线 main `1c12f98bafc38d257482f35f268e7f14d2dbd156`。本包是独立可合并的纯文档任务，后续代码包须分别开任务、隔离分支及 PR。
 
 必读：[章程](../PROJECT-CHARTER.md)、[当前状态](../handoffs/STATE.md)、[业务链路与能力矩阵](../TAX-MONTHLY-DATA-CHAIN.md)、[采集契约](../TAX-COLLECTION-CONTRACT.md)、[交接](../handoffs/TAX-MONTHLY-DATA-CHAIN.md)。最新业务 PRD 按章程固定 PR #18 head 查阅，不复制未合并整份文件。

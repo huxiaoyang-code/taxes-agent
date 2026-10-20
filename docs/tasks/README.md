@@ -1,5 +1,7 @@
 # 任务看板 · TASK BOARD
 
+> **2026-10-20 当前子包：[TAX-HISTORY-COLLECTION](TAX-HISTORY-COLLECTION.md)** · [契约 / 安全资料对照表](../TAX-HISTORY-COLLECTION.md) · [交接](../handoffs/TAX-HISTORY-COLLECTION.md)。负责人 `huxiaoyang-code`，Refs #20 / #13 / #14 / #17。固定历史查询代码与两轮真实 MCP 验证通过（各 3 fresh / 3 complete，6 行 / 2 期间，unknown 0，无保留锁，比较一致），文档 / 最终 PR 审查与合并待完成。仅受限 M1 查询子包，完整 M1 的项目 / 稳定身份版本 / 字段依赖与 M2–M5 未完成。用户已登录完成，新链已建；PR #35 仍独立 Draft 未合并，不宣称企业三 API 已复采。下方月度文档及旧包状态保留历史。
+
 > **2026-10-20 最新任务：[TAX-MONTHLY-DATA-CHAIN](TAX-MONTHLY-DATA-CHAIN.md)** · [业务链路 / 能力矩阵](../TAX-MONTHLY-DATA-CHAIN.md) · [交接](../handoffs/TAX-MONTHLY-DATA-CHAIN.md)。负责人 `huxiaoyang-code`，Refs #20 / #13 / #14 / #17。本期已报，优先单项目已报期真实取数 → 详情 / 官网确有文件 → 资料依赖与企业补充，后端缺项明确列待办；技术失败不转企业补交。本文档包未实现新取数 / 下载，PR #35 独立 Draft 未合并。用户正重登但未告知完成，本轮不操作浏览器。下方旧包保留历史，不再以未报待办作为唯一前置。
 
 > **2026-10-20 当前包：[TAX-BUSINESS-COLLECTION](TAX-BUSINESS-COLLECTION.md)** · [交接](../handoffs/TAX-BUSINESS-COLLECTION.md) · [契约](../TAX-COLLECTION-CONTRACT.md)。负责人 `huxiaoyang-code`，Refs #20 / #13 / #14 / #17；分支 `codex/huxiaoyang-code/tax-business-collection`，基线 PR #33 merge `f05c7a1a6a9412ab873f4b282a76ee773baff2f7`（已审查验证合并）。用户关闭旧浏览器后要求再次启动后端浏览器并已登录，root 已绑定全新专用窗口。新 v2 source 4 passive + 1 identity、现有 MCP 两轮各 3 fresh / 3 complete / 6 行，独立投影相等、无保留锁，仍仅既有白名单覆盖。新增期间 / 企业字段及严格零时间格式已验收：root 完整 26 / 26 套、独立原 54 + 增量 45 项通过；现有 MCP → 新纯采集后端最终两轮各 3 fresh / 3 complete / 6 行，无保留锁，企业 6 字段均 present / nonempty 6、投影相等，期间 validPair 6、缺失 / 非法 / 倒序 / 不支持均 0，起止 Midnight 各 6、distinctPeriodCount 3、alreadyFiledWithValidPeriod 6，filingPeriodsVerified true，source / run 与 run / run 可比且 PairEqual / MultisetEqual true。仅核实这 6 行已申报记录，已进入纳税人信息查询页，业务数据捕获不足，总任务未完成。
@@ -67,6 +69,7 @@
 
 | 任务 ID | 负责人 | 范围 | 状态 | 依赖 | 任务单 |
 |---|---|---|---|---|---|
+| TAX-HISTORY-COLLECTION | `huxiaoyang-code` | 固定历史查询、私有账册、两轮实际 MCP 与比较 | 受限 M1 子包代码 / 真实验证通过；本包 PR 尚未创建 / 合并，完整 M1 未完成 | 项目 / 稳定身份版本 / 字段依赖待核；M2–M5 待办 | [TAX-HISTORY-COLLECTION](TAX-HISTORY-COLLECTION.md) |
 | TAX-COLLECTION-REBASE | `huxiaoyang-code` | 门户契约、新 source、两次真实 MCP 复采 / 比较 | 核心已合并 PR #29；23 套 / 54 项通过，真实两次六请求 / 各六行，投影相等；整个专项仍 partial | 合并后交接；后续 candidate_only 原型 identity_before 失败、新 prepare 锁待安全诊断 / 受控恢复 | [TAX-COLLECTION-REBASE](TAX-COLLECTION-REBASE.md) |
 | TAX-SESSION-DISCOVERY | `huxiaoyang-code` | 本机专用 Edge 后端通道、真实会话探索、DTO 去重修复 | 连接前置已合并 PR #27；17 套通过，真实业务未取得 | 用户登录问题、有效企业 / 期间与实际业务契约 | [TAX-SESSION-DISCOVERY](TAX-SESSION-DISCOVERY.md) |
 | TAX-READONLY-TOOLS | `huxiaoyang-code` | 真实只读探索、agent / MCP 准备工具、合成验收 | 工具前置已合并 PR #25；530 项通过，真实专项未完成 | 当前身份 / 期间及真实契约 | [TAX-READONLY-TOOLS](TAX-READONLY-TOOLS.md) |
