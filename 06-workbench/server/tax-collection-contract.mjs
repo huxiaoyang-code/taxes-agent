@@ -1,4 +1,5 @@
 import {IDENTITY_FIELDS,FILING_FIELDS,PASSIVE_RECIPES} from './tax-collection-shape.mjs';
+import {FULL_FRAME_URL_SEMANTICS} from './tax-frame-url.mjs';
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v,keys)=>object(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
 const scalarFields=(v,allowed)=>object(v)&&Object.keys(v).every(k=>allowed.includes(k)&&typeof v[k]==='string'&&v[k].length<=4096);
@@ -26,8 +27,11 @@ export function validateCapture(capture,resource){
 }
 export function validateEvidence(kind,v){
   if(kind==='source'){
-    if(!exact(v,['version','authorizedNavigation','handoffMode','readerStoppedConfirmed','registrationRef','registrationRoot','pageRef','targetId','frameId','loaderId','documentUrlDigest','browserKey','capturedAt','identity','filing'])
-      ||v.version!==1||v.authorizedNavigation!==true||!/^taxr_[a-f0-9]{48}$/.test(v.registrationRef)
+    const keys=['version','authorizedNavigation','handoffMode','readerStoppedConfirmed','registrationRef','registrationRoot','pageRef','targetId','frameId','loaderId','documentUrlDigest','browserKey','capturedAt','identity','filing'];
+    if(v?.version===2)keys.push('documentUrlSemantics');
+    if(!exact(v,keys)||![1,2].includes(v.version)
+      ||v.version===2&&v.documentUrlSemantics!==FULL_FRAME_URL_SEMANTICS
+      ||v.authorizedNavigation!==true||!/^taxr_[a-f0-9]{48}$/.test(v.registrationRef)
       ||v.handoffMode!=='quarantined_reader_new_navigation'||v.readerStoppedConfirmed!==true
       ||!/^taxpage_[a-f0-9]{48}$/.test(v.pageRef)||typeof v.registrationRoot!=='string'
       ||!/[\\/]\.agent-runs[\\/]tax-browser-registry$/.test(v.registrationRoot)
@@ -45,4 +49,13 @@ export function validateEvidence(kind,v){
       ||new Set(v.requestProof.map(p=>p.requestRef)).size!==3)fail();
   }else fail();
   return v;
+}
+// Version 1 only bound Frame.url, so it remains readable historical evidence.
+// Never infer or fill a missing fragment proof from the browser's current URL.
+export function requireActiveSource(source){
+  validateEvidence('source',source);
+  if(source.version!==2||source.documentUrlSemantics!==FULL_FRAME_URL_SEMANTICS){
+    const error=new Error('tax_collection_source_reobservation_required');error.code=error.message;throw error;
+  }
+  return source;
 }

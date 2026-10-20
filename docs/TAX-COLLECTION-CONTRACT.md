@@ -1,10 +1,16 @@
 # 当前企业与待办期间的真实采集契约
 
+> **2026-10-20 当前修复：[TAX-FULL-URL-BINDING](tasks/TAX-FULL-URL-BINDING.md)** · [交接](handoffs/TAX-FULL-URL-BINDING.md)。CDP `Frame.url` 不含 fragment；旧 `documentScopeVerified = true` 只作历史结果，不保证完整 URL 绑定，也不证明现场实际切换。当前 v2 真实源 / 复采未运行；下文 PR #29 结果按其历史边界阅读。当前 `business_page_prepare` 新锁仍保留，导航待窗口协调；旧“当前无锁阻塞”等表述只指当时已释放的核心采集锁。
+
 核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
 
 日期：2026-10-20。适用任务：[TAX-COLLECTION-REBASE](tasks/TAX-COLLECTION-REBASE.md)。本契约描述采集与验收边界，不代表表中业务资源已经取得。全国税局尚无可据此宣布的真实接入完成结果。
 
 ## 证据等级与执行门槛
+
+完整文档 URL 必须按 CDP `Frame.url` 与 `urlFragment` 严格组合，保留单个 `#` 的片段语义并拒绝矛盾 / 异常输入（[官方协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Page.pdl)）。source v2 显式声明 `documentUrlSemantics = 'cdp_frame_url_plus_fragment_v1'`，新 save 只写 v2；v1 仅保留严格历史读取 / 比较，active 在 open / lock 前拒绝。host assert 使用完整 URL，页面内请求脚本在 fetch 前还须精确比对内部 `expectedFullUrl`，避免 host → evaluate 空窗；完整 URL、fragment 及派生摘要均不输出模型。
+
+当前恢复门槛优先于下文历史通用恢复描述：显式 `filter: [{}]` 全包含目标清单复核后 `exactTargetMatchCount = 0`，返回 `recovery_target_ambiguous`；未 attach / read frame、未 reload / unlock，锁保留。目标缺席、通用 CDP 错误或两次快照缺席均不证明原 realm 销毁，不得猜别页替代或盲删锁；先协调用户具体窗口或形成可证明终止方案。
 
 | 等级 | 可核验依据 | 可得结论 | 执行限制 |
 |---|---|---|---|

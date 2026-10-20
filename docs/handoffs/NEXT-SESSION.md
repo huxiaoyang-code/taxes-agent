@@ -1,5 +1,11 @@
 # 新会话入口 · NEXT SESSION
 
+> **2026-10-20 优先恢复：[TAX-FULL-URL-BINDING 任务](../tasks/TAX-FULL-URL-BINDING.md)与[交接](TAX-FULL-URL-BINDING.md)**，再读[契约](../TAX-COLLECTION-CONTRACT.md)。负责人 `huxiaoyang-code`，基线 PR #30 merge `846ff0a988460de0e9a1c5afa92298a7633995e8`，分支 `codex/huxiaoyang-code/tax-business-pages`。完整 URL（含 fragment）P1 core 管理者全量 23 / 23 套、独立无继承上下文审查 59 / 59 均 exit 0，无剩余 core 阻塞；整包待最终审查 / PR，v2 实机 source 与复采未运行，不能主动沿用 v1。
+>
+> 只由 root 查本 worktree ignored `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`。当前 prepare 的 identity_before 失败，performedCount 0 不等于未尝试；未导航 / 无候选，business_page_prepare 新锁保留。显式全包含 filter 后 source target 仍缺席，未 attach / read frame、未 reload / unlock；不能据缺席判 realm 销毁，不能猜别页替代解锁。root 未关闭税局页，用户具体窗口协调未答，导航暂缓。旧 19 文件均未变、原后端 / browser / quarantine 保留，另起旧 v1 临时 HTTP 已身份核对后停。正常导航授权不变；禁止自动点击与正式业务写，真实原值 / 凭据不进模型或 Git。下文 PR #29 documentScopeVerified true 仅作历史，不保证完整 URL，业务期间与完整资料仍缺，专项未完成；ignored 原型不属于本包生产成果，candidate_only 不直接导航。
+
+以下旧入口按各包历史阅读，不能覆盖上方当前锁与完整 URL 语义。
+
 核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
 
 > **2026-10-20 优先恢复：[TAX-COLLECTION-REBASE](../tasks/TAX-COLLECTION-REBASE.md)**、[采集契约](../TAX-COLLECTION-CONTRACT.md)、[本包交接](TAX-COLLECTION-REBASE.md)。负责人 `huxiaoyang-code`；分叉基线 `0345046ce40b644f26d4ea52adb362d040533bc2`，独立分支 `codex/huxiaoyang-code/tax-collection-rebase`。只查本包 worktree 的 `.agent-runs/TAX-COLLECTION-CHECKPOINT.json` 恢复实际引用 / 进程 / 窗口，不复用已废弃 provisional，不盲重启原后端。旧 19 项未提交文件哈希未变，旧 owner / browser / quarantine 保留。
