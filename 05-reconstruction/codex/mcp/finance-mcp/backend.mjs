@@ -59,7 +59,7 @@ export async function callBackend(name, args, catalog) {
   const url = `${API_BASE}/agent/tools/${encodeURIComponent(name)}`;
   // ACL verification + dedicated Edge startup + CDP connect are bounded but
   // can exceed the ordinary 15 s request budget. Repeating open is idempotent.
-  const requestTimeoutMs = name === "tax_browser_open" ? 60000 : TIMEOUT_MS;
+  const requestTimeoutMs = name === "tax_browser_open" ? 60000 : name === "tax_live_collect" ? 90000 : TIMEOUT_MS;
   let res;
   try {
     res = await fetch(url, {
