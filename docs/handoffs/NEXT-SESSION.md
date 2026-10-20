@@ -1,6 +1,6 @@
 # 新会话入口 · NEXT SESSION
 
-> **2026-10-20 先读：[历史查询子包](../TAX-HISTORY-COLLECTION.md)** · [任务](../tasks/TAX-HISTORY-COLLECTION.md) · [交接 / 下一任务提示词](TAX-HISTORY-COLLECTION.md)。用户已登录完成，新链已建，固定查询两轮现有 MCP 实际复采与比较通过（各 3 fresh / 3 complete，6 行 / 2 期间，unknown 0，无保留锁）；只证明捕获固定查询范围。代码 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3` 已验，本包 PR 尚未创建 / 合并。完整 M1 的项目 / 稳定身份版本 / 表字段依赖及 M2–M5 仍待办，无详情 / 下载 / preparation 接线。root 独占真实会话，旧链永久禁用，PR #35 仍独立 Draft；恢复事实与边界以新交接为准，下方“未登录完成 / 新链未建”等按历史阅读。
+> **2026-10-20 先读：[历史查询子包](../TAX-HISTORY-COLLECTION.md)** · [任务](../tasks/TAX-HISTORY-COLLECTION.md) · [交接 / 下一任务提示词](TAX-HISTORY-COLLECTION.md)。用户已登录完成，新链已建，固定查询两轮现有 MCP 实际复采与比较通过（各 3 fresh / 3 complete，6 行 / 2 期间，unknown 0，无保留锁）；只证明捕获固定查询范围。代码 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3` 已验，本包已独立审查并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并。完整 M1 的项目 / 稳定身份版本 / 表字段依赖及 M2–M5 仍待办，无详情 / 下载 / preparation 接线。root 独占真实会话，旧链永久禁用，PR #35 仍独立 Draft；恢复事实与边界以新交接为准，下方“未登录完成 / 新链未建”等按历史阅读。
 
 > **2026-10-20 最新入口：[月度链路](../TAX-MONTHLY-DATA-CHAIN.md)** · [M1–M5任务](../tasks/TAX-MONTHLY-DATA-CHAIN.md) · [交接 / 新任务提示词](TAX-MONTHLY-DATA-CHAIN.md)。用户本期已报，先以一个已确认项目打通已报期及必要历史取数 / 官网确有文件；未报待办、完整规则平台不是当然前置。PR #35 仍独立 Draft；新增查询 / 下载与准备桥接未完成。本轮纯文档，未操作真实会话；用户正重登但未告知完成。技术缺口与企业确需补充分别处理。先读新交接再恢复，下方“当前”均为历史快照。
 

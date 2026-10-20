@@ -6,7 +6,7 @@
 
 用户本期已报且已明确登录完成。root 已从当前有效企业建立新 source / query capture，固定历史查询生产链已验两轮。此为 **M1 受限查询子包**，完整 M1 的项目确认、稳定身份 / 版本、字段依赖仍待核，M2–M5 仍待办；没有详情、原始表单 / 下载 / 回执和 preparation 接线。
 
-分支 `codex/huxiaoyang-code/tax-history-collection`，起点 `ad09ccd9`。代码提交 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3`，11 文件，tree `9714bb0ac58dea9a41443b97c7dcda8cf97c11f6`。本包 PR 尚未创建 / 合并；最终文档、PR 正文和最终 head 仍需独立审查，不能宣称已入 main。
+分支 `codex/huxiaoyang-code/tax-history-collection`，起点 `ad09ccd9`。代码提交 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3`，11 文件，tree `9714bb0ac58dea9a41443b97c7dcda8cf97c11f6`。本包已独立审查并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并：最终 head `6d4caf0adbf7b9394057e12f5888dba872887dc9`，tree `2122e9cbb8a03f14fe9132309299524cd728a787`；merge `1628ca6a9055a5be696d8d550901a0aec59b36c5`，合并时间 UTC `2026-10-20T13:21:30Z`（北京时间 2026-10-20 21:21:30）。独立审查批准准确最终 head 与 PR 正文，管理者核对签名 merge / tree 与已审一致并导入本隔离工作区，主工作区未改。当前交接分支 `codex/huxiaoyang-code/tax-history-handoff` 基于该 merge，本次仅补录 PR #38 合并事实，交接 PR 状态以 GitHub 为准。
 
 实现为固定 `POST DescribeSbmxcx2` 九键 body / 十三行字段白名单，native fetch 只读，fresh 身份前后核验、完整文档与代次守卫、固定私有 ACL store 和原子持久化。管理员 refresh 不注册 MCP；MCP `tax_history_collect` 只接 contextRef，`tax_history_compare` 只接两个 runRef。功能默认关，可信运行环境显式开启；原值、运行参数和实际随机引用不入模型 / Git / PR。使用、失败和完整度语义见主文档。
 
@@ -37,7 +37,7 @@ root 独占真实会话。owner / browser 未关闭、未重启；旧链已按 `
 
 ## 下一步与收尾
 
-当前先完成本子包文档 / 最终 PR 审查、提交 / 合并及合并事实补录。之后独立开任务核 M1 项目 / 账套 / 目标期间、稳定身份 / 版本与表单字段依赖，同时沿已观察资产和列表行消费者并行核 M2 详情来源，详情可反向补项目 / 版本证据；全部稳定身份 / 版本研究不是入口发现前置。真正消费或合并详情时须满足必要绑定，未核继续阻断。必要时同步准备 M3 合成接口，但未桥接前不得改 readiness。单项目安全对照表已在主文档保留全部栏目，实例原值只留可信层；需求未核不能说资料齐全。
+本子包已随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 独审合并，本次仅补录 PR #38 合并事实，交接 PR 状态以 GitHub 为准。之后独立开任务核 M1 项目 / 账套 / 目标期间、稳定身份 / 版本与表单字段依赖，同时沿已观察资产和列表行消费者并行核 M2 详情来源，详情可反向补项目 / 版本证据；全部稳定身份 / 版本研究不是入口发现前置。真正消费或合并详情时须满足必要绑定，未核继续阻断。必要时同步准备 M3 合成接口，但未桥接前不得改 readiness。单项目安全对照表已在主文档保留全部栏目，实例原值只留可信层；需求未核不能说资料齐全。
 
 M2a 已有 root 本机静态索引的详情 / 下载路由、列表消费者及 marker 候选，未核实际 body、关联、只读与下载证据，新增请求 0；沿当前实际资产与消费者继续追踪，静态函数不能直接执行。十三行投影不含详情 URL / 文件字段；如只能依赖按钮且需人工交互，记技术待核，不称官网不支持。
 
@@ -45,4 +45,4 @@ M2a 已有 root 本机静态索引的详情 / 下载路由、列表消费者及 
 
 ## 可复制的下一任务提示词
 
-> 先读 docs/PROJECT-CHARTER.md、docs/handoffs/STATE.md、docs/TAX-HISTORY-COLLECTION.md、docs/tasks/TAX-HISTORY-COLLECTION.md、本交接和月度链路主 / 任务。核最新 main、本包 PR 与 PR35 Draft，不把代码 d0fdbce 或旧基线当最新已合并版本。用户已登录完成，root 已建新 source / query capture；固定 DescribeSbmxcx2 九键 / 十三字段查询经现有 MCP 两轮各3 fresh / 3complete，无unknown / 保留锁，各6行2期间、固定捕获范围闭合及比较一致。完整M1仍缺项目/账套/目标月份、稳定身份/版本/更正/筛选语义与实际表单字段依赖；核这些时可沿已观察资产和行消费者并行发现M2详情来源，详情可反向补项目/版本，全部稳定身份/版本研究不是入口发现前置；真正消费/合并详情须必要绑定，未核继续阻断，不猜分页/参数/接口。门户旧6行3期间不混新查询6行2期间。completed_period与当前待办分开，downstreamReady和完整度标志仍false，没有preparation接线。旧链target_absent已本机审计退役、结果永久禁用，server请求终止unknown，owner/browser保留；PR35退役代码是独立未合实现，不整包当依赖。root独占真实会话，实施/审查只用合成材料和安全摘要，不读真实私有材料，不点击、不业务写，原值/参数/随机refs/私有路径不进Git。单项目表按项目、表版本、字段资料、口径、历史窗口、税局入口证据、本机来源、状态、缺口、负责人阻断逐项核；未核列内部待办，企业补充须网站有效缺失+本机不足+业务必需三证。按当时有效实施授权推进，管理者独立审查、验证、Git/PR/合并与交接，不预写完成。
+> 先读 docs/PROJECT-CHARTER.md、docs/handoffs/STATE.md、docs/TAX-HISTORY-COLLECTION.md、docs/tasks/TAX-HISTORY-COLLECTION.md、本交接和月度链路主 / 任务。核最新 main、已合并 PR38 与 PR35 Draft；PR38 merge为1628ca6a9055a5be696d8d550901a0aec59b36c5，代码d0fdbce仅代码验证锚，不把旧基线当最新已合并版本。用户已登录完成，root 已建新 source / query capture；固定 DescribeSbmxcx2 九键 / 十三字段查询经现有 MCP 两轮各3 fresh / 3complete，无unknown / 保留锁，各6行2期间、固定捕获范围闭合及比较一致。完整M1仍缺项目/账套/目标月份、稳定身份/版本/更正/筛选语义与实际表单字段依赖；核这些时可沿已观察资产和行消费者并行发现M2详情来源，详情可反向补项目/版本，全部稳定身份/版本研究不是入口发现前置；真正消费/合并详情须必要绑定，未核继续阻断，不猜分页/参数/接口。门户旧6行3期间不混新查询6行2期间。completed_period与当前待办分开，downstreamReady和完整度标志仍false，没有preparation接线。旧链target_absent已本机审计退役、结果永久禁用，server请求终止unknown，owner/browser保留；PR35退役代码是独立未合实现，不整包当依赖。root独占真实会话，实施/审查只用合成材料和安全摘要，不读真实私有材料，不点击、不业务写，原值/参数/随机refs/私有路径不进Git。单项目表按项目、表版本、字段资料、口径、历史窗口、税局入口证据、本机来源、状态、缺口、负责人阻断逐项核；未核列内部待办，企业补充须网站有效缺失+本机不足+业务必需三证。按当时有效实施授权推进，管理者独立审查、验证、Git/PR/合并与交接，不预写完成。

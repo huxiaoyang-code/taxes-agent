@@ -2,7 +2,7 @@
 
 日期：2026-10-20。负责人：`huxiaoyang-code`。Refs #20 / #13 / #14 / #17。对应[任务单](tasks/TAX-HISTORY-COLLECTION.md)、[交接](handoffs/TAX-HISTORY-COLLECTION.md)和[月度链路](TAX-MONTHLY-DATA-CHAIN.md)。
 
-本包实现并真实验证一个已观察申报查询的只读取回与私有结果账册，是 **M1 的受限查询子包**。完整 M1 的项目确认、稳定记录身份 / 版本与表单依赖仍未完成；M2–M5 仍待办。当前代码提交 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3`，基线 `ad09ccd9`；本包 PR 尚未创建 / 合并，不声明已进入 main。
+本包实现并真实验证一个已观察申报查询的只读取回与私有结果账册，是 **M1 的受限查询子包**。完整 M1 的项目确认、稳定记录身份 / 版本与表单依赖仍未完成；M2–M5 仍待办。当前代码提交 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3`，基线 `ad09ccd9`；本包已独立审查并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并，准确合并事实见[交接](handoffs/TAX-HISTORY-COLLECTION.md)。
 
 ## 已实现的固定契约
 
@@ -38,7 +38,7 @@ template 保存不可变捕获契约，context 保存新鲜身份与重放文档
 
 ## 验证结果
 
-代码验证锚为上述完整代码提交（11 文件；tree `9714bb0ac58dea9a41443b97c7dcda8cf97c11f6`）。管理者报告全量 `npm test` 28 / 28 套通过；history 合成 34 / 34 项通过，其中 30 项定向单元 / 合成测试，4 项经过真实 MCP stdio → 合成 HTTP → Agent → 生产 collector / store。合成 HTTP 不计为税局真实取数。独立代码审查已批准该准确代码 head 及真实运行权限；本包文档及最终 PR 仍须独立审查。
+代码验证锚为上述完整代码提交（11 文件；tree `9714bb0ac58dea9a41443b97c7dcda8cf97c11f6`）。管理者报告全量 `npm test` 28 / 28 套通过；history 合成 34 / 34 项通过，其中 30 项定向单元 / 合成测试，4 项经过真实 MCP stdio → 合成 HTTP → Agent → 生产 collector / store。合成 HTTP 不计为税局真实取数。独立代码审查已批准该准确代码 head 及真实运行权限；本包文档及最终 PR 已独立审查，并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并。
 
 root 在用户明确登录完成后，从当前有效企业建立新 source 与 query capture，实际执行以下验证；实施者未读取真实原值或私有证据。
 

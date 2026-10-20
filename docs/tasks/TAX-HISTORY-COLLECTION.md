@@ -1,6 +1,6 @@
 # TAX-HISTORY-COLLECTION · M1 固定历史查询子包
 
-日期：2026-10-20。负责人：`huxiaoyang-code`。Refs #20 / #13 / #14 / #17，均不关闭。分支 `codex/huxiaoyang-code/tax-history-collection`，基线 `ad09ccd9`；代码提交 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3`。状态：代码与两轮真实验证已通过，文档 / 最终 PR 审查与合并待完成；不标完整 M1 完成。
+日期：2026-10-20。负责人：`huxiaoyang-code`。Refs #20 / #13 / #14 / #17，均不关闭。分支 `codex/huxiaoyang-code/tax-history-collection`，基线 `ad09ccd9`；代码提交 `d0fdbce47b48164d67584c8cfa34abcdcd6c17d3`。状态：代码、文档与两轮真实验证已通过，已独立审查并随 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并；不标完整 M1 完成。
 
 必读：[章程](../PROJECT-CHARTER.md)、[STATE](../handoffs/STATE.md)、[本包使用契约](../TAX-HISTORY-COLLECTION.md)、[本包交接](../handoffs/TAX-HISTORY-COLLECTION.md)、[月度任务](TAX-MONTHLY-DATA-CHAIN.md)。
 
@@ -26,7 +26,7 @@
 
 root 已在新有效 source / query capture 上实际完成 refresh 2 / 2、MCP 两轮各 3 fresh / 3 complete / unknown 0 / 无保留锁；各轮 6 行 / 总数 6 / 单页 / 2 期间，捕获范围闭合，capture / run 及 run / run 四项比较均相等。上述结果只验固定查询子包。完整安全资料对照表及仍 false 的标志见[使用契约](../TAX-HISTORY-COLLECTION.md)。
 
-剩余收尾：文档链接、diff / 敏感信息检查；最终文档及 PR 正文独审；管理者按准确最终 head 提交 / PR / 合并，之后补合并事实及会话交接。PR 尚未创建 / 合并，不预写完成。
+收尾事实：文档链接、diff / 敏感信息检查与最终文档 / PR 正文独审通过，管理者按准确 head 完成 [PR #38](https://github.com/huxiaoyang-code/youshu-fork/pull/38) 合并，并核对签名 merge / tree 与已审一致。准确提交、时间见[交接](../handoffs/TAX-HISTORY-COLLECTION.md)；本次仅补录 PR #38 合并事实，交接 PR 状态以 GitHub 为准。
 
 ## 未完成任务
 
