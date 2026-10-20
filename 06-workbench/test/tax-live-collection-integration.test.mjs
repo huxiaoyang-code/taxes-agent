@@ -332,7 +332,7 @@ async function observedSourceFixture(directory,{changeDuringWait=false,clearBefo
   const origin='https://etax.fujian.chinatax.gov.cn:8443',registrationRef=ref('taxr_'),targetId=PRIVATE+'_TARGET';
   const handlers=new Map(),calls=[];
   const emit=(name,params)=>handlers.get(name)?.(params,{sessionId:'synthetic-session'});
-  const identityBody={Response:{Data:{userinfo:{reg_number:PRIVATE+'_REG',company_name:PRIVATE+'_COMPANY',user_id:PRIVATE+'_USER',user_type:'2'}}}};
+  const identityBody={Response:{Data:{userinfo:{reg_number:PRIVATE+'_REG',company_name:PRIVATE+'_COMPANY',creditCode:PRIVATE+'_CREDIT',taxpayer_id:PRIVATE+'_TAX',user_id:PRIVATE+'_USER',user_type:'2'}}}};
   const filingBody={Response:{Data:{wsbxxGrid:[{sbb:PRIVATE+'_FORM',sbqx:PRIVATE+'_DEADLINE',zt:PRIVATE+'_STATUS'}],dbt:'synthetic',tbsl:1}}};
   const frame={id:'synthetic-frame',loaderId:'synthetic-loader',url:origin+'/loginb/',urlFragment:'#/a?token='+PRIVATE};
   let frameReads=0;

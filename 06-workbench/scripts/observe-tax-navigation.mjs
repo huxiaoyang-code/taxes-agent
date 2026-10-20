@@ -6,7 +6,8 @@ import {openRegisteredBrowserDiagnostic,DEFAULT_REGISTRATION_ROOT} from '../serv
 import {classifyObservedUrl,pageReference} from './inventory-tax-browser.mjs';
 import {observedRecipe,collectionShape,businessProjection} from '../server/tax-collection-shape.mjs';
 import {TaxCollectionStore,collectionLock} from '../server/tax-collection-local.mjs';
-import {readLiveResource,sameEnterprise,assertLiveFrame} from '../server/tax-live-collection.mjs';
+import {readLiveResource,assertLiveFrame} from '../server/tax-live-collection.mjs';
+import {enterpriseOf,sameEnterprise,validEnterprise} from '../server/tax-history-contract.mjs';
 import {validateCapture} from '../server/tax-collection-contract.mjs';
 import {FULL_FRAME_URL_SEMANTICS,frameUrlDigest} from '../server/tax-frame-url.mjs';
 const ORIGIN='https://etax.fujian.chinatax.gov.cn:8443';
@@ -20,6 +21,7 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
   let initialFrameConsumed=false,initialContextClearCount=0;
   const earlyScopeEvents=[],oldContextIds=new Set(),consumedOldContextIds=new Set();
   let navigationStartedAt=0,knownRequestOrdinal=0;
+  let attachUnknown=false,lockAcquiring=false,detachRequested=false,connectionUnknown=false,verifiedFrame,cleanupFailureStep=null;
   const scopeTrace=[],requestHistory=[];
   let businessRequestOrdinal=0;const businessRequestHistory=[];
   const scopeDiagnostics=()=>{
@@ -72,12 +74,16 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
     const targets=list.targetInfos.filter(t=>t.type==='page'&&typeof t.targetId==='string'
       &&classifyObservedUrl(t.url)?.routeCode==='portal_home'&&pageReference(registrationRef,t.targetId)===pageRef);
     if(targets.length!==1)return finalResult={status:'page_unavailable',captures:[],...markers()};
-    phase='lock';lock=await(overrides.acquireLock||collectionLock)(transport.localScope?.profilePath,
-      {scope:{registrationRef,pageRef,operation:'authorized_navigation'}});
-    phase='attach';attached=await cdp.send('Target.attachToTarget',{targetId:targets[0].targetId,flatten:true},{timeoutMs:5000});
-    if(typeof attached?.sessionId!=='string')throw new Error('attach');
+    phase='lock';lockAcquiring=true;lock=await(overrides.acquireLock||collectionLock)(transport.localScope?.profilePath,
+      {scope:{registrationRef,pageRef,operation:'authorized_navigation'}});lockAcquiring=false;
+    phase='attach';attachUnknown=true;attached=await cdp.send('Target.attachToTarget',{targetId:targets[0].targetId,flatten:true},{timeoutMs:5000});
+    if(typeof attached?.sessionId!=='string'||!attached.sessionId||attached.sessionId.length>256)throw new Error('attach');attachUnknown=false;
     const opts={sessionId:attached.sessionId,timeoutMs:5000};
     const listen=(name,handler)=>remove.push(cdp.on(name,(p,c)=>{if(c?.sessionId===attached.sessionId)handler(p)}));
+    const lost=()=>{connectionUnknown=true;terminationConfirmed=false;pendingSource=null;};
+    remove.push(cdp.on('closed',lost));
+    remove.push(cdp.on('Target.detachedFromTarget',p=>{if(p.sessionId===attached.sessionId&&!detachRequested)lost();}));
+    listen('Inspector.detached',()=>{if(!detachRequested)lost();});
     listen('Runtime.executionContextCreated',p=>{if(!navigationSent&&Number.isSafeInteger(p.context?.id)&&oldContextIds.size<1024)oldContextIds.add(p.context.id);});
     listen('Runtime.executionContextsCleared',()=>{contextDestroyed=true;scopeEvent({kind:'contexts_cleared'});});
     listen('Runtime.executionContextDestroyed',p=>scopeEvent({kind:'context_destroyed',contextId:p.executionContextId}));
@@ -144,11 +150,13 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
     for(const item of finished.splice(0))processFinished(item);
     phase='wait';await(overrides.wait||((ms)=>new Promise(done=>setTimeout(done,ms))))(12000);
     acceptNetworkEvents=false;
-    phase='drain';await Promise.allSettled([...work]);
+    phase='drain';if((await Promise.allSettled([...work])).some(r=>r.status==='rejected'))throw new Error('work');
     phase='verify_scope';const frameTree=await cdp.send('Page.getFrameTree',{},opts);
     loaderObserved=navigatedFrames.some(frame=>frame.id===expectedFrame&&frame.loaderId===expectedLoader);
     if(frameTree?.frameTree?.frame?.id!==expectedFrame||frameTree.frameTree.frame.loaderId!==expectedLoader
-      ||!contextDestroyed||!loaderObserved||scopeRevision!==0)throw new Error('scope');
+      ||!contextDestroyed||!loaderObserved||scopeRevision!==0||connectionUnknown)throw new Error('scope');
+    verifiedFrame={frameId:expectedFrame,loaderId:expectedLoader,
+      documentUrlDigest:typeof frameTree.frameTree.frame.url==='string'?frameUrlDigest(frameTree.frameTree.frame):null};
     terminationConfirmed=true;
     if(persistSource){
       phase='source_projection';const ordered=localCaptures.filter(c=>Number.isFinite(c.requestTimestamp)).sort((a,b)=>a.requestTimestamp-b.requestTimestamp);
@@ -156,16 +164,16 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
       const identity=ordered.filter(c=>c.resource==='identity'&&c.requestTimestamp<=filing?.requestTimestamp).at(-1);
       if(!identity||!filing)throw new Error('projection');
       const local=c=>({resource:c.resource,recipe:c.recipe,projection:c.projection});
-      if(!validateCapture(local(identity),'identity')||!validateCapture(local(filing),'current_filing'))throw new Error('projection');
+      if(!validateCapture(local(identity),'identity')||!validateCapture(local(filing),'current_filing')
+        ||!validEnterprise(enterpriseOf(identity.projection)))throw new Error('projection');
       const documentUrlDigest=frameUrlDigest(frameTree.frameTree.frame);
       const scope={version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,frameId:expectedFrame,loaderId:expectedLoader,documentUrlDigest};
       phase='identity_after';const expectedFullUrl=await assertLiveFrame(cdp,opts,scope);terminationConfirmed=false;
-      let after;activeVerificationRequestCount++;
-      try{after=await readLiveResource(cdp,opts,identity.recipe,'identity',expectedFullUrl);terminationConfirmed=true;}
-      catch(error){if(error.settled===true)terminationConfirmed=true;throw error;}
+      activeVerificationRequestCount++;
+      const after=await readLiveResource(cdp,opts,identity.recipe,'identity',expectedFullUrl);terminationConfirmed=true;
       await assertLiveFrame(cdp,opts,scope);
       if(scopeRevision!==0)throw new Error('scope');
-      if(!sameEnterprise(identity.projection,after.capture.projection))throw new Error('enterprise_changed');
+      if(!sameEnterprise(enterpriseOf(identity.projection),enterpriseOf(after.capture.projection))){terminationConfirmed=false;throw new Error('enterprise_changed');}
       if(await transport.localScope.currentRegistrationState()!=='quarantined')throw new Error('handoff_state');
       pendingSource={version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,
         registrationRef,registrationRoot:resolve(registrationRoot||DEFAULT_REGISTRATION_ROOT),pageRef,targetId:targets[0].targetId,
@@ -178,19 +186,36 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
   }catch{return finalResult={status:'observation_failed',captures,activeVerificationRequestCount,...markers()};}
   finally{
     acceptNetworkEvents=false;
-    await Promise.allSettled([...work]);
+    const cleanupFailed=step=>{terminationConfirmed=false;pendingSource=null;cleanupFailureStep??=step;};
+    if((await Promise.allSettled([...work])).some(r=>r.status==='rejected'))cleanupFailed('work_drain');
+    if(attachUnknown)cleanupFailed('attach');
     if(attached?.sessionId){
-      for(const method of ['Network.disable','Runtime.disable','Page.disable'])
-        try{await transport.cdp.send(method,{}, {sessionId:attached.sessionId,timeoutMs:5000})}catch{terminationConfirmed=false;}
+      if(scopeGuardArmed)try{
+        if(await transport.localScope.currentRegistrationState()!=='quarantined')throw new Error('registration');
+        const frame=(await transport.cdp.send('Page.getFrameTree',{}, {sessionId:attached.sessionId,timeoutMs:5000}))?.frameTree?.frame;
+        if(!frame||Object.hasOwn(frame,'parentId')||frame.id!==expectedFrame||frame.loaderId!==expectedLoader||scopeRevision!==0||connectionUnknown
+          ||verifiedFrame?.documentUrlDigest&&frameUrlDigest(frame)!==verifiedFrame.documentUrlDigest)throw new Error('scope');
+      }catch{cleanupFailed('final_scope');}
+      // The owned session detach removes its enabled domains. Runtime.disable
+      // itself can emit contextsCleared, so never disable domains separately.
+      detachRequested=true;
+      try{await transport.cdp.send('Target.detachFromTarget',{sessionId:attached.sessionId},{timeoutMs:5000});}
+      catch{cleanupFailed('detach');}
     }
-    if(attached?.sessionId)try{await transport.cdp.send('Target.detachFromTarget',{sessionId:attached.sessionId},{timeoutMs:5000})}catch{terminationConfirmed=false;}
-    if(scopeGuardArmed&&scopeRevision!==0){terminationConfirmed=false;pendingSource=null;
-      if(finalResult){finalResult.status='observation_failed';finalResult.phase='scope_cleanup';}}
-    for(const off of remove)try{off()}catch{terminationConfirmed=false;}
-    if(finalResult)finalResult.scopeDiagnostics=scopeDiagnostics();
-    let lockRetained=false;
-    if(lock){if(terminationConfirmed)try{await lock.release()}catch{lock.retain();lockRetained=true;}else{lock.retain();lockRetained=true;}}
-    if(finalResult)finalResult.lockRetained=lockRetained;
+    for(const off of remove)try{off()}catch{cleanupFailed('listeners');}
+    if(scopeGuardArmed&&scopeRevision!==0||connectionUnknown)cleanupFailed('scope_event');
+    // Await the owned connection close before permitting another collector.
+    try{if(transport)await transport.close();}catch{cleanupFailed('transport_close');}
+    let lockRetained=lockAcquiring||attachUnknown;
+    if(lock){if(terminationConfirmed&&!connectionUnknown&&scopeRevision===0)try{await lock.release()}catch{cleanupFailed('lock_release');lockRetained=true;}
+      else lockRetained=true;
+      if(lockRetained)try{lock.retain();}catch{cleanupFailed('lock_retain');}}
+    if(finalResult){
+      finalResult.scopeDiagnostics=scopeDiagnostics();finalResult.lockRetained=lockRetained;
+      finalResult.cleanupConfirmed=terminationConfirmed&&!lockRetained&&!cleanupFailureStep;
+      finalResult.cleanupFailureStep=cleanupFailureStep;
+      if(cleanupFailureStep){finalResult.status='observation_failed';finalResult.phase=scopeGuardArmed&&scopeRevision!==0?'scope_cleanup':'cleanup';}
+    }
     if(pendingSource&&finalResult?.status==='observed'&&!lockRetained){
       try{finalResult.sourceRef=await(overrides.store||new TaxCollectionStore()).save('source',pendingSource);
         finalResult.identityProjectionMatched=true;finalResult.enterpriseVerified=false;
@@ -198,7 +223,6 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
     }else if(pendingSource&&finalResult?.status==='observed'){
       finalResult.status='observation_failed';finalResult.phase='cleanup';
     }
-    try{transport?.close()}catch{}
   }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

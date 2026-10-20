@@ -37,6 +37,7 @@ async function recovery(f,{mode='normal',execute,ownerAlive=false}={}){
   const origin='https://etax.fujian.chinatax.gov.cn:8443',handlers=new Map(),calls=[];let reloaded=false,ownerChecks=0;
   const emit=(name,params)=>handlers.get(name)?.(params,{sessionId:'synthetic-session'});
   const overrides={
+    acquireAdminGuard:async()=>({verify(){},async close(){}}),audit:async()=>{},
     readLock:path=>readCollectionLock(path,{security}),
     acquireRecovery:(path,expected)=>collectionRecoveryLock(path,expected,{security}),
     async isOwnerAlive(){ownerChecks++;return ownerAlive||(mode==='late_owner_alive'&&ownerChecks>=3);},
@@ -72,6 +73,7 @@ async function recovery(f,{mode='normal',execute,ownerAlive=false}={}){
 }
 async function assertOriginal(f){assert.equal(await readFile(f.lockPath,'utf8'),f.original);}
 async function assertNoRecoveryMutex(f){assert.equal((await readdir(f.profile)).includes('YoushuCollectionRecoveryV1.json'),false);}
+async function assertRecoveryRetained(f){assert.equal((await readdir(f.profile)).includes('YoushuCollectionRecoveryV1.json'),true);}
 
 test('default recovery is diagnostic only and cannot reload, create a mutex, or delete a lock',async()=>{
   await fixture(async f=>{
@@ -112,18 +114,25 @@ test('mismatched safe registration or page refs cannot recover another navigatio
 test('nonce changes after reload cannot authorize deletion of a replacement lock',async()=>{
   await fixture(async f=>{
     const {result}=await recovery(f,{execute:true,mode:'nonce_changed'});assert.equal(result.status,'recovery_failed');assert.equal(result.oldLockReleased,false);
-    assert.equal(JSON.parse(await readFile(f.lockPath,'utf8')).nonce,'f'.repeat(48));await assertNoRecoveryMutex(f);
+    assert.equal(JSON.parse(await readFile(f.lockPath,'utf8')).nonce,'f'.repeat(48));await assertRecoveryRetained(f);
   });
 });
 
-for(const mode of ['no_new_loader','no_context','disable_failed','detach_failed','close_failed','registry_changed','late_owner_alive']){
+for(const mode of ['no_new_loader','no_context','detach_failed','close_failed','registry_changed','late_owner_alive']){
   test(`recovery preserves the original lock on ${mode}`,async()=>{
     await fixture(async f=>{
       const {result}=await recovery(f,{execute:true,mode});assert.equal(result.status,'recovery_failed');assert.equal(result.oldLockReleased,false);
-      await assertOriginal(f);await assertNoRecoveryMutex(f);
+      await assertOriginal(f);await assertRecoveryRetained(f);
     });
   });
 }
+
+test('recovery detaches its session without domain-disable commands or their synthetic failure',async()=>{
+  await fixture(async f=>{
+    const {result,calls}=await recovery(f,{execute:true,mode:'disable_failed'});
+    assert.equal(result.status,'recovered');assert.equal(calls.some(method=>method.endsWith('.disable')),false);await assertNoRecoveryMutex(f);
+  });
+});
 
 test('explicit verified reload with dead owner releases only the matching collection lock',async()=>{
   await fixture(async f=>{

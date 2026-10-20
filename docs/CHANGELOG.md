@@ -5,6 +5,21 @@
 
 ## [Unreleased]
 
+### Added — 税局数据与往期文件探索（2026-10-20 启动，2026-10-21 更新）
+
+- [PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；用户今日停止探索，仅收尾交接。代码已独审，当前文档待最终 head 审查，未合并。
+
+- 新增[探索契约 / 接口目录](TAX-DOWNLOAD-EXPLORATION.md)、[任务](tasks/TAX-DOWNLOAD-EXPLORATION.md)与[交接](handoffs/TAX-DOWNLOAD-EXPLORATION.md)，明确只探索网站取数与复用命令，不生成下一期账套。
+- 本机管理员页面探索 CLI 只接 source 引用和固定目标；菜单隔离读取、精确只读标签、两读同原 URL、被动主 frame 取证，全部资料 quarantine / 不可消费。未知 TTL 不当登录失效事实，不授业务 API 权限。
+- 实际 GET `getCwbbzlList` / POST `queryZlbscjb` 为 `observed_request_metadata`、HTTP 200。POST 七键全核 `Lrrqq / Lrrqz / ZlbsxlDm / Skssqq / Skssqz / PageNum / PageSize`，query 唯一 `_`；不猜 timestamp / nonce / 日期筛选语义。完整 prefix / 值只在本机模板，外发审批拒绝、未执行不重试；正文 / 新财报独立 replay 0。
+- 新增本机快照窄 CLI 文档与测试入口；独审及 root 独立 38 项合成后实测 `live_observed_private_snapshot_partial`，3 份 / 1,326,340 字节 JS 直接 ACL 私有保存、另 1 份预算跳过，无锁 / 清理确认，仅安全摘要。helper HTTP 0 不证明网页后台静默；快照不算财报下载。静态有限词表增加本轮已核技术名与键，20 / 20 合成通过，未知 prefix / 名称 / 业务值继续抑制，不改变旧版本实际分析事实。
+- 最新 shape 独审 / root 25 项通过后本机定位：组件 6,016B / 5,790 字符，唯一五键对象不全绑定实际七键；详情 `/zhcx/cwbbxxcxxq` 仅静态候选。query 是 CallExpression 动态构造依赖，queryFieldSchema 空 / complete false，不能推断 token 键，非导航模板。parameter_property 仅语法关联，非完整运行时数据流 / 企业行映射；纯 shape 不是下载命令。
+- 被动财报 CLI 固定 Page.reload({})，准确字节独审 / root 42 项后实际 request 28 / matched 2 / bodySaved 1、57B、scopeSealed / cleanup true、无锁 / ownUnknown false；为本接口认证错误，非业务列表。用户确认手动刷新后浏览器仍登录，要求暂停财报：不等待重登、不再本分支重试、不作其他取数前置，不据此推企业财报适用规则。
+- 最新 C81 opt-in bootstrap 经独审 / root 63 项后真实正常导航固定门户，sourceCreated / runCreated，fresh 3 attempted / settled / performed / complete、unknown false / 企业匹配，cleanup true / 无锁，确认当前登录有效；不恢复旧 history context。旧 bootstrap 39 项 not_live_run 仅旧版本事实。
+- 发票入口实际 nav ACK 有 15 条 scripts / 认证 metadata、无已识别列表 query，不重放 getPublicKey。先四份私有 JS 后因 scope 不匹配重建当前快照：最新 7 / 9 份、4,034,109B、44 事件 / 35 拒绝 / 2 预算跳过、scope / cleanup true / 无锁；A16D 离线 7 sources + 38 focused functions、parse fail 0，原 JS 仅 ACL。
+- invoice observer 准确字节独审 / root 37 项后，先两次未 armed（第二次固定 guard 为 TargetURLmatchesSnapshot false、FrameTree 未读），均零业务 / cleanup true / 无锁；重建当前快照后 120 秒 / 180 秒真实窗均 armed / scopeStable / 全 scope 布尔 true，事件 / metadata / bodies 0、cleanup true / 无锁，现全停。用户后续确认已手动查询无结果，空或报错未区分；不推点击在上述窗内，不确认官网无数据 / 接口坏 / 登录失效。今天按用户要求停止探索、仅收尾交接 PR；下次用户明确继续后才核作用域 + armed，再安排人工查询。
+- 41 组首跑 40 组通过，旧 tax-browser-session-mcp lost-response 模拟子 Node 异常退出 3221226505；未改实现或测试，定向 4 / 4 通过，root 随后全 41 组重试 exit 0、41 / 41 全部通过；仅 static / contract-shape 两组 `--expose-internals`。本轮仅探索支撑候审，可先交 PR 审合、总目标继续；真实 query → 原件下载 → 后端 MCP fresh 复采仍未证，业务下载 / 新 repeat 0，不转企业补资料。
+
 ### Changed — 多人跨电脑协作与任务分配（2026-10-15，2026-10-16 更新状态）
 
 - 用户明确确认多人协作方式：同事账号 `xiaoyihaishiaini`（个人私有仓库协作者）已**接受** write 邀请（邀请 ID `337920044`），管理者 2026-10-16 通过 GitHub API 实测 `permission = write`。负责人 `huxiaoyang-code` 负责税局登录与数据接入（RC-0 / RC-1 / RC-2a / RC-2b 及数据处理集成，协调 RC-3），同事负责两类报表口径核对与导出（RC-4 / RC-5）。**开发多人不等于产品多租户**：产品仍为本机单用户、可多账套批量。
