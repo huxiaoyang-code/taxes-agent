@@ -1,41 +1,45 @@
 # TAX-BUSINESS-COLLECTION · 当前交接
 
-日期：2026-10-20。负责人：`huxiaoyang-code`。分支 `codex/huxiaoyang-code/tax-business-collection`。必读：[任务](../tasks/TAX-BUSINESS-COLLECTION.md)、[契约](../TAX-COLLECTION-CONTRACT.md)、[章程](../PROJECT-CHARTER.md)。期间字段修复独立验证与最终两轮真实 MCP 已完成，root 待锁 head / PR 交付；已进入纳税人信息查询页，业务数据捕获不足，不能宣布整体采集完成。
+日期：2026-10-20。负责人：`huxiaoyang-code`。分支 `codex/huxiaoyang-code/tax-query-data`。必读：[任务](../tasks/TAX-BUSINESS-COLLECTION.md)、[契约](../TAX-COLLECTION-CONTRACT.md)、[章程](../PROJECT-CHARTER.md)。已合并基线 [PR #34](https://github.com/huxiaoyang-code/youshu-fork/pull/34) merge `1c12f98bafc38d257482f35f268e7f14d2dbd156`，head `3e16b3a48aaa12b8fa39b6f7d277e9a88d555c10`；本包当前代码 HEAD `c820b7778c903b3a9dac57f31a93545efa3c7564`（tree `39e78e5115b529da17741ff9dc343b27db23f12e`），未预填自身 PR / merge。
 
-## 基线与现场
+## 当前代码与实际阻塞
 
-基线 [PR #33](https://github.com/huxiaoyang-code/youshu-fork/pull/33) merge `f05c7a1a6a9412ab873f4b282a76ee773baff2f7`，head `9a9191f968548cbf2f5010e20f46df035f566bd6` 已独审、完整 25 套验证并合并。旧只读操作退役 `unknown_abandoned`、迟到结果永久禁用等历史见[前包交接](TAX-READONLY-ABANDON.md)，无需重做，不沿用旧 source / 窗口引用。本包自身 head / PR / merge 未知，不预填。
+两个企业绑定 enum 已准确实现为 `literal_parameter` / `current_session`，空 query 增量验证、capture → run / run → run 投影覆盖比较已有代码。恢复 / guard 七文件及末两文件 surface 修复已独审；root 最终受影响 121 项（query 72 + retire 44 + MCP 5）通过，root 最终完整 npm test 29 / 29 套 exit 0（同一 c820 版本、无代码 delta）；最终独立 delta 44 项及先前 query 72 / MCP 5 通过；这些是代码验证，不是企业资料 MCP 实采成功。
 
-用户关闭整个旧浏览器，明确要求再启动后端浏览器并已登录。root 已以既有后端 open 和登记接口绑定全新专用窗口，新 v2 source 4 passive + 1 active identity 成功。期间格式修复后，现有 MCP stdio → HTTP → Agent → 新纯采集后端最终两轮各 3 fresh / 3 complete、各 6 行，身份 / 企业 / filing 投影相等，run / run 独立，无保留锁。当前登录 owner 后端 / 浏览器保留，只重启不拥有浏览器的独立 collector 加载格式补丁。
+query_context_refresh 退役实际 execute scope 校验失败：retirementCommitted true，lockRetired / realmDestructionProven / cleanupConfirmed false，resumeRequired true，prepare + commit 已存在。旧链已永久不可消费，锁未退休、没有 realm / finish 通过证据。新 source / context / run 均未建，三企业业务 / MCP 成功仍为 0。原标签已跳统一认证域，具体页面 / 是否需重新登录待用户确认；已异步请用户在现有窗口进入目标企业首页并告知 root。owner / browser 保留，不盲重启、不手删锁、不复用旧链或消费迟到结果。
 
-## 新发现与状态解释
-
-| 已核实事实 | 可以说明 | 不能推出 |
+| 真实阶段 | 已发生事实 | 覆盖与限制 |
 |---|---|---|
-| userinfo 21 字段；filing 行最多 32、合计 34 个技术字段 | 本机已看见实际 schema | 全字段已私有持久化 / 已全部授权投影 |
-| `skssqq`、`skssqz`、`skssqzqz` 在 6 行均为 string，旧白名单漏保留 | 旧 period missing 是未采入 / 未核实 | 接口未返回期间，或字段存在即日期与当前待办归属已验证 |
-| 6 行 `zt` 均已申报，入口为更正 / 作废 / 财报报送 | 行入口继续封锁 | 无待办、可沿这些入口采业务或允许写动作 |
-| 独立 `listNsrDbxx` 业务失败 | 待办集合未验 | 已验证空列表 |
-| `queryDj` 静态消费者仅信用等级 | 信用字段候选 | 完整企业档案 |
+| 早期参数预检 | 两 POST 捕获 djxh 空而 helper 非空，0 请求安全停止 | 已通过两模式实现 / 增量验证解决，不是当前锁原因 |
+| 第一次 refresh | identity phase query_shape_invalid；attempted / performed / complete 各 1、unknown 0，无保留锁 | 未到 helper / 三业务 / context 发布；不是企业资料实采成功 |
+| 第二次 refresh | 只增加同一身份响应的安全结构诊断；attempted 1，timeout / cleanup_unconfirmed，响应未确认，无 diagnosticAvailable 结果 | performed 0 不等于未发送；保留专用锁，host 已死且 quarantine，没有新 context / run |
 
-官方字段语义旁证为[广西税务局公开文件 PDF 第 100 页](https://guangxi.chinatax.gov.cn/xxgk/zfxxgk_22500/fdzdgknr/zfcg_22570/zbgg_22623/202303/P020230313613088224248.pdf#page=100)，其 `skssqq` / `skssqz` 为所属期起 / 止；这不证明本门户日期格式或当前事项归属，`skssqzqz` 仍不能凭名称推断。
+不能从超时、身份响应形状失败、dead-host 或缺诊断断言登录过期、企业变化或请求终止。当前锁与下述门户 / 查询页捕获时的“无锁”属于不同运行阶段。
 
-已扩静态私有 `FILING_FIELDS` 期间 3 字段 / `IDENTITY_FIELDS` 基础企业 6 字段，不扩个人、agency、auth。不新增 source / run / capture 版本，不改旧文件，旧 scalar 子集仍 load，不补齐旧证据。collect / compare 使用 strict 日历 helper 重算 `filingPeriodsVerified` / `filingPeriodCoverage`、`filingPeriodsComparable` / `filingPeriodPairsEqual` / `filingPeriodMultisetEqual` 与 `enterpriseBasicFieldCoverage`；缺日期旧历史不可比，不由 missing == missing 推 true。原 filing projection 的 `periodVerified = false` 不变，显式 `currentPendingPeriodVerified = false`。
+## 已有业务观察与边界
 
-初次新字段 raw 两轮已取得期间，但旧 helper 两格式对 6 行判 unsupported；root 本机固定格式计数确认起止各 6 / 6 精确 `YYYY-MM-DD 00:00:00`。作者仅新增严格零时间格式与 Midnight 计数，拒绝非零 time、T、timezone、毫秒及空白；日期原值不入模型 / Git。root 最终完整 `npm test` 26 / 26 套、独立原 54 项 + 增量 45 项、作者 190 项定向均通过。
+PR #34 门户期间 / 企业字段修复已合并，root 完整 26 套、独立原 54 + 增量 45 项通过。门户最终 MCP 两轮各 3 fresh / 3 complete / 6 行，企业 6 字段齐全、validPair 6 / distinctPeriodCount 3，source / run 与 run / run 投影和期间对 / 多重集相等，当时无锁。门户六行全部已申报，filingPeriodsVerified true 不能当当前待办；periodVerified / currentPendingPeriodVerified / businessScopeVerified / projectionComplete 仍 false，提醒失败不能当空集合，更正 / 作废 / 财报报送入口仍封锁。
 
-最终真实新增企业 6 字段均 present / nonempty 6 且两轮投影相等；期间 validPair 6，缺失 / 非法 / 倒序 / 不支持均 0，起止 Midnight 各 6、distinctPeriodCount 3、alreadyFiledWithValidPeriod 6。`filingPeriodsVerified = true`，source / run 与 run / run 的 `filingPeriodsComparable`、PairEqual、MultisetEqual 均 true；身份 / 企业 / filing 投影相等，独立请求 true。它仅证明这些已申报行的期间与基础企业覆盖；`currentPendingPeriodVerified`、`periodVerified`、`businessScopeVerified`、`projectionComplete` 仍 false，完整 profile / full business 仍缺。
+企业资料实际捕获三个 API：GET DescribeNsrjbxx、POST DescribeNsrxxJcxx、POST DescribeQysdshdxx（完整 pathname / query / schema 见契约），均 Error null / Data 对象；income 该页 List 0 不推无义务。企业资料 document 为 `/szzh/zhcx/nsrxxcx`；中间出现的 `/szzh/zhcx/sbxx` 是另页 scope，不能等价成企业资料或真正申报查询页。
 
-## 查询入口与下一步
+申报查询首遍正常导航和本机 90 项合成 / 独审批准诊断已完成：实际 document `/szzh/zhcx/sbxx/sbxxcx` 单 ruuid、无 hash，前后 3 个 identity 同企业，当时无锁。实际 POST `/szc/szzh/sjswszzh/zhcx/v1/DescribeSbmxcx2` 无 query / JSON body 9 个固定一级键；Error null、PageNumber 1 / PageSize 10 / Total 6 / List 6，13 个行字段齐全，validPair 6 / 起止 Midnight 各 6 / distinctPeriodCount 2，与门户六行 / 三期间的期间对及多重集均不等。仅 observed_request + schema，不能因都是六行当同集合；业务语义、当前待办、后端接入与 MCP 复采未验。不猜 gzlx / zfbz 意义，所有新 JS quarantine、safeAssetRefs []。
 
-已发现唯一有效“纳税人信息查询”与“申报信息查询”菜单各 1 项。同源静态 handler `/szc/szzh/sjswszzh/spHandler` 的唯一 `cdlj` 分别对应公共技术路由 `/szzh/zhcx/nsrxxcx`、`/szzh/zhcx/sbxx/sbxxcx`。正常导航原型独审 30 项通过，所有新 JS 均 private 隔离、`safeAssetRefs = []`；已进入纳税人信息查询页，业务数据捕获不足。运行时 URL、query 值、refs 只在本机，不入模型 / Git。
+## 绑定语义与后续复采
 
-root 已沿当前企业有效菜单一次正常 `Page.navigate` 进入纳税人信息查询；导航前 2 + 后 1 共 3 个 identity complete，`documentScopeVerified` / `identityProjectionMatched` true，无保留锁。初次仅被动 Network 观察：127 请求，29 超上限、74 外部跳过、6 显式副作用跳过；JSON 仅见用户消息等框架接口，企业档案业务成功证据、只读 recipe 核验与业务接口复采尚未完成。`safeAssetRefs = []`，新 JS 全本机 private 隔离，无点击或未知接口重放。首轮被静态 / 外部资源占满，正最小调整 ignored 采样为优先业务 XHR / Fetch 并暖缓存再观察，第二次结果未出，不预填成功；当前待办、完整企业资料与申报查询页仍未完成。
+企业资料两 POST 的原捕获 djxh 为空，捕获 helper 私有 djxh 非空，nsrsbh / shxydm 对 parent 企业匹配。保留原 query 顺序 / 值及 null body，不向空 query 填 helper 值，不改 t / page 参数。literal_parameter 继续 literal 匹配；current_session 以捕获 helper 的私有非空 djxh 和已确认四企业字段为基准，在 refresh / 前后 fresh helper 重复核验，两个 profile 自身 code / name 匹配。current_session 的 income 只能在守卫通过后 sessionEnterpriseBound true，parameterEnterpriseBound / responseEnterpriseBound / obligationVerified 均 false；尚无成功实采结果。
 
-1. 字段与严格零时间格式修复的实现 / 合成 / 独立验证 / 最终两轮真实 MCP 已完成，文档冻结交 root 锁 head 审查 / PR。自身未知提交不预填，查询页后续结果可另包继续。
-2. 纳税人信息查询已进入但业务捕获不足，继续优先业务 XHR / Fetch、暖缓存观察；实际只读请求 / schema 与企业 / 事项期间核实后，才固定 recipe 后端独立复采。不能从菜单名或已导航推业务成功，申报查询页仍未完成。
-3. 不走已申报行更正 / 作废 / 财报报送入口；当前待办集合、期间、完整企业资料、业务字段仍有缺项，不能把新字段补齐升级为总任务完成。
+待现有 prepare + commit 明确 resume / finish、锁退休及实际恢复后，才继续独立 immutable context、capture / replay document 分离、不导航 / 不升级旧 portal source，以及项目 MCP 两轮 collect（每轮计划 7 fresh：三业务 + 前后 identity / getUserMsg 守卫 4）。比较代码已实现不等于真实投影相等或覆盖成功。报税选择字段只补行业、登记状态、增值税企业类型、会计制度、税务机关等已确认资料和具体事项缺口；人员、登录操作人、银行账号默认排除，除非明确报税需要，不无界恢复完整 profile / full business。
 
-root 独占真实会话和 Git；本轮用户授权 Codex subagent 实施，最终 reviewer 未参与实施且不继承实施上下文。文档 owner 仅本包 6 文档，不改旧任务 / 交接或 core。本包字段事实已冻结，合成测试与真实业务结果分列；后续查询页不能预填成功。
+## 实际退役状态与下一步 resume
 
-恢复仅 root 本机查本 worktree ignored `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`，实施者不读取真实 checkpoint / source / run / profile / raw / evidence。真实数据 / 凭据只本机，安全 refs 也不入 Git；正常导航授权有效，自动点击、提交、缴款、更正、作废、备案变更及副作用不明操作禁止。
+恢复 / guard 七文件和末两文件 surface 修复均已独审。root 实际 diagnose 确认 ownerDead / exactScope / cleanup true；它只是执行前诊断。实际 execute scope 校验失败，永久 retirementCommitted true、lockRetired / realmDestructionProven / cleanupConfirmed false、resumeRequired true，prepare + commit 已存在。旧链永久不可消费；尚无 realm / finish 通过证据，不能删除事务、另建 prepare / commit 或越过锁。
+
+一次固定 loginb 正常导航出现多次 mainframe / clear / detach / within_document，未按成功处理，失败事件不追认为销毁证明。随后只读 inventory 只证明原标签已跳统一认证域：tpass_login 分类覆盖整个认证域，routeCode unknown；更窄诊断 knownOAuthPath / 已知尾 slash 路径均 false，fragmentPresent true、queryKeyCount 0、titleIndicatesLogin false。具体页面 / 是否需重新登录待用户确认，不推测 session 清除原因。已异步请用户在现有窗口进入目标企业首页并告知 root，此后未新增 fetch / 导航。
+
+用户确认完成后，root 先只读确认精确已知 portal 与稳定 scope，再按**同一 prepare + commit 显式 resume**，用新一次已授权正常导航获取旧 realm 销毁及 cleanup / finish 证据；旧失败事件不可补记，redirect / hash / scope 守卫不放宽。unknown_abandoned / late session effects possible 始终保留；永久 commit、诊断 cleanup true、dead-owner 或未来清锁都不等于服务端请求终止。恢复和 finish 仍待验，owner / browser 不盲重启，旧链迟到结果永久不消费。
+
+## 草稿交付与运行版本
+
+等待用户输入期间准备当前代码 + 真实失败状态的草稿 PR，不 ready、不 merge，不宣告本轮已交付或专项完成。新版专用退役实际运行是独立本机 admin；现有纯采集 backend 未因磁盘 commit 自动重载，当前未重启，browser owner 保留。恢复无锁且精确 portal / scope 稳定后，实际 MCP 复采前只把纯采集 backend 更新到经审版本，绝不重启 browser owner；更新及实采均未预填成功。
+
+root 独占真实会话与 Git；本轮文档 owner 仅现有六文档，不改代码 / ignored 诊断 / 旧任务 / 全局 Skill。用户授权 Codex subagent 实施，最终 reviewer 不参与实施、不继承实施上下文。恢复只由 root 本机查 worktree ignored checkpoint；实施者不读真实 CP / manifest / raw / evidence / 隔离 JS。真实 refs、nonce、PID、端口、URL / query 值、身份 / 业务原值和凭据不进模型 / Git / PR，安全 refs 也不入 Git。自动点击永久禁止，业务写及副作用不明操作禁止；专项未完成。
