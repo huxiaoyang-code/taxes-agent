@@ -1,5 +1,10 @@
 # 阶段状态
 
+> **2026-10-20 当前包：[TAX-COLLECTION-REBASE](../tasks/TAX-COLLECTION-REBASE.md)** · [采集契约](../TAX-COLLECTION-CONTRACT.md) · [交接](TAX-COLLECTION-REBASE.md)。负责人 `huxiaoyang-code`，独立分支 `codex/huxiaoyang-code/tax-collection-rebase`，分叉基线 `0345046ce40b644f26d4ea52adb362d040533bc2`。本包“门户契约 + 真实复采”已有验收证据，先完成最终 head 一致性核对与 PR 合并；整个专项仍未完成。恢复只查本包 worktree 的 `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`。
+>
+> 新 source 实机成功：4 个被动请求 + 1 个主动身份复核，新 context / loader、`scopeRevision = 0`、`identityProjectionMatched = true`，新锁正常释放。原 MCP stdio → 隔离 HTTP → Agent → 后端两次各 3 个 fresh 请求均 performed / complete，合计 6 个，形成不同 run；source / run 及 run / run 的三项投影比较全 true，`independentRequests = true`，各 6 行。实际 wire `Csbz` 已匹配；行字段不齐，曾最大 32，`zspmDm` 仅 4 / 6 行存在。
+>
+> `documentScopeVerified = true`，但 `businessScopeVerified`、`enterpriseVerified`、`periodVerified`、`projectionComplete` 均 false，缺 `business_period`、`full_enterprise_profile`、`full_business_fields`。旧 provisional 已废弃，`scope_cleanup` / 废弃新锁只属历史，当前无该锁阻塞。已授权继续沿真实同源业务页补期间与资料，不是等待用户输入。管理者最终 `npm test` 23 / 23 套、采集合成 54 项均 exit 0；未参与实现、`fork_turns=none` 的独立 reviewer 已审代码无剩余阻塞，待最终 head 一致性核对，PR / head / merge 据实补录不预报。旧 19 项未提交文件哈希未变，旧 owner / browser / quarantine 保留。原始本机标识、调试信息、业务原值与凭据不入模型 / Git；安全引用可由工具返回模型但不入 Git / PR。下方其他任务按其时点历史阅读。
 > **2026-10-20 当前包：[TAX-SESSION-DISCOVERY](../tasks/TAX-SESSION-DISCOVERY.md)** · [交接](TAX-SESSION-DISCOVERY.md)。原基线 `17a053bfb66b482064ed92aa343ab42c41d47825`，实施分支 `codex/huxiaoyang-code/tax-session-discovery`。专用 Edge 通道与 DTO 去重修复已随 [PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 于北京时间 **2026-10-20 01:00:33** 合并，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`；完整 head `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 17 文件独立最终复核通过、无剩余阻塞，fetch 后树一致，不冒充第二账号批准。全量 17 套 exit 0、独立 59 / 46 / 4 项及额外复验通过；纯文档收尾分支 `codex/huxiaoyang-code/tax-session-handoff` 基于该 merge。
 >
 > 实机 MCP → HTTP → Agent → 专用 Edge 已验 open=`needs_login`、probe=`login_required` 且 `requestPerformed=false`、close=`closed` 且 profile 清理成功。**业务请求 0、业务成功 0、第二遍业务采集未运行，企业 / 期间未取得，真实接入仍为 0。** 专用 Edge / 临时后端已关闭，原官方页保留；用户反馈登录遇到问题、稍后说明，当前等具体问题，不要求点击探索。解决后优先后端专用窗口人工登录一次继续业务取数；安全索引和边界见交接，[扩展范围已登记](https://github.com/huxiaoyang-code/youshu-fork/issues/20#issuecomment-6272266944)。下方旧入口保留追溯。
@@ -131,7 +136,7 @@
 - 数据边界：税局是否提供科目 / 期初 / 凭证 / 银行 / 发票**不可先行承诺**；若仅有企业列表 / 申报汇总，**不能完成自动财务闭环**，必须由用户提供本地资料并标识来源；不把未知 / 缺失当 0 或凭空生成凭证。
 - 待办（超出本文件所有权，保留历史原文）：`docs/PHASE1-ACCEPTANCE.md`、`docs/CAPABILITY-AUDIT-2026-10-13.md`、`docs/handoffs/IMPORT-STRICT.md` 未改（历史验收 / 盘点文档保留历史）；其中最后一件的「下一部分 IMPORT-IDEMPOTENCY」为**历史记录**，已由本文件与 NEXT-SESSION 的现行排序替代。**`docs/INDEX.md` 与 `docs/CHANGELOG.md` 本轮已同步**（本工作区本轮允许修改）。
 - 会话事实（已核实，不预报本次 final 实时状态）：本方案**初稿**、**首审返工（review）**、**二审返工（review2）** 三次实施会话均已实际结束，退出码均为 **0**（`pi-report-closure-plan.exit` / `pi-report-closure-plan-review.exit` / `pi-report-closure-plan-review2.exit`，**管理者已核实**）；IMPORT-STRICT 的**两个交接会话**亦均退出 **0**（均为管理者已核实）。**本次 final** 的会话日志 `D:/有数云fork/.agent-runs/pi-report-closure-plan-final.jsonl`、退出码文件 `pi-report-closure-plan-final.exit`（**由管理者后来实际核对**，不预报）。
-- 合成数据验收服务：原启动记录 `http://127.0.0.1:50969/` PID 53200；**本次管理者 `Get-Process` 未找到该进程，URL 不可视为可用**；未重启，也无需用户验收该服务。
+- 合成数据验收服务：原启动记录 `[历史本机回环地址已省略]` PID [历史值已省略]；**本次管理者 `Get-Process` 未找到该进程，URL 不可视为可用**；未重启，也无需用户验收该服务。
 
 ## 后续可执行任务表（依赖顺序）
 

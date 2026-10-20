@@ -1,5 +1,10 @@
 # 新会话入口 · NEXT SESSION
 
+> **2026-10-20 优先恢复：[TAX-COLLECTION-REBASE](../tasks/TAX-COLLECTION-REBASE.md)**、[采集契约](../TAX-COLLECTION-CONTRACT.md)、[本包交接](TAX-COLLECTION-REBASE.md)。负责人 `huxiaoyang-code`；分叉基线 `0345046ce40b644f26d4ea52adb362d040533bc2`，独立分支 `codex/huxiaoyang-code/tax-collection-rebase`。只查本包 worktree 的 `.agent-runs/TAX-COLLECTION-CHECKPOINT.json` 恢复实际引用 / 进程 / 窗口，不复用已废弃 provisional，不盲重启原后端。旧 19 项未提交文件哈希未变，旧 owner / browser / quarantine 保留。
+>
+> 本包新 source 已成功：4 passive + 1 active identity verify，新 context / loader、`scopeRevision = 0`、身份投影匹配、新锁释放；`Csbz` 实际 wire 匹配。真实原 MCP stdio → 隔离 HTTP → Agent → 后端两次各 3 fresh 请求均 performed / complete，合计 6 个，不同 run，source / run 及 run / run 三项投影比较全 true，`independentRequests = true`，各 6 行。行字段异构，曾最大 32，`zspmDm` 仅 4 / 6 行存在。`documentScopeVerified = true`，但 `businessScopeVerified`、`enterpriseVerified`、`periodVerified`、`projectionComplete` 均 false，仍缺 `business_period`、`full_enterprise_profile`、`full_business_fields`。
+>
+> 管理者最终 `npm test` 23 / 23 套及采集合成 54 项均 exit 0；无实施上下文的独立 reviewer 已审当前代码无剩余阻塞，待最终 head 一致性核对。先按“门户契约 + 真实复采”PR 验收合并，PR / head / merge 不预报；整个专项未完成，后续已授权沿实际同源业务页补期间与资料，不是等待用户输入。历史 `scope_cleanup` / 废弃锁已非阻塞。正常导航允许，自动点击、隐藏接口猜测及正式申报 / 缴款等禁止；原始本机标识 / 调试信息 / 原值 / 凭据不进模型或 Git，安全引用不写 Git / PR。下方其他入口按历史阅读。
 > **2026-10-20 优先恢复：[TAX-SESSION-DISCOVERY 任务](../tasks/TAX-SESSION-DISCOVERY.md)与[交接](TAX-SESSION-DISCOVERY.md)**。负责人 `huxiaoyang-code`；[PR #27](https://github.com/huxiaoyang-code/youshu-fork/pull/27) 已于北京时间 **2026-10-20 01:00:33** 合并，merge `73ee241648fb70711af21f8bdae49ed2f6680ab7`，完整候选 `a07c93a3657a9aaade5d44562a85f615327a82dd` 的 17 文件独立最终复核通过、无剩余阻塞，fetch 后树一致。3 个专用 Edge 工具与 DTO 去重修复已交付，17 套全量及独立 59 / 46 / 4 项通过；纯文档收尾分支 `codex/huxiaoyang-code/tax-session-handoff` 基于该 merge，恢复仍先核对最新 main / PR，原分叉基线及实施分支见交接。
 >
 > 实机 MCP → 后端 → 专用 Edge 已验证 open / 未登录 probe / close；**业务请求与成功均为 0，企业 / 期间未取得，后端第二遍业务采集未运行，专项未完成**。专用 Edge、临时 profile 和临时后端已清理，原官方页保留；不要沿用旧 connection / tab 标识。用户反馈登录遇到问题、稍后说明，当前等具体问题，不要求点击探索；解决后优先后端专用官方窗口人工登录一次，继续真实 schema / 企业 / 业务采集，不复制原窗口凭据。

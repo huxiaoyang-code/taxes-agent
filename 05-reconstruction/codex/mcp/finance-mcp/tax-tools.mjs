@@ -25,6 +25,10 @@ const available = (name, description, inputSchema) =>
   ({ name, description, inputSchema, status: "available", origin: "local" });
 
 export const TAX_TOOLS = [
+  available("tax_live_collect", "按本机管理员新导航形成的sourceRef重复只读采集当前企业上下文与当前申报清单，仅返回安全引用、企业一致性与部分覆盖。默认关闭；期间仍待核实。",
+    {...obj({sourceRef:{type:"string",pattern:"^taxsource_[a-f0-9]{48}$"}},["sourceRef"]),additionalProperties:false}),
+  available("tax_live_compare", "本机比较两次只读采集的白名单投影，只返回企业相等、清单相等及覆盖状态，不返回业务原值。",
+    {...obj({leftRef:{type:"string",pattern:"^tax(?:source|run)_[a-f0-9]{48}$"},rightRef:{type:"string",pattern:"^tax(?:source|run)_[a-f0-9]{48}$"}},["leftRef","rightRef"]),additionalProperties:false}),
   available("tax_browser_open", "打开本机专用 Edge 官方窗口，需操作者人工登录。使用独立临时目录，不复制已有登录态；仅返回连接引用，不创建已认证税务会话。",
     { ...obj({ region: { type: "string", enum: ["350000"] } }, ["region"]), additionalProperties: false }),
   available("tax_browser_probe", "检查专用窗口并对已观察的福建身份读取路径发起一次实际只读请求。仅返回安全结构与状态，schema_unverified 不代表登录或业务成功。",
