@@ -10,7 +10,7 @@ import {TaxQueryStore} from '../server/tax-query-store.mjs';
 import {TaxQueryCollection} from '../server/tax-query-collection.mjs';
 import {QUERY_ORIGIN,QUERY_PATHS} from '../server/tax-query-contract.mjs';
 export const PRIVATE='SYNTHETIC_QUERY_BUSINESS_TRIPWIRE',OPERATOR='SYNTHETIC_QUERY_OPERATOR_TRIPWIRE';
-export async function queryFixture(directory,{collector=new TaxQueryCollection()}={}){
+export async function queryFixture(directory,{collector=new TaxQueryCollection(),bindingMode='literal_parameter'}={}){
   const security={testStorage:true,async secureDirectory(){},async verifyDirectory(p){assert.ok((await lstat(p)).isDirectory())},
     async verifyFile(p){assert.ok((await lstat(p)).isFile())}};
   const parentStore=new TaxCollectionStore({root:join(directory,'parent-evidence'),security}),profile=join(directory,'profile');await mkdir(profile);
@@ -33,11 +33,12 @@ export async function queryFixture(directory,{collector=new TaxQueryCollection()
     enterprise_profile:{Response:{Error:null,Data:{shxydm:enterprise.creditCode,nsrmc:enterprise.company_name,kjzdzz:PRIVATE+'_ACCOUNTING',
       sfshow:true,yhzh:PRIVATE+'_BANK_ACCOUNT',ssglyXm:OPERATOR,ssglyDm:OPERATOR}}},
     income_assessment:{Response:{Error:null,Data:{PageNumber:1,PageSize:10,Total:0,List:[]}}}};
+  const parameterDjxh=bindingMode==='current_session'?'':djxh;
   const manifest={version:1,sourceRef:parentSourceRef,target:'taxpayer_profile',capturedAt:2000,assets:[],document:{targetId:parent.targetId,
     frameId:'capture-frame',loaderId:'capture-loader',url:QUERY_ORIGIN+'/szzh/zhcx/nsrxxcx?ruuid='+PRIVATE+'_OPAQUE'},
     identityProjection:identity.projection,requests:Object.entries(QUERY_PATHS).map(([resource,path])=>({url:QUERY_ORIGIN+path+
-      (resource==='basic_profile'?'?t=1700000000000':resource==='enterprise_profile'?'?djxh='+djxh:
-        resource==='income_assessment'?'?pageNum=1&pageSize=10&djxh='+djxh:''),method:['basic_profile','getUserMsg'].includes(resource)?'GET':'POST',body:null,response:bodies[resource]}))};
+      (resource==='basic_profile'?'?t=1700000000000':resource==='enterprise_profile'?'?djxh='+parameterDjxh:
+        resource==='income_assessment'?'?pageNum=1&pageSize=10&djxh='+parameterDjxh:''),method:['basic_profile','getUserMsg'].includes(resource)?'GET':'POST',body:null,response:bodies[resource]}))};
   const manifestPath=join(artifactDirectory,'manifest.json');await writeFile(manifestPath,JSON.stringify(manifest));
   const state={mode:'normal',requests:[],calls:[],closed:0,now:3000};
   const frame=()=>({id:'current-frame',loaderId:state.mode==='wrong_loader'?'other-loader':'current-loader',

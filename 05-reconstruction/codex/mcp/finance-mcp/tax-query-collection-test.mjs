@@ -11,12 +11,12 @@ const here=dirname(fileURLToPath(import.meta.url)),root=resolve(here,'../../../.
 const PRIVATE='SYNTHETIC_QUERY_BUSINESS_TRIPWIRE';
 const safe=v=>assert.doesNotMatch(JSON.stringify(v),/SYNTHETIC_QUERY|targetId|frameId|loaderId|registrationRoot|profilePath|expression|fullUrl|authorization|cookie/i);
 const url=p=>JSON.stringify(pathToFileURL(join(root,p)).href);
-async function withBackend(callback){
+async function withBackend(callback,fixtureOptions={}){
   await mkdir(temp,{recursive:true});const directory=await mkdtemp(join(temp,'synthetic-'));let child,client,stopped,stderr='',stdout='';const events=[];
   try{
     const script=`const {taxQueryCollection}=await import(${url('06-workbench/server/agent-tools.mjs')});
       const {queryFixture}=await import(${url('06-workbench/test/tax-query-fixture.mjs')});
-      const fixture=await queryFixture(${JSON.stringify(directory)},{collector:taxQueryCollection});
+      const fixture=await queryFixture(${JSON.stringify(directory)},{collector:taxQueryCollection,...${JSON.stringify(fixtureOptions)}});
       const refreshed=await taxQueryCollection.refresh({artifactRef:fixture.artifactRef});
       process.send?.({type:'ready',result:refreshed});
       process.on('message',message=>{
@@ -69,6 +69,16 @@ test('MCP and HTTP reject caller URLs/parameters/headers and portal source refs 
     body:JSON.stringify({contextRef:f.contextRef,url:PRIVATE})});const result=await response.json();safe(result);
   assert.ok(response.status>=400||result.status==='input_invalid'||result.result?.status==='input_invalid');assert.equal((await f.stats()).requests,3);
 }));
+test('current-session empty parameters retain seven fresh requests per MCP run without claiming parameter binding',async()=>withBackend(async f=>{
+  const first=await call(f.client,'tax_query_collect',{contextRef:f.contextRef}),second=await call(f.client,'tax_query_collect',{contextRef:f.contextRef});
+  assert.equal(first.status,'query_resources_observed');assert.equal(second.status,'query_resources_observed');
+  assert.equal(first.requestPerformedCount,7);assert.equal(second.responseCompleteCount,7);assert.equal(first.bindingMode,'current_session');
+  assert.equal(first.resources.income_assessment.parameterEnterpriseBound,false);assert.equal(first.resources.income_assessment.sessionEnterpriseBound,true);
+  assert.equal(first.resources.income_assessment.responseEnterpriseBound,false);assert.equal(first.resources.income_assessment.obligationVerified,false);
+  const result=await call(f.client,'tax_query_compare',{leftRef:first.runRef,rightRef:second.runRef});
+  assert.equal(result.status,'query_runs_compared');assert.equal(result.independentRequests,true);assert.equal(result.enterpriseProfileEqual,true);
+  assert.equal((await f.stats()).requests,17);
+},{bindingMode:'current_session'}));
 test('MCP unknown active request retains lock and never publishes/retries a run',async()=>withBackend(async f=>{
   await f.mode('unknown');const first=await call(f.client,'tax_query_collect',{contextRef:f.contextRef});assert.equal(first.lockRetained,true);
   const second=await call(f.client,'tax_query_collect',{contextRef:f.contextRef});assert.equal(second.reason,'tax_collection_busy');

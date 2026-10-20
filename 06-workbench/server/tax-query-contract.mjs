@@ -25,9 +25,9 @@ export function queryRecipeValid(recipe,resource){
   const keys=recipe.query.map(p=>p.key).join(',');
   if(resource==='basic_profile')return keys==='t'&&/^[0-9]{1,20}$/.test(recipe.query[0].value);
   if(resource==='getUserMsg')return keys===''||keys==='t'&&/^[0-9]{1,20}$/.test(recipe.query[0].value);
-  if(resource==='enterprise_profile')return keys==='djxh'&&nonempty(recipe.query[0].value);
+  if(resource==='enterprise_profile')return keys==='djxh'&&(recipe.query[0].value===''||nonempty(recipe.query[0].value));
   return resource==='income_assessment'&&keys==='pageNum,pageSize,djxh'&&/^[1-9][0-9]{0,6}$/.test(recipe.query[0].value)
-    &&/^[1-9][0-9]{0,3}$/.test(recipe.query[1].value)&&Number(recipe.query[1].value)<=1000&&nonempty(recipe.query[2].value);
+    &&/^[1-9][0-9]{0,3}$/.test(recipe.query[1].value)&&Number(recipe.query[1].value)<=1000&&(recipe.query[2].value===''||nonempty(recipe.query[2].value));
 }
 export function queryDocumentValid(document,capture=false){
   if(!exact(document,['targetId','frameId','loaderId','fullUrl','documentUrlSemantics','documentUrlDigest'])
@@ -51,7 +51,8 @@ const fields=(data,names)=>Object.fromEntries(names.filter(k=>Object.hasOwn(data
   const value=data[k];if(value!==null&&!['string','number','boolean'].includes(typeof value)||typeof value==='string'&&value.length>4096
     ||typeof value==='number'&&!Number.isFinite(value))throw queryFail('query_shape_invalid');
   return[k,value];}));
-export function queryProjection(body,resource,enterprise,djxh){
+export function queryProjection(body,resource,enterprise,djxh,bindingMode='literal_parameter'){
+  if(!['literal_parameter','current_session'].includes(bindingMode))throw queryFail('query_shape_invalid');
   const data=responseData(body);
   if(resource==='getUserMsg'){
     if(!nonempty(data.djxh)||data.djxh!==djxh||data.nsrsbh!==enterprise.taxpayer_id||data.shxydm!==enterprise.creditCode)throw queryFail('query_enterprise_changed');
@@ -71,7 +72,7 @@ export function queryProjection(body,resource,enterprise,djxh){
     ||!List.every(object)||Total===0&&(PageNumber!==1||List.length!==0)
     ||Total>0&&((PageNumber-1)*PageSize>=Total||List.length>Total-(PageNumber-1)*PageSize))throw queryFail('query_shape_invalid');
   return{PageNumber,PageSize,Total,ListCount:List.length,rowsCompared:false,pageCoverageComplete:PageNumber===1&&List.length===Total,
-    unknownRowSchema:List.length>0,parameterEnterpriseBound:true,responseEnterpriseBound:false,obligationVerified:false};
+    unknownRowSchema:List.length>0,parameterEnterpriseBound:bindingMode==='literal_parameter',sessionEnterpriseBound:bindingMode==='current_session',responseEnterpriseBound:false,obligationVerified:false};
 }
 export function buildQueryTemplate(manifest,parent,parentSourceRef,artifactRef){
   requireActiveSource(parent);
@@ -96,16 +97,18 @@ export function buildQueryTemplate(manifest,parent,parentSourceRef,artifactRef){
   }
   const djxh=records.enterprise_profile.recipe.query[0].value;
   if(records.income_assessment.recipe.query[2].value!==djxh)throw queryFail('query_enterprise_changed');
+  const bindingMode=djxh===''?'current_session':'literal_parameter',capturedHelperDjxh=responseData(records.getUserMsg.body).djxh;
+  if(!nonempty(capturedHelperDjxh)||bindingMode==='literal_parameter'&&capturedHelperDjxh!==djxh)throw queryFail('query_enterprise_changed');
   const captureProjections={};
   for(const [resource,item] of Object.entries(records)){
-    const projection=queryProjection(item.body,resource,enterprise,djxh);
+    const projection=queryProjection(item.body,resource,enterprise,capturedHelperDjxh,bindingMode);
     if(resource!=='getUserMsg')captureProjections[resource]=projection;
     if(resource==='income_assessment'&&(projection.PageNumber!==Number(item.recipe.query[0].value)
       ||projection.PageSize!==Number(item.recipe.query[1].value)))throw queryFail('query_shape_invalid');
   }
   return{version:1,parentSourceRef,parentArtifactRef:artifactRef,capturedAt:manifest.capturedAt,registrationRef:parent.registrationRef,
     registrationRoot:parent.registrationRoot,browserKey:parent.browserKey,captureDocument,identityRecipe:parent.identity.recipe,enterprise,
-    recipes:Object.fromEntries(['basic_profile','enterprise_profile','income_assessment'].map(k=>[k,records[k].recipe])),getUserMsgRecipe:records.getUserMsg.recipe,captureProjections};
+    recipes:Object.fromEntries(['basic_profile','enterprise_profile','income_assessment'].map(k=>[k,records[k].recipe])),getUserMsgRecipe:records.getUserMsg.recipe,bindingMode,capturedHelperDjxh,captureProjections};
 }
 const canonical=value=>JSON.stringify(value,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 const kind=value=>value===null?'null':typeof value;
@@ -131,12 +134,13 @@ export function compareCapturedProjections(capture,run){
     kind:'value_changed',capturedValue:before[field],runValue:after[field]});
   return{summary,diff};
 }
-function validateProjectionSet(projections,enterprise){
+function validateProjectionSet(projections,enterprise,bindingMode){
+  if(!['literal_parameter','current_session'].includes(bindingMode))throw queryFail('query_record_invalid');
   if(!exact(projections,['basic_profile','enterprise_profile','income_assessment']))throw queryFail('query_record_invalid');
     for(const [resource,projection] of Object.entries(projections)){
       if(resource==='income_assessment'){
-        if(!exact(projection,['PageNumber','PageSize','Total','ListCount','rowsCompared','pageCoverageComplete','unknownRowSchema','parameterEnterpriseBound','responseEnterpriseBound','obligationVerified'])
-          ||projection.rowsCompared!==false||projection.parameterEnterpriseBound!==true||projection.responseEnterpriseBound!==false||projection.obligationVerified!==false
+        if(!exact(projection,['PageNumber','PageSize','Total','ListCount','rowsCompared','pageCoverageComplete','unknownRowSchema','parameterEnterpriseBound','sessionEnterpriseBound','responseEnterpriseBound','obligationVerified'])
+          ||projection.rowsCompared!==false||projection.parameterEnterpriseBound!==(bindingMode==='literal_parameter')||projection.sessionEnterpriseBound!==(bindingMode==='current_session')||projection.responseEnterpriseBound!==false||projection.obligationVerified!==false
           ||!Number.isSafeInteger(projection.ListCount)||projection.ListCount<0||projection.ListCount>1000
           ||!Number.isSafeInteger(projection.PageNumber)||projection.PageNumber<1||projection.PageNumber>10000000
           ||!Number.isSafeInteger(projection.PageSize)||projection.PageSize<1||projection.PageSize>1000
@@ -155,14 +159,16 @@ function validateProjectionSet(projections,enterprise){
 }
 const refs=(v,prefix)=>typeof v==='string'&&new RegExp('^'+prefix+'_[a-f0-9]{48}$').test(v);
 export function validateQueryRecord(kind,v){
-  const shared=['version','parentSourceRef','parentArtifactRef','capturedAt','registrationRef','registrationRoot','browserKey','captureDocument','identityRecipe','enterprise','recipes','getUserMsgRecipe','captureProjections'];
+  const shared=['version','parentSourceRef','parentArtifactRef','capturedAt','registrationRef','registrationRoot','browserKey','captureDocument','identityRecipe','enterprise','recipes','getUserMsgRecipe','bindingMode','capturedHelperDjxh','captureProjections'];
   if(kind==='template'){
     if(!exact(v,shared)||v.version!==1||!refs(v.parentSourceRef,'taxsource')||!refs(v.parentArtifactRef,'taxquery')||!Number.isSafeInteger(v.capturedAt)
       ||!refs(v.registrationRef,'taxr')||typeof v.registrationRoot!=='string'||!/[\\/]\.agent-runs[\\/]tax-browser-registry$/.test(v.registrationRoot)
       ||! /^[a-f0-9]{64}$/.test(v.browserKey)||!queryDocumentValid(v.captureDocument,true)||!validateRecipe(v.identityRecipe,'identity')||!validEnterprise(v.enterprise)
       ||!exact(v.recipes,['basic_profile','enterprise_profile','income_assessment'])||!Object.entries(v.recipes).every(([k,r])=>queryRecipeValid(r,k))
-      ||!queryRecipeValid(v.getUserMsgRecipe,'getUserMsg')||v.recipes.enterprise_profile.query[0].value!==v.recipes.income_assessment.query[2].value)throw queryFail('query_record_invalid');
-    validateProjectionSet(v.captureProjections,v.enterprise);
+      ||!queryRecipeValid(v.getUserMsgRecipe,'getUserMsg')||v.recipes.enterprise_profile.query[0].value!==v.recipes.income_assessment.query[2].value
+      ||!nonempty(v.capturedHelperDjxh)||v.bindingMode!==(v.recipes.enterprise_profile.query[0].value===''?'current_session':'literal_parameter')
+      ||v.bindingMode==='literal_parameter'&&v.capturedHelperDjxh!==v.recipes.enterprise_profile.query[0].value)throw queryFail('query_record_invalid');
+    validateProjectionSet(v.captureProjections,v.enterprise,v.bindingMode);
     if(v.captureProjections.income_assessment.PageNumber!==Number(v.recipes.income_assessment.query[0].value)
       ||v.captureProjections.income_assessment.PageSize!==Number(v.recipes.income_assessment.query[1].value))throw queryFail('query_record_invalid');
   }else if(kind==='context'){
@@ -170,11 +176,11 @@ export function validateQueryRecord(kind,v){
       ||!queryRef(v.templateRef,'template')||!Number.isSafeInteger(v.createdAt)||v.expiresAt!==v.createdAt+1800000
       ||!queryDocumentValid(v.replayDocument)||!validEnterprise(v.enterprise)||!refs(v.operationRef,'taxop')||!proofValid(v.proof,['identity','getUserMsg','identity']))throw queryFail('query_record_invalid');
   }else if(kind==='run'){
-    if(!exact(v,['version','contextRef','templateRef','createdAt','enterprise','operationRef','proof','projections','captureDiff'])||v.version!==1
+    if(!exact(v,['version','contextRef','templateRef','createdAt','enterprise','operationRef','proof','bindingMode','projections','captureDiff'])||v.version!==1
       ||!queryRef(v.contextRef,'context')||!queryRef(v.templateRef,'template')||!Number.isSafeInteger(v.createdAt)||!validEnterprise(v.enterprise)
       ||!refs(v.operationRef,'taxop')||!proofValid(v.proof,['identity','getUserMsg','basic_profile','enterprise_profile','income_assessment','getUserMsg','identity'])
       ||!exact(v.projections,['basic_profile','enterprise_profile','income_assessment']))throw queryFail('query_record_invalid');
-    validateProjectionSet(v.projections,v.enterprise);
+    validateProjectionSet(v.projections,v.enterprise,v.bindingMode);
     if(!Array.isArray(v.captureDiff)||v.captureDiff.length>256||v.captureDiff.some(item=>!exact(item,['resource','field','kind','capturedValue','runValue'])
       ||!['missing','added','type_changed','value_changed'].includes(item.kind)
       ||!(item.resource==='basic_profile'?BASIC_FIELDS:item.resource==='enterprise_profile'?ENTERPRISE_FIELDS:item.resource==='income_assessment'?['PageNumber','PageSize','Total','ListCount']:[]).includes(item.field)

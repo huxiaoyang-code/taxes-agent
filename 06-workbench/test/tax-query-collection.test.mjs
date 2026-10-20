@@ -9,8 +9,8 @@ import {TaxQueryCollection,queryRequestScript} from '../server/tax-query-collect
 import {QUERY_ORIGIN,QUERY_PATHS,queryProjection,validateQueryRecord} from '../server/tax-query-contract.mjs';
 const ROOT=fileURLToPath(new URL('../.agent-runs/',import.meta.url));
 const safe=v=>assert.doesNotMatch(JSON.stringify(v),/SYNTHETIC_QUERY|profilePath|registrationRoot|targetId|frameId|loaderId|expression|headers|cookie|fullUrl/i);
-async function fixture(fn){await mkdir(ROOT,{recursive:true});const dir=await mkdtemp(join(ROOT,'synthetic-query-'));
-  try{await fn(await queryFixture(dir),dir);}finally{assert.equal(dirname(resolve(dir)),resolve(ROOT));await rm(dir,{recursive:true,force:true});}}
+async function fixture(fn,options){await mkdir(ROOT,{recursive:true});const dir=await mkdtemp(join(ROOT,'synthetic-query-'));
+  try{await fn(await queryFixture(dir,options),dir);}finally{assert.equal(dirname(resolve(dir)),resolve(ROOT));await rm(dir,{recursive:true,force:true});}}
 test('opaque refs only and default disabled',async()=>{
   const c=new TaxQueryCollection();assert.equal((await c.collect({contextRef:'taxquerycontext_'+'1'.repeat(48)})).status,'not_enabled');
   assert.equal((await c.collect({contextRef:'../x'})).status,'input_invalid');
@@ -24,6 +24,8 @@ test('new replay context distinctly binds current doc; each collect actually per
   const first=await f.collector.collect({contextRef:refresh.contextRef}),second=await f.collector.collect({contextRef:refresh.contextRef});safe(first);safe(second);
   assert.equal(first.status,'query_resources_observed',JSON.stringify(first));assert.equal(first.requestPerformedCount,7);assert.equal(first.responseCompleteCount,7);
   assert.equal(first.resources.income_assessment.responseEnterpriseBound,false);assert.equal(first.resources.income_assessment.obligationVerified,false);
+  assert.equal(first.bindingMode,'literal_parameter');assert.equal(first.resources.income_assessment.parameterEnterpriseBound,true);
+  assert.equal(first.resources.income_assessment.sessionEnterpriseBound,false);
   assert.equal(first.businessScopeVerified,false);assert.equal(first.periodVerified,false);assert.notEqual(first.runRef,second.runRef);
   const compared=await f.collector.compare({leftRef:first.runRef,rightRef:second.runRef});safe(compared);assert.equal(compared.independentRequests,true);
   assert.equal(compared.basicProfileEqual,true);assert.equal(compared.enterpriseProfileEqual,true);
@@ -165,3 +167,54 @@ for(const [name,mutate] of [['page zero',p=>p.PageNumber=0],['pageSize string',p
   await writeFile(path,JSON.stringify(record));const result=await f.collector.compare({leftRef:first.runRef,rightRef:second.runRef});safe(result);
   assert.notEqual(result.status,'query_runs_compared');
 }));
+test('empty original parameters remain empty under current-session binding, including both fresh runs',async()=>fixture(async f=>{
+  const refreshed=await f.collector.refresh({artifactRef:f.artifactRef});safe(refreshed);assert.equal(refreshed.status,'query_context_refreshed');
+  assert.equal(refreshed.bindingMode,'current_session');const context=await f.store.load(refreshed.contextRef),template=await f.store.load(context.templateRef);
+  assert.equal(template.bindingMode,'current_session');assert.equal(template.capturedHelperDjxh,PRIVATE+'_DJXH');
+  assert.equal(template.recipes.enterprise_profile.query[0].value,'');assert.equal(template.recipes.income_assessment.query[2].value,'');
+  const first=await f.collector.collect({contextRef:refreshed.contextRef}),second=await f.collector.collect({contextRef:refreshed.contextRef});safe(first);safe(second);
+  assert.equal(first.status,'query_resources_observed');assert.equal(first.requestPerformedCount,7);assert.equal(first.bindingMode,'current_session');
+  assert.equal(first.resources.income_assessment.parameterEnterpriseBound,false);assert.equal(first.resources.income_assessment.sessionEnterpriseBound,true);
+  assert.equal(first.resources.income_assessment.responseEnterpriseBound,false);assert.equal(first.resources.income_assessment.obligationVerified,false);
+  const requests=f.state.requests.filter(r=>['enterprise_profile','income_assessment'].includes(r.resource));assert.equal(requests.length,4);
+  assert.ok(requests.every(r=>new URL(r.address).searchParams.get('djxh')===''));assert.ok(requests.every(r=>!r.address.includes(PRIVATE)));
+  const compared=await f.collector.compare({leftRef:first.runRef,rightRef:second.runRef});safe(compared);
+  assert.equal(compared.status,'query_runs_compared');assert.equal(compared.enterpriseProfileEqual,true);assert.equal(compared.incomePaginationEqual,true);
+  assert.equal(first.captureComparison.incomePaginationEqual,true);assert.equal(first.projectionComplete,false);
+},{bindingMode:'current_session'}));
+for(const mode of ['missing_helper_djxh','empty_helper_djxh','cross_helper','cross_basic','cross_profile','mixed_parameters','whitespace_parameter','wrong_page','wrong_parent'])
+test('current-session capture rejects incomplete or mismatched provenance: '+mode,async()=>fixture(async f=>{
+  await f.changeManifest(m=>{
+    const helper=m.requests.find(r=>r.url.includes('getUserMsg')).response.Response.Data;
+    if(mode==='missing_helper_djxh')delete helper.djxh;
+    if(mode==='empty_helper_djxh')helper.djxh='';
+    if(mode==='cross_helper')helper.shxydm=PRIVATE+'_OTHER';
+    if(mode==='cross_basic')m.requests.find(r=>r.url.includes('DescribeNsrjbxx')).response.Response.Data.tyshxydm=PRIVATE+'_OTHER';
+    if(mode==='cross_profile')m.requests.find(r=>r.url.includes('DescribeNsrxxJcxx')).response.Response.Data.nsrmc=PRIVATE+'_OTHER';
+    if(mode==='mixed_parameters')m.requests.find(r=>r.url.includes('DescribeQysdshdxx')).url+=PRIVATE+'_DJXH';
+    if(mode==='whitespace_parameter')for(const r of m.requests)if(r.url.includes('djxh='))r.url+='++';
+    if(mode==='wrong_page')m.requests.find(r=>r.url.includes('DescribeQysdshdxx')).response.Response.Data.PageSize=9;
+    if(mode==='wrong_parent')m.identityProjection.userinfo.creditCode=PRIVATE+'_OTHER';
+  });
+  const result=await f.collector.refresh({artifactRef:f.artifactRef});safe(result);assert.equal(result.status,'query_refresh_failed');
+  assert.equal(result.requestAttemptedCount,0);assert.equal(f.state.requests.length,0);assert.equal(result.lockRetained,false);
+},{bindingMode:'current_session'}));
+for(const mode of ['wrong_djxh','identity_changed','cross_basic','cross_enterprise','wrong_page'])
+test('current-session fresh verification rejects changed enterprise/helper or paging: '+mode,async()=>fixture(async f=>{
+  const context=await f.collector.refresh({artifactRef:f.artifactRef});assert.equal(context.status,'query_context_refreshed');f.state.mode=mode;
+  const result=await f.collector.collect({contextRef:context.contextRef});safe(result);assert.equal(result.status,'query_collection_failed');
+  assert.equal((await readdir(f.store.root)).filter(n=>n.startsWith('taxqueryrun_')).length,0);
+},{bindingMode:'current_session'}));
+test('stored run with a different valid binding mode cannot compare against its template',async()=>fixture(async f=>{
+  const ctx=await f.collector.refresh({artifactRef:f.artifactRef}),first=await f.collector.collect({contextRef:ctx.contextRef}),second=await f.collector.collect({contextRef:ctx.contextRef});
+  const path=join(f.store.root,second.runRef+'.json'),record=await f.store.load(second.runRef);
+  record.bindingMode='literal_parameter';record.projections.income_assessment.parameterEnterpriseBound=true;record.projections.income_assessment.sessionEnterpriseBound=false;
+  validateQueryRecord('run',record);await writeFile(path,JSON.stringify(record));
+  assert.equal((await f.collector.compare({leftRef:first.runRef,rightRef:second.runRef})).status,'not_comparable');
+},{bindingMode:'current_session'}));
+test('template mode/helper inconsistency is rejected before any fresh request',async()=>fixture(async f=>{
+  const ctx=await f.collector.refresh({artifactRef:f.artifactRef}),context=await f.store.load(ctx.contextRef),template=await f.store.load(context.templateRef);
+  for(const mutate of [t=>t.bindingMode='literal_parameter',t=>t.capturedHelperDjxh='',t=>t.captureProjections.income_assessment.parameterEnterpriseBound=true]){
+    const corrupt=structuredClone(template);mutate(corrupt);assert.throws(()=>validateQueryRecord('template',corrupt));
+  }
+},{bindingMode:'current_session'}));

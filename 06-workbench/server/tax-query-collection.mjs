@@ -119,7 +119,7 @@ export class TaxQueryCollection{
             const enterprise=enterpriseOf(projection);if(!sameQueryEnterprise(enterprise,template.enterprise))throw queryFail('query_enterprise_changed');
             await guard();return enterprise;
           }
-          const projection=queryProjection(value.body,resource,template.enterprise,template.recipes.enterprise_profile.query[0].value);
+          const projection=queryProjection(value.body,resource,template.enterprise,template.capturedHelperDjxh,template.bindingMode);
           if(resource==='income_assessment'&&(projection.PageNumber!==Number(recipe.query[0].value)||projection.PageSize!==Number(recipe.query[1].value)))throw queryFail('query_shape_invalid');
           await guard();return projection;
         }catch(error){if(!replyCounted){performedUnknown++;completeUnknown++;}if(error.settled===true)confirmed=true;throw error;}
@@ -130,13 +130,13 @@ export class TaxQueryCollection{
         record={version:1,templateRef:null,createdAt,expiresAt:createdAt+1800000,replayDocument:document,enterprise:template.enterprise,
           operationRef:ref('taxop'),proof};
         result={status:'query_context_refreshed',captureDocumentRetained:true,replayDocumentBound:true,documentScopeVerified:true,
-          identityProjectionMatched:true,djxhMatched:true,businessScopeVerified:false,periodVerified:false,projectionComplete:false};
+          identityProjectionMatched:true,djxhMatched:true,bindingMode:template.bindingMode,businessScopeVerified:false,periodVerified:false,projectionComplete:false};
       }else{
         const projections={};for(const resource of ['basic_profile','enterprise_profile','income_assessment'])projections[resource]=await read(resource);
         await read('getUserMsg');await read('identity');await guard();
         const captureComparison=compareCapturedProjections(template.captureProjections,projections);
-        record={version:1,contextRef:args.contextRef,templateRef,createdAt:this.d.now(),enterprise:template.enterprise,operationRef:ref('taxop'),proof,projections,captureDiff:captureComparison.diff};
-        result={status:'query_resources_observed',documentScopeVerified:true,identityProjectionMatched:true,djxhMatched:true,
+        record={version:1,contextRef:args.contextRef,templateRef,createdAt:this.d.now(),enterprise:template.enterprise,operationRef:ref('taxop'),proof,bindingMode:template.bindingMode,projections,captureDiff:captureComparison.diff};
+        result={status:'query_resources_observed',documentScopeVerified:true,identityProjectionMatched:true,djxhMatched:true,bindingMode:template.bindingMode,
           businessRequestCount:3,verificationRequestCount:4,businessScopeVerified:false,enterpriseVerified:false,periodVerified:false,projectionComplete:false,
           resources:{basic_profile:{responseEnterpriseBound:true,fieldCount:Object.keys(projections.basic_profile).length},
             enterprise_profile:{responseEnterpriseBound:true,fieldCount:Object.keys(projections.enterprise_profile).length},
@@ -187,7 +187,7 @@ export class TaxQueryCollection{
       const context=await this.d.store.load(left.contextRef,deadline),template=await this.d.store.load(context.templateRef,deadline);
       if(left.templateRef!==context.templateRef||!sameQueryEnterprise(left.enterprise,context.enterprise)||!sameQueryEnterprise(right.enterprise,context.enterprise)
         ||!sameQueryEnterprise(context.enterprise,template.enterprise))return{status:'not_comparable'};
-      if([left,right].some(run=>run.projections.income_assessment.PageNumber!==Number(template.recipes.income_assessment.query[0].value)
+      if([left,right].some(run=>run.bindingMode!==template.bindingMode||run.projections.income_assessment.PageNumber!==Number(template.recipes.income_assessment.query[0].value)
         ||run.projections.income_assessment.PageSize!==Number(template.recipes.income_assessment.query[1].value)))return{status:'not_comparable'};
       await this.d.parentStore.assertNotAbandoned(template.parentSourceRef);
       if(left.createdAt<context.createdAt||right.createdAt<context.createdAt||left.createdAt>context.expiresAt||right.createdAt>context.expiresAt
