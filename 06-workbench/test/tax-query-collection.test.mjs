@@ -146,6 +146,16 @@ test('operation deadline also bounds private-store work before starting any live
   let calls=0;f.collector.d.clock=()=>calls++===0?0:120001;
   const r=await f.collector.refresh({artifactRef:f.artifactRef});safe(r);assert.equal(r.reason,'query_deadline');assert.equal(f.state.requests.length,0);
 }));
+for(const failedKind of ['template','context','run'])test('unknown publication is assigned only to its actual record kind: '+failedKind,async()=>fixture(async f=>{
+  const context=failedKind==='run'?await f.collector.refresh({artifactRef:f.artifactRef}):null,save=f.store.save.bind(f.store);
+  f.store.save=async(kind,...args)=>{if(kind===failedKind){const error=Error('query_publication_unknown');error.code='query_publication_unknown';throw error;}return save(kind,...args);};
+  const result=failedKind==='run'?await f.collector.collect({contextRef:context.contextRef}):await f.collector.refresh({artifactRef:f.artifactRef});safe(result);
+  assert.equal(result.phase,'publish');assert.equal(result.reason,'query_publication_unknown');
+  assert.equal(result.templatePublished,failedKind==='template'?null:failedKind==='context');
+  assert.equal(result.contextPublished,failedKind==='context'?null:false);assert.equal(result.runPublished,failedKind==='run'?null:false);
+  assert.equal(result.requestAttemptedCount,failedKind==='run'?7:3);assert.equal(result.requestPerformedCount,failedKind==='run'?7:3);
+  assert.equal(result.responseCompleteCount,failedKind==='run'?7:3);assert.equal(result.lockRetained,false);
+}));
 for(const [name,mutate] of [['page zero',p=>p.PageNumber=0],['pageSize string',p=>p.PageSize='10'],['negative total',p=>p.Total=-1],
   ['false coverage',p=>p.pageCoverageComplete=false],['unknown schema string',p=>p.unknownRowSchema='no'],
   ['rows contradiction',p=>{p.ListCount=1;p.Total=1;}],['missing identity',(_p,r)=>delete r.projections.basic_profile.nsrsbh],

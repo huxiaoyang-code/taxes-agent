@@ -53,7 +53,7 @@ export class TaxQueryCollection{
       return{status:'input_invalid'};
     if(this.d.enabled!==true&&process.env.TAX_QUERY_COLLECTION_ENABLED!=='1')return{status:'not_enabled'};
     let transport,attached,lock,confirmed=true,template,context,templateRef,record,result,document,revision=0,detachRequested=false,
-      phase='load',attempted=0,performed=0,complete=0,performedUnknown=0,completeUnknown=0,templatePublished=false;const proof=[],remove=[],started=this.d.clock();
+      phase='load',attempted=0,performed=0,complete=0,performedUnknown=0,completeUnknown=0,templatePublished=false,publicationKind=null;const proof=[],remove=[],started=this.d.clock();
     const deadline=()=>{if(this.d.clock()-started>120000)throw queryFail('query_deadline');};
     try{
       if(refresh){
@@ -164,11 +164,13 @@ export class TaxQueryCollection{
         requestNotPerformedCount:attempted-performed-performedUnknown,lockRetained};
       if(record)try{
         await this.d.parentStore.assertNotAbandoned(template.parentSourceRef);
-        if(refresh){templateRef=await this.d.store.save('template',template,deadline);templatePublished=true;record.templateRef=templateRef;
-          result.contextRef=await this.d.store.save('context',record,deadline);result.templatePublished=true;result.contextPublished=true;}
-        else result.runRef=await this.d.store.save('run',record,deadline);
-      }catch(error){result={status:refresh?'query_refresh_failed':'query_collection_failed',phase:'publish',reason:error?.code==='query_publication_unknown'?'query_publication_unknown':'query_publish_failed',
-        templatePublished,contextPublished:error?.code==='query_publication_unknown'?null:false,requestAttemptedCount:attempted,
+        if(refresh){publicationKind='template';templateRef=await this.d.store.save('template',template,deadline);templatePublished=true;record.templateRef=templateRef;
+          publicationKind='context';result.contextRef=await this.d.store.save('context',record,deadline);result.templatePublished=true;result.contextPublished=true;}
+        else{publicationKind='run';result.runRef=await this.d.store.save('run',record,deadline);}
+      }catch(error){const unknown=error?.code==='query_publication_unknown';
+        result={status:refresh?'query_refresh_failed':'query_collection_failed',phase:'publish',reason:unknown?'query_publication_unknown':'query_publish_failed',
+        templatePublished:unknown&&publicationKind==='template'?null:templatePublished,
+        contextPublished:unknown&&publicationKind==='context'?null:false,runPublished:unknown&&publicationKind==='run'?null:false,requestAttemptedCount:attempted,
         requestPerformedCount:performed,responseCompleteCount:complete,requestPerformedUnknownCount:performedUnknown,
         responseCompleteUnknownCount:completeUnknown,lockRetained:false};}
     }
