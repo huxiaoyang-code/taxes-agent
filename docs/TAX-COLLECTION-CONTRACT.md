@@ -2,6 +2,8 @@
 
 > **2026-10-20 当前修复：[TAX-FULL-URL-BINDING](tasks/TAX-FULL-URL-BINDING.md)** · [交接](handoffs/TAX-FULL-URL-BINDING.md)。CDP `Frame.url` 不含 fragment；旧 `documentScopeVerified = true` 只作历史结果，不保证完整 URL 绑定，也不证明现场实际切换。当前 v2 真实源 / 复采未运行；下文 PR #29 结果按其历史边界阅读。当前 `business_page_prepare` 新锁仍保留，导航待窗口协调；旧“当前无锁阻塞”等表述只指当时已释放的核心采集锁。
 
+P1 已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 于 UTC `2026-10-20T06:13:58Z`（北京时间 14:13:58）合并，head `57aeb06cf9236fbc7a1a75e14f737c6ca3b793f6`，merge `75eebbbfb78adfaf88be35a2e1080b5432764126`；最终 fresh 独审 13 文件 exact head / tree 通过、无阻塞，管理者已核对签名 merge 对象及树一致。当前纯交接分支 `codex/huxiaoyang-code/tax-full-url-handoff` 基于该 merge，core 未变，不重复 23 / 59 验证。
+
 核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
 
 日期：2026-10-20。适用任务：[TAX-COLLECTION-REBASE](tasks/TAX-COLLECTION-REBASE.md)。本契约描述采集与验收边界，不代表表中业务资源已经取得。全国税局尚无可据此宣布的真实接入完成结果。

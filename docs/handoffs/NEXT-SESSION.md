@@ -1,6 +1,6 @@
 # 新会话入口 · NEXT SESSION
 
-> **2026-10-20 优先恢复：[TAX-FULL-URL-BINDING 任务](../tasks/TAX-FULL-URL-BINDING.md)与[交接](TAX-FULL-URL-BINDING.md)**，再读[契约](../TAX-COLLECTION-CONTRACT.md)。负责人 `huxiaoyang-code`，基线 PR #30 merge `846ff0a988460de0e9a1c5afa92298a7633995e8`，分支 `codex/huxiaoyang-code/tax-business-pages`。完整 URL（含 fragment）P1 core 管理者全量 23 / 23 套、独立无继承上下文审查 59 / 59 均 exit 0，无剩余 core 阻塞；整包待最终审查 / PR，v2 实机 source 与复采未运行，不能主动沿用 v1。
+> **2026-10-20 优先恢复：[TAX-FULL-URL-BINDING 任务](../tasks/TAX-FULL-URL-BINDING.md)与[交接](TAX-FULL-URL-BINDING.md)**，再读[契约](../TAX-COLLECTION-CONTRACT.md)。负责人 `huxiaoyang-code`。核心已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 于 UTC `2026-10-20T06:13:58Z`（北京时间 14:13:58）合并，head `57aeb06cf9236fbc7a1a75e14f737c6ca3b793f6`，merge `75eebbbfb78adfaf88be35a2e1080b5432764126`；最终 fresh 独审 13 文件 exact head / tree 通过、无阻塞，管理者已核对签名 merge 对象及树一致。当前纯交接分支 `codex/huxiaoyang-code/tax-full-url-handoff` 基于该 merge。完整 URL P1 既有全量 23 / 23 套、独审 59 / 59 均 exit 0，core 7 文件未变、不重复测试；v2 实机 source 与复采未运行，不能主动沿用 v1。
 >
 > 只由 root 查本 worktree ignored `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`。当前 prepare 的 identity_before 失败，performedCount 0 不等于未尝试；未导航 / 无候选，business_page_prepare 新锁保留。显式全包含 filter 后 source target 仍缺席，未 attach / read frame、未 reload / unlock；不能据缺席判 realm 销毁，不能猜别页替代解锁。root 未关闭税局页，用户具体窗口协调未答，导航暂缓。旧 19 文件均未变、原后端 / browser / quarantine 保留，另起旧 v1 临时 HTTP 已身份核对后停。正常导航授权不变；禁止自动点击与正式业务写，真实原值 / 凭据不进模型或 Git。下文 PR #29 documentScopeVerified true 仅作历史，不保证完整 URL，业务期间与完整资料仍缺，专项未完成；ignored 原型不属于本包生产成果，candidate_only 不直接导航。
 

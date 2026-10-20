@@ -1,10 +1,10 @@
 # TAX-FULL-URL-BINDING · 完整文档 URL 绑定修复
 
-日期：2026-10-20。负责人：`huxiaoyang-code`。关联总任务：Refs #20，按业务 Refs #13 / #14 / #17；不关闭总任务。状态：P1 核心实现与合成验收已通过，整包待最终审查 / PR；v2 真实源形成与复采未运行，整个税局资料采集专项未完成。
+日期：2026-10-20。负责人：`huxiaoyang-code`。关联总任务：Refs #20，按业务 Refs #13 / #14 / #17；不关闭总任务。状态：P1 核心已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 验收合并；v2 真实源形成与复采未运行，整个税局资料采集专项未完成。
 
-- 基线：PR #30 merge `846ff0a988460de0e9a1c5afa92298a7633995e8`；当前独立分支 `codex/huxiaoyang-code/tax-business-pages`。
+- 实施基线：PR #30 merge `846ff0a988460de0e9a1c5afa92298a7633995e8`；实施分支 `codex/huxiaoyang-code/tax-business-pages`。当前纯交接分支 `codex/huxiaoyang-code/tax-full-url-handoff`，基线为 PR #31 merge。
 - 必读：[章程](../PROJECT-CHARTER.md)、[STATE](../handoffs/STATE.md)、[原采集任务](TAX-COLLECTION-REBASE.md)、[采集契约](../TAX-COLLECTION-CONTRACT.md)、[本包交接](../handoffs/TAX-FULL-URL-BINDING.md)。
-- 本包不预填自身未知 PR / head / merge；提交、合并后由管理者据实补录。
+- PR #31 head `57aeb06cf9236fbc7a1a75e14f737c6ca3b793f6`，merge `75eebbbfb78adfaf88be35a2e1080b5432764126`，UTC `2026-10-20T06:13:58Z`（北京时间 14:13:58）；最终 fresh 独审 13 文件 exact head / tree 通过、无阻塞，管理者已导入核对真实签名 merge 对象及树一致。
 
 ## 问题与范围
 
@@ -35,7 +35,7 @@ CDP 的 `Frame.url` 不含 fragment，fragment 另在 `urlFragment`。旧 source
 2. v1 历史资料仍可严格 load / compare；任何 active v1 在 open / lock 前拒绝，不借版本兼容绕过完整绑定。
 3. v2 source 记录明确语义；host assert 与页面内 fetch 前比对都包含 fragment，失败路径不发送业务请求，不泄露原值。
 4. 作者采集合成 59 项、管理者 `06-workbench` 下 `npm test` 23 / 23 套均 exit 0；未参与实施、无继承上下文的独立 reviewer 审 core 7 文件无剩余阻塞，并独立 59 / 59 exit 0。首轮全量曾有 workflow 原生异常，单独与整轮复跑均 exit 0，未据此改代码。
-5. 上述验收只覆盖本包代码 / 合成逻辑，不包括 scratch 恢复执行、真实导航或 v2 实机复采。整包文档与最终候选 head 仍由管理者统一核对，不把 core 独审当已合并。
+5. 最终 fresh 独审 13 文件 exact head / tree 通过、无阻塞，PR #31 已合并；core 7 文件未变，23 / 59 验证不重复运行。验收不包括 scratch 恢复执行、真实导航或 v2 实机复采；本轮仅做合并后纯交接收尾。
 
 ## 当前恢复门槛
 
@@ -45,4 +45,4 @@ CDP 的 `Frame.url` 不含 fragment，fragment 另在 `urlFragment`。旧 source
 
 恢复入口只指本 worktree 的 ignored `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`，由 root 在本机核实；版本化文档不写真实引用、进程号、端口、URL 参数或业务值。旧 19 项文件最新核对全部未变；原后端 / 浏览器 / quarantine 保留。本轮另启的旧 v1 临时 HTTP 已核对身份后停止，避免继续用旧源。
 
-P2 地域条件 / 分支输入绑定已迁移到 ignored 原型并完成其合成验证；该原型 108 项只作本机诊断研发事实，不属于本包生产成果。`candidate_only` 不能直接导航。下一步先完成 P1 PR；真实恢复与新 v2 source / 两遍真实请求须另有现场证据，不能用本次合成通过代替。
+P2 地域条件 / 分支输入绑定已迁移到 ignored 原型并完成其合成验证；该原型 108 项只作本机诊断研发事实，不属于本包生产成果。`candidate_only` 不能直接导航。P1 PR 已合并；真实恢复与新 v2 source / 两遍真实请求须另有现场证据，不能用本次合成通过代替。
