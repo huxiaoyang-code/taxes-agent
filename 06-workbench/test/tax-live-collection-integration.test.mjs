@@ -6,11 +6,14 @@ import {mkdtemp, mkdir, readFile, readdir, writeFile, rm, lstat} from 'node:fs/p
 import {tmpdir} from 'node:os';
 import {join, dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {runInNewContext} from 'node:vm';
 import {TaxCollectionStore, collectionLock} from '../server/tax-collection-local.mjs';
-import {validateRecipe, validateCapture, validateEvidence} from '../server/tax-collection-contract.mjs';
+import {validateRecipe, validateCapture, validateEvidence,requireActiveSource} from '../server/tax-collection-contract.mjs';
 import {businessProjection, collectionShape, observedRecipe} from '../server/tax-collection-shape.mjs';
 import {observeTaxNavigation} from '../scripts/observe-tax-navigation.mjs';
 import {pageReference} from '../scripts/inventory-tax-browser.mjs';
+import {FULL_FRAME_URL_SEMANTICS,fullFrameUrl,frameUrlDigest} from '../server/tax-frame-url.mjs';
+import {TaxLiveCollection,assertLiveFrame,readLiveResource,liveRequestScript} from '../server/tax-live-collection.mjs';
 
 const PRIVATE='PRIVATE_SYNTHETIC_BUSINESS_TRIPWIRE';
 const temporaryParent=fileURLToPath(new URL('../.agent-runs/tax-live-test-temporary/',import.meta.url));
@@ -25,7 +28,7 @@ function captures(){
         rowCount:1,projectionComplete:false,periodVerified:false,navigation:navigation()}},
   };
 }
-function source(){return {version:1,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,registrationRef:ref('taxr_'),
+function source(){return {version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,registrationRef:ref('taxr_'),
   registrationRoot:join(tmpdir(),'synthetic-checkout','.agent-runs','tax-browser-registry'),
   pageRef:ref('taxpage_'),targetId:PRIVATE+'_TARGET',frameId:PRIVATE+'_FRAME',loaderId:PRIVATE+'_LOADER',
   browserKey:'a'.repeat(64),documentUrlDigest:'b'.repeat(64),capturedAt:1,...captures()};}
@@ -47,6 +50,145 @@ function security(calls=[]){return {testStorage:true,
   async verifyFile(path){calls.push(['verifyFile',path]);assert.ok((await lstat(path)).isFile());},
 };}
 const safe=value=>assert.doesNotMatch(JSON.stringify(value),/PRIVATE_SYNTHETIC|tax-browser-registry|targetId|frameId|loaderId/);
+
+test('full frame URL binds the actual CDP split fragment byte for byte, including a lone #',()=>{
+  const url='https://etax.fujian.chinatax.gov.cn:8443/loginb/';
+  for(const fragment of ['', '#', '#/a', '#/a%2Fb', '#/a%2fb', '#/a?token='+PRIVATE]){
+    assert.equal(fullFrameUrl({url,urlFragment:fragment}),url+fragment);
+  }
+  assert.equal(fullFrameUrl({url}),url);
+  assert.notEqual(frameUrlDigest({url}),frameUrlDigest({url,urlFragment:'#'}));
+  assert.notEqual(frameUrlDigest({url,urlFragment:'#/a%2Fb'}),frameUrlDigest({url,urlFragment:'#/a%2fb'}));
+  for(const frame of [null,{}, {url:4},{url:'invalid'}, {url:url+'#'}, {url:url+'#/a',urlFragment:'#/a'},
+    {url,urlFragment:null},{url,urlFragment:undefined},{url,urlFragment:42},{url,urlFragment:'/a'},
+    {url,urlFragment:'#/a\nPRIVATE'},{url:'HTTPS://etax.fujian.chinatax.gov.cn:8443/loginb/'}]){
+    assert.throws(()=>fullFrameUrl(frame),/^Error: tax_collection_scope_changed$/);
+  }
+});
+
+test('real frame assertion rejects a different split fragment even with unchanged frame, loader and base URL',async()=>{
+  const frame={id:'synthetic-frame',loaderId:'synthetic-loader',url:'https://etax.fujian.chinatax.gov.cn:8443/loginb/',urlFragment:'#/a?token='+PRIVATE};
+  const scope={version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,frameId:frame.id,loaderId:frame.loaderId,documentUrlDigest:frameUrlDigest(frame)};
+  const cdp={async send(){return {frameTree:{frame:{...frame}}}}};
+  assert.equal(await assertLiveFrame(cdp,{},scope),fullFrameUrl(frame));
+  frame.urlFragment='#/b?token='+PRIVATE;
+  await assert.rejects(assertLiveFrame(cdp,{},scope),/^Error: tax_collection_scope_changed$/);
+  for(const incomplete of [{...scope,version:1},{...scope,documentUrlSemantics:'frame_url_only'},
+    {...scope,documentUrlDigest:undefined},{frameId:frame.id,loaderId:frame.loaderId}]){
+    await assert.rejects(assertLiveFrame(cdp,{},incomplete),/^Error: tax_collection_scope_changed$/);
+  }
+});
+
+test('missing expected full URL cannot generate or evaluate an active request',async()=>{
+  let calls=0;const cdp={async send(){calls++;throw Error('must_not_evaluate')}};
+  const recipe=captures().identity.recipe;
+  assert.throws(()=>liveRequestScript(recipe,'identity',ref('taxreq_')),/^Error: tax_collection_scope_changed$/);
+  await assert.rejects(readLiveResource(cdp,{},recipe,'identity'),/^Error: tax_collection_scope_changed$/);
+  assert.equal(calls,0);
+});
+
+test('legacy sources remain exact read-only history and cannot acquire locks or be silently republished',async()=>{
+  await fixture(async directory=>{
+    const store=new TaxCollectionStore({root:join(directory,'evidence'),security:security()});
+    const current=source(),sourceRef=await store.save('source',current),legacy={...current,version:1};delete legacy.documentUrlSemantics;
+    const sourceFile=join(store.root,sourceRef+'.json'),legacyText=JSON.stringify(legacy);
+    await writeFile(sourceFile,legacyText);assert.deepEqual(await store.load(sourceRef),legacy);
+    assert.equal(validateEvidence('source',legacy),legacy);
+    assert.throws(()=>requireActiveSource(legacy),/^Error: tax_collection_source_reobservation_required$/);
+    await assert.rejects(store.save('source',legacy),/^Error: tax_collection_source_reobservation_required$/);
+    const runRef=await store.save('run',{...run(),sourceRef});
+    const profile=join(directory,'profile');await mkdir(profile);
+    const lock=await collectionLock(profile,{security:security(),scope:{sourceRef,operation:'business_page_prepare'}});lock.retain();
+    const lockFile=join(profile,'YoushuCollectionLockV1.json'),originalLock=await readFile(lockFile,'utf8');
+    let opened=0,locked=0;
+    const collector=new TaxLiveCollection({enabled:true,store,now:()=>3,
+      async openDiagnostic(){opened++;throw Error(PRIVATE)},async acquireLock(){locked++;throw Error(PRIVATE)}});
+    const output=await collector.collect({sourceRef});safe(output);
+    assert.equal(output.status,'collection_failed');assert.equal(output.phase,'load');
+    assert.equal(output.reason,'tax_collection_source_reobservation_required');assert.equal(opened,0);assert.equal(locked,0);
+    const compared=await collector.compare({leftRef:sourceRef,rightRef:runRef});safe(compared);
+    assert.equal(compared.status,'compared');assert.equal(compared.identityProjectionEqual,true);
+    assert.equal(await readFile(sourceFile,'utf8'),legacyText);assert.equal(await readFile(lockFile,'utf8'),originalLock);
+    assert.equal((await readdir(store.root)).length,2);
+  });
+});
+
+// Execute the real generated browser expression in a synthetic JS context. The
+// mock response uses streams, so URL checks surround the same read path as CDP.
+async function activeScopeFixture(directory,mode){
+  const origin='https://etax.fujian.chinatax.gov.cn:8443',frame={id:'synthetic-frame',loaderId:'synthetic-loader',url:origin+'/loginb/',urlFragment:'#/a?token='+PRIVATE};
+  const initialUrl=fullFrameUrl(frame),sourceRecord={...source(),frameId:frame.id,loaderId:frame.loaderId,documentUrlDigest:frameUrlDigest(frame)};
+  const store=new TaxCollectionStore({root:join(directory,'evidence'),security:security()}),sourceRef=await store.save('source',sourceRecord);
+  const profile=join(directory,'profile');await mkdir(profile);
+  if(mode==='changed_before_listener')frame.urlFragment='#/b?token='+PRIVATE;
+  let fetchCount=0,evaluations=0;const handlers=new Map();
+  const emit=()=>handlers.get('Page.navigatedWithinDocument')?.({frameId:frame.id},{sessionId:'synthetic-session'});
+  const identityBody={Response:{Data:{userinfo:sourceRecord.identity.projection.userinfo}}};
+  const filingBody={Response:{Data:{wsbxxGrid:sourceRecord.filing.projection.wsbxxGrid}}};
+  const collector=new TaxLiveCollection({enabled:true,store,now:()=>3,
+    acquireLock:(path,options)=>collectionLock(path,{...options,security:security()}),
+    async openDiagnostic(){return {localScope:{profilePath:profile,browserKey:sourceRecord.browserKey,registrationState:'quarantined',
+      async currentRegistrationState(){return 'quarantined'}},close(){},cdp:{
+      on(name,handler){handlers.set(name,handler);return()=>handlers.delete(name)},
+      async send(method,params){
+        if(method==='Target.getTargetInfo')return {targetInfo:{type:'page'}};
+        if(method==='Target.attachToTarget')return {sessionId:'synthetic-session'};
+        if(method==='Page.getFrameTree')return {frameTree:{frame:{...frame}}};
+        if(method==='Runtime.evaluate'){
+          evaluations++;
+          if(mode==='changed_before_evaluate')frame.urlFragment='#/b?token='+PRIVATE;
+          const location={href:fullFrameUrl(frame)};
+          const result=await runInNewContext(params.expression,{location,URL,AbortController,TextDecoder,
+            window:{fetch:Array.prototype.push,setTimeout:Array.prototype.push},setTimeout:()=>0,clearTimeout:()=>{},
+            async fetch(){
+              fetchCount++;
+              if(mode==='aba_during_fetch'&&fetchCount===2){
+                frame.urlFragment='#/b';location.href=fullFrameUrl(frame);emit();
+                frame.urlFragment='#/a?token='+PRIVATE;location.href=initialUrl;emit();
+              }
+              return new Response(JSON.stringify(fetchCount===2?filingBody:identityBody),{status:200});
+            }});
+          return {result:{value:result}};
+        }
+        if(['Page.enable','Runtime.enable','Page.disable','Runtime.disable','Target.detachFromTarget'].includes(method))return {};
+        throw Error('synthetic_unexpected_cdp_method');
+      },
+    }}}
+  });
+  const output=await collector.collect({sourceRef});safe(output);
+  return {output,fetchCount,evaluations,store,profile};
+}
+
+test('split-fragment source accepts the matching live URL and never leaks its sensitive fragment',async()=>{
+  await fixture(async directory=>{
+    const {output,fetchCount}=await activeScopeFixture(directory,'matching');
+    assert.equal(output.status,'partial_observed');assert.equal(output.documentScopeVerified,true);assert.equal(fetchCount,3);
+    assert.match(output.runRef,/^taxrun_[a-f0-9]{48}$/);
+  });
+});
+test('hash change before collection listeners start rejects before any evaluate or fetch',async()=>{
+  await fixture(async directory=>{
+    const {output,fetchCount,evaluations,store,profile}=await activeScopeFixture(directory,'changed_before_listener');
+    assert.equal(output.status,'collection_failed');assert.equal(output.reason,'tax_collection_scope_changed');
+    assert.equal(evaluations,0);assert.equal(fetchCount,0);assert.equal((await readdir(store.root)).length,1);
+    assert.deepEqual(await readdir(profile),[]);
+  });
+});
+test('hash change between host assertion and Runtime.evaluate cannot start a fetch',async()=>{
+  await fixture(async directory=>{
+    const {output,fetchCount,evaluations,store}=await activeScopeFixture(directory,'changed_before_evaluate');
+    assert.equal(output.status,'collection_failed');assert.equal(output.reason,'tax_collection_scope_changed');
+    assert.equal(evaluations,1);assert.equal(fetchCount,0);assert.equal((await readdir(store.root)).length,1);
+    assert.equal(output.lockRetained,false);
+  });
+});
+test('live listener detects split-fragment A to B to A even when the request expression finishes at A',async()=>{
+  await fixture(async directory=>{
+    const {output,fetchCount,store}=await activeScopeFixture(directory,'aba_during_fetch');
+    assert.equal(output.status,'collection_failed');assert.equal(output.reason,'tax_collection_scope_changed');
+    assert.equal(fetchCount,2);assert.equal((await readdir(store.root)).length,1);
+  });
+});
 
 test('real evidence store validates, stages, publishes and reloads exact source/run schemas',async()=>{
   await fixture(async directory=>{
@@ -72,6 +214,7 @@ test('schema validation rejects extra business/auth fields, incomplete scopes an
     v=>{v.registrationRef='file:///private';},v=>{v.pageRef=PRIVATE;},
     v=>{v.handoffMode='synthetic_unconfirmed';},v=>{v.readerStoppedConfirmed=false;},
     v=>{delete v.documentUrlDigest;},v=>{v.documentUrlDigest=PRIVATE;},
+    v=>{delete v.documentUrlSemantics;},v=>{v.documentUrlSemantics='frame_url_only';},v=>{v.version=1;},
     v=>{v.identity.projection.userinfo.token=PRIVATE;},v=>{v.identity.projection.userinfo.company_name='';},
     v=>{v.filing.projection.wsbxxGrid[0].unknown=PRIVATE;},v=>{v.filing.projection.rowCount=2;},
     v=>{v.filing.projection.projectionComplete=true;},v=>{v.filing.projection.periodVerified=true;},
@@ -183,7 +326,7 @@ test('ACL failure after exclusive profile creation retains the lock for recovery
 });
 
 async function observedSourceFixture(directory,{changeDuringWait=false,clearBeforeFrame=1,clearAfterFrame=false,
-  businessBeforeClears=false,hashBeforeReply=false}={}){
+  businessBeforeClears=false,hashBeforeReply=false,fragmentChangeAt=null}={}){
   const store=new TaxCollectionStore({root:join(directory,'evidence'),security:security()});
   const profile=join(directory,'synthetic-profile');await mkdir(profile);
   const origin='https://etax.fujian.chinatax.gov.cn:8443',registrationRef=ref('taxr_'),targetId=PRIVATE+'_TARGET';
@@ -191,7 +334,8 @@ async function observedSourceFixture(directory,{changeDuringWait=false,clearBefo
   const emit=(name,params)=>handlers.get(name)?.(params,{sessionId:'synthetic-session'});
   const identityBody={Response:{Data:{userinfo:{reg_number:PRIVATE+'_REG',company_name:PRIVATE+'_COMPANY',user_id:PRIVATE+'_USER',user_type:'2'}}}};
   const filingBody={Response:{Data:{wsbxxGrid:[{sbb:PRIVATE+'_FORM',sbqx:PRIVATE+'_DEADLINE',zt:PRIVATE+'_STATUS'}],dbt:'synthetic',tbsl:1}}};
-  const frame={id:'synthetic-frame',loaderId:'synthetic-loader',url:origin+'/loginb/#/a'};
+  const frame={id:'synthetic-frame',loaderId:'synthetic-loader',url:origin+'/loginb/',urlFragment:'#/a?token='+PRIVATE};
+  let frameReads=0;
   const output=await observeTaxNavigation({registrationRef,
     registrationRoot:join(directory,'synthetic-checkout','.agent-runs','tax-browser-registry'),
     pageRef:pageReference(registrationRef,targetId),destination:'portal_index',persistSource:true,readerStoppedConfirmed:true},{
@@ -200,7 +344,7 @@ async function observedSourceFixture(directory,{changeDuringWait=false,clearBefo
         if(changeDuringWait){
           // Same frame/loader and final URL A, but data may cross an intermediate B.
           emit('Page.navigatedWithinDocument',{frameId:frame.id,url:origin+'/loginb/#/b'});
-          emit('Page.navigatedWithinDocument',{frameId:frame.id,url:frame.url});
+          emit('Page.navigatedWithinDocument',{frameId:frame.id,url:frame.url+frame.urlFragment});
         }
       },
       async openDiagnostic(){return {localScope:{profilePath:profile,browserKey:'a'.repeat(64),registrationState:'quarantined',
@@ -218,7 +362,7 @@ async function observedSourceFixture(directory,{changeDuringWait=false,clearBefo
               if(clearAfterFrame)emit('Runtime.executionContextsCleared',{});
               if(hashBeforeReply){
                 emit('Page.navigatedWithinDocument',{frameId:frame.id,url:origin+'/loginb/#/b'});
-                emit('Page.navigatedWithinDocument',{frameId:frame.id,url:frame.url});
+                emit('Page.navigatedWithinDocument',{frameId:frame.id,url:frame.url+frame.urlFragment});
               }
               for(const [requestId,path,method,postData,timestamp] of [
                 ['identity','/mhzx/api/mh/mhsy/getUserInfo','GET',undefined,1],
@@ -232,9 +376,15 @@ async function observedSourceFixture(directory,{changeDuringWait=false,clearBefo
               return {frameId:frame.id,loaderId:frame.loaderId};
             }
             if(method==='Network.getResponseBody')return {body:JSON.stringify(params.requestId==='identity'?identityBody:filingBody)};
-            if(method==='Page.getFrameTree')return {frameTree:{frame:{...frame}}};
+            if(method==='Page.getFrameTree'){
+              frameReads++;
+              if(fragmentChangeAt==='before_identity'&&frameReads===2)frame.urlFragment='#/b?token='+PRIVATE;
+              return {frameTree:{frame:{...frame}}};
+            }
             if(method==='Runtime.evaluate'){
               const requestRef=params.expression.match(/taxreq_[a-f0-9]{48}/)?.[0];assert.ok(requestRef);
+              assert.ok(params.expression.includes(JSON.stringify(frame.url+frame.urlFragment)));
+              if(fragmentChangeAt==='after_identity')frame.urlFragment='#/b?token='+PRIVATE;
               return {result:{value:{status:'observed',settled:true,requestPerformed:true,responseComplete:true,requestRef,body:identityBody}}};
             }
             if(['Network.enable','Page.enable','Runtime.enable','Network.disable','Page.disable','Runtime.disable','Target.detachFromTarget'].includes(method))return {};
@@ -250,6 +400,8 @@ test('normal observation persists and reloads an exact source through the real s
     const {output,store,profile,calls}=await observedSourceFixture(directory);
     assert.equal(output.status,'observed');assert.match(output.sourceRef,/^taxsource_[a-f0-9]{48}$/);
     const saved=await store.load(output.sourceRef);assert.equal(saved.handoffMode,'quarantined_reader_new_navigation');
+    assert.equal(saved.version,2);assert.equal(saved.documentUrlSemantics,FULL_FRAME_URL_SEMANTICS);
+    assert.equal(saved.documentUrlDigest,frameUrlDigest({url:'https://etax.fujian.chinatax.gov.cn:8443/loginb/',urlFragment:'#/a?token='+PRIVATE}));
     assert.equal(saved.readerStoppedConfirmed,true);assert.equal(saved.filing.projection.rowCount,1);
     assert.equal(saved.identity.projection.userinfo.reg_number,PRIVATE+'_REG');
     assert.equal(saved.filing.projection.periodVerified,false);assert.equal(saved.filing.projection.projectionComplete,false);
@@ -266,6 +418,17 @@ test('same-loader hash B then A during passive wait must not publish a source ev
     assert.deepEqual(files,[],'temporary scope reversal must invalidate captured data before publication');
   });
 });
+
+for(const fragmentChangeAt of ['before_identity','after_identity']){
+  test(`observation refuses a split-fragment change ${fragmentChangeAt} without relying on event delivery`,async()=>{
+    await fixture(async directory=>{
+      const {output,store,calls}=await observedSourceFixture(directory,{fragmentChangeAt});
+      assert.equal(output.status,'observation_failed');assert.equal(Object.hasOwn(output,'sourceRef'),false);
+      assert.equal(calls.filter(method=>method==='Runtime.evaluate').length,fragmentChangeAt==='before_identity'?0:1);
+      const files=await readdir(store.root).catch(error=>{if(error.code==='ENOENT')return [];throw error;});assert.deepEqual(files,[]);
+    });
+  });
+}
 
 test('two initial context clears before the first new main frame still produce a reloadable real source',async()=>{
   await fixture(async directory=>{

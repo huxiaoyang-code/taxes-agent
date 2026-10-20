@@ -5,7 +5,7 @@ import {mkdir,realpath,lstat,open,readFile,unlink,rename} from 'node:fs/promises
 import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {verifyPrivateDirectory,verifyPrivateFile} from './tax-browser-diagnostic.mjs';
-import {validateEvidence} from './tax-collection-contract.mjs';
+import {validateEvidence,requireActiveSource} from './tax-collection-contract.mjs';
 const DEFAULT_ROOT=fileURLToPath(new URL('../../.agent-runs/tax-collection-evidence/',import.meta.url));
 const WORKSPACE=fileURLToPath(new URL('../../',import.meta.url));
 const REF=/^tax(?:source|run)_[a-f0-9]{48}$/;
@@ -53,6 +53,7 @@ export class TaxCollectionStore{
   }
   async save(kind,value){
     if(!['source','run'].includes(kind))throw fail();validateEvidence(kind,value);
+    if(kind==='source')requireActiveSource(value);
     const text=JSON.stringify(value);if(Buffer.byteLength(text)>4194304)throw fail();await this.ready();
     const ref='tax'+kind+'_'+randomBytes(24).toString('hex'),file=join(this.root,ref+'.json');
     const staging=file+'.tmp',handle=await open(staging,'wx',0o600);

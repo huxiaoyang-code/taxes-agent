@@ -3,21 +3,25 @@ import {dirname,resolve} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 import {openRegisteredBrowserDiagnostic} from './tax-browser-diagnostic.mjs';
 import {TaxCollectionStore,collectionLock} from './tax-collection-local.mjs';
-import {validateCapture,validateEvidence,validateRecipe} from './tax-collection-contract.mjs';
+import {validateCapture,requireActiveSource,validateRecipe} from './tax-collection-contract.mjs';
 import {businessProjection,collectionShape} from './tax-collection-shape.mjs';
+import {FULL_FRAME_URL_SEMANTICS,fullFrameUrl} from './tax-frame-url.mjs';
 const ORIGIN='https://etax.fujian.chinatax.gov.cn:8443';
 const fail=code=>{const e=new Error(code);e.code=code;return e};
 export const sameEnterprise=(a,b)=>typeof a?.userinfo?.reg_number==='string'&&a.userinfo.reg_number.trim().length>0
   &&typeof a.userinfo.company_name==='string'&&a.userinfo.company_name.trim().length>0
   &&a.userinfo.reg_number===b?.userinfo?.reg_number&&a.userinfo.company_name===b.userinfo.company_name;
-export function liveRequestScript(recipe,resource,requestRef){
+export function liveRequestScript(recipe,resource,requestRef,expectedFullUrl){
   if(!validateRecipe(recipe,resource))throw fail('tax_collection_recipe_invalid');
   if(!/^taxreq_[a-f0-9]{48}$/.test(requestRef||''))throw fail('tax_collection_recipe_invalid');
+  try{const expected=new URL(expectedFullUrl);if(typeof expectedFullUrl!=='string'||expected.href!==expectedFullUrl
+    ||expected.origin!==ORIGIN||expected.username||expected.password)throw 0;}catch{throw fail('tax_collection_scope_changed');}
   return `(async()=>{
     const current=new URL(location.href);
     if(current.origin!==${JSON.stringify(ORIGIN)}||current.username||current.password
       ||!Function.prototype.toString.call(window.fetch).includes('[native code]')
       ||!Function.prototype.toString.call(window.setTimeout).includes('[native code]'))return{status:'scope_invalid',settled:true};
+    if(location.href!==${JSON.stringify(expectedFullUrl)})return{status:'scope_changed',settled:true};
     const before=location.href,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
     try{
       const response=await fetch(${JSON.stringify(ORIGIN+recipe.path)}${recipe.queryTimestamp?"+'?t='+Date.now()":''},
@@ -35,14 +39,15 @@ export function liveRequestScript(recipe,resource,requestRef){
     }catch{return{status:'request_unconfirmed',settled:false};}finally{clearTimeout(timer);}
   })()`;
 }
-export async function readLiveResource(cdp,opts,recipe,resource){
+export async function readLiveResource(cdp,opts,recipe,resource,expectedFullUrl){
   const requestRef='taxreq_'+randomBytes(24).toString('hex');
-  const result=await cdp.send('Runtime.evaluate',{expression:liveRequestScript(recipe,resource,requestRef),returnByValue:true,awaitPromise:true,timeout:15000},
+  const result=await cdp.send('Runtime.evaluate',{expression:liveRequestScript(recipe,resource,requestRef,expectedFullUrl),returnByValue:true,awaitPromise:true,timeout:15000},
     {...opts,timeoutMs:16000});
   const value=result?.result?.value;
   if(result?.exceptionDetails||value?.status!=='observed'||value.settled!==true||value.requestPerformed!==true
     ||value.responseComplete!==true||value.requestRef!==requestRef){
-    const error=fail(value?.settled===true?'tax_collection_response_invalid':'tax_collection_request_unconfirmed');error.settled=value?.settled===true;throw error;}
+    const error=fail(value?.settled===true&&['scope_invalid','scope_changed'].includes(value.status)?'tax_collection_scope_changed'
+      :value?.settled===true?'tax_collection_response_invalid':'tax_collection_request_unconfirmed');error.settled=value?.settled===true;throw error;}
   const shape=collectionShape(value.body);
   if(shape.businessStatus==='failed'){const error=fail('tax_collection_business_failed');error.settled=true;throw error;}
   const projection=businessProjection(value.body,resource),capture={resource,recipe,projection};
@@ -50,10 +55,13 @@ export async function readLiveResource(cdp,opts,recipe,resource){
   return{capture,shape,proof:{requestRef,resource,requestPerformed:true,responseComplete:true}};
 }
 export async function assertLiveFrame(cdp,opts,source){
+  if(source?.version!==2||source.documentUrlSemantics!==FULL_FRAME_URL_SEMANTICS
+    ||! /^[a-f0-9]{64}$/.test(source.documentUrlDigest||''))throw fail('tax_collection_scope_changed');
   const tree=await cdp.send('Page.getFrameTree',{},opts),frame=tree?.frameTree?.frame;
   if(frame?.id!==source.frameId||frame?.loaderId!==source.loaderId)throw fail('tax_collection_scope_changed');
-  try{const u=new URL(frame.url);if(u.origin!==ORIGIN||u.username||u.password)throw 0;}catch{throw fail('tax_collection_scope_changed')}
-  if(source.documentUrlDigest&&createHash('sha256').update(frame.url).digest('hex')!==source.documentUrlDigest)throw fail('tax_collection_scope_changed');
+  let full;try{full=fullFrameUrl(frame);const u=new URL(full);if(u.origin!==ORIGIN||u.username||u.password)throw 0;}catch{throw fail('tax_collection_scope_changed')}
+  if(createHash('sha256').update(full).digest('hex')!==source.documentUrlDigest)throw fail('tax_collection_scope_changed');
+  return full;
 }
 const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)
   ?Object.fromEntries(Object.keys(v).sort().map(key=>[key,v[key]])):v);
@@ -73,7 +81,7 @@ export class TaxLiveCollection{
     if(!this.d.enabled&&process.env.TAX_LIVE_COLLECTION_ENABLED!=='1')return{status:'not_enabled'};
     let transport,attached,lock,confirmed=true,record,result,phase='load';const remove=[];
     try{
-      const source=validateEvidence('source',await this.d.store.load(args.sourceRef));
+      const source=requireActiveSource(await this.d.store.load(args.sourceRef));
       if(this.d.now()-source.capturedAt>1800000||source.capturedAt>this.d.now())throw fail('tax_collection_source_expired');
       phase='open';transport=await this.d.openDiagnostic({registrationRef:source.registrationRef,registrationRoot:source.registrationRoot},
         {registrationBase:dirname(resolve(source.registrationRoot))});
@@ -101,8 +109,8 @@ export class TaxLiveCollection{
       const read=async(resource,recipe)=>{
         if(await transport.localScope.currentRegistrationState()!=='quarantined')throw fail('tax_collection_scope_changed');
         if(revision!==baselineRevision)throw fail('tax_collection_scope_changed');
-        await assertLiveFrame(cdp,opts,source);confirmed=false;
-        let value;try{value=await readLiveResource(cdp,opts,recipe,resource);confirmed=true;}catch(error){if(error.settled===true)confirmed=true;throw error;}
+        const expectedFullUrl=await assertLiveFrame(cdp,opts,source);confirmed=false;
+        let value;try{value=await readLiveResource(cdp,opts,recipe,resource,expectedFullUrl);confirmed=true;}catch(error){if(error.settled===true)confirmed=true;throw error;}
         await assertLiveFrame(cdp,opts,source);
         if(await transport.localScope.currentRegistrationState()!=='quarantined'||revision!==baselineRevision)throw fail('tax_collection_scope_changed');return value;
       };
@@ -118,7 +126,7 @@ export class TaxLiveCollection{
         projectionComplete:false,requestCount:3,comparison:compareProjections(source,record),
         filingShape:filing.shape,identityShape:after.shape,missing:['business_period','full_enterprise_profile','full_business_fields']};
     }catch(error){result={status:'collection_failed',phase,
-      reason:['tax_collection_scope_changed','tax_collection_source_expired','tax_collection_enterprise_changed','tax_collection_busy',
+      reason:['tax_collection_scope_changed','tax_collection_source_expired','tax_collection_source_reobservation_required','tax_collection_enterprise_changed','tax_collection_busy',
         'tax_collection_request_unconfirmed','tax_collection_projection_invalid','tax_collection_business_failed'].includes(error?.code||error?.message)?error.code||error.message:'tax_collection_failed',
       scopeVerified:false,periodVerified:false};}
     finally{

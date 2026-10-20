@@ -22,9 +22,10 @@ async function withBackend(callback,{mode='normal'}={}){
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
       import {join} from 'node:path';
-      import {mkdir,lstat} from 'node:fs/promises';
+      import {mkdir,lstat,writeFile} from 'node:fs/promises';
       const {TaxCollectionStore,collectionLock}=await import(${moduleUrl('tax-collection-local.mjs')});
       const {businessProjection}=await import(${moduleUrl('tax-collection-shape.mjs')});
+      const {FULL_FRAME_URL_SEMANTICS}=await import(${moduleUrl('tax-frame-url.mjs')});
       const {taxLiveCollection}=await import(${moduleUrl('agent-tools.mjs')});
       const directory=${JSON.stringify(directory)},privateValue=${JSON.stringify(PRIVATE)},mode=${JSON.stringify(mode)};
       const security={testStorage:true,async secureDirectory(){},async verifyDirectory(p){assert.ok((await lstat(p)).isDirectory())},
@@ -41,13 +42,17 @@ async function withBackend(callback,{mode='normal'}={}){
         projection:businessProjection(identityBody,'identity')};
       const filing={resource:'current_filing',recipe:{path:'/mhzx/api/mh/wddb/v1/wddbquerybbsmxx',method:'POST',body:{Csbz:'synthetic'},queryTimestamp:true},
         projection:businessProjection(filingBody,'current_filing')};
-      const source={version:1,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,
+      const source={version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,
         registrationRef:'taxr_'+'1'.repeat(48),
         registrationRoot:join(directory,'synthetic-checkout','.agent-runs','tax-browser-registry'),
         pageRef:'taxpage_'+'2'.repeat(48),targetId:privateValue+'_TARGET',frameId:privateValue+'_FRAME',loaderId:privateValue+'_LOADER',
-        browserKey:'a'.repeat(64),documentUrlDigest:createHash('sha256').update('https://etax.fujian.chinatax.gov.cn:8443/loginb/').digest('hex'),
+        browserKey:'a'.repeat(64),documentUrlDigest:createHash('sha256').update('https://etax.fujian.chinatax.gov.cn:8443/loginb/#/synthetic').digest('hex'),
         capturedAt:1000,identity,filing};
       const sourceRef=await store.save('source',source);
+      if(mode==='legacy_source'){
+        const historical={...source,version:1};delete historical.documentUrlSemantics;
+        await writeFile(join(store.root,sourceRef+'.json'),JSON.stringify(historical));
+      }
       const otherSourceRef=mode==='other_source'?await store.save('source',{...source,pageRef:'taxpage_'+'3'.repeat(48)}):null;
       let requestCount=0,openCount=0,closeCount=0,detachCount=0;
       taxLiveCollection.d={store,enabled:true,now:()=>mode==='expired'?2000001:1001,
@@ -60,12 +65,13 @@ async function withBackend(callback,{mode='normal'}={}){
             if(method==='Target.getTargetInfo')return {targetInfo:{type:'page'}};
             if(method==='Target.attachToTarget')return {sessionId:'synthetic-session'};
             if(method==='Page.getFrameTree')return {frameTree:{frame:{id:source.frameId,loaderId:source.loaderId,
-              url:'https://etax.fujian.chinatax.gov.cn:8443/loginb/'}}};
+              url:'https://etax.fujian.chinatax.gov.cn:8443/loginb/',urlFragment:mode==='fragment_changed_before_listener'?'#/changed':'#/synthetic'}}};
             if(method==='Runtime.evaluate'){
               requestCount++;
               assert.ok(params.expression.includes("cache:'no-store'"));
               assert.ok(params.expression.includes("credentials:'same-origin'"));
               assert.ok(params.expression.includes("redirect:'manual'"));
+              assert.ok(params.expression.includes('https://etax.fujian.chinatax.gov.cn:8443/loginb/#/synthetic'));
               const resource=params.expression.includes('/mhzx/api/mh/mhsy/getUserInfo')?'identity':'current_filing';
               assert.ok(resource==='identity'||params.expression.includes('/mhzx/api/mh/wddb/v1/wddbquerybbsmxx'));
               process.send?.({type:'synthetic-request',ordinal:requestCount,resource});
@@ -158,6 +164,23 @@ test('expired sources are rejected before opening a synthetic connection',async(
     const result=await ok(client,'tax_live_collect',{sourceRef});assert.equal(result.status,'collection_failed');assert.equal(result.phase,'load');
     const actual=await stats();assert.equal(actual.requestCount,0);assert.equal(actual.openCount,0);
   },{mode:'expired'});
+});
+
+test('legacy source semantics are rejected by MCP before opening or acquiring collection scope',async()=>{
+  await withBackend(async({client,sourceRef,stats,directory})=>{
+    const result=await ok(client,'tax_live_collect',{sourceRef});assert.equal(result.status,'collection_failed');
+    assert.equal(result.phase,'load');assert.equal(result.reason,'tax_collection_source_reobservation_required');
+    const actual=await stats();assert.equal(actual.requestCount,0);assert.equal(actual.openCount,0);
+    assert.equal((await readdir(join(directory,'evidence'))).length,1);assert.deepEqual(await readdir(join(directory,'synthetic-profile')),[]);
+  },{mode:'legacy_source'});
+});
+
+test('split fragment changed before listener startup cannot pass MCP collection with the old base URL digest',async()=>{
+  await withBackend(async({client,sourceRef,stats,directory})=>{
+    const result=await ok(client,'tax_live_collect',{sourceRef});assert.equal(result.status,'collection_failed');
+    assert.equal(result.reason,'tax_collection_scope_changed');assert.equal((await stats()).requestCount,0);
+    assert.equal((await readdir(join(directory,'evidence'))).length,1);assert.deepEqual(await readdir(join(directory,'synthetic-profile')),[]);
+  },{mode:'fragment_changed_before_listener'});
 });
 
 test('uncertain in-flight request retains cross-checkout exclusion and publishes no run',async()=>{

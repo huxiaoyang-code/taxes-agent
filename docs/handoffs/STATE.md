@@ -1,5 +1,11 @@
 # 阶段状态
 
+> **2026-10-20 当前包：[TAX-FULL-URL-BINDING](../tasks/TAX-FULL-URL-BINDING.md)** · [交接](TAX-FULL-URL-BINDING.md) · [契约](../TAX-COLLECTION-CONTRACT.md)。基线 PR #30 merge `846ff0a988460de0e9a1c5afa92298a7633995e8`，分支 `codex/huxiaoyang-code/tax-business-pages`。P1 core 严格绑定 CDP URL + fragment，v2 新存、v1 仅历史 load / compare 并在 active open / lock 前拒绝，页面 fetch 前再精确比较完整 URL。管理者全量 23 / 23 套与无实施上下文独审 59 / 59 均 exit 0，core 7 文件无剩余阻塞；整包待最终审查 / PR，v2 实机 source / 复采未运行。
+>
+> 当前 ignored 原型 `identity_before` 失败、performedCount 0 不等于未尝试；未导航 / 无候选，`business_page_prepare` 新锁保留。只读诊断显式全包含 `filter: [{}]` 后 exactTargetMatchCount 仍 0、owner 已停止 / source 绑定匹配，未 attach / read frame、未 reload / unlock，返回 recovery_target_ambiguous、cleanup 成功。缺目标不证明 realm 销毁或 fragment 切换；root 未关税局页，已问用户具体窗口情况，导航暂缓待协调。旧 19 文件全部未变，原后端 / browser / quarantine 保留，另起旧 v1 临时 HTTP 已核对身份后停止。恢复仅查本 worktree ignored `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`；不得盲删锁 / 猜别页替代。下文 PR #29 documentScopeVerified true 仅为历史，不能保证完整 URL；业务 scope / 期间 / 完整资料仍未验，整个专项未完成。ignored 原型 108 项不作本包生产交付，candidate_only 不直接导航。
+
+以下为各包时点历史；当前恢复以上方入口及本包交接为准。
+
 核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
 
 > **2026-10-20 当前包：[TAX-COLLECTION-REBASE](../tasks/TAX-COLLECTION-REBASE.md)** · [采集契约](../TAX-COLLECTION-CONTRACT.md) · [交接](TAX-COLLECTION-REBASE.md)。负责人 `huxiaoyang-code`，独立分支 `codex/huxiaoyang-code/tax-collection-rebase`，分叉基线 `0345046ce40b644f26d4ea52adb362d040533bc2`。本包“门户契约 + 真实复采”已随 PR #29 验收合并；整个专项仍未完成。恢复只查本包 worktree 的 `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`。

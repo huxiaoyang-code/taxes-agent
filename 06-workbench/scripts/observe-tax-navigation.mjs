@@ -2,13 +2,13 @@
 // Does not release, acquire or modify a reader lease, or click anything.
 import {dirname,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {createHash} from 'node:crypto';
 import {openRegisteredBrowserDiagnostic,DEFAULT_REGISTRATION_ROOT} from '../server/tax-browser-diagnostic.mjs';
 import {classifyObservedUrl,pageReference} from './inventory-tax-browser.mjs';
 import {observedRecipe,collectionShape,businessProjection} from '../server/tax-collection-shape.mjs';
 import {TaxCollectionStore,collectionLock} from '../server/tax-collection-local.mjs';
 import {readLiveResource,sameEnterprise,assertLiveFrame} from '../server/tax-live-collection.mjs';
 import {validateCapture} from '../server/tax-collection-contract.mjs';
+import {FULL_FRAME_URL_SEMANTICS,frameUrlDigest} from '../server/tax-frame-url.mjs';
 const ORIGIN='https://etax.fujian.chinatax.gov.cn:8443';
 const DESTINATIONS=Object.freeze({portal_home:ORIGIN+'/loginb/',portal_index:ORIGIN+'/mhzx/api/mh/mhsy/index'});
 export async function observeTaxNavigation({registrationRef,registrationRoot,pageRef,destination,prepareOnly=false,persistSource=false,readerStoppedConfirmed=false}={},overrides={}){
@@ -157,17 +157,17 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
       if(!identity||!filing)throw new Error('projection');
       const local=c=>({resource:c.resource,recipe:c.recipe,projection:c.projection});
       if(!validateCapture(local(identity),'identity')||!validateCapture(local(filing),'current_filing'))throw new Error('projection');
-      const documentUrlDigest=createHash('sha256').update(frameTree.frameTree.frame.url).digest('hex');
-      const scope={frameId:expectedFrame,loaderId:expectedLoader,documentUrlDigest};
-      phase='identity_after';await assertLiveFrame(cdp,opts,scope);terminationConfirmed=false;
+      const documentUrlDigest=frameUrlDigest(frameTree.frameTree.frame);
+      const scope={version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,frameId:expectedFrame,loaderId:expectedLoader,documentUrlDigest};
+      phase='identity_after';const expectedFullUrl=await assertLiveFrame(cdp,opts,scope);terminationConfirmed=false;
       let after;activeVerificationRequestCount++;
-      try{after=await readLiveResource(cdp,opts,identity.recipe,'identity');terminationConfirmed=true;}
+      try{after=await readLiveResource(cdp,opts,identity.recipe,'identity',expectedFullUrl);terminationConfirmed=true;}
       catch(error){if(error.settled===true)terminationConfirmed=true;throw error;}
       await assertLiveFrame(cdp,opts,scope);
       if(scopeRevision!==0)throw new Error('scope');
       if(!sameEnterprise(identity.projection,after.capture.projection))throw new Error('enterprise_changed');
       if(await transport.localScope.currentRegistrationState()!=='quarantined')throw new Error('handoff_state');
-      pendingSource={version:1,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,
+      pendingSource={version:2,documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,authorizedNavigation:true,handoffMode:'quarantined_reader_new_navigation',readerStoppedConfirmed:true,
         registrationRef,registrationRoot:resolve(registrationRoot||DEFAULT_REGISTRATION_ROOT),pageRef,targetId:targets[0].targetId,
         frameId:expectedFrame,loaderId:expectedLoader,documentUrlDigest,browserKey:transport.localScope?.browserKey,
         capturedAt:Date.now(),identity:local(identity),filing:local(filing)};
