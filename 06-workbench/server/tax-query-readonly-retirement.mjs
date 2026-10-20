@@ -24,6 +24,24 @@ const fail=()=>{throw Error('query_retirement_failed')};
 const ref=(v,prefix)=>typeof v==='string'&&new RegExp('^'+prefix+'_[a-f0-9]{48}$').test(v);
 const mutexValid=v=>exact(v,['version','nonce','ownerPid'])&&v.version===1&&/^[a-f0-9]{48}$/.test(v.nonce)
   &&Number.isSafeInteger(v.ownerPid)&&v.ownerPid>0&&v.ownerPid<=2147483647;
+// Browser-level inventory only; never interpret a failed lookup as absence.
+function targetInventory(value){
+  if(!exact(value,['targetInfos'])||!Array.isArray(value.targetInfos)||value.targetInfos.length>256
+    ||Buffer.byteLength(canonical(value))>262144)fail();
+  const ids=new Set(),required=['targetId','type','title','url','attached'],
+    optional=['openerId','canAccessOpener','openerFrameId','browserContextId','subtype','parentFrameId','parentId','pid'];
+  for(const target of value.targetInfos){
+    if(!target||typeof target!=='object'||Array.isArray(target)||required.some(k=>!Object.hasOwn(target,k))
+      ||Object.keys(target).some(k=>!required.includes(k)&&!optional.includes(k))
+      ||!['targetId','type'].every(k=>typeof target[k]==='string'&&target[k].length>0&&target[k].length<=256)
+      ||!['title','url'].every(k=>typeof target[k]==='string'&&target[k].length<=8192)||typeof target.attached!=='boolean'
+      ||optional.some(k=>Object.hasOwn(target,k)&&(k==='canAccessOpener'?typeof target[k]!=='boolean':
+        k==='pid'?!Number.isSafeInteger(target[k])||target[k]<0||target[k]>2147483647:
+        typeof target[k]!=='string'||target[k].length===0||target[k].length>256))||ids.has(target.targetId))fail();
+    ids.add(target.targetId);
+  }
+  return{ids,digest:hash(canonical(value)),count:ids.size};
+}
 async function alive(pid){try{process.kill(pid,0);return true}catch(e){if(e.code==='ESRCH')return false;throw e;}}
 function surface(raw){
   try{const u=new URL(raw);if(u.username||u.password||u.href.includes('#'))return null;
@@ -83,7 +101,8 @@ export async function retireQueryReadonly(args={},overrides={}){
     readLock:readCollectionLock,acquireRecovery:collectionRecoveryLock,acquireAdminGuard:acquireReadonlyAdminGuard,isOwnerAlive:alive,
     wait:ms=>new Promise(done=>setTimeout(done,ms)),checkpoint:async()=>{},...overrides};
   let phase='validation',transport,guard,attached,original,originalBytes,mutex,prepare,paths,marker,committed=false,finished=false,
-    result,revisionInvalid=false,navigationSent=false,contextDestroyed=false,newFrame,oldDocument,detachRequested=false,cleanup=true,existingProof,recoveryPath;
+    result,revisionInvalid=false,navigationSent=false,contextDestroyed=false,newFrame,oldDocument,detachRequested=false,cleanup=true,existingProof,recoveryPath,
+    existingAbsentProof,absenceProof,verifyRetirementScope,targetReappeared=false;
   const removers=[],events=[];let contextClears=0,started=0;
   const record=kind=>{if(events.length<32)events.push({order:events.length+1,kind,elapsedMs:Math.max(0,Date.now()-started)});else revisionInvalid=true;};
   const security=d.store.security;
@@ -99,7 +118,7 @@ export async function retireQueryReadonly(args={},overrides={}){
     const artifact=await d.store.loadArtifact(args.artifactRef),parent=await d.parentStore.load(artifact.sourceRef);
     if(parent.version!==2)fail();const template=buildQueryTemplate(artifact,parent,artifact.sourceRef,args.artifactRef);
     await d.parentStore.ready();await d.store.ready();
-    const base=join(d.store.root,'retire_'+args.artifactRef);paths={prepare:base+'.prepare.json',proof:base+'.realm.json',finish:base+'.finished.json',
+    const base=join(d.store.root,'retire_'+args.artifactRef);paths={prepare:base+'.prepare.json',proof:base+'.realm.json',absent:base+'.absent.json',finish:base+'.finished.json',
       commit:join(d.parentStore.root,'abandon_'+artifact.sourceRef+'.commit.json')};
     phase='registration';transport=await d.openDiagnostic({registrationRef:parent.registrationRef,registrationRoot:parent.registrationRoot},
       {registrationBase:dirname(resolve(parent.registrationRoot))});
@@ -164,28 +183,43 @@ export async function retireQueryReadonly(args={},overrides={}){
       const clears=existingProof.events.filter(e=>e.kind==='context_clear'),frames=existingProof.events.filter(e=>e.kind==='main_frame');
       if(clears.length<1||clears.length>2||frames.length!==1||clears.some(e=>e.order>frames[0].order))fail();
     }
+    const absentBytes=await maybe(paths.absent,security);
+    if(absentBytes){existingAbsentProof=JSON.parse(absentBytes);
+      if(existingProof||!committed||!exact(existingAbsentProof,['version','kind','prepareSha256','commitSha256','oldTargetDigest','checks'])
+        ||existingAbsentProof.version!==2||existingAbsentProof.kind!=='target_absent'
+        ||existingAbsentProof.prepareSha256!==hash(preparedBytes)||existingAbsentProof.commitSha256!==hash(commitBytes)
+        ||existingAbsentProof.oldTargetDigest!==hash(template.captureDocument.targetId)
+        ||!Array.isArray(existingAbsentProof.checks)||existingAbsentProof.checks.length!==2
+        ||existingAbsentProof.checks.some((c,i)=>!exact(c,['order','inventorySha256','targetCount','elapsedMs'])||c.order!==i+1
+          ||!/^[a-f0-9]{64}$/.test(c.inventorySha256)||!Number.isSafeInteger(c.targetCount)||c.targetCount<0||c.targetCount>256
+          ||!Number.isSafeInteger(c.elapsedMs)||c.elapsedMs<0)
+        ||existingAbsentProof.checks[1].elapsedMs<existingAbsentProof.checks[0].elapsedMs)fail();
+    }
     if(finishBytes){const finish=JSON.parse(finishBytes);
-      if(!existingProof||!exact(finish,['version','commitSha256','realmSha256'])||finish.version!==1
-        ||finish.commitSha256!==hash(commitBytes)||finish.realmSha256!==hash(proofBytes))fail();finished=true;
+      if(existingAbsentProof? !exact(finish,['version','kind','commitSha256','proofSha256'])||finish.version!==2||finish.kind!=='target_absent'
+          ||finish.commitSha256!==hash(commitBytes)||finish.proofSha256!==hash(absentBytes):
+        !existingProof||!exact(finish,['version','commitSha256','realmSha256'])||finish.version!==1
+          ||finish.commitSha256!==hash(commitBytes)||finish.realmSha256!==hash(proofBytes))fail();finished=true;
       if(await maybe(mutexPath,security)===null){if(await maybe(lockPath,security)!==null)fail();
         return result=safe('historical_retirement_confirmed','finished',{lockRetired:true,retirementCommitted:true,
-          historicalRealmDestructionProven:true,currentRealmVerified:false,resumed:true});}
+          ...(existingAbsentProof?{proofKind:'target_absent',historicalOldContextUnavailableProven:true,currentOldContextVerified:false}:
+            {proofKind:'realm_reset',historicalRealmDestructionProven:true}),currentRealmVerified:false,resumed:true});}
     }
     phase='owner';if(await d.isOwnerAlive(original.ownerPid))return result=safe('owner_alive',phase);
     const verifyMutex=async()=>{const current=JSON.parse(await privateBytes(mutexPath,security,4096));
       if(!mutexValid(current)||canonical(current)!==canonical(mutex)||current.ownerPid!==process.pid&&await d.isOwnerAlive(current.ownerPid))fail();guard.verify();};
     const verifyOriginal=async(absentAllowed=false)=>{await registration();await verifyMutex();if(await d.isOwnerAlive(original.ownerPid))fail();
       const actual=await maybe(lockPath,security);if(actual===null){if(!absentAllowed)fail();return false;}if(!actual.equals(originalBytes))fail();return true;};
+    verifyRetirementScope=()=>verifyOriginal(Boolean(existingProof||existingAbsentProof));
     phase='target';const cdp=transport.cdp,targetId=template.captureDocument.targetId;
-    const target=await cdp.send('Target.getTargetInfo',{targetId},{timeoutMs:5000});
-    if(target?.targetInfo?.type!=='page'||target.targetInfo.targetId!==targetId)fail();
-    if(args.execute!==true)return result=safe('diagnosed',phase,{ownerDeadConfirmed:true,lockScopeMatched:true,retirementCommitted:false});
+    if(args.execute!==true){targetInventory(await cdp.send('Target.getTargets',{}, {timeoutMs:5000}));
+      return result=safe('diagnosed',phase,{ownerDeadConfirmed:true,lockScopeMatched:true,retirementCommitted:false});}
     if(!mutex){
       const orphan=await maybe(mutexPath,security);
       if(orphan){if(args.resume!==true) return result=safe('resume_required','mutex');mutex=JSON.parse(orphan);if(!mutexValid(mutex)||await d.isOwnerAlive(mutex.ownerPid))fail();}
       else{if(args.resume===true)fail();await d.acquireRecovery(profile,original);mutex=JSON.parse(await privateBytes(mutexPath,security,4096));}
     }
-    await verifyOriginal(Boolean(existingProof));await d.checkpoint('mutex_created');
+    await verifyRetirementScope();await d.checkpoint('mutex_created');
     if(!prepare){
       prepare={version:1,artifactRef:args.artifactRef,parentSourceRef:artifact.sourceRef,artifactSha256:hash(canonical(artifact)),parentSha256:hash(canonical(parent)),
         profile,browserKey:parent.browserKey,originalBase64:originalBytes.toString('base64'),mutex,audit:QUERY_RETIREMENT_AUDIT};
@@ -194,7 +228,29 @@ export async function retireQueryReadonly(args={},overrides={}){
     marker.prepareSha256=hash(await privateBytes(paths.prepare,security));
     if(!committed){await verifyOriginal();await publish(paths.commit,marker,security);committed=true;await d.checkpoint('commit_durable');}
     // Tombstone is permanent before any realm reset. Failure never re-enables old evidence.
-    await verifyOriginal(Boolean(existingProof));phase='attach';attached=await cdp.send('Target.attachToTarget',{targetId,flatten:true},{timeoutMs:5000});
+    await verifyRetirementScope();phase='target';started=Date.now();
+    // Keep watching any already-dispatched browser events, including a transient
+    // reappearance between the inventories. No discovery or new target is enabled.
+    for(const name of ['Target.targetCreated','Target.targetInfoChanged'])removers.push(cdp.on(name,p=>{
+      if(p?.targetInfo?.targetId===targetId)targetReappeared=true;
+    }));
+    const first=targetInventory(await cdp.send('Target.getTargets',{}, {timeoutMs:5000}));
+    if(!first.ids.has(targetId)){
+      if(existingProof)fail();phase='target_absent';
+      const checks=[{order:1,inventorySha256:first.digest,targetCount:first.count,elapsedMs:Math.max(0,Date.now()-started)}];
+      await d.checkpoint('target_absent_first');await verifyRetirementScope();await d.wait(250);await verifyRetirementScope();
+      const second=targetInventory(await cdp.send('Target.getTargets',{}, {timeoutMs:5000}));
+      checks.push({order:2,inventorySha256:second.digest,targetCount:second.count,elapsedMs:Math.max(0,Date.now()-started)});
+      if(targetReappeared||revisionInvalid||second.ids.has(targetId))fail();await verifyRetirementScope();
+      absenceProof={version:2,kind:'target_absent',prepareSha256:marker.prepareSha256,
+        commitSha256:hash(await privateBytes(paths.commit,security)),oldTargetDigest:hash(targetId),checks};
+      result=safe('target_absence_verified',phase,{proofKind:'target_absent',oldContextUnavailableProven:true,
+        retirementCommitted:true,...existingAbsentProof?{resumed:true}:{}});return result;
+    }
+    if(existingAbsentProof)fail();
+    const target=await cdp.send('Target.getTargetInfo',{targetId},{timeoutMs:5000});
+    if(target?.targetInfo?.type!=='page'||target.targetInfo.targetId!==targetId)fail();
+    phase='attach';attached=await cdp.send('Target.attachToTarget',{targetId,flatten:true},{timeoutMs:5000});
     if(typeof attached?.sessionId!=='string'||typeof cdp.on!=='function')fail();const opts={sessionId:attached.sessionId,timeoutMs:5000};
     const listen=(name,fn)=>removers.push(cdp.on(name,(p,c)=>{if(c?.sessionId===attached.sessionId)fn(p)}));
     listen('Runtime.executionContextsCleared',()=>{if(existingProof){revisionInvalid=true;return;}if(!navigationSent)return;record('context_clear');if(newFrame||++contextClears>2)revisionInvalid=true;contextDestroyed=true;});
@@ -233,24 +289,31 @@ export async function retireQueryReadonly(args={},overrides={}){
       }catch{cleanup=false;}
       try{detachRequested=true;await transport.cdp.send('Target.detachFromTarget',{sessionId:attached.sessionId},{timeoutMs:5000})}catch{cleanup=false;}
     }
-    for(const off of removers)try{off()}catch{cleanup=false;}
     try{await transport?.close()}catch{cleanup=false;}
+    for(const off of removers)try{off()}catch{cleanup=false;}
+    if(absenceProof&&targetReappeared)cleanup=false;
     if(revisionInvalid)cleanup=false;
-    if(result?.status==='realm_reset_verified')try{
+    if(['realm_reset_verified','target_absence_verified'].includes(result?.status))try{
       phase='retire';if(!cleanup)fail();guard.verify();
-      if(await d.isOwnerAlive(original.ownerPid)||await transport.localScope.currentRegistrationState()!=='quarantined')fail();
+      await verifyRetirementScope();
       const profile=prepare.profile,current=await maybe(join(profile,LOCK),security),actualMutex=JSON.parse(await privateBytes(join(profile,MUTEX),security,4096));
-      if(current===null&&!existingProof||current!==null&&!current.equals(originalBytes)||canonical(actualMutex)!==canonical(mutex))fail();
-      const proof={version:1,oldDocumentDigest:oldDocument.documentUrlDigest,newDocumentDigest:newFrame.documentUrlDigest,
-        oldFrame:oldDocument.frameId,oldLoader:oldDocument.loaderId,newFrame:newFrame.frameId,newLoader:newFrame.loaderId,
-        contextDestroyed:true,finalSurface:result.finalSurface,events};
-      if(!existingProof){await publish(paths.proof,proof,security);await d.checkpoint('realm_durable');}
+      if(current===null&&!existingProof&&!existingAbsentProof||current!==null&&!current.equals(originalBytes)||canonical(actualMutex)!==canonical(mutex))fail();
+      if(absenceProof){
+        if(!existingAbsentProof){await publish(paths.absent,absenceProof,security);await d.checkpoint('target_absent_durable');}
+      }else{
+        const proof={version:1,oldDocumentDigest:oldDocument.documentUrlDigest,newDocumentDigest:newFrame.documentUrlDigest,
+          oldFrame:oldDocument.frameId,oldLoader:oldDocument.loaderId,newFrame:newFrame.frameId,newLoader:newFrame.loaderId,
+          contextDestroyed:true,finalSurface:result.finalSurface,events};
+        if(!existingProof){await publish(paths.proof,proof,security);await d.checkpoint('realm_durable');}
+      }
       // All old work remains permanently blocked even if the following host crashes.
-      const finish={version:1,commitSha256:hash(await privateBytes(paths.commit,security)),realmSha256:hash(await privateBytes(paths.proof,security))};
+      const finish=absenceProof?{version:2,kind:'target_absent',commitSha256:hash(await privateBytes(paths.commit,security)),
+        proofSha256:hash(await privateBytes(paths.absent,security))}:
+        {version:1,commitSha256:hash(await privateBytes(paths.commit,security)),realmSha256:hash(await privateBytes(paths.proof,security))};
       if(!finished)await publish(paths.finish,finish,security);finished=true;await d.checkpoint('finished_durable');
-      if(await d.isOwnerAlive(original.ownerPid)||await transport.localScope.currentRegistrationState()!=='quarantined')fail();guard.verify();
+      await verifyRetirementScope();
       const finalLock=await maybe(join(profile,LOCK),security);
-      if(finalLock===null&&!existingProof||finalLock!==null&&!finalLock.equals(originalBytes)
+      if(finalLock===null&&!existingProof&&!existingAbsentProof||finalLock!==null&&!finalLock.equals(originalBytes)
         ||canonical(JSON.parse(await privateBytes(join(profile,MUTEX),security,4096)))!==canonical(mutex))fail();
       if(finalLock!==null)await unlink(join(profile,LOCK));result.lockRetired=true;await d.checkpoint('lock_retired');
       await unlink(join(profile,MUTEX));result.status='retired_readonly';result.phase='finished';result.lockRetired=true;
