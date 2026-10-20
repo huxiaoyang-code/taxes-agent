@@ -1,8 +1,8 @@
 # 当前企业与待办期间的真实采集契约
 
-> **2026-10-20 当前修复：[TAX-FULL-URL-BINDING](tasks/TAX-FULL-URL-BINDING.md)** · [交接](handoffs/TAX-FULL-URL-BINDING.md)。CDP `Frame.url` 不含 fragment；旧 `documentScopeVerified = true` 只作历史结果，不保证完整 URL 绑定，也不证明现场实际切换。当前 v2 真实源 / 复采未运行；下文 PR #29 结果按其历史边界阅读。当前 `business_page_prepare` 新锁仍保留，导航待窗口协调；旧“当前无锁阻塞”等表述只指当时已释放的核心采集锁。
+> **2026-10-20 当前包：[TAX-READONLY-ABANDON](tasks/TAX-READONLY-ABANDON.md)** · [交接](handoffs/TAX-READONLY-ABANDON.md)。以 PR #32 为基线，admin-only 固定只读旧操作永久放弃能力已通过独立 37 / 37 与管理者最终 `npm test` 25 / 25 套；真实默认诊断及显式 execute 成功，`abandoned_readonly / finished`、`lockRetired = true`，所有 cleanup confirmed。其语义仍为 `unknown_abandoned`，不证明请求或 realm 终止。重新登录后的新 v2 source 已成功 4 passive + 1 active identity-after，现有 MCP stdio → HTTP → Agent → 后端两次各 3 新请求 / 3 完整响应、各 6 行、无保留锁，完整 URL v2 / `documentScopeVerified = true`，身份 / 企业 / filing 投影一致且 `independentRequests = true`。仅验证身份 / 门户申报列表，业务期间 / 完整资料仍缺，整个业务专项未完成；业务候选 prepare 已完成 3 固定只读请求，6 行全为 branch_unverified，候选 / 导航均 0、lockRetained false；具体字段缺口正按官方消费者定位，未取得所属期 / 业务页。下文 PR #29 v1 结果只作退出前历史。完整候选 head / PR 仍由 root 收尾，不预填未知提交。
 
-P1 已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 于 UTC `2026-10-20T06:13:58Z`（北京时间 14:13:58）合并，head `57aeb06cf9236fbc7a1a75e14f737c6ca3b793f6`，merge `75eebbbfb78adfaf88be35a2e1080b5432764126`；最终 fresh 独审 13 文件 exact head / tree 通过、无阻塞，管理者已核对签名 merge 对象及树一致。当前纯交接分支 `codex/huxiaoyang-code/tax-full-url-handoff` 基于该 merge，core 未变，不重复 23 / 59 验证。
+完整 URL P1 已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 合并，PR #32 已补交接；提交与验收见[完整 URL 交接](handoffs/TAX-FULL-URL-BINDING.md)及[当前交接](handoffs/TAX-READONLY-ABANDON.md)。CDP `Frame.url` 不含 fragment，旧 `documentScopeVerified = true` 不保证完整 URL，也不证明现场曾切换；v2 新 save 与 fetch 前绑定要求继续有效。
 
 核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
 
@@ -12,7 +12,11 @@ P1 已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 于 U
 
 完整文档 URL 必须按 CDP `Frame.url` 与 `urlFragment` 严格组合，保留单个 `#` 的片段语义并拒绝矛盾 / 异常输入（[官方协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Page.pdl)）。source v2 显式声明 `documentUrlSemantics = 'cdp_frame_url_plus_fragment_v1'`，新 save 只写 v2；v1 仅保留严格历史读取 / 比较，active 在 open / lock 前拒绝。host assert 使用完整 URL，页面内请求脚本在 fetch 前还须精确比对内部 `expectedFullUrl`，避免 host → evaluate 空窗；完整 URL、fragment 及派生摘要均不输出模型。
 
-当前恢复门槛优先于下文历史通用恢复描述：显式 `filter: [{}]` 全包含目标清单复核后 `exactTargetMatchCount = 0`，返回 `recovery_target_ambiguous`；未 attach / read frame、未 reload / unlock，锁保留。目标缺席、通用 CDP 错误或两次快照缺席均不证明原 realm 销毁，不得猜别页替代或盲删锁；先协调用户具体窗口或形成可证明终止方案。
+当前退役门槛优先于下文历史通用恢复描述：旧 host 已停止，原 target 在显式 `filter: [{}]` 全包含清单中缺席；缺席、通用 CDP 错误或两次快照均不证明原 realm / renderer 销毁，现场未证明 BFCache，不猜另一页替代。独立 admin-only `abandon_readonly` 只永久放弃已审固定只读旧操作及迟到结果，默认只诊断，执行 / resume 必须显式。严格 source / scope / nonce / dead owner / PID 复用 / registry / profile 绑定；目标不可寻址只接受原 method 下精确 `-32602` / message 组合，通用错误不作 not-found。
+
+退役先将原锁 bytes + SHA 私有归档并 fsync prepare，再永久 commit abandoned，才退役同 canonical 锁并 finished。Global OS mutex（当前 SID / SYSTEM）与持久 RECOVERY 阻挡并发 collector；host 死亡 / stdin EOF 释放 helper mutex，未完成事务须显式 resume。collector 创建锁后还须再核 mutex，竞态失败仅撤自己 nonce。commit 后历史 run 仍可 load / compare，但旧 source 不得保存新 run；旧 source 不改写 / 升级，结果 `requestTermination = 'unknown_abandoned'`，不能当作 `recovered`、`complete`、`contextDestroyed` 或新鲜证明。
+
+已审旧 host 停止后不能续发 host 请求链、写应用文件或发布候选；残留 IIFE 至多一个固定 identity GET 与读响应，旧结果无消费者，10 秒 Abort 不证明终止。原生 fetch 可接收 `Set-Cookie`，未证现场改变身份 Cookie，不能保证会话绝对不变。旧版审计为 `operator_attested_not_loaded_bytes_proof`，旧完整加载 bytes 未归档，不伪造 loaded-bytes 证明。本次实际退役已验证原锁 bytes + SHA 私有存档，旧 source 不改写 / 升级；`realmDestructionProven = false`、`lateSessionEffectsPossible = true`、`oldResultConsumption = permanently_forbidden`。重新登录后的全新 v2 source / 两轮 MCP 门户复采已实际完成，未复用旧响应；`businessScopeVerified`、`periodVerified`、`projectionComplete` 仍 false，缺 `business_period`、`full_enterprise_profile`、`full_business_fields`。
 
 | 等级 | 可核验依据 | 可得结论 | 执行限制 |
 |---|---|---|---|
@@ -24,7 +28,7 @@ P1 已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 于 U
 
 本包独立后端接管要求本机 reader 已停止并保留 registry 的 `quarantined` 状态；新 source 显式记录 `handoffMode = quarantined_reader_new_navigation` 与 `readerStoppedConfirmed = true`，由管理员在实际确认后随新导航形成。该声明不能绕过实时状态检查：后端打开连接以及每次请求前后仍须核对 registry 为隔离状态，遇到活动旧 reader 或状态改变直接拒绝；不得靠解除 quarantine、改 lease 或重启未知后端取得权限。source 还在本机保存 document URL 摘要，与固定 frame / loader 及导航事件代次共同约束页面；摘要及原始 URL 不作为模型业务资料输出。
 
-若本包新采集锁因不确定请求 / scope 清理失败保留，默认恢复动作只诊断，不改变文件或导航。管理者明确执行恢复时，只处理匹配本包 `authorized_navigation` scope 的新锁，校验旧 owner 已停止及原 nonce，并要求唯一已绑定官方页正常 reload、形成新 loader 和 context clear，完整清理后再复核 owner / nonce 才删除对应新锁。活动 owner、不同 scope、nonce 改变、无新上下文 / loader 或清理失败均保留原锁；旧 quarantine / claim 不变。恢复成功只是解除本包废弃互斥，不等于企业 / 期间业务验证成功，仍须重新观察形成新 source。
+以下为 PR #29 当时的受控 reload 恢复契约历史，不能用于当前缺目标旧操作：新采集锁因不确定请求 / scope 清理失败保留时，默认只诊断；显式恢复仅处理匹配 `authorized_navigation` scope 的新锁，校验 dead owner / nonce、唯一绑定官方页正常 reload 后的新 loader / context clear、完整清理，再复核后删除对应新锁。不符则保留，旧 quarantine / claim 不变。此历史恢复仅解除当时互斥，不等于企业 / 期间验证成功；当前以本节 admin-only 放弃契约和本包任务 / 交接为准。
 
 ## 新解析的安全证据索引
 

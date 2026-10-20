@@ -16,6 +16,7 @@ const MESSAGES = Object.freeze({
   tax_browser_launch_timeout: "专用浏览器启动超时",
   tax_browser_connect_failed: "无法建立本机浏览器连接",
   tax_browser_cdp_error: "本机浏览器命令执行失败",
+  tax_browser_target_not_found: "指定浏览器目标不存在",
   tax_browser_cdp_timeout: "本机浏览器命令超时",
   tax_browser_cdp_closed: "本机浏览器连接已关闭",
   tax_browser_close_failed: "专用浏览器尚未确认关闭",
@@ -245,7 +246,9 @@ export class CdpConnection {
         const item = this.pending.get(message.id);
         if (!item) return;
         this.pending.delete(message.id); clearTimeout(item.timer);
-        message.error ? item.no(new TaxBrowserError("tax_browser_cdp_error")) : item.yes(message.result || {});
+        message.error ? item.no(new TaxBrowserError(item.method === "Target.getTargetInfo"
+          && message.error.code === -32602 && message.error.message === "No target with given id found"
+          ? "tax_browser_target_not_found" : "tax_browser_cdp_error")) : item.yes(message.result || {});
       });
     });
     return this.openPromise;
@@ -255,7 +258,7 @@ export class CdpConnection {
     const id = this.nextId++;
     return new Promise((yes, no) => {
       const timer = setTimeout(() => { this.pending.delete(id); no(new TaxBrowserError("tax_browser_cdp_timeout")); }, timeoutMs);
-      this.pending.set(id, { yes, no, timer });
+      this.pending.set(id, { yes, no, timer, method });
       try { this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); }
       catch { clearTimeout(timer); this.pending.delete(id); no(new TaxBrowserError("tax_browser_cdp_closed")); }
     });

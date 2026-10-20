@@ -1,7 +1,7 @@
 // Local-only private storage and cross-checkout exclusion. Never return local paths.
 import {execFile} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
-import {mkdir,realpath,lstat,open,readFile,unlink,rename} from 'node:fs/promises';
+import {mkdir,realpath,lstat,open,readFile,unlink,rename,link} from 'node:fs/promises';
 import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {verifyPrivateDirectory,verifyPrivateFile} from './tax-browser-diagnostic.mjs';
@@ -55,10 +55,12 @@ export class TaxCollectionStore{
     if(!['source','run'].includes(kind))throw fail();validateEvidence(kind,value);
     if(kind==='source')requireActiveSource(value);
     const text=JSON.stringify(value);if(Buffer.byteLength(text)>4194304)throw fail();await this.ready();
+    if(kind==='run')await this.assertNotAbandoned(value.sourceRef);
     const ref='tax'+kind+'_'+randomBytes(24).toString('hex'),file=join(this.root,ref+'.json');
     const staging=file+'.tmp',handle=await open(staging,'wx',0o600);
     try{await handle.writeFile(text);await handle.sync()}finally{await handle.close()}
     try{await this.security.verifyFile(staging);validateEvidence(kind,JSON.parse(await readFile(staging,'utf8')));
+      if(kind==='run')await this.assertNotAbandoned(value.sourceRef);
       await rename(staging,file);await this.security.verifyFile(file);return ref;
     }finally{await unlink(staging).catch(()=>{})}
   }
@@ -67,8 +69,15 @@ export class TaxCollectionStore{
     const path=join(this.root,ref+'.json');await this.security.verifyFile(path);
     const handle=await open(path,'r');try{const stat=await handle.stat();if(!stat.isFile()||stat.size>4194304)throw fail();
       const text=await handle.readFile('utf8');if(Buffer.byteLength(text)>4194304)throw fail();
-      return validateEvidence(ref.startsWith('taxsource_')?'source':'run',JSON.parse(text));
+      const kind=ref.startsWith('taxsource_')?'source':'run',value=validateEvidence(kind,JSON.parse(text));
+      return value;
     }finally{await handle.close()}
+  }
+  async assertNotAbandoned(sourceRef){
+    if(typeof sourceRef!=='string'||!/^taxsource_[a-f0-9]{48}$/.test(sourceRef))throw fail();
+    // Presence is fail-closed even if a damaged journal cannot be decoded.
+    try{await lstat(join(this.root,`abandon_${sourceRef}.commit.json`));throw fail()}
+    catch(error){if(error.code!=='ENOENT')throw error}
   }
 }
 export async function collectionLock(profilePath,{security={},scope}={}){
@@ -78,7 +87,17 @@ export async function collectionLock(profilePath,{security={},scope}={}){
   const file=join(profilePath,LOCK),nonce=randomBytes(24).toString('hex');
   let handle;try{handle=await open(file,'wx',0o600)}catch{throw new Error('tax_collection_busy')}
   try{await handle.writeFile(JSON.stringify({version:1,nonce,ownerPid:process.pid,scope}));await handle.sync()}finally{await handle.close()}
-  await d.verifyFile(file);let ended=false;
+  await d.verifyFile(file);
+  // Recovery can acquire its mutex after the preflight check but before wx.
+  // Never enter a browser request in that window, or delete another owner's lock.
+  let recoveryPresent=false;
+  try{await lstat(join(profilePath,RECOVERY));recoveryPresent=true}catch(error){if(error.code!=='ENOENT')throw error}
+  if(recoveryPresent){
+    const current=await privateJson(file,d);
+    if(current.nonce!==nonce||current.ownerPid!==process.pid)throw fail();
+    await unlink(file);throw new Error('tax_collection_busy');
+  }
+  let ended=false;
   return{async release(){if(ended)return;await d.verifyFile(file);const current=JSON.parse(await readFile(file,'utf8'));
     if(current.nonce!==nonce||current.ownerPid!==process.pid)throw fail();await unlink(file);ended=true;},
     retain(){ended=true;}};
@@ -104,8 +123,13 @@ export async function collectionRecoveryLock(profilePath,expected,{security={}}=
     &&JSON.stringify(current.scope)===JSON.stringify(expected.scope);
   if(!matches(await readCollectionLock(profilePath,{security:d})))throw fail();
   const file=join(profilePath,RECOVERY),nonce=randomBytes(24).toString('hex');
-  let handle;try{handle=await open(file,'wx',0o600)}catch{throw new Error('tax_collection_recovery_busy')}
-  try{await handle.writeFile(JSON.stringify({version:1,nonce,ownerPid:process.pid}));await handle.sync()}finally{await handle.close()}
+  const staging=file+'.'+nonce+'.tmp';
+  try{
+    const handle=await open(staging,'wx',0o600);
+    try{await handle.writeFile(JSON.stringify({version:1,nonce,ownerPid:process.pid}));await handle.sync()}finally{await handle.close()}
+    await d.verifyFile(staging);
+    try{await link(staging,file)}catch{throw new Error('tax_collection_recovery_busy')}
+  }finally{await unlink(staging).catch(()=>{})}
   await d.verifyFile(file);let released=false;
   const ownMutex=async()=>{const current=await privateJson(file,d);if(current.nonce!==nonce||current.ownerPid!==process.pid)throw fail()};
   return{
