@@ -46,10 +46,29 @@ for(const mode of ['identity_business_error','identity_schema_error','identity_c
   const r=await f.collector.refresh({artifactRef:f.artifactRef});f.state.mode=mode;
   const result=await f.collector.collect({contextRef:r.contextRef});safe(result);assert.equal(result.status,'query_collection_failed');
   assert.equal(result.requestAttemptedCount,1);assert.equal(result.requestPerformedCount,1);assert.equal(result.responseCompleteCount,1);assert.equal(result.lockRetained,false);
+  assert.equal(result.identityDiagnostic.available,true);assert.ok(Array.isArray(result.identityDiagnostic.shape.schema));
+  assert.equal(result.identityDiagnostic.projectionValid,mode!=='identity_schema_error');
+}));
+test('identity safe schema survives cleanup failure without any additional probe',async()=>fixture(async f=>{
+  f.state.mode='identity_schema_error';const close=f.collector.d.openDiagnostic;
+  f.collector.d.openDiagnostic=async(...args)=>{const transport=await close(...args);transport.close=()=>{throw Error(PRIVATE)};return transport;};
+  const result=await f.collector.refresh({artifactRef:f.artifactRef});safe(result);assert.equal(result.reason,'query_cleanup_unconfirmed');
+  assert.equal(result.requestAttemptedCount,1);assert.equal(result.identityDiagnostic.available,true);assert.equal(result.identityDiagnostic.projectionValid,false);
+  assert.deepEqual(result.identityDiagnostic.fields.reg_number,{present:false,string:false,nonempty:false});
+}));
+test('identity diagnostics describe fixed raw fields even when projection filters their type or length',async()=>fixture(async f=>{
+  const open=f.collector.d.openDiagnostic;
+  f.collector.d.openDiagnostic=async(...args)=>{const transport=await open(...args),send=transport.cdp.send;
+    transport.cdp.send=async(method,...params)=>{const reply=await send(method,...params);
+      if(method==='Runtime.evaluate'){const user=reply.result.value.body.Response.Data.userinfo;user.reg_number=123;user.company_name='x'.repeat(4097);}return reply;};return transport;};
+  const result=await f.collector.refresh({artifactRef:f.artifactRef});safe(result);assert.equal(result.status,'query_refresh_failed');
+  assert.deepEqual(result.identityDiagnostic.fields.reg_number,{present:true,string:false,nonempty:false});
+  assert.deepEqual(result.identityDiagnostic.fields.company_name,{present:true,string:true,nonempty:true});assert.equal(result.identityDiagnostic.projectionValid,false);
 }));
 test('unknown request retains real profile lock and prevents a second collector',async()=>fixture(async f=>{
   const r=await f.collector.refresh({artifactRef:f.artifactRef});f.state.mode='unknown';
   const first=await f.collector.collect({contextRef:r.contextRef});safe(first);assert.equal(first.lockRetained,true);
+  assert.deepEqual(first.identityDiagnostic,{available:false});
   const count=f.state.requests.length,second=await f.collector.collect({contextRef:r.contextRef});safe(second);
   assert.equal(second.reason,'tax_collection_busy');assert.equal(f.state.requests.length,count);assert.equal((await readdir(f.profile)).length,1);
 }));

@@ -53,7 +53,7 @@ export class TaxQueryCollection{
       return{status:'input_invalid'};
     if(this.d.enabled!==true&&process.env.TAX_QUERY_COLLECTION_ENABLED!=='1')return{status:'not_enabled'};
     let transport,attached,lock,confirmed=true,template,context,templateRef,record,result,document,revision=0,detachRequested=false,
-      phase='load',attempted=0,performed=0,complete=0,performedUnknown=0,completeUnknown=0,templatePublished=false,publicationKind=null;const proof=[],remove=[],started=this.d.clock();
+      phase='load',attempted=0,performed=0,complete=0,performedUnknown=0,completeUnknown=0,templatePublished=false,publicationKind=null,identityDiagnostic;const proof=[],remove=[],started=this.d.clock();
     const deadline=()=>{if(this.d.clock()-started>120000)throw queryFail('query_deadline');};
     try{
       if(refresh){
@@ -113,9 +113,12 @@ export class TaxQueryCollection{
             ||value.responseComplete!==true||value.requestRef!==requestRef)throw queryFail(matched&&value?.status==='scope_changed'?'query_scope_changed':value?.settled===true?'query_response_invalid':'query_request_unconfirmed');
           proof.push({requestRef,resource,requestPerformed:true,responseComplete:true});
           if(resource==='identity'){
-            if(collectionShape(value.body).businessStatus==='failed')throw queryFail('query_business_failed');
-            const projection=businessProjection(value.body,'identity');
-            if(!validateCapture({resource:'identity',recipe,projection},'identity'))throw queryFail('query_shape_invalid');
+            const shape=collectionShape(value.body),projection=businessProjection(value.body,'identity'),userinfo=(value.body?.Response?.Data??value.body?.data)?.userinfo;
+            identityDiagnostic={available:true,shape,projectionValid:validateCapture({resource:'identity',recipe,projection},'identity'),
+              fields:Object.fromEntries(['reg_number','company_name','creditCode','taxpayer_id'].map(key=>[key,{
+                present:Object.hasOwn(userinfo??{},key),string:typeof userinfo?.[key]==='string',nonempty:typeof userinfo?.[key]==='string'&&userinfo[key].trim().length>0}]))};
+            if(shape.businessStatus==='failed')throw queryFail('query_business_failed');
+            if(!identityDiagnostic.projectionValid)throw queryFail('query_shape_invalid');
             const enterprise=enterpriseOf(projection);if(!sameQueryEnterprise(enterprise,template.enterprise))throw queryFail('query_enterprise_changed');
             await guard();return enterprise;
           }
@@ -159,7 +162,7 @@ export class TaxQueryCollection{
       let lockRetained=false;
       if(lock){if(confirmed)try{await lock.release()}catch{lock.retain();lockRetained=true;}else{lock.retain();lockRetained=true;}}
       if(lockRetained){record=undefined;result={status:refresh?'query_refresh_failed':'query_collection_failed',phase:'cleanup',reason:'query_cleanup_unconfirmed'};}
-      result={...result,requestAttemptedCount:attempted,requestPerformedCount:performed,responseCompleteCount:complete,
+      result={...result,...(result.status?.endsWith('_failed')?{identityDiagnostic:identityDiagnostic??{available:false}}:{}),requestAttemptedCount:attempted,requestPerformedCount:performed,responseCompleteCount:complete,
         requestPerformedUnknownCount:performedUnknown,responseCompleteUnknownCount:completeUnknown,
         requestNotPerformedCount:attempted-performed-performedUnknown,lockRetained};
       if(record)try{

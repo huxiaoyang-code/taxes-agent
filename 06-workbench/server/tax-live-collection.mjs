@@ -86,6 +86,7 @@ export class TaxLiveCollection{
     let transport,attached,lock,confirmed=true,record,result,phase='load';const remove=[];
     try{
       const source=requireActiveSource(await this.d.store.load(args.sourceRef));
+      await this.d.store.assertNotAbandoned(args.sourceRef);
       if(this.d.now()-source.capturedAt>1800000||source.capturedAt>this.d.now())throw fail('tax_collection_source_expired');
       phase='open';transport=await this.d.openDiagnostic({registrationRef:source.registrationRef,registrationRoot:source.registrationRoot},
         {registrationBase:dirname(resolve(source.registrationRoot))});
@@ -111,12 +112,14 @@ export class TaxLiveCollection{
       await cdp.send('Page.enable',{},opts);await cdp.send('Runtime.enable',{},opts);
       await assertLiveFrame(cdp,opts,source);const baselineRevision=revision;
       const read=async(resource,recipe)=>{
+        await this.d.store.assertNotAbandoned(args.sourceRef);
         if(await transport.localScope.currentRegistrationState()!=='quarantined')throw fail('tax_collection_scope_changed');
         if(revision!==baselineRevision)throw fail('tax_collection_scope_changed');
         const expectedFullUrl=await assertLiveFrame(cdp,opts,source);confirmed=false;
         let value;try{value=await readLiveResource(cdp,opts,recipe,resource,expectedFullUrl);confirmed=true;}catch(error){if(error.settled===true)confirmed=true;throw error;}
         await assertLiveFrame(cdp,opts,source);
-        if(await transport.localScope.currentRegistrationState()!=='quarantined'||revision!==baselineRevision)throw fail('tax_collection_scope_changed');return value;
+        if(await transport.localScope.currentRegistrationState()!=='quarantined'||revision!==baselineRevision)throw fail('tax_collection_scope_changed');
+        await this.d.store.assertNotAbandoned(args.sourceRef);return value;
       };
       phase='identity_before';const before=await read('identity',source.identity.recipe);
       if(!sameEnterprise(source.identity.projection,before.capture.projection))throw fail('tax_collection_enterprise_changed');
@@ -161,6 +164,7 @@ export class TaxLiveCollection{
       const rightSource=args.rightRef.startsWith('taxsource_')?args.rightRef:right.sourceRef;
       if(leftSource!==rightSource||left.operationRef&&left.operationRef===right.operationRef)return{status:'not_comparable'};
       const source=await this.d.store.load(leftSource);
+      await this.d.store.assertNotAbandoned(leftSource);
       if([left,right].some(record=>record.capturedAt<source.capturedAt||record.capturedAt>this.d.now()))return{status:'not_comparable'};
       return{status:'compared',independentRequests:true,...compareProjections(left,right)};
     }catch{return{status:'comparison_failed'}}
