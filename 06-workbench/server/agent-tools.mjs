@@ -13,6 +13,7 @@ import { TaxAcquisition } from "./tax-acquisition.mjs";
 import { FujianBrowserSessions } from "./tax-fujian-session.mjs";
 import { TaxBrowserError } from "./tax-browser-transport.mjs";
 import { TaxLiveCollection } from "./tax-live-collection.mjs";
+import { TaxQueryCollection } from "./tax-query-collection.mjs";
 
 export class ToolError extends Error {
   constructor(code, message, details = null) {
@@ -200,6 +201,7 @@ export const taxAcquisition = new TaxAcquisition({ gateway: taxGateway, accounti
 // Opens nothing until the explicit tax_browser_open tool is invoked.
 export const taxBrowserSessions = new FujianBrowserSessions();
 export const taxLiveCollection = new TaxLiveCollection();
+export const taxQueryCollection = new TaxQueryCollection();
 
 /**
  * 把网关的 TaxError 归一成后端工具错误（保留 code 供 MCP 客户端判定）。
@@ -219,6 +221,8 @@ function taxHandler(fn) {
 
 // ------------------------------------------------------------------ 已实现工具
 const HANDLERS = dict({
+  tax_query_collect: (args) => taxQueryCollection.collect(args ?? {}),
+  tax_query_compare: (args) => taxQueryCollection.compare(args ?? {}),
   tax_live_collect: (args) => taxLiveCollection.collect(args ?? {}),
   tax_live_compare: (args) => taxLiveCollection.compare(args ?? {}),
   tax_browser_open: taxHandler((args) => taxBrowserSessions.open(args ?? {})),

@@ -59,7 +59,8 @@ export async function callBackend(name, args, catalog) {
   const url = `${API_BASE}/agent/tools/${encodeURIComponent(name)}`;
   // ACL verification + dedicated Edge startup + CDP connect are bounded but
   // can exceed the ordinary 15 s request budget. Repeating open is idempotent.
-  const requestTimeoutMs = name === "tax_browser_open" ? 60000 : name === "tax_live_collect" ? 90000 : TIMEOUT_MS;
+  const privateQuery = name === "tax_query_collect" || name === "tax_query_compare";
+  const requestTimeoutMs = privateQuery ? 180000 : name === "tax_browser_open" ? 60000 : name === "tax_live_collect" ? 90000 : TIMEOUT_MS;
   let res;
   try {
     res = await fetch(url, {
@@ -72,6 +73,7 @@ export async function callBackend(name, args, catalog) {
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
   } catch (e) {
+    if (privateQuery) throw new BackendError("query_backend_unavailable", "固定查询后端不可用或超时", { tool: name });
     const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
     const reason = timedOut
       ? `请求超时（${requestTimeoutMs}ms）`
@@ -89,12 +91,14 @@ export async function callBackend(name, args, catalog) {
   try { data = text ? JSON.parse(text) : null; } catch { parsed = false; }
 
   if (!res.ok) {
+    if (privateQuery) throw new BackendError("query_backend_rejected", "固定查询后端拒绝请求", { tool: name, httpStatus: res.status });
     const code = (parsed && data && (data.error || data.code)) || `backend_http_${res.status}`;
     const message = (parsed && data && (data.message || data.error))
       || `后端返回 HTTP ${res.status}：${text.slice(0, 200)}`;
     throw new BackendError(code, message, parsed ? data : { raw: text.slice(0, 500) });
   }
   if (!parsed) {
+    if (privateQuery) throw new BackendError("query_backend_invalid_json", "固定查询后端响应格式错误", { tool: name });
     throw new BackendError(
       "backend_invalid_json",
       `后端返回非 JSON（HTTP ${res.status}）：${text.slice(0, 200)}`,
