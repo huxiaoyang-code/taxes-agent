@@ -14,6 +14,11 @@ import { FujianBrowserSessions } from "./tax-fujian-session.mjs";
 import { TaxBrowserError } from "./tax-browser-transport.mjs";
 import { TaxLiveCollection } from "./tax-live-collection.mjs";
 import { TaxHistoryCollection } from "./tax-history-collection.mjs";
+import {
+  CATALOG_SOURCE, catalogStats, entryDetail, getCatalogEntry, listModules, moduleStats, searchCatalog, validateParams,
+} from "./tax-api-catalog.mjs";
+import { aggregateOutcomes, classifyOutcome, OUTCOMES } from "./tax-api-catalog-classify.mjs";
+import { prepareCatalogCall } from "./tax-api-catalog-readiness.mjs";
 
 export class ToolError extends Error {
   constructor(code, message, details = null) {
@@ -219,8 +224,79 @@ function taxHandler(fn) {
   };
 }
 
+/**
+ * 把目录层/分类器层的纯函数错误归一成 ToolError，保留 code 供 MCP 客户端判定。
+ * 这些工具不发网络请求、不接受任意 URL，也不需要税务会话。
+ */
+function catalogHandler(fn) {
+  return (args) => {
+    try {
+      return fn(args ?? {});
+    } catch (e) {
+      if (e && typeof e.code === "string" && /^catalog_/.test(e.code)) throw new ToolError(e.code, e.message);
+      if (e && typeof e.code === "string" && /^classify_/.test(e.code)) throw new ToolError(e.code, e.message);
+      throw e;
+    }
+  };
+}
+
+/** 目录工具只接受固定字段：多余字段直接拒绝，且不回显未知键名。 */
+function rejectExtra(args, allowed) {
+  const extraCount = Object.keys(args).filter((key) => !allowed.includes(key)).length;
+  if (extraCount) {
+    throw Object.assign(new Error(`不接受未登记的参数（${extraCount} 项，未回显键名）`), { code: "catalog_filter_invalid" });
+  }
+}
+
 // ------------------------------------------------------------------ 已实现工具
 const HANDLERS = dict({
+  tax_api_catalog_modules: catalogHandler((args) => {
+    rejectExtra(args, ["moduleId"]);
+    const stats = catalogStats();
+    if (args.moduleId !== undefined) {
+      const detail = moduleStats(str(args.moduleId));
+      return { source: CATALOG_SOURCE, stats, module: detail.module, entries: detail.entries,
+        catalogManaged: true, liveCallVerified: false };
+    }
+    return { source: CATALOG_SOURCE, stats, modules: listModules(), catalogManaged: true, liveCallVerified: false };
+  }),
+  tax_api_catalog_search: catalogHandler((args) => searchCatalog(args)),
+  tax_api_catalog_entry: catalogHandler((args) => {
+    rejectExtra(args, ["id"]);
+    return { ...entryDetail(getCatalogEntry(str(args.id))), source: CATALOG_SOURCE };
+  }),
+  tax_api_catalog_validate: catalogHandler((args) => {
+    rejectExtra(args, ["id", "params"]);
+    return validateParams(str(args.id), args.params ?? {});
+  }),
+  tax_api_catalog_prepare: catalogHandler((args) => prepareCatalogCall(args, {
+    // 约定：resolver 必须同步返回布尔 true/false；返回 false 一律按“账套不存在”拒绝。
+    accountSetExists: (id) => { A.getAccountSet(id); return true; },
+  })),
+  tax_api_catalog_classify: catalogHandler((args) => {
+    rejectExtra(args, ["risk", "observation", "results"]);
+    const risk = str(args.risk) || "unknown";
+    const result = classifyOutcome(args.observation ?? {}, { risk });
+    if (args.results !== undefined) return { ...result, aggregate: aggregateOutcomes(args.results) };
+    return result;
+  }),
+  tax_api_catalog_outcomes: catalogHandler((args) => {
+    rejectExtra(args, []);
+    return {
+      outcomes: Object.entries(OUTCOMES).map(([id, label]) => ({ id, label })),
+      rules: [
+        "HTTP 200 不等于成功：需已解析、结构识别且业务码为成功族，且元数据不矛盾",
+        "零事件不等于空数据：空结果必须有显式无记录证据",
+        "单接口认证错误不判全局登录失效；本工具不提供全局会话推断（全局校验用既有 tax_session_verify）",
+        "重试能力与本次建议分开：只有只读瞬时传输失败且未用尽次数才建议重试",
+        "timeoutMs 为本地策略默认值，不是税局 SLA",
+      ],
+      globalSessionState: "unknown",
+      catalogManaged: true,
+      liveCallVerified: false,
+    };
+  }),
+
   tax_live_collect: (args) => taxLiveCollection.collect(args ?? {}),
   tax_live_compare: (args) => taxLiveCollection.compare(args ?? {}),
   tax_history_collect: (args) => taxHistoryCollection.collect(args ?? {}),
