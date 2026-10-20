@@ -182,6 +182,70 @@ const PLACEHOLDER_TOOLS = [
   ["finance_task_status", "查询财税任务状态（未实现：本地无异步任务系统，不能返回 completed）"],
 ].map(([name, description]) => unavailable(name, description));
 
+/**
+ * 接口目录（现成材料整理）。只做检索/校验/准备/分类，不发请求、不接受任意 URL，
+ * 不执行登录或写操作。catalogManaged=true 永远伴随 liveCallVerified=false：
+ * 目录已管理 ≠ 线上调用已验证。
+ */
+const CATALOG_TOOLS = [
+  available("tax_api_catalog_modules",
+    "列出已整理的税局接口目录模块与覆盖计数（模块数/条目数/方法/参数/响应/前置条件缺口计数/证据分布）。"
+    + "可传 moduleId 查看单模块条目。目录只收录现成分析报告明确列举的接口：29 模块 / 131 条，不代表全国/全站完整，也不代表报告自称的 200+ 端点已实现。",
+    obj({ moduleId: { type: "string", description: "可选：返回该模块的条目摘要列表" } }), "local"),
+  available("tax_api_catalog_search",
+    "分页检索接口目录（固定结构条件：module/service/method/risk/evidence/completeness/text + page/pageSize）。"
+    + "不接受任意 URL、源码或正则；结果始终标记 catalogManaged 与 liveCallVerified。",
+    obj({
+      module: { type: "string", description: "模块 id，见 tax_api_catalog_modules" },
+      service: { type: "string", enum: ["portal", "identity", "behavior", "service_desk"] },
+      method: { type: "string", enum: ["GET", "POST", "unknown"] },
+      risk: { type: "string", enum: ["read_only", "state_changing", "authentication", "unknown"] },
+      evidence: { type: "string", enum: ["observed", "static", "inferred", "unknown"] },
+      completeness: { type: "string", enum: ["full_contract", "method_and_params_documented", "method_and_response_documented",
+        "method_documented", "params_documented", "path_only", "unknown"],
+        description: "契约完整度：full_contract 需路径+方法+参数+响应+前置条件均有证据，当前目录为 0 条" },
+      text: { type: "string", description: "1..64 字符关键词（id/用途/路径/模块名子串，不接受 URL）" },
+      page: { type: "integer", description: "1..1000，缺省 1" },
+      pageSize: { type: "integer", description: "1..50，缺省 20" },
+    }), "local"),
+  available("tax_api_catalog_entry",
+    "读取单个接口的合同详情：方法、静态路径模板、参数（键/类型/必填/来源）、身份/企业/权限依赖、"
+    + "响应与错误约定、分页/下载依赖、操作风险、证据类别与报告行号。未载明的字段明确标 unknown。",
+    obj({ id: { type: "string", description: "目录接口 id（tax_api_catalog_search 返回）" } }, ["id"]), "local"),
+  available("tax_api_catalog_validate",
+    "只校验准备发送的参数是否落在目录已载明的合同内（必填/类型/未知字段/凭据与运行时地址拒绝）。"
+    + "含凭据/会话/授权码类参数只登记依赖，不接受参数值；字段位置不回显任意键名。"
+    + "通过校验不代表该企业可用或调用会成功；contractVerified=false 时“无问题”仅表示没有可对照合同。",
+    obj({
+      id: { type: "string" },
+      params: { type: "object", description: "待校验参数（键值不可含凭据、令牌或运行时完整地址）" },
+    }, ["id"]), "local"),
+  available("tax_api_catalog_prepare",
+    "调用准备检查：校验参数、账号/企业/期间引用与权限声明，返回 not_ready / blocked_by_policy / "
+    + "contract_ready_adapter_missing 与具体缺项。不连接税局、不实现代理、不伪造请求；登录与写接口一律阻断。"
+    + "引用与权限只做格式校验：不核实企业归属、会话有效性或权限授予（unverified）。",
+    obj({
+      id: { type: "string" },
+      params: { type: "object" },
+      context: {
+        type: "object",
+        description: "接入上下文引用（仅格式校验、均未核实）：{accountSetId?(严格正整数), enterpriseRef?, loginSessionRef?, period?, permissions?, operatorConfirmed?}",
+      },
+    }, ["id"]), "local"),
+  available("tax_api_catalog_classify",
+    "按证据分类一次调用的结果：未发出 / 传输超时 / 传输失败 / 已收待解析 / 认证要求 / 明确无权限 / "
+    + "业务空结果 / 成功 / 结构不识别 / 业务错误。只接受安全观察摘要（布尔/计数/枚举，严格校验类型与范围，"
+    + "矛盾元数据判 structure_unrecognized），不接受也不返回响应体或错误原文。本工具不推断全局登录状态（恒为 unknown），"
+    + "真实全局会话校验使用既有 tax_session_verify。timeoutMs 为本地策略默认值，不是税局 SLA。",
+    obj({
+      risk: { type: "string", enum: ["read_only", "state_changing", "authentication", "unknown"], description: "来自目录条目的操作风险，决定超时阈值与重试能力" },
+      observation: { type: "object", description: "安全观察摘要；未知字段会被拒绝" },
+      results: { type: "array", description: "可选：多个已分类结果的汇总（只计数，不出全局会话结论）" },
+    }), "local"),
+  available("tax_api_catalog_outcomes",
+    "列出结果分类枚举与分类规则（供 Agent 解释结论口径）。", obj({}), "local"),
+];
+
 /** 纯本地工具（不经后端）。 */
 const LOCAL_TOOLS = [
   available("finance_query_catalog", "列出财务查询能力：items 为原站契约原文，capabilities 标注本地真实支持状态。", obj({}), "local"),
@@ -190,11 +254,14 @@ const LOCAL_TOOLS = [
     obj({ resource: { type: "string", description: "Skill 相对路径，例如 bookkeeping/SKILL.md" } }, ["resource"]), "local"),
 ];
 
-export const TOOLS = [...LOCAL_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS];
+export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS];
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 /** 本地自己处理、不转发后端的工具。 */
 export const LOCAL_ONLY = new Set(["finance_query_catalog", "skills_list", "skills_read"]);
+
+/** 目录工具必须走后端（server/agent-tools.mjs 的执行层），这里显式登记以禁止本地伪实现。 */
+export const CATALOG_TOOL_NAMES = CATALOG_TOOLS.map((t) => t.name);
 
 // ---------------------------------------------------------------- 查询能力可用性
 /**

@@ -46,6 +46,9 @@ const steps = [
   { name: "tax-history-mcp", file: join(MCP, "tax-history-test.mjs"), cwd: MCP },
   { name: "tax-browser-session-mcp", file: join(MCP, "tax-browser-session-test.mjs"), cwd: MCP },
   { name: "tax-preparation", file: join(WORKBENCH, "test", "tax-preparation.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-api-catalog", file: join(WORKBENCH, "test", "tax-api-catalog.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-api-catalog-http", file: join(WORKBENCH, "test", "tax-api-catalog-http.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-api-catalog-mcp", file: join(MCP, "tax-api-catalog-test.mjs"), cwd: MCP },
   { name: "tax-acquisition-mcp", file: join(MCP, "tax-acquisition-test.mjs"), cwd: MCP },
   { name: "server-local-boundary", file: join(WORKBENCH, "test", "server-local-boundary.test.mjs"), cwd: WORKBENCH },
 ];
