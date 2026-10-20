@@ -59,7 +59,8 @@ export async function callBackend(name, args, catalog) {
   const url = `${API_BASE}/agent/tools/${encodeURIComponent(name)}`;
   // ACL verification + dedicated Edge startup + CDP connect are bounded but
   // can exceed the ordinary 15 s request budget. Repeating open is idempotent.
-  const requestTimeoutMs = name === "tax_browser_open" ? 60000 : name === "tax_live_collect" ? 90000 : TIMEOUT_MS;
+  const historyTool = ["tax_history_collect", "tax_history_compare"].includes(name);
+  const requestTimeoutMs = historyTool ? 180000 : name === "tax_browser_open" ? 60000 : name === "tax_live_collect" ? 90000 : TIMEOUT_MS;
   let res;
   try {
     res = await fetch(url, {
@@ -72,6 +73,7 @@ export async function callBackend(name, args, catalog) {
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
   } catch (e) {
+    if (historyTool) throw new BackendError("history_backend_unavailable", "历史查询后端暂不可用");
     const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
     const reason = timedOut
       ? `请求超时（${requestTimeoutMs}ms）`
@@ -83,18 +85,24 @@ export async function callBackend(name, args, catalog) {
     );
   }
 
-  const text = await res.text();
+  let text;
+  try { text = await res.text(); } catch (error) {
+    if (historyTool) throw new BackendError("history_backend_response_unconfirmed", "历史查询后端响应未确认");
+    throw error;
+  }
   let data = null;
   let parsed = true;
   try { data = text ? JSON.parse(text) : null; } catch { parsed = false; }
 
   if (!res.ok) {
+    if (historyTool) throw new BackendError("history_backend_failed", "历史查询后端失败");
     const code = (parsed && data && (data.error || data.code)) || `backend_http_${res.status}`;
     const message = (parsed && data && (data.message || data.error))
       || `后端返回 HTTP ${res.status}：${text.slice(0, 200)}`;
     throw new BackendError(code, message, parsed ? data : { raw: text.slice(0, 500) });
   }
   if (!parsed) {
+    if (historyTool) throw new BackendError("history_backend_invalid_json", "历史查询后端响应无效");
     throw new BackendError(
       "backend_invalid_json",
       `后端返回非 JSON（HTTP ${res.status}）：${text.slice(0, 200)}`,
