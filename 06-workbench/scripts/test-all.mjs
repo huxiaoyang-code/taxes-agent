@@ -29,6 +29,19 @@ const steps = [
   { name: "tax-collection-recovery", file: join(WORKBENCH, "test", "tax-collection-recovery.test.mjs"), cwd: WORKBENCH },
   { name: "tax-readonly-abandon", file: join(WORKBENCH, "test", "tax-readonly-abandon.test.mjs"), cwd: WORKBENCH },
   { name: "tax-readonly-abandon-guard", file: join(WORKBENCH, "test", "tax-readonly-abandon-guard.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-static", file: join(WORKBENCH, "test", "tax-download-static.test.mjs"), cwd: WORKBENCH, nodeArgs: ["--expose-internals"] },
+  { name: "tax-download-contract-shape", file: join(WORKBENCH, "test", "tax-download-contract-shape.test.mjs"), cwd: WORKBENCH, nodeArgs: ["--expose-internals"] },
+  { name: "tax-download-menu", file: join(WORKBENCH, "test", "tax-download-menu.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-navigation", file: join(WORKBENCH, "test", "tax-download-navigation.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-retirement", file: join(WORKBENCH, "test", "tax-download-retirement.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-page", file: join(WORKBENCH, "test", "tax-download-page.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-page-cli", file: join(WORKBENCH, "test", "tax-download-page-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-snapshot", file: join(WORKBENCH, "test", "tax-download-snapshot.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-financial-passive", file: join(WORKBENCH, "test", "tax-download-financial-passive.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-download-invoice-observer", file: join(WORKBENCH, "test", "tax-download-invoice-observer.test.mjs"), cwd: WORKBENCH },
+  { name: "observe-tax-navigation-cleanup", file: join(WORKBENCH, "test", "observe-tax-navigation-cleanup.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-navigation-recovery-chain", file: join(WORKBENCH, "test", "tax-navigation-recovery-chain.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-portal-bootstrap", file: join(WORKBENCH, "test", "tax-portal-bootstrap.test.mjs"), cwd: WORKBENCH },
   { name: "tax-live-collection-mcp", file: join(MCP, "tax-live-collection-test.mjs"), cwd: MCP },
   { name: "tax-history-mcp", file: join(MCP, "tax-history-test.mjs"), cwd: MCP },
   { name: "tax-browser-session-mcp", file: join(MCP, "tax-browser-session-test.mjs"), cwd: MCP },
@@ -44,7 +57,7 @@ for (const step of steps) {
     results.push({ name: step.name, status: 1 });
     continue;
   }
-  const r = spawnSync(process.execPath, [step.file], { stdio: "inherit", cwd: step.cwd });
+  const r = spawnSync(process.execPath, [...(step.nodeArgs || []), step.file], { stdio: "inherit", cwd: step.cwd });
   if (r.error) console.error(`启动失败：${r.error.message}`);
   results.push({ name: step.name, status: r.status ?? 1 });
 }
