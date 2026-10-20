@@ -8,7 +8,7 @@
 
 **该财报接口返回一份 57 字节认证错误；用户确认手动刷新后浏览器仍登录，现按用户要求暂停财报分支，不等待重登、不再财报重试。** 财报业务列表成功 0、新财报 MCP 独立 replay 0、官网文件下载成功 0。优先发票、历史申报、税种认定，财报不是其他取数前置；不因此推导企业财报适用规则。当前新发现均 `quarantined_unverified / enterpriseBinding=false / consumable=false`，不算完整 M2 或解除 preparation / downstreamReady 阻断。真实摘要由 root 提供，实施不读取私有材料。
 
-最新门户重建实际 fresh 3 / 完成、企业匹配，登录有效；发票入口、私有脚本快照及被动 observer 均已实测。**两个 120 秒 / 180 秒 armed 窗的事件、metadata、body 均 0，现已全部停止。** 用户尚未确认是否查询或页面结果，root 已询问，不能推断用户未操作 / 官网无数据 / 登录失效；当前没有监听，不能让用户直接查询期待被捕获。本轮完成的是查询 / 下载探索支撑，真实发票 query → 原件下载 → 后端 MCP 独立复采仍未证实。
+最新门户重建实际 fresh 3 / 完成、企业匹配，登录有效；发票入口、私有脚本快照及被动 observer 均已实测。**两个 120 秒 / 180 秒 armed 窗的事件、metadata、body 均 0，现已全部停止。** 用户最新确认已手动点击查询但没有结果，空结果或报错尚未区分，计划明天问老会计、今天到此为止；不推断点击发生于上述窗口，也不确认官网无数据 / 接口损坏 / 登录失效。当前停止探索，不请求或重开监听。本轮完成的是查询 / 下载探索支撑，真实发票 query → 原件下载 → 后端 MCP 独立复采仍未证实。
 
 ## 证据阶段与接口目录
 
@@ -40,7 +40,7 @@
 | 最新 opt-in 门户重建 | C81 经独审 / root **63 / 63** 后真实 openPortal sourceCreated / runCreated，attempted / settled / performed / complete 各 3、unknown false / 企业匹配 true；main 1 / clear 2 / within 0、cleanup true / 无锁 | 正常固定门户导航与 fresh 3 证明当前登录有效；没有恢复旧 history context，也不把源身份绑定扩大到跨域发票发现 |
 | 发票脚本快照与离线分析 | 较早快照 4 / 5 份、2,818,411B；刷新当前文档快照后最新 captured 7 / eligible 9、4,034,109B、scriptEvents 44 / rejected 35 / budgetSkipped 2，scope / cleanup true / 无锁。A16D 最新本机离线 7 sources + 38 focused functions、parse failure 0 | 均为部分资产，原 JS 仅 ACL；旧分析部分 AST limit，不能据静态集合推完整调用链或发票业务成功 |
 | observer 前置失败与重建 | 已独审 / root 37 项通过。先两次未 armed，第一次无诊断；第二次固定 guard 投影 TargetURLmatchesSnapshot false、FrameTree 未读；均零业务、cleanup true / 无锁。随后重建上述当前 snapshot | 不能把前置 scope 拒绝当用户没查询、无数据或登录失效，不复用失配快照 |
-| observer 两个真实窗 | 120 秒和 180 秒均 armed、scopeStable / 全部 scope 布尔 true；事件 / metadata / bodies 全 0，cleanup true / 无锁。窗口现已全停 | 用户 manual state 回复 pending；未证明发生有效 query，也不能证明未操作 / 无数据 / 失效。不追加主动请求或认证链重放 |
+| observer 两个真实窗 | 120 秒和 180 秒均 armed、scopeStable / 全部 scope 布尔 true；事件 / metadata / bodies 全 0，cleanup true / 无锁。窗口现已全停 | 用户已手动点查询但无结果，空或报错未区分；点击与这两个窗的时间关系未知，零事件事实不变，不确认官网无数据 / 接口坏 / 登录失效。今天停止，不请求 / 重开窗 |
 | 验证入口 | 上一版本 40 / 40 全量通过。41 组首跑 40 组通过，旧 tax-browser-session-mcp 的 lost-response 模拟子 Node 异常退出 3221226505；未改实现或测试，定向重跑 4 / 4 通过。root 随后全 41 组重试 exit 0、41 / 41 全部通过 | 不删测试 / 不据一次子进程退出猜根因；observer 37 / bootstrap 63 的独审与 root 合成不代替全量最终结果或发票业务成功 |
 
 ## 本机管理员页面探索命令
@@ -77,6 +77,6 @@ node scripts/bootstrap-tax-portal-source.mjs --registration-ref "<LOCAL_REGISTRA
 
 原导航锁已 operator-attested 严格退役，旧 parent / context / template / runs 永久禁止消费；requestTermination 仍 unknown / realmDestructionProven false / lateSessionEffectsPossible true。settled / not-performed 0 是 root 联合推断，非原输出或 loaded-code-bytes 证明。latest-scope 守卫已修正；root 旧四进程存活、旧 19 文件保留，不记 PID / 私有引用，不据此复用旧 scope。详见[交接](handoffs/TAX-DOWNLOAD-EXPLORATION.md)。
 
-财报继续按用户要求暂停，不推适用规则；优先发票 / 历史申报 / 税种认定。当前 observer 窗口已全停，root 已问用户是否未点、已有结果或空 / 错误，尚无回复；不替用户作答。收到 manual state 后，先核当前文档 / 快照、按需重建匹配作用域，再 armed 新窗，才安排窗内人工查询，不自动点击或重放认证链，不恢复旧 history context。
+财报继续按用户要求暂停，不推适用规则；优先发票 / 历史申报 / 税种认定。用户已确认手动查询但无结果，空结果或报错未区分；今天停止探索，明天拟问老会计，当前只收尾交接 PR，不请求 / 重开记录窗。下一次必须用户明确继续，之后先核当前文档 / 快照作用域并确认 armed，才安排窗内人工查询；不自动点击或重放认证链，不恢复旧 history context。
 
-本轮仅完成查询 / 下载探索支撑候审，root 全 41 组重试已 exit 0、41 / 41 通过；本轮支撑文档冻结候审，尚无新 PR。等待用户答复期间可提交、审核合并支撑 PR，总专项目标继续，不声称下载链完成。内部待办为：捕获真实发票 query 与响应、核详情 / 官网原件与完整保存、后端 MCP 独立 fresh 复采。技术缺口不转企业补资料；业务下载 / 新 MCP query repeat 均 0，不关闭 / 重启，不扩会计实现。
+本轮仅完成查询 / 下载探索支撑候审，root 全 41 组重试已 exit 0、41 / 41 通过；本轮支撑文档冻结候审，[PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；代码已独审，用户今日停止事实的文档仍待最终 head 审查。按用户要求只收尾支撑 PR 的提交 / 审核流程，总专项目标继续，不声称下载链完成。内部待办为：捕获真实发票 query 与响应、核详情 / 官网原件与完整保存、后端 MCP 独立 fresh 复采。技术缺口不转企业补资料；业务下载 / 新 MCP query repeat 均 0，不关闭 / 重启，不扩会计实现。

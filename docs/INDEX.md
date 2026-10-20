@@ -1,6 +1,6 @@
 # 代码管理索引 · CODE INDEX
 
-> **2026-10-21 当前：[税局下载探索](TAX-DOWNLOAD-EXPLORATION.md)** · [任务](tasks/TAX-DOWNLOAD-EXPLORATION.md) · [交接 / 命令](handoffs/TAX-DOWNLOAD-EXPLORATION.md)。本轮仅完成查询 / 下载探索支撑候审。财报按用户要求暂停；新门户 fresh 3 / 企业匹配已实测，发票已正常跳转，但只有脚本 / 认证 metadata，未识别列表 query。最新私有 snapshot 7 / 9 份、4,034,109B；observer 已独审 + root 37 项，120s / 180s 两个真实窗均 armed / scopeStable / 全 scope 布尔 true，事件 / metadata / bodies 0、cleanup true / 无锁，窗口现全停。用户是否查询 / 结果 pending，不判未操作 / 无数据 / 失效；须先重核匹配 scope / snapshot、armed 新窗，再安排窗内人工 query。41 组首跑 40 过、旧 MCP lost-response 模拟子 Node 异常，无改定向 4 / 4 过；root 随后全 41 组重试 exit 0、41 / 41 全过；本轮支撑交付冻结候审，尚无新 PR。 业务下载 / 新 MCP repeat 0；可先交支撑 PR，总专项继续，不转企业补资料。下方历史保留原时点。
+> **2026-10-21 当前：[税局下载探索](TAX-DOWNLOAD-EXPLORATION.md)** · [任务](tasks/TAX-DOWNLOAD-EXPLORATION.md) · [交接 / 命令](handoffs/TAX-DOWNLOAD-EXPLORATION.md)。本轮仅完成查询 / 下载探索支撑候审。财报按用户要求暂停；新门户 fresh 3 / 企业匹配已实测，发票已正常跳转，但只有脚本 / 认证 metadata，未识别列表 query。最新私有 snapshot 7 / 9 份、4,034,109B；observer 已独审 + root 37 项，120s / 180s 两个真实窗均 armed / scopeStable / 全 scope 布尔 true，事件 / metadata / bodies 0、cleanup true / 无锁，窗口现全停。用户已手动查询无结果，空或报错未区分，不推点击在记录窗内，不确认官网无数据 / 接口坏 / 登录失效。今天停止探索、仅收尾交接 PR，不请求 / 重开窗；下次须用户明确继续，再核 scope / snapshot + armed 后人工查询。41 组首跑 40 过、旧 MCP lost-response 模拟子 Node 异常，无改定向 4 / 4 过；root 随后全 41 组重试 exit 0、41 / 41 全过；本轮支撑交付冻结候审，[PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；代码已独审，用户今日停止事实的文档仍待最终 head 审查。 业务下载 / 新 MCP repeat 0；可先交支撑 PR，总专项继续，不转企业补资料。下方历史保留原时点。
 
 > 本文件是仓库的**唯一索引入口**：先看这里，再进具体目录。
 > 维护约定：新增/移动模块、改变入口或命令时，**必须同步更新本文件**。

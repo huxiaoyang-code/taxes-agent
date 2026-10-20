@@ -6,7 +6,7 @@
 
 只探索税局数据、往期资料与本机分析及复用命令，不建账、不问月份。root 独占真实会话与 Git，实施只用安全源码 / 合成 / 安全摘要。**财报接口返回 57B 认证错误，用户确认手动刷新后浏览器仍登录，现按要求暂停财报，不等待重登、不再本分支重试。** 列表成功 0 / 下载 0 / 新财报 replay 0，全部新发现隔离不可消费；优先发票 / 历史申报 / 税种认定，财报不当前置，不推导财报适用企业规则。
 
-新门户 fresh 3 / 企业匹配已实测；已进发票入口，15 条 metadata 只有脚本 / 认证相关请求，未识别发票列表 query。最新 7 份当前脚本仅本机；observer 已独审 + root 37 项，120 秒 / 180 秒两个真实窗均 armed / scopeStable / 全 scope 布尔 true，但事件 / metadata / bodies 0，cleanup true / 无锁，现已全停。用户未确认 query 或页面结果，root 询问 pending，不判未操作 / 无数据 / 失效。支撑包可先候审，不代表业务链完成。
+新门户 fresh 3 / 企业匹配已实测；已进发票入口，15 条 metadata 只有脚本 / 认证相关请求，未识别发票列表 query。最新 7 份当前脚本仅本机；observer 已独审 + root 37 项，120 秒 / 180 秒两个真实窗均 armed / scopeStable / 全 scope 布尔 true，但事件 / metadata / bodies 0，cleanup true / 无锁，现已全停。用户最新确认已手动点击查询但没有结果，空结果或报错未区分；不推点击发生在这两个窗内，不确认官网无数据 / 接口坏 / 登录失效。用户计划明天问老会计，今天停止探索，仅收尾交接 PR，不请求 / 重开窗。支撑包可先候审，不代表业务链完成。
 
 | 恢复对象 | 已核事实 | 约束 |
 |---|---|---|
@@ -27,7 +27,7 @@
 | 发票正常导航 | 2181 实际一次 nav ACK，前身份 1 complete / unknown 0；95 事件 / 15 主 frame metadata、auth 8 / external 61 / redirect 3 / subframe 0，body / scripts 0；scope_changed / artifact 私有保存、cleanup true / 无锁 | 只有 scripts、重复 POST getPublicKey 与 GET getNewEtaxFlag HTTP 200，未观察发票列表 query，不认开票能力 / 不重放认证链 |
 | 发票当前快照 / 静态 | 较早 4 / 5 份、2,818,411B；重建当前文档后最新 captured 7 / eligible 9、4,034,109B，scriptEvents 44 / rejected 35 / budgetSkipped 2、scope / cleanup true / 无锁。A16D 最新本机 7 sources + 38 focused funcs、parse fail 0 | 部分资产 / 静态候选，不证明完整调用链；原 JS 只 ACL |
 | observer 前置失败 | 两次未 armed；第一次无诊断，第二次 root 固定 guard 投影 TargetURLmatchesSnapshot false / FrameTree 未读，均零业务 / cleanup true / 无锁；随后重建当前 snapshot | 不复用失配快照，不推登录失效 / 数据空；不补猜第一次失败原因 |
-| observer 两真实窗 | 准确字节独审 / root 37 项后，120 秒和 180 秒均 armed / scopeStable / 全 scope 布尔 true，事件 / metadata / bodies 0、cleanup true / 无锁，窗口全停 | 用户 query / 结果未确认，已问未点 / 有结果 / 空错，pending；不能根据零事件断言其未操作 / 无数据 / 登录失效 |
+| observer 两真实窗 | 准确字节独审 / root 37 项后，120 秒和 180 秒均 armed / scopeStable / 全 scope 布尔 true，事件 / metadata / bodies 0、cleanup true / 无锁，窗口全停 | 用户已查询但无结果，空或报错未区分；点击是否在窗内未知，零事件不变，不据此确认官网无数据 / 接口坏 / 登录失效。今天停止，不重开窗 |
 | 验证入口 | 上一版本 40 / 40 通过。41 组首跑旧 tax-browser-session-mcp lost-response 模拟子 Node 退出 3221226505，其余 40 组过；无改动定向 4 / 4 通过，root 全 41 组重试 exit 0、41 / 41 通过 | 不删测试 / 改实现 / 预写通过，不据子进程退出猜根因。仅 static / contract-shape 用 `--expose-internals`；业务下载 / 新 query repeat 仍 0 |
 
 REA 原脚本输出及完整 prefix 输出均自动审批拒绝，未执行、不重试该目的地。安全替代只在本机 ACL 文件离线 AST，再投影已审技术结构；不输出原 JS / 值 / prefix，不从脱敏 shape 拼 URL。原静态版本实测事实保留，不用新字节回填旧证据。
@@ -40,10 +40,10 @@ page / snapshot / financial-passive / invoice-observer 前置及占位集中在[
 
 1. 保留用户浏览器、旧四进程与旧 19 文件；旧链永久禁用不逆转，不手动清锁、不盲目重导航。
 2. 用户已确认仍登录，财报暂停；不等待重登、不把此接口认证错误推全局登录失效或财报适用规则。当前优先发票 / 历史申报 / 税种认定。
-3. 用户是否 query / 页面结果仍 pending；两个窗都已停止，不能直接让用户查询而没有监听。收到 manual state 后，root 重核当前 scope、必要时重建匹配快照，armed 新窗后再安排用户窗内 query。不得自动点击 / 主动 API / 导航 / Runtime，不重放 getPublicKey、不恢复旧 history context。
+3. 用户已手动点查询但无结果，空或报错未区分；今天停止，计划明天问老会计。两个窗均已停止，不再请求 / 重开。下次只在用户明确继续后，root 先核当前 scope / 匹配快照、确认 armed，再安排窗内人工 query。不得自动点击 / 主动 API / 导航 / Runtime，不重放 getPublicKey、不恢复旧 history context。
 4. 原件校验类型 / 完整度 / 企业期间来源并私有持久化后才计下载。继续不建账、不问月份，技术失败不转企业补交。
-5. root 最终全 41 组重试 exit 0、41 / 41 通过，本轮支撑交付冻结候审、尚无新 PR；用户若仍未答复，不必阻塞支撑交付，但总专项继续。内部待办是真实 invoice query → 下载完整保存 → backend MCP 独立 fresh 复采，不能转企业补资料；不预写 PR / 合并 / 业务成功。
+5. root 最终全 41 组重试 exit 0、41 / 41 通过，本轮支撑交付冻结候审、[PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；代码已独审，用户今日停止事实的文档仍待最终 head 审查；按用户要求今天停止探索，仅收尾支撑 PR，[PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；代码已独审，用户今日停止事实的文档仍待最终 head 审查；总专项未完成，后续须用户明确继续。内部待办是真实 invoice query → 下载完整保存 → backend MCP 独立 fresh 复采，不能转企业补资料；不预写 PR / 合并 / 业务成功。
 
 ## 新会话提示词
 
-> 2026-10-21当前支撑包候审，总专项未完。财报按用户暂停，57B仅接口认证错误，不推浏览器全局失效/适用企业规则。C81 fresh3全完成/企业匹配、source+run创建，无锁；2181 invoice navACK有15条脚本/认证metadata，无已识别列表query，不重放getPublicKey。最新1026当前snapshot7/eligible9、4034109B、44events/35reject/2budgetskip、scope/cleanuptrue无锁；A16D离线7sources+38focused/parsefail0。observer3454已独审/root37过；两次未armed后重建当前snapshot，再120s+180s窗均armed/scopeStable/全scopebooltrue，事件metadata/bodies0、cleanuptrue无锁，现全停。用户是否query/有结果/空错pending，不能推未操作/无数据/登录失效，当前无监听不要直接让用户点；先核scope/快照并armed新窗后再人工query。41首跑40过、旧MCP lostresponse模拟子Node退出3221226505，无修改定向4/4过，root全41重试exit0/41组全过、支撑包冻结候审尚无新PR。可先交支撑PR审合，总目标继续，内部待办真实query→下载→后端MCP fresh复采，下载/新repeat0，不转企业补资料。旧链永禁消费/旧四进程19保留，不恢复旧historycontext；不建账问月份/自动click/重启，rawJS/值/prefix只本机。
+> 2026-10-21当前支撑包候审，总专项未完。财报按用户暂停，57B仅接口认证错误，不推浏览器全局失效/适用企业规则。C81 fresh3全完成/企业匹配、source+run创建，无锁；2181 invoice navACK有15条脚本/认证metadata，无已识别列表query，不重放getPublicKey。最新1026当前snapshot7/eligible9、4034109B、44events/35reject/2budgetskip、scope/cleanuptrue无锁；A16D离线7sources+38focused/parsefail0。observer3454已独审/root37过；两次未armed后重建当前snapshot，再120s+180s窗均armed/scopeStable/全scopebooltrue，事件metadata/bodies0、cleanuptrue无锁，现全停。用户已手动点query但无结果，空或报错未区分，不推点击在上述窗内，不确认官网无数据/接口坏/登录失效。用户计划明天问老会计、今天停止，只收尾交接PR，不请求/重开窗；下次用户明确继续后先核scope/快照+armed再人工query。41首跑40过、旧MCP lostresponse模拟子Node退出3221226505，无修改定向4/4过，root全41重试exit0/41组全过、支撑包冻结候审[PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40)已创建开放候审，代码已独审、停止事实文档待最终head审。可先交支撑PR审合，总目标继续，内部待办真实query→下载→后端MCP fresh复采，下载/新repeat0，不转企业补资料。旧链永禁消费/旧四进程19保留，不恢复旧historycontext；不建账问月份/自动click/重启，rawJS/值/prefix只本机。
