@@ -24,6 +24,8 @@ const steps = [
   { name: "tax-browser-diagnostic", file: join(WORKBENCH, "test", "tax-browser-diagnostic.test.mjs"), cwd: WORKBENCH },
   { name: "tax-collection-observation", file: join(WORKBENCH, "test", "tax-collection-observation.test.mjs"), cwd: WORKBENCH },
   { name: "tax-live-collection-integration", file: join(WORKBENCH, "test", "tax-live-collection-integration.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-query-collection", file: join(WORKBENCH, "test", "tax-query-collection.test.mjs"), cwd: WORKBENCH },
+  { name: "tax-query-collection-mcp", file: join(MCP, "tax-query-collection-test.mjs"), cwd: MCP },
   { name: "tax-filing-period", file: join(WORKBENCH, "test", "tax-filing-period.test.mjs"), cwd: WORKBENCH },
   { name: "tax-collection-recovery", file: join(WORKBENCH, "test", "tax-collection-recovery.test.mjs"), cwd: WORKBENCH },
   { name: "tax-readonly-abandon", file: join(WORKBENCH, "test", "tax-readonly-abandon.test.mjs"), cwd: WORKBENCH },

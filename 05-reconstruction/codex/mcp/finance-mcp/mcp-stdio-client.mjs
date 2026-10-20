@@ -67,11 +67,13 @@ export class McpStdioClient {
   rpc(method, params = {}) {
     if (!this.child || this.exited) return Promise.reject(new Error("mcp_not_running"));
     const id = this.nextId++;
+    const requestTimeoutMs = method === "tools/call" && ["tax_query_collect", "tax_query_compare"].includes(params?.name)
+      ? Math.max(this.timeoutMs, 210000) : this.timeoutMs;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`mcp_timeout: ${method} 超过 ${this.timeoutMs}ms 未响应`));
-      }, this.timeoutMs);
+        reject(new Error(`mcp_timeout: ${method} 超过 ${requestTimeoutMs}ms 未响应`));
+      }, requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     });

@@ -25,6 +25,10 @@ const available = (name, description, inputSchema) =>
   ({ name, description, inputSchema, status: "available", origin: "local" });
 
 export const TAX_TOOLS = [
+  available("tax_query_collect", "从本机管理员新建的独立查询上下文，重新请求三个已观察企业查询资源并前后核验身份。仅返回计数、绑定状态和私有运行引用，不返回企业原值；不导航，期间及完整业务覆盖仍未验证。",
+    {...obj({contextRef:{type:"string",pattern:"^taxquerycontext_[a-f0-9]{48}$"}},["contextRef"]),additionalProperties:false}),
+  available("tax_query_compare", "本机比较同一查询上下文两次独立实际请求的企业资料投影和分页计数，仅返回相等布尔；空所得税核定列表不证明没有税务义务。",
+    {...obj({leftRef:{type:"string",pattern:"^taxqueryrun_[a-f0-9]{48}$"},rightRef:{type:"string",pattern:"^taxqueryrun_[a-f0-9]{48}$"}},["leftRef","rightRef"]),additionalProperties:false}),
   available("tax_live_collect", "按本机管理员新导航形成的sourceRef重复只读采集当前企业上下文与当前申报清单，仅返回安全引用、企业一致性与部分覆盖。默认关闭；期间仍待核实。",
     {...obj({sourceRef:{type:"string",pattern:"^taxsource_[a-f0-9]{48}$"}},["sourceRef"]),additionalProperties:false}),
   available("tax_live_compare", "本机比较两次只读采集的白名单投影，只返回企业相等、清单相等及覆盖状态，不返回业务原值。",
