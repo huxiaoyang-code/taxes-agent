@@ -2,6 +2,8 @@ import {IDENTITY_FIELDS,FILING_FIELDS,PASSIVE_RECIPES} from './tax-collection-sh
 import {FULL_FRAME_URL_SEMANTICS} from './tax-frame-url.mjs';
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v,keys)=>object(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
+// Allow subsets so historical evidence retains its original missing fields. The
+// expanded private business whitelist never fills or upgrades old projections.
 const scalarFields=(v,allowed)=>object(v)&&Object.keys(v).every(k=>allowed.includes(k)&&typeof v[k]==='string'&&v[k].length<=4096);
 const opaque=v=>typeof v==='string'&&v.length>0&&v.length<=256;
 const fail=()=>{throw new Error('tax_collection_evidence_invalid')};

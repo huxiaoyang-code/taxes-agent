@@ -1,36 +1,42 @@
 # 当前企业与待办期间的真实采集契约
 
-> **2026-10-20 当前包：[TAX-READONLY-ABANDON](tasks/TAX-READONLY-ABANDON.md)** · [交接](handoffs/TAX-READONLY-ABANDON.md)。以 PR #32 为基线，admin-only 固定只读旧操作永久放弃能力已通过独立 37 / 37 与管理者最终 `npm test` 25 / 25 套；真实默认诊断及显式 execute 成功，`abandoned_readonly / finished`、`lockRetired = true`，所有 cleanup confirmed。其语义仍为 `unknown_abandoned`，不证明请求或 realm 终止。重新登录后的新 v2 source 已成功 4 passive + 1 active identity-after，现有 MCP stdio → HTTP → Agent → 后端两次各 3 新请求 / 3 完整响应、各 6 行、无保留锁，完整 URL v2 / `documentScopeVerified = true`，身份 / 企业 / filing 投影一致且 `independentRequests = true`。仅验证身份 / 门户申报列表，业务期间 / 完整资料仍缺，整个业务专项未完成；业务候选 prepare 已完成 3 固定只读请求，6 行全为 branch_unverified，候选 / 导航均 0、lockRetained false；具体字段缺口正按官方消费者定位，未取得所属期 / 业务页。下文 PR #29 v1 结果只作退出前历史。完整候选 head / PR 仍由 root 收尾，不预填未知提交。
+> **2026-10-20 当前包：[TAX-BUSINESS-COLLECTION](tasks/TAX-BUSINESS-COLLECTION.md)** · [交接](handoffs/TAX-BUSINESS-COLLECTION.md)。基于已合并 PR #33，私有已申报期间 / 基础企业字段及严格零时间格式修复已验收，root 完整 26 / 26 套、独立原 54 + 增量 45 项通过，最终两轮真实 MCP 成功；已进入纳税人信息查询页，业务数据捕获不足，当前待办期间、完整企业档案和业务字段仍未完成。下方 PR #29 原解析与门户结果按历史阅读，不能覆盖本节新发现。
 
-完整 URL P1 已随 [PR #31](https://github.com/huxiaoyang-code/youshu-fork/pull/31) 合并，PR #32 已补交接；提交与验收见[完整 URL 交接](handoffs/TAX-FULL-URL-BINDING.md)及[当前交接](handoffs/TAX-READONLY-ABANDON.md)。CDP `Frame.url` 不含 fragment，旧 `documentScopeVerified = true` 不保证完整 URL，也不证明现场曾切换；v2 新 save 与 fetch 前绑定要求继续有效。
+## 当前证据与范围
 
-核心“门户契约 + 真实复采”已随 [PR #29](https://github.com/huxiaoyang-code/youshu-fork/pull/29) 于北京时间 **2026-10-20 13:44:12**（UTC `2026-10-20T05:44:12Z`）合并。最终 head `c1d663a7b107f8538e01100a37c0b1102b9c02aa`，merge `bdc6e9a1c26835889d873ea0af1c57ac35d292ce`；管理者已 fetch 核对，最终独立审查与 head 一致性核对通过。
+用户关闭旧浏览器后明确要求再次启动后端浏览器并已登录；root 通过既有后端 open / 登记接口绑定全新专用窗口。新 v2 source 4 passive + 1 active identity 成功，现有 MCP stdio → HTTP → Agent → 后端两轮各 3 fresh / 3 complete、各 6 行，身份 / 企业 / filing 投影相等、run / run 独立、无保留锁。格式修复后的最终两轮使用现有 MCP 链路与新纯采集后端，新增企业 6 字段均 present / nonempty 6 且投影相等；期间 validPair 6，缺失 / 非法 / 倒序 / 不支持均 0，起止 Midnight 各 6，distinctPeriodCount 3、alreadyFiledWithValidPeriod 6。filingPeriodsVerified true，source / run 与 run / run 均期间可比、PairEqual / MultisetEqual true；仅适用这些已申报行，不能推出当前待办或完整业务。
 
-日期：2026-10-20。适用任务：[TAX-COLLECTION-REBASE](tasks/TAX-COLLECTION-REBASE.md)。本契约描述采集与验收边界，不代表表中业务资源已经取得。全国税局尚无可据此宣布的真实接入完成结果。
+本机 schema 已见 userinfo 21 字段、filing 行最多 32 / 合计 34 个技术字段；`skssqq`、`skssqz`、`skssqzqz` 在 6 行全为 string，旧 `FILING_FIELDS` 未保留。此前 period missing 仅说明未采入 / 未核实，不能写成接口未返回期间。6 行 `zt` 均已申报，入口是更正 / 作废 / 财报报送，继续封锁；不能据此认为没有待办，`listNsrDbxx` 业务失败不等于空集合。`queryDj` 仅信用等级消费者，不能当完整档案。
 
-## 证据等级与执行门槛
+## 私有字段、期间与比较
 
-完整文档 URL 必须按 CDP `Frame.url` 与 `urlFragment` 严格组合，保留单个 `#` 的片段语义并拒绝矛盾 / 异常输入（[官方协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Page.pdl)）。source v2 显式声明 `documentUrlSemantics = 'cdp_frame_url_plus_fragment_v1'`，新 save 只写 v2；v1 仅保留严格历史读取 / 比较，active 在 open / lock 前拒绝。host assert 使用完整 URL，页面内请求脚本在 fetch 前还须精确比对内部 `expectedFullUrl`，避免 host → evaluate 空窗；完整 URL、fragment 及派生摘要均不输出模型。
+仅扩静态私有 `FILING_FIELDS` 期间 3 字段、`IDENTITY_FIELDS` 基础企业 6 字段，不扩个人 / agency / auth。不新增 source / run / capture 版本，不改旧文件；历史 scalar 子集仍可 load，不补齐旧证据。原值只在本机受限忽略目录，不回模型，安全 refs 也不入 Git / PR。
 
-当前退役门槛优先于下文历史通用恢复描述：旧 host 已停止，原 target 在显式 `filter: [{}]` 全包含清单中缺席；缺席、通用 CDP 错误或两次快照均不证明原 realm / renderer 销毁，现场未证明 BFCache，不猜另一页替代。独立 admin-only `abandon_readonly` 只永久放弃已审固定只读旧操作及迟到结果，默认只诊断，执行 / resume 必须显式。严格 source / scope / nonce / dead owner / PID 复用 / registry / profile 绑定；目标不可寻址只接受原 method 下精确 `-32602` / message 组合，通用错误不作 not-found。
+collect / compare 使用 strict 日历 helper 核实真实日历与起止顺序，重算已申报 `filingPeriodsVerified` / `filingPeriodCoverage`、`filingPeriodsComparable` / `filingPeriodPairsEqual` / `filingPeriodMultisetEqual`、`enterpriseBasicFieldCoverage`。缺日期历史不可比，不能 missing == missing 推 true。原 filing projection 的 `periodVerified = false` 不变，显式 `currentPendingPeriodVerified = false`；已申报期间有效也不等于当前待办期间已验，基础企业覆盖也不等于完整档案。`businessScopeVerified`、`periodVerified`、`currentPendingPeriodVerified`、`projectionComplete` 仍 false，完整 profile / full business 仍缺。
 
-退役先将原锁 bytes + SHA 私有归档并 fsync prepare，再永久 commit abandoned，才退役同 canonical 锁并 finished。Global OS mutex（当前 SID / SYSTEM）与持久 RECOVERY 阻挡并发 collector；host 死亡 / stdin EOF 释放 helper mutex，未完成事务须显式 resume。collector 创建锁后还须再核 mutex，竞态失败仅撤自己 nonce。commit 后历史 run 仍可 load / compare，但旧 source 不得保存新 run；旧 source 不改写 / 升级，结果 `requestTermination = 'unknown_abandoned'`，不能当作 `recovered`、`complete`、`contextDestroyed` 或新鲜证明。
+[广西税务局公开文件 PDF 第 100 页](https://guangxi.chinatax.gov.cn/xxgk/zfxxgk_22500/fdzdgknr/zfcg_22570/zbgg_22623/202303/P020230313613088224248.pdf#page=100) 将 `skssqq` / `skssqz` 列为税款所属期起 / 止，仅为字段语义旁证，不证明本门户日期格式、值、业务成功码或当前待办归属；`skssqzqz` 不按名称猜语义。
 
-已审旧 host 停止后不能续发 host 请求链、写应用文件或发布候选；残留 IIFE 至多一个固定 identity GET 与读响应，旧结果无消费者，10 秒 Abort 不证明终止。原生 fetch 可接收 `Set-Cookie`，未证现场改变身份 Cookie，不能保证会话绝对不变。旧版审计为 `operator_attested_not_loaded_bytes_proof`，旧完整加载 bytes 未归档，不伪造 loaded-bytes 证明。本次实际退役已验证原锁 bytes + SHA 私有存档，旧 source 不改写 / 升级；`realmDestructionProven = false`、`lateSessionEffectsPossible = true`、`oldResultConsumption = permanently_forbidden`。重新登录后的全新 v2 source / 两轮 MCP 门户复采已实际完成，未复用旧响应；`businessScopeVerified`、`periodVerified`、`projectionComplete` 仍 false，缺 `business_period`、`full_enterprise_profile`、`full_business_fields`。
+初次新增字段实采已取得日期，但原两格式 strict helper 对 6 行判 unsupported；root 本机确认起止各 6 / 6 为精确 `YYYY-MM-DD 00:00:00` 后，仅扩严格零时间格式及 Midnight 计数，拒非零 time、T、timezone、毫秒和空白，不输出日期原值。最终两轮新字段验收完成；root 只重启不拥有浏览器的独立 collector 加载补丁，当前登录 owner 后端 / 浏览器保留。
 
-| 等级 | 可核验依据 | 可得结论 | 执行限制 |
-|---|---|---|---|
-| `static_candidate` | 官方已加载代码的固定路由、调用点、参数与消费者 | 功能及请求形状候选 | 不据名称猜参数、业务码或直接批量执行；先沿已确认正常页面观察 |
-| `observed_request` | 实际网络请求与对应响应元信息 | 该页面实际发过此方法 / 路径 | 请求存在、HTTP 成功均不等于企业业务成功；确认只读及参数来源后才可固定重采 |
-| `business_verified` | 实际成功响应、业务码 / 错误字段、必要 schema、企业与期间校验 | 仅该资源、该作用域的实际业务成功 | 后端仍须实际重新请求，不能复用首次响应充数 |
+## 查询导航与执行门槛
 
-未知路径不进入任意 URL 代理；只执行逐项核实的官方固定 recipe。模型不得提供任意 URL、Cookie、header、query 或 body。会话依赖与业务参数由本机可信通道产生，工具只收安全会话引用和明确资源标识。请求前后检查连接代次与企业作用域，身份切换、导航到登录或迟到结果一律不得混入先前企业结果。
+实际有效菜单“纳税人信息查询”与“申报信息查询”各唯一 1 项，同源静态 handler 为 `/szc/szzh/sjswszzh/spHandler`，唯一 `cdlj` 对应公共技术 query route `/szzh/zhcx/nsrxxcx` 与 `/szzh/zhcx/sbxx/sbxxcx`。正常导航原型独审 30 项通过，所有新 JS 均 private 隔离、`safeAssetRefs = []`；已进入纳税人信息查询页，业务数据捕获不足，不预填成功。运行时完整 URL、query 值与页面引用仅本机；模型不传任意 URL、Cookie、headers、query 或 body。
 
-本包独立后端接管要求本机 reader 已停止并保留 registry 的 `quarantined` 状态；新 source 显式记录 `handoffMode = quarantined_reader_new_navigation` 与 `readerStoppedConfirmed = true`，由管理员在实际确认后随新导航形成。该声明不能绕过实时状态检查：后端打开连接以及每次请求前后仍须核对 registry 为隔离状态，遇到活动旧 reader 或状态改变直接拒绝；不得靠解除 quarantine、改 lease 或重启未知后端取得权限。source 还在本机保存 document URL 摘要，与固定 frame / loader 及导航事件代次共同约束页面；摘要及原始 URL 不作为模型业务资料输出。
+root 已沿当前企业有效菜单一次正常 `Page.navigate` 进入纳税人信息查询；导航前 2 + 后 1 共 3 个 identity complete，`documentScopeVerified` / `identityProjectionMatched` true，无保留锁。初次仅被动 Network 观察：127 请求，29 超上限、74 外部跳过、6 显式副作用跳过；JSON 仅见用户消息等框架接口，企业档案业务成功证据、只读 recipe 核验与业务接口复采尚未完成。`safeAssetRefs = []`，新 JS 全本机 private 隔离，无点击或未知接口重放。首轮被静态 / 外部资源占满，正最小调整 ignored 采样为优先业务 XHR / Fetch 并暖缓存再观察，第二次结果未出，不预填成功；当前待办、完整企业资料与申报查询页仍未完成。
 
-以下为 PR #29 当时的受控 reload 恢复契约历史，不能用于当前缺目标旧操作：新采集锁因不确定请求 / scope 清理失败保留时，默认只诊断；显式恢复仅处理匹配 `authorized_navigation` scope 的新锁，校验 dead owner / nonce、唯一绑定官方页正常 reload 后的新 loader / context clear、完整清理，再复核后删除对应新锁。不符则保留，旧 quarantine / claim 不变。此历史恢复仅解除当时互斥，不等于企业 / 期间验证成功；当前以本节 admin-only 放弃契约和本包任务 / 交接为准。
+可信层须核官方同源、固定 handler / 唯一路由、身份与企业前后绑定，按 CDP `Frame.url` + `urlFragment` 严格 full URL 绑定，并保留 context / loader / 导航代次守卫；source v2 明确完整 URL 语义，新 save 只写 v2，active v1 在 open / lock 前拒绝，页面 fetch 前再精确检查内部 expectedFullUrl。原始 URL / fragment / 派生摘要不输出。
 
-## 新解析的安全证据索引
+菜单或 handler 静态匹配只证明导航来源，不证明目标页请求纯只读。root 正常导航后先被动观察真实请求，再核实际业务成功、schema、企业 / 事项期间和副作用；只有逐项核实的固定只读 recipe 可经后端独立重新请求，不猜隐藏接口，不从菜单名或 HTTP 200 判完整成功。
+
+| 证据等级 | 可核验依据 | 可得结论 |
+|---|---|---|
+| `static_candidate` | 官方加载代码的固定路由、调用点、参数和消费者 | 候选形状，不能直接执行 |
+| `observed_request` | 实际请求与响应元信息 | 请求存在，不代表业务成功或完整覆盖 |
+| `business_verified` | 实际业务成功、schema、企业 / 期间核验 | 仅该资源、该作用域成功，仍须后端独立复采 |
+
+正常导航已有授权，自动点击、提交、缴款、更正、作废、备案变更和副作用不明操作禁止。真实数据 / 凭据不进模型或 Git。恢复仅 root 查本 worktree ignored `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`；不写实际 refs、PID、端口或业务原值。旧 source 不复用，前包退役是 unknown_abandoned，迟到结果永久禁止消费；详细历史见[退役交接](handoffs/TAX-READONLY-ABANDON.md)，不当作请求终止证明或当前业务证据。
+
+## 历史解析的安全证据索引（PR #29 时点）
 
 输入为用户本机 `etax_rea_work`：接口分析报告、门户 / 登录脚本和大型浏览器证据 JSON。JSON 有 5 条 records，浏览器场景为 `records[1]`，其 `normalized_result.events.items` 共 1,259 项、场景 3 步。下表 ordinal 为该数组的零基下标；不记录 transaction ID、完整 URL、query 值、header、body 原值或 DOM。
 
@@ -54,7 +60,7 @@
 
 `getDbrwtstx` 静态参数含 `sfgxydzt`，其他消息详情 / `update*` 也涉及状态变化；即使名字像查询，也不得作为只读请求执行。正常导航可能触发官方页面自身行为，主动后端 recipe 仍须独立排除副作用不明操作。
 
-## 本包门户采集与真实后端复采结果
+## 历史门户采集与真实后端复采结果（PR #29 时点）
 
 管理者沿已确认首页入口完成修复后的新 source：4 个被动实际请求，加 1 个主动身份复核；新 context / loader、`scopeRevision = 0`、`identityProjectionMatched = true`，新采集锁正常释放。以下结果来自本包实际运行，不倒填到上节原始解析证据。恢复只查本包 worktree 的 `.agent-runs/TAX-COLLECTION-CHECKPOINT.json`。
 
@@ -90,7 +96,7 @@ wire 结构已由官方静态封装与实际请求共同确认：调用层 `{csb
 
 ## 企业与期间作用域
 
-普通企业首页静态代码消费 `userinfo.user_id,user_type,reg_number,company_name,enterprise_type,taxpayerStatusCode`，并以 `reg_number` 处理企业缓存隔离；代理页另外消费 `agencyName,agencyCreditCode` 等。上述为字段结构，未取得真实值；代理身份、办税员或授权企业列表不等于当前选中纳税企业。
+普通企业首页静态代码消费 `userinfo.user_id,user_type,reg_number,company_name,enterprise_type,taxpayerStatusCode`，并以 `reg_number` 处理企业缓存隔离；代理页另外消费 `agencyName,agencyCreditCode` 等。该静态清单本身不证明真实值已取得；本轮已见 userinfo schema，完整企业档案仍未验。代理身份、办税员或授权企业列表不等于当前选中纳税企业。
 
 本机可信层必须建立不含原值的企业绑定引用，并持有本机实际企业标识用于比较。不能把哈希后的税号 / 姓名当作自动可外传数据；模型只收不由原值派生的随机引用及 `sameEnterprise` 等布尔结论。所有企业资源显式归属该绑定；仅靠共享 Cookie 隐式作用域时，要在前后实际校验身份并拒绝切换中的结果。
 
@@ -104,7 +110,7 @@ wire 结构已由官方静态封装与实际请求共同确认：调用层 `{csb
 |---|---|---|
 | 当前企业上下文 | 当前企业标识 / 名称、主体类型、登记状态、身份与授权归属 | 实际业务 schema 成功；企业绑定一致；不能以个人 / 代理身份替代 |
 | 企业申报相关资料 | 税费种认定、计税 / 纳税人类型、适用登记与备案、会计准则 / 适用表单 | 每类资料都有实际来源及适用时间；菜单推荐不算认定 |
-| 当前待办与已报事项 | 事项标识 / 类别、所属期起止、期限、申报 / 缴款状态、需报表单 | 取得完整义务集合与实际分页终点；待办空不等于无申报义务 |
+| 当前待办与已申报事项 | 事项标识 / 类别、所属期起止、期限、申报 / 缴款状态、需报表单 | 取得完整义务集合与实际分页终点；待办空不等于无申报义务 |
 | 当前事项业务材料 | 表单 / 版本、所需字段、官方已有金额与数量、预填来源、缺项 | 原值本机处理；已取得 / 缺失 / 不适用有证据；税局资料不当然包含完整账务凭证 |
 | 必要依赖 | 当前事项所需累计 / 结转 / 优惠、必要历史、企业事件、发票 / 已缴信息 | 先由已确认事项确定最小范围；避免无界历史 / 全模块抓取 |
 | 完整性与差异 | 稳定业务键、记录数 / 页面数、重复与冲突、首末页证据、首遍与复采差异 | 分页未终止或 schema 漂移必须标记部分成功；动态变化有本机差异分类 |

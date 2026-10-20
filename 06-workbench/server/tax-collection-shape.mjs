@@ -1,9 +1,13 @@
-// All model-facing names come from verified static source, never response keys.
+// All model-facing names come from verified static source or explicitly confirmed
+// technical schema. Business field values remain in the private projection only.
+import {FILING_PERIOD_FIELDS} from './tax-filing-period.mjs';
 export const COLLECTION_FIELDS = Object.freeze(['Response','Data','data','userinfo','returnCode','code','Error','error',
   'user_id','user_type','reg_number','company_name','enterprise_type','taxpayerStatusCode',
   'ysbList','dqswsList','qtList','fxydList','lx','sbqx',
   'dbzsbt','dbrwblsx','dbztDm','other','dbuuid','sfsytc','sfzdgxzt','dblj',
-  'dbt','wsbxxGrid','tbsl','sbb','zt','ztBm','zsxmDm','zspmDm','yyfwqdz','cddz','lybz','relatedType']);
+  'dbt','wsbxxGrid','tbsl','sbb','zt','ztBm','zsxmDm','zspmDm','yyfwqdz','cddz','lybz','relatedType',
+  'creditCode','taxpayer_id','enterprise_id','competent_tax_bureau_code','competent_tax_bureau_name','registrationTypeOfLevySubject',
+  ...FILING_PERIOD_FIELDS]);
 export function collectionShape(body) {
   const allowed=new Set(COLLECTION_FIELDS), schema=[],paths=new Map();let truncated=false,nodes=0;
   const kind=v=>v===null?'null':Array.isArray(v)?'array':['object','string','number','boolean'].includes(typeof v)?typeof v:'unknown';
@@ -68,8 +72,17 @@ export function observedRecipe(request){
   }catch{return null;}
 }
 
-export const IDENTITY_FIELDS=Object.freeze(['user_id','user_type','reg_number','company_name','enterprise_type','taxpayerStatusCode','relatedType']);
-export const FILING_FIELDS=Object.freeze(['sbb','sbqx','zt','ztBm','zsxmDm','zspmDm','lybz']);
+export const ENTERPRISE_BASIC_FIELDS=Object.freeze(['creditCode','taxpayer_id','enterprise_id',
+  'competent_tax_bureau_code','competent_tax_bureau_name','registrationTypeOfLevySubject']);
+export const IDENTITY_FIELDS=Object.freeze(['user_id','user_type','reg_number','company_name','enterprise_type','taxpayerStatusCode','relatedType',
+  ...ENTERPRISE_BASIC_FIELDS]);
+export const FILING_FIELDS=Object.freeze(['sbb','sbqx','zt','ztBm','zsxmDm','zspmDm','lybz',...FILING_PERIOD_FIELDS]);
+export function enterpriseBasicFieldCoverage(userinfo){
+  const present=ENTERPRISE_BASIC_FIELDS.filter(key=>typeof userinfo?.[key]==='string');
+  const nonempty=present.filter(key=>userinfo[key].trim().length>0).length;
+  return {fieldCount:ENTERPRISE_BASIC_FIELDS.length,presentCount:present.length,missingCount:ENTERPRISE_BASIC_FIELDS.length-present.length,
+    nonemptyStringCount:nonempty,emptyStringCount:present.length-nonempty};
+}
 const pick=(value,fields)=>Object.fromEntries(fields.filter(key=>typeof value?.[key]==='string'&&value[key].length<=4096).map(key=>[key,value[key]]));
 export function businessProjection(body,resource){
   const data=body?.Response?.Data??body?.data;
