@@ -22,7 +22,10 @@ async function fixture(run){
     const state={mode:'normal',ownerAlive:false,registry:'quarantined',crash:null,crashed:false,guardHeld:false,after:false,navCount:0},calls=[];
     const frame=()=>({id:'query-frame',loaderId:state.after?'new-loader':'query-loader',url:state.after?
       state.mode==='auth'?'https://tpass.fujian.chinatax.gov.cn:8443/api/v1.0/auth/oauth2/login?opaque=PRIVATE':
-      state.mode==='external'?'https://example.invalid/':QUERY_ORIGIN+'/loginb/':QUERY_ORIGIN+'/szzh/zhcx/sbxx/sbxxcx'});
+      state.mode==='external'?'https://example.invalid/':state.mode==='unconfirmed_index'?QUERY_ORIGIN+'/mhzx/api/mh/mhsy/index':
+      state.mode==='portal_bare_query'?QUERY_ORIGIN+'/loginb/?':QUERY_ORIGIN+'/loginb/':QUERY_ORIGIN+'/szzh/zhcx/sbxx/sbxxcx',
+      ...state.after&&['portal_bare_hash','auth_bare_hash'].includes(state.mode)?{url:state.mode==='auth_bare_hash'?
+        'https://tpass.fujian.chinatax.gov.cn:8443/api/v1.0/auth/oauth2/login?opaque=PRIVATE':QUERY_ORIGIN+'/loginb/',urlFragment:'#'}:{}});
     const d={store:f.store,parentStore:f.parentStore,
       readLock:p=>readCollectionLock(p,{security:f.security}),acquireRecovery:(p,e)=>collectionRecoveryLock(p,e,{security:f.security}),
       isOwnerAlive:async()=>state.ownerAlive,
@@ -88,7 +91,7 @@ for(const mode of ['normal','two_clear','auth'])test('strict realm reset retires
   assert.equal(again.currentRealmVerified,false);assert.equal(Object.hasOwn(again,'finalSurface'),false);
   assert.equal(f.state.navCount,1);assert.equal(f.calls.slice(before).includes('Target.attachToTarget'),false);
 }));
-for(const mode of ['no_context','no_loader','external','aba','three_clear','clear_after_frame','cleanup_failed','close_failed','registry_changed','late_owner'])
+for(const mode of ['no_context','no_loader','external','unconfirmed_index','portal_bare_hash','portal_bare_query','auth_bare_hash','aba','three_clear','clear_after_frame','cleanup_failed','close_failed','registry_changed','late_owner'])
 test('unconfirmed realm/cleanup/owner/registration retains persistent blockers: '+mode,async()=>fixture(async f=>{
   f.state.mode=mode;const r=await invoke(f);assert.equal(r.status,'retirement_failed');assert.equal(r.lockRetired,false);
   assert.deepEqual(await readFile(f.lockPath),f.originalBytes);assert.ok(await lstat(join(f.profile,MUTEX)));await assert.rejects(f.parentStore.assertNotAbandoned(f.parentSourceRef));

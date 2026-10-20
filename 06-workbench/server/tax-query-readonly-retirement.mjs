@@ -26,9 +26,9 @@ const mutexValid=v=>exact(v,['version','nonce','ownerPid'])&&v.version===1&&/^[a
   &&Number.isSafeInteger(v.ownerPid)&&v.ownerPid>0&&v.ownerPid<=2147483647;
 async function alive(pid){try{process.kill(pid,0);return true}catch(e){if(e.code==='ESRCH')return false;throw e;}}
 function surface(raw){
-  try{const u=new URL(raw);if(u.username||u.password||u.hash)return null;
+  try{const u=new URL(raw);if(u.username||u.password||u.href.includes('#'))return null;
     if(u.origin==='https://tpass.fujian.chinatax.gov.cn:8443'&&u.pathname==='/api/v1.0/auth/oauth2/login')return'auth';
-    if(u.origin===QUERY_ORIGIN&&!u.search&&['/loginb/','/loginb','/mhzx/api/mh/mhsy/index'].includes(u.pathname))return'portal';
+    if([QUERY_ORIGIN+'/loginb',QUERY_ORIGIN+'/loginb/'].includes(u.href))return'portal';
   }catch{}return null;
 }
 function documentOf(frame,targetId){const fullUrl=fullFrameUrl(frame);return{targetId,frameId:frame.id,loaderId:frame.loaderId,fullUrl,
