@@ -4,8 +4,9 @@ import {randomBytes,createHash} from 'node:crypto';
 import {openRegisteredBrowserDiagnostic} from './tax-browser-diagnostic.mjs';
 import {TaxCollectionStore,collectionLock} from './tax-collection-local.mjs';
 import {validateCapture,requireActiveSource,validateRecipe} from './tax-collection-contract.mjs';
-import {businessProjection,collectionShape} from './tax-collection-shape.mjs';
+import {businessProjection,collectionShape,enterpriseBasicFieldCoverage} from './tax-collection-shape.mjs';
 import {FULL_FRAME_URL_SEMANTICS,fullFrameUrl} from './tax-frame-url.mjs';
+import {summarizeFilingPeriods,compareFilingPeriods} from './tax-filing-period.mjs';
 const ORIGIN='https://etax.fujian.chinatax.gov.cn:8443';
 const fail=code=>{const e=new Error(code);e.code=code;return e};
 export const sameEnterprise=(a,b)=>typeof a?.userinfo?.reg_number==='string'&&a.userinfo.reg_number.trim().length>0
@@ -70,7 +71,10 @@ export function compareProjections(left,right){
     identityProjectionEqual:canonical(left.identity.projection)===canonical(right.identity.projection),
     filingProjectionEqual:canonical(left.filing.projection.wsbxxGrid)===canonical(right.filing.projection.wsbxxGrid),
     leftRowCount:left.filing.projection.rowCount,rightRowCount:right.filing.projection.rowCount,
-    projectionComplete:false,periodVerified:false};
+    leftEnterpriseBasicFieldCoverage:enterpriseBasicFieldCoverage(left.identity.projection.userinfo),
+    rightEnterpriseBasicFieldCoverage:enterpriseBasicFieldCoverage(right.identity.projection.userinfo),
+    ...compareFilingPeriods(left.filing.projection.wsbxxGrid,right.filing.projection.wsbxxGrid),
+    projectionComplete:false,periodVerified:false,currentPendingPeriodVerified:false};
 }
 export class TaxLiveCollection{
   constructor(overrides={}){this.d={store:new TaxCollectionStore(),openDiagnostic:openRegisteredBrowserDiagnostic,
@@ -124,6 +128,10 @@ export class TaxLiveCollection{
       result={status:'partial_observed',documentScopeVerified:true,identityProjectionMatched:true,businessScopeVerified:false,
         scopeVerified:false,enterpriseVerified:false,periodVerified:false,requestPerformedCount:3,responseCompleteCount:3,
         projectionComplete:false,requestCount:3,comparison:compareProjections(source,record),
+        ...summarizeFilingPeriods(filing.capture.projection.wsbxxGrid),
+        enterpriseBasicFieldCoverage:enterpriseBasicFieldCoverage(after.capture.projection.userinfo),
+        // The legacy business_period code continues to mean CURRENT PENDING
+        // scope. Valid filing-row periods do not resolve that separate gap.
         filingShape:filing.shape,identityShape:after.shape,missing:['business_period','full_enterprise_profile','full_business_fields']};
     }catch(error){result={status:'collection_failed',phase,
       reason:['tax_collection_scope_changed','tax_collection_source_expired','tax_collection_source_reobservation_required','tax_collection_enterprise_changed','tax_collection_busy',
@@ -140,6 +148,7 @@ export class TaxLiveCollection{
       if(result)result.lockRetained=lockRetained;
       if(record&&!lockRetained){try{result.runRef=await this.d.store.save('run',record)}catch{result={status:'collection_failed',phase:'persist',scopeVerified:false,periodVerified:false,lockRetained:false}}}
       else if(record)result={status:'collection_failed',phase:'cleanup',scopeVerified:false,periodVerified:false,lockRetained};
+      if(result)result.currentPendingPeriodVerified=false;
     }
     return result;
   }
