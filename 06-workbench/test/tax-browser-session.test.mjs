@@ -448,7 +448,11 @@ test('browser launch uses a private profile and terminates only its owned proces
   assert.equal(launch.options.shell, false); assert.equal(launch.options.windowsHide, true);
   assert.ok(launch.args.includes('--remote-debugging-address=127.0.0.1'));
   assert.ok(launch.args.includes('--remote-debugging-port=0'));
-  assert.ok(launch.args.some((arg) => arg.startsWith('--user-data-dir=')));
+  assert.ok(launch.args.includes(`--user-data-dir=${join(tmpdir(), 'synthetic-owned-browser-profile')}`));
+  assert.equal(launch.args.includes('--inprivate'), false);
+  assert.equal(launch.args.some((arg) => arg === '--guest' || arg.startsWith('--guest=')), false);
+  assert.equal(launch.args.some((arg) => arg === '--headless' || arg.startsWith('--headless=')), false);
+  assert.equal(launch.args.includes('--disable-web-security'), false);
   let exits = 0; proc.onExit(() => { exits++; });
   await proc.kill(); await proc.kill(); assert.equal(exits, 1);
   if (process.platform === 'win32') {
