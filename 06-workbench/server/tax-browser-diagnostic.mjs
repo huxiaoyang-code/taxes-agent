@@ -158,8 +158,15 @@ function processIdentity(snapshot, ownerPid, browserPid) {
     || Date.parse(owner.createdAt) > Date.parse(browser.createdAt)
     || !Array.isArray(browser.args) || !browser.args.every((arg) => typeof arg === "string")) throw fail();
   const flags = ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
-    "--inprivate", "--new-window", "--edge-skip-compat-layer-relaunch"];
+    "--new-window", "--edge-skip-compat-layer-relaunch"];
   for (const flag of flags) if (browser.args.filter((arg) => arg === flag).length !== 1) throw fail();
+  // Legacy owned launches used InPrivate; the current launch runs a normal window.
+  // Accept either, but reject malformed or duplicated InPrivate switches.
+  const inprivate = browser.args.filter((arg) => arg === "--inprivate" || arg.startsWith("--inprivate"));
+  if (inprivate.length > 1 || inprivate.some((arg) => arg !== "--inprivate")) throw fail();
+  // A normal dedicated browser must not be impersonated by guest/unsafe modes.
+  const forbidden = ["--guest", "--headless", "--disable-web-security", "--no-sandbox"];
+  if (browser.args.some((arg) => forbidden.some((flag) => arg === flag || arg.startsWith(flag + "=")))) throw fail();
   for (const prefix of ["--remote-debugging-address", "--remote-debugging-port", "--user-data-dir"]) {
     if (browser.args.filter((arg) => arg === prefix || arg.startsWith(prefix + "=")).length !== 1) throw fail();
   }

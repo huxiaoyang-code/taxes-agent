@@ -145,7 +145,7 @@ export function spawnBrowserProcess({ exePath, profileDir, entryUrl, timeoutMs =
   let child;
   try {
     child = spawnImpl(exePath, [entryUrl, "--new-window", `--user-data-dir=${profileDir}`,
-      "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", "--inprivate",
+      "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
       "--no-first-run", "--no-default-browser-check", "--edge-skip-compat-layer-relaunch"],
     { shell: false, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
   } catch { throw new TaxBrowserError("tax_browser_launch_failed"); }
