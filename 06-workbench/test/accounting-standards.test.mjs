@@ -709,6 +709,232 @@ try {
     assert.equal(A.balanceSheet(enterprise, "2026-01").totals.equity, 200);
   });
 
+  // ================================================================ 5. 独审返修（R1）：角色 / 报表 / 现金流 / 整数分 / profile 回显
+  await test("年末结转：410301 方向冲突写前整体拒绝（不重复贷 410301），正常明细仍正确清零", async () => {
+    // 正常：权益 / credit 的 410301 → yearEnd 后 410301 = 0、4104 = 100。
+    const okSet = create("年末明细正常", ENTERPRISE, "2025-12");
+    A.addAccount(okSet, { code: "410301", name: "本年利润-明细", category: "权益", direction: "credit" });
+    post(okSet, "2025-12", [e("1002", 100), e("410301", 0, 100)]);
+    const okCarry = A.carryForwardProfit(okSet, "2025-12", { yearEnd: true });
+    assert.equal(okCarry.yearEndVoucher.total_debit, 100);
+    assert.equal(A.accountBalances(okSet, "2025-12").get("410301").natural, 0);
+    assert.equal(A.accountBalances(okSet, "2025-12").get("4104").natural, 100);
+
+    // 正常创建的写前校验：类别 / 方向与准则根科目冲突直接拒绝，不落库。
+    const writeSet = create("年末明细写前校验", ENTERPRISE);
+    await rejectsCode(
+      () => A.addAccount(writeSet, { code: "410301", name: "错向明细", category: "权益", direction: "debit" }),
+      "account_semantics_conflict",
+    );
+    await rejectsCode(
+      () => A.addAccount(writeSet, { code: "600101", name: "错类收入", category: "资产", direction: "debit" }),
+      "account_semantics_conflict",
+    );
+    assert.ok(!A.listAccounts(writeSet).some((account) => account.code === "410301"));
+    assert.ok(!A.listAccounts(writeSet).some((account) => account.code === "600101"));
+
+    // 已有异常数据（旧库 / 手工改库）：参与年末结转前整体拒绝，不产生任何结转残留。
+    const badSet = create("年末明细冲突", ENTERPRISE, "2025-12");
+    db.prepare(
+      `INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
+       VALUES (?, '410301', '异常本年利润明细', '权益', 'debit', 0, 1)`,
+    ).run(badSet);
+    post(badSet, "2025-12", [e("1002", 100), e("410301", 0, 100)]);
+    assert.equal(A.accountBalances(badSet, "2025-12").get("410301").natural, -100);
+    const error = await rejectsCode(
+      () => A.carryForwardProfit(badSet, "2025-12", { yearEnd: true }),
+      "carryforward_account_semantics_conflict",
+    );
+    assert.deepEqual(
+      error.details.conflicts.map((item) => [item.stage, item.accountCode, item.reason]),
+      [["year-end", "410301", "direction-conflict"]],
+    );
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) n FROM vouchers WHERE account_set_id=? AND kind='carryforward'`).get(badSet).n,
+      0,
+      "拒绝时不得留下任何结转凭证",
+    );
+    assert.equal(A.accountBalances(badSet, "2025-12").get("410301").natural, -100, "不得再贷一次变成 -200");
+    assert.equal(A.accountBalances(badSet, "2025-12").get("4104").natural, 0);
+    // 期末检查同口径：冲突时不再谎称只剩“年末未结转”这一个提示。
+    await rejectsCode(() => A.periodEndCheck(badSet, "2025-12"), "carryforward_account_semantics_conflict");
+  });
+
+  await test("利润表：类别冲突的非零收入不被 category 预过滤丢弃，明确不完整且保留可审金额", async () => {
+    const setId = create("利润表冲突", ENTERPRISE);
+    // 已有异常数据：6001 收入明细被登记成资产 / 借方（正常 addAccount 已被写前校验拒绝）。
+    db.prepare(
+      `INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
+       VALUES (?, '600101', '异常收入明细', '资产', 'debit', 0, 1)`,
+    ).run(setId);
+    post(setId, "2026-01", [e("1002", 100), e("600101", 0, 100)]);
+
+    const is = A.incomeStatement(setId, "2026-01");
+    assert.equal(is.current["营业收入"], 0, "冲突金额绝不误分类进收入行");
+    assert.equal(is.current["净利润"], 0);
+    assert.equal(is.reportStatus.complete, false, "不能给一张漂亮零表后声称完整");
+    assert.ok(is.reportStatus.diagnostics.some(
+      (diagnostic) => diagnostic.code === "report_account_semantics_mismatch" && diagnostic.accountCode === "600101",
+    ));
+    assert.deepEqual(
+      is.unresolvedAmounts.current.map((item) => [item.accountCode, item.amountMinor, item.reasons]),
+      [["600101", -10000, ["account_category_conflict", "account_direction_conflict"]]],
+      "保留可审金额事实（贷 100 元 = -10000 分）与冲突原因",
+    );
+    const bs = A.balanceSheet(setId, "2026-01");
+    assert.equal(line(bs, "货币资金"), 100);
+    assert.equal(bs.totals.assets, 100, "冲突收入不静默计成资产");
+    assert.equal(bs.reportStatus.complete, false);
+    assert.ok(bs.unresolvedAmounts.some((item) => item.accountCode === "600101" && item.amountMinor === -10000));
+    // 结转写前拒绝：收入余额不能留在账上被当成资产封账。
+    await rejectsCode(() => A.carryForwardProfit(setId, "2026-01"), "carryforward_account_semantics_conflict");
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) n FROM vouchers WHERE account_set_id=? AND kind='carryforward'`).get(setId).n, 0,
+    );
+
+    // 合法自定义收入明细（损益 / credit）按 profile 祖先语义进收入行且保持完整。
+    const okSet = create("利润表合法明细", ENTERPRISE);
+    A.addAccount(okSet, { code: "600101", name: "主营业务收入-合成明细", category: "损益", direction: "credit" });
+    post(okSet, "2026-01", [e("1002", 100), e("600101", 0, 100)]);
+    const okIs = A.incomeStatement(okSet, "2026-01");
+    assert.equal(okIs.current["营业收入"], 100);
+    assert.equal(okIs.reportStatus.complete, true);
+    assert.deepEqual(okIs.unresolvedAmounts.current, []);
+  });
+
+  await test("现金流：同一凭证双向现金保留 gross，经营入 100 / 投资出 100 不再被净额 0 跳过", () => {
+    const setId = create("现金流双向", ENTERPRISE);
+    A.setOpeningBalances(setId, [e("1002", 500), e("4001", 0, 500)]);
+    A.createVoucher(setId, {
+      period: "2026-01", status: "posted",
+      entries: [e("1002", 100), e("6001", 0, 100), e("1601", 100), e("1002", 0, 100)],
+    });
+    const cf = A.cashFlowStatement(setId, "2026-01");
+    assert.equal(cf.totals.operating, 100, "经营流入 100");
+    assert.equal(cf.totals.investing, -100, "投资流出 100");
+    assert.equal(cf.totals.net_increase, 0);
+    assert.deepEqual(cf.cash, { begin: 500, end: 500, change: 0 });
+    assert.deepEqual(cf.unknown, []);
+    assert.equal(cf.classificationComplete, true);
+    assert.equal(cf.reconciles, true);
+    assert.equal(cf.reportStatus.complete, true);
+  });
+
+  await test("现金流：现金内部划转不分类但保留现金事实；部分现金 + 应收应付按对方方向归类", () => {
+    const transfer = create("现金流内部划转", SMALL);
+    A.setOpeningBalances(transfer, [e("1002", 500), e("3001", 0, 500)]);
+    A.addAccount(transfer, { code: "100201", name: "工行基本户", category: "资产", direction: "debit" });
+    post(transfer, "2026-01", [e("100201", 100), e("1002", 0, 100)]);
+    const tf = A.cashFlowStatement(transfer, "2026-01");
+    assert.deepEqual(tf.unknown, []);
+    assert.equal(tf.totals.operating + tf.totals.investing + tf.totals.financing, 0);
+    assert.equal(tf.classificationComplete, true);
+    assert.deepEqual(tf.cash, { begin: 500, end: 500, change: 0 });
+    assert.equal(tf.reconciles, true);
+
+    const partial = create("现金流部分现金", SMALL);
+    A.setOpeningBalances(partial, [e("1002", 500), e("3001", 0, 500)]);
+    post(partial, "2026-01", [e("1002", 60), e("1122", 40), e("5001", 0, 100)]);
+    const pc = A.cashFlowStatement(partial, "2026-01");
+    assert.equal(pc.totals.operating, 60, "部分现金销售：经营流入按贷方 5001 归类");
+    assert.equal(pc.classificationComplete, true);
+    assert.equal(pc.reconciles, true);
+
+    const payable = create("现金流部分应付", SMALL);
+    A.setOpeningBalances(payable, [e("1002", 500), e("3001", 0, 500)]);
+    post(payable, "2026-01", [e("1601", 100), e("1002", 0, 70), e("2202", 0, 30)]);
+    const pb = A.cashFlowStatement(payable, "2026-01");
+    assert.equal(pb.totals.investing, -70, "部分现金购建：投资流出按借方 1601 归类");
+    assert.equal(pb.classificationComplete, true);
+    assert.equal(pb.reconciles, true);
+  });
+
+  await test("现金流：复合多类别凭证不按比例分摊，保留可核对金额并明确不完整", () => {
+    const setId = create("现金流复合多类", SMALL);
+    A.setOpeningBalances(setId, [e("1002", 500), e("3001", 0, 500)]);
+    post(setId, "2026-01", [e("1403", 120), e("1601", 180), e("1002", 0, 300)]);
+    const cf = A.cashFlowStatement(setId, "2026-01");
+    assert.equal(cf.classificationComplete, false);
+    assert.equal(cf.totals.operating, 0);
+    assert.equal(cf.totals.investing, 0);
+    assert.deepEqual(
+      cf.unknown.map((item) => [item.direction, item.reason, item.value]),
+      [["outflow", "multi-counterpart-allocation-not-implemented", -300]],
+      "未分类金额按方向保留，不伪造经营 / 投资金额",
+    );
+    assert.deepEqual(cf.cash, { begin: 500, end: 200, change: -300 });
+    assert.equal(cf.reconciles, false, "未分类金额不伪装成已勾稽");
+    assert.ok(cf.reportStatus.diagnostics.some((d) => d.code === "cash_flow_classification_incomplete"));
+  });
+
+  await test("现金流：退款按反向独立分类；红字负数金额仍被守卫拒绝", async () => {
+    const setId = create("现金流退款冲销", SMALL, "2025-12");
+    A.setOpeningBalances(setId, [e("1002", 500), e("3001", 0, 500)]);
+    post(setId, "2025-12", [e("1002", 100), e("5001", 0, 100)]);
+    post(setId, "2026-01", [e("5001", 100), e("1002", 0, 100)]);
+    const cf = A.cashFlowStatement(setId, "2026-01");
+    assert.equal(cf.totals.operating, -100, "退款是经营流出，不按上期净额 0 处理");
+    assert.equal(cf.classificationComplete, true);
+    assert.equal(cf.reconciles, true);
+
+    const before = db.prepare(`SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?`).get(setId).n;
+    let negativeError = null;
+    try {
+      A.createVoucher(setId, {
+        period: "2026-01", status: "posted",
+        entries: [e("1002", -50), e("5001", 0, -50)],
+      });
+    } catch (error) { negativeError = error; }
+    assert.ok(negativeError, "负数金额必须被拒绝（红字冲销走反方向分录，不靠负值改方向）");
+    assert.match(String(negativeError.message), /voucher_invalid/);
+    assert.equal(db.prepare(`SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?`).get(setId).n, before);
+  });
+
+  await test("资产负债表：0.30 = 0.10 + 0.20 按整数分平衡；真正差 1 分明确不平", () => {
+    const small = create("小数分平衡", SMALL);
+    A.setOpeningBalances(small, [e("1002", 0.3), e("2001", 0, 0.1), e("3001", 0, 0.2)]);
+    const tb = A.trialBalance(small, "2026-01");
+    assert.equal(tb.totals.closing_debit, tb.totals.closing_credit);
+    const bs = A.balanceSheet(small, "2026-01");
+    assert.deepEqual(bs.totals, { assets: 0.3, liabilities: 0.1, equity: 0.2 });
+    assert.equal(bs.balanced, true, "整数分比较：30 = 10 + 20");
+    assert.equal(bs.reportStatus.complete, true);
+
+    const enterprise = create("小数分不平", ENTERPRISE);
+    A.setOpeningBalances(enterprise, [e("1002", 0.01), e("1122", 0, 0.01)]);
+    const gap = A.balanceSheet(enterprise, "2026-01");
+    assert.equal(gap.totals.assets, 0.01);
+    assert.equal(gap.totals.liabilities, 0);
+    assert.equal(gap.totals.equity, 0);
+    assert.equal(gap.balanced, false, "真正差 1 分不得被 epsilon 抹平");
+    assert.equal(gap.reportStatus.complete, false);
+    assert.ok(gap.unresolvedAmounts.some((item) => item.accountCode === "1122" && item.amountMinor === -1));
+  });
+
+  await test("未知持久 profile：结构化拒绝且不回显库内原始字符串，不 fallback", async () => {
+    const setId = create("未知profile回显", SMALL);
+    const raw = "UNTRUSTED_SYNTHETIC_PROFILE";
+    db.prepare(`UPDATE account_sets SET accounting_profile_id=? WHERE id=?`).run(raw, setId);
+    for (const [label, fn] of [
+      ["getAccountSet", () => A.getAccountSet(setId)],
+      ["periodEndCheck", () => A.periodEndCheck(setId, "2026-01")],
+      ["balanceSheet", () => A.balanceSheet(setId, "2026-01")],
+      ["incomeStatement", () => A.incomeStatement(setId, "2026-01")],
+      ["cashFlowStatement", () => A.cashFlowStatement(setId, "2026-01")],
+    ]) {
+      const error = await rejectsCode(fn, "accounting_profile_unknown");
+      assert.deepEqual(Object.keys(error.details).sort(), ["field", "reason"], `${label} 只回固定字段`);
+      assert.equal(error.details.field, "accounting_profile_id");
+      assert.equal(error.details.reason, "profile-not-registered");
+      assert.equal(JSON.stringify(error.details).includes(raw), false, `${label} 不得回显原始 profile 字符串`);
+    }
+    assert.equal(
+      db.prepare(`SELECT accounting_profile_id FROM account_sets WHERE id=?`).get(setId).accounting_profile_id,
+      raw,
+      "只读原始行仍可核对（不被改写 / 不 fallback）",
+    );
+  });
+
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;

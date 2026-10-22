@@ -1,7 +1,8 @@
 # 交接 · LOCAL-03a 阶段 A（纯 profile / 报表规则）→ 阶段 B1（持久 profile + 真实领域 / 迁移）
 
 - 状态：**阶段 A 47866a3 已独立接受 / root 41 项；阶段 B1 已在 worktree 实现并自测（17 + 6 项新领域 / 迁移，
-  B1 清单全绿）；未提交、未推送、未建 PR、未合并；HTTP / Agent / MCP / 导出 / v5 备份 / test-all / 全套仍属 B2**
+  B1 清单全绿）；B1 独审返修 R1（5 项具体缺陷）已实现并自测（新 8 项）但仍未独立复审；
+  未提交、未推送、未建 PR、未合并；HTTP / Agent / MCP / 导出 / v5 备份 / test-all / 全套仍属 B2**
 - 阶段 A 基线：`98977e04bd24aa293074021802191814f8c2a1d2`；B1 实际 main
   `dfefae0553052474b8a9308105443714bc5d9cfb`（LOCAL-02 #47 / PR #60 已合），本地合入后起点 `f7e69bd`
 - 分支：`codex/huxiaoyang-code/local-03a`；worktree 目录名 `local-03a`（本机绝对路径只交 root 的 ignored 记录）
@@ -280,3 +281,68 @@ v4→v5 备份含 WAL 已提交批次、业务行 / 指纹 / 原标签不变；�
    员工不自行合 main、不抢锁。
 3. B2 至少：入口接线、输出边界、五类导出 / Office 元数据与不完整提示、`local-backup` 精确 v3 / v4 / v5、
    真实 HTTP / Agent / MCP 连续链与失败路径、测试注册与公共交接；之后才谈 03 整体完成。
+
+## 9. B1 独审返修 R1（2026-10-22，同模型新会话，未提交 / 未复审）
+
+### 9.1 事实
+
+- root 核实：上一员工进程退出 0，但最后一次 assistant 回复 `stopReason=error`（tokenhub 4000008，thinking
+  历史参数不全），**不是实现完成**；`git status` 干净、HEAD 仍为 `ec4eace68f2a08d167dcb7eadd7d2acc55c45e58`，
+  未产生 WIP，因此不恢复旧会话、不读原始日志，用同一已核模型（deepseek-v4.1-flash）全新 `no-session` 继续。
+- 本包可写范围本轮为 11 文件（原 19 文件内的子集，`db.mjs` 已释放给 07，本轮未碰）。
+
+### 9.2 实际改动（均为 11 文件内）
+
+```text
+M  06-workbench/server/accounting.mjs
+M  06-workbench/server/period-end-controls.mjs
+M  06-workbench/test/accounting-standards.test.mjs
+M  06-workbench/test/accounting-standards-migration.test.mjs
+M  docs/ACCOUNTING-STANDARDS.md
+M  docs/tasks/LOCAL-03a.md
+M  docs/handoffs/LOCAL-03a.md
+```
+
+- **未改**：`coa.mjs`、`import-storage.mjs`、`import-incremental.mjs`、`db.mjs`、`accounting-profiles.mjs`、
+  `accounting-report-rules.mjs`（阶段 A 已审纯模块保持原样）、HTTP / Agent / MCP / 导出 / Office /
+  test-all / package / 公共 STATE。
+
+### 9.3 修复要点（细节见 [ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §12）
+
+1. 年末 / 损益结转前用**准则映射**校验参与科目（类别 / 方向 / 备抵），冲突在保存点外整体拒绝
+   （`carryforward_account_semantics_conflict`）；方向取根科目权威语义；`addAccount` 写前拒绝冲突
+   （`account_semantics_conflict`）；必要角色同时做语义校验（`accounting_role_semantics_conflict`）。
+2. 利润表不再用库内 `category === 损益` 预过滤（按准则映射判断范围），冲突给
+   `report_account_semantics_mismatch` + `complete=false`，并以 `unresolvedAmounts` 保留可审金额。
+3. 现金流按 gross 方向拆分（流入 = 现金借方、流出 = 现金贷方），单方向单对方科目才分类；复合或多类别
+   给 `unknown` + `direction` + `value`；不按比例分摊、不用净额 0 消除诊断。
+4. 资产负债表 `balanced` 用整数分 `BigInt` 比较（不用浮点 `===`，不用 epsilon）。
+5. `accounting_profile_unknown` 的 `details` 只回 `field` / `reason`，不再回显库内任意原始 profile 字符串。
+
+### 9.4 实跑（cwd=`06-workbench`，合成临时库，TEMP/TMP 为本会话专属目录）
+
+| 命令 | 结果 |
+|---|---|
+| `node test/accounting-standards.test.mjs` | **25 / 25 exit 0**（原 17 + R1 新 8） |
+| `node test/accounting-standards-migration.test.mjs` | **6 / 6 exit 0**（加严未回显原值断言） |
+| `node test/accounting-standard-profiles.test.mjs` | 41 / 41 |
+| `node test/accounting-guards.test.mjs` | 23 / 23 |
+| `node test/accounting-derived.test.mjs` | 31 / 31 |
+| `node test/accounting-period-integrity.test.mjs` | 45 / 45 |
+| `node test/import-strict.test.mjs` | 54 / 54 |
+| `node test/import-incremental.test.mjs` | 49 / 49 |
+| `node test/voucher-amount-guards.test.mjs` | 103 / 103 |
+| `node test/local-audit.test.mjs` | 28 / 28 |
+| `accounting-period-http` / `import-incremental-http` / `report-export-http` / `finance-output-policy` | 18 / 22 / 29 / 37 全通过 |
+
+受控未通过（未删断言，仍归 B2）：`report-export` 18 / 21（原 17 / 21）、`smoke` 27 / 28、
+`finance-model-adapter` 20 / 21、`local-backup` 0 / 1（v5 拒绝）；`report-office-export` 本 worktree 缺
+`exceljs` 依赖无法运行（环境限制，如实记录，未安装依赖、未改 package）。
+
+### 9.5 未完成 / 下一步
+
+- 仍**未提交、未推送、未建 PR、未合并**，也未通过独立复审；root 需在 freeze 后做
+  `review_standards03_final` 复审并决定后续。
+- 仍属 B2：入口接线、导出 / Office 适配、v5 备份、测试注册、公共交接；复合现金流分摊 /
+  受限资金 / 期限重分类等业务边界未变（见 [ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §8 / §12）。
+- 真实账套 / 税局 / 凭据全程未使用；真实税局接入仍为 0。

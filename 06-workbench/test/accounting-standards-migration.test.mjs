@@ -573,16 +573,23 @@ try {
         const { db } = await import("./server/db.mjs");
         const A = await import("./server/accounting.mjs");
         const raw = db.prepare("SELECT id, accounting_standard, accounting_profile_id FROM account_sets WHERE id=1").get();
-        let code = null;
-        try { A.balanceSheet(1, "2025-11"); } catch (error) { code = error.code; }
-        let periodCode = null;
-        try { A.periodEndCheck(1, "2025-11"); } catch (error) { periodCode = error.code; }
-        console.log(JSON.stringify({ raw, code, periodCode }));
+        let code = null; let details = null;
+        try { A.balanceSheet(1, "2025-11"); } catch (error) { code = error.code; details = error.details; }
+        let periodCode = null; let periodDetails = null;
+        try { A.periodEndCheck(1, "2025-11"); } catch (error) { periodCode = error.code; periodDetails = error.details; }
+        console.log(JSON.stringify({ raw, code, details, periodCode, periodDetails }));
       `;
       const result = runChild(fixture.dir, script);
       assert.equal(result.raw.accounting_profile_id, "future-profile-v9");
       assert.equal(result.code, "accounting_profile_unknown");
       assert.equal(result.periodCode, "accounting_profile_unknown");
+      // 未知 profile 只回固定 field / reason，不回显库内任意原始字符串（也不 fallback）。
+      for (const [label, details] of [["report", result.details], ["period-end", result.periodDetails]]) {
+        assert.deepEqual(Object.keys(details).sort(), ["field", "reason"], `${label} 只回固定字段`);
+        assert.equal(details.field, "accounting_profile_id");
+        assert.equal(details.reason, "profile-not-registered");
+        assert.equal(JSON.stringify(details).includes("future-profile-v9"), false, `${label} 不得回显原始 profile`);
+      }
     } finally {
       try { fixture.conn.close(); } catch { /* ignore */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

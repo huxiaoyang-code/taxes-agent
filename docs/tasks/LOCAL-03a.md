@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-03a 双准则科目、报表映射与旧账套兼容迁移
 
 - 类型：会计 profile / 报表规则（阶段 A 纯模块）→ 持久迁移 + 真实接线（阶段 B1 / B2）
-- 状态：**阶段 A 纯规则已实现并自测、独立接受；阶段 B1（核心领域 / 迁移 / 真实手算链）已在 worktree 实现并自测，未提交、未建 PR、未合并；HTTP / Agent / MCP / 导出 / v5 备份与全套注册仍属 B2**
+- 状态：**阶段 A 纯规则已实现并自测、独立接受；阶段 B1（核心领域 / 迁移 / 真实手算链）已在 worktree 实现并自测，未提交、未建 PR、未合并；B1 独审返修 R1（5 项具体缺陷）已实现并通过自测，但尚未独立复审；HTTP / Agent / MCP / 导出 / v5 备份与全套注册仍属 B2**
 - 基线：阶段 A `98977e04bd24aa293074021802191814f8c2a1d2`；B1 实际 main `dfefae0553052474b8a9308105443714bc5d9cfb`（LOCAL-02 #47 / PR #60 已合），合并 main 后的本地起点 `f7e69bd`
 - 分支：`codex/huxiaoyang-code/local-03a`（独立 worktree，工作区名 `local-03a`）
 - 负责人：`huxiaoyang-code`（已核实）
@@ -225,3 +225,20 @@ node test/accounting-standard-profiles.test.mjs
 - B1 **不单独 PR 合并**；等 root 独审领域核心、05 / 08 / 银行 #53 实际释放并纳入最新 main 后再精确扩窗 B2。
 - 未改 `server.mjs` / `agent-tools.mjs` / MCP / `test-all` / `public` / 公共交接 / 索引 / backup / report-export /
   Office；未注册测试；未操作真实账套 / 税局；真实接入仍为 0。
+
+### 8.6 B1 独审返修 R1（2026-10-22，同模型新会话）
+
+- 触发：ec4eace 的 B1 独立审查不接受，点名 5 项具体缺陷（年末角色方向、利润表 category 预过滤、
+  双向现金流净额 0 跳过、BS 浮点平衡比较、未知 profile 回显原值）。
+- 本轮可写范围收紧为 11 文件（`accounting.mjs` / `coa.mjs` / `import-incremental.mjs` / `import-storage.mjs` /
+  `period-end-controls.mjs` / 3 个测试 / 3 份 docs），**未触碰** `db.mjs`、纯规则 / profile 模块、
+  HTTP / Agent / MCP / 导出 / Office / test-all / package / 共享 STATE。实际只改了 5 个文件：
+  `accounting.mjs`、`period-end-controls.mjs`、`accounting-standards.test.mjs`、
+  `accounting-standards-migration.test.mjs`、三份 docs（`coa.mjs` / `import-*.mjs` 未改）。
+- 修复内容与边界见 [ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §5.1 / §11.4–§11.6 / §12。
+- 自测：`accounting-standards` **25 / 25**（原 17 项全部保留 + 新 8 项）；`accounting-standards-migration` 6 / 6
+  （原 6 项 + 未知 profile 不回显原值断言）；其余 B1 必跑 7 套全绿（41 / 23 / 31 / 45 / 54 / 49 / 103）。
+- 受控未通过（未删断言、不谎称全套通过）：`report-export` 18 / 21（原 17 / 21）、`smoke` 27 / 28、
+  `finance-model-adapter` 20 / 21、`local-backup` 0 / 1（v5 拒绝）仍归 B2；
+  `report-office-export` 本 worktree 缺 `exceljs` 无法运行（环境限制，非本包改动）。
+- 未提交、未推送、未合并；不等同于复审通过，也不代表 03 / 05b 完成。

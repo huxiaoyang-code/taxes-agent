@@ -11,6 +11,7 @@ import {
   classifyAccountingCashCounterpart,
   evaluateAccountingStatement,
   getAccountingReportRules,
+  resolveAccountingAccountRule,
 } from "./accounting-report-rules.mjs";
 import {
   MAX_ABSOLUTE_CENTS,
@@ -26,12 +27,14 @@ import {
   sumCents,
 } from "./money.mjs";
 import {
+  accountProfileSemantics,
   assetCardPeriodStatus,
   assertAssetCardWriteAllowed,
   assertPeriodCloseable,
   assertPeriodMutable,
   buildPeriodEndCheck,
   cardMoney,
+  carryForwardSemanticsConflicts,
   expectedDepreciationCents,
   postedEntryRows,
   sumNaturalByPrefix,
@@ -106,7 +109,6 @@ export function accountSetProfile(setId) {
   } catch (e) {
     throw profileError("accounting_profile_unknown", "账套持久会计 profile 未知或已损坏", {
       field: "accounting_profile_id",
-      profileId: typeof profileId === "string" ? profileId : null,
       reason: e?.code === "accounting_profile_unknown" ? "profile-not-registered" : "profile-unreadable",
     });
   }
@@ -155,9 +157,15 @@ function seedAccounts(profile) {
   }));
 }
 
-/** 必要的 profile 角色必须能落到真实科目上；缺失时在写入前失败（不伪造分录）。 */
+/**
+ * 必要的 profile 角色必须能落到真实科目上，并与准则映射语义（类别 / 方向 / 备抵）一致；
+ * 缺失或冲突都在写入前失败（不伪造分录，也不能靠被污染的库元数据算 natural）。
+ */
 function requireRoleAccounts(setId, profile, roleNames) {
-  const existing = new Set(rows(`SELECT code FROM accounts WHERE account_set_id=?`, setId).map((a) => a.code));
+  const existing = new Map(
+    rows(`SELECT code, name, category, direction, contra FROM accounts WHERE account_set_id=?`, setId)
+      .map((account) => [account.code, account]),
+  );
   for (const role of roleNames) {
     const value = profile.roles[role];
     const list = Array.isArray(value) ? value : [value];
@@ -170,6 +178,15 @@ function requireRoleAccounts(setId, profile, roleNames) {
       if (!existing.has(code)) {
         throw profileError("accounting_role_missing", `profile ${profile.id} 的角色 ${role} 对应科目不在账套科目表中`, {
           field: role, profileId: profile.id, accountCode: code, reason: "role-account-missing",
+        });
+      }
+      const semantics = accountProfileSemantics(profile, existing.get(code));
+      if (semantics.reasons.length) {
+        throw profileError("accounting_role_semantics_conflict", `profile ${profile.id} 的角色 ${role} 科目语义与准则映射冲突`, {
+          field: role,
+          accountCode: semantics.declared.code,
+          matchedRoot: semantics.matchedRoot,
+          reason: semantics.reasons[0],
         });
       }
     }
@@ -246,10 +263,22 @@ export function listAccounts(setId) {
   return rows(`SELECT * FROM accounts WHERE account_set_id=? ORDER BY code`, setId);
 }
 export function addAccount(setId, { code, name, category, direction, parent_code = null }) {
-  getAccountSet(setId);
+  const { profile } = accountSetProfile(setId);
   if (!code || !name) throw new Error("code_and_name_required");
   if (!["debit", "credit"].includes(direction)) throw new Error("direction_invalid");
   if (!["资产", "负债", "权益", "成本", "损益"].includes(category)) throw new Error("category_invalid");
+  // 自定义明细写前校验：类别 / 方向 / 备抵必须与 profile 根科目一致；未映射编码仍允许，
+  // 但报表会以 account_unmapped 诊断（不把无准则依据的科目静默当成某一类）。
+  const semantics = accountProfileSemantics(profile, { code: String(code), name, category, direction, contra: false });
+  if (semantics.reasons.length) {
+    const reason = semantics.reasons[0];
+    throw profileError("account_semantics_conflict", `自定义科目与 profile ${profile.id} 根科目语义冲突`, {
+      field: reason === "category-conflict" ? "category" : reason === "direction-conflict" ? "direction" : "contra",
+      accountCode: String(code),
+      matchedRoot: semantics.matchedRoot,
+      reason,
+    });
+  }
   run(
     `INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
      VALUES (?,?,?,?,?,0,1)`,
@@ -1082,6 +1111,7 @@ export function balanceSheet(setId, period) {
       reportStatus,
       rows: [],
       reclassifications: [],
+      unresolvedAmounts: [],
       diagnostics: reportStatus.diagnostics,
     };
   }
@@ -1104,17 +1134,22 @@ export function balanceSheet(setId, period) {
     equity: centsToNumber(BigInt(evaluation.totals.equity)),
   };
   const reportStatus = profileReportStatus("balance-sheet", evaluation, { profile, context });
+  // 平衡判断全程在整数分上完成（不经浮点 === 比较，也不用 epsilon 抹平真实差额）。
+  const assetsMinor = BigInt(evaluation.totals.assets);
+  const liabilitiesMinor = BigInt(evaluation.totals.liabilities);
+  const equityMinor = BigInt(evaluation.totals.equity);
   return {
     period,
     accountingContext: context,
     reportStatus,
     rows: evaluation.rows.map((row) => ({ id: row.id, label: row.label, valueMinor: row.valueMinor })),
     reclassifications: evaluation.reclassifications,
+    unresolvedAmounts: unresolvedAmountFacts("balance-sheet", evaluation),
     diagnostics: reportStatus.diagnostics,
     assets,
     liabilities,
     totals,
-    balanced: totals.assets === totals.liabilities + totals.equity,
+    balanced: assetsMinor === liabilitiesMinor + equityMinor,
   };
 }
 
@@ -1225,6 +1260,37 @@ function incomeDto(evaluation) {
   return out;
 }
 
+/**
+ * 未进入任何报表行的金额事实（语义冲突 / 待明细 / 未映射 / 超出本表）。
+ * 这些金额绝不写进报表行合计（不漂亮地归零，也不误分类）；保留为人工可核对的审计事实。
+ */
+function unresolvedAmountFacts(kind, evaluation) {
+  const out = [];
+  const index = new Map();
+  for (const diagnostic of evaluation?.diagnostics ?? []) {
+    if (!Number.isSafeInteger(diagnostic?.amountMinor)) continue;
+    const accountCode = typeof diagnostic.accountCode === "string" ? diagnostic.accountCode : null;
+    const matchedRoot = typeof diagnostic.matchedRoot === "string" ? diagnostic.matchedRoot : null;
+    const key = `${accountCode ?? ""}|${matchedRoot ?? ""}|${diagnostic.amountMinor}`;
+    let fact = index.get(key);
+    if (!fact) {
+      fact = {
+        reportKind: kind,
+        accountCode,
+        ...(matchedRoot ? { matchedRoot } : {}),
+        amountMinor: diagnostic.amountMinor,
+        reasons: [],
+      };
+      index.set(key, fact);
+      out.push(fact);
+    }
+    if (typeof diagnostic.code === "string" && !fact.reasons.includes(diagnostic.code)) {
+      fact.reasons.push(diagnostic.code);
+    }
+  }
+  return out;
+}
+
 function mergeReportStatuses(statusList) {
   const diagnostics = [];
   const seen = new Set();
@@ -1254,6 +1320,7 @@ export function incomeStatement(setId, period) {
       accountingContext: context,
       reportStatus,
       rows: { current: [], ytd: [] },
+      unresolvedAmounts: { current: [], ytd: [] },
       diagnostics: reportStatus.diagnostics,
     };
   }
@@ -1261,11 +1328,28 @@ export function incomeStatement(setId, period) {
   const year = String(period).slice(0, 4);
   const ytdStart = set.start_period > `${year}-01` ? set.start_period : `${year}-01`;
   const accounts = accountListDto(setId);
-  const profitCodes = new Set(accounts.filter((account) => account.category === "损益").map((account) => account.code));
+  const accountByCode = new Map(accounts.map((account) => [account.code, account]));
+  // 不能用「库内 category === 损益」预过滤：被错误登记成资产 / 负债的收入会连同金额被一起丢掉，
+  // 得到一张漂亮但错误的零表。按准则映射判断是否属于利润表范围；未映射编码不按声明类别静默丢弃
+  // （交给纯规则给 account_unmapped + 金额事实）；现金 / 往来等只进资产负债表的发生额仍不进利润表。
+  const inIncomeStatement = (item) => {
+    const account = accountByCode.get(item.code);
+    if (!account) return false;
+    let resolved;
+    try {
+      resolved = resolveAccountingAccountRule(profile.id, account);
+    } catch {
+      // 科目元数据本身非法：不静默丢弃，交给纯规则给出明确错误 / 诊断。
+      return true;
+    }
+    if (!resolved.matchedRoot) return true;
+    if (resolved.statements.incomeStatement) return true;
+    return resolved.statements.balanceSheet?.via === "undistributed-profit";
+  };
   const evaluate = (fromPeriod, toPeriod) => evaluateAccountingStatement(profile.id, {
     kind: "income-statement",
     accounts,
-    amounts: rangeAmounts(setId, fromPeriod, toPeriod).filter((item) => profitCodes.has(item.code)),
+    amounts: rangeAmounts(setId, fromPeriod, toPeriod).filter(inIncomeStatement),
   });
   const currentEvaluation = evaluate(period, period);
   const ytdEvaluation = evaluate(ytdStart, period);
@@ -1278,6 +1362,10 @@ export function incomeStatement(setId, period) {
     accountingContext: context,
     reportStatus,
     rows: { current: currentEvaluation.rows, ytd: ytdEvaluation.rows },
+    unresolvedAmounts: {
+      current: unresolvedAmountFacts("income-statement", currentEvaluation),
+      ytd: unresolvedAmountFacts("income-statement", ytdEvaluation),
+    },
     diagnostics: reportStatus.diagnostics,
     current: incomeDto(currentEvaluation),
     ytd: incomeDto(ytdEvaluation),
@@ -1358,6 +1446,14 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
   requireRoleAccounts(setId, profile, ["currentYearProfit", "profitDistribution"]);
   const profitRoot = roles.currentYearProfit;
   const retainedRoot = roles.profitDistribution;
+  // 参与结转的已有科目行必须与准则映射语义一致（类别 / 方向 / 备抵）：
+  // 写前整体拒绝，不靠被污染的库元数据算 natural，也不在提交后再补一行掩盖。
+  const semanticsConflicts = carryForwardSemanticsConflicts(db, setId, profile, roles, p, { yearEnd });
+  if (semanticsConflicts.length) {
+    throw profileError("carryforward_account_semantics_conflict", "参与结转的科目与准则 profile 语义冲突", {
+      period: p, yearEnd: yearEnd === true, conflicts: semanticsConflicts,
+    });
+  }
 
   const plCodes = new Set(listAccounts(setId).filter((x) => x.category === "损益").map((x) => x.code));
   const isProfitCarry = (v) => v.entries.some((e) => plCodes.has(e.code));
@@ -1405,11 +1501,17 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
     if (!postedPL) {
       const bal = accountBalances(setId, p);
       const entries = [];
-      for (const a of listAccounts(setId).filter((x) => x.category === "损益")) {
-        const natural = storedCents(bal.get(a.code)?.natural ?? 0);
+      // 方向取准则映射的权威语义（已在上方校验过一致），不直接用库内 direction 推定。
+      for (const a of listAccounts(setId)) {
+        const semantics = accountProfileSemantics(profile, a);
+        const incomeStatementAccount = a.category === "损益" || semantics.effective?.category === "损益";
+        if (!incomeStatementAccount) continue;
+        const direction = semantics.effective?.direction ?? a.direction;
+        const netCents = storedCents(bal.get(a.code)?.net ?? 0);
+        const natural = direction === "credit" ? -netCents : netCents;
         if (natural === 0n) continue;
         // 按余额符号生成相反的合法分录，绝不写负数金额。
-        if (a.direction === "credit") {
+        if (direction === "credit") {
           revenueCents += natural;
           entries.push(natural > 0n
             ? { code: a.code, summary: "结转本期损益", debit: centsToNumber(natural), credit: 0 }
@@ -1441,7 +1543,11 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
       const lines = [];
       for (const [code, b] of bal) {
         if (!underPrefix(code, profitRoot)) continue;
-        const natural = storedCents(b.natural);
+        // 参与年末结转的明细方向同样取准则映射的权威语义，不盲信库内 direction。
+        const semantics = accountProfileSemantics(profile, b);
+        const direction = semantics.effective?.direction ?? b.direction;
+        const netCents = storedCents(b.net);
+        const natural = direction === "credit" ? -netCents : netCents;
         if (natural === 0n) continue;
         lines.push({ code, natural });
       }
@@ -1943,9 +2049,12 @@ export function legacyCashFlowStatement(setId, period) {
 }
 
 /**
- * 现金流量表：新 profile 只分类「单一非现金对方科目」的基础现金凭证；
- * 复合对方科目不按比例分摊、不猜现金等价物 / 受限资金，直接给
- * cash_flow_classification_incomplete，且不把未分类金额伪装成经营 / 投资 / 筹资。
+ * 现金流量表：新 profile 按「该方向唯一非现金对方科目」分类基础现金凭证。
+ * - 现金流入 = 现金科目借方合计、现金流出 = 现金科目贷方合计，同一凭证双向时分别保留 gross；
+ * - 归到非现金对方的金额 = min(该方向现金总额, 该方向非现金总额)，差额视为现金科目间划转；
+ * - 该方向有多个非现金对方科目时不按比例分摊、不猜现金等价物 / 受限资金，
+ *   给 cash_flow_classification_incomplete 并保留可核对金额（unknown[].value），
+ *   不把未分类金额伪装成经营 / 投资 / 筹资，也不用净额 0 消除诊断。
  * 旧账套（legacy）仍走旧兼容计算（完整性由 legacy_profile_compatibility 单独表达）。
  */
 export function cashFlowStatement(setId, period) {
@@ -1978,44 +2087,68 @@ export function cashFlowStatement(setId, period) {
     setId, period,
   )) {
     const entries = rows(`SELECT code, debit, credit FROM voucher_entries WHERE voucher_id=?`, voucher.id);
-    let cashDelta = 0n;
-    const others = new Map();
+    // 现金流入 = 现金科目借方合计，现金流出 = 现金科目贷方合计。
+    // 同一凭证可能同时有流入和流出（现金内部划转 / 合并记账），不能先按净额相消而丢掉 gross 双向。
+    let inflow = 0n;
+    let outflow = 0n;
+    const debitCounterparties = new Map();
+    const creditCounterparties = new Map();
     for (const entry of entries) {
       const debit = storedCents(entry.debit);
       const credit = storedCents(entry.credit);
       if (isCash(entry.code)) {
-        cashDelta += debit - credit;
-      } else if (debit !== 0n || credit !== 0n) {
-        others.set(entry.code, true);
+        inflow += debit;
+        outflow += credit;
+        continue;
+      }
+      if (debit !== 0n) {
+        debitCounterparties.set(entry.code, (debitCounterparties.get(entry.code) ?? 0n) + debit);
+      }
+      if (credit !== 0n) {
+        creditCounterparties.set(entry.code, (creditCounterparties.get(entry.code) ?? 0n) + credit);
       }
     }
-    if (cashDelta === 0n || others.size === 0) continue;
-    if (others.size > 1) {
-      // 不实现复合凭证按比例分摊：不猜分类，也不把金额塞进其他类别。
-      unknown.push({
-        category: "unknown",
-        reason: "multi-counterpart-allocation-not-implemented",
-        value: centsToNumber(cashDelta),
-      });
-      continue;
-    }
-    const [code] = [...others.keys()];
-    const account = byCode.get(code);
-    if (!account) {
-      unknown.push({ code, category: "unknown", reason: "counterpart-unmapped", value: centsToNumber(cashDelta) });
-      continue;
-    }
-    const classified = classifyAccountingCashCounterpart(profile.id, account);
-    if (classified.category === "operating" || classified.category === "investing" || classified.category === "financing") {
-      addBucket(classified.category, code, cashDelta);
-    } else {
+    if (inflow === 0n && outflow === 0n) continue;
+    const totalOf = (map) => [...map.values()].reduce((sum, value) => sum + value, 0n);
+    const debitTotal = totalOf(debitCounterparties);
+    const creditTotal = totalOf(creditCounterparties);
+    // 能归到非现金对方的金额 = min(该方向现金总额, 该方向非现金总额)：
+    // 差额只能是现金科目之间的划转（对方也是现金），既不分类，也不臆造比例分摊。
+    const inflowToNonCash = inflow < creditTotal ? inflow : creditTotal;
+    const outflowToNonCash = outflow < debitTotal ? outflow : debitTotal;
+    const classify = (signedCents, counterparties, direction) => {
+      if (signedCents === 0n || counterparties.size === 0) return;
+      if (counterparties.size > 1) {
+        // 不实现复合凭证按比例分摊：不猜分类，也不把金额塞进其他类别。
+        unknown.push({
+          direction,
+          category: "unknown",
+          reason: "multi-counterpart-allocation-not-implemented",
+          value: centsToNumber(signedCents),
+        });
+        return;
+      }
+      const [code] = [...counterparties.keys()];
+      const account = byCode.get(code);
+      if (!account) {
+        unknown.push({ code, direction, category: "unknown", reason: "counterpart-unmapped", value: centsToNumber(signedCents) });
+        return;
+      }
+      const classified = classifyAccountingCashCounterpart(profile.id, account);
+      if (classified.category === "operating" || classified.category === "investing" || classified.category === "financing") {
+        addBucket(classified.category, code, signedCents);
+        return;
+      }
       unknown.push({
         code,
+        direction,
         category: "unknown",
         reason: fixedReason(classified.reason, "classification-not-verified"),
-        value: centsToNumber(cashDelta),
+        value: centsToNumber(signedCents),
       });
-    }
+    };
+    classify(inflowToNonCash, creditCounterparties, "inflow");
+    classify(-outflowToNonCash, debitCounterparties, "outflow");
   }
 
   const toLines = (category) => [...bucket[category].entries()]

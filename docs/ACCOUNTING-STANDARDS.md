@@ -185,6 +185,24 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 完整现金流量表引擎与间接法调节表。受限现金 / 现金等价物不因单一现金科目自动归入经营 /
 投资 / 筹资，仍为 `unknown`；阶段 B 继续负责现金凭证筛选与金额分配验证。
 
+### 5.1 同一凭证的 gross 双向现金（R1 返修，2026-10-22）
+
+现金凭证不再按「整张凭证的现金净额」处理（净额 0 会被直接跳过，导致真实的两笔交易消失）：
+
+- 现金流入 = 该凭证现金科目**借方合计**；现金流出 = 现金科目**贷方合计**，两者分别保留；
+- 能归到非现金对方的金额 = `min(该方向现金总额, 该方向非现金总额)`；差额只能是现金科目之间的划转，
+  不分类、不产生未分类诊断，但现金 `begin / end / change` 仍如实反映；
+- 该方向只有一个非现金对方科目 → 按 `classifyAccountingCashCounterpart` 归类；
+- 该方向有多个非现金对方科目 → `unknown` + `multi-counterpart-allocation-not-implemented`，
+  `unknown[].value` 保留该方向的带符号金额、`unknown[].direction` 标记 `inflow / outflow`，
+  `classificationComplete=false` 且给 `cash_flow_classification_incomplete`；
+- 绝不按比例分摊、绝不用净额 0 消除诊断，也不把未分类金额塞进经营 / 投资 / 筹资。
+
+已验证的固定口径（合成数据）：同一凭证「借 1002 100 / 贷 6001 100 / 借 1601 100 / 贷 1002 100」
+→ 经营流入 +100、投资流出 -100、净增加 0、`reconciles=true`；现金科目之间划转 → 三类的 0、
+`unknown` 空、`classificationComplete=true`；部分现金 + 应收 / 应付 → 按对方方向归类（60 / -70）；
+复合多类别（借 1403 120 + 借 1601 180 / 贷 1002 300）→ `unknown -300`、不分类、`reconciles=false`。
+
 ## 6. legacy 分支（防历史重解释）
 
 - `getAccountingReportRules("legacy-small-coa-v1").engineMode === "legacy-compatibility"`，
@@ -258,6 +276,16 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 | `account_out_of_statement` | 该科目不进入所请求的报表（如成本科目进利润表） |
 | `account_reverse_balance_requires_detail` | 资产 / 负债 / 成本科目出现与自然方向相反的余额，且无已核实列示行（已核实合法负列示如小企 `2221` 除外）；`reason` 固定说明缺什么明细 |
 | `legacy_engine_required` | legacy 账套必须走阶段 B 旧报表兼容路径 |
+
+真实业务写入 / 结转的结构化拒绝（R1 返修新增，均在写入前整体拒绝，不落任何派生凭证）：
+
+| code | 场景 |
+|---|---|
+| `account_semantics_conflict` | `addAccount` 自定义明细的类别 / 方向 / 备抵与 profile 根科目冲突（未映射编码仍允许，留给报表 `account_unmapped`） |
+| `accounting_role_semantics_conflict` | 必要角色科目（本年利润 / 利润分配 / 默认折旧费用）的库内元数据与准则映射冲突 |
+| `carryforward_account_semantics_conflict` | 参与损益结转 / 年末结转的科目行语义冲突（`details.conflicts[]` 含 `stage / field / accountCode / matchedRoot / reason(s)`）；期末检查同码拒绝 |
+
+`accounting_profile_unknown` 的 `details` 只含固定 `field` 与 `reason`，**不回显**库内任意原始 profile 字符串。
 
 现金流分类 `unknown` 的 `reason`：`counterpart_unmapped`、`counterpart_is_cash`、
 `counterpart_scope_requires_detail`、`counterpart_scope_unsupported`、
@@ -366,6 +394,13 @@ context = { profileId, accounts? }   // 由服务端在定位 append 目标 / �
 - `period-end-controls.mjs` 的 `yearEndCarryStep`、`assertPeriodMutable` 年末依赖识别、
   资产核对根科目均改为 role 驱动，不再用 SQL 硬编码 `3103/3104` / `5602`。
 - 必要角色缺失 / 与科目表冲突时在写入前失败（`accounting_role_missing`），不伪造分录。
+- **R1 返修**：角色与结转参与科目还须通过**准则映射语义校验**（类别 / 方向 / 备抵），
+  不再用库内 `direction` 直接推 `natural`：
+  - 结转前扫描「声明为损益，或准则映射属于损益」的非零科目，以及 `yearEnd=true` 时本年利润前缀下的非零明细；
+  - 发现冲突即在保存点**外**整体拒绝（`carryforward_account_semantics_conflict`），不产生任何结转凭证、
+    不删除草稿结转、不先提交再改一行；
+  - 年末结转借贷方向取准则根科目权威方向；正常创建的自定义明细在 `addAccount` 写前就拒绝冲突（`account_semantics_conflict`）。
+  - 未映射（无根科目）的损益自定义科目仍按声明方向结转，报表侧同时报 `account_unmapped`：这是已知边界，不冒充已校验。
 - `periodEndCheck` 新增：
   - 顶层 `accountingContext`；
   - `warnings`（固定诊断码；legacy 为 `legacy_profile_compatibility`，新 profile 登记准则不一致为
@@ -381,14 +416,20 @@ context = { profileId, accounts? }   // 由服务端在定位 append 目标 / �
   - 资产负债表：截至期间的科目自身**期末余额**（借减贷），父子科目各计一次；原值 / 累计 / 净值分别展示，
     只有净值进资产总计；企业 `5001` 生产成本进存货，绝不计入营业收入；资本公积单独列示；
   - 利润表：仅**明确时间窗内、排除结转**的已过账损益发生净额；本期与本年累计分开，年中启用时起点取
-    `max(账套启用期间, 当年 1 月)`；
-  - 现金流：只分类**单一非现金对方科目**的基础现金凭证；复合对方科目不按比例分摊、不猜现金等价物 /
-    受限现金，给 `cash_flow_classification_incomplete`，且不把未分类金额塞进经营 / 投资 / 筹资。
+    `max(账套启用期间, 当年 1 月)`；**不按库内 `category === 损益` 预过滤**（否则被错误登记成资产 / 负债的
+    收入会连同金额一起消失，得到漂亮零表）：按准则映射判断是否属于利润表范围，未映射编码交给规则给
+    `account_unmapped` + 金额事实；冲突科目给 `report_account_semantics_mismatch` 且 `complete=false`；
+  - 现金流：按方向分类**单一非现金对方科目**的基础现金凭证（gross 双向规则见 §5.1）；复合对方科目不按
+    比例分摊、不猜现金等价物 / 受限现金，给 `cash_flow_classification_incomplete`，且不把未分类金额塞进
+    经营 / 投资 / 筹资。
 - legacy 走**真实旧兼容计算**（原 `balanceSheet` / `incomeStatement` / `cashFlowStatement` 逻辑），
   返回 `legacy_compatibility` + `complete=false`；不把阶段 A 的 `legacy_engine_required` 空值当完成。
 - 保留小企 `2221` 借方余额的合法负列示；企业同输入给 incomplete；`1604` 现金流用途不明给 unknown；
   非零未知 / 需明细 / 语义冲突明确 incomplete，零余额复杂科目不阻断；不因算式碰巧平衡就宣称完整。
 - 金额仍由 LOCAL-02 `money.mjs` 与已验证查询生成（净额使用整数分），未改变单笔上限、未新增浮点舍入。
+- **R1 返修**：资产负债表的 `balanced` 用 `evaluation.totals` 的**整数分**比较
+  （`BigInt(assets) === BigInt(liabilities) + BigInt(equity)`），不再用浮点 `===`、也不靠 epsilon 抹平真实差额：
+  `0.30 = 0.10 + 0.20` → `balanced=true`；真正差 1 分（如企业 `1122` 贷方无已核实列示行）→ `balanced=false`。
 
 ### 11.6 稳定下游 DTO（B1 只产出，不改 05 / 08 入口）
 
@@ -419,17 +460,32 @@ reportStatus = { status, complete, partialValues, diagnostics }
   `legacy_profile_compatibility`、`declared_standard_profile_mismatch`、`report_account_unmapped`、
   `report_account_requires_detail`、`report_account_semantics_mismatch`、`cash_flow_classification_incomplete`。
   本机原始 `accountCode` 可用于定位；模型 / 导出侧只能按各自政策保留允许的码 / 计数 / 受控引用。
+- **R1 返修新增可审金额事实**（只增字段，不改旧字段 / 单位）：
+
+```js
+// 资产负债表：未进入任何报表行的非零金额（语义冲突 / 待明细 / 未映射 / 超出本表）
+unresolvedAmounts = [{ reportKind, accountCode, matchedRoot?, amountMinor, reasons: [诊断码...] }]
+// 利润表：本期与本年累计分别给
+unresolvedAmounts = { current: [...], ytd: [...] }
+// 现金流未分类项增加方向标记
+unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reason, value }]
+```
+
+  这些金额**绝不**写进任何报表行或合计（不漂亮归零、不误分类），只作为人工核对事实；
+  同一科目同一金额的多条冲突诊断合并为一条并列出 `reasons`。legacy 分支返回空数组。
 - 报表 DTO 保留旧主要字段与单位：资产负债表 `assets[] / liabilities[] / totals{assets,liabilities,equity} / balanced`；
   利润表 `current / ytd` 旧中文键；现金流 `operating / investing / financing / totals / cash / reconciles /
   supplement_indirect`。新增 `rows`（`id/label/valueMinor`）、`reclassifications`、`unknown`、
   `classificationComplete` 等**只增不改**字段。
 - 结构化错误（`Error.code` + `Error.details`）：
-  - `accounting_profile_unknown`：profile ID 未知 / 损坏（details 只含受控 field / profileId / reason）；
+  - `accounting_profile_unknown`：profile ID 未知 / 损坏（details 只含受控 field / reason，**R1 起不回显原始 profile 字符串**）；
   - `accounting_standard_invalid`：准则非法 / 首尾空白 / 非字符串 / 空白不是默认值；
   - `accounting_profile_standard_mismatch`：显式 profile 与准则不一致；
   - `accounting_profile_legacy_not_creatable`：legacy 新建；
   - `accounting_profile_immutable`：预留（本文件不提供普通 profile 更新入口）；
   - `accounting_role_missing`：必要角色未定义 / 对应科目不在账套科目表；
+  - `accounting_role_semantics_conflict` / `account_semantics_conflict` / `carryforward_account_semantics_conflict`：
+    R1 返修新增的准则语义冲突拒绝（角色科目 / 自定义明细写前 / 结转参与科目）；
   - `import_context_invalid`：内部 normalize 上下文形状错误（非 payload 输入）。
   `details` 只放受控 `field / profileId / accountCode / reason`，不回显未知原始输入。
 
@@ -438,7 +494,7 @@ reportStatus = { status, complete, partialValues, diagnostics }
 | 命令 | 结果 |
 |---|---|
 | `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
-| `node test/accounting-standards.test.mjs` | 17 / 17 exit 0 |
+| `node test/accounting-standards.test.mjs` | 25 / 25 exit 0（B1 原 17 + R1 新增 8） |
 | `node test/accounting-standards-migration.test.mjs` | 6 / 6 exit 0 |
 | `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
 | `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
@@ -453,6 +509,10 @@ reportStatus = { status, complete, partialValues, diagnostics }
   两准则 100 元三月卡片 33.33/33.33/33.34，第 4 月不再提；无形资产、默认费用科目、不适用 / 缺计提 / 账卡差异；
   小企 2221 负列示、企业同输入 incomplete、1604 现金流、未知非零 / 零余额、同码冲突、非法准则、
   多企业隔离、重复计提 / 结转、后期 4103→4104 依赖、失败原子性、legacy 兼容报表与旧 create 重放。
+- R1 返修新增 8 项（仍全用真实 API + 独立字面量，未删旧断言）：410301 方向冲突写前拒绝且不双贷；
+  利润表冲突收入不被预过滤丢弃且保留 `amountMinor=-10000`；同凭证双向现金 gross（经营 +100 / 投资 -100）；
+  现金内部划转 / 部分现金 + 应收（60）/ 部分现金 + 应付（-70）；复合多类别 `unknown -300`；退款 -100 +
+  负数金额拒绝；`0.30 = 0.10 + 0.20` 整数分平衡 + 真正 1 分不平；未知 profile 只回 `field/reason`。
 - `accounting-standards-migration.test.mjs`：真实 v4 合成旧库（企业标签 + 旧小企 COA + 已完成 create 批次）
   与 v3 合成旧库；迁移前 v4 备份 `verify` / `restore-new` 到全新目录成功，恢复库由真实 `db.mjs` 入口升 v5；
   v4→v5 备份含 WAL 已提交批次、业务行 / 指纹 / 原标签不变、所有旧账套为 legacy；旧 create 批次**新进程**重放
@@ -469,7 +529,8 @@ reportStatus = { status, complete, partialValues, diagnostics }
 2. **入口接线**：`server.mjs`、`agent-tools.mjs`、MCP `tools.mjs` 未改；`accountingContext` / `reportStatus`
    尚未进入 HTTP / Agent / MCP DTO。B2 才接真实入口与连续链。
 3. **导出 / Office**：`report-export.mjs` / `report-office-export.mjs` 未改；B1 只保证核心返回值与旧主要字段兼容。
-   现有 `report-export` 套件有 4 项因新 profile 行项目 / 累计折旧符号 / 复合现金流口径差异失败，
+   现有 `report-export` 套件有 3 项因新 profile 行项目 / 累计折旧符号 / 复合现金流口径差异失败（R1 后 18 / 21；
+   原 17 / 21，原因是同一凭证单向现金分类修好后“混合现金凭证”一项转绿），
    已登记为 B2（05 导出）适配项，未删断言、未改导出源码。
 4. **08 输出边界**：新增字段 / 行项目计数差异需 08 在 B2 更新精确允许字段与未知键处理；B1 未改 08 文件。
 5. **测试注册**：`scripts/test-all.mjs` 未改；B1 三套新测试尚未注册。
@@ -479,3 +540,36 @@ reportStatus = { status, complete, partialValues, diagnostics }
    `local-backup.test.mjs` 初始化即因版本 5 ≠ 4 失败（B2 备份）。均**未**通过修改旧断言绕过。
 8. 全程未使用真实账套 / 税局凭据 / 私有采集；真实税局接入仍为 **0**，税局现场仍暂停；
    本包仍只是内部简化基础业务子集，不宣称 2026 全准则或可申报。
+
+## 12. B1 独审返修 R1（2026-10-22，未合并、不代表已通过复审）
+
+触发：ec4eace 的 B1 独立审查不接受（9 套旧回归全绿不等于领域正确）。本轮的 5 项具体缺陷与最小修复：
+
+| # | 缺陷 | 修复 |
+|---|---|---|
+| P1 | 年末结转信任库内 `direction` 推 `natural`：企业 `410301`（权益 / debit）参与年末后再次贷记，贷余额 100 → 200 | 结转前用准则映射校验参与科目（类别 / 方向 / 备抵），冲突写前整体拒绝；年末方向取根科目权威方向；`addAccount` 写前校验自定义明细 |
+| P1 | 利润表按库内 `category === 损益` 预过滤：企业 `600101`（资产 / debit）的贷方 100 被丢弃，收入 / 利润 0 且 `complete=true` | 按准则映射判断利润表范围；冲突给 `report_account_semantics_mismatch` + `complete=false`；新增 `unresolvedAmounts` 保留金额事实 |
+| P1 | 同一凭证现金净额 0 被提前 `continue`：经营入 100 / 投资出 100 全部丢失且三项 `true` | 按方向拆 gross 流入 / 流出；单方向单对方科目才分类；复合给 `unknown` + 方向 + 金额，不按比例分摊、不用净额消除诊断 |
+| P2 | `balanced: totals.assets === totals.liabilities + totals.equity` 浮点比较：0.30 vs 0.10 + 0.20 → false | 用 `evaluation.totals` 整数分 `BigInt` 比较；真正 1 分不平仍为 false（不用 epsilon 抹平） |
+| P3 | `accounting_profile_unknown` 的 `details.profileId` 回显未知原始字符串 | 只回固定 `field` / `reason`；仍拒绝且不 fallback |
+
+一致性核查（同一轮）：BS / IS / CF / 结转均以准则映射为权威语义；legacy 仍走旧兼容报表路径、
+不因准则标签自动换 profile（原有 legacy 断言全部保留并通过）。
+
+已验证边界（不宣称全）：
+
+- 多对方科目、现金与现金混合划转的**部分归属**按 `min(该方向现金总额, 该方向非现金总额)` 归属到非现金对方，
+  差额视为现金内部划转；不对多对方方向做任何比例分摊。
+- 未映射自定义损益科目仍按声明方向结转（报表同时报 `account_unmapped`），不因缺根科目而拒绝写入。
+- 红字（负数金额）仍被金额守卫拒绝；冲销走反方向分录，不靠负值改方向。
+- 利润表 / 资产负债表冲突金额**不**进入任何报表行，只以 `unresolvedAmounts` 暴露（可核金额 + 诊断原因）。
+- 本包仍**未**实现：复合现金流分摊、受限资金 / 现金等价物、期限重分类、金融工具、租赁、递延所得税等（见 §8）。
+
+实际测试（cwd=`06-workbench`，合成临时库）：`accounting-standards` **25/25**（原 17 + 新 8）、
+`accounting-standards-migration` **6/6**（未知 profile 新增“不回显原值”断言）、
+`accounting-standard-profiles` 41/41、`accounting-guards` 23/23、`accounting-derived` 31/31、
+`accounting-period-integrity` 45/45、`import-strict` 54/54、`import-incremental` 49/49、
+`voucher-amount-guards` 103/103、`local-audit` 28/28；顺带：`accounting-period-http` 18、
+`import-incremental-http` 22、`report-export-http` 29、`finance-output-policy` 37 均通过。
+受控未通过（未删断言）：`report-export` 18/21、`smoke` 27/28、`finance-model-adapter` 20/21、
+`local-backup` 0/1（v5 拒绝）；`report-office-export` **未能运行**（本 worktree 缺 `exceljs` 依赖）。

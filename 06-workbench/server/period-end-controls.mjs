@@ -24,6 +24,7 @@ import {
   sumCents,
 } from "./money.mjs";
 import { getAccountingProfile } from "./accounting-profiles.mjs";
+import { resolveAccountingAccountRule } from "./accounting-report-rules.mjs";
 
 export const PERIOD_END_STATUS = {
   OK: "ok",
@@ -50,9 +51,9 @@ export function accountSetProfileForControls(db, setId) {
   } catch {
     const error = new Error("accounting_profile_unknown");
     error.code = "accounting_profile_unknown";
+    // 不回显库内任意原始 profile 字符串（只给固定字段 + 受控 reason）。
     error.details = {
       field: "accounting_profile_id",
-      profileId: typeof profileId === "string" ? profileId : null,
       reason: "profile-not-registered",
     };
     throw error;
@@ -69,6 +70,92 @@ export function accountSetProfileForControls(db, setId) {
       legacy: profile.legacy === true,
     },
   };
+}
+
+/**
+ * 用准则映射校验一行科目元数据（类别 / 方向 / 备抵），**不盲信库内元数据**。
+ * 返回：
+ * - `matchedRoot`：命中的 profile 根科目（未映射为 null）
+ * - `effective`：根科目权威语义（未映射为 null）
+ * - `reasons`：受控冲突 token（category-conflict / direction-conflict / contra-conflict /
+ *   account-metadata-invalid），空数组表示一致
+ * 未映射的自定义编码本身不算冲突（报表层会单独诊断），但它的方向无法用准则校验。
+ */
+export function accountProfileSemantics(profile, account) {
+  const declared = {
+    code: String(account?.code ?? ""),
+    category: account?.category,
+    direction: account?.direction,
+    contra: account?.contra === true || account?.contra === 1 || account?.contra === "1",
+    name: typeof account?.name === "string" ? account.name : null,
+  };
+  let resolved;
+  try {
+    resolved = resolveAccountingAccountRule(profile.id, declared);
+  } catch {
+    return {
+      declared,
+      matchedRoot: null,
+      effective: null,
+      reasons: ["account-metadata-invalid"],
+    };
+  }
+  if (!resolved.matchedRoot) {
+    return { declared, matchedRoot: null, effective: null, reasons: [] };
+  }
+  const reasons = [];
+  if (resolved.effective.category !== declared.category) reasons.push("category-conflict");
+  if (resolved.effective.direction !== declared.direction) reasons.push("direction-conflict");
+  if (declared.contra && resolved.effective.contra !== true) reasons.push("contra-conflict");
+  return {
+    declared,
+    matchedRoot: resolved.matchedRoot,
+    effective: resolved.effective,
+    reasons,
+  };
+}
+
+const semanticsConflict = (account, field, reason) => ({
+  field,
+  accountCode: account.declared.code,
+  matchedRoot: account.matchedRoot,
+  reason,
+});
+
+/** 冲突原因 → 受控 field token（category / direction / contra）。 */
+const conflictField = (reason) => (reason === "category-conflict"
+  ? "category"
+  : reason === "direction-conflict" ? "direction" : "contra");
+
+/**
+ * 结转参与科目的语义校验（写入前整体拒绝的依据）。
+ * 参与 = 库内登记为损益，或准则映射属于损益（防止被错误登记成资产 / 负债的收入漏结），
+ * 以及 yearEnd=true 时本年利润角色前缀下的明细。
+ * 只校验期末仍有余额的科目：零余额异常科目不影响结转结果，留给报表诊断。
+ */
+export function carryForwardSemanticsConflicts(db, setId, profile, roles, period, { yearEnd = false } = {}) {
+  const balances = balancesThrough(db, setId, period);
+  const out = [];
+  for (const account of accountRows(db, setId)) {
+    const net = balances.get(account.code)?.net ?? 0n;
+    if (net === 0n) continue;
+    const semantics = accountProfileSemantics(profile, account);
+    const authoritativePl = semantics.effective?.category === "损益";
+    const profitCarry = account.category === "损益" || authoritativePl;
+    const yearEndCarry = yearEnd && underPrefix(account.code, roles.currentYearProfit);
+    if (!profitCarry && !yearEndCarry) continue;
+    if (!semantics.reasons.length) continue;
+    out.push({
+      stage: profitCarry ? "profit-carry" : "year-end",
+      ...semanticsConflict(
+        semantics,
+        conflictField(semantics.reasons[0]),
+        semantics.reasons[0],
+      ),
+      reasons: semantics.reasons,
+    });
+  }
+  return out;
 }
 
 const PERIOD_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
@@ -923,6 +1010,10 @@ export function buildPeriodEndCheck(db, setId, period, { skip = [] } = {}) {
   const existingCodes = new Set(
     db.prepare(`SELECT code FROM accounts WHERE account_set_id=?`).all(setId).map((row) => row.code),
   );
+  const roleRows = new Map(
+    db.prepare(`SELECT code, name, category, direction, contra FROM accounts WHERE account_set_id=?`).all(setId)
+      .map((row) => [row.code, row]),
+  );
   for (const role of ["currentYearProfit", "profitDistribution", "defaultDepreciationExpense"]) {
     const code = roles[role];
     if (typeof code !== "string" || !code || !existingCodes.has(code)) {
@@ -936,6 +1027,24 @@ export function buildPeriodEndCheck(db, setId, period, { skip = [] } = {}) {
       };
       throw error;
     }
+    // 角色科目也必须与准则映射语义一致（类别 / 方向 / 备抵）：库内元数据被污染时不允许静默封账。
+    const semantics = accountProfileSemantics(profile, roleRows.get(code));
+    if (semantics.reasons.length) {
+      const error = new Error("accounting_role_semantics_conflict");
+      error.code = "accounting_role_semantics_conflict";
+      error.details = { field: role, profileId: profile.id, ...semanticsConflict(semantics, conflictField(semantics.reasons[0]), semantics.reasons[0]) };
+      throw error;
+    }
+  }
+  // 参与结转的科目行语义冲突同样在检查阶段明确拒绝，避免“期末检查说已结转、结转却失败”的不一致。
+  const carryConflicts = carryForwardSemanticsConflicts(db, setId, profile, roles, period, {
+    yearEnd: String(period).endsWith("-12"),
+  });
+  if (carryConflicts.length) {
+    const error = new Error("carryforward_account_semantics_conflict");
+    error.code = "carryforward_account_semantics_conflict";
+    error.details = { source: "period-end-check", period, conflicts: carryConflicts };
+    throw error;
   }
   const steps = [
     draftStep(db, setId, period),
