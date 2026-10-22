@@ -441,6 +441,162 @@ test("增量导入入口一致：更晚期间已封账时，向更早期追加�
   assert.equal(appended.created.vouchersCreated, 1);
 });
 
+test("P1：旧折旧草稿（改寿命后）经 HTTP 不得重过账，检查不按“已过账”放行，撤销重算 20 后可封账", async () => {
+  const set = await ok("POST", "/api/account-sets", { name: "P1 旧草稿公司", start_period: "2026-01" });
+  const id = set.id;
+  await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
+    { code: "1601", debit: 100, credit: 0 }, { code: "3001", debit: 0, credit: 100 },
+  ] });
+  const card = await ok("POST", `/api/account-sets/${id}/assets`, {
+    kind: "fixed", name: "旧草稿设备", original_cost: 100, residual_rate: 0,
+    useful_life_months: 10, start_period: "2026-01", acquired_period: "2026-01",
+  });
+  assert.equal(card.monthly, 10); // 手算：100 ÷ 10
+  const dep = await ok("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-01" });
+  assert.equal(dep.voucher.total_debit, 10);
+  await ok("POST", `/api/account-sets/${id}/vouchers/${dep.voucher.id}/unpost`);
+  assert.equal((await ok("PATCH", `/api/account-sets/${id}/assets/${card.id}`, { useful_life_months: 5 })).monthly, 20);
+
+  const before = snapshot();
+  const denied = await fails("POST", `/api/account-sets/${id}/vouchers/${dep.voucher.id}/post`, undefined, 409,
+    /depreciation_run_stale/);
+  assert.equal(denied.details.stale[0].period, "2026-01");
+  assert.equal(denied.details.stale[0].recordedAmount, 10);
+  assert.equal(denied.details.stale[0].expectedAmount, 20);
+  assert.match(denied.details.guidance, /删除|重新计提/);
+  assert.deepEqual(snapshot(), before, "拒绝重过账不得写入任何内容");
+  // Agent 入口同样拒绝旧草稿重过账。
+  await fails("POST", "/agent/tools/voucher_post", { accountSetId: id, voucherId: dep.voucher.id }, 409,
+    /depreciation_run_stale/);
+  // 期末检查 / 封账：旧草稿仍阻止，不能凭“有计提记录”放行。
+  const blocked = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`);
+  assert.equal(blocked.ready, false);
+  assert.ok(blocked.blocking.some((b) => b.code === "depreciation_draft_exists"), JSON.stringify(blocked.blocking));
+  // 封账仍被拒：既有草稿前置先报 period_has_draft_vouchers（400，保留旧错误码）。
+  await fails("POST", `/api/account-sets/${id}/periods`, { period: "2026-01", status: "closed" }, 400,
+    /period_has_draft_vouchers/);
+
+  // 可行解除路径：删除旧草稿（连带旧 run）→ 按当前定义重新计提 20 → 结转 → 封账。
+  await ok("DELETE", `/api/account-sets/${id}/vouchers/${dep.voucher.id}`);
+  assert.equal((await ok("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-01" })).voucher.total_debit, 20);
+  await ok("POST", `/api/account-sets/${id}/carry-forward`, { period: "2026-01" });
+  const ready = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`);
+  assert.equal(ready.ready, true, JSON.stringify(ready.blocking));
+  assert.equal((await ok("POST", `/api/account-sets/${id}/periods`, { period: "2026-01", status: "closed" })).status, "closed");
+  const cards = await ok("GET", `/api/account-sets/${id}/assets`);
+  assert.equal(cards[0].accumulated, 20); // 手算：100 ÷ 5
+});
+
+test("P2：HTTP 凭证拒绝不足一分的非零数（全库不变），正常边界保留", async () => {
+  const set = await ok("POST", "/api/account-sets", { name: "P2 亚分公司", start_period: "2026-01" });
+  const id = set.id;
+  const before = snapshot();
+  const body = await fails("POST", `/api/account-sets/${id}/vouchers`, {
+    period: "2026-01", status: "posted",
+    entries: [
+      { code: "1002", debit: 1, credit: 0.001 },
+      { code: "1001", debit: 0.001, credit: 1 },
+    ],
+  }, 400, /voucher_invalid/);
+  const messages = JSON.stringify(body.details);
+  assert.match(messages, /不足一分/, messages);
+  assert.deepEqual(snapshot(), before, "被拒绝的亚分凭证不得写入任何内容");
+  // Agent 工具入口同样拒绝（voucher_check / voucher_create）。
+  const agentCheck = await ok("POST", "/agent/tools/voucher_check", {
+    accountSetId: id, entries: [{ code: "1002", debit: 1 }, { code: "1001", credit: 0.0049 }],
+  });
+  assert.equal(agentCheck.ok, false);
+  assert.match(JSON.stringify(agentCheck.errors), /不足一分/);
+  await fails("POST", "/agent/tools/voucher_create", {
+    accountSetId: id, period: "2026-01",
+    entries: [{ code: "1002", debit: 1 }, { code: "1001", credit: 0.001 }],
+  }, 400, /voucher_invalid/);
+  // 合法边界：0.005 四舍五入为 0.01。
+  const okVoucher = await ok("POST", `/api/account-sets/${id}/vouchers`, {
+    period: "2026-01", status: "posted",
+    entries: [{ code: "1002", debit: 0.005 }, { code: "1001", credit: 0.005 }],
+  });
+  assert.equal(okVoucher.total_debit, 0.01);
+});
+
+test("P3：未入账登记按取得期间计入（HTTP：1 月不阻塞 / 3、4 月阻塞），缺取得期间仍保守报告", async () => {
+  const set = await ok("POST", "/api/account-sets", { name: "P3 未入账期间公司", start_period: "2026-01" });
+  const id = set.id;
+  await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
+    { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },
+  ] });
+  const card = await ok("POST", `/api/account-sets/${id}/assets`, {
+    kind: "fixed", name: "三月待补购入设备", original_cost: 100, residual_rate: 0,
+    useful_life_months: 10, start_period: "2026-04", acquired_period: "2026-03",
+    ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补",
+  });
+  assert.equal(card.ledger_status, "pending_purchase_voucher");
+  const jan = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`);
+  assert.equal(jan.ready, true, JSON.stringify(jan.blocking));
+  assert.equal(jan.blocking.some((b) => b.code === "asset_purchase_voucher_pending"), false);
+  const mar = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-03`);
+  assert.ok(mar.blocking.some((b) => b.code === "asset_purchase_voucher_pending"), JSON.stringify(mar.blocking));
+  const apr = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-04`);
+  assert.ok(apr.blocking.some((b) => b.code === "asset_purchase_voucher_pending"));
+  assert.ok(apr.blocking.some((b) => b.code === "asset_ledger_pending"));
+  await fails("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-04" }, 409, /asset_ledger_pending/);
+  // 真实补录购入 + 改回 booked 后 3 月不再阻塞。
+  await ok("POST", `/api/account-sets/${id}/vouchers`, {
+    period: "2026-03", status: "posted",
+    entries: [{ code: "1601", debit: 100, credit: 0 }, { code: "1002", debit: 0, credit: 100 }],
+  });
+  await ok("PATCH", `/api/account-sets/${id}/assets/${card.id}`, { ledger_status: "booked" });
+  const fixed = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-03`);
+  assert.equal(fixed.blocking.some((b) => b.code === "asset_purchase_voucher_pending"), false, JSON.stringify(fixed.blocking));
+  assert.equal(fixed.steps.find((s) => s.id === "asset_reconciliation").status, "ok");
+
+  // 缺取得期间：仍保守报告，不因缺字段放宽真实未入账旁路。
+  const set2 = await ok("POST", "/api/account-sets", { name: "P3 缺取得期间公司", start_period: "2026-01" });
+  await ok("PUT", `/api/account-sets/${set2.id}/opening-balances`, { items: [
+    { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },
+  ] });
+  await ok("POST", `/api/account-sets/${set2.id}/assets`, {
+    kind: "fixed", name: "未登记取得的待补设备", original_cost: 100, residual_rate: 0,
+    useful_life_months: 10, start_period: "2026-04",
+    ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补",
+  });
+  const missing = await ok("GET", `/api/account-sets/${set2.id}/period-end-check?period=2026-01`);
+  assert.ok(missing.blocking.some((b) => b.code === "asset_purchase_voucher_pending"), JSON.stringify(missing.blocking));
+  assert.ok(missing.blocking.some((b) => b.code === "asset_acquired_period_missing"));
+});
+
+test("P4：HTTP 资产写入口拒绝 2^32 / 2^32−1 / 非整数 / 超上限时不留半张卡片，1200 边界合法", async () => {
+  const set = await ok("POST", "/api/account-sets", { name: "P4 寿命边界公司", start_period: "2026-01" });
+  const id = set.id;
+  const before = snapshot();
+  for (const bad of [4294967296, 4294967295, 1201, 0, -1, 1.5]) {
+    await fails("POST", `/api/account-sets/${id}/assets`, {
+      kind: "fixed", name: "寿命非法设备", original_cost: 100, residual_rate: 0,
+      useful_life_months: bad, start_period: "2026-01", acquired_period: "2026-01",
+    }, 400, /useful_life_months_(invalid|out_of_range)/);
+  }
+  assert.deepEqual(snapshot(), before, "非法寿命不得落库（不留半张卡片）");
+  assert.equal((await ok("GET", `/api/account-sets/${id}/assets`)).length, 0);
+  // Agent 入口：旧 pre-fix 行为会先落库再在 DTO 里抛错，现在写入前就拒绝。
+  await fails("POST", "/agent/tools/asset_create", {
+    accountSetId: id, name: "寿命非法设备", original_cost: 100, residual_rate: 0,
+    useful_life_months: 4294967296, start_period: "2026-01", acquired_period: "2026-01",
+  }, 400, /useful_life_months_out_of_range/);
+  assert.equal((await ok("GET", `/api/account-sets/${id}/assets`)).length, 0);
+  // 边界 1200 合法，列表 / 期末检查可正常读取（O(1) 分期）。
+  const edge = await ok("POST", `/api/account-sets/${id}/assets`, {
+    kind: "fixed", name: "边界寿命设备", original_cost: 1200, residual_rate: 0,
+    useful_life_months: 1200, start_period: "2026-01", acquired_period: "2026-01",
+  });
+  assert.equal(edge.monthly, 1);
+  await fails("PATCH", `/api/account-sets/${id}/assets/${edge.id}`, { useful_life_months: 4294967296 }, 400,
+    /useful_life_months_out_of_range/);
+  const unchanged = (await ok("GET", `/api/account-sets/${id}/assets`))[0];
+  assert.equal(unchanged.useful_life_months, 1200);
+  const check = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`);
+  assert.equal(check.steps.find((s) => s.id === "depreciation").status, "blocked");
+});
+
 test("期末检查对不存在 / 非法期间给出稳定错误码", async () => {
   await fails("GET", `/api/account-sets/${setId}/period-end-check`, undefined, 400, /period_required/);
   await fails("GET", `/api/account-sets/${setId}/period-end-check?period=2026-13`, undefined, 400, /period_invalid/);

@@ -172,7 +172,7 @@ const BACKEND_TOOLS = [
       kind: { type: "string", enum: ["fixed", "intangible"], description: "缺省 fixed" },
       name: { type: "string" },
       original_cost: { type: "number", description: "原值（精确到分；超过 999999999999.99 拒绝）" },
-      useful_life_months: { type: "integer" },
+      useful_life_months: { type: "integer", minimum: 1, maximum: 1200, description: "计提期数（1 ~ 1200 期）。这是技术输入边界，不冒充法定会计年限；非整数 / 0 / 超上限一律拒绝" },
       start_period: PERIOD,
       residual_rate: { type: "number", description: "残值率，固定资产缺省 0.05，无形资产缺省 0" },
       asset_account: { type: "string" },
@@ -191,9 +191,9 @@ const BACKEND_TOOLS = [
       patch: { type: "object", description: "待修改字段：{name?, expense_account?, acquired_period?, opening_accumulated?, ledger_status?, ledger_note?}" },
     }, ["accountSetId", "assetId"]), "local"),
   available("period_end_check",
-    "期末检查（只读）：逐步返回草稿清零、试算平衡、应计提折旧/摊销完整、资产卡片与总账核对、损益结转、年末结转、连续期间顺序的状态与适用/不适用理由，以及阻塞项与明确缺项。连续期间不只按凭证判断：更早期间有应计提而零凭证同样阻塞（previous_period_depreciation_pending）。与封账前置共用同一规则，不连接税局。",
+    "期末检查（只读）：逐步返回草稿清零、试算平衡、应计提折旧/摊销完整、资产卡片与总账核对、损益结转、年末结转、连续期间顺序的状态与适用/不适用理由，以及阻塞项与明确缺项。连续期间不只按凭证判断：更早期间有应计提而零凭证同样阻塞（previous_period_depreciation_pending）。已过账计提仍按卡片当前定义重算，定义已变的旧计提报 depreciation_run_stale（不按“曾经过账”放行）。与封账前置共用同一规则，不连接税局。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD }, ["accountSetId", "period"]), "local"),
-  available("depreciation_run", "对全部资产卡片按直线法计提指定期间折旧/摊销，生成一张凭证。同期不重复计提；累计舍入在应有寿命内恰好提足；未入固定资产账的卡片明确拒绝（asset_ledger_pending），全局累计会超出可计提额时明确拒绝（depreciation_global_over_depreciable）并给撤销顺序。",
+  available("depreciation_run", "对全部资产卡片按直线法计提指定期间折旧/摊销，生成一张凭证。同期不重复计提；累计舍入在应有寿命内恰好提足；未入固定资产账的卡片明确拒绝（asset_ledger_pending），全局累计会超出可计提额时明确拒绝（depreciation_global_over_depreciable）并给撤销顺序。旧定义下的已过账计提（寿命 / 原值 / 期间等已变）不会被当成已计提完成或静默补提，而是返回 depreciation_run_stale 并要求反过账 + 删除后重算。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD }, ["accountSetId", "period"]), "local"),
   available("carry_forward_profit", "结转本期损益到 3103；yearEnd=true 时再结转 3103→3104。普通结转读取截至本期的累计损益余额，因此更晚期间已有已过账结转时，前期写入会被拒绝（later_profit_carryforward_depends_on_period），需按倒序撤销后重做。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD, yearEnd: { type: "boolean" } }, ["accountSetId", "period"]), "local"),
@@ -363,7 +363,7 @@ function typeOk(v, t) {
   return false;
 }
 
-/** 最小运行时校验：必填、类型、枚举。返回问题字符串数组，空数组表示通过。 */
+/** 最小运行时校验：必填、类型、枚举、数值上下限。返回问题字符串数组，空数组表示通过。 */
 export function validateArgs(schema, args) {
   const problems = [];
   if (!schema || schema.type !== "object") return problems;
@@ -380,6 +380,11 @@ export function validateArgs(schema, args) {
       continue;
     }
     if (prop.enum && !prop.enum.includes(v)) problems.push(`参数 ${key} 只能是：${prop.enum.join(" / ")}`);
+    // 数值上下限（目前用于 useful_life_months 这类**技术输入边界**）：越界不交给后端落库后再报错。
+    if (typeof v === "number") {
+      if (typeof prop.minimum === "number" && v < prop.minimum) problems.push(`参数 ${key} 不能小于 ${prop.minimum}`);
+      if (typeof prop.maximum === "number" && v > prop.maximum) problems.push(`参数 ${key} 不能大于 ${prop.maximum}`);
+    }
   }
   return problems;
 }

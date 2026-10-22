@@ -16,10 +16,10 @@
 import {
   MONEY_MAX_TEXT,
   centsToNumber,
+  evenSplitAmountCents,
   formatCents,
   monthsBetween,
   mulCentsByRatio,
-  splitEvenlyCents,
   storedCents,
   sumCents,
 } from "./money.mjs";
@@ -128,14 +128,20 @@ export function sumNaturalByPrefix(balances, prefixes) {
 }
 
 // ------------------------------------------------------------------ 资产卡片金额与期序
-/** 卡片金额（分）：原值、残值、可折旧 / 摊销额、分期表。 */
+/** 卡片金额（分）：原值、残值、可折旧 / 摊销额、分期口径。
+ * 分期金额按需 O(1) 计算（amountAt），不展开整张表：寿命再大也不会线性吃内存。
+ */
 export function cardMoney(card) {
   const originalCents = storedCents(card.original_cost);
   const residualCents = mulCentsByRatio(originalCents, card.residual_rate ?? 0);
   const depreciableCents = originalCents - residualCents;
   const life = Number(card.useful_life_months);
-  const schedule = splitEvenlyCents(depreciableCents, life);
-  return { originalCents, residualCents, depreciableCents, schedule, monthlyCents: schedule[0], life };
+  const amountAt = (index) => evenSplitAmountCents(depreciableCents, life, index);
+  return {
+    originalCents, residualCents, depreciableCents, life, amountAt,
+    monthlyCents: amountAt(0),
+    finalMonthCents: amountAt(life - 1),
+  };
 }
 
 /** 卡片显式取得 / 入账期间；未登记时为 null（绝不用 start_period 推测取得日）。 */
@@ -156,12 +162,12 @@ function cardExistsAt(card, period) {
   return isPeriod(acquired) ? acquired <= period : true;
 }
 
-/** 已过账计提金额（分）：截至 period（历史口径）。 */
-function postedRunCents(db, cardId, throughPeriod = null) {
+/** 已过账计提金额（分）：截至 period（历史口径）。exclusive=true 时只统计**早于** period 的计提。 */
+function postedRunCents(db, cardId, throughPeriod = null, { exclusive = false } = {}) {
   const rows = throughPeriod
     ? db.prepare(
       `SELECT r.amount FROM asset_depreciation_runs r JOIN vouchers v ON v.id = r.voucher_id
-        WHERE r.asset_id=? AND v.status='posted' AND r.period<=?`,
+        WHERE r.asset_id=? AND v.status='posted' AND r.period${exclusive ? "<" : "<="}?`,
     ).all(cardId, throughPeriod)
     : db.prepare(
       `SELECT r.amount FROM asset_depreciation_runs r JOIN vouchers v ON v.id = r.voucher_id
@@ -171,9 +177,65 @@ function postedRunCents(db, cardId, throughPeriod = null) {
 }
 
 /**
+ * 按卡片**当前**定义计算该卡片在 period 应计提多少（分，O(1)）。
+ * 与「本期是否真的存在计提记录」无关：
+ *  - 期间非法 / 卡片当时尚不存在 / 未入账 / 未到期 / 已提足 / 已过寿命 → expectedCents = 0；
+ *  - 否则 = min(分期表当期金额, 截至上一期剩余额)。
+ * 用途：① 计算本期应提额；② 校验一张**旧草稿 / 已过账计提**是否仍与卡片定义一致
+ * （原值 / 残值 / 寿命 / 起提期间 / 取得期间 / 期初累计 / 账簿状态任一改变都会让它失配）。
+ */
+export function expectedDepreciationCents(db, card, period, money = cardMoney(card)) {
+  const index = monthsBetween(card.start_period, period);
+  const openingCents = storedCents(card.opening_accumulated ?? 0);
+  const beforeCents = openingCents + postedRunCents(db, card.id, period, { exclusive: true });
+  const base = { index, openingCents, beforeCents };
+  if (index === null) {
+    return { ...base, status: "invalid", expectedCents: 0n, reason: "计提开始期间非法" };
+  }
+  if (!cardExistsAt(card, period)) {
+    return {
+      ...base, status: "not_existed", expectedCents: 0n,
+      reason: `该期间卡片尚未取得 / 入账（取得期间 ${cardAcquiredPeriod(card)}），不应有计提`,
+    };
+  }
+  if (index < 0) {
+    return { ...base, status: "not_started", expectedCents: 0n, reason: `计提开始期间为 ${card.start_period}` };
+  }
+  if ((card.ledger_status ?? "booked") !== "booked") {
+    return {
+      ...base, status: "ledger_pending", expectedCents: 0n,
+      reason: "卡片登记为尚未入固定资产账：不得计提，需先补真实购入 / 期初入账并核对总账一致后改为 booked",
+    };
+  }
+  const remainingCents = money.depreciableCents - beforeCents;
+  if (remainingCents <= 0n) {
+    return { ...base, status: "fully_depreciated", expectedCents: 0n, reason: "截至上一期累计已提足，本期不应再提" };
+  }
+  if (index >= money.life) {
+    return {
+      ...base, status: "life_expired", expectedCents: 0n,
+      reason: `已超过 ${money.life} 期寿命但累计未提足，需人工核对卡片或补提`,
+    };
+  }
+  let dueCents = money.amountAt(index);
+  if (dueCents > remainingCents) dueCents = remainingCents;
+  if (dueCents < 0n) dueCents = 0n;
+  if (dueCents === 0n) {
+    // 极小金额按分取整后本期为 0（余额在后期提足）：不是阻塞项，也不是“已提足”。
+    return {
+      ...base, status: "no_amount_due", expectedCents: 0n,
+      reason: "按分取整后本期应计提额为 0，余额在后续期提足",
+    };
+  }
+  return { ...base, status: "due", expectedCents: dueCents };
+}
+
+/**
  * 单张卡片在 period 的计提状态：
  *  not_started       未到计提开始期间（start_period 之后才开始计提，不等同取得日期）
- *  posted            本期已计提并过账
+ *  posted            本期已计提并过账，且金额仍与卡片当前定义一致
+ *  posted_stale      本期已过账，但与卡片当前定义应提额（或科目）不一致：旧定义下的失效计提，
+ *                    不能当成“已完成”（阻止封账），必须反过账 + 删除后重算
  *  draft_pending     本期存在未过账计提（必须删除或恢复，绝不双重入账）
  *  ledger_pending    卡片登记为「尚未入固定资产账」：不得计提，也不能作为已入账资产核对
  *  fully_depreciated 已提足（**截至该期间**的累计达到可折旧 / 摊销额，无法再提）
@@ -219,7 +281,24 @@ export function assetCardPeriodStatus(db, card, period, money = cardMoney(card))
   };
   if (index === null) return { ...base, status: "invalid", reason: "计提开始期间非法" };
   if (run && run.voucher_status === "posted") {
-    return { ...base, status: "posted", amountCents: storedCents(run.amount) };
+    const recordedCents = storedCents(run.amount);
+    // 已过账 ≠ 已完成：必须再用卡片**当前**定义重算本期应提额。
+    // 反过账后改了寿命 / 原值 / 残值 / 起提期间 / 取得期间 / 期初累计 / 账簿状态时，
+    // 旧的已过账计提就不再成立，必须报 posted_stale（阻止封账），绝不当成“已计提完成”放行。
+    const expected = expectedDepreciationCents(db, card, period, money);
+    const consistent = expected.status === "due"
+      ? expected.expectedCents === recordedCents
+      : recordedCents === 0n;
+    if (consistent) return { ...base, status: "posted", amountCents: recordedCents };
+    return {
+      ...base,
+      status: "posted_stale",
+      amountCents: recordedCents,
+      expectedCents: expected.expectedCents,
+      expectedStatus: expected.status,
+      reason: `已过账计提 ${formatCents(recordedCents)} 与卡片当前定义应提 ${formatCents(expected.expectedCents)} 不一致`
+        + `（${expected.reason ?? expected.status}）：需反过账并删除旧计提凭证，按当前定义重新计提`,
+    };
   }
   if (run) {
     return {
@@ -252,9 +331,9 @@ export function assetCardPeriodStatus(db, card, period, money = cardMoney(card))
       reason: `已超过 ${money.life} 期寿命但累计未提足，需人工核对卡片或补提`,
     };
   }
-  // 本期应计提额 = 分期表金额，但不超过「截至本期间的剩余额」。
+  // 本期应计提额 = 分期表金额（O(1) 取当期，不展开整表），但不超过「截至本期间的剩余额」。
   // 不在这里用全局余额截断：那会把后期计提提前塞进历史期间，掩盖实际超提。
-  let dueCents = money.schedule[index];
+  let dueCents = money.amountAt(index);
   if (dueCents > remainingCents) dueCents = remainingCents;
   if (dueCents < 0n) dueCents = 0n;
   if (dueCents === 0n) {
@@ -286,6 +365,7 @@ function cardStatusDto(status) {
     accumulatedTotal: centsToNumber(status.globalAccumulatedCents),
     remaining: centsToNumber(status.remainingCents),
     dueAmount: status.amountCents === undefined ? null : centsToNumber(status.amountCents),
+    expectedAmount: status.expectedCents === undefined ? null : centsToNumber(status.expectedCents),
     reason: status.reason ?? null,
   };
 }
@@ -339,7 +419,9 @@ function assetReconciliationStep(db, setId, period) {
     cardAccumTotals.set(accumCode, (cardAccumTotals.get(accumCode) || 0n) + opening + runs);
     // 「尚未入固定资产账」不是豁免：账面没有原值就不能当作已入账资产，必须继续参与原值核对，
     // 并额外给出明确缺项（真实补购入 / 期初入账后改正状态才能真正解除）。
-    if (ledgerStatus !== "booked") {
+    // 但只统计**该期间已存在**的卡片：取得期间在查询期间之后的卡片，本期根本没有这项资产，
+    // 不应把它的待补凭证登记跨期前置成阻塞（缺取得期间仍按“已存在”保守报告）。
+    if (exists && ledgerStatus !== "booked") {
       pendingLedger.push({
         assetId: card.id,
         name: card.name,
@@ -467,7 +549,22 @@ function depreciationStep(db, setId, period) {
   const draft = statuses.filter((s) => s.status === "draft_pending");
   const expired = statuses.filter((s) => s.status === "life_expired");
   const ledgerPending = statuses.filter((s) => s.status === "ledger_pending");
+  const stale = statuses.filter((s) => s.status === "posted_stale");
   const blocking = [];
+  for (const s of stale) {
+    blocking.push({
+      code: "depreciation_run_stale",
+      message: `资产「${s.name}」本期已过账计提 ${formatCents(s.amountCents)} 与卡片当前定义应提 ${formatCents(s.expectedCents)} 不一致`
+        + `（${s.reason ?? "卡片定义已变更"}）：旧草稿重过账 / 旧计提凭证不能继续生效，请反过账并删除旧计提凭证后重新计提`,
+      details: {
+        assetId: s.assetId, period,
+        recordedAmount: centsToNumber(s.amountCents),
+        expectedAmount: centsToNumber(s.expectedCents),
+        expectedStatus: s.expectedStatus ?? null,
+        guidance: "反过账该计提凭证 → 删除旧计提凭证（连带旧 run）→ 按当前卡片定义重新计提；不接受把旧草稿直接重过账",
+      },
+    });
+  }
   for (const s of ledgerPending) {
     blocking.push({
       code: "asset_ledger_pending",

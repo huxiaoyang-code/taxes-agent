@@ -275,19 +275,48 @@ export function mulDivCents(cents, numerator, denominator) {
 }
 
 /**
- * 把总额按「分」平均分期：每期向下取整，余额全部落在最后一期。
- * 这样既不会少提最后一分，也不会在寿命内提前多提一期（前期永不超额）。
+ * 分期表**展开**的上限（期数）。这是技术输入边界，不是法定折旧年限。
+ * evenSplitAmountCents（O(1) 取单期）不受此限；只有 splitEvenlyCents（展开整张表）才受限。
  */
-export function splitEvenlyCents(totalCents, periods) {
-  const total = typeof totalCents === "bigint" ? totalCents : BigInt(totalCents);
+export const MAX_SCHEDULE_PERIODS = 1200;
+
+function requirePeriodCount(periods) {
   const count = Number(periods);
   if (!Number.isInteger(count) || count < 1) {
     throw new MoneyError("money_periods_invalid", `分期数必须为正整数：${periods}`);
   }
+  return count;
+}
+
+/**
+ * 第 index 期（0 起）的金额，**O(1)**，不展开整张分期表。
+ * 规则：每期向下取整到分，余额全部落在最后一期 —— 寿命内恰好提足、前期永不超额。
+ * 期数只要求正整数（不设内存上限）：即使旧库里的使用寿命很大，取一期仍然是常数内存 / 常数时间。
+ */
+export function evenSplitAmountCents(totalCents, periods, index) {
+  const total = typeof totalCents === "bigint" ? totalCents : BigInt(totalCents);
+  const count = requirePeriodCount(periods);
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i >= count) {
+    throw new MoneyError("money_periods_invalid", `期序超出分期范围（0 ~ ${count - 1}）：${index}`);
+  }
   const base = total / BigInt(count);
-  const out = new Array(count).fill(base);
-  out[count - 1] = total - base * BigInt(count - 1);
-  return out;
+  return i === count - 1 ? total - base * BigInt(count - 1) : base;
+}
+
+/**
+ * 把总额按「分」平均分期：每期向下取整，余额全部落在最后一期。
+ * 会展开整张表，所以限定 1 ~ MAX_SCHEDULE_PERIODS 期（防止巨大期数线性吃内存）；
+ * 只需要某一期金额时用 evenSplitAmountCents（O(1)）。
+ */
+export function splitEvenlyCents(totalCents, periods) {
+  const total = typeof totalCents === "bigint" ? totalCents : BigInt(totalCents);
+  const count = requirePeriodCount(periods);
+  if (count > MAX_SCHEDULE_PERIODS) {
+    throw new MoneyError("money_periods_out_of_range",
+      `分期数超出展开上限（1 ~ ${MAX_SCHEDULE_PERIODS} 期）：${periods}；只需单期金额请用 evenSplitAmountCents`);
+  }
+  return Array.from({ length: count }, (_, i) => evenSplitAmountCents(total, count, i));
 }
 
 /** 两个期间（YYYY-MM）相差的月数，b - a；用于计提期序（不构造日期）。 */

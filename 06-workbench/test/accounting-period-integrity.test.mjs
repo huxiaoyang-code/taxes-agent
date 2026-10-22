@@ -581,6 +581,30 @@ try {
     } finally { db.prepare = original; }
     assert.deepEqual(snapshot(), before, "新增失败不得留下半张卡片");
     assert.equal(A.listAssetCards(s).length, 1);
+
+    // 落库之后的 DTO 构造失败也必须整体回滚（review2 P4）：
+    // 不允许出现“卡片已持久化、但列表 / 期末检查每次都因同一行报错”的半成品。
+    db.prepare = (sql) => {
+      if (/SELECT \* FROM asset_cards WHERE account_set_id=\? AND id=\?/.test(sql)) throw new Error("inject_card_dto_fail");
+      return original(sql);
+    };
+    try {
+      await rejects(() => A.addAssetCard(s, {
+        name: "DTO 失败卡片", original_cost: 60, residual_rate: 0, useful_life_months: 3,
+        start_period: "2026-02", acquired_period: "2026-01",
+      }), /inject_card_dto_fail/);
+    } finally { db.prepare = original; }
+    assert.deepEqual(snapshot(), before, "DTO 构造失败必须回滚已落库的卡片");
+    assert.equal(A.listAssetCards(s).length, 1);
+    db.prepare = (sql) => {
+      if (/SELECT \* FROM asset_cards WHERE account_set_id=\? AND id=\?/.test(sql)) throw new Error("inject_card_dto_fail");
+      return original(sql);
+    };
+    try {
+      await rejects(() => A.updateAssetCard(s, card.id, { name: "改名失败" }), /inject_card_dto_fail/);
+    } finally { db.prepare = original; }
+    assert.deepEqual(snapshot(), before, "DTO 构造失败必须回滚已更新的字段");
+    assert.equal(A.listAssetCards(s)[0].name, "原子性设备");
   });
 
   // ================================================================ F2 后期真实依赖
@@ -932,6 +956,256 @@ try {
     // 未被结转阻塞住：恢复后正常结转并可封账。
     assert.equal(A.carryForwardProfit(s, "2026-01", { yearEnd: true }).profit, 70);
     assert.equal(A.setPeriodStatus(s, "2026-01", "closed").status, "closed");
+  });
+
+  // ================================================================ 8. 最终独审四项定向回归
+  await test("P1：改寿命后旧折旧草稿不得重过账，期末检查也不按“已过账”放行；撤销重算 20 后可封账", async () => {
+    const s = newSet("P1-旧草稿失效");
+    // 期初投入资产 100（无凭证）：借 1601 100 / 贷 3001 100。
+    A.setOpeningBalances(s, [e("1601", 100), e("3001", 0, 100)]);
+    const card = A.addAssetCard(s, {
+      name: "旧草稿设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    assert.equal(card.monthly, 10); // 手算：100 ÷ 10 = 10
+    const jan = A.generateDepreciation(s, "2026-01");
+    assert.equal(jan.voucher.total_debit, 10);
+    A.unpostVoucher(s, jan.voucher.id);
+    // 反过账后改寿命 10 → 5（尚无已过账计提，改动本身合法），月额变为 20。
+    const changed = A.updateAssetCard(s, card.id, { useful_life_months: 5 });
+    assert.equal(changed.monthly, 20); // 手算：100 ÷ 5 = 20
+
+    const before = snapshot();
+    const err = await rejectsCode(() => A.postVoucher(s, jan.voucher.id), "depreciation_run_stale");
+    assert.equal(err.details.voucherId, jan.voucher.id);
+    assert.equal(err.details.stale[0].period, "2026-01");
+    assert.equal(err.details.stale[0].recordedAmount, 10);
+    assert.equal(err.details.stale[0].expectedAmount, 20);
+    assert.match(err.details.guidance, /删除|重新计提/);
+    assert.deepEqual(snapshot(), before, "拒绝重过账不得写入任何内容");
+    assert.equal(A.getVoucher(s, jan.voucher.id).status, "draft", "旧凭证必须保持草稿，不被静默改过账");
+
+    // 旧草稿仍是本期未过账计提：期末检查阻止封账（不能凭“有计提记录”放行）。
+    const blocked = A.periodEndCheck(s, "2026-01");
+    assert.equal(blocked.ready, false);
+    assert.equal(stepOf(blocked, "depreciation").status, "blocked");
+    assert.ok(codesOf(blocked).includes("depreciation_draft_exists"), JSON.stringify(blocked.blocking));
+    // 封账仍被拒：既有草稿前置先报 period_has_draft_vouchers（保留旧错误码），同样不放行。
+    await rejectsCode(() => A.setPeriodStatus(s, "2026-01", "closed"), "period_has_draft_vouchers");
+
+    // 修复前 / 直接写库形态：旧 run 被写成已过账 —— 必须报 posted_stale，而不是“已计提完成”。
+    db.prepare(`UPDATE vouchers SET status='posted' WHERE id=?`).run(jan.voucher.id);
+    const staleCheck = A.periodEndCheck(s, "2026-01");
+    assert.equal(staleCheck.ready, false, "旧定义下的已过账计提不得让期末检查 ready=true");
+    const staleStep = stepOf(staleCheck, "depreciation");
+    const staleItem = staleStep.blocking.find((b) => b.code === "depreciation_run_stale");
+    assert.ok(staleItem, JSON.stringify(staleStep.blocking));
+    assert.equal(staleItem.details.recordedAmount, 10);
+    assert.equal(staleItem.details.expectedAmount, 20);
+    assert.equal(staleStep.details.cards[0].status, "posted_stale");
+    assert.equal(staleStep.details.cards[0].dueAmount, 10);
+    assert.equal(staleStep.details.cards[0].expectedAmount, 20);
+    await rejectsCode(() => A.generateDepreciation(s, "2026-01"), "depreciation_run_stale");
+    await rejectsCode(() => A.setPeriodStatus(s, "2026-01", "closed"), "period_end_check_failed");
+
+    // 可行解除路径：反过账 → 删除旧计提凭证（连带旧 run）→ 按当前定义重新计提 20 → 结转 → 封账。
+    A.unpostVoucher(s, jan.voucher.id);
+    A.deleteVoucher(s, jan.voucher.id);
+    assert.equal(A.listDepreciationRuns(s, { period: "2026-01" }).length, 0);
+    assert.equal(A.generateDepreciation(s, "2026-01").voucher.total_debit, 20);
+    A.carryForwardProfit(s, "2026-01");
+    const ready = A.periodEndCheck(s, "2026-01");
+    assert.equal(ready.ready, true, JSON.stringify(ready.blocking));
+    assert.equal(A.setPeriodStatus(s, "2026-01", "closed").status, "closed");
+    assert.equal(A.accountBalances(s, "2026-01").get("1602").natural, 20);
+  });
+
+  await test("P1：原值 / 残值 / 起提 / 取得 / 期初累计 / 账簿状态 / 科目变更都让旧草稿失效，纯名称备注不锁死", async () => {
+    const cases = [
+      { patch: { original_cost: 200 }, expected: 20, label: "原值 100→200（20）" },
+      { patch: { residual_rate: 0.1 }, expected: 9, label: "残值率 0→10%（可计提 90，月额 9）" },
+      { patch: { start_period: "2026-02" }, expected: 0, label: "起提期间推到 2 月（1 月不应计提）" },
+      { patch: { acquired_period: "2027-01" }, expected: 0, label: "取得期间晚于计提期（卡片当时不存在）" },
+      { patch: { opening_accumulated: 95 }, expected: 5, label: "期初累计 95（只剩 5）" },
+      {
+        patch: { ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补" },
+        expected: 0, label: "改为未入固定资产账（不得计提）",
+      },
+    ];
+    for (const item of cases) {
+      const s = newSet(`P1-字段-${item.label.slice(0, 6)}`);
+      A.setOpeningBalances(s, [e("1601", 100), e("3001", 0, 100)]);
+      const card = A.addAssetCard(s, {
+        name: "字段覆盖设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+        start_period: "2026-01", acquired_period: "2026-01",
+      });
+      const jan = A.generateDepreciation(s, "2026-01");
+      assert.equal(jan.voucher.total_debit, 10);
+      A.unpostVoucher(s, jan.voucher.id);
+      A.updateAssetCard(s, card.id, item.patch);
+      const before = snapshot();
+      const err = await rejectsCode(() => A.postVoucher(s, jan.voucher.id), "depreciation_run_stale");
+      assert.equal(err.details.stale[0].expectedAmount, item.expected, item.label);
+      assert.deepEqual(snapshot(), before, `${item.label}：拒绝重过账不得写入`);
+    }
+
+    // 科目映射：金额没变但分录科目不再与卡片一致 → 同样拒绝重过账。
+    const s = newSet("P1-科目变更");
+    A.setOpeningBalances(s, [e("1601", 100), e("3001", 0, 100)]);
+    const card = A.addAssetCard(s, {
+      name: "科目设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    const jan = A.generateDepreciation(s, "2026-01");
+    A.unpostVoucher(s, jan.voucher.id);
+    A.updateAssetCard(s, card.id, { accum_account: "1702", expense_account: "5603" });
+    const accountErr = await rejectsCode(() => A.postVoucher(s, jan.voucher.id), "depreciation_run_stale");
+    const entryItem = accountErr.details.stale.find((x) => Array.isArray(x.entries));
+    assert.ok(entryItem, JSON.stringify(accountErr.details.stale));
+    assert.ok(entryItem.entries.some((x) => x.code === "1702" && x.side === "credit"), JSON.stringify(entryItem.entries));
+
+    // 资产科目（asset_account）不进入计提凭证分录，只影响原值核对科目：允许重过账，但核对报差异（封账仍被阻止）。
+    const s3 = newSet("P1-资产科目");
+    A.setOpeningBalances(s3, [e("1601", 100), e("3001", 0, 100)]);
+    const card3 = A.addAssetCard(s3, {
+      name: "资产科目设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    const jan3 = A.generateDepreciation(s3, "2026-01");
+    A.unpostVoucher(s3, jan3.voucher.id);
+    A.updateAssetCard(s3, card3.id, { asset_account: "1701" });
+    assert.equal(A.postVoucher(s3, jan3.voucher.id).status, "posted", "资产科目变更不使计提金额 / 分录失效");
+    const recon3 = stepOf(A.periodEndCheck(s3, "2026-01"), "asset_reconciliation");
+    assert.equal(recon3.status, "blocked", "但原值核对会如实报差异");
+    assert.ok(recon3.blocking.some((b) => b.code === "asset_missing_card"), JSON.stringify(recon3.blocking));
+
+    // 纯显示信息（名称 / 备注）不应无意义锁死重过账。
+    const s2 = newSet("P1-纯显示");
+    A.setOpeningBalances(s2, [e("1601", 100), e("3001", 0, 100)]);
+    const plain = A.addAssetCard(s2, {
+      name: "显示信息设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    const jan2 = A.generateDepreciation(s2, "2026-01");
+    A.unpostVoucher(s2, jan2.voucher.id);
+    A.updateAssetCard(s2, plain.id, { name: "改个名字", ledger_note: "只是备注" });
+    assert.equal(A.postVoucher(s2, jan2.voucher.id).status, "posted", "名称 / 备注变更不应阻止重过账");
+    assert.equal(A.listAssetCards(s2)[0].accumulated, 10);
+  });
+
+  await test("P2：凭证逐金额字段拒绝不足一分的非零数（0.001 / 1e-7 / 0.0049），正常边界保留，拒绝时全库不变", async () => {
+    const s = newSet("P2-亚分金额");
+    const before = snapshot();
+    const err = await rejectsCode(() => A.createVoucher(s, {
+      period: "2026-01", entries: [e("1002", 1, 0.001), e("1001", 0.001, 1)],
+    }), "voucher_invalid");
+    assert.ok(err.details.errors.some((m) => /不足一分/.test(m)), JSON.stringify(err.details.errors));
+    assert.deepEqual(snapshot(), before, "被拒绝的亚分凭证不得写入任何内容");
+    // 逐字段：数字 / 十进制文本 / 极小指数 / 舍入成 0 的正数都必须拒绝。
+    for (const bad of [0.001, "0.001", 1e-7, 1e-20, 0.0049, "0.0049999"]) {
+      const check = A.checkVoucher(s, [e("1002", bad), e("1001", 0, 1)]);
+      assert.equal(check.ok, false, `${String(bad)} 应被拒绝`);
+      assert.ok(check.errors.some((m) => /不足一分/.test(m)), `${String(bad)}：${JSON.stringify(check.errors)}`);
+    }
+    // 合法边界保留：0.005 按 HALF_UP 进一分（0.01），0.01 / 1 正常。
+    const okCheck = A.checkVoucher(s, [e("1002", 0.005), e("1001", 0, 0.005)]);
+    assert.equal(okCheck.ok, true, JSON.stringify(okCheck.errors));
+    assert.equal(okCheck.total_debit, 0.01);
+    const small = A.createVoucher(s, { period: "2026-01", entries: [e("1002", 0.01), e("1001", 0, 0.01)] });
+    assert.equal(small.total_debit, 0.01);
+  });
+
+  await test("P3：未入账登记的阻塞按取得期间计入（1 月不阻塞 / 3、4 月阻塞），缺取得期间仍保守报告", () => {
+    const s = newSet("P3-未入账按取得期间");
+    A.setOpeningBalances(s, opening(s));
+    const card = A.addAssetCard(s, {
+      name: "三月待补购入设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-04", acquired_period: "2026-03",
+      ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补",
+    });
+    // 1 月：卡片还没取得，原值核对与待补登记都不应提前成为阻塞。
+    const jan = A.periodEndCheck(s, "2026-01");
+    assert.equal(codesOf(jan).includes("asset_purchase_voucher_pending"), false, JSON.stringify(jan.blocking));
+    assert.equal(stepOf(jan, "asset_reconciliation").status, "ok", JSON.stringify(stepOf(jan, "asset_reconciliation").blocking));
+    assert.equal(stepOf(jan, "asset_reconciliation").details.pendingLedger.length, 0);
+    assert.equal(stepOf(jan, "depreciation").details.cards[0].status, "not_started");
+    assert.equal(jan.ready, true, JSON.stringify(jan.blocking));
+    // 3 月（取得期间）：未入账登记与原值差异必须报出来；计提尚未开始。
+    const mar = A.periodEndCheck(s, "2026-03");
+    assert.ok(codesOf(mar).includes("asset_purchase_voucher_pending"), JSON.stringify(mar.blocking));
+    assert.ok(codesOf(mar).includes("asset_cost_mismatch"), JSON.stringify(mar.blocking));
+    assert.equal(stepOf(mar, "asset_reconciliation").details.pendingLedger.length, 1);
+    assert.equal(stepOf(mar, "depreciation").details.cards[0].status, "not_started");
+    // 4 月：进入计提范围但未入账 → 计提步骤也阻止（真实未入账旁路不放宽）。
+    const apr = A.periodEndCheck(s, "2026-04");
+    assert.ok(codesOf(apr).includes("asset_purchase_voucher_pending"));
+    assert.ok(stepOf(apr, "depreciation").blocking.some((b) => b.code === "asset_ledger_pending"));
+    assert.throws(() => A.generateDepreciation(s, "2026-04"), /asset_ledger_pending/);
+    // 真实补录购入入账并改回 booked 后解除（3 月不再报待补 / 原值差异）。
+    A.createVoucher(s, { period: "2026-03", status: "posted", entries: [e("1601", 100), e("1002", 0, 100)] });
+    A.updateAssetCard(s, card.id, { ledger_status: "booked" });
+    const marFixed = A.periodEndCheck(s, "2026-03");
+    assert.equal(codesOf(marFixed).includes("asset_purchase_voucher_pending"), false, JSON.stringify(marFixed.blocking));
+    assert.equal(stepOf(marFixed, "asset_reconciliation").status, "ok", JSON.stringify(stepOf(marFixed, "asset_reconciliation").blocking));
+
+    // 缺取得期间：无法判断存在性 → 仍保守报告，不因缺字段就放宽真实未入账旁路。
+    const s2 = newSet("P3-缺取得期间仍保守");
+    A.setOpeningBalances(s2, opening(s2));
+    A.addAssetCard(s2, {
+      name: "未登记取得的待补设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-04", ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补",
+    });
+    const jan2 = A.periodEndCheck(s2, "2026-01");
+    assert.ok(codesOf(jan2).includes("asset_purchase_voucher_pending"), JSON.stringify(jan2.blocking));
+    assert.ok(codesOf(jan2).includes("asset_acquired_period_missing"), JSON.stringify(jan2.blocking));
+  });
+
+  await test("P4：寿命写入口拒绝 2^32 / 2^32−1 / 负数 / 0 / 非整数 / 1201，边界 1200 合法且失败完整回滚", async () => {
+    const s = newSet("P4-寿命边界");
+    A.setOpeningBalances(s, opening(s));
+    const before = snapshot();
+    for (const bad of [4294967296, 4294967295, -1, 0, 1.5, "12.5", "abc", 1201, NaN, Infinity]) {
+      const err = await rejects(() => A.addAssetCard(s, {
+        name: "寿命非法", original_cost: 100, residual_rate: 0, useful_life_months: bad,
+        start_period: "2026-01", acquired_period: "2026-01",
+      }));
+      assert.match(err.message, /useful_life_months_(invalid|out_of_range)/, String(bad));
+    }
+    assert.deepEqual(snapshot(), before, "非法寿命不得落库（不留半张卡片）");
+    assert.equal(A.listAssetCards(s).length, 0);
+
+    // 边界 1200 合法：O(1) 取单期金额，不展开整张分期表。
+    const edge = A.addAssetCard(s, {
+      name: "边界寿命设备", original_cost: 1200, residual_rate: 0, useful_life_months: 1200,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    assert.equal(edge.monthly, 1);      // 手算：1200 ÷ 1200
+    assert.equal(edge.final_month, 1);
+    assert.equal(A.updateAssetCard(s, edge.id, { useful_life_months: 1200 }).monthly, 1);
+    for (const bad of [4294967296, 1201, 0, -5, 2.5, "1200.5"]) {
+      await rejects(() => A.updateAssetCard(s, edge.id, { useful_life_months: bad }),
+        /useful_life_months_(invalid|out_of_range)/);
+    }
+    const unchanged = A.listAssetCards(s).find((c) => c.id === edge.id);
+    assert.equal(unchanged.useful_life_months, 1200, "更新失败必须完整回滚（卡片保持原值）");
+    assert.equal(unchanged.monthly, 1);
+
+    // 旧库已存在极端大寿命行：读路径 O(1)，列表与期末检查不会崩、也不会线性吃内存。
+    const s2 = newSet("P4-旧库存量大寿命");
+    A.setOpeningBalances(s2, opening(s2));
+    db.prepare(
+      `INSERT INTO asset_cards (account_set_id, kind, name, original_cost, residual_rate, useful_life_months,
+         start_period, asset_account, accum_account, expense_account, created_at, acquired_period)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(s2, "fixed", "旧库大寿命设备", 100, 0, 4294967296, "2026-01", "1601", "1602", "5602",
+      new Date().toISOString(), "2026-01");
+    const listed = A.listAssetCards(s2);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].useful_life_months, 4294967296);
+    assert.equal(listed[0].monthly, 0, "10000 分 ÷ 2^32 期按分向下取整为 0");
+    assert.equal(listed[0].final_month, 100, "余额仍落在最后一期");
+    const legacy = stepOf(A.periodEndCheck(s2, "2026-01"), "depreciation").details.cards[0];
+    assert.equal(legacy.status, "no_amount_due");
   });
 
   // ================================================================ 7. 迁移 v3 → v4

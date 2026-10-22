@@ -6,8 +6,10 @@
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，仅 10 个文档，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态），未提交、未推送、未建 PR、未合并，待管理者验收**
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4），未提交、未推送、未建 PR、未合并，待管理者验收与 root 最终审查**
   - head / merge 由管理者后补；本交接**不预报**审查结论、head 或 merge。
+  - **重要测试口径**：管理者在该 head 上跑过的 50 / 50 与已合 Office 21 / 21 **不能代表最终通过**；
+    最终独立审查（`fork_turns=none`）实测四个阻塞（P1–P4），本轮回工后才在**最终代码**上重跑全套。
 - 共享文档 release：管理者已在 `.agent-runs/local-02-docs-release.md` 释放 STATE / NEXT-SESSION /
   任务看板 / 八包总览 / INDEX / CHANGELOG / 接管计划，本包按自身事实追加（不覆盖前包已验收结果）。
 
@@ -29,7 +31,11 @@
 ### 1.2 资产卡片 / 总账 / 连续月份计提
 
 - 分期表：`月额 = 向下取整(可提提及额 ÷ 期数)`，余额落在最后一期 → 寿命内**恰好**提足
-  （`100 / 3 → 33.33 + 33.33 + 33.34`），寿命外不再提，不提前多提。
+  （`100 / 3 → 33.33 + 33.33 + 33.34`），寿命外不再提，不提前多提。取单期金额为 O(1)
+  （`money.evenSplitAmountCents` / `cardMoney(card).amountAt(index)`），不展开整张分期表。
+- **计提期数是受验证的输入**：新增 / 修改只接受 `1 ~ 1200` 期整数（技术输入边界，不冒充法定年限）；
+  负数 / 0 / 非整数 / `2^32` 一类巨大值在**写入前**拒绝，落库与 DTO 构造同一保存点，
+  任何后续计算失败整体回滚（不留下“已落库但列表 / 检查持续报错”的卡片）。
 - 极小金额（`0.05 元 / 12 期`）前 11 期 `no_amount_due`（不阻塞封账），第 12 期一次提足。
 - **期间口径**：卡片状态按被查询期间计算累计（只含本期及以前已过账计提），另给全局 `accumulatedTotal` 参考；
   本期应提额 = `min(分期表、截至本期剩余)`；**历史状态 / 历史应提额不用未来全局余额决定**
@@ -57,6 +63,10 @@
   `assertPeriodMutable`（前期可改性）/ `assetCardPeriodStatus`（卡片期间状态）。
 - 七个步骤：草稿清零、试算平衡、应计提完整、卡片与总账核对、损益结转、年末结转、连续期间顺序；
   每步给 `ok` / `blocked` / `not_applicable` 与**理由**，无资产 / 无损益 / 非 12 月显式不适用。
+- 计提步骤不只认「已过账」：已过账金额与卡片**当前**定义不一致时报 `posted_stale` /
+  `depreciation_run_stale` 并阻止封账（review2 P1）。
+- 未入账登记（`asset_purchase_voucher_pending`）只在**该期间卡片已存在**时计入阻塞；
+  取得期间晚于查询期间的卡片不提前阻塞，缺取得期间仍按「已存在」保守报告（review2 P3）。
 - 连续期间不只按凭证：更早期间有应计提而未计提的资产（**零凭证也算业务**）→ `previous_period_depreciation_pending`，
   需按期间顺序先完成该期计提 / 结转 / 封账；真正无适用业务的空期仍可跳过。
 - 真实入口：`GET /api/account-sets/:id/period-end-check?period=`、Agent `period_end_check`、
@@ -138,10 +148,10 @@
 
 | 命令 | 工作目录 | 结果 |
 |---|---|---|
-| `npm test` | `06-workbench` | **50 / 50 套 exit 0** |
-| `node test/accounting-period-integrity.test.mjs` | `06-workbench` | **38 / 38**，exit 0 |
-| `node test/accounting-period-http.test.mjs` | `06-workbench` | **13 / 13**，exit 0 |
-| `node accounting-period-test.mjs` | `finance-mcp` | **4 / 4**，exit 0 |
+| `npm test` | `06-workbench` | **50 / 50 套 exit 0**（最终代码实跑） |
+| `node test/accounting-period-integrity.test.mjs` | `06-workbench` | **43 / 43**，exit 0 |
+| `node test/accounting-period-http.test.mjs` | `06-workbench` | **17 / 17**，exit 0 |
+| `node accounting-period-test.mjs` | `finance-mcp` | **5 / 5**，exit 0 |
 | `node test/accounting-guards.test.mjs` | `06-workbench` | 23 / 23，exit 0 |
 | `node test/accounting-derived.test.mjs` | `06-workbench` | 31 / 31，exit 0 |
 | `node test/voucher-amount-guards.test.mjs` | `06-workbench` | 103 / 103，exit 0 |
@@ -247,3 +257,19 @@
 | F3 零凭证但应计提的前期被跳过，后期可先封账 | `periodSequenceStep` 扫描更早期间的资产应计提证据，新增 `previous_period_depreciation_pending`；真正无适用业务空期不阻塞 | 领域 F3（1/2/3 月 = 33.33/33.33/33.34，合计 100）、HTTP F3 |
 | F4 `pending_purchase_voucher` + 任意 note 成为原值差异旁路，未入账仍能提 10 折旧 | 未入账卡片不排除原值核对 + 额外 `asset_purchase_voucher_pending`；`generateDepreciation` 明确拒绝 `asset_ledger_pending`（先于任何写入）；任意备注不能解除 | 领域 F4、HTTP F4、MCP F4 |
 | 历史状态：`assetCardPeriodStatus` 用全局余额判 `fully_depreciated` / 截断历史应提额 | 历史状态 / 应提额只用「截至该期间」事实；全局余额改为执行时守卫 `depreciation_global_over_depreciable`（给撤销顺序）；旧库兼容回归保留 | 「历史状态：跨年查询 2025-12」「旧库已存在后期 run」 |
+
+### 9.3 review2：最终独立审查四项阻塞（P1–P4）
+
+文档与契约同步：`docs/ACCOUNTING-PERIOD-INTEGRITY.md` §1 / §2.1 / §2.5 / §2.4 / §3 / §4.2 / §6 / §7 / §8 已按本轮行为更新，
+其中 §2.5 为新增的「已过账 ≠ 已完成」口径。
+
+| 编号 | 问题（审查实测） | 修复 | 回归 |
+|---|---|---|---|
+| P1 | Jan 开账、卡片 100 / 寿命 10：计提 10 → 反过账 → 改寿命 5 → **重过账原凭证成功** → 结转：月额已变 20 但已提 10，`periodEndCheck ready=true` 且可封账 | `accounting.mjs` 新增 `assertDepreciationRunsCurrent`（`postVoucher` 调用）：按卡片**当前**定义重算每张旧 run 的应提额，并校验凭证分录与卡片费用 / 累计科目；失配报 `depreciation_run_stale` + `guidance`（删除旧草稿连带旧 run → 重新计提）。`period-end-controls.mjs` 新增 `expectedDepreciationCents` 与 `posted_stale` 状态，`depreciationStep` / `generateDepreciation` 同一口径阻止；名称 / 备注不参与，不无意义锁死；既有 `asset_card_locked_by_posted_runs` / `depreciation_exceeds_depreciable` / 历史期间口径全部保留 | 领域 P1 两条（原场景 + 字段覆盖含科目 / 纯显示）、HTTP P1（Agent `voucher_post` 409）、MCP P1 |
+| P2 | `parseVoucherAmount` 丢 `subCent`：两行 posted 凭证 `{1002,1,0.001}` / `{1001,0.001,1}` 成功并把 0.001 静默存 0 | 凭证逐金额字段拒绝非零亚分数（含 `1e-7` / `0.0049` / 十进制文本），`checkVoucher` / `createVoucher` 共用；`0.005 → 0.01` 等正常边界保留；拒绝时全库不变 | 领域 P2、HTTP P2（Agent 两入口）、MCP P2 |
+| P3 | `asset_reconciliation` 的 `pendingLedger` 未按 `exists` 过滤：取得 2026-03 / 起提 2026-04 的 `pending_purchase_voucher` 卡片把 2026-01 检查阻塞 | 只在 `cardExistsAt(card, period)` 成立时计入 `asset_purchase_voucher_pending`；缺取得期间仍保守报告；真实补录 + 改回 `booked` 才解除（未放宽真实未入账旁路） | 领域 P3（Jan / Mar / Apr、已录入 / 未录入、缺字段）、HTTP P3 |
+| P4 | 资产新增先落库、`cardDto` 才在 `splitEvenlyCents` 抛 `Invalid array length`（`4294967296`），卡片已持久化、列表 / 检查持续报错；小于 `2^32` 的巨大值线性 `fill` 耗内存 | `requireUsefulLifeMonths`：add / update 都只接受 `1 ~ 1200` 整数（`useful_life_months_invalid` / `useful_life_months_out_of_range`，技术边界不冒充法定年限）；`money.mjs` 新增 O(1) `evenSplitAmountCents` + `MAX_SCHEDULE_PERIODS`，`cardMoney` 改 `amountAt(index)` 不展开整表；add / update 的落库 + DTO 构造同一保存点，任何后续计算失败整体回滚 | 领域 P4（巨大 / 负数 / 0 / 非整数 / 1201 / 边界 1200 / 更新回滚 / 旧库极端大寿命行读路径）、HTTP P4（Agent `asset_create` + `PATCH`）、MCP P4（参数上下限 + patch 后端边界） |
+
+附带：`import-storage.mjs` 中 `acquired_period` 迁移注释原称“核对时回落 start_period”，与实际「不回填、报 `asset_acquired_period_missing`」矛盾，已修注释（**迁移语义不变**）。
+本轮回工**未新增存储列**（schema 仍 v4 同一 5 列），真实 v3→v4 升级 / WAL 备份恢复 / 失败回滚验证未退。
+LOCAL-06 备份 CLI 尚未合并且当前只支持 v3，本轮**不触碰**；v4 兼容增量由 root 整合已审 LOCAL-06 后另派。

@@ -80,6 +80,16 @@ test('期末完整性工具与资产补项工具已公布严格 schema（不在 
   const create = TOOLS.find((t) => t.name === 'asset_create');
   assert.ok(create.inputSchema.properties.acquired_period, 'asset_create 必须支持显式取得期间');
   assert.deepEqual(create.inputSchema.properties.ledger_status.enum, ['booked', 'pending_purchase_voucher']);
+  // 寿命是**技术输入边界**（非“法定会计年限”）：MCP 层先拦 2^32 这类巨大值，不交给后端落库后才报错。
+  assert.equal(create.inputSchema.properties.useful_life_months.maximum, 1200);
+  assert.equal(create.inputSchema.properties.useful_life_months.minimum, 1);
+  const lifeProblems = validateArgs(create.inputSchema, {
+    accountSetId: 1, name: 'x', original_cost: 1, useful_life_months: 4294967296, start_period: '2026-01',
+  });
+  assert.ok(lifeProblems.some((m) => /不能大于/.test(m)), JSON.stringify(lifeProblems));
+  assert.ok(validateArgs(create.inputSchema, {
+    accountSetId: 1, name: 'x', original_cost: 1, useful_life_months: 1200, start_period: '2026-01',
+  }).length === 0, '边界 1200 合法');
 });
 
 test('MCP 两个月完整链：计提 → 结转 → 期末检查 → 封账；缺步骤与封账后写入口一致拒绝', async () => {
@@ -236,6 +246,79 @@ test('MCP 负例：未入账登记不得计提 / 封账；后期普通结转依�
     await ok(client, 'voucher_unpost', { accountSetId: f2.id, voucherId: febCarry.voucher.id });
     await ok(client, 'voucher_unpost', { accountSetId: f2.id, voucherId: jan.id });
     assert.equal((await ok(client, 'carry_forward_profit', { accountSetId: f2.id, period: '2026-02' })).profit, 20);
+  });
+});
+
+test('MCP 负例：旧折旧草稿重过账 / 亚分金额 / 大寿命（真实链路）', async () => {
+  await withBackend(async (client) => {
+    // ---- P1：反过账后改寿命，旧草稿不得重过账，必须删除后重算 ----
+    const set = await ok(client, 'account_set_create', { name: 'MCP P1 旧草稿公司', start_period: '2026-01' });
+    await ok(client, 'opening_balance_set', { accountSetId: set.id, items: [
+      { code: '1601', debit: 100, credit: 0 }, { code: '3001', debit: 0, credit: 100 },
+    ] });
+    const card = await ok(client, 'asset_create', {
+      accountSetId: set.id, kind: 'fixed', name: 'MCP 旧草稿设备', original_cost: 100,
+      residual_rate: 0, useful_life_months: 10, start_period: '2026-01', acquired_period: '2026-01',
+    });
+    assert.equal(card.monthly, 10); // 手算：100 ÷ 10
+    const dep = await ok(client, 'depreciation_run', { accountSetId: set.id, period: '2026-01' });
+    assert.equal(dep.voucher.total_debit, 10);
+    await ok(client, 'voucher_unpost', { accountSetId: set.id, voucherId: dep.voucher.id });
+    assert.equal((await ok(client, 'asset_update', {
+      accountSetId: set.id, assetId: card.id, patch: { useful_life_months: 5 },
+    })).monthly, 20);
+    const denied = await fails(client, 'voucher_post', { accountSetId: set.id, voucherId: dep.voucher.id },
+      /depreciation_run_stale/);
+    assert.match(denied.text, /2026-01/);
+    const blocked = await ok(client, 'period_end_check', { accountSetId: set.id, period: '2026-01' });
+    assert.equal(blocked.ready, false);
+    assert.ok(blocked.blocking.some((b) => b.code === 'depreciation_draft_exists'), JSON.stringify(blocked.blocking));
+    await fails(client, 'period_set_status', { accountSetId: set.id, period: '2026-01', status: 'closed' },
+      /period_has_draft_vouchers/);
+    // 可行解除路径：删除旧草稿 → 重新计提 20 → 结转 → 封账。
+    await ok(client, 'voucher_delete', { accountSetId: set.id, voucherId: dep.voucher.id });
+    assert.equal((await ok(client, 'depreciation_run', { accountSetId: set.id, period: '2026-01' })).voucher.total_debit, 20);
+    await ok(client, 'carry_forward_profit', { accountSetId: set.id, period: '2026-01' });
+    assert.equal((await ok(client, 'period_end_check', { accountSetId: set.id, period: '2026-01' })).ready, true);
+    await ok(client, 'period_set_status', { accountSetId: set.id, period: '2026-01', status: 'closed' });
+
+    // ---- P2：亚分金额逐字段拒绝 ----
+    const p2 = await ok(client, 'account_set_create', { name: 'MCP P2 亚分公司', start_period: '2026-01' });
+    await fails(client, 'voucher_create', {
+      accountSetId: p2.id, period: '2026-01', status: 'posted',
+      entries: [{ code: '1002', debit: 1, credit: 0.001 }, { code: '1001', debit: 0.001, credit: 1 }],
+    }, /不足一分/);
+    const check = await ok(client, 'voucher_check', {
+      accountSetId: p2.id,
+      entries: [{ code: '1002', debit: 1 }, { code: '1001', credit: 0.0049 }],
+    });
+    assert.equal(check.ok, false);
+    assert.match(JSON.stringify(check.errors), /不足一分/);
+    // 正常边界保留：0.005 → 0.01
+    const okVoucher = await ok(client, 'voucher_create', {
+      accountSetId: p2.id, period: '2026-01', status: 'posted',
+      entries: [{ code: '1002', debit: 0.005 }, { code: '1001', credit: 0.005 }],
+    });
+    assert.equal(okVoucher.total_debit, 0.01);
+
+    // ---- P4：大寿命在 MCP 参数层就被拦住；patch 路径由后端边界拒绝，且不留半张卡片 ----
+    const p4 = await ok(client, 'account_set_create', { name: 'MCP P4 寿命边界公司', start_period: '2026-01' });
+    await fails(client, 'asset_create', {
+      accountSetId: p4.id, kind: 'fixed', name: '寿命非法设备', original_cost: 100, residual_rate: 0,
+      useful_life_months: 4294967296, start_period: '2026-01', acquired_period: '2026-01',
+    }, /不能大于 1200/);
+    assert.equal((await ok(client, 'asset_list', { accountSetId: p4.id })).length, 0, '非法寿命不得落库');
+    const edge = await ok(client, 'asset_create', {
+      accountSetId: p4.id, kind: 'fixed', name: '边界寿命设备', original_cost: 1200, residual_rate: 0,
+      useful_life_months: 1200, start_period: '2026-01', acquired_period: '2026-01',
+    });
+    assert.equal(edge.monthly, 1);
+    await fails(client, 'asset_update', {
+      accountSetId: p4.id, assetId: edge.id, patch: { useful_life_months: 4294967296 },
+    }, /useful_life_months_out_of_range/);
+    const listed = await ok(client, 'asset_list', { accountSetId: p4.id });
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].useful_life_months, 1200, '更新失败必须完整回滚');
   });
 });
 

@@ -19,7 +19,7 @@
 | 两位以上小数 | 逐笔四舍五入到分后再求和；合计在整数分上完成（`1.005 + 0.005 = 1.02`）。 |
 | 单笔上限 | `999999999999.99`（12 位整数 + 2 位小数，**本包不扩大上限**）。超界按**完整原值**判定：`999999999999.994`、`999999999999.9900000001` 一律拒绝，不因舍入被收进界内。 |
 | 负数 | 按完整原值判定（含 `-0.001`、`-1e-10`、`-0.000…1`）；会计金额不接受负数金额，一律拒绝，绝不因为舍成 0 而被接受。 |
-| 极小正值 | 非零但不足一分（如 `0.001`）带 `subCent` 标记：凭证 / 期初 / 导入期初**拒绝**，不会静默写成 0。 |
+| 极小正值 | 非零但不足一分（如 `0.001`、`1e-7`、`0.0049`）带 `subCent` 标记：凭证**逐个金额字段**（借方 / 贷方）、期初、导入期初一律**拒绝**，不会静默写成 0。`0.001` 不被允许“舍成 0 后仍算合法分录”。 |
 | 非法类型 | `NaN` / `Infinity` / 对象 / 数组 / 布尔 / 指数记法 / 千分位（凭证入口）一律拒绝，不按 0 兜底。 |
 | 存续金额 | 累计余额、补项期初累计等**不受单笔上限约束**（按「整数分可精确表示」范围，`±(2^53−1)` 分）。单笔上限只管单笔金额。 |
 | 合计输出 | 转回 Number 前必须能「十进制最短表示 → 再解析」精确还原为同一分数；不能保分即抛 `money_total_not_representable`，绝不返回少一分 / 多一分的数字。 |
@@ -46,6 +46,12 @@
 - 极小金额按分取整后前期月额为 0（如 `0.05 元 / 12 期`）：前期状态为 `no_amount_due`（不阻塞封账），
   最后一期一次提足 0.05。
 - 跨年连续期间（如 `2026-11 → 2027-02`）按期序计算，不构造具体日期。
+- **取单期金额是 O(1)**（`money.evenSplitAmountCents`），不需要展开整张分期表；`splitEvenlyCents`（会展开数组）
+  上限 `MAX_SCHEDULE_PERIODS = 1200` 期，防止巨大期数线性吃内存。
+- **计提期数是受验证的输入**：卡片写入（新增 / 修改）只接受 `1 ~ 1200` 的整数（`useful_life_months`
+  为负 / 0 / 非整数 / `2^32` 一类巨大值 → `useful_life_months_invalid` / `useful_life_months_out_of_range`）。
+  1200 期是**技术输入边界，不是法定会计年限**；实际寿命仍由操作者按准则判断。落库与 DTO 构造在同一个保存点内，
+  任何后续计算失败都整体回滚，不会留下“卡片已落库但列表 / 期末检查持续报错”的半成品。
 
 ### 2.2 取得期间 ≠ 计提开始期间
 
@@ -84,6 +90,29 @@
 卡片维护入口：`PATCH /api/account-sets/:id/assets/:assetId`、Agent / MCP `asset_update`、Web `GET /assets`
 与 `POST /assets`（新增，支持上述补项字段）。
 
+### 2.5 「已过账」不是「已完成」：计提定义一致性
+
+一张计提凭证只代表卡片**当时定义**下的应提额。任何影响计提定义的字段变了，旧凭证（草稿或已过账）都不再成立：
+
+| 字段 | 影响 |
+|---|---|
+| `useful_life_months` / `original_cost` / `residual_rate` | 分期表金额（月额） |
+| `start_period` | 期序（当期是否到计提期） |
+| `acquired_period` | 该期间卡片是否存在 |
+| `opening_accumulated` | 截至本期剩余可计提额 |
+| `ledger_status` | 是否允许计提（未入账不得计提） |
+| `asset_account` | 卡片与总账核对的原值科目（由 `asset_reconciliation` 步骤报差异，不影响计提凭证分录） |
+| `accum_account` / `expense_account` | 计提凭证分录科目，改变后旧凭证与卡片不一致 |
+| `name` / `ledger_note` | 纯显示信息，**不影响**一致性判断（不无意义锁死） |
+
+- 反过账后改定义再**重过账旧草稿**会被拒绝：`depreciation_run_stale`（`details.stale` 给资产 / 期间 / 旧金额 /
+  当前应提额 / 原因；科目变更则给 `entries` 差异），`guidance` 指明「删除旧草稿（连带旧 run）→ 按当前定义重新计提」。
+  **不接受静默改写原凭证，也不接受旧草稿直接恢复过账。**
+- 期末检查与 `generateDepreciation` 用同一口径重算：已过账金额与当前定义不一致时状态为 `posted_stale`，
+  计提步骤报 `depreciation_run_stale` 并阻止封账（不再把「存在已过账 run」当作已完成）。
+- 可执行解除路径：`反过账 → 删除旧计提凭证（连带 run）→ 按期间顺序重新计提 → 重新结转 → 重新检查 / 封账`，
+  与 F2 的倒序撤销一致；历史已过账金额在未被撤销前按原样保留，不被静默改写。
+
 ## 3. 期末检查与封账前置
 
 `buildPeriodEndCheck`（HTTP `GET /api/account-sets/:id/period-end-check?period=`、Agent / MCP `period_end_check`）
@@ -94,8 +123,8 @@
 |---|---|---|
 | `draft_vouchers` | 总是适用 | 本期仍有草稿凭证（先过账或删除） |
 | `trial_balance` | 总是适用 | 期末借贷不平 |
-| `depreciation` | 账套有资产卡片；无卡片 → `not_applicable` | 本期应计提未计提（`depreciation_missing` + 应提金额）、本期有未过账计提（`depreciation_draft_exists`）、已过寿命仍未提足（`depreciation_life_expired_underprovided`）、卡片登记为未入固定资产账（`asset_ledger_pending`） |
-| `asset_reconciliation` | 有卡片或相关总账科目有余额；都没有 → `not_applicable` | 缺卡片 / 原值差异 / 累计差异 / 缺取得期间 / 未入账登记（`asset_purchase_voucher_pending`，且如实报原值差异） |
+| `depreciation` | 账套有资产卡片；无卡片 → `not_applicable` | 本期应计提未计提（`depreciation_missing` + 应提金额）、本期有未过账计提（`depreciation_draft_exists`）、已过寿命仍未提足（`depreciation_life_expired_underprovided`）、卡片登记为未入固定资产账（`asset_ledger_pending`）、**已过账但与卡片当前定义不一致（`depreciation_run_stale`）** |
+| `asset_reconciliation` | 有卡片或相关总账科目有余额；都没有 → `not_applicable` | 缺卡片 / 原值差异 / 累计差异 / 缺取得期间 / **该期间已存在**卡片的未入账登记（`asset_purchase_voucher_pending`，且如实报原值差异）。取得期间晚于查询期间的卡片不提前计入阻塞；缺取得期间按「已存在」保守报告 |
 | `profit_carry_forward` | 本期有损益发生或有未结转损益余额；都没有 → `not_applicable` | 损益类科目仍有余额：未结转（`profit_not_carried_forward`）或结转后又有损益分录（`profit_carry_stale`） |
 | `year_end_carry_forward` | 12 月且 3103 有余额；非 12 月 → `not_applicable` | 12 月末 3103 未结转（`year_end_not_carried`） |
 | `period_sequence` | 总是适用 | 更晚期间已封账（`later_period_closed`）；更早有业务证据的期间未封账：已有凭证（`previous_period_open`）**或**仍有应计提而未计提的资产（`previous_period_depreciation_pending`，零凭证也算业务）。真正无适用业务的空期间不阻塞 |
@@ -140,6 +169,7 @@
 | **更晚期间已有已过账计提** | `later_depreciation_depends_on_period`，`details.runs`（资产 / 期间 / 凭证） |
 | 资产卡片事实影响已封账期间 | `asset_card_affects_closed_period`，`details.closedPeriods` |
 | 卡片已有已过账计提时改金额 / 期间 / 账簿状态 / 科目 | `asset_card_locked_by_posted_runs`，`details.postedRuns` |
+| 旧草稿计提凭证与卡片当前定义不一致（改寿命 / 原值 / 残值 / 期间 / 期初累计 / 账簿状态 / 科目） | `depreciation_run_stale`（重过账时拒绝），期末检查 / 计提入口同一结论，`details.stale` / `guidance` 给删除重算顺序 |
 
 正确顺序（文档化的可执行路径）：
 
@@ -186,6 +216,8 @@
 | `period_end_check_failed` | 封账前置未通过（`details.blocking` 逐项） |
 | `depreciation_missing` / `depreciation_draft_exists` / `depreciation_life_expired_underprovided` | 计提缺项 |
 | `asset_ledger_pending` / `depreciation_global_over_depreciable` / `depreciation_exceeds_depreciable` | 未入账卡片不得计提 / 全局累计会超可计提额 / 重过账会超可计提额 |
+| `depreciation_run_stale` | 旧草稿 / 已过账计提及与卡片当前定义（金额或科目）不一致：必须反过账 + 删除后重算 |
+| `useful_life_months_invalid` / `useful_life_months_out_of_range` | 计提期数不是正整数 / 超过技术上限（1 ~ 1200 期，非“法定年限”） |
 | `asset_missing_card` / `asset_cost_mismatch` / `asset_accumulated_mismatch` / `asset_acquired_period_missing` / `asset_purchase_voucher_pending` | 卡片 / 总账核对 |
 | `asset_card_locked_by_posted_runs` / `asset_card_affects_closed_period` / `ledger_note_required` / `ledger_status_invalid` / `acquired_period_invalid` | 卡片维护 |
 | `profit_not_carried_forward` / `profit_carry_stale` / `year_end_not_carried` / `previous_period_depreciation_pending` | 结转与连续期间 |
@@ -198,10 +230,12 @@ Agent / MCP 侧保留同一 `code` 与 `details`。
 ## 7. 下游接口（供 LOCAL-03 / 04 / 05 / 06 / 07 使用）
 
 - 金额：`money.mjs` 的 `parseMoney` / `requireCents` / `storedCents` / `centsToNumber` / `formatCents` /
-  `sumCents` / `mulCentsByRatio` / `mulDivCents` / `splitEvenlyCents` / `monthsBetween`。
+  `sumCents` / `mulCentsByRatio` / `mulDivCents` / `evenSplitAmountCents`（O(1) 取单期） / `splitEvenlyCents`
+  （展开整表，上限 `MAX_SCHEDULE_PERIODS`） / `monthsBetween`。
   **新代码禁止**再用 `Math.round(x*100)/100` 或 SQL `SUM()` 直接汇总金额。
-- 卡片：`cardMoney(card)`、`assetCardPeriodStatus(db, card, period)`、`cardAcquiredPeriod(card)` 是唯一口径；
-  新增字段向下兼容（旧行默认 `booked` / `0` / `NULL`）。
+- 卡片：`cardMoney(card)`（含 `amountAt(index)` 的 O(1) 分期口径）、`assetCardPeriodStatus(db, card, period)`、
+  `expectedDepreciationCents(db, card, period)`（按当前定义重算单期应提额，用于校验旧计提是否失效）、
+  `cardAcquiredPeriod(card)` 是唯一口径；新增字段向下兼容（旧行默认 `booked` / `0` / `NULL`）。
 - 卡片维护：任何 add / update / delete 必须先进 `assertAssetCardWriteAllowed(db, setId, { operation, previous, next })`，
   不要绕过它直接改 `asset_cards`（否则会再次打开「已封账后被静默改事实」的缺口）。
 - 期末：`buildPeriodEndCheck(db, setId, period)`（只读）、`assertPeriodCloseable(...)`（封账）、
@@ -223,3 +257,8 @@ Agent / MCP 侧保留同一 `code` 与 `details`。
 7. 增量导入的**预检**阶段未单独预判「后续结转 / 计提依赖」：预检只报已封账等既有冲突，依赖冲突在正式写入时由同一守卫
    拒绝（HTTP 409 + `details` + 事务回滚，库不变）。统一预检归 LOCAL-07 批量编排。
 8. 税局现场暂停、真实接入 **0**；本契约不涉及税局、银行、浏览器或凭据。
+9. 计提期数上限 `1200` 期是**技术输入边界**（避免巨大期数把分摊 / DTO 计算推入不可控规模），
+   不是任何准则下的法定折旧年限；准则口径的“合理寿命”仍需 LOCAL-03 的双准则映射与人工判断。
+10. 旧库若已存在直接用 SQL 写入的不合法寿命（`<= 0` / 非整数），读路径仍会报错；API 已不再能产生这类行，
+    需要时由维护入口按 `1 ~ 1200` 的整数修正（本包不提供批量修复脚本）。
+11. 本轮回工（review2）**未新增存储列**：schema 仍为 v4 的同一 5 列，真实 v3→v4 升级 / WAL 备份恢复验证保持不变。

@@ -6,6 +6,7 @@ import { db } from "./db.mjs";
 import { COA } from "./coa.mjs";
 import {
   MAX_ABSOLUTE_CENTS,
+  MAX_SCHEDULE_PERIODS,
   MONEY_MAX_CENTS,
   MONEY_MAX_TEXT,
   centsToNumber,
@@ -23,6 +24,7 @@ import {
   assertPeriodMutable,
   buildPeriodEndCheck,
   cardMoney,
+  expectedDepreciationCents,
   postedEntryRows,
   sumNaturalByPrefix,
 } from "./period-end-controls.mjs";
@@ -237,6 +239,10 @@ export function periodStatus(setId, period) {
 function parseVoucherAmount(raw) {
   const parsed = parseMoney(raw, { label: "金额", maxCents: MONEY_MAX_CENTS });
   if (!parsed.ok) return { ok: false, error: parsed.error };
+  // 非零但不足一分（ 0.001 / 1e-7 ）必须拒绝：不能静默舍成 0 后仍当成合法金额入库。
+  if (parsed.subCent) {
+    return { ok: false, error: `金额不足一分（非零金额不能舍入成 0）：${String(raw)}` };
+  }
   return { ok: true, cents: parsed.cents };
 }
 
@@ -461,6 +467,89 @@ function assertDepreciationPostable(setId, v) {
   }
 }
 
+/**
+ * 旧草稿计提凭证的「定义一致性」守卫（重过账之前）：
+ * 一张计提凭证只能代表卡片**当时定义**下的应提额。若这张凭证被反过账后卡片改了
+ * 寿命 / 原值 / 残值 / 起提期间 / 取得期间 / 期初累计 / 账簿状态，或改了费用与累计科目，
+ * 旧草稿就直接重过账会让账簿静默保留一个错误金额（例如寿命从 10 改 5 后仍然只提 10）。
+ * 所以一律明确拒绝并给可执行路径：删除旧草稿（连带旧 run）→ 按当前定义重新计提。
+ * 注：只影响**重过账旧草稿**；已过账计提的历史金额仍按原样保留，不会被静默改写。
+ */
+function assertDepreciationRunsCurrent(setId, v) {
+  if (v.kind !== "depreciation") return;
+  const runs = rows(
+    `SELECT asset_id, period, amount FROM asset_depreciation_runs
+      WHERE account_set_id=? AND voucher_id=? ORDER BY period, asset_id`,
+    setId, v.id,
+  );
+  if (!runs.length) return;
+  const stale = [];
+  const wantEntries = new Map();
+  const addEntry = (map, key, cents) => map.set(key, (map.get(key) ?? 0n) + cents);
+  for (const r of runs) {
+    const card = row(`SELECT * FROM asset_cards WHERE account_set_id=? AND id=?`, setId, r.asset_id);
+    const recordedCents = storedCents(r.amount);
+    if (!card) {
+      stale.push({
+        assetId: r.asset_id, period: r.period,
+        recordedAmount: centsToNumber(recordedCents), expectedAmount: null,
+        reason: "计提记录对应的资产卡片已不存在",
+      });
+      continue;
+    }
+    if (recordedCents !== 0n) {
+      addEntry(wantEntries, `${card.expense_account}|debit`, recordedCents);
+      addEntry(wantEntries, `${card.accum_account}|credit`, recordedCents);
+    }
+    const expected = expectedDepreciationCents(db, card, r.period);
+    // 与期末检查同一口径：一致才算“该期已计提完成”，否则为旧定义下的失效草稿。
+    const consistent = expected.status === "due"
+      ? expected.expectedCents === recordedCents
+      : recordedCents === 0n;
+    if (!consistent) {
+      stale.push({
+        assetId: card.id, name: card.name, period: r.period,
+        recordedAmount: centsToNumber(recordedCents),
+        expectedAmount: centsToNumber(expected.expectedCents),
+        expectedStatus: expected.status,
+        reason: `${expected.reason ?? expected.status}（卡片当前定义应提 ${formatCents(expected.expectedCents)}，旧凭证记 ${formatCents(recordedCents)}）`,
+      });
+    }
+  }
+  // 科目映射也可能被改过：计提凭证必须与卡片当前的费用 / 累计科目及金额一致。
+  const gotEntries = new Map();
+  for (const entry of rows(`SELECT code, debit, credit FROM voucher_entries WHERE voucher_id=?`, v.id)) {
+    const d = storedCents(entry.debit), c = storedCents(entry.credit);
+    if (d !== 0n) addEntry(gotEntries, `${entry.code}|debit`, d);
+    if (c !== 0n) addEntry(gotEntries, `${entry.code}|credit`, c);
+  }
+  const entryDiffs = [];
+  for (const key of new Set([...wantEntries.keys(), ...gotEntries.keys()])) {
+    const want = wantEntries.get(key) ?? 0n, got = gotEntries.get(key) ?? 0n;
+    if (want === got) continue;
+    const [code, side] = key.split("|");
+    entryDiffs.push({ code, side, expectedAmount: centsToNumber(want), voucherAmount: centsToNumber(got) });
+  }
+  if (entryDiffs.length) {
+    stale.push({
+      assetId: null, name: null, period: null,
+      recordedAmount: null, expectedAmount: null,
+      reason: "计提凭证分录与卡片当前的费用 / 累计折旧科目（或金额）不一致",
+      entries: entryDiffs,
+    });
+  }
+  if (!stale.length) return;
+  const err = new Error("depreciation_run_stale");
+  err.code = "depreciation_run_stale";
+  err.details = {
+    voucherId: v.id,
+    period: v.period,
+    stale,
+    guidance: "该计提凭证是旧卡片定义下的草稿，不能直接重过账（不静默改原凭证）：请删除该草稿凭证（连带旧计提记录）后按当前卡片定义重新计提；已过账的同类凭证需先反过账再删除重算",
+  };
+  throw err;
+}
+
 export function postVoucher(setId, id) {
   // 先读原始行 + 分录做校验，再看 hydrate 合计：即使库里金额已被损坏，也必须先给 voucher_invalid。
   const raw = row(`SELECT * FROM vouchers WHERE account_set_id=? AND id=?`, setId, id);
@@ -472,7 +561,9 @@ export function postVoucher(setId, id) {
   );
   const chk = checkVoucher(setId, entries);
   if (!chk.ok) { const e = new Error("voucher_invalid"); e.details = chk; throw e; }
-  // 先给金额诊断（重过账会把累计推过可计提额），再给期间依赖顺序：两者都是只读断言。
+  // 先给「旧草稿是否仍符合卡片当前定义」与金额诊断（重过账会把累计推过可计提额），
+  // 再给期间依赖顺序：三者都是只读断言，失败时全库不变。
+  assertDepreciationRunsCurrent(setId, { id: raw.id, kind: raw.kind, period: raw.period });
   assertDepreciationPostable(setId, { id: raw.id, kind: raw.kind });
   assertPeriodMutable(db, setId, raw.period, {
     operation: "post_voucher",
@@ -987,7 +1078,7 @@ function cardDto(card) {
     origin: card.origin ?? "purchase",
     depreciable: centsToNumber(money.depreciableCents),
     monthly: centsToNumber(money.monthlyCents),
-    final_month: centsToNumber(money.schedule[money.schedule.length - 1]),
+    final_month: centsToNumber(money.finalMonthCents),
     accumulated: centsToNumber(accumulatedCents),
     remaining: centsToNumber(money.depreciableCents - accumulatedCents),
     months_done: monthsDone,
@@ -1025,15 +1116,40 @@ function cardSupplementFields(c = {}, { kind, depreciableCents } = {}) {
   return { acquired, openingCents: opening.cents, ledgerStatus, ledgerNote, origin };
 }
 
+/**
+ * 卡片计提期数的**技术 / 产品输入边界**（不是“法定会计寿命”）：
+ * 只接受 1 ~ MAX_SCHEDULE_PERIODS（1200 期 = 100 年）的整数。
+ * 这样既能拦住 2^32 这类会把分摊 / DTO 计算推入不可控规模的输入（避免落库后才在分期 / 列表里抛错），
+ * 也保留实际业务所需的长寿命；真实会计寿命仍由操作者按准则判断。
+ */
+function requireUsefulLifeMonths(raw) {
+  const value = typeof raw === "number"
+    ? raw
+    : typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    const err = new Error("useful_life_months_invalid");
+    err.details = { value: raw ?? null, expected: `1 ~ ${MAX_SCHEDULE_PERIODS} 的整数期数` };
+    throw err;
+  }
+  if (value > MAX_SCHEDULE_PERIODS) {
+    const err = new Error("useful_life_months_out_of_range");
+    err.details = {
+      value, max: MAX_SCHEDULE_PERIODS,
+      note: "技术输入边界（不冒充法定会计期限）：期数过大会让分摊 / DTO 计算不可控",
+    };
+    throw err;
+  }
+  return value;
+}
+
 export function addAssetCard(setId, c = {}) {
   getAccountSet(setId);
   const kind = c.kind === "intangible" ? "intangible" : "fixed";
   const name = String(c.name || "").trim();
   const cost = parseMoney(c.original_cost, { label: "资产原值" });
-  const life = parseInt(c.useful_life_months, 10);
+  const life = requireUsefulLifeMonths(c.useful_life_months);
   if (!name) throw new Error("name_required");
   if (!cost.ok || cost.cents <= 0n) throw new Error("original_cost_invalid");
-  if (!(life >= 1) || !Number.isSafeInteger(life)) throw new Error("useful_life_months_invalid");
   const start_period = String(c.start_period || "");
   if (!CARD_PERIOD_RE.test(start_period)) throw new Error("start_period_invalid");
   const residual = c.residual_rate === undefined ? (kind === "fixed" ? 0.05 : 0) : Number(c.residual_rate);
@@ -1057,16 +1173,22 @@ export function addAssetCard(setId, c = {}) {
   };
   // 新增卡片会改变受影响期间的资产核对 / 计提事实：已封账 / 已过账派生凭证先拒绝并给撤销顺序。
   assertAssetCardWriteAllowed(db, setId, { operation: "add_asset_card", previous: null, next: nextCard });
-  const info = run(
-    `INSERT INTO asset_cards (account_set_id, kind, name, original_cost, residual_rate, useful_life_months,
-       start_period, asset_account, accum_account, expense_account, created_at,
-       acquired_period, opening_accumulated, ledger_status, ledger_note, origin)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    setId, kind, name, centsToNumber(cost.cents), residual, life, start_period, asset_account, accum_account,
-    expense_account, now(), supplement.acquired, centsToNumber(supplement.openingCents),
-    supplement.ledgerStatus, supplement.ledgerNote, supplement.origin,
-  );
-  return listAssetCards(setId).find((x) => x.id === Number(info.lastInsertRowid));
+  // 落库与 DTO 构造在同一保存点内：任何后续计算（分期 / 累计 / 核对）失败都必须完整回滚，
+  // 绝不留下“卡片已持久化但列表 / 期末检查持续报错”的半成品。
+  return withSavepoint(() => {
+    const info = run(
+      `INSERT INTO asset_cards (account_set_id, kind, name, original_cost, residual_rate, useful_life_months,
+         start_period, asset_account, accum_account, expense_account, created_at,
+         acquired_period, opening_accumulated, ledger_status, ledger_note, origin)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      setId, kind, name, centsToNumber(cost.cents), residual, life, start_period, asset_account, accum_account,
+      expense_account, now(), supplement.acquired, centsToNumber(supplement.openingCents),
+      supplement.ledgerStatus, supplement.ledgerNote, supplement.origin,
+    );
+    return cardDto(row(
+      `SELECT * FROM asset_cards WHERE account_set_id=? AND id=?`, setId, Number(info.lastInsertRowid),
+    ));
+  });
 }
 
 /**
@@ -1112,9 +1234,7 @@ export function updateAssetCard(setId, id, patch = {}) {
     next.residual_rate = residual;
   }
   if (patch.useful_life_months !== undefined) {
-    const life = parseInt(patch.useful_life_months, 10);
-    if (!(life >= 1) || !Number.isSafeInteger(life)) throw new Error("useful_life_months_invalid");
-    next.useful_life_months = life;
+    next.useful_life_months = requireUsefulLifeMonths(patch.useful_life_months);
   }
   if (patch.start_period !== undefined) {
     const p = String(patch.start_period);
@@ -1133,16 +1253,19 @@ export function updateAssetCard(setId, id, patch = {}) {
   next.origin = supplement.origin;
   // 拒绝时数据库完全不变；guidance 给出可执行撤销 / 重算顺序。
   assertAssetCardWriteAllowed(db, setId, { operation: "update_asset_card", previous: card, next });
-  run(
-    `UPDATE asset_cards SET name=?, original_cost=?, residual_rate=?, useful_life_months=?, start_period=?,
-       asset_account=?, accum_account=?, expense_account=?, acquired_period=?, opening_accumulated=?,
-       ledger_status=?, ledger_note=?, origin=? WHERE account_set_id=? AND id=?`,
-    next.name, next.original_cost, next.residual_rate, next.useful_life_months, next.start_period,
-    next.asset_account, next.accum_account, next.expense_account, next.acquired_period,
-    next.opening_accumulated, next.ledger_status, next.ledger_note, next.origin,
-    setId, id,
-  );
-  return listAssetCards(setId).find((x) => x.id === id);
+  // 写入与 DTO 构造同一保存点：后续计算失败必须回滚，不留下字段已改但列表 / 检查报错的半成品。
+  return withSavepoint(() => {
+    run(
+      `UPDATE asset_cards SET name=?, original_cost=?, residual_rate=?, useful_life_months=?, start_period=?,
+         asset_account=?, accum_account=?, expense_account=?, acquired_period=?, opening_accumulated=?,
+         ledger_status=?, ledger_note=?, origin=? WHERE account_set_id=? AND id=?`,
+      next.name, next.original_cost, next.residual_rate, next.useful_life_months, next.start_period,
+      next.asset_account, next.accum_account, next.expense_account, next.acquired_period,
+      next.opening_accumulated, next.ledger_status, next.ledger_note, next.origin,
+      setId, id,
+    );
+    return cardDto(row(`SELECT * FROM asset_cards WHERE account_set_id=? AND id=?`, setId, id));
+  });
 }
 
 export function deleteAssetCard(setId, id) {
@@ -1199,6 +1322,7 @@ export function generateDepreciation(setId, period) {
     const pending = [];
     const skipped = [];
     const ledgerPending = [];
+    const stale = [];
     const overDepreciable = [];
     for (const c of cards) {
       const money = cardMoney(c);
@@ -1210,6 +1334,18 @@ export function generateDepreciation(setId, period) {
       const status = assetCardPeriodStatus(db, c, p, money);
       if (status.status === "ledger_pending") {
         ledgerPending.push({ assetId: c.id, name: c.name, ledgerStatus: status.ledgerStatus });
+        continue;
+      }
+      // 旧定义下的已过账计提（例如反过账后改了寿命 / 原值 / 期间，旧凭证又被写回过账状态）：
+      // 不能当成“本期已计提完成”放行，也不能静默补提，必须明确要求撤销重算。
+      if (status.status === "posted_stale") {
+        stale.push({
+          assetId: c.id,
+          name: c.name,
+          recordedAmount: centsToNumber(status.amountCents),
+          expectedAmount: centsToNumber(status.expectedCents),
+          reason: status.reason ?? null,
+        });
         continue;
       }
       if (status.status !== "due") {
@@ -1246,6 +1382,16 @@ export function generateDepreciation(setId, period) {
         period: p,
         assets: ledgerPending,
         guidance: "卡片登记为尚未入固定资产账（登记本身不是入账证据）：请先补录真实购入 / 期初入账凭证、核对卡片原值与总账一致并把卡片改为 booked，再计提",
+      };
+      throw err;
+    }
+    if (stale.length) {
+      const err = new Error("depreciation_run_stale");
+      err.code = "depreciation_run_stale";
+      err.details = {
+        period: p,
+        assets: stale,
+        guidance: "本期已过账计提与卡片当前定义（原值 / 残值 / 寿命 / 期间 / 期初累计 / 账簿状态 / 科目）不一致：请反过账并删除该计提凭证，按当前定义重新计提；不接受旧草稿直接重过账",
       };
       throw err;
     }

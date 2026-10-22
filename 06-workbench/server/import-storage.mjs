@@ -311,7 +311,8 @@ const addColumnIfMissing = (table, column, ddl) => (db) => {
 
 /**
  * LOCAL-02 资产卡片补项契约（只加列，不改旧行语义）：
- *  acquired_period      显式取得 / 入账期间；留 NULL 表示未登记（不臆造取得日期，核对时回落 start_period）
+ *  acquired_period      显式取得 / 入账期间；留 NULL 表示未登记（**不回落** start_period，也不臆造取得日期；
+ *                       核对时按「已存在」保守参与并报 asset_acquired_period_missing，经维护入口补登记后解除）
  *  opening_accumulated  补项期初累计（历史已入账的累计折旧 / 摊销，计入剩余可计提额）
  *  ledger_status        booked=参与卡片/总账核对；pending_purchase_voucher=已显式登记“尚未入固定资产账”
  *  ledger_note          未入账 / 补项原因（必填于非 booked）

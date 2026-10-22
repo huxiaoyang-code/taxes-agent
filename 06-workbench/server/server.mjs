@@ -52,6 +52,7 @@ const PERIOD_GUARD_CODES = new Set([
   "period_end_check_failed", "carryforward_stale",
   "asset_card_affects_closed_period", "asset_card_locked_by_posted_runs",
   "asset_ledger_pending", "depreciation_global_over_depreciable", "depreciation_exceeds_depreciable",
+  "depreciation_run_stale",
 ]);
 
 // ------------------------------------------------------------------ 路由表
