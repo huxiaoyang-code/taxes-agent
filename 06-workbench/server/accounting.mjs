@@ -3,7 +3,15 @@
 // 金额规则（LOCAL-02）：所有金额以「整数分」计算（money.mjs），落库 / 出参统一两位小数；
 // 舍入唯一 ROUND_HALF_UP；合计在分上累加后再转换，禁止把两位小数用浮点求和。
 import { db } from "./db.mjs";
-import { COA } from "./coa.mjs";
+import {
+  getAccountingProfile,
+  resolveNewAccountingProfile,
+} from "./accounting-profiles.mjs";
+import {
+  classifyAccountingCashCounterpart,
+  evaluateAccountingStatement,
+  getAccountingReportRules,
+} from "./accounting-report-rules.mjs";
 import {
   MAX_ABSOLUTE_CENTS,
   MAX_SCHEDULE_PERIODS,
@@ -66,38 +74,169 @@ function withSavepoint(fn) {
   }
 }
 
+// ---------------------------------------------------------------- 会计 profile
+/**
+ * 结构化 profile 错误：只用受控字段，不回显未知原始输入 / SQL / 堆栈 / 路径。
+ * 错误码与阶段 A 一致：accounting_profile_unknown / accounting_standard_invalid /
+ * accounting_profile_standard_mismatch / accounting_profile_legacy_not_creatable。
+ */
+function profileError(code, message, details = null) {
+  const err = new Error(message || code);
+  err.code = code;
+  if (details) err.details = details;
+  return err;
+}
+
+/** 账套原始行（不解析 profile，供内部与只读恢复核对使用）。 */
+function accountSetRow(id) {
+  return row(`SELECT * FROM account_sets WHERE id=?`, id);
+}
+
+/**
+ * 解析账套的持久 profile。未知 / 损坏 profile **不 fallback 到新小企**：
+ * 正常业务得到结构化 accounting_profile_unknown；只读恢复核对仍可直接读原始行 / 备份。
+ */
+export function accountSetProfile(setId) {
+  const set = accountSetRow(setId);
+  if (!set) throw new Error("account_set_not_found");
+  const profileId = set.accounting_profile_id;
+  let profile;
+  try {
+    profile = getAccountingProfile(profileId);
+  } catch (e) {
+    throw profileError("accounting_profile_unknown", "账套持久会计 profile 未知或已损坏", {
+      field: "accounting_profile_id",
+      profileId: typeof profileId === "string" ? profileId : null,
+      reason: e?.code === "accounting_profile_unknown" ? "profile-not-registered" : "profile-unreadable",
+    });
+  }
+  const context = {
+    declaredStandard: set.accounting_standard ?? null,
+    profileId: profile.id,
+    coaVersion: profile.coaVersion,
+    reportMappingVersion: profile.reportMappingVersion,
+    legacy: profile.legacy === true,
+  };
+  return { set, profile, roles: profile.roles, context };
+}
+
+/** 新建账套可用的 profile：未提供准则默认小企；非法 / 错配 / legacy 新建一律结构化拒绝。 */
+function resolveCreationProfile({ accounting_standard, profileId } = {}) {
+  const raw = accounting_standard;
+  // 旧调用方会传 undefined / null / ""：视为“未提供准则”，默认小企（不把空白当成合法准则值）。
+  if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    return resolveNewAccountingProfile(profileId === undefined ? {} : { profileId });
+  }
+  if (typeof raw !== "string") {
+    throw profileError("accounting_standard_invalid", "会计准则是非受支持的类型", {
+      field: "accounting_standard",
+      reason: "not-a-string",
+    });
+  }
+  if (raw !== raw.trim()) {
+    throw profileError("accounting_standard_invalid", "会计准则必须精确匹配（不接受首尾空白）", {
+      field: "accounting_standard",
+      reason: "not-exact",
+    });
+  }
+  return resolveNewAccountingProfile(profileId === undefined
+    ? { accounting_standard: raw }
+    : { accounting_standard: raw, profileId });
+}
+
+/** 新建账套时的科目种子：按 profile 的科目表，不再无差别读取旧 COA 单数组。 */
+function seedAccounts(profile) {
+  return profile.coa.map((account) => ({
+    code: account.code,
+    name: account.name,
+    category: account.category,
+    direction: account.direction,
+    contra: account.contra === true,
+  }));
+}
+
+/** 必要的 profile 角色必须能落到真实科目上；缺失时在写入前失败（不伪造分录）。 */
+function requireRoleAccounts(setId, profile, roleNames) {
+  const existing = new Set(rows(`SELECT code FROM accounts WHERE account_set_id=?`, setId).map((a) => a.code));
+  for (const role of roleNames) {
+    const value = profile.roles[role];
+    const list = Array.isArray(value) ? value : [value];
+    for (const code of list) {
+      if (typeof code !== "string" || !code) {
+        throw profileError("accounting_role_missing", `profile ${profile.id} 缺少角色 ${role}`, {
+          field: role, profileId: profile.id, reason: "role-not-defined",
+        });
+      }
+      if (!existing.has(code)) {
+        throw profileError("accounting_role_missing", `profile ${profile.id} 的角色 ${role} 对应科目不在账套科目表中`, {
+          field: role, profileId: profile.id, accountCode: code, reason: "role-account-missing",
+        });
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------- 账套
-export function createAccountSet({ name, taxpayer_type, accounting_standard, start_period }) {
+/**
+ * 新建账套：按请求准则选择合法新 profile，并在**同一保存点**内写账套、科目、首期间与 profile。
+ * 未提供准则默认小企；非法准则 / 显式 legacy 新建 / 错配全部结构化拒绝。
+ * 已存在账套的 profile 不可通过普通参数改变（本文件没有更新 profile / 准则的入口）。
+ */
+export function createAccountSet({ name, taxpayer_type, accounting_standard, start_period, profileId } = {}) {
   if (!name) throw new Error("name_required");
   const startPeriod = requirePeriod(start_period, "start_period_invalid");
-  const info = run(
-    `INSERT INTO account_sets (name, taxpayer_type, accounting_standard, start_period, created_at)
-     VALUES (?,?,?,?,?)`,
-    name,
-    taxpayer_type || "小规模纳税人",
-    accounting_standard || "小企业会计准则",
-    startPeriod,
-    now()
-  );
-  const id = Number(info.lastInsertRowid);
-  const insAcc = db.prepare(
-    `INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
-     VALUES (?,?,?,?,?,?,1)`
-  );
-  for (const a of COA) insAcc.run(id, a.code, a.name, a.category, a.direction, a.contra ? 1 : 0);
-  ensurePeriod(id, startPeriod);
-  return getAccountSet(id);
+  const profile = resolveCreationProfile({ accounting_standard, profileId });
+  if (profile.legacy) {
+    // resolveNewAccountingProfile 已拒绝，这里只作防御。
+    throw profileError("accounting_profile_legacy_not_creatable", "legacy profile 不能用于新建账套", {
+      field: "profileId", profileId: profile.id, reason: "legacy-not-creatable",
+    });
+  }
+  return withSavepoint(() => {
+    const info = run(
+      `INSERT INTO account_sets (name, taxpayer_type, accounting_standard, start_period, created_at, accounting_profile_id)
+       VALUES (?,?,?,?,?,?)`,
+      name,
+      taxpayer_type || "小规模纳税人",
+      profile.declaredStandard,
+      startPeriod,
+      now(),
+      profile.id,
+    );
+    const id = Number(info.lastInsertRowid);
+    const insAcc = db.prepare(
+      `INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
+       VALUES (?,?,?,?,?,?,1)`
+    );
+    for (const a of seedAccounts(profile)) insAcc.run(id, a.code, a.name, a.category, a.direction, a.contra ? 1 : 0);
+    ensurePeriod(id, startPeriod);
+    return getAccountSet(id);
+  });
 }
 
 export function listAccountSets() {
-  return rows(`SELECT * FROM account_sets ORDER BY id DESC`);
+  return rows(`SELECT * FROM account_sets ORDER BY id DESC`).map((set) => {
+    try {
+      return { ...set, accountingContext: accountSetProfile(set.id).context };
+    } catch (e) {
+      // 损坏 / 未知 profile：列表仍可用于只读恢复核对，但明确标记错误，不静默 fallback。
+      return {
+        ...set,
+        accountingContext: null,
+        accountingContextError: {
+          code: e?.code === "accounting_profile_unknown" ? "accounting_profile_unknown" : "profile_unreadable",
+          field: "accounting_profile_id",
+        },
+      };
+    }
+  });
 }
 export function getAccountSet(id) {
-  const s = row(`SELECT * FROM account_sets WHERE id=?`, id);
-  if (!s) throw new Error("account_set_not_found");
-  return s;
+  const { set, context } = accountSetProfile(id);
+  return { ...set, accountingContext: context };
 }
 export function deleteAccountSet(id) {
+  accountSetProfile(id);
   run(`DELETE FROM account_sets WHERE id=?`, id);
 }
 
@@ -677,6 +816,150 @@ function centsView(bal) {
 /** 判断科目编码是否属于给定的一组顶层编码及其下级明细。 */
 const codeUnderAny = (code, prefixList) => prefixList.some((p) => underPrefix(code, p));
 
+// ---------------------------------------------------------------- 报表状态 / DTO 适配
+const BS_ASSET_ROW_IDS = new Set([
+  "cash", "short-term-investment", "notes-receivable", "accounts-receivable", "prepayments",
+  "dividends-receivable", "interest-receivable", "other-receivables", "inventory",
+  "fixed-assets-cost", "accumulated-depreciation", "fixed-assets-net", "construction-in-progress",
+  "intangible-assets-cost", "accumulated-amortization", "intangible-assets-net",
+  "long-term-deferred-expenses", "total-assets",
+]);
+
+// 阶段 A 诊断码 → 稳定外层码（不把内部 message / 名称 / 金额原值透传给模型或导出元数据）。
+const PROFILE_DIAGNOSTIC_MAP = {
+  account_unmapped: ["report_account_unmapped", "account-not-in-profile"],
+  account_requires_detail: ["report_account_requires_detail", "account-requires-detail"],
+  account_reverse_balance_requires_detail: ["report_account_requires_detail", "reverse-balance-requires-detail"],
+  account_category_conflict: ["report_account_semantics_mismatch", "account-category-conflict"],
+  account_direction_conflict: ["report_account_semantics_mismatch", "account-direction-conflict"],
+  account_contra_conflict: ["report_account_semantics_mismatch", "account-contra-conflict"],
+  account_scope_unsupported: ["report_account_semantics_mismatch", "account-scope-unsupported"],
+  account_scope_unknown: ["report_account_semantics_mismatch", "account-scope-unknown"],
+  account_out_of_statement: ["report_account_semantics_mismatch", "account-out-of-statement"],
+};
+
+const REASON_TOKEN = /^[a-z0-9][a-z0-9._-]*$/i;
+const fixedReason = (value, fallback) =>
+  (typeof value === "string" && REASON_TOKEN.test(value) ? value : fallback);
+
+function mappingDiagnostics(kind, evaluation) {
+  const out = [];
+  const seen = new Set();
+  for (const diagnostic of evaluation?.diagnostics ?? []) {
+    const [code, fallbackReason] = PROFILE_DIAGNOSTIC_MAP[diagnostic.code]
+      ?? ["report_account_semantics_mismatch", "profile-rule-diagnostic"];
+    const accountCode = typeof diagnostic.accountCode === "string" ? diagnostic.accountCode : undefined;
+    const reason = fixedReason(diagnostic.reason, fallbackReason);
+    const key = `${code}|${accountCode ?? ""}|${reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      code,
+      severity: diagnostic.severity === "warning" ? "warning" : "error",
+      reportKind: kind,
+      ...(accountCode ? { accountCode } : {}),
+      reason,
+    });
+  }
+  return out;
+}
+
+function declaredStandardMismatch(kind, profile, context) {
+  if (profile.legacy) return null;
+  if (context.declaredStandard === profile.declaredStandard) return null;
+  return {
+    code: "declared_standard_profile_mismatch",
+    severity: "warning",
+    reportKind: kind,
+    reason: "declared-standard-differs-from-profile",
+  };
+}
+
+function profileReportStatus(kind, evaluation, { profile, context, extraDiagnostics = [] }) {
+  const diagnostics = [
+    ...mappingDiagnostics(kind, evaluation),
+    ...extraDiagnostics,
+  ];
+  const mismatch = declaredStandardMismatch(kind, profile, context);
+  if (mismatch) diagnostics.push(mismatch);
+  const complete = evaluation.complete === true && !mismatch && !extraDiagnostics.some((d) => d.severity === "error");
+  return {
+    status: complete ? "complete" : "incomplete",
+    complete,
+    partialValues: !complete,
+    diagnostics,
+  };
+}
+
+function legacyReportStatus(kind, partialValues) {
+  return {
+    status: "legacy_compatibility",
+    complete: false,
+    partialValues: partialValues === true,
+    diagnostics: [{
+      code: "legacy_profile_compatibility",
+      severity: "warning",
+      reportKind: kind,
+      reason: "legacy-profile-uses-old-report-path",
+    }],
+  };
+}
+
+// legacy 兼容报表实际覆盖的科目前缀（旧算法硬编码）；不在其中的非零科目即“确有漏映射”。
+const LEGACY_BS_PREFIXES = [
+  "1001", "1002", "1012", "1101", "1121", "1122", "1123", "1131", "1132", "1221",
+  "1401", "1402", "1403", "1405", "1408", "1411", "1601", "1602", "1604", "1701", "1702", "1801",
+  "2001", "2201", "2202", "2203", "2211", "2221", "2231", "2232", "2241", "2501", "2701",
+  "3001", "3002", "3101", "3103", "3104",
+];
+function legacyBalancePartial(setId, period) {
+  for (const [code, balance] of accountBalances(setId, period)) {
+    if (storedCents(balance.net) === 0n) continue;
+    if (balance.category === "损益") continue; // 旧兼容路径把损益汇总进未分配利润
+    if (LEGACY_BS_PREFIXES.some((prefix) => underPrefix(code, prefix))) continue;
+    return true;
+  }
+  return false;
+}
+
+function accountListDto(setId) {
+  return listAccounts(setId).map((account) => ({
+    code: account.code,
+    name: account.name,
+    category: account.category,
+    direction: account.direction,
+    contra: !!account.contra,
+  }));
+}
+
+// 纯规则要求安全整数分：BigInt 分转 Number 前先检查范围，绝不静默丢分。
+const MAX_SAFE_CENTS = BigInt(Number.MAX_SAFE_INTEGER);
+function centsToSafeMinor(cents, label = "金额") {
+  const value = typeof cents === "bigint" ? cents : BigInt(cents);
+  if (value > MAX_SAFE_CENTS || value < -MAX_SAFE_CENTS) {
+    const error = new Error("money_total_out_of_range");
+    error.code = "money_total_out_of_range";
+    error.details = { field: label, reason: "cents-out-of-safe-integer-range" };
+    throw error;
+  }
+  return Number(value);
+}
+
+function balanceAmounts(setId, period) {
+  return [...accountBalances(setId, period).values()]
+    .map((balance) => ({ code: balance.code, netMinor: centsToSafeMinor(storedCents(balance.net), "balance") }));
+}
+
+function rangeAmounts(setId, fromPeriod, toPeriod) {
+  const acc = new Map();
+  for (const entry of postedEntryRows(db, setId, { fromPeriod, toPeriod, excludeCarryforward: true })) {
+    acc.set(entry.code, (acc.get(entry.code) ?? 0n) + storedCents(entry.debit) - storedCents(entry.credit));
+  }
+  return [...acc.entries()]
+    .filter(([, cents]) => cents !== 0n)
+    .map(([code, cents]) => ({ code, netMinor: centsToSafeMinor(cents, "range") }));
+}
+
 // ---------------------------------------------------------------- 报表
 export function trialBalance(setId, period) {
   const bal = accountBalances(setId, period);
@@ -701,7 +984,7 @@ export function trialBalance(setId, period) {
   };
 }
 
-export function balanceSheet(setId, period) {
+function legacyBalanceSheet(setId, period) {
   const bal = accountBalances(setId, period);
   const cents = centsView(bal);
   // 按编码层级归集：列表给出顶层科目，自动包含其下明细科目；合计全程在分上完成。
@@ -787,7 +1070,55 @@ export function balanceSheet(setId, period) {
   };
 }
 
-export function incomeStatement(setId, period) {
+export function balanceSheet(setId, period) {
+  const { profile, context } = accountSetProfile(setId);
+  if (profile.legacy) {
+    const partialValues = legacyBalancePartial(setId, period);
+    const data = legacyBalanceSheet(setId, period);
+    const reportStatus = legacyReportStatus("balance-sheet", partialValues);
+    return {
+      ...data,
+      accountingContext: context,
+      reportStatus,
+      rows: [],
+      reclassifications: [],
+      diagnostics: reportStatus.diagnostics,
+    };
+  }
+  const accounts = accountListDto(setId);
+  const evaluation = evaluateAccountingStatement(profile.id, {
+    kind: "balance-sheet",
+    accounts,
+    amounts: balanceAmounts(setId, period),
+  });
+  const valueOf = (row) => centsToNumber(BigInt(row.valueMinor));
+  const assets = evaluation.rows
+    .filter((row) => BS_ASSET_ROW_IDS.has(row.id))
+    .map((row) => ({ label: row.label, value: valueOf(row) }));
+  const liabilities = evaluation.rows
+    .filter((row) => !BS_ASSET_ROW_IDS.has(row.id))
+    .map((row) => ({ label: row.label, value: valueOf(row) }));
+  const totals = {
+    assets: centsToNumber(BigInt(evaluation.totals.assets)),
+    liabilities: centsToNumber(BigInt(evaluation.totals.liabilities)),
+    equity: centsToNumber(BigInt(evaluation.totals.equity)),
+  };
+  const reportStatus = profileReportStatus("balance-sheet", evaluation, { profile, context });
+  return {
+    period,
+    accountingContext: context,
+    reportStatus,
+    rows: evaluation.rows.map((row) => ({ id: row.id, label: row.label, valueMinor: row.valueMinor })),
+    reclassifications: evaluation.reclassifications,
+    diagnostics: reportStatus.diagnostics,
+    assets,
+    liabilities,
+    totals,
+    balanced: totals.assets === totals.liabilities + totals.equity,
+  };
+}
+
+function legacyIncomeStatement(setId, period) {
   const s = getAccountSet(setId);
   const year = String(period).slice(0, 4);
   const ytdStart = s.start_period > `${year}-01` ? s.start_period : `${year}-01`;
@@ -865,6 +1196,94 @@ export function incomeStatement(setId, period) {
   return { period, current: build(period, period), ytd: build(ytdStart, period) };
 }
 
+const INCOME_KEY_BY_ROW = {
+  "operating-revenue": "营业收入",
+  "operating-cost": "营业成本",
+  "taxes-and-surcharges": "税金及附加",
+  "selling-expense": "销售费用",
+  "administrative-expense": "管理费用",
+  "finance-expense": "财务费用",
+  "investment-income": "投资收益",
+  "operating-profit": "营业利润",
+  "non-operating-income": "营业外收入",
+  "non-operating-expense": "营业外支出",
+  "total-profit": "利润总额",
+  "income-tax-expense": "所得税费用",
+  "net-profit": "净利润",
+};
+const INCOME_ZERO_KEYS = [
+  "营业收入", "营业成本", "税金及附加", "销售费用", "管理费用", "财务费用", "投资收益",
+  "其他收入", "其他费用", "营业利润", "营业外收入", "营业外支出", "利润总额", "所得税费用", "净利润",
+];
+
+function incomeDto(evaluation) {
+  const out = Object.fromEntries(INCOME_ZERO_KEYS.map((key) => [key, 0]));
+  for (const row of evaluation.rows) {
+    const key = INCOME_KEY_BY_ROW[row.id];
+    if (key) out[key] = centsToNumber(BigInt(row.valueMinor));
+  }
+  return out;
+}
+
+function mergeReportStatuses(statusList) {
+  const diagnostics = [];
+  const seen = new Set();
+  for (const status of statusList) {
+    for (const diagnostic of status.diagnostics) {
+      const key = `${diagnostic.code}|${diagnostic.accountCode ?? ""}|${diagnostic.reason}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      diagnostics.push(diagnostic);
+    }
+  }
+  const complete = statusList.every((status) => status.complete === true);
+  return { status: complete ? "complete" : "incomplete", complete, partialValues: !complete, diagnostics };
+}
+
+/**
+ * 利润表：新 profile 只取明确时间窗内、排除结转的已过账损益发生额；
+ * 本期 = 所选期间，本年累计起点 = max(账套启用期间, 当年 1 月)。
+ */
+export function incomeStatement(setId, period) {
+  const { profile, context } = accountSetProfile(setId);
+  if (profile.legacy) {
+    const data = legacyIncomeStatement(setId, period);
+    const reportStatus = legacyReportStatus("income-statement", false);
+    return {
+      ...data,
+      accountingContext: context,
+      reportStatus,
+      rows: { current: [], ytd: [] },
+      diagnostics: reportStatus.diagnostics,
+    };
+  }
+  const set = accountSetRow(setId);
+  const year = String(period).slice(0, 4);
+  const ytdStart = set.start_period > `${year}-01` ? set.start_period : `${year}-01`;
+  const accounts = accountListDto(setId);
+  const profitCodes = new Set(accounts.filter((account) => account.category === "损益").map((account) => account.code));
+  const evaluate = (fromPeriod, toPeriod) => evaluateAccountingStatement(profile.id, {
+    kind: "income-statement",
+    accounts,
+    amounts: rangeAmounts(setId, fromPeriod, toPeriod).filter((item) => profitCodes.has(item.code)),
+  });
+  const currentEvaluation = evaluate(period, period);
+  const ytdEvaluation = evaluate(ytdStart, period);
+  const reportStatus = mergeReportStatuses([
+    profileReportStatus("income-statement", currentEvaluation, { profile, context }),
+    profileReportStatus("income-statement", ytdEvaluation, { profile, context }),
+  ]);
+  return {
+    period,
+    accountingContext: context,
+    reportStatus,
+    rows: { current: currentEvaluation.rows, ytd: ytdEvaluation.rows },
+    diagnostics: reportStatus.diagnostics,
+    current: incomeDto(currentEvaluation),
+    ytd: incomeDto(ytdEvaluation),
+  };
+}
+
 export function generalLedger(setId, code, period) {
   const s = getAccountSet(setId);
   const acc = row(`SELECT * FROM accounts WHERE account_set_id=? AND code=?`, setId, code);
@@ -932,9 +1351,13 @@ function prevPeriod(period) {
  * - 期间登记（ensurePeriod）在保存点内执行，失败不留下新建的空期间。
  */
 export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
-  getAccountSet(setId);
+  const { profile, roles } = accountSetProfile(setId);
   const p = requirePeriod(period);
   if (periodStatus(setId, p) === "closed") throw new Error("period_closed");
+  // 本年利润 / 利润分配按 profile 角色解析：小企 / legacy 3103→3104，企业 4103→4104。
+  requireRoleAccounts(setId, profile, ["currentYearProfit", "profitDistribution"]);
+  const profitRoot = roles.currentYearProfit;
+  const retainedRoot = roles.profitDistribution;
 
   const plCodes = new Set(listAccounts(setId).filter((x) => x.category === "损益").map((x) => x.code));
   const isProfitCarry = (v) => v.entries.some((e) => plCodes.has(e.code));
@@ -976,7 +1399,7 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
       if (v.status !== "posted") deleteVoucherRow(setId, v.id);
     }
 
-    // ---- 1. 结转本期损益到 3103 ----
+    // ---- 1. 结转本期损益到 profile 的本年利润角色 ----
     let voucher = null;
     let revenueCents = 0n, expenseCents = 0n, profitCents = 0n;
     if (!postedPL) {
@@ -1000,9 +1423,9 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
       }
       if (entries.length) {
         profitCents = revenueCents - expenseCents;
-        // 利润为 0 时不加 3103 零金额行（借贷已自然平衡）。
-        if (profitCents > 0n) entries.push({ code: "3103", summary: "结转本期损益", debit: 0, credit: centsToNumber(profitCents) });
-        else if (profitCents < 0n) entries.push({ code: "3103", summary: "结转本期损益", debit: centsToNumber(-profitCents), credit: 0 });
+        // 利润为 0 时不加本年利润零金额行（借贷已自然平衡）。
+        if (profitCents > 0n) entries.push({ code: profitRoot, summary: "结转本期损益", debit: 0, credit: centsToNumber(profitCents) });
+        else if (profitCents < 0n) entries.push({ code: profitRoot, summary: "结转本期损益", debit: centsToNumber(-profitCents), credit: 0 });
         voucher = createVoucher(setId, {
           period: p, voucher_date: lastDay(p), summary: "结转本期损益",
           kind: "carryforward", status: "posted", entries,
@@ -1010,14 +1433,14 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
       }
     }
 
-    // ---- 2. 年末结转 3103 -> 3104（本期无损益但 3103 有余额也可执行）----
-    // 与资产负债表口径一致：按 3103 前缀（含下级明细）逐个科目转出，不静默只取根余额。
+    // ---- 2. 年末结转：本年利润角色 → 利润分配角色（本期无损益但本年利润有余额也可执行）----
+    // 与资产负债表口径一致：按本年利润前缀（含下级明细）逐个科目转出，不静默只取根余额。
     let yearEndVoucher = null;
     if (yearEnd && !postedYE) {
       const bal = accountBalances(setId, p);
       const lines = [];
       for (const [code, b] of bal) {
-        if (!underPrefix(code, "3103")) continue;
+        if (!underPrefix(code, profitRoot)) continue;
         const natural = storedCents(b.natural);
         if (natural === 0n) continue;
         lines.push({ code, natural });
@@ -1029,9 +1452,9 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
           if (l.natural > 0n) es.push({ code: l.code, debit: centsToNumber(l.natural), credit: 0, summary: "结转本年利润" });
           else es.push({ code: l.code, debit: 0, credit: centsToNumber(-l.natural), summary: "结转本年利润" });
         }
-        // 明细互抵后净额为零时，不需要 3104 对账行，分录本身已平衡。
-        if (total > 0n) es.push({ code: "3104", debit: 0, credit: centsToNumber(total), summary: "结转本年利润" });
-        else if (total < 0n) es.push({ code: "3104", debit: centsToNumber(-total), credit: 0, summary: "结转本年利润" });
+        // 明细互抵后净额为零时，不需要利润分配对账行，分录本身已平衡。
+        if (total > 0n) es.push({ code: retainedRoot, debit: 0, credit: centsToNumber(total), summary: "结转本年利润" });
+        else if (total < 0n) es.push({ code: retainedRoot, debit: centsToNumber(-total), credit: 0, summary: "结转本年利润" });
         yearEndVoucher = createVoucher(setId, {
           period: p, voucher_date: lastDay(p), summary: "结转本年利润",
           kind: "carryforward", status: "posted", entries: es,
@@ -1143,7 +1566,7 @@ function requireUsefulLifeMonths(raw) {
 }
 
 export function addAssetCard(setId, c = {}) {
-  getAccountSet(setId);
+  const { profile, roles } = accountSetProfile(setId);
   const kind = c.kind === "intangible" ? "intangible" : "fixed";
   const name = String(c.name || "").trim();
   const cost = parseMoney(c.original_cost, { label: "资产原值" });
@@ -1154,9 +1577,12 @@ export function addAssetCard(setId, c = {}) {
   if (!CARD_PERIOD_RE.test(start_period)) throw new Error("start_period_invalid");
   const residual = c.residual_rate === undefined ? (kind === "fixed" ? 0.05 : 0) : Number(c.residual_rate);
   if (!Number.isFinite(residual) || residual < 0 || residual >= 1) throw new Error("residual_rate_invalid");
-  const asset_account = c.asset_account || (kind === "fixed" ? "1601" : "1701");
-  const accum_account = c.accum_account || (kind === "fixed" ? "1602" : "1702");
-  const expense_account = c.expense_account || "5602";
+  // 默认资产 / 累计 / 费用科目按 profile 角色：小企与 legacy 管理费用 5602，企业 6602。
+  const defaultAsset = kind === "fixed" ? roles.fixedAsset : roles.intangibleAsset;
+  const defaultAccum = kind === "fixed" ? roles.accumulatedDepreciation : roles.accumulatedAmortization;
+  const asset_account = c.asset_account || defaultAsset;
+  const accum_account = c.accum_account || defaultAccum;
+  const expense_account = c.expense_account || roles.defaultDepreciationExpense;
   for (const code of [asset_account, accum_account, expense_account]) {
     if (!row(`SELECT 1 FROM accounts WHERE account_set_id=? AND code=?`, setId, code))
       throw new Error(`account_not_found:${code}`);
@@ -1426,7 +1852,7 @@ export function generateDepreciation(setId, period) {
  * 现金流量表：以货币资金科目的对方科目分类（经营/投资/筹资），
  * 并附「净利润 -> 经营活动净额」的间接法补充资料。
  */
-export function cashFlowStatement(setId, period) {
+export function legacyCashFlowStatement(setId, period) {
   getAccountSet(setId);
   if (!/^\d{4}-\d{2}$/.test(String(period || ""))) throw new Error("period_invalid");
   // 货币资金及其下级明细（如 100201 银行明细）均为现金科目。
@@ -1512,6 +1938,171 @@ export function cashFlowStatement(setId, period) {
       减_存货的增加: n(dInvCents),
       加_经营性应付的增加: n(dPayCents),
       经营活动产生的现金流量净额: n(opTCents),
+    },
+  };
+}
+
+/**
+ * 现金流量表：新 profile 只分类「单一非现金对方科目」的基础现金凭证；
+ * 复合对方科目不按比例分摊、不猜现金等价物 / 受限资金，直接给
+ * cash_flow_classification_incomplete，且不把未分类金额伪装成经营 / 投资 / 筹资。
+ * 旧账套（legacy）仍走旧兼容计算（完整性由 legacy_profile_compatibility 单独表达）。
+ */
+export function cashFlowStatement(setId, period) {
+  const { profile, roles, context } = accountSetProfile(setId);
+  if (profile.legacy) {
+    const data = legacyCashFlowStatement(setId, period);
+    const reportStatus = legacyReportStatus("cash-flow-statement", false);
+    return {
+      ...data,
+      accountingContext: context,
+      reportStatus,
+      diagnostics: reportStatus.diagnostics,
+      unknown: [],
+      classificationComplete: true,
+    };
+  }
+  if (!/^\d{4}-\d{2}$/.test(String(period || ""))) throw new Error("period_invalid");
+  const accounts = accountListDto(setId);
+  const byCode = new Map(accounts.map((account) => [account.code, account]));
+  const names = new Map(accounts.map((account) => [account.code, account.name]));
+  const cashRoots = roles.cashRoots;
+  const isCash = (code) => codeUnderAny(code, cashRoots);
+  const bucket = { operating: new Map(), investing: new Map(), financing: new Map() };
+  const addBucket = (category, code, cents) =>
+    bucket[category].set(code, (bucket[category].get(code) || 0n) + cents);
+  const unknown = [];
+
+  for (const voucher of rows(
+    `SELECT id FROM vouchers WHERE account_set_id=? AND status='posted' AND kind<>'carryforward' AND period=?`,
+    setId, period,
+  )) {
+    const entries = rows(`SELECT code, debit, credit FROM voucher_entries WHERE voucher_id=?`, voucher.id);
+    let cashDelta = 0n;
+    const others = new Map();
+    for (const entry of entries) {
+      const debit = storedCents(entry.debit);
+      const credit = storedCents(entry.credit);
+      if (isCash(entry.code)) {
+        cashDelta += debit - credit;
+      } else if (debit !== 0n || credit !== 0n) {
+        others.set(entry.code, true);
+      }
+    }
+    if (cashDelta === 0n || others.size === 0) continue;
+    if (others.size > 1) {
+      // 不实现复合凭证按比例分摊：不猜分类，也不把金额塞进其他类别。
+      unknown.push({
+        category: "unknown",
+        reason: "multi-counterpart-allocation-not-implemented",
+        value: centsToNumber(cashDelta),
+      });
+      continue;
+    }
+    const [code] = [...others.keys()];
+    const account = byCode.get(code);
+    if (!account) {
+      unknown.push({ code, category: "unknown", reason: "counterpart-unmapped", value: centsToNumber(cashDelta) });
+      continue;
+    }
+    const classified = classifyAccountingCashCounterpart(profile.id, account);
+    if (classified.category === "operating" || classified.category === "investing" || classified.category === "financing") {
+      addBucket(classified.category, code, cashDelta);
+    } else {
+      unknown.push({
+        code,
+        category: "unknown",
+        reason: fixedReason(classified.reason, "classification-not-verified"),
+        value: centsToNumber(cashDelta),
+      });
+    }
+  }
+
+  const toLines = (category) => [...bucket[category].entries()]
+    .filter(([, value]) => value !== 0n)
+    .map(([code, value]) => ({ code, name: names.get(code) || code, value: centsToNumber(value) }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const operating = toLines("operating");
+  const investing = toLines("investing");
+  const financing = toLines("financing");
+  const sumLine = (lines) => lines.reduce((total, line) => total + storedCents(line.value), 0n);
+  const operatingCents = sumLine(operating);
+  const investingCents = sumLine(investing);
+  const financingCents = sumLine(financing);
+  const netCents = operatingCents + investingCents + financingCents;
+
+  const balEnd = centsView(accountBalances(setId, period));
+  const balBegin = centsView(accountBalances(setId, prevPeriod(period)));
+  const cashAt = (balances) => sumByPrefixCents(balances, cashRoots);
+  const cashBeginCents = cashAt(balBegin);
+  const cashEndCents = cashAt(balEnd);
+
+  const earnings = incomeStatement(setId, period);
+  // 折旧 / 摊销只认已过账借方对方科目（累计折旧 / 摊销角色前缀）。
+  const accumRoots = [roles.accumulatedDepreciation, roles.accumulatedAmortization];
+  const depreciationCents = postedEntryRows(db, setId, {
+    fromPeriod: period, toPeriod: period, excludeCarryforward: true,
+  }).reduce((total, entry) => (
+    codeUnderAny(entry.code, accumRoots) ? total + storedCents(entry.credit) : total
+  ), 0n);
+
+  const rules = getAccountingReportRules(profile.id);
+  const rootsOf = (rowId) => {
+    const row = rules.balanceSheet.rows.find((item) => item.rowId === rowId);
+    return row?.roots ?? [];
+  };
+  const receivableRoots = [
+    ...rootsOf("notes-receivable"), ...rootsOf("accounts-receivable"),
+    ...rootsOf("prepayments"), ...rootsOf("other-receivables"),
+  ];
+  const inventoryRoots = rootsOf("inventory");
+  const payableRoots = [
+    ...rootsOf("notes-payable"), ...rootsOf("accounts-payable"), ...rootsOf("advances-from-customers"),
+    ...rootsOf("employee-benefits-payable"), ...rootsOf("taxes-payable"), ...rootsOf("interest-payable"),
+    ...rootsOf("dividends-payable"), ...rootsOf("other-payables"),
+  ];
+  const delta = (roots) => sumByPrefixCents(balEnd, roots) - sumByPrefixCents(balBegin, roots);
+  const n = centsToNumber;
+
+  const unknownReasons = [...new Set(unknown.map((item) => fixedReason(item.reason, "classification-not-verified")))];
+  const extraDiagnostics = unknownReasons.map((reason) => ({
+    code: "cash_flow_classification_incomplete",
+    severity: "error",
+    reportKind: "cash-flow-statement",
+    reason,
+  }));
+  const reportStatus = profileReportStatus(
+    "cash-flow-statement",
+    { complete: unknown.length === 0, diagnostics: [] },
+    { profile, context, extraDiagnostics },
+  );
+
+  return {
+    period,
+    method: "直接法（单一对方科目分类）",
+    accountingContext: context,
+    reportStatus,
+    diagnostics: reportStatus.diagnostics,
+    operating,
+    investing,
+    financing,
+    unknown,
+    classificationComplete: unknown.length === 0,
+    totals: {
+      operating: n(operatingCents),
+      investing: n(investingCents),
+      financing: n(financingCents),
+      net_increase: n(netCents),
+    },
+    cash: { begin: n(cashBeginCents), end: n(cashEndCents), change: n(cashEndCents - cashBeginCents) },
+    reconciles: netCents === cashEndCents - cashBeginCents,
+    supplement_indirect: {
+      净利润: earnings.current["净利润"],
+      加_折旧与摊销: n(depreciationCents),
+      减_经营性应收的增加: n(delta(receivableRoots)),
+      减_存货的增加: n(delta(inventoryRoots)),
+      加_经营性应付的增加: n(delta(payableRoots)),
+      经营活动产生的现金流量净额: n(operatingCents),
     },
   };
 }
@@ -1736,9 +2327,14 @@ export function parseImportTexts(texts = {}, metaOverride = {}) {
  * 共享导入预检：先核对原始数据/文本，再归一化成可写入的值。
  * 预检与正式写入共用本函数，保证「预检通过后正式写入不会因同一静态约束失败」。
  * 本函数只读，不产生任何业务写入；错误带行号/凭证/科目/字段上下文。
- * 返回 { ok, errors, warnings, normalized, summary }。
+ * 返回 { ok, errors, warnings, normalized, summary, profile, profileError }。
+ *
+ * 第二个参数是**内部已验证上下文**（可选），不是 payload 字段：
+ *   { profileId, accounts? }
+ * 用于 append 目标账套 / 旧已完成 create 批次重放：必须按目标账套**实际** profile 与科目表校验，
+ * 不是按新企业模板先拒绝合法旧录入。payload 里的任何字段都不能冒充这个上下文。
  */
-export function normalizeImportPayload(payload = {}) {
+export function normalizeImportPayload(payload = {}, context = null) {
   const errors = [], warnings = [];
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     return {
@@ -1747,6 +2343,8 @@ export function normalizeImportPayload(payload = {}) {
       warnings,
       normalized: { account_set: {}, accounts: [], opening_balances: [], vouchers: [] },
       summary: { account_set: null, start_period: null, accounts: 0, opening_balances: 0, vouchers: 0, entries: 0 },
+      profile: null,
+      profileError: null,
     };
   }
   const p = payload;
@@ -1765,6 +2363,45 @@ export function normalizeImportPayload(payload = {}) {
   if (!taxT.ok) errors.push(`纳税人性质 taxpayer_type 类型非法：${fmtRaw(meta.taxpayer_type)}`);
   const stdT = coerceText(meta.accounting_standard);
   if (!stdT.ok) errors.push(`会计准则 accounting_standard 类型非法：${fmtRaw(meta.accounting_standard)}`);
+
+  // ---- 会计 profile / 基础科目表（内部上下文优先；否则按请求准则选择新 profile）----
+  let profile = null;
+  let profileError = null;
+  let baseAccounts = [];
+  if (context !== undefined && context !== null) {
+    if (typeof context !== "object" || Array.isArray(context) || typeof context.profileId !== "string") {
+      throw Object.assign(new Error("import_context_invalid"), {
+        code: "import_context_invalid",
+        details: { field: "context", reason: "malformed" },
+      });
+    }
+    profile = getAccountingProfile(context.profileId);
+    baseAccounts = Array.isArray(context.accounts) ? context.accounts : seedAccounts(profile);
+  } else {
+    const rawStd = meta.accounting_standard;
+    let standard;
+    if (rawStd === undefined || rawStd === null) {
+      standard = undefined;
+    } else if (!stdT.ok) {
+      profileError = { code: "accounting_standard_invalid", message: "会计准则是非受支持的类型" };
+    } else if (typeof rawStd === "string" && rawStd !== rawStd.trim()) {
+      profileError = { code: "accounting_standard_invalid", message: "会计准则必须精确匹配（不接受首尾空白）" };
+    } else if (stdT.value === "") {
+      standard = undefined;
+    } else {
+      standard = stdT.value;
+    }
+    if (!profileError) {
+      try {
+        profile = resolveNewAccountingProfile(standard === undefined ? {} : { accounting_standard: standard });
+      } catch (e) {
+        profileError = { code: e?.code || "accounting_standard_invalid", message: e?.message || "会计准则不受支持" };
+      }
+    }
+    if (profileError) errors.push(`${profileError.code}: ${profileError.message}`);
+    baseAccounts = profile ? seedAccounts(profile) : [];
+  }
+  const baseCodes = new Set(baseAccounts.map((account) => String(account.code)));
   const startRaw = meta.start_period;
   let startPeriod = null;
   if (startRaw !== undefined && startRaw !== null && typeof startRaw !== "string" && typeof startRaw !== "number") {
@@ -1786,8 +2423,8 @@ export function normalizeImportPayload(payload = {}) {
   const vouchersIn = readCollection("vouchers");
 
   // ---- 科目 ----
-  const coaCodes = new Set(COA.map((a) => a.code));
-  const accountCodes = new Set(coaCodes);
+  const standardCodes = baseCodes;
+  const accountCodes = new Set(standardCodes);
   const normalizedAccounts = [];
   const seenCodes = new Set();
   accountsIn.forEach((a, i) => {
@@ -1811,7 +2448,7 @@ export function normalizeImportPayload(payload = {}) {
     if (rawDir && !["debit", "credit"].includes(direction)) errors.push(`科目第 ${line} 行（编码 ${code || "空"}）方向非法：${rawDir}`);
     if (rawCat && !ACCOUNT_CATEGORIES.includes(rawCat)) errors.push(`科目第 ${line} 行（编码 ${code || "空"}）类别非法：${rawCat}`);
 
-    const isStandard = !!code && coaCodes.has(code);
+    const isStandard = !!code && standardCodes.has(code);
     const isDuplicate = !!code && seenCodes.has(code);
     if (isStandard) warnings.push(`科目 ${code} 已存在标准科目，将保留标准名称`);
     if (isDuplicate) warnings.push(`科目 ${code} 重复出现，仅保留首行`);
@@ -2011,19 +2648,35 @@ export function normalizeImportPayload(payload = {}) {
       vouchers: vouchersIn.length,
       entries: entryCount,
     },
+    profile: profile ? { id: profile.id, declaredStandard: profile.declaredStandard, legacy: profile.legacy === true } : null,
+    profileError,
   };
 }
 
 /** 校验导入 payload，返回错误/警告/统计（向后兼容入口，内部与正式写入共用同一约束）。 */
 export function validateImportPayload(payload = {}) {
   const r = normalizeImportPayload(payload);
-  return { ok: r.ok, errors: r.errors, warnings: r.warnings, summary: r.summary };
+  return {
+    ok: r.ok, errors: r.errors, warnings: r.warnings, summary: r.summary,
+    profile: r.profile, profileError: r.profileError,
+  };
 }
 
-/** 先预检（dryRun）再落库；预检与落库共用 normalizeImportPayload 的同一套约束，失败不落库。 */
+/**
+ * 旧首次导入（无来源 / 企业 / 批次身份）：行为与返回结构保持不变，
+ * 但新建账套按请求准则选择合法新 profile（同一事务内写账套 / 科目 / 首期间 / profile）。
+ * 返回 validation 中可带 profileError，不把非法准则逃逸成泛 500。
+ */
 export function importAccountSet(payload = {}, { dryRun = false } = {}) {
   const normalized = normalizeImportPayload(payload);
-  const validation = { ok: normalized.ok, errors: normalized.errors, warnings: normalized.warnings, summary: normalized.summary };
+  const validation = {
+    ok: normalized.ok,
+    errors: normalized.errors,
+    warnings: normalized.warnings,
+    summary: normalized.summary,
+    profile: normalized.profile,
+    profileError: normalized.profileError,
+  };
   if (dryRun || !normalized.ok) return { dryRun: true, validation, created: null };
   const n = normalized.normalized;
   const meta = n.account_set;
@@ -2031,7 +2684,8 @@ export function importAccountSet(payload = {}, { dryRun = false } = {}) {
   try {
     const set = createAccountSet({
       name: meta.name, taxpayer_type: meta.taxpayer_type || "小规模纳税人",
-      accounting_standard: meta.accounting_standard || "小企业会计准则", start_period: meta.start_period,
+      accounting_standard: meta.accounting_standard || undefined, start_period: meta.start_period,
+      ...(normalized.profile ? { profileId: normalized.profile.id } : {}),
     });
     const have = new Set(listAccounts(set.id).map((a) => a.code));
     for (const a of n.accounts) {

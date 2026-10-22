@@ -1,11 +1,12 @@
-# 会计 profile 与内部报表规则（LOCAL-03a 阶段 A）
+# 会计 profile 与内部报表规则（LOCAL-03a）
 
-本文件说明 LOCAL-03a 阶段 A 交付的**纯 profile / 报表规则模块**：三个 profile 的科目与角色、
-内部资产负债表 / 利润表行项目、金额契约、支持范围、权威来源与错误码。
+本文件说明 LOCAL-03a 交付的 **profile / 报表规则纯模块（阶段 A）** 与 **持久 profile + 真实领域接线（阶段 B1）**：
+三个 profile 的科目与角色、内部资产负债表 / 利润表行项目、金额契约、支持范围、权威来源、错误码、
+持久结构、迁移语义与下游 DTO。
 
-> **边界声明**：本文件与对应模块只覆盖**纯定义与纯计算**。阶段 A 未做持久迁移、未接线任何
-> HTTP / Agent / MCP / 导出入口、未改动现有账套与历史数据，也**不是**法定完整财务报表、
-> 税局申报格式或税务计算实现。「登记了分录」不等于「自动算税」。
+> **边界声明**：本文件覆盖**内部简化报表的已核实基础业务子集**与迁移 / 领域接线；**不是**法定完整财务报表、
+> 税局申报格式或税务计算实现。「登记了分录」不等于「自动算税」。B1 未接 HTTP / Agent / MCP / 导出入口，
+> 未注册 `test-all`，未做 v5 备份工具兼容；**LOCAL-03a 尚未整体交付**，B2 门槛见 §11.8。
 
 ## 1. 模块与公开接口
 
@@ -299,3 +300,182 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 5. HTTP / Agent / MCP 真实入口与 DTO 诊断透传，`report-export.mjs` 五类导出的 profile / 诊断协调；
 6. 原任务两组完整手算连续链（真实过账 → 检查 → 结转 → 封账 → 年末 → 次年）、受影响回归与最终全套；
 7. 独立内容审查、最终已审 head 串行合并与交接。
+
+---
+
+## 11. 阶段 B1：持久 profile、真实领域接线与旧账兼容（实现完成，未合并、未整体交付）
+
+B1 从实际 main `dfefae0553052474b8a9308105443714bc5d9cfb`（LOCAL-02 #47 / PR #60 已合）与阶段 A 冻结 `47866a3` 出发，
+在本 worktree `local-03a` 实现；**不重造**阶段 A 的三个 profile、COA 与纯规则引擎，保留其已审 API。
+
+### 11.1 持久结构（schema v5，只加一列）
+
+```sql
+-- import-storage.mjs migration v5（迁移前一致备份 → 同一事务加列 + 记版本）
+ALTER TABLE account_sets
+  ADD COLUMN accounting_profile_id TEXT NOT NULL DEFAULT 'legacy-small-coa-v1';
+```
+
+- 只存**不可变 profile ID**；科目表 / 报表映射版本由该 ID 解析，不另存可互相矛盾的 `coaVersion` /
+  `reportMappingVersion` 多列。
+- 迁移前既有账套（小企标签、企业标签、未知标签、空账套）**一律**成为 `legacy-small-coa-v1`；
+  原 `accounting_standard` 字符串原样保留，不按标签重种科目、不转换历史、不改期初 / 科目 / 卡片 / 凭证 /
+  期间 / 企业绑定 / 来源 / 批次 / 指纹。
+- 未知或损坏 profile **不 fallback 到新小企**：正常业务抛 `accounting_profile_unknown`；
+  只读恢复核对仍可直接读原始行 / 备份。
+- 没有普通更新入口；本文件与领域层都不提供“改 profile / 准则”的 API，也不做准则转换。
+- 一企一账套唯一约束（`import_enterprise_account_sets`）未变。
+
+迁移链仍为 `ensureImportSchema`：先备份（含 WAL 已提交数据）→ 备份记录 + 新结构 + 迁移版本同一事务；
+失败整体回滚、重试重新备份、重复启动幂等。v3 / v4 候选可逐级升 v5。
+
+### 11.2 建账与旧首次导入
+
+- `createAccountSet({ name, taxpayer_type, accounting_standard, start_period, profileId? })`：
+  - 省略准则（`undefined` / `null` / `""`）→ `small-2011-basic-v1`；
+  - 只接受精确的「小企业会计准则」「企业会计准则」；首尾空白、其他字符串、非字符串 → `accounting_standard_invalid`；
+  - 显式 `profileId` 必须存在且与准则一致 → `accounting_profile_unknown` / `accounting_profile_standard_mismatch`；
+  - legacy profile 不可新建 → `accounting_profile_legacy_not_creatable`；
+  - 账套、profile 科目表、首期间在**同一保存点**内写入；失败不留下半截账套。
+- 旧 `importAccountSet`（无来源 / 企业 / 批次身份）返回结构不变；新建账套按 payload 准则选择新 profile，
+  `validation` 新增 `profile` / `profileError`（profile 错误也以 `code: message` 进入 `errors`，不逃逸成泛 500）。
+- 增量 `mode=create` 同样按准则选择新 profile；`mode=append` **不**用 payload 标签改 profile。
+- 已有账套 profile 只按持久 `accounting_profile_id` 读取，普通参数不能改变它或准则。
+
+### 11.3 增量导入：先定位目标，再严格归一化
+
+`normalizeImportPayload(payload, context?)` 新增**内部第二参数**（不是 payload 字段）：
+
+```js
+context = { profileId, accounts? }   // 由服务端在定位 append 目标 / 已完成 create 批次后传入
+```
+
+- `importIncremental` 现在先做最小参数 / 批次读取，定位 append 账套或旧已完成 `create` 批次的目标账套，
+  再以**目标实际 profile 与真实科目表**调用严格 normalize；不再在查 batch / 目标之前按新企业模板拒绝旧录入。
+- 旧 `create` 重放保留企业标签 + 旧小企 COA 的合法 `5001` 收入；重放仍核验内容一致、企业绑定、
+  当前凭证存在 / posted / 落库指纹、真实期初；不因“先找到 batch”跳过。
+- `append` 沿目标实际科目表与同企一账套规则；payload 的准则标签不改变 profile。
+- 预检与正式执行同规则，出错零业务写入；旧批次 / 来源指纹规则未改。
+- 未知 profile 的目标账套 → 结构化 `accounting_profile_unknown`；`import_context_invalid` 只用于内部上下文形状错误。
+
+### 11.4 profile 角色在真实业务中的使用
+
+- 期初 / 凭证 / 资产卡片 / 损益结转 / 年末结转 / 后续期间依赖守卫全部按**持久 profile 角色**解析：
+  - 小企 / legacy：损益结转 `3103`，年末 `3103 → 3104`，默认折旧费用 `5602`；
+  - 企业：损益结转 `4103`，年末 `4103 → 4104`，默认折旧费用 `6602`。
+- `period-end-controls.mjs` 的 `yearEndCarryStep`、`assertPeriodMutable` 年末依赖识别、
+  资产核对根科目均改为 role 驱动，不再用 SQL 硬编码 `3103/3104` / `5602`。
+- 必要角色缺失 / 与科目表冲突时在写入前失败（`accounting_role_missing`），不伪造分录。
+- `periodEndCheck` 新增：
+  - 顶层 `accountingContext`；
+  - `warnings`（固定诊断码；legacy 为 `legacy_profile_compatibility`，新 profile 登记准则不一致为
+    `declared_standard_profile_mismatch`）；
+  - `rules.profitAccount` / `retainedEarningsAccount` / `defaultDepreciationExpense`；
+  - 原 `accountSetId / period / ready / steps / blocking / missing / rules` 与原 step id、状态语义保持。
+- legacy 警告**不自动**变成封账阻塞；未知 profile / 必要角色缺失才在真正写入前失败。
+  `period_end_check_failed`、`later_period_closed`、`later_year_end_carryforward_depends_on_period` 等原控制码保留。
+
+### 11.5 报表实现（真实已过账凭证 + 期初）
+
+- 新 profile 的三表由真实余额 / 时间窗与阶段 A `evaluateAccountingStatement` 计算，不重写规则引擎：
+  - 资产负债表：截至期间的科目自身**期末余额**（借减贷），父子科目各计一次；原值 / 累计 / 净值分别展示，
+    只有净值进资产总计；企业 `5001` 生产成本进存货，绝不计入营业收入；资本公积单独列示；
+  - 利润表：仅**明确时间窗内、排除结转**的已过账损益发生净额；本期与本年累计分开，年中启用时起点取
+    `max(账套启用期间, 当年 1 月)`；
+  - 现金流：只分类**单一非现金对方科目**的基础现金凭证；复合对方科目不按比例分摊、不猜现金等价物 /
+    受限现金，给 `cash_flow_classification_incomplete`，且不把未分类金额塞进经营 / 投资 / 筹资。
+- legacy 走**真实旧兼容计算**（原 `balanceSheet` / `incomeStatement` / `cashFlowStatement` 逻辑），
+  返回 `legacy_compatibility` + `complete=false`；不把阶段 A 的 `legacy_engine_required` 空值当完成。
+- 保留小企 `2221` 借方余额的合法负列示；企业同输入给 incomplete；`1604` 现金流用途不明给 unknown；
+  非零未知 / 需明细 / 语义冲突明确 incomplete，零余额复杂科目不阻断；不因算式碰巧平衡就宣称完整。
+- 金额仍由 LOCAL-02 `money.mjs` 与已验证查询生成（净额使用整数分），未改变单笔上限、未新增浮点舍入。
+
+### 11.6 稳定下游 DTO（B1 只产出，不改 05 / 08 入口）
+
+- 账套（`getAccountSet`、`listAccountSets` 可解析项）与三表 / 期末检查统一新增：
+
+```js
+accountingContext = {
+  declaredStandard,        // 本机原登记字符串（迁移不改）
+  profileId,               // 持久 profile ID（SQL 列 accounting_profile_id）
+  coaVersion,
+  reportMappingVersion,
+  legacy,                  // true = 兼容实现，不是第三种准则
+}
+```
+
+- 三表新增 `reportStatus`：
+
+```js
+reportStatus = { status, complete, partialValues, diagnostics }
+// status: complete | incomplete | legacy_compatibility
+// 两个新 profile 在支持范围内 complete=true、partialValues=false
+// incomplete → complete=false；如仍给出部分金额则 partialValues=true
+// balanced / reconciles 仅代表算术勾稽，不替代 complete
+```
+
+- `diagnostics[]` 至少 `{ code, severity, reportKind, accountCode?, reason }`；`severity` 为 `warning/error`；
+  `reason` 为固定标记，不含 SQL / 堆栈 / 文件路径 / 摘要 / 企业名。固定外层码：
+  `legacy_profile_compatibility`、`declared_standard_profile_mismatch`、`report_account_unmapped`、
+  `report_account_requires_detail`、`report_account_semantics_mismatch`、`cash_flow_classification_incomplete`。
+  本机原始 `accountCode` 可用于定位；模型 / 导出侧只能按各自政策保留允许的码 / 计数 / 受控引用。
+- 报表 DTO 保留旧主要字段与单位：资产负债表 `assets[] / liabilities[] / totals{assets,liabilities,equity} / balanced`；
+  利润表 `current / ytd` 旧中文键；现金流 `operating / investing / financing / totals / cash / reconciles /
+  supplement_indirect`。新增 `rows`（`id/label/valueMinor`）、`reclassifications`、`unknown`、
+  `classificationComplete` 等**只增不改**字段。
+- 结构化错误（`Error.code` + `Error.details`）：
+  - `accounting_profile_unknown`：profile ID 未知 / 损坏（details 只含受控 field / profileId / reason）；
+  - `accounting_standard_invalid`：准则非法 / 首尾空白 / 非字符串 / 空白不是默认值；
+  - `accounting_profile_standard_mismatch`：显式 profile 与准则不一致；
+  - `accounting_profile_legacy_not_creatable`：legacy 新建；
+  - `accounting_profile_immutable`：预留（本文件不提供普通 profile 更新入口）；
+  - `accounting_role_missing`：必要角色未定义 / 对应科目不在账套科目表；
+  - `import_context_invalid`：内部 normalize 上下文形状错误（非 payload 输入）。
+  `details` 只放受控 `field / profileId / accountCode / reason`，不回显未知原始输入。
+
+### 11.7 B1 实际测试（cwd=`06-workbench`）
+
+| 命令 | 结果 |
+|---|---|
+| `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
+| `node test/accounting-standards.test.mjs` | 17 / 17 exit 0 |
+| `node test/accounting-standards-migration.test.mjs` | 6 / 6 exit 0 |
+| `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
+| `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45 / 45 exit 0 |
+| `node test/import-strict.test.mjs` | 54 / 54 exit 0 |
+| `node test/import-incremental.test.mjs` | 49 / 49 exit 0 |
+| `node test/voucher-amount-guards.test.mjs` | 103 / 103 exit 0 |
+
+- `accounting-standards.test.mjs`：两家合成企业各一账套，2025-11 建账 → 12 月 → 次年 1 月真实过账 / 检查 /
+  结转 / 封账；表格金额（小企 3000/1600/1600/12800/0/800/13600/2800 等，企业 5000/2500/…）全部按独立手算字面量核对；
+  年末 `3103/3104`、`4103/4104`，次年利润分配保持上年数；企业 `5001` 在产品 1000 不变且不计收入；
+  两准则 100 元三月卡片 33.33/33.33/33.34，第 4 月不再提；无形资产、默认费用科目、不适用 / 缺计提 / 账卡差异；
+  小企 2221 负列示、企业同输入 incomplete、1604 现金流、未知非零 / 零余额、同码冲突、非法准则、
+  多企业隔离、重复计提 / 结转、后期 4103→4104 依赖、失败原子性、legacy 兼容报表与旧 create 重放。
+- `accounting-standards-migration.test.mjs`：真实 v4 合成旧库（企业标签 + 旧小企 COA + 已完成 create 批次）
+  与 v3 合成旧库；迁移前 v4 备份 `verify` / `restore-new` 到全新目录成功，恢复库由真实 `db.mjs` 入口升 v5；
+  v4→v5 备份含 WAL 已提交批次、业务行 / 指纹 / 原标签不变、所有旧账套为 legacy；旧 create 批次**新进程**重放
+  `idempotent_replay`、内容变化 `batch_content_changed`、append / 查询 / 重启一致；v3→v5 保留历史；
+  故障注入整体回滚并重试重新备份；未知 profile 结构化拒绝且原始行仍可读。全部合成临时路径 + 随机临时库。
+- 旧 fixture 仅做必要合法更新：`accounting-derived.test.mjs` 的“损益明细归类”用例补足资金来源（避免把
+  “负货币资金”这一不真实场景当成报表规则断言），金额 / 其他断言未删、未降精度。
+
+### 11.8 B1 未做 / 待 B2（不得据此宣称整体交付）
+
+1. **v5 备份 / 恢复**：`local-backup.mjs` 当前仍严格只支持 v3 / v4；B1 **未修改**该文件与 CLI / 测试。
+   v5 库备份会被明确拒绝，必须等银行 #53 最终结构与窗口释放后在 B2 增加 `STRUCTURE_V5` 与完整测试；
+   B1 已实际验证 **v4 迁移前备份**可 `verify` / `restore-new` 并由真实入口升 v5。
+2. **入口接线**：`server.mjs`、`agent-tools.mjs`、MCP `tools.mjs` 未改；`accountingContext` / `reportStatus`
+   尚未进入 HTTP / Agent / MCP DTO。B2 才接真实入口与连续链。
+3. **导出 / Office**：`report-export.mjs` / `report-office-export.mjs` 未改；B1 只保证核心返回值与旧主要字段兼容。
+   现有 `report-export` 套件有 4 项因新 profile 行项目 / 累计折旧符号 / 复合现金流口径差异失败，
+   已登记为 B2（05 导出）适配项，未删断言、未改导出源码。
+4. **08 输出边界**：新增字段 / 行项目计数差异需 08 在 B2 更新精确允许字段与未知键处理；B1 未改 08 文件。
+5. **测试注册**：`scripts/test-all.mjs` 未改；B1 三套新测试尚未注册。
+6. **公共交接**：`docs/handoffs/STATE.md`、`NEXT-SESSION.md`、任务索引 / INDEX / CHANGELOG 未改（归 root 释放窗口）。
+7. **其他既有套件**：`smoke.test.mjs` 1 项因在新小企账套导入企业科目 `6602` 得到 incomplete 报表而失败（B2
+   合法 fixture 适配）；`finance-model-adapter.test.mjs` 1 项因资产负债表行数 39 vs 旧 28 失败（B2 08 适配）；
+   `local-backup.test.mjs` 初始化即因版本 5 ≠ 4 失败（B2 备份）。均**未**通过修改旧断言绕过。
+8. 全程未使用真实账套 / 税局凭据 / 私有采集；真实税局接入仍为 **0**，税局现场仍暂停；
+   本包仍只是内部简化基础业务子集，不宣称 2026 全准则或可申报。

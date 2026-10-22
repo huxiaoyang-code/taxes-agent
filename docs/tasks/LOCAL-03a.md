@@ -1,8 +1,8 @@
 # 任务单 · LOCAL-03a 双准则科目、报表映射与旧账套兼容迁移
 
-- 类型：会计 profile / 报表规则（阶段 A 纯模块）→ 持久迁移 + 真实接线（阶段 B）
-- 状态：**阶段 A 纯规则已实现并自测；第二轮独审最小回修已落地，待复审；尚未接线；阶段 B 未完成**（未提交、未建 PR、未合并）
-- 基线：`98977e04bd24aa293074021802191814f8c2a1d2`（root 核实的最新 main，PR #55 合并后）
+- 类型：会计 profile / 报表规则（阶段 A 纯模块）→ 持久迁移 + 真实接线（阶段 B1 / B2）
+- 状态：**阶段 A 纯规则已实现并自测、独立接受；阶段 B1（核心领域 / 迁移 / 真实手算链）已在 worktree 实现并自测，未提交、未建 PR、未合并；HTTP / Agent / MCP / 导出 / v5 备份与全套注册仍属 B2**
+- 基线：阶段 A `98977e04bd24aa293074021802191814f8c2a1d2`；B1 实际 main `dfefae0553052474b8a9308105443714bc5d9cfb`（LOCAL-02 #47 / PR #60 已合），合并 main 后的本地起点 `f7e69bd`
 - 分支：`codex/huxiaoyang-code/local-03a`（独立 worktree，工作区名 `local-03a`）
 - 负责人：`huxiaoyang-code`（已核实）
 - 远端载体：[Issue #56](https://github.com/huxiaoyang-code/youshu-fork/issues/56)（`Refs #20` / `Refs #13` / `Refs #14`）
@@ -21,11 +21,15 @@
 
 | 阶段 | 范围 | 状态 |
 |---|---|---|
-| A | 六个新增文件的纯 profile / 报表规则预实现与定向自测 | **已完成实现与自测（未提交、未合并）** |
-| B | 持久 profile 迁移、真实业务接线、HTTP / Agent / MCP / 导出、完整手算链、回归与审查合并 | **未开始** |
+| A | 六个新增文件的纯 profile / 报表规则预实现与定向自测 | **已完成实现与自测；47866a3 已被独立接受 / root 41 项通过** |
+| B1 | 持久 profile 迁移、核心领域接线、真实手算链、v3 / v4 迁移与旧批次兼容 | **已在 worktree 实现并自测（17 + 6 项新领域 / 迁移，B1 清单全绿）；未接入口、未改备份 / 导出 / test-all；未合并** |
+| B2 | HTTP / Agent / MCP / 导出 / Office、v5 备份、全套注册、最终独审与合并 | **未开始（等 05 / 08 / 银行 #53 窗口释放）** |
 
 阶段 A 允许在 LOCAL-02 #47 未合并前，从 root 核实的最新 main 独立 worktree **提前实现纯模块**；
 **不允许**提前修改核心共享文件，也不构成阶段 B 的授权。阶段 A 不单独 PR 合并、不把 LOCAL03a 标为完成。
+
+B1 的开窗与实际变化见 §8；精确可写文件、迁移 DDL、DTO 与 B2 待办见
+[ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §11 与本任务 §9。
 
 ## 3. 阶段 A 精确文件清单（唯一可写范围，六个新增文件）
 
@@ -153,3 +157,71 @@ node test/accounting-standard-profiles.test.mjs
 - 无真实账套 / 税务凭据 / 私有采集数据 / 用户配置；不访问或重启税局窗口与旧后端；不读其他 worktree。
 - 不用真实账套数据做自动测试；本机绝对路径 / PID 只进 root 的 ignored 记录，不入版本化文档。
 - 源码 / 任务 / 合成错误按项目已核实 tokenhub 授权范围发送；不得绕过沙箱。
+
+## 8. 阶段 B1 实际执行记录（2026-10-22，未合并）
+
+### 8.1 开窗与文件边界
+
+- root 正式开窗：LOCAL-02 PR #60 已验收合并，actual main `dfefae0553052474b8a9308105443714bc5d9cfb`；
+  阶段 A `47866a3278447db1c4243b9afd2aebe92ea78e55` 已独立接受 / root 41 项通过；本轮把实际 main 合入
+  `local-03a` 后开工（本地起点 `f7e69bd`）。不再等待 02。
+- B1 精确可写 19 文件：6 个核心（`coa.mjs`、`accounting.mjs`、`db.mjs`、`import-storage.mjs`、
+  `import-incremental.mjs`、`period-end-controls.mjs`）、本包 2 个纯模块 + 1 个纯测试、2 个新领域 / 迁移测试、
+  5 个旧领域测试的必要合法 fixture、本包 3 份 docs。
+
+### 8.2 实际改动
+
+- `import-storage.mjs`：schema **v5**，`account_sets.accounting_profile_id TEXT NOT NULL DEFAULT
+  'legacy-small-coa-v1'`（只加一列，不预置多版本列）；沿用“先一致备份 → 同一事务加列 + 记版本”。
+  迁移前所有账套（含企业标签 / 未知标签 / 空账套）一律 legacy，保留原 `accounting_standard`。
+- `coa.mjs`：旧 `COA` 保留为兼容默认；新增 `coaForProfile(profileId)`，新建账套不再无差别读取单数组。
+- `accounting.mjs`：建账 / 旧首次导入 / 增量 create 按准则选择合法新 profile（同事务写账套 / 科目 / 首期间 /
+  profile）；`getAccountSet` / `listAccountSets` 增加 `accountingContext`；三表改为 profile 感知：
+  新 profile 由真实已过账凭证 / 期初 + 阶段 A 规则计算，legacy 走真实旧兼容计算；三表新增 `reportStatus`
+  与固定外层诊断码；`carryForwardProfit` / 资产卡片默认费用按 profile 角色；`normalizeImportPayload`
+  增加内部第二参数 context；旧 `importAccountSet` 返回结构不变并带 `profileError`。
+- `import-incremental.mjs`：先做最小批次 / 目标读取，再以目标实际 profile / 科目表严格 normalize；
+  旧 create 重放不再被新企业模板提前拒绝；append 沿目标科目与一企一账套；导出 `batchFingerprint` 供迁移 / 兼容
+  测试构造真实旧批次（指纹字段与排序未改）。
+- `period-end-controls.mjs`：年末结转 / 后续年末依赖识别 / 资产核对根科目改为 profile 角色驱动（企业 4103→4104，
+  小企与 legacy 3103→3104；默认折旧费用 6602 / 5602）；期末检查新增 `accountingContext`、`warnings`、
+  `rules.profitAccount / retainedEarningsAccount / defaultDepreciationExpense`；原 step / 控制码 / 原子性保留。
+- `db.mjs` 未改（迁移由 `import-storage.ensureImportSchema` 在启动时执行）；`money.mjs` 只读复用。
+
+### 8.3 实际测试（cwd = `06-workbench`，全部合成临时库 / 无真实账套 / 无税局）
+
+| 命令 | 结果 |
+|---|---|
+| `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
+| `node test/accounting-standards.test.mjs`（新增） | 17 / 17 exit 0 |
+| `node test/accounting-standards-migration.test.mjs`（新增） | 6 / 6 exit 0 |
+| `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
+| `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45 / 45 exit 0 |
+| `node test/import-strict.test.mjs` | 54 / 54 exit 0 |
+| `node test/import-incremental.test.mjs` | 49 / 49 exit 0 |
+| `node test/voucher-amount-guards.test.mjs` | 103 / 103 exit 0 |
+
+新领域套件覆盖原任务第 6 节两家企业三个月固定金额表、两准则 100 元三月卡片、无形资产、负列示、1604、
+未知 / 零余额科目、同码冲突、多企业隔离、重复动作、后期依赖与原子性；迁移套件覆盖 v4 / v3 合成旧库、
+迁移前 v4 备份 `verify` / `restore-new` + 真实 `db.mjs` 入口升 v5、旧业务行 / 指纹 / 标签不变、旧 create 批次
+新进程重放 / 内容冲突 / append / 查询、故障回滚与未知 profile 结构化拒绝。详见
+[ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §11.7。
+
+### 8.4 受控未通过 / 待 B2（不删断言、不谎称全套通过）
+
+- `local-backup.test.mjs`：初始化断言 `IMPORT_SCHEMA_VERSION === 4` 失败（现为 5）；当前备份工具严格只支持
+  v3 / v4，v5 备份 / 恢复必须等银行 #53 最终结构并在 B2 增加 `STRUCTURE_V5`。B1 未改该源码 / 测试 / CLI。
+- `report-export.test.mjs`：4 项失败，原因是新 profile 行项目（累计折旧按阶段 A 为负值展示）、CSV 行集合与
+  复合现金流按比例分摊（B1 明确不实现的复杂分摊）/ 混合现金凭证分类。归 B2（05 导出）适配。
+- `smoke.test.mjs`：1 项失败（在新小企账套导入企业科目 `6602`，报表按新 profile 明确 incomplete，不再按名称
+  猜成管理费用）。归 B2 合法 fixture 适配。
+- `finance-model-adapter.test.mjs`：1 项失败（资产负债表行数 39 与新 profile 行项目，旧期望 28）。归 B2（08）。
+- `accounting-period-http` 18 / 18、`import-incremental-http` 22 / 22、`report-export-http` 29 / 29、
+  `finance-output-policy` 37 / 37 实际仍通过（本轮顺带实跑，记录事实）。
+
+### 8.5 收尾
+
+- B1 **不单独 PR 合并**；等 root 独审领域核心、05 / 08 / 银行 #53 实际释放并纳入最新 main 后再精确扩窗 B2。
+- 未改 `server.mjs` / `agent-tools.mjs` / MCP / `test-all` / `public` / 公共交接 / 索引 / backup / report-export /
+  Office；未注册测试；未操作真实账套 / 税局；真实接入仍为 0。

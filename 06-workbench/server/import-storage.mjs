@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { centsToNumber, parseMoney } from "./money.mjs";
 
 /** 本文件负责的 schema 版本。新增列 / 新增表必须新增 migration 并递增版本。 */
-export const IMPORT_SCHEMA_VERSION = 4;
+export const IMPORT_SCHEMA_VERSION = 5;
 
 /** 本文件创建的持久对象（供自检 / 测试断言使用）。 */
 export const IMPORT_TABLES = [
@@ -326,6 +326,23 @@ const V4_STATEMENTS = [
   addColumnIfMissing("asset_cards", "origin", "TEXT NOT NULL DEFAULT 'purchase'"),
 ];
 
+// ---------------------------------------------------------------- schema v5
+/**
+ * LOCAL-03a 会计 profile 持久化（只加一列，不做准则转换）：
+ *  - accounting_profile_id  不可变 profile ID（解析科目表 / 报表映射版本）；
+ *  - 默认 'legacy-small-coa-v1'：**所有迁移前既有账套**（小企标签、企业标签、未知标签、空账套）
+ *    一律成为 legacy 兼容账套，保留原 accounting_standard 字符串，不改历史科目 / 期初 / 凭证 / 卡片 / 批次 / 指纹；
+ *  - 只存 profile ID，不另存可互相矛盾的 coaVersion / reportMappingVersion 多列；
+ *  - 没有普通更新入口，本迁移也不按标签重种科目或把 legacy 升级成新准则。
+ */
+const V5_STATEMENTS = [
+  addColumnIfMissing(
+    "account_sets",
+    "accounting_profile_id",
+    "TEXT NOT NULL DEFAULT 'legacy-small-coa-v1'",
+  ),
+];
+
 const MIGRATIONS = [
   {
     version: 1,
@@ -346,6 +363,11 @@ const MIGRATIONS = [
     version: 4,
     note: "LOCAL-02 资产卡片补项契约：取得期间 / 期初累计 / 未入账登记 / 来源（只加列，旧行默认值不变）",
     steps: V4_STATEMENTS,
+  },
+  {
+    version: 5,
+    note: "LOCAL-03a 会计 profile：账套增加不可变 accounting_profile_id；迁移前既有账套一律 legacy 兼容，原 accounting_standard 与历史业务不变",
+    steps: V5_STATEMENTS,
   },
 ];
 

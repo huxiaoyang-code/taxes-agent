@@ -119,6 +119,8 @@ try {
 
   await test("明细：损益明细科目按顶层编码归类（560201 → 管理费用）", () => {
     const s = newSet("明细汇总-损益归类");
+    // 合法业务 fixture：费用需有资金来源，避免“负货币资金”这一不真实场景被误当成报表规则断言。
+    A.setOpeningBalances(s, [entry("1002", 100, 0), entry("3001", 0, 100)]);
     A.addAccount(s, { code: "560201", name: "办公费", category: "损益", direction: "debit" });
     A.createVoucher(s, {
       period: "2026-01", status: "posted",

@@ -35,7 +35,7 @@
 import { createHash } from "node:crypto";
 import { db } from "./db.mjs";
 import * as A from "./accounting.mjs";
-import { COA } from "./coa.mjs";
+import { resolveNewAccountingProfile } from "./accounting-profiles.mjs";
 import {
   getAccountSetEnterprise, getBatch, getEnterpriseAccountSet, getSourceBinding, getVoucherSource,
   insertBatchVoucher, insertEnterpriseAccountSet, insertSourceBinding, insertVoucherSource,
@@ -102,7 +102,11 @@ function canonicalEnterpriseKey(raw) {
 }
 
 // ---------------------------------------------------------------- 批次内容指纹
-function batchFingerprint({ mode, targetAccountSetId, source, meta, normalized, vouchers }) {
+/**
+ * 批次内容指纹（导出供迁移 / 兼容回归构造真实旧批次）；不改变指纹字段与排序规则。
+ * 只包含确定性业务字段；profile 不参与指纹（同一 payload 在迁移前后可原样重放）。
+ */
+export function batchFingerprint({ mode, targetAccountSetId, source, meta, normalized, vouchers }) {
   return sha256(JSON.stringify({
     mode,
     targetAccountSetId: mode === MODE_APPEND ? targetAccountSetId : null,
@@ -317,13 +321,95 @@ export function importIncremental(options = {}) {
     argErrors.push("缺少导入数据 payload（{ account_set, accounts, opening_balances, vouchers }）");
   }
 
-  // ---------- 2. 严格归一化（与旧导入同一套约束，不降低任何规则） ----------
+  // ---------- 2. 最小目标读取：append 目标 / 已完成 create 批次的目标账套 ----------
+  // 严格 normalize 必须在定位目标之后：口径要用目标**实际** profile 与科目表，
+  // 否则旧 create 批次重放可能被新企业模板提前拒绝（例如企业模板下 5001 不是收入）。
+  const batchRecord = getBatch(db, batchId);
+  let targetSet = null;
+  let targetContext = null;
+  let creationProfile = null;
+  const targetErrors = [];
+  if (mode === MODE_APPEND && targetAccountSetId) {
+    try {
+      targetSet = A.getAccountSet(targetAccountSetId);
+    } catch (e) {
+      if (e?.code === "accounting_profile_unknown") {
+        targetErrors.push(`${e.code}: 目标账套持久会计 profile 未知或已损坏`);
+      } else {
+        const err = new Error("account_set_not_found");
+        err.code = "account_set_not_found";
+        err.details = { accountSetId: targetAccountSetId };
+        throw err;
+      }
+    }
+    if (targetSet) {
+      targetContext = { profileId: targetSet.accounting_profile_id, accounts: A.listAccounts(targetAccountSetId) };
+      request.accountSetId = targetAccountSetId;
+    }
+  } else if (mode === MODE_CREATE) {
+    request.accountSetId = null;
+    if (batchRecord && batchRecord.status === "completed" && batchRecord.mode === MODE_CREATE
+      && batchRecord.account_set_id != null) {
+      try {
+        targetSet = A.getAccountSet(batchRecord.account_set_id);
+        targetContext = { profileId: targetSet.accounting_profile_id, accounts: A.listAccounts(targetSet.id) };
+      } catch (e) {
+        if (e?.code === "accounting_profile_unknown") {
+          targetErrors.push(`${e.code}: 已完成批次的目标账套持久会计 profile 未知或已损坏`);
+        } else {
+          targetErrors.push(`batch_replay_state_incomplete: 已完成批次的目标账套无法读取（${e?.message || "account_set_not_found"}）`);
+        }
+      }
+    }
+  }
+  if (targetErrors.length) {
+    const validation = { ok: false, errors: targetErrors, warnings: [], summary: null, profile: null, profileError: null };
+    return rejected(request, targetErrors, { validation });
+  }
+
+  // 新 create（无目标）：按 payload 准则选择合法新 profile；payload 不能提供内部上下文。
+  if (mode === MODE_CREATE && !targetContext) {
+    const rawMeta = payload && typeof payload === "object" && !Array.isArray(payload)
+      && payload.account_set && typeof payload.account_set === "object" && !Array.isArray(payload.account_set)
+      ? payload.account_set : {};
+    const rawStandard = rawMeta.accounting_standard;
+    const requestedProfileId = typeof args.profileId === "string"
+      ? args.profileId
+      : (typeof args.profile_id === "string" ? args.profile_id : undefined);
+    try {
+      if (rawStandard !== undefined && rawStandard !== null && typeof rawStandard !== "string") {
+        throw Object.assign(new Error("accounting_standard_invalid"), { code: "accounting_standard_invalid" });
+      }
+      if (typeof rawStandard === "string" && rawStandard !== "" && rawStandard !== rawStandard.trim()) {
+        throw Object.assign(new Error("accounting_standard_invalid"), { code: "accounting_standard_invalid" });
+      }
+      creationProfile = resolveNewAccountingProfile({
+        ...(typeof rawStandard === "string" && rawStandard.trim() ? { accounting_standard: rawStandard } : {}),
+        ...(requestedProfileId ? { profileId: requestedProfileId } : {}),
+      });
+    } catch (e) {
+      const code = e?.code || "accounting_standard_invalid";
+      const message = e?.message || "会计准则不受支持";
+      const errors = [`${code}: ${message}`];
+      const validation = {
+        ok: false, errors, warnings: [], summary: null,
+        profile: null, profileError: { code, message },
+      };
+      return rejected(request, errors, { validation });
+    }
+    targetContext = { profileId: creationProfile.id, accounts: creationProfile.coa };
+  }
+
+  // ---------- 3. 严格归一化（与旧导入同一套约束，不降低任何规则） ----------
   const strict = payload === undefined || payload === null
     ? null
-    : A.normalizeImportPayload(payload);
+    : A.normalizeImportPayload(payload, targetContext || undefined);
   const validation = strict
-    ? { ok: strict.ok, errors: strict.errors, warnings: strict.warnings, summary: strict.summary }
-    : { ok: false, errors: [], warnings: [], summary: null };
+    ? {
+      ok: strict.ok, errors: strict.errors, warnings: strict.warnings, summary: strict.summary,
+      profile: strict.profile, profileError: strict.profileError,
+    }
+    : { ok: false, errors: [], warnings: [], summary: null, profile: null, profileError: null };
 
   if (argErrors.length || !strict) {
     return rejected(request, [...argErrors, ...(strict ? strict.errors : [])], { validation });
@@ -333,25 +419,6 @@ export function importIncremental(options = {}) {
   if (!strict.ok) {
     // 严格校验失败：预检与正式都一样拒绝，且不写任何表。
     return rejected(request, strict.errors, { validation });
-  }
-
-  // ---------- 3. 目标账套与规范企业身份 ----------
-  // 批次记录提前读取：create 模式的重试需要用它识别「已完成批次」并取得其账套 ID。
-  const batchRecord = getBatch(db, batchId);
-
-  let targetSet = null;
-  if (mode === MODE_APPEND) {
-    try {
-      targetSet = A.getAccountSet(targetAccountSetId);
-    } catch {
-      const err = new Error("account_set_not_found");
-      err.code = "account_set_not_found";
-      err.details = { accountSetId: targetAccountSetId };
-      throw err;
-    }
-    request.accountSetId = targetAccountSetId;
-  } else {
-    request.accountSetId = null;
   }
 
   const identityConflicts = [];
@@ -465,10 +532,10 @@ export function importIncremental(options = {}) {
   }
 
   // ---------- 5. 科目兼容性 ----------
-  // create：以标准科目表为既有基准（新账套建账时自带 COA）；append：以目标账套实际科目为基准。
+  // create / append / create 重放统一以目标实际 profile 的科目表为基准（targetContext.accounts：
+  // append / 重放为账套真实科目，新建为所选新 profile 的科目表）。
   const existingAccounts = new Map(
-    (mode === MODE_APPEND ? A.listAccounts(targetAccountSetId) : COA)
-      .map((a) => [String(a.code), a]),
+    (targetContext?.accounts ?? []).map((a) => [String(a.code), a]),
   );
   const accountConflicts = [];
   const accountsToAdd = [];
@@ -506,7 +573,9 @@ export function importIncremental(options = {}) {
   const seenSourceIds = new Map();
   const fingerprintBySid = new Map();
   const seenNumbers = new Map();
-  const startPeriodForCheck = mode === MODE_APPEND ? targetSet.start_period : meta.start_period;
+  const startPeriodForCheck = mode === MODE_APPEND
+    ? targetSet.start_period
+    : (targetSet?.start_period ?? meta.start_period);
 
   normalized.vouchers.forEach((v, i) => {
     if (planErrors.length) return;
@@ -858,8 +927,9 @@ export function importIncremental(options = {}) {
       const set = A.createAccountSet({
         name: meta.name,
         taxpayer_type: meta.taxpayer_type || "小规模纳税人",
-        accounting_standard: meta.accounting_standard || "小企业会计准则",
+        accounting_standard: meta.accounting_standard || undefined,
         start_period: meta.start_period,
+        ...(creationProfile ? { profileId: creationProfile.id } : {}),
       });
       accountSetId = set.id;
       outcome.accountSetId = set.id;

@@ -1,8 +1,16 @@
-// coa.mjs — 小企业会计准则 标准科目表（节选，可直接扩展）
+// coa.mjs — 旧账套兼容的基线科目表（LOCAL-03a 阶段 B 起为兼容默认）
 // direction: 'debit' 借增 / 'credit' 贷增
 // category : 资产 | 负债 | 权益 | 成本 | 损益
+//
+// 重要（LOCAL-03a）：本数组是**派工基线的 legacy 兼容默认**，只用于旧账套读取 / 兼容路径。
+// 新建账套必须按持久 accounting profile 取科目表（见 accounting-profiles.mjs 的 getAccountingProfile），
+// 不得再把这个单一数组无差别当成所有准则的科目表，也不得用它实现准则转换。
+import { getAccountingProfile } from "./accounting-profiles.mjs";
 
 export const STANDARDS = ["小企业会计准则", "企业会计准则"];
+
+/** legacy 兼容 profile ID（旧账套迁移后的持久值）。 */
+export const LEGACY_PROFILE_ID = "legacy-small-coa-v1";
 
 export const COA = [
   // ---------------- 资产 ----------------
@@ -75,3 +83,18 @@ export const COA = [
 
 /** 叶子科目：没有任何其他科目以它为父级（本表为平铺，故全部是叶子）。 */
 export const LEAF_CODES = new Set(COA.map((a) => a.code));
+
+/**
+ * 按 profile 取科目表（新建账套 / 严格导入使用）。
+ * 返回 `{ code, name, category, direction, contra }` 数组；legacy profile 与上面的兼容默认逐项一致。
+ * 未知 profile 抛 accounting_profile_unknown，绝不 fallback 到本文件的 COA。
+ */
+export function coaForProfile(profileId) {
+  return getAccountingProfile(profileId).coa.map((account) => ({
+    code: account.code,
+    name: account.name,
+    category: account.category,
+    direction: account.direction,
+    contra: account.contra === true,
+  }));
+}
