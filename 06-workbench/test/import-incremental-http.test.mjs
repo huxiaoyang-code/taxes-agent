@@ -398,6 +398,9 @@ try {
     });
 
     await testAsync("重启后：已封账期间仍被拒绝（状态持久，不因重启失效）", async () => {
+      // LOCAL-02 封账前置：先把本期损益结转到 3103，再封账（与实际业务顺序一致）。
+      const carry = await server.api("POST", `/api/account-sets/${setId}/carry-forward`, { period: "2026-01" });
+      assert.equal(carry.status, 201, JSON.stringify(carry.data));
       const close = await server.api("POST", `/api/account-sets/${setId}/periods`, { period: "2026-01", status: "closed" });
       assert.equal(close.status, 200, JSON.stringify(close.data));
       const r = await server.api("POST", "/api/import/incremental", {
