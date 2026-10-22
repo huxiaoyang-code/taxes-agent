@@ -2,19 +2,25 @@
 
 本包交付五类内部 CSV：资产负债表、利润表、现金流量表、科目余额表、明细账。报表只读取现有账簿，包含建账期初及已过账凭证；草稿、反过账凭证不进入金额。CSV 不是税局申报文件，下载成功也不证明账套来源完整或符合目标准则。总体任务及尚未完成的 B2、RC-3、RC-6 见 [交接](handoffs/RC-B-REPORTS.md) 与 [闭环方案](REPORT-CLOSURE-PLAN.md)。
 
+> **当前导出状态（2026-10-22 更新；本文件所有权已追加到 Issue #45 / LOCAL-05a）**：`report-export.mjs` 的 `buildReportExport` 仍是**纯 CSV DTO** 函数（`format` 只接受 `csv`，其余抛 `report_format_unsupported`，`details: {supported:["csv"]}`）。接线分支在 CSV DTO 之上挂载了 `report-office-export.mjs`：真实下载路由 `/export` 现支持 `csv` / `xlsx` / `pdf` 三种真实附件；预览路由 `/export-data` 仍严格只返回 CSV DTO，`xlsx` / `pdf` / `yaml` / 空 `format=` 一律 400，**不静默转 CSV、不生成附件**。失败一律返回 JSON 且无 `Content-Disposition`，不产生半截文件。该接线源码冻结点 `71894a1`（分支 `codex/huxiaoyang-code/local-05-wire`）；本包分支基于 `d5816078`，**已无冲突同步 PR #60 实际 main**（merge `dfefae0553052474b8a9308105443714bc5d9cfb`，2026-10-22T13:34:48Z；Issue #47 已 CLOSED，最终文档 head `18aa6fb` 的 tree 与 merge tree 一致）得到候选 `a9fb1bcf112588f33f615523d46bff8f8bbeb50c`（**PR #60 不含本包 Office 接线**）：`server.mjs` 顶部冲突只做语义并列保留（Office 固定错误映射 + 核心 `PERIOD_GUARD_CODES`），`scripts/test-all.mjs` 末尾登记 `report-office-http`（55 → 56，原 55 个套件不变）。已建 Draft [PR #62](https://github.com/huxiaoyang-code/youshu-fork/pull/62)（**OPEN、未合并**），最终独立审查（root / `review_local05`）待做，合并后对用户主工作区生效。管理者在精确 `a9fb` 实跑 `REPORT_OFFICE_PYTHON=<已核实 Python> npm test`：**56 / 56 套 exit 0**（Office **21 / 21**、`pdfplumber geometry verified for 11 PDFs`、`report-office-http` 6 / 6、`report-export-http` 31 / 31；忽略目录相对证据名 `local-05-final-manager-test.log`，exit 文件 0）。模块细节、错误映射与验收证据见 [REPORT-OFFICE-EXPORT](REPORT-OFFICE-EXPORT.md)。
+>
+> 能力边界不变：五类报表均为**内部报表**，不是税局申报文件，也不是法定双准则映射或官方行次的实现；复杂现金流分类、间接法独立勾稽与双准则官方映射仍为后续任务。
+
 ## 使用与文件格式
 
-在报表页选择账套和已登记期间，选择报表后下载 CSV；明细账还需选择科目。程序接口：
+在报表页选择账套和已登记期间，选择报表后下载；明细账还需选择科目。**PR #62 合并前**，用户主工作区的页面与下载路由仍只有 CSV——页面格式选择与三格式附件随 `a9fb1bcf` 候选（Draft PR #62），合并后才对用户生效。程序接口（三格式部分为接线分支能力）：
 
 ```text
-GET /api/account-sets/:id/reports/:kind/export?period=2026-01&format=csv
-GET /api/account-sets/:id/reports/ledger/export?period=2026-01&format=csv&code=1002
-GET /api/account-sets/:id/reports/:kind/export-data?period=2026-01&code=1002
+GET /api/account-sets/:id/reports/:kind/export?period=2026-01&format=csv|xlsx|pdf
+GET /api/account-sets/:id/reports/ledger/export?period=2026-01&format=csv|xlsx|pdf&code=1002
+GET /api/account-sets/:id/reports/:kind/export-data?period=2026-01&code=1002    # 仅 CSV DTO
 ```
 
-`kind` 为 `balance-sheet`、`income-statement`、`cash-flow-statement`、`trial-balance`、`ledger`。`export-data` 用于与下载一致的页面预览，原报表 REST 接口保留兼容；老接口的余额表发生额和明细账范围不能直接解释为本期发生额。
+`kind` 为 `balance-sheet`、`income-statement`、`cash-flow-statement`、`trial-balance`、`ledger`。`/export` 返回附件：`csv` 由 `buildReportExport` 原样生成，`xlsx` / `pdf` 由接线模块在同一 CSV DTO 上生成（不经页面前端打印，不重算金额）。`/export-data` 用于与下载一致的页面预览，只接受缺省 / `format=csv`；其他格式为 400 `report_format_unsupported`（`details: {supported:["csv"]}`），从不返回附件。原报表 REST 接口保留兼容；老接口的余额表发生额和明细账范围不能直接解释为本期发生额。
 
-CSV 使用 UTF-8 BOM、CRLF、中文标题、金额两位小数。文件按元数据、限制、试算检查和报表主体分节，不是单一矩形数据导入模板。文本使用双引号及双引号转义；危险的公式文本（含前导空白、制表符等）加单引号，内部生成的负数金额仍为数值。文件名以报表类型、账套 ID、期间和可选科目编码组成，不携带账套名称。首版仅支持 CSV；Excel/PDF 尚未实现。
+CSV 使用 UTF-8 BOM、CRLF、中文标题、金额两位小数。文件按元数据、限制、试算检查和报表主体分节，不是单一矩形数据导入模板。文本使用双引号及双引号转义；危险的公式文本（含前导空白、制表符等）加单引号，内部生成的负数金额仍为数值。文件名以报表类型、账套 ID、期间和可选科目编码组成，不携带账套名称。
+
+历史表述：“首版仅支持 CSV；Excel / PDF 尚未实现”描述的是本包 PR #15 当时的真实状态，**现已被 2026-10-22 的接线取代**（当前随 Draft PR #62 候选，尚未合并）；不能再用它描述当前 `/export` 的实现能力，也不能反过来说内部报表已具备双准则 / 申报能力。
 
 ## 金额与范围
 
@@ -39,6 +45,8 @@ buildReportExport(setId, { kind, period, format = 'csv', code })
 // => { filename, contentType, body, report }
 ```
 
+该函数本身**只生成 CSV**（`format` 仅接受 `csv`，其余抛 `report_format_unsupported`）；`xlsx` / `pdf` 由 `report-office-export.mjs` 在同一 CSV DTO 上生成，见文首状态说明。
+
 `report` 版本为 `schemaVersion: 1`：
 
 | 字段 | 说明 |
@@ -62,7 +70,7 @@ buildReportExport(setId, { kind, period, format = 'csv', code })
 | `account_set_not_found` | 账套不存在或 ID 非法。|
 | `period_required` / `period_invalid` | 期间缺失或不符合合法 YYYY-MM。|
 | `period_before_start` / `period_not_registered` | 早于启用期间 / 期间未登记。|
-| `report_kind_unsupported` / `report_format_unsupported` | 报表类型 / 格式不支持。|
+| `report_kind_unsupported` / `report_format_unsupported` | 报表类型 / 格式不支持。`report-export.mjs` 只接受 `format=csv`；`/export-data` 同样只接受 `csv`（其余 400），`/export` 由接线模块额外接受 `xlsx` / `pdf`。|
 | `account_code_required` / `account_not_found` | 明细账科目缺失 / 不存在。|
 | `report_data_invalid` | 账簿计算结果含非有限金额；拒绝输出 NaN、Infinity 或 JSON null 伪金额。|
 
@@ -105,3 +113,5 @@ buildReportExport(setId, { kind, period, format = 'csv', code })
 ## 验证
 
 在 `06-workbench` 运行 `node test/report-export.test.mjs`。该套 21 项测试在本轮 Subagent 自验全部通过；临时库通过 `WORKBENCH_DATA_DIR` 隔离，在退出时关闭并清理，不使用真实数据。涵盖跨月/跨年、父子科目、贷方余额、年中启用、已过账范围、年结/折旧、混合现金流、五类 CSV 金额、中文/公式防护、空账、异常请求、封账只读、账套隔离、失衡信号及非有限金额拒绝。完整回归和 HTTP 下载结果由管理者在待提交版本复验并登记 [交接](handoffs/RC-B-REPORTS.md)。
+
+**2026-10-22 接线后的 HTTP 证据（独立审查，冻结 head `71894a1`）**：`node test/report-export-http.test.mjs` **31/31、exit 0**（原 `format=xlsx` 必 400 的失效断言已**替换**为真正不支持的 `yaml`，并新增 `/export-data` 严格 CSV 与 `/export` 真实 XLSX 两条回归）；`node test/report-office-http.test.mjs` **6/6、exit 0**（五类 × 三格式真实下载、XLSX 重开与独立手算金额、PDF 魔数 / 嵌入字体 / 文本 / 页数、失败无附件、下载后全库快照不变）。两者均为真实 `server.mjs` 子进程 + 临时合成库 + 随机回环端口。页面层由 root 在真实 IAB 分别选择三格式并点击，均显示“已生成并开始下载”；**未检查浏览器保存位置，也未新增 PDF 几何**（该轮几何仍只指模块轮 11 PDF）。**预整合与最终同步轮（精确 `a9fb`）**：已在末尾登记 `report-office-http` 后由管理者实跑全套 `npm test`：**56 / 56 套 exit 0**，含本文件相关套件 `report-export` 21/21、`report-export-http` 31/31、`report-office-http` 6/6、`office-export` 21/21（含 `pdfplumber geometry verified for 11 PDFs`）；PR #62 的最终独立审查与合并仍待。
