@@ -1629,6 +1629,147 @@ await test("I5 已持久 pending 导入任务：源 payloadFile 金额 100→200
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='carryforward'`), 1);
 });
 
+// ---------------------------------------------------------------- I6 / I7（独审新增 P2）
+const itemRow = (dataDir, jobKey, itemKey) => {
+  const db = openDb(dataDir);
+  try {
+    return db.prepare(`SELECT i.id, i.account_set_id, i.account_set_source, i.status FROM local_batch_items i
+        JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND i.item_key=?`).get(jobKey, itemKey);
+  } finally { db.close(); }
+};
+const itemArtifactCount = (dataDir, jobKey, itemKey) => {
+  const db = openDb(dataDir);
+  try {
+    return scalar(db, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(SELECT i.id FROM local_batch_items i
+        JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND i.item_key=?)`, jobKey, itemKey);
+  } finally { db.close(); }
+};
+
+await test("I6 企业已绑定但 manifest 省略 accountSetId：推断的账套必须落库并贯穿报表证据与 resume 核验", () => {
+  const dataDir = join(ROOT, "i6-data");
+  const outDir = join(ROOT, "i6-out");
+  primeDataDir(dataDir);
+  const spec = { itemKey: "item-1", enterpriseKey: "91350000INFER0001A", name: "推断绑定报表" };
+  const [fixture] = createFixture(dataDir, [spec]);
+  const manifestPath = writeManifest("i6", jobManifest({
+    jobKey: "inferred-binding-report",
+    items: [{
+      // 契约不变：accountSetId 仍是可选字段；企业已绑定时由真实绑定推断账套。
+      itemKey: spec.itemKey,
+      source: { system: "local-export", enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name },
+      periods: [{ period: "2026-01", reports: [{ kind: "balance-sheet", formats: ["csv"] }] }],
+    }],
+  }));
+
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 0, `${started.stderr} ${started.stdout}`);
+  assert.equal(cliJson(started).status, "succeeded");
+  // P2：解析出的账套 ID 必须真的写进 local_batch_items（不是只存在于内存快照 / 锁作用域）。
+  const row = itemRow(dataDir, "inferred-binding-report", spec.itemKey);
+  assert.equal(row.account_set_id, fixture.setId, "推断得到的账套 ID 必须持久化");
+  assert.ok(row.account_set_source, "必须留下账套来源（manifest / 阶段 / 绑定推断）");
+  const stage = stageRow(dataDir, "report:balance-sheet:csv", spec.enterpriseKey);
+  assert.equal(stage.status, "succeeded");
+  assert.equal(JSON.parse(stage.evidence_json).accountSetId, fixture.setId, "产物证据必须带真实账套 ID");
+  const artifact = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT artifact_key, bytes_hash, relative_path FROM local_batch_artifacts ORDER BY id`).get();
+    } finally { db.close(); }
+  })();
+  const artifactPath = join(outDir, artifact.relative_path);
+  assert.equal(fileHash(artifactPath), artifact.bytes_hash);
+  const vouchersBefore = count(dataDir, `SELECT COUNT(*) FROM vouchers`);
+
+  // 数据与文件完全没变，停机后新进程 resume 必须仍 succeeded（不得 report_evidence_changed）。
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "inferred-binding-report"]);
+  const resumedJson = cliJson(resumed);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(resumedJson.status, "succeeded");
+  assert.equal(resumedJson.items[0].verified.ok, true, `不得以 null 重算摘要：${JSON.stringify(resumedJson.items[0].verified)}`);
+  assert.equal(stageRow(dataDir, "report:balance-sheet:csv", spec.enterpriseKey).error_code, null);
+  assert.equal(itemRow(dataDir, "inferred-binding-report", spec.itemKey).account_set_id, fixture.setId, "重启后仍是同一账套");
+  assert.equal(fileHash(artifactPath), artifact.bytes_hash, "已发布产物不得被改写");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), vouchersBefore, "resume 不得写入业务数据");
+});
+
+await test("I7 推断绑定覆盖仅 post / 无 import 报表 / 有 import，且错绑定仍零写、不覆盖已声明账套", () => {
+  const dataDir = join(ROOT, "i7-data");
+  const outDir = join(ROOT, "i7-out");
+  primeDataDir(dataDir);
+  const specs = [
+    { itemKey: "item-post", enterpriseKey: "91350000INFER0101A", name: "推断仅过账", revenue: 0, other: 0, capital: 10000, salary: 40 },
+    { itemKey: "item-report", enterpriseKey: "91350000INFER0102A", name: "推断仅报表", revenue: 0, other: 0, capital: 20000 },
+    { itemKey: "item-import", enterpriseKey: "91350000INFER0103A", name: "推断含导入", revenue: 800, other: 0, capital: 30000 },
+    { itemKey: "item-other", enterpriseKey: "91350000INFER0104A", name: "错绑定目标", revenue: 0, other: 0, capital: 40000 },
+  ];
+  const fixture = createFixture(dataDir, specs);
+  const sourceOf = (index) => ({ system: "local-export", enterpriseKey: specs[index].enterpriseKey, enterpriseName: specs[index].name });
+  const manifestPath = writeManifest("i7", jobManifest({
+    jobKey: "inferred-binding-shapes",
+    items: [
+      // 仅 post、无 import、manifest 省略 accountSetId
+      { itemKey: specs[0].itemKey, source: sourceOf(0), periods: [{ period: "2026-01", post: { vouchers: [{ voucherId: fixture[0].draftVoucherId }] } }] },
+      // 仅报表、无 import
+      { itemKey: specs[1].itemKey, source: sourceOf(1), periods: [{ period: "2026-01", reports: [{ kind: "trial-balance", formats: ["csv"] }] }] },
+      // 有 import + 报表
+      {
+        itemKey: specs[2].itemKey, source: sourceOf(2),
+        periods: [{
+          period: "2026-01",
+          imports: [{ batchId: `${specs[2].enterpriseKey}-b1`, mode: "append", confirmNewBinding: true, payload: payloadFor(specs[2]) }],
+          reports: [{ kind: "income-statement", formats: ["csv"] }],
+        }],
+      },
+    ],
+  }));
+
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 0, `${started.stderr} ${started.stdout}`);
+  assert.equal(cliJson(started).status, "succeeded");
+  for (const [index, itemKey] of [[0, "item-post"], [1, "item-report"], [2, "item-import"]]) {
+    assert.equal(itemRow(dataDir, "inferred-binding-shapes", itemKey).account_set_id, fixture[index].setId,
+      `${itemKey} 推断账套必须落库`);
+  }
+  assert.equal(JSON.parse(stageRow(dataDir, "post", specs[0].enterpriseKey).evidence_json).accountSetId, fixture[0].setId);
+  assert.equal(JSON.parse(stageRow(dataDir, "report:trial-balance:csv", specs[1].enterpriseKey).evidence_json).accountSetId, fixture[1].setId);
+  assert.equal(JSON.parse(stageRow(dataDir, `import:${specs[2].enterpriseKey}-b1`, specs[2].enterpriseKey).evidence_json).accountSetId, fixture[2].setId);
+  assert.equal(JSON.parse(stageRow(dataDir, "report:income-statement:csv", specs[2].enterpriseKey).evidence_json).accountSetId, fixture[2].setId);
+  const snapshotVouchers = count(dataDir, `SELECT COUNT(*) FROM vouchers`);
+
+  // 停机后新进程 resume：三种形态都必须仍 succeeded，没有任何 report_evidence_changed / evidence_changed。
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "inferred-binding-shapes"]);
+  const resumedJson = cliJson(resumed);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(resumedJson.status, "succeeded");
+  assert.ok(resumedJson.items.every((entry) => entry.verified.ok === true), JSON.stringify(resumedJson.items.map((entry) => entry.verified)));
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_stages WHERE status='needs_review'`), 0);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), snapshotVouchers, "resume 不得重复入账");
+
+  // 错绑定：企业甲已绑定 set-甲，manifest 却显式声明 set-丁 → 结构化拒绝、零业务写入、不覆盖已声明账套。
+  const wrongPath = writeManifest("i7-wrong", jobManifest({
+    jobKey: "inferred-binding-mismatch",
+    items: [{
+      itemKey: "item-a", source: sourceOf(0), accountSetId: fixture[3].setId,
+      periods: [{ period: "2026-01", reports: [{ kind: "balance-sheet", formats: ["csv"] }] }],
+    }],
+  }));
+  const vouchersBeforeWrong = count(dataDir, `SELECT COUNT(*) FROM vouchers`);
+  const wrong = runCli(["start", "--data-dir", dataDir, "--manifest", wrongPath, "--output-dir", outDir]);
+  const wrongJson = cliJson(wrong);
+  assert.equal(wrong.status, 1, `${wrong.stderr} ${wrong.stdout}`);
+  assert.equal(wrongJson.status, "needs_review");
+  assert.equal(wrongJson.items[0].bindingBlocked, "enterprise_binding_mismatch");
+  assert.equal(itemRow(dataDir, "inferred-binding-mismatch", "item-a").account_set_id, fixture[3].setId,
+    "错绑定时不得把账套改成推断值");
+  assert.equal(itemRow(dataDir, "inferred-binding-mismatch", "item-a").account_set_source, "manifest");
+  assert.equal(itemArtifactCount(dataDir, "inferred-binding-mismatch", "item-a"), 0, "错绑定不得发布产物");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), vouchersBeforeWrong, "错绑定零业务写入");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, fixture[3].setId), 0);
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE item_id=(SELECT id FROM local_batch_items
+      WHERE item_key='item-a' AND job_id=(SELECT id FROM local_batch_jobs WHERE job_key='inferred-binding-mismatch'))`), "needs_review");
+});
+
 // ---------------------------------------------------------------- 收尾
 console.log("");
 const passed = RESULTS.filter(([ok]) => ok).length;

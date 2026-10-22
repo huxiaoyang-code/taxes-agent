@@ -102,9 +102,21 @@ const FAIL = (code, details = {}, message) => {
 // ---------------------------------------------------------------- 数据目录 / 依赖检查
 const CORE_TABLES = ["account_sets", "accounts", "vouchers", "voucher_entries"];
 
+/** SQLite 并发竞争下可重试的错误（不是库损坏）：另一个执行者正在写 / 正关闭连接并清理 -wal、-shm。 */
+const TRANSIENT_LOCK = /database is locked|database table is locked|unable to open database file|disk I\/O error/i;
+
+/** 同步短睡（CLI 单线程，只用于有限次重试，不引入异步边界）。 */
+function sleepSync(ms) {
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(cell, 0, 0, ms);
+}
+
 /**
  * 只读检查数据目录，决定「是否可以由本包初始化结构」。
  * 不 import db.mjs（db.mjs 一 import 就会自动打开并迁移核心库）。
+ * 并发场景（两个 CLI 同时 start）：另一个进程正在写、或正在关闭连接并清理 `-wal` / `-shm` 时，
+ * 只读探测会瞬时拿到 `database is locked`，这不是库损坏，也不应报成 `database_unreadable`。
+ * 因此这里做**有限次**重试（最多 4 次，共 < 1s）；仍失败就如实返回不可读（fail-closed，不猜）。
  */
 export function inspectDataDir(dataDir) {
   if (typeof dataDir !== "string" || !dataDir) FAIL("data_dir_required");
@@ -119,31 +131,42 @@ export function inspectDataDir(dataDir) {
   if (!exists) return result;
   result.bytes = statSync(dbPath).size;
   if (result.bytes === 0) { result.readable = true; return result; }
-  let probe;
-  try {
-    probe = new DatabaseSync(dbPath, { readOnly: true });
-    result.readable = true;
-    result.tables = probe.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all().map((r) => r.name);
-    if (result.tables.includes("schema_migrations")) {
-      result.coreVersion = Number(probe.prepare(`SELECT COALESCE(MAX(version),0) AS v FROM schema_migrations`).get()?.v || 0);
+  const attempts = 4;
+  for (let attempt = 1; ; attempt += 1) {
+    let probe;
+    try {
+      probe = new DatabaseSync(dbPath, { readOnly: true });
+      try { probe.exec("PRAGMA busy_timeout = 5000"); } catch { /* 只读连接不允许设置时忽略 */ }
+      result.tables = probe.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all().map((r) => r.name);
+      result.coreVersion = null;
+      result.batchVersion = null;
+      result.hasBusinessContent = false;
+      if (result.tables.includes("schema_migrations")) {
+        result.coreVersion = Number(probe.prepare(`SELECT COALESCE(MAX(version),0) AS v FROM schema_migrations`).get()?.v || 0);
+      }
+      if (result.tables.includes(LOCAL_BATCH_TABLES[0])) {
+        const row = probe.prepare(`SELECT version FROM local_batch_component WHERE component=?`).get(LOCAL_BATCH_COMPONENT);
+        result.batchVersion = row ? Number(row.version) : 0;
+      }
+      const business = CORE_TABLES.filter((name) => result.tables.includes(name));
+      if (business.length) {
+        result.hasBusinessContent = true;
+        try {
+          const sets = Number(probe.prepare(`SELECT COUNT(*) AS n FROM account_sets`).get()?.n || 0);
+          result.businessRows = sets;
+        } catch { result.businessRows = null; }
+      }
+      result.readable = true;
+      result.error = undefined;
+      break;
+    } catch (error) {
+      result.readable = false;
+      result.error = error?.message || String(error);
+      if (attempt >= attempts || !TRANSIENT_LOCK.test(result.error)) break;
+      sleepSync(50 * attempt);
+    } finally {
+      try { probe?.close(); } catch { /* 只读探测关闭失败不影响结果 */ }
     }
-    if (result.tables.includes(LOCAL_BATCH_TABLES[0])) {
-      const row = probe.prepare(`SELECT version FROM local_batch_component WHERE component=?`).get(LOCAL_BATCH_COMPONENT);
-      result.batchVersion = row ? Number(row.version) : 0;
-    }
-    const business = CORE_TABLES.filter((name) => result.tables.includes(name));
-    if (business.length) {
-      result.hasBusinessContent = true;
-      try {
-        const sets = Number(probe.prepare(`SELECT COUNT(*) AS n FROM account_sets`).get()?.n || 0);
-        result.businessRows = sets;
-      } catch { result.businessRows = null; }
-    }
-  } catch (error) {
-    result.readable = false;
-    result.error = error?.message || String(error);
-  } finally {
-    try { probe?.close(); } catch { /* 只读探测失败时保持 readable=false */ }
   }
   return result;
 }

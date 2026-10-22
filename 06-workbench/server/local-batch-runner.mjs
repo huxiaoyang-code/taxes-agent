@@ -309,6 +309,20 @@ function itemAllowsUnboundSet(stages) {
 }
 
 /**
+ * 把「绑定推断出的真实账套」写进 item（一家企业只有一个账套）。
+ * 只补空值、不改变已声明 / 已落库的账套；调用点必须在 resolveItemBinding 成功之后，
+ * 因此错绑定 / 缺绑定仍会在任何写入之前抛错（零写）。
+ * 目的：manifest 省略可选 accountSetId 时，推断结果必须是持久事实，
+ * 而不是只在锁作用域 / 内存快照里，否则后续阶段、产物证据与恢复核验仍按 null 计算。
+ */
+function persistResolvedAccountSet(item, bindingInfo) {
+  const resolved = bindingInfo?.accountSetId ?? null;
+  if (!resolved || (item.account_set_id !== null && item.account_set_id !== undefined)) return item;
+  storage.setItemAccountSet(db, { itemId: item.id, accountSetId: resolved, source: "enterprise_binding" });
+  return storage.getItem(db, item.id) ?? { ...item, account_set_id: resolved };
+}
+
+/**
  * 主执行流程。返回 { status, jobId, jobKey, active, phases }。
  * 只有持有 job 锁的执行实例能推进阶段；第二个同 jobKey 进程会得到 active=true。
  */
@@ -366,19 +380,18 @@ export async function executeJob({
         }
         continue;
       }
+      // 绑定核验通过后立刻把解析出的账套 ID 落库，后续阶段 / 产物证据 / 恢复核验统一使用这个持久值。
+      const bindingItem = persistResolvedAccountSet(item, bindingInfo);
       const hasWork = stages.some((stage) => stage.status === STAGE_STATUS.PENDING);
       if (!hasWork) {
         // 没有待执行阶段，仍核验已成功阶段的上游证据（恢复时不能只看队列表）。
-        itemReport.verified = verifySucceededStages(item, stages, job.output_dir);
+        itemReport.verified = verifySucceededStages(bindingItem, stages, job.output_dir);
         continue;
       }
       storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
-      const lockItem = bindingInfo.accountSetId && bindingInfo.accountSetId !== item.account_set_id
-        ? { ...item, account_set_id: bindingInfo.accountSetId }
-        : item;
       let itemLocks;
       try {
-        itemLocks = acquireItemLocks({ item: lockItem, instance, pid, hooks });
+        itemLocks = acquireItemLocks({ item: bindingItem, instance, pid, hooks });
       } catch (error) {
         itemReport.lockBlocked = error?.code || "lock_error";
         for (const stage of stages.filter((entry) => entry.status === STAGE_STATUS.PENDING)) {
@@ -392,7 +405,7 @@ export async function executeJob({
         continue;
       }
       try {
-        const verified = verifySucceededStages(item, stages, job.output_dir);
+        const verified = verifySucceededStages(bindingItem, stages, job.output_dir);
         itemReport.verified = verified;
         if (verified.blocked) {
           for (const stage of stages.filter((entry) => entry.status === STAGE_STATUS.PENDING)) {

@@ -16,7 +16,7 @@
 产品仍是本机单用户：一家企业一个账套，多企业批量 = 多账套批量；不做 SaaS / 多租户 / 账户平台；
 本包不做税局、官方申报文件或新增网页平台。
 
-## 2. 精确文件权限（本包只新增这 10 个文件）
+## 2. 精确文件权限（本包只有这 10 个文件）
 
 | 文件 | 作用 |
 |---|---|
@@ -24,8 +24,8 @@
 | `06-workbench/server/local-batch-runner.mjs` | 计划展开、逐账套编排、worker 池、受控发布、恢复与证据核验 |
 | `06-workbench/server/local-batch-actions.mjs` | 固定 7 类本地操作的真实领域适配（不复制金额 / 结账规则） |
 | `06-workbench/server/local-batch-report-worker.mjs` | worker 线程：只把已冻结 DTO 渲染成 XLSX / PDF（无数据库副作用） |
-| `06-workbench/scripts/local-batch.mjs` | CLI：`help/start/status/resume/cancel/retry` |
-| `06-workbench/test/local-batch-persistence.test.mjs` | 失败隔离 / 前序失败门禁 / 一企一套绑定 / 输入快照选择 / 报表依赖证据 / 崩溃恢复 / 互斥 fence / 迁移回滚 |
+| `06-workbench/scripts/local-batch.mjs` | CLI：`help/start/status/resume/cancel/retry`；启动期短连接 + 原生锁错误归一 |
+| `06-workbench/test/local-batch-persistence.test.mjs` | 失败隔离 / 前序失败门禁 / 一企一套绑定（含推断账套落库）/ 输入快照选择 / 报表依赖证据 / 崩溃恢复 / 互斥 fence / 迁移回滚 |
 | `06-workbench/test/local-batch-cli.test.mjs` | CLI 契约 / 20 家企业两月真实动作链 / 五类报表 / 并发证据 |
 | `docs/LOCAL-BATCH-CLI.md` | 可执行契约（CLI、manifest、状态机、锁、恢复、并发、限制） |
 | `docs/tasks/LOCAL-07-CLI.md` | 本任务单 |
@@ -60,6 +60,8 @@ report-office-export / server / Agent / MCP / test-all / package / 锁 / public 
 | G 输入 / 证据失效 | 同上 G1（原文件改 / 缺 / 快照 hash 改；普通 resume 与 retry 都拒绝）、G2（反过账 / 删除）、G3（完成文件丢失只重生成报表） |
 | H 迁移 / 备份 / 恢复 | 同上 H1（既有库拒绝自动建表）、H2（迁移中断回滚）、H3（LOCAL-06 依赖如实标注、无伪备份） |
 | I 独立审查 5 个 P1 回归（本轮新增） | 同上 I1–I5（详见下方列表） |
+| J 独审新增 P2（推断账套持久化）回归 | 同上 I6–I7：省略可选 `accountSetId` 时绑定推断出的账套必须**真实落库**并贯穿后续阶段 / 产物证据 /
+新进程 `resume` 核验（不只改内存快照）；仅 post / 无 import 仅报表 / 含 import 三种形态均不误报失效；错绑定仍零写入且不覆盖已声明账套 |
 
 I 组具体覆盖（新增，不替代 / 不削弱 A–H）：
 
@@ -68,6 +70,14 @@ I 组具体覆盖（新增，不替代 / 不削弱 A–H）：
 - I3 报表快照 / 参数异常只影响该 item 阶段状态，不再使整 job `exit 2`；
 - I4 报表证据覆盖以前期间 / 跨年依赖，真实重算 hash 与旧产物不同；
 - I5 源 payload 金额 100→200：普通 resume 拒绝，显式快照才写旧内容并留痕。
+
+J 组（独审新增 P2，最小修复；不撤销「`accountSetId` 可选」契约）：
+
+- I6 企业已绑定、manifest 省略 `accountSetId`、仅请求报表 → `start` 成功且 `local_batch_items.account_set_id`
+  与产物证据 `accountSetId` 都是真实绑定账套；停机后新进程普通 `resume` 仍 `succeeded`（`verified.ok=true`），
+  不得 `report_evidence_changed`，产物文件 hash 与凭证数不变；
+- I7 同一推断规则覆盖「仅 post（无 import）」「仅报表（无 import）」「含 import + 报表」，且错绑定
+  （企业已绑定 A，manifest 声明 B）仍 `enterprise_binding_mismatch` / 零业务写入 / 不把账套改成推断值。
 
 真实动作只调用既有领域：`importIncremental`（已含 `BEGIN IMMEDIATE`）、`postVoucher`、`generateDepreciation`、
 `carryForwardProfit`、`setPeriodStatus`，报表复用 `buildReportExport` + LOCAL-05 渲染。
@@ -106,6 +116,29 @@ node test/smoke.test.mjs && node test/accounting-derived.test.mjs && node test/a
 
 未完成（本轮不伪造）：LOCAL-02 依赖下的真实 `period-check` / `close`；LOCAL-06 的既有库迁移与
 `createBackup → verifyBackup → restoreNew` 后新进程续跑；共享互斥 guard 接线；提交 / PR / 合并。
+
+### 6.2 本轮（独审新增 P2 最小修复）
+
+已关闭的 5 个 P1 修复保留不变（未回退、未放宽断言）。新增 P2：企业已绑定账套、manifest 省略可选
+`accountSetId`、仅请求报表时，`resolveItemBinding` 虽在锁作用域推断成功，但账套 ID 没有落库 ——
+`start` 退出码 0 / `succeeded`，而 `local_batch_items.account_set_id` 与产物证据 `accountSetId` 仍为 `null`；
+数据与文件完全未变的紧接普通 `resume` 却 `exit 1` / `needs_review` / `report_evidence_changed`（用 `null` 重算摘要）。
+
+已完成：绑定核验通过后立即把解析出的账套写进 `local_batch_items`（`account_set_source = enterprise_binding`），
+后续阶段作用域 / 产物证据 / 恢复核验统一用这个持久值；恢复核验的账套作用域改为「证据记录的账套，否则已落库的账套」，
+不再用 `null` 重算业务摘要；错绑定 / 缺绑定仍、在任何写入之前抛错（零写）。已转 `needs_review` 的旧任务仍需显式 `retry`，
+不自动改回成功。未完成同上（LOCAL-02 / LOCAL-06 / 共享 guard / 提交与 PR）。
+
+### 6.3 并发 `start` 瞬时锁（附带修复，已定位）
+
+前两轮 22 / 23 当时只保留尾部、无法定位；本轮完整日志 + 双进程真实 CLI 探针已定位为两条瞬时 SQLite 锁冲突：
+只读探测误报 `database_unreadable`（`database is locked`），以及共享 `server/db.mjs` 初始化建表在另一执行者
+持写锁时抛原生 `ERR_SQLITE_ERROR`（栈 `db.mjs:14`）。**不是** PID 存活判断错误。
+
+已修（仅本包文件）：只读探测对瞬时锁有限重试（仍失败才 fail-closed）；`start` / `resume` 在加载编排层前用本包连接
+预热并保持到批量结构确认完成，原生锁错误归一为 `database_busy`（退出码 3）。实测探针修复前 2 / 25 与 2 / 60 次失败，
+修复后 0 / 60 与 0 / 150 轮失败。**未改共享 `db.mjs`**（不在本包边界）：完全根除需共享库初始化加 `busy_timeout`，
+需管理者另排共享文件窗口，因此不声称已彻底根除。
 
 ## 7. 完成口径
 

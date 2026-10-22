@@ -104,6 +104,30 @@ function openDirect(dbPath, { readOnly }) {
 
 const DB_FILE = "workbench.db";
 
+/**
+ * 启动期短连接（不写任何业务数据）：并发 CLI 同时打开同一个库时，共享的 `db.mjs` 初始化会
+ * 执行建表 / 建索引语句；若另一个执行者此时正在写、或刚关闭连接并清理 `-wal` / `-shm`，
+ * 该共享初始化会瞬时拿到 `database is locked`（栈在 `db.mjs` 创建表处）。
+ * 这里先用本包自己的连接（带 busy_timeout）读一次 schema，再在整个「import runner +
+ * ensureBatchSchema」期间保持连接存活，把并发窗口降到最小；结束后立即关闭，不延长 WAL。
+ * 预热打开失败时 soft-fail（不写任何内容），随后仍由真实步骤报错，不掩盖问题。
+ */
+async function withStartupDatabase(dataDir, fn) {
+  const state = storage.inspectDataDir(dataDir);
+  let warm = null;
+  if (state.exists && state.bytes) {
+    try { warm = openDirect(resolve(dataDir, DB_FILE), { readOnly: false }); } catch { warm = null; }
+    if (warm) {
+      try { warm.prepare(`SELECT COUNT(*) AS n FROM sqlite_master`).get(); } catch { /* 预热失败不阻止真实流程 */ }
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    try { warm?.close(); } catch { /* 关闭失败不影响结果 */ }
+  }
+}
+
 /** status / cancel / retry：只使用存储层，绝不 import 会打开业务库的 runner。 */
 function withBatchDatabase(dataDir, { readOnly }, fn) {
   const state = storage.inspectDataDir(dataDir);
@@ -192,8 +216,11 @@ async function dispatch({ command, options }) {
     // 3) 数据目录只读检查：只有「显式新目录」或「已有目标批量结构」才允许继续。
     const init = storage.assertInitializable(dataDir);
     process.env.WORKBENCH_DATA_DIR = dataDir;
-    const runner = await import("../server/local-batch-runner.mjs");
-    storage.ensureBatchSchema(runner.database, { freshDatabase: init.fresh });
+    const runner = await withStartupDatabase(dataDir, async () => {
+      const loaded = await import("../server/local-batch-runner.mjs");
+      storage.ensureBatchSchema(loaded.database, { freshDatabase: init.fresh });
+      return loaded;
+    });
     const result = await runner.createAndRun({
       manifest: validated.manifest, manifestHash, manifestJson, plans, inputs, outputDir,
     });
@@ -274,8 +301,11 @@ async function dispatch({ command, options }) {
     });
   }
   process.env.WORKBENCH_DATA_DIR = dataDir;
-  const runner = await import("../server/local-batch-runner.mjs");
-  storage.ensureBatchSchema(runner.database, { freshDatabase: false });
+  const runner = await withStartupDatabase(dataDir, async () => {
+    const loaded = await import("../server/local-batch-runner.mjs");
+    storage.ensureBatchSchema(loaded.database, { freshDatabase: false });
+    return loaded;
+  });
   const allowSnapshotOnly = options.flags.has("--use-saved-inputs");
   if (allowSnapshotOnly) {
     // 显式选择「仅用已保存快照续跑」：先核验快照存在 / 源文件状态，再继续执行（选择与原因会写进阶段证据）。
@@ -319,16 +349,23 @@ try {
   const code = await dispatch(parsed);
   process.exit(code);
 } catch (error) {
-  const code = error?.code || "cli_failed";
+  const rawCode = error?.code || "cli_failed";
+  // 并发竞争下的瞬时锁冲突（共享库初始化 / 事务窗口）不是参数错误：归一成稳定错误码 + 依赖类退出码，
+  // 并提示稍后重试；已经进行的阶段仍可 resume，不做任何隐式重写。
+  const transientBusy = String(rawCode).startsWith("ERR_SQLITE")
+    && /database is locked|database table is locked/i.test(String(error?.message || ""));
+  const code = transientBusy ? "database_busy" : rawCode;
   const exitCode = error instanceof CliError ? error.exitCode
-    : (["migration_requires_backup", "dependency_unavailable", "database_not_found", "database_unreadable", "schema_future_version", "batch_schema_unavailable"].includes(code) ? 3 : 2);
+    : (["migration_requires_backup", "dependency_unavailable", "database_not_found", "database_unreadable",
+      "database_busy", "schema_future_version", "batch_schema_unavailable"].includes(code) ? 3 : 2);
   process.stderr.write(`[local-batch] ${String(code).slice(0, 120)}\n`);
   emit({
     ok: false,
     command: parsed?.command ?? null,
     error: {
       code,
-      message: error instanceof CliError ? error.message : "命令执行失败：请查看错误码",
+      message: error instanceof CliError ? error.message
+        : (transientBusy ? "数据目录正被其它执行者占用：请稍后重试（阶段可 resume）" : "命令执行失败：请查看错误码"),
       details: sanitizeDetails(error?.details),
     },
   });

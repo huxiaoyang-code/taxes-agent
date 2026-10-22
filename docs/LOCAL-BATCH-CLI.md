@@ -40,6 +40,8 @@ node scripts/local-batch.mjs retry  --data-dir <数据目录> --job-key <jobKey>
 
 - `--data-dir` 每次都必须显式给出（该目录内是 `workbench.db`）。`start` 还必须显式给出 `--manifest` 与 `--output-dir`。
 - `status` 使用**只读**连接：不建表、不升级、不续跑；缺库返回 `database_not_found`，不会把不存在的库当新库。
+- 数据目录只读探测对**并发瞬时锁**有限重试（另一个执行者正在写 / 正关闭连接并清理 `-wal`、`-shm` 时
+  只读探测会瞬时拿到 `database is locked`，这不是库损坏）；真正读不出才报 `database_unreadable`（fail-closed）。
 - `cancel` / `retry` 只改任务状态（不 import 会打开业务库的编排模块），`retry` 之后仍需 `resume` 继续。
 - stdout 只有一行受控 JSON；stderr 只输出错误码与一句话说明，不含账务文本 / SQL / 堆栈。
 - 输出文件只写入 `--output-dir` 之内（受控相对路径），从不覆盖已有无关文件。
@@ -51,7 +53,10 @@ node scripts/local-batch.mjs retry  --data-dir <数据目录> --job-key <jobKey>
 | `0` | 命令成功且任务状态为 `succeeded`（或 `cancel` / `retry` 正常登记） |
 | `1` | 仍有失败 / 需复核 / 依赖阻塞 / 已取消 / 其它实例正在执行 |
 | `2` | 参数、manifest 校验或 jobKey 冲突错误 |
-| `3` | 依赖或数据目录错误（缺库、无批量结构、需先备份、结构版本不兼容） |
+| `3` | 依赖或数据目录错误（缺库、无批量结构、需先备份、结构版本不兼容、并发占用 `database_busy`） |
+
+并发 `start` / `resume` 时，共享库初始化会执行建表 / 建索引语句；若此时另一个执行者正在写，原生 SQLite
+错误 `database is locked` 不当作参数错误，而统一归一为 `database_busy`（退出码 3，提示稍后重试；已进行的阶段仍可 `resume`）。
 
 典型 JSON：`{"ok":true,"command":"start","jobKey":"...","jobId":1,"status":"succeeded","created":true,"renders":15,...}`；
 错误：`{"ok":false,"command":"status","error":{"code":"database_not_found","message":"..."}}`。
@@ -142,6 +147,11 @@ import(按清单) → post → depreciation → carryforward → period-check �
      `enterprise_binding_mismatch`；声明的账套已绑定其它企业 → `account_set_enterprise_mismatch`；
      非首次建账 / 非显式新绑定却没有任何绑定 → `enterprise_binding_missing`。该核验覆盖**全部**动作，
      含无 import 的过账 / 计提 / 结转 / 检查 / 结账 / 报表 / 恢复核验，不只在导入分支。
+     **解析出的账套立刻落库**：manifest 的 `accountSetId` 仍是可选字段，省略时由绑定推断；推断结果写入
+     `local_batch_items.account_set_id`（`account_set_source = enterprise_binding`），后续阶段作用域、
+     产物证据（`evidence.accountSetId`）与恢复核验统一使用这个持久值。未绑定 / 错绑定仍在**任何写入之前**抛错，
+     不覆盖 manifest 已声明的账套（零业务写入）；不会只用锁作用域或内存快照替账套，也不会用 `null` 去重算
+     报表业务摘要（否则数据与文件都没变也会误报 `report_evidence_changed`）。
   2. **源输入证据**（见 §7）：源文件被改 / 丢失且未显式选择快照 → `input_changed` / `input_missing`。
 - `blocked_dependency` 表示依赖接口未就绪（当前 = LOCAL-02 期末检查）；报表不因此停止（内部报表不依赖封账）。
 - 状态转换持久化，每次写入都带 `owner_instance` + `fencing_token` + `attempt` 的 CAS 校验。
@@ -164,6 +174,9 @@ import(按清单) → post → depreciation → carryforward → period-check �
     独立 fence 事务补 checkpoint」，commit 后崩溃可安全回放（见 §7）；
   - 报表：主线程在**一致只读快照**里生成 DTO / CSV 后立即释放读事务，渲染在 worker 线程，主线程不持有写事务。
 - 只有批量 runner 之间保证按账套互斥；手工 HTTP / Agent 入口尚未接线，**不宣传全产品互斥**。
+- 启动期并发：`start` / `resume` 在 `import` 编排层前先用本包连接（`busy_timeout`）读一次 schema，并在整个
+  「加载编排层 + 确认批量结构」期间保持该连接，避免两个 CLI 同时初始化共享库时因 `-wal` / `-shm`
+  瞬态竞争而失败；该连接不写业务数据、结束后立即关闭。
 
 ## 6. 数据落盘（同一 workbench.db）
 
@@ -173,7 +186,7 @@ import(按清单) → post → depreciation → carryforward → period-check �
 |---|---|
 | `local_batch_component` | component 版本（`local-batch` / v1） |
 | `local_batch_jobs` | `job_key UNIQUE`、manifest 哈希与规范 manifest、并发度、输出根、取消标志、状态 |
-| `local_batch_items` | 每 job 每 itemKey / 每规范企业唯一；真实 `account_set_id` 与来源 |
+| `local_batch_items` | 每 job 每 itemKey / 每规范企业唯一；真实 `account_set_id` 与来源（`manifest` / `stage:<阶段>` / `enterprise_binding` 绑定推断） |
 | `local_batch_stages` | `(item, period, stage_key)` 唯一；attempt、输入 / 结果哈希、证据、错误码、owner / fence、时间 |
 | `local_batch_locks` | `resource_key` 唯一锁 + fencing token + 租约 |
 | `local_batch_artifacts` | 稳定 `artifact_key`、snapshotHash、bytesHash、大小、MIME、受控相对位置、发布状态、真实 threadId 与渲染时间 |
@@ -215,6 +228,9 @@ import(按清单) → post → depreciation → carryforward → period-check �
 
 - 每次 `resume` 都重新核验已成功阶段的上游证据：凭证被反过账 / 改金额 / 删除、来源状态回退、
   计提 runs 变化、封账被重开、报表业务证据变化 → `needs_review`（`evidence_changed`），停止盲续。
+  核验的账套作用域取「阶段证据记录的账套，否则 item 已落库的账套」；两者都没有才视为无法核验（不放行）。
+  因此省略 `accountSetId` 的任务一旦把绑定推断出的账套落库，重启后的核验与原执行使用同一账套，
+  不会因 `null` 重算摘要而假报 `report_evidence_changed`（真变化仍会报）。
 - `retry` 只重开选定的失败 / 需复核 / 已取消未完成阶段；`succeeded` / `not_applicable` 永不重跑。
 
 ## 8. 报表快照、并发与发布
@@ -258,7 +274,8 @@ import(按清单) → post → depreciation → carryforward → period-check �
 
 ```bash
 node test/local-batch-cli.test.mjs          # 9 组：CLI 契约 / 20 家企业两月真实动作链 / 五类 CSV+XLSX+PDF / 并发证据
-node test/local-batch-persistence.test.mjs  # 23 组：失败隔离 / 前序失败停住 / 一企一套绑定 / 崩溃恢复 / 互斥与 fence /
+node test/local-batch-persistence.test.mjs  # 25 组：失败隔离 / 前序失败停住 / 一企一套绑定（含省略 accountSetId 的
+                                            #        推断账套落库与重启核验）/ 崩溃恢复 / 互斥与 fence /
                                             #        失效证据 / 输入快照选择 / 报表依赖证据 / 迁移回滚
 ```
 

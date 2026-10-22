@@ -610,7 +610,11 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
       ? null : Number(evidence.accountSetId);
     const binding = getEnterpriseAccountSet(db, item.enterprise_key);
     const boundSetId = binding ? Number(binding.account_set_id) : null;
-    const expectedSetId = evidenceSetId ?? (item.account_set_id === null ? null : Number(item.account_set_id));
+    // 账套作用域统一用「证据记录的账套，否则 item 已落库的账套」：
+    // 省略可选 accountSetId 的任务可能没把账套写进早期证据，但绑定核验已把它落库，
+    // 不能再用 null 去重算摘要（否则数据未变也会误报证据失效）。
+    const expectedSetId = evidenceSetId ?? (item.account_set_id === null || item.account_set_id === undefined
+      ? null : Number(item.account_set_id));
     if (expectedSetId !== null && boundSetId !== null && boundSetId !== expectedSetId) {
       return { ok: false, reason: "enterprise_binding_changed" };
     }
@@ -653,7 +657,7 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
           `SELECT r.amount, r.voucher_id, v.status AS voucher_status FROM asset_depreciation_runs r
              LEFT JOIN vouchers v ON v.id=r.voucher_id
             WHERE r.account_set_id=? AND r.asset_id=? AND r.period=?`,
-        ).get(evidence.accountSetId, run.assetId, run.period);
+        ).get(expectedSetId, run.assetId, run.period);
         if (!row) return { ok: false, reason: "depreciation_run_removed", details: { assetId: run.assetId } };
         if (row.voucher_id !== run.voucherId || row.voucher_status !== "posted") {
           return { ok: false, reason: "depreciation_run_changed", details: { assetId: run.assetId } };
@@ -681,7 +685,7 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
     }
     if (key === STAGE_KEYS.CLOSE) {
       const row = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`)
-        .get(evidence.accountSetId, evidence.period);
+        .get(expectedSetId, evidence.period);
       if (row?.status !== "closed") return { ok: false, reason: "period_reopened" };
       return { ok: true };
     }
@@ -689,7 +693,7 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
       const snapshot = getSnapshot(db, { itemId: item.id, period: stage.period, kind: evidence.kind });
       if (!snapshot) return { ok: false, reason: "report_snapshot_missing" };
       if (snapshot.business_hash !== evidence.businessHash) return { ok: false, reason: "report_evidence_changed" };
-      if (businessDigest(db, evidence.accountSetId, stage.period) !== snapshot.business_hash) {
+      if (businessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) {
         return { ok: false, reason: "report_evidence_changed" };
       }
       // 产物文件核验：丢失 / 被改必须标失效（只重做报表，不重做会计）。

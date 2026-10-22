@@ -6,9 +6,11 @@
 - 分支：`codex/huxiaoyang-code/local-07-cli`
 - 开工基线：`257f96275031eefa484699dd71bd012e2d221e51`（含 LOCAL-01 PR #46、LOCAL-05a PR #52、LOCAL-08 PR #50）
 - 交付契约：[docs/LOCAL-BATCH-CLI.md](../LOCAL-BATCH-CLI.md) · [任务单](../tasks/LOCAL-07-CLI.md)
-- 状态：**实现 + 自测 + 独立审查 5 个 P1 修复（真实复现后再修）完成；未提交 / 未 PR / 未合并**（员工不执行 Git）。
+- 状态：**实现 + 自测 + 独立审查 5 个 P1 修复（真实复现后再修）+ 独审新增 P2 最小修复（先红后绿）完成；
+  未提交 / 未 PR / 未合并**（员工不执行 Git）。
   最终功能完成仍受 LOCAL-02 / LOCAL-06 依赖约束；`period-check` / `close` / 既有库迁移 / 恢复续跑**未**完成。
-- 本轮审查基线（冻结 head）：`dfad680544c279fc065334a02800fc1a7c86e602`；修复只动本包原 10 个文件。
+- 审查 / 修复基线（冻结 head）：`1326adda88b0b941674e41f94de026790895a0eb`（P1 轮为 `dfad680`）；
+  两轮修复都只动本包原 10 个文件。
 
 ## 1. 本包新增文件（10，精确）
 
@@ -26,8 +28,8 @@
 5. `scripts/local-batch.mjs` — CLI `help/start/status/resume/cancel/retry`；参数 → manifest 校验 →
    数据目录只读检查 → 才动态 import 会打开库的模块。
 6. `test/local-batch-cli.test.mjs` — CLI 契约、20 家企业两月真实动作链 + 五类 CSV/XLSX/PDF、并发证据。
-7. `test/local-batch-persistence.test.mjs` — 失败隔离、前序失败门禁、一企一套绑定核验、源输入证据与显式快照选择、
-   报表依赖证据（含跨年以前期间）、快照异常隔离、崩溃恢复、互斥 / fence、迁移回滚 / 备份依赖。
+7. `test/local-batch-persistence.test.mjs` — 失败隔离、前序失败门禁、一企一套绑定核验（含省略 `accountSetId` 时推断账套的落库与重启核验）、
+   源输入证据与显式快照选择、报表依赖证据（含跨年以前期间）、快照异常隔离、崩溃恢复、互斥 / fence、迁移回滚 / 备份依赖。
 
 文档：
 
@@ -35,8 +37,11 @@
 9. `docs/tasks/LOCAL-07-CLI.md`
 10. `docs/handoffs/LOCAL-07-CLI.md`（本文件）
 
-`git status --short` 只显示这 10 个新文件；**未修改**任何既有 accounting / db / import-* / report-* /
-server / Agent / MCP / test-all / package / lock / public / 共享状态索引文件。
+本包边界仍是这 10 个文件（首轮为新增；随后冻结在 `1326add`）。本轮 P2 + 并发修复只修改其中 **8** 个
+（`scripts/local-batch.mjs`、`server/local-batch-{actions,runner,storage}.mjs`、`test/local-batch-persistence.test.mjs`
+与 3 份本包文档），另外 2 个文件（`server/local-batch-report-worker.mjs`、`test/local-batch-cli.test.mjs`）未改；
+**未新增 / 重命名 / 删除文件**，也**未修改**任何共享入口 / accounting / db / import-* / report-* /
+Agent / MCP / test-all / package / lock / public / 共享状态索引文件。
 
 ## 2. 已实现能力（真实可用）
 
@@ -51,6 +56,8 @@ server / Agent / MCP / test-all / package / lock / public / 共享状态索引�
 - 互斥与 fencing：`job:<id>` / `book:<规范enterpriseKey>` / `account-set:<id>` 数据库行锁 + 单调 token + 租约；
   租约内且 owner 存活或存活不明 → 保守拒绝（`lock_active` / `owner_active`）；PID 确认死亡 → 递增 fence 接管；
   阶段结果写入与 fence 校验同事务，旧 token / 旧 attempt 迟到提交被 `fence_lost` 拒绝。
+- 并发启动（本轮附带修复）：共享库初始化的瞬时锁冲突（`database is locked`）有限重试并归一为 `database_busy`
+  （退出码 3），不再误报 `database_unreadable`（库本身可读）或外泄 `ERR_SQLITE_ERROR` / 误报参数错误。
 - 幂等与恢复：导入沿上游 batchId / 来源 / 内容指纹（commit 后崩溃 → 回放 + 逐张 `sourceTrace` 核验 + 补 checkpoint）；
   过账 / 计提 / 结转 / 封账 effect + checkpoint 同事务；产物发布后崩溃 → 按 `artifact_key + snapshotHash + bytesHash`
   补记、不重新渲染；`resume` 每次都重新核验已成功阶段上游证据（反过账 / 改动 / 删除 → `needs_review`）。
@@ -66,6 +73,11 @@ server / Agent / MCP / test-all / package / lock / public / 共享状态索引�
   旧快照（`input_changed` / `input_missing`，零写入）；只有显式 `--use-saved-inputs` 才用受保护快照，
   并在导入阶段证据写入 `inputEvidence = { mode: "saved_snapshot", reason, sourceHash }`；未用开关时为
   `mode: "source_file_verified"`。已完成项的证据规则不变。
+- **推断账套持久化（本轮 P2 修正）**：`accountSetId` 仍是 manifest 可选字段；省略时由 `import_enterprise_account_sets`
+  绑定推断，且**在绑定核验通过后立即写入** `local_batch_items.account_set_id`（`account_set_source = enterprise_binding`）。
+  后续阶段作用域、产物证据 `accountSetId`、恢复核验都用这个持久值；恢复核验的账套作用域取「证据记录的账套，否则已落库的账套」，
+  不再以 `null` 重算业务摘要。错绑定 / 缺绑定仍发生在任何写入之前（零业务写入），也不覆盖 manifest 已声明的账套。
+  已转 `needs_review` 的旧任务仍需显式 `retry`（不自动改回成功）。
 - **报表依赖证据（本轮修正）**：`businessHash` 从「仅本期 `period=?`」扩展为报表真实依赖范围：账套登记、
   科目定义、全部期初、该账套启用期起至期末的全部已过账凭证 + 分录指纹（以前期间 / 跨年 / 本年累计）、
   期末及以前期间状态；五类报表共用同一边界。以前期间反过账 / 改金额 / 删除后 `resume` 必须转 `needs_review`
@@ -88,8 +100,8 @@ server / Agent / MCP / test-all / package / lock / public / 共享状态索引�
 
 | 命令 | 结果 | 退出码 |
 |---|---|---|
-| `node test/local-batch-cli.test.mjs` | 9 / 9 组通过（A1–A5、B1、B2、C1、C2），约 8.5s | 0 |
-| `node test/local-batch-persistence.test.mjs` | 23 / 23 组通过（D1、E1–E4、F1–F7、G1–G3、H1–H3、I1–I5），约 13s；修复版后连续 22 次实跑均 23/23 | 0 |
+| `node test/local-batch-cli.test.mjs` | 9 / 9 组通过（A1–A5、B1、B2、C1、C2），约 8.5s（本轮 P2 修复后重跑） | 0 |
+| `node test/local-batch-persistence.test.mjs` | **25 / 25** 组通过（D1、E1–E4、F1–F7、G1–G3、H1–H3、I1–I7），P2 修复前为 23 / 25 | 0 |
 | `node test/import-incremental.test.mjs` | 49 / 49 | 0 |
 | `node test/import-strict.test.mjs` | 54 / 54 | 0 |
 | `node test/report-office-export.test.mjs` | 21 / 21 | 0 |
@@ -98,7 +110,12 @@ server / Agent / MCP / test-all / package / lock / public / 共享状态索引�
 | `node test/accounting-derived.test.mjs` | 31 / 31 | 0 |
 | `node test/accounting-guards.test.mjs` | 23 / 23 | 0 |
 
-原 9 组 CLI + 原 18 组持久性用例**一条未删、未放宽**；新增 I1–I5 五组针对独立审查的 P1，
+P1 轮的 9 + 23 与本轮 P2 + 并发修复后的 9 + 25 都已实际重跑；每一轮的**完整 stdout + stderr** 都整份保存在本 worktree 的
+`.agent-runs/` 诊断日志（Git 忽略目录，不入 Git），不只保留尾部，便于失败时定位具体组。
+并发探针（双进程真实 CLI 同时 `start`）也保存在同一目录：修复前 60 轮复现 2 次失败，修复后 60 + 150 轮 0 次失败（§3.4）。
+最终定稿代码（含并发修复）又实跑一次：`persistence` **25 / 25**、`cli` **9 / 9**，均 exit 0。
+
+原 9 组 CLI + 原 18 组持久性用例**一条未删、未放宽**；新增 I1–I5 五组针对独立审查的 P1、I6–I7 两组针对独审新增 P2，
 G1 按新规则加严（普通 `resume` 也必须拒绝源文件变化，不再只在 `retry` 分支校验）。
 
 ### 3.1 先在冻结 head 上真实复现（不是 mock）
@@ -117,8 +134,9 @@ G1 按新规则加严（普通 `resume` 也必须拒绝源文件变化，不再�
 即在冻结 head 上持久性套件为 `17 / 23`（原 18 组仍全部通过）；修复后 `23 / 23`。
 随后已把源文件恢复为修复版，并校验行尾为 LF（`.gitattributes` 要求）。
 
-诚实备注：上述过程中出现过 1 次 `22 / 23`，未能捕获到具体组名（不在 I1–I5，五组当时均 PASS），随后连续 22 次均 23/23；
-原有用例含 PID 存活 / SIGKILL 时序判断（F3 / F4 / E1–E4），若再现请优先按该方向排查。本轮未改这些语义。
+诚实备注（更正旧表述，并已在本轮定位）：P1 轮曾出现**两次** `22 / 23`（不是一次），当时只保留输出尾部，无法定位，
+因此当时**不声称已定位原因**。本轮保留完整 stdout + stderr 后用探针复现并定位到具体组与堆栈（F1 并发 `start`
+的瞬时 SQLite 锁，见 §3.4），**不是** PID 存活 / SIGKILL 时序判断，也不是账务逻辑错误。
 
 ### 3.2 主要断言要点（真实数据，非文件存在检查）
 
@@ -148,8 +166,61 @@ G1 按新规则加严（普通 `resume` 也必须拒绝源文件变化，不再�
 - 快照异常：第一家请求未登记的 2026-02 报表 → 该 item 报表阶段 `failed` / `period_not_registered`、无产物；
   第二家草稿真实过账且报表产物落地（job `failed` → `exit 1`，不再是 `exit 2`）；真实登记期间 + 补科目后
   `retry` + `resume` 可完成。
+- **一企一套（新 P2 回归）**：企业已绑定、manifest 省略可选 `accountSetId`、仅请求报表 → `start` 成功且
+  `local_batch_items.account_set_id` 与产物证据 `accountSetId` 都是真实绑定账套；数据 / 文件不变的紧接新进程 `resume`
+  仍 `succeeded`（`verified.ok=true`，不得 `report_evidence_changed`）；仅 post / 无 import 仅报表 / 含 import 三种形态
+  同样成立；错绑定（已绑 A、声明 B）仍 `enterprise_binding_mismatch`、零业务写入、不把账套改成推断值。
 - 迁移：既有库（只有核心表）→ `migration_requires_backup`（退出码 3，`details.dependency=LOCAL-06 createBackup/verifyBackup`），
   不留任何 `local_batch_*` 表；同名 view 制造的建表失败 → 事务整体回滚，`integrity_check=ok`。
+
+### 3.3 本轮 P2（独审新增）先红后绿（真实持久化回归，不是 mock）
+
+独立审查在冻结 head `1326add` 上用合成探针证实：企业已绑定账套、manifest 省略 `accountSetId`、仅请求报表时，
+`resolveItemBinding` 仅在锁作用域推断成功，账套 ID 未落库 —— `start` 退出码 0 / `succeeded`，而
+`local_batch_items.account_set_id` 与产物证据 `accountSetId` 仍为 `null`；数据与文件完全未变的紧接普通 `resume`
+却 `exit 1` / `needs_review` / `report_evidence_changed`（用 `null` 重算业务摘要）。
+
+| 阶段 | 命令 | 结果 |
+|---|---|---|
+| 红（冻结 `1326add`，只加新回归） | `node test/local-batch-persistence.test.mjs` | **23 / 25**，I6 / I7 失败：`AssertionError: 推断得到的账套 ID 必须持久化` / `item-post 推断账套必须落库`（`null !== 1`） |
+| 绿（最小修复后） | `node test/local-batch-persistence.test.mjs` | **25 / 25**，exit 0 |
+
+修复只在本包文件内：
+
+1. `local-batch-runner.mjs`：绑定核验通过后立即把解析出的账套写入 `local_batch_items.account_set_id`
+   （`source = enterprise_binding`），并用重读后的 item 做 item 锁、阶段执行、报表快照与恢复核验；
+   错绑定 / 缺绑定仍在写入前抛错（零写），不覆盖 manifest 已声明的账套。
+2. `local-batch-actions.mjs`：`verifyStageEvidence` 的账套作用域改为「证据记录的账套，否则已落库的账套」，
+   计提 runs / 封账期间 / 报表业务摘要都用这个值，不再用 `null` 算摘要。
+3. `local-batch-persistence.test.mjs`：新增 I6 / I7 两组真实持久化回归（含「停机后新进程 `resume`」与错绑定零写）；
+   原 23 组一条未删、未放宽。
+
+旧任务（已因该 P2 转 `needs_review`）不自动改回成功：仍按既有语义需显式 `retry` 重开报表阶段。
+
+### 3.4 附带修复：并发 `start` 的瞬时 SQLite 锁（前两轮 22 / 23 的真因）
+
+前两轮各出现 1 次 22 / 23，当时只保留输出尾部、无法定位，因此当时不声称已定位。本轮用双进程真实 CLI 探针复现（60 轮
+中 2 次失败），拿到完整 stdout + stderr + 堆栈后定位为**两条**瞬时锁冲突（不是 PID 存活判断，也不是账务 / 断言逻辑错）：
+
+| 现象 | 真实原因（拿到的证据） |
+|---|---|
+| `exit 3` / `database_unreadable`，`details.reason = "database is locked"` | 只读探测 `inspectDataDir` 撞上另一执行者正在写、或刚关闭连接并清理 `-wal` / `-shm`；库本身可读 |
+| `exit 2` / 原生 `ERR_SQLITE_ERROR`，栈 `server/db.mjs:14`（共享库建表 / 建索引初始化） | 共享 `db.mjs` 初始化没有 `busy_timeout`：另一执行者持写锁时，建表语句瞬时 `database is locked` |
+
+修复（仍只动本包文件）：
+
+1. `local-batch-storage.mjs`：只读探测对瞬时锁**有限重试**（≤4 次、共 < 1s，并设 `busy_timeout`）；仍失败才如实报
+   `database_unreadable`（fail-closed，不猜也不放宽），不会把瞬态当成库损坏或需要备份。
+2. `scripts/local-batch.mjs`：`start` / `resume` 在加载编排层前先用本包连接（`busy_timeout`）读一次 schema，
+   并在「加载编排层 + 确认批量结构」期间保持该连接存活，把并发初始化窗口降到最小；原生 SQLite 锁错误归一为
+   `database_busy`（退出码 3，提示稍后重试），不再外泄 `ERR_SQLITE_ERROR` 或误报为参数错误。
+
+实测（同一探针，双进程真实 CLI 并发 `start`，完整日志在 `.agent-runs/`）：修复前 25 轮 2 次失败 + 60 轮 2 次失败；
+修复后 **60 轮 + 150 轮 0 次失败**。修复后本包两套测试：`persistence` **25 / 25** 连续 2 次、`cli` **9 / 9**，均 exit 0。
+
+诚实限制：共享 `server/db.mjs` 初始化仍**没有** `busy_timeout`（不在本包 10 文件边界内，**未改**）。本包只能把窗口
+压到最小 + 给稳定错误码；要做到完全确定还需在共享库初始化加 `busy_timeout`，需管理者另排共享文件窗口。因此
+不声称「并发启动问题已彻底根除」。
 
 ## 4. 依赖缺口（管理者下一步）
 
@@ -181,4 +252,6 @@ G1 按新规则加严（普通 `resume` 也必须拒绝源文件变化，不再�
   即使某个具体科目当期金额未变；本期之后的数据不进入摘要。
 - 全部测试为合成临时库 / 临时目录；未使用真实账套、凭据或税局接口；「20 家企业」不代表任何真实客户或
   税务并发验收。真实接入数仍为 0。
+- **并发启动仍未彻底根除**：共享 `server/db.mjs` 初始化没有 `busy_timeout`（不在本包 10 文件边界内，未改）。
+  本包已把窗口压到最小并归一为 `database_busy`（退出码 3）；完全确定需管理者另排共享文件窗口。
 - 未重跑全量 `npm test`（本包未修改上游文件，仅跑了受影响定向套件）；不写「全仓通过」。
