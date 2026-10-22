@@ -1,12 +1,19 @@
 # 任务单 · LOCAL-06-BACKUP 本机一致性备份 / 验证 / 恢复到全新目标
 
 - 类型：独立子包（新模块 + CLI + 测试 + 契约文档），**不接线**任何共享文件
-- 状态：**实现与自测完成（含第一轮定向返工 + 终审 P2 外键动作返工 + 外键重复声明补修），未提交 / 未 PR / 未审查 / 未合并**
-  （不代表 LOCAL-06 整体完成；上一轮冻结候选的 15 / 15 与外键动作返工后的 16 / 16 均**未最终通过**）
+- 状态：**实现与自测完成；已审源码 head `b2dcba3` 已通过管理验收与最终独立审查；PR
+  [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN，等待本次文档核对后按已授权流程合并，
+  实际 merge SHA 尚未产生（不标记 MERGED）**
+  （不代表 LOCAL-06 整体完成；`829541a` 冻结候选的 15 / 15 与第一轮 16 / 16 均因漏掉重复声明外键
+  而**未最终通过**，已被当前的外键分组一对一比对取代）
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 合并后主线，schema **v3**）
 - 分支：`codex/huxiaoyang-code/local-06-backup`
 - 负责人：`huxiaoyang-code`（已核实）
-- 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`）
+- PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)
+  （base `257f96275031eefa484699dd71bd012e2d221e51`，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）
+- 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`），
+  保持 OPEN 供兼容整合；完整审计留痕在
+  [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
 - 契约文档：[LOCAL-BACKUP](../LOCAL-BACKUP.md) · 交接：[handoffs/LOCAL-06-BACKUP](../handoffs/LOCAL-06-BACKUP.md)
 - 总览：[INDEPENDENT-PRODUCT-WORK](INDEPENDENT-PRODUCT-WORK.md)（八包；本行状态由管理者在合并后补写，本包不预报）
 
@@ -32,7 +39,7 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 4. 明确的路径 / sidecar / 别名 / 覆盖 / 并发安全规则与稳定错误码（含「目标落在备份目录内」按真实路径判定）；
 5. 原位恢复只给**接入契约**（明确未实现），留给后续共享维护窗口。
 
-### 1.1 第一轮定向返工的必改项（本轮已处理，证据见交接 §3）
+### 1.1 第一轮定向返工的必改项（已处理，证据见交接 §3）
 
 1. **P1 源库保护**：初版 `createBackup` 用 `readOnly: false` 打开源库，在「父业务连接已不存在、
    WAL 已提交但未 checkpoint」时会 checkpoint 源库（改主文件、删 `-wal`）。已改为真正只读连接，
@@ -48,7 +55,7 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 5. **路径别名**：`target_conflicts_backup` 两侧都按真实路径（realpath）比较，父目录 junction 别名
    不能把恢复目标写进备份目录（返工前已复现，返工后有用例守住）。
 
-### 1.2 终审 P2 返工：外键动作兼容性（本轮必改）
+### 1.2 终审 P2 返工：外键动作兼容性（已处理）
 
 终审独立探针发现：上一冻结候选（head `829541a`，六文件源码 `ddadb03` + main `257f962`）虽然
 管理者与独立 reviewer 均实跑 15 / 15 通过，但 `foreignKeyGroups()` 丢弃了
@@ -140,8 +147,10 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 2. 模块导入**无副作用**（不在导入时打开数据库 / 创建目录）；
 3. 恢复必须"先验证再发布"，失败与中断不留被当成成功的 `workbench.db`；
 4. CLI 三子命令可真实执行，输出稳定 `code`，不回显账务原文 / 原始 SQL / 堆栈 / 绝对路径；
-5. 三份新文档按事实记录范围、格式、兼容（**只支持当前 v3**）、耐久性边界、测试命令与 exit、限制与后续接入约束，
-   **不预报**已审 head / PR / merge，**不声称** LOCAL-06 整体完成，**不声称**税局或真实财务验证。
+5. 三份新文档按事实记录范围、格式、兼容（**只支持当前 v3**）、耐久性边界、测试命令与 exit、限制与后续接入约束；
+   已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）与五种外键变体拒绝事实
+   如实记录，**不伪造** merge SHA、不标记 MERGED；仅改文档的提交不改变源码，不重跑 16 个用例，
+   已审源码 head 保持不变；**不声称** LOCAL-06 整体完成，**不声称**税局或真实财务验证。
 
 ## 5. 实现要点（给审查者的对照清单）
 
@@ -182,5 +191,23 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 - 见 [LOCAL-BACKUP §9](../LOCAL-BACKUP.md)：未接线、严格拒绝的代价、只支持 v3、清单无签名、
   全表扫描成本、`-shm` 读锁边界、Windows 目录项耐久性边界、未验证真实账套、未验证 Windows 交付路径。
 - 原位恢复接入契约见 [LOCAL-BACKUP §6.5](../LOCAL-BACKUP.md)，属后续共享维护窗口任务，**本包未实现**。
-- 审计留痕（谁在什么时候备份 / 恢复 / 恢复到哪个目标）属 LOCAL-06 审计部分，**本包未实现**。
-- schema v4（LOCAL-02 #47）合并后必须扩展 `TABLE_STRUCTURE` 并重跑本套件，不得只靠动态表清单一律放行。
+- 审计留痕（谁在什么时候备份 / 恢复 / 恢复到哪个目标）属 LOCAL-06 审计部分，**本包未实现**，
+  完整审计在 [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)。
+- **严格只支持当前 schema v3**：schema v4（LOCAL-02 #47）以及 bank / batch / audit 等组件必须后续
+  **显式**做结构组合（扩 `TABLE_STRUCTURE` / 复核 `formatVersion`）与真实 SQLite 行为与合成临时库验收，
+  不得只靠动态表清单或「旧用例通过」推定已支持。
+
+## 8. 审查与合并状态（截至本次文档核对）
+
+| 项 | 事实 |
+|---|---|
+| 已审源码 head | `b2dcba35e87e9ebb75245dcc874aa41705b31243`（base `257f96275031eefa484699dd71bd012e2d221e51`） |
+| 管理者验收 | `node test/local-backup.test.mjs` **16 / 16、exit 0** |
+| 最终独立审查 | `review_backup06_final`：未参与实现、fork 为 none，同 head 独立 **16 / 16、exit 0** |
+| 独立真实探针 | 五种外键变体（`ON DELETE NO ACTION`、`ON UPDATE CASCADE`、`CASCADE + RESTRICT`、逆序重复、两个同 `CASCADE`）在源库与重算 manifest hash 的快照两侧均被拒绝，输出 / 目标不创建；正常结构恢复后真实 `accounting.deleteAccountSet` 成功 |
+| 仓库卫生 | `git diff --check` 通过；源码工作区干净；无剩余已发现阻塞项 |
+| PR | [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) OPEN，附当前任务说明，等待本次文档核对后按已授权流程合并 |
+| 合并 | **实际 merge SHA 尚未产生**，不伪造、不标记 MERGED |
+
+仅改文档的提交会得到新的 PR head，但**已审源码 head 仍是 `b2dcba3`**；本次不改源码 / 测试 / CLI，
+不重跑 16 个用例，由管理者核对源码未变；本次只检查文档链接 / 事实 / 范围与 `git diff --check`。

@@ -1,10 +1,15 @@
 # 本机一致性备份 / 验证 / 恢复到全新目标 · LOCAL-BACKUP（LOCAL-06 独立子包契约）
 
-状态：**实现与自测完成（含第一轮定向返工），未提交 / 未 PR / 未审查 / 未合并**。这是 LOCAL-06 的
-**独立子包**，不表示 LOCAL-06 整体完成（审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级、
-整套交付仍未实现）。
+状态：**子包源码已通过管理验收与最终独立审查；PR
+[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN，等待本次文档核对后按已授权流程合并**
+（实际 merge SHA 尚未产生，本文件不预报、也不标记 MERGED）。这是 LOCAL-06 的**独立子包**，不表示 LOCAL-06
+整体完成（审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
 
-- 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`）
+- 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`）；
+  Issue #49 保持 OPEN，用于后续兼容整合；完整审计留痕在
+  [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
+- PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)（base `257f96275031eefa484699dd71bd012e2d221e51`，
+  已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`；分支 `codex/huxiaoyang-code/local-06-backup`
 - 任务单：[tasks/LOCAL-06-BACKUP](tasks/LOCAL-06-BACKUP.md) · 交接：[handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md)
 - 精确文件归属：本包**只新增 6 个文件**（见任务单 §3），不修改任何共享文件
@@ -141,8 +146,9 @@
 清单**没有签名**：它的作用是绑定「这份快照就是清单描述的这份数据」，能发现**损坏、截断、半成品、
 版本不明、清单与内容不一致、别的产品 / 别的结构**，**不能**防止有人把清单与快照一起整体伪造
 （自测里就专门构造了「清单摘要同步改对、但结构与本产品不符」的负例，靠**真实结构校验**而不是摘要拦住；
-本轮又补了「只改外键 `ON DELETE` / `ON UPDATE` 动作、列 / 主键 / 数据 / 迁移记录全不变、并将清单摘要
-一并重算」的伪结构负例，源库与快照两侧均被 `foreign_key_actions` 拦住）。
+并另加「只改外键 `ON DELETE` / `ON UPDATE` 动作、列 / 主键 / 数据 / 迁移记录全不变、并将清单摘要
+一并重算」与「重复声明同列同目标外键」两类伪结构负例，源库与快照两侧均被
+`foreign_key_actions` / `foreign_key_duplicate` 拦住）。
 若后续需要防伪，应在 LOCAL-06 的审计部分引入签名 / 校验和登记，本子包不假装已具备。
 
 ### 3.3 写入耐久顺序（实际执行的步骤）
@@ -446,12 +452,33 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
 node test/local-backup.test.mjs
 ```
 
-覆盖与真实结果见交接文档 [handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md) §3：
-本轮**外键重复声明补修后**的六文件上为 **16 / 16 通过，exit 0**。更早的冻结候选状态必须分开看：
-head `829541a`（六文件源码 `ddadb03`）的 **15 / 15** 因终审 P2 外键动作漏洞**未最终通过**；
-外键动作返工后的 16 / 16（按目标键建 `Map`）又因重复声明外键可绕过而**未最终通过**，
-已被本轮的一对一外键分组比对与新增负例取代。`import-incremental` 49 / 49、
-`import-incremental-http` 22 / 22、`smoke` 28 / 28 是**上一轮返工后**的受影响回归结果，
-本轮只改了本包 6 个文件、未动任何共享源码，因此**未重跑**那三套（不把旧结果当成新证据）。
-该套件**未**接入 `scripts/test-all.mjs`（`test-all.mjs` 是共享文件，不在本包文件所有权内），
-因此 `npm test` 暂不包含本套件。
+覆盖与真实结果见交接文档 [handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md) §3。已审源码
+head `b2dcba35e87e9ebb75245dcc874aa41705b31243` 上 **16 / 16 通过、exit 0**，分别由管理者与
+未参与实现、fork 为 none 的独立审查各实跑一次；独立审查另实跑五种外键变体（`ON DELETE NO ACTION`、
+`ON UPDATE CASCADE`、`CASCADE + RESTRICT`、逆序重复、两个同 `CASCADE`），源库与重算清单 hash 的快照
+两侧均被拒绝且不创建输出 / 目标，正常结构恢复后真实 `accounting.deleteAccountSet` 成功级联。
+
+历史状态必须分开看：head `829541a`（六文件源码 `ddadb03`）的 15 / 15 与第一轮 16 / 16 都曾漏掉
+「重复声明同列同目标外键可绕过」，因此**未最终通过**，已被当前的外键分组一对一比对取代。
+`import-incremental` 49 / 49、`import-incremental-http` 22 / 22、`smoke` 28 / 28 是更早一轮返工后的
+受影响回归结果；本包只改自己的 6 个文件、未动共享源码，因此没有把它们当作当前证据。
+该套件**未**接入 `scripts/test-all.mjs`（共享文件，不在本包文件所有权内），因此 `npm test` 暂不包含本套件。
+本次仅更新文档的提交**不改变源码**，因此不重跑上述 16 个用例；已审源码 head 仍是 `b2dcba3`，
+由管理者在合并前核对源码未变。
+
+## 11. 当前状态与下一步
+
+1. **已完成的验收**：已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）、
+   五种外键变体在源库与快照两侧均被拒绝、正常结构恢复后真实删除账套成功、`git diff --check` 通过、
+   源码工作区干净；**当前没有已发现的阻塞项**。
+2. **PR 状态**：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN 并附当前任务说明，
+   等待本次文档核对后按已授权流程合并；**实际 merge SHA 尚未产生**，不伪造、不标记 MERGED。
+3. **本次文档提交会产生新的 PR head**，但**已审源码 head 仍是 `b2dcba3`**；本次不改源码 / 测试 / CLI，
+   由管理者核对源码未变。
+4. **严格只支持当前 schema v3**：v4（LOCAL-02 #47）以及 bank / batch / audit 等组件必须后续**显式**
+   做结构组合与真实 SQLite 行为与合成临时库验收，不得用动态表清单或「旧用例通过」推定已支持。
+5. **Issue #49 保持 OPEN** 供兼容整合；完整审计留痕在
+   [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)。
+6. **后续仍未实现**：原位（就地）恢复与回退编排、Windows 干净安装 / 启动 / 升级交付、
+   审计接线、定时 / 批量入口；这些完成后本子包才能计入 LOCAL-06 整体交付，
+   本文件**不声称** LOCAL-06 整体完成。

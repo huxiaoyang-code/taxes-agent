@@ -2,16 +2,18 @@
 
 - 任务单：[tasks/LOCAL-06-BACKUP](../tasks/LOCAL-06-BACKUP.md) · 契约：[LOCAL-BACKUP](../LOCAL-BACKUP.md)
 - 负责人：`huxiaoyang-code`（已核实）；远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)
-  （`Refs #20` / `Refs #13`）
+  （`Refs #20` / `Refs #13`，保持 OPEN 供兼容整合）；完整审计留痕在
+  [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`
 - 分支：`codex/huxiaoyang-code/local-06-backup`
-- 已审 head：**无**（本包尚未提交、未推送、未开 PR、未审查、未合并；不预报任何 head / merge）
-- 上一冻结候选：head `829541a403aa7e2866d42e7a8c6eb3d366940366`（六文件源码 `ddadb03` + main `257f962`）。
-  管理者与无实施上下文的独立 reviewer 均实跑 **15 / 15 exit 0**，但**独立探针发现 P2（外键动作未校验）**，
-  因此该候选 **未最终通过**（见 §3.0）。此后「外键动作返工」的 16 / 16 候选（按目标键建 `Map`）
-  又被 root 真实合成探针发现「重复声明同列同目标外键」可绕过，**同样未最终通过**；
-  两者均已被本轮的**外键分组一对一比对**修复取代。
-- 状态：**实现与自测完成（含第一轮定向返工 + 终审 P2 外键动作返工 + 外键重复声明补修），等待管理者重新验证与新 head 独立审查**
+- PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)（base `257f96275031eefa484699dd71bd012e2d221e51`）
+- 已审源码 head：`b2dcba35e87e9ebb75245dcc874aa41705b31243`（**实际 merge SHA 尚未产生**，
+  不伪造、不标记 MERGED）
+- 上一冻结候选（历史，仅备查）：head `829541a` / 六文件源码 `ddadb03` 曾 15 / 15 通过，
+  但因外键动作未校验、以及第一轮 16 / 16 又漏掉「重复声明同列同目标外键可绕过」而**未最终通过**，
+  已被当前的**外键分组一对一比对**取代（详见 §3.0）。
+- 状态：**已审源码已通过管理验收与最终独立审查，无剩余已发现阻塞项；PR #55 等待本次文档核对后
+  按已授权流程合并**；文档提交会得到新 PR head，但已审源码 head 仍为 `b2dcba3`
 - 范围：LOCAL-06 的**独立子包**（备份 / 验证 / 恢复全新目标）；LOCAL-06 整体**未完成**
   （审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级交付均未实现）
 
@@ -22,9 +24,11 @@
 | `06-workbench/server/local-backup.mjs` | 1490 | 快照生成 / 清单生成与验证 / 真实结构校验（含外键分组一对一与动作契约）/ 恢复到全新目标；无模块级副作用 |
 | `06-workbench/scripts/local-backup.mjs` | 86 | CLI `backup` / `verify` / `restore-new`（JSON 输出 + 稳定退出码） |
 | `06-workbench/test/local-backup.test.mjs` | 1392 | 真实 SQLite/WAL + 真实 CLI 子进程回归（16 个用例） |
-| `docs/LOCAL-BACKUP.md` | 457 | 备份格式 / 兼容范围 / 错误码 / 安全规则 / 耐久性边界 / 下游契约 / 原位恢复接入契约 |
-| `docs/tasks/LOCAL-06-BACKUP.md` | 186 | 本包任务单 |
+| `docs/LOCAL-BACKUP.md` | — | 备份格式 / 兼容范围 / 错误码 / 安全规则 / 耐久性边界 / 下游契约 / 原位恢复接入契约 / 当前状态与下一步 |
+| `docs/tasks/LOCAL-06-BACKUP.md` | — | 本包任务单 |
 | `docs/handoffs/LOCAL-06-BACKUP.md` | — | 本交接 |
+
+（三个源码文件的行数为已审源码 head `b2dcba3` 的值；三份文档随每次交接更新，不记固定行数。）
 
 未改（共享文件，仅只读）：`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
 `server/server.mjs`、`server/agent-tools.mjs`、MCP 注册、`scripts/test-all.mjs`、`package.json`、
@@ -132,31 +136,35 @@
   与重算清单摘要后的快照 `verify` / `restore-new` 均 `structure_invalid`、不创建目标；
   正常结构恢复后用真实 `deleteAccountSet` 仍能级联删除。
 
-**本轮（外键分组一对一修复后的六文件）实跑结果**：
+**当前验收结果（已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）**：
 
-| 命令 | 结果 | 退出码 |
-|---|---|---|
-| `node test/local-backup.test.mjs` | **16 / 16 通过** | **0** |
+| 验收方 | 身份 / 口径 | 命令 | 结果 |
+|---|---|---|---|
+| root 管理者 | 审查 + 运行验证，不补写业务代码 | `node test/local-backup.test.mjs` | **16 / 16 通过，exit 0** |
+| 独立审查 `review_backup06_final` | **未参与实现**、`fork=none`，与上面同一 head | `node test/local-backup.test.mjs` | **16 / 16 通过，exit 0** |
 
-本轮只改本包 6 个文件、未动任何共享源码，因此**未重跑** `import-incremental` 49 / 49、
-`import-incremental-http` 22 / 22、`smoke` 28 / 28（那是**上一轮返工后**的受影响回归结果，
-不当作本轮的新证据）。本套件**未**接入 `scripts/test-all.mjs`（共享文件，不在本包所有权内），
-因此**没有**「`npm test` 全量跑过本套件」这一事实。
+独立审查另做了五种外键变体的真实探针（源库与“重算 manifest hash 的快照”两侧都跑）：
+`ON DELETE NO ACTION`、`ON UPDATE CASCADE`、`CASCADE + RESTRICT`、逆序重复、两个同 `CASCADE`
+—— **全部被拒绝，输出 / 目标不创建**；作为对照，正常真实 `accounting.deleteAccountSet` 在恢复后的库上
+**成功**级联删除。`git diff --check` 通过，源码工作区干净；**无剩余已发现阻塞项**。
 
-> 候选状态必须分开看，**不得把既有失败隐去**：
-> - head `829541a`（六文件源码 `ddadb03`）的 **15 / 15 exit 0** 是管理者与独立 reviewer 的实跑结果，
->   但当时用例没有任何外键动作断言，**未最终通过**；
-> - 外键动作返工后的 **16 / 16**（按目标键建 `Map`）又因重复声明外键可绕过，
->   被 root 真实合成探针打回，**也未最终通过**；
-> - 当前 16 / 16 是**外键分组一对一修复后**的实跑结果，仍需重新验证与独立审查，
->   不预报已审 head / PR / merge。
-> 历史（第一轮返工之前）的初版 12 / 12 也不代表当前代码。
+本包只改自己的 6 个文件、未动任何共享源码，因此没有把更早一轮的 `import-incremental` 49 / 49、
+`import-incremental-http` 22 / 22、`smoke` 28 / 28 当作当前证据。本套件**未**接入
+`scripts/test-all.mjs`（共享文件，不在本包所有权内），因此**没有**「`npm test` 全量跑过本套件」这一事实。
 
-### 3.1 本轮 16 个用例各自验证什么（全部合成数据）
+本次仅改文档的提交**不改变源码**，因此**不重跑** 16 个用例；已审源码 head 仍为 `b2dcba3`，
+由 root 核对源码未变，只检查文档链接 / 事实 / 范围与 `git diff --check`。
+
+> 历史候选必须分开看，**不得把既有失败隐去**（简明保留，不再展开）：
+> head `829541a`（六文件源码 `ddadb03`）的 15 / 15、以及第一轮外键动作返工后的 16 / 16，
+> 都曾漏掉「重复声明同列同目标外键可绕过」（前者还漏 `ON DELETE` / `ON UPDATE` 动作），
+> 因此**未最终通过**，已被当前的**外键分组一对一比对**取代；初版 12 / 12 也不代表当前代码。
+
+### 3.1 16 个用例各自验证什么（全部合成数据）
 
 1. **模块导入无副作用**：子进程仅 import 模块 + 指向不存在的 `WORKBENCH_DATA_DIR`，
    断言该目录未被创建、仓库默认数据目录里的库字节未变。
-2. **遗留 WAL（本轮新增，对应返工必改项 1）**：真实子 Node 用 `db.mjs` + 真实导入接口写入合成业务后
+2. **遗留 WAL（定向返工新增，对应返工必改项 1）**：真实子 Node 用 `db.mjs` + 真实导入接口写入合成业务后
    **不关闭连接直接 `process.exit(0)`**，留下已提交但未 checkpoint 的 `-wal`；
    父进程记录主库 / `-wal` 的 hash 与大小 → 调用**真实 CLI backup**：
    快照含 2 张已提交凭证（借方合计 13300）与批次 / 来源 / 逐张关联；
@@ -172,7 +180,7 @@
    `snapshot.bytes` 与 `sha256` 与文件实际一致 / `snapshot.journalMode=delete` / `source.journalMode=wal` /
    表清单与内容摘要覆盖核心业务表与全部导入来源表 / 清单文本不含本机绝对路径与盘符；
    并断言备份结果 `backupMeta.durability.fileContentsSynced=true`（fsync 真的执行）。
-5. **清单字段类型 / 规范范围（本轮新增，对应返工必改项 3）**：21 项类型 / 范围负例逐项断言
+5. **清单字段类型 / 规范范围（定向返工新增，对应返工必改项 3）**：21 项类型 / 范围负例逐项断言
    `manifest_invalid`（缺 `appVersion`、`appVersion` 为对象 / null、`formatVersion=0`、
    `createdAt` 非字符串、`snapshot.bytes=0`、`snapshot.sha256` 非摘要、`pageSize=3000`、
    `journalMode="wal-ftw"`、`structure.sqliteVersion` 非字符串、`userVersion=-1`、
@@ -206,7 +214,7 @@
 9. **源库侧拒绝**：非本产品库 → `source_not_product_database`（且**未创建**备份目录）；
    随机字节文件 → `source_not_database`；`schema_migrations` 记 99 → `schema_unsupported`；
    0 字节 → `source_empty`；外键被破坏（`DELETE FROM account_sets`）→ `foreign_key_violation`（未创建备份目录）。
-10. **真实结构负例（本轮新增，对应返工必改项 2）**：
+10. **真实结构负例（定向返工新增，对应返工必改项 2）**：
     - 假 v3（只留核心表、删掉全部 `import_*` 与 `schema_backups`、重建 `schema_migrations` 写一条 3）
       → 源库 `source_not_product_database`，明细列出缺失的导入表；
     - 缺关键列（`ALTER TABLE import_batches DROP COLUMN result_json`；另有一例重建 `vouchers` 缺 `kind`）
@@ -217,7 +225,7 @@
     - 迁移前备份记录被清空 → `source_structure_invalid` + `backup_records_empty`；
     - 上面前三类同时作用于 **verify / restore-new**（把快照换成被改结构库并同步清单摘要）：
       `snapshot_not_product_database` / `structure_invalid`，且**不会**创建恢复目标。
-11. **外键契约（本轮两次增补，对应终审 P2 + 重复声明补修）**：从正常快照复制三份伪结构——（a）**只**把
+11. **外键契约（两次增补，对应终审 P2 + 重复声明补修）**：从正常快照复制三份伪结构——（a）**只**把
     `periods` 的 `account_set_id` 外键改成 `ON DELETE NO ACTION`；（b）**只**把它改成 `ON UPDATE CASCADE`；
     （c）保留原 `ON DELETE CASCADE` 再重复声明同列同目标一条 `ON DELETE RESTRICT`（两个实际外键分组）。
     三份的列 / 主键 / 数据与正常库逐行相等（内容摘要拦不住）。前置断言：伪结构上真实 `DELETE FROM account_sets`
@@ -250,14 +258,15 @@
 16. **时点隔离**：备份后再写入两笔业务 → 源库继续可写且余额按手算变化；旧备份仍 `verify` 通过、
     仍是 4 张凭证、分录借方合计 27600；已恢复的库仍是 4 张凭证（不被后来的源库业务改动）。
 
-> 序号 12–16 为原 11–15 的向后顺延（本轮在第 11 位插入外键动作用例）。
+> 序号 12–16 为原 11–15 的向后顺延（外键契约用例插入第 11 位后顺延）。
 
 ### 3.2 没有做的事（测试口径）
 
 - 没有连接真实账套库 / 真实数据 / 税局 / 浏览器；没有把任何真实凭据或账务原文写入代码、测试或文档。
 - 没有跑 `npm test` 全量聚合（本套件不在 `test-all.mjs` 里，见 §3 说明）。
-- 本轮只实跑本套件：未重跑上一轮的 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、
-  `smoke` 28 / 28（本轮未改任何共享源码，不把旧结果当新证据）。
+- 本包当前**没有**把上一轮的 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、
+  `smoke` 28 / 28 当作新证据（它们是更早一轮返工后的受影响回归结果，本包未改共享源码）。
+- 本次仅文档的提交**不跑**源码与测试（无业务代码变更），只核对文档链接 / 事实 / 范围与 `git diff --check`。
 - 没有在 schema v4 / LOCAL-02 分支代码上运行过（见 §5）。
 - 没有验证网络盘 / 同步盘 / 杀毒软件占用 / 真实断电等 Windows 交付场景。
 
@@ -279,17 +288,19 @@
 
 ## 5. 未完项 / 风险 / 下一任务输入
 
-1. **未提交 / 未 PR / 未审查 / 未合并**：本交接不预报已审 head 或 merge；合并后由管理者补齐。
-   上一冻结候选（head `829541a`）虽已 15 / 15 实跑，但**因终审 P2 外键动作漏洞未最终通过**；
-   其后外键动作返工的 16 / 16 候选又因重复声明外键可绕过而**同样未最终通过**。
-   需管理者对**外键分组一对一修复后的六文件**重新验证 + 新 head 独立审查后再决定是否建 PR。
-2. **LOCAL-06 整体未完成**：审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级交付均未实现；
-   本包只交付「备份 / 验证 / 恢复全新目标」。
+1. **合并尚未发生**：已审源码 head `b2dcba3` 已通过管理验收（16 / 16 exit 0）与最终独立审查
+   `review_backup06_final`（未参与实现、`fork=none`，同 head 独立 16 / 16 exit 0），
+   PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN 并附当前任务说明。
+   下一步：**本次文档核对 → 按已授权流程合并**；**实际 merge SHA 尚未产生**，不伪造、不标 MERGED，
+   合并后由管理者补齐。
+2. **LOCAL-06 整体未完成**：审计留痕、原位在线恢复与回退、Windows 干净安装 / 启动 / 升级交付、
+   定时 / 批量入口均未实现；本包只交付「备份 / 验证 / 恢复全新目标」。
 3. **只支持当前 v3 结构**：`schema_outdated`（v0 / v1 / v2）要求先用当前产品入口升级；
    不替候选库做初始化 / 迁移，也不盲放旧结构。
-4. **schema v4（LOCAL-02 #47）合并后必须重验**：按真实契约扩展 `TABLE_STRUCTURE`
-   （列 / 约束 / 迁移记录），在最新 main 上重跑 `node test/local-backup.test.mjs`，
-   并复核是否需要提升 `formatVersion`；动态表清单不是「v4 已支持」的证据。
+4. **schema v4（LOCAL-02 #47）与 bank / batch / audit 组件必须后续显式组合与真实验收**：
+   按真实契约扩展 `TABLE_STRUCTURE`（列 / 约束 / 外键动作 / 迁移记录），在最新 main 上重跑
+   `node test/local-backup.test.mjs`，并复核是否需要提升 `formatVersion`；
+   动态表清单不是「v4 已支持」的证据，**严格只支持当前 v3**。
 5. **源库保护边界**：主库与 `-wal` 字节不变、不被删除；`-shm` 读锁 / 读标记可能变化（锁协调）。
    某环境若只读连接无法读 WAL 索引，会明确 `source_readonly_blocked`，不使用可写连接绕过。
 6. **耐久性边界**：文件内容 `fsync` 后再 `rename`；Windows 无法 `fsync` 目录项，
@@ -306,27 +317,22 @@
 
 ## 6. 本次执行边界（会话事实）
 
-- 实施员工：本机 pi，仅使用已核实的 **DeepSeek V4.1 Flash**；未启动其它模型、未启动子 agent。
-- 本轮为**外键重复声明补修的新进程 / 新会话**（`--no-session`，不 resume，未读取旧员工 jsonl 大日志），
-  在同一 worktree 上接续上一员工**未提交**的外键动作返工成果定向修复（未重置 / 未丢弃其变更），
-  也未新建其它 worktree、未切分支。
-- 未执行 Git 提交 / 推送 / 合并；只改授权的 6 个文件；未访问税局 / 浏览器 / 真实账套 / 凭据。
-- 复现探针与测试均只写**系统临时目录**（`%TEMP%`，用完删除），未在本 worktree / 仓库留下临时文件；
-  测试进程自行清理自己创建的临时目录与数据库连接。
-- `git diff --check` / 范围核对见 §7；需要再返工请开**新会话**（不 resume），只传本任务单、本交接、
-  契约文档与相关源码。
+- 实施员工：本机 pi，主模型与唯一回退均为已核实的 **DeepSeek V4.1 Flash**；未启动其它模型、未启动子 agent。
+- 本轮为**仅文档的 PR 合并前交接事实更新**新进程 / 新会话（`--no-session`，不 resume，未加载旧大日志），
+  在同一 worktree 上只改 3 份文档；未重置 / 未丢弃已提交的源码成果，未新建其它 worktree、未切分支。
+- 未执行 Git 提交 / 推送 / 合并；未改源码 / 测试 / CLI / 其他 docs；未访问税局 / 浏览器 / 真实账套 / 凭据。
+- 本轮不跑源码 / 测试（无业务代码变更），只检查文档链接 / 事实 / 范围与 `git diff --check`；
+  已审源码 head 仍为 `b2dcba3`，由 root 核对源码未变。
+- 文档不含本机绝对工作区路径、进程号，也不含任何凭据或本机配置内容。
 
-## 7. 本次变更范围核对（外键重复声明补修）
+## 7. 本次变更范围核对（仅文档）
 
-- `git status --porcelain` 只有授权的 5 个文件被修改（`scripts/local-backup.mjs` 本轮未改）：
-  `06-workbench/server/local-backup.mjs`、`06-workbench/test/local-backup.test.mjs`、
-  `docs/LOCAL-BACKUP.md`、`docs/tasks/LOCAL-06-BACKUP.md`、`docs/handoffs/LOCAL-06-BACKUP.md`；
-- 本轮源码改动只在外键比对：`structureProblems()` 的 `Map` 改成逐个实际分组一对一匹配 +
-  `foreign_key_duplicate`，并更新对应注释 / `foreignKeyGroups()` 文档；
-  未改 readonly / WAL / 完整结构 / 清单 / fsync / realpath / 原子发布等已有修复；仍只支持已合并 v3；
-- 未新增 / 删除文件，未留有临时探针文件；未改任何共享文件（`server/db.mjs`、
-  `server/import-storage.mjs`、`server/accounting.mjs`、`server/server.mjs`、`server/agent-tools.mjs`、
-  MCP 注册、`scripts/test-all.mjs`、`package.json`、`public/*`、`docs/handoffs/STATE.md` 等）；
-- `git diff --check` 无输出（无空白 / 冲突标记问题）。
-- 员工不执行 Git 提交 / 推送 / 合并；当前 head 仍为 `829541a`（前两轮变更未提交，未重置）；
-  上述范围与新 head 由管理者提交时复核。
+- `git status --porcelain` 应只有 3 个文档被修改：`docs/LOCAL-BACKUP.md`、
+  `docs/tasks/LOCAL-06-BACKUP.md`、`docs/handoffs/LOCAL-06-BACKUP.md`；
+- 未改任何源码 / 测试 / CLI（`06-workbench/**` 保持已审源码 head `b2dcba3` 的内容），
+  未改任何共享文件（`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
+  `server/server.mjs`、`server/agent-tools.mjs`、MCP 注册、`scripts/test-all.mjs`、`package.json`、
+  `public/*`、`docs/handoffs/STATE.md`、`docs/INDEX.md`、`docs/CHANGELOG.md`、`docs/tasks/README.md`）；
+- 未新增 / 删除文件，未留临时探针文件；`git diff --check` 无输出（无空白 / 冲突标记问题）。
+- 员工不执行 Git 提交 / 推送 / 合并；上述范围与新 PR head 由管理者提交时复核，
+  **实际 merge SHA 以管理者合并结果为准**。
