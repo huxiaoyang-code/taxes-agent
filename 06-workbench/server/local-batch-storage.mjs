@@ -116,7 +116,15 @@ function sleepSync(ms) {
  * 不 import db.mjs（db.mjs 一 import 就会自动打开并迁移核心库）。
  * 并发场景（两个 CLI 同时 start）：另一个进程正在写、或正在关闭连接并清理 `-wal` / `-shm` 时，
  * 只读探测会瞬时拿到 `database is locked`，这不是库损坏，也不应报成 `database_unreadable`。
- * 因此这里做**有限次**重试（最多 4 次，共 < 1s）；仍失败就如实返回不可读（fail-closed，不猜）。
+ * 因此这里做**有限次**重试（最多 4 次）；仍失败就如实返回不可读（fail-closed，不猜）。
+ *
+ * 重试预算如实说明（不夸大）：每个连接都尝试 `busy_timeout = 5000`（毫秒），最多 4 次尝试，
+ * 重试之间的额外同步短睡合计 300ms（50 + 100 + 150），**没有** < 1 秒或其它总时长截止保证；
+ * 单次 `inspectDataDir` 的墙钟时间取决于持锁方，可能远大于 1 秒。
+ * 独立审查的真实观察（非推断）：用另一份 DELETE-journal 模式的 SQLite 库以 `BEGIN EXCLUSIVE` 持锁，
+ * 另一子进程单次 `inspectDataDir` 实测 29812ms（外层 wall 29867ms），最终返回
+ * `readable = false` / `error = "database is locked"`。该数字只描述那一次观测，不能推成
+ * 「每个环境固定 30 秒」或「总有 20 秒上限」。产品未要求 < 1 秒，本轮不新增 deadline、不改行为。
  */
 export function inspectDataDir(dataDir) {
   if (typeof dataDir !== "string" || !dataDir) FAIL("data_dir_required");

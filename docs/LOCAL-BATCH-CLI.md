@@ -42,6 +42,10 @@ node scripts/local-batch.mjs retry  --data-dir <数据目录> --job-key <jobKey>
 - `status` 使用**只读**连接：不建表、不升级、不续跑；缺库返回 `database_not_found`，不会把不存在的库当新库。
 - 数据目录只读探测对**并发瞬时锁**有限重试（另一个执行者正在写 / 正关闭连接并清理 `-wal`、`-shm` 时
   只读探测会瞬时拿到 `database is locked`，这不是库损坏）；真正读不出才报 `database_unreadable`（fail-closed）。
+  重试预算如实为：**每连接 `busy_timeout = 5000`（毫秒）、最多 4 次尝试、重试间额外睡眠合计 300ms、没有全局截止**，
+  因此**不保证 < 1 秒**。独立审查实测：另用 DELETE-journal 模式的库以 `BEGIN EXCLUSIVE` 持锁时，另一子进程单次
+  只读探测耗时 29812ms（wall 29867ms）后才 fail-closed（`readable=false` / `database is locked`）；该数字只描述
+  那一次观测，不代表每个环境的固定时长。产品未要求 < 1 秒，本包未加 deadline、未改该行为。
 - `cancel` / `retry` 只改任务状态（不 import 会打开业务库的编排模块），`retry` 之后仍需 `resume` 继续。
 - stdout 只有一行受控 JSON；stderr 只输出错误码与一句话说明，不含账务文本 / SQL / 堆栈。
 - 输出文件只写入 `--output-dir` 之内（受控相对路径），从不覆盖已有无关文件。
@@ -175,8 +179,8 @@ import(按清单) → post → depreciation → carryforward → period-check �
   - 报表：主线程在**一致只读快照**里生成 DTO / CSV 后立即释放读事务，渲染在 worker 线程，主线程不持有写事务。
 - 只有批量 runner 之间保证按账套互斥；手工 HTTP / Agent 入口尚未接线，**不宣传全产品互斥**。
 - 启动期并发：`start` / `resume` 在 `import` 编排层前先用本包连接（`busy_timeout`）读一次 schema，并在整个
-  「加载编排层 + 确认批量结构」期间保持该连接，避免两个 CLI 同时初始化共享库时因 `-wal` / `-shm`
-  瞬态竞争而失败；该连接不写业务数据、结束后立即关闭。
+  「加载编排层 + 确认批量结构」期间保持该连接，把两个 CLI 同时初始化共享库时因 `-wal` / `-shm` 瞬态竞争的窗口
+  压到最小（**不保证消除**：共享 `server/db.mjs` 初始化仍无 `busy_timeout`，不在本包边界）；该连接不写业务数据、结束后立即关闭。
 
 ## 6. 数据落盘（同一 workbench.db）
 
@@ -300,3 +304,6 @@ node test/local-batch-persistence.test.mjs  # 25 组：失败隔离 / 前序失�
    但账套登记 / 科目定义 / 期初 / 期间的任何变化都会让相关期间报表证据失效（审慎优先）。
 7. 企业与账套绑定核验依赖 `import_enterprise_account_sets` 这一已合并的上游结构；本 CLI 只读核验，
    不改绑定、不新增绑定接口。
+8. 只读探测的重试**没有全局截止**（每连接 `busy_timeout = 5000`、最多 4 次、额外睡眠合计 300ms）：被外部
+   `BEGIN EXCLUSIVE` 长期持锁时实测可长达约 30 秒才 fail-closed。产品未要求 < 1 秒，本包不新增 deadline；
+   共享库初始化锁冲突同样未在本包边界内处理。
