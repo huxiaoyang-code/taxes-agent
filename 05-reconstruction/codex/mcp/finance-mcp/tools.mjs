@@ -88,6 +88,30 @@ const BACKEND_TOOLS = [
       meta: { type: "object", description: "覆盖账套信息：{name, taxpayer_type, accounting_standard, start_period}" },
     })),
 
+  available("book_import_incremental",
+    "增量导入：以稳定规范企业身份 + 批次 ID 首次建账或向已有账套追加。产品口径是一家企业只有一个账套：同一 enterpriseKey 即使来自另一个来源也必须追加到已有账套，不得新建第二本；同一账套也不得绑定另一家企业。同批重试幂等、同来源凭证按内容指纹去重、内容修订 / 来源凭证被反过账或被删除 / 身份不符 / 封账期间 / 期初覆盖返回结构化冲突（不静默覆盖）。默认 dryRun=true 只预检，必须显式 dryRun=false 才落库。",
+    obj({
+      dryRun: { type: "boolean", description: "缺省 true=仅预检（不写任何表）；显式 false=正式导入" },
+      batchId: { type: "string", description: "调用方稳定批次 ID；同批重试不重复记账，内容变化拒绝" },
+      source: obj({
+        system: { type: "string", description: "来源系统标识，例如旧账来源名" },
+        enterpriseKey: { type: "string", description: "稳定规范企业身份（如统一社会信用代码）；不得用可改的账套名称代替；一家企业一个账套" },
+        enterpriseName: { type: "string", description: "企业名称（仅展示，不参与身份判定）" },
+      }, ["system", "enterpriseKey"]),
+      mode: { type: "string", enum: ["create", "append"], description: "create=首次建账（缺省，已有同企业账套时拒绝并引导追加）；append=向 accountSetId 追加" },
+      accountSetId: { ...ACCOUNT_SET_ID, description: "append 必填：目标账套 ID（必须已属同一企业身份）" },
+      confirmNewBinding: { type: "boolean", description: "append 时为本来源登记来源证据；企业身份必须与账套既有绑定一致" },
+      payload: { type: "object", description: "{account_set, accounts, opening_balances, vouchers}；vouchers 项可带 sourceVoucherId" },
+      texts: { type: "object", description: "CSV 文本：{meta, accounts, openings, vouchers}" },
+      files: { type: "object", description: "CSV base64：{meta, accounts, openings, vouchers}" },
+      encoding: { type: "string", description: "files 解码编码，如 utf-8 / gbk" },
+      meta: { type: "object", description: "覆盖账套信息：{name, taxpayer_type, accounting_standard, start_period}" },
+    }, ["batchId", "source"]), "local"),
+
+  available("book_import_batch",
+    "查询增量导入批次结果与逐张来源凭证追踪（只读；含当前凭证存在 / posted / 内容一致的核验状态；新建与去重命中的来源凭证都按批次留痕，含纯去重批次）。",
+    obj({ batchId: { type: "string", description: "批次 ID" } }, ["batchId"]), "local"),
+
   // ---- 账套 / 科目 / 期初 / 期间 ----
   available("account_set_create", "新建账套并自动载入标准科目。",
     obj({
