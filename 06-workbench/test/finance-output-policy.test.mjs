@@ -215,6 +215,36 @@ await test('query: 账套/科目/期末/试算/利润/现金流/明细账的有�
   policy.dispose();
 });
 
+await test('query: 现金流 reconciles 是必需布尔（缺失 / 类型错失败，真实 false 保留）', () => {
+  const policy = new FinanceOutputPolicy();
+  const base = {
+    period: '2026-01',
+    operating: [], investing: [], financing: [],
+    totals: { operating: 0, investing: 0, financing: 0, net_increase: 0 },
+    cash: { begin: 0, end: 0, change: 0 },
+  };
+  const wrap = (value) => policy.wrapQuery('finance_query:report.cash_flow_statement', { accountSetId: 5, value }).projection;
+
+  // 完整合法零值 DTO + 真实 false：false 是业务状态，必须原样保留（不得改成 true / 不得丢）。
+  const falseZero = wrap({ ...base, reconciles: false });
+  assert.deepEqual(falseZero, {
+    period: '2026-01', operating: 0, investing: 0, financing: 0, netIncrease: 0,
+    cashBegin: 0, cashEnd: 0, cashChange: 0, reconciles: false, lineCount: 0,
+  });
+
+  // 缺失 / 类型错：未知勾稽状态不得伪造成 false（也不得只靠 transport 兜底）。
+  expectCode(() => policy.wrapQuery('finance_query:report.cash_flow_statement', {
+    accountSetId: 5, value: base,
+  }), 'output_policy_value_invalid');
+  expectCode(() => policy.wrapQuery('finance_query:report.cash_flow_statement', {
+    accountSetId: 5, value: { ...base, reconciles: 'true' },
+  }), 'output_policy_value_invalid');
+  expectCode(() => policy.wrapQuery('finance_query:report.cash_flow_statement', {
+    accountSetId: 5, value: { ...base, reconciles: 1 },
+  }), 'output_policy_value_invalid');
+  policy.dispose();
+});
+
 await test('query: 未登记 operation 直接拒绝（不做兜底投影）', () => {
   const policy = new FinanceOutputPolicy();
   expectCode(() => policy.wrapQuery('finance_query:enterprise_account.bank', { accountSetId: 5, value: {} }), 'output_policy_unknown_operation');
@@ -551,6 +581,18 @@ await test('shape: projection 白名单拒绝自由文本、中文、深层嵌�
   assertNoLeak(inherited.value, 'inherited projection');
 });
 
+await test('shape: projection 数值上限 1e12 就是可表示 ID 边界（超界被丢弃并计数）', () => {
+  assert.equal(M.PROJECTION_NUMBER_LIMIT, 1e12);
+  // 合法边界：上限本身仍是可表示 / 可选择的 ID。
+  const kept = sanitizeProjection({ id: 1_000_000_000_000 });
+  assert.deepEqual(kept.value, { id: 1_000_000_000_000 });
+  assert.equal(kept.dropped, 0);
+  // 超界：被白名单丢弃并计入 dropped；因此调用方必须明确拒绝这类选择信息，不能静默返回。
+  const over = sanitizeProjection({ id: 1_000_000_000_001 });
+  assert.deepEqual(over.value, {});
+  assert.equal(over.dropped, 1);
+});
+
 await test('shape: 循环引用 / 访问器 / 类实例 / 超量原数据都被明确拒绝，不做 JSON.stringify', () => {
   const policy = new FinanceOutputPolicy({ valueNodes: 50 });
   const cyclic = { period: '2026-01', totals: {} };
@@ -737,7 +779,15 @@ await test('review1: 访问器 / 恶意对象不会在摘要阶段触发 getter�
 await test('review1: 字节预算——单个大字符串与累计持有都受限，撤销 / 过期后扣除', () => {
   const longText = '合成长文本'.repeat(20); // 5 个汉字 × 3 B × 20 = 300 B
   assert.equal(Buffer.byteLength(longText, 'utf8'), 300);
-  const small = { period: '2026-01', note: longText }; // 节点很少，字节很多
+  const small = {
+    period: '2026-01',
+    lines: [],
+    totals: {
+      opening_debit: 0, opening_credit: 0, period_debit: 0, period_credit: 0,
+      closing_debit: 0, closing_credit: 0,
+    },
+    note: longText,
+  }; // 节点很少，字节很多
 
   // （1）单值字节上限：节点预算把不住，必须靠字节预算
   expectCode(
@@ -866,6 +916,442 @@ await test('review1: Proxy 陷阱无法完全避免触发，但失败必须是�
   assert.ok(!JSON.stringify(envelope).includes('synthetic_sensitive_proxy'));
   assertNoLeak(envelope, 'proxy write envelope');
   policy.dispose();
+});
+
+await test('adapter-prep: project 数组同时接受状态 token 与期间，自由文本仍被丢弃', () => {
+  const { value, dropped } = sanitizeProjection({
+    periods: ['2026-01', 'ok_token', X.summary, 12, true],
+    labels: [X.enterprise, X.accountName, '2026-13'],
+  });
+  assert.deepEqual(value, { periods: ['2026-01', 'ok_token', 12, true], labels: [] });
+  assert.equal(dropped, 4);
+  assertNoLeak(value, 'period/token array projection');
+});
+
+await test('adapter-prep: 普通工具 DTO spec 存在，无引用摘要只回白名单字段且不泄漏原值', () => {
+  const { summarizeQueryResult, summarizeWriteResult } = M;
+  assert.ok(M.SUPPORTED_OPERATIONS.query.includes('account_list'));
+  assert.ok(M.SUPPORTED_OPERATIONS.query.includes('book_import_batch'));
+  assert.ok(M.SUPPORTED_OPERATIONS.write.includes('book_import_incremental'));
+
+  const accounts = summarizeQueryResult('account_list', {
+    accountSetId: 5,
+    items: [
+      { code: X.accountCode, name: X.accountName, category: '资产', direction: 'debit', is_leaf: 1, contra: 0 },
+      { code: '1602', name: '累计折旧', category: '资产', direction: 'credit', is_leaf: 1, contra: 1 },
+    ],
+  });
+  assert.deepEqual(accounts.projection, {
+    accountCount: 2, leafCount: 2, contraCount: 1,
+    byCategory: { assets: 2, liabilities: 0, equity: 0, cost: 0, profit_loss: 0 },
+  });
+  assert.equal(accounts.summaryUnavailable, false);
+  assertNoLeak(accounts.projection, 'account_list projection');
+
+  const batch = summarizeQueryResult('book_import_batch', {
+    batch: { id: X.taxId, status: 'completed', mode: 'create', accountSetId: 9, result: { accountSetCreated: false, vouchersCreated: 2, vouchersDeduplicated: 0 } },
+    source: { system: X.person, enterpriseKey: X.taxId },
+    sourceTrace: [{ sourceVoucherId: X.taxId, voucherId: 31, state: 'ok' }, { state: 'inconsistent' }],
+    voucherCount: 2,
+  });
+  assert.deepEqual(batch.projection, {
+    batchStatus: 'completed', batchMode: 'create', accountSetId: 9, traceCount: 2, okTraceCount: 1,
+    inconsistentTraceCount: 1, voucherCount: 2, accountSetCreated: false, vouchersCreated: 2,
+    vouchersDeduplicated: 0,
+  });
+  assertNoLeak(batch.projection, 'book_import_batch projection');
+
+  const preview = summarizeWriteResult('book_import_incremental', {
+    status: 'preview', accountSetId: null, validation: { ok: true },
+    conflicts: [{ code: 'x', message: X.summary }], errors: [],
+    planned: { accountSetCreated: true, vouchersToCreate: ['a', 'b'], vouchersDeduplicated: ['c'] },
+    source: { enterpriseKey: X.taxId, enterpriseName: X.enterprise }, batch: { id: X.taxId },
+  });
+  assert.equal(preview.applied, false);
+  assert.equal(preview.appliedReason, 'dry_run');
+  assert.equal(preview.needsLocalReview, true);
+  assert.equal(preview.projection.status, 'preview');
+  assert.equal(preview.projection.plannedVouchers, 2);
+  assert.equal(preview.projection.plannedVouchersDeduplicated, 1);
+  assert.equal(preview.projection.conflictCount, 1);
+  assertNoLeak({ ...preview, projection: preview.projection }, 'incremental projection');
+
+  const applied = summarizeWriteResult('book_import_incremental', {
+    status: 'applied', created: { accountSetId: 11, accountSetCreated: true, vouchersCreated: 1 },
+  });
+  assert.equal(applied.applied, true);
+  assert.equal(applied.projection.accountSetId, 11);
+
+  expectCode(() => summarizeQueryResult('finance_query:enterprise_account.bank', {}), 'output_policy_unknown_operation');
+});
+
+await test('adapter-prep: 共享引用（DAG）是合法 DTO，不算循环；真循环仍拒绝', () => {
+  const shared = { rows: [{ amount: 1 }] };
+  const dag = { created: { sourceTrace: shared.rows }, sourceTrace: shared.rows };
+  const { nodes, bytes } = M.inspectRawValue(dag, 1000, 1_000_000);
+  assert.ok(nodes >= 4 && bytes > 0);
+  const policy = new FinanceOutputPolicy();
+  const envelope = policy.wrapWrite('legacy_book_import', {
+    accountSetId: 5,
+    value: { dryRun: false, validation: { ok: true, errors: [], warnings: [] }, created: { id: 9, sourceTrace: shared.rows }, sourceTrace: shared.rows },
+  });
+  assert.equal(envelope.applied, true);
+  assert.match(envelope.localRef, /^finref_/);
+  assert.equal(envelope.projection.createdAccountSetId, 9);
+  policy.dispose();
+
+  const cyclic = { created: {} };
+  cyclic.created.self = cyclic;
+  expectCode(() => M.inspectRawValue(cyclic), 'output_policy_value_invalid');
+});
+
+await test('review3 F2: 投影期间 / 状态按固定值域（自由 ASCII 不当 token），真 0 保留', () => {
+  const { summarizeQueryResult } = M;
+  const income = (period) => ({
+    period,
+    current: { 营业收入: 0, 营业成本: 0, 销售费用: 0, 管理费用: 0, 财务费用: 0, 利润总额: 0, 净利润: 0 },
+    ytd: { 营业收入: 0, 净利润: 0 },
+  });
+
+  const ok = summarizeQueryResult('finance_query:report.income_statement', income('2026-01'));
+  assert.equal(ok.summaryUnavailable, false);
+  assert.equal(ok.projection.period, '2026-01');
+  assert.equal(ok.projection.currentRevenue, 0, '真实 0 必须保留');
+  assert.equal(ok.projection.ytdNetProfit, 0);
+
+  // 自由 ASCII / 非法月份都不算期间
+  for (const bad of ['synthetic_sensitive_period', '2026-13', '2026-1', '2026-00']) {
+    const broken = summarizeQueryResult('finance_query:report.income_statement', income(bad));
+    assert.equal(broken.summaryUnavailable, true, `period=${bad} 应失败`);
+    assert.deepEqual(broken.projection, {});
+  }
+  expectCode(
+    () => new FinanceOutputPolicy().wrapQuery('finance_query:report.income_statement', {
+      accountSetId: 5, value: income('synthetic_sensitive_period'),
+    }),
+    'output_policy_value_invalid',
+  );
+
+  // 凭证状态 / 期间状态 / 科目分类 / 资产种类 / 方向：未登记值一律失败
+  const detail = (status) => ({ id: 7, period: '2026-01', status, entries: [{ debit: 1, credit: 1 }] });
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', detail('posted')).summaryUnavailable, false);
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', detail('synthetic_sensitive_status')).summaryUnavailable, true);
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', detail('open')).summaryUnavailable, true, '凭证状态不接受期间状态');
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', { ...detail('posted'), period: 'synthetic_sensitive_period' }).summaryUnavailable, true);
+
+  const periodEnd = (status) => ({
+    periods: [{ period: '2026-01', status }],
+    trial_balance: { period: '2026-01', totals: { closing_debit: 0, closing_credit: 0 } },
+  });
+  assert.equal(summarizeQueryResult('finance_query:period_end.summary', periodEnd('open')).summaryUnavailable, false);
+  assert.equal(summarizeQueryResult('finance_query:period_end.summary', periodEnd('synthetic_sensitive_status')).summaryUnavailable, true);
+  assert.equal(summarizeQueryResult('finance_query:period_end.summary', periodEnd('posted')).summaryUnavailable, true, '期间状态不接受凭证状态');
+
+  const ledger = (direction) => ({
+    period: '2026-01', direction, opening: { debit: 0, credit: 0 }, items: [],
+  });
+  assert.equal(summarizeQueryResult('finance_query:ledger.general', ledger('debit')).summaryUnavailable, false);
+  assert.equal(summarizeQueryResult('finance_query:ledger.general', ledger('synthetic_sensitive_direction')).summaryUnavailable, true);
+
+  const accounts = (category) => summarizeQueryResult('account_list', {
+    items: [{ code: '1001', name: 'x', category, is_leaf: 1, contra: 0 }],
+  });
+  assert.equal(accounts('资产').summaryUnavailable, false);
+  assert.equal(accounts('synthetic_sensitive_category').summaryUnavailable, true);
+
+  const cards = (kind) => summarizeQueryResult('asset_list', [{
+    kind, original_cost: 0, accumulated: 0, remaining: 0,
+  }]);
+  assert.equal(cards('intangible').summaryUnavailable, false);
+  assert.equal(cards('synthetic_sensitive_kind').summaryUnavailable, true);
+
+  // 批次审计：追溯状态按固定域，非 ok 计入需复核（不再静默漏计）
+  const batch = (state) => ({
+    batch: {
+      status: 'completed', mode: 'create', accountSetId: 9,
+      result: { accountSetCreated: false, vouchersCreated: 1, vouchersDeduplicated: 0 },
+    },
+    sourceTrace: [{ state }],
+    voucherCount: 1,
+  });
+  const missing = summarizeQueryResult('book_import_batch', batch('missing'));
+  assert.equal(missing.summaryUnavailable, false);
+  assert.equal(missing.projection.okTraceCount, 0);
+  assert.equal(missing.projection.inconsistentTraceCount, 1, '非 ok 状态必须计入需复核');
+  assert.equal(summarizeQueryResult('book_import_batch', batch('synthetic_sensitive_state')).summaryUnavailable, true);
+  assert.equal(summarizeQueryResult('book_import_batch', {
+    ...batch('ok'), batch: { ...batch('ok').batch, status: 'synthetic_sensitive_status' },
+  }).summaryUnavailable, true);
+});
+
+await test('LOCAL-02 兼容：asset_update 写 / period_end_check 只读 / 新领域错误固定映射', () => {
+  assert.ok(M.SUPPORTED_OPERATIONS.write.includes('asset_update'));
+  assert.ok(M.SUPPORTED_OPERATIONS.query.includes('period_end_check'));
+
+  const card = {
+    id: 77, account_set_id: 5, kind: 'fixed', name: X.enterprise, ledger_note: X.note,
+    start_period: '2026-02', acquired_period: '2026-02', original_cost: 1200, residual_rate: 0.05,
+    useful_life_months: 12, opening_accumulated: 0, accumulated: 95, remaining: 1045,
+    ledger_status: 'booked', origin: 'purchase', asset_account: '1601', accum_account: '1602',
+    expense_account: '5602', months_done: 1,
+  };
+  const updated = M.summarizeWriteResult('asset_update', card);
+  assert.equal(updated.applied, true);
+  assert.equal(updated.needsLocalReview, false);
+  assert.deepEqual(updated.projection, {
+    assetId: 77, kind: 'fixed', startPeriod: '2026-02', acquiredPeriod: '2026-02',
+    originalCost: 1200, usefulLifeMonths: 12, openingAccumulated: 0, accumulated: 95,
+    remaining: 1045, ledgerStatus: 'booked', origin: 'purchase',
+  });
+  assertNoLeak(updated.projection, 'asset_update projection');
+  assert.equal(JSON.stringify(updated.projection).includes('ledger_note'), false);
+  assert.equal(JSON.stringify(updated.projection).includes('asset_account'), false);
+
+  // 未知 / 缺失 id：写结果只能 applied=unknown，不伪造成功。
+  const unknown = M.summarizeWriteResult('asset_update', { ...card, id: undefined });
+  assert.equal(unknown.applied, 'unknown');
+  assert.equal(unknown.needsLocalReview, true);
+  assert.deepEqual(unknown.projection, {});
+
+  const step = (id, status) => ({
+    id, title: X.enterprise, reason: X.summary, status, details: { name: X.accountName },
+  });
+  const check = {
+    accountSetId: 5, period: '2026-02', ready: false,
+    steps: [
+      step('draft_vouchers', 'ok'), step('trial_balance', 'ok'), step('depreciation', 'ok'),
+      step('asset_reconciliation', 'ok'), step('profit_carry_forward', 'blocked'),
+      step('year_end_carry_forward', 'not_applicable'), step('period_sequence', 'ok'),
+    ],
+    blocking: [{
+      step: 'profit_carry_forward', title: X.accountName, code: 'profit_not_carried_forward',
+      message: X.summary, details: { note: X.note },
+    }],
+    missing: [{ step: 'profit_carry_forward', code: 'profit_not_carried_forward', message: X.summary }],
+    rules: { note: X.note },
+  };
+  const projected = M.summarizeQueryResult('period_end_check', check);
+  assert.equal(projected.summaryUnavailable, false);
+  assert.deepEqual(projected.projection, {
+    period: '2026-02', ready: false, stepCount: 7,
+    stepIds: [
+      'draft_vouchers', 'trial_balance', 'depreciation', 'asset_reconciliation',
+      'profit_carry_forward', 'year_end_carry_forward', 'period_sequence',
+    ],
+    stepStatuses: ['ok', 'ok', 'ok', 'ok', 'blocked', 'not_applicable', 'ok'],
+    okStepCount: 5, blockedStepCount: 1, notApplicableStepCount: 1,
+    blockedStepIds: ['profit_carry_forward'], blockingCount: 1,
+    blockingCodes: ['profit_not_carried_forward'],
+  });
+  assertNoLeak(projected.projection, 'period_end_check projection');
+
+  // 未知步骤 / 状态 / 阻塞码一律 fail closed，不把自由文本当 token 投影。
+  assert.equal(M.summarizeQueryResult('period_end_check', {
+    ...check, steps: [{ ...check.steps[0], id: 'synthetic_sensitive_step' }],
+  }).summaryUnavailable, true);
+  assert.equal(M.summarizeQueryResult('period_end_check', {
+    ...check, steps: [{ ...check.steps[0], status: 'synthetic_sensitive_status' }],
+  }).summaryUnavailable, true);
+  assert.equal(M.summarizeQueryResult('period_end_check', {
+    ...check, blocking: [{ ...check.blocking[0], code: 'synthetic_sensitive_code' }],
+  }).summaryUnavailable, true);
+
+  // 新领域错误码必须有固定 category（不靠 unknown 掩盖可指导动作的错误）。
+  for (const [code, category] of [
+    ['assetId_required', 'asset'], ['acquired_period_invalid', 'asset'],
+    ['ledger_note_required', 'asset'], ['asset_card_affects_closed_period', 'asset'],
+    ['asset_card_locked_by_posted_runs', 'asset'], ['period_end_check_failed', 'period_end'],
+    ['later_profit_carryforward_depends_on_period', 'period_end'],
+    ['profit_not_carried_forward', 'period_end'], ['depreciation_run_stale', 'depreciation'],
+  ]) {
+    const projectedError = safeErrorProjection(new Error(code));
+    assert.equal(projectedError.error.code, code);
+    assert.equal(projectedError.error.category, category);
+    assert.notEqual(projectedError.error.category, 'unknown');
+  }
+});
+
+await test('LOCAL-02 回修1：全部已登记阻塞码（含 39 / 36 字符长码）完整投影，未登记长串仍按通用预算丢弃', () => {
+  // 手写常量：与 period-end-controls.mjs 实际产出的固定阻塞码 / 产生它的步骤一一对应，
+  // 不是从被测实现反推（不从 M.PERIOD_END_BLOCKING_CODES 取）。
+  const CODE_STEP = {
+    period_has_draft_vouchers: 'draft_vouchers',
+    period_unbalanced: 'trial_balance',
+    depreciation_run_stale: 'depreciation',
+    asset_ledger_pending: 'depreciation',
+    depreciation_missing: 'depreciation',
+    depreciation_draft_exists: 'depreciation',
+    depreciation_life_expired_underprovided: 'depreciation',
+    asset_missing_card: 'asset_reconciliation',
+    asset_cost_mismatch: 'asset_reconciliation',
+    asset_accumulated_mismatch: 'asset_reconciliation',
+    asset_acquired_period_missing: 'asset_reconciliation',
+    asset_purchase_voucher_pending: 'asset_reconciliation',
+    profit_not_carried_forward: 'profit_carry_forward',
+    profit_carry_stale: 'profit_carry_forward',
+    carryforward_stale: 'profit_carry_forward',
+    year_end_not_carried: 'year_end_carry_forward',
+    previous_period_open: 'period_sequence',
+    previous_period_depreciation_pending: 'period_sequence',
+    later_period_closed: 'period_sequence',
+  };
+  const allCodes = Object.keys(CODE_STEP);
+  assert.equal(allCodes.length, 19);
+  // 两条真实长码超过通用 token 的 32 字符预算，是本次回修的复现对象。
+  assert.equal('depreciation_life_expired_underprovided'.length, 39);
+  assert.equal('previous_period_depreciation_pending'.length, 36);
+
+  const stepOf = (id, status) => ({
+    id, title: X.enterprise, reason: X.summary, status, details: { name: X.accountName },
+  });
+  const checkWith = (codes) => {
+    const blockedSteps = new Set(codes.map((code) => CODE_STEP[code]));
+    const statusOf = (id) => (blockedSteps.has(id)
+      ? 'blocked'
+      : (id === 'year_end_carry_forward' ? 'not_applicable' : 'ok'));
+    return {
+      accountSetId: 5, period: '2026-02', ready: false,
+      steps: [
+        stepOf('draft_vouchers', statusOf('draft_vouchers')),
+        stepOf('trial_balance', statusOf('trial_balance')),
+        stepOf('depreciation', statusOf('depreciation')),
+        stepOf('asset_reconciliation', statusOf('asset_reconciliation')),
+        stepOf('profit_carry_forward', statusOf('profit_carry_forward')),
+        stepOf('year_end_carry_forward', statusOf('year_end_carry_forward')),
+        stepOf('period_sequence', statusOf('period_sequence')),
+      ],
+      blocking: codes.map((code) => ({
+        step: CODE_STEP[code], title: X.accountName, code, message: X.summary,
+        details: { assetName: X.assetName, note: X.note },
+      })),
+      missing: codes.map((code) => ({ step: CODE_STEP[code], code, message: X.summary })),
+      rules: { note: X.note },
+    };
+  };
+
+  // ① 逐个真实码：各自的合法摘要必须**完整**给出该码，且 projection 不再丢弃任何字段。
+  for (const code of allCodes) {
+    const projected = M.summarizeQueryResult('period_end_check', checkWith([code]));
+    assert.equal(projected.summaryUnavailable, false, `${code} 不应被判无效`);
+    assert.deepEqual(projected.projection.blockingCodes, [code], `${code} 必须完整表示`);
+    assert.equal(projected.projection.blockingCount, 1);
+    assert.equal(projected.projection.blockedStepCount, 1);
+    assert.equal(projected.projectionDropped, 0, `${code} 不应被投影预算丢弃`);
+    assertNoLeak(projected.projection, `${code} projection`);
+  }
+
+  // ② 真实两条长码同时出现（多步骤 / 同一码可多条）：两个都完整，dropped 为 0。
+  const bothLong = M.summarizeQueryResult('period_end_check', checkWith([
+    'depreciation_life_expired_underprovided', 'previous_period_depreciation_pending',
+  ]));
+  assert.equal(bothLong.summaryUnavailable, false);
+  assert.deepEqual(bothLong.projection.blockingCodes, [
+    'depreciation_life_expired_underprovided', 'previous_period_depreciation_pending',
+  ]);
+  assert.equal(bothLong.projectionDropped, 0);
+  // 一个步骤多条真实原因（两张卡片都未提足）：条数不必等于步骤数。
+  const repeated = checkWith(['depreciation_life_expired_underprovided']);
+  repeated.blocking.push({ ...repeated.blocking[0], details: { assetId: 78 } });
+  repeated.missing.push({ ...repeated.missing[0] });
+  const repeatedProjected = M.summarizeQueryResult('period_end_check', repeated);
+  assert.equal(repeatedProjected.summaryUnavailable, false);
+  assert.equal(repeatedProjected.projection.blockingCount, 2);
+  assert.deepEqual(repeatedProjected.projection.blockingCodes, ['depreciation_life_expired_underprovided']);
+  assert.equal(repeatedProjected.projectionDropped, 0);
+
+  // ③ 未知码仍然 fail closed（不因白名单放宽而放过任意字符串）。
+  const unknown = checkWith(['depreciation_life_expired_underprovided']);
+  unknown.blocking[0].code = 'synthetic_sensitive_code';
+  assert.equal(M.summarizeQueryResult('period_end_check', unknown).summaryUnavailable, true);
+  const longUnknown = checkWith(['depreciation_life_expired_underprovided']);
+  longUnknown.blocking[0].code = 'unregistered_long_code_for_projection_xyz'; // 41 字符
+  assert.equal(longUnknown.blocking[0].code.length, 41);
+  assert.equal(M.summarizeQueryResult('period_end_check', longUnknown).summaryUnavailable, true);
+
+  // ④ 通用 token 预算本身没有被放宽：未登记的 33~40 字符串仍在 sanitize 阶段被丢弃。
+  const thirtySeven = 'generic_long_token_not_registered_xyz';
+  assert.equal(thirtySeven.length, 37);
+  const dropped = M.sanitizeProjection({
+    unregistered: thirtySeven, registered: 'depreciation_life_expired_underprovided', period: '2026-02',
+  });
+  assert.equal('unregistered' in dropped.value, false);
+  assert.equal(dropped.dropped, 1);
+  assert.equal(dropped.value.registered, 'depreciation_life_expired_underprovided');
+  assert.equal(dropped.value.period, '2026-02');
+  // 中文 / 自由文本 / 超 40 字符仍未允许
+  assert.equal(M.sanitizeProjection({ text: X.summary }).dropped, 1);
+  assert.equal(M.sanitizeProjection({ text: 'a'.repeat(41) }).dropped, 1);
+});
+
+await test('LOCAL-02 回修2：期末检查 DTO 全局一致性（缺 / 重复 / 矛盾）一律 fail closed', () => {
+  const stepOf = (id, status) => ({ id, title: X.enterprise, reason: X.summary, status });
+  const steps = (overrides = {}) => [
+    stepOf('draft_vouchers', overrides.draft_vouchers || 'ok'),
+    stepOf('trial_balance', overrides.trial_balance || 'ok'),
+    stepOf('depreciation', overrides.depreciation || 'ok'),
+    stepOf('asset_reconciliation', overrides.asset_reconciliation || 'ok'),
+    stepOf('profit_carry_forward', overrides.profit_carry_forward || 'ok'),
+    stepOf('year_end_carry_forward', overrides.year_end_carry_forward || 'not_applicable'),
+    stepOf('period_sequence', overrides.period_sequence || 'ok'),
+  ];
+  const blocked = (code, step) => ({ step, title: X.enterprise, code, message: X.summary });
+  const base = { accountSetId: 5, period: '2026-02', ready: true, steps: steps(), blocking: [] };
+  assert.equal(M.summarizeQueryResult('period_end_check', base).summaryUnavailable, false);
+
+  const unavailable = (label, fixture) => {
+    assert.equal(M.summarizeQueryResult('period_end_check', fixture).summaryUnavailable, true, label);
+  };
+  unavailable('ready:true + steps:[] + blocking:[]', { ...base, steps: [] });
+  unavailable('7 个重复的 draft_vouchers', {
+    ...base, steps: Array.from({ length: 7 }, () => stepOf('draft_vouchers', 'ok')),
+  });
+  unavailable('多出第 8 个步骤（重复 period_sequence）', {
+    ...base, steps: [...steps(), stepOf('period_sequence', 'ok')],
+  });
+  unavailable('缺一个步骤', { ...base, steps: steps().slice(0, 6) });
+  unavailable('未知步骤 id', { ...base, steps: [...steps().slice(0, 6), stepOf('synthetic_sensitive_step', 'ok')] });
+  unavailable('未知步骤状态', { ...base, steps: [...steps().slice(0, 6), stepOf('period_sequence', 'synthetic_sensitive_status')] });
+  unavailable('ready:true 但全部步骤 blocked 且 blocking 非空', {
+    ...base,
+    ready: true,
+    steps: steps({
+      draft_vouchers: 'blocked', trial_balance: 'blocked', depreciation: 'blocked',
+      asset_reconciliation: 'blocked', profit_carry_forward: 'blocked',
+      year_end_carry_forward: 'blocked', period_sequence: 'blocked',
+    }),
+    blocking: [blocked('period_has_draft_vouchers', 'draft_vouchers')],
+  });
+  unavailable('ready:false 但没有任何 blocking', { ...base, ready: false });
+  unavailable('blocked 步骤没有任何阻塞原因', {
+    ...base, ready: true, steps: steps({ period_sequence: 'blocked' }),
+  });
+  unavailable('blocking 归属到未阻塞步骤', {
+    ...base, ready: false, blocking: [blocked('profit_not_carried_forward', 'trial_balance')],
+  });
+  unavailable('blocking 归属到未知步骤', {
+    ...base, ready: false, blocking: [blocked('profit_not_carried_forward', 'synthetic_sensitive_step')],
+  });
+  unavailable('blocking 缺少 step 归属', {
+    ...base, ready: false, steps: steps({ profit_carry_forward: 'blocked' }),
+    blocking: [{ code: 'profit_not_carried_forward', message: X.summary }],
+  });
+
+  // 正例：blocked 步骤 + 对应原因 + ready:false 仍然投影成功（一条原因也可以覆盖多步骤）。
+  const ok = M.summarizeQueryResult('period_end_check', {
+    ...base,
+    ready: false,
+    steps: steps({ depreciation: 'blocked', period_sequence: 'blocked' }),
+    blocking: [
+      blocked('depreciation_life_expired_underprovided', 'depreciation'),
+      blocked('previous_period_depreciation_pending', 'period_sequence'),
+      blocked('previous_period_open', 'period_sequence'),
+    ],
+  });
+  assert.equal(ok.summaryUnavailable, false);
+  assert.equal(ok.projection.blockedStepCount, 2);
+  assert.equal(ok.projection.blockingCount, 3);
+  assert.deepEqual(ok.projection.blockedStepIds, ['depreciation', 'period_sequence']);
+  assert.equal(ok.projectionDropped, 0);
 });
 
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);

@@ -446,6 +446,24 @@ const HANDLERS = dict({
   // ---- 资产 / 折旧 / 结转（后端已有实现，本轮正式注册到 MCP）----
   asset_list: (args) => A.listAssetCards(requireAccountSetId(args)),
   asset_create: (args) => A.addAssetCard(requireAccountSetId(args), args),
+  // 资产卡片维护 / 补项：取得期间、期初累计、未入账登记，用于解除卡片与总账差异的封账阻塞。
+  asset_update: (args) => {
+    const setId = requireAccountSetId(args);
+    const rawId = args.assetId ?? args.asset_id;
+    const assetId = Number(rawId);
+    if (rawId === undefined || rawId === null || rawId === "" || !Number.isInteger(assetId) || assetId <= 0) {
+      throw new ToolError("assetId_required", "必须提供正整数 assetId");
+    }
+    const patch = args.patch && typeof args.patch === "object" && !Array.isArray(args.patch)
+      ? args.patch
+      : Object.fromEntries(Object.entries(args).filter(([k]) => !["accountSetId", "account_set_id", "assetId", "asset_id", "patch"].includes(k)));
+    return A.updateAssetCard(setId, assetId, patch);
+  },
+  // 期末检查（只读）：与封账前置同一规则，逐步给适用 / 不适用理由、明确缺项与修复建议。
+  period_end_check: (args) => {
+    const setId = requireAccountSetId(args);
+    return A.periodEndCheck(setId, requirePeriod(args));
+  },
   depreciation_run: (args) => A.generateDepreciation(requireAccountSetId(args), requirePeriod(args)),
   carry_forward_profit: (args) => A.carryForwardProfit(requireAccountSetId(args), requirePeriod(args), { yearEnd: !!args.yearEnd }),
 
