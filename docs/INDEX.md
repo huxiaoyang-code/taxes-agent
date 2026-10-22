@@ -1,5 +1,7 @@
 # 代码管理索引 · CODE INDEX
 
+> **2026-10-22 新增（本机产品路线）：[增量导入契约](LOCAL-IMPORT.md)** · [任务](tasks/LOCAL-01.md) · [交接](handoffs/LOCAL-01.md) · [八包总览](tasks/INDEPENDENT-PRODUCT-WORK.md)。新增 `06-workbench/server/import-incremental.mjs`（领域：三种导入用法 / **一企一账套规范企业身份** / 批次 / 内容指纹 / 去重与结构化冲突 / 凭证状态核验 / 自动号码预分配 / 单事务）、`import-storage.mjs`（**schema v3**：企业→账套唯一关系 + 来源证据 + 落库指纹 + `import_batch_vouchers` 逐张批次关联，**先备份后建新结构**的迁移事务，迁移失败重新备份且不复用过期快照），并接线 `db.mjs`、`server.mjs`（`POST /api/import/incremental`、`GET /api/import/batches/:id`）、`agent-tools.mjs`（`book_import_incremental` / `book_import_batch`）与 MCP `tools.mjs`（同两个工具，`origin: local`）；旧 `importAccountSet` / `legacy_book_import` 不变。测试：上一冻结候选 `npm test` **47 / 47 套 exit 0**；最后定向修复后实跑领域 49 / 49、HTTP + Agent 22 / 22、MCP 7 / 7，均 exit 0（合成临时库 + 随机回环端口）；最终代码未重跑全套。最后定向返工：`create` 同批回放也核验当前真实期初（合法 API 改期初后不再伪报 replay），实际执行 / 查询 / 回放统一 `sourceTrace` 逐张 DTO。**税局现场仍暂停、真实接入仍 0**；本包不影响税局模块。状态：实现与修复完成，未提交 / 未建 PR / 未合并，待管理者验收。
+
 > **2026-10-21 新增：[税局接口目录](TAX-API-CATALOG.md)** · [任务](tasks/TAX-API-CATALOG.md) · [交接](handoffs/TAX-API-CATALOG.md)。把现成逆向报告明确列举的税局接口整理成 29 模块 / 131 条结构化目录，后端与 MCP 可检索 / 分页 / 详情 / 参数校验 / 调用准备，并附统一结果分类器。只读合同：未连接税局，本包线上已验证 0 条；完整可调用契约 0 条（缺响应 / 企业 / 权限前置条件）。初审问题已修复，待冻结后复审。
 
 > **2026-10-21 当前：[税局下载探索](TAX-DOWNLOAD-EXPLORATION.md)** · [任务](tasks/TAX-DOWNLOAD-EXPLORATION.md) · [交接 / 命令](handoffs/TAX-DOWNLOAD-EXPLORATION.md)。本轮仅完成查询 / 下载探索支撑候审。财报按用户要求暂停；新门户 fresh 3 / 企业匹配已实测，发票已正常跳转，但只有脚本 / 认证 metadata，未识别列表 query。最新私有 snapshot 7 / 9 份、4,034,109B；observer 已独审 + root 37 项，120s / 180s 两个真实窗均 armed / scopeStable / 全 scope 布尔 true，事件 / metadata / bodies 0、cleanup true / 无锁，窗口现全停。用户已手动查询无结果，空或报错未区分，不推点击在记录窗内，不确认官网无数据 / 接口坏 / 登录失效。今天停止探索、仅收尾交接 PR，不请求 / 重开窗；下次须用户明确继续，再核 scope / snapshot + armed 后人工查询。41 组首跑 40 过、旧 MCP lost-response 模拟子 Node 异常，无改定向 4 / 4 过；root 随后全 41 组重试 exit 0、41 / 41 全过；本轮支撑交付冻结候审，[PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；代码已独审，用户今日停止事实的文档仍待最终 head 审查。 业务下载 / 新 MCP repeat 0；可先交支撑 PR，总专项继续，不转企业补资料。下方历史保留原时点。
@@ -18,6 +20,8 @@
 
 | 我想…… | 去哪里 |
 |---|---|
+| 增量导入（连续多月 / 去重 / 幂等） | [增量导入契约](LOCAL-IMPORT.md) · [任务](tasks/LOCAL-01.md) · `06-workbench/server/import-incremental.mjs` |
+| 看本机产品路线的八包计划 | [本机独立产品工作](tasks/INDEPENDENT-PRODUCT-WORK.md) |
 | 跑起来看效果 | [§6 命令速查](#6-命令速查) → `06-workbench` |
 | 看线上站点分析结论 | [`../REPORT.md`](../REPORT.md) |
 | 看复刻总体方案 | [`../05-reconstruction/ARCHITECTURE.md`](../05-reconstruction/ARCHITECTURE.md) |

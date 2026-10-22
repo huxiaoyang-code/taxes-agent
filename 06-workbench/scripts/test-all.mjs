@@ -51,6 +51,10 @@ const steps = [
   { name: "tax-api-catalog-mcp", file: join(MCP, "tax-api-catalog-test.mjs"), cwd: MCP },
   { name: "tax-acquisition-mcp", file: join(MCP, "tax-acquisition-test.mjs"), cwd: MCP },
   { name: "server-local-boundary", file: join(WORKBENCH, "test", "server-local-boundary.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-01 增量导入：领域层 + HTTP / Agent 真实入口 + MCP 真实链路（仅追加）
+  { name: "import-incremental", file: join(WORKBENCH, "test", "import-incremental.test.mjs"), cwd: WORKBENCH },
+  { name: "import-incremental-http", file: join(WORKBENCH, "test", "import-incremental-http.test.mjs"), cwd: WORKBENCH },
+  { name: "import-incremental-mcp", file: join(MCP, "import-incremental-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {
