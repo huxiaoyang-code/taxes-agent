@@ -1214,6 +1214,140 @@ await test("review3 F3: finance_query 数据层账套核对（wrapper 无 id 也
   assert.equal(crossPlain.policy.stats().refs, 0);
 });
 
+await test("review5 F1/F2: 上下文必需期间 / 可表示 ID 不得静默丢弃，projectionDropped 回真实计数", async () => {
+  const contextExecutor = (sets, periods = []) => createFinanceModelAdapter({
+    executeRaw: async (name) => {
+      assert.equal(name, "account_context");
+      return { account_sets: sets, periods };
+    },
+  });
+
+  // 合法边界对照：上限 1e12 与相邻 999999999999 都是可表示 / 可选择的 ID。
+  const atLimit = contextExecutor([
+    { id: 999_999_999_999, name: X.enterpriseA, taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-12" },
+    { id: 1_000_000_000_000, name: X.enterpriseB, taxpayer_type: "一般纳税人", accounting_standard: "企业会计准则", start_period: "2026-01" },
+  ]);
+  const legal = await atLimit.callModelTool("account_context", { limit: 2 });
+  assert.equal(legal.ok, true, `合法边界 ID 不应被拒：${JSON.stringify(legal.error || null)}`);
+  assert.deepEqual(legal.projection.accountSetIds, [999_999_999_999, 1_000_000_000_000]);
+  assert.equal(legal.projection.returnedCount, 2);
+  assert.equal(legal.projection.truncated, false);
+  assert.equal(legal.projectionDropped, 0);
+  assert.equal(TRANSPORT.validateModelEnvelope(legal, TRANSPORT_REGISTRY).ok, true);
+  assertNoLeak(legal, "legal context ids");
+  atLimit.policy.dispose();
+
+  // 超过 1e12 的合法正安全整数 ID：projection 无法表示 → 明确失败，不得 returnedCount=1 + 空列表。
+  const overLimit = contextExecutor([
+    { id: 1_000_000_000_001, name: X.enterpriseC, taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01" },
+  ]);
+  const rejected = await overLimit.callModelTool("account_context", {});
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.code, "model_result_invalid");
+  assert.equal("projection" in rejected, false);
+  assert.equal(JSON.stringify(rejected).includes("1000000000001"), false, "拒绝回包不得回显不可表示 ID");
+  overLimit.policy.dispose();
+
+  // scoped：非法 / 缺失 start_period 与 global 分支一致明确失败（不再静默省略）。
+  const badScoped = contextExecutor([
+    { id: 1, name: "synthetic", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-13" },
+  ]);
+  const scopedBad = await badScoped.callModelTool("account_context", { accountSetId: 1 });
+  assert.equal(scopedBad.ok, false);
+  assert.equal(scopedBad.error.code, "model_result_invalid");
+  assert.equal(JSON.stringify(scopedBad).includes("2026-13"), false);
+  badScoped.policy.dispose();
+
+  const missingScoped = contextExecutor([{ id: 1, name: "synthetic" }]);
+  const scopedMissing = await missingScoped.callModelTool("account_context", { accountSetId: 1 });
+  assert.equal(scopedMissing.ok, false);
+  assert.equal(scopedMissing.error.code, "model_result_invalid");
+  missingScoped.policy.dispose();
+
+  // global 同一条路径：非法必需月份同样拒绝（不是只有 scoped 才校验）。
+  const badGlobal = contextExecutor([{ id: 1, name: "synthetic", start_period: "2026-13" }]);
+  const globalBad = await badGlobal.callModelTool("account_context", {});
+  assert.equal(globalBad.ok, false);
+  assert.equal(globalBad.error.code, "model_result_invalid");
+  badGlobal.policy.dispose();
+
+  // scoped 超界 ID：同样明确拒绝，不返回缺 accountSetId 的“完整”投影。
+  const overScoped = contextExecutor([
+    { id: 1_000_000_000_001, name: "synthetic", start_period: "2026-01" },
+  ]);
+  const scopedOver = await overScoped.callModelTool("account_context", { accountSetId: 1_000_000_000_001 });
+  assert.equal(scopedOver.ok, false);
+  assert.equal(scopedOver.error.code, "model_result_invalid");
+  overScoped.policy.dispose();
+
+  // 合法对照：scoped 期间正常投影，transport 可校验。
+  const legalScoped = contextExecutor(
+    [{ id: 2, name: X.enterpriseD, taxpayer_type: "一般纳税人", accounting_standard: "企业会计准则", start_period: "2026-12" }],
+    [{ period: "2026-12", status: "open" }],
+  );
+  const scopedOk = await legalScoped.callModelTool("account_context", { accountSetId: 2 });
+  assert.equal(scopedOk.ok, true, `合法 scoped 上下文不应被拒：${JSON.stringify(scopedOk.error || null)}`);
+  assert.equal(scopedOk.scope, "account_set");
+  assert.equal(scopedOk.accountSetId, 2);
+  assert.equal(scopedOk.projection.startPeriod, "2026-12");
+  assert.equal(scopedOk.projection.periodCount, 1);
+  assert.equal(scopedOk.projectionDropped, 0);
+  assert.equal(TRANSPORT.validateModelEnvelope(scopedOk, TRANSPORT_REGISTRY).ok, true);
+  legalScoped.policy.dispose();
+});
+
+await test("review5 F3: 现金流 reconciles 是必需布尔，缺失 / 类型错明确失败，真实 false 仍保留", async () => {
+  const cashFlow = await queryOk("finance_query", { accountSetId: setC.id, nodeId: "report.cash_flow_statement", period: "2026-01" });
+  assert.equal(cashFlow.projection.reconciles, true);
+
+  const mutate = (mutator) => createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      mutator(name, value);
+      return value;
+    },
+  });
+
+  // 完整合法零值 DTO 删掉 reconciles：必须失败，不能投影成 reconciles:false 并生成引用。
+  const missing = mutate((name, value) => {
+    if (name === "finance_query") delete value.data.reconciles;
+  });
+  const missingEnvelope = await missing.callModelTool("finance_query", {
+    accountSetId: setC.id, nodeId: "report.cash_flow_statement", period: "2026-01",
+  });
+  assert.equal(missingEnvelope.ok, false);
+  assert.equal(missingEnvelope.error.code, "model_result_invalid");
+  assert.equal("localRef" in missingEnvelope, false, "未知勾稽状态不得建引用");
+  assert.equal(JSON.stringify(missingEnvelope).includes("reconciles"), false);
+  missing.policy.dispose();
+
+  // 类型错（字符串 / 数字）同样失败。
+  for (const forged of ["true", 1]) {
+    const wrongType = mutate((name, value) => {
+      if (name === "finance_query") value.data.reconciles = forged;
+    });
+    const wrongEnvelope = await wrongType.callModelTool("finance_query", {
+      accountSetId: setC.id, nodeId: "report.cash_flow_statement", period: "2026-01",
+    });
+    assert.equal(wrongEnvelope.ok, false);
+    assert.equal(wrongEnvelope.error.code, "model_result_invalid");
+    wrongType.policy.dispose();
+  }
+
+  // 合法边界：真实的 false 是业务状态，必须原样保留并可通过 transport。
+  const legitFalse = mutate((name, value) => {
+    if (name === "finance_query") value.data.reconciles = false;
+  });
+  const falseEnvelope = await legitFalse.callModelTool("finance_query", {
+    accountSetId: setC.id, nodeId: "report.cash_flow_statement", period: "2026-01",
+  });
+  assert.equal(falseEnvelope.ok, true);
+  assert.equal(falseEnvelope.projection.reconciles, false);
+  assert.equal(falseEnvelope.projectionDropped, 0);
+  assert.equal(TRANSPORT.validateModelEnvelope(falseEnvelope, TRANSPORT_REGISTRY).ok, true);
+  legitFalse.policy.dispose();
+});
+
 await test("模型返回 / 错误投影 / 测试日志都不含合成敏感原文", async () => {
   // 通道释放后本机读取必须失效（能力对象是唯一凭据）
   policy.releaseChannel(channel);

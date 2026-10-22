@@ -6,6 +6,7 @@
   3. **出站信封校验已实现但未挂载**：`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`；
   4. **第三轮定向返工（review3）已实现并自测通过，未提交 / 未合并**：F1 transport 每个允许键独立校验 + 纯数据快照（拒绝悬空 `projectionDropped` 与任意层级访问器）、F2 投影期间 / 状态固定值域、F3 `finance_query` 数据层账套核对。
   5. **第四轮定向修正（review4，最后副本一致性）已实现并自测通过，未提交 / 未合并**：transport 的「校验对象」与「返回对象」现在是同一份快照（先生成有界纯数据快照 → 再对同一快照完整校验 → 只返回该快照），并补可变反射输入回归；transport 14 → **15/15**。最终独立审查、PR、合并仍由管理者后续执行。
+  6. **第五轮定向返工（review5，新鲜独审 3 个 P2）已实现并自测通过，未提交 / 未合并**：① scoped `account_context` 的 `start_period` 由「可选 `periodOf`」改为**必需合法月份**（与 global 分支一致）；② global / scoped 上下文对**不可投影的 ID**（超过 projection 数值上限 1e12）**明确拒绝**，不再静默删掉 `accountSetIds`，且 `projectionDropped` 回真实消毒计数而不是固定 0；③ `report.cash_flow_statement` 的 `reconciles` 改为**必需布尔**，缺失 / 类型错一律 `model_result_invalid`，不再把未知伪造成 `false`。三层实跑：策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0；**尚未**最终独立审查 / PR / 合并。
 - **HTTP / Agent / MCP / CLI 仍全部未接线**：`agent-tools.mjs`、`server.mjs`、MCP `backend/server/tools`、`scripts/test-all.mjs` 一律未改（共享入口归 LOCAL-02 / Issue #47）。因此**当前真实模型入口仍原样返回业务原文**；本契约尚未在真实入口生效，Issue #44 **保持 OPEN**。模块 / 适配层通过 ≠ 数据边界已生效。
 - 归属：LOCAL-08（[任务单](tasks/LOCAL-08.md)、[交接](handoffs/LOCAL-08.md)），Refs Issue #44；负责人 `huxiaoyang-code`；分支 `codex/huxiaoyang-code/local-08-adapter`（由管理者从上述 main 建立）。
 - 本文件只描述**已经写进代码并在合成 / 临时库测试中验证过的契约**；未实现项一律标注「未实现」。
@@ -56,6 +57,8 @@ projection 只允许：**有限数值**（2 位小数、绝对值 ≤ 1e12）、
 > 摘要字段的必需性：每个 node 的投影 spec 只读**真实 DTO 的必需字段/类型**；缺字段、类型不符或必需 canonical 行缺失时明确失败（`model_result_invalid` / `output_policy_value_invalid`），**不用 0 或空对象伪造真实数值**。真实的 0 仍正常保留。
 >
 > **值域（review3）**：每个投影字段同时校验「缺失」与「自己的固定值域」。期间（`period` / `startPeriod`）一律严格 `YYYY-MM`；凭证状态 `draft|posted`、期间状态 `open|closed`、科目分类五类、方向 `debit|credit`、资产种类 `fixed|intangible`、批次状态 / 导入模式 / 追溯状态一律固定枚举或固定集合。自由 ASCII 小写串（例如 `synthetic_sensitive_period` / `synthetic_sensitive_status`）不再被当作安全 token；未登记值即失败，不用 0 / 空值冒充。`taxpayerType` / `accountingStandard` 在库内允许自由文本，未登记值降级为受控 `unknown`（不回显原值），期间与状态不做这种降级。
+>
+> **必需布尔（review5）**：现金流 `reconciles` 是真实 DTO 的必需布尔。缺失或类型错（字符串 / 数字）一律失败（适配层 `model_result_invalid`、策略层 `output_policy_value_invalid`），**不得**用 `=== true` 把未知投影成 `false`；真实的 `false`（勾稽不平）是业务状态，原样保留。
 
 | operation | 允许字段 |
 |---|---|
@@ -246,6 +249,7 @@ adapter.policy.localRead(envelope.localRef, { channel, accountSetId: 5, operatio
 - **真实返回形状**：`finance_query` 必须回 `{ nodeId, label, data }`；适配层只把 `data` 交给 spec，并先做**每个 node 的必需字段形状检查**（例如利润表必须含 `current` / `ytd` 的全部摘要字段，资产表必须含 `assets` / `liabilities` / `totals` 数值），否则回 `model_result_invalid`——绝不让 wrapper 或变形 DTO 投影成「全 0 报表」。
 - **数据层归属核对（review3）**：wrapper（`{nodeId,label,data}`）**没有**账套字段，只核对 wrapper 会漏掉「请求 A 却拿到 B 的 data」。适配层按具体 node 的已知可信字段核对：账套节点 `data.id`、凭证节点 `data.account_set_id`、凭证列表 / 科目体系逐行 `account_set_id`；普通只读工具中带 `account_set_id` 的行（`account_list` / `asset_list`）同样核对。任一可信字段与请求账套不一致 → `model_scope_mismatch`，**不创建引用**；字段存在但类型不对 → `model_result_invalid`。报表 / 试算 / 明细账 / 期末等聚合 DTO 没有账套字段，**不臆造必需字段**（否则会误拒全部合法聚合节点）。
 - **全局上下文（合法全局操作）**：无 `accountSetId` 时 `scope:"global"`，只给 `accountSetCount` / `returnedCount` / `pageOffset` / `pageLimit` / `truncated` / `hasNextPage` / `nextOffset` / `accountSetIds[]` / `startPeriods[]` / `taxpayerTypes[]` / `accountingStandards[]` / `displayNameFlags[]` / `selectionRequirement` / `persisted:false`；**不伪造 `setId=0/1`**，也**不建引用**（`localRef:null`、`refUnavailable:"global_scope"`）。默认每页 10、上限 32；超页大小 / 负 offset 在**执行前**回 `model_context_page_invalid`。指定账套时做真实归属校验（不在列表里回 `account_set_not_found`），并只给该账套的期间计数等摘要。
+- **上下文必需字段与可表示 ID（review5）**：global 账套列表与 scoped 账套摘要都要求每行 `id` 为正安全整数、`start_period` 为**合法 `YYYY-MM`**；非法 / 缺失一律 `model_result_invalid`，不再「可选 `periodOf`」后静默省略。账套选择信息（`accountSetIds[]` / scoped `accountSetId`）必须能进入 projection：projection 的有限数值上限是 **1e12**，超过上限的 ID 无法表示 → **明确拒绝**（`model_result_invalid`），绝不静默删成 `accountSetIds:[]`（那样 `returnedCount>0` 却无法选择）。`finance_query:enterprise_account.account_set` 的 `data.id` 同属选择信息，按同一上限校验。两分支的 `projectionDropped` 都使用 `sanitizeProjection` 的**真实丢弃计数**，不再固定 0。**未扩大为全部 DTO 重写**：凭证 / 资产等内部流水 ID 仍按既有 spec 处理。
 - **create 类写动作的 setId 只能来自真实结果**：`account_set_create` 取结果 `id`；`legacy_book_import` 取 `created.id`；`book_import_incremental` 取 `created.accountSetId` / 顶层 `accountSetId` / `batch.accountSetId`（按序，全部校验正安全整数）。没有可信 ID（dry-run / 校验失败 / 未建账）时回**未绑定摘要**：`accountSetId:null`、`localRef:null`、`refUnavailable:"not_applied"|"unbound_scope"`，绝不造假 ID。成功绑定时信封明确 `operationCategory:"create"`、`scope:"result"`、`accountSetIdSource:"result"`。
 - **`book_import_batch`**：账套只由真实结果 `batch.accountSetId` 决定；入参 `accountSetId` 仅用于核对，不匹配回 `model_scope_mismatch`（绝不替换结果所属账套）。批次 ID / 来源系统 / 企业身份 / 凭证号不出投影。
 - **普通写动作**：`accountSetId` 在执行前校验；若结果回显的 `account_set_id` 与入参不一致，保留真实 `applied` 但不绑定引用（`refUnavailable:"scope_mismatch"`）。
@@ -281,9 +285,9 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 ## 12. 未实现 / 未接线（明示）
 
-- 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`），员工本轮在分支上新增 4 项测试后为 **32/32、exit 0**（既有 28 + review1 3 项含义保留）。
-- 适配层：**已实现 + 临时库真实调用验收 17/17、exit 0**；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
-- transport：**已实现 + 独立测试 15/15、exit 0**；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
+- 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`）；本阶段与 review1 / review3 / review5 的回归叠加后为 **34/34、exit 0**（既有 28 + review1 3 项含义均保留）。
+- 适配层：**已实现 + 临时库真实调用验收 19/19、exit 0**（含 review5 上下文 / 现金流回归）；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
+- transport：**已实现 + 独立测试 16/16、exit 0**（含 review5 ID 可表示性边界）；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
 - 因此：**当前真实模型入口仍原样返回原文**，本契约尚未在真实入口生效；Issue #44 保持 OPEN。
 - 未做：磁盘持久化引用、多用户 / 权限体系、按用户隔离、审计落库、批量写队列、`localRead` 的 MCP / CLI 工具。
 - 未验收：真实 HTTP / Agent / MCP / CLI 端到端；真实账套（禁止）；跨重启（设计上失效）。
@@ -301,13 +305,13 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 | 套件 | 命令（仓库相对） | 结果 |
 |---|---|---|
-| 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 32/32 passed，exit 0 |
-| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 17/17 passed，exit 0 |
-| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 15/15 passed，exit 0 |
-| 领域回归 | `cd 06-workbench && node test/accounting-guards.test.mjs` | 23/23 通过，exit 0 |
-| 领域回归 | `cd 06-workbench && node test/accounting-derived.test.mjs` | 31/31 通过，exit 0 |
-| 领域回归 | `cd 06-workbench && node test/import-incremental.test.mjs` | 49/49 通过，exit 0 |
-| HTTP / Agent 回归 | `cd 06-workbench && node test/smoke.test.mjs` | 28/28 通过，exit 0 |
+| 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 34/34 passed，exit 0（review5 后本轮实跑） |
+| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 19/19 passed，exit 0（review5 后本轮实跑） |
+| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 16/16 passed，exit 0（review5 后本轮实跑） |
+| 领域回归 | `cd 06-workbench && node test/accounting-guards.test.mjs` | 23/23 通过，exit 0（上一轮记录，review5 未重跑） |
+| 领域回归 | `cd 06-workbench && node test/accounting-derived.test.mjs` | 31/31 通过，exit 0（上一轮记录，review5 未重跑） |
+| 领域回归 | `cd 06-workbench && node test/import-incremental.test.mjs` | 49/49 通过，exit 0（上一轮记录，review5 未重跑） |
+| HTTP / Agent 回归 | `cd 06-workbench && node test/smoke.test.mjs` | 28/28 通过，exit 0（上一轮记录，review5 未重跑） |
 
 未运行：完整 `scripts/test-all.mjs`（新套件**未登记**进该共享入口，属 LOCAL-02 文件；无意义多跑）。未验证：真实 HTTP / MCP 端到端、真实账套、跨重启。
 
@@ -342,3 +346,13 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | F1 | 最终副本顺序不一致：`validateEnvelope` 先 `validateEnvelopeInner(original)`，成功后再对 `original` 做 `plainSnapshot`，**返回的副本本身没有校验**。合成复现：合法 query 对象让 `adapter` 的 `getOwnPropertyDescriptor` 前几次返回合法版本串、之后返回普通对象，结果仍 `ok:true` 且返回了不符合固定类型的 `adapter` | 新增第二遍：先生成**有界纯数据快照**，再对**同一快照**完整校验并只返回该快照（第一遍原对象校验只保留既有固定错误码，不决定返回值）。getter 仍不执行、非普通原型 / Symbol / `toJSON` / 函数 / 深度与大小上限全部保留。回归：`adapter`、嵌套 `projection.assets` 的描述符中途换值都被拒或只返回校验过的值；始终合法的可变输入返回对象再次完整校验仍通过且等于返回值；普通 plain JSON 正例不受影响 |
 
 本项三层实际输出：策略 **32/32**、适配层 **17/17**、transport **15/15**（14 → 15，新增 1 项可变反射一致性回归），均 exit 0。已用旧顺序实跑确认新回归会**变红**（`14/15`、exit 1），恢复修正后 `15/15`、exit 0。本轮**未提交 / 未推送 / 未合并**；共享入口接线（LOCAL-02 #47）、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、最终独立审查与 PR / 合并均**未完成**，不得写成已验收。
+
+### 14.4 第五轮定向返工 review5（新鲜独立审查，3 个 P2）
+
+| 项 | 复核发现 | 修复 / 回归 |
+|---|---|---|
+| P2-1 scoped 上下文期间 | `account_context({accountSetId:1})` 的真实结果 `start_period:'2026-13'` 只经「可选 `periodOf`」处理，反而 `ok:true`、`startPeriod` 被省略、`projectionDropped:0`，与 global 分支「非法必需月份拒绝」不一致 | scoped 摘要改用 `requirePeriod`（必需且严格 `YYYY-MM`），非法 / 缺失一律 `model_result_invalid`；账套 `id` 同时按可表示范围校验。回归：真实注入 `2026-13` / 缺字段均失败且不回显原值；合法 `2026-12` 仍成功且 `startPeriod` 保留 |
+| P2-2 全局上下文 ID | 唯一合法正安全整数 `id=1000000000001`（>1e12）通过 ID 校验后被投影消毒器当超界数值删除，得到 `accountSetIds:[]`、`returnedCount:1`、`truncated:false`、`projectionDropped:0`：既无法选择又无提示 | 新增可表示 ID 边界（= projection 数值上限 1e12）：global 列表 ID / scoped 账套 ID / `enterprise_account.account_set` 的 `data.id` 超界即 `model_result_invalid`，不静默删除；global / scoped 的 `projectionDropped` 改为 `sanitizeProjection` 真实计数，不再固定 0。合法边界 `999999999999` / `1e12` 仍成功且能通过 transport；transport 新增 boundary 回归（上限内接受、超界 `envelope_projection_invalid`） |
+| P2-3 现金流 `reconciles` | 完整合法零值现金流 DTO 删掉 `reconciles` 后仍成功，`projection.reconciles=false` 并生成引用：把未知勾稽状态伪造成 `false` | 策略 spec 改为 `requireBoolean(statement,"reconciles")`，适配层形状检查同时要求布尔；缺失 / 字符串 / 数字均 `model_result_invalid` 且不建引用，真正 `false` 之业务状态原样保留。策略层新增缺失 / 类型错失败与真 `false` 正例回归 |
+
+三层本轮实际输出：策略 **34/34**（32 → 34：新增现金流布尔回归 + 数值上限边界）、适配层 **19/19**（17 → 19：新增上下文期间 / ID 回归 + 现金流布尔回归）、transport **16/16**（15 → 16：新增 ID 可表示性边界），均 exit 0（实际输出）。已验行为未回退：旧 32 / 17 / 15 项断言含义未削弱。本轮**未重跑**四套领域回归（与 review5 根因无直接关系，不声称重跑）。**未提交 / 未推送 / 未合并**；共享入口接线（LOCAL-02 #47）、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、最终独立审查与 PR / 合并均**未完成**，不得写成已验收。

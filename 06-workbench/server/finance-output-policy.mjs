@@ -51,7 +51,14 @@ const DEFAULT_BYTE_BUDGET = 64 * 1024 * 1024;
 const NODE_BYTE_COST = 8;
 const MAX_RAW_ARRAY = 5000;
 const MAX_DEPTH_RAW = 32;
-const MONEY_LIMIT = 1e12;
+/**
+ * projection 里有限数值的绝对值上限（金额与计数共用）。
+ * 账套 / 凭证等 ID 也走同一个数值通道：超过这个上限的 ID 无法进入 projection，
+ * 会被消毒器丢弃并计入 projectionDropped。需要选择能力的 ID（账套列表 / 账套上下文）
+ * 因此必须由调用方**明确拒绝**，不能静默丢掉（见 finance-model-adapter.mjs）。
+ */
+export const PROJECTION_NUMBER_LIMIT = 1e12;
+const MONEY_LIMIT = PROJECTION_NUMBER_LIMIT;
 const MAX_SEGMENTS = 8;
 const MAX_COMPUTE_NODES = 1024;
 const MAX_COMPUTE_ARRAY = 512;
@@ -659,7 +666,9 @@ const QUERY_SPECS = dict({
       operating: money(operating), investing: money(investing), financing: money(financing),
       netIncrease: money(netIncrease),
       cashBegin: money(begin), cashEnd: money(end), cashChange: money(end - begin),
-      reconciles: prop(statement, "reconciles") === true,
+      // 真实现金流量表 DTO 一定带布尔 reconciles；缺失 / 类型错必须失败，
+      // 不能把「不知道」投影成 false（那会让模型把未知勾稽状态当成已核对）。
+      reconciles: requireBoolean(statement, "reconciles"),
       lineCount: listLen(operatingRows) + listLen(investingRows) + listLen(financingRows),
     };
   },

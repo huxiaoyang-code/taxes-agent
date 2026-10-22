@@ -215,6 +215,36 @@ await test('query: 账套/科目/期末/试算/利润/现金流/明细账的有�
   policy.dispose();
 });
 
+await test('query: 现金流 reconciles 是必需布尔（缺失 / 类型错失败，真实 false 保留）', () => {
+  const policy = new FinanceOutputPolicy();
+  const base = {
+    period: '2026-01',
+    operating: [], investing: [], financing: [],
+    totals: { operating: 0, investing: 0, financing: 0, net_increase: 0 },
+    cash: { begin: 0, end: 0, change: 0 },
+  };
+  const wrap = (value) => policy.wrapQuery('finance_query:report.cash_flow_statement', { accountSetId: 5, value }).projection;
+
+  // 完整合法零值 DTO + 真实 false：false 是业务状态，必须原样保留（不得改成 true / 不得丢）。
+  const falseZero = wrap({ ...base, reconciles: false });
+  assert.deepEqual(falseZero, {
+    period: '2026-01', operating: 0, investing: 0, financing: 0, netIncrease: 0,
+    cashBegin: 0, cashEnd: 0, cashChange: 0, reconciles: false, lineCount: 0,
+  });
+
+  // 缺失 / 类型错：未知勾稽状态不得伪造成 false（也不得只靠 transport 兜底）。
+  expectCode(() => policy.wrapQuery('finance_query:report.cash_flow_statement', {
+    accountSetId: 5, value: base,
+  }), 'output_policy_value_invalid');
+  expectCode(() => policy.wrapQuery('finance_query:report.cash_flow_statement', {
+    accountSetId: 5, value: { ...base, reconciles: 'true' },
+  }), 'output_policy_value_invalid');
+  expectCode(() => policy.wrapQuery('finance_query:report.cash_flow_statement', {
+    accountSetId: 5, value: { ...base, reconciles: 1 },
+  }), 'output_policy_value_invalid');
+  policy.dispose();
+});
+
 await test('query: 未登记 operation 直接拒绝（不做兜底投影）', () => {
   const policy = new FinanceOutputPolicy();
   expectCode(() => policy.wrapQuery('finance_query:enterprise_account.bank', { accountSetId: 5, value: {} }), 'output_policy_unknown_operation');
@@ -549,6 +579,18 @@ await test('shape: projection 白名单拒绝自由文本、中文、深层嵌�
   const inherited = sanitizeProjection(Object.create({ enterprise: X.enterprise, total: 5 }));
   assert.deepEqual(inherited.value, {});
   assertNoLeak(inherited.value, 'inherited projection');
+});
+
+await test('shape: projection 数值上限 1e12 就是可表示 ID 边界（超界被丢弃并计数）', () => {
+  assert.equal(M.PROJECTION_NUMBER_LIMIT, 1e12);
+  // 合法边界：上限本身仍是可表示 / 可选择的 ID。
+  const kept = sanitizeProjection({ id: 1_000_000_000_000 });
+  assert.deepEqual(kept.value, { id: 1_000_000_000_000 });
+  assert.equal(kept.dropped, 0);
+  // 超界：被白名单丢弃并计入 dropped；因此调用方必须明确拒绝这类选择信息，不能静默返回。
+  const over = sanitizeProjection({ id: 1_000_000_000_001 });
+  assert.deepEqual(over.value, {});
+  assert.equal(over.dropped, 1);
 });
 
 await test('shape: 循环引用 / 访问器 / 类实例 / 超量原数据都被明确拒绝，不做 JSON.stringify', () => {

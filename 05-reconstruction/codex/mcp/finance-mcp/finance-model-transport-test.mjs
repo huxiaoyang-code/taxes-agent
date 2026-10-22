@@ -611,6 +611,32 @@ await test('review3 F1: 所有可选键在 success / failure / dropped 分支独
   }
 });
 
+await test('ID 可表示性边界：projection 数值上限 1e12 内的 ID 数组可通过，超界 ID 被拒', async () => {
+  const context = await adapter.callModelTool('account_context', { limit: 1 });
+  assert.equal(context.ok, true);
+  const atLimit = JSON.parse(JSON.stringify(context));
+  atLimit.projection = {
+    ...atLimit.projection,
+    accountSetCount: 2,
+    returnedCount: 2,
+    truncated: false,
+    hasNextPage: false,
+    accountSetIds: [999_999_999_999, 1_000_000_000_000],
+    startPeriods: ['2026-12', '2026-01'],
+    taxpayerTypes: ['small_scale', 'general'],
+    accountingStandards: ['small_business', 'enterprise'],
+    displayNameFlags: [true, true],
+  };
+  delete atLimit.projection.nextOffset;
+  assert.equal(validateModelEnvelope(atLimit, REGISTRY).ok, true, '上限内的 ID 数组应被接受');
+
+  // 超界 ID 无法用 projection 的有限数值表示：信封层硬拒，不能被静默丢成空选择列表。
+  const over = JSON.parse(JSON.stringify(atLimit));
+  over.projection.accountSetIds = [1_000_000_000_001];
+  over.projection.returnedCount = 1;
+  expectFailure(validateModelEnvelope(over, REGISTRY), 'envelope_projection_invalid');
+});
+
 await test('最后副本一致性：校验的必须就是返回的（可变反射输入不得返回未校验副本）', () => {
   // 1) 精确复现：合法 query 对象，adapter 的 getOwnPropertyDescriptor 先返回合法版本串，
   //    之后返回普通对象。旧实现「先校验原对象、再快照原对象」，返回的副本从未被校验，

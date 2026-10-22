@@ -22,6 +22,7 @@ import { Buffer } from "node:buffer";
 import {
   FinanceOutputPolicy,
   OUTPUT_POLICY_VERSION,
+  PROJECTION_NUMBER_LIMIT,
   SUPPORTED_OPERATIONS,
   OutputPolicyError,
   enumTokenOf,
@@ -59,6 +60,28 @@ const listLen = (list) => {
 const periodOf = (obj, key) => {
   const value = textOf(obj, key);
   return typeof value === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(value) ? value : undefined;
+};
+/** 账套上下文的必需期间：非法 / 缺失一律 model_result_invalid（与 global 账套列表一致）。 */
+const requirePeriod = (obj, key) => {
+  const value = periodOf(obj, key);
+  if (value === undefined) throw policyError("model_result_invalid");
+  return value;
+};
+/**
+ * 可投影的 ID 范围：projection 的有限数值上限（policy 的 1e12）。
+ * 超过上限的 ID 会被白名单消毒丢弃，模型就会看到「returnedCount=1 但 accountSetIds:[]」，
+ * 既无法选择又没有任何提示。这里**明确拒绝不可表示值**（model_result_invalid），
+ * 而不是静默删掉必需的选择信息，也不去编造 / 截断 ID。
+ */
+const MAX_PROJECTED_ID = PROJECTION_NUMBER_LIMIT;
+const projectedIdOf = (obj, key) => {
+  const id = intOf(obj, key);
+  return id !== undefined && id <= MAX_PROJECTED_ID ? id : undefined;
+};
+const requireProjectedId = (obj, key) => {
+  const id = projectedIdOf(obj, key);
+  if (id === undefined) throw policyError("model_result_invalid");
+  return id;
 };
 const isPlainArgs = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const policyError = (code) => new OutputPolicyError(code, code);
@@ -343,6 +366,8 @@ const isRecord = (value) => value !== null && typeof value === "object" && !Arra
 const hasNumber = (obj, key) => typeof prop(obj, key) === "number" && Number.isFinite(prop(obj, key));
 const hasText = (obj, key) => typeof prop(obj, key) === "string";
 const hasAllNumbers = (obj, keys) => keys.every((key) => hasNumber(obj, key));
+const hasBoolean = (obj, key) => typeof prop(obj, key) === "boolean";
+const hasProjectedId = (obj, key) => projectedIdOf(obj, key) !== undefined;
 const hasEntriesShape = (items) => Array.isArray(items) && items.every((item) => isRecord(item)
   && hasNumber(item, "debit") && hasNumber(item, "credit"));
 const hasLedgerShape = (value) => isRecord(value) && Array.isArray(prop(value, "items"))
@@ -366,7 +391,7 @@ const PLAIN_QUERY_SHAPES = Object.freeze({
 });
 
 const FINANCE_QUERY_SHAPES = Object.freeze({
-  "enterprise_account.account_set": (data) => isRecord(data) && hasNumber(data, "id")
+  "enterprise_account.account_set": (data) => isRecord(data) && hasProjectedId(data, "id")
     && hasText(data, "start_period") && hasText(data, "name")
     && hasText(data, "taxpayer_type") && hasText(data, "accounting_standard"),
   "enterprise_account.subject_system.all": (data) => Array.isArray(data) && listLen(data) > 0
@@ -393,7 +418,8 @@ const FINANCE_QUERY_SHAPES = Object.freeze({
     && isRecord(prop(data, "cash")) && Array.isArray(prop(data, "operating"))
     && Array.isArray(prop(data, "investing")) && Array.isArray(prop(data, "financing"))
     && hasAllNumbers(prop(data, "totals"), ["operating", "investing", "financing", "net_increase"])
-    && hasAllNumbers(prop(data, "cash"), ["begin", "end"]) && hasText(data, "period"),
+    && hasAllNumbers(prop(data, "cash"), ["begin", "end"])
+    && hasBoolean(data, "reconciles") && hasText(data, "period"),
   "period_end.summary": (data) => isRecord(data) && Array.isArray(prop(data, "periods"))
     && prop(data, "periods").every((item) => isRecord(item) && hasText(item, "status"))
     && isRecord(prop(data, "trial_balance")) && isRecord(prop(prop(data, "trial_balance"), "totals"))
@@ -639,10 +665,9 @@ function buildAccountSetPage(sets, page) {
   const displayNameFlags = [];
   for (let i = page.offset; i < total && accountSetIds.length < page.limit; i++) {
     const entry = prop(sets, i);
-    const id = intOf(entry, "id");
-    const startPeriod = periodOf(entry, "start_period");
-    // 结构异常的账套行不静默跳过（那会悄悄漏账套），直接失败，让调用方修根因。
-    if (id === undefined || startPeriod === undefined) throw policyError("model_result_invalid");
+    // 结构异常 / 不可投影的账套行不静默跳过（那会悄悄漏账套），直接失败，让调用方修根因。
+    const id = requireProjectedId(entry, "id");
+    const startPeriod = requirePeriod(entry, "start_period");
     accountSetIds.push(id);
     startPeriods.push(startPeriod);
     taxpayerTypes.push(enumTokenOf("taxpayer", textOf(entry, "taxpayer_type")) ?? "unknown");
@@ -668,7 +693,8 @@ function buildAccountSetPage(sets, page) {
     selectionRequirement: "explicit_account_set_id",
     persisted: false,
   });
-  return projection.value;
+  // 真实丢弃数必须回给调用方，不能固定 0（固定 0 会把“选择信息被删”伪装成完整结果）。
+  return { projection: projection.value, projectionDropped: projection.dropped };
 }
 
 function buildScopedContextProjection(entry, periods) {
@@ -683,8 +709,8 @@ function buildScopedContextProjection(entry, periods) {
   }
   const projection = sanitizeProjection({
     scope: "account_set",
-    accountSetId: intOf(entry, "id"),
-    startPeriod: periodOf(entry, "start_period"),
+    accountSetId: requireProjectedId(entry, "id"),
+    startPeriod: requirePeriod(entry, "start_period"),
     taxpayerType: enumTokenOf("taxpayer", textOf(entry, "taxpayer_type")) ?? "unknown",
     accountingStandard: enumTokenOf("standard", textOf(entry, "accounting_standard")) ?? "unknown",
     hasDisplayName: (textOf(entry, "name") || "").length > 0,
@@ -694,7 +720,7 @@ function buildScopedContextProjection(entry, periods) {
     selectionRequirement: "explicit_account_set_id",
     persisted: false,
   });
-  return projection.value;
+  return { projection: projection.value, projectionDropped: projection.dropped };
 }
 
 // ---------------------------------------------------------------- adapter 工厂
@@ -857,6 +883,7 @@ export function createFinanceModelAdapter(options = {}) {
 
       if (claimedAccountSetId === null) {
         // 明确的 global scope：不伪造 setId=0/1，也不把全局原文塞进某个账套引用里。
+        const pageResult = buildAccountSetPage(sets, page);
         return {
           ok: true,
           outputPolicy: OUTPUT_POLICY_VERSION,
@@ -867,8 +894,8 @@ export function createFinanceModelAdapter(options = {}) {
           operationCategory: "context",
           scope: "global",
           accountSetId: null,
-          projection: buildAccountSetPage(sets, page),
-          projectionDropped: 0,
+          projection: pageResult.projection,
+          projectionDropped: pageResult.projectionDropped,
           localRef: null,
           refPersistence: "none",
           refUnavailable: "global_scope",
@@ -880,6 +907,7 @@ export function createFinanceModelAdapter(options = {}) {
       if (!entry) throw policyError("account_set_not_found");
       const periods = prop(result, "periods");
       if (!Array.isArray(periods)) throw policyError("model_result_invalid");
+      const scopedResult = buildScopedContextProjection(entry, periods);
       return {
         ok: true,
         outputPolicy: OUTPUT_POLICY_VERSION,
@@ -890,8 +918,8 @@ export function createFinanceModelAdapter(options = {}) {
         operationCategory: "context",
         scope: "account_set",
         accountSetId: claimedAccountSetId,
-        projection: buildScopedContextProjection(entry, periods),
-        projectionDropped: 0,
+        projection: scopedResult.projection,
+        projectionDropped: scopedResult.projectionDropped,
         localRef: null,
         refPersistence: "none",
         // 上下文结果本身是全局列表（含其它账套），不能塞进单账套引用。
