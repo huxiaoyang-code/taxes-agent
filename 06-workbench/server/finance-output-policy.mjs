@@ -51,7 +51,14 @@ const DEFAULT_BYTE_BUDGET = 64 * 1024 * 1024;
 const NODE_BYTE_COST = 8;
 const MAX_RAW_ARRAY = 5000;
 const MAX_DEPTH_RAW = 32;
-const MONEY_LIMIT = 1e12;
+/**
+ * projection 里有限数值的绝对值上限（金额与计数共用）。
+ * 账套 / 凭证等 ID 也走同一个数值通道：超过这个上限的 ID 无法进入 projection，
+ * 会被消毒器丢弃并计入 projectionDropped。需要选择能力的 ID（账套列表 / 账套上下文）
+ * 因此必须由调用方**明确拒绝**，不能静默丢掉（见 finance-model-adapter.mjs）。
+ */
+export const PROJECTION_NUMBER_LIMIT = 1e12;
+const MONEY_LIMIT = PROJECTION_NUMBER_LIMIT;
 const MAX_SEGMENTS = 8;
 const MAX_COMPUTE_NODES = 1024;
 const MAX_COMPUTE_ARRAY = 512;
@@ -106,10 +113,77 @@ const int = (obj, key) => {
   const v = num(obj, key);
   return Number.isSafeInteger(v) && v > 0 ? v : undefined;
 };
+const invalidSummary = (what) => new OutputPolicyError("output_policy_value_invalid", `摘要必需字段缺失或类型不符：${what}`);
+const requireNum = (obj, key) => {
+  const v = prop(obj, key);
+  if (typeof v !== "number" || !Number.isFinite(v)) throw invalidSummary(key);
+  return v;
+};
+const requireText = (obj, key) => {
+  const v = prop(obj, key);
+  if (typeof v !== "string") throw invalidSummary(key);
+  return v;
+};
+const requireBoolean = (obj, key) => {
+  const v = prop(obj, key);
+  if (typeof v !== "boolean") throw invalidSummary(key);
+  return v;
+};
+const requirePositiveInt = (obj, key) => {
+  const v = int(obj, key);
+  if (v === undefined) throw invalidSummary(key);
+  return v;
+};
+const requireRecord = (obj, key) => {
+  const v = prop(obj, key);
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw invalidSummary(key);
+  return v;
+};
+const requireArray = (obj, key, max = MAX_RAW_ARRAY) => {
+  const v = prop(obj, key);
+  if (!Array.isArray(v)) throw invalidSummary(key);
+  if (listLen(v) > max) throw new OutputPolicyError("output_policy_value_too_large", `${key} 数组长度超过上限`);
+  return v;
+};
+const requireArrayValue = (value, what, max = MAX_RAW_ARRAY) => {
+  if (!Array.isArray(value)) throw invalidSummary(what);
+  if (listLen(value) > max) throw new OutputPolicyError("output_policy_value_too_large", `${what} 数组长度超过上限`);
+  return value;
+};
 const periodOf = (obj, key) => {
   const v = text(obj, key);
   return typeof v === "string" && PROJ_PERIOD_RE.test(v) ? v : undefined;
 };
+/**
+ * 投影期间的固定值域：必须是合法 `YYYY-MM`。
+ * 只做「存在 + 类型」校验不够：自由 ASCII token 也能通过 token 白名单，等于把原值伪装成安全值。
+ */
+const requirePeriod = (obj, key) => {
+  const v = periodOf(obj, key);
+  if (v === undefined) throw invalidSummary(key);
+  return v;
+};
+/** 固定枚举：缺失 / 未登记原值一律失败，绝不把任意小写 ASCII 当受控 token。 */
+const requireEnumToken = (table, obj, key) => {
+  const token = enumToken(table, requireText(obj, key));
+  if (token === undefined) throw invalidSummary(key);
+  return token;
+};
+/** 固定取值集合（代码常量域，例如凭证状态 / 资产种类 / 追溯状态）。 */
+const requireChoice = (obj, key, choices) => {
+  const v = requireText(obj, key);
+  if (!choices.includes(v)) throw invalidSummary(key);
+  return v;
+};
+const ASSET_KIND_CHOICES = Object.freeze(["fixed", "intangible"]);
+const VOUCHER_STATUS_CHOICES = Object.freeze(["draft", "posted"]);
+const PERIOD_STATUS_CHOICES = Object.freeze(["open", "closed"]);
+const ASSET_KIND_TOKENS = dict({ fixed: "fixed", intangible: "intangible" });
+// 与 import-incremental.mjs 的 VOUCHER_STATE 一一对应；"inconsistent" 是批次审计里既有的复核标记。
+const TRACE_STATE_TOKENS = dict({
+  ok: "ok", inconsistent: "inconsistent", missing: "missing", unposted: "unposted",
+  unverified: "unverified", modified: "modified", other_account_set: "other_account_set",
+});
 /** 数组长度也走 data 属性描述符，避开 `arr.length` 的 Proxy get 陷阱。 */
 const listLen = (arr) => {
   const n = prop(arr, "length");
@@ -125,7 +199,12 @@ const money = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v
 const sumField = (list, key) => {
   let total = 0;
   const length = listLen(list);
-  for (let i = 0; i < length; i++) total += num(prop(list, i), key) || 0;
+  for (let i = 0; i < length; i++) {
+    const row = prop(list, i);
+    const value = prop(row, key);
+    if (typeof value !== "number" || !Number.isFinite(value)) throw invalidSummary(key);
+    total += value;
+  }
   return total;
 };
 /** 引用参数先验类型：`REF_PATTERN.test(obj)` 会对对象调用 ToString，等于执行用户代码。 */
@@ -178,9 +257,29 @@ const STANDARD_TOKENS = dict({ "小企业会计准则": "small_business", "企�
 const CATEGORY_TOKENS = dict({ "资产": "assets", "负债": "liabilities", "权益": "equity", "成本": "cost", "损益": "profit_loss" });
 const DIRECTION_TOKENS = dict({ debit: "debit", credit: "credit" });
 const STATUS_TOKENS = dict({ draft: "draft", posted: "posted", open: "open", closed: "closed" });
+const MODE_TOKENS = dict({ create: "create", append: "append" });
+const BATCH_STATUS_TOKENS = dict({ completed: "completed", failed: "failed", pending: "pending", started: "started" });
+const IMPORT_STATUS_TOKENS = dict({
+  preview: "preview", applied: "applied", idempotent_replay: "idempotent_replay",
+});
 const enumToken = (table, raw) => {
   if (typeof raw !== "string" || !own(table, raw)) return undefined;
   return table[raw];
+};
+/** 受控业务枚举词表出口：按枚举名取一个 frozen 映射，只接受已登记原始字符串。 */
+export const ENUM_TOKENS = Object.freeze({
+  taxpayer: TAXPAYER_TOKENS,
+  standard: STANDARD_TOKENS,
+  category: CATEGORY_TOKENS,
+  direction: DIRECTION_TOKENS,
+  status: STATUS_TOKENS,
+  mode: MODE_TOKENS,
+  batchStatus: BATCH_STATUS_TOKENS,
+});
+/** 把真实业务枚举值映射成受控 ASCII token；未登记值返回 undefined（不回声原值）。 */
+export const enumTokenOf = (name, raw) => {
+  if (typeof name !== "string" || !own(ENUM_TOKENS, name)) return undefined;
+  return enumToken(ENUM_TOKENS[name], raw);
 };
 
 // ---------------------------------------------------------------- projection 消毒
@@ -216,7 +315,10 @@ function sanitizeInto(target, source, state, depth) {
         const item = prop(value, i);
         if (typeof item === "number" && Number.isFinite(item) && Math.abs(item) <= MONEY_LIMIT) out.push(money(item));
         else if (typeof item === "boolean") out.push(item);
-        else if (typeof item === "string" && item.length <= PROJ_MAX_STRING && PROJ_TOKEN_RE.test(item)) out.push(item);
+        // 数组元素与标量值同一套白名单：状态 token 或期间（期间也是契约声明的允许类型），
+        // 自由文本 / 中文业务名 / 任意长字符串仍然丢弃。
+        else if (typeof item === "string" && item.length <= PROJ_MAX_STRING
+          && (PROJ_TOKEN_RE.test(item) || PROJ_PERIOD_RE.test(item))) out.push(item);
         else state.dropped++;
       }
       target[key] = out;
@@ -251,17 +353,17 @@ function freezeDeep(value) {
 
 // ---------------------------------------------------------------- 原数据测量（容量 / 循环 / 原型 / 字节）
 /**
- * 有界遍历原始结果：拒绝循环引用、访问器属性、类实例与超量数据；不做 JSON.stringify。
- * 计量口径：`bytes = 8 × 节点数 + 字符串 UTF-8 字节 + 键名 UTF-8 字节`。
+ * 有界遍历原始结果：拒绝**真正的循环引用**、访问器属性、类实例与超量数据；不做 JSON.stringify。
+ * 共享引用（DAG，同一对象出现在两个兄弟字段，例如增量导入结果的 created.sourceTrace 与
+ * 顶层 sourceTrace）是合法业务 DTO，不当作循环：只用「当前路径祖先集」判循环，不用全局 seen。
+ * 计量口径：`bytes = 8 × 节点数 + 字符串 UTF-8 字节 + 键名 UTF-8 字节`（重复访问也各计一次，保守）。
  * 节点数限制不了「1 个 8 MiB 字符串」，所以字节预算与节点预算必须分开。
  */
 export function inspectRawValue(root, maxNodes = DEFAULT_VALUE_NODES, maxBytes = DEFAULT_VALUE_BYTES) {
-  const seen = new WeakSet();
-  const stack = [[root, 0]];
   let nodes = 0;
   let bytes = NODE_BYTE_COST;
-  while (stack.length) {
-    const [current, depth] = stack.pop();
+  const ancestors = new Set();
+  const walk = (current, depth) => {
     nodes++;
     bytes += NODE_BYTE_COST;
     if (nodes > maxNodes) {
@@ -275,12 +377,11 @@ export function inspectRawValue(root, maxNodes = DEFAULT_VALUE_NODES, maxBytes =
       if (bytes > maxBytes) {
         throw new OutputPolicyError("output_policy_value_too_large", `原数据字节数超过上限 ${maxBytes}`);
       }
-      continue;
+      return;
     }
-    if (current === null || typeof current !== "object") continue;
+    if (current === null || typeof current !== "object") return;
     if (depth > MAX_DEPTH_RAW) throw new OutputPolicyError("output_policy_value_invalid", "原数据嵌套层数超过上限");
-    if (seen.has(current)) throw new OutputPolicyError("output_policy_value_invalid", "原数据存在循环引用");
-    seen.add(current);
+    if (ancestors.has(current)) throw new OutputPolicyError("output_policy_value_invalid", "原数据存在循环引用");
     if (Array.isArray(current)) {
       if (listLen(current) > MAX_RAW_ARRAY) {
         throw new OutputPolicyError("output_policy_value_too_large", `数组长度超过上限 ${MAX_RAW_ARRAY}`);
@@ -291,15 +392,18 @@ export function inspectRawValue(root, maxNodes = DEFAULT_VALUE_NODES, maxBytes =
         throw new OutputPolicyError("output_policy_value_invalid", "原数据包含非普通对象（Map/Date/类实例等）");
       }
     }
+    ancestors.add(current);
     for (const key of Object.keys(current)) {
       const desc = Object.getOwnPropertyDescriptor(current, key);
       if (!desc || !own(desc, "value")) {
         throw new OutputPolicyError("output_policy_value_invalid", "原数据包含访问器属性");
       }
       bytes += Buffer.byteLength(key, "utf8");
-      stack.push([desc.value, depth + 1]);
+      walk(desc.value, depth + 1);
     }
-  }
+    ancestors.delete(current);
+  };
+  walk(root, 0);
   if (bytes > maxBytes) {
     throw new OutputPolicyError("output_policy_value_too_large", `原数据字节数超过上限 ${maxBytes}`);
   }
@@ -314,16 +418,15 @@ export function measureRawValue(root, maxNodes = DEFAULT_VALUE_NODES) {
 // ---------------------------------------------------------------- 查询 projection 规格
 // 每个 spec 只按固定键名取值：键名是代码常量，不是数据驱动，未知字段默认不出现。
 const voucherListSummary = (value) => {
-  const list = Array.isArray(value) ? value : [];
+  const list = requireArrayValue(value, "vouchers");
   const length = listLen(list);
-  if (length > MAX_RAW_ARRAY) throw new OutputPolicyError("output_policy_value_too_large", "凭证数量超过上限");
   let entries = 0, posted = 0, draft = 0;
   for (let i = 0; i < length; i++) {
     const v = at(prop(list, i));
-    entries += listLen(listOf(v, "entries"));
-    const status = text(v, "status");
+    entries += listLen(requireArray(v, "entries"));
+    const status = requireChoice(v, "status", VOUCHER_STATUS_CHOICES);
     if (status === "posted") posted++;
-    else if (status === "draft") draft++;
+    else draft++;
   }
   const debit = sumFieldEntries(list, "debit");
   const credit = sumFieldEntries(list, "credit");
@@ -344,19 +447,149 @@ const lineValue = (rows, label) => {
   const length = listLen(rows);
   for (let i = 0; i < length; i++) {
     const row = at(prop(rows, i));
-    if (text(row, "label") === label) return num(row, "value");
+    if (text(row, "label") === label) {
+      const value = prop(row, "value");
+      if (typeof value !== "number" || !Number.isFinite(value)) throw invalidSummary(label);
+      return value;
+    }
   }
-  return undefined;
+  throw invalidSummary(label);
 };
 const voucherDetailSummary = (value) => {
   const v = at(value);
-  const entries = listOf(v, "entries");
+  const entries = requireArray(v, "entries");
   const debit = sumField(entries, "debit");
   const credit = sumField(entries, "credit");
   return {
-    voucherId: int(v, "id"), period: periodOf(v, "period"), status: enumToken(STATUS_TOKENS, text(v, "status")),
+    voucherId: requirePositiveInt(v, "id"), period: requirePeriod(v, "period"),
+    status: requireChoice(v, "status", VOUCHER_STATUS_CHOICES),
     lineCount: listLen(entries), totalDebit: money(debit), totalCredit: money(credit),
     balanced: Math.abs(debit - credit) < 0.005,
+  };
+};
+
+// ---- 普通工具（非 finance_query）的真实 DTO 摘要 ----
+// 账套 / 科目目录：只给计数与受控枚举，科目编码、名称一律不返回。
+const accountDirectorySummary = (value) => {
+  const accounts = Array.isArray(value) ? value : requireArray(at(value), "items");
+  const length = listLen(accounts);
+  const counts = { assets: 0, liabilities: 0, equity: 0, cost: 0, profit_loss: 0 };
+  let leaf = 0, contra = 0;
+  for (let i = 0; i < length; i++) {
+    const account = at(prop(accounts, i));
+    counts[requireEnumToken(CATEGORY_TOKENS, account, "category")]++;
+    if (requireNum(account, "is_leaf") === 1) leaf++;
+    if (requireNum(account, "contra") === 1) contra++;
+  }
+  return { accountCount: length, leafCount: leaf, contraCount: contra, byCategory: counts };
+};
+// 明细账：兼容 finance_query（裸 generalLedger）与 ledger_query（带 accountSetId 的包装）。
+const ledgerSummary = (value) => {
+  const ledger = at(value);
+  const period = requirePeriod(ledger, "period");
+  const direction = requireEnumToken(DIRECTION_TOKENS, ledger, "direction");
+  const items = requireArray(ledger, "items");
+  const opening = requireRecord(ledger, "opening");
+  const openingDebit = requireNum(opening, "debit");
+  const openingCredit = requireNum(opening, "credit");
+  const periodDebit = sumField(items, "debit");
+  const periodCredit = sumField(items, "credit");
+  return {
+    period,
+    direction,
+    itemCount: listLen(items),
+    openingDebit: money(openingDebit), openingCredit: money(openingCredit),
+    periodDebit: money(periodDebit), periodCredit: money(periodCredit),
+    closingBalance: money(openingDebit - openingCredit + periodDebit - periodCredit),
+  };
+};
+// 期初余额读取：只给条数与借贷合计（含是否平衡），不返回科目编码或逐项金额。
+const openingBalanceSummary = (value) => {
+  const items = requireArray(at(value), "items");
+  const debit = sumField(items, "debit");
+  const credit = sumField(items, "credit");
+  return {
+    itemCount: listLen(items),
+    totalDebit: money(debit), totalCredit: money(credit),
+    balanced: Math.abs(debit - credit) < 0.005,
+  };
+};
+// 期间清单：只给状态计数。
+const periodListSummary = (value) => {
+  const items = requireArray(at(value), "items");
+  const length = listLen(items);
+  let open = 0, closed = 0;
+  for (let i = 0; i < length; i++) {
+    const status = requireChoice(at(prop(items, i)), "status", PERIOD_STATUS_CHOICES);
+    if (status === "open") open++;
+    else closed++;
+  }
+  return { periodCount: length, openPeriodCount: open, closedPeriodCount: closed };
+};
+// 凭证预检：只给是否通过、错误条数与借贷合计。
+const voucherCheckSummary = (value) => {
+  const v = at(value);
+  const ok = requireBoolean(v, "ok");
+  const debit = requireNum(v, "total_debit");
+  const credit = requireNum(v, "total_credit");
+  const errors = requireArray(v, "errors");
+  return {
+    checkOk: ok,
+    errorCount: listLen(errors),
+    totalDebit: money(debit), totalCredit: money(credit),
+    balanced: Math.abs(debit - credit) < 0.005,
+  };
+};
+// 资产卡片清单：只给张数与金额合计，卡片名称 / 科目编码不返回。
+const assetListSummary = (value) => {
+  const cards = requireArrayValue(value, "asset cards");
+  const length = listLen(cards);
+  let fixed = 0, intangible = 0, cost = 0, accumulated = 0, remaining = 0;
+  for (let i = 0; i < length; i++) {
+    const card = at(prop(cards, i));
+    const kind = requireChoice(card, "kind", ASSET_KIND_CHOICES);
+    if (kind === "intangible") intangible++;
+    else fixed++;
+    cost += requireNum(card, "original_cost");
+    accumulated += requireNum(card, "accumulated");
+    remaining += requireNum(card, "remaining");
+  }
+  return {
+    cardCount: length, fixedCount: fixed, intangibleCount: intangible,
+    totalOriginalCost: money(cost), totalAccumulated: money(accumulated), totalRemaining: money(remaining),
+  };
+};
+// 导入批次审计：批次 ID / 来源系统 / 企业身份 / 凭证号一律不返回，只给状态 token 与计数。
+const batchAuditSummary = (value) => {
+  const v = at(value);
+  const batch = requireRecord(v, "batch");
+  const resultValue = prop(batch, "result");
+  const result = resultValue === null || resultValue === undefined ? null : at(resultValue);
+  if (resultValue !== null && resultValue !== undefined && result === EMPTY) throw invalidSummary("batch.result");
+  const trace = requireArray(v, "sourceTrace");
+  const length = listLen(trace);
+  let ok = 0, inconsistent = 0;
+  for (let i = 0; i < length; i++) {
+    // 状态域与 VOUCHER_STATE 对齐：非 ok 一律计入需复核，不再静默漏计。
+    const state = requireEnumToken(TRACE_STATE_TOKENS, at(prop(trace, i)), "state");
+    if (state === "ok") ok++;
+    else inconsistent++;
+  }
+  const batchStatus = requireEnumToken(BATCH_STATUS_TOKENS, batch, "status");
+  const batchMode = requireEnumToken(MODE_TOKENS, batch, "mode");
+  const accountSetId = int(batch, "accountSetId");
+  if (accountSetId === undefined && prop(batch, "accountSetId") !== undefined
+    && prop(batch, "accountSetId") !== null) throw invalidSummary("batch.accountSetId");
+  const voucherCount = requireNum(v, "voucherCount");
+  return {
+    batchStatus,
+    batchMode,
+    accountSetId,
+    traceCount: length, okTraceCount: ok, inconsistentTraceCount: inconsistent,
+    voucherCount,
+    accountSetCreated: result ? requireBoolean(result, "accountSetCreated") : undefined,
+    vouchersCreated: result ? requireNum(result, "vouchersCreated") : undefined,
+    vouchersDeduplicated: result ? requireNum(result, "vouchersDeduplicated") : undefined,
   };
 };
 
@@ -364,142 +597,127 @@ const QUERY_SPECS = dict({
   "finance_query:enterprise_account.account_set": (value) => {
     const set = at(value);
     return {
-      accountSetId: int(set, "id"),
-      startPeriod: periodOf(set, "start_period"),
-      taxpayerType: enumToken(TAXPAYER_TOKENS, text(set, "taxpayer_type")),
-      accountingStandard: enumToken(STANDARD_TOKENS, text(set, "accounting_standard")),
-      hasDisplayName: (text(set, "name") || "").length > 0,
+      accountSetId: requirePositiveInt(set, "id"),
+      startPeriod: requirePeriod(set, "start_period"),
+      // 税种 / 准则在库内是自由文本（createAccountSet 不限制），未知取值降级为受控 "unknown"；
+      // 期间与状态不做这种降级：非法期间 / 状态必须失败。
+      taxpayerType: enumToken(TAXPAYER_TOKENS, requireText(set, "taxpayer_type")) ?? "unknown",
+      accountingStandard: enumToken(STANDARD_TOKENS, requireText(set, "accounting_standard")) ?? "unknown",
+      hasDisplayName: requireText(set, "name").length > 0,
     };
   },
-  "finance_query:enterprise_account.subject_system.all": (value) => {
-    const accounts = Array.isArray(value) ? value : [];
-    const length = listLen(accounts);
-    if (length > MAX_RAW_ARRAY) throw new OutputPolicyError("output_policy_value_too_large", "科目数量超过上限");
-    const counts = { assets: 0, liabilities: 0, equity: 0, cost: 0, profit_loss: 0 };
-    let leaf = 0, contra = 0;
-    for (let i = 0; i < length; i++) {
-      const account = at(prop(accounts, i));
-      const token = enumToken(CATEGORY_TOKENS, text(account, "category"));
-      if (token) counts[token]++;
-      if (num(account, "is_leaf") === 1) leaf++;
-      if (num(account, "contra") === 1) contra++;
-    }
-    return { accountCount: length, leafCount: leaf, contraCount: contra, byCategory: counts };
-  },
+  "finance_query:enterprise_account.subject_system.all": accountDirectorySummary,
   "finance_query:voucher.generated.list": voucherListSummary,
   "finance_query:voucher.generated.summary": voucherListSummary,
   "finance_query:voucher.draft.summary": voucherListSummary,
   "finance_query:voucher.detail": voucherDetailSummary,
   "finance_query:report.balance_sheet": (value) => {
     const sheet = at(value);
-    const totals = at(prop(sheet, "totals"));
-    const assets = listOf(sheet, "assets");
-    const liabilities = listOf(sheet, "liabilities");
-    const totalAssets = num(totals, "assets") || 0;
-    const totalLiabilities = num(totals, "liabilities") || 0;
-    const totalEquity = num(totals, "equity") || 0;
+    const totals = requireRecord(sheet, "totals");
+    const assets = requireArray(sheet, "assets");
+    const liabilities = requireArray(sheet, "liabilities");
+    const totalAssets = requireNum(totals, "assets");
+    const totalLiabilities = requireNum(totals, "liabilities");
+    const totalEquity = requireNum(totals, "equity");
     return {
-      period: periodOf(sheet, "period"),
+      period: requirePeriod(sheet, "period"),
       assets: money(totalAssets), liabilities: money(totalLiabilities), equity: money(totalEquity),
       balanced: prop(sheet, "balanced") === true
         || Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.005,
       lineCount: listLen(assets) + listLen(liabilities),
       // 固定 canonical 行（标签来自 accounting.mjs 代码常量，不是数据内容）
-      cash: money(lineValue(assets, "货币资金") || 0),
-      receivables: money(lineValue(assets, "应收账款") || 0),
-      inventory: money(lineValue(assets, "存货") || 0),
-      fixedAssetsNet: money(lineValue(assets, "固定资产账面价值") || 0),
+      cash: money(lineValue(assets, "货币资金")),
+      receivables: money(lineValue(assets, "应收账款")),
+      inventory: money(lineValue(assets, "存货")),
+      fixedAssetsNet: money(lineValue(assets, "固定资产账面价值")),
     };
   },
   "finance_query:report.income_statement": (value) => {
     const statement = at(value);
-    const current = at(prop(statement, "current"));
-    const ytd = at(prop(statement, "ytd"));
-    const line = (source, label) => money(num(source, label) || 0);
+    const current = requireRecord(statement, "current");
+    const ytd = requireRecord(statement, "ytd");
     return {
-      period: periodOf(statement, "period"),
-      currentRevenue: line(current, "营业收入"),
-      currentCost: line(current, "营业成本"),
-      currentExpenses: line(current, "销售费用") + line(current, "管理费用") + line(current, "财务费用"),
-      currentProfitBeforeTax: line(current, "利润总额"),
-      currentNetProfit: line(current, "净利润"),
-      ytdRevenue: line(ytd, "营业收入"),
-      ytdNetProfit: line(ytd, "净利润"),
+      period: requirePeriod(statement, "period"),
+      currentRevenue: money(requireNum(current, "营业收入")),
+      currentCost: money(requireNum(current, "营业成本")),
+      currentExpenses: money(requireNum(current, "销售费用") + requireNum(current, "管理费用")
+        + requireNum(current, "财务费用")),
+      currentProfitBeforeTax: money(requireNum(current, "利润总额")),
+      currentNetProfit: money(requireNum(current, "净利润")),
+      ytdRevenue: money(requireNum(ytd, "营业收入")),
+      ytdNetProfit: money(requireNum(ytd, "净利润")),
     };
   },
   "finance_query:report.cash_flow_statement": (value) => {
     const statement = at(value);
-    const totals = at(prop(statement, "totals"));
-    const cash = at(prop(statement, "cash"));
-    const operating = num(totals, "operating") || 0;
-    const investing = num(totals, "investing") || 0;
-    const financing = num(totals, "financing") || 0;
-    const begin = num(cash, "begin") || 0;
-    const end = num(cash, "end") || 0;
+    const totals = requireRecord(statement, "totals");
+    const cash = requireRecord(statement, "cash");
+    const operating = requireNum(totals, "operating");
+    const investing = requireNum(totals, "investing");
+    const financing = requireNum(totals, "financing");
+    const netIncrease = requireNum(totals, "net_increase");
+    const begin = requireNum(cash, "begin");
+    const end = requireNum(cash, "end");
+    const operatingRows = requireArray(statement, "operating");
+    const investingRows = requireArray(statement, "investing");
+    const financingRows = requireArray(statement, "financing");
     return {
-      period: periodOf(statement, "period"),
+      period: requirePeriod(statement, "period"),
       operating: money(operating), investing: money(investing), financing: money(financing),
-      netIncrease: money(num(totals, "net_increase") || operating + investing + financing),
+      netIncrease: money(netIncrease),
       cashBegin: money(begin), cashEnd: money(end), cashChange: money(end - begin),
-      reconciles: prop(statement, "reconciles") === true,
-      lineCount: listLen(listOf(statement, "operating")) + listLen(listOf(statement, "investing"))
-        + listLen(listOf(statement, "financing")),
+      // 真实现金流量表 DTO 一定带布尔 reconciles；缺失 / 类型错必须失败，
+      // 不能把「不知道」投影成 false（那会让模型把未知勾稽状态当成已核对）。
+      reconciles: requireBoolean(statement, "reconciles"),
+      lineCount: listLen(operatingRows) + listLen(investingRows) + listLen(financingRows),
     };
   },
   "finance_query:report.trial_balance": (value) => {
     const balance = at(value);
-    const totals = at(prop(balance, "totals"));
-    const closingDebit = num(totals, "closing_debit") || 0;
-    const closingCredit = num(totals, "closing_credit") || 0;
+    const totals = requireRecord(balance, "totals");
+    const closingDebit = requireNum(totals, "closing_debit");
+    const closingCredit = requireNum(totals, "closing_credit");
     return {
-      period: periodOf(balance, "period"),
-      lineCount: listLen(listOf(balance, "lines")),
-      openingDebit: money(num(totals, "opening_debit") || 0),
-      openingCredit: money(num(totals, "opening_credit") || 0),
-      periodDebit: money(num(totals, "period_debit") || 0),
-      periodCredit: money(num(totals, "period_credit") || 0),
+      period: requirePeriod(balance, "period"),
+      lineCount: listLen(requireArray(balance, "lines")),
+      openingDebit: money(requireNum(totals, "opening_debit")),
+      openingCredit: money(requireNum(totals, "opening_credit")),
+      periodDebit: money(requireNum(totals, "period_debit")),
+      periodCredit: money(requireNum(totals, "period_credit")),
       closingDebit: money(closingDebit), closingCredit: money(closingCredit),
       balanced: Math.abs(closingDebit - closingCredit) < 0.005,
     };
   },
   "finance_query:period_end.summary": (value) => {
     const summary = at(value);
-    const periods = listOf(summary, "periods");
+    const periods = requireArray(summary, "periods");
     const periodCount = listLen(periods);
     let open = 0, closed = 0;
     for (let i = 0; i < periodCount; i++) {
-      const status = text(at(prop(periods, i)), "status");
+      const status = requireChoice(at(prop(periods, i)), "status", PERIOD_STATUS_CHOICES);
       if (status === "open") open++;
-      else if (status === "closed") closed++;
+      else closed++;
     }
-    const balance = at(prop(summary, "trial_balance"));
-    const totals = at(prop(balance, "totals"));
-    const closingDebit = num(totals, "closing_debit") || 0;
-    const closingCredit = num(totals, "closing_credit") || 0;
+    const balance = requireRecord(summary, "trial_balance");
+    const totals = requireRecord(balance, "totals");
+    const closingDebit = requireNum(totals, "closing_debit");
+    const closingCredit = requireNum(totals, "closing_credit");
     return {
       periodCount, openPeriodCount: open, closedPeriodCount: closed,
-      period: periodOf(balance, "period"),
+      period: requirePeriod(balance, "period"),
       closingDebit: money(closingDebit), closingCredit: money(closingCredit),
       balanced: Math.abs(closingDebit - closingCredit) < 0.005,
     };
   },
-  "finance_query:ledger.general": (value) => {
-    const ledger = at(value);
-    const items = listOf(ledger, "items");
-    const opening = at(prop(ledger, "opening"));
-    const openingDebit = num(opening, "debit") || 0;
-    const openingCredit = num(opening, "credit") || 0;
-    const periodDebit = sumField(items, "debit");
-    const periodCredit = sumField(items, "credit");
-    return {
-      period: periodOf(ledger, "period"),
-      direction: enumToken(DIRECTION_TOKENS, text(ledger, "direction")),
-      itemCount: listLen(items),
-      openingDebit: money(openingDebit), openingCredit: money(openingCredit),
-      periodDebit: money(periodDebit), periodCredit: money(periodCredit),
-      closingBalance: money(openingDebit - openingCredit + periodDebit - periodCredit),
-    };
-  },
+  "finance_query:ledger.general": ledgerSummary,
+  // ---- 普通工具（非 finance_query）的只读能力：同样只给白名单摘要 ----
+  voucher_check: voucherCheckSummary,
+  account_list: accountDirectorySummary,
+  opening_balance_get: openingBalanceSummary,
+  period_list: periodListSummary,
+  ledger_query: ledgerSummary,
+  asset_list: assetListSummary,
+  book_import_batch: batchAuditSummary,
 });
 
 // ---------------------------------------------------------------- 写动作 projection 规格
@@ -589,7 +807,8 @@ const WRITE_SPECS = dict({
       const v = at(value);
       return {
         assetId: int(v, "id"),
-        kind: text(v, "kind") === "intangible" ? "intangible" : "fixed",
+        // 未登记 kind 不再一律标成 fixed：只投影登记过的种类。
+        kind: enumToken(ASSET_KIND_TOKENS, text(v, "kind")),
         startPeriod: periodOf(v, "start_period"),
         usefulLifeMonths: num(v, "useful_life_months"),
         originalCost: money(num(v, "original_cost")),
@@ -667,7 +886,88 @@ const WRITE_SPECS = dict({
       return { applied: "unknown", reason: "unverified_result" };
     },
   },
+  book_import_incremental: {
+    summary: (value) => {
+      const v = at(value);
+      const created = at(prop(v, "created"));
+      const batch = at(prop(v, "batch"));
+      const planned = at(prop(v, "planned"));
+      return {
+        status: enumToken(IMPORT_STATUS_TOKENS, text(v, "status")),
+        accountSetId: int(created, "accountSetId") ?? int(v, "accountSetId"),
+        accountSetCreated: prop(created, "accountSetCreated") === true,
+        accountsAdded: num(created, "accountsAdded"),
+        openingBalancesApplied: num(created, "openingBalancesApplied"),
+        vouchersCreated: num(created, "vouchersCreated"),
+        vouchersDeduplicated: num(created, "vouchersDeduplicated"),
+        replayed: prop(v, "replayed") === true,
+        conflictCount: listLen(listOf(v, "conflicts")),
+        errorCount: listLen(listOf(v, "errors")),
+        validationOk: prop(at(prop(v, "validation")), "ok") === true,
+        batchStatus: enumToken(BATCH_STATUS_TOKENS, text(batch, "status")),
+        plannedAccountSetCreated: prop(planned, "accountSetCreated") === true,
+        plannedVouchers: listLen(listOf(planned, "vouchersToCreate")),
+        plannedVouchersDeduplicated: listLen(listOf(planned, "vouchersDeduplicated")),
+      };
+    },
+    evidence: (value) => {
+      const v = at(value);
+      const status = text(v, "status");
+      if (status === "applied") {
+        return int(at(prop(v, "created")), "accountSetId") !== undefined
+          ? { applied: true }
+          : { applied: "unknown", reason: "unverified_result" };
+      }
+      if (status === "idempotent_replay") return { applied: false, reason: "idempotent_replay" };
+      if (status === "preview") return { applied: false, reason: "dry_run" };
+      return { applied: "unknown", reason: "unverified_result" };
+    },
+  },
 });
+
+/**
+ * 无引用摘要出口：供适配器在「没有可信账套绑定」时使用（全局上下文 / 批次未绑定 / create 失败未建账）。
+ * 只返回白名单 projection：不创建引用、不返回原值，未知 operation 仍拒绝。
+ * 反射失败不抛异常（调用方通常已将“未能绑定引用”降级），用 summaryUnavailable 标记。
+ */
+export function summarizeQueryResult(operation, value) {
+  const summarize = requireSpec(QUERY_SPECS, operation, "query");
+  try {
+    const sanitized = sanitizeProjection(summarize(value));
+    return { projection: sanitized.value, projectionDropped: sanitized.dropped, summaryUnavailable: false };
+  } catch {
+    return { projection: freezeDeep({}), projectionDropped: 0, summaryUnavailable: true };
+  }
+}
+
+/** 写结果的无引用摘要（applied 三态来自同一份证据规则，不因未绑定引用而丢）。 */
+export function summarizeWriteResult(operation, value) {
+  const spec = requireSpec(WRITE_SPECS, operation, "write");
+  let evidence = UNKNOWN_EVIDENCE;
+  try {
+    evidence = normalizeEvidence(spec.evidence(value));
+  } catch {
+    evidence = UNKNOWN_EVIDENCE;
+  }
+  let projection = freezeDeep({});
+  let dropped = 0;
+  let summaryUnavailable = false;
+  try {
+    const sanitized = sanitizeProjection(spec.summary(value));
+    projection = sanitized.value;
+    dropped = sanitized.dropped;
+  } catch {
+    summaryUnavailable = true;
+  }
+  return {
+    applied: evidence.applied,
+    ...(evidence.reason ? { appliedReason: evidence.reason } : {}),
+    needsLocalReview: evidence.applied !== true,
+    projection,
+    projectionDropped: dropped,
+    summaryUnavailable,
+  };
+}
 
 /** 模块支持的 operation 列表（未知 operation 一律拒绝，不做兜底）。 */
 export const SUPPORTED_OPERATIONS = Object.freeze({
@@ -731,6 +1031,44 @@ const ERROR_CODES = dict({
   asset_has_depreciation_runs: "asset",
   payload_or_texts_or_files_required: "input",
   report_data_invalid: "report",
+  // ---- 普通工具适配层（finance-model-adapter.mjs）自己的固定错误码 ----
+  model_tool_unknown: "tool",
+  model_tool_tax_excluded: "tool",
+  model_tool_not_implemented: "tool",
+  model_node_unknown: "tool",
+  model_node_not_implemented: "tool",
+  model_arguments_invalid: "input",
+  account_set_id_conflict: "input",
+  model_context_page_invalid: "input",
+  model_scope_mismatch: "input",
+  model_result_invalid: "output_policy",
+  // ---- main 里已有、会被入口转发的领域域码（只回声常量，不回声原文）----
+  operation_failed: "unknown",
+  accountSetId_required: "account_set",
+  accountSetId_invalid: "account_set",
+  nodeId_required: "input",
+  items_required: "input",
+  import_validation_failed: "import",
+  import_conflict: "import",
+  batch_not_found: "import",
+  batchId_required: "input",
+  code_and_name_required: "account",
+  direction_invalid: "account",
+  category_invalid: "account",
+  status_invalid: "period",
+  period_not_found: "period",
+  period_has_draft_vouchers: "period",
+  period_unbalanced: "period",
+  posted_voucher_requires_unpost: "voucher",
+  voucherId_required: "voucher",
+  opening_unbalanced: "opening",
+  opening_code_required: "opening",
+  opening_amount_invalid: "opening",
+  original_cost_invalid: "asset",
+  useful_life_months_invalid: "asset",
+  residual_rate_invalid: "asset",
+  voucher_number_unplanned: "voucher",
+  depreciation_exceeds_depreciable: "depreciation",
   unknown_tool: "tool",
   tool_required: "tool",
   output_policy_ref_unknown: "output_policy",
@@ -1187,7 +1525,7 @@ export class FinanceOutputPolicy {
       projection,
       projectionDropped: dropped,
       localRef: stored.ref,
-      refPersistence: REF_PERSISTENCE,
+      refPersistence: stored.ref ? REF_PERSISTENCE : "none",
       rawValuesIncluded: false,
     };
     if (evidence.reason) envelope.appliedReason = evidence.reason;
