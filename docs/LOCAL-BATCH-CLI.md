@@ -1,4 +1,4 @@
-# 本机持久批量 CLI（LOCAL-07）
+# 本机持久批量 CLI（LOCAL-07 / B1）
 
 本机**单用户**财税工作台的持久批量任务与命令行入口：一名操作者在自己电脑上对**多家企业**做批量导入、
 过账、计提 / 摊销、结转、期末检查、结账与内部报表。**一家企业只有一个账套**，多企业批量处理 = 多个账套。
@@ -17,14 +17,14 @@
 
 | 依赖 | 状态 | 本 CLI 的处理 |
 |---|---|---|
-| LOCAL-01 增量导入（`import-incremental.mjs`） | 已合并，可作为真实导入入口 | 直接用；批次 / 来源 / 一企一账套 / 跨批去重规则全部沿用上游 |
-| LOCAL-05a 纯渲染（`report-office-export.mjs`） | 已合并，导入无数据库副作用 | worker 线程只调用 `buildReportDocument/buildReportXlsx/buildReportPdf` |
+| LOCAL-01 增量导入（`import-incremental.mjs`） | 已合并 | 直接用；批次 / 来源 / 一企一账套 / 跨批去重规则全部沿用上游 |
+| LOCAL-05a 纯渲染（`report-office-export.mjs`） | 已合并 | worker 线程只调用 `buildReportDocument/buildReportXlsx/buildReportPdf` |
 | LOCAL-05b 会计口径 / 双准则 | 未完成 | 不冒充合规；报表沿用现有本地科目映射，限制写在 DTO 与产物里 |
-| **LOCAL-02 金额 / 期末完整性（`A.periodEndCheck`）** | **未合并** | `period-check` 阶段如实返回 `blocked_dependency` + `dependency_unavailable`；`close` 因缺少同期间成功检查而同样阻塞。**不用旧试算平衡冒充期末检查，不放宽封账规则** |
-| **LOCAL-06 备份恢复（`createBackup` / `verifyBackup` / `restoreNew`）** | **未合并** | 只在**显式新建、空的**数据目录上初始化批量结构；既有库一律返回 `migration_requires_backup` / `dependency_unavailable`，不自动建表、不用 `copyFile` 主文件冒充备份 |
+| **LOCAL-02 金额 / 期末完整性（`A.periodEndCheck` / `A.setPeriodStatus`）** | **已实际合入 main（PR #60）** | `period-check` 只按真实 `{ ready, steps, blocking }` 判定；`close` 真实调用 `setPeriodStatus`，由核心重新校验前置，close 效果与 checkpoint 同一事务。旧 check 成功不代替核心校验 |
+| **LOCAL-06 备份恢复（`createBackup` / `verifyBackup` / `restoreNew`）** | 模块已合，但**现库组件安装 / restore-new 未接线** | 只在**显式新目标**上初始化批量结构；既有库（含零字节文件 / 空业务核心库）一律 `migration_requires_backup` / `dependency_unavailable`，不自动建表、不用 `copyFile` 冒充备份 |
 
-因此本包交付的是「已经可运行的稳定真实阶段 + 持久协议」；`period-check` / `close` 与既有库迁移需等
-LOCAL-02 / LOCAL-06 合并后由管理者重验，**不能宣称 LOCAL-07 最终完成**。
+因此本 B1 交付的是「真实七阶段（含真实期末检查 / 封账）+ 持久协议 + 独占新建安全」。
+现库组件安装、共享手工入口互斥与 `restoreNew` 实例分叉仍归后续 W3 / W4，**不能宣称 LOCAL-07 整包完成**。
 
 ## 2. 运行方式
 
@@ -39,6 +39,7 @@ node scripts/local-batch.mjs retry  --data-dir <数据目录> --job-key <jobKey>
 ```
 
 - `--data-dir` 每次都必须显式给出（该目录内是 `workbench.db`）。`start` 还必须显式给出 `--manifest` 与 `--output-dir`。
+- `--data-dir` 必须是真实目录（不能是符号链接 / junction，realpath 必须与显式路径一致），否则 `data_dir_alias`。
 - `status` 使用**只读**连接：不建表、不升级、不续跑；缺库返回 `database_not_found`，不会把不存在的库当新库。
 - 数据目录只读探测对**并发瞬时锁**有限重试（另一个执行者正在写 / 正关闭连接并清理 `-wal`、`-shm` 时
   只读探测会瞬时拿到 `database is locked`，这不是库损坏）；真正读不出才报 `database_unreadable`（fail-closed）。
@@ -57,7 +58,7 @@ node scripts/local-batch.mjs retry  --data-dir <数据目录> --job-key <jobKey>
 | `0` | 命令成功且任务状态为 `succeeded`（或 `cancel` / `retry` 正常登记） |
 | `1` | 仍有失败 / 需复核 / 依赖阻塞 / 已取消 / 其它实例正在执行 |
 | `2` | 参数、manifest 校验或 jobKey 冲突错误 |
-| `3` | 依赖或数据目录错误（缺库、无批量结构、需先备份、结构版本不兼容、并发占用 `database_busy`） |
+| `3` | 依赖或数据目录错误（缺库、无批量结构、需先备份、结构版本不兼容、并发占用 `database_busy`、新建目标已被占用 / 非空 / 别名） |
 
 并发 `start` / `resume` 时，共享库初始化会执行建表 / 建索引语句；若此时另一个执行者正在写，原生 SQLite
 错误 `database is locked` 不当作参数错误，而统一归一为 `database_busy`（退出码 3，提示稍后重试；已进行的阶段仍可 `resume`）。
@@ -139,8 +140,13 @@ import(按清单) → post → depreciation → carryforward → period-check �
 - `succeeded` 只在**结果已核验**后落地：导入要 `import_batches=completed` 且逐张 `sourceTrace.state=ok`；
   计提要核 runs 与已过账凭证金额；结转要核真实结转凭证；封账要核 `periods.status=closed`；
   报表要核产物文件字节 hash。
-- `not_applicable` 必须有真实领域证据（例如无资产卡片 / 未到计提期 / 已提足），不能用开关绕过。证据存
-  `local_batch_stages.evidence_json`（卡片、runs、原因码）。
+- `not_applicable` 必须有真实领域证据（例如无资产卡片 / 取得期间未到 / 未到起提期 / 已提足 / 按分取整为 0 / 本期已计提），
+  不能用开关绕过。计提逐卡复用 LOCAL-02 的 `assetCardPeriodStatus`，不自写 `remaining > 0` 规则。
+  证据存 `local_batch_stages.evidence_json`（卡片状态、runs、原因码）。
+- 期末检查 / 封账的判定：真实 `A.periodEndCheck` 返回 `{ ready, steps, blocking }`；`ready===true` 且
+  `steps` 非空且无 blocking 才 `succeeded`，否则 `needs_review`（证据只留步骤 id / 状态与阻断码，
+  不落企业 / 资产自由文本 details）。`close` 真实调用 `A.setPeriodStatus`，核心会重新校验业务前置；
+  旧 check 成功不代替它。
 - 某 item 阶段失败只停止**该 item** 的后续阶段，其它企业继续。执行器按「期间 → 阶段顺序」线性推进：
   遇到任何前序 `failed` / `needs_review` 就不再执行后序阶段（后序未开始阶段标 `needs_review` +
   `prior_stage_unresolved`，证据里记 `blockedBy`）；**同一次执行**内某阶段自身登记 `needs_review`
@@ -157,7 +163,9 @@ import(按清单) → post → depreciation → carryforward → period-check �
      不覆盖 manifest 已声明的账套（零业务写入）；不会只用锁作用域或内存快照替账套，也不会用 `null` 去重算
      报表业务摘要（否则数据与文件都没变也会误报 `report_evidence_changed`）。
   2. **源输入证据**（见 §7）：源文件被改 / 丢失且未显式选择快照 → `input_changed` / `input_missing`。
-- `blocked_dependency` 表示依赖接口未就绪（当前 = LOCAL-02 期末检查）；报表不因此停止（内部报表不依赖封账）。
+- `blocked_dependency` 只在真实依赖接口不可用 / 同期间没有成功检查时出现；当前已合入的 LOCAL-02 接口存在，
+  因此正常 20 企业链路会真实执行 check / close（不是依赖阻塞）。报表不因 check / close 的业务复核而伪造成功；
+  前序 `needs_review` 会按门禁停住后续阶段。
 - 状态转换持久化，每次写入都带 `owner_instance` + `fencing_token` + `attempt` 的 CAS 校验。
 
 ## 5. 互斥、fencing 与事务窗口
@@ -168,12 +176,15 @@ import(按清单) → post → depreciation → carryforward → period-check �
 - 申请 / 续租 / 接管都是**数据库内原子操作**（`BEGIN IMMEDIATE` + CAS）：
   - 自己持有 → 续租；
   - 租约内且 owner 进程存活（或存活无法确认）→ `lock_active`；
-  - 租约已过期但 PID 仍存活 / 无法确认 → `owner_active`，**保守拒绝，不按超时抢锁**；
+  - 租约已过期但 PID 仍存活 / 无法确认 → `owner_active`，**保守拒绝，不按超时抢锁**
+    （代码策略；独审实测的是「租约过期 + PID 存活」，未实测「PID 存活无法确认」分支）；
   - **PID 确认已不存在** → 递增 fence 接管（死进程不可能再提交）。
 - 阶段结果写入必须与 fence 校验在**同一个** `BEGIN IMMEDIATE` 事务内；旧 token / 旧 attempt 的迟到提交会被
   `fence_lost` 拒绝，不会覆盖新尝试。
 - 事务窗口：
-  - `post` / `depreciation` / `carryforward` / `period-check`（接口就绪时）/ `close`：会计效果 + checkpoint 同一事务；
+  - `post` / `depreciation` / `carryforward` / `period-check` / `close`：会计效果 + checkpoint 同一事务；
+    `close` 调用真实 `A.setPeriodStatus(..., 'closed')` 并查库确认期间状态，核心领域用 SAVEPOINT，
+    不套第二 `BEGIN`，也不直接 SQL 置 closed；
   - `import`：`importIncremental` 自带 `BEGIN IMMEDIATE`，**禁止外包事务**；采用「上游批次幂等 + 事后真实核验 +
     独立 fence 事务补 checkpoint」，commit 后崩溃可安全回放（见 §7）；
   - 报表：主线程在**一致只读快照**里生成 DTO / CSV 后立即释放读事务，渲染在 worker 线程，主线程不持有写事务。
@@ -201,12 +212,16 @@ import(按清单) → post → depreciation → carryforward → period-check �
 
 ### 结构初始化与备份依赖
 
-- 只允许「数据目录里根本没有 `workbench.db`」的**显式新目标**初始化：先只读检查目录 → 再 import 会打开库的模块 →
-  事务建结构。
-- 既有库（哪怕只有核心表）：一律 `migration_requires_backup`（退出码 3，`details.dependency = LOCAL-06 createBackup/verifyBackup`）。
-  `status` / `cancel` / `retry` 对这类库返回 `batch_schema_unavailable`。
-- **没有任何 CLI 参数 / 环境变量可以绕过备份**；LOCAL-06 合并后由管理者另排短窗口把
-  `createBackup → verifyBackup → 迁移 → 记录` 真正接上，再做旧结构迁移与 restore-new 验收。
+- 只允许「数据目录里根本没有 `workbench.db`」的**显式新目标**初始化。`start` 先只读检查目录身份，
+  再调用 `claimFreshDataDir`：以 `O_EXCL` 原子创建所有权标记和零字节库文件本身，把 `dev/ino` 绑定到
+  进程内回执；`ensureBatchSchema` 必须收到本进程回执，建表前后都校验目录 / 库文件 / `PRAGMA database_list` /
+  `dev/ino` 未被替换。**布尔 fresh / 伪造回执无效**。
+- 并发两个进程抢同一新目标：最多一个取得创建资格；另一个稳定 `fresh_target_claimed`（退出码 3），
+  只有能确认完整已初始化结构时才按已有库路径继续，不帮忙修半库。
+- 既有库（哪怕只有核心表、空业务、甚至零字节文件）一律 `migration_requires_backup`（退出码 3，
+  `details.dependency = LOCAL-06 createBackup/verifyBackup`）。`status` / `cancel` / `retry` 对这类库返回
+  `batch_schema_unavailable`。符号链接 / junction 目录一律 `data_dir_alias`。
+- **没有任何 CLI 参数 / 环境变量可以绕过备份**；LOCAL-06 现库安装 / `restoreNew` 由后续 W3 / W4 接线。
 
 ## 7. 输入快照、恢复与幂等
 
@@ -232,6 +247,8 @@ import(按清单) → post → depreciation → carryforward → period-check �
 
 - 每次 `resume` 都重新核验已成功阶段的上游证据：凭证被反过账 / 改金额 / 删除、来源状态回退、
   计提 runs 变化、封账被重开、报表业务证据变化 → `needs_review`（`evidence_changed`），停止盲续。
+  期末检查重新执行真实 `A.periodEndCheck`：若只剩「更晚期间已由本任务合法封账」的 `later_period_closed`
+  且目标期间仍 `closed`，视为合法后续效果；其它回退 → `period_check_regressed`。
   核验的账套作用域取「阶段证据记录的账套，否则 item 已落库的账套」；两者都没有才视为无法核验（不放行）。
   因此省略 `accountSetId` 的任务一旦把绑定推断出的账套落库，重启后的核验与原执行使用同一账套，
   不会因 `null` 重算摘要而假报 `report_evidence_changed`（真变化仍会报）。
@@ -277,25 +294,31 @@ import(按清单) → post → depreciation → carryforward → period-check �
 在 `06-workbench` 目录：
 
 ```bash
-node test/local-batch-cli.test.mjs          # 9 组：CLI 契约 / 20 家企业两月真实动作链 / 五类 CSV+XLSX+PDF / 并发证据
-node test/local-batch-persistence.test.mjs  # 25 组：失败隔离 / 前序失败停住 / 一企一套绑定（含省略 accountSetId 的
-                                            #        推断账套落库与重启核验）/ 崩溃恢复 / 互斥与 fence /
-                                            #        失效证据 / 输入快照选择 / 报表依赖证据 / 迁移回滚
+node test/local-batch-cli.test.mjs          # 10 组：CLI 契约 / 20 家企业两月真实七阶段 / 年末跨年 / 并发证据
+node test/local-batch-persistence.test.mjs  # 31 组：失败隔离 / 前序失败停住 / 一企一套绑定（含省略 accountSetId 的
+                                            #        推断账套落库与重启核验）/ 崩溃恢复（含 close 前后）/ 互斥与 fence /
+                                            #        失效证据 / 输入快照选择 / 报表依赖证据 / 迁移回滚 /
+                                            #        真实期末检查与封账 / 卡片状态 / 独占新建安全
 ```
+
+B1 实测：`cli` **10 / 10**、`persistence` **31 / 31**，均 exit 0。20 企业主任务实际 **840 个 stage**
+（全部 succeeded，含 40 个真实 period-check + 40 个真实 close）与 **600 个报表产物**；
+不是旧 480 / 300 数字。历史 9 + 25 是旧基线事实，不被覆盖。
 
 两份测试全部使用**真实 CLI 子进程 + 真实 SQLite + 真实领域接口 + 真实 XLSX/PDF 渲染**，
 合成临时库位于系统临时目录（不访问真实账套 / 凭据 / 税局）；`mock` 只用于故障注入（子进程 `SIGKILL` /
-暂停同步点），不替代主验收。
+受控同步点），不替代主验收。
 
-定向回归（本包不修改这些文件，只证明未受影响）：`import-incremental` 49、`import-strict` 54、
-`report-office-export` 21、`report-export` 21、`smoke` 28、`accounting-derived` 31、`accounting-guards` 23。
+定向回归（本包不修改这些文件，只证明未受影响）：`accounting-period-integrity` 45、`accounting-period-http`、
+`report-office-export` 21、`report-export` 21、`import-incremental` 49，均 exit 0。
 
 ## 11. 明确限制
 
-1. **LOCAL-02 未合并**：`period-check` 恒为 `blocked_dependency`，因此 `close` 不会真正执行；20 家企业链路的
-   任务状态如实为 `needs_review`（退出码 1），报表仍全部真实产出并通过金额核对。不得用旧试算平衡替代期末检查。
-2. **LOCAL-06 未合并**：既有库不迁移（`migration_requires_backup`）；未做真实一致备份 / `restoreNew` /
-   恢复后新进程续跑验收，也没有 `copyFile` 式伪备份。
+1. **B1 只覆盖真实七阶段**：`period-check` / `close` 已按已合入的 LOCAL-02 真实执行并通过 20 企业两月验收；
+   这不等于 LOCAL-07 整包完成。**现库组件安装 / 备份支持 / 共享手工入口互斥（W3）与
+   `createBackup → verifyBackup → restoreNew` / 实例分叉 / 旧锁路径 / 报表重建（W4）仍未做**。
+2. **既有库不迁移**：哪怕空业务核心库或零字节文件也 `migration_requires_backup`；未做真实一致备份 /
+   `restoreNew` / 恢复后新进程续跑验收，也没有 `copyFile` 式伪备份。
 3. 本 CLI 的互斥只覆盖批量 runner 之间；手工 HTTP / Agent 入口未接线，需管理者另排共享 guard 小窗口。
 4. 报表仍然是内部报表：数据完整性「未核实」、不是税局申报模板；PDF 依赖本机中文字体，字节可能随字体 / 元数据变化，
    已完成产物按记录 hash 校验，重新生成视为新 attempt。
@@ -306,4 +329,5 @@ node test/local-batch-persistence.test.mjs  # 25 组：失败隔离 / 前序失�
    不改绑定、不新增绑定接口。
 8. 只读探测的重试**没有全局截止**（每连接 `busy_timeout = 5000`、最多 4 次、额外睡眠合计 300ms）：被外部
    `BEGIN EXCLUSIVE` 长期持锁时实测可长达约 30 秒才 fail-closed。产品未要求 < 1 秒，本包不新增 deadline；
-   共享库初始化锁冲突同样未在本包边界内处理。
+   共享库初始化锁冲突同样未在本包边界内处理。历史两次 22 / 23 完整失败原始输出缺失、原因未定位，
+   本轮绿色结果不得用于覆盖。

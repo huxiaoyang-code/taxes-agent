@@ -18,9 +18,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 
@@ -29,6 +29,15 @@ const CLI = join(WB, "scripts", "local-batch.mjs");
 const ROOT = mkdtempSync(join(tmpdir(), "lb-cli-"));
 const RESULTS = [];
 let failures = 0;
+/** 只清理本次 mkdtemp 创建、位于系统临时根下且不是符号链接 / junction 的明确目录。 */
+function cleanupRoot() {
+  const root = resolve(ROOT);
+  const base = resolve(tmpdir());
+  if (root === base || !root.startsWith(base + sep)) throw new Error(`拒绝清理范围外目录：${root}`);
+  const stat = lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`拒绝清理非真实目录：${root}`);
+  rmSync(root, { recursive: true, force: true });
+}
 
 async function test(name, fn) {
   try {
@@ -64,10 +73,15 @@ const PRIME_CODE = `
 import * as storage from "./server/local-batch-storage.mjs";
 const dataDir = process.env.WORKBENCH_DATA_DIR;
 const init = storage.assertInitializable(dataDir);
+const receipt = init.fresh ? storage.claimFreshDataDir(dataDir) : null;
 process.env.WORKBENCH_DATA_DIR = dataDir;
-const runner = await import("./server/local-batch-runner.mjs");
-const schema = storage.ensureBatchSchema(runner.database, { freshDatabase: init.fresh });
-console.log(JSON.stringify({ fresh: init.fresh, schema }));
+try {
+  const runner = await import("./server/local-batch-runner.mjs");
+  const schema = storage.ensureBatchSchema(runner.database, { receipt });
+  console.log(JSON.stringify({ fresh: init.fresh, schema }));
+} finally {
+  if (receipt) storage.releaseFreshClaim(receipt);
+}
 `;
 function primeDataDir(dataDir) {
   const result = runNode(PRIME_CODE, { env: { WORKBENCH_DATA_DIR: dataDir } });
@@ -92,7 +106,7 @@ for (const spec of specs) {
   });
   A.addAssetCard(set.id, {
     kind: "fixed", name: "生产设备", original_cost: spec.assetCost, residual_rate: 0,
-    useful_life_months: spec.life, start_period: "2026-01",
+    useful_life_months: spec.life, start_period: "2026-01", acquired_period: "2026-01",
     asset_account: "1601", accum_account: "1602", expense_account: "5602",
   });
   const draft = A.createVoucher(set.id, {
@@ -110,6 +124,31 @@ console.log(JSON.stringify(out));
 function createFixture(dataDir, specs) {
   const result = runNode(FIXTURE_CODE, { env: { WORKBENCH_DATA_DIR: dataDir, FIXTURE_SPECS: JSON.stringify(specs) } });
   assert.equal(result.status, 0, `fixture 失败：${result.stderr}`);
+  return JSON.parse(String(result.stdout).trim().split(/\r?\n/).at(-1));
+}
+
+/** 通过真实领域入口在已由 CLI 建好的账套上补资产卡片（取得期间 / 起提期间 / 入账状态齐全）。 */
+const CARD_CODE = `
+import { db } from "./server/db.mjs";
+import * as A from "./server/accounting.mjs";
+const specs = JSON.parse(process.env.CARD_SPECS);
+const out = [];
+for (const spec of specs) {
+  const binding = db.prepare("SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?").get(spec.enterpriseKey);
+  if (!binding) throw new Error("binding_missing");
+  const card = A.addAssetCard(binding.account_set_id, {
+    kind: "fixed", name: "生产设备", original_cost: spec.assetCost, residual_rate: 0,
+    useful_life_months: spec.life, start_period: "2026-01", acquired_period: "2026-01",
+    ledger_status: "booked",
+    asset_account: "1601", accum_account: "1602", expense_account: "5602",
+  });
+  out.push({ enterpriseKey: spec.enterpriseKey, setId: binding.account_set_id, cardId: card.id });
+}
+console.log(JSON.stringify(out));
+`;
+function addAssetCards(dataDir, specs) {
+  const result = runNode(CARD_CODE, { env: { WORKBENCH_DATA_DIR: dataDir, CARD_SPECS: JSON.stringify(specs) } });
+  assert.equal(result.status, 0, `资产卡片准备失败：${result.stderr}`);
   return JSON.parse(String(result.stdout).trim().split(/\r?\n/).at(-1));
 }
 
@@ -186,47 +225,63 @@ function assertPdf(buffer) {
 
 // ---------------------------------------------------------------- 20 家企业手算表
 const COMPANY_COUNT = 20;
+/**
+ * 独立手算预期（元）：至少公司 1 完全采用任务单给定样例：
+ * 期初银行 10000 + 设备 1200 = 资本 11200；设备零残值 12 期、每期 100；
+ * 月 1 收入 2000 / 费用 300 / 折旧 100；月 2 收入 1500 / 费用 250 / 折旧 100。
+ * 其余公司使用不同金额 / 寿命，逐家独立核对，不串读同一账套。
+ */
 function company(i) {
-  const assetCost = i === 1 ? 100 : 600;
-  const life = i === 1 ? 3 : 12;
-  const capital = 100000 + 1000 * i;
-  const rev1 = 1000 + 10 * i;
-  const e1 = 200 + i;
-  const rev2 = 1200 + 10 * i;
-  const e2 = 210 + i;
-  const salary = 50 + i;
+  let bank0, assetCost, life, rev1, e1, rev2, e2;
+  if (i === 1) {
+    bank0 = 10000; assetCost = 1200; life = 12; rev1 = 2000; e1 = 300; rev2 = 1500; e2 = 250;
+  } else {
+    const variants = [[600, 6], [900, 12], [1200, 24], [1800, 6], [2400, 12]];
+    [assetCost, life] = variants[(i - 2) % variants.length];
+    bank0 = 7000 + i * 211;
+    rev1 = 800 + i * 17;
+    e1 = 150 + i * 3;
+    rev2 = 600 + i * 11;
+    e2 = 120 + i * 2;
+  }
+  const capital = r2(bank0 + assetCost);
   const monthly = r2(assetCost / life);
   const d1 = monthly;
-  const d2 = r2(Math.min(monthly, r2(assetCost - d1)));
-  const p1 = r2(rev1 - e1 - salary - d1);
+  const d2 = monthly;
+  const p1 = r2(rev1 - e1 - d1);
   const p2 = r2(rev2 - e2 - d2);
-  const cashJan = r2(capital + rev1 - e1 - assetCost);
-  const cashFeb = r2(cashJan + rev2 - e2);
+  const bank1 = r2(bank0 + rev1 - e1);
+  const bank2 = r2(bank1 + rev2 - e2);
+  const accum1 = d1;
+  const accum2 = r2(d1 + d2);
+  const fixedNet1 = r2(assetCost - accum1);
+  const fixedNet2 = r2(assetCost - accum2);
   return {
     i,
     enterpriseKey: `91350000BATCH${String(i).padStart(4, "0")}X`,
     name: `合成批${String(i).padStart(2, "0")}公司`,
-    capital, rev1, rev2, e1, e2, salary, assetCost, life, monthly, d1, d2, p1, p2, cashJan, cashFeb,
-    fixedNet: r2(assetCost - d1 - d2),
-    accum: r2(d1 + d2),
-    totalAssets: r2(cashFeb + assetCost - d1 - d2),
-    totalLiabilities: salary,
-    totalEquity: r2(capital + p1 + p2),
+    bank0, capital, rev1, rev2, e1, e2, assetCost, life, monthly, d1, d2, p1, p2,
+    bank1, bank2, accum1, accum2, fixedNet1, fixedNet2,
+    totalAssets1: r2(bank1 + fixedNet1),
+    totalAssets2: r2(bank2 + fixedNet2),
+    totalEquity1: r2(capital + p1),
+    totalEquity2: r2(capital + p1 + p2),
   };
 }
 const COMPANIES = Array.from({ length: COMPANY_COUNT }, (_, index) => company(index + 1));
 
-function janPayload(c) {
+function janPayload(c, { includeOpenings = true } = {}) {
   return {
     account_set: {
       name: c.name, taxpayer_type: "小规模纳税人",
       accounting_standard: "小企业会计准则", start_period: "2026-01",
     },
     accounts: [],
-    opening_balances: [
-      { code: "1002", debit: String(c.capital), credit: "" },
+    opening_balances: includeOpenings ? [
+      { code: "1002", debit: String(c.bank0), credit: "" },
+      { code: "1601", debit: String(c.assetCost), credit: "" },
       { code: "3001", debit: "", credit: String(c.capital) },
-    ],
+    ] : [],
     vouchers: [
       {
         sourceVoucherId: `${c.enterpriseKey}-2026-01-sale`,
@@ -242,14 +297,6 @@ function janPayload(c) {
         entries: [
           { code: "5602", debit: String(c.e1), credit: "" },
           { code: "1002", debit: "", credit: String(c.e1) },
-        ],
-      },
-      {
-        sourceVoucherId: `${c.enterpriseKey}-2026-01-asset`,
-        period: "2026-01", date: "2026-01-25", word: "记", number: 3, summary: "购置设备",
-        entries: [
-          { code: "1601", debit: String(c.assetCost), credit: "" },
-          { code: "1002", debit: "", credit: String(c.assetCost) },
         ],
       },
     ],
@@ -289,6 +336,20 @@ const ALL_REPORTS = [
   { kinds: ["ledger"], formats: ["csv", "xlsx", "pdf"], code: "1002" },
 ];
 
+function provisionManifest(jobKey) {
+  return {
+    schemaVersion: 1, jobKey, concurrency: 1,
+    items: COMPANIES.map((c) => ({
+      itemKey: `ent-${String(c.i).padStart(2, "0")}`,
+      source: { system: "local-export", enterpriseKey: c.enterpriseKey, enterpriseName: c.name },
+      periods: [{
+        period: "2026-01",
+        imports: [{ batchId: `${c.enterpriseKey}-2026-01`, mode: "create", payload: janPayload(c) }],
+      }],
+    })),
+  };
+}
+
 function chainManifest(jobKey, fixtureByKey) {
   const items = COMPANIES.map((c) => {
     const fixture = fixtureByKey.get(c.enterpriseKey);
@@ -300,22 +361,34 @@ function chainManifest(jobKey, fixtureByKey) {
         {
           period: "2026-01",
           imports: [{
-            batchId: `${c.enterpriseKey}-2026-01`,
+            batchId: `${c.enterpriseKey}-2026-01-run`,
             mode: "append",
             confirmNewBinding: true,
-            payload: janPayload(c),
+            payload: janPayload(c, { includeOpenings: false }),
           }],
-          post: { vouchers: [{ voucherId: fixture.draftVoucherId }] },
+          post: { vouchers: [
+            { sourceVoucherId: `${c.enterpriseKey}-2026-01-sale` },
+            { sourceVoucherId: `${c.enterpriseKey}-2026-01-fee` },
+          ] },
           depreciation: true,
           carryforward: { yearEnd: false },
           periodCheck: true,
           close: true,
+          reports: ALL_REPORTS.flatMap((group) => group.kinds.map((kind) => ({
+            kind, formats: group.formats, ...(group.code ? { code: group.code } : {}),
+          }))),
         },
         {
           period: "2026-02",
           imports: [{ batchId: `${c.enterpriseKey}-2026-02`, mode: "append", payload: febPayload(c) }],
+          post: { vouchers: [
+            { sourceVoucherId: `${c.enterpriseKey}-2026-02-sale` },
+            { sourceVoucherId: `${c.enterpriseKey}-2026-02-fee` },
+          ] },
           depreciation: true,
           carryforward: { yearEnd: false },
+          periodCheck: true,
+          close: true,
           reports: ALL_REPORTS.flatMap((group) => group.kinds.map((kind) => ({
             kind, formats: group.formats, ...(group.code ? { code: group.code } : {}),
           }))),
@@ -412,48 +485,59 @@ await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX/PDF 金额与
   const outDir = join(ROOT, "b1-out");
   rmSync(dataDir, { recursive: true, force: true });
   rmSync(outDir, { recursive: true, force: true });
-  primeDataDir(dataDir);
-  const fixture = createFixture(dataDir, COMPANIES.map((c) => ({
-    enterpriseKey: c.enterpriseKey, name: c.name, assetCost: c.assetCost, life: c.life, salary: c.salary,
+
+  // 1) 正式 CLI 在全新目标上建立批量结构（独占新建回执；不用预建 core 库 + fresh 布尔豁免）。
+  const provisionPath = writeManifest(join(ROOT, "b1-provision.json"), provisionManifest("chain-20-provision"));
+  const provision = runCli(["start", "--data-dir", dataDir, "--manifest", provisionPath, "--output-dir", outDir]);
+  assert.equal(provision.status, 0, `新建目标 provision 失败：${provision.stderr} ${provision.stdout}`);
+  const provisionJson = cliJson(provision);
+  assert.equal(provisionJson.created, true);
+  assert.equal(provisionJson.status, "succeeded");
+  assert.equal(existsSync(join(dataDir, "workbench.db")), true);
+  assert.equal(existsSync(join(dataDir, ".local-batch-create")), false, "结构建立后不得遗留所有权标记");
+
+  // 2) 真实领域入口补资产卡片（取得期间 / 起提期间 / 入账状态与期初 1601 同步）。
+  const cards = addAssetCards(dataDir, COMPANIES.map((c) => ({
+    enterpriseKey: c.enterpriseKey, assetCost: c.assetCost, life: c.life,
   })));
-  assert.equal(fixture.length, COMPANY_COUNT);
-  const byKey = new Map(fixture.map((entry) => [entry.enterpriseKey, entry]));
+  assert.equal(cards.length, COMPANY_COUNT);
+  const byKey = new Map(cards.map((entry) => [entry.enterpriseKey, entry]));
   const manifest = chainManifest("chain-20", byKey);
   const manifestPath = writeManifest(join(ROOT, "b1-manifest.json"), manifest);
 
+  // 3) 两月完整七阶段（每企每月 import→post→depreciation→carryforward→period-check→close→reports）。
   const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 0, `20 企业两月链路应成功：${started.stderr} ${started.stdout}`);
   const startedJson = cliJson(started);
-  // LOCAL-02 尚未合并：period-check / close 必须如实 blocked_dependency，整体状态 needs_review（退出码 1）。
-  assert.equal(started.status, 1, `start 退出码应为 1（依赖未合并，需复核）：${started.stderr}`);
-  assert.equal(startedJson.status, "needs_review");
-  assert.equal(startedJson.renders, COMPANY_COUNT * 15, "应为每家企业 15 个报表产物");
+  assert.equal(startedJson.status, "succeeded");
+  const expectedReportsPerCompany = 30;
+  assert.equal(startedJson.renders, COMPANY_COUNT * expectedReportsPerCompany, "每企业每月 15 个报表产物");
 
   const db = openDb(dataDir);
   try {
     // 一企一账套：20 个账套、20 条规范企业绑定，互不串号。
     assert.equal(scalar(db, `SELECT COUNT(*) FROM account_sets`), COMPANY_COUNT);
     assert.equal(scalar(db, `SELECT COUNT(*) FROM import_enterprise_account_sets`), COMPANY_COUNT);
-    assert.equal(scalar(db, `SELECT COUNT(*) FROM local_batch_items`), COMPANY_COUNT);
+    assert.equal(scalar(db, `SELECT COUNT(*) FROM local_batch_items WHERE job_id=(SELECT id FROM local_batch_jobs WHERE job_key='chain-20')`), COMPANY_COUNT);
     assert.equal(scalar(db, `SELECT COUNT(*) FROM local_batch_jobs WHERE job_key='chain-20'`), 1);
+    assert.equal(scalar(db, `SELECT COUNT(*) FROM local_batch_jobs WHERE job_key='chain-20-provision'`), 1);
 
     for (const c of COMPANIES) {
       const fixtureSet = byKey.get(c.enterpriseKey).setId;
       const binding = db.prepare(`SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?`)
         .get(c.enterpriseKey);
       assert.equal(binding.account_set_id, fixtureSet, `企业 ${c.i} 绑定到同一账套`);
-      // 批次：两月各一条 completed。
+      // 批次：provision 首次 create、月 1 追加回放（跨批来源去重）、月 2 追加，均 completed。
       const batches = db.prepare(`SELECT batch_id, status, enterprise_key, account_set_id FROM import_batches
           WHERE enterprise_key=? ORDER BY batch_id`).all(c.enterpriseKey);
-      assert.equal(batches.length, 2);
+      assert.equal(batches.length, 3);
       assert.ok(batches.every((row) => row.status === "completed" && row.account_set_id === fixtureSet));
-      // 凭证：1 月 3 张导入 + 1 张草稿（post 阶段真实过账）+ 计提 1 + 结转 1；2 月 2 张 + 计提 1 + 结转 1。
+      // 凭证：每月导入 2 + 计提 1 + 结转 1 = 4；两月 8 张，全部 posted。
       const vouchers = db.prepare(`SELECT id, period, status, kind FROM vouchers WHERE account_set_id=?`).all(fixtureSet);
-      assert.equal(vouchers.length, 10, `企业 ${c.i} 凭证数`);
-      assert.ok(vouchers.every((row) => row.status === "posted"), "所有凭证最终应为 posted（含草稿过账）");
-      assert.equal(vouchers.filter((row) => row.period === "2026-01").length, 6);
+      assert.equal(vouchers.length, 8, `企业 ${c.i} 凭证数`);
+      assert.ok(vouchers.every((row) => row.status === "posted"), "所有凭证最终应为 posted");
+      assert.equal(vouchers.filter((row) => row.period === "2026-01").length, 4);
       assert.equal(vouchers.filter((row) => row.period === "2026-02").length, 4);
-      const draftVoucher = db.prepare(`SELECT status FROM vouchers WHERE id=?`).get(byKey.get(c.enterpriseKey).draftVoucherId);
-      assert.equal(draftVoucher.status, "posted", "草稿凭证必须由 post 阶段真实过账");
       // 计提 runs：两月各一条，金额 = 手算月度值。
       const runs = db.prepare(`SELECT period, amount, voucher_id FROM asset_depreciation_runs
           WHERE account_set_id=? ORDER BY period`).all(fixtureSet);
@@ -473,81 +557,110 @@ await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX/PDF 金额与
           debit: r2(per.d), credit: r2(per.c),
         };
       };
-      const cash = balance("1002");
-      assert.equal(cash.net, c.cashFeb, `企业 ${c.i} 1002 期末余额`);
+      assert.equal(balance("1002").net, c.bank2, `企业 ${c.i} 1002 期末余额`);
       assert.equal(balance("1601").net, c.assetCost);
-      assert.equal(balance("1602").net, -c.accum);
-      assert.equal(balance("2211").net, -c.salary);
+      assert.equal(balance("1602").net, -c.accum2);
       assert.equal(balance("3001").net, -c.capital);
       assert.equal(balance("3103").net, -r2(c.p1 + c.p2), `企业 ${c.i} 本年利润`);
       // 期初余额未被追加月份覆盖。
-      assert.equal(r2(db.prepare(`SELECT debit FROM opening_balances WHERE account_set_id=? AND code='1002'`).get(fixtureSet).debit), c.capital);
-      // 期末检查 / 结账如实依赖未就绪，且没有伪封账。
-      const periodCheck = db.prepare(`SELECT s.status AS stage_status, s.error_code AS stage_error FROM local_batch_stages s
+      assert.equal(r2(db.prepare(`SELECT debit FROM opening_balances WHERE account_set_id=? AND code='1002'`).get(fixtureSet).debit), c.bank0);
+      assert.equal(r2(db.prepare(`SELECT debit FROM opening_balances WHERE account_set_id=? AND code='1601'`).get(fixtureSet).debit), c.assetCost);
+      // 期末检查 / 结账真实成功，期间确实 closed（不是 mock / 手工 SQL）。
+      const checkStages = db.prepare(`SELECT s.period, s.stage_key, s.status, s.error_code, s.evidence_json FROM local_batch_stages s
           JOIN local_batch_items i ON i.id=s.item_id
-          WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='chain-20') AND i.enterprise_key=? AND s.stage_key='period-check'`)
-        .get(c.enterpriseKey);
-      assert.equal(periodCheck.stage_status, "blocked_dependency");
-      assert.equal(periodCheck.stage_error, "dependency_unavailable");
-      assert.equal(scalar(db, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND status='closed'`, fixtureSet), 0);
+          WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='chain-20')
+            AND i.enterprise_key=? AND s.stage_key IN ('period-check','close') ORDER BY s.period, s.stage_key`)
+        .all(c.enterpriseKey);
+      assert.equal(checkStages.length, 4);
+      assert.ok(checkStages.every((row) => row.status === "succeeded" && row.error_code === null), JSON.stringify(checkStages));
+      assert.deepEqual(checkStages.map((row) => `${row.period}:${row.stage_key}`), [
+        "2026-01:close", "2026-01:period-check", "2026-02:close", "2026-02:period-check",
+      ]);
+      const closedPeriods = db.prepare(`SELECT period, status FROM periods WHERE account_set_id=? ORDER BY period`).all(fixtureSet);
+      assert.deepEqual(closedPeriods.map((row) => row.status), ["closed", "closed"], `企业 ${c.i} 两月均封账`);
     }
 
-    // 报表产物：300 个文件全部真实存在且可打开；金额与手算表一致。
+    // 阶段计划真实条数（不是固定七条）：每企每月 6 个动作阶段 + 15 个报表阶段。
+    const stages = db.prepare(`SELECT s.status, s.stage_key FROM local_batch_stages s
+        JOIN local_batch_items i ON i.id=s.item_id
+       WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='chain-20')`).all();
+    assert.equal(stages.length, COMPANY_COUNT * (2 * 6 + 2 * 15), "20 企业 × 两月 × (6 动作 + 15 报表)");
+    assert.equal(stages.filter((row) => row.status === "succeeded").length, stages.length);
+    assert.equal(stages.filter((row) => row.stage_key === "period-check").length, COMPANY_COUNT * 2);
+    assert.equal(stages.filter((row) => row.stage_key === "close").length, COMPANY_COUNT * 2);
+    assert.equal(stages.filter((row) => row.stage_key === "depreciation").length, COMPANY_COUNT * 2);
+    assert.equal(stages.filter((row) => row.stage_key.startsWith("report:")).length, COMPANY_COUNT * 2 * 15);
+
+    // 4) 独立手算表贯穿两月：CSV 金额 + XLSX 值 / 结构 + PDF 内容 / 页。
     let files = 0;
     for (const c of COMPANIES) {
       const itemKey = `ent-${String(c.i).padStart(2, "0")}`;
-      const folder = join(outDir, "chain-20", `ent-${String(c.i).padStart(2, "0")}`, "2026-02");
-      const names = readdirSync(folder).sort();
-      assert.equal(names.length, 15, `${itemKey} 应有 15 个产物`);
-      files += names.length;
-      const balanceCsv = parseCsv(readFileSync(join(folder, "balance-sheet-2026-02.csv"), "utf8"));
-      assert.equal(r2(csvNumber(balanceCsv, "资产总计", 3)), c.totalAssets, `${itemKey} 资产负债表资产总计`);
-      assert.equal(r2(csvNumber(balanceCsv, "负债合计", 3)), c.totalLiabilities);
-      assert.equal(r2(csvNumber(balanceCsv, "所有者权益合计", 3)), c.totalEquity);
-      assert.equal(r2(csvNumber(balanceCsv, "固定资产账面价值", 3)), c.fixedNet);
-      assert.equal(r2(csvNumber(balanceCsv, "减：累计折旧", 3)), c.accum);
-      assert.equal(String(csvRow(balanceCsv, "资产负债表平衡", 1)).trim(), "是");
-      const incomeCsv = parseCsv(readFileSync(join(folder, "income-statement-2026-02.csv"), "utf8"));
-      const netRow = incomeCsv.find((row) => firstCell(row) === "净利润");
-      assert.ok(netRow, "利润表缺少净利润行");
-      assert.equal(r2(Number(netRow[1])), c.p2, `${itemKey} 本期净利润`);
-      assert.equal(r2(Number(netRow[2])), r2(c.p1 + c.p2), `${itemKey} 本年累计净利润`);
-      const trialCsv = parseCsv(readFileSync(join(folder, "trial-balance-2026-02.csv"), "utf8"));
-      const totalRow = trialCsv.find((row) => firstCell(row) === "合计");
-      assert.ok(totalRow);
-      assert.equal(r2(Number(totalRow[9])), r2(Number(totalRow[10])), `${itemKey} 余额表借贷合计平衡`);
-      const ledgerCsv = parseCsv(readFileSync(join(folder, "ledger-1002-2026-02.csv"), "utf8"));
-      const closingRow = ledgerCsv.find((row) => firstCell(row) === "期末" && row.length === 3);
-      assert.ok(closingRow, "明细账缺少期末余额行");
-      assert.equal(r2(Number(closingRow[1]) - Number(closingRow[2])), c.cashFeb, `${itemKey} 明细账期末余额`);
-      const cashCsv = parseCsv(readFileSync(join(folder, "cash-flow-statement-2026-02.csv"), "utf8"));
-      assert.equal(String(csvRow(cashCsv, "现金流勾稽（本期）", 1)).trim(), "是");
-
-      // XLSX 真实加载并核对同一金额。
-      const incomeXlsx = await loadXlsx(join(folder, "income-statement-2026-02.xlsx"));
-      assert.equal(numeric(xlsxRow(incomeXlsx, "净利润")[1]), c.p2, `${itemKey} XLSX 净利润`);
-      const balanceXlsx = await loadXlsx(join(folder, "balance-sheet-2026-02.xlsx"));
-      assert.equal(numeric(xlsxRow(balanceXlsx, "资产总计")[2]), c.totalAssets, `${itemKey} XLSX 资产总计`);
-      const trialXlsx = await loadXlsx(join(folder, "trial-balance-2026-02.xlsx"));
-      const xlsxTotal = xlsxRow(trialXlsx, "合计");
-      assert.equal(r2(Number(xlsxTotal[9])), r2(Number(xlsxTotal[10])), `${itemKey} XLSX 余额表合计平衡`);
-      const ledgerXlsx = await loadXlsx(join(folder, "ledger-1002-2026-02.xlsx"));
-      const xlsxClosing = xlsxRow(ledgerXlsx, "期末余额");
-      assert.equal(r2(Number(xlsxClosing[1]) - Number(xlsxClosing[2])), c.cashFeb, `${itemKey} XLSX 明细账期末`);
-      const cashXlsx = await loadXlsx(join(folder, "cash-flow-statement-2026-02.xlsx"));
-      assert.ok(xlsxRow(cashXlsx, "经营活动现金流量"), "XLSX 现金流应有经营活动区块");
-
-      for (const kind of ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance"]) {
-        const pages = assertPdf(readFileSync(join(folder, `${kind}-2026-02.pdf`)));
-        assert.ok(pages >= 1, `${itemKey} ${kind} PDF 页数`);
+      for (const period of ["2026-01", "2026-02"]) {
+        const jan = period === "2026-01";
+        const expected = {
+          bank: jan ? c.bank1 : c.bank2,
+          accum: jan ? c.accum1 : c.accum2,
+          fixedNet: jan ? c.fixedNet1 : c.fixedNet2,
+          totalAssets: jan ? c.totalAssets1 : c.totalAssets2,
+          totalEquity: jan ? c.totalEquity1 : c.totalEquity2,
+          profit: jan ? c.p1 : c.p2,
+          cumulative: jan ? c.p1 : r2(c.p1 + c.p2),
+        };
+        const folder = join(outDir, "chain-20", itemKey, period);
+        const names = readdirSync(folder).sort();
+        assert.equal(names.length, 15, `${itemKey} ${period} 应有 15 个产物`);
+        files += names.length;
+        const balanceCsv = parseCsv(readFileSync(join(folder, `balance-sheet-${period}.csv`), "utf8"));
+        assert.equal(r2(csvNumber(balanceCsv, "资产总计", 3)), expected.totalAssets, `${itemKey} ${period} 资产总计`);
+        assert.equal(r2(csvNumber(balanceCsv, "负债合计", 3)), 0, `${itemKey} ${period} 负债合计`);
+        assert.equal(r2(csvNumber(balanceCsv, "所有者权益合计", 3)), expected.totalEquity, `${itemKey} ${period} 所有者权益`);
+        assert.equal(r2(csvNumber(balanceCsv, "固定资产账面价值", 3)), expected.fixedNet, `${itemKey} ${period} 固定资产净值`);
+        assert.equal(r2(csvNumber(balanceCsv, "减：累计折旧", 3)), expected.accum, `${itemKey} ${period} 累计折旧`);
+        assert.equal(String(csvRow(balanceCsv, "资产负债表平衡", 1)).trim(), "是");
+        const incomeCsv = parseCsv(readFileSync(join(folder, `income-statement-${period}.csv`), "utf8"));
+        const netRow = incomeCsv.find((row) => firstCell(row) === "净利润");
+        assert.ok(netRow, "利润表缺少净利润行");
+        assert.equal(r2(Number(netRow[1])), expected.profit, `${itemKey} ${period} 本期净利润`);
+        assert.equal(r2(Number(netRow[2])), expected.cumulative, `${itemKey} ${period} 本年累计净利润`);
+        const trialCsv = parseCsv(readFileSync(join(folder, `trial-balance-${period}.csv`), "utf8"));
+        const totalRow = trialCsv.find((row) => firstCell(row) === "合计");
+        assert.ok(totalRow);
+        assert.equal(r2(Number(totalRow[9])), r2(Number(totalRow[10])), `${itemKey} ${period} 余额表借贷合计平衡`);
+        const ledgerCsv = parseCsv(readFileSync(join(folder, `ledger-1002-${period}.csv`), "utf8"));
+        const closingRow = ledgerCsv.find((row) => firstCell(row) === "期末" && row.length === 3);
+        assert.ok(closingRow, "明细账缺少期末余额行");
+        assert.equal(r2(Number(closingRow[1]) - Number(closingRow[2])), expected.bank, `${itemKey} ${period} 明细账期末余额`);
+        const cashCsv = parseCsv(readFileSync(join(folder, `cash-flow-statement-${period}.csv`), "utf8"));
+        assert.equal(String(csvRow(cashCsv, "现金流勾稽（本期）", 1)).trim(), "是");
+        for (const kind of ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance"]) {
+          const pages = assertPdf(readFileSync(join(folder, `${kind}-${period}.pdf`)));
+          assert.ok(pages >= 1, `${itemKey} ${period} ${kind} PDF 页数`);
+        }
+        assertPdf(readFileSync(join(folder, `ledger-1002-${period}.pdf`)));
       }
-      assertPdf(readFileSync(join(folder, "ledger-1002-2026-02.pdf")));
+      // XLSX 真实加载并核对同一金额（两月都读工作簿值）。
+      for (const period of ["2026-01", "2026-02"]) {
+        const jan = period === "2026-01";
+        const folder = join(outDir, "chain-20", itemKey, period);
+        const incomeXlsx = await loadXlsx(join(folder, `income-statement-${period}.xlsx`));
+        assert.equal(numeric(xlsxRow(incomeXlsx, "净利润")[1]), jan ? c.p1 : c.p2, `${itemKey} ${period} XLSX 净利润`);
+        const balanceXlsx = await loadXlsx(join(folder, `balance-sheet-${period}.xlsx`));
+        assert.equal(numeric(xlsxRow(balanceXlsx, "资产总计")[2]), jan ? c.totalAssets1 : c.totalAssets2, `${itemKey} ${period} XLSX 资产总计`);
+        const trialXlsx = await loadXlsx(join(folder, `trial-balance-${period}.xlsx`));
+        const xlsxTotal = xlsxRow(trialXlsx, "合计");
+        assert.equal(r2(Number(xlsxTotal[9])), r2(Number(xlsxTotal[10])), `${itemKey} ${period} XLSX 余额表合计平衡`);
+        const ledgerXlsx = await loadXlsx(join(folder, `ledger-1002-${period}.xlsx`));
+        const xlsxClosing = xlsxRow(ledgerXlsx, "期末余额");
+        assert.equal(r2(Number(xlsxClosing[1]) - Number(xlsxClosing[2])), jan ? c.bank1 : c.bank2, `${itemKey} ${period} XLSX 明细账期末`);
+        const cashXlsx = await loadXlsx(join(folder, `cash-flow-statement-${period}.xlsx`));
+        assert.ok(xlsxRow(cashXlsx, "经营活动现金流量"), "XLSX 现金流应有经营活动区块");
+      }
     }
-    assert.equal(files, COMPANY_COUNT * 15);
+    assert.equal(files, COMPANY_COUNT * expectedReportsPerCompany);
 
     // 产物记录：hash / 大小 / MIME / 相对位置 / 真实 worker threadId 与渲染时间齐全。
     const artifacts = db.prepare(`SELECT * FROM local_batch_artifacts ORDER BY id`).all();
-    assert.equal(artifacts.length, COMPANY_COUNT * 15);
+    assert.equal(artifacts.length, COMPANY_COUNT * expectedReportsPerCompany);
     for (const artifact of artifacts) {
       assert.equal(artifact.status, "published");
       assert.match(artifact.bytes_hash, /^[0-9a-f]{64}$/);
@@ -563,40 +676,44 @@ await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX/PDF 金额与
       const fileHash = createHash("sha256").update(readFileSync(absolute)).digest("hex");
       assert.equal(fileHash, artifact.bytes_hash, "产物字节 hash 与登记一致");
     }
-    const statuses = db.prepare(`SELECT status, COUNT(*) AS n FROM local_batch_stages GROUP BY status`).all();
-    const byStatus = Object.fromEntries(statuses.map((row) => [row.status, row.n]));
-    assert.equal(byStatus.succeeded, COMPANY_COUNT * 22, "除期末检查/结账外全部 succeeded（每企业 22）");
-    assert.equal(byStatus.blocked_dependency, COMPANY_COUNT * 2, "period-check 与 close 各 20 个依赖阻塞");
+    const byStatus = Object.fromEntries(db.prepare(`SELECT status, COUNT(*) AS n FROM local_batch_stages GROUP BY status`).all()
+      .map((row) => [row.status, row.n]));
     assert.equal(byStatus.failed ?? 0, 0);
     assert.equal(byStatus.needs_review ?? 0, 0);
+    assert.equal(byStatus.blocked_dependency ?? 0, 0);
   } finally {
     db.close();
   }
 
-  // 同 jobKey 同内容幂等：不新增账套 / 凭证 / 产物，attempt 不增加。
-  const attemptsBefore = (() => {
-    const db = openDb(dataDir);
-    const rows = db.prepare(`SELECT stage_key, period, attempt FROM local_batch_stages ORDER BY id`).all();
-    db.close();
-    return rows;
-  })();
+  // 5) 同 jobKey 同内容幂等：不新增账套 / 凭证 / runs / 产物，attempt 不增加；
+  //    新进程 resume 也必须重新核验已成功证据（含 close 之后的早前 period-check）而不误判失效。
+  const readAttempts = () => {
+    const handle = openDb(dataDir);
+    try { return handle.prepare(`SELECT stage_key, period, attempt FROM local_batch_stages ORDER BY id`).all(); }
+    finally { handle.close(); }
+  };
+  const attemptsBefore = readAttempts();
   const replay = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
-  const replayJson = cliJson(replay);
-  assert.equal(replay.status, 1);
-  assert.equal(replayJson.created, false, "同 jobKey 同内容不得创建第二个 job");
-  assert.equal(replayJson.jobId, startedJson.jobId);
-  const dbReplay = openDb(dataDir);
+  assert.equal(replay.status, 0, `${replay.stderr} ${replay.stdout}`);
+  assert.equal(cliJson(replay).created, false, "同 jobKey 同内容不得创建第二个 job");
+  assert.equal(cliJson(replay).jobId, startedJson.jobId);
+  assert.deepEqual(readAttempts(), attemptsBefore, "幂等回放不得重跑任何阶段");
+
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "chain-20"]);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(cliJson(resumed).status, "succeeded");
+  assert.deepEqual(readAttempts(), attemptsBefore, "新进程 resume 不得重跑已成功阶段");
+  const dbAfter = openDb(dataDir);
   try {
-    assert.equal(scalar(dbReplay, `SELECT COUNT(*) FROM account_sets`), COMPANY_COUNT);
-    assert.equal(scalar(dbReplay, `SELECT COUNT(*) FROM vouchers`), COMPANY_COUNT * 10);
-    const after = dbReplay.prepare(`SELECT stage_key, period, attempt FROM local_batch_stages ORDER BY id`).all();
-    assert.deepEqual(after, attemptsBefore, "幂等回放不得重跑任何阶段");
-    assert.equal(scalar(dbReplay, `SELECT COUNT(*) FROM local_batch_artifacts`), COMPANY_COUNT * 15);
+    assert.equal(scalar(dbAfter, `SELECT COUNT(*) FROM account_sets`), COMPANY_COUNT);
+    assert.equal(scalar(dbAfter, `SELECT COUNT(*) FROM vouchers`), COMPANY_COUNT * 8);
+    assert.equal(scalar(dbAfter, `SELECT COUNT(*) FROM asset_depreciation_runs`), COMPANY_COUNT * 2);
+    assert.equal(scalar(dbAfter, `SELECT COUNT(*) FROM local_batch_artifacts`), COMPANY_COUNT * expectedReportsPerCompany);
+    assert.equal(scalar(dbAfter, `SELECT COUNT(*) FROM periods WHERE status='closed'`), COMPANY_COUNT * 2);
   } finally {
-    dbReplay.close();
+    dbAfter.close();
   }
 });
-
 await test("B2 首次 create 建账 + 次月 append 到同一账套（真实结果）+ 同 jobKey 异内容拒绝", () => {
   const dataDir = join(ROOT, "b2-data");
   const outDir = join(ROOT, "b2-out");
@@ -714,6 +831,125 @@ await test("B2 首次 create 建账 + 次月 append 到同一账套（真实结�
   }
 });
 
+await test("B3 年末结转跨年样例：本年利润→未分配利润、下一年期初 / 累计独立核对", async () => {
+  const dataDir = join(ROOT, "b3-data");
+  const outDir = join(ROOT, "b3-out");
+  rmSync(dataDir, { recursive: true, force: true });
+  rmSync(outDir, { recursive: true, force: true });
+  const enterpriseKey = "91350000YEAR0001A";
+  const name = "跨年样例公司";
+  const decPayload = {
+    account_set: { name, taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-12" },
+    accounts: [],
+    opening_balances: [
+      { code: "1002", debit: "50000", credit: "" },
+      { code: "3001", debit: "", credit: "50000" },
+    ],
+    vouchers: [
+      { sourceVoucherId: `${enterpriseKey}-dec-sale`, period: "2026-12", date: "2026-12-10", word: "记", number: 1, summary: "十二月收入", entries: [{ code: "1002", debit: "12000", credit: "" }, { code: "5001", debit: "", credit: "12000" }] },
+      { sourceVoucherId: `${enterpriseKey}-dec-fee`, period: "2026-12", date: "2026-12-20", word: "记", number: 2, summary: "十二月费用", entries: [{ code: "5602", debit: "2000", credit: "" }, { code: "1002", debit: "", credit: "2000" }] },
+    ],
+  };
+  const janPayload = {
+    account_set: { name, taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-12" },
+    accounts: [], opening_balances: [],
+    vouchers: [
+      { sourceVoucherId: `${enterpriseKey}-jan27-sale`, period: "2027-01", date: "2027-01-10", word: "记", number: 1, summary: "一月收入", entries: [{ code: "1002", debit: "3000", credit: "" }, { code: "5001", debit: "", credit: "3000" }] },
+      { sourceVoucherId: `${enterpriseKey}-jan27-fee`, period: "2027-01", date: "2027-01-20", word: "记", number: 2, summary: "一月费用", entries: [{ code: "5602", debit: "1000", credit: "" }, { code: "1002", debit: "", credit: "1000" }] },
+    ],
+  };
+  const reports = [
+    { kind: "balance-sheet", formats: ["csv"] },
+    { kind: "income-statement", formats: ["csv"] },
+  ];
+  const manifestPath = writeManifest(join(ROOT, "b3-manifest.json"), {
+    schemaVersion: 1, jobKey: "year-end-cross", concurrency: 1,
+    items: [{
+      itemKey: "year-end",
+      source: { system: "local-export", enterpriseKey, enterpriseName: name },
+      periods: [
+        {
+          period: "2026-12",
+          imports: [{ batchId: `${enterpriseKey}-dec`, mode: "create", payload: decPayload }],
+          post: { vouchers: [{ sourceVoucherId: `${enterpriseKey}-dec-sale` }, { sourceVoucherId: `${enterpriseKey}-dec-fee` }] },
+          depreciation: true,
+          carryforward: { yearEnd: true },
+          periodCheck: true,
+          close: true,
+          reports,
+        },
+        {
+          period: "2027-01",
+          imports: [{ batchId: `${enterpriseKey}-jan27`, mode: "append", payload: janPayload }],
+          post: { vouchers: [{ sourceVoucherId: `${enterpriseKey}-jan27-sale` }, { sourceVoucherId: `${enterpriseKey}-jan27-fee` }] },
+          depreciation: true,
+          carryforward: { yearEnd: false },
+          periodCheck: true,
+          close: true,
+          reports,
+        },
+      ],
+    }],
+  });
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 0, `${started.stderr} ${started.stdout}`);
+  assert.equal(cliJson(started).status, "succeeded");
+  const db = openDb(dataDir);
+  let setId;
+  try {
+    const binding = db.prepare(`SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?`).get(enterpriseKey);
+    setId = binding.account_set_id;
+    const balance = (code, throughPeriod = "2027-01") => {
+      const per = db.prepare(`SELECT COALESCE(SUM(e.debit),0) d, COALESCE(SUM(e.credit),0) c
+          FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
+         WHERE v.account_set_id=? AND v.status='posted' AND e.code=? AND v.period<=?`).get(setId, code, throughPeriod);
+      const opening = db.prepare(`SELECT debit, credit FROM opening_balances WHERE account_set_id=? AND code=?`)
+        .get(setId, code) || { debit: 0, credit: 0 };
+      return r2(Number(opening.debit) - Number(opening.credit) + per.d - per.c);
+    };
+    assert.equal(balance("3103", "2026-12"), 0, "年末结转后本年利润应为 0");
+    assert.equal(balance("3104", "2026-12"), -10000, "年末未分配利润 = 2026 年利润 10000");
+    assert.equal(balance("1002"), r2(50000 + 12000 - 2000 + 3000 - 1000));
+    // 2027-01 普通结转把当月利润转到 3103，未影响上年 3104。
+    assert.equal(balance("3103"), -2000);
+    assert.equal(balance("3104"), -10000);
+    assert.equal(balance("1602"), 0);
+    const rows = db.prepare(`SELECT period, stage_key, status FROM local_batch_stages WHERE stage_key IN ('period-check','close') ORDER BY period, stage_key`).all();
+    assert.deepEqual(rows.map((row) => `${row.period}:${row.stage_key}:${row.status}`), [
+      "2026-12:close:succeeded", "2026-12:period-check:succeeded",
+      "2027-01:close:succeeded", "2027-01:period-check:succeeded",
+    ]);
+  } finally { db.close(); }
+
+  const decBalance = parseCsv(readFileSync(join(outDir, "year-end-cross", "year-end", "2026-12", "balance-sheet-2026-12.csv"), "utf8"));
+  assert.equal(r2(csvNumber(decBalance, "未分配利润", 3)), 10000, "2026 年末未分配利润");
+  const decIncome = parseCsv(readFileSync(join(outDir, "year-end-cross", "year-end", "2026-12", "income-statement-2026-12.csv"), "utf8"));
+  const decNet = decIncome.find((row) => firstCell(row) === "净利润");
+  assert.equal(r2(Number(decNet[1])), 10000);
+  assert.equal(r2(Number(decNet[2])), 10000);
+  const janBalance = parseCsv(readFileSync(join(outDir, "year-end-cross", "year-end", "2027-01", "balance-sheet-2027-01.csv"), "utf8"));
+  assert.equal(r2(csvNumber(janBalance, "未分配利润", 2)), 10000, "2027 年期初未分配利润 = 上年结转");
+  assert.equal(r2(csvNumber(janBalance, "未分配利润", 3)), 12000, "2027-01 期末未分配利润 = 10000 + 2000");
+  const janIncome = parseCsv(readFileSync(join(outDir, "year-end-cross", "year-end", "2027-01", "income-statement-2027-01.csv"), "utf8"));
+  const janNet = janIncome.find((row) => firstCell(row) === "净利润");
+  assert.equal(r2(Number(janNet[1])), 2000, "2027-01 本期净利润");
+  assert.equal(r2(Number(janNet[2])), 2000, "2027 年累计净利润（按年重置）");
+
+  // 新进程 resume：年末 / 跨年期间检查与后续封账不误报失效，不重跑。
+  const attemptsBefore = (() => {
+    const handle = openDb(dataDir);
+    try { return handle.prepare(`SELECT stage_key, period, attempt FROM local_batch_stages ORDER BY id`).all(); }
+    finally { handle.close(); }
+  })();
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "year-end-cross"]);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  const db2 = openDb(dataDir);
+  try {
+    const after = db2.prepare(`SELECT stage_key, period, attempt FROM local_batch_stages ORDER BY id`).all();
+    assert.deepEqual(after, attemptsBefore);
+  } finally { db2.close(); }
+});
+
 // ---------------------------------------------------------------- C. 并发证据
 function concurrencyManifest(jobKey, fixtures, concurrency) {
   return {
@@ -813,6 +1049,7 @@ await test("C1 跨两家企业真实 worker 渲染区间相交，peak>1 且 <= c
     }
   }
   assert.ok(crossCompany, "必须存在两家不同企业、不同线程的真实重叠渲染区间");
+  console.log(`    并发峰值=${peak}，跨企业重叠线程=${crossCompany.left.threadId}/${crossCompany.right.threadId}，区间重叠=${crossCompany.left.started < crossCompany.right.finished && crossCompany.right.started < crossCompany.left.finished}`);
   // 所有输出仍然金额正确：明细账 60 笔收入累计 10..69 之和。
   const expectedRevenue = r2(Array.from({ length: 60 }, (_, index) => 10 + index).reduce((sum, value) => sum + value, 0));
   for (const entry of fixture) {
@@ -840,6 +1077,7 @@ await test("C2 concurrency=1 对照：渲染区间不重叠（peak=1）", () => 
   const intervals = readRenderIntervals(dataDir, "render-serial");
   assert.equal(intervals.length, 12);
   assert.equal(peakOverlap(intervals), 1, "concurrency=1 时渲染必须完全串行");
+  console.log(`    concurrency=1 峰值=${peakOverlap(intervals)}`);
   for (let index = 1; index < intervals.length; index += 1) {
     assert.ok(intervals[index].started >= intervals[index - 1].finished, "串行渲染区间不得重叠");
   }
@@ -850,7 +1088,7 @@ console.log("");
 const passed = RESULTS.filter(([ok]) => ok).length;
 console.log(`结果：${passed} / ${RESULTS.length} 通过`);
 if (failures === 0) {
-  rmSync(ROOT, { recursive: true, force: true });
+  cleanupRoot();
   process.exit(0);
 }
 console.log(`未清理临时目录（便于排查）：${ROOT}`);

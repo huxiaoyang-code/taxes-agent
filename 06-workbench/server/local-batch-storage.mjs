@@ -8,20 +8,24 @@
 // 2) 任务、阶段、锁、输入快照、产物元数据全部落在**同一个** workbench.db（local_batch_ 前缀 +
 //    独立 component 版本表），这样业务状态与 checkpoint 处于同一备份时点。不另建队列 DB。
 // 3) 新增 component 结构前必须先有可恢复的一致备份（LOCAL-06 createBackup / verifyBackup）。
-//    本包交付时 LOCAL-06 尚未合并，因此：**只在显式新建、空的合成数据目录**上初始化结构；
-//    对既有库（已有 workbench.db）返回 migration_requires_backup / dependency_unavailable，
-//    绝不自动建表 / 升级，也不用 copyFile 主文件冒充备份。没有 CLI / 环境变量旁路开关。
+//    本包尚未接线现库组件安装，因此：只在**显式新目标**（没有任何 workbench.db）上初始化结构，
+//    且必须持有本进程 claimFreshDataDir 的独占回执（O_EXCL 标记 + 库文件 dev/ino 绑定）；
+//    布尔 fresh / 自造回执无效。既有库（含空业务核心库、零字节文件、缺 batch 表）一律
+//    migration_requires_backup / dependency_unavailable，绝不自动建表 / 升级，也不用 copyFile 主文件冒充备份。
 // 4) 同账套跨进程互斥用数据库行锁 + 单调 fencing token + 租约；租约过期不等于旧执行者已死：
 //    PID 仍存活或权限不确定时保守拒绝（owner_active），只有「租约过期且 PID 已确认不存在」才接管
 //    并递增 fence，旧 token 的任何提交都会被事务内 fence 校验拒绝。
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, parse, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { dirname, join, resolve, sep } from "node:path";
 
 export const LOCAL_BATCH_COMPONENT = "local-batch";
 export const LOCAL_BATCH_SCHEMA_VERSION = 1;
+
+/** 新建目标的所有权标记文件：与 workbench.db 同目录，只在「建立批量结构」窗口内存在。 */
+export const FRESH_CLAIM_MARKER = ".local-batch-create";
 
 export const LOCAL_BATCH_TABLES = [
   "local_batch_component",
@@ -179,33 +183,188 @@ export function inspectDataDir(dataDir) {
   return result;
 }
 
+/** Windows 路径比较：realpath 可能改变盘符 / 大小写；NTFS 默认大小写不敏感。 */
+function sameCanonicalPath(left, right) {
+  const a = resolve(left);
+  const b = resolve(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * 数据目录路径身份校验：必须是真实目录，不能是符号链接 / junction，
+ * realpath 必须与显式路径一致（防止指到别的目录 / 别人的库）。
+ * 目录不存在时不报错（由调用方决定是否允许新建）。
+ */
+export function assertDataDirIdentity(dataDir) {
+  if (typeof dataDir !== "string" || !String(dataDir).trim()) FAIL("data_dir_required");
+  const resolved = resolve(dataDir);
+  if (resolved === parse(resolved).root) FAIL("data_dir_invalid", {}, "--data-dir 不能是文件系统根目录");
+  let stat;
+  try { stat = lstatSync(resolved); } catch (error) {
+    if (error?.code === "ENOENT") return { exists: false, path: resolved };
+    FAIL("data_dir_unreadable", { dataDir: basename(resolved) }, "数据目录无法读取");
+  }
+  if (stat.isSymbolicLink()) FAIL("data_dir_alias", { dataDir: basename(resolved) }, "--data-dir 不能是符号链接 / junction");
+  if (!stat.isDirectory()) FAIL("data_dir_invalid", { dataDir: basename(resolved) }, "--data-dir 必须是目录");
+  let real;
+  try { real = realpathSync(resolved); } catch { FAIL("data_dir_unreadable", { dataDir: basename(resolved) }); }
+  if (!sameCanonicalPath(real, resolved)) {
+    FAIL("data_dir_alias", { dataDir: basename(resolved) }, "--data-dir 解析后的真实目录与显式路径不一致（别名 / junction）");
+  }
+  return { exists: true, path: resolved, realPath: real };
+}
+
 /**
  * 判断是否可以安全初始化：只允许「数据目录里根本没有 workbench.db」的显式新目标。
  * 已有库一律要求先走 LOCAL-06 一致备份（依赖未合并时返回 dependency_unavailable）。
+ * 注意：**零字节 workbench.db 也按既有库拒绝**（不能以「文件为空」绕过现库门槛）。
  */
 export function assertInitializable(dataDir) {
-  const state = inspectDataDir(dataDir);
+  const identity = assertDataDirIdentity(dataDir);
+  const resolved = identity.path;
+  const state = inspectDataDir(resolved);
   if (!state.readable && state.exists) {
-    FAIL("database_unreadable", { dataDir, reason: state.error }, "数据目录中的 workbench.db 无法只读打开");
+    FAIL("database_unreadable", { dataDir: basename(resolved), reason: state.error }, "数据目录中的 workbench.db 无法只读打开");
   }
   if (!state.exists) return { fresh: true, state };
-  const emptyFile = state.bytes === 0 && !state.wal && !state.shm && state.tables.length === 0;
-  if (emptyFile) return { fresh: true, state };
   if (state.batchVersion === LOCAL_BATCH_SCHEMA_VERSION) return { fresh: false, state };
   if (state.batchVersion === null || state.batchVersion === 0) {
     FAIL(
       "migration_requires_backup",
       {
-        dataDir, dependency: "LOCAL-06 createBackup/verifyBackup", status: "dependency_unavailable",
+        dataDir: basename(resolved), dependency: "LOCAL-06 createBackup/verifyBackup", status: "dependency_unavailable",
         batchVersion: state.batchVersion, coreVersion: state.coreVersion, hasBusinessContent: state.hasBusinessContent,
+        bytes: state.bytes,
       },
-      "既有数据库还没有批量结构：新增 component 结构前必须先用已审 LOCAL-06 一致备份并核验成功",
+      "既有数据库（包括空文件）还没有批量结构：新增 component 结构前必须先用已审 LOCAL-06 一致备份并核验成功",
     );
   }
   FAIL("migration_requires_backup", {
-    dataDir, dependency: "LOCAL-06 createBackup/verifyBackup", status: "dependency_unavailable",
+    dataDir: basename(resolved), dependency: "LOCAL-06 createBackup/verifyBackup", status: "dependency_unavailable",
     batchVersion: state.batchVersion, target: LOCAL_BATCH_SCHEMA_VERSION,
   });
+}
+
+// ---------------------------------------------------------------- 新建目标独占事实
+// 进程内不可伪造的回执（WeakSet 成员身份）。CLI 只在自己 claim 成功后把回执传给
+// ensureBatchSchema；传布尔值 / 自己构造的对象一律无效。
+const FRESH_CLAIMS = new WeakSet();
+
+/**
+ * 原子占有「显式新目标」：不存在则创建目录，然后以 O_EXCL 建立所有权标记。
+ * 只有拿到回执的进程才拥有「本次亲手创建」资格；并发的另一个进程会稳定失败，
+ * 只有在其能确认完整已初始化批量结构时才允许按已有库路径继续（由调用方判断）。
+ */
+export function claimFreshDataDir(dataDir, { pid = process.pid } = {}) {
+  if (typeof dataDir !== "string" || !String(dataDir).trim()) FAIL("data_dir_required");
+  const resolved = resolve(dataDir);
+  if (resolved === parse(resolved).root) FAIL("data_dir_invalid", {}, "--data-dir 不能是文件系统根目录");
+  if (existsSync(resolved)) {
+    assertDataDirIdentity(resolved);
+    const entries = readdirSync(resolved);
+    if (entries.includes(FRESH_CLAIM_MARKER)) {
+      FAIL("fresh_target_claimed", { dataDir: basename(resolved) },
+        "新目标已被另一个执行者占用：不帮忙修半库；可稍后重试或确认结构完整后按已有库继续");
+    }
+    if (existsSync(join(resolved, "workbench.db"))) {
+      FAIL("fresh_target_not_fresh", { dataDir: basename(resolved) }, "目标已有 workbench.db：不接受新建占用");
+    }
+    if (entries.length) {
+      FAIL("data_dir_not_empty", { dataDir: basename(resolved), entryCount: entries.length },
+        "显式新目标必须为空目录（拒绝在他人目录中创建库）");
+    }
+  } else {
+    mkdirSync(resolved, { recursive: true });
+    assertDataDirIdentity(resolved);
+  }
+  const markerPath = join(resolved, FRESH_CLAIM_MARKER);
+  const nonce = randomUUID();
+  let fd;
+  try {
+    fd = openSync(markerPath, "wx");
+  } catch (error) {
+    if (error?.code === "EEXIST") FAIL("fresh_target_claimed", { dataDir: basename(resolved) });
+    throw batchError("fresh_target_claim_failed", { reason: error?.code || String(error) });
+  }
+  try {
+    writeFileSync(fd, JSON.stringify({ nonce, pid, at: nowIso() }), "utf8");
+  } finally {
+    try { closeSync(fd); } catch { /* 标记已写入，关闭失败不改变所有权 */ }
+  }
+  // 同时原子创建库文件本身（O_EXCL）：回执随后绑定这个文件的 dev/ino，
+  // 因此「探测后文件被替换」会在 assertFreshReceipt 中稳定被拒。
+  const dbPath = join(resolved, "workbench.db");
+  let dbFd;
+  try {
+    dbFd = openSync(dbPath, "wx");
+  } catch (error) {
+    try { unlinkSync(markerPath); } catch { /* 只清理本进程刚建的标记 */ }
+    if (error?.code === "EEXIST") FAIL("fresh_target_claimed", { dataDir: basename(resolved) }, "目标库文件已被其它执行者创建");
+    throw batchError("fresh_target_claim_failed", { reason: error?.code || String(error) });
+  }
+  try { closeSync(dbFd); } catch { /* 文件已创建，关闭失败不改变所有权 */ }
+  const createdStat = statSync(dbPath);
+  const receipt = {
+    dataDir: resolved, dbPath, markerPath, pid, nonce,
+    identity: { dev: String(createdStat.dev), ino: String(createdStat.ino) }, createdDb: true,
+  };
+  FRESH_CLAIMS.add(receipt);
+  return receipt;
+}
+
+/** 释放本进程所有权标记；只删除 nonce 命中的自己的标记，不碰其它进程文件。 */
+export function releaseFreshClaim(receipt) {
+  if (!receipt || !FRESH_CLAIMS.has(receipt)) return false;
+  FRESH_CLAIMS.delete(receipt);
+  let released = false;
+  try {
+    const current = JSON.parse(readFileSync(receipt.markerPath, "utf8"));
+    if (current?.nonce === receipt.nonce) { unlinkSync(receipt.markerPath); released = true; }
+  } catch { /* 标记已被替换 / 已删除：不碰 */ }
+  // 结构创建失败且库仍为空文件：只删除本进程创建且身份一致的对象，避免留下无法解释的半目标。
+  // 已有任何内容（包括 db.mjs 建出的核心表）一律保留，交管理者 / 操作者判断。
+  try {
+    if (receipt.createdDb && receipt.identity) {
+      const st = lstatSync(receipt.dbPath);
+      const same = !st.isSymbolicLink() && st.isFile()
+        && String(st.dev) === receipt.identity.dev && String(st.ino) === receipt.identity.ino;
+      if (same && statSync(receipt.dbPath).size === 0) unlinkSync(receipt.dbPath);
+    }
+  } catch { /* 库文件已被替换 / 删除：不清理他人对象 */ }
+  return released;
+}
+
+/**
+ * 绑定「实际打开的库」身份：回执必须是本进程签发，标记仍是自己的，
+ * 库文件不是符号链接、realpath 与 PRAGMA database_list 的 main 一致，dev/ino 在窗口内不变。
+ */
+export function assertFreshReceipt(receipt, db) {
+  if (!receipt || !FRESH_CLAIMS.has(receipt)) {
+    FAIL("fresh_receipt_invalid", {}, "新建批量结构必须持有本进程独占创建回执");
+  }
+  assertDataDirIdentity(receipt.dataDir);
+  let marker;
+  try { marker = JSON.parse(readFileSync(receipt.markerPath, "utf8")); } catch {
+    FAIL("fresh_receipt_stale", {}, "新建所有权标记已丢失 / 被替换：拒绝继续");
+  }
+  if (marker?.nonce !== receipt.nonce) FAIL("fresh_receipt_stale", {}, "新建所有权标记不属于本进程");
+  let fileStat;
+  try { fileStat = lstatSync(receipt.dbPath); } catch { FAIL("fresh_database_missing", {}); }
+  if (fileStat.isSymbolicLink() || !fileStat.isFile()) FAIL("fresh_database_alias", {}, "workbench.db 不是普通文件");
+  let real;
+  try { real = realpathSync(receipt.dbPath); } catch { FAIL("fresh_database_unreadable", {}); }
+  if (!sameCanonicalPath(real, receipt.dbPath)) FAIL("fresh_database_alias", {}, "workbench.db 真实路径与目标不一致");
+  let main;
+  try { main = db.prepare(`PRAGMA database_list`).all().find((row) => row.name === "main"); } catch { main = null; }
+  if (!main?.file || !sameCanonicalPath(main.file, receipt.dbPath)) {
+    FAIL("fresh_database_mismatch", {}, "已打开的库不是本次独占创建的目标文件");
+  }
+  const identity = { dev: String(fileStat.dev), ino: String(fileStat.ino) };
+  if (!receipt.identity) receipt.identity = identity;
+  else if (receipt.identity.dev !== identity.dev || receipt.identity.ino !== identity.ino) {
+    FAIL("fresh_database_replaced", {}, "探测后库文件被替换：拒绝在他人库上建结构");
+  }
+  return identity;
 }
 
 function readBatchVersion(db) {
@@ -333,10 +492,11 @@ const SCHEMA_STATEMENTS = [
 ];
 
 /**
- * 建立批量结构。只允许在**显式新建**的数据目录（由 assertInitializable 判定 fresh）上调用；
+ * 建立批量结构。只允许在**显式新建**的数据目录（由 claimFreshDataDir 取得本进程独占回执）上调用；
  * 建表 + component 版本记录在同一事务内，任一步失败整体回滚，不留半套 schema。
+ * 不接受 freshDatabase 布尔参数：布尔值不能证明「本次亲手创建」，必须持有进程内回执。
  */
-export function ensureBatchSchema(db, { freshDatabase = false } = {}) {
+export function ensureBatchSchema(db, { receipt = null } = {}) {
   const version = readBatchVersion(db);
   if (version !== null) {
     if (version === LOCAL_BATCH_SCHEMA_VERSION) return { created: false, version };
@@ -345,21 +505,29 @@ export function ensureBatchSchema(db, { freshDatabase = false } = {}) {
       found: version, supported: LOCAL_BATCH_SCHEMA_VERSION, dependency: "LOCAL-06 createBackup/verifyBackup",
     });
   }
-  if (!freshDatabase) {
+  if (!receipt) {
     FAIL("migration_requires_backup", {
       dependency: "LOCAL-06 createBackup/verifyBackup", status: "dependency_unavailable",
-    }, "既有数据库缺少批量结构：必须先取得已审 LOCAL-06 一致备份，再建立新结构");
+    }, "既有数据库缺少批量结构：必须先取得已审 LOCAL-06 一致备份；布尔 fresh 参数不被接受");
   }
+  // 事务开始前先绑定「本次实际打开的库」身份。
+  assertFreshReceipt(receipt, db);
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const statement of SCHEMA_STATEMENTS) db.exec(statement);
     db.prepare(`INSERT INTO local_batch_component (component, version, updated_at, note) VALUES (?,?,?,?)`)
       .run(LOCAL_BATCH_COMPONENT, LOCAL_BATCH_SCHEMA_VERSION, nowIso(), "LOCAL-07 持久批量任务与 CLI");
+    // 提交前再次校验：事务窗口内库文件不得被别名替换。
+    assertFreshReceipt(receipt, db);
     db.exec("COMMIT");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* 原库结构以回滚结果为准 */ }
+    if (error?.code === "fresh_receipt_invalid" || error?.code === "fresh_receipt_stale"
+      || error?.code === "fresh_database_replaced" || error?.code === "fresh_database_alias"
+      || error?.code === "fresh_database_mismatch") throw error;
     throw batchError("local_batch_schema_failed", { reason: error?.message || String(error) });
   }
+  releaseFreshClaim(receipt);
   return { created: true, version: LOCAL_BATCH_SCHEMA_VERSION };
 }
 

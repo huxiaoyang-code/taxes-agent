@@ -21,9 +21,9 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import * as storage from "../server/local-batch-storage.mjs";
@@ -33,6 +33,15 @@ const CLI = join(WB, "scripts", "local-batch.mjs");
 const ROOT = mkdtempSync(join(tmpdir(), "lb-persist-"));
 const RESULTS = [];
 let failures = 0;
+/** 只清理本次 mkdtemp 创建、位于系统临时根下且不是符号链接 / junction 的明确目录。 */
+function cleanupRoot() {
+  const root = resolve(ROOT);
+  const base = resolve(tmpdir());
+  if (root === base || !root.startsWith(base + sep)) throw new Error(`拒绝清理范围外目录：${root}`);
+  const stat = lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`拒绝清理非真实目录：${root}`);
+  rmSync(root, { recursive: true, force: true });
+}
 
 async function test(name, fn) {
   try {
@@ -93,10 +102,15 @@ const PRIME_CODE = `
 import * as storage from "./server/local-batch-storage.mjs";
 const dataDir = process.env.WORKBENCH_DATA_DIR;
 const init = storage.assertInitializable(dataDir);
+const receipt = init.fresh ? storage.claimFreshDataDir(dataDir) : null;
 process.env.WORKBENCH_DATA_DIR = dataDir;
-const runner = await import("./server/local-batch-runner.mjs");
-const schema = storage.ensureBatchSchema(runner.database, { freshDatabase: init.fresh });
-console.log(JSON.stringify({ fresh: init.fresh, schema }));
+try {
+  const runner = await import("./server/local-batch-runner.mjs");
+  const schema = storage.ensureBatchSchema(runner.database, { receipt });
+  console.log(JSON.stringify({ fresh: init.fresh, schema }));
+} finally {
+  if (receipt) storage.releaseFreshClaim(receipt);
+}
 `;
 function primeDataDir(dataDir) {
   const result = runNode(PRIME_CODE, { env: { WORKBENCH_DATA_DIR: dataDir } });
@@ -121,7 +135,16 @@ for (const spec of specs) {
   if (spec.assetCost) {
     A.addAssetCard(set.id, {
       kind: "fixed", name: "生产设备", original_cost: spec.assetCost, residual_rate: 0,
-      useful_life_months: spec.life, start_period: "2026-01",
+      useful_life_months: spec.life, start_period: "2026-01", acquired_period: "2026-01",
+      asset_account: "1601", accum_account: "1602", expense_account: "5602",
+    });
+  }
+  // 真实领域状态：登记为「尚未入固定资产账」的卡片（用于 needs_review 停住后序的回归）。
+  if (spec.pendingCard) {
+    A.addAssetCard(set.id, {
+      kind: "fixed", name: "待入账设备", original_cost: 500, residual_rate: 0,
+      useful_life_months: 12, start_period: "2026-01", acquired_period: "2026-01",
+      ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补",
       asset_account: "1601", accum_account: "1602", expense_account: "5602",
     });
   }
@@ -196,6 +219,21 @@ const pause = () => {
 if (mode === "kill-after-import") hooks.afterImportCommit = kill;
 if (mode === "kill-in-depreciation") hooks.inDepreciationTransaction = kill;
 if (mode === "kill-in-carryforward") hooks.inCarryForwardTransaction = kill;
+if (mode === "kill-near-close") hooks.nearCloseCommit = kill;
+if (mode === "kill-after-close") hooks.afterStageCommit = ({ stage, result }) => {
+  if (stage.stage_key === "close" && result?.status === "succeeded") kill();
+};
+if (mode === "draft-after-check") {
+  const A = await import("./server/accounting.mjs");
+  hooks.afterStageCommit = ({ stage, item, result }) => {
+    if (stage.stage_key !== "period-check" || result?.status !== "succeeded") return;
+    A.createVoucher(Number(item.account_set_id), {
+      period: stage.period, voucher_date: stage.period + "-15", word: "记", number: 999,
+      summary: "封账前新增草稿", status: "draft",
+      entries: [{ code: "5602", debit: 1, credit: 0 }, { code: "1002", debit: 0, credit: 1 }],
+    });
+  };
+}
 if (mode === "kill-after-publish") hooks.afterArtifactPublish = kill;
 if (mode === "pause-after-import") hooks.afterImportCommit = pause;
 if (mode === "pause-after-report-stage") hooks.afterReportStage = pause;
@@ -220,7 +258,14 @@ const count = (dataDir, sql, ...args) => {
 // ---------------------------------------------------------------- manifest 构件
 const r2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
-function payloadFor(spec, { withCustomAccount = false, tag = "", includeOpenings = true } = {}) {
+function payloadFor(spec, { withCustomAccount = false, tag = "", includeOpenings = true, assetInOpening = false } = {}) {
+  const openingBalances = includeOpenings ? [
+    { code: "1002", debit: String(spec.capital), credit: "" },
+    ...(assetInOpening && spec.assetCost
+      ? [{ code: "1601", debit: String(spec.assetCost), credit: "" }]
+      : []),
+    { code: "3001", debit: "", credit: String(Number(spec.capital) + (assetInOpening && spec.assetCost ? Number(spec.assetCost) : 0)) },
+  ] : [];
   const vouchers = [{
     sourceVoucherId: `${spec.enterpriseKey}-sale${tag}`,
     period: "2026-01", date: "2026-01-10", word: "记", number: tag ? 11 : 1, summary: "销售收入",
@@ -245,10 +290,7 @@ function payloadFor(spec, { withCustomAccount = false, tag = "", includeOpenings
       accounting_standard: "小企业会计准则", start_period: "2026-01",
     },
     accounts: [],
-    opening_balances: includeOpenings ? [
-      { code: "1002", debit: String(spec.capital), credit: "" },
-      { code: "3001", debit: "", credit: String(spec.capital) },
-    ] : [],
+    opening_balances: openingBalances,
     vouchers,
   };
 }
@@ -980,8 +1022,17 @@ await test("G3 完成文件丢失：resume 标 needs_review，retry 只重生成
 
 await test("H1 既有库缺批量结构：拒绝自动建表（migration_requires_backup），无任何 local_batch 表", () => {
   const dataDir = join(ROOT, "h1-data");
-  // 只创建核心库（等价于既有工作台库），不建立批量结构。
-  const core = runNode(`import "./server/db.mjs"; console.log("core-ok");`, { env: { WORKBENCH_DATA_DIR: dataDir } });
+  // 只创建核心库并写入真实业务（等价于既有工作台库），不建立批量结构。
+  const core = runNode(`
+import { db } from "./server/db.mjs";
+import * as A from "./server/accounting.mjs";
+const set = A.createAccountSet({ name: "既有业务公司", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01" });
+A.createVoucher(set.id, {
+  period: "2026-01", voucher_date: "2026-01-10", word: "记", number: 1, summary: "既有业务", status: "posted",
+  entries: [{ code: "1002", debit: 100, credit: 0 }, { code: "5001", debit: 0, credit: 100 }],
+});
+console.log("core-ok");
+`, { env: { WORKBENCH_DATA_DIR: dataDir } });
   assert.equal(core.status, 0, core.stderr);
   const spec = { itemKey: "item-1", enterpriseKey: "91350000MIGR00001A", name: "旧库拒绝", revenue: 100, other: 0, capital: 1000 };
   const manifestPath = writeManifest("h1", jobManifest({
@@ -1004,6 +1055,8 @@ await test("H1 既有库缺批量结构：拒绝自动建表（migration_require
   })();
   assert.ok(!tables.some((name) => name.startsWith("local_batch_")), "不得自动建立批量结构");
   assert.ok(tables.includes("account_sets"), "原库结构保留");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM account_sets`), 1, "原有业务账套保留");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 1, "原有业务凭证保留");
   // status / cancel / retry 同样如实报依赖，不初始化。
   for (const command of ["status", "cancel", "retry"]) {
     const cmd = runCli([command, "--data-dir", dataDir, "--job-key", "whatever"]);
@@ -1014,25 +1067,38 @@ await test("H1 既有库缺批量结构：拒绝自动建表（migration_require
 
 await test("H2 批量结构迁移中断整体回滚：不留下半套 schema", () => {
   const dataDir = join(ROOT, "h2-data");
-  const core = runNode(`import "./server/db.mjs"; console.log("core-ok");`, { env: { WORKBENCH_DATA_DIR: dataDir } });
-  assert.equal(core.status, 0, core.stderr);
+  rmSync(dataDir, { recursive: true, force: true });
+  // 合法新建回执 + 故意制造同名 view 让「建表」失败；必须整体回滚。
+  const receipt = storage.claimFreshDataDir(dataDir);
   const db = new DatabaseSync(join(dataDir, "workbench.db"));
   try {
-    // 用同名 view 让「建表」步骤失败，验证事务回滚（不留 component / jobs 等结构）。
     db.exec(`CREATE VIEW local_batch_artifacts AS SELECT 1 AS blocker`);
     assert.throws(
-      () => storage.ensureBatchSchema(db, { freshDatabase: true }),
+      () => storage.ensureBatchSchema(db, { receipt }),
       (error) => error.code === "local_batch_schema_failed",
       "迁移必须失败而不是绕过",
     );
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all().map((row) => row.name);
     assert.ok(!tables.includes("local_batch_component"), "不得留下 component 记录");
     assert.ok(!tables.includes("local_batch_jobs"), "不得留下半套任务表");
-    assert.ok(tables.includes("account_sets"), "原库业务表不变");
     const view = db.prepare(`SELECT name FROM sqlite_master WHERE type='view' AND name='local_batch_artifacts'`).get();
     assert.ok(view, "冲突对象保持原样");
     assert.equal(db.prepare(`PRAGMA integrity_check`).all().map((row) => Object.values(row)[0]).join(";"), "ok");
-  } finally { db.close(); }
+    // 布尔 fresh / 无回执一律不能建立结构。
+    assert.throws(
+      () => storage.ensureBatchSchema(db, { freshDatabase: true }),
+      (error) => error.code === "migration_requires_backup",
+      "布尔 fresh 不能证明本次亲手创建",
+    );
+    assert.throws(
+      () => storage.ensureBatchSchema(db, { receipt: { dataDir } }),
+      (error) => error.code === "fresh_receipt_invalid",
+      "自造回执必须无效",
+    );
+  } finally {
+    db.close();
+    storage.releaseFreshClaim(receipt);
+  }
 });
 
 await test("H3 LOCAL-06 备份 / restore-new 未合并：如实标依赖，不生成伪备份文件", () => {
@@ -1053,6 +1119,41 @@ await test("H3 LOCAL-06 备份 / restore-new 未合并：如实标依赖，不�
   assert.ok(!files.some((name) => name.startsWith("local_batch_")), "拒绝时不得改动结构");
   assert.equal(existsSync(join(dataDir, "local-batch-backup")), false);
   assert.equal(existsSync(join(dataDir, "local_batch_component")), false);
+  // 零字节 workbench.db 也属于既有库：不能以「空文件」绕过现库门槛。
+  const zeroDir = join(ROOT, "h3-zero");
+  mkdirSync(zeroDir, { recursive: true });
+  writeFileSync(join(zeroDir, "workbench.db"), "");
+  assert.throws(
+    () => storage.assertInitializable(zeroDir),
+    (error) => error.code === "migration_requires_backup" && error.details.status === "dependency_unavailable",
+    "零字节既有库必须拒绝新建组件",
+  );
+  assert.throws(
+    () => storage.claimFreshDataDir(zeroDir),
+    (error) => error.code === "fresh_target_not_fresh",
+    "零字节库不得作为新目标占用",
+  );
+  // 符号链接 / junction 指向别的目录：不能作为新建目标，也不能绕到别人的库。
+  const realDir = join(ROOT, "h3-real");
+  const linkDir = join(ROOT, "h3-link");
+  mkdirSync(realDir, { recursive: true });
+  try {
+    symlinkSync(realDir, linkDir, "junction");
+    assert.throws(
+      () => storage.assertDataDirIdentity(linkDir),
+      (error) => error.code === "data_dir_alias",
+      "junction 目标必须被拒绝",
+    );
+    assert.throws(
+      () => storage.claimFreshDataDir(linkDir),
+      (error) => error.code === "data_dir_alias",
+      "不得通过 junction 新建库",
+    );
+  } catch (error) {
+    if (error?.code !== "data_dir_alias") {
+      console.log(`  SKIP junction 创建受本机权限限制：${error?.code || error?.message}`);
+    }
+  }
 });
 
 // ---------------------------------------------------------------- I. 独立审查 5 个 P1 的真实回归（新增，非 mock）
@@ -1167,9 +1268,11 @@ await test("I1 前序阶段失败 / 需复核时不得越过去执行后序阶�
     { itemKey: "item-a", enterpriseKey: "91350000PRIOR0001A", name: "前序失败甲", revenue: 0, other: 0, capital: 20000, assetCost: 600, life: 12, salary: 60 },
     // 乙的 post 引用了尚未登记的来源凭证（真实 source_voucher_not_found）；补齐导入后走显式 retry 应能完成。
     { itemKey: "item-b", enterpriseKey: "91350000PRIOR0002A", name: "前序失败乙", revenue: 500, other: 0, capital: 30000, assetCost: 1200, life: 12 },
+    // 丙的卡片真实登记为「尚未入固定资产账」：计提核心必然拒绝，用于同一次执行内 needs_review 停住后序。
+    { itemKey: "item-c", enterpriseKey: "91350000PRIOR0003A", name: "未入账丙", revenue: 0, other: 0, capital: 10000, pendingCard: true },
   ];
   const fixture = createFixture(dataDir, specs);
-  const [a, b] = specs.map((spec, index) => ({
+  const [a, b, c] = specs.map((spec, index) => ({
     itemKey: spec.itemKey, spec, fixture: fixture[index],
   }));
   const periodSpec = (entry, post) => ({
@@ -1251,18 +1354,17 @@ await test("I1 前序阶段失败 / 需复核时不得越过去执行后序阶�
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, a.fixture.setId), 1, "甲无新增凭证");
 
   // 同一次执行内产生 needs_review 也必须停住该 item 后序：
-  // 一个新任务对同一账套同一期间再跑计提（该期间已由其它任务真实计提并过账）→ 真实领域返回「有卡片到期但本次无动作」，
-  // 阶段登记 needs_review；其后的结转 / 报表不得被执行。
+  // 丙的卡片真实登记为「尚未入固定资产账」，核心 generateDepreciation 必然抛 asset_ledger_pending；
+  // 阶段登记 needs_review，其后的结转 / 报表不得被执行。
   const reviewPath = writeManifest("i1-review", jobManifest({
     jobKey: "prior-stage-needs-review",
-    items: [itemFor(b.fixture, b.spec, {
+    items: [itemFor(c.fixture, c.spec, {
       period: "2026-01",
       depreciation: true,
       carryforward: { yearEnd: false },
       reports: [{ kind: "trial-balance", formats: ["csv"] }],
     })],
   }));
-  const carryBefore = count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, b.fixture.setId);
   const reviewRun = runCli(["start", "--data-dir", dataDir, "--manifest", reviewPath, "--output-dir", outDir]);
   assert.equal(reviewRun.status, 1, `${reviewRun.stderr} ${reviewRun.stdout}`);
   const reviewStage = (() => {
@@ -1273,11 +1375,11 @@ await test("I1 前序阶段失败 / 需复核时不得越过去执行后序阶�
     } finally { db.close(); }
   })();
   assert.deepEqual(reviewStage.map((row) => [row.status, row.error_code]), [
-    ["needs_review", "depreciation_due_but_no_action"],
+    ["needs_review", "asset_ledger_pending"],
     ["needs_review", "prior_stage_unresolved"],
     ["needs_review", "prior_stage_unresolved"],
   ], JSON.stringify(reviewStage));
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, b.fixture.setId), carryBefore,
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, c.fixture.setId), 0,
     "needs_review 后不得继续结转");
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(
       SELECT id FROM local_batch_items WHERE job_id=(SELECT id FROM local_batch_jobs WHERE job_key='prior-stage-needs-review'))`), 0,
@@ -1770,12 +1872,329 @@ await test("I7 推断绑定覆盖仅 post / 无 import 报表 / 有 import，且
       WHERE item_key='item-a' AND job_id=(SELECT id FROM local_batch_jobs WHERE job_key='inferred-binding-mismatch'))`), "needs_review");
 });
 
+// ---------------------------------------------------------------- J. B1 真实期末检查 / 结账 / 失败隔离 / 卡片状态
+/** 真实领域入口：按 spec 建卡，可选先计提一次（用于「已计提」状态）。 */
+function addStateCard(dataDir, spec) {
+  const code = `
+import * as A from "./server/accounting.mjs";
+const spec = JSON.parse(process.env.CARD_SPEC);
+const card = A.addAssetCard(Number(process.env.SET_ID), spec.card);
+let generated = null;
+if (spec.preDepreciate) {
+  const result = A.generateDepreciation(Number(process.env.SET_ID), "2026-01");
+  generated = { voucherId: result.voucher?.id ?? null, runs: result.runs?.length ?? 0 };
+}
+console.log(JSON.stringify({ cardId: card.id, generated }));
+`;
+  const result = runNode(code, {
+    env: { WORKBENCH_DATA_DIR: dataDir, SET_ID: String(spec.setId), CARD_SPEC: JSON.stringify(spec) },
+  });
+  assert.equal(result.status, 0, `建卡失败：${result.stderr}`);
+  return JSON.parse(String(result.stdout).trim().split(/\r?\n/).at(-1));
+}
+
+await test("J1 真实 period-check/close 成功 + 单家缺折旧阻断 + 补齐后 retry/resume 只做未完成部分", () => {
+  const dataDir = join(ROOT, "j1-data");
+  const outDir = join(ROOT, "j1-out");
+  primeDataDir(dataDir);
+  const specs = [1, 2, 3].map((index) => ({
+    itemKey: `item-${index}`,
+    enterpriseKey: `91350000CHECK00${index}A`,
+    name: `期末检查${index}号`,
+    revenue: 1000 + index, other: 0, capital: 50000 + index * 1000,
+    assetCost: 600, life: 12,
+  }));
+  const fixture = createFixture(dataDir, specs);
+  const items = specs.map((spec, index) => {
+    const period = {
+      period: "2026-01",
+      imports: [{ batchId: `${spec.enterpriseKey}-j1`, mode: "append", confirmNewBinding: true, payload: payloadFor(spec, { assetInOpening: true }) }],
+      post: { vouchers: [{ sourceVoucherId: `${spec.enterpriseKey}-sale` }] },
+      carryforward: { yearEnd: false },
+      periodCheck: true,
+      close: true,
+      reports: [{ kind: "trial-balance", formats: ["csv"] }],
+    };
+    // 2 号故意缺计提：期末检查必须真实阻断，close / reports 不得越过。
+    if (index !== 1) period.depreciation = true;
+    return itemFor(fixture[index], spec, period);
+  });
+  const manifestPath = writeManifest("j1", jobManifest({ jobKey: "real-seven", items }));
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 1, `${started.stderr} ${started.stdout}`);
+  assert.equal(cliJson(started).status, "needs_review");
+
+  const stageOf = (enterpriseKey, stageKey) => stageRow(dataDir, stageKey, enterpriseKey);
+  for (const index of [0, 2]) {
+    const key = specs[index].enterpriseKey;
+    assert.equal(stageOf(key, "period-check").status, "succeeded", `${key} check`);
+    assert.equal(stageOf(key, "close").status, "succeeded", `${key} close`);
+    assert.equal(stageOf(key, "report:trial-balance:csv").status, "succeeded", `${key} report`);
+    assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture[index].setId), 1);
+    assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, fixture[index].setId), 3, "导入 + 计提 + 结转");
+  }
+  const brokenKey = specs[1].enterpriseKey;
+  assert.equal(stageOf(brokenKey, "period-check").status, "needs_review");
+  assert.equal(JSON.parse(stageOf(brokenKey, "period-check").evidence_json).ready, false);
+  assert.ok(JSON.parse(stageOf(brokenKey, "period-check").evidence_json).blocking.some((entry) => entry.step === "depreciation"));
+  assert.equal(stageOf(brokenKey, "close").status, "needs_review");
+  assert.equal(stageOf(brokenKey, "report:trial-balance:csv").status, "needs_review");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND status='closed'`, fixture[1].setId), 0, "缺折旧不得封账");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, fixture[1].setId), 2, "导入 + 结转（无计提）");
+  const attemptsBefore = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT stage_key, attempt FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id
+          WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='real-seven') AND i.enterprise_key IN (?,?)
+          ORDER BY s.id`).all(specs[0].enterpriseKey, specs[2].enterpriseKey);
+    } finally { db.close(); }
+  })();
+
+  // 补齐 2 号真实业务：先按核心撤销顺序反过账旧结转（未过账结转不再构成折旧前置依赖），
+  // 再用独立任务真实计提；随后 resume 让证据核验把失效结转标 needs_review，retry + resume 只做未完成部分。
+  const carryRow = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT id FROM vouchers WHERE account_set_id=? AND period='2026-01' AND kind='carryforward'`).get(fixture[1].setId);
+    } finally { db.close(); }
+  })();
+  const unpost = runNode(`
+import * as A from "./server/accounting.mjs";
+A.unpostVoucher(Number(process.env.SET_ID), Number(process.env.VOUCHER_ID));
+console.log("unposted");
+`, { env: { WORKBENCH_DATA_DIR: dataDir, SET_ID: String(fixture[1].setId), VOUCHER_ID: String(carryRow.id) } });
+  assert.equal(unpost.status, 0, unpost.stderr);
+  const fixPath = writeManifest("j1-fix", jobManifest({
+    jobKey: "real-seven-fix-dep",
+    items: [itemFor(fixture[1], specs[1], { period: "2026-01", depreciation: true })],
+  }));
+  const fixed = runCli(["start", "--data-dir", dataDir, "--manifest", fixPath, "--output-dir", outDir]);
+  assert.equal(fixed.status, 0, `${fixed.stderr} ${fixed.stdout}`);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs WHERE account_set_id=?`, fixture[1].setId), 1, "补齐任务只计提一次");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='depreciation'`, fixture[1].setId), 1);
+
+  // 普通 resume 先核验证据：旧结转被反过账 → needs_review，不得直接越过 check/close。
+  const resumeBroken = runCli(["resume", "--data-dir", dataDir, "--job-key", "real-seven"]);
+  assert.equal(resumeBroken.status, 1, `${resumeBroken.stderr} ${resumeBroken.stdout}`);
+  assert.equal(stageOf(brokenKey, "carryforward").status, "needs_review");
+  assert.equal(stageOf(brokenKey, "carryforward").error_code, "evidence_changed");
+  const retried = runCli(["retry", "--data-dir", dataDir, "--job-key", "real-seven", "--item", "item-2"]);
+  assert.equal(retried.status, 0, retried.stderr);
+  const reopened = cliJson(retried).reopened.map((entry) => entry.stageKey);
+  assert.deepEqual(reopened, ["carryforward", "period-check", "close", "report:trial-balance:csv"], JSON.stringify(reopened));
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "real-seven"]);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(cliJson(resumed).status, "succeeded");
+  assert.equal(stageOf(brokenKey, "period-check").status, "succeeded");
+  assert.equal(stageOf(brokenKey, "close").status, "succeeded");
+  assert.equal(stageOf(brokenKey, "report:trial-balance:csv").status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture[1].setId), 1);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND status='posted'`, fixture[1].setId), 3, "导入 + 计提 + 新结转");
+  // 其它两家原成功业务不重做。
+  const attemptsAfter = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT stage_key, attempt FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id
+          WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='real-seven') AND i.enterprise_key IN (?,?)
+          ORDER BY s.id`).all(specs[0].enterpriseKey, specs[2].enterpriseKey);
+    } finally { db.close(); }
+  })();
+  assert.deepEqual(attemptsAfter, attemptsBefore, "另 19 家（此处 2 家）成功业务不得重跑");
+});
+
+await test("J2 check 成功后、close 之前受控新增真实草稿：核心重新拒绝封账（旧 check 不代替前置）", async () => {
+  const dataDir = join(ROOT, "j2-data");
+  const outDir = join(ROOT, "j2-out");
+  primeDataDir(dataDir);
+  const spec = {
+    itemKey: "item-1", enterpriseKey: "91350000STALE0001A", name: "陈旧检查",
+    revenue: 1200, other: 0, capital: 40000,
+  };
+  const [fixture] = createFixture(dataDir, [spec]);
+  const manifestPath = writeManifest("j2", jobManifest({
+    jobKey: "stale-check",
+    items: [itemFor(fixture, spec, {
+      period: "2026-01",
+      imports: [{ batchId: `${spec.enterpriseKey}-j2`, mode: "append", confirmNewBinding: true, payload: payloadFor(spec) }],
+      carryforward: { yearEnd: false },
+      periodCheck: true,
+      close: true,
+    })],
+  }));
+  const crashed = await spawnNode(RUN_JOB_CODE, {
+    env: { WORKBENCH_DATA_DIR: dataDir, MANIFEST_PATH: manifestPath, OUT_DIR: outDir, HOOK_MODE: "draft-after-check" },
+  }).done;
+  assert.equal(crashed.status, 0, `${crashed.stderr} ${crashed.stdout}`);
+  assert.equal(stageRow(dataDir, "period-check", spec.enterpriseKey).status, "succeeded");
+  const closeRow = stageRow(dataDir, "close", spec.enterpriseKey);
+  assert.equal(closeRow.status, "needs_review");
+  assert.equal(closeRow.error_code, "period_has_draft_vouchers");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 0,
+    "核心前置拒绝后不得封账");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND status='draft'`, fixture.setId), 1,
+    "封账前新增草稿真实存在");
+});
+
+// ---------------------------------------------------------------- E5 / E6 close 崩溃点
+function closeOnlyManifest(jobKey, spec, fixture) {
+  return jobManifest({
+    jobKey,
+    items: [itemFor(fixture, spec, {
+      period: "2026-01",
+      imports: [{ batchId: `${spec.enterpriseKey}-${jobKey}`, mode: "append", confirmNewBinding: true, payload: payloadFor(spec) }],
+      carryforward: { yearEnd: false },
+      periodCheck: true,
+      close: true,
+    })],
+  });
+}
+
+await test("E5 close 事务中 SIGKILL（效果未提交）：期间保持 open，重启后重新封账一次", async () => {
+  const dataDir = join(ROOT, "e5-data");
+  const outDir = join(ROOT, "e5-out");
+  primeDataDir(dataDir);
+  const spec = { itemKey: "item-1", enterpriseKey: "91350000CLOSE0001A", name: "封账中断", revenue: 900, other: 0, capital: 30000 };
+  const [fixture] = createFixture(dataDir, [spec]);
+  const manifestPath = writeManifest("e5", closeOnlyManifest("close-crash-before", spec, fixture));
+  const crashed = await spawnNode(RUN_JOB_CODE, {
+    env: { WORKBENCH_DATA_DIR: dataDir, MANIFEST_PATH: manifestPath, OUT_DIR: outDir, HOOK_MODE: "kill-near-close" },
+  }).done;
+  assert.notEqual(crashed.status, 0, "子进程应被 SIGKILL 终止");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 0,
+    "未提交的 close 效果必须回滚");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_stages WHERE status='running' AND stage_key='close'`), 1);
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "close-crash-before"]);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(cliJson(resumed).status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 1);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, fixture.setId), 1, "结转不重复");
+});
+
+await test("E6 close 已提交后进程中断：新进程 resume 识别已提交合法效果，补 checkpoint 不重复封账", async () => {
+  const dataDir = join(ROOT, "e6-data");
+  const outDir = join(ROOT, "e6-out");
+  primeDataDir(dataDir);
+  const spec = { itemKey: "item-1", enterpriseKey: "91350000CLOSE0002A", name: "封账已提交", revenue: 800, other: 0, capital: 30000 };
+  const [fixture] = createFixture(dataDir, [spec]);
+  const manifestPath = writeManifest("e6", closeOnlyManifest("close-crash-after", spec, fixture));
+  const crashed = await spawnNode(RUN_JOB_CODE, {
+    env: { WORKBENCH_DATA_DIR: dataDir, MANIFEST_PATH: manifestPath, OUT_DIR: outDir, HOOK_MODE: "kill-after-close" },
+  }).done;
+  assert.notEqual(crashed.status, 0, "子进程应被 SIGKILL 终止");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 1,
+    "已提交的 close 效果必须保留");
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE status='succeeded' AND stage_key='close'`), "succeeded",
+    "close 效果与 checkpoint 同事务提交");
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "close-crash-after"]);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(cliJson(resumed).status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 1);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, fixture.setId), 1);
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key='close'`), "succeeded");
+});
+
+// ---------------------------------------------------------------- H4 新建目标独占 / 零字节 / 别名 / 替换
+await test("H4 新建目标独占回执：并发占用、零字节库、非空目录、探测后替换、伪造回执均不能绕过", () => {
+  const target = join(ROOT, "h4-target");
+  rmSync(target, { recursive: true, force: true });
+  const receipt = storage.claimFreshDataDir(target);
+  // 同进程第二个占用者：稳定拒绝（不帮忙修半库）。
+  assert.throws(() => storage.claimFreshDataDir(target), (error) => error.code === "fresh_target_claimed");
+  // 跨进程第二个占用者：O_EXCL 标记保证同样被拒。
+  const child = runNode(`
+import * as storage from "./server/local-batch-storage.mjs";
+try { storage.claimFreshDataDir(process.env.TARGET); console.log("CLAIMED"); }
+catch (error) { console.log("REJECTED", error.code); }
+`, { env: { TARGET: target } });
+  assert.equal(child.status, 0, child.stderr);
+  assert.match(child.stdout, /REJECTED fresh_target_claimed/);
+  assert.equal(existsSync(join(target, "workbench.db")), true, "回执已原子创建库文件");
+  assert.equal(statSync(join(target, "workbench.db")).size, 0);
+  storage.releaseFreshClaim(receipt);
+
+  // 探测后库文件被替换成非本进程创建的文件：绑定身份必须失败。
+  const receipt2 = storage.claimFreshDataDir(target);
+  const dbPath = join(target, "workbench.db");
+  unlinkSync(dbPath);
+  writeFileSync(dbPath, "not-a-sqlite-database");
+  const replaced = new DatabaseSync(dbPath);
+  try {
+    assert.throws(() => storage.assertFreshReceipt(receipt2, replaced), (error) => String(error?.code || "").startsWith("fresh_"));
+  } finally {
+    replaced.close();
+    storage.releaseFreshClaim(receipt2);
+  }
+
+  // 非空目录不得作为新目标。
+  const nonEmpty = join(ROOT, "h4-nonempty");
+  mkdirSync(nonEmpty, { recursive: true });
+  writeFileSync(join(nonEmpty, "keep.txt"), "user-data");
+  assert.throws(() => storage.claimFreshDataDir(nonEmpty), (error) => error.code === "data_dir_not_empty");
+  assert.equal(readFileSync(join(nonEmpty, "keep.txt"), "utf8"), "user-data", "不得改动他人目录内容");
+});
+
+// ---------------------------------------------------------------- J3 折旧适配：真实卡片状态
+await test("J3 计提适配真实卡片状态：取得期间未到 / 未入账 / 0 分分期 / 已提足 / 已计提", () => {
+  const dataDir = join(ROOT, "j3-data");
+  const outDir = join(ROOT, "j3-out");
+  primeDataDir(dataDir);
+  const specs = [
+    { itemKey: "future", enterpriseKey: "91350000CARD0001A", name: "未来取得", capital: 10000 },
+    { itemKey: "pending", enterpriseKey: "91350000CARD0002A", name: "未入账", capital: 10000 },
+    { itemKey: "rounding", enterpriseKey: "91350000CARD0003A", name: "零分分期", capital: 10000 },
+    { itemKey: "fully", enterpriseKey: "91350000CARD0004A", name: "已提足", capital: 10000 },
+    { itemKey: "posted", enterpriseKey: "91350000CARD0005A", name: "已计提", capital: 10000 },
+  ];
+  const fixtures = createFixture(dataDir, specs);
+  const cards = [
+    { card: { kind: "fixed", name: "未来设备", original_cost: 600, residual_rate: 0, useful_life_months: 12, start_period: "2026-01", acquired_period: "2026-03", asset_account: "1601", accum_account: "1602", expense_account: "5602" } },
+    { card: { kind: "fixed", name: "未入账设备", original_cost: 600, residual_rate: 0, useful_life_months: 12, start_period: "2026-01", acquired_period: "2026-01", ledger_status: "pending_purchase_voucher", ledger_note: "购入凭证待补", asset_account: "1601", accum_account: "1602", expense_account: "5602" } },
+    { card: { kind: "fixed", name: "零分设备", original_cost: 1, residual_rate: 0, useful_life_months: 1200, start_period: "2026-01", acquired_period: "2026-01", asset_account: "1601", accum_account: "1602", expense_account: "5602" } },
+    { card: { kind: "fixed", name: "已提足设备", original_cost: 600, residual_rate: 0, useful_life_months: 12, start_period: "2026-01", acquired_period: "2026-01", opening_accumulated: 600, asset_account: "1601", accum_account: "1602", expense_account: "5602" } },
+    { card: { kind: "fixed", name: "已计提设备", original_cost: 600, residual_rate: 0, useful_life_months: 12, start_period: "2026-01", acquired_period: "2026-01", asset_account: "1601", accum_account: "1602", expense_account: "5602" }, preDepreciate: true },
+  ];
+
+  const before = count(dataDir, `SELECT COUNT(*) FROM vouchers`);
+  for (let index = 0; index < specs.length; index += 1) {
+    addStateCard(dataDir, { setId: fixtures[index].setId, ...cards[index] });
+  }
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`) - before, 1, "只有「已计提」预置了一张真实计提凭证");
+
+  const items = specs.map((spec, index) => itemFor(fixtures[index], spec, { period: "2026-01", depreciation: true }));
+  const manifestPath = writeManifest("j3", jobManifest({ jobKey: "card-states", items }));
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 1, `${started.stderr} ${started.stdout}`);
+  const statusOf = (itemKey) => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT s.status, s.error_code, s.evidence_json FROM local_batch_stages s
+          JOIN local_batch_items i ON i.id=s.item_id
+         WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='card-states') AND i.item_key=? AND s.stage_key='depreciation'`)
+        .get(itemKey);
+    } finally { db.close(); }
+  };
+  assert.equal(statusOf("future").status, "not_applicable");
+  assert.equal(JSON.parse(statusOf("future").evidence_json).cards[0].status, "not_existed");
+  assert.equal(statusOf("pending").status, "needs_review");
+  assert.equal(statusOf("pending").error_code, "asset_ledger_pending");
+  assert.equal(statusOf("rounding").status, "not_applicable");
+  assert.equal(JSON.parse(statusOf("rounding").evidence_json).cards[0].status, "no_amount_due");
+  assert.equal(statusOf("fully").status, "not_applicable");
+  assert.equal(JSON.parse(statusOf("fully").evidence_json).cards[0].status, "fully_depreciated");
+  assert.equal(statusOf("posted").status, "not_applicable");
+  assert.equal(JSON.parse(statusOf("posted").evidence_json).cards[0].status, "posted");
+  // 未入账卡片不得产生凭证；其余不适用状态也不得凭空生成。
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, fixtures[1].setId), 0);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, fixtures[2].setId), 0);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, fixtures[3].setId), 0);
+});
+
 // ---------------------------------------------------------------- 收尾
 console.log("");
 const passed = RESULTS.filter(([ok]) => ok).length;
 console.log(`结果：${passed} / ${RESULTS.length} 通过`);
 if (failures === 0) {
-  rmSync(ROOT, { recursive: true, force: true });
+  cleanupRoot();
   process.exit(0);
 }
 console.log(`未清理临时目录（便于排查）：${ROOT}`);

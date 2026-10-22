@@ -130,6 +130,7 @@ async function withStartupDatabase(dataDir, fn) {
 
 /** status / cancel / retry：只使用存储层，绝不 import 会打开业务库的 runner。 */
 function withBatchDatabase(dataDir, { readOnly }, fn) {
+  storage.assertDataDirIdentity(dataDir);
   const state = storage.inspectDataDir(dataDir);
   if (!state.exists) throw fail("database_not_found", 3, "数据目录中没有 workbench.db（不会被当成新库）");
   if (!state.readable) throw fail("database_unreadable", 3, "workbench.db 无法打开");
@@ -215,12 +216,31 @@ async function dispatch({ command, options }) {
     const manifestHash = storage.sha256(manifestJson);
     // 3) 数据目录只读检查：只有「显式新目录」或「已有目标批量结构」才允许继续。
     const init = storage.assertInitializable(dataDir);
+    // 新建目标必须取得本进程独占创建回执：布尔 fresh / 自造回执都不能证明本次亲手创建。
+    let receipt = null;
+    if (init.fresh) {
+      try {
+        receipt = storage.claimFreshDataDir(dataDir);
+      } catch (error) {
+        // 并发者只在能确认完整已初始化批量结构时按已有库路径继续；否则稳定拒绝，不帮忙修半库。
+        if (["fresh_target_claimed", "data_dir_not_empty"].includes(error?.code)) {
+          const again = storage.assertInitializable(dataDir);
+          if (again.fresh) throw error;
+        } else throw error;
+      }
+    }
     process.env.WORKBENCH_DATA_DIR = dataDir;
-    const runner = await withStartupDatabase(dataDir, async () => {
-      const loaded = await import("../server/local-batch-runner.mjs");
-      storage.ensureBatchSchema(loaded.database, { freshDatabase: init.fresh });
-      return loaded;
-    });
+    let runner;
+    try {
+      runner = await withStartupDatabase(dataDir, async () => {
+        const loaded = await import("../server/local-batch-runner.mjs");
+        storage.ensureBatchSchema(loaded.database, { receipt });
+        return loaded;
+      });
+    } finally {
+      // 无论成功与否都只清理本进程的标记；结构失败时允许稍后重试。
+      if (receipt) storage.releaseFreshClaim(receipt);
+    }
     const result = await runner.createAndRun({
       manifest: validated.manifest, manifestHash, manifestJson, plans, inputs, outputDir,
     });
@@ -251,8 +271,9 @@ async function dispatch({ command, options }) {
       })),
       results: result.results ?? [],
       limits: [
-        "period-check / close 依赖 LOCAL-02 已审 A.periodEndCheck；未合并时如实报 dependency_unavailable，不用旧试算平衡冒充期末检查",
-        "既有库新增批量结构依赖 LOCAL-06 createBackup/verifyBackup；未合并时拒绝自动建表 / 升级",
+        "period-check / close 调用已合入的 LOCAL-02 A.periodEndCheck / setPeriodStatus；旧 check 成功不代替核心重新校验",
+        "既有库新增批量结构依赖 LOCAL-06 createBackup/verifyBackup；未接线时拒绝自动建表 / 升级",
+        "新建目标必须通过本进程独占创建回执；布尔 fresh / 自造回执无效",
         "本 CLI 只保证批量 runner 之间按账套互斥，未接线手工 HTTP / Agent 入口",
       ],
     });
@@ -293,6 +314,7 @@ async function dispatch({ command, options }) {
   }
   // resume
   const jobKey = requireJobKey(options);
+  storage.assertDataDirIdentity(dataDir);
   const state = storage.inspectDataDir(dataDir);
   if (!state.exists) throw fail("database_not_found", 3, "数据目录中没有 workbench.db");
   if (state.batchVersion !== storage.LOCAL_BATCH_SCHEMA_VERSION) {
@@ -303,7 +325,7 @@ async function dispatch({ command, options }) {
   process.env.WORKBENCH_DATA_DIR = dataDir;
   const runner = await withStartupDatabase(dataDir, async () => {
     const loaded = await import("../server/local-batch-runner.mjs");
-    storage.ensureBatchSchema(loaded.database, { freshDatabase: false });
+    storage.ensureBatchSchema(loaded.database, { receipt: null });
     return loaded;
   });
   const allowSnapshotOnly = options.flags.has("--use-saved-inputs");
@@ -357,7 +379,9 @@ try {
   const code = transientBusy ? "database_busy" : rawCode;
   const exitCode = error instanceof CliError ? error.exitCode
     : (["migration_requires_backup", "dependency_unavailable", "database_not_found", "database_unreadable",
-      "database_busy", "schema_future_version", "batch_schema_unavailable"].includes(code) ? 3 : 2);
+      "database_busy", "schema_future_version", "batch_schema_unavailable", "fresh_target_claimed",
+      "fresh_target_not_fresh", "data_dir_alias", "data_dir_not_empty", "data_dir_invalid",
+      "data_dir_unreadable"].includes(code) ? 3 : 2);
   process.stderr.write(`[local-batch] ${String(code).slice(0, 120)}\n`);
   emit({
     ok: false,
@@ -377,7 +401,7 @@ function sanitizeDetails(details) {
   if (!details || typeof details !== "object") return undefined;
   const out = {};
   for (const [key, value] of Object.entries(details)) {
-    if (["errors", "batchVersion", "supported", "coreVersion", "dependency", "status", "jobKey", "jobId", "reason", "count"].includes(key)) {
+    if (["errors", "batchVersion", "supported", "coreVersion", "dependency", "status", "jobKey", "jobId", "reason", "count", "entryCount", "bytes"].includes(key)) {
       if (Array.isArray(value)) out[key] = value.map((entry) => String(entry).slice(0, 200));
       else if (value !== null && typeof value === "object") out[key] = undefined;
       else out[key] = value;

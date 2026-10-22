@@ -234,6 +234,11 @@ const EVIDENCE_CONFLICT_CODES = new Set([
   "input_changed", "input_missing", "input_snapshot_missing", "input_payload_invalid",
   "account_set_unresolved", "depreciation_run_inconsistent", "depreciation_due_but_no_action",
   "depreciation_amount_mismatch", "year_end_carry_expected", "close_not_confirmed",
+  // LOCAL-02 封账前置 / 计提与结转守卫：业务变化后由核心真实拒绝，统一转人工复核。
+  "period_end_check_failed", "period_check_blocked", "period_has_draft_vouchers", "period_unbalanced",
+  "period_not_found", "period_before_start", "carryforward_stale", "depreciation_run_stale",
+  "depreciation_draft_exists", "depreciation_global_over_depreciable", "asset_ledger_pending",
+  "asset_acquired_period_missing", "asset_purchase_voucher_pending",
   // 企业与账套绑定不符：保守转人工复核，不写入任何业务数据。
   "enterprise_binding_mismatch", "enterprise_binding_missing", "account_set_enterprise_mismatch",
 ]);

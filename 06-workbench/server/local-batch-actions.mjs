@@ -3,8 +3,10 @@
 // 只允许这 7 类操作：import → post → depreciation → carryforward → period-check → close → reports。
 // 本文件不复制任何金额 / 结账 / 折旧算法，只调用既有已审领域接口：
 //   - import：import-incremental.mjs（自带 BEGIN IMMEDIATE，禁止外包事务）
-//   - post / depreciation / carryforward / close：accounting.mjs
-//   - period-check：LOCAL-02 的 A.periodEndCheck（本包交付时尚未合并 → dependency_unavailable）
+//   - post / depreciation / carryforward：accounting.mjs
+//    折旧 / 结转 / 封账的应提 / 不适用 / 拒绝一律复用已合入的 LOCAL-02 纯领域规则与事务保存点，
+//    不另写金额 / 起提 / 封账算法。
+//   - period-check / close：已合入的 LOCAL-02 A.periodEndCheck / setPeriodStatus（只读检查 + 核心重新校验前置）
 //   - reports：report-export.mjs 的一致只读 DTO 快照（渲染在 worker 线程，见 runner）
 //
 // 事务边界：除 import 外，每个阶段的「会计效果 + checkpoint」都在同一个 BEGIN IMMEDIATE 内，
@@ -15,6 +17,8 @@ import {
   STAGE_KEYS, STAGE_STATUS, canonicalJson, getInput, getSnapshot, saveSnapshot, sha256,
   withFencedTransaction, withReadSnapshot, writeStageResult,
 } from "./local-batch-storage.mjs";
+import { assetCardPeriodStatus } from "./period-end-controls.mjs";
+import { centsToNumber } from "./money.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
@@ -330,12 +334,21 @@ export function executeDepreciationStage(ctx) {
   if (!setId) throw domainError("account_set_unresolved", "计提阶段缺少账套");
   const period = stage.period;
   return withFencedTransaction(db, lock, () => {
+    // 应提 / 不适用必须复用 LOCAL-02 的纯领域规则，不能自写「start_period <= period && remaining > 0」。
+    const rawCards = db.prepare(`SELECT * FROM asset_cards WHERE account_set_id=? ORDER BY id`).all(setId);
+    const cardStates = rawCards.map((card) => {
+      const state = assetCardPeriodStatus(db, card, period);
+      return {
+        assetId: card.id,
+        status: state.status,
+        expected: state.expectedCents === undefined || state.expectedCents === null
+          ? null : centsToNumber(state.expectedCents),
+        recorded: state.amountCents === undefined || state.amountCents === null
+          ? null : centsToNumber(state.amountCents),
+      };
+    });
+    const dueCards = cardStates.filter((card) => card.status === "due");
     const result = A.generateDepreciation(setId, period);
-    const cards = A.listAssetCards(setId).map((card) => ({
-      assetId: card.id, kind: card.kind, startPeriod: card.start_period,
-      monthly: card.monthly, remaining: card.remaining, accumulated: card.accumulated,
-    }));
-    const dueCards = cards.filter((card) => card.startPeriod <= period && card.remaining > EPS);
     let status = STAGE_STATUS.SUCCEEDED;
     let errorCode = null;
     const runs = [];
@@ -362,19 +375,25 @@ export function executeDepreciationStage(ctx) {
         throw domainError("depreciation_amount_mismatch", "计提合计与凭证贷方金额不一致", { runs: amount, voucherCredit: voucherEvidenceValue.totalCredit });
       }
     } else if (dueCards.length) {
+      // 核心认定本期应提但本次没有任何计提凭证：不能无条件报成功，也不能静默补提。
       status = STAGE_STATUS.NEEDS_REVIEW;
       errorCode = "depreciation_due_but_no_action";
     } else {
+      // 无卡片 / 未取得 / 未到起提期 / 已提足 / 按分取整为 0：真实领域结论是「不适用」。
       status = STAGE_STATUS.NOT_APPLICABLE;
     }
     const evidence = {
       accountSetId: setId,
       period,
       action: result.voucher ? "generated" : "no_action",
-      note: result.voucher ? null : "本期无需计提（无卡片 / 未到计提期 / 已提足）",
-      reason: result.voucher ? null : (cards.length === 0 ? "no_asset_cards" : "no_card_due_this_period"),
-      cards,
+      reason: result.voucher ? null
+        : (rawCards.length === 0 ? "no_asset_cards"
+          : (dueCards.length ? "due_but_no_action" : "no_card_due_this_period")),
+      cards: cardStates,
       dueCards: dueCards.map((card) => card.assetId),
+      skipped: (Array.isArray(result.skipped) ? result.skipped : []).map((entry) => ({
+        assetId: entry.assetId, status: entry.status ?? null,
+      })),
       runs,
       voucher: voucherEvidenceValue,
       businessHash: businessDigest(db, setId, period),
@@ -403,8 +422,8 @@ export function executeCarryForwardStage(ctx) {
     try {
       result = A.carryForwardProfit(setId, period, { yearEnd: spec.yearEnd === true });
     } catch (error) {
-      if (error?.message === "already_carried_forward") already = "already_carried_forward";
-      else if (error?.message === "already_year_end_carried") already = "already_year_end_carried";
+      if (error?.message === "already_carried_forward" || error?.code === "already_carried_forward") already = "already_carried_forward";
+      else if (error?.message === "already_year_end_carried" || error?.code === "already_year_end_carried") already = "already_year_end_carried";
       else throw error;
     }
     // 无论本次生成还是已有，都必须用真实凭证 / 余额证据核验，不能只看一个布尔或异常名。
@@ -458,8 +477,10 @@ export function executeCarryForwardStage(ctx) {
 
 // ---------------------------------------------------------------- period-check
 /**
- * 期末完整性检查：只使用 LOCAL-02 已审 A.periodEndCheck（当前草稿名称，合并后核实）。
- * 本包交付时 LOCAL-02 尚未合并 → 明确 dependency_unavailable，绝不用旧 trialBalance 冒充期末检查。
+ * 期末完整性检查：只使用已合入的 LOCAL-02 `A.periodEndCheck`。
+ * 真实返回是 `{ accountSetId, period, ready, steps, blocking, missing, rules }`：
+ * 必须按 `ready` / `steps` / `blocking` 判定，不能读不存在的 `ok` / `status` / `checks`。
+ * 检查本身只读，不写业务；证据只保留步骤 id / 状态与阻断码，不落企业 / 资产自由文本。
  */
 export function executePeriodCheckStage(ctx) {
   const { db, stage, item, lock } = ctx;
@@ -468,8 +489,8 @@ export function executePeriodCheckStage(ctx) {
   if (typeof A.periodEndCheck !== "function") {
     const evidence = {
       accountSetId: setId, period: stage.period,
-      dependency: "LOCAL-02 A.periodEndCheck", status: "dependency_unavailable",
-      note: "LOCAL-02 期末完整性检查尚未合并：本阶段不执行，也不以旧试算平衡替代期末检查",
+      dependency: "LOCAL-02 A.periodEndCheck", dependencyUnavailable: true,
+      note: "LOCAL-02 期末完整性检查接口不可用：本阶段不执行，也不以旧试算平衡替代期末检查",
     };
     withFencedTransaction(db, lock, () => {
       const ok = writeStageResult(db, {
@@ -483,18 +504,23 @@ export function executePeriodCheckStage(ctx) {
   }
   return withFencedTransaction(db, lock, () => {
     const result = A.periodEndCheck(setId, stage.period);
-    const resultOk = result?.ok === true && result?.status !== "failed";
+    const steps = (Array.isArray(result?.steps) ? result.steps : []).map((step) => ({
+      id: step.id, status: step.status,
+    }));
+    const blocking = (Array.isArray(result?.blocking) ? result.blocking : []).map((entry) => ({
+      step: entry.step, code: entry.code,
+    }));
+    const ready = result?.ready === true && steps.length > 0 && blocking.length === 0;
     const evidence = {
       accountSetId: setId, period: stage.period, dependency: "LOCAL-02 A.periodEndCheck",
-      resultStatus: result?.status ?? null, ok: result?.ok === true,
-      checks: Array.isArray(result?.checks) ? result.checks.length : 0,
+      ready, steps, blocking,
       businessHash: businessDigest(db, setId, stage.period),
     };
-    const status = resultOk ? STAGE_STATUS.SUCCEEDED : STAGE_STATUS.NEEDS_REVIEW;
+    const status = ready ? STAGE_STATUS.SUCCEEDED : STAGE_STATUS.NEEDS_REVIEW;
     const ok = writeStageResult(db, {
       stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
       status, outcomeHash: sha256(canonicalJson(evidence)), evidence,
-      errorCode: resultOk ? null : "period_check_failed",
+      errorCode: ready ? null : "period_check_blocked",
     });
     if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
     return { status, evidence };
@@ -502,18 +528,22 @@ export function executePeriodCheckStage(ctx) {
 }
 
 // ---------------------------------------------------------------- close
-/** 封账：必须同一期间已有成功的期末检查；closed 改变与 checkpoint 同一事务。 */
+/**
+ * 封账：必须同一期间已有成功的期末检查；真实调用 `A.setPeriodStatus(setId, period, 'closed')`，
+ * 由核心在业务变化后重新拒绝（草稿 / 不平 / 计提 / 卡片总账 / 结转 / 连续期间）。
+ * 旧 check 成功只作为阶段门禁，**不代替**核心的前置校验；close 效果与 checkpoint 同一事务。
+ */
 export function executeCloseStage(ctx) {
   const { db, stage, item, lock } = ctx;
   const setId = item.account_set_id;
   if (!setId) throw domainError("account_set_unresolved", "封账阶段缺少账套");
   const period = stage.period;
   const check = db.prepare(
-    `SELECT status FROM local_batch_stages WHERE item_id=? AND period=? AND stage_key=?`,
+    `SELECT status, outcome_hash FROM local_batch_stages WHERE item_id=? AND period=? AND stage_key=?`,
   ).get(item.id, period, STAGE_KEYS.PERIOD_CHECK);
   if (!check || check.status !== STAGE_STATUS.SUCCEEDED) {
     const evidence = {
-      accountSetId: setId, period, dependency: "LOCAL-02 A.periodEndCheck",
+      accountSetId: setId, period,
       priorCheckStatus: check?.status ?? null,
       note: "未取得同期间成功的期末检查：拒绝封账（不实现更宽松的替代规则）",
     };
@@ -528,11 +558,15 @@ export function executeCloseStage(ctx) {
     return { status: STAGE_STATUS.BLOCKED_DEPENDENCY, evidence };
   }
   return withFencedTransaction(db, lock, () => {
-    A.setPeriodStatus(setId, period, "closed");
+    // 核心会重新校验草稿 / 试算平衡 / 期末检查全部前置；旧 check 成功不能绕过它。
+    const closed = A.setPeriodStatus(setId, period, "closed");
+    if (closed?.status !== "closed") throw domainError("close_not_confirmed", "封账后期间状态不是 closed");
     const row = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`).get(setId, period);
     if (row?.status !== "closed") throw domainError("close_not_confirmed", "封账后期间状态不是 closed");
     const evidence = {
       accountSetId: setId, period, periodStatus: row.status,
+      priorCheckOutcomeHash: check.outcome_hash ?? null,
+      recheckedByCore: true,
       businessHash: businessDigest(db, setId, period),
     };
     const ok = writeStageResult(db, {
@@ -680,8 +714,21 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
       return { ok: true };
     }
     if (key === STAGE_KEYS.PERIOD_CHECK) {
-      if (evidence.status === "dependency_unavailable") return { ok: true };
-      return { ok: true };
+      if (evidence.dependencyUnavailable === true) return { ok: true };
+      if (typeof A.periodEndCheck !== "function" || expectedSetId === null) {
+        return { ok: false, reason: "period_check_dependency_missing" };
+      }
+      const check = A.periodEndCheck(expectedSetId, stage.period);
+      if (check?.ready === true) return { ok: true };
+      const codes = (Array.isArray(check?.blocking) ? check.blocking : []).map((entry) => entry.code);
+      // 合法后续效果：本任务已成功封账的**更晚**期间会让早前期间的顺序检查报 later_period_closed。
+      // 这不是早前 check 失效；只有目标期间仍为 closed 且阻断全部是该合法后续效果时才继续认成功。
+      if (codes.length && codes.every((code) => code === "later_period_closed")) {
+        const target = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`)
+          .get(expectedSetId, stage.period);
+        if (target?.status === "closed") return { ok: true };
+      }
+      return { ok: false, reason: "period_check_regressed", details: { counting: codes.length, codes: codes.slice(0, 8) } };
     }
     if (key === STAGE_KEYS.CLOSE) {
       const row = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`)
