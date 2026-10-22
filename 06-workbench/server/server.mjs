@@ -6,7 +6,7 @@ import { extname, join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as A from "./accounting.mjs";
 import { getImportBatch, importIncremental } from "./import-incremental.mjs";
-import { buildReportExport } from "./report-export.mjs";
+import { buildOfficeExport } from "./report-office-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, decodeFiles, ToolError, taxBrowserSessions } from "./agent-tools.mjs";
@@ -45,6 +45,26 @@ const REPORT_INPUT_ERRORS = new Set([
   "report_options_invalid", "period_required", "period_invalid", "period_before_start", "period_not_registered",
   "report_kind_unsupported", "report_format_unsupported", "account_code_required",
 ]);
+const REPORT_NOT_FOUND_ERRORS = new Set(["account_set_not_found", "account_not_found"]);
+const REPORT_REJECTED_ERRORS = new Set(["report_data_invalid", "office_text_too_long"]);
+// Fixed product wording for format-level failures; internal font paths / stacks never reach the client.
+const REPORT_FONT_ERRORS = {
+  pdf_font_unavailable: "服务器缺少可嵌入的中文字体，暂时无法生成 PDF；请改用 CSV 或 Excel",
+  pdf_font_glyph_missing: "当前中文字体缺少报表所需字符，无法生成 PDF；请改用 CSV 或 Excel",
+};
+function reportError(e) {
+  const code = e?.code;
+  if (REPORT_FONT_ERRORS[code]) return { status: 500, body: { error: code, message: REPORT_FONT_ERRORS[code], details: null } };
+  if (REPORT_NOT_FOUND_ERRORS.has(code)) return { status: 404, body: { error: code, message: e.message, details: e.details ?? null } };
+  if (code === "office_text_too_long") {
+    // Locate the offending field only: the over-long text itself is never echoed back.
+    const { field = null, length = null, limit = null } = e.details ?? {};
+    return { status: 422, body: { error: code, message: e.message, details: { field, length, limit } } };
+  }
+  if (REPORT_REJECTED_ERRORS.has(code)) return { status: 422, body: { error: code, message: e.message, details: e.details ?? null } };
+  if (REPORT_INPUT_ERRORS.has(code)) return { status: 400, body: { error: code, message: e.message, details: e.details ?? null } };
+  return { status: 500, body: { error: "report_export_failed", message: "报表导出失败，请稍后重试", details: null } };
+}
 
 // ------------------------------------------------------------------ 路由表
 async function api(req, res, url, m) {
@@ -121,26 +141,32 @@ async function api(req, res, url, m) {
       return json(res, 405, { error: "method_not_allowed", message: "Only GET is supported", details: null });
     }
     try {
-      const result = buildReportExport(+match[1], {
+      const preview = match[3] === "export-data";
+      // export-data stays a CSV-shaped JSON DTO and keeps the original strict format contract:
+      // only csv / absent is accepted, so office formats are never silently rewritten to CSV.
+      const requestedFormat = url.searchParams.get("format") ?? "csv";
+      if (preview && requestedFormat !== "csv") {
+        const error = new Error("report_format_unsupported");
+        error.code = "report_format_unsupported";
+        error.details = { supported: ["csv"] };
+        throw error;
+      }
+      // Only /export turns the requested format into a real attachment.
+      const result = await buildOfficeExport(+match[1], {
         kind: match[2], period: url.searchParams.get("period"),
-        format: url.searchParams.get("format") ?? "csv", code: url.searchParams.get("code"),
+        format: preview ? "csv" : requestedFormat, code: url.searchParams.get("code"),
       });
-      if (match[3] === "export-data") return json(res, 200, result.report);
+      if (preview) return json(res, 200, result.report);
       // Complete generation before sending headers: failures must remain JSON, never partial files.
-      const body = Buffer.from(result.body, "utf8");
+      const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, "utf8");
       res.writeHead(200, {
         "content-type": result.contentType, "content-length": body.length,
         "content-disposition": attachmentName(result.filename), "x-content-type-options": "nosniff",
       });
       return res.end(body);
     } catch (e) {
-      const code = e?.code;
-      const status = ["account_set_not_found", "account_not_found"].includes(code) ? 404 : code === "report_data_invalid" ? 422 : REPORT_INPUT_ERRORS.has(code) ? 400 : 500;
-      return json(res, status, {
-        error: status === 500 ? "report_export_failed" : code,
-        message: status === 500 ? "报表导出失败，请稍后重试" : e.message,
-        details: status === 500 ? null : e.details ?? null,
-      });
+      const failure = reportError(e);
+      return json(res, failure.status, failure.body);
     }
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/reports\/(trial-balance|balance-sheet|income-statement|cash-flow-statement)$/))) {
