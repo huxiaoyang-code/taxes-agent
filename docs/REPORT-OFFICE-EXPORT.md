@@ -2,14 +2,14 @@
 
 本文件描述**新增的独立导出模块** `06-workbench/server/report-office-export.mjs`。它复用 [REPORT-EXPORT](REPORT-EXPORT.md) 的稳定报表 DTO，为五类内部报表生成真实 XLSX / PDF，同时保留 CSV。
 
-**当前状态（2026-10-22 接线阶段 + 最小接线回归修复）：模块已随 PR #52 合并（merge `257f96275031eefa484699dd71bd012e2d221e51`，源码最终 `2681df1`；管理者与独立 reviewer 各 21/21，含 11 个 PDF 的 pdfplumber 几何检查，原 11 PDF / 43 页已全部目视检查）。当前分支 `codex/huxiaoyang-code/local-05-wire` 基于该 merge，已完成**页面格式选择与下载校验**、**真实 HTTP 黑盒测试**、**`server.mjs` 报表导出路由的最小挂载**（`await buildOfficeExport` + 固定错误映射，不新增框架）、**两条路由契约回归修复**（附件真实支持 XLSX；`/export-data` 恢复原严格 CSV 格式契约）和三份文档。挂载后 `node test/report-office-http.test.mjs` 在**真实 `server/server.mjs`** 子进程上实跑 **6/6 通过、exit 0**；`node test/report-export-http.test.mjs` 现为 **31/31 通过、exit 0**（旧的 `format=xlsx` 必须 400 断言已换成真正不支持的 `yaml`，并新增两条路由契约回归）。准备阶段的“临时替身 6/6”只是历史旁证，不作为验收证据。候选仍未提交 / 未建 PR / 未合并，待根管理者独立审查（含实际 UI 验证）与合并。`scripts/test-all.mjs` 仍归 LOCAL02 #47，新套件尚未进入统一入口。
+**当前状态（2026-10-22 接线阶段 + 最小接线回归修复）：模块已随 PR #52 合并（merge `257f96275031eefa484699dd71bd012e2d221e51`，源码最终 `2681df1`；管理者与独立 reviewer 各 21/21，含 11 个 PDF 的 pdfplumber 几何检查，原 11 PDF / 43 页已全部目视检查）。当前分支 `codex/huxiaoyang-code/local-05-wire` 基于该 merge，已完成**页面格式选择与下载校验**、**真实 HTTP 黑盒测试**、**`server.mjs` 报表导出路由的最小挂载**（`await buildOfficeExport` + 固定错误映射，不新增框架）、**两条路由契约回归修复**（附件真实支持 XLSX；`/export-data` 恢复原严格 CSV 格式契约）和文档（原三份，本轮再把追加所有权的 `docs/REPORT-EXPORT.md` 一并修正为四份）。挂载后 `node test/report-office-http.test.mjs` 在**真实 `server/server.mjs`** 子进程上实跑 **6/6 通过、exit 0**；`node test/report-export-http.test.mjs` 现为 **31/31 通过、exit 0**（旧的 `format=xlsx` 必须 400 断言已换成真正不支持的 `yaml`，并新增两条路由契约回归）。准备阶段的“临时替身 6/6”只是历史旁证，不作为验收证据。已提交为 `71894a1`（分支 `codex/huxiaoyang-code/local-05-wire`），**未建 PR / 未合并，尚未合入 LOCAL02**。独立审查已完成：在该 head 上实跑 `report-office-http` 6/6、`report-export-http` 31/31 均 exit 0；页面脚本探针与 root 在真实页面点击三格式均触发下载（探针 / 页面都不是保存位置检查，也未新增 PDF 几何）。`scripts/test-all.mjs` 仍归 LOCAL02 #47，新套件尚未进入统一入口。
 
-返工已修复两项独立 review 复现的 P2：PDF 超长首页元数据越界、XLSX 超过 Excel 单格上限仍成功生成；同时去除了重复尾注并避免尾注孤页。既有 `docs/REPORT-EXPORT.md` 仍描述“首版仅 CSV”（该文件不在本任务范围），需由持有该文件的共享变更同步。
+返工已修复两项独立 review 复现的 P2：PDF 超长首页元数据越界、XLSX 超过 Excel 单格上限仍成功生成；同时去除了重复尾注并避免尾注孤页。`docs/REPORT-EXPORT.md` 所有权已追加到 Issue #45，本轮已按当前事实修正（原文“首版仅 CSV”改为历史表述），无需再由其他变更代同步。
 
 - 模块分支：`codex/huxiaoyang-code/local-05-office`（已随 PR #52 合并；模块源冻结 `9f585d0`，纯 DTO 无副作用修改 `1e11d1c`，源码最终 `2681df1`）。
 - 接线阶段分支：`codex/huxiaoyang-code/local-05-wire`，基于上述 merge `257f962`（在本分支上不另做模块实现，只在报表导出路由做最小挂载）。
 - 原始基线（分叉时）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
-- Issue：#45（LOCAL-05a）；LOCAL-05 整体未完成：模块已合并，**HTTP / 页面接线在本分支已实现，候选待审待合**。
+- Issue：#45（LOCAL-05a）；LOCAL-05 整体未完成：模块已合并，**HTTP / 页面接线已在本分支实现并完成独审（`71894a1`），未建 PR / 未合并**。
 - 合成验收产物：`06-workbench/tmp/report-office-qa/`（gitignored）。
 
 既有验收事实分两类，不可混用也不可互相否定：
@@ -46,7 +46,7 @@ const file = await buildOfficeExport(accountSetId, {
 
 - 页面 `06-workbench/public/index.html` / `public/app.js`：五类报表下载增加中文格式选择（CSV 表格 / Excel 工作簿 / PDF），按钮改为“下载报表”。`downloadReport()` 按所选格式传 `format`，保存前逐项校验：
   - `Content-Type` 与所选格式一致（`text/csv; charset=utf-8`、`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`、`application/pdf`）；
-  - `Content-Disposition` 的 `filename*` 解码后扩展名与所选格式一致，且与 `filename` 指向同一文件名；
+  - `Content-Disposition` 的 `filename*` 解码后扩展名与所选格式一致（无 `filename*` 时退回本地 `<kind>-<period><扩展名>`）。**UI 未实现 `filename` 与 `filename*` 的同名比对**：只校验实际采用的 `filename*` 扩展名；两边响应头一致性由 HTTP 套件断言，不为迁就文档而扩展 UI；
   - `Content-Length` 与实际字节数一致；
   - 文件魔数真实（CSV 的 UTF-8 BOM、XLSX 的 `PK\x03\x04`、PDF 的 `%PDF-`）。
   任一项不满足即取消保存，因此 HTML / JSON 错误页不会被当成 xlsx 保存；错误提示使用固定中文文案，**不展示内部堆栈或字体绝对路径**。
@@ -200,7 +200,7 @@ Poppler（`pdfinfo` / `pdftoppm`）与 Python + pdfplumber 仅用于**验收检�
 
 工作目录 `06-workbench`，临时合成库；不含真实账套或凭据。
 
-### 本轮（导入无副作用小修）实际命令
+### 导入无副作用小修轮（模块阶段）实际命令
 
 | 命令 | 结果 | 退出码 |
 |---|---|---|
@@ -231,7 +231,7 @@ format=pdf  → 400 application/json，同上
 
 当时同一测试在 gitignored 临时替身上得到的 6/6 **只是历史旁证，不作为验收证据**；正式证据是上表真实 `server/server.mjs` 的 6/6。
 
-### 最小接线回归修复（2026-10-22，本轮）
+### 最小接线回归修复（2026-10-22）
 
 接线后 `/export?format=xlsx` 按契约返回真实工作簿，旧套件里“`format=xlsx` 必须 400”的历史断言因此失效。修复**不改模块渲染代码、不删测试、不改弱断言**：
 
@@ -242,6 +242,19 @@ format=pdf  → 400 application/json，同上
 - `06-workbench/test/report-office-http.test.mjs`：预览用例补充上述四种格式的严格 400 断言，其余 6 个用例（CSV / XLSX / PDF 五类、输入校验、生成失败）断言不变。新增真实 HTTP 6 项保留。
 
 本轮实跑：`report-export-http` **31/31**、`report-office-http` **6/6**、`report-export` **21/21**，均 exit 0（真实 `server.mjs` 子进程 + 临时合成库 + 随机回环端口）。源码 Office 生成器未变，**前轮 11 PDF 几何结果只标前轮、本轮未重跑**。
+
+### 独立审查与页面验收（2026-10-22）
+
+冻结 head `71894a1`（源码 / 测试不再改）。四类证据互相不可替代：
+
+| 证据 | 执行者 | 结果 | 不覆盖 |
+|---|---|---|---|
+| `node test/report-office-http.test.mjs` | 独立审查（未参与实现） | **6/6、exit 0**（真实本包 `server.mjs` 子进程、临时合成库、随机回环端口） | 浏览器行为 |
+| `node test/report-export-http.test.mjs` | 独立审查 | **31/31、exit 0**（包含 `/export-data` 严格 CSV 与 `/export` 真实 XLSX 契约） | 同上 |
+| 页面脚本探针 | 独立审查 | CSV / XLSX / PDF 均触发下载；422 / 500 / MIME / 扩展名 / 长度 / 魔数失败均取消保存且控件恢复；内部路径不显示 | **不是真浏览器** |
+| 真实页面点击 | root 管理者 | 真实 IAB 新标签页 + 本机 loopback + 合成账套（期初银行 1,000 / 资本 1,000；收入 800、费用 300；预览银行 1,500）；三格式分别选择并点击均显示“已生成并开始下载”、按钮恢复；服务 / 库 / 标签页已自清理，截图在 root 忽略目录 | **未检查保存位置**，**未新增 PDF 几何** |
+
+口径：页面**实际生成并触发了下载**；附件二进制是否正确（XLSX 重开、PDF 可解析、CSV 行语义）以 HTTP 套件独审证据为准。
 
 ### 旧模块源码 `9f585d0` 的既有验收（渲染逻辑未变，仍然有效）
 
@@ -265,15 +278,19 @@ format=pdf  → 400 application/json，同上
 - 公式注入样例保持文本；PDF 中动态文本不执行。
 - 缺字体、非字体文件、缺字、未知格式、未登记期间、缺科目、非法账套均验证失败路径；空账提示在 XLSX / PDF 均保留。
 
-**视觉 QA 已完成：** 旧模块源码 `9f585d0` 的 11 个 PDF（43 页）已由根管理者实际渲染并逐张检查全部 5 张 contact sheet（输出在 `06-workbench/tmp/report-office-full-qa-v2`），中文 / 分页 / 表格可读、无视觉阻塞。本轮只改动态 `import` 并新增隔离回归，渲染逻辑未变，故该视觉证据继续覆盖本次源码。员工自身无图像识别能力，因此不做像素目视，也不重复执行该渲染。
+**视觉 QA 已完成：** 旧模块源码 `9f585d0` 的 11 个 PDF（43 页）已由根管理者实际渲染并逐张检查全部 5 张 contact sheet（输出在 `06-workbench/tmp/report-office-full-qa-v2`），中文 / 分页 / 表格可读、无视觉阻塞。该轮只改动态 `import` 并新增隔离回归，渲染逻辑未变，故该视觉证据继续覆盖本次源码。员工自身无图像识别能力，因此不做像素目视，也不重复执行该渲染。
 
-复验范围按实际源码变动决定：仅文档或无关基线（例如新增独立 LOCAL08 模块）更新不要求重跑整套测试；只有渲染 / 导入逻辑本身变动时才需重新执行对应检查。本轮改动只涉及导入方式与回归用例，故运行了整套模块套件而无需重做视觉 QA。接线阶段只改页面、HTTP 测试与 `server.mjs` 导出路由，模块渲染代码未变，因此不重做像素目视；但本轮仍按定向回归要求实跑了整套模块套件 **21/21**（含 11 PDF 几何）。
+复验范围按实际源码变动决定：仅文档或无关基线（例如新增独立 LOCAL08 模块）更新不要求重跑整套测试；只有渲染 / 导入逻辑本身变动时才需重新执行对应检查。轮次分开记，**不混轮**：
+
+- **纯模块轮**（`9f585d0`，渲染逻辑冻结）：20/20；根管理者另在 `1e11d1c` 内容上实跑 `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export`，**21/21** 并输出 `pdfplumber geometry verified for 11 PDFs`；11 PDF / 43 页几何与目视结论只属于这些模块轮。
+- **初次接线前轮**：上条 21/21（含 11 PDF 几何）作为**前轮证据**保留；接线当时未重跑，也不因接线重做视觉。
+- **后续最小回归轮**（`71894a1`）：只跑 `report-office-http` **6/6**、`report-export-http` **31/31**、`report-export` **21/21**（CSV / DTO 套件），**未设 `REPORT_OFFICE_PYTHON`、未重跑 11 PDF 几何**。因此不能写“接线轮重跑了模块 21/21 并含几何”。
 
 ## 接线状态与后续
 
-- **已接线但未合并**：导出路由挂载、两条路由契约回归与页面格式选择只在本分支（未提交 / 未建 PR），对用户主工作区未生效；`docs/REPORT-EXPORT.md` 仍写“首版仅 CSV”，需由持有该文件的共享变更同步。
+- **已接线、已提交、未合并**：导出路由挂载、两条路由契约回归与页面格式选择已在 `71894a1`（本分支），**未建 PR / 未合并、尚未合入 LOCAL02**，对用户主工作区尚未生效；`docs/REPORT-EXPORT.md` 已在本轮同步为当前事实（纯 CSV 函数 + `/export-data` 严格 CSV DTO + `/export` 三格式 + 失败无附件），旧“首版仅 CSV”只作历史。
 - **旧断言失效问题已在本分支解决**：`test/report-export-http.test.mjs` 的 `format=xlsx` 无论断已换成真正不支持的 `yaml`，并新增两条路由契约回归；该套件现为 **31/31 通过、exit 0**，不再有范围外阻塞。
-- **仍待完成**：根管理者最终独立审查与**实际 UI 验证**尚未进行，PR / 合并均未发生；不由本任务声明已合并。
+- **已完成**：根管理者独立审查（源码 + 两套真实 HTTP）与页面级验证（真实 IAB 点击三格式均触发下载）；**未检查浏览器保存位置，未新增 PDF 几何**。**仍待**：整合（本分支相对 `origin/main` behind 9，需先同步）、PR、合并；不由本任务声明已合并。
 - **统一入口未登记**：`scripts/test-all.mjs` 归 LOCAL02 #47（仍为 47 套，本任务未改），新套件尚未纳入；本任务未跑全库 `npm test`（本分支尚未合入 CORE-02），**不声称全套通过**；全量回归待根管理者合 02 与登记后统一执行。
-- 接线后仍需：由持有 `scripts/test-all.mjs` 的变更把新测试纳入统一入口；更新面向用户的导出文档；继续只用临时合成账套做真实 HTTP 验收。
+- 接线后仍需：由持有 `scripts/test-all.mjs` 的变更把新测试纳入统一入口；继续只用临时合成账套做真实 HTTP 验收。`docs/REPORT-EXPORT.md` 已于本轮同步，不再作为待办。
 - 复杂现金流分类、间接法独立勾稽、双准则官方映射、来源完整性属于后续核心任务；本模块只保留限制提示，**不声称这些问题已修复**，也不声称 LOCAL-03 或双准则完成。
