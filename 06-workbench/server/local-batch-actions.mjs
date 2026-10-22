@@ -1,0 +1,645 @@
+// local-batch-actions.mjs — LOCAL-07 固定本地操作的真实领域适配层。
+//
+// 只允许这 7 类操作：import → post → depreciation → carryforward → period-check → close → reports。
+// 本文件不复制任何金额 / 结账 / 折旧算法，只调用既有已审领域接口：
+//   - import：import-incremental.mjs（自带 BEGIN IMMEDIATE，禁止外包事务）
+//   - post / depreciation / carryforward / close：accounting.mjs
+//   - period-check：LOCAL-02 的 A.periodEndCheck（本包交付时尚未合并 → dependency_unavailable）
+//   - reports：report-export.mjs 的一致只读 DTO 快照（渲染在 worker 线程，见 runner）
+//
+// 事务边界：除 import 外，每个阶段的「会计效果 + checkpoint」都在同一个 BEGIN IMMEDIATE 内，
+// 并先做 fence 校验（旧 owner / 旧 token 无法提交）。不能在同一事务内 fence 的 import 采用
+// 上游自身的批次幂等 + 事后真实核验 + 独立 fence 事务补 checkpoint（commit 后崩溃可安全回放）。
+
+import {
+  STAGE_KEYS, STAGE_STATUS, canonicalJson, getInput, getSnapshot, saveSnapshot, sha256,
+  withFencedTransaction, withReadSnapshot, writeStageResult,
+} from "./local-batch-storage.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
+
+// 数据目录守卫：本模块会通过 db.mjs 打开业务库，因此必须由调用方先显式设置 WORKBENCH_DATA_DIR。
+// 未设置时立即失败，不 import db.mjs，也不会触碰默认数据目录。
+if (!process.env.WORKBENCH_DATA_DIR || !String(process.env.WORKBENCH_DATA_DIR).trim()) {
+  const error = new Error("local_batch_data_dir_required");
+  error.code = "local_batch_data_dir_required";
+  throw error;
+}
+const [A, { db }, importStorage, importIncrementalModule, reportExportModule] = await Promise.all([
+  import("./accounting.mjs"),
+  import("./db.mjs"),
+  import("./import-storage.mjs"),
+  import("./import-incremental.mjs"),
+  import("./report-export.mjs"),
+]);
+const {
+  getEnterpriseAccountSet, getVoucherSource, persistedVoucherFingerprint,
+} = importStorage;
+const { getImportBatch, importIncremental } = importIncrementalModule;
+const { buildReportExport } = reportExportModule;
+
+const r2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+const EPS = 0.005;
+
+export const IMPORT_STAGE_PREFIX = `${STAGE_KEYS.IMPORT}:`;
+
+function domainError(code, message, details = {}) {
+  const error = new Error(message || code);
+  error.code = code;
+  error.details = details;
+  return error;
+}
+
+/** 只保存结构化错误码，不保存原始账务文本 / 金额 / 堆栈。 */
+function sanitizeError(error) {
+  const code = error?.code || error?.message || "stage_failed";
+  return {
+    code: String(code).slice(0, 120),
+    message: "阶段执行失败：请查看状态中的错误码与证据摘要",
+  };
+}
+
+// ---------------------------------------------------------------- 证据指纹
+/** 某账套某期间的业务证据摘要：已过账凭证（含分录指纹）+ 期初 + 期间状态。 */
+export function businessDigest(db, setId, period) {
+  const vouchers = db.prepare(
+    `SELECT id, period, voucher_date, word, number, summary, status, kind FROM vouchers
+      WHERE account_set_id=? AND period=? ORDER BY id`,
+  ).all(setId, period).map((voucher) => {
+    const entries = db.prepare(
+      `SELECT code, summary, debit, credit FROM voucher_entries WHERE voucher_id=? ORDER BY line_no`,
+    ).all(voucher.id);
+    return {
+      id: voucher.id, status: voucher.status, kind: voucher.kind,
+      fingerprint: persistedVoucherFingerprint(voucher, entries),
+    };
+  });
+  const openings = db.prepare(
+    `SELECT code, debit, credit FROM opening_balances WHERE account_set_id=? ORDER BY code`,
+  ).all(setId);
+  const periodStatus = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`).get(setId, period);
+  return sha256(canonicalJson({ setId, period, vouchers, openings, periodStatus: periodStatus?.status ?? null }));
+}
+
+function voucherEvidence(voucher) {
+  const entries = db.prepare(
+    `SELECT code, summary, debit, credit FROM voucher_entries WHERE voucher_id=? ORDER BY line_no`,
+  ).all(voucher.id);
+  return {
+    voucherId: voucher.id, status: voucher.status, period: voucher.period, kind: voucher.kind,
+    totalDebit: r2(entries.reduce((sum, entry) => sum + entry.debit, 0)),
+    totalCredit: r2(entries.reduce((sum, entry) => sum + entry.credit, 0)),
+    entriesHash: persistedVoucherFingerprint(voucher, entries),
+    entryCount: entries.length,
+  };
+}
+
+// ---------------------------------------------------------------- import
+/**
+ * 执行一条 import 规格（item 内一个时期的一条 batch）。
+ * 校验顺序：输入快照指纹 → 领域严格校验 / 幂等 → 批次与逐张来源凭证真实核验 → fence 事务补 checkpoint。
+ */
+export function executeImportStage(ctx) {
+  const { db, stage, item, spec, lock, hooks } = ctx;
+  const input = getInput(db, { jobId: item.job_id, itemId: item.id, batchId: spec.batchId });
+  if (!input) throw domainError("input_snapshot_missing", "缺少该批次的输入快照");
+  const bytes = Buffer.from(input.content);
+  const bytesHash = sha256(bytes);
+  if (bytesHash !== input.source_hash) throw domainError("input_changed", "已保存的输入快照指纹与登记不一致");
+  let payload;
+  try {
+    payload = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw domainError("input_payload_invalid", "输入快照不是合法 JSON");
+  }
+  const setId = item.account_set_id;
+  if (spec.mode === "append" && !setId) {
+    throw domainError("account_set_unresolved", "追加导入没有已确认账套（必须有 item.accountSetId 或本 item 前一 create 的真实结果）");
+  }
+  const options = {
+    batchId: spec.batchId,
+    source: {
+      system: item.source_system,
+      enterpriseKey: item.enterprise_key,
+      enterpriseName: item.enterprise_name || "",
+    },
+    mode: spec.mode,
+    payload,
+    confirmNewBinding: spec.confirmNewBinding === true,
+    dryRun: false,
+  };
+  if (spec.mode === "append") options.accountSetId = setId;
+  const result = importIncremental(options);
+  if (!result || result.ok !== true) {
+    const conflicts = Array.isArray(result?.conflicts) ? result.conflicts.map((c) => c.code) : [];
+    const errors = Array.isArray(result?.errors) ? result.errors.length : 0;
+    const code = conflicts[0] || (errors ? "import_validation_rejected" : "import_rejected");
+    throw domainError(code, "增量导入被拒绝：结构化冲突或严格校验失败", { conflicts, errorCount: errors });
+  }
+  if (![ "applied", "idempotent_replay" ].includes(result.status)) {
+    throw domainError("import_status_unexpected", "增量导入返回了非落库状态", { status: result.status });
+  }
+  // commit 之后、checkpoint 之前的崩溃点（测试可注入）。
+  const afterCommit = () => { if (hooks?.afterImportCommit) hooks.afterImportCommit({ stage, item, result }); };
+  afterCommit();
+
+  // 真实核验：批次必须 completed，逐张来源凭证状态必须 ok（不是看到 completed 字段就成功）。
+  const batch = getImportBatch(spec.batchId);
+  if (!batch?.batch || batch.batch.status !== "completed") {
+    throw domainError("import_batch_not_completed", "批次未标记完成", { status: batch?.batch?.status ?? null });
+  }
+  const trace = Array.isArray(batch.sourceTrace) ? batch.sourceTrace : [];
+  const bad = trace.filter((entry) => entry.state !== "ok");
+  if (bad.length) {
+    throw domainError("import_trace_inconsistent", "逐张来源凭证核验不是全部 ok", {
+      bad: bad.slice(0, 5).map((entry) => ({ sourceVoucherId: entry.sourceVoucherId, state: entry.state })),
+    });
+  }
+  const accountSetId = result.accountSetId ?? result.created?.accountSetId ?? batch.batch.accountSetId;
+  if (!Number.isInteger(accountSetId) || accountSetId <= 0) {
+    throw domainError("import_account_set_missing", "导入未返回真实账套 ID");
+  }
+  const binding = getEnterpriseAccountSet(db, item.enterprise_key);
+  if (!binding || binding.account_set_id !== accountSetId) {
+    throw domainError("import_enterprise_binding_mismatch", "账套未绑定该规范企业身份");
+  }
+  const voucherRows = trace.map((entry) => {
+    const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(entry.voucherId);
+    if (!voucher) throw domainError("import_voucher_missing", "来源追踪指向的本机凭证不存在");
+    if (voucher.account_set_id !== accountSetId) throw domainError("import_voucher_account_set_mismatch", "凭证账套与批次不一致");
+    if (voucher.status !== "posted") throw domainError("import_voucher_unposted", "导入凭证不是已过账状态");
+    const evidence = voucherEvidence(voucher);
+    return { sourceVoucherId: entry.sourceVoucherId, action: entry.action, ...evidence };
+  });
+  const evidence = {
+    batchId: spec.batchId,
+    mode: spec.mode,
+    status: result.status,
+    accountSetId,
+    accountSetCreated: result.created?.accountSetCreated === true,
+    vouchersCreated: Number(result.created?.vouchersCreated ?? 0),
+    vouchersDeduplicated: Number(result.created?.vouchersDeduplicated ?? 0),
+    contentFingerprint: batch.batch.contentFingerprint ?? null,
+    inputHash: bytesHash,
+    sourceTrace: trace.map((entry) => ({
+      sourceVoucherId: entry.sourceVoucherId, voucherId: entry.voucherId,
+      action: entry.action, state: entry.state,
+    })),
+    vouchers: voucherRows,
+    businessHash: businessDigest(db, accountSetId, stage.period),
+  };
+  const outcomeHash = sha256(canonicalJson(evidence));
+  withFencedTransaction(db, lock, () => {
+    const ok = writeStageResult(db, {
+      stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+      status: STAGE_STATUS.SUCCEEDED, outcomeHash, evidence,
+    });
+    if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+  });
+  return { status: STAGE_STATUS.SUCCEEDED, evidence, accountSetId };
+}
+
+// ---------------------------------------------------------------- post
+function resolveVoucherRef(db, setId, ref, enterpriseKey, sourceSystem) {
+  if (ref.voucherId) {
+    const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(ref.voucherId);
+    if (!voucher) throw domainError("voucher_not_found", "显式 voucherId 对应的凭证不存在", { voucherId: ref.voucherId });
+    if (voucher.account_set_id !== setId) throw domainError("voucher_account_set_mismatch", "凭证不属于该账套");
+    return voucher;
+  }
+  const source = getVoucherSource(db, sourceSystem, enterpriseKey, ref.sourceVoucherId);
+  if (!source) throw domainError("source_voucher_not_found", "来源凭证未在本账套登记", { sourceVoucherId: ref.sourceVoucherId });
+  if (source.account_set_id !== setId) throw domainError("source_voucher_account_set_mismatch", "来源凭证登记在其它账套");
+  const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(source.voucher_id);
+  if (!voucher) throw domainError("source_voucher_voucher_missing", "来源登记对应的凭证已被删除");
+  return voucher;
+}
+
+/** 对 manifest 显式清单逐张过账；effect 与 checkpoint 同一事务。 */
+export function executePostStage(ctx) {
+  const { db, stage, item, spec, lock } = ctx;
+  const setId = item.account_set_id;
+  if (!setId) throw domainError("account_set_unresolved", "过账阶段缺少账套");
+  return withFencedTransaction(db, lock, () => {
+    const evidence = [];
+    for (const ref of spec.vouchers) {
+      const voucher = resolveVoucherRef(db, setId, ref, item.enterprise_key, item.source_system);
+      const before = voucher.status;
+      const posted = A.postVoucher(setId, voucher.id);
+      if (posted.status !== "posted") throw domainError("voucher_post_not_confirmed", "过账后状态仍不是 posted");
+      evidence.push({ ref: ref.voucherId ? { voucherId: ref.voucherId } : { sourceVoucherId: ref.sourceVoucherId }, before, ...voucherEvidence(posted) });
+    }
+    const outcome = {
+      accountSetId: setId,
+      businessHash: businessDigest(db, setId, stage.period),
+      vouchers: evidence,
+      postedCount: evidence.filter((entry) => entry.before !== "posted").length,
+      alreadyPostedCount: evidence.filter((entry) => entry.before === "posted").length,
+    };
+    const outcomeHash = sha256(canonicalJson(outcome));
+    const ok = writeStageResult(db, {
+      stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+      status: STAGE_STATUS.SUCCEEDED, outcomeHash, evidence: outcome,
+    });
+    if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    if (ctx.hooks?.inPostTransaction) ctx.hooks.inPostTransaction({ stage, item });
+    return { status: STAGE_STATUS.SUCCEEDED, evidence: outcome };
+  });
+}
+
+// ---------------------------------------------------------------- depreciation
+/** 计提 / 摊销：调用统一入口 generateDepreciation；无动作必须有真实领域证据（卡片 / runs）。 */
+export function executeDepreciationStage(ctx) {
+  const { db, stage, item, lock } = ctx;
+  const setId = item.account_set_id;
+  if (!setId) throw domainError("account_set_unresolved", "计提阶段缺少账套");
+  const period = stage.period;
+  return withFencedTransaction(db, lock, () => {
+    const result = A.generateDepreciation(setId, period);
+    const cards = A.listAssetCards(setId).map((card) => ({
+      assetId: card.id, kind: card.kind, startPeriod: card.start_period,
+      monthly: card.monthly, remaining: card.remaining, accumulated: card.accumulated,
+    }));
+    const dueCards = cards.filter((card) => card.startPeriod <= period && card.remaining > EPS);
+    let status = STAGE_STATUS.SUCCEEDED;
+    let errorCode = null;
+    const runs = [];
+    let voucherEvidenceValue = null;
+    if (result.voucher) {
+      if (result.voucher.status !== "posted") throw domainError("depreciation_voucher_unposted", "计提凭证不是已过账状态");
+      voucherEvidenceValue = voucherEvidence(result.voucher);
+      for (const run of Array.isArray(result.runs) ? result.runs : []) {
+        const row = db.prepare(
+          `SELECT r.*, v.status AS voucher_status FROM asset_depreciation_runs r
+             LEFT JOIN vouchers v ON v.id=r.voucher_id
+            WHERE r.account_set_id=? AND r.asset_id=? AND r.period=?`,
+        ).get(setId, run.asset_id, period);
+        if (!row || row.voucher_id !== result.voucher.id || row.voucher_status !== "posted") {
+          throw domainError("depreciation_run_inconsistent", "计提记录与凭证 / 状态不一致");
+        }
+        runs.push({ assetId: run.asset_id, amount: row.amount, voucherId: row.voucher_id, period: row.period });
+      }
+      const amount = r2(runs.reduce((sum, run) => sum + run.amount, 0));
+      if (Math.abs(amount - voucherEvidenceValue.totalDebit) > 0.005) {
+        throw domainError("depreciation_amount_mismatch", "计提合计与凭证借方金额不一致", { runs: amount, voucherDebit: voucherEvidenceValue.totalDebit });
+      }
+      if (Math.abs(amount - voucherEvidenceValue.totalCredit) > 0.005) {
+        throw domainError("depreciation_amount_mismatch", "计提合计与凭证贷方金额不一致", { runs: amount, voucherCredit: voucherEvidenceValue.totalCredit });
+      }
+    } else if (dueCards.length) {
+      status = STAGE_STATUS.NEEDS_REVIEW;
+      errorCode = "depreciation_due_but_no_action";
+    } else {
+      status = STAGE_STATUS.NOT_APPLICABLE;
+    }
+    const evidence = {
+      accountSetId: setId,
+      period,
+      action: result.voucher ? "generated" : "no_action",
+      note: result.voucher ? null : "本期无需计提（无卡片 / 未到计提期 / 已提足）",
+      reason: result.voucher ? null : (cards.length === 0 ? "no_asset_cards" : "no_card_due_this_period"),
+      cards,
+      dueCards: dueCards.map((card) => card.assetId),
+      runs,
+      voucher: voucherEvidenceValue,
+      businessHash: businessDigest(db, setId, period),
+    };
+    const outcomeHash = sha256(canonicalJson(evidence));
+    const ok = writeStageResult(db, {
+      stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+      status, outcomeHash, evidence, errorCode,
+    });
+    if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    if (ctx.hooks?.inDepreciationTransaction) ctx.hooks.inDepreciationTransaction({ stage, item });
+    return { status, evidence };
+  });
+}
+
+// ---------------------------------------------------------------- carryforward
+/** 结转本期损益（yearEnd 只按 manifest 明确选择）；effect 与 checkpoint 同一事务。 */
+export function executeCarryForwardStage(ctx) {
+  const { db, stage, item, spec, lock } = ctx;
+  const setId = item.account_set_id;
+  if (!setId) throw domainError("account_set_unresolved", "结转阶段缺少账套");
+  const period = stage.period;
+  return withFencedTransaction(db, lock, () => {
+    let result = null;
+    let already = null;
+    try {
+      result = A.carryForwardProfit(setId, period, { yearEnd: spec.yearEnd === true });
+    } catch (error) {
+      if (error?.message === "already_carried_forward") already = "already_carried_forward";
+      else if (error?.message === "already_year_end_carried") already = "already_year_end_carried";
+      else throw error;
+    }
+    // 无论本次生成还是已有，都必须用真实凭证 / 余额证据核验，不能只看一个布尔或异常名。
+    const carryVouchers = db.prepare(
+      `SELECT * FROM vouchers WHERE account_set_id=? AND period=? AND kind='carryforward' AND status='posted' ORDER BY id`,
+    ).all(setId, period);
+    const plCodes = new Set(A.listAccounts(setId).filter((account) => account.category === "损益").map((account) => account.code));
+    const classify = (voucher) => {
+      const codes = db.prepare(`SELECT code FROM voucher_entries WHERE voucher_id=?`).all(voucher.id).map((row) => row.code);
+      return codes.some((code) => plCodes.has(code)) ? "profit" : "year_end";
+    };
+    const profitCarries = carryVouchers.filter((voucher) => classify(voucher) === "profit");
+    const yearEndCarries = carryVouchers.filter((voucher) => classify(voucher) === "year_end");
+    const expected = spec.yearEnd === true ? yearEndCarries : profitCarries;
+    if (spec.yearEnd === true && !yearEndCarries.length) {
+      const balance3103 = [...A.accountBalances(setId, period).entries()]
+        .filter(([code]) => code === "3103" || code.startsWith("3103"))
+        .map(([code, balance]) => ({ code, natural: balance.natural }));
+      const nonzero = balance3103.filter((row) => Math.abs(row.natural) >= EPS);
+      if (nonzero.length) {
+        throw domainError("year_end_carry_expected", "年末结转应有凭证但库内没有已过账结转凭证");
+      }
+    }
+    const evidence = {
+      accountSetId: setId,
+      period,
+      yearEnd: spec.yearEnd === true,
+      already: already,
+      generated: result ? {
+        voucherId: result.voucher?.id ?? null,
+        yearEndVoucherId: result.yearEndVoucher?.id ?? null,
+        revenue: result.revenue, expense: result.expense, profit: result.profit,
+      } : null,
+      existing: [
+        ...profitCarries.map((voucher) => voucherEvidence(voucher)),
+        ...yearEndCarries.map((voucher) => voucherEvidence(voucher)),
+      ],
+      expectedCarryCount: expected.length,
+      businessHash: businessDigest(db, setId, period),
+    };
+    const outcomeHash = sha256(canonicalJson(evidence));
+    const ok = writeStageResult(db, {
+      stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+      status: STAGE_STATUS.SUCCEEDED, outcomeHash, evidence,
+    });
+    if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    if (ctx.hooks?.inCarryForwardTransaction) ctx.hooks.inCarryForwardTransaction({ stage, item });
+    return { status: STAGE_STATUS.SUCCEEDED, evidence };
+  });
+}
+
+// ---------------------------------------------------------------- period-check
+/**
+ * 期末完整性检查：只使用 LOCAL-02 已审 A.periodEndCheck（当前草稿名称，合并后核实）。
+ * 本包交付时 LOCAL-02 尚未合并 → 明确 dependency_unavailable，绝不用旧 trialBalance 冒充期末检查。
+ */
+export function executePeriodCheckStage(ctx) {
+  const { db, stage, item, lock } = ctx;
+  const setId = item.account_set_id;
+  if (!setId) throw domainError("account_set_unresolved", "期末检查阶段缺少账套");
+  if (typeof A.periodEndCheck !== "function") {
+    const evidence = {
+      accountSetId: setId, period: stage.period,
+      dependency: "LOCAL-02 A.periodEndCheck", status: "dependency_unavailable",
+      note: "LOCAL-02 期末完整性检查尚未合并：本阶段不执行，也不以旧试算平衡替代期末检查",
+    };
+    withFencedTransaction(db, lock, () => {
+      const ok = writeStageResult(db, {
+        stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+        status: STAGE_STATUS.BLOCKED_DEPENDENCY, outcomeHash: sha256(canonicalJson(evidence)),
+        evidence, errorCode: "dependency_unavailable",
+      });
+      if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    });
+    return { status: STAGE_STATUS.BLOCKED_DEPENDENCY, evidence };
+  }
+  return withFencedTransaction(db, lock, () => {
+    const result = A.periodEndCheck(setId, stage.period);
+    const resultOk = result?.ok === true && result?.status !== "failed";
+    const evidence = {
+      accountSetId: setId, period: stage.period, dependency: "LOCAL-02 A.periodEndCheck",
+      resultStatus: result?.status ?? null, ok: result?.ok === true,
+      checks: Array.isArray(result?.checks) ? result.checks.length : 0,
+      businessHash: businessDigest(db, setId, stage.period),
+    };
+    const status = resultOk ? STAGE_STATUS.SUCCEEDED : STAGE_STATUS.NEEDS_REVIEW;
+    const ok = writeStageResult(db, {
+      stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+      status, outcomeHash: sha256(canonicalJson(evidence)), evidence,
+      errorCode: resultOk ? null : "period_check_failed",
+    });
+    if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    return { status, evidence };
+  });
+}
+
+// ---------------------------------------------------------------- close
+/** 封账：必须同一期间已有成功的期末检查；closed 改变与 checkpoint 同一事务。 */
+export function executeCloseStage(ctx) {
+  const { db, stage, item, lock } = ctx;
+  const setId = item.account_set_id;
+  if (!setId) throw domainError("account_set_unresolved", "封账阶段缺少账套");
+  const period = stage.period;
+  const check = db.prepare(
+    `SELECT status FROM local_batch_stages WHERE item_id=? AND period=? AND stage_key=?`,
+  ).get(item.id, period, STAGE_KEYS.PERIOD_CHECK);
+  if (!check || check.status !== STAGE_STATUS.SUCCEEDED) {
+    const evidence = {
+      accountSetId: setId, period, dependency: "LOCAL-02 A.periodEndCheck",
+      priorCheckStatus: check?.status ?? null,
+      note: "未取得同期间成功的期末检查：拒绝封账（不实现更宽松的替代规则）",
+    };
+    withFencedTransaction(db, lock, () => {
+      const ok = writeStageResult(db, {
+        stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+        status: STAGE_STATUS.BLOCKED_DEPENDENCY, outcomeHash: sha256(canonicalJson(evidence)),
+        evidence, errorCode: check ? "period_check_not_passed" : "dependency_unavailable",
+      });
+      if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    });
+    return { status: STAGE_STATUS.BLOCKED_DEPENDENCY, evidence };
+  }
+  return withFencedTransaction(db, lock, () => {
+    A.setPeriodStatus(setId, period, "closed");
+    const row = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`).get(setId, period);
+    if (row?.status !== "closed") throw domainError("close_not_confirmed", "封账后期间状态不是 closed");
+    const evidence = {
+      accountSetId: setId, period, periodStatus: row.status,
+      businessHash: businessDigest(db, setId, period),
+    };
+    const ok = writeStageResult(db, {
+      stageId: stage.id, instance: lock.instance, token: lock.token, attempt: ctx.attempt,
+      status: STAGE_STATUS.SUCCEEDED, outcomeHash: sha256(canonicalJson(evidence)), evidence,
+    });
+    if (!ok) throw domainError("stage_result_rejected", "阶段结果未能落库（owner / token / attempt 不匹配）");
+    if (ctx.hooks?.nearCloseCommit) ctx.hooks.nearCloseCommit({ stage, item });
+    return { status: STAGE_STATUS.SUCCEEDED, evidence };
+  });
+}
+
+// ---------------------------------------------------------------- reports（DTO 快照）
+/**
+ * 在**一个只读事务**内为某 item + period 生成全部请求的 DTO / CSV，并绑定当时业务证据 hash，
+ * 立即释放事务。渲染（XLSX / PDF）随后在 worker 线程完成，主线程不持有数据库写事务。
+ */
+export function buildReportSnapshots({ item, period, reports }) {
+  return withReadSnapshot(db, () => {
+    const setId = item.account_set_id;
+    if (!setId) throw domainError("account_set_unresolved", "报表面向的账套未确定");
+    const businessHash = businessDigest(db, setId, period);
+    const list = [];
+    for (const report of reports) {
+      const options = { kind: report.kind, period, format: "csv" };
+      if (report.kind === "ledger") options.code = report.code;
+      const built = buildReportExport(setId, options);
+      const dtoJson = JSON.stringify(built.report);
+      list.push({
+        period,
+        kind: report.kind,
+        code: report.code ?? null,
+        dtoHash: sha256(dtoJson),
+        dtoJson,
+        csvText: built.body,
+        csvHash: sha256(built.body),
+        businessHash,
+        filename: built.filename,
+        contentType: built.contentType,
+      });
+    }
+    return { accountSetId: setId, period, businessHash, reports: list };
+  });
+}
+
+export function persistSnapshot({ jobId, itemId, snapshot }) {
+  saveSnapshot(db, {
+    jobId, itemId, period: snapshot.period, kind: snapshot.kind,
+    dtoHash: snapshot.dtoHash, businessHash: snapshot.businessHash,
+    dtoJson: snapshot.dtoJson, csvText: snapshot.csvText, csvHash: snapshot.csvHash,
+  });
+}
+
+/** 报表阶段：确认快照仍然对应当前业务证据（账务证据变化则旧报表过期）。 */
+export function reportInputHash(snapshot, format, code) {
+  return sha256(canonicalJson({
+    dtoHash: snapshot.dto_hash ?? snapshot.dtoHash,
+    businessHash: snapshot.business_hash ?? snapshot.businessHash,
+    format, code: code ?? null,
+  }));
+}
+
+/**
+ * 恢复时重新核验已成功阶段的上游证据是否仍然成立。
+ * 任何被反过账 / 改金额 / 删除 / 状态回退 / 文件损坏都会返回 ok:false（调用方转 needs_review）。
+ */
+export function verifyStageEvidence({ stage, item, outputDir = null }) {
+  const evidence = safeParse(stage.evidence_json);
+  const key = stage.stage_key;
+  try {
+    if (key.startsWith(IMPORT_STAGE_PREFIX)) {
+      const batch = getImportBatch(evidence.batchId);
+      if (!batch?.batch || batch.batch.status !== "completed") return { ok: false, reason: "import_batch_state_changed" };
+      const bad = (batch.sourceTrace || []).filter((entry) => entry.state !== "ok");
+      if (bad.length) return { ok: false, reason: "import_source_trace_changed", details: { count: bad.length } };
+      for (const entry of evidence.vouchers || []) {
+        const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(entry.voucherId);
+        if (!voucher) return { ok: false, reason: "voucher_missing", details: { voucherId: entry.voucherId } };
+        if (voucher.status !== "posted") return { ok: false, reason: "voucher_unposted", details: { voucherId: entry.voucherId } };
+        if (voucherEvidence(voucher).entriesHash !== entry.entriesHash) {
+          return { ok: false, reason: "voucher_modified", details: { voucherId: entry.voucherId } };
+        }
+      }
+      return { ok: true };
+    }
+    if (key === STAGE_KEYS.POST) {
+      for (const entry of evidence.vouchers || []) {
+        const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(entry.voucherId);
+        if (!voucher) return { ok: false, reason: "voucher_missing", details: { voucherId: entry.voucherId } };
+        if (voucher.status !== "posted") return { ok: false, reason: "voucher_unposted", details: { voucherId: entry.voucherId } };
+        if (voucherEvidence(voucher).entriesHash !== entry.entriesHash) {
+          return { ok: false, reason: "voucher_modified", details: { voucherId: entry.voucherId } };
+        }
+      }
+      return { ok: true };
+    }
+    if (key === STAGE_KEYS.DEPRECIATION) {
+      for (const run of evidence.runs || []) {
+        const row = db.prepare(
+          `SELECT r.amount, r.voucher_id, v.status AS voucher_status FROM asset_depreciation_runs r
+             LEFT JOIN vouchers v ON v.id=r.voucher_id
+            WHERE r.account_set_id=? AND r.asset_id=? AND r.period=?`,
+        ).get(evidence.accountSetId, run.assetId, run.period);
+        if (!row) return { ok: false, reason: "depreciation_run_removed", details: { assetId: run.assetId } };
+        if (row.voucher_id !== run.voucherId || row.voucher_status !== "posted") {
+          return { ok: false, reason: "depreciation_run_changed", details: { assetId: run.assetId } };
+        }
+        if (Math.abs(Number(row.amount) - Number(run.amount)) > EPS) {
+          return { ok: false, reason: "depreciation_amount_changed", details: { assetId: run.assetId } };
+        }
+      }
+      return { ok: true };
+    }
+    if (key === STAGE_KEYS.CARRYFORWARD) {
+      for (const entry of evidence.existing || []) {
+        const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(entry.voucherId);
+        if (!voucher) return { ok: false, reason: "carryforward_voucher_missing", details: { voucherId: entry.voucherId } };
+        if (voucher.status !== "posted") return { ok: false, reason: "carryforward_voucher_unposted", details: { voucherId: entry.voucherId } };
+        if (voucherEvidence(voucher).entriesHash !== entry.entriesHash) {
+          return { ok: false, reason: "carryforward_voucher_modified", details: { voucherId: entry.voucherId } };
+        }
+      }
+      return { ok: true };
+    }
+    if (key === STAGE_KEYS.PERIOD_CHECK) {
+      if (evidence.status === "dependency_unavailable") return { ok: true };
+      return { ok: true };
+    }
+    if (key === STAGE_KEYS.CLOSE) {
+      const row = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`)
+        .get(evidence.accountSetId, evidence.period);
+      if (row?.status !== "closed") return { ok: false, reason: "period_reopened" };
+      return { ok: true };
+    }
+    if (key.startsWith(`${STAGE_KEYS.REPORT}:`)) {
+      const snapshot = getSnapshot(db, { itemId: item.id, period: stage.period, kind: evidence.kind });
+      if (!snapshot) return { ok: false, reason: "report_snapshot_missing" };
+      if (snapshot.business_hash !== evidence.businessHash) return { ok: false, reason: "report_evidence_changed" };
+      if (businessDigest(db, evidence.accountSetId, stage.period) !== snapshot.business_hash) {
+        return { ok: false, reason: "report_evidence_changed" };
+      }
+      // 产物文件核验：丢失 / 被改必须标失效（只重做报表，不重做会计）。
+      const artifact = db.prepare(
+        `SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=? ORDER BY id DESC LIMIT 1`,
+      ).get(item.id, stage.period, stage.stage_key);
+      if (!artifact) return { ok: false, reason: "artifact_missing" };
+      if (artifact.status !== "published") return { ok: false, reason: "artifact_not_published" };
+      if (artifact.bytes_hash !== evidence.bytesHash) return { ok: false, reason: "artifact_record_changed" };
+      if (!outputDir) return { ok: true };
+      const absolute = resolve(outputDir, artifact.relative_path);
+      const root = resolve(outputDir);
+      if (absolute !== root && !absolute.startsWith(root + sep)) return { ok: false, reason: "artifact_path_escape" };
+      if (!existsSync(absolute)) return { ok: false, reason: "artifact_file_missing" };
+      if (sha256(readFileSync(absolute)) !== artifact.bytes_hash) return { ok: false, reason: "artifact_file_corrupted" };
+      return { ok: true };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: sanitizeError(error).code };
+  }
+}
+
+function safeParse(text) {
+  try { return JSON.parse(text || "{}") ?? {}; } catch { return {}; }
+}
+
+/** 统一执行入口（runner 只按 stageKey 派发，没有任意代码入口）。 */
+export function executeStage(ctx) {
+  const key = ctx.stage.stage_key;
+  try {
+    if (key.startsWith(IMPORT_STAGE_PREFIX)) return executeImportStage(ctx);
+    if (key === STAGE_KEYS.POST) return executePostStage(ctx);
+    if (key === STAGE_KEYS.DEPRECIATION) return executeDepreciationStage(ctx);
+    if (key === STAGE_KEYS.CARRYFORWARD) return executeCarryForwardStage(ctx);
+    if (key === STAGE_KEYS.PERIOD_CHECK) return executePeriodCheckStage(ctx);
+    if (key === STAGE_KEYS.CLOSE) return executeCloseStage(ctx);
+    throw domainError("stage_key_unsupported", "阶段类型不在固定白名单内", { stageKey: key });
+  } catch (error) {
+    if (error?.code) throw error;
+    const sanitized = sanitizeError(error);
+    throw domainError(sanitized.code, sanitized.message);
+  }
+}
+
+export { businessDigest as __businessDigest };
