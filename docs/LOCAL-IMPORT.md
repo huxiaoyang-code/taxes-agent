@@ -1,6 +1,6 @@
 # 增量导入契约 · LOCAL-IMPORT（LOCAL-01 交付）
 
-状态：**实现与修复完成，待管理者验收 / PR 与合并**（head、merge 由管理者后补，本文不预报）。
+状态：**已验收合并**。基线 `0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`，已审 head `e12e71eb29dd5fc480aeebe5f0baace94bc3a4d7`，[PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 已实际 MERGED，merge `1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（北京时间 2026-10-22 17:13:24）。
 契约范围：领域 / HTTP / Agent / MCP 入口、冲突码、持久化 schema **v3**、迁移前备份与回退口径。
 基线：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`。任务单：[tasks/LOCAL-01](tasks/LOCAL-01.md) · 交接：[handoffs/LOCAL-01](handoffs/LOCAL-01.md)。
 
