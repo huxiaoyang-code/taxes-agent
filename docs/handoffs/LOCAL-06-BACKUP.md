@@ -6,33 +6,32 @@
   [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`
 - 分支：`codex/huxiaoyang-code/local-06-backup`
-- PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)（base `257f96275031eefa484699dd71bd012e2d221e51`）
-- 已审源码 head：`b2dcba35e87e9ebb75245dcc874aa41705b31243`（**实际 merge SHA 尚未产生**，
-  不伪造、不标记 MERGED）
+- PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)（base `257f96275031eefa484699dd71bd012e2d221e51`，
+  PR head `55dfe44`）
+- 已审**源码** head（独审 16 项）：`b2dcba35e87e9ebb75245dcc874aa41705b31243`；**merge
+  `98977e04bd24aa293074021802191814f8c2a1d2`**（北京时间 2026-10-22，PR #55 已 MERGED）
 - 上一冻结候选（历史，仅备查）：head `829541a` / 六文件源码 `ddadb03` 曾 15 / 15 通过，
   但因外键动作未校验、以及第一轮 16 / 16 又漏掉「重复声明同列同目标外键可绕过」而**未最终通过**，
   已被当前的**外键分组一对一比对**取代（详见 §3.0）。
-- 状态：**已审源码已通过管理验收与最终独立审查，无剩余已发现阻塞项；PR #55 等待本次文档核对后
-  按已授权流程合并**；文档提交会得到新 PR head，但已审源码 head 仍为 `b2dcba3`
+- 状态：**子包已合并；合并后兼容整合轮（schema v3 / v4 精确契约）实现 + 自测完成，未提交 / 未建 PR /
+  未合并，最终独立审查待做**（不预报 head / merge）
 - 范围：LOCAL-06 的**独立子包**（备份 / 验证 / 恢复全新目标）；LOCAL-06 整体**未完成**
   （审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级交付均未实现）
 
-## 1. 交付物（只新增 6 个文件，未改任何共享文件）
+## 1. 交付物（6 个自有文件；共享文件仅 1 处仅追加登记）
 
-| 文件 | 行数 | 作用 |
+| 文件 | 行数（兼容整合轮） | 作用 |
 |---|---|---|
-| `06-workbench/server/local-backup.mjs` | 1490 | 快照生成 / 清单生成与验证 / 真实结构校验（含外键分组一对一与动作契约）/ 恢复到全新目标；无模块级副作用 |
-| `06-workbench/scripts/local-backup.mjs` | 86 | CLI `backup` / `verify` / `restore-new`（JSON 输出 + 稳定退出码） |
-| `06-workbench/test/local-backup.test.mjs` | 1392 | 真实 SQLite/WAL + 真实 CLI 子进程回归（16 个用例） |
-| `docs/LOCAL-BACKUP.md` | — | 备份格式 / 兼容范围 / 错误码 / 安全规则 / 耐久性边界 / 下游契约 / 原位恢复接入契约 / 当前状态与下一步 |
+| `06-workbench/server/local-backup.mjs` | 1616 | 快照生成 / 清单生成与验证 / **v3 与 v4 各自独立**的真实结构校验（列 / 类型 / NOT NULL / 默认值 / 主键 / UNIQUE / 外键分组一对一与动作）/ 恢复到全新目标；无模块级副作用 |
+| `06-workbench/scripts/local-backup.mjs` | 86 | CLI `backup` / `verify` / `restore-new`（JSON 输出 + 稳定退出码）；本轮未改 |
+| `06-workbench/test/local-backup.test.mjs` | 2064 | 真实 SQLite/WAL + 真实 CLI 子进程回归（20 个用例） |
+| `docs/LOCAL-BACKUP.md` | — | 备份格式 / 兼容范围（v3 + v4）/ 错误码 / 安全规则 / 耐久性边界 / 下游契约 / 原位恢复接入契约 / 当前状态与下一步 |
 | `docs/tasks/LOCAL-06-BACKUP.md` | — | 本包任务单 |
 | `docs/handoffs/LOCAL-06-BACKUP.md` | — | 本交接 |
 
-（三个源码文件的行数为已审源码 head `b2dcba3` 的值；三份文档随每次交接更新，不记固定行数。）
-
-未改（共享文件，仅只读）：`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
-`server/server.mjs`、`server/agent-tools.mjs`、MCP 注册、`scripts/test-all.mjs`、`package.json`、
-`public/*`、`docs/handoffs/STATE.md`、`docs/INDEX.md`、`docs/CHANGELOG.md`、`docs/tasks/README.md`。
+共享文件：仅 `06-workbench/scripts/test-all.mjs` **追加** 3 条已合入套件登记（原 50 套顺序 / 内容不变）。
+未改（仅只读）：`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
+`server/server.mjs`、`server/agent-tools.mjs`、MCP 注册、`package.json`、`public/*` 及其它 docs。
 
 ## 2. 实现事实（可逐条核对）
 
@@ -45,22 +44,26 @@
    `-wal` 仍然存在；`-shm` 的读锁 / 读标记可能变化（SQLite 锁协调，不承载业务数据），文档 §2.1 已如实区分。
 3. **绝不复用旧快照**：每次备份都新建目录、重新生成、重新自检（完整性 / 外键 / 真实结构 / 内容摘要），
    完全不使用「文件大小非 0」这类判定。
-4. **真实结构校验（唯一支持当前 v3）**：`TABLE_STRUCTURE` 逐表校验
-   列名集合、声明类型、`NOT NULL`、主键列与顺序、UNIQUE 约束列组；
+4. **真实结构校验（v3 与 v4 各自独立契约）**：按库报告的 schema 版本选 `STRUCTURE_V3` 或
+   `STRUCTURE_V4`（版本号**只用来选契约**，不足以为凭），逐表校验
+   列名集合、声明类型、`NOT NULL`、**默认值（与 `PRAGMA table_info.dflt_value` 逐字比对）**、
+   主键列与顺序、UNIQUE 约束列组；
    外键按 `PRAGMA foreign_key_list` 的 `id` 分组整体比对**本表列组 → 目标表列组 + `ON DELETE` /
    `ON UPDATE` / `MATCH` 动作**（多列外键按 `seq` 聚合，不只比单个目标列），实际外键分组与期望外键
    **一对一**匹配：每个实际分组都要验动作，未声明的额外外键（`unexpected_foreign_keys`）与同列同目标
    重复声明的分组（`foreign_key_duplicate`）都拒绝——不能用「按目标键建 `Map`」静默覆盖。
-   真实 v3 DDL 的外键契约统一为 `ON DELETE CASCADE` + 默认 `ON UPDATE NO ACTION` + 默认 `MATCH NONE`
-   （`REAL_FOREIGN_KEY_ACTIONS`），未来 v4 若有不同动作必须逐条显式覆盖，不放宽成「任一动作均可」。
-   另校验 `schema_migrations` 记录从 1 到当前版本**连续**、`applied_at` 可解析、
-   `schema_backups` 至少一条形状合法的迁移前备份记录。
+   真实 DDL 的外键契约（v3 / v4 相同）统一为 `ON DELETE CASCADE` + 默认 `ON UPDATE NO ACTION` +
+   默认 `MATCH NONE`（`REAL_FOREIGN_KEY_ACTIONS`），任何版本若有不同动作必须逐条显式覆盖，
+   不放宽成「任一动作均可」。
+   另校验 `schema_migrations` 记录从 1 到该版本**连续**、`applied_at` 可解析、
+   `schema_backups` 至少一条形状合法的迁移前备份记录，且**不出现该版本契约以外的表**（未来组件拒绝）。
    8 张核心会计表 + `schema_migrations` / `schema_backups` + 5 张 `import_*` 全部必需；
-   缺表 / 缺列 / 约束不符 / 外键动作不符（`foreign_key_actions`）/ 伪造或矛盾迁移记录 →
-   `structure_invalid`（源库入口 `source_structure_invalid`），
+   缺表 / 缺列 / 约束不符 / 默认值不符（`column_default`）/ 外键动作不符（`foreign_key_actions`）/
+   伪造或矛盾迁移记录 / 未知表 → `structure_invalid`（源库入口 `source_structure_invalid`），
    缺表 → 非本产品库（`source_not_product_database` / `snapshot_not_product_database`）。
    版本高于支持上限 → `schema_unsupported`；**低于** → `schema_outdated`（旧库先用当前产品入口升级，
    本模块不替候选库初始化 / 迁移）。
+   拒绝明细里的默认值只回显本模块已知字面值（未知值报 `nonstandard`），不回显任意业务文本。
 5. **清单绑定**（`formatVersion: 1`）：产品 / 格式 / 格式版本 / 应用版本 / 源库事实 /
    `structure.{schemaVersion,userVersion,sqliteVersion,migrations,tables}` /
    `content.{digest, tables[表]={rows,digest}}` / `snapshot.{bytes,sha256,pageSize,journalMode}`。
@@ -93,6 +96,14 @@
     不带 SQL / 堆栈 / 账务原文 / 绝对路径。CLI 退出码 `0/1/2/3`（成功 / 用法 / 明确拒绝 / 内部错误）。
 13. **依赖**：只用 Node 内建 `node:sqlite` / `node:fs` / `node:crypto` / `node:path` 与
     `import-storage.mjs` 的只读常量 / 版本函数；**零新增第三方依赖**，无安装器。
+14. **兼容整合轮（v3 / v4）事实**：
+    - `SUPPORTED_SCHEMA_VERSIONS = [3, 4]`，最高支持版本 4 = 产品 `IMPORT_SCHEMA_VERSION`（测试里有显式断言）；
+    - `TABLE_STRUCTURE_COMMON` 是两版本逐字相同的表；**差异只有 `asset_cards`**，两份列契约（`ASSET_CARDS_COLUMNS_V3` /
+      `ASSET_CARDS_COLUMNS_V4`）都写全，不用 spread 继承（避免改一份就静默改变另一版本）；
+    - v4 的 5 个补项列按真实 `ALTER TABLE` 契约校类型 / NOT NULL / 默认值；
+    - v3 备份**不隐式迁移**：验证 / 恢复均不写备份与源库；恢复出来仍是 v3，只有产品入口显式打开才升 v4（
+      会留下 `workbench.db.pre-v4-*.bak` + 迁移记录 4，并按默认值落 5 列）；
+    - 恢复后发布前复验 / 源库不变 / 目标独占 / CLI 错误语义全部未变。
 
 ## 3. 测试证据（实际实跑，非自报估计）
 
@@ -136,7 +147,7 @@
   与重算清单摘要后的快照 `verify` / `restore-new` 均 `structure_invalid`、不创建目标；
   正常结构恢复后用真实 `deleteAccountSet` 仍能级联删除。
 
-**当前验收结果（已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）**：
+**当前验收结果**（合并前，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）：
 
 | 验收方 | 身份 / 口径 | 命令 | 结果 |
 |---|---|---|---|
@@ -146,14 +157,14 @@
 独立审查另做了五种外键变体的真实探针（源库与“重算 manifest hash 的快照”两侧都跑）：
 `ON DELETE NO ACTION`、`ON UPDATE CASCADE`、`CASCADE + RESTRICT`、逆序重复、两个同 `CASCADE`
 —— **全部被拒绝，输出 / 目标不创建**；作为对照，正常真实 `accounting.deleteAccountSet` 在恢复后的库上
-**成功**级联删除。`git diff --check` 通过，源码工作区干净；**无剩余已发现阻塞项**。
+**成功**级联删除。`git diff --check` 通过，源码工作区干净。该 head 已随 PR #55 合并（merge `98977e04`）。
 
-本包只改自己的 6 个文件、未动任何共享源码，因此没有把更早一轮的 `import-incremental` 49 / 49、
-`import-incremental-http` 22 / 22、`smoke` 28 / 28 当作当前证据。本套件**未**接入
-`scripts/test-all.mjs`（共享文件，不在本包所有权内），因此**没有**「`npm test` 全量跑过本套件」这一事实。
+**合并后兼容整合轮（本轮，未提交）**：同一套件在 v3 + v4 精确契约下 **20 / 20 通过、exit 0**（见 §3.3）；
+在 `06-workbench` 跑 `npm test` 为 **53 / 53 套 exit 0**（本套件已按任务单授权仅追加登记进
+`scripts/test-all.mjs`，原有 50 套顺序 / 内容不变）。
 
-本次仅改文档的提交**不改变源码**，因此**不重跑** 16 个用例；已审源码 head 仍为 `b2dcba3`，
-由 root 核对源码未变，只检查文档链接 / 事实 / 范围与 `git diff --check`。
+本包未动任何共享业务源码，因此没有把更早一轮的 `import-incremental` 49 / 49、
+`import-incremental-http` 22 / 22、`smoke` 28 / 28 当作本轮证据。
 
 > 历史候选必须分开看，**不得把既有失败隐去**（简明保留，不再展开）：
 > head `829541a`（六文件源码 `ddadb03`）的 15 / 15、以及第一轮外键动作返工后的 16 / 16，
@@ -176,7 +187,7 @@
    `import_batch_vouchers=4`，来源→凭证→分录金额逐张 join 断言；备份期间源 `-wal` 与主库 hash **不变**、
    未提交事务仍在（未被回滚 / 阻塞）；`ROLLBACK` 后全表逐行相等；备份后继续写业务成功且不进旧快照。
 4. **清单绑定**：`verify` 通过；断言产品 / 格式 / `formatVersion=1` / `appVersion` 为非空字符串 /
-   `structure.schemaVersion` / `source.schemaVersion` / `structure.migrations=[1,2,3]` /
+   `structure.schemaVersion` / `source.schemaVersion` / `structure.migrations=[1,2,3,4]`（v4）/
    `snapshot.bytes` 与 `sha256` 与文件实际一致 / `snapshot.journalMode=delete` / `source.journalMode=wal` /
    表清单与内容摘要覆盖核心业务表与全部导入来源表 / 清单文本不含本机绝对路径与盘符；
    并断言备份结果 `backupMeta.durability.fileContentsSynced=true`（fsync 真的执行）。
@@ -263,12 +274,53 @@
 ### 3.2 没有做的事（测试口径）
 
 - 没有连接真实账套库 / 真实数据 / 税局 / 浏览器；没有把任何真实凭据或账务原文写入代码、测试或文档。
-- 没有跑 `npm test` 全量聚合（本套件不在 `test-all.mjs` 里，见 §3 说明）。
-- 本包当前**没有**把上一轮的 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、
-  `smoke` 28 / 28 当作新证据（它们是更早一轮返工后的受影响回归结果，本包未改共享源码）。
-- 本次仅文档的提交**不跑**源码与测试（无业务代码变更），只核对文档链接 / 事实 / 范围与 `git diff --check`。
-- 没有在 schema v4 / LOCAL-02 分支代码上运行过（见 §5）。
+- 本包**没有**把上一轮的 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、
+  `smoke` 28 / 28 当作新证据（它们是更早一轮返工后的受影响回归结果，本包未改共享业务源码）。
+- **没有**字节级的历史 v3 账套：v3 夹具由真实 v4 产品快照用 SQLite `DROP COLUMN` 反向去掉 v4 只加列 +
+  回退迁移记录 4 派生，并在用例里逐列断言它确实是 v3（列 / 类型 / NOT NULL / 默认值 / 迁移记录），
+  **不声称**验证过真实历史 v3 账套。
 - 没有验证网络盘 / 同步盘 / 杀毒软件占用 / 真实断电等 Windows 交付场景。
+
+### 3.3 兼容整合轮新增的 4 个用例（17–20，已在新代码上实跑 20 / 20）
+
+17. **v4 真实产品合成库全链路**：子进程用真实产品入口（`db.mjs` + `import-incremental` + `accounting`）建库：
+    增量导入 1 月（期初 400000/1601 120000/1602 24000/3001 496000 + 两张来源凭证）→ 新增资产卡片
+    （原值 120000 / 残值 5% / 60 期 → 月额 1900；`acquired_period=2026-01`、`opening_accumulated=24000`、
+    `ledger_status=booked`、`origin=supplement`）→ 1 月计提 + 结转 + **真实封账** → 追加 2 月两批 → 2 月计提。
+    断言：
+    - 快照 `asset_cards` 列 = v3 的 12 列 + v4 的 5 列（类型 / NOT NULL / 默认值逐列一致），卡片 5 个补项值与期初累计正确；
+    - 快照内连续两期计提（1900 / 1900）、封账状态（1 月 closed / 2 月 open）、两批批次 / 4 条来源 / 4 条逐张关联；
+    - `verify` 通过，`restore-new` 目标回执 `schemaVersion=4` / `migrations=[1,2,3,4]` / 快照 sha256；
+    - 恢复后用真实入口读到**独立手算**的期初、1 月 / 2 月余额、试算平衡（520000 + 41400 → 531200）、
+      7 张凭证（期间 / 字号 / kind / 状态 / 合计）、卡片（累计 27800 / 2 期 / 剩余 86200）、
+      计提记录、两批 `sourceTrace`、企业绑定与来源证据；
+    - 恢复库的期末检查：1 月 `depreciation` / `asset_reconciliation` / `profit_carry_forward`
+      均为 `ok`，2 月 `profit_carry_forward` 如实 `blocked`（未结转）。
+18. **v4 恢复库继续真实操作**：在恢复库上新建 2 月凭证（1002 +500 / 5001 −500）、再计提 3 月；
+    已封账的 1 月写入与计提反过账均被 `period_closed` 拒绝；余额按手算（2 月 1002 = 406800、5001 = −500；
+    3 月 1602 = −29700、5602 = 3800），卡片累计 29700 / 3 期 / 剩余 84300，期间状态 `closed/open/open`。
+19. **v3 旧备份语义**：派生 v3 库（先逐列断言是 v3，且 asset_cards DDL 不含 v4 列名）→ 当前工具备份为
+    **v3 备份**（`formatVersion=1`、`schemaVersion=3`、`migrations=[1,2,3]`）→ `verify` 通过且**源库 sha256
+    与备份目录签名都不变**（不偷偷迁移原备份 / 源库）→ `restore-new` 成功且**目标仍是 v3**
+    （回执 `schemaVersion=3`，目录只有 `workbench.db` / `manifest.json` / `restore.json`）→
+    显式交给产品入口打开才升 v4：新增 `workbench.db.pre-v4-*.bak`、迁移记录 `[1,2,3,4]`、
+    5 列按真实默认值落库（`NULL / 0 / 'booked' / '' / 'purchase'`），旧卡片因此报
+    `asset_acquired_period_missing` + `asset_accumulated_mismatch`（实际差异如实记录），封账状态与批次不丢 →
+    升级后的库能按 v4 备份 / 验证，旧 v3 备份仍只读可用。
+20. **伪兼容一律拒绝**：① 只抬高版本号（真 v3 + 一条 version=4 记录）→ `missing_columns`；
+    ② v4 缺 `ledger_note` → `missing_columns`；③ `ledger_status` 默认值改成 `'pending'` → `column_default`；
+    ④ `acquired_period` 变成 `NOT NULL DEFAULT ''` → `column_not_null`；⑤ `opening_accumulated` 变成 TEXT →
+    `column_type`；⑥ 未知组件表 `bank_statements` → `unexpected_tables`；⑦ 迁移记录 5 → `schema_unsupported`；
+    ⑧ 迁移记录 1,2,4 → `migrations_gap`；⑨ v4 结构却声称 v3 → `unexpected_columns`；
+    ⑩ 快照侧（缺列 / 错默认值 / 未知表）在**重算清单字节数与 sha256 后**仍 `structure_invalid`；
+    ⑪ 清单自报 v4 但迁移记录非连续 → `manifest_invalid`，自报 v5 → `schema_unsupported`。
+    每个源库负例都断言**源库 sha256 不变**且不创建备份目录；每个快照负例都断言不创建恢复目标。
+
+**先红后绿证据（本轮新增校验）**：把 `column_default` 比较临时从模块副本里去掉后，同一份
+「`ledger_status` 默认值 = `'pending'`」的伪 v4 库 `createBackup` 返回 `ok: true`（旧行为）；
+保留校验的正式模块对同一库返回 `source_structure_invalid` +
+`{kind:"column_default",table:"asset_cards",column:"ledger_status",expected:"'booked'",actual:"nonstandard"}`。
+即该用例确实只因为新校验才被拦住；其余 ①②④⑤⑥⑦⑧⑨ 的断言均绑定了对应的具体 `kind`。
 
 ## 4. 下游契约（给后续任务的输入）
 
@@ -276,8 +328,8 @@
   `restoreNew({backupDir,targetDir})` / `backupContract()`，**不抛异常**、返回统一
   `{ok,status,code,details,...}`；稳定 code 表见 [LOCAL-BACKUP §5.1](../LOCAL-BACKUP.md)。
 - `backupContract()` 另暴露 `supportedSchemaVersion`（本模块校验过的真实结构版本，当前 3）与
-  `productSchemaVersion`（`IMPORT_SCHEMA_VERSION`，当前 3）：v4 合并后两者不一致时，
-  必须先扩展结构规范再重验（测试里有显式断言）。
+  `productSchemaVersion`（`IMPORT_SCHEMA_VERSION`，当前 4）与 `supportedSchemaVersions`（当前 `[3, 4]`）：
+  最高支持版本与产品版本必须一致（测试里有显式断言）；新增版本必须先补独立契约。
 - 备份目录：`workbench.db.snapshot` + `manifest.json`；恢复目标：`workbench.db` +
   `manifest.json`（副本）+ `restore.json`（回执）。
 - 源库定位口径：恢复目标目录可直接当产品数据目录（`WORKBENCH_DATA_DIR=<目标>`），
@@ -288,19 +340,16 @@
 
 ## 5. 未完项 / 风险 / 下一任务输入
 
-1. **合并尚未发生**：已审源码 head `b2dcba3` 已通过管理验收（16 / 16 exit 0）与最终独立审查
-   `review_backup06_final`（未参与实现、`fork=none`，同 head 独立 16 / 16 exit 0），
-   PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN 并附当前任务说明。
-   下一步：**本次文档核对 → 按已授权流程合并**；**实际 merge SHA 尚未产生**，不伪造、不标 MERGED，
-   合并后由管理者补齐。
-2. **LOCAL-06 整体未完成**：审计留痕、原位在线恢复与回退、Windows 干净安装 / 启动 / 升级交付、
+1. **合并事实**：PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 MERGED，
+   merge `98977e04bd24aa293074021802191814f8c2a1d2`；合并前已审源码 head `b2dcba3` 通过管理验收
+   （16 / 16 exit 0）与最终独立审查 `review_backup06_final`（未参与实现、`fork=none`，同 head 独立 16 / 16 exit 0）。
+2. **兼容整合轮未提交**：v3 + v4 精确契约与 20 / 20 自测已完成，但**未提交 / 未建 PR / 未合并**，
+   最终独立审查待做；head 与 merge 由管理者提交时补齐，本交接不预报。
+3. **LOCAL-06 整体未完成**：审计留痕、原位在线恢复与回退、Windows 干净安装 / 启动 / 升级交付、
    定时 / 批量入口均未实现；本包只交付「备份 / 验证 / 恢复全新目标」。
-3. **只支持当前 v3 结构**：`schema_outdated`（v0 / v1 / v2）要求先用当前产品入口升级；
-   不替候选库做初始化 / 迁移，也不盲放旧结构。
-4. **schema v4（LOCAL-02 #47）与 bank / batch / audit 组件必须后续显式组合与真实验收**：
-   按真实契约扩展 `TABLE_STRUCTURE`（列 / 约束 / 外键动作 / 迁移记录），在最新 main 上重跑
-   `node test/local-backup.test.mjs`，并复核是否需要提升 `formatVersion`；
-   动态表清单不是「v4 已支持」的证据，**严格只支持当前 v3**。
+4. **仍未支持的版本 / 组件**：v0 / v1 / v2 旧库给 `schema_outdated`（先用当前产品入口升级，
+   本模块不替候选库初始化 / 迁移）；未来 v5+ 给 `schema_unsupported`；
+   bank / batch / audit 等**尚未合入**的组件表仍被 `unexpected_tables` 拒绝（不为兼容关表 / 只抬版本号）。
 5. **源库保护边界**：主库与 `-wal` 字节不变、不被删除；`-shm` 读锁 / 读标记可能变化（锁协调）。
    某环境若只读连接无法读 WAL 索引，会明确 `source_readonly_blocked`，不使用可写连接绕过。
 6. **耐久性边界**：文件内容 `fsync` 后再 `rename`；Windows 无法 `fsync` 目录项，
@@ -318,21 +367,23 @@
 ## 6. 本次执行边界（会话事实）
 
 - 实施员工：本机 pi，主模型与唯一回退均为已核实的 **DeepSeek V4.1 Flash**；未启动其它模型、未启动子 agent。
-- 本轮为**仅文档的 PR 合并前交接事实更新**新进程 / 新会话（`--no-session`，不 resume，未加载旧大日志），
-  在同一 worktree 上只改 3 份文档；未重置 / 未丢弃已提交的源码成果，未新建其它 worktree、未切分支。
-- 未执行 Git 提交 / 推送 / 合并；未改源码 / 测试 / CLI / 其他 docs；未访问税局 / 浏览器 / 真实账套 / 凭据。
-- 本轮不跑源码 / 测试（无业务代码变更），只检查文档链接 / 事实 / 范围与 `git diff --check`；
-  已审源码 head 仍为 `b2dcba3`，由 root 核对源码未变。
-- 文档不含本机绝对工作区路径、进程号，也不含任何凭据或本机配置内容。
+- 本轮为**兼容整合轮**（v3 / v4 精确契约）新进程 / 新会话（`--no-session`，不 resume，未加载旧大日志），
+  在同一 worktree 上只改 3 个自有业务文件（`server/local-backup.mjs`、`test/local-backup.test.mjs` 与
+  仅追加的 `scripts/test-all.mjs` 登记）+ 本文档与契约 / 任务单 / 交接；未重置 / 未丢弃已提交成果，
+  未新建其它 worktree、未切分支。
+- 未执行 Git 提交 / 推送 / 合并；未改共享业务源码（`db.mjs` / `import-storage.mjs` / `accounting.mjs` /
+  `period-end-controls.mjs` / `server.mjs` / `agent-tools.mjs` / MCP 注册）；
+  未访问税局 / 浏览器 / 真实账套 / 凭据；未读写其它员工未合并的模块。
+- 本轮真实跑过的命令：`node test/local-backup.test.mjs`（20 / 20，exit 0）与
+  `npm test`（53 / 53 套，exit 0，带 `REPORT_OFFICE_PYTHON` 使 Office 真实 PDF 几何校验生效）。
+- 文档不含本机绝对工作区路径、端口 / 进程号，也不含任何凭据或本机配置内容。
 
-## 7. 本次变更范围核对（仅文档）
+## 7. 本次变更范围核对
 
-- `git status --porcelain` 应只有 3 个文档被修改：`docs/LOCAL-BACKUP.md`、
-  `docs/tasks/LOCAL-06-BACKUP.md`、`docs/handoffs/LOCAL-06-BACKUP.md`；
-- 未改任何源码 / 测试 / CLI（`06-workbench/**` 保持已审源码 head `b2dcba3` 的内容），
-  未改任何共享文件（`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
-  `server/server.mjs`、`server/agent-tools.mjs`、MCP 注册、`scripts/test-all.mjs`、`package.json`、
-  `public/*`、`docs/handoffs/STATE.md`、`docs/INDEX.md`、`docs/CHANGELOG.md`、`docs/tasks/README.md`）；
-- 未新增 / 删除文件，未留临时探针文件；`git diff --check` 无输出（无空白 / 冲突标记问题）。
+- `git status --porcelain` 只应有本包授权文件：`06-workbench/server/local-backup.mjs`、
+  `06-workbench/test/local-backup.test.mjs`、`06-workbench/scripts/test-all.mjs`（仅追加 3 条登记）
+  与 3 份 backup 文档 + 本任务单授权的共享索引文档；
+- 未改其它源码 / 测试 / CLI，未新增 / 删除业务文件，未留临时探针文件（本机探针均在 Git 忽略目录并已删除）；
+  `git diff --check` 无输出（无空白 / 冲突标记问题）。
 - 员工不执行 Git 提交 / 推送 / 合并；上述范围与新 PR head 由管理者提交时复核，
-  **实际 merge SHA 以管理者合并结果为准**。
+  **实际 head / merge SHA 以管理者提交与合并结果为准**。
