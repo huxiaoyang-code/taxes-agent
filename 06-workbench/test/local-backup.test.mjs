@@ -12,6 +12,8 @@
  *    每表行数与内容摘要 / 快照 sha256、页大小、journal mode；清单与回执不含本机绝对路径；
  *    清单字段类型 / 规范范围逐项校验，可重算字段与真实快照比对；
  *  - 真实结构（schema v3）：列 / 类型 / NOT NULL / 主键 / UNIQUE / 外键 / 迁移记录一致性；
+ *    外键按外键分组比对 `ON DELETE` / `ON UPDATE` / `MATCH` 动作（不只比目标列），
+ *    只改动作的伪结构在源库与快照两侧都被拒绝，且正常结构恢复后真实删除账套可级联成功；
  *    缺导入表、缺关键列、缺约束、迁移记录矛盾 / 空备份记录一律拒绝（源库与快照双向）；
  *  - 恢复只写全新目标：已有目标（含空目录 / 文件 / 未完成残留）默认拒绝且内容完全不动；
  *    先验证再发布，发布后用当前实际会计 / 导入接口读到相同的期初、两个月金额、来源与批次；
@@ -947,7 +949,159 @@ process.stdout.write(JSON.stringify({
     }
   });
 
-  // ================================================================ 10. 路径 / 别名边界
+  // ================================================================ 10. 外键动作契约（ON DELETE / ON UPDATE）
+  await test("外键动作契约：只改 ON DELETE / ON UPDATE 或重复声明同列外键的伪结构在源库与快照都被拒绝，正常结构恢复后可真实删除账套", () => {
+    // 独立复现：新临时库初始化产品 v3 → 事务内只重建 periods，把 account_set_id 外键的
+    // ON DELETE CASCADE 改成 NO ACTION，其余列 / 主键 / 数据 / 迁移记录完全不变（内容摘要拦不住）。
+    const relaxedDelete = tamperedDatabase("fk-delete-no-action", `
+      CREATE TABLE periods_x (
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE NO ACTION,
+        period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+        PRIMARY KEY (account_set_id, period)
+      );
+      INSERT INTO periods_x (account_set_id, period, status) SELECT account_set_id, period, status FROM periods;
+      DROP TABLE periods;
+      ALTER TABLE periods_x RENAME TO periods;
+    `);
+    // 另一变体：ON UPDATE 由默认 NO ACTION 改成 CASCADE（删除动作仍是 CASCADE）。
+    const relaxedUpdate = tamperedDatabase("fk-update-cascade", `
+      CREATE TABLE periods_x (
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE ON UPDATE CASCADE,
+        period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+        PRIMARY KEY (account_set_id, period)
+      );
+      INSERT INTO periods_x (account_set_id, period, status) SELECT account_set_id, period, status FROM periods;
+      DROP TABLE periods;
+      ALTER TABLE periods_x RENAME TO periods;
+    `);
+
+    // 保留原有 `ON DELETE CASCADE`，再额外声明同列同目标的一条 `ON DELETE RESTRICT`：
+    // PRAGMA 会给出两个外键分组，按目标键建 Map 时后一条 RESTRICT / CASCADE 会静默覆盖前一条，
+    // 于是「两个分组」被误当成兼容结构。实际删除账套仍然失败，必须逐组比对并拒绝重复。
+    const duplicateForeignKey = tamperedDatabase("fk-duplicate", `
+      CREATE TABLE periods_x (
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+        period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+        PRIMARY KEY (account_set_id, period),
+        FOREIGN KEY (account_set_id) REFERENCES account_sets(id) ON DELETE RESTRICT
+      );
+      INSERT INTO periods_x (account_set_id, period, status) SELECT account_set_id, period, status FROM periods;
+      DROP TABLE periods;
+      ALTER TABLE periods_x RENAME TO periods;
+    `);
+
+    const periodsRows = (file) => {
+      const conn = openSnapshot(file);
+      try {
+        return conn.prepare("SELECT account_set_id, period, status FROM periods ORDER BY account_set_id, period")
+          .all().map((row) => [row.account_set_id, row.period, row.status]);
+      } finally { conn.close(); }
+    };
+    const originalPeriods = periodsRows(join(BACKUP_DIR, LB.SNAPSHOT_FILE));
+    assert.ok(originalPeriods.length >= 1, "前置条件：正常库应有期间行");
+
+    // 这种伪结构不是「无害的结构差异」：真实级联删除账套会失败（这正是必须拒绝的原因）。
+    const relaxedConn = new DatabaseSync(relaxedDelete);
+    try {
+      relaxedConn.exec("PRAGMA foreign_keys = ON");
+      assert.throws(() => relaxedConn.exec("DELETE FROM account_sets"), /FOREIGN KEY constraint failed/,
+        "前置条件：ON DELETE 被改成 NO ACTION 后，真实删除账套必须失败");
+    } finally { relaxedConn.close(); }
+
+    // 重复外键变体：两个分组（CASCADE + RESTRICT）都在实际结构里，真实删除账套同样必须失败。
+    const duplicateConn = new DatabaseSync(duplicateForeignKey);
+    try {
+      duplicateConn.exec("PRAGMA foreign_keys = ON");
+      const groups = duplicateConn.prepare("SELECT * FROM pragma_foreign_key_list('periods')").all()
+        .map((row) => `${row.from}->${row.table}(${row.to}):${String(row.on_delete).toUpperCase()}`)
+        .sort();
+      assert.deepEqual(groups,
+        ["account_set_id->account_sets(id):CASCADE", "account_set_id->account_sets(id):RESTRICT"],
+        "前置条件：重复声明的 periods 外键必须产生两个实际分组");
+      duplicateConn.exec("BEGIN");
+      try {
+        assert.throws(() => duplicateConn.exec("DELETE FROM account_sets"), /FOREIGN KEY constraint failed/,
+          "前置条件：重复外键（RESTRICT）下真实删除账套必须失败");
+      } finally { duplicateConn.exec("ROLLBACK"); }
+    } finally { duplicateConn.close(); }
+
+    const fkVariants = [
+      ["delete", relaxedDelete, ["foreign_key_actions"]],
+      ["update", relaxedUpdate, ["foreign_key_actions"]],
+      ["duplicate", duplicateForeignKey, ["foreign_key_duplicate", "foreign_key_actions"]],
+    ];
+    for (const [label, file, expectedKinds] of fkVariants) {
+      // 列 / 主键 / 数据都与原库相同：只有外键动作不同。
+      assert.deepEqual(periodsRows(file), originalPeriods, "伪结构不得改动业务数据（否则内容摘要就能拦住）");
+
+      // 10.1 源库入口：拒绝并且不创建备份目录。
+      const out = join(ROOT, `out-fk-${label}`);
+      const sourceResult = runCli(["backup", "--db", file, "--out", out]);
+      assertRejected(sourceResult, "source_structure_invalid");
+      const sourceDetails = JSON.stringify(sourceResult.json?.details ?? {});
+      for (const kind of expectedKinds) {
+        assert.ok(sourceDetails.includes(kind), `拒绝明细应指出 ${kind}，实际 ${sourceDetails}`);
+      }
+      assert.ok(sourceDetails.includes("periods"), `拒绝明细应指出表名，实际 ${sourceDetails}`);
+      assert.equal(sourceDetails.includes(META.name), false, "拒绝明细不得回显账套业务文本");
+      assert.equal(fs.existsSync(out), false, "外键契约不符的源库不得创建备份目录");
+
+      // 10.2 快照入口：攻击者把快照与清单的字节数 / sha256 一起重算，仍必须被结构校验拦住。
+      const dir = copyBackup();
+      replaceSnapshot(dir, file);
+      const manifest = JSON.parse(fs.readFileSync(join(dir, LB.MANIFEST_FILE), "utf8"));
+      assert.equal(manifest.snapshot.sha256, sha256File(join(dir, LB.SNAPSHOT_FILE)),
+        "前置条件：清单摘要已跟着伪快照重算（摘要本身自洽）");
+      const verifyResult = runCli(["verify", "--backup", dir]);
+      assertRejected(verifyResult, "structure_invalid");
+      const verifyDetails = JSON.stringify(verifyResult.json?.details ?? {});
+      for (const kind of expectedKinds) {
+        assert.ok(verifyDetails.includes(kind), `快照拒绝明细应指出 ${kind}，实际 ${verifyDetails}`);
+      }
+      const target = join(ROOT, `t-fk-${label}`);
+      assertRejected(runCli(["restore-new", "--backup", dir, "--target", target]), "structure_invalid");
+      assert.equal(fs.existsSync(target), false, "外键契约不符的备份不得被恢复");
+    }
+
+    // 10.3 正常结构对照：合法备份恢复后，用真实会计接口删除账套必须级联成功。
+    const controlTarget = join(ROOT, "restored-fk-control");
+    const controlRestore = runCli(["restore-new", "--backup", BACKUP_DIR, "--target", controlTarget]);
+    assert.equal(controlRestore.code, 0, controlRestore.stdout + controlRestore.stderr);
+    const controlScript = join(ROOT, "fk-delete-control.mjs");
+    fs.writeFileSync(controlScript, `
+const A = await import(${JSON.stringify(pathToFileURL(join(WORKBENCH, "server", "accounting.mjs")).href)});
+const { db } = await import(${JSON.stringify(pathToFileURL(join(WORKBENCH, "server", "db.mjs")).href)});
+const setId = A.listAccountSets()[0].id;
+const count = (table) => db.prepare('SELECT COUNT(*) n FROM "' + table + '"').get().n;
+const periodsBefore = db.prepare("SELECT COUNT(*) n FROM periods WHERE account_set_id = ?").get(setId).n;
+if (periodsBefore < 1) { process.exitCode = 9; }
+A.deleteAccountSet(setId);
+process.stdout.write(JSON.stringify({
+  periodsBefore,
+  sets: count("account_sets"),
+  periods: count("periods"),
+  vouchers: count("vouchers"),
+  entries: count("voucher_entries"),
+  sources: count("import_voucher_sources"),
+}) + "\\n");
+`, "utf8");
+    const control = spawnSync(process.execPath, [controlScript], {
+      encoding: "utf8",
+      timeout: 120000,
+      env: { ...process.env, WORKBENCH_DATA_DIR: controlTarget },
+    });
+    fs.rmSync(controlScript, { force: true });
+    assert.equal(control.status, 0, `正常结构对照的删除应成功：${control.stdout}${control.stderr}`);
+    const controlFacts = JSON.parse(control.stdout.trim().split("\n").pop());
+    assert.ok(controlFacts.periodsBefore >= 1, "对照库应有期间行，删除才有意义");
+    assert.deepEqual(
+      [controlFacts.sets, controlFacts.periods, controlFacts.vouchers, controlFacts.entries, controlFacts.sources],
+      [0, 0, 0, 0, 0],
+      "正常结构下删除账套必须级联成功，账套 / 期间 / 凭证 / 分录 / 来源都归 0",
+    );
+  });
+
+  // ================================================================ 11. 路径 / 别名边界
   await test("路径与别名边界：硬链接 / junction / sidecar / 目标在备份目录内 / 指向正在使用的库", () => {
     // 10.1 源库经硬链接（另一路径别名同一文件）；用完立即删除，避免影响后续用例的源库计数。
     const hardlink = join(ROOT, "live-hardlink.db");
@@ -1059,7 +1213,7 @@ process.stdout.write(JSON.stringify({
     }
   });
 
-  // ================================================================ 11. 中断与重试
+  // ================================================================ 12. 中断与重试
   await test("恢复中断残留：明确拒绝、不产生 workbench.db、清理后可重试成功", () => {
     const target = join(ROOT, "interrupted-target");
     fs.mkdirSync(target);
@@ -1172,7 +1326,7 @@ process.stdout.write(JSON.stringify({
     assert.equal(sha256File(join(interruptedTarget, "workbench.db")), manifest.snapshot.sha256);
   });
 
-  // ================================================================ 12. 并发
+  // ================================================================ 13. 并发
   await test("并发同一备份目录 / 同一恢复目标：恰好一个成功，另一个稳定拒绝，无半成品", async () => {
     const sharedOut = join(ROOT, "backup-concurrent");
     const [first, second] = await Promise.all([
@@ -1203,7 +1357,7 @@ process.stdout.write(JSON.stringify({
     assert.deepEqual(facts.jan, EXPECTED_JAN_BALANCE);
   });
 
-  // ================================================================ 13. 时点隔离
+  // ================================================================ 14. 时点隔离
   await test("备份时点之后的新业务不回滚，旧备份仍停留在原时点", () => {
     const liveBefore = db.prepare("SELECT COUNT(*) n FROM vouchers").get().n;
     A.createVoucher(SET_ID, {

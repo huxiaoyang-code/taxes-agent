@@ -1,7 +1,8 @@
 # 任务单 · LOCAL-06-BACKUP 本机一致性备份 / 验证 / 恢复到全新目标
 
 - 类型：独立子包（新模块 + CLI + 测试 + 契约文档），**不接线**任何共享文件
-- 状态：**实现与自测完成（含第一轮定向返工），未提交 / 未 PR / 未审查 / 未合并**（不代表 LOCAL-06 整体完成）
+- 状态：**实现与自测完成（含第一轮定向返工 + 终审 P2 外键动作返工 + 外键重复声明补修），未提交 / 未 PR / 未审查 / 未合并**
+  （不代表 LOCAL-06 整体完成；上一轮冻结候选的 15 / 15 与外键动作返工后的 16 / 16 均**未最终通过**）
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 合并后主线，schema **v3**）
 - 分支：`codex/huxiaoyang-code/local-06-backup`
 - 负责人：`huxiaoyang-code`（已核实）
@@ -47,6 +48,48 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 5. **路径别名**：`target_conflicts_backup` 两侧都按真实路径（realpath）比较，父目录 junction 别名
    不能把恢复目标写进备份目录（返工前已复现，返工后有用例守住）。
 
+### 1.2 终审 P2 返工：外键动作兼容性（本轮必改）
+
+终审独立探针发现：上一冻结候选（head `829541a`，六文件源码 `ddadb03` + main `257f962`）虽然
+管理者与独立 reviewer 均实跑 15 / 15 通过，但 `foreignKeyGroups()` 丢弃了
+`PRAGMA foreign_key_list` 的 `on_delete` / `on_update`，`TABLE_STRUCTURE` 也只列映射，
+因此**只改外键动作的伪装结构可以全部通过**：
+
+- 复现（独立、真实）：新临时 `WORKBENCH_DATA_DIR` 初始化产品 v3 库并建账套；关闭外键，在事务内
+  **仅重建 `periods`**，把 `account_set_id` 外键从 `ON DELETE CASCADE` 改成 `NO ACTION`，
+  其余列 / 主键 / 数据 / 迁移记录不变；再开回外键。结果 `backup` / `verify` / `restore-new` 均 `ok:true`，
+  而恢复后用真实 `accounting.deleteAccountSet` 抛 `FOREIGN KEY constraint failed`（正常结构对照能删除，
+  账套与期间都归 0）。
+
+必改项（已处理，证据见交接 §3）：
+
+1. 按真实 DDL 的外键契约（全部 `ON DELETE CASCADE` + 默认 `ON UPDATE NO ACTION` + 默认 `MATCH NONE`）
+   逐外键比对**列组 + 删除 / 更新 / 匹配动作**，按 `pragma_foreign_key_list` 的 `id` 分组（多列外键整体比较），
+   不只检查目标列；未声明的额外外键也不接受（`unexpected_foreign_keys`）；
+2. **源库与快照两侧都拒绝**同类伪结构（快照侧即使攻击者把清单 `bytes` / `sha256` 一并重算也拦住）；
+3. 不通过关闭外键 / 放宽兼容 / 吞异常过关；正常 `backup` / `verify` / `restore-new` 行为不变；
+4. 测试新增 `ON DELETE` 与 `ON UPDATE` 两个错误变体 + 只做结构负例不够的「恢复后真实删除」正常对照。
+
+### 1.3 补修：外键重复声明可绕过 (§1.2 修复后仍存在)
+
+根真实合成探针发现：保留 `periods.account_set_id REFERENCES account_sets(id) ON DELETE CASCADE`，
+再额外声明同列同目标的一条 `FOREIGN KEY(account_set_id) REFERENCES account_sets(id) ON DELETE RESTRICT`。
+`PRAGMA foreign_key_list` 给出两个分组（`id0=RESTRICT`、`id1=CASCADE`），
+但 §1.2 的实现把实际外键按目标键装进 `Map`，后一条会**静默覆盖**前一条，于是只看剩的 `CASCADE`；
+期望目标集合又让重复目标不算 `unexpected`。实测 `createBackup` 成功，随后真实
+`accounting.deleteAccountSet` 仍抛 `FOREIGN KEY constraint failed`。**不得误称已修好全部外键。**
+
+必改项（已处理，证据见交接 §3.0）：
+
+1. 实际外键分组与期望外键**一对一**匹配（多列外键仍按 `id` / `seq` 成一个分组）；
+   任何重复分组（`foreign_key_duplicate`）或额外分组（`unexpected_foreign_keys`）都拒绝，
+   不再用「按目标键建 Map」；
+2. 匹配动作对**每个**实际分组逐一验证（`ON DELETE` / `ON UPDATE` / `MATCH`），不放宽兼容、
+   不关闭外键检查、不吞异常；
+3. 源库入口与快照入口都拒绝，快照侧即使攻击者把清单 `bytes` / `sha256` 一并重算也拦住；
+4. 测试补「重复外键」源库负例 + 重算清单的**快照**负例（先断言伪结构确实产生两个分组、
+   真实删除确实失败），正常级联对照仍需通过；只做此真实残留与必要文档，不扩大其它数据库篡改课题。
+
 ## 2. 非目标
 
 - 不实现原位（就地）在线恢复、停写 / 关连接 / 现库保护 / 重新打开的编排；
@@ -86,6 +129,11 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
      表清单 / 迁移记录 / 摘要）与真实快照比对；
    - **真实结构负例**：缺导入表、缺关键列、缺 UNIQUE / 外键约束、迁移记录矛盾、迁移备份记录为空，
      源库与快照两个入口都拒绝；
+   - **外键动作负例**：只改 `ON DELETE`（CASCADE → NO ACTION）或 `ON UPDATE`（NO ACTION → CASCADE）、
+     其余结构 / 数据 / 迁移记录不变并把清单摘要一并重算的伪结构，源库与快照两侧都拒绝；
+   - **外键重复声明负例**：保留原 `ON DELETE CASCADE` 再额外声明同列同目标 `ON DELETE RESTRICT`
+     （实际两个外键分组），源库与快照（清单摘要一并重算）两侧都拒绝，明细含 `foreign_key_duplicate`；
+     同一套正常结构恢复后用真实 `deleteAccountSet` **能**级联删除（账套 / 期间 / 凭证 / 分录 / 来源归 0）；
    - 恢复后金额与来源一致性、已有目标不动、损坏 / 篡改 / 半成品 / 未来 / 旧版本 / 非本产品库拒绝；
    - 路径与别名边界（含**父目录 junction 别名不能绕过** `target_conflicts_backup`）、
      真实进程中断的原子边界、并发同目录 / 同目标、时点隔离；
@@ -109,9 +157,12 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
    不用迁移 / 初始化去"修好"候选库（`readOnly` 打开 + 固定 PRAGMA / SELECT）；
    `pageSize` / `journalMode` / `userVersion` / `tables` / `migrations` / 摘要全部与真实快照比对。
 5. **真实结构校验（唯一支持 v3）**：`TABLE_STRUCTURE` 逐表校验列名 / 声明类型 / NOT NULL / 主键顺序 /
-   UNIQUE 列组 / 外键，外加 `schema_migrations` 记录从 1 连续且与版本一致、`schema_backups` 存在合法记录；
-   缺表 / 缺列 / 缺约束 / 伪造或矛盾迁移记录 → `structure_invalid`（源库入口为 `source_structure_invalid`）；
-   更高版本 → `schema_unsupported`，更低版本 → `schema_outdated`。
+   UNIQUE 列组 / 外键（目标列组 + `ON DELETE` / `ON UPDATE` / `MATCH` 动作，按外键分组整体比较，
+   多列外键不只比单个目标列，实际分组与期望**一对一**匹配，重复分组 `foreign_key_duplicate` 与
+   未声明额外分组 `unexpected_foreign_keys` 都不接受），外加 `schema_migrations` 记录从 1 连续且与版本一致、
+   `schema_backups` 存在合法记录；
+   缺表 / 缺列 / 缺约束 / 外键动作不符（`foreign_key_actions`）/ 伪造或矛盾迁移记录 → `structure_invalid`
+   （源库入口为 `source_structure_invalid`）；更高版本 → `schema_unsupported`，更低版本 → `schema_outdated`。
 6. **耐久性**：partial 快照 / 清单 / 未完成标记写后 `fsync` 再 `rename`；POSIX 额外尝试 `fsync` 目录，
    Windows 明确不支持并如实汇报（`backupMeta.durability` / `durability`）。
 7. **恢复原子性**：`mkdir` 独占 → 未完成标记（`fsync`）→ partial 复制 → 复制结果重新校验 sha256 →

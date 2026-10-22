@@ -12,7 +12,12 @@
 //    但**不复用**「文件大小非 0 就当可用快照」的判定：这里始终重新生成并重新验证。
 // 3) 结构版本只支持**当前真实结构**：`TABLE_STRUCTURE` 逐表校验列 / 类型 / NOT NULL /
 //    主键 / UNIQUE / 外键，并校验 `schema_migrations` 记录连续且与版本一致、`schema_backups`
-//    记录存在。缺表 / 缺列 / 缺关键约束 / 伪造或矛盾迁移记录一律拒绝；
+//    记录存在。外键按**真实外键分组**（多列外键整体比较，不只比目标列）与期望外键**一对一**比对
+//    `ON DELETE` / `ON UPDATE` / `MATCH` 动作（同一列组对同一目标重复声明也一样逐组验动作并拒绝
+//    `foreign_key_duplicate`，绝不用「按目标键建 Map」静默覆盖）：只改动作的伪结构
+//    （例如把 `ON DELETE CASCADE` 改成 `NO ACTION`）会伪装成兼容结构，
+//    恢复后真实删除账套才失败，必须拒绝。
+//    缺表 / 缺列 / 缺关键约束 / 动作不符 / 重复或未声明的外键 / 伪造或矛盾迁移记录一律拒绝；
 //    旧版本库（< 当前支持版本）给 `schema_outdated`，未来版本给 `schema_unsupported`，
 //    都要求先由产品真实入口升级 / 换新版工具，本模块**不**替候选库初始化或迁移。
 //    未来 schema v4（LOCAL-02）合并后必须按真实契约重验并扩展本表，不得只靠「表是动态算的」放行。
@@ -91,7 +96,7 @@ const IMPORT_SCHEMA_TABLES = Object.freeze([
 
 /**
  * 当前真实结构规范（schema v3）：逐表列名 / 声明类型 / NOT NULL、主键列顺序、
- * UNIQUE 约束列组、外键（本表列 -> 目标表(目标列)）。
+ * UNIQUE 约束列组、外键（本表列 -> 目标表(目标列)，动作见 `REAL_FOREIGN_KEY_ACTIONS`）。
  * 列规范写成 `"<TYPE>"` 或 `"<TYPE> NOT NULL"`；`INTEGER PRIMARY KEY` 在 SQLite 里
  * `PRAGMA table_info` 的 notnull 为 0，因此这类主键列按 `"INTEGER"` 声明。
  */
@@ -682,16 +687,46 @@ const uniqueColumnGroups = (conn, table) => {
   return groups;
 };
 
+/**
+ * 真实 DDL 的外键动作契约（schema v3）：`db.mjs` / `import-storage.mjs` 里**所有**外键都写作
+ * `REFERENCES <表>(<列>) ON DELETE CASCADE`（未声明 `ON UPDATE`，即 SQLite 默认 `NO ACTION`；
+ * 匹配语义为默认 `NONE`）。这些动作是业务语义的一部分：改成 `NO ACTION` / `RESTRICT` 会让真实
+ * 「删除账套」级联失败，改成 `SET NULL` / `SET DEFAULT` 会改写业务数据，都不是本产品结构。
+ * 未来 v4 若出现不同动作的外键，必须在该外键条目上用 `actions` **逐条显式覆盖**，
+ * 不得把比较放宽成「任一动作均可」或关闭外键检查。
+ */
+const REAL_FOREIGN_KEY_ACTIONS = Object.freeze({ onDelete: "CASCADE", onUpdate: "NO ACTION", match: "NONE" });
+
+const foreignKeyActions = (fk) => ({ ...REAL_FOREIGN_KEY_ACTIONS, ...(fk.actions ?? {}) });
+const foreignKeyTargetKey = (fk) => `${fk.from.join(",")}->${fk.table}(${fk.to.join(",")})`;
+
+/**
+ * 按 `PRAGMA foreign_key_list` 的 `id` 分组，读出每个外键的列组与删除 / 更新 / 匹配动作。
+ * 多列外键按 `seq` 顺序聚合，因此比较的是**整个外键契约**，不会只比单个目标列。
+ * 返回的是**每一个实际外键分组**（同一列组被声明两次就是两组），调用方必须逐组比对，
+ * 不得按目标键折叠成 Map —— 否则后声明的动作会覆盖前一条，把重复外键伪装成兼容结构。
+ */
 const foreignKeyGroups = (conn, table) => {
+  const rows = conn.prepare("SELECT * FROM pragma_foreign_key_list(?)").all(table)
+    .sort((a, b) => Number(a.id) - Number(b.id) || Number(a.seq) - Number(b.seq));
   const grouped = new Map();
-  for (const fk of conn.prepare("SELECT * FROM pragma_foreign_key_list(?)").all(table)) {
+  for (const fk of rows) {
     const key = String(fk.id);
-    if (!grouped.has(key)) grouped.set(key, { table: String(fk.table), from: [], to: [] });
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        table: String(fk.table),
+        from: [],
+        to: [],
+        onDelete: String(fk.on_delete ?? "").toUpperCase(),
+        onUpdate: String(fk.on_update ?? "").toUpperCase(),
+        match: String(fk.match ?? "NONE").toUpperCase(),
+      });
+    }
     const entry = grouped.get(key);
     entry.from[Number(fk.seq)] = String(fk.from);
-    entry.to[Number(fk.seq)] = fk.to === null ? null : String(fk.to);
+    entry.to[Number(fk.seq)] = fk.to === null || fk.to === undefined ? null : String(fk.to);
   }
-  return [...grouped.values()].map((fk) => `${fk.from.join(",")}->${fk.table}(${fk.to.join(",")})`);
+  return [...grouped.values()];
 };
 
 /** 逐表校验列 / 类型 / NOT NULL / 主键 / UNIQUE / 外键；返回问题清单（不含 SQL 与路径）。 */
@@ -737,12 +772,54 @@ function structureProblems(conn, tables) {
     for (const wanted of spec.unique) {
       if (!uniqueGroups.includes(wanted.join(","))) problems.push({ kind: "unique", table, columns: wanted });
     }
+    // 外键：目标列组 + 动作（ON DELETE / ON UPDATE / MATCH）整体比对。
+    // 实际外键分组与期望外键**一对一**匹配：不能按目标键建 Map（会把重复分组覆盖成一条），
+    // 因此同一列组指向同一目标却声明了两次时，每个实际分组都要验动作，并显式拒绝重复；
+    // 未声明的额外分组同样拒绝。
     const actualForeignKeys = foreignKeyGroups(conn, table);
+    const unmatched = actualForeignKeys.map((fk) => ({ fk, used: false }));
     for (const wanted of spec.foreignKeys) {
-      const key = `${wanted.from.join(",")}->${wanted.table}(${wanted.to.join(",")})`;
-      if (!actualForeignKeys.includes(key)) {
+      const targetKey = foreignKeyTargetKey(wanted);
+      const candidates = unmatched.filter((entry) => !entry.used && foreignKeyTargetKey(entry.fk) === targetKey);
+      if (!candidates.length) {
         problems.push({ kind: "foreign_key", table, columns: wanted.from, references: wanted.table });
+        continue;
       }
+      const want = foreignKeyActions(wanted);
+      for (const entry of candidates) {
+        entry.used = true;
+        const actual = entry.fk;
+        if (actual.onDelete !== want.onDelete
+          || actual.onUpdate !== want.onUpdate
+          || actual.match !== want.match) {
+          problems.push({
+            kind: "foreign_key_actions",
+            table,
+            columns: wanted.from,
+            references: wanted.table,
+            expected: `${want.onDelete}/${want.onUpdate}/${want.match}`,
+            actual: `${actual.onDelete}/${actual.onUpdate}/${actual.match}`,
+          });
+        }
+      }
+      if (candidates.length > 1) {
+        problems.push({
+          kind: "foreign_key_duplicate",
+          table,
+          columns: wanted.from,
+          references: wanted.table,
+          count: candidates.length,
+        });
+      }
+    }
+    const unexpectedForeignKeys = unmatched.filter((entry) => !entry.used).map((entry) => entry.fk);
+    if (unexpectedForeignKeys.length) {
+      problems.push({
+        kind: "unexpected_foreign_keys",
+        table,
+        columns: unexpectedForeignKeys.map((fk) => fk.from.join(",")).slice(0, MAX_DETAIL_ITEMS),
+        references: [...new Set(unexpectedForeignKeys.map((fk) => fk.table))].slice(0, MAX_DETAIL_ITEMS),
+      });
     }
   }
   return problems;

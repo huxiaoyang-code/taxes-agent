@@ -6,7 +6,12 @@
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`
 - 分支：`codex/huxiaoyang-code/local-06-backup`
 - 已审 head：**无**（本包尚未提交、未推送、未开 PR、未审查、未合并；不预报任何 head / merge）
-- 状态：**实现与自测完成（含第一轮定向返工），等待管理者验证与独立审查**
+- 上一冻结候选：head `829541a403aa7e2866d42e7a8c6eb3d366940366`（六文件源码 `ddadb03` + main `257f962`）。
+  管理者与无实施上下文的独立 reviewer 均实跑 **15 / 15 exit 0**，但**独立探针发现 P2（外键动作未校验）**，
+  因此该候选 **未最终通过**（见 §3.0）。此后「外键动作返工」的 16 / 16 候选（按目标键建 `Map`）
+  又被 root 真实合成探针发现「重复声明同列同目标外键」可绕过，**同样未最终通过**；
+  两者均已被本轮的**外键分组一对一比对**修复取代。
+- 状态：**实现与自测完成（含第一轮定向返工 + 终审 P2 外键动作返工 + 外键重复声明补修），等待管理者重新验证与新 head 独立审查**
 - 范围：LOCAL-06 的**独立子包**（备份 / 验证 / 恢复全新目标）；LOCAL-06 整体**未完成**
   （审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级交付均未实现）
 
@@ -14,11 +19,11 @@
 
 | 文件 | 行数 | 作用 |
 |---|---|---|
-| `06-workbench/server/local-backup.mjs` | 1413 | 快照生成 / 清单生成与验证 / 真实结构校验 / 恢复到全新目标；无模块级副作用 |
+| `06-workbench/server/local-backup.mjs` | 1490 | 快照生成 / 清单生成与验证 / 真实结构校验（含外键分组一对一与动作契约）/ 恢复到全新目标；无模块级副作用 |
 | `06-workbench/scripts/local-backup.mjs` | 86 | CLI `backup` / `verify` / `restore-new`（JSON 输出 + 稳定退出码） |
-| `06-workbench/test/local-backup.test.mjs` | 1238 | 真实 SQLite/WAL + 真实 CLI 子进程回归（15 个用例） |
-| `docs/LOCAL-BACKUP.md` | 438 | 备份格式 / 兼容范围 / 错误码 / 安全规则 / 耐久性边界 / 下游契约 / 原位恢复接入契约 |
-| `docs/tasks/LOCAL-06-BACKUP.md` | 135 | 本包任务单 |
+| `06-workbench/test/local-backup.test.mjs` | 1392 | 真实 SQLite/WAL + 真实 CLI 子进程回归（16 个用例） |
+| `docs/LOCAL-BACKUP.md` | 457 | 备份格式 / 兼容范围 / 错误码 / 安全规则 / 耐久性边界 / 下游契约 / 原位恢复接入契约 |
+| `docs/tasks/LOCAL-06-BACKUP.md` | 186 | 本包任务单 |
 | `docs/handoffs/LOCAL-06-BACKUP.md` | — | 本交接 |
 
 未改（共享文件，仅只读）：`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
@@ -37,11 +42,18 @@
 3. **绝不复用旧快照**：每次备份都新建目录、重新生成、重新自检（完整性 / 外键 / 真实结构 / 内容摘要），
    完全不使用「文件大小非 0」这类判定。
 4. **真实结构校验（唯一支持当前 v3）**：`TABLE_STRUCTURE` 逐表校验
-   列名集合、声明类型、`NOT NULL`、主键列与顺序、UNIQUE 约束列组、外键（本表列 → 目标表列）；
+   列名集合、声明类型、`NOT NULL`、主键列与顺序、UNIQUE 约束列组；
+   外键按 `PRAGMA foreign_key_list` 的 `id` 分组整体比对**本表列组 → 目标表列组 + `ON DELETE` /
+   `ON UPDATE` / `MATCH` 动作**（多列外键按 `seq` 聚合，不只比单个目标列），实际外键分组与期望外键
+   **一对一**匹配：每个实际分组都要验动作，未声明的额外外键（`unexpected_foreign_keys`）与同列同目标
+   重复声明的分组（`foreign_key_duplicate`）都拒绝——不能用「按目标键建 `Map`」静默覆盖。
+   真实 v3 DDL 的外键契约统一为 `ON DELETE CASCADE` + 默认 `ON UPDATE NO ACTION` + 默认 `MATCH NONE`
+   （`REAL_FOREIGN_KEY_ACTIONS`），未来 v4 若有不同动作必须逐条显式覆盖，不放宽成「任一动作均可」。
    另校验 `schema_migrations` 记录从 1 到当前版本**连续**、`applied_at` 可解析、
    `schema_backups` 至少一条形状合法的迁移前备份记录。
    8 张核心会计表 + `schema_migrations` / `schema_backups` + 5 张 `import_*` 全部必需；
-   缺表 / 缺列 / 缺约束 / 伪造或矛盾迁移记录 → `structure_invalid`（源库入口 `source_structure_invalid`），
+   缺表 / 缺列 / 约束不符 / 外键动作不符（`foreign_key_actions`）/ 伪造或矛盾迁移记录 →
+   `structure_invalid`（源库入口 `source_structure_invalid`），
    缺表 → 非本产品库（`source_not_product_database` / `snapshot_not_product_database`）。
    版本高于支持上限 → `schema_unsupported`；**低于** → `schema_outdated`（旧库先用当前产品入口升级，
    本模块不替候选库初始化 / 迁移）。
@@ -82,24 +94,65 @@
 
 工作目录：`06-workbench`。运行环境：Node **v24.15.0**、SQLite **3.51.3**（`node:sqlite`）、Windows。
 
-**本轮（第一轮定向返工后的最终六文件）实跑结果**：
+### 3.0 外键契约返工（两个阶段，均未最终通过→已修复）
+
+#### 3.0.1 终审 P2：外键动作未校验
+
+- 独立探针复现（真实、合成数据）：新临时 `WORKBENCH_DATA_DIR` 初始化产品 v3 库建账套 → 关闭外键，
+  在事务内**只重建 `periods`**，把 `account_set_id` 外键 `ON DELETE CASCADE` 改成 `NO ACTION`，
+  其余列 / 主键 / 数据 / 迁移记录不变 → 开回外键。结果 `backup` / `verify` / `restore-new` 均 `ok:true`，
+  恢复后真实 `accounting.deleteAccountSet` 抛 `FOREIGN KEY constraint failed`（正常结构对照能删除，
+  账套与期间 0 行）。
+- 根因：`foreignKeyGroups()` 丢弃 `PRAGMA foreign_key_list` 的 `on_delete` / `on_update`，
+  `TABLE_STRUCTURE` 也只列映射，因此**只改动作的伪装结构可整体通过**。
+- 修复：`REAL_FOREIGN_KEY_ACTIONS`（真实 DDL：`CASCADE` / `NO ACTION` / `NONE`）+ 按外键 `id` 分组比对
+  列组与三个动作 + 额外外键也不接受；源库与快照两侧同一套校验（快照侧即使清单摘要被一并重算也拦住）；
+  不关闭外键、不放宽兼容、不吞异常。正常 `backup` / `verify` / `restore-new` 行为不变。
+- 员工自查复现（同一探针，两份模块）：HEAD（未修复）→ `backup` ok:true、`verify` ok:true、
+  `restore-new` ok:true、伪结构删除抛外键错误；第一版修复 → 源库 `source_structure_invalid`，明细
+  `{kind:"foreign_key_actions",table:"periods",columns:["account_set_id"],references:"account_sets",
+  expected:"CASCADE/NO ACTION/NONE",actual:"NO ACTION/NO ACTION/NONE"}`。
+  但该第一版修复**仍有残留**（见 3.0.2），所以它的 **16 / 16 也未最终通过**。
+
+#### 3.0.2 补修：重复声明外键可绕过
+
+- 根真实合成探针：保留 `periods.account_set_id REFERENCES account_sets(id) ON DELETE CASCADE`，
+  再额外声明同列同目标一条 `FOREIGN KEY(account_set_id) REFERENCES account_sets(id) ON DELETE RESTRICT`。
+  `PRAGMA foreign_key_list` 给出两个分组（`id0=RESTRICT`、`id1=CASCADE`），但 3.0.1 的实现把实际外键
+  按目标键装进 `Map`，后一条会**静默覆盖**前一条，只看剩下那个 `CASCADE`；期望目标集合又让重复目标不算
+  `unexpected`。实测 `createBackup` 成功，随后真实 `accounting.deleteAccountSet` 仍抛
+  `FOREIGN KEY constraint failed`（源库真实行为：`RESTRICT` 立即报错）。
+- 修复：按 `id` / `seq` 得到的**每个实际外键分组**与期望外键**一对一**匹配（多列外键仍成一个分组）；
+  每个匹配到的实际分组都逐一验 `ON DELETE` / `ON UPDATE` / `MATCH`；同一期望外键匹配到多个实际分组时
+  报 `foreign_key_duplicate`（并逐组验动作）；未被匹配的额外分组继续报 `unexpected_foreign_keys`。
+  不再使用「按目标键建 `Map`」，不关闭外键、不放宽兼容、不吞异常；源库与快照两侧同一套校验。
+- 测试：第 11 个用例新增第三份伪结构（重复外键），前置先断言 `PRAGMA` 确实给出两个分组（
+  `CASCADE` + `RESTRICT`）且真实 `DELETE FROM account_sets` 在事务内确实失败，再断言源库
+  `source_structure_invalid`（明细含 `foreign_key_duplicate` + `foreign_key_actions` + 表名，无业务文本）
+  与重算清单摘要后的快照 `verify` / `restore-new` 均 `structure_invalid`、不创建目标；
+  正常结构恢复后用真实 `deleteAccountSet` 仍能级联删除。
+
+**本轮（外键分组一对一修复后的六文件）实跑结果**：
 
 | 命令 | 结果 | 退出码 |
 |---|---|---|
-| `node test/local-backup.test.mjs` | **15 / 15 通过** | **0** |
-| `node test/import-incremental.test.mjs`（回归对照，LOCAL-01 未受影响） | 49 / 49 通过 | 0 |
-| `node test/import-incremental-http.test.mjs`（回归对照） | 22 / 22 通过 | 0 |
-| `node test/smoke.test.mjs`（回归对照） | 28 / 28 通过 | 0 |
+| `node test/local-backup.test.mjs` | **16 / 16 通过** | **0** |
 
-说明：本套件**未**接入 `scripts/test-all.mjs`（该文件是共享文件，不在本包所有权内），
-因此**没有**「`npm test` 全部套件都跑过本套件」这一事实；上表是逐条实跑命令与真实结果。
-回归对照三套是在本轮返工之后运行的，只证明**没有破坏**既有入口（本包未改任何既有文件）。
+本轮只改本包 6 个文件、未动任何共享源码，因此**未重跑** `import-incremental` 49 / 49、
+`import-incremental-http` 22 / 22、`smoke` 28 / 28（那是**上一轮返工后**的受影响回归结果，
+不当作本轮的新证据）。本套件**未**接入 `scripts/test-all.mjs`（共享文件，不在本包所有权内），
+因此**没有**「`npm test` 全量跑过本套件」这一事实。
 
-> 历史记录（**初版**，已被本轮返工取代，不再代表当前代码）：初版自测 12 / 12 通过、exit 0（连续 3 次）；
-> 该结果只说明初版在被指出的缺陷上**没有**相应断言（源连接可写、结构校验薄弱、`appVersion` 未校验、
-> 备份未 `fsync`、别名未用 realpath）。本轮返工后以 15 项用例为准。
+> 候选状态必须分开看，**不得把既有失败隐去**：
+> - head `829541a`（六文件源码 `ddadb03`）的 **15 / 15 exit 0** 是管理者与独立 reviewer 的实跑结果，
+>   但当时用例没有任何外键动作断言，**未最终通过**；
+> - 外键动作返工后的 **16 / 16**（按目标键建 `Map`）又因重复声明外键可绕过，
+>   被 root 真实合成探针打回，**也未最终通过**；
+> - 当前 16 / 16 是**外键分组一对一修复后**的实跑结果，仍需重新验证与独立审查，
+>   不预报已审 head / PR / merge。
+> 历史（第一轮返工之前）的初版 12 / 12 也不代表当前代码。
 
-### 3.1 本轮 15 个用例各自验证什么（全部合成数据）
+### 3.1 本轮 16 个用例各自验证什么（全部合成数据）
 
 1. **模块导入无副作用**：子进程仅 import 模块 + 指向不存在的 `WORKBENCH_DATA_DIR`，
    断言该目录未被创建、仓库默认数据目录里的库字节未变。
@@ -164,33 +217,47 @@
     - 迁移前备份记录被清空 → `source_structure_invalid` + `backup_records_empty`；
     - 上面前三类同时作用于 **verify / restore-new**（把快照换成被改结构库并同步清单摘要）：
       `snapshot_not_product_database` / `structure_invalid`，且**不会**创建恢复目标。
-11. **路径 / 别名边界**：硬链接源库 → `source_alias`（用后立即删除）；经 junction 目录的源库路径 →
+11. **外键契约（本轮两次增补，对应终审 P2 + 重复声明补修）**：从正常快照复制三份伪结构——（a）**只**把
+    `periods` 的 `account_set_id` 外键改成 `ON DELETE NO ACTION`；（b）**只**把它改成 `ON UPDATE CASCADE`；
+    （c）保留原 `ON DELETE CASCADE` 再重复声明同列同目标一条 `ON DELETE RESTRICT`（两个实际外键分组）。
+    三份的列 / 主键 / 数据与正常库逐行相等（内容摘要拦不住）。前置断言：伪结构上真实 `DELETE FROM account_sets`
+    确实抛 `FOREIGN KEY constraint failed`；重复声明那份还先断言 `PRAGMA foreign_key_list` 确为两个分组
+    （`CASCADE` + `RESTRICT`）且在前置删除试验后用 `ROLLBACK` 不改文件。三份均断言：源库 `backup` →
+    `source_structure_invalid` 且明细含 `foreign_key_actions`（重复声明那份还含 `foreign_key_duplicate`）
+    + 表名（**不含**账套业务文本）、未创建备份目录；快照侧把清单 `bytes` / `sha256` 一并重算（自洽）后
+    `verify` / `restore-new` 均 `structure_invalid` 且不创建恢复目标。正常结构对照：合法备份恢复后用真实
+    `accounting.mjs` 删除账套成功，账套 / 期间 / 凭证 / 分录 / 来源行数全为 0。
+12. **路径 / 别名边界**：硬链接源库 → `source_alias`（用后立即删除）；经 junction 目录的源库路径 →
     `source_alias`；`--db <库>-wal` → `source_sidecar`；已存在目录 / 文件作 `--out` → `out_exists`
     （文件内容未变）；junction 作 `--out` → `out_alias`；目标在备份目录内 → `target_conflicts_backup`
     （未创建该子目录）；junction 作 `--target` → `target_alias`；`--target` 指向正在使用的库文件 →
     `target_exists` 且该文件仍是普通文件；**父目录 junction 别名两侧都试**
     → 均 `target_conflicts_backup`、备份目录签名不变、经别名读取的备份仍可 `verify`；6 种 CLI 用法错误 →
     退出码 1 与对应 `usage_*` code。（若运行环境禁止创建目录链接，junction 子用例明确打印跳过，不伪装通过。）
-12. **中断残留**：目标目录内只有 `.restore-incomplete` + `.partial-*.db`（无 `workbench.db`）→
+13. **中断残留**：目标目录内只有 `.restore-incomplete` + `.partial-*.db`（无 `workbench.db`）→
     `target_incomplete`，目录签名前后不变；删除该目录后重试 → 成功且 sha256 与快照一致、金额可读。
-13. **真实进程中断**：先造一个 >8 MiB 的合成本产品库（1200 张填充凭证）并正常备份。
+14. **真实进程中断**：先造一个 >8 MiB 的合成本产品库（1200 张填充凭证）并正常备份。
     - 备份进程：观测到未完成标记后 `kill` → 备份目录要么不存在，要么**不通过** `verify`
       （`backup_incomplete` / `manifest_missing` / `snapshot_missing`），且**没有** `manifest.json`；
       清理残留后重试成功。
     - 恢复进程：观测到标记后 `kill` → 若出现 `workbench.db`，其 sha256**必须等于**清单里的快照 sha256
       （先校验后 rename，不存在半套正式文件）；未完成目标再恢复会被明确拒绝；清理后重试成功。
-14. **并发**：两个 CLI 同时备份到同一 `--out` → 退出码恒为 `{0,2}`，失败方 code 为
+15. **并发**：两个 CLI 同时备份到同一 `--out` → 退出码恒为 `{0,2}`，失败方 code 为
     `out_exists` 或 `out_incomplete`（取决于观测时机）；随后 `verify` 通过，目录里只剩
     `workbench.db.snapshot` + `manifest.json`（无临时文件 / 标记）。两个 CLI 同时恢复到同一 `--target` →
     退出码 `{0,2}`，失败方 `target_exists` / `target_incomplete`；成功目标 sha256 与快照一致、
     无未完成标记、金额可读。
-15. **时点隔离**：备份后再写入两笔业务 → 源库继续可写且余额按手算变化；旧备份仍 `verify` 通过、
+16. **时点隔离**：备份后再写入两笔业务 → 源库继续可写且余额按手算变化；旧备份仍 `verify` 通过、
     仍是 4 张凭证、分录借方合计 27600；已恢复的库仍是 4 张凭证（不被后来的源库业务改动）。
+
+> 序号 12–16 为原 11–15 的向后顺延（本轮在第 11 位插入外键动作用例）。
 
 ### 3.2 没有做的事（测试口径）
 
 - 没有连接真实账套库 / 真实数据 / 税局 / 浏览器；没有把任何真实凭据或账务原文写入代码、测试或文档。
 - 没有跑 `npm test` 全量聚合（本套件不在 `test-all.mjs` 里，见 §3 说明）。
+- 本轮只实跑本套件：未重跑上一轮的 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、
+  `smoke` 28 / 28（本轮未改任何共享源码，不把旧结果当新证据）。
 - 没有在 schema v4 / LOCAL-02 分支代码上运行过（见 §5）。
 - 没有验证网络盘 / 同步盘 / 杀毒软件占用 / 真实断电等 Windows 交付场景。
 
@@ -213,6 +280,9 @@
 ## 5. 未完项 / 风险 / 下一任务输入
 
 1. **未提交 / 未 PR / 未审查 / 未合并**：本交接不预报已审 head 或 merge；合并后由管理者补齐。
+   上一冻结候选（head `829541a`）虽已 15 / 15 实跑，但**因终审 P2 外键动作漏洞未最终通过**；
+   其后外键动作返工的 16 / 16 候选又因重复声明外键可绕过而**同样未最终通过**。
+   需管理者对**外键分组一对一修复后的六文件**重新验证 + 新 head 独立审查后再决定是否建 PR。
 2. **LOCAL-06 整体未完成**：审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级交付均未实现；
    本包只交付「备份 / 验证 / 恢复全新目标」。
 3. **只支持当前 v3 结构**：`schema_outdated`（v0 / v1 / v2）要求先用当前产品入口升级；
@@ -226,8 +296,8 @@
    断电可能丢失刚发布的文件名（此时按未完成处理）。
 7. **严格拒绝的代价**：真实库若存在外键 / 页级问题或结构被手工改过会被拒绝备份
    （`foreign_key_violation` / `integrity_failed` / `structure_invalid`），需先人工核对；本包不提供修复工具。
-8. **清单无签名**：防损坏 / 不一致 / 半成品 / 结构不符，不防「清单与快照一起整体伪造」；
-   防伪属后续审计部分。
+8. **清单无签名**：防损坏 / 不一致 / 半成品 / 结构不符（含只改外键动作、以及重复声明同列外键的伪结构），
+   不防「清单与快照一起整体伪造」；防伪属后续审计部分。
 9. **未接线**：没有定时备份、没有产品 UI / HTTP / Agent / MCP 入口、没有自动切换数据目录。
 10. **性能边界**：内容摘要为全表扫描 + 逐行规范序列化，大库会变慢且单表内存随行数增长；
     未做增量 / 分块优化。
@@ -237,10 +307,26 @@
 ## 6. 本次执行边界（会话事实）
 
 - 实施员工：本机 pi，仅使用已核实的 **DeepSeek V4.1 Flash**；未启动其它模型、未启动子 agent。
-- 本轮为第一轮定向返工的**新进程 / 新会话**（`--no-session`，不 resume，未读取原员工 jsonl 全日志）；
-  在同一 worktree 上接续初版成果定向修复，未重置初版成果。
-- 未执行 Git 提交 / 推送 / 合并；未修改共享文件；未访问税局 / 浏览器 / 真实账套 / 凭据。
-- 只写系统临时目录与本 worktree 内 `tmp-l06-fix/`（手工探针，交付前删除）与既有
-  `tmp-l06-probe*`（初版员工遗留的合成探针，本轮核对绝对路径确认在本 worktree 后清理）；
+- 本轮为**外键重复声明补修的新进程 / 新会话**（`--no-session`，不 resume，未读取旧员工 jsonl 大日志），
+  在同一 worktree 上接续上一员工**未提交**的外键动作返工成果定向修复（未重置 / 未丢弃其变更），
+  也未新建其它 worktree、未切分支。
+- 未执行 Git 提交 / 推送 / 合并；只改授权的 6 个文件；未访问税局 / 浏览器 / 真实账套 / 凭据。
+- 复现探针与测试均只写**系统临时目录**（`%TEMP%`，用完删除），未在本 worktree / 仓库留下临时文件；
   测试进程自行清理自己创建的临时目录与数据库连接。
-- 需要返工请开**新会话**（不 resume），只需本任务单、本交接、契约文档与相关源码。
+- `git diff --check` / 范围核对见 §7；需要再返工请开**新会话**（不 resume），只传本任务单、本交接、
+  契约文档与相关源码。
+
+## 7. 本次变更范围核对（外键重复声明补修）
+
+- `git status --porcelain` 只有授权的 5 个文件被修改（`scripts/local-backup.mjs` 本轮未改）：
+  `06-workbench/server/local-backup.mjs`、`06-workbench/test/local-backup.test.mjs`、
+  `docs/LOCAL-BACKUP.md`、`docs/tasks/LOCAL-06-BACKUP.md`、`docs/handoffs/LOCAL-06-BACKUP.md`；
+- 本轮源码改动只在外键比对：`structureProblems()` 的 `Map` 改成逐个实际分组一对一匹配 +
+  `foreign_key_duplicate`，并更新对应注释 / `foreignKeyGroups()` 文档；
+  未改 readonly / WAL / 完整结构 / 清单 / fsync / realpath / 原子发布等已有修复；仍只支持已合并 v3；
+- 未新增 / 删除文件，未留有临时探针文件；未改任何共享文件（`server/db.mjs`、
+  `server/import-storage.mjs`、`server/accounting.mjs`、`server/server.mjs`、`server/agent-tools.mjs`、
+  MCP 注册、`scripts/test-all.mjs`、`package.json`、`public/*`、`docs/handoffs/STATE.md` 等）；
+- `git diff --check` 无输出（无空白 / 冲突标记问题）。
+- 员工不执行 Git 提交 / 推送 / 合并；当前 head 仍为 `829541a`（前两轮变更未提交，未重置）；
+  上述范围与新 head 由管理者提交时复核。

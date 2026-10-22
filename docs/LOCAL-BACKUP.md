@@ -140,7 +140,9 @@
 
 清单**没有签名**：它的作用是绑定「这份快照就是清单描述的这份数据」，能发现**损坏、截断、半成品、
 版本不明、清单与内容不一致、别的产品 / 别的结构**，**不能**防止有人把清单与快照一起整体伪造
-（自测里就专门构造了「清单摘要同步改对、但结构与本产品不符」的负例，靠**真实结构校验**而不是摘要拦住）。
+（自测里就专门构造了「清单摘要同步改对、但结构与本产品不符」的负例，靠**真实结构校验**而不是摘要拦住；
+本轮又补了「只改外键 `ON DELETE` / `ON UPDATE` 动作、列 / 主键 / 数据 / 迁移记录全不变、并将清单摘要
+一并重算」的伪结构负例，源库与快照两侧均被 `foreign_key_actions` 拦住）。
 若后续需要防伪，应在 LOCAL-06 的审计部分引入签名 / 校验和登记，本子包不假装已具备。
 
 ### 3.3 写入耐久顺序（实际执行的步骤）
@@ -169,7 +171,7 @@
 |---|---|---|
 | 产品 | `youshu-workbench` | `backup_app_unsupported` |
 | 清单格式 | `youshu-workbench-local-backup` × `formatVersion = 1` | `backup_format_unsupported` |
-| schema / 结构 | **恰好当前真实结构版本 v3**（列 / 类型 / NOT NULL / 主键 / UNIQUE / 外键 / 迁移记录全量校验） | 更高版本（未来 v4+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated` |
+| schema / 结构 | **恰好当前真实结构版本 v3**（列 / 类型 / NOT NULL / 主键 / UNIQUE / 外键目标列与动作 / 迁移记录全量校验） | 更高版本（未来 v4+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated` |
 | 应用版本 | **仅记录**（校验「存在且为非空字符串」），不参与兼容判定 | 缺失 / 类型不合法 → `manifest_invalid`；不同版本号**不会**被拒绝 |
 
 - 为什么**只支持 v3**：本模块校验的是**具体结构**（每张表、每个关键列与约束、迁移记录连续性）。
@@ -179,6 +181,14 @@
 - **表清单与内容摘要是动态的**：`structure.tables` 从 `sqlite_master` 实时计算，每表摘要也逐表计算，
   因此未来新增表会被自动纳入绑定、并因「未在本模块结构规范内」而**被拒绝**（`structure_invalid` /
   `unexpected_tables`）——这正是「不得把 v4 当成已支持」的兜底。
+- **外键动作也是结构契约**：真实 v3 DDL 里所有外键都是 `ON DELETE CASCADE` + 默认 `ON UPDATE NO ACTION`
+  （匹配语义默认 `NONE`），这不是风格差异而是业务语义——删除账套依赖级联。只改动作的伪结构
+  （例如把 `periods.account_set_id` 的 `ON DELETE CASCADE` 改成 `NO ACTION`）列 / 主键 / 数据 / 迁移记录
+  都可以完全不变、内容摘要也完全一致，但恢复后真实「删除账套」会抛外键错误。因此本模块按
+  `PRAGMA foreign_key_list` 的**外键分组**（多列外键整体比较）逐项比对 `ON DELETE` / `ON UPDATE` /
+  `MATCH`，并把未声明的额外外键也当作结构不符（`foreign_key_actions` / `unexpected_foreign_keys`）。
+  未来 v4 若有不同动作，必须在该外键条目上逐条显式声明（`actions`），**不得**放宽成「任一动作均可」
+  或关闭外键检查。
 - **v4 合并后必须重验**：LOCAL-02（#47）合并 schema v4 后，**必须**在最新 main 上按真实契约扩展
   `TABLE_STRUCTURE`（列 / 约束 / 迁移记录）、重跑 `node test/local-backup.test.mjs`，并复核是否需要
   提升 `formatVersion`。模块导出的 `SUPPORTED_SCHEMA_VERSION` 与产品 `IMPORT_SCHEMA_VERSION`
@@ -202,11 +212,15 @@
 7. **真实结构校验**（`TABLE_STRUCTURE`，schema v3）：
    - 必需表齐全（8 张核心会计表 + `schema_migrations` / `schema_backups` + 5 张 `import_*`），
      且没有本规范之外的业务表；
-   - 每张表的列名集合、声明类型、`NOT NULL`、主键列与顺序、UNIQUE 约束列组、外键
-     （本表列 → 目标表列）全部匹配；
+   - 每张表的列名集合、声明类型、`NOT NULL`、主键列与顺序、UNIQUE 约束列组全部匹配；
+   - 外键按 `PRAGMA foreign_key_list` 的分组（`id`）与期望外键**一对一**整体比对：本表列组 → 目标表列组
+     **以及** `ON DELETE` / `ON UPDATE` / `MATCH` 动作；每个实际分组都要验动作，且不接受未声明的额外
+     外键与重复声明（同列组同目标多个分组）（多列外键按 `seq` 聚合，不只比单个目标列）；
+     只改动作的伪结构 → `foreign_key_actions`，重复声明 → `foreign_key_duplicate`；
    - `schema_migrations` 记录必须是从 1 到当前版本**连续**、`applied_at` 可解析；
    - `schema_backups` 必须至少有一条迁移前备份记录，形状（版本 / 路径 / 时间 / integrity）合法；
-   - 任一项不成立 → `structure_invalid`（明细只含问题类型、表名、列名、计数）。
+   - 任一项不成立 → `structure_invalid`（明细只含问题类型、表名、列名、计数，以及约束动作关键字
+     如 `CASCADE` / `NO ACTION` / `NONE`；**不含**业务原文）。
      结构指纹不成立 / 缺表 → 判定非本产品库；
 8. 实际 schema 版本与清单 `structure.schemaVersion`、`source.schemaVersion` 一致，
    `structure.migrations` 与真实迁移记录逐项一致，`user_version` 一致；
@@ -410,7 +424,8 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
    此时需要先人工核对（本包**不提供**修复工具，也不会替库做迁移）。
 3. **只支持当前 v3 结构**（§4）：v0 / v1 / v2 旧库给 `schema_outdated`，必须先用当前产品入口升级；
    v4 合并后必须扩展结构规范并重验。
-4. **清单无签名**（§3.2）：防损坏 / 防不一致，不防整体伪造；结构校验能拦住「结构不符」，
+4. **清单无签名**（§3.2）：防损坏 / 防不一致，不防整体伪造；结构校验能拦住「结构不符」
+   （含只改外键 `ON DELETE` / `ON UPDATE` 动作的伪结构，以及重复声明同列外键的伪结构），
    但拦住的是结构而不是恶意同构伪造。
 5. **内容摘要是全表扫描**：大库（几十万凭证）备份 / 验证会明显变慢，且内存占用随单表行数增长
    （逐行规范序列化）；当前按本机单用户规模设计，未做增量 / 分块优化。
@@ -432,7 +447,11 @@ node test/local-backup.test.mjs
 ```
 
 覆盖与真实结果见交接文档 [handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md) §3：
-本轮返工后的最终六文件上为 **15 / 15 通过，exit 0**；同一轮另跑的受影响回归为
-`import-incremental` 49 / 49、`import-incremental-http` 22 / 22、`smoke` 28 / 28（均 exit 0）。
+本轮**外键重复声明补修后**的六文件上为 **16 / 16 通过，exit 0**。更早的冻结候选状态必须分开看：
+head `829541a`（六文件源码 `ddadb03`）的 **15 / 15** 因终审 P2 外键动作漏洞**未最终通过**；
+外键动作返工后的 16 / 16（按目标键建 `Map`）又因重复声明外键可绕过而**未最终通过**，
+已被本轮的一对一外键分组比对与新增负例取代。`import-incremental` 49 / 49、
+`import-incremental-http` 22 / 22、`smoke` 28 / 28 是**上一轮返工后**的受影响回归结果，
+本轮只改了本包 6 个文件、未动任何共享源码，因此**未重跑**那三套（不把旧结果当成新证据）。
 该套件**未**接入 `scripts/test-all.mjs`（`test-all.mjs` 是共享文件，不在本包文件所有权内），
 因此 `npm test` 暂不包含本套件。
