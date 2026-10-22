@@ -147,6 +147,36 @@ const periodOf = (obj, key) => {
   const v = text(obj, key);
   return typeof v === "string" && PROJ_PERIOD_RE.test(v) ? v : undefined;
 };
+/**
+ * 投影期间的固定值域：必须是合法 `YYYY-MM`。
+ * 只做「存在 + 类型」校验不够：自由 ASCII token 也能通过 token 白名单，等于把原值伪装成安全值。
+ */
+const requirePeriod = (obj, key) => {
+  const v = periodOf(obj, key);
+  if (v === undefined) throw invalidSummary(key);
+  return v;
+};
+/** 固定枚举：缺失 / 未登记原值一律失败，绝不把任意小写 ASCII 当受控 token。 */
+const requireEnumToken = (table, obj, key) => {
+  const token = enumToken(table, requireText(obj, key));
+  if (token === undefined) throw invalidSummary(key);
+  return token;
+};
+/** 固定取值集合（代码常量域，例如凭证状态 / 资产种类 / 追溯状态）。 */
+const requireChoice = (obj, key, choices) => {
+  const v = requireText(obj, key);
+  if (!choices.includes(v)) throw invalidSummary(key);
+  return v;
+};
+const ASSET_KIND_CHOICES = Object.freeze(["fixed", "intangible"]);
+const VOUCHER_STATUS_CHOICES = Object.freeze(["draft", "posted"]);
+const PERIOD_STATUS_CHOICES = Object.freeze(["open", "closed"]);
+const ASSET_KIND_TOKENS = dict({ fixed: "fixed", intangible: "intangible" });
+// 与 import-incremental.mjs 的 VOUCHER_STATE 一一对应；"inconsistent" 是批次审计里既有的复核标记。
+const TRACE_STATE_TOKENS = dict({
+  ok: "ok", inconsistent: "inconsistent", missing: "missing", unposted: "unposted",
+  unverified: "unverified", modified: "modified", other_account_set: "other_account_set",
+});
 /** 数组长度也走 data 属性描述符，避开 `arr.length` 的 Proxy get 陷阱。 */
 const listLen = (arr) => {
   const n = prop(arr, "length");
@@ -387,9 +417,9 @@ const voucherListSummary = (value) => {
   for (let i = 0; i < length; i++) {
     const v = at(prop(list, i));
     entries += listLen(requireArray(v, "entries"));
-    const status = requireText(v, "status");
+    const status = requireChoice(v, "status", VOUCHER_STATUS_CHOICES);
     if (status === "posted") posted++;
-    else if (status === "draft") draft++;
+    else draft++;
   }
   const debit = sumFieldEntries(list, "debit");
   const credit = sumFieldEntries(list, "credit");
@@ -424,8 +454,8 @@ const voucherDetailSummary = (value) => {
   const debit = sumField(entries, "debit");
   const credit = sumField(entries, "credit");
   return {
-    voucherId: requirePositiveInt(v, "id"), period: requireText(v, "period"),
-    status: requireText(v, "status"),
+    voucherId: requirePositiveInt(v, "id"), period: requirePeriod(v, "period"),
+    status: requireChoice(v, "status", VOUCHER_STATUS_CHOICES),
     lineCount: listLen(entries), totalDebit: money(debit), totalCredit: money(credit),
     balanced: Math.abs(debit - credit) < 0.005,
   };
@@ -440,8 +470,7 @@ const accountDirectorySummary = (value) => {
   let leaf = 0, contra = 0;
   for (let i = 0; i < length; i++) {
     const account = at(prop(accounts, i));
-    const token = enumToken(CATEGORY_TOKENS, requireText(account, "category"));
-    if (token) counts[token]++;
+    counts[requireEnumToken(CATEGORY_TOKENS, account, "category")]++;
     if (requireNum(account, "is_leaf") === 1) leaf++;
     if (requireNum(account, "contra") === 1) contra++;
   }
@@ -450,8 +479,8 @@ const accountDirectorySummary = (value) => {
 // 明细账：兼容 finance_query（裸 generalLedger）与 ledger_query（带 accountSetId 的包装）。
 const ledgerSummary = (value) => {
   const ledger = at(value);
-  const period = requireText(ledger, "period");
-  const direction = requireText(ledger, "direction");
+  const period = requirePeriod(ledger, "period");
+  const direction = requireEnumToken(DIRECTION_TOKENS, ledger, "direction");
   const items = requireArray(ledger, "items");
   const opening = requireRecord(ledger, "opening");
   const openingDebit = requireNum(opening, "debit");
@@ -460,7 +489,7 @@ const ledgerSummary = (value) => {
   const periodCredit = sumField(items, "credit");
   return {
     period,
-    direction: enumToken(DIRECTION_TOKENS, direction),
+    direction,
     itemCount: listLen(items),
     openingDebit: money(openingDebit), openingCredit: money(openingCredit),
     periodDebit: money(periodDebit), periodCredit: money(periodCredit),
@@ -484,9 +513,9 @@ const periodListSummary = (value) => {
   const length = listLen(items);
   let open = 0, closed = 0;
   for (let i = 0; i < length; i++) {
-    const status = requireText(at(prop(items, i)), "status");
+    const status = requireChoice(at(prop(items, i)), "status", PERIOD_STATUS_CHOICES);
     if (status === "open") open++;
-    else if (status === "closed") closed++;
+    else closed++;
   }
   return { periodCount: length, openPeriodCount: open, closedPeriodCount: closed };
 };
@@ -511,7 +540,7 @@ const assetListSummary = (value) => {
   let fixed = 0, intangible = 0, cost = 0, accumulated = 0, remaining = 0;
   for (let i = 0; i < length; i++) {
     const card = at(prop(cards, i));
-    const kind = requireText(card, "kind");
+    const kind = requireChoice(card, "kind", ASSET_KIND_CHOICES);
     if (kind === "intangible") intangible++;
     else fixed++;
     cost += requireNum(card, "original_cost");
@@ -534,19 +563,20 @@ const batchAuditSummary = (value) => {
   const length = listLen(trace);
   let ok = 0, inconsistent = 0;
   for (let i = 0; i < length; i++) {
-    const state = requireText(at(prop(trace, i)), "state");
+    // 状态域与 VOUCHER_STATE 对齐：非 ok 一律计入需复核，不再静默漏计。
+    const state = requireEnumToken(TRACE_STATE_TOKENS, at(prop(trace, i)), "state");
     if (state === "ok") ok++;
-    else if (state === "inconsistent") inconsistent++;
+    else inconsistent++;
   }
-  const batchStatus = requireText(batch, "status");
-  const batchMode = requireText(batch, "mode");
+  const batchStatus = requireEnumToken(BATCH_STATUS_TOKENS, batch, "status");
+  const batchMode = requireEnumToken(MODE_TOKENS, batch, "mode");
   const accountSetId = int(batch, "accountSetId");
   if (accountSetId === undefined && prop(batch, "accountSetId") !== undefined
     && prop(batch, "accountSetId") !== null) throw invalidSummary("batch.accountSetId");
   const voucherCount = requireNum(v, "voucherCount");
   return {
-    batchStatus: enumToken(BATCH_STATUS_TOKENS, batchStatus),
-    batchMode: enumToken(MODE_TOKENS, batchMode),
+    batchStatus,
+    batchMode,
     accountSetId,
     traceCount: length, okTraceCount: ok, inconsistentTraceCount: inconsistent,
     voucherCount,
@@ -561,9 +591,11 @@ const QUERY_SPECS = dict({
     const set = at(value);
     return {
       accountSetId: requirePositiveInt(set, "id"),
-      startPeriod: requireText(set, "start_period"),
-      taxpayerType: enumToken(TAXPAYER_TOKENS, requireText(set, "taxpayer_type")),
-      accountingStandard: enumToken(STANDARD_TOKENS, requireText(set, "accounting_standard")),
+      startPeriod: requirePeriod(set, "start_period"),
+      // 税种 / 准则在库内是自由文本（createAccountSet 不限制），未知取值降级为受控 "unknown"；
+      // 期间与状态不做这种降级：非法期间 / 状态必须失败。
+      taxpayerType: enumToken(TAXPAYER_TOKENS, requireText(set, "taxpayer_type")) ?? "unknown",
+      accountingStandard: enumToken(STANDARD_TOKENS, requireText(set, "accounting_standard")) ?? "unknown",
       hasDisplayName: requireText(set, "name").length > 0,
     };
   },
@@ -581,7 +613,7 @@ const QUERY_SPECS = dict({
     const totalLiabilities = requireNum(totals, "liabilities");
     const totalEquity = requireNum(totals, "equity");
     return {
-      period: requireText(sheet, "period"),
+      period: requirePeriod(sheet, "period"),
       assets: money(totalAssets), liabilities: money(totalLiabilities), equity: money(totalEquity),
       balanced: prop(sheet, "balanced") === true
         || Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.005,
@@ -598,7 +630,7 @@ const QUERY_SPECS = dict({
     const current = requireRecord(statement, "current");
     const ytd = requireRecord(statement, "ytd");
     return {
-      period: requireText(statement, "period"),
+      period: requirePeriod(statement, "period"),
       currentRevenue: money(requireNum(current, "营业收入")),
       currentCost: money(requireNum(current, "营业成本")),
       currentExpenses: money(requireNum(current, "销售费用") + requireNum(current, "管理费用")
@@ -623,7 +655,7 @@ const QUERY_SPECS = dict({
     const investingRows = requireArray(statement, "investing");
     const financingRows = requireArray(statement, "financing");
     return {
-      period: requireText(statement, "period"),
+      period: requirePeriod(statement, "period"),
       operating: money(operating), investing: money(investing), financing: money(financing),
       netIncrease: money(netIncrease),
       cashBegin: money(begin), cashEnd: money(end), cashChange: money(end - begin),
@@ -637,7 +669,7 @@ const QUERY_SPECS = dict({
     const closingDebit = requireNum(totals, "closing_debit");
     const closingCredit = requireNum(totals, "closing_credit");
     return {
-      period: requireText(balance, "period"),
+      period: requirePeriod(balance, "period"),
       lineCount: listLen(requireArray(balance, "lines")),
       openingDebit: money(requireNum(totals, "opening_debit")),
       openingCredit: money(requireNum(totals, "opening_credit")),
@@ -653,9 +685,9 @@ const QUERY_SPECS = dict({
     const periodCount = listLen(periods);
     let open = 0, closed = 0;
     for (let i = 0; i < periodCount; i++) {
-      const status = requireText(at(prop(periods, i)), "status");
+      const status = requireChoice(at(prop(periods, i)), "status", PERIOD_STATUS_CHOICES);
       if (status === "open") open++;
-      else if (status === "closed") closed++;
+      else closed++;
     }
     const balance = requireRecord(summary, "trial_balance");
     const totals = requireRecord(balance, "totals");
@@ -663,7 +695,7 @@ const QUERY_SPECS = dict({
     const closingCredit = requireNum(totals, "closing_credit");
     return {
       periodCount, openPeriodCount: open, closedPeriodCount: closed,
-      period: requireText(balance, "period"),
+      period: requirePeriod(balance, "period"),
       closingDebit: money(closingDebit), closingCredit: money(closingCredit),
       balanced: Math.abs(closingDebit - closingCredit) < 0.005,
     };
@@ -766,7 +798,8 @@ const WRITE_SPECS = dict({
       const v = at(value);
       return {
         assetId: int(v, "id"),
-        kind: text(v, "kind") === "intangible" ? "intangible" : "fixed",
+        // 未登记 kind 不再一律标成 fixed：只投影登记过的种类。
+        kind: enumToken(ASSET_KIND_TOKENS, text(v, "kind")),
         startPeriod: periodOf(v, "start_period"),
         usefulLifeMonths: num(v, "useful_life_months"),
         originalCost: money(num(v, "original_cost")),

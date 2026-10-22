@@ -1,10 +1,11 @@
 # 任务单 · LOCAL-08 财务输出边界（模型摘要 / 本机读取分道 + 普通工具适配层）
 
 - 类型：独立后端模块 + 适配层 + 出站信封校验 + 独立验收测试 + 契约文档
-- 状态（分两段，**不要混读**）：
+- 状态（分段，**不要混读**）：
   1. **纯策略模块已合并**：经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；
   2. **本阶段（适配层）已实现并自测通过，未挂载**：普通工具适配层 + 真实（临时库）调用验收 + MCP 出站信封校验 + 契约 / 任务单 / 交接更新。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口（`agent-tools.mjs` / `server.mjs` / MCP 注册与传输 / `scripts/test-all.mjs`）归 **LOCAL-02（Issue #47，返工中）**，本轮未改。Issue #44 **保持 OPEN**。
-  3. **review1 五项独立审查返工已完成并自测通过（未提交 / 未合并）**：F1 transport 允许键校验、F2 参数快照防串账、F3 摘要必需字段、F4 真实错误码 / create+result、F5 写结果未知语义。最终独立审查、PR、合并仍由管理者后续执行。
+  3. **review1 五项独立审查返工已完成并自测通过（未提交 / 未合并）**：F1 transport 允许键校验、F2 参数快照防串账、F3 摘要必需字段、F4 真实错误码 / create+result、F5 写结果未知语义。
+  4. **review3 三项定向返工已完成并自测通过（未提交 / 未合并）**：F1 transport 每个允许键独立校验 + 纯数据快照（悬空 `projectionDropped`、任意层级访问器）、F2 投影期间 / 状态固定值域、F3 `finance_query` 数据层账套核对。**最终独立审查、PR、合并仍由管理者后续执行**。
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`
 - 实际分支：`codex/huxiaoyang-code/local-08-adapter`（由管理者从上述 main 建立；员工未执行任何 Git 操作）
 - 交付契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)；交接：[handoffs/LOCAL-08](../handoffs/LOCAL-08.md)
@@ -46,7 +47,7 @@
 | # | 文件 | 类型 |
 |---|---|---|
 | 1 | `06-workbench/server/finance-output-policy.mjs` | 既有（本阶段扩 spec / 出口 / 错误码 / 遍历修正） |
-| 2 | `06-workbench/test/finance-output-policy.test.mjs` | 既有（28 → 31 项，旧 28 项含义保留） |
+| 2 | `06-workbench/test/finance-output-policy.test.mjs` | 既有（28 → 32 项，旧 28 项含义保留） |
 | 3 | `06-workbench/server/finance-model-adapter.mjs` | **新增** |
 | 4 | `06-workbench/test/finance-model-adapter.test.mjs` | **新增**（真实临时库） |
 | 5 | `05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` | **新增** |
@@ -71,17 +72,17 @@
   10. 敏感 / 未知额外字段、错误契约版本、非 `model` channel、`rawValuesIncluded:true`、未登记 operation / nodeId、畸形 projection / ref / applied 全部拒绝，且不回显字段名或值。
   11. 非 JSON / 空 / 数组响应回固定码，不回声响应片段；运输失败固定常量，写场景 `retriable:false` + `writeOutcome:"unknown"`。
 - 策略模块：
-  12. 既有 28 项含义不削弱（实际仍全过），新增 3 项覆盖：数组接受期间、普通工具 DTO spec + 无引用摘要、共享引用（DAG）合法 / 真循环仍拒绝。
+  12. 既有 28 项含义不削弱（实际仍全过），后续新增覆盖：数组接受期间、普通工具 DTO spec + 无引用摘要、共享引用（DAG）合法 / 真循环仍拒绝，以及 review3 的投影期间 / 状态固定值域。
 - 回归：实跑领域回归（见 §8），并在报告中写清未测范围（真实 HTTP / MCP 挂载、真实账套、跨重启）。
 - 验证命令与期望：
 
 ```bash
 cd 06-workbench
-node test/finance-output-policy.test.mjs      # 31/31 passed, exit 0
-node test/finance-model-adapter.test.mjs      # 15/15 passed, exit 0
+node test/finance-output-policy.test.mjs      # 32/32 passed, exit 0
+node test/finance-model-adapter.test.mjs      # 17/17 passed, exit 0
 
 # 仓库根目录
-node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   # 11/11 passed, exit 0
+node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   # 14/14 passed, exit 0
 ```
 
 - 不通过处理：退回同一员工修复，记录阻塞；不得删改旧断言或放宽到「只要不报错」。
@@ -118,9 +119,9 @@ node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   
 
 | 套件 | 命令（工作目录） | 结果 |
 |---|---|---|
-| 策略模块 | `node test/finance-output-policy.test.mjs`（`06-workbench`） | `31/31 passed`，exit 0 |
-| 适配层 | `node test/finance-model-adapter.test.mjs`（`06-workbench`） | `15/15 passed`，exit 0 |
-| transport | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs`（仓库根） | `11/11 passed`，exit 0 |
+| 策略模块 | `node test/finance-output-policy.test.mjs`（`06-workbench`） | `32/32 passed`，exit 0 |
+| 适配层 | `node test/finance-model-adapter.test.mjs`（`06-workbench`） | `17/17 passed`，exit 0 |
+| transport | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs`（仓库根） | `14/14 passed`，exit 0 |
 | 领域回归 | `node test/accounting-guards.test.mjs`（`06-workbench`） | `23/23 通过`，exit 0 |
 | 领域回归 | `node test/accounting-derived.test.mjs`（`06-workbench`） | `31/31 通过`，exit 0 |
 | 领域回归 | `node test/import-incremental.test.mjs`（`06-workbench`） | `49/49 通过`，exit 0 |
@@ -143,6 +144,19 @@ node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   
 
 - 本轮未提交、未推送、未合并；不得把本次自测写成最终独立审查通过。
 - 仍未完成：共享 HTTP / Agent / MCP / CLI 接线（LOCAL-02 #47 释放所有权后另行小 PR）、3 个套件登记进 `scripts/test-all.mjs`、LOCAL-02 合并后的新期末 / 资产补项工具（工具名与 DTO 稳定后按真实 DTO 补映射 + spec + 测试）。
+
+### 8.2 review3 三项定向返工（本轮实际发生）
+
+| 项 | 残留复现 | 修复 | 真实回归 |
+|---|---|---|---|
+| F1（P1） | transport 只在 `projection` 存在时验 `projectionDropped`：真实失败写信封删 `projection` + 对象型 `projectionDropped` 仍 `ok:true` 返回原文；合法 query 信封可选 `tool` 换成 enumerable getter 被当缺省，返回原对象后 `JSON.stringify` 触发泄漏 | 每个出现的允许键独立验类型 / 值域 / 分支语义；悬空 `projectionDropped` 与缺失伴随字段拒绝；`accountSetIdSource` 与分支绑定；校验后只返回**重建的纯数据副本**，所有层级访问器 / Symbol / 非普通原型 / `toJSON` 拒绝；普通 JSON + 对象 getter 两路、success/failure/dropped 矩阵 | transport 14/14，含 dropped 对象 / 负数 / 非整数 / 超限 / 悬空、getter 不执行、返回副本可改不污染原对象 |
+| F2（P1） | 摘要必需字段从 `periodOf` / 状态枚举退化为 `requireText`：`data.period='synthetic_sensitive_period'` 与 `voucher.detail.status` 任意 token 均原文泄漏 | 新增 `requirePeriod` / `requireEnumToken` / `requireChoice`；期间严格 `YYYY-MM`、状态 / 分类 / 方向 / 种类 / 批次 / 追溯固定枚举；逐点审 `requireText`；不依赖下层 transport 兜底 | 适配层 17/17：真实 ASCII 标记 / 非法月份 / 缺字段全部 `model_result_invalid`，真 0 / 普通工具仍可调用；策略 32/32 同步固定值域 |
+| F3（P2） | scope 只看 wrapper；`finance_query` 请求 A 实际返回 B `data` 时 wrapper 无 id 漏过，得到 A 引用 + B 数据 | 按 node 核对可信 data 字段：账套 `data.id`、凭证 `data.account_set_id`、凭证列表 / 科目体系逐行；普通 `account_list` / `asset_list` 行也核对；不一致 `model_scope_mismatch` 且不建引用；聚合节点不臆造必需字段 | 适配层 17/17：注入 `executeRaw` 仍调真实 `callAgentTool` 走 B 库，账套 / 凭证 / 科目 / 列表均拒绝且 refs=0；试算平衡等无 scope 字段节点仍通过 |
+
+- 三层本轮实际输出：策略 `32/32`、适配层 `17/17`、transport `14/14`，均 exit 0。
+- 已通过部分未回退：调用参数有界深快照 / alias / getter / 继承拒绝；合法 create / node / batch / unimplemented / 错误码与 dry-run；真实发出后断连 unknown 不自动重试（原回归仍绿）。
+- 本轮未跑整套旧领域（按任务单要求只在根因涉及真实业务接口处定向补）；**未提交 / 未推送 / 未合并**。
+- 仍未完成：最终独立审查、共享 HTTP / Agent / MCP / CLI 接线（LOCAL-02 #47 释放所有权后另行小 PR）、3 个套件登记进 `scripts/test-all.mjs`、LOCAL-02 合并后的新期末 / 资产补项工具。不得写成已验收。
 
 ## 9. 真实数据边界
 

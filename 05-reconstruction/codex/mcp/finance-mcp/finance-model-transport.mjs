@@ -30,6 +30,67 @@ const prop = (obj, key) => {
 const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
+// ---------------------------------------------------------------- 纯数据快照
+// 校验器只接受「自有 data 属性」构建的普通对象 / 数组，并且**返回重建的副本**：
+// 即使调用方传入 enumerable getter / toJSON / Symbol / 非普通原型，也不会在 JSON.stringify
+// 阶段执行用户代码或带出未校验属性。快照本身有界，避免恶意输入撑爆内存。
+const SNAPSHOT_MAX_DEPTH = 8;
+const SNAPSHOT_MAX_NODES = 4096;
+const SNAPSHOT_MAX_ARRAY = 256;
+const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function plainSnapshot(root) {
+  let nodes = 0;
+  const ancestors = new Set();
+  const walk = (value, depth) => {
+    nodes++;
+    if (nodes > SNAPSHOT_MAX_NODES) throw new Error("snapshot");
+    if (value === null) return null;
+    const type = typeof value;
+    if (type === "string") return value;
+    if (type === "number") {
+      if (!Number.isFinite(value)) throw new Error("snapshot");
+      return value;
+    }
+    if (type === "boolean") return value;
+    // 函数 / Symbol / BigInt / undefined 都不是合法信封数据。
+    if (type !== "object") throw new Error("snapshot");
+    if (depth > SNAPSHOT_MAX_DEPTH || ancestors.has(value)) throw new Error("snapshot");
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        const length = prop(value, "length");
+        if (!Number.isSafeInteger(length) || length < 0 || length > SNAPSHOT_MAX_ARRAY) throw new Error("snapshot");
+        if (Object.getOwnPropertySymbols(value).length > 0) throw new Error("snapshot");
+        if (Object.keys(value).length !== length) throw new Error("snapshot");
+        const out = new Array(length);
+        for (let i = 0; i < length; i++) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+          if (!descriptor || !own(descriptor, "value")) throw new Error("snapshot");
+          out[i] = walk(descriptor.value, depth + 1);
+        }
+        return out;
+      }
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) throw new Error("snapshot");
+      if (Object.getOwnPropertySymbols(value).length > 0) throw new Error("snapshot");
+      const out = {};
+      for (const key of Object.keys(value)) {
+        if (BLOCKED_KEYS.has(key)) throw new Error("snapshot");
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !own(descriptor, "value")) throw new Error("snapshot");
+        // 与校验阶段的 prop() 语义一致：显式 undefined 视为缺省，不进入副本。
+        if (descriptor.value === undefined) continue;
+        out[key] = walk(descriptor.value, depth + 1);
+      }
+      return out;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  return walk(root, 0);
+}
+
 const MONEY_LIMIT = 1e12;
 const COUNT_LIMIT = 1e15;
 const KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
@@ -442,9 +503,13 @@ function validateCatalog(catalog) {
 // ---------------------------------------------------------------- 信封校验
 function validateEnvelope(data, registries) {
   try {
-    return validateEnvelopeInner(data, registries);
+    const result = validateEnvelopeInner(data, registries);
+    if (result.ok !== true) return result;
+    // 只返回**重建的纯数据副本**：原对象上的 getter / Symbol / 非普通原型 / toJSON
+    // 既不会在校验阶段被执行，也不可能在后续 JSON.stringify 时带出未校验属性。
+    return { ok: true, envelope: plainSnapshot(result.envelope) };
   } catch {
-    // getter / Proxy 陷阱抛错也绝不能把原文带出去：统一固定结果。
+    // getter / Proxy / 快照超界等异常也绝不能把原文带出去：统一固定结果。
     return invalid("envelope_invalid");
   }
 }
@@ -495,6 +560,7 @@ function validateEnvelopeInner(data, registries) {
   const scope = prop(data, "scope");
   if (scope !== undefined) {
     if (typeof scope !== "string" || !ENVELOPE_SCOPES.includes(scope)) return invalid("envelope_invalid");
+    if (category === undefined) return invalid("envelope_invalid");
     const allowedScopes = SCOPES_BY_CATEGORY[category];
     if (!allowedScopes || !allowedScopes.includes(scope)) return invalid("envelope_invalid");
   } else if (ok) {
@@ -528,65 +594,116 @@ function validateEnvelopeInner(data, registries) {
 
   // ⑤ 账套 ID / 来源：成功信封必须有账套字段；global/static 明确为 null
   const accountSetId = prop(data, "accountSetId");
-  if (accountSetId !== undefined && accountSetId !== null) {
+  const hasAccountSetId = own(data, "accountSetId");
+  if (hasAccountSetId && accountSetId !== null) {
     if (!validNumberField(accountSetId, { integer: true, max: 1e15 }) || accountSetId <= 0) {
       return invalid("envelope_invalid");
     }
   }
-  if (ok && !own(data, "accountSetId")) return invalid("envelope_invalid");
-  if (ok) {
-    if (scope === "global" && accountSetId !== null) return invalid("envelope_invalid");
-  }
+  if (ok && !hasAccountSetId) return invalid("envelope_invalid");
+  if (ok && scope === "global" && accountSetId !== null) return invalid("envelope_invalid");
   const source = prop(data, "accountSetIdSource");
-  if (source !== undefined) {
+  if (own(data, "accountSetIdSource")) {
     if (typeof source !== "string" || !ACCOUNT_SET_ID_SOURCES.includes(source)) return invalid("envelope_invalid");
     if (!ok) return invalid("envelope_unexpected_field");
-    if (!(category === "write" || category === "create" || scope === "batch")) {
-      return invalid("envelope_unexpected_field");
-    }
+    // 来源与分支语义绑定：写用入参、create / batch 只认真实结果。
+    const sourceAllowed = (source === "argument" && category === "write")
+      || (source === "result" && (category === "create" || scope === "batch"));
+    if (!sourceAllowed) return invalid("envelope_unexpected_field");
   }
 
   // ⑥ 引用字段：成功 = 可用的 process_memory 引用或明确降级；失败 = 只能 null / none
   const localRef = prop(data, "localRef");
+  const hasLocalRef = own(data, "localRef");
   const refPersistence = prop(data, "refPersistence");
+  const hasPersistence = own(data, "refPersistence");
   const refExpiresAt = prop(data, "refExpiresAt");
+  const hasExpires = own(data, "refExpiresAt");
   const refUnavailable = prop(data, "refUnavailable");
-  if (localRef !== undefined && !validRef(localRef)) return invalid("envelope_ref_invalid");
-  if (refPersistence !== undefined && refPersistence !== "process_memory" && refPersistence !== "none") {
+  const hasUnavailable = own(data, "refUnavailable");
+  if (hasLocalRef && !validRef(localRef)) return invalid("envelope_ref_invalid");
+  if (hasPersistence && refPersistence !== "process_memory" && refPersistence !== "none") {
     return invalid("envelope_ref_invalid");
   }
-  if (refExpiresAt !== undefined) {
+  if (hasExpires) {
     const parsed = typeof refExpiresAt === "string" && ISO_RE.test(refExpiresAt) ? Date.parse(refExpiresAt) : NaN;
     if (!Number.isFinite(parsed)) return invalid("envelope_ref_invalid");
   }
-  if (refUnavailable !== undefined
+  if (hasUnavailable
     && (typeof refUnavailable !== "string" || !REF_UNAVAILABLE_TOKENS.has(refUnavailable))) {
     return invalid("envelope_ref_invalid");
   }
   if (typeof localRef === "string") {
-    if (refPersistence !== "process_memory" || refExpiresAt === undefined || refUnavailable !== undefined) {
+    if (refPersistence !== "process_memory" || !hasExpires || hasUnavailable) {
       return invalid("envelope_ref_invalid");
     }
   } else if (localRef === null) {
-    if (refPersistence !== "none" || refExpiresAt !== undefined) return invalid("envelope_ref_invalid");
+    // 失败信封的引用字段由分支规则统一判“不适用”；这里只查真正的矛盾组合。
+    if (hasExpires) return invalid("envelope_ref_invalid");
+    if (ok && refPersistence !== "none") return invalid("envelope_ref_invalid");
+    if (!ok && hasPersistence && refPersistence !== "none") return invalid("envelope_ref_invalid");
+  } else {
+    // 没有 localRef 时不允许出现任何引用伴随字段（悬空字段直接拒绝）。
+    if (hasPersistence || hasExpires || hasUnavailable) return invalid("envelope_ref_invalid");
   }
   if (ok) {
-    if (!own(data, "localRef")) return invalid("envelope_invalid");
-    if (localRef === null && refUnavailable === undefined) return invalid("envelope_ref_invalid");
+    if (!hasLocalRef) return invalid("envelope_invalid");
+    if (localRef === null && !hasUnavailable) return invalid("envelope_ref_invalid");
     if (scope === "account_set" && accountSetId === null) {
       // 未绑定账套的写结果（dry-run / 未建账 / 写后降级）可以明确为 null；
       // 查询 / 上下文 / 静态结果仍必须有真实账套或明确的 global。
       const unboundWrite = (category === "write" || category === "create")
-        && localRef === null && refUnavailable !== undefined;
+        && localRef === null && hasUnavailable;
       if (!unboundWrite) return invalid("envelope_invalid");
     }
   } else {
     if (localRef !== undefined && localRef !== null) return invalid("envelope_ref_invalid");
-    if (refPersistence !== undefined && refPersistence !== "none") return invalid("envelope_ref_invalid");
-    if (refExpiresAt !== undefined) return invalid("envelope_ref_invalid");
+    if (hasPersistence && refPersistence !== "none") return invalid("envelope_ref_invalid");
+    if (hasExpires) return invalid("envelope_ref_invalid");
   }
 
-  // ⑦ 失败信封：只允许固定错误码，且 code/category/messageKey 必须自洽
+  const writeLike = category === "write" || category === "create";
+  const hasProjection = own(data, "projection");
+  const hasDropped = own(data, "projectionDropped");
+  const hasStatus = own(data, "applied") || own(data, "appliedReason") || own(data, "needsLocalReview");
+  const hasError = own(data, "error");
+  const hasCatalog = own(data, "catalog");
+
+  // ⑦ 分支许可先判：不适用字段直接拒绝（保持固定错误码），再验适用的值。
+  if (!ok) {
+    if (!writeLike) {
+      for (const key of [
+        "projection", "projectionDropped", "applied", "appliedReason", "needsLocalReview",
+        "localRef", "refPersistence", "refUnavailable", "catalog",
+      ]) {
+        if (own(data, key)) return invalid("envelope_unexpected_field");
+      }
+    }
+    if (!hasError) return invalid("envelope_error_shape_invalid");
+    if (hasCatalog) return invalid("envelope_unexpected_field");
+  } else {
+    if (hasError) return invalid("envelope_unexpected_field");
+    if (!writeLike && hasStatus) return invalid("envelope_unexpected_field");
+    if (writeLike && !hasStatus) return invalid("envelope_status_invalid");
+  }
+
+  // ⑧ projection / projectionDropped：**每个出现的键都独立校验**，不依赖伴随键。
+  if (hasProjection && !validProjection(prop(data, "projection"))) return invalid("envelope_projection_invalid");
+  if (hasDropped) {
+    const dropped = prop(data, "projectionDropped");
+    if (!validNumberField(dropped, { integer: true, max: 1e6 }) || dropped < 0) {
+      return invalid("envelope_projection_invalid");
+    }
+  }
+  // 悬空 / 缺失的伴随字段都拒绝：合法截断契约是「有 projection 才允许 dropped，且必须是计数」。
+  if (hasDropped && !hasProjection) return invalid("envelope_unexpected_field");
+  if (hasProjection && !hasDropped) return invalid("envelope_projection_invalid");
+  if (ok && !hasProjection) return invalid("envelope_invalid");
+
+  // ⑨ applied 三态：只在写类分支适用；存在即完整校验。
+  if (writeLike && !validateStatusFields(data)) return invalid("envelope_status_invalid");
+
+  // ⑩ 失败信封：只允许固定错误码，且 code/category/messageKey 必须自洽。
   if (!ok) {
     const error = prop(data, "error");
     if (!isPlainObject(error)) return invalid("envelope_error_shape_invalid");
@@ -603,51 +720,15 @@ function validateEnvelopeInner(data, registries) {
     }
     if (typeof retriable !== "boolean") return invalid("envelope_error_shape_invalid");
     if (typeof messageKey !== "string" || messageKey !== errorCode) return invalid("envelope_error_shape_invalid");
-    if (own(data, "catalog")) return invalid("envelope_unexpected_field");
-
-    const writeLike = category === "write" || category === "create";
-    if (!writeLike) {
-      for (const key of [
-        "projection", "projectionDropped", "applied", "appliedReason", "needsLocalReview",
-        "localRef", "refPersistence", "refUnavailable",
-      ]) {
-        if (own(data, key)) return invalid("envelope_unexpected_field");
-      }
-      return { ok: true, envelope: data };
-    }
-    if (!validateStatusFields(data)) return invalid("envelope_status_invalid");
-    if (own(data, "projection")) {
-      if (!validProjection(prop(data, "projection"))) return invalid("envelope_projection_invalid");
-      const dropped = prop(data, "projectionDropped");
-      if (!validNumberField(dropped, { integer: true, max: 1e6 }) || dropped < 0) {
-        return invalid("envelope_invalid");
-      }
-    }
-    return { ok: true, envelope: data };
+  } else if (own(data, "rawErrorIncluded")) {
+    return invalid("envelope_unexpected_field");
   }
 
-  // ⑧ 成功信封：必须有白名单投影；写类必须有 applied 三态
-  if (!own(data, "projection")) return invalid("envelope_invalid");
-  if (!validProjection(prop(data, "projection"))) return invalid("envelope_projection_invalid");
-  const dropped = prop(data, "projectionDropped");
-  if (!validNumberField(dropped, { integer: true, max: 1e6 }) || dropped < 0) {
-    return invalid("envelope_invalid");
-  }
-  if (own(data, "error")) return invalid("envelope_unexpected_field");
-  if (own(data, "rawErrorIncluded")) return invalid("envelope_unexpected_field");
-
-  const writeLike = category === "write" || category === "create";
-  if (writeLike) {
-    if (!validateStatusFields(data)) return invalid("envelope_status_invalid");
-  } else {
-    for (const key of ["applied", "appliedReason", "needsLocalReview"]) {
-      if (own(data, key)) return invalid("envelope_unexpected_field");
+  // ⑪ 静态目录：只允许固定代码常量，且必须是登记过的 node 集合。
+  if (hasCatalog) {
+    if (!ok || category !== "static" || toolName !== "finance_query_catalog") {
+      return invalid("envelope_unexpected_field");
     }
-  }
-
-  // ⑨ 静态目录：只允许固定代码常量，且必须是登记过的 node 集合
-  if (own(data, "catalog")) {
-    if (category !== "static" || toolName !== "finance_query_catalog") return invalid("envelope_unexpected_field");
     if (!validateCatalog(prop(data, "catalog"))) return invalid("envelope_invalid");
   }
 

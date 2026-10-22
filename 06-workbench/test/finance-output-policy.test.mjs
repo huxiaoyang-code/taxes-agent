@@ -963,5 +963,84 @@ await test('adapter-prep: 共享引用（DAG）是合法 DTO，不算循环；�
   expectCode(() => M.inspectRawValue(cyclic), 'output_policy_value_invalid');
 });
 
+await test('review3 F2: 投影期间 / 状态按固定值域（自由 ASCII 不当 token），真 0 保留', () => {
+  const { summarizeQueryResult } = M;
+  const income = (period) => ({
+    period,
+    current: { 营业收入: 0, 营业成本: 0, 销售费用: 0, 管理费用: 0, 财务费用: 0, 利润总额: 0, 净利润: 0 },
+    ytd: { 营业收入: 0, 净利润: 0 },
+  });
+
+  const ok = summarizeQueryResult('finance_query:report.income_statement', income('2026-01'));
+  assert.equal(ok.summaryUnavailable, false);
+  assert.equal(ok.projection.period, '2026-01');
+  assert.equal(ok.projection.currentRevenue, 0, '真实 0 必须保留');
+  assert.equal(ok.projection.ytdNetProfit, 0);
+
+  // 自由 ASCII / 非法月份都不算期间
+  for (const bad of ['synthetic_sensitive_period', '2026-13', '2026-1', '2026-00']) {
+    const broken = summarizeQueryResult('finance_query:report.income_statement', income(bad));
+    assert.equal(broken.summaryUnavailable, true, `period=${bad} 应失败`);
+    assert.deepEqual(broken.projection, {});
+  }
+  expectCode(
+    () => new FinanceOutputPolicy().wrapQuery('finance_query:report.income_statement', {
+      accountSetId: 5, value: income('synthetic_sensitive_period'),
+    }),
+    'output_policy_value_invalid',
+  );
+
+  // 凭证状态 / 期间状态 / 科目分类 / 资产种类 / 方向：未登记值一律失败
+  const detail = (status) => ({ id: 7, period: '2026-01', status, entries: [{ debit: 1, credit: 1 }] });
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', detail('posted')).summaryUnavailable, false);
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', detail('synthetic_sensitive_status')).summaryUnavailable, true);
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', detail('open')).summaryUnavailable, true, '凭证状态不接受期间状态');
+  assert.equal(summarizeQueryResult('finance_query:voucher.detail', { ...detail('posted'), period: 'synthetic_sensitive_period' }).summaryUnavailable, true);
+
+  const periodEnd = (status) => ({
+    periods: [{ period: '2026-01', status }],
+    trial_balance: { period: '2026-01', totals: { closing_debit: 0, closing_credit: 0 } },
+  });
+  assert.equal(summarizeQueryResult('finance_query:period_end.summary', periodEnd('open')).summaryUnavailable, false);
+  assert.equal(summarizeQueryResult('finance_query:period_end.summary', periodEnd('synthetic_sensitive_status')).summaryUnavailable, true);
+  assert.equal(summarizeQueryResult('finance_query:period_end.summary', periodEnd('posted')).summaryUnavailable, true, '期间状态不接受凭证状态');
+
+  const ledger = (direction) => ({
+    period: '2026-01', direction, opening: { debit: 0, credit: 0 }, items: [],
+  });
+  assert.equal(summarizeQueryResult('finance_query:ledger.general', ledger('debit')).summaryUnavailable, false);
+  assert.equal(summarizeQueryResult('finance_query:ledger.general', ledger('synthetic_sensitive_direction')).summaryUnavailable, true);
+
+  const accounts = (category) => summarizeQueryResult('account_list', {
+    items: [{ code: '1001', name: 'x', category, is_leaf: 1, contra: 0 }],
+  });
+  assert.equal(accounts('资产').summaryUnavailable, false);
+  assert.equal(accounts('synthetic_sensitive_category').summaryUnavailable, true);
+
+  const cards = (kind) => summarizeQueryResult('asset_list', [{
+    kind, original_cost: 0, accumulated: 0, remaining: 0,
+  }]);
+  assert.equal(cards('intangible').summaryUnavailable, false);
+  assert.equal(cards('synthetic_sensitive_kind').summaryUnavailable, true);
+
+  // 批次审计：追溯状态按固定域，非 ok 计入需复核（不再静默漏计）
+  const batch = (state) => ({
+    batch: {
+      status: 'completed', mode: 'create', accountSetId: 9,
+      result: { accountSetCreated: false, vouchersCreated: 1, vouchersDeduplicated: 0 },
+    },
+    sourceTrace: [{ state }],
+    voucherCount: 1,
+  });
+  const missing = summarizeQueryResult('book_import_batch', batch('missing'));
+  assert.equal(missing.summaryUnavailable, false);
+  assert.equal(missing.projection.okTraceCount, 0);
+  assert.equal(missing.projection.inconsistentTraceCount, 1, '非 ok 状态必须计入需复核');
+  assert.equal(summarizeQueryResult('book_import_batch', batch('synthetic_sensitive_state')).summaryUnavailable, true);
+  assert.equal(summarizeQueryResult('book_import_batch', {
+    ...batch('ok'), batch: { ...batch('ok').batch, status: 'synthetic_sensitive_status' },
+  }).summaryUnavailable, true);
+});
+
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;

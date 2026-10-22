@@ -430,6 +430,51 @@ function resolveBatchAccountSetId(value) {
   return intOf(prop(value, "batch"), "accountSetId") ?? null;
 }
 
+// ---------------------------------------------------------------- data 层归属核对
+/**
+ * finance_query 的真实返回是 `{ nodeId, label, data }`：wrapper 里**没有**账套字段，
+ * 只核对 wrapper 会漏掉「请求 A 却拿到 B 的 data」。这里按具体 node 的**已知可信字段**核对：
+ *   - 账套节点：`data.id`
+ *   - 凭证节点：`data.account_set_id`（列表节点逐行核对）
+ *   - 科目体系：逐行 `account_set_id`
+ * 只核对**真实存在**的可信字段；报表 / 试算 / 明细账 / 期末等聚合 DTO 没有账套字段，
+ * 不臆造必需字段（那会把合法聚合节点全部拒绝）。字段存在但类型不对同样按结果无效处理。
+ */
+const scopedIdOf = (row, key) => {
+  if (!own(row, key)) return undefined;
+  const id = intOf(row, key);
+  if (id === undefined) throw policyError("model_result_invalid");
+  return id;
+};
+const rowScopeIds = (rows) => {
+  const ids = [];
+  const length = listLen(rows);
+  for (let i = 0; i < length; i++) {
+    const id = scopedIdOf(prop(rows, i), "account_set_id");
+    if (id !== undefined) ids.push(id);
+  }
+  return ids;
+};
+const FINANCE_QUERY_DATA_SCOPE = Object.freeze({
+  "enterprise_account.account_set": (data) => {
+    const id = scopedIdOf(data, "id");
+    return id === undefined ? [] : [id];
+  },
+  "enterprise_account.subject_system.all": (data) => rowScopeIds(data),
+  "voucher.generated.list": (data) => rowScopeIds(data),
+  "voucher.generated.summary": (data) => rowScopeIds(data),
+  "voucher.draft.summary": (data) => rowScopeIds(data),
+  "voucher.detail": (data) => {
+    const id = scopedIdOf(data, "account_set_id");
+    return id === undefined ? [] : [id];
+  },
+});
+// 普通只读工具里**同样带可信账套字段**的 DTO（列表行 account_set_id）。
+const PLAIN_QUERY_DATA_SCOPE = Object.freeze({
+  account_list: (value) => rowScopeIds(prop(value, "items")),
+  asset_list: (value) => rowScopeIds(value),
+});
+
 // ---------------------------------------------------------------- 信封构造
 const rawValuesIncluded = false;
 
@@ -631,9 +676,10 @@ function buildScopedContextProjection(entry, periods) {
   let open = 0;
   let closed = 0;
   for (let i = 0; i < periodCount; i++) {
-    const status = textOf(prop(periods, i), "status");
+    const status = enumTokenOf("status", textOf(prop(periods, i), "status"));
     if (status === "open") open++;
     else if (status === "closed") closed++;
+    else throw policyError("model_result_invalid");
   }
   const projection = sanitizeProjection({
     scope: "account_set",
@@ -673,6 +719,13 @@ export function createFinanceModelAdapter(options = {}) {
       if (echoed !== null && echoed !== accountSetId) throw policyError("model_scope_mismatch");
       const shape = PLAIN_QUERY_SHAPES[operation];
       if (typeof shape !== "function" || !shape(value)) throw policyError("model_result_invalid");
+      // 已知带账套字段的普通查询 DTO：逐行核对归属（wrapper 回显一致也不代表行数据同属一个账套）。
+      const scopeProbe = PLAIN_QUERY_DATA_SCOPE[operation];
+      if (typeof scopeProbe === "function") {
+        for (const scopedId of scopeProbe(value)) {
+          if (scopedId !== accountSetId) throw policyError("model_scope_mismatch");
+        }
+      }
       const summary = summarizeQueryResult(operation, value);
       if (summary.summaryUnavailable || Object.keys(summary.projection).length === 0) {
         // 不把「没读到预期字段」当成功：否则模型会得到一个静默为 0 / 空的假报表。
@@ -720,6 +773,13 @@ export function createFinanceModelAdapter(options = {}) {
       const data = prop(result, "data");
       const shape = FINANCE_QUERY_SHAPES[nodeId];
       if (typeof shape !== "function" || !shape(data)) throw policyError("model_result_invalid");
+      // wrapper 没有账套字段：按具体 node 的可信 data 字段核对归属，不匹配则不建引用。
+      const probe = FINANCE_QUERY_DATA_SCOPE[nodeId];
+      if (typeof probe === "function") {
+        for (const scopedId of probe(data)) {
+          if (scopedId !== accountSetId) throw policyError("model_scope_mismatch");
+        }
+      }
       const summary = summarizeQueryResult(operation, data);
       if (summary.summaryUnavailable || Object.keys(summary.projection).length === 0) {
         throw policyError("model_result_invalid");
@@ -908,7 +968,8 @@ export function createFinanceModelAdapter(options = {}) {
           ...policy.wrapWrite(operation, { accountSetId: resolvedAccountSetId, value }),
           adapter: MODEL_ADAPTER_VERSION,
           tool: toolName,
-          scope: "account_set",
+          operationCategory: "create",
+          scope: "result",
           accountSetIdSource: "result",
         };
       } catch {

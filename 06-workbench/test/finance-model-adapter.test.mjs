@@ -1040,6 +1040,180 @@ await test("review2 F4: 真实 create / 增量 / 缺参错误与未应用写结�
   assert.equal(TRANSPORT.validateModelEnvelope(dryRun, TRANSPORT_REGISTRY).ok, true);
 });
 
+await test("review3 F2: period / startPeriod / status 等投影字段按固定值域校验（自由 ASCII / 非法月份 / 缺字段 / 真零）", async () => {
+  const mutate = (mutator) => createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      mutator(name, value);
+      return value;
+    },
+  });
+
+  // 利润表期间被塞入自由 ASCII 串：不是期间就失败，不回声原值
+  const badIncomePeriod = mutate((name, value) => {
+    if (name === "finance_query") value.data.period = "synthetic_sensitive_period";
+  });
+  const incomeBroken = await badIncomePeriod.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "report.income_statement", period: "2026-01",
+  });
+  assert.equal(incomeBroken.ok, false);
+  assert.equal(incomeBroken.error.code, "model_result_invalid");
+  assertNoLeak(incomeBroken, "bad income period");
+  assert.equal(JSON.stringify(incomeBroken).includes("synthetic_sensitive_period"), false);
+
+  // 非法月份 / 缺字段：同样明确失败
+  const badMonth = mutate((name, value) => {
+    if (name === "finance_query") value.data.period = "2026-13";
+  });
+  const monthBroken = await badMonth.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "report.balance_sheet", period: "2026-01",
+  });
+  assert.equal(monthBroken.ok, false);
+  assert.equal(monthBroken.error.code, "model_result_invalid");
+
+  const missingPeriod = mutate((name, value) => {
+    if (name === "finance_query") delete value.data.period;
+  });
+  const periodMissing = await missingPeriod.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "report.trial_balance", period: "2026-01",
+  });
+  assert.equal(periodMissing.ok, false);
+  assert.equal(periodMissing.error.code, "model_result_invalid");
+  assert.equal(JSON.stringify(periodMissing).includes("period"), false);
+
+  // 凭证详情 status 不能是任意小写 token
+  const badVoucherStatus = mutate((name, value) => {
+    if (name === "finance_query") value.data.status = "synthetic_sensitive_status";
+  });
+  const statusBroken = await badVoucherStatus.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "voucher.detail", voucherId: globalThis.__v1Id,
+  });
+  assert.equal(statusBroken.ok, false);
+  assert.equal(statusBroken.error.code, "model_result_invalid");
+  assertNoLeak(statusBroken, "bad voucher status");
+  assert.equal(JSON.stringify(statusBroken).includes("synthetic_sensitive_status"), false);
+
+  // 账套节点 startPeriod 必须严格 YYYY-MM
+  const badStartPeriod = mutate((name, value) => {
+    if (name === "finance_query") value.data.start_period = "2026-13";
+  });
+  const startBroken = await badStartPeriod.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "enterprise_account.account_set",
+  });
+  assert.equal(startBroken.ok, false);
+  assert.equal(startBroken.error.code, "model_result_invalid");
+
+  // 普通工具的状态 / 枚举同样按固定值域（不是“小写 ASCII 就是 token”）
+  const badPeriodStatus = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      if (name === "period_list") value.items[0].status = "synthetic_sensitive_status";
+      return value;
+    },
+  });
+  const periodListBroken = await badPeriodStatus.callModelTool("period_list", { accountSetId: setA.id });
+  assert.equal(periodListBroken.ok, false);
+  assert.equal(periodListBroken.error.code, "model_result_invalid");
+
+  const badCategory = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      if (name === "account_list") value.items[0].category = "synthetic_sensitive_category";
+      return value;
+    },
+  });
+  const categoryBroken = await badCategory.callModelTool("account_list", { accountSetId: setA.id });
+  assert.equal(categoryBroken.ok, false);
+  assert.equal(categoryBroken.error.code, "model_result_invalid");
+  assert.equal(JSON.stringify(categoryBroken).includes("synthetic_sensitive_category"), false);
+
+  const badKind = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      if (name === "asset_list") value[0].kind = "synthetic_sensitive_kind";
+      return value;
+    },
+  });
+  const kindBroken = await badKind.callModelTool("asset_list", { accountSetId: setA.id });
+  assert.equal(kindBroken.ok, false);
+  assert.equal(kindBroken.error.code, "model_result_invalid");
+
+  // 未受影响：合法期间 / 普通工具照常可用，真 0 保留
+  const periods = await queryOk("period_list", { accountSetId: setA.id });
+  assert.ok(periods.projection.periodCount >= 1);
+  assert.ok(periods.projection.openPeriodCount >= 1);
+  const zero = await queryOk("finance_query", { accountSetId: setC.id, nodeId: "report.income_statement", period: "2026-01" });
+  assert.equal(zero.projection.currentRevenue, 0);
+  assert.equal(zero.projection.currentNetProfit, 0);
+  assert.equal(zero.projection.ytdRevenue, 0);
+});
+
+await test("review3 F3: finance_query 数据层账套核对（wrapper 无 id 也不能漏；聚合节点不误伤）", async () => {
+  // 注入：wrapper 仍是 {nodeId,label,data}（无账套字段），但真实执行的是另一个账套。
+  const crossSet = createFinanceModelAdapter({
+    executeRaw: async (name, args) => (name === "finance_query"
+      ? callAgentTool(name, { ...args, accountSetId: setB.id })
+      : callAgentTool(name, args)),
+  });
+  assert.equal(crossSet.policy.stats().refs, 0);
+
+  // 账套节点：data.id 直接暴露 B
+  const accountSetNode = await crossSet.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "enterprise_account.account_set",
+  });
+  assert.equal(accountSetNode.ok, false);
+  assert.equal(accountSetNode.error.code, "model_scope_mismatch");
+  assert.equal("localRef" in accountSetNode, false, "不一致的查询不得创建引用");
+
+  // 凭证节点：data.account_set_id
+  const voucherB = A.listVouchers(setB.id)[0];
+  assert.ok(voucherB, "B 账套应有真实凭证");
+  assert.equal(voucherB.account_set_id, setB.id);
+  const voucherNode = await crossSet.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "voucher.detail", voucherId: voucherB.id,
+  });
+  assert.equal(voucherNode.ok, false);
+  assert.equal(voucherNode.error.code, "model_scope_mismatch");
+
+  // 科目体系：逐行 account_set_id
+  const subjects = await crossSet.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "enterprise_account.subject_system.all",
+  });
+  assert.equal(subjects.ok, false);
+  assert.equal(subjects.error.code, "model_scope_mismatch");
+
+  // 凭证列表：逐行 account_set_id（按 B 凭证真实状态选择对应 node）
+  const listNode = voucherB.status === "posted" ? "voucher.generated.list" : "voucher.draft.summary";
+  const listed = await crossSet.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: listNode, period: "2026-01",
+  });
+  assert.equal(listed.ok, false);
+  assert.equal(listed.error.code, "model_scope_mismatch");
+
+  // 三次不一致都不得留下引用
+  assert.equal(crossSet.policy.stats().refs, 0);
+
+  // 无账套字段的聚合节点不臆造必需字段：仍按 wrapper 结果正常通过
+  const aggregate = await crossSet.callModelTool("finance_query", {
+    accountSetId: setA.id, nodeId: "report.trial_balance", period: "2026-01",
+  });
+  assert.equal(aggregate.ok, true, `聚合节点不应被误拒：${JSON.stringify(aggregate.error || null)}`);
+  assert.equal(aggregate.accountSetId, setA.id);
+
+  // 真实 A 结果照常成功（归属一致时不误拒）
+  const normal = await queryOk("finance_query", { accountSetId: setA.id, nodeId: "enterprise_account.account_set" });
+  assert.equal(normal.projection.accountSetId, setA.id);
+
+  // 普通只读工具里同样带 account_set_id 的 DTO（科目列表行）也按数据层核对
+  const crossPlain = createFinanceModelAdapter({
+    executeRaw: async (name, args) => callAgentTool(name, { ...args, accountSetId: setB.id }),
+  });
+  const crossAccounts = await crossPlain.callModelTool("account_list", { accountSetId: setA.id });
+  assert.equal(crossAccounts.ok, false);
+  assert.equal(crossAccounts.error.code, "model_scope_mismatch");
+  assert.equal(crossPlain.policy.stats().refs, 0);
+});
+
 await test("模型返回 / 错误投影 / 测试日志都不含合成敏感原文", async () => {
   // 通道释放后本机读取必须失效（能力对象是唯一凭据）
   policy.releaseChannel(channel);

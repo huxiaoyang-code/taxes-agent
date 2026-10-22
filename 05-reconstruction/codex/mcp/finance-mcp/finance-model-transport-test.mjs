@@ -444,5 +444,172 @@ await test('合成回环服务：请求已发出后断连按 unknown 处理（�
   assertNoLeak(writeFailure, 'loopback disconnect');
 });
 
+await test('review3 F1: 失败写信封删 projection + 对象型 projectionDropped 被拒绝，受控截断计数仍合法', async () => {
+  // 真实适配层产出（voucher_create 缺账套 → 写类失败信封）
+  const failure = await adapter.callModelTool('voucher_create', { period: '2026-01' });
+  assert.equal(failure.ok, false);
+  assert.equal(JSON.stringify(failure).includes(X.enterprise), false);
+
+  // 旧漏洞：删 projection 后只在 projection 存在时才验 dropped → 对象型 dropped 直接穿出。
+  const dangling = { ...failure };
+  delete dangling.projection;
+  dangling.projectionDropped = { enterprise: X.enterprise };
+  expectFailure(validateModelEnvelope(dangling, REGISTRY), 'envelope_projection_invalid');
+  const parsedDangling = parseModelEnvelope(JSON.stringify(dangling), REGISTRY);
+  expectFailure(parsedDangling, 'envelope_projection_invalid');
+  assertNoLeak(parsedDangling, 'dangling projectionDropped');
+  assert.equal(JSON.stringify(parsedDangling.failure).includes('projectionDropped'), false);
+
+  // 悬空但类型合法的计数也不接受：dropped 只能在 projection 存在时出现。
+  const orphanCount = { ...failure };
+  delete orphanCount.projection;
+  expectFailure(validateModelEnvelope(orphanCount, REGISTRY), 'envelope_unexpected_field');
+
+  // 有 projection 时 dropped 必须存在且是受控计数（0 ≤ 整数 ≤ 1e6）。
+  for (const bad of [{ enterprise: X.enterprise }, '5', -1, 1.5, 1e9, null, true]) {
+    expectFailure(
+      validateModelEnvelope({ ...failure, projection: {}, projectionDropped: bad }, REGISTRY),
+      'envelope_projection_invalid',
+    );
+  }
+  const missingDropped = { ...failure };
+  delete missingDropped.projectionDropped;
+  expectFailure(validateModelEnvelope(missingDropped, REGISTRY), 'envelope_projection_invalid');
+  const successMissingDropped = { ...invoice };
+  delete successMissingDropped.projectionDropped;
+  expectFailure(validateModelEnvelope(successMissingDropped, REGISTRY), 'envelope_projection_invalid');
+  expectFailure(parseModelEnvelope(JSON.stringify(successMissingDropped), REGISTRY), 'envelope_projection_invalid');
+
+  // 合法截断契约保留：成功查询 / 失败写的计数正例
+  for (const dropped of [0, 7]) {
+    const okQuery = validateModelEnvelope({ ...invoice, projectionDropped: dropped }, REGISTRY);
+    assert.equal(okQuery.ok, true, `成功查询 dropped=${dropped} 应接受`);
+    const okFailure = validateModelEnvelope({ ...failure, projection: {}, projectionDropped: dropped }, REGISTRY);
+    assert.equal(okFailure.ok, true, `写失败 dropped=${dropped} 应接受`);
+  }
+});
+
+await test('review3 F1: 访问器 / toJSON / 非普通原型 / Symbol 一律拒绝，且返回的是纯数据副本', async () => {
+  // 1) 合法 query 信封的可选 tool 换成 enumerable getter：旧实现视为缺省并返回原对象 → JSON.stringify 触发泄漏。
+  let toolGetterCalls = 0;
+  const withToolGetter = { ...invoice };
+  Object.defineProperty(withToolGetter, 'tool', {
+    enumerable: true,
+    get() { toolGetterCalls++; return X.enterprise; },
+  });
+  const getterChecked = validateModelEnvelope(withToolGetter, REGISTRY);
+  expectFailure(getterChecked, 'envelope_invalid');
+  assert.equal(toolGetterCalls, 0, '校验 / 快照阶段不得执行 getter');
+  assertNoLeak(JSON.stringify(getterChecked), 'getter envelope result');
+
+  // 2) 嵌套 projection 访问器：同样不执行，直接拒绝
+  let nestedGetterCalls = 0;
+  const nested = { ...invoice, projection: { ...invoice.projection } };
+  Object.defineProperty(nested.projection, 'note', {
+    enumerable: true,
+    get() { nestedGetterCalls++; return X.summary; },
+  });
+  expectFailure(validateModelEnvelope(nested, REGISTRY), 'envelope_projection_invalid');
+  assert.equal(nestedGetterCalls, 0);
+
+  // 3) own toJSON（会改变 JSON.stringify 行为）既不在白名单，也不会被调用。
+  const withToJson = { ...invoice, toJSON: () => ({ leaked: X.enterprise }) };
+  expectFailure(validateModelEnvelope(withToJson, REGISTRY), 'envelope_unexpected_field');
+  assert.equal(JSON.stringify(validateModelEnvelope(withToJson, REGISTRY)).includes(X.enterprise), false);
+
+  // 4) 继承属性 / Symbol 键 / 函数值都不进信封
+  const inherited = Object.assign(Object.create({ extra: X.enterprise }), { ...invoice });
+  expectFailure(validateModelEnvelope(inherited, REGISTRY), 'envelope_invalid');
+  const symbolKey = { ...invoice, [Symbol('synthetic')]: X.enterprise };
+  expectFailure(validateModelEnvelope(symbolKey, REGISTRY), 'envelope_invalid');
+  expectFailure(validateModelEnvelope({ ...invoice, projectionDropped: () => 0 }, REGISTRY), 'envelope_projection_invalid');
+
+  // 5) 通过校验的返回是重建副本：改写副本不影响原对象，也不含额外行为。
+  const checked = validateModelEnvelope(invoice, REGISTRY);
+  assert.equal(checked.ok, true);
+  assert.notEqual(checked.envelope, invoice);
+  assert.notEqual(checked.envelope.projection, invoice.projection);
+  assert.equal(Object.getPrototypeOf(checked.envelope), Object.prototype);
+  assert.equal(Object.getPrototypeOf(checked.envelope.projection), Object.prototype);
+  checked.envelope.projection.assets = 1;
+  assert.equal(invoice.projection.assets, 1700);
+  assertNoLeak(checked.envelope, 'rebuilt envelope');
+  const reparsed = parseModelEnvelope(JSON.stringify(invoice), REGISTRY);
+  assert.equal(reparsed.ok, true);
+  assert.notEqual(reparsed.envelope, invoice);
+  assertNoLeak(reparsed.envelope, 'reparsed envelope');
+});
+
+await test('review3 F1: 所有可选键在 success / failure / dropped 分支独立校验（矩阵）', async () => {
+  const successWrite = await adapter.callModelTool('voucher_create', {
+    accountSetId: 3, period: '2026-01', entries: [],
+  });
+  assert.equal(successWrite.ok, true);
+  const failureWrite = await adapter.callModelTool('voucher_create', { period: '2026-01' });
+  assert.equal(failureWrite.ok, false);
+  const failureRead = await adapter.callModelTool('voucher_approve', {});
+  assert.equal(failureRead.ok, false);
+  const orphanDropped = { ...failureWrite };
+  delete orphanDropped.projection;
+  orphanDropped.projectionDropped = 3;
+
+  const cases = [
+    // 成功查询：写状态 / 错误 / 目录 / 结果来源都不适用
+    ['query+applied', { ...invoice, applied: true }, 'envelope_unexpected_field'],
+    ['query+appliedReason', { ...invoice, appliedReason: 'unverified_result' }, 'envelope_unexpected_field'],
+    ['query+needsLocalReview', { ...invoice, needsLocalReview: false }, 'envelope_unexpected_field'],
+    ['query+error', { ...invoice, error: { code: 'operation_failed', category: 'unknown', retriable: false, messageKey: 'operation_failed' } }, 'envelope_unexpected_field'],
+    ['query+catalog', { ...invoice, catalog: { available: [], unimplemented: [], localExtensions: [] } }, 'envelope_unexpected_field'],
+    ['query+source', { ...invoice, accountSetIdSource: 'result' }, 'envelope_unexpected_field'],
+    ['query+rawErrorIncluded', { ...invoice, rawErrorIncluded: false }, 'envelope_unexpected_field'],
+    ['query+badTool', { ...invoice, tool: 'voucher_create' }, 'envelope_invalid'],
+    ['query+badNode', { ...invoice, nodeId: 'enterprise_account.bank' }, 'envelope_invalid'],
+    ['query+refUnavailable', { ...invoice, refUnavailable: 'global_scope' }, 'envelope_ref_invalid'],
+    ['query+badExpiry', { ...invoice, refExpiresAt: X.apiBase }, 'envelope_ref_invalid'],
+    ['query+forgedRef', { ...invoice, localRef: 'finref_forged' }, 'envelope_ref_invalid'],
+    ['query+badDropped', { ...invoice, projectionDropped: -1 }, 'envelope_projection_invalid'],
+    ['query+badDroppedText', { ...invoice, projectionDropped: X.enterprise }, 'envelope_projection_invalid'],
+
+    // 成功写：source 必须是 argument；状态自洽；投影/截断契约必须成对
+    ['write+sourceResult', { ...successWrite, accountSetIdSource: 'result' }, 'envelope_unexpected_field'],
+    ['write+sourceBad', { ...successWrite, accountSetIdSource: 'synthetic_private_source' }, 'envelope_invalid'],
+    ['write+reasonOnApplied', { ...successWrite, appliedReason: 'unverified_result' }, 'envelope_status_invalid'],
+    ['write+reviewTrue', { ...successWrite, needsLocalReview: true }, 'envelope_status_invalid'],
+    ['write+catalog', { ...successWrite, catalog: { available: [], unimplemented: [], localExtensions: [] } }, 'envelope_unexpected_field'],
+    ['write+error', { ...successWrite, error: { code: 'operation_failed', category: 'unknown', retriable: false, messageKey: 'operation_failed' } }, 'envelope_unexpected_field'],
+
+    // 失败写：projection / dropped / 状态 / 来源 / 目录都不因“失败”而放宽
+    ['failureWrite+orphanDropped', orphanDropped, 'envelope_unexpected_field'],
+    ['failureWrite+badProjection', { ...failureWrite, projection: { note: X.summary } }, 'envelope_projection_invalid'],
+    ['failureWrite+missingDropped', { ...failureWrite, projectionDropped: undefined }, 'envelope_projection_invalid'],
+    ['failureWrite+badReason', { ...failureWrite, appliedReason: 'synthetic_private_reason' }, 'envelope_status_invalid'],
+    ['failureWrite+sourceResult', { ...failureWrite, accountSetIdSource: 'result' }, 'envelope_unexpected_field'],
+    ['failureWrite+catalog', { ...failureWrite, catalog: { available: [], unimplemented: [], localExtensions: [] } }, 'envelope_unexpected_field'],
+    ['failureWrite+refString', { ...failureWrite, localRef: `finref_${'a'.repeat(48)}` }, 'envelope_ref_invalid'],
+    ['failureWrite+badUnavailable', { ...failureWrite, refUnavailable: 'synthetic_private_token' }, 'envelope_ref_invalid'],
+
+    // 失败只读：引用 / 投影 / 状态 / 目录 / 来源全不适用
+    ['failureRead+projection', { ...failureRead, projection: {} }, 'envelope_unexpected_field'],
+    ['failureRead+dropped', { ...failureRead, projectionDropped: 0 }, 'envelope_unexpected_field'],
+    ['failureRead+applied', { ...failureRead, applied: false }, 'envelope_unexpected_field'],
+    ['failureRead+reason', { ...failureRead, appliedReason: 'unverified_result' }, 'envelope_unexpected_field'],
+    ['failureRead+localRef', { ...failureRead, localRef: null }, 'envelope_unexpected_field'],
+    ['failureRead+persistence', { ...failureRead, refPersistence: 'none' }, 'envelope_ref_invalid'],
+    ['failureRead+unavailable', { ...failureRead, refUnavailable: 'global_scope' }, 'envelope_ref_invalid'],
+    ['failureRead+catalog', { ...failureRead, catalog: { available: [], unimplemented: [], localExtensions: [] } }, 'envelope_unexpected_field'],
+    ['failureRead+source', { ...failureRead, accountSetIdSource: 'result' }, 'envelope_unexpected_field'],
+    ['failureRead+errorExtra', { ...failureRead, error: { ...failureRead.error, extra: 1 } }, 'envelope_error_shape_invalid'],
+  ];
+  for (const [label, envelope, code] of cases) {
+    const plain = JSON.parse(JSON.stringify(envelope));
+    try {
+      expectFailure(validateModelEnvelope(envelope, REGISTRY), code);
+      expectFailure(parseModelEnvelope(JSON.stringify(plain), REGISTRY), code);
+    } catch (error) {
+      throw new Error(`[${label}] ${error.message}`);
+    }
+  }
+});
+
 console.log(`\nFinance model transport test: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;
