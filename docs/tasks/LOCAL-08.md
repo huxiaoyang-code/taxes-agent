@@ -6,6 +6,7 @@
   2. **本阶段（适配层）已实现并自测通过，未挂载**：普通工具适配层 + 真实（临时库）调用验收 + MCP 出站信封校验 + 契约 / 任务单 / 交接更新。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口（`agent-tools.mjs` / `server.mjs` / MCP 注册与传输 / `scripts/test-all.mjs`）归 **LOCAL-02（Issue #47，返工中）**，本轮未改。Issue #44 **保持 OPEN**。
   3. **review1 五项独立审查返工已完成并自测通过（未提交 / 未合并）**：F1 transport 允许键校验、F2 参数快照防串账、F3 摘要必需字段、F4 真实错误码 / create+result、F5 写结果未知语义。
   4. **review3 三项定向返工已完成并自测通过（未提交 / 未合并）**：F1 transport 每个允许键独立校验 + 纯数据快照（悬空 `projectionDropped`、任意层级访问器）、F2 投影期间 / 状态固定值域、F3 `finance_query` 数据层账套核对。**最终独立审查、PR、合并仍由管理者后续执行**。
+  5. **review4 最后副本一致性定向修正已完成并自测通过（未提交 / 未合并）**：transport 改为「先生成有界纯数据快照 → 对同一快照完整校验 → 只返回该快照」，不再出现「校验 A 返回 B」；新增可变反射输入回归，transport 14 → **15/15**。上轮独审进程在给出完整结论前中止，因此**不得写本轮已最终通过**，仍需 root 最后独立复审。
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`
 - 实际分支：`codex/huxiaoyang-code/local-08-adapter`（由管理者从上述 main 建立；员工未执行任何 Git 操作）
 - 交付契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)；交接：[handoffs/LOCAL-08](../handoffs/LOCAL-08.md)
@@ -82,7 +83,7 @@ node test/finance-output-policy.test.mjs      # 32/32 passed, exit 0
 node test/finance-model-adapter.test.mjs      # 17/17 passed, exit 0
 
 # 仓库根目录
-node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   # 14/14 passed, exit 0
+node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   # 15/15 passed, exit 0
 ```
 
 - 不通过处理：退回同一员工修复，记录阻塞；不得删改旧断言或放宽到「只要不报错」。
@@ -157,6 +158,16 @@ node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   
 - 已通过部分未回退：调用参数有界深快照 / alias / getter / 继承拒绝；合法 create / node / batch / unimplemented / 错误码与 dry-run；真实发出后断连 unknown 不自动重试（原回归仍绿）。
 - 本轮未跑整套旧领域（按任务单要求只在根因涉及真实业务接口处定向补）；**未提交 / 未推送 / 未合并**。
 - 仍未完成：最终独立审查、共享 HTTP / Agent / MCP / CLI 接线（LOCAL-02 #47 释放所有权后另行小 PR）、3 个套件登记进 `scripts/test-all.mjs`、LOCAL-02 合并后的新期末 / 资产补项工具。不得写成已验收。
+
+### 8.3 review4 最后副本一致性定向修正（本轮实际发生）
+
+| 项 | 残留复现 | 修复 | 真实回归 |
+|---|---|---|---|
+| F1（P1） | `validateEnvelope` 先 `validateEnvelopeInner(original)`，成功后再 `plainSnapshot(original)`，返回的副本未经校验；合成合法 query 对象让 `adapter` 的 `getOwnPropertyDescriptor` 前几次返回合法值、之后返回普通对象，结果仍 `ok:true` 且带回不符合固定类型的 `adapter` | 增加第二遍：先用 `plainSnapshot` 生成有界纯数据快照，再对**同一快照**完整校验并只返回它；第一遍原对象校验只用于沿用既有固定错误码，不决定返回值。getter 不执行、非普通原型 / Symbol / `toJSON` / 函数 / 深度与大小上限全部保留 | transport 15/15（14 → 15）：新增 1 项可变反射一致性回归（`adapter` 与嵌套 `projection.assets` 描述符中途换值、始终合法的可变输入返回对象可再次完整校验且逐字段合规、普通 plain JSON 正例仍通过）；旧顺序实跑该新项失败（`14/15`、exit 1），修正后 `15/15`、exit 0 |
+
+- 三层本轮实际输出：策略 `32/32`、适配层 `17/17`、transport `15/15`，均 exit 0。
+- 范围：只改 transport 校验顺序与该套件新增 1 项回归；未重构模块，未改适配层 / 策略逻辑，未触动共享入口与其他包。
+- **未提交 / 未推送 / 未合并**；共享入口接线、`scripts/test-all.mjs` 登记、LOCAL-02 新工具补项、root 最后独立复审与 PR / 合并均未完成，不得写成已验收。
 
 ## 9. 真实数据边界
 

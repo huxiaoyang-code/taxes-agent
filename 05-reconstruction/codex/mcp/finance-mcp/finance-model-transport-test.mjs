@@ -611,5 +611,90 @@ await test('review3 F1: 所有可选键在 success / failure / dropped 分支独
   }
 });
 
+await test('最后副本一致性：校验的必须就是返回的（可变反射输入不得返回未校验副本）', () => {
+  // 1) 精确复现：合法 query 对象，adapter 的 getOwnPropertyDescriptor 先返回合法版本串，
+  //    之后返回普通对象。旧实现「先校验原对象、再快照原对象」，返回的副本从未被校验，
+  //    结果 ok:true 且带回一个不符合固定类型的 adapter。
+  const legalAdapter = invoice.adapter;
+  let adapterReads = 0;
+  const shifting = new Proxy({ ...invoice }, {
+    ownKeys(target) { return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      if (key === 'adapter') {
+        adapterReads++;
+        if (adapterReads >= 2) {
+          return { configurable: true, enumerable: true, writable: true, value: { leak: X.enterprise } };
+        }
+      }
+      return Object.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const shifted = validateModelEnvelope(shifting, REGISTRY);
+  assert.ok(adapterReads >= 1, '校验必然读过 adapter');
+  if (shifted.ok) {
+    // 一旦接受，返回对象里的每个字段都必须是校验过的值（不是后来换上的对象）。
+    assert.equal(shifted.envelope.adapter, legalAdapter);
+    assertNoLeak(shifted.envelope, 'shifting adapter envelope');
+  } else {
+    assertNoLeak(shifted.failure, 'shifting adapter failure');
+  }
+
+  // 2) 同一手法用在嵌套 projection 上：返回的金额只能是校验过的那个值。
+  let assetsReads = 0;
+  const shiftingProjection = new Proxy({ ...invoice.projection }, {
+    ownKeys(target) { return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      if (key === 'assets') {
+        assetsReads++;
+        if (assetsReads >= 3) {
+          return { configurable: true, enumerable: true, writable: true, value: X.enterprise };
+        }
+      }
+      return Object.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const shiftedNested = validateModelEnvelope({ ...invoice, projection: shiftingProjection }, REGISTRY);
+  assert.ok(assetsReads >= 1, '校验必然读过 projection.assets');
+  if (shiftedNested.ok) {
+    assert.equal(shiftedNested.envelope.projection.assets, invoice.projection.assets);
+    assertNoLeak(shiftedNested.envelope, 'shifting projection envelope');
+  } else {
+    assertNoLeak(shiftedNested.failure, 'shifting projection failure');
+  }
+
+  // 3) 状态可变但**始终合法**的输入：接受时返回对象必须逐字段满足实际契约，
+  //    再校验一次仍然通过且完全等于返回值（不存在只校验了别的对象的字段）。
+  let flips = 0;
+  const flipping = new Proxy({ ...invoice }, {
+    ownKeys(target) { return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      if (key === 'projection') {
+        flips++;
+        return {
+          configurable: true, enumerable: true, writable: true,
+          value: { ...invoice.projection, assets: flips % 2 === 0 ? 1700 : 1800 },
+        };
+      }
+      return Object.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const flipped = validateModelEnvelope(flipping, REGISTRY);
+  if (flipped.ok) {
+    const assetsValue = flipped.envelope.projection.assets;
+    assert.ok(assetsValue === 1700 || assetsValue === 1800, `返回的 assets 必须落在合法值域：${assetsValue}`);
+    const rechecked = validateModelEnvelope(flipped.envelope, REGISTRY);
+    assert.equal(rechecked.ok, true, '返回对象自身必须再次通过完整校验');
+    assert.deepEqual(rechecked.envelope, flipped.envelope);
+  } else {
+    assertNoLeak(flipped.failure, 'flipping envelope failure');
+  }
+
+  // 4) 普通 plain JSON 正例不受影响：仍然是接受 + 纯数据副本。
+  const plainChecked = validateModelEnvelope(JSON.parse(JSON.stringify(invoice)), REGISTRY);
+  assert.equal(plainChecked.ok, true);
+  assert.equal(plainChecked.envelope.adapter, legalAdapter);
+  assertNoLeak(plainChecked.envelope, 'plain JSON envelope');
+});
+
 console.log(`\nFinance model transport test: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;

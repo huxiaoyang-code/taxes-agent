@@ -1,10 +1,11 @@
 # 财务输出边界契约 · FINANCE-OUTPUT-BOUNDARY
 
-- 状态分四段，**不要混读**：
+- 状态分五段，**不要混读**：
   1. **纯策略模块已合并**：`06-workbench/server/finance-output-policy.mjs` 经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；
   2. **普通工具适配层已实现但未挂载**：`06-workbench/server/finance-model-adapter.mjs` + 真实（临时库）调用验收 `06-workbench/test/finance-model-adapter.test.mjs`；
   3. **出站信封校验已实现但未挂载**：`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`；
-  4. **第三轮定向返工（review3）已实现并自测通过，未提交 / 未合并**：F1 transport 每个允许键独立校验 + 纯数据快照（拒绝悬空 `projectionDropped` 与任意层级访问器）、F2 投影期间 / 状态固定值域、F3 `finance_query` 数据层账套核对。最终独立审查、PR、合并仍由管理者后续执行。
+  4. **第三轮定向返工（review3）已实现并自测通过，未提交 / 未合并**：F1 transport 每个允许键独立校验 + 纯数据快照（拒绝悬空 `projectionDropped` 与任意层级访问器）、F2 投影期间 / 状态固定值域、F3 `finance_query` 数据层账套核对。
+  5. **第四轮定向修正（review4，最后副本一致性）已实现并自测通过，未提交 / 未合并**：transport 的「校验对象」与「返回对象」现在是同一份快照（先生成有界纯数据快照 → 再对同一快照完整校验 → 只返回该快照），并补可变反射输入回归；transport 14 → **15/15**。最终独立审查、PR、合并仍由管理者后续执行。
 - **HTTP / Agent / MCP / CLI 仍全部未接线**：`agent-tools.mjs`、`server.mjs`、MCP `backend/server/tools`、`scripts/test-all.mjs` 一律未改（共享入口归 LOCAL-02 / Issue #47）。因此**当前真实模型入口仍原样返回业务原文**；本契约尚未在真实入口生效，Issue #44 **保持 OPEN**。模块 / 适配层通过 ≠ 数据边界已生效。
 - 归属：LOCAL-08（[任务单](tasks/LOCAL-08.md)、[交接](handoffs/LOCAL-08.md)），Refs Issue #44；负责人 `huxiaoyang-code`；分支 `codex/huxiaoyang-code/local-08-adapter`（由管理者从上述 main 建立）。
 - 本文件只描述**已经写进代码并在合成 / 临时库测试中验证过的契约**；未实现项一律标注「未实现」。
@@ -268,7 +269,8 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 - 严格字段白名单：未知字段回 `envelope_unexpected_field`；`message` / `details` / `stack` / `path` / `raw` / `apiBase` / 企业名等敏感键回 `envelope_sensitive_field`；两者都**不回显字段名或值**。
 - **每个允许键在所有适用分支都完整校验**：成功查询信封不接受 `appliedReason`、`error`、`catalog`、`accountSetIdSource` 等不适用字段；失败信封如带 `projection` / `appliedReason` / 目录也按同一规则校验；非写失败不接受引用字段；不适用字段直接拒绝，而不是“键名在白名单就放行”。**`projection` / `projectionDropped` 各自独立校验**：`projectionDropped` 只要是出现的键就验「非负整数 ≤ 1e6」，且必须有 `projection` 伴随（悬空计数直接拒绝）；`projection` 存在时 `projectionDropped` 必须同时存在（受控截断契约）。`accountSetIdSource` 与分支语义绑定：`argument` 只用于 `write`，`result` 只用于 `create` / `batch`。
-- **纯数据快照（review3）**：校验通过后**只返回重建的普通对象 / 数组副本**，绝不返回原对象。所有层级（信封顶层 / `error` / `catalog` / `projection` 嵌套与数组）拒绝访问器属性、Symbol 键、非普通原型、函数 / BigInt；因此合法 query 信封把可选 `tool` 换成 enumerable getter 时，旧实现“视为缺省后返回原对象、JSON.stringify 触发 getter”的泄漏路径已关闭：getter 一次都不会执行，且结果是固定拒绝码或纯数据副本。
+- **纯数据快照（review3 / review4）**：校验通过后**只返回重建的普通对象 / 数组副本**，绝不返回原对象。所有层级（信封顶层 / `error` / `catalog` / `projection` 嵌套与数组）拒绝访问器属性、Symbol 键、非普通原型、函数 / BigInt；因此合法 query 信封把可选 `tool` 换成 enumerable getter 时，旧实现“视为缺省后返回原对象、JSON.stringify 触发 getter”的泄漏路径已关闭：getter 一次都不会执行，且结果是固定拒绝码或纯数据副本。
+- **校验对象 = 返回对象（review4）**：`validateEnvelope` 先用 `plainSnapshot` 生成**有界纯数据快照**，再对**这份即将返回的同一快照**重新完整校验并只返回它（第一遍在原对象上的校验仅用于沿用既有固定错误码，不决定返回值）。因此原对象在多次反射读取之间变化（例如 `getOwnPropertyDescriptor` 先返回合法值、之后返回普通对象）只会让快照校验失败被拒，**不会出现「校验 A、返回 B」**；返回的每个字段都是校验过的值。
 - 契约校验：`outputPolicy === "finance-output-policy/v1"`、`adapter === "finance-model-adapter/v1"`、`channel === "model"`、`rawValuesIncluded === false`、`ok` 布尔；成功信封必须有 `projection` 与 `localRef`。
 - `operation` / `tool` / `nodeId` / `operationCategory` / `scope` / `appliedReason` / 错误码 / 目录都使用**模块内置固定登记语义**；调用方另传登记表只能进一步收紧，**不传也不会退化成“只校验形状”**。operation 与 category/scope/tool/nodeId 必须互相一致；错误码必须命中固定 code → category 映射（含 `nodeId_required` / `voucherId_required` 等真实大驼峰码），任意码被拒绝。
 - `projection` 再校验一次形状（数值上限 / **固定受控 token 或期间** / 数组 / 深度 / 节点；任意 ASCII 业务串不能伪装成状态），嵌套敏感键同样拒绝；`localRef` 必为 `finref_` 形状，`refPersistence` 仅 `process_memory` / `none`，`refExpiresAt` 必须是带引用的 ISO 时间，引用与降级原因互斥。
@@ -281,7 +283,7 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 - 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`），员工本轮在分支上新增 4 项测试后为 **32/32、exit 0**（既有 28 + review1 3 项含义保留）。
 - 适配层：**已实现 + 临时库真实调用验收 17/17、exit 0**；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
-- transport：**已实现 + 独立测试 14/14、exit 0**；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
+- transport：**已实现 + 独立测试 15/15、exit 0**；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
 - 因此：**当前真实模型入口仍原样返回原文**，本契约尚未在真实入口生效；Issue #44 保持 OPEN。
 - 未做：磁盘持久化引用、多用户 / 权限体系、按用户隔离、审计落库、批量写队列、`localRead` 的 MCP / CLI 工具。
 - 未验收：真实 HTTP / Agent / MCP / CLI 端到端；真实账套（禁止）；跨重启（设计上失效）。
@@ -301,7 +303,7 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 |---|---|---|
 | 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 32/32 passed，exit 0 |
 | 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 17/17 passed，exit 0 |
-| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 14/14 passed，exit 0 |
+| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 15/15 passed，exit 0 |
 | 领域回归 | `cd 06-workbench && node test/accounting-guards.test.mjs` | 23/23 通过，exit 0 |
 | 领域回归 | `cd 06-workbench && node test/accounting-derived.test.mjs` | 31/31 通过，exit 0 |
 | 领域回归 | `cd 06-workbench && node test/import-incremental.test.mjs` | 49/49 通过，exit 0 |
@@ -331,4 +333,12 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | F2 | 摘要必需字段从 `periodOf` / 状态枚举退化为 `requireText`，sanitizer 接受小写 token：`data.period='synthetic_sensitive_period'` 与 `voucher.detail.status` 任意业务 token 均原文泄漏 | 新增 `requirePeriod` / `requireEnumToken` / `requireChoice`；每个投影字段同时校验缺失与自己的固定值域（`YYYY-MM`、固定枚举 / 集合），逐点审 `requireText` 调用；真实适配器注入 ASCII 标记 / 非法月份 / 缺字段 / 真零正例回归 |
 | F3 | scope 核对只看 wrapper；`finance_query` 请求 A 实际返回 B 的 `data` 时 wrapper 无 id 漏过，得到 A 绑定引用 + B 数据 | 按 node 核对可信 data 字段（账套 `data.id`、凭证 `data.account_set_id`、列表逐行）；不一致固定 `model_scope_mismatch` 且不建引用；聚合节点不臆造必需字段；真实 `callAgentTool` A/B 两库注入覆盖 |
 
-三层测试：策略 **32/32**、适配层 **17/17**、transport **14/14**，均 exit 0（本轮实际输出）。本轮**未提交 / 未推送 / 未合并**；最终独立审查、共享入口接线（LOCAL-02）、`scripts/test-all.mjs` 登记与 LOCAL-02 新工具补项均**未完成**，不得写成已验收。
+三层测试：策略 **32/32**、适配层 **17/17**、transport **14/14**（review3 时点），均 exit 0（本轮实际输出）。本轮**未提交 / 未推送 / 未合并**；最终独立审查、共享入口接线（LOCAL-02）、`scripts/test-all.mjs` 登记与 LOCAL-02 新工具补项均**未完成**，不得写成已验收。
+
+### 14.3 第四轮定向修正 review4：最后副本一致性（本轮实际发生）
+
+| 项 | 复核发现 | 修复 / 回归 |
+|---|---|---|
+| F1 | 最终副本顺序不一致：`validateEnvelope` 先 `validateEnvelopeInner(original)`，成功后再对 `original` 做 `plainSnapshot`，**返回的副本本身没有校验**。合成复现：合法 query 对象让 `adapter` 的 `getOwnPropertyDescriptor` 前几次返回合法版本串、之后返回普通对象，结果仍 `ok:true` 且返回了不符合固定类型的 `adapter` | 新增第二遍：先生成**有界纯数据快照**，再对**同一快照**完整校验并只返回该快照（第一遍原对象校验只保留既有固定错误码，不决定返回值）。getter 仍不执行、非普通原型 / Symbol / `toJSON` / 函数 / 深度与大小上限全部保留。回归：`adapter`、嵌套 `projection.assets` 的描述符中途换值都被拒或只返回校验过的值；始终合法的可变输入返回对象再次完整校验仍通过且等于返回值；普通 plain JSON 正例不受影响 |
+
+本项三层实际输出：策略 **32/32**、适配层 **17/17**、transport **15/15**（14 → 15，新增 1 项可变反射一致性回归），均 exit 0。已用旧顺序实跑确认新回归会**变红**（`14/15`、exit 1），恢复修正后 `15/15`、exit 0。本轮**未提交 / 未推送 / 未合并**；共享入口接线（LOCAL-02 #47）、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、最终独立审查与 PR / 合并均**未完成**，不得写成已验收。

@@ -503,11 +503,19 @@ function validateCatalog(catalog) {
 // ---------------------------------------------------------------- 信封校验
 function validateEnvelope(data, registries) {
   try {
-    const result = validateEnvelopeInner(data, registries);
-    if (result.ok !== true) return result;
-    // 只返回**重建的纯数据副本**：原对象上的 getter / Symbol / 非普通原型 / toJSON
-    // 既不会在校验阶段被执行，也不可能在后续 JSON.stringify 时带出未校验属性。
-    return { ok: true, envelope: plainSnapshot(result.envelope) };
+    // 第一遍：在原对象上完整校验，只用于沿用既有的固定错误码
+    // （prop() 只读属性描述符，不执行 getter）。这一遍的结论**不能**直接决定返回什么。
+    const checked = validateEnvelopeInner(data, registries);
+    if (checked.ok !== true) return checked;
+    // 第二遍：先重建**有界纯数据快照**，再对这份「将要返回的同一份快照」重新完整校验。
+    // 于是「校验的内容」与「返回的内容」永远是同一个对象：原对象即使在多次反射读取之间
+    // 变化（例如 getOwnPropertyDescriptor 每次返回不同的值），也只可能让快照校验失败，
+    // 绝不会出现「校验 A、返回 B」或返回未按契约校验过的副本。
+    // 快照本身不含 getter / Symbol / 非普通原型 / toJSON，后续 JSON.stringify 也不会执行用户代码。
+    const snapshot = plainSnapshot(data);
+    const verified = validateEnvelopeInner(snapshot, registries);
+    if (verified.ok !== true) return verified;
+    return { ok: true, envelope: verified.envelope };
   } catch {
     // getter / Proxy / 快照超界等异常也绝不能把原文带出去：统一固定结果。
     return invalid("envelope_invalid");
