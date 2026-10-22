@@ -1032,3 +1032,480 @@ test("银行流水是独立数据：对账 / 匹配都不改变凭证与期间�
   assert.deepEqual(db.prepare(`SELECT * FROM periods WHERE account_set_id=? ORDER BY period`).all(set.id), periodsBefore,
     "银行对账不得自动改 periods 状态");
 });
+
+// ================================================================== 首轮独立审查 5 项阻塞回归
+/** 独立金额常量（分）：每笔 1.00 元 = 100 分；501 笔合计 50100 分（手算，不用被测公式生成）。 */
+const UNIT_CENTS = 100;
+const BULK_N = 501;
+const BULK_TOTAL_CENTS = 50100;
+
+const bulkCsv = (count, prefix) => csvAmountDirection(Array.from({ length: count }, (_, i) => ({
+  date: "2026-01-15", summary: `批量${i + 1}`, amount: "1.00", direction: "inflow", refId: `${prefix}-${i + 1}`,
+})));
+
+test("内部判定不被展示分页截断：501 条有效匹配全部参与未达项 / 候选占用 / 失效核验", () => {
+  const set = createSet("合成分页截断", []); // 期初 0，全部金额来自本期
+  const bank = register(set.id, uniq("BANK")).account.bank_account_id;
+  const imported = importCsv(set.id, bank, "PAGE-501", bulkCsv(BULK_N, "PG"));
+  assert.equal(imported.batch.importedRows, BULK_N);
+
+  const voucherIds = [];
+  for (let i = 0; i < BULK_N; i += 1) {
+    const voucher = post(set.id, "2026-01-15", bankIn(1));
+    voucherIds.push(voucher.id);
+    B.confirmMatch(db, {
+      accountSetId: set.id, bankAccountId: bank, transactionId: imported.transactionIds[i],
+      voucherId: voucher.id, entryId: entryOfVoucher(voucher.id), reason: `第 ${i + 1} 笔复核一致`,
+    });
+  }
+  assert.equal(count(`SELECT COUNT(*) AS n FROM bank_matches WHERE account_set_id=? AND status='confirmed'`, set.id), BULK_N);
+
+  const reconciled = B.reconcileBank(db, {
+    accountSetId: set.id, bankAccountId: bank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: BigInt(BULK_TOTAL_CENTS),
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成 501 笔对账单",
+  });
+  // 500 条以后的那一笔不得被当成未达项重复列在两侧。
+  assert.equal(reconciled.outstanding.bookReceivedBankMissing.length, 0, "全部已核销后不得残留企业已收银行未收");
+  assert.equal(reconciled.outstanding.bankReceivedBookMissing.length, 0, "全部已核销后不得残留银行已收企业未收");
+  assert.equal(reconciled.outstanding.totals.bookReceivedBankMissingCents, 0);
+  assert.equal(reconciled.outstanding.totals.bankReceivedBookMissingCents, 0);
+  assert.equal(reconciled.book.closingCents, BULK_TOTAL_CENTS);
+  assert.equal(reconciled.adjusted.bookCents, BULK_TOTAL_CENTS);
+  assert.equal(reconciled.adjusted.bankCents, BULK_TOTAL_CENTS);
+  assert.equal(reconciled.adjusted.differenceCents, 0);
+  assert.equal(reconciled.matches.confirmed, BULK_N);
+  assert.equal(reconciled.status, "reconciled");
+
+  // 候选占用：第 501 条已占用分录也必须 available=false，不能被报成可再次占用。
+  const extra = importCsv(set.id, bank, "PAGE-501-EXTRA", csvAmountDirection([
+    { date: "2026-01-15", summary: "额外一笔", amount: "1.00", direction: "inflow", refId: "PG-EXTRA" },
+  ]));
+  const candidates = B.listCandidates(db, {
+    accountSetId: set.id, bankAccountId: bank, transactionId: extra.transactionIds[0],
+  });
+  assert.equal(candidates.candidates.length, BULK_N);
+  assert.equal(candidates.selection, "requires_manual_choice");
+  for (const item of candidates.candidates) {
+    assert.equal(item.available, false, `分录 ${item.entryId} 已占用却报成可用`);
+    assert.ok(item.claimedByMatchId, `分录 ${item.entryId} 缺少占用匹配 ID`);
+  }
+
+  // 失效核验：反过账最后一笔后，checked 必须是 501，且该匹配立即失效。
+  A.unpostVoucher(set.id, voucherIds[voucherIds.length - 1]);
+  const view = B.listMatchesView(db, { accountSetId: set.id, bankAccountId: bank });
+  assert.equal(view.invalidations.length, 1, "第 501 条之后的失效必须被发现");
+  assert.equal(view.invalidations[0].reason, "voucher_unposted");
+  assert.equal(count(`SELECT COUNT(*) AS n FROM bank_matches WHERE account_set_id=? AND status='invalidated'`, set.id), 1);
+  const refresh = B.refreshMatchStates(db, { accountSetId: set.id, bankAccountId: bank });
+  assert.equal(refresh.checked, BULK_N - 1, "核验范围必须覆盖全部剩余有效匹配");
+});
+
+test("批次与待决歧义真实数量不受展示分页影响（201 批次 / 501 待决歧义）", () => {
+  // 批次：201 个批次，展示只给一页，但计数必须真实。
+  const batchSet = createSet("合成分页批次", []);
+  const batchBank = register(batchSet.id, uniq("BANK")).account.bank_account_id;
+  for (let i = 1; i <= 201; i += 1) {
+    S.insertBatch(db, {
+      accountSetId: batchSet.id, bankAccountId: batchBank, sourceId: "local-statement",
+      batchId: `PAGE-BATCH-${i}`, currency: "CNY", period: "2026-01",
+      contentSha256: `digest-${i}`, mappingFingerprint: "fingerprint",
+      normalizationVersion: I.NORMALIZATION_VERSION, status: "completed",
+    });
+  }
+  const status = B.getBankStatus(db, { accountSetId: batchSet.id, bankAccountId: batchBank });
+  assert.equal(status.batches.total, 201, "批次总数必须是真实数量，不是展示页长度");
+  assert.equal(status.batches.completed, 201);
+  assert.equal(status.batches.pendingReview, 0);
+  assert.equal(status.batches.failed, 0);
+  assert.ok(status.batches.items.length <= status.batches.itemsLimit, "展示分页仍有明确边界");
+  assert.equal(status.batches.items.length, 200);
+  assert.equal(status.batches.itemsTruncated, true);
+
+  // 待决歧义：501 条 pending，对账问题计数必须是 501（不是 500）。
+  const ambSet = createSet("合成分页歧义", []);
+  const ambBank = register(ambSet.id, uniq("BANK")).account.bank_account_id;
+  const dupRows = Array.from({ length: BULK_N }, () => ({
+    date: "2026-01-05", summary: "同摘要", amount: "1.00", direction: "inflow",
+  }));
+  const firstFile = csvAmountDirection(dupRows).trimEnd();
+  const firstImport = importCsv(ambSet.id, ambBank, "PAGE-AMB-1", `${firstFile}\n`);
+  assert.equal(firstImport.batch.importedRows, BULK_N);
+  // 内容摘要不同（末尾多一个换行）、规范化行完全相同 -> 每行都是待人工判定的疑似重复。
+  const secondImport = importCsv(ambSet.id, ambBank, "PAGE-AMB-2", `${firstFile}\n\n`);
+  assert.equal(secondImport.batch.ambiguousRows, BULK_N);
+
+  const reconciled = B.reconcileBank(db, {
+    accountSetId: ambSet.id, bankAccountId: ambBank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: BigInt(BULK_TOTAL_CENTS),
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成歧义对账单",
+  });
+  assert.equal(reconciled.ambiguities.pending, BULK_N, "待决歧义数量必须是真实数量");
+  const issue = reconciled.issues.find((i) => i.code === "unresolved_ambiguity");
+  assert.ok(issue, "必须给出未决歧义问题");
+  assert.equal(issue.details.count, BULK_N);
+  assert.ok(issue.details.items.length <= 20, "证据条数有上限");
+  assert.equal(reconciled.status, "pending_review");
+  const ambStatus = B.getBankStatus(db, { accountSetId: ambSet.id, bankAccountId: ambBank });
+  assert.equal(ambStatus.ambiguities.pending, BULK_N);
+});
+
+test("余额调节按截止日 asOf 判定未达项：合法跨日匹配不得提前消除，截止后两侧都发生正常消除", () => {
+  // 1) 1 月 31 日账面收款 1000.00，2 月 1 日银行收款 1000.00，容差 1 天确认。
+  const set = createSet("合成跨日截止", []);
+  const bank = register(set.id, uniq("BANK")).account.bank_account_id;
+  const janVoucher = post(set.id, "2026-01-31", bankIn(1000));
+  const febTxn = importCsv(set.id, bank, "ASOF-IN", csvAmountDirection([
+    { date: "2026-02-01", summary: "次日到账", amount: "1000.00", direction: "inflow", refId: "AS-1" },
+  ]), MAPPING_AMOUNT_DIRECTION, { period: "2026-02" });
+  B.confirmMatch(db, {
+    accountSetId: set.id, bankAccountId: bank, transactionId: febTxn.transactionIds[0],
+    voucherId: janVoucher.id, entryId: entryOfVoucher(janVoucher.id),
+    reason: "跨日 1 天已核对", dateToleranceDays: 1,
+  });
+  const jan = B.reconcileBank(db, {
+    accountSetId: set.id, bankAccountId: bank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: 0n,
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成 1 月对账单",
+  });
+  // 独立手算：账面截止 1000.00；银行截止 0.00；未达「企业已收银行未收」1000.00
+  // 调节后账面 = 1000.00，调节后银行 = 0.00 + 1000.00 = 1000.00，差额 0。
+  assert.equal(jan.book.closingCents, 100000);
+  assert.equal(jan.statement.closeCents, 0);
+  assert.deepEqual(jan.outstanding.bookReceivedBankMissing.map((i) => i.amountCents), [100000]);
+  assert.equal(jan.outstanding.totals.bookReceivedBankMissingCents, 100000);
+  assert.equal(jan.outstanding.bankReceivedBookMissing.length, 0);
+  assert.equal(jan.adjusted.bookCents, 100000);
+  assert.equal(jan.adjusted.bankCents, 100000);
+  assert.equal(jan.adjusted.differenceCents, 0);
+  assert.equal(jan.status, "reconciled");
+  // 匹配本身仍然有效（不禁止合法跨日匹配）。
+  assert.equal(jan.matches.confirmed, 1);
+
+  // 2) 反方向：1 月 31 日账面付款 1000.00，2 月 1 日银行付款。
+  const outSet = createSet("合成跨日截止反向", []);
+  const outBank = register(outSet.id, uniq("BANK")).account.bank_account_id;
+  const outVoucher = post(outSet.id, "2026-01-31", bankOut(1000));
+  const febOut = importCsv(outSet.id, outBank, "ASOF-OUT", csvAmountDirection([
+    { date: "2026-02-01", summary: "次日付款", amount: "1000.00", direction: "outflow", refId: "AS-2" },
+  ]), MAPPING_AMOUNT_DIRECTION, { period: "2026-02" });
+  B.confirmMatch(db, {
+    accountSetId: outSet.id, bankAccountId: outBank, transactionId: febOut.transactionIds[0],
+    voucherId: outVoucher.id, entryId: entryOfVoucher(outVoucher.id),
+    reason: "跨日付款已核对", dateToleranceDays: 1,
+  });
+  const janOut = B.reconcileBank(db, {
+    accountSetId: outSet.id, bankAccountId: outBank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: 0n,
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成 1 月对账单",
+  });
+  assert.equal(janOut.book.closingCents, -100000);
+  assert.equal(janOut.outstanding.totals.bookPaidBankMissingCents, 100000);
+  assert.equal(janOut.outstanding.totals.bookReceivedBankMissingCents, 0);
+  assert.equal(janOut.adjusted.bookCents, -100000);
+  assert.equal(janOut.adjusted.bankCents, -100000);
+  assert.equal(janOut.adjusted.differenceCents, 0);
+
+  // 3) 截止日两侧都已发生：正常消除（不得因为 asOf 判定把已核销项留在未达里）。
+  const sameSet = createSet("合成同侧截止", []);
+  const sameBank = register(sameSet.id, uniq("BANK")).account.bank_account_id;
+  const sameVoucher = post(sameSet.id, "2026-01-05", bankIn(1000));
+  const sameTxn = importCsv(sameSet.id, sameBank, "ASOF-SAME", csvAmountDirection([
+    { date: "2026-01-06", summary: "次日到账（仍在截止日前）", amount: "1000.00", direction: "inflow", refId: "AS-3" },
+  ]));
+  B.confirmMatch(db, {
+    accountSetId: sameSet.id, bankAccountId: sameBank, transactionId: sameTxn.transactionIds[0],
+    voucherId: sameVoucher.id, entryId: entryOfVoucher(sameVoucher.id),
+    reason: "两侧都在截止日前", dateToleranceDays: 1,
+  });
+  const same = B.reconcileBank(db, {
+    accountSetId: sameSet.id, bankAccountId: sameBank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: 100000n,
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成 1 月对账单",
+  });
+  assert.equal(same.outstanding.totals.bookReceivedBankMissingCents, 0);
+  assert.equal(same.outstanding.totals.bankReceivedBookMissingCents, 0);
+  assert.equal(same.book.matchedEntryCount, 1);
+  assert.equal(same.adjusted.bookCents, 100000);
+  assert.equal(same.adjusted.bankCents, 100000);
+  assert.equal(same.status, "reconciled");
+});
+
+test("对账结果持久化原子：插运行记录或插审计失败时全组件回滚、不废弃旧结果", () => {
+  const set = createSet("合成对账原子", []);
+  const bank = register(set.id, uniq("BANK")).account.bank_account_id;
+  post(set.id, "2026-01-10", bankIn(500));
+  const options = {
+    accountSetId: set.id, bankAccountId: bank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: 0n,
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成原子对账单",
+  };
+  const first = B.reconcileBank(db, options);
+  assert.ok(first.reconcileRunId);
+  const runsBefore = db.prepare(`SELECT id, stale, stale_reason FROM bank_reconcile_runs WHERE account_set_id=? ORDER BY id`).all(set.id)
+    .map((r) => ({ id: Number(r.id), stale: Number(r.stale), reason: r.stale_reason }));
+  const auditBefore = count(`SELECT COUNT(*) AS n FROM bank_audit_events WHERE account_set_id=? AND event_type='reconcile_computed'`, set.id);
+  const snapshotBefore = snapshotBank();
+
+  // 1) 插审计失败：旧运行记录不能被标记 stale，也不能留下无审计的新结果。
+  db.exec(`CREATE TRIGGER bank_test_audit_fail BEFORE INSERT ON bank_audit_events
+             WHEN NEW.event_type = 'reconcile_computed'
+             BEGIN SELECT RAISE(ABORT, 'injected_audit_failure'); END`);
+  try {
+    assert.throws(() => B.reconcileBank(db, options), /injected_audit_failure|constraint|ABORT/i);
+    assert.deepEqual(
+      db.prepare(`SELECT id, stale, stale_reason FROM bank_reconcile_runs WHERE account_set_id=? ORDER BY id`).all(set.id)
+        .map((r) => ({ id: Number(r.id), stale: Number(r.stale), reason: r.stale_reason })),
+      runsBefore,
+      "插审计失败不得废弃旧运行记录",
+    );
+    assert.equal(count(`SELECT COUNT(*) AS n FROM bank_audit_events WHERE account_set_id=? AND event_type='reconcile_computed'`, set.id), auditBefore);
+    assert.deepEqual(snapshotBank(), snapshotBefore, "插审计失败后银行组件状态必须完全回滚");
+  } finally {
+    db.exec(`DROP TRIGGER bank_test_audit_fail`);
+  }
+
+  // 2) 插运行记录失败：同样不得留下新审计、不得误废弃旧结果。
+  db.exec(`CREATE TRIGGER bank_test_run_fail BEFORE INSERT ON bank_reconcile_runs
+             BEGIN SELECT RAISE(ABORT, 'injected_run_failure'); END`);
+  try {
+    assert.throws(() => B.reconcileBank(db, options), /injected_run_failure|constraint|ABORT/i);
+    assert.deepEqual(
+      db.prepare(`SELECT id, stale, stale_reason FROM bank_reconcile_runs WHERE account_set_id=? ORDER BY id`).all(set.id)
+        .map((r) => ({ id: Number(r.id), stale: Number(r.stale), reason: r.stale_reason })),
+      runsBefore,
+      "插运行记录失败不得废弃旧运行记录",
+    );
+    assert.equal(count(`SELECT COUNT(*) AS n FROM bank_audit_events WHERE account_set_id=? AND event_type='reconcile_computed'`, set.id), auditBefore);
+    assert.deepEqual(snapshotBank(), snapshotBefore, "插运行记录失败后银行组件状态必须完全回滚");
+  } finally {
+    db.exec(`DROP TRIGGER bank_test_run_fail`);
+  }
+
+  // 3) 故障排除后同一请求成功，旧记录被正确标记 stale 且只增加一条运行记录 + 一条审计。
+  const ok = B.reconcileBank(db, options);
+  const runsAfter = db.prepare(`SELECT id, stale FROM bank_reconcile_runs WHERE account_set_id=? ORDER BY id`).all(set.id)
+    .map((r) => ({ id: Number(r.id), stale: Number(r.stale) }));
+  assert.equal(runsAfter.length, runsBefore.length + 1);
+  assert.equal(runsAfter[runsAfter.length - 1].id, ok.reconcileRunId);
+  assert.equal(runsAfter[0].stale, 1);
+  assert.equal(count(`SELECT COUNT(*) AS n FROM bank_audit_events WHERE account_set_id=? AND event_type='reconcile_computed'`, set.id), auditBefore + 1);
+});
+
+function entryOfVoucher(voucherId) {
+  return db.prepare(`SELECT id FROM voucher_entries WHERE voucher_id=? AND code='1002'`).get(voucherId).id;
+}
+
+function bankTableNames(conn) {
+  return conn.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all()
+    .map((r) => String(r.name)).filter((n) => n.startsWith("bank_")).sort();
+}
+
+function bankRowCounts(conn) {
+  return Object.fromEntries(bankTableNames(conn).map((name) => [
+    name, Number(conn.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get().n),
+  ]));
+}
+
+/** 造一个「已迁移好银行组件」的独立临时库（最小真实账务结构 + 1002 叶子科目 + 1 个账套）。 */
+async function isolatedComponentDb(dir, name) {
+  const file = join(dir, name);
+  const conn = new DatabaseSync(file);
+  conn.exec("PRAGMA foreign_keys = ON");
+  createLegacySchema(conn);
+  conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
+              VALUES (1, '1002', '银行存款', '资产', 'debit', 0, 1)`);
+  const backup = {
+    createBackup: ({ outDir }) => ({ backupDir: join(outDir, "fake-backup"), bytes: 1 }),
+    verifyBackup: () => ({ ok: true }),
+  };
+  const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: backup });
+  assert.equal(migrated.migrated, true);
+  assert.equal(S.bankSchemaContract(conn).ok, true, "健康组件库必须通过结构契约");
+  return { conn, file };
+}
+
+const contractWriteCalls = (conn) => [
+  ["registerBankAccount", () => B.registerBankAccount(conn, {
+    accountSetId: 1, bankAccountId: "BANK-CONTRACT", sourceId: "src-1", glAccountCode: "1002",
+  })],
+  ["importBankBatch", () => B.importBankBatch(conn, {
+    accountSetId: 1, bankAccountId: "BANK-CONTRACT", sourceId: "src-1", period: "2026-01",
+    batchId: "CONTRACT-1", csvText: "日期,摘要,金额,方向\n2026-01-05,x,1.00,收\n", mapping: MAPPING_AMOUNT_DIRECTION,
+  })],
+  ["confirmMatch", () => B.confirmMatch(conn, {
+    accountSetId: 1, bankAccountId: "BANK-CONTRACT", transactionId: 1, voucherId: 1, entryId: 1, reason: "x",
+  })],
+  ["resolveAmbiguity", () => B.resolveAmbiguity(conn, {
+    accountSetId: 1, bankAccountId: "BANK-CONTRACT", ambiguityId: 1, decision: "distinct", reason: "x",
+  })],
+  ["reconcileBank", () => B.reconcileBank(conn, {
+    accountSetId: 1, bankAccountId: "BANK-CONTRACT", period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: 0n,
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "x",
+  })],
+  ["listTransactionsView", () => B.listTransactionsView(conn, { accountSetId: 1, bankAccountId: "BANK-CONTRACT" })],
+];
+
+test("组件结构 / 版本契约：未来版本、矛盾版本、缺表 / 缺列 / 唯一索引 / 外键动作都在业务写前拒绝", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-contract-"));
+  const assertBlocked = async ({ conn, file }, expectedCode) => {
+    const state = S.bankSchemaContract(conn);
+    assert.equal(state.ok, false);
+    assert.equal(state.code, expectedCode);
+    const tablesBefore = bankTableNames(conn);
+    const rowsBefore = bankRowCounts(conn);
+    await assert.rejects(() => S.ensureBankSchema(conn, { dbPath: file }), (e) => e.code === expectedCode);
+    for (const [label, call] of contractWriteCalls(conn)) {
+      assert.throws(call, (e) => e.code === expectedCode, `${expectedCode}: ${label} 必须拒绝`);
+    }
+    assert.deepEqual(bankRowCounts(conn), rowsBefore, `${expectedCode}: 失败不得写入任何 bank_* 数据`);
+    assert.deepEqual(bankTableNames(conn), tablesBefore, `${expectedCode}: 不得用 CREATE IF NOT EXISTS 修补坏库`);
+    return state;
+  };
+
+  try {
+    // 未来的组件版本：不能当 already-initialized 放行。
+    {
+      const ctx = await isolatedComponentDb(dir, "future.db");
+      try {
+        ctx.conn.prepare(`INSERT INTO bank_component_migrations (version, applied_at) VALUES (2, ?)`)
+          .run(new Date().toISOString());
+        await assertBlocked(ctx, "bank_schema_future_version");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 版本记录与表结构矛盾：表在、版本行丢了。
+    {
+      const ctx = await isolatedComponentDb(dir, "contradiction.db");
+      try {
+        ctx.conn.exec(`DELETE FROM bank_component_migrations`);
+        await assertBlocked(ctx, "bank_schema_version_contradiction");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 缺表：不能静默补建。
+    {
+      const ctx = await isolatedComponentDb(dir, "missing-table.db");
+      try {
+        ctx.conn.exec(`DROP TABLE bank_reconcile_runs`);
+        const state = await assertBlocked(ctx, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_table_missing" && p.detail.table === "bank_reconcile_runs"));
+      } finally { ctx.conn.close(); }
+    }
+
+    // 缺关键列。
+    {
+      const ctx = await isolatedComponentDb(dir, "missing-column.db");
+      try {
+        ctx.conn.exec(`ALTER TABLE bank_audit_events DROP COLUMN detail_json`);
+        const state = await assertBlocked(ctx, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_column_mismatch"
+          && p.detail.table === "bank_audit_events" && p.detail.missing.includes("detail_json")));
+      } finally { ctx.conn.close(); }
+    }
+
+    // 缺 UNIQUE（防双重占用）索引。
+    {
+      const ctx = await isolatedComponentDb(dir, "missing-unique.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_matches_active_txn`);
+        const state = await assertBlocked(ctx, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_index_missing"
+          && p.detail.index === "idx_bank_matches_active_txn"));
+      } finally { ctx.conn.close(); }
+    }
+
+    // 外键删除动作被改成 CASCADE：匹配证据会在删除流水时被连带抹掉，必须拒绝。
+    {
+      const ctx = await isolatedComponentDb(dir, "fk-action.db");
+      try {
+        ctx.conn.exec(`DROP TABLE bank_matches`);
+        ctx.conn.exec(`CREATE TABLE bank_matches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_set_id INTEGER NOT NULL,
+          bank_account_id TEXT NOT NULL,
+          currency TEXT NOT NULL,
+          transaction_id INTEGER REFERENCES bank_transactions(id) ON DELETE CASCADE,
+          voucher_id INTEGER NOT NULL,
+          entry_id INTEGER NOT NULL,
+          entry_line_no INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          confirmed_at TEXT NOT NULL,
+          cancelled_at TEXT,
+          cancel_reason TEXT,
+          invalidated_at TEXT,
+          invalidation_reason TEXT
+        )`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_matches_active_txn
+                         ON bank_matches (transaction_id) WHERE status = 'confirmed'`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_matches_active_entry
+                         ON bank_matches (account_set_id, entry_id) WHERE status = 'confirmed'`);
+        ctx.conn.exec(`CREATE INDEX idx_bank_matches_scope
+                         ON bank_matches (account_set_id, bank_account_id, status)`);
+        const state = await assertBlocked(ctx, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_foreign_key_missing"
+          && p.detail.table === "bank_matches" && p.detail.onDelete === "SET NULL"));
+      } finally { ctx.conn.close(); }
+    }
+
+    // 未声明的额外 bank_* 表：本版本不假定它兼容。
+    {
+      const ctx = await isolatedComponentDb(dir, "unexpected-table.db");
+      try {
+        ctx.conn.exec(`CREATE TABLE bank_extra_probe (id INTEGER PRIMARY KEY)`);
+        const state = await assertBlocked(ctx, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_unexpected_table"));
+        ctx.conn.exec(`DROP TABLE bank_extra_probe`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "移除额外表后契约恢复");
+      } finally { ctx.conn.close(); }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("失效匹配复核计数先过滤再限条：>500 条已复核前缀不得掩盖后续未复核项", () => {
+  const set = createSet("合成失效前缀", []);
+  const bank = register(set.id, uniq("BANK")).account.bank_account_id;
+  const txn = importCsv(set.id, bank, "INV-PREFIX", csvAmountDirection([
+    { date: "2026-01-12", summary: "收款", amount: "10.00", direction: "inflow", refId: "IP-1" },
+  ])).transactionIds[0];
+  const matchedVoucher = post(set.id, "2026-01-12", bankIn(10));
+  const confirmed = B.confirmMatch(db, {
+    accountSetId: set.id, bankAccountId: bank, transactionId: txn,
+    voucherId: matchedVoucher.id, entryId: entryOfVoucher(matchedVoucher.id), reason: "核对一致",
+  });
+  assert.equal(confirmed.match.status, "confirmed");
+  const unmatchedVoucher = post(set.id, "2026-01-12", bankIn(10));
+  const unmatchedEntryId = entryOfVoucher(unmatchedVoucher.id);
+  const matchedEntryId = entryOfVoucher(matchedVoucher.id);
+
+  // 制造 >500 条「已复核」失效匹配（其分录当前已有有效匹配），再追加 1 条真正未复核的；
+  // 若实现先取一页失效记录再排除已复核项，最后这条未复核项就会被静默漏掉。
+  const insertInvalidated = db.prepare(`INSERT INTO bank_matches
+      (account_set_id, bank_account_id, currency, transaction_id, voucher_id, entry_id, entry_line_no,
+       status, snapshot_json, reason, confirmed_at, invalidated_at, invalidation_reason)
+      VALUES (?,?, 'CNY', ?, ?, ?, 1, 'invalidated', '{}', '历史确认', ?, ?, 'voucher_unposted')`);
+  for (let i = 0; i < 500; i += 1) {
+    insertInvalidated.run(set.id, bank, txn, matchedVoucher.id, matchedEntryId,
+      new Date().toISOString(), new Date().toISOString());
+  }
+  insertInvalidated.run(set.id, bank, null, unmatchedVoucher.id, unmatchedEntryId,
+    new Date().toISOString(), new Date().toISOString());
+
+  const result = B.reconcileBank(db, {
+    accountSetId: set.id, bankAccountId: bank, period: "2026-01", asOf: "2026-01-31",
+    statementOpenCents: 0n, statementCloseCents: 0n,
+    coverageFrom: "2026-01-01", coverageTo: "2026-01-31", statementSource: "合成失效前缀对账单",
+  });
+  assert.equal(result.matches.invalidatedUnresolved, 1, "未复核的失效匹配必须被计入");
+  const issue = result.issues.find((i) => i.code === "match_invalidated");
+  assert.ok(issue, "必须给出未复核失效匹配问题");
+  assert.equal(issue.details.count, 1);
+  assert.equal(issue.details.items.length, 1);
+  assert.equal(issue.details.items[0].entryId, unmatchedEntryId);
+  assert.equal(result.status, "pending_review");
+});

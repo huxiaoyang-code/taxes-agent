@@ -25,12 +25,16 @@ import {
   sha256Hex,
 } from "./bank-import.mjs";
 import {
-  BANK_SCHEMA_VERSION,
   appendAuditEvent,
+  assertBankSchemaReady,
   bankError,
   bankSchemaState,
-  bankSchemaVersion,
+  countBatchesByStatus,
+  countMatchesByStatus,
   countPendingAmbiguities,
+  countPendingAmbiguitiesOnOrBefore,
+  countTransactionMatchStates,
+  countUnresolvedInvalidatedMatches,
   findActiveMatchForEntry,
   findActiveMatchForTransaction,
   findBatchByFile,
@@ -47,13 +51,18 @@ import {
   insertReconcileRun,
   insertTransaction,
   inTransaction,
+  listAllMatches,
   listAmbiguities,
   listAuditEvents,
   listBatchRows,
   listBatches,
+  listConfirmedMatchSides,
   listMatches,
+  listMatchesForTransactionIds,
+  listPendingAmbiguitiesOnOrBefore,
   listReconcileRuns,
   listTransactions,
+  listUnresolvedInvalidatedMatches,
   markBatchFailed,
   markReconcileRunsStale,
   removeFailedBatch,
@@ -196,9 +205,9 @@ export function resolveBankScope(db, { accountSetId, bankAccountId, currency = n
   const setId = positiveInt(accountSetId, "account_set_id_invalid", "账套 ID");
   const accountSet = db.prepare(`SELECT * FROM account_sets WHERE id=?`).get(setId);
   if (!accountSet) throw bankError("account_set_not_found", `账套不存在：${setId}`, { accountSetId: setId });
-  if (bankSchemaVersion(db) < BANK_SCHEMA_VERSION) {
-    throw bankError("bank_schema_missing", "当前库尚未初始化银行组件（bank_*）", { accountSetId: setId });
-  }
+  // 组件版本 / 结构契约统一门槛：未来版本、矛盾版本、缺表 / 缺列 / 主键 / UNIQUE / FK 动作损坏
+  // 都在任何业务读写之前拒绝（不用 CREATE IF NOT EXISTS 修补）。
+  assertBankSchemaReady(db);
   const account = getBankAccount(db, { accountSetId: setId, bankAccountId: String(bankAccountId ?? "").trim() });
   if (!account) {
     throw bankError("bank_account_not_registered", `账套 ${setId} 未登记该银行账户：${bankAccountId}`, {
@@ -230,9 +239,7 @@ export function registerBankAccount(db, options = {}) {
     currency = "CNY", displayName = "", bankAccountNo = "", actor = "local-operator",
   } = options;
   const setId = positiveInt(accountSetId, "account_set_id_invalid", "账套 ID");
-  if (bankSchemaVersion(db) < BANK_SCHEMA_VERSION) {
-    throw bankError("bank_schema_missing", "当前库尚未初始化银行组件（bank_*）", { accountSetId: setId });
-  }
+  assertBankSchemaReady(db);
   if (!db.prepare(`SELECT id FROM account_sets WHERE id=?`).get(setId)) {
     throw bankError("account_set_not_found", `账套不存在：${setId}`, { accountSetId: setId });
   }
@@ -761,10 +768,11 @@ export function listTransactionsView(db, options = {}) {
     to,
     limit: options.limit ?? 500,
   });
-  const matches = listMatches(db, {
+  // 只按当前页的流水 ID 取有效匹配：既不漏（不是先取一页匹配再过滤），也不依赖总匹配数。
+  const matches = listMatchesForTransactionIds(db, {
     accountSetId: scope.setId,
     bankAccountId: scope.account.bank_account_id,
-    statuses: ["confirmed"],
+    transactionIds: rows.map((r) => Number(r.id)),
   });
   const byTxn = new Map(matches.map((m) => [Number(m.transaction_id), m]));
   const items = rows.map((txn) => txnView(txn, byTxn.get(Number(txn.id)) ?? null));
@@ -883,7 +891,8 @@ export function evaluateMatch(db, match) {
  */
 export function refreshMatchStates(db, { accountSetId, bankAccountId, persist = true } = {}) {
   const scope = resolveBankScope(db, { accountSetId, bankAccountId });
-  const confirmed = listMatches(db, {
+  // 内部完整判定：必须核验**全部**有效匹配，展示分页（默认 500）不得截断核验范围。
+  const confirmed = listAllMatches(db, {
     accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id, statuses: ["confirmed"],
   });
   const invalidated = [];
@@ -966,10 +975,9 @@ export function listCandidates(db, options = {}) {
   const activeTxnMatch = findActiveMatchForTransaction(db, {
     accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id, transactionId,
   });
-  const activeMatches = listMatches(db, {
-    accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id, statuses: ["confirmed"],
-  });
-  const claimedEntryIds = new Set(activeMatches.map((m) => Number(m.entry_id)));
+
+  // 候选占用逐行按分录直接查当前有效匹配：不先取一页匹配再判断占用，确保超过一页后仍正确标记 available=false。
+  const claimForEntry = (entryId) => findActiveMatchForEntry(db, { accountSetId: scope.setId, entryId });
 
   const sql = `SELECT v.id AS voucher_id, v.period, v.voucher_date, v.word, v.number, v.status,
                       v.summary AS voucher_summary,
@@ -1006,6 +1014,7 @@ export function listCandidates(db, options = {}) {
         ? DIRECTIONS.OUTFLOW
         : null;
     const amount = direction === DIRECTIONS.INFLOW ? debitCents : creditCents;
+    const claim = claimForEntry(Number(row.entry_id));
     const item = {
       voucherId: Number(row.voucher_id),
       entryId: Number(row.entry_id),
@@ -1019,12 +1028,10 @@ export function listCandidates(db, options = {}) {
       amountCents: direction ? centsNumber(amount) : null,
       amountText: direction ? formatCents(amount) : null,
       summary: row.entry_summary || row.voucher_summary || "",
-      available: !claimedEntryIds.has(Number(row.entry_id)),
-      claimedByMatchId: null,
+      available: !claim,
+      claimedByMatchId: claim ? Number(claim.id) : null,
       periodDateConsistent: String(row.period) === periodOf(row.voucher_date),
     };
-    const claim = activeMatches.find((m) => Number(m.entry_id) === Number(row.entry_id));
-    if (claim) item.claimedByMatchId = Number(claim.id);
     if (!direction) {
       skipped.push({ voucherId: Number(row.voucher_id), entryId: Number(row.entry_id), code: "entry_amount_ambiguous" });
       continue;
@@ -1616,13 +1623,25 @@ export function reconcileBank(db, options = {}) {
   const txnRows = db.prepare(`SELECT * FROM bank_transactions
                                WHERE account_set_id=? AND bank_account_id=? AND txn_date <= ?
                                ORDER BY txn_date, id`).all(setId, accountId, asOf);
-  const confirmedMatches = listMatches(db, {
-    accountSetId: setId, bankAccountId: accountId, statuses: ["confirmed"],
-  });
-  const matchedEntryIds = new Set(confirmedMatches.map((m) => Number(m.entry_id)));
-  const matchedTxnIds = new Set(confirmedMatches
-    .filter((m) => m.transaction_id !== null && m.transaction_id !== undefined)
-    .map((m) => Number(m.transaction_id)));
+  // 有效匹配的双方日期：全部读取（不分页）。
+  // 截止日视角：只有当匹配的**两侧都已发生**（凭证日期与银行流水日期都 <= asOf）时，
+  // 这一对才能从截止日未达项中消除；跨日合法匹配保留为「已确认但未发生」的未达项，
+  // 不因此禁止跨日匹配，也不回写账务凑平。
+  const confirmedMatchSides = listConfirmedMatchSides(db, { accountSetId: setId, bankAccountId: accountId });
+  const settledEntryIds = new Set();
+  const settledTxnIds = new Set();
+  for (const match of confirmedMatchSides) {
+    const voucherDate = match.voucher_date === null || match.voucher_date === undefined
+      ? null : String(match.voucher_date);
+    const txnDate = match.txn_date === null || match.txn_date === undefined
+      ? null : String(match.txn_date);
+    if (!voucherDate || !txnDate) continue; // 任一侧缺失（被删除）时不得当作已消除
+    if (voucherDate > asOf || txnDate > asOf) continue;
+    settledEntryIds.add(Number(match.entry_id));
+    if (match.transaction_id !== null && match.transaction_id !== undefined) {
+      settledTxnIds.add(Number(match.transaction_id));
+    }
+  }
 
   let statementNet = 0n;
   for (const txn of txnRows) {
@@ -1671,13 +1690,13 @@ export function reconcileBank(db, options = {}) {
 
   // ---- 四类未达项 ----
   const bookReceivedBankMissing = bookEntries
-    .filter((e) => e.direction === DIRECTIONS.INFLOW && !matchedEntryIds.has(e.entryId));
+    .filter((e) => e.direction === DIRECTIONS.INFLOW && !settledEntryIds.has(e.entryId));
   const bookPaidBankMissing = bookEntries
-    .filter((e) => e.direction === DIRECTIONS.OUTFLOW && !matchedEntryIds.has(e.entryId));
+    .filter((e) => e.direction === DIRECTIONS.OUTFLOW && !settledEntryIds.has(e.entryId));
   const bankReceivedBookMissing = [];
   const bankPaidBookMissing = [];
   for (const txn of txnRows) {
-    if (matchedTxnIds.has(Number(txn.id))) continue;
+    if (settledTxnIds.has(Number(txn.id))) continue;
     const item = {
       transactionId: Number(txn.id),
       date: txn.txn_date,
@@ -1709,37 +1728,39 @@ export function reconcileBank(db, options = {}) {
   const difference = adjustedBook - adjustedBank;
 
   // ---- 未决歧义 / 失效匹配：即使两边数字相等也不能声明已完成 ----
-  const pendingAmbiguities = listAmbiguities(db, {
-    accountSetId: setId, bankAccountId: accountId, status: "pending",
-  }).filter((a) => String(a.txn_date) <= asOf);
-  if (pendingAmbiguities.length) {
+  // 计数用 SQL 聚合 / 先过滤再限条，不拿展示分页长度当真实数量。
+  const pendingAmbiguityCount = countPendingAmbiguitiesOnOrBefore(db, {
+    accountSetId: setId, bankAccountId: accountId, asOf,
+  });
+  const pendingAmbiguities = listPendingAmbiguitiesOnOrBefore(db, {
+    accountSetId: setId, bankAccountId: accountId, asOf, limit: 20,
+  });
+  const unresolvedInvalidatedCount = countUnresolvedInvalidatedMatches(db, {
+    accountSetId: setId, bankAccountId: accountId,
+  });
+  const unresolvedInvalidatedMatches = listUnresolvedInvalidatedMatches(db, {
+    accountSetId: setId, bankAccountId: accountId, limit: 20,
+  });
+  if (pendingAmbiguityCount) {
     issues.push({
       code: "unresolved_ambiguity", severity: "pending",
       message: "存在未判定来源的疑似重复行，未达项与调整后余额不能视为完整",
       details: {
-        count: pendingAmbiguities.length,
-        items: pendingAmbiguities.slice(0, 20).map((a) => ({
+        count: pendingAmbiguityCount,
+        items: pendingAmbiguities.map((a) => ({
           ambiguityId: Number(a.id), date: a.txn_date, amountCents: Number(a.amount_cents),
           direction: a.direction, batchId: a.batch_id, rowIndex: Number(a.row_index),
         })),
       },
     });
   }
-  const invalidatedMatches = listMatches(db, {
-    accountSetId: setId, bankAccountId: accountId, statuses: ["invalidated"],
-  }).filter((m) => {
-    if (m.transaction_id !== null && m.transaction_id !== undefined && matchedTxnIds.has(Number(m.transaction_id))) {
-      return false;
-    }
-    return !matchedEntryIds.has(Number(m.entry_id));
-  });
-  if (invalidatedMatches.length) {
+  if (unresolvedInvalidatedCount) {
     issues.push({
       code: "match_invalidated", severity: "pending",
       message: "存在已失效的匹配（反过账 / 修改 / 删除后），必须复核后才能声明已对平",
       details: {
-        count: invalidatedMatches.length,
-        items: invalidatedMatches.slice(0, 20).map((m) => ({
+        count: unresolvedInvalidatedCount,
+        items: unresolvedInvalidatedMatches.map((m) => ({
           matchId: Number(m.id), reason: m.invalidation_reason, voucherId: Number(m.voucher_id),
           entryId: Number(m.entry_id),
           transactionId: m.transaction_id === null ? null : Number(m.transaction_id),
@@ -1796,8 +1817,9 @@ export function reconcileBank(db, options = {}) {
       netText: formatCents(bookNet),
       closingText: formatCents(bookClose),
       postedEntryCount: bookEntries.length,
+      // 截止日两侧都已发生并被人工确认的银行分录数（跨日未发生的匹配不计入已核销）。
       matchedEntryCount: new Set(bookEntries
-        .filter((e) => matchedEntryIds.has(e.entryId)).map((e) => e.entryId)).size,
+        .filter((e) => settledEntryIds.has(e.entryId)).map((e) => e.entryId)).size,
     },
     outstanding: {
       bookReceivedBankMissing,
@@ -1827,44 +1849,50 @@ export function reconcileBank(db, options = {}) {
     status,
     issues,
     matches: {
-      confirmed: confirmedMatches.length,
+      confirmed: confirmedMatchSides.length,
       invalidatedNow: refresh.invalidated.length,
-      invalidatedUnresolved: invalidatedMatches.length,
+      invalidatedUnresolved: unresolvedInvalidatedCount,
     },
-    ambiguities: { pending: pendingAmbiguities.length },
+    ambiguities: { pending: pendingAmbiguityCount },
     accountingUntouched: true,
     note: noteField(options.note),
   };
 
-  const runId = insertReconcileRun(db, {
-    accountSetId: setId,
-    bankAccountId: accountId,
-    currency,
-    period,
-    asOf,
-    status,
-    bookCloseCents: centsNumber(bookClose),
-    adjustedBookCents: centsNumber(adjustedBook),
-    statementCloseCents: centsNumber(statementClose),
-    adjustedBankCents: centsNumber(adjustedBank),
-    differenceCents: centsNumber(difference),
-    result: {
-      status, issues: issues.map((i) => i.code), differenceCents: centsNumber(difference),
-      statementDifferenceCents: centsNumber(statementDifference),
-      coverage: { coverageFrom, coverageTo }, statementSource,
-    },
-  });
-  appendAuditEvent(db, {
-    accountSetId: setId,
-    bankAccountId: accountId,
-    eventType: "reconcile_computed",
-    subjectType: "bank_reconcile_run",
-    subjectId: String(runId),
-    detail: {
-      period, asOf, status, differenceCents: centsNumber(difference),
-      statementDifferenceCents: centsNumber(statementDifference),
-      issueCodes: issues.map((i) => i.code),
-    },
+  // 旧运行记录失效 + 新运行记录 + 审计必须同一事务：
+  // 任一插入失败（如合成触发器）都不能留下「无审计的新结果」或误废弃旧结果。
+  // 若调用方已经开启外层事务 / 保存点，inTransaction 继续使用保存点，与外层保持兼容。
+  const runId = inTransaction(db, () => {
+    const id = insertReconcileRun(db, {
+      accountSetId: setId,
+      bankAccountId: accountId,
+      currency,
+      period,
+      asOf,
+      status,
+      bookCloseCents: centsNumber(bookClose),
+      adjustedBookCents: centsNumber(adjustedBook),
+      statementCloseCents: centsNumber(statementClose),
+      adjustedBankCents: centsNumber(adjustedBank),
+      differenceCents: centsNumber(difference),
+      result: {
+        status, issues: issues.map((i) => i.code), differenceCents: centsNumber(difference),
+        statementDifferenceCents: centsNumber(statementDifference),
+        coverage: { coverageFrom, coverageTo }, statementSource,
+      },
+    });
+    appendAuditEvent(db, {
+      accountSetId: setId,
+      bankAccountId: accountId,
+      eventType: "reconcile_computed",
+      subjectType: "bank_reconcile_run",
+      subjectId: String(id),
+      detail: {
+        period, asOf, status, differenceCents: centsNumber(difference),
+        statementDifferenceCents: centsNumber(statementDifference),
+        issueCodes: issues.map((i) => i.code),
+      },
+    });
+    return id;
   });
   return { reconcileRunId: runId, ...result };
 }
@@ -1880,33 +1908,38 @@ export function getBankStatus(db, options = {}) {
   const setId = scope.setId;
   const accountId = scope.account.bank_account_id;
   const refresh = refreshMatchStates(db, { accountSetId: setId, bankAccountId: accountId });
-  const batches = listBatches(db, { accountSetId: setId, bankAccountId: accountId, limit: 200 })
-    .map((b) => batchView(db, b));
-  const txns = listTransactions(db, { accountSetId: setId, bankAccountId: accountId, limit: 1000000 });
-  const matches = listMatches(db, { accountSetId: setId, bankAccountId: accountId, limit: 1000000 });
-  const activeTxnIds = new Set(matches.filter((m) => m.status === "confirmed" && m.transaction_id !== null)
-    .map((m) => Number(m.transaction_id)));
+  // 状态计数一律用 SQL 聚合（真实数量）；items 仍可保留展示分页边界（默认 200）。
+  const batchCounts = countBatchesByStatus(db, { accountSetId: setId, bankAccountId: accountId });
+  const batches = listBatches(db, {
+    accountSetId: setId, bankAccountId: accountId, limit: options.batchLimit ?? 200,
+  }).map((b) => batchView(db, b));
+  const transactionCounts = countTransactionMatchStates(db, {
+    accountSetId: setId, bankAccountId: accountId,
+  });
+  const matchCounts = countMatchesByStatus(db, { accountSetId: setId, bankAccountId: accountId });
   const pending = countPendingAmbiguities(db, { accountSetId: setId, bankAccountId: accountId });
   const lastRuns = listReconcileRuns(db, { accountSetId: setId, bankAccountId: accountId, limit: 5 });
   return {
     scope: scopeSummary(scope),
     schema: bankSchemaState(db),
     batches: {
-      total: batches.length,
-      completed: batches.filter((b) => b.status === "completed").length,
-      pendingReview: batches.filter((b) => b.status === "pending_review").length,
-      failed: batches.filter((b) => b.status === "failed").length,
+      total: batchCounts.total,
+      completed: batchCounts.completed,
+      pendingReview: batchCounts.pendingReview,
+      failed: batchCounts.failed,
+      itemsTruncated: batchCounts.total > batches.length,
+      itemsLimit: options.batchLimit ?? 200,
       items: batches,
     },
     transactions: {
-      total: txns.length,
-      matched: txns.filter((t) => activeTxnIds.has(Number(t.id))).length,
-      unmatched: txns.filter((t) => !activeTxnIds.has(Number(t.id))).length,
+      total: transactionCounts.total,
+      matched: transactionCounts.matched,
+      unmatched: transactionCounts.unmatched,
     },
     matches: {
-      confirmed: matches.filter((m) => m.status === "confirmed").length,
-      cancelled: matches.filter((m) => m.status === "cancelled").length,
-      invalidated: matches.filter((m) => m.status === "invalidated").length,
+      confirmed: matchCounts.confirmed,
+      cancelled: matchCounts.cancelled,
+      invalidated: matchCounts.invalidated,
     },
     ambiguities: { pending },
     invalidations: refresh.invalidated,

@@ -265,3 +265,40 @@ test("无数据库副作用：导入并使用本模块不会创建默认库", ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------------------ 首轮独立审查：错误列表总上限
+test("预检错误总上限：201 行坏金额不崩、errorsTruncated=true，重复流水号追加路径共用同一上限", () => {
+  const mapping = {
+    columns: { date: "日期", amount: "金额", direction: "方向", refId: "流水号" },
+    amountMode: "amount_direction",
+    directionLabels: { inflow: ["收"], outflow: ["付"] },
+    currency: "CNY",
+  };
+  const maxErrors = I.BANK_CSV_LIMITS.maxErrors;
+
+  // 合法表头 + 201 行非法金额：此前会在第 201 条错误上抛 "Assignment to constant variable."。
+  const badAmountRows = Array.from({ length: 201 }, (_, i) => `2026-01-10,bad,in,BAD-${i + 1}`);
+  const badAmount = preview(`日期,金额,方向,流水号\n${badAmountRows.join("\n")}\n`, mapping);
+  assert.equal(badAmount.ok, false, "有错误的文件不得报 ok");
+  assert.equal(badAmount.errors.length, maxErrors, "错误列表必须封顶在上限");
+  assert.equal(badAmount.errorsTruncated, true, "超过上限必须显式标记截断");
+  assert.ok(badAmount.errors.every((e) => e.code === "amount_invalid"));
+  assert.deepEqual(badAmount.stats, {
+    dataRows: 201, validRows: 0, errorCount: maxErrors, skippedBlankRows: 0,
+  });
+
+  // 重复稳定流水号：同一套追加路径也必须守总上限，不能单路无限增长。
+  const dupRefRows = Array.from({ length: 401 }, () => "2026-01-10,1.00,收,DUP-1");
+  const dupRef = preview(`日期,金额,方向,流水号\n${dupRefRows.join("\n")}\n`, mapping);
+  assert.equal(dupRef.ok, false);
+  assert.equal(dupRef.errors.length, maxErrors);
+  assert.equal(dupRef.errorsTruncated, true);
+  assert.ok(dupRef.errors.every((e) => e.code === "row_duplicate_ref_id"));
+
+  // 未超上限时不得误报截断（错误条数与行号证据保持完整）。
+  const small = preview("日期,金额,方向,流水号\n2026-01-10,bad,in,S-1\n2026-01-10,1.00,收,S-2\n", mapping);
+  assert.equal(small.ok, false);
+  assert.equal(small.errors.length, 1);
+  assert.equal(small.errorsTruncated, false);
+  assert.equal(small.errors[0].rowNumber, 1);
+});

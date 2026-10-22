@@ -52,6 +52,7 @@ const USAGE_CODES = new Set([
 const BLOCKED_CODES = new Set([
   "migration_backup_unavailable", "migration_backup_failed", "migration_backup_invalid",
   "schema_not_supported", "bank_schema_missing", "bank_migration_failed",
+  "bank_schema_future_version", "bank_schema_version_contradiction", "bank_schema_corrupt",
   "backup_service_not_found", "backup_service_invalid", "db_path_required",
   "fresh_database_file_exists", "fresh_database_path_required",
 ]);
@@ -215,7 +216,18 @@ async function loadBackupService(flags) {
 }
 
 async function ensureBankReady(ctx, flags) {
-  if (STORAGE.bankSchemaVersion(ctx.db) >= STORAGE.BANK_SCHEMA_VERSION) return null;
+  // 统一组件检查：版本 / 结构契约符合就直接用；已存在 bank_* 但不符合契约（未来版本、
+  // 矛盾版本、缺表 / 缺列 / 主键 / 索引 / 外键动作）必须在任何命令动作之前拒绝；
+  // 只有「完全没有 bank_*」才进入备份门槛迁移。
+  const contract = STORAGE.bankSchemaContract(ctx.db);
+  if (contract.ok) return null;
+  if (contract.initialized) {
+    throw new CliError(contract.code, contract.message, {
+      version: contract.version,
+      target: contract.target,
+      problems: contract.problems.slice(0, 10),
+    });
+  }
   const backupService = await loadBackupService(flags);
   return STORAGE.ensureBankSchema(ctx.db, {
     dbPath: ctx.abs,

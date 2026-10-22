@@ -720,6 +720,10 @@ export function normalizeBankRow({ cells, headerIndex, mapping, period, rowNumbe
 /**
  * 预检：解析文件 + 校验映射 + 规范化每一行。任何错误都返回结构化行级 / 表级错误，
  * 不做部分导入。本函数不接触数据库。
+ *
+ * 错误列表总条数上限 = `BANK_CSV_LIMITS.maxErrors`：CSV 解析、缺失列、期间、行级规范化、
+ * 文件内重复流水号**共用同一个上限**；超限只置 `errorsTruncated: true`，不无限增长，
+ * 也不因截断把有错误的文件报成 ok。
  */
 export function previewCsvImport({ csvText, mapping: rawMapping, period }) {
   const mappingResult = normalizeMapping(rawMapping);
@@ -739,16 +743,27 @@ export function previewCsvImport({ csvText, mapping: rawMapping, period }) {
   }
   const mapping = mappingResult.mapping;
   const parsed = parseBankCsv(csvText, { ignoreBlankRows: mapping.ignoreBlankRows });
-  const errors = [...parsed.errors];
-  const errorsTruncated = parsed.errorsTruncated;
+  // 错误列表总上限与 CSV 解析共用同一上限：任何追加路径（行级错误、缺列、期间、
+  // 文件内重复流水号）都只能追加到上限，超过就置 errorsTruncated，不能再无限增长。
+  const maxErrors = BANK_CSV_LIMITS.maxErrors;
+  const errors = [];
+  let errorsTruncated = parsed.errorsTruncated;
+  const addError = (error) => {
+    if (errors.length < maxErrors) {
+      errors.push(error);
+      return;
+    }
+    errorsTruncated = true;
+  };
+  for (const error of parsed.errors) addError(error);
   const fileDigest = sha256(typeof csvText === "string" ? csvText : String(csvText ?? ""));
 
   if (!isValidPeriod(period)) {
-    errors.push({ code: "period_invalid", message: "必须显式提供账务期间 YYYY-MM" });
+    addError({ code: "period_invalid", message: "必须显式提供账务期间 YYYY-MM" });
   }
   const { index: headerIndex, missing } = headerIndexFor(parsed.headers, mapping);
   for (const item of missing) {
-    errors.push({
+    addError({
       code: "csv_missing_column",
       message: `CSV 缺少映射声明的列：${item.header}`,
       field: item.key,
@@ -770,11 +785,7 @@ export function previewCsvImport({ csvText, mapping: rawMapping, period }) {
       });
       if (!normalized.ok) {
         for (const err of normalized.errors) {
-          if (errors.length < BANK_CSV_LIMITS.maxErrors) {
-            errors.push({ ...err, rowNumber: raw.rowNumber, lineNumber: raw.lineNumber });
-          } else {
-            errorsTruncated = true;
-          }
+          addError({ ...err, rowNumber: raw.rowNumber, lineNumber: raw.lineNumber });
         }
         continue;
       }
@@ -782,7 +793,7 @@ export function previewCsvImport({ csvText, mapping: rawMapping, period }) {
       if (row.refId) {
         const existing = seenRefIds.get(row.refId);
         if (existing !== undefined) {
-          errors.push({
+          addError({
             code: "row_duplicate_ref_id",
             message: `同一文件内银行流水 ID 重复：${row.refId}（第 ${existing} 行与第 ${raw.rowNumber} 行）`,
             field: "refId",

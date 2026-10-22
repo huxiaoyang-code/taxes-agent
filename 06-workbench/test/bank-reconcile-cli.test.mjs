@@ -444,3 +444,58 @@ test("CLI 每一步都真实持久化：重新打开库能看到批次、流水�
     assert.equal(readFileSync(dbPath).length > 0, true);
   } finally { probe.close(); }
 });
+
+// ------------------------------------------------------------------ 首轮独立审查：组件结构契约（CLI 旁路）
+test("CLI 组件结构契约损坏：未来版本 / 缺表在任何命令动作前拒绝（exit 5）且不写入", () => {
+  const futurePath = join(baseDir, "contract-future.db");
+  const missingPath = join(baseDir, "contract-missing-table.db");
+  // WAL 模式下直接复制文件不安全：用一致快照导出，再在副本上制造结构偏差。
+  db.prepare("VACUUM INTO ?").run(futurePath);
+  db.prepare("VACUUM INTO ?").run(missingPath);
+
+  const tableCounts = (path) => {
+    const conn = new DatabaseSync(path);
+    try {
+      const names = conn.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all()
+        .map((r) => String(r.name)).filter((n) => n.startsWith("bank_")).sort();
+      const counts = Object.fromEntries(names.map((n) => [n, Number(conn.prepare(`SELECT COUNT(*) AS n FROM ${n}`).get().n)]));
+      const tables = Object.fromEntries(conn.prepare(`SELECT name FROM sqlite_master WHERE type='table'`)
+        .all().map((r) => [String(r.name), 1]));
+      return { counts, tables };
+    } finally { conn.close(); }
+  };
+
+  // 1) 组件版本行被改成未来版本（v2）：不得被当成 already-initialized 放行。
+  {
+    const conn = new DatabaseSync(futurePath);
+    try {
+      conn.prepare(`INSERT INTO bank_component_migrations (version, applied_at) VALUES (2, ?)`)
+        .run(new Date().toISOString());
+    } finally { conn.close(); }
+  }
+  const futureBefore = tableCounts(futurePath);
+  expectError(["status", "--db", futurePath, "--account-set", String(setA.id), "--bank-account", "BANK-A"],
+    "bank_schema_future_version", 5);
+  expectError(["account-register", "--db", futurePath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-FUTURE", "--source", "local-statement", "--gl-code", "1002"],
+  "bank_schema_future_version", 5);
+  assert.deepEqual(tableCounts(futurePath), futureBefore, "未来版本拒绝时不得写入任何 bank_* 数据");
+
+  // 2) 缺少组件表：不得用 CREATE IF NOT EXISTS 静默修补，写入前就拒绝。
+  {
+    const conn = new DatabaseSync(missingPath);
+    try { conn.exec("DROP TABLE bank_reconcile_runs"); } finally { conn.close(); }
+  }
+  const missingBefore = tableCounts(missingPath);
+  const rejected = expectError(["account-register", "--db", missingPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-MISSING", "--source", "local-statement", "--gl-code", "1002"],
+  "bank_schema_corrupt", 5);
+  assert.ok(rejected.error.details.problems.some((p) => p.code === "bank_schema_table_missing"
+    && p.detail.table === "bank_reconcile_runs"), "必须给出结构化结构问题证据");
+  const missingAfter = tableCounts(missingPath);
+  assert.deepEqual(missingAfter, missingBefore, "结构损坏拒绝时不得写入或补建任何 bank_* 表");
+  assert.equal(missingAfter.tables.bank_reconcile_runs, undefined, "损坏的表不得被静默重建");
+
+  rmSync(futurePath, { force: true });
+  rmSync(missingPath, { force: true });
+});

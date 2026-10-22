@@ -47,6 +47,131 @@ const REQUIRED_BASE_COLUMNS = Object.freeze({
   voucher_entries: ["id", "voucher_id", "line_no", "code", "debit", "credit"],
 });
 
+/**
+ * 组件结构契约（schema v1）：表 / 关键列 / 主键 / 索引（含 UNIQUE 与部分索引）/ 外键动作。
+ *
+ * 用途：
+ *  - 业务写前结构自检（`assertBankSchemaReady`）：缺表 / 缺列 / 主键 / UNIQUE / FK 动作不符
+ *    一律在写入前结构化拒绝，不用 `CREATE TABLE IF NOT EXISTS` 静默修补坏库；
+ *  - 文档与后续备份 / 恢复组合的结构核对依据（外部模块可 import 本常量）。
+ *
+ * 本契约只做**结构**核对（sqlite_master / PRAGMA），不做全表内容扫描。
+ * 版本升级必须显式改这里并新增迁移；本版本仍只有 v1，不伪造 v2。
+ */
+export const BANK_SCHEMA_CONTRACT = Object.freeze({
+  version: BANK_SCHEMA_VERSION,
+  tables: Object.freeze({
+    bank_component_migrations: {
+      columns: Object.freeze(["version", "applied_at", "note"]),
+      primaryKey: Object.freeze(["version"]),
+    },
+    bank_component_backups: {
+      columns: Object.freeze(["id", "version", "path", "bytes", "integrity", "created_at", "note"]),
+      primaryKey: Object.freeze(["id"]),
+    },
+    bank_accounts: {
+      columns: Object.freeze([
+        "account_set_id", "bank_account_id", "source_id", "currency", "gl_account_code",
+        "display_name", "bank_account_no", "created_at",
+      ]),
+      primaryKey: Object.freeze(["account_set_id", "bank_account_id"]),
+    },
+    bank_batches: {
+      columns: Object.freeze([
+        "account_set_id", "bank_account_id", "source_id", "batch_id", "currency", "period",
+        "content_sha256", "mapping_fingerprint", "normalization_version", "status", "row_count",
+        "imported_rows", "reused_rows", "ambiguous_rows", "attempts", "replay_of_batch",
+        "result_json", "error_code", "error_message", "created_at", "updated_at",
+      ]),
+      primaryKey: Object.freeze(["account_set_id", "bank_account_id", "batch_id"]),
+    },
+    bank_transactions: {
+      columns: Object.freeze([
+        "id", "account_set_id", "bank_account_id", "source_id", "currency", "txn_date", "period",
+        "direction", "amount_cents", "summary", "bank_ref_id", "balance_after_cents",
+        "content_fingerprint", "row_fingerprint", "batch_id", "row_index", "origin", "created_at",
+      ]),
+      primaryKey: Object.freeze(["id"]),
+    },
+    bank_batch_rows: {
+      columns: Object.freeze([
+        "id", "account_set_id", "bank_account_id", "batch_id", "row_index", "row_sha256",
+        "row_fingerprint", "status", "transaction_id", "ambiguity_id", "note", "created_at",
+      ]),
+      primaryKey: Object.freeze(["id"]),
+    },
+    bank_ambiguities: {
+      columns: Object.freeze([
+        "id", "account_set_id", "bank_account_id", "source_id", "batch_id", "row_index", "txn_date",
+        "period", "direction", "amount_cents", "summary", "currency", "row_fingerprint",
+        "content_fingerprint", "batch_row_sha256", "candidate_transaction_ids", "status", "decision",
+        "decision_reason", "resolved_transaction_id", "resolved_at", "created_at",
+      ]),
+      primaryKey: Object.freeze(["id"]),
+    },
+    bank_matches: {
+      columns: Object.freeze([
+        "id", "account_set_id", "bank_account_id", "currency", "transaction_id", "voucher_id",
+        "entry_id", "entry_line_no", "status", "snapshot_json", "reason", "confirmed_at",
+        "cancelled_at", "cancel_reason", "invalidated_at", "invalidation_reason",
+      ]),
+      primaryKey: Object.freeze(["id"]),
+    },
+    bank_audit_events: {
+      columns: Object.freeze([
+        "id", "account_set_id", "bank_account_id", "event_type", "subject_type", "subject_id",
+        "detail_json", "created_at",
+      ]),
+      primaryKey: Object.freeze(["id"]),
+    },
+    bank_reconcile_runs: {
+      columns: Object.freeze([
+        "id", "account_set_id", "bank_account_id", "currency", "period", "as_of", "status",
+        "book_close_cents", "adjusted_book_cents", "statement_close_cents", "adjusted_bank_cents",
+        "difference_cents", "result_json", "stale", "stale_reason", "created_at",
+      ]),
+      primaryKey: Object.freeze(["id"]),
+    },
+  }),
+  /**
+   * 索引契约：`index` 有名字时按名字核对，没有名字时按（表 + 列 + unique + partial）签名核对
+   * （用于表级 UNIQUE 约束生成的自动索引）。
+   */
+  indexes: Object.freeze([
+    { index: "idx_bank_accounts_gl", table: "bank_accounts", columns: ["account_set_id", "gl_account_code"], unique: true, partial: false },
+    { index: "idx_bank_accounts_source", table: "bank_accounts", columns: ["account_set_id", "source_id"], unique: false, partial: false },
+    { table: "bank_accounts", columns: ["account_set_id", "bank_account_id"], unique: true, partial: false },
+    { index: "idx_bank_batches_file", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "source_id", "content_sha256"], unique: false, partial: false },
+    { index: "idx_bank_batches_status", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
+    { table: "bank_batches", columns: ["account_set_id", "bank_account_id", "batch_id"], unique: true, partial: false },
+    { index: "idx_bank_txn_ref", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "bank_ref_id"], unique: true, partial: true },
+    { index: "idx_bank_txn_batch_row", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
+    { index: "idx_bank_txn_scope_date", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "txn_date"], unique: false, partial: false },
+    { index: "idx_bank_txn_fingerprint", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "row_fingerprint"], unique: false, partial: false },
+    { index: "idx_bank_batch_rows_txn", table: "bank_batch_rows", columns: ["transaction_id"], unique: false, partial: false },
+    { table: "bank_batch_rows", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
+    { index: "idx_bank_ambiguities_status", table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
+    { table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
+    { index: "idx_bank_matches_active_txn", table: "bank_matches", columns: ["transaction_id"], unique: true, partial: true },
+    { index: "idx_bank_matches_active_entry", table: "bank_matches", columns: ["account_set_id", "entry_id"], unique: true, partial: true },
+    { index: "idx_bank_matches_scope", table: "bank_matches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
+    { index: "idx_bank_audit_scope", table: "bank_audit_events", columns: ["account_set_id", "bank_account_id", "event_type"], unique: false, partial: false },
+    { index: "idx_bank_reconcile_scope", table: "bank_reconcile_runs", columns: ["account_set_id", "bank_account_id", "period", "as_of"], unique: false, partial: false },
+  ]),
+  /** 外键契约：列顺序、目标表 / 列与删除动作都必须与 DDL 一致。 */
+  foreignKeys: Object.freeze([
+    { table: "bank_accounts", columns: ["account_set_id"], refTable: "account_sets", refColumns: ["id"], onDelete: "CASCADE" },
+    { table: "bank_batches", columns: ["account_set_id", "bank_account_id"], refTable: "bank_accounts", refColumns: ["account_set_id", "bank_account_id"], onDelete: "CASCADE" },
+    { table: "bank_transactions", columns: ["account_set_id", "bank_account_id"], refTable: "bank_accounts", refColumns: ["account_set_id", "bank_account_id"], onDelete: "CASCADE" },
+    { table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "batch_id"], refTable: "bank_batches", refColumns: ["account_set_id", "bank_account_id", "batch_id"], onDelete: "CASCADE" },
+    { table: "bank_batch_rows", columns: ["transaction_id"], refTable: "bank_transactions", refColumns: ["id"], onDelete: "SET NULL" },
+    { table: "bank_batch_rows", columns: ["account_set_id", "bank_account_id", "batch_id"], refTable: "bank_batches", refColumns: ["account_set_id", "bank_account_id", "batch_id"], onDelete: "CASCADE" },
+    { table: "bank_ambiguities", columns: ["resolved_transaction_id"], refTable: "bank_transactions", refColumns: ["id"], onDelete: "SET NULL" },
+    { table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "batch_id"], refTable: "bank_batches", refColumns: ["account_set_id", "bank_account_id", "batch_id"], onDelete: "CASCADE" },
+    { table: "bank_matches", columns: ["transaction_id"], refTable: "bank_transactions", refColumns: ["id"], onDelete: "SET NULL" },
+  ]),
+});
+
 const nowIso = () => new Date().toISOString();
 /** 结构化业务错误：CLI / 上层按 code 映射退出码，不打印原始 SQL。 */
 export function bankError(code, message, details) {
@@ -78,13 +203,235 @@ export function assertBaseSchema(db) {
   }
 }
 
+// ------------------------------------------------------------------ 组件结构契约自检
+const SCHEMA_MESSAGES = Object.freeze({
+  bank_schema_missing: "当前库尚未初始化银行组件（bank_*）",
+  bank_schema_future_version: "银行组件版本比当前程序更新，拒绝在未知结构上读写",
+  bank_schema_version_contradiction: "银行组件版本记录与表结构矛盾，拒绝在矛盾结构上读写",
+  bank_schema_corrupt: "银行组件表结构与本版本契约不一致（缺表 / 缺列 / 主键 / 索引 / 外键动作），拒绝在损坏结构上读写",
+});
+
+function indexSignatures(db, table) {
+  return db.prepare(`PRAGMA index_list(${table})`).all().map((idx) => ({
+    name: String(idx.name),
+    unique: Number(idx.unique) === 1,
+    partial: Number(idx.partial) === 1,
+    origin: String(idx.origin ?? ""),
+    columns: db.prepare(`PRAGMA index_info(${idx.name})`).all()
+      .sort((a, b) => Number(a.seqno) - Number(b.seqno))
+      .map((c) => String(c.name)),
+  }));
+}
+
+function foreignKeySignatures(db, table) {
+  const rows = db.prepare(`PRAGMA foreign_key_list(${table})`).all();
+  const groups = new Map();
+  for (const row of rows) {
+    const id = Number(row.id);
+    const entry = groups.get(id) ?? {
+      refTable: String(row.table),
+      onDelete: String(row.on_delete ?? "NO ACTION").toUpperCase(),
+      rows: [],
+    };
+    entry.rows.push({ seq: Number(row.seq), from: String(row.from), to: String(row.to) });
+    groups.set(id, entry);
+  }
+  return [...groups.values()].map((entry) => {
+    const ordered = entry.rows.sort((a, b) => a.seq - b.seq);
+    return {
+      columns: ordered.map((r) => r.from),
+      refTable: entry.refTable,
+      refColumns: ordered.map((r) => r.to),
+      onDelete: entry.onDelete,
+    };
+  });
+}
+
+const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * 只读核对当前库的银行组件结构 / 版本是否与本版本契约一致。
+ *
+ * 返回值：{ initialized, ok, version, target, code, message, problems }。
+ * - 没有任何 bank_* 表 → initialized:false / code `bank_schema_missing`（可以走迁移门槛）；
+ * - 版本比本程序更新 → `bank_schema_future_version`；
+ * - 版本记录与表集合矛盾（有表无版本、版本行不是唯一的 v1 等）→ `bank_schema_version_contradiction`；
+ * - 其余结构偏差 → `bank_schema_corrupt`（problems 里逐项给出表 / 列 / 主键 / 索引 / 外键）。
+ * 本函数不做全表内容扫描，不写库。
+ */
+export function bankSchemaContract(db) {
+  const problems = [];
+  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all()
+    .map((r) => String(r.name));
+  const bankTables = tables.filter((n) => n.startsWith("bank_"));
+  if (!bankTables.length) {
+    return {
+      initialized: false,
+      ok: false,
+      version: 0,
+      target: BANK_SCHEMA_VERSION,
+      code: "bank_schema_missing",
+      message: SCHEMA_MESSAGES.bank_schema_missing,
+      problems: [{ code: "bank_schema_missing", detail: { target: BANK_SCHEMA_VERSION } }],
+    };
+  }
+  const hasVersionTable = bankTables.includes("bank_component_migrations");
+  const versions = hasVersionTable
+    ? db.prepare(`SELECT version FROM bank_component_migrations ORDER BY version`).all()
+      .map((r) => Number(r.version))
+    : [];
+  const version = versions.length ? Math.max(...versions) : 0;
+
+  if (versions.some((v) => v > BANK_SCHEMA_VERSION)) {
+    problems.push({
+      code: "bank_schema_future_version",
+      detail: { versions, target: BANK_SCHEMA_VERSION },
+    });
+  }
+  if (!hasVersionTable) {
+    problems.push({
+      code: "bank_schema_version_contradiction",
+      detail: { reason: "component_migrations_missing", tables: bankTables.slice(0, 20) },
+    });
+  } else if (versions.length !== 1 || versions[0] !== BANK_SCHEMA_VERSION) {
+    problems.push({
+      code: "bank_schema_version_contradiction",
+      detail: { versions, target: BANK_SCHEMA_VERSION, reason: "version_rows_not_exactly_target" },
+    });
+  }
+
+  const expectedTables = Object.keys(BANK_SCHEMA_CONTRACT.tables);
+  const unexpected = bankTables.filter((n) => !expectedTables.includes(n));
+  if (unexpected.length) {
+    problems.push({ code: "bank_schema_unexpected_table", detail: { tables: unexpected.slice(0, 20) } });
+  }
+
+  const columnsByTable = new Map();
+  for (const [name, spec] of Object.entries(BANK_SCHEMA_CONTRACT.tables)) {
+    if (!tables.includes(name)) {
+      problems.push({ code: "bank_schema_table_missing", detail: { table: name } });
+      continue;
+    }
+    const info = db.prepare(`PRAGMA table_info(${name})`).all();
+    const columns = info.map((c) => String(c.name));
+    columnsByTable.set(name, columns);
+    const missing = spec.columns.filter((c) => !columns.includes(c));
+    const extra = columns.filter((c) => !spec.columns.includes(c));
+    if (missing.length || extra.length) {
+      problems.push({ code: "bank_schema_column_mismatch", detail: { table: name, missing, extra } });
+    }
+    const primaryKey = info.filter((c) => Number(c.pk) > 0)
+      .sort((a, b) => Number(a.pk) - Number(b.pk))
+      .map((c) => String(c.name));
+    if (!sameList(primaryKey, [...spec.primaryKey])) {
+      problems.push({
+        code: "bank_schema_primary_key_mismatch",
+        detail: { table: name, expected: [...spec.primaryKey], actual: primaryKey },
+      });
+    }
+  }
+
+  const indexesByTable = new Map();
+  const indexesFor = (table) => {
+    if (!columnsByTable.has(table)) return [];
+    if (!indexesByTable.has(table)) indexesByTable.set(table, indexSignatures(db, table));
+    return indexesByTable.get(table);
+  };
+  for (const want of BANK_SCHEMA_CONTRACT.indexes) {
+    const have = indexesFor(want.table);
+    const match = have.find((idx) => (want.index
+      ? idx.name === want.index
+      : (idx.unique === want.unique && idx.partial === want.partial && sameList(idx.columns, [...want.columns]))));
+    if (!match) {
+      problems.push({
+        code: "bank_schema_index_missing",
+        detail: {
+          table: want.table, index: want.index ?? null, columns: [...want.columns],
+          unique: want.unique, partial: want.partial,
+        },
+      });
+      continue;
+    }
+    if (match.unique !== want.unique || match.partial !== want.partial
+      || !sameList(match.columns, [...want.columns])) {
+      problems.push({
+        code: "bank_schema_index_mismatch",
+        detail: {
+          table: want.table, index: match.name,
+          expected: { columns: [...want.columns], unique: want.unique, partial: want.partial },
+          actual: { columns: match.columns, unique: match.unique, partial: match.partial },
+        },
+      });
+    }
+  }
+
+  for (const want of BANK_SCHEMA_CONTRACT.foreignKeys) {
+    if (!columnsByTable.has(want.table)) continue;
+    const have = foreignKeySignatures(db, want.table);
+    const match = have.find((fk) => fk.refTable === want.refTable
+      && fk.onDelete === want.onDelete
+      && sameList(fk.columns, [...want.columns])
+      && sameList(fk.refColumns, [...want.refColumns]));
+    if (!match) {
+      problems.push({
+        code: "bank_schema_foreign_key_missing",
+        detail: {
+          table: want.table, columns: [...want.columns], refTable: want.refTable,
+          refColumns: [...want.refColumns], onDelete: want.onDelete,
+          actual: have.slice(0, 10),
+        },
+      });
+    }
+  }
+
+  if (!problems.length) {
+    return {
+      initialized: true,
+      ok: true,
+      version,
+      target: BANK_SCHEMA_VERSION,
+      code: null,
+      message: null,
+      problems: [],
+    };
+  }
+  const code = problems.some((p) => p.code === "bank_schema_future_version")
+    ? "bank_schema_future_version"
+    : problems.some((p) => p.code === "bank_schema_version_contradiction")
+      ? "bank_schema_version_contradiction"
+      : "bank_schema_corrupt";
+  return {
+    initialized: true,
+    ok: false,
+    version,
+    target: BANK_SCHEMA_VERSION,
+    code,
+    message: SCHEMA_MESSAGES[code],
+    problems,
+  };
+}
+
+/**
+ * 业务写 / 读前置门槛：结构或版本不符合本版本契约就结构化拒绝（不写库、不 DDL）。
+ * 所有写入口（登记 / 导入 / 匹配 / 歧义 / 对账）都经由 resolveBankScope 等调用本函数。
+ */
+export function assertBankSchemaReady(db) {
+  const state = bankSchemaContract(db);
+  if (state.ok) return state;
+  throw bankError(state.code, state.message, {
+    version: state.version,
+    target: state.target,
+    problems: state.problems.slice(0, 20),
+  });
+}
+
 export function bankSchemaVersion(db) {
   if (!tableExists(db, "bank_component_migrations")) return 0;
   const row = db.prepare(`SELECT COALESCE(MAX(version),0) AS v FROM bank_component_migrations`).get();
   return Number(row?.v || 0);
 }
 
-/** 只读自检：组件版本、表、迁移 / 备份记录。 */
+/** 只读自检：组件版本、表、迁移 / 备份记录与结构契约状态。 */
 export function bankSchemaState(db) {
   const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all().map((r) => r.name);
   const migrations = tableExists(db, "bank_component_migrations")
@@ -93,12 +440,18 @@ export function bankSchemaState(db) {
   const backups = tableExists(db, "bank_component_backups")
     ? db.prepare(`SELECT id, version, path, bytes, integrity, created_at, note FROM bank_component_backups ORDER BY id`).all()
     : [];
+  const contract = bankSchemaContract(db);
   return {
     version: bankSchemaVersion(db),
     target: BANK_SCHEMA_VERSION,
     tables: tables.filter((t) => t.startsWith("bank_")),
     migrations,
     backups,
+    contract: {
+      ok: contract.ok,
+      code: contract.code,
+      problemCodes: [...new Set(contract.problems.map((p) => p.code))],
+    },
   };
 }
 
@@ -430,6 +783,12 @@ async function runBackupGate({ backupService, dbPath, outDir, version }) {
 /**
  * 初始化 / 升级银行组件结构。
  *
+ * 版本 / 结构契约（未来版本、矛盾版本、缺表 / 缺列 / 主键 / UNIQUE / FK 动作）：
+ *  - 已符合本版本契约 → 幂等 no-op（already-initialized）；
+ *  - 已经有 bank_* 结构但与契约不符 → 结构化拒绝，**不做任何 DDL / 备份 / 写入**，
+ *    也不用 CREATE IF NOT EXISTS 静默修补坏库；
+ *  - 完全没有 bank_* 表 → 走已有库备份门槛 / 新库创建事实后建组件。
+ *
  * @param {DatabaseSync} db 显式连接
  * @param {object} options
  * @param {string} options.dbPath 当前库文件路径（备份与创建事实都绑定它）
@@ -442,9 +801,17 @@ export async function ensureBankSchema(db, options = {}) {
   const { dbPath, receipt = null, backupService = null, dataDir = null } = options;
   if (!dbPath) throw bankError("db_path_required", "初始化银行组件必须显式提供库路径");
   const abs = resolve(String(dbPath));
-  const from = bankSchemaVersion(db);
-  if (from >= BANK_SCHEMA_VERSION) {
+  const contract = bankSchemaContract(db);
+  const from = contract.version;
+  if (contract.ok) {
     return { migrated: false, from, to: from, creation: "already-initialized", backup: null };
+  }
+  if (contract.initialized) {
+    throw bankError(contract.code, contract.message, {
+      from,
+      to: BANK_SCHEMA_VERSION,
+      problems: contract.problems.slice(0, 20),
+    });
   }
   // 先核对账务核心结构；不是受支持的库就不做任何 DDL / 备份。
   assertBaseSchema(db);
@@ -473,9 +840,19 @@ export async function ensureBankSchema(db, options = {}) {
       }
       db.prepare(`INSERT INTO bank_component_migrations (version, applied_at, note) VALUES (?,?,?)`)
         .run(BANK_SCHEMA_VERSION, nowIso(), `LOCAL-04 bank component (${creation})`);
+      // DDL 后立即按契约自检；不合约就不留半个结构。
+      const after = bankSchemaContract(db);
+      if (!after.ok) {
+        throw bankError(after.code, after.message, {
+          from,
+          to: BANK_SCHEMA_VERSION,
+          problems: after.problems.slice(0, 20),
+        });
+      }
       return { migrated: true, from, to: BANK_SCHEMA_VERSION, creation, backup };
     });
   } catch (e) {
+    if (e && typeof e.code === "string" && e.code.startsWith("bank_schema_")) throw e;
     throw bankError("bank_migration_failed", "银行组件结构初始化失败，原库已回滚", {
       from,
       to: BANK_SCHEMA_VERSION,
@@ -606,6 +983,7 @@ export function markBatchFailed(db, {
   return getBatch(db, { accountSetId, bankAccountId, batchId });
 }
 
+/** 批次展示列表：只用于展示（默认 200）。状态计数请用 `countBatchesByStatus`。 */
 export function listBatches(db, { accountSetId, bankAccountId, limit = 200 }) {
   return db.prepare(`SELECT * FROM bank_batches
                       WHERE account_set_id=? AND bank_account_id=?
@@ -651,6 +1029,7 @@ export function insertTransaction(db, {
   return db.prepare(`SELECT * FROM bank_transactions WHERE id=?`).get(Number(info.lastInsertRowid));
 }
 
+/** 流水展示列表：只用于展示（默认 500）。内部判定请用完整查询 / SQL 聚合。 */
 export function listTransactions(db, {
   accountSetId, bankAccountId, from = null, to = null, limit = 500,
 }) {
@@ -705,6 +1084,7 @@ export function getAmbiguity(db, { accountSetId, bankAccountId, ambiguityId }) {
     .get(accountSetId, bankAccountId, ambiguityId) || null;
 }
 
+/** 歧义展示列表：只用于展示（默认 500）。真实数量请用 `countPendingAmbiguities*`。 */
 export function listAmbiguities(db, { accountSetId, bankAccountId, status = null, limit = 500 }) {
   const where = ["account_set_id=?", "bank_account_id=?"];
   const args = [accountSetId, bankAccountId];
@@ -763,6 +1143,11 @@ export function insertMatch(db, {
   return getMatch(db, { accountSetId, bankAccountId, matchId: Number(info.lastInsertRowid) });
 }
 
+/**
+ * 展示分页的匹配列表：**只用于展示**，默认上限 500。
+ * 内部业务判定（失效核验 / 候选占用 / 对账未达项 / 状态计数）必须使用下面的完整扫描或 SQL 聚合，
+ * 否则超过一页后的真实数据会被静默当成不存在。
+ */
 export function listMatches(db, { accountSetId, bankAccountId, statuses = null, limit = 500 }) {
   const where = ["account_set_id=?", "bank_account_id=?"];
   const args = [accountSetId, bankAccountId];
@@ -773,7 +1158,168 @@ export function listMatches(db, { accountSetId, bankAccountId, statuses = null, 
   args.push(limit);
   return db.prepare(`SELECT * FROM bank_matches WHERE ${where.join(" AND ")}
                       ORDER BY id LIMIT ?`).all(...args);
-}// ------------------------------------------------------------------ 审计
+}
+
+// ------------------------------------------------------------------ 内部完整扫描 / 聚合
+// 展示分页（LIMIT）只能用于输出；以下函数给内部完整判定用，确保结果与数据量无关。
+// 只对内部固定表名生效，不接受外部传入的表名。
+const INTERNAL_SCAN_CHUNK = 500;
+
+/** 键集游标完整扫描：按 rowid 分块读取整个过滤集合（内存受块大小约束，结果完整）。 */
+function scanTableComplete(db, { table, where = [], params = [], chunkSize = INTERNAL_SCAN_CHUNK }) {
+  const rows = [];
+  const clauses = [...where, "rowid > ?"];
+  const sql = `SELECT rowid AS _bank_scan_rowid, * FROM ${table}
+                WHERE ${clauses.join(" AND ")} ORDER BY rowid LIMIT ?`;
+  let cursor = 0;
+  for (;;) {
+    const chunk = db.prepare(sql).all(...params, cursor, chunkSize);
+    for (const row of chunk) {
+      cursor = Number(row._bank_scan_rowid);
+      const copy = { ...row };
+      delete copy._bank_scan_rowid;
+      rows.push(copy);
+    }
+    if (chunk.length < chunkSize) break;
+  }
+  return rows;
+}
+
+/** 范围内**全部**匹配（忽略展示分页）。 */
+export function listAllMatches(db, { accountSetId, bankAccountId, statuses = null }) {
+  const where = ["account_set_id=?", "bank_account_id=?"];
+  const params = [accountSetId, bankAccountId];
+  if (Array.isArray(statuses) && statuses.length) {
+    where.push(`status IN (${statuses.map(() => "?").join(",")})`);
+    params.push(...statuses);
+  }
+  return scanTableComplete(db, { table: "bank_matches", where, params });
+}
+
+/** 给定流水 ID 集合的有效匹配（用于展示视图；按 ID 分块，不依赖总匹配数）。 */
+export function listMatchesForTransactionIds(db, { accountSetId, bankAccountId, transactionIds = [] }) {
+  const ids = transactionIds.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const out = [];
+  const chunk = 400;
+  for (let i = 0; i < ids.length; i += chunk) {
+    const slice = ids.slice(i, i + chunk);
+    out.push(...db.prepare(`SELECT * FROM bank_matches
+                             WHERE account_set_id=? AND bank_account_id=? AND status='confirmed'
+                               AND transaction_id IN (${slice.map(() => "?").join(",")})`)
+      .all(accountSetId, bankAccountId, ...slice));
+  }
+  return out;
+}
+
+/**
+ * 范围内全部有效匹配的双方日期（用于按 asOf 视角判定未达项）。
+ * 不分页：漏读任何一条都会把已核销项误列为未达，或把未发生的一侧当成已发生。
+ */
+export function listConfirmedMatchSides(db, { accountSetId, bankAccountId }) {
+  return db.prepare(`SELECT m.id, m.transaction_id, m.voucher_id, m.entry_id,
+                            v.voucher_date AS voucher_date, t.txn_date AS txn_date
+                       FROM bank_matches m
+                       LEFT JOIN vouchers v ON v.id = m.voucher_id
+                       LEFT JOIN bank_transactions t ON t.id = m.transaction_id
+                      WHERE m.account_set_id=? AND m.bank_account_id=? AND m.status='confirmed'
+                      ORDER BY m.id`).all(accountSetId, bankAccountId);
+}
+
+function groupCount(db, table, column, accountSetId, bankAccountId) {
+  const rows = db.prepare(`SELECT ${column} AS k, COUNT(*) AS n FROM ${table}
+                            WHERE account_set_id=? AND bank_account_id=? GROUP BY ${column}`)
+    .all(accountSetId, bankAccountId);
+  return new Map(rows.map((r) => [String(r.k), Number(r.n)]));
+}
+
+/** 批次状态真实计数（SQL 聚合，不是当前展示页的计数）。 */
+export function countBatchesByStatus(db, { accountSetId, bankAccountId }) {
+  const byStatus = groupCount(db, "bank_batches", "status", accountSetId, bankAccountId);
+  const total = [...byStatus.values()].reduce((sum, n) => sum + n, 0);
+  return {
+    total,
+    completed: byStatus.get("completed") ?? 0,
+    pendingReview: byStatus.get("pending_review") ?? 0,
+    failed: byStatus.get("failed") ?? 0,
+    byStatus: Object.fromEntries(byStatus),
+  };
+}
+
+/** 匹配状态真实计数（SQL 聚合）。 */
+export function countMatchesByStatus(db, { accountSetId, bankAccountId }) {
+  const byStatus = groupCount(db, "bank_matches", "status", accountSetId, bankAccountId);
+  return {
+    confirmed: byStatus.get("confirmed") ?? 0,
+    cancelled: byStatus.get("cancelled") ?? 0,
+    invalidated: byStatus.get("invalidated") ?? 0,
+    byStatus: Object.fromEntries(byStatus),
+  };
+}
+
+/** 流水总数与「已有效匹配」数（SQL 聚合；不受展示 limit 影响）。 */
+export function countTransactionMatchStates(db, { accountSetId, bankAccountId }) {
+  const total = Number(db.prepare(`SELECT COUNT(*) AS n FROM bank_transactions
+                                    WHERE account_set_id=? AND bank_account_id=?`)
+    .get(accountSetId, bankAccountId).n);
+  const matched = Number(db.prepare(`SELECT COUNT(*) AS n FROM bank_transactions t
+                                      WHERE t.account_set_id=? AND t.bank_account_id=?
+                                        AND EXISTS (SELECT 1 FROM bank_matches m
+                                                     WHERE m.account_set_id=t.account_set_id
+                                                       AND m.bank_account_id=t.bank_account_id
+                                                       AND m.transaction_id=t.id
+                                                       AND m.status='confirmed')`)
+    .get(accountSetId, bankAccountId).n);
+  return { total, matched, unmatched: total - matched };
+}
+
+/** 截止日（含）之前的未决歧义真实数量。 */
+export function countPendingAmbiguitiesOnOrBefore(db, { accountSetId, bankAccountId, asOf }) {
+  return Number(db.prepare(`SELECT COUNT(*) AS n FROM bank_ambiguities
+                             WHERE account_set_id=? AND bank_account_id=? AND status='pending'
+                               AND txn_date <= ?`)
+    .get(accountSetId, bankAccountId, asOf).n);
+}
+
+/** 截止日（含）之前的未决歧义证据（只限展示条数，不是计数依据）。 */
+export function listPendingAmbiguitiesOnOrBefore(db, {
+  accountSetId, bankAccountId, asOf, limit = 20,
+}) {
+  return db.prepare(`SELECT * FROM bank_ambiguities
+                      WHERE account_set_id=? AND bank_account_id=? AND status='pending'
+                        AND txn_date <= ?
+                      ORDER BY txn_date, id LIMIT ?`)
+    .all(accountSetId, bankAccountId, asOf, limit);
+}
+
+/** 仍需复核的失效匹配（其流水 / 分录当前都没有有效匹配）真实数量；先过滤再限条。 */
+export function countUnresolvedInvalidatedMatches(db, { accountSetId, bankAccountId }) {
+  return Number(db.prepare(`SELECT COUNT(*) AS n FROM bank_matches m
+                             WHERE m.account_set_id=? AND m.bank_account_id=? AND m.status='invalidated'
+                               AND NOT EXISTS (SELECT 1 FROM bank_matches c
+                                                WHERE c.account_set_id=m.account_set_id AND c.status='confirmed'
+                                                  AND c.entry_id=m.entry_id)
+                               AND (m.transaction_id IS NULL OR NOT EXISTS (
+                                     SELECT 1 FROM bank_matches c2
+                                      WHERE c2.account_set_id=m.account_set_id AND c2.status='confirmed'
+                                        AND c2.transaction_id=m.transaction_id))`)
+    .get(accountSetId, bankAccountId).n);
+}
+
+/** 仍需复核的失效匹配证据（先按同一条件过滤，再限展示条数）。 */
+export function listUnresolvedInvalidatedMatches(db, { accountSetId, bankAccountId, limit = 20 }) {
+  return db.prepare(`SELECT m.* FROM bank_matches m
+                      WHERE m.account_set_id=? AND m.bank_account_id=? AND m.status='invalidated'
+                        AND NOT EXISTS (SELECT 1 FROM bank_matches c
+                                         WHERE c.account_set_id=m.account_set_id AND c.status='confirmed'
+                                           AND c.entry_id=m.entry_id)
+                        AND (m.transaction_id IS NULL OR NOT EXISTS (
+                              SELECT 1 FROM bank_matches c2
+                               WHERE c2.account_set_id=m.account_set_id AND c2.status='confirmed'
+                                 AND c2.transaction_id=m.transaction_id))
+                      ORDER BY m.id LIMIT ?`).all(accountSetId, bankAccountId, limit);
+}
+
+// ------------------------------------------------------------------ 审计
 export function appendAuditEvent(db, {
   accountSetId = null, bankAccountId = null, eventType, subjectType = "", subjectId = "", detail = {},
 }) {

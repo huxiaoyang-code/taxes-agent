@@ -1,7 +1,8 @@
 # 任务单 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
 - 类型：后端领域 + 组件持久层 + 本机 CLI + 契约文档 + 测试
-- 状态：**实施与自测完成，待管理者审查 / 提交 / PR / 合并**（本文件不预写 PR 编号、已审 head 或 merge）
+- 状态：**实施 + 首轮独立审查 5 项阻塞修复与回归完成，待管理者复验 / 提交 / PR / 合并**；本文件不预写 PR 编号、已审 head 或 merge，也不声称最终已通过。
+- 审查基线（冻结 head）：`e2545216226b87262508d8a94f38426415670d8c`；本轮仍只动原 10 个文件。
 - 基线：`257f96275031eefa484699dd71bd012e2d221e51`（含已审 PR #52 导出模块、PR #50 输出策略模块；schema 仍为 LOCAL-01 v3）
 - 分支：`codex/huxiaoyang-code/local-04-bank`；工作区：`.worktrees/local-04-bank`
 - 负责人：`huxiaoyang-code`（已核实）
@@ -49,9 +50,9 @@
 | `06-workbench/server/bank-storage.mjs` | `bank_*` schema v1、组件版本、迁移前备份门槛、创建事实回执、CRUD / 审计 / 对账运行记录 |
 | `06-workbench/server/bank-reconciliation.mjs` | 账户登记、导入落库、候选、确认 / 取消、读时失效核验、余额调节、状态汇总 |
 | `06-workbench/scripts/bank-reconcile.mjs` | 本机 CLI（显式 `--db`、JSON / text、错误码与退出码、`init-db`） |
-| `06-workbench/test/bank-import.test.mjs` | CSV / 映射 / 金额 / 日期 / 预检纯函数回归（15 项） |
-| `06-workbench/test/bank-reconciliation.test.mjs` | 真实临时库领域回归：幂等 / 去重 / 歧义 / 候选 / 匹配 / 失效 / 余额调节（20 项） |
-| `06-workbench/test/bank-reconcile-cli.test.mjs` | CLI 子进程端到端回归（9 项） |
+| `06-workbench/test/bank-import.test.mjs` | CSV / 映射 / 金额 / 日期 / 预检纯函数回归（16 项） |
+| `06-workbench/test/bank-reconciliation.test.mjs` | 真实临时库领域回归：幂等 / 去重 / 歧义 / 候选 / 匹配 / 失效 / 余额调节 / 分页与 asOf / 结构契约 / 对账原子性（26 项） |
+| `06-workbench/test/bank-reconcile-cli.test.mjs` | CLI 子进程端到端回归（10 项） |
 | `docs/LOCAL-BANK.md` | 契约：表 / 函数 / CLI / 公式 / 错误码 / 限制 / 备份门槛 |
 | `docs/tasks/LOCAL-04-BANK.md` | 本任务单 |
 | `docs/handoffs/LOCAL-04-BANK.md` | 版本化交接（实际结果、未完成项、复验命令） |
@@ -63,9 +64,9 @@
 | 依赖 | 状态 | 本包如何处理 |
 |---|---|---|
 | LOCAL-01 批次语义 / v3 schema | 已合并 | 银行组件独立 `bank_*` 命名空间，只读当前 `vouchers` / `voucher_entries` / `opening_balances` / `accounts` / `periods`，不写全局版本 |
-| LOCAL-06 一致备份 | 候选待独审，**未合并** | 备份实现作为窄依赖注入；未提供时安全拒绝（`migration_backup_unavailable`）；只用失败分支 + 顺序测试，不把 fake backup 当迁移验收；新库生命周期用进程内创建事实 |
+| LOCAL-06 一致备份 | 候选已独审但 **PR #55 仍 OPEN，未合并** | 备份实现作为窄依赖注入；未提供时安全拒绝（`migration_backup_unavailable`）；只用失败分支 + 顺序测试，不把 fake backup 当迁移验收；新库生命周期用进程内创建事实。候选只能严拒 v3 的 `unexpected_tables`，**不等于**已支持 `bank_*`；后续银行组件必须按 `docs/LOCAL-BANK.md` §4.1 的结构 / 版本组合与已审 backup 明确对齐才能声称现库安装 / 备份恢复闭环 |
 | LOCAL-02 金额 / 期末完整性 | 未合并 | 按当前真实 schema 读账；账务金额按整数分读取，非精确到分给结构化错误；合同合并后需补兼容回归 |
-| LOCAL-03 双准则 / 辅助维度 | 未合并 | 首版一个银行账户绑定一个 1002 叶子科目，同科目多账户拒绝；辅助维度扩展留待合同确认 |
+| LOCAL-03 双准则 / 辅助维度 | 未合并 | 首版一个银行账户绑定一个 1002 叶子科目，同科目多账户拒绝；**双准则与 1002 叶子科目映射尚未实际复验**，不得声称已完成 03 依赖 |
 | 共享接线（HTTP / Agent / MCP / UI / test-all） | 未做 | 本包直接交付可调用 Node CLI 与领域 API，不等待接线即可跑业务；接线单列后续任务 |
 
 ## 5. 验收标准（对照本包实际结果）
@@ -88,29 +89,42 @@
 | CLI 显式 `--db`；无参 / help / 拼错路径不创建默认库 | 通过 |
 | 已有库无备份实现时安全拒绝且不建 `bank_*` 表 | 通过（exit 5） |
 | 不生成 / 修改凭证与期间；审计不被业务删除级联抹掉 | 通过 |
-| 既有全套回归 | `npm test` 47 / 47 套件通过，exit 0 |
+| 内部业务判定不读展示分页：501 笔全确认后调节后 50100 / 50100、反过账后 checked=501、候选全部标记占用、201 批次 / 501 歧义的**真实计数**、>500 已复核失效前缀不掩盖后续未复核 | 通过（首轮审查 P1 修复，冻结 head 上失败） |
+| 余额调计按 asOf 视角：合法跨日匹配不提前消除、反方向跨日与两侧都发生正常消除 | 通过（首轮审查 P1 修复） |
+| 组件结构 / 版本契约：未来版本 / 矛盾版本 / 缺表 / 缺列 / 主键 / UNIQUE / 索引签名 / 外键动作 / 额外表均在业务写前拒绝且无写入，CLI 不能绕过 | 通过（首轮审查 P2 修复，领域 + 子进程两路） |
+| 对账结果持久化原子：插运行记录失败与插审计失败都全组件回滚，无无审计新结果、无误废弃旧结果 | 通过（首轮审查 P2 修复） |
+| CSV 错误列表总上限：201 行坏金额不崩、重复流水号追加路径共用上限、截断不误报 ok | 通过（首轮审查 P2 修复） |
+| 既有全套回归 | 上一轮 `npm test` 47 / 47 套件通过；本轮只跑定向 3 套（未改上游共享代码） |
 
 ## 6. 实际测试命令与结果（本次运行）
 
 工作目录 `06-workbench`：
 
 ```
-node --test test/bank-import.test.mjs          # 15 / 15 通过
-node --test test/bank-reconciliation.test.mjs  # 20 / 20 通过
-node --test test/bank-reconcile-cli.test.mjs   #  9 /  9 通过
+node --test test/bank-import.test.mjs          # 16 / 16 通过
+node --test test/bank-reconciliation.test.mjs  # 26 / 26 通过
+node --test test/bank-reconcile-cli.test.mjs   # 10 / 10 通过
 node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs
-                                               # 44 / 44 通过，exit 0
-npm test                                       # 47 / 47 套件通过，exit 0
+                                                # 52 / 52 通过，exit 0
 ```
+
+原 44 个用例（15 / 20 / 9）保留未改；新增 8 个回归用例在冻结 head `e2545216` 上全部失败、在修复后全部通过。
+`npm test` 本轮未重跑（只改银行包内文件，未动上游共享代码），不把上一轮 47 / 47 当作本轮证据。
 
 ## 7. 未完成项（不声称整个 LOCAL-04 已交付完成）
 
 1. 已有库迁移 / 组件升级的真实验收：等 LOCAL-06 已审备份实现合并后，补迁移前备份、WAL 已提交内容、
    迁移失败回滚、恢复新目标、银行组件 / 审计 / 来源 / 金额完整性证据；当前只用失败分支与顺序测试。
-2. HTTP / Agent / MCP / UI 与 `scripts/test-all.mjs` 接线（共享串行窗口）。
-3. LOCAL-02 / LOCAL-03 稳定合同合并后的真实兼容回归与版本记录；辅助核算维度下的多银行账户支持再评估。
+   **额外约束**：备份候选只能严拒 v3 `unexpected_tables`，所以必须先把 §4.1 的银行组件结构 / 版本（v1）
+   与已审 backup 明确组合并复验，才能宣称现库安装 / 备份恢复闭环；本包不读未合并候选当已支持，也不伪造 v2。
+2. HTTP / Agent / MCP / UI 与 `scripts/test-all.mjs` 接线（共享串行窗口）；本轮只跑定向 3 套，未重跑 `npm test`。
+3. LOCAL-02 / LOCAL-03 稳定合同合并后的真实兼容回归与版本记录；辅助核算维度下的多银行账户支持再评估；
+   03 双准则与 1002 叶子科目映射尚未实际复验。
 4. 一对多 / 多对一人工组匹配（当前只有明确提示码，不自动占用分录）。
 5. 外币 / 换汇、银行网站 / API 接入：明确不在本包范围。
+6. 组件结构契约只核对结构 / 版本（不做内容 / 行数 / 哈希校验），且不加缓存；额外 `bank_*` 表会被拒绝，
+   真正加表必须先升版本并补迁移。
+7. 内部完整扫描的性能：501 笔全确认约 8 秒级，数据量更大时耗时会线性增长；本版不做增量 / 缓存。
 
 ## 8. 交付后管理者需要做
 

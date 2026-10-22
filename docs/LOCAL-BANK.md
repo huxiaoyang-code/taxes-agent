@@ -1,6 +1,6 @@
 # 银行流水与持久对账契约 · LOCAL-BANK（LOCAL-04 交付）
 
-状态：**实施与自测完成，待管理者审查 / 提交 / PR / 合并**。本文件不预写 PR 编号、已审 head 或 merge。
+状态：**实施 + 首轮独立审查 5 项阻塞修复与回归完成，待管理者复验 / 提交 / PR / 合并**；本轮不声称最终已通过（审查基线 `e2545216226b87262508d8a94f38426415670d8c`）。本文件不预写 PR 编号、已审 head 或 merge。
 - 远端载体：[Issue #53](https://github.com/huxiaoyang-code/youshu-fork/issues/53)（`Refs #20` / `Refs #13`）
 - 基线：`257f96275031eefa484699dd71bd012e2d221e51`（含已审 PR #52 导出模块、PR #50 输出策略模块）
 - 分支：`codex/huxiaoyang-code/local-04-bank`；工作区：`.worktrees/local-04-bank`
@@ -37,7 +37,7 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 | 文件 | 职责 |
 |---|---|
 | `06-workbench/server/bank-import.mjs` | 纯函数：CSV 解析、字段映射校验、日期 / 金额 / 方向规范化、预检、指纹与限制。**无数据库副作用**。 |
-| `06-workbench/server/bank-storage.mjs` | `bank_*` 独立命名空间、组件版本 `bank_component_migrations`、迁移前备份门槛、创建事实回执、CRUD 与审计 / 对账运行记录。 |
+| `06-workbench/server/bank-storage.mjs` | `bank_*` 独立命名空间、组件版本 `bank_component_migrations`、结构契约 `BANK_SCHEMA_CONTRACT` / `bankSchemaContract` / `assertBankSchemaReady`、迁移前备份门槛、创建事实回执、CRUD / 审计 / 对账运行记录；以及内部完整判定用的键集游标扫描与 SQL 聚合（展示分页 API 与内部 API 严格分开）。 |
 | `06-workbench/server/bank-reconciliation.mjs` | 账户登记、导入落库（单事务）、批次 / 流水 / 歧义查询、候选、确认 / 取消、读时失效核验、余额调节、状态汇总。 |
 | `06-workbench/scripts/bank-reconcile.mjs` | 本机 CLI：显式 `--db`、JSON / text 输出、稳定错误码与退出码；`init-db` 使用产品真实建库入口创建新库。 |
 
@@ -62,6 +62,68 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 银行账户 / 批次 / 流水 / 逐行记录 / 歧义之间有外键（`ON DELETE CASCADE` 跟随账套删除）；
 `bank_matches.transaction_id` 与 `bank_ambiguities.resolved_transaction_id` 使用 `ON DELETE SET NULL`，
 快照字段保留原值，避免业务删除把匹配证据连带抹掉。
+
+### 4.1 组件结构契约（v1，供备份 / 恢复与后续接线核对）
+
+组件结构以代码常量 `BANK_SCHEMA_CONTRACT`（`server/bank-storage.mjs`）为唯一权威，并由
+`bankSchemaContract(db)` 只读核对。**本节列出的列 / 主键 / UNIQUE / 索引 / 外键动作 = 运行时真实门槛**，
+后续 LOCAL-06 备份组合、恢复与集成窗口可直接 `import { BANK_SCHEMA_CONTRACT }` 核对，不要另行猜测结构。
+
+版本：`BANK_SCHEMA_VERSION = 1`；`bank_component_migrations` 必须**有且只有一行 `version = 1`**。
+本版本**没有 v2 迁移**，也不伪造 v2。
+
+| 表 | 列（按 DDL 顺序） | 主键 |
+|---|---|---|
+| `bank_component_migrations` | `version, applied_at, note` | `version` |
+| `bank_component_backups` | `id, version, path, bytes, integrity, created_at, note` | `id` |
+| `bank_accounts` | `account_set_id, bank_account_id, source_id, currency, gl_account_code, display_name, bank_account_no, created_at` | `(account_set_id, bank_account_id)` |
+| `bank_batches` | `account_set_id, bank_account_id, source_id, batch_id, currency, period, content_sha256, mapping_fingerprint, normalization_version, status, row_count, imported_rows, reused_rows, ambiguous_rows, attempts, replay_of_batch, result_json, error_code, error_message, created_at, updated_at` | `(account_set_id, bank_account_id, batch_id)` |
+| `bank_transactions` | `id, account_set_id, bank_account_id, source_id, currency, txn_date, period, direction, amount_cents, summary, bank_ref_id, balance_after_cents, content_fingerprint, row_fingerprint, batch_id, row_index, origin, created_at` | `id` |
+| `bank_batch_rows` | `id, account_set_id, bank_account_id, batch_id, row_index, row_sha256, row_fingerprint, status, transaction_id, ambiguity_id, note, created_at` | `id` |
+| `bank_ambiguities` | `id, account_set_id, bank_account_id, source_id, batch_id, row_index, txn_date, period, direction, amount_cents, summary, currency, row_fingerprint, content_fingerprint, batch_row_sha256, candidate_transaction_ids, status, decision, decision_reason, resolved_transaction_id, resolved_at, created_at` | `id` |
+| `bank_matches` | `id, account_set_id, bank_account_id, currency, transaction_id, voucher_id, entry_id, entry_line_no, status, snapshot_json, reason, confirmed_at, cancelled_at, cancel_reason, invalidated_at, invalidation_reason` | `id` |
+| `bank_audit_events` | `id, account_set_id, bank_account_id, event_type, subject_type, subject_id, detail_json, created_at` | `id` |
+| `bank_reconcile_runs` | `id, account_set_id, bank_account_id, currency, period, as_of, status, book_close_cents, adjusted_book_cents, statement_close_cents, adjusted_bank_cents, difference_cents, result_json, stale, stale_reason, created_at` | `id` |
+
+索引与 UNIQUE（`unique` / `partial` 均参与核对；无名字的项是表级 UNIQUE 约束生成的自动索引）：
+
+| 表 | 索引 / 约束 | 列 | unique | partial |
+|---|---|---|---|---|
+| `bank_accounts` | `idx_bank_accounts_gl` | `(account_set_id, gl_account_code)` | 是 | 否 |
+| `bank_accounts` | `idx_bank_accounts_source` | `(account_set_id, source_id)` | 否 | 否 |
+| `bank_accounts` | 主键自动索引 | `(account_set_id, bank_account_id)` | 是 | 否 |
+| `bank_batches` | `idx_bank_batches_file` | `(account_set_id, bank_account_id, source_id, content_sha256)` | 否 | 否 |
+| `bank_batches` | `idx_bank_batches_status` | `(account_set_id, bank_account_id, status)` | 否 | 否 |
+| `bank_batches` | 主键自动索引 | `(account_set_id, bank_account_id, batch_id)` | 是 | 否 |
+| `bank_transactions` | `idx_bank_txn_ref` | `(account_set_id, bank_account_id, source_id, bank_ref_id)` | 是 | 是 |
+| `bank_transactions` | `idx_bank_txn_batch_row` | `(account_set_id, bank_account_id, batch_id, row_index)` | 是 | 否 |
+| `bank_transactions` | `idx_bank_txn_scope_date` | `(account_set_id, bank_account_id, txn_date)` | 否 | 否 |
+| `bank_transactions` | `idx_bank_txn_fingerprint` | `(account_set_id, bank_account_id, source_id, row_fingerprint)` | 否 | 否 |
+| `bank_batch_rows` | `idx_bank_batch_rows_txn` | `(transaction_id)` | 否 | 否 |
+| `bank_batch_rows` | `UNIQUE(account_set_id, bank_account_id, batch_id, row_index)` | 同左 | 是 | 否 |
+| `bank_ambiguities` | `idx_bank_ambiguities_status` | `(account_set_id, bank_account_id, status)` | 否 | 否 |
+| `bank_ambiguities` | `UNIQUE(account_set_id, bank_account_id, batch_id, row_index)` | 同左 | 是 | 否 |
+| `bank_matches` | `idx_bank_matches_active_txn` | `(transaction_id)`（`WHERE status='confirmed'`） | 是 | 是 |
+| `bank_matches` | `idx_bank_matches_active_entry` | `(account_set_id, entry_id)`（`WHERE status='confirmed'`） | 是 | 是 |
+| `bank_matches` | `idx_bank_matches_scope` | `(account_set_id, bank_account_id, status)` | 否 | 否 |
+| `bank_audit_events` | `idx_bank_audit_scope` | `(account_set_id, bank_account_id, event_type)` | 否 | 否 |
+| `bank_reconcile_runs` | `idx_bank_reconcile_scope` | `(account_set_id, bank_account_id, period, as_of)` | 否 | 否 |
+
+外键（列顺序 + 目标列 + `ON DELETE` 动作都参与核对）：
+
+| 表 | 列 | → 目标 | ON DELETE |
+|---|---|---|---|
+| `bank_accounts` | `account_set_id` | `account_sets(id)` | CASCADE |
+| `bank_batches` | `(account_set_id, bank_account_id)` | `bank_accounts(account_set_id, bank_account_id)` | CASCADE |
+| `bank_transactions` | `(account_set_id, bank_account_id)` | `bank_accounts(account_set_id, bank_account_id)` | CASCADE |
+| `bank_transactions` | `(account_set_id, bank_account_id, batch_id)` | `bank_batches(account_set_id, bank_account_id, batch_id)` | CASCADE |
+| `bank_batch_rows` | `transaction_id` | `bank_transactions(id)` | SET NULL |
+| `bank_batch_rows` | `(account_set_id, bank_account_id, batch_id)` | `bank_batches(...)` | CASCADE |
+| `bank_ambiguities` | `resolved_transaction_id` | `bank_transactions(id)` | SET NULL |
+| `bank_ambiguities` | `(account_set_id, bank_account_id, batch_id)` | `bank_batches(...)` | CASCADE |
+| `bank_matches` | `transaction_id` | `bank_transactions(id)` | SET NULL |
+
+`bank_audit_events` / `bank_reconcile_runs` **没有外键**（审计证据与运行记录不随业务删除消失）。
 
 ## 5. 账户与科目合同
 
@@ -117,6 +179,10 @@ CSV 解析：UTF-8 BOM、CRLF / LF / CR、引号包裹、`""` 转义、字段内
 - 摘要超长拒绝（不截断），流水 ID 字符 / 长度非法拒绝。
 
 **预检（`import-preview`）与正式导入共用同一套规范化规则**，预检只读、不写任何表。
+
+错误列表**总条数上限 = `maxErrors = 200`**：CSV 解析、缺列、期间、行级规范化、文件内重复流水号
+**共用同一个上限**；超过只置 `errorsTruncated = true`，不抛异常、不无限增长，也不因截断把有错误的文件
+报成 `ok:true`（修复前 201 行非法金额会抛 `Assignment to constant variable.`，已回归）。
 
 ## 7. 批次身份、幂等与去重
 
@@ -199,6 +265,12 @@ CSV 解析：UTF-8 BOM、CRLF / LF / CR、引号包裹、`""` 转义、字段内
 把旧的对账运行记录标记 `stale`；重新展示必要未达项。**旧凭证反过账后又原样过账，不会自动恢复失效匹配**，
 必须重新确认（产生新匹配记录）。
 
+内部核验范围与展示分页严格分离：`refreshMatchStates` / 候选占用 / 对账未达项 / 状态计数一律读取
+**完整集合或 SQL 聚合**（键集游标分块扫描 `listAllMatches`、直接按分录查占用、
+`countBatchesByStatus` / `countMatchesByStatus` / `countTransactionMatchStates` / `countPendingAmbiguities*` /
+`listConfirmedMatchSides`），不使用 `listMatches` / `listBatches` / `listAmbiguities` / `listTransactions`
+这些**展示**分页（默认 500 / 200）的结果做业务判定。
+
 观测边界（如实说明）：本版本没有可靠的账务修订号 / 变更事件流，检测发生在**读取时**，
 因此只能保证「本次读取时点」的账务状态一致性，不能声称捕获两次调用之间未观察到的所有中间操作。
 共享写入口（`accounting.mjs` 的反过账 / 删除 / 修改）的事件接线属于后续共享窗口任务，本包未改那些文件。
@@ -215,11 +287,15 @@ CSV 解析：UTF-8 BOM、CRLF / LF / CR、引号包裹、`""` 转义、字段内
   `声明期初 + 覆盖期流水净额 = 声明期末`，不一致保留差异（`statement_balance_mismatch`），
   不自动改余额、不补项。
 - 覆盖范围必须包含 `asOf`，否则 `incomplete`。
-- 四类未达项（逐项带来源）：
-  - 企业已收银行未收：未匹配的账面 posted 银行借方分录；
-  - 企业已付银行未付：未匹配的账面 posted 银行贷方分录；
-  - 银行已收企业未收：未匹配的银行流入流水；
-  - 银行已付企业未付：未匹配的银行流出流水。
+- 四类未达项（逐项带来源，一律按 **截止日 asOf 视角**）：
+  - 企业已收银行未收：未核销的账面 posted 银行借方分录；
+  - 企业已付银行未付：未核销的账面 posted 银行贷方分录；
+  - 银行已收企业未收：未核销的银行流入流水；
+  - 银行已付企业未付：未核销的银行流出流水。
+- 「核销」的判据：匹配为 `confirmed` **并且两侧都已发生**（凭证日期 `<= asOf` 且流水日期 `<= asOf`）。
+  合法跨日匹配（如 1 月 31 日账面、2 月 1 日银行）在 1 月 31 日视角下仍算「企业已收银行未收」，
+  不得因为已有匹配就把未发生的一侧当成已发生；截止后两侧都发生的匹配正常消除。
+  这条规则**不禁止**跨日匹配，也不回写账务凑平，匹配本身仍保持 `confirmed`。
 - 公式（整数分，BigInt 累加后校验范围）：
   - 调节后账面 = 账面截止余额 + 银行已收企业未收 − 银行已付企业未付
   - 调节后银行 = 银行截止余额 + 企业已收银行未收 − 企业已付银行未付
@@ -228,7 +304,12 @@ CSV 解析：UTF-8 BOM、CRLF / LF / CR、引号包裹、`""` 转义、字段内
   无未复核的失效匹配 + 期间日期一致」时给出；否则 `incomplete`（覆盖 / 期间 / 来源类）
   或 `pending_review`（差异 / 歧义 / 失效匹配类）。
 - 每次调节都写 `bank_reconcile_runs` 与 `reconcile_computed` 审计，并把同一账户更早的运行记录标记 `stale`；
-  调节不生成、不修改任何凭证，也不改 `periods` 状态。
+  三步（旧记录 stale → 新运行记录 → 审计）**在同一事务内**完成：任一步失败（包括合成触发器注入失败）
+  全组件回滚，不留下「无审计的新结果」，也不误废弃旧结果；调用方已有外层事务 / 保存点时继续用保存点，
+  与外层事务兼容。
+- 未决歧义 / 未复核失效匹配的**计数**来自 SQL 聚合（先按条件过滤再限展示条数），
+  不拿一页展示记录的长度冒充真实数量。
+- 调节不生成、不修改任何凭证，也不改 `periods` 状态。
 
 固定手算验收（单位分，测试中直接写独立常量）：两边期初 80000；账面仅有未达收款 30000、付款 10000；
 银行仅有未达收款 50000、付款 10000 → 账面截止 100000，银行截止 120000，
@@ -264,6 +345,11 @@ node scripts/bank-reconcile.mjs <command> --db <库文件> [选项] [--format js
 
 金额参数用元（最多两位小数），输出同时给整数分与两位小数文本。`--format text` 给操作者本机可读明细。
 
+展示与计数分开（如实标出边界）：`batches` / `transactions` / `matches` / `ambiguities` 的 `items` 是**展示页**
+（有 `--limit` 上限，`status` 的批次 items 上限默认 200 并在 `itemsLimit` / `itemsTruncated` 中标明）；
+`status` 的 `batches.total|completed|pendingReview|failed`、`transactions.total|matched|unmatched`、
+`matches.confirmed|cancelled|invalidated`、`ambiguities.pending` 均为**真实计数**（SQL 聚合），不受展示页影响。
+
 退出码：`0` 成功；`2` 用法 / 路径 / 范围参数错误；`3` 业务拒绝或冲突；
 `4` 内部错误（默认不输出 SQL / 堆栈）；`5` 依赖未就绪（备份 / 结构门槛）。
 
@@ -271,7 +357,7 @@ node scripts/bank-reconcile.mjs <command> --db <库文件> [选项] [--format js
 
 | 类别 | 错误码 |
 |---|---|
-| 数据库 / 结构 | `db_not_found`、`db_not_workbench`、`schema_not_supported`、`bank_schema_missing` |
+| 数据库 / 结构 | `db_not_found`、`db_not_workbench`、`schema_not_supported`、`bank_schema_missing`、`bank_schema_future_version`、`bank_schema_version_contradiction`、`bank_schema_corrupt` |
 | 迁移门槛 | `migration_backup_unavailable`、`migration_backup_failed`、`migration_backup_invalid`、`bank_migration_failed` |
 | 账户 / 范围 | `account_set_not_found`、`bank_account_not_registered`、`bank_account_conflict`、`bank_gl_account_already_bound`、`bank_gl_account_not_found`、`bank_gl_account_not_leaf`、`bank_gl_account_invalid`、`currency_unsupported`、`period_before_start` |
 | CSV / 映射 | `csv_duplicate_header`、`csv_unclosed_quote`、`csv_stray_quote`、`csv_trailing_characters`、`csv_missing_column`、`mapping_*`、`row_date_*`、`row_amount_*`、`amount_*` |
@@ -292,12 +378,26 @@ node scripts/bank-reconcile.mjs <command> --db <库文件> [选项] [--format js
 - 新库：`claimFreshDatabase({ dbPath })` 只在目标文件**不存在**时创建空文件并返回**进程内**创建回执；
   `ensureBankSchema` 只在回执匹配时允许免备份初始化。回执不落盘、不跨进程，因此 CLI 独立调用
   **无法**把已有库伪装成新库，也没有 `--force` 之类的旁路布尔参数。
+- **结构 / 版本契约统一拒绝（同一门槛覆盖 CLI 与领域写入口）**：`ensureBankSchema` / CLI `ensureBankReady` /
+  领域 `resolveBankScope` / `registerBankAccount` 都调用同一套 `bankSchemaContract(db)` + `assertBankSchemaReady(db)`：
+  - 版本比本程序新（如 v1 库里有一条 `version=2`）→ `bank_schema_future_version`；
+  - 版本记录与表集合矛盾（有表无版本行、版本行不是唯一的 v1）→ `bank_schema_version_contradiction`；
+  - 缺表 / 缺列 / 主键不符 / 缺 UNIQUE 或索引签名不符 / 外键列或 `ON DELETE` 动作不符 /
+    额外的未声明 `bank_*` 表 → `bank_schema_corrupt`；
+  - 完全没有任何 `bank_*` 表才进入备份门槛迁移；
+  - 拒绝时**不做任何 DDL / 写入**，不用 `CREATE TABLE IF NOT EXISTS` 静默修补坏库，失败即无写入；
+  - 只做结构核对（`sqlite_master` + PRAGMA），**不扫全表内容**，不做昂贵内容校验。
+- CLI 对以上错误码统一 exit 5（依赖未就绪）；`details.problems` 给出结构问题证据（表 / 列 / 索引 / 外键）。
 - CLI 的 `init-db` 是唯一允许建库的入口：它先确认目标文件不存在（且文件名必须是 `workbench.db`），
   声明创建事实，设置 `WORKBENCH_DATA_DIR` 指向显式目录后调用产品真实建库入口 `server/db.mjs`，
   再在同一进程内初始化 `bank_*`。已有库加入 `bank_*` 时 CLI 支持 `--backup-service <模块>`。
 
-**当前状态（如实）**：LOCAL-06 已审查备份实现尚未合并进本分支，因此**已有库的银行组件迁移尚未可用**，
+**当前状态（如实）**：LOCAL-06 已审查备份实现尚未合并进本分支（候选 PR #55 仍 OPEN），因此**已有库的银行组件迁移尚未可用**，
 CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试证明此时不创建任何 `bank_*` 表。
+注意：该候选的严格拒绝只针对 schema v3 的 `unexpected_tables`，**不等于**已支持 `bank_*` 额外表的恢复组合；
+本包不读取未合并候选当已支持，也不修改其文件。要声称「现库安装 / 备份恢复闭环」，必须先把
+本组件 §4.1 的结构 / 版本契约（表 / 列 / PK / UNIQUE / 索引 / FK 动作 / 版本 v1）与已审 backup 组合明确对齐，
+由集成窗口重新核验后才能宣称。
 新库生命周期（`init-db` / 进程内创建事实）与全部业务功能已可真实运行。
 若后续 LOCAL-06 合同与本包的注入点不一致，由集成窗口按真实合并合同调整，不在本包修改 backup 白名单或降版本。
 
@@ -318,14 +418,32 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 
 | 套件 | 命令（在 `06-workbench` 目录） | 结果 |
 |---|---|---|
-| CSV / 映射 / 规范化 | `node --test test/bank-import.test.mjs` | 15 / 15 通过 |
-| 持久化 / 匹配 / 失效 / 余额调节 | `node --test test/bank-reconciliation.test.mjs` | 20 / 20 通过 |
-| CLI 端到端（子进程） | `node --test test/bank-reconcile-cli.test.mjs` | 9 / 9 通过 |
-| 三套合计 | `node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs` | 44 / 44 通过，exit 0 |
-| 既有全套回归 | `npm test` | 47 / 47 套件通过，exit 0 |
+| CSV / 映射 / 规范化 | `node --test test/bank-import.test.mjs` | 16 / 16 通过 |
+| 持久化 / 匹配 / 失效 / 余额调节 | `node --test test/bank-reconciliation.test.mjs` | 26 / 26 通过 |
+| CLI 端到端（子进程） | `node --test test/bank-reconcile-cli.test.mjs` | 10 / 10 通过 |
+| 三套合计 | `node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs` | 52 / 52 通过，exit 0 |
+| 既有全套回归 | `npm test` | 上一轮 47 / 47 套件通过；**本轮未重跑**（本轮只改银行包内 10 个文件，未动上游共享代码） |
 
 三套件**尚未注册**到 `scripts/test-all.mjs`：该文件属于共享测试总入口，按任务边界由后续共享接线窗口登记；
 本包不修改它，因此 `npm test` 不包含这三个套件。
+
+### 13.1 首轮独立审查 5 项阻塞：真实复现与回归
+
+审查基线为冻结 head `e2545216226b87262508d8a94f38426415670d8c`。复现与回归都用
+真实临时 SQLite + 真实建库 / 建账套 / posted 凭证 / 导入 / 确认 / 对账路径，金额用独立手算常量（分）。
+
+| 阻塞 | 冻结 head 上的真实表现 | 修复 | 回归用例 |
+|---|---|---|---|
+| P1 内部计算读展示分页 | 501 笔×100 分全确认后期初 0 / 银行期末 50100，返回调节后 **50200 / 50200** 且 `reconciled`，最后 1 笔被两侧重复列为未达；反过账后 `refresh` 只核验 500 条、`invalidated[]` 且该 match 仍 `confirmed`；候选占用漏 1 条；批次数 200 封顶；待决歧义 500 封顶；>500 条已复核失效匹配前缀掩盖后续未复核 | 内部判定改用完整集合（键集游标分块 `listAllMatches`、按分录直查占用、`listConfirmedMatchSides`）与 SQL 聚合计数；展示分页保留明确边界 | `内部判定不被展示分页截断`、`批次与待决歧义真实数量…`、`失效匹配复核计数先过滤再限条…` |
+| P1 截止日 asOf 未达 | 1/31 账面收款 1000.00 + 2/1 银行收款（容差 1 天已确认）→ 1/31 未达项为 0、调节后 1000 / 0、差额 1000 且 `pending_review`；反向同理 | 未达项按 asOf 视角：只有匹配两侧都已发生才消除；跨日匹配合法、不回写账务 | `余额调节按截止日 asOf 判定未达项…` |
+| P2 组件结构 / 未来版本 | v1 库插入 `version=2` 后 `ensureBankSchema` 返回 success 且 `registerBankAccount` 能写；删除 `bank_reconcile_runs` 后初始化仍 success；CLI 同因旁路 | 统一 `bankSchemaContract` / `assertBankSchemaReady`：未来版本、矛盾版本、缺表 / 缺列 / 主键 / UNIQUE / 索引签名 / 外键动作 / 额外 `bank_*` 表都在业务写前拒绝；不 DDL 修补、不做内容扫描；仍为组件 v1 | `组件结构 / 版本契约…`（领域）、`CLI 组件结构契约损坏…`（子进程） |
+| P2 对账持久化非原子 | 合成触发器让 `reconcile_computed` 审计插入失败后，runs 由 `[{id:1,stale:0}]` 变 `[{id:1,stale:1},{id:2,stale:0}]` 且旧结果被误废弃 | 旧记录 stale + 新运行记录 + 审计同一 `inTransaction`（嵌套用保存点） | `对账结果持久化原子…`（插 run 失败与插 audit 失败两路均校验全组件快照） |
+| P2 CSV 错误截断 | 合法表头 + 201 行 `2026-01-10,bad,in`（正常映射）抛 `Assignment to constant variable.` | 错误列表改用有界 `addError`：行级错误 / 缺列 / 期间 / 文件内重复流水号共用总上限，超过置 `errorsTruncated` | `预检错误总上限…` |
+
+回归证据（本轮实际执行）：
+
+- 同一复现脚本在冻结 head 上 29 / 51 项断言失败（含上述 5 类现象）；修复后 51 / 51 通过。
+- 新增 8 个回归用例（1 导入 + 6 领域 + 1 CLI）在冻结 head 上全部失败、在修复后全部通过；原 44 个用例两侧都通过。
 
 ## 14. 限制与未完成项（不声称已交付完成）
 
@@ -347,3 +465,12 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 9. **对账单完整性**：银行截止余额由操作者声明并与覆盖期流水净额自校验；不读取银行原件、
    不自动判断对账单是否覆盖全部交易，只按显式覆盖范围与来源说明给状态。
 10. **不做**：银行网站 / 银行 API、SaaS / 多租户、自动调整凭证、自动结账、发票 / 税务适配。
+11. **结构契约的边界**：`bankSchemaContract` 只核对结构 / 版本（表 / 列 / 主键 / UNIQUE / 索引 / 外键动作 /
+    额外表），**不做内容一致性、行数或哈希比对**；也不做缓存，每次调用都重新读 `sqlite_master` + PRAGMA。
+    额外或未知的 `bank_*` 表会被当作「契约外结构」拒绝——将来真的加表必须先升版本并补迁移。
+12. **内部完整扫描的成本**：失效核验 / 对账未达项按完整集合读（键集游标分块）；数据量很大时
+    耗时随匹配数增长（501 笔全确认约 8 秒级），本版本不做增量 / 缓存机制，也不以展示分页换正确性。
+13. **现库安装 / 备份恢复闭环未完成**：LOCAL-06 候选未合并且只按 v3 严拒额外表；银行组件的结构 / 版本
+    与 backup 的组合尚未由集成窗口核验，不声称现库迁移 / 恢复已可用（详见 §12）。
+14. **03 双准则与 1002 叶子科目契约未复验**：本包只接受 `1002` 或其显式明细作为资产类借方叶子科目；
+    LOCAL-03 的双准则 / 辅助维度合并后必须重新核验，不能声称已完成 03 依赖。
