@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
 import ExcelJS from 'exceljs';
 
@@ -620,6 +621,65 @@ try {
     await assert.rejects(() => office(s, "ledger", "2026-02", "xlsx"), (error) => error.code === "account_code_required");
     await assert.rejects(() => office(999999, "trial-balance", "2026-02", "pdf"), (error) => error.code === "account_set_not_found");
     assert.deepEqual(A.listPeriods(s), before);
+  });
+
+  // ---------------------------------------------------------------- import-side-effect isolation
+  await test("pure DTO rendering never opens or creates a database in an isolated data dir", async () => {
+    // A separate Node process is required: this test file already imported db.mjs above, so any
+    // in-process check would be masked by the module cache and by the already-open temporary DB.
+    const isolationRoot = join(tmpdir(), `wb-office-isolation-${process.pid}-${Date.now()}`);
+    const isolationDataDir = join(isolationRoot, "data");
+    const dtoTmpDir = mkdtempSync(join(tmpdir(), 'wb-office-dto-'));
+    const dtoPath = join(dtoTmpDir, "synthetic-report-dto.json");
+    const moduleUrl = pathToFileURL(join(process.cwd(), "server", "report-office-export.mjs")).href;
+    const defaultDataDir = join(process.cwd(), "data");
+    const defaultDataDirExisted = existsSync(defaultDataDir);
+    assert.equal(existsSync(isolationRoot), false, "the isolated data dir must not exist before the child starts");
+    // Reuse the same synthetic DTO the exporter consumes: no real book, only the stable schema.
+    writeFileSync(dtoPath, JSON.stringify(dto(s, "balance-sheet", "2026-01")), "utf8");
+    const script = [
+      `import { existsSync, readFileSync } from "node:fs";`,
+      `const root = ${JSON.stringify(isolationRoot)};`,
+      `const dataDir = ${JSON.stringify(isolationDataDir)};`,
+      `const moduleUrl = ${JSON.stringify(moduleUrl)};`,
+      `const dtoPath = ${JSON.stringify(dtoPath)};`,
+      `const bail = (code) => { console.error(code); process.exit(2); };`,
+      `if (process.env.WORKBENCH_DATA_DIR !== dataDir) bail("data_dir_env_not_applied");`,
+      `if (existsSync(root) || existsSync(dataDir)) bail("isolation_root_pre_exists");`,
+      // Importing the renderer alone must not touch the filesystem or the database module.
+      `const mod = await import(moduleUrl);`,
+      `if (existsSync(root) || existsSync(dataDir)) bail("import_created_data_dir");`,
+      `const report = JSON.parse(readFileSync(dtoPath, "utf8"));`,
+      `const document = mod.buildReportDocument(report);`,
+      `if (document.sections.length < 2 || document.sections[0].rows.length < 1) bail("document_model_empty");`,
+      `const xlsx = await mod.buildReportXlsx(report, document);`,
+      `if (Buffer.from(xlsx.subarray(0, 2)).toString("latin1") !== "PK") bail("xlsx_not_zip");`,
+      `const pdf = await mod.buildReportPdf(report, document);`,
+      `if (Buffer.from(pdf.buffer.subarray(0, 5)).toString("latin1") !== "%PDF-") bail("pdf_not_pdf");`,
+      `if (!(pdf.pageCount >= 1)) bail("pdf_page_count");`,
+      `if (existsSync(root) || existsSync(dataDir)) bail("render_created_data_dir");`,
+      `if (existsSync(dataDir + "/workbench.db") || existsSync(dataDir + "/workbench.db-wal") || existsSync(dataDir + "/workbench.db-shm")) bail("sqlite_files_created");`,
+      `process.stdout.write(JSON.stringify({ ok: true, xlsxBytes: xlsx.length, pdfBytes: pdf.buffer.length, pdfPages: pdf.pageCount, rows: document.sections[0].rows.length }));`,
+    ].join("\n");
+    try {
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+        cwd: process.cwd(),
+        env: { ...process.env, WORKBENCH_DATA_DIR: isolationDataDir },
+        encoding: "utf8",
+        timeout: 180000,
+      });
+      assert.equal(child.status, 0, `isolated render child failed (status ${child.status}): ${child.stderr || child.stdout}`);
+      const summary = JSON.parse(child.stdout.trim());
+      assert.equal(summary.ok, true, "the isolated child must report a completed pure render");
+      assert.ok(summary.rows >= 1, "the child must render real document rows from the DTO");
+      assert.ok(summary.xlsxBytes > 1000, "the isolated child must produce a real XLSX buffer");
+      assert.ok(summary.pdfBytes > 1000 && summary.pdfPages >= 1, "the isolated child must produce a real PDF buffer");
+    } finally {
+      rmSync(dtoTmpDir, { recursive: true, force: true });
+      rmSync(isolationRoot, { recursive: true, force: true });
+    }
+    assert.equal(existsSync(isolationRoot), false, "pure DTO rendering must not create WORKBENCH_DATA_DIR or its parent");
+    assert.equal(existsSync(defaultDataDir), defaultDataDirExisted, "pure DTO rendering must not fall back to the default 06-workbench/data directory");
   });
 
   // ---------------------------------------------------------------- independent external PDF QA

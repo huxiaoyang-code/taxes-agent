@@ -2,12 +2,15 @@
 
 本文件描述**新增的独立导出模块** `06-workbench/server/report-office-export.mjs`。它复用 [REPORT-EXPORT](REPORT-EXPORT.md) 的稳定报表 DTO，为五类内部报表生成真实 XLSX / PDF，同时保留 CSV。
 
-**当前状态：模块已实现、独立审查返工并通过员工合成自测，但尚未接入 HTTP / 前端，也未合并或验收。** 返工已修复两项独立 review 复现的 P2：PDF 超长首页元数据越界、XLSX 超过 Excel 单格上限仍成功生成；同时去除了重复尾注并避免尾注孤页。既有 `docs/REPORT-EXPORT.md` 仍描述“首版仅 CSV”，因为共享接线归 LOCAL01 #43；在接线完成前，用户不能通过页面或 `/api/.../export?format=xlsx|pdf` 使用本模块。
+**当前状态：模块已实现、独立审查返工并通过员工合成自测（模块套件 21/21），但尚未接入 HTTP / 前端；本轮新增的“纯 DTO 渲染无数据库副作用”小修已完成员工自测，新的最终独立审查 / PR / 合并待根管理者执行。** 返工已修复两项独立 review 复现的 P2：PDF 超长首页元数据越界、XLSX 超过 Excel 单格上限仍成功生成；同时去除了重复尾注并避免尾注孤页。既有 `docs/REPORT-EXPORT.md` 仍描述“首版仅 CSV”，因为共享接线尚未做；在接线完成前，用户不能通过页面或 `/api/.../export?format=xlsx|pdf` 使用本模块。
 
 - 分支：`codex/huxiaoyang-code/local-05-office`
-- 基线：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
-- Issue：#45（LOCAL-05a）；LOCAL-05 整体未完成。
+- 模块源冻结：`9f585d0`；合入 `origin/main` `94a79ef4a5e1c19e1320aed2e848ba42a7121712` 后的当前分支 head：`40236c359011c481fde66cfbf3ca9e9ec2b18066`
+- 基线（分叉时）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
+- Issue：#45（LOCAL-05a）；LOCAL-05 整体未完成，本模块未接线。
 - 合成验收产物：`06-workbench/tmp/report-office-qa/`（gitignored）。
+
+小修前的既有验收事实（不得当作本轮新代码验收）：根管理者实跑模块测试 20/20、独立审查 20/20（无剩余阻塞），pdfplumber 检查 11 个 PDF 共 43 页文字重叠 0 / 越界 0。视觉 QA 目前无明确证据，待根管理者补。
 
 ## 使用
 
@@ -29,6 +32,19 @@ const file = await buildOfficeExport(accountSetId, {
   - `buildReportDocument(report)` → 与两种格式共用的文档模型（标题、元数据、限制、分节、列、行、脚注）。
   - `buildReportXlsx(report, document?)`、`buildReportPdf(report, document?)`。
 - 便于测试 / 接入的常量：`OFFICE_FORMATS`、`OFFICE_REPORT_KINDS`。
+
+## 导入无副作用（纯 DTO 渲染）
+
+`report-export.mjs` 以**静态导入**方式依赖 `db.mjs`，而 `db.mjs` 在模块加载时就会打开（必要时创建）默认 `workbench.db` 并执行迁移。若本模块也在顶层静态导入 `report-export.mjs`，则任何只想消费 DTO 的调用方（例如后续 LOCAL-07 worker 只调用 `buildReportDocument` / `buildReportXlsx` / `buildReportPdf`）仅因“导入了一个渲染模块”就会触发数据库打开 / 迁移与目录创建。
+
+因此本模块：
+
+- 模块顶层**不**导入 `report-export.mjs`；
+- `buildReportDocument` / `buildReportXlsx` / `buildReportPdf` 只依赖传入的 `report` DTO；
+- `report-export.mjs` 仅在 `async buildOfficeExport` 实际调用时动态 `import`（带模块缓存，不重复加载）；
+- 函数签名、返回结构、金额来源、格式 / 字体 / 分页 / 超长字段拒绝行为均未改变，也未复制上游报表计算逻辑。
+
+回归证据要求（不能靠 mock 代替）：在一个**全新 Node 子进程**中仅导入本模块，并基于合成 DTO 真正生成 XLSX / PDF；即使 `WORKBENCH_DATA_DIR` 指向尚未创建的专属临时位置，也不得创建该目录或其父目录、不得出现 `workbench.db` / `-wal` / `-shm`，且不得回落到 `06-workbench/data`。同一进程内检查无效（父进程已加载 `db.mjs`，模块缓存会掩盖副作用）。
 
 ## 数据与口径
 
@@ -143,13 +159,24 @@ Poppler（`pdfinfo` / `pdftoppm`）与 Python + pdfplumber 仅用于**验收检�
 
 工作目录 `06-workbench`，临时合成库；不含真实账套或凭据。
 
-| 命令 | 结果 |
+### 本轮（导入无副作用小修）实际命令
+
+| 命令 | 结果 | 退出码 |
+|---|---|---|
+| `node --check server/report-office-export.mjs` / `node --check test/report-office-export.test.mjs` | 语法检查通过 | 0 |
+| `npm run test:office-export` | **21/21 通过**（原 20 项全保留 + 1 项隔离子进程回归）；pdfplumber 几何检查在本轮未设 `REPORT_OFFICE_PYTHON` 时明确 SKIP | 0 |
+| `node test/report-export.test.mjs` | 21/21 通过 | 0 |
+| `node test/report-export-http.test.mjs` | 29/29 通过 | 0 |
+| `WORKBENCH_DATA_DIR=<不存在的新临时路径> node --input-type=module -e 'await import("./server/report-office-export.mjs")'` | `{"dataDirExists":false,"db":false,"wal":false,"shm":false}`，未见目录 / 库 / WAL / SHM | 0 |
+
+### 小修前的既有自测与管理事实（历史，非本轮新证据）
+
+| 命令 / 事实 | 结果 |
 |---|---|
 | `npm run test:office-export` | 20/20 通过，退出码 0 |
 | `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export` | 20/20 通过；pdfplumber 检查 11 个 PDF（43 页）无文字重叠、无越界 |
-| `node test/report-export.test.mjs` | 21/21 通过 |
-| `node test/report-export-http.test.mjs` | 29/29 通过 |
-| `node test/smoke.test.mjs` | 28/28 通过 |
+| 根管理者实跑模块测试 + 独立审查 | 20/20 与 20/20，无剩余阻塞 |
+| `node test/report-export.test.mjs` / `node test/report-export-http.test.mjs` / `node test/smoke.test.mjs` | 21/21、29/29、28/28（早前轮次） |
 
 覆盖要点：
 
@@ -159,17 +186,20 @@ Poppler（`pdfinfo` / `pdftoppm`）与 Python + pdfplumber 仅用于**验收检�
 - 4,000 字中文账套名 PDF 为 5 页、3,000 字无断词 ASCII 名称 4 页、4,000 字明细账科目名 3 页；pdfplumber 越界 0，全部字符可提取。
 - 单格 32767 字摘要通过并完整保存；32768 与 40,000 字摘要、40,000 字账套名在 XLSX / PDF 均以 `office_text_too_long` 拒绝，错误含字段定位且不回显原文；1 元明细账的 5 个金额单元格无续行重复。
 - 独立手算金额（2026-01 / 2026-02）与 DTO、XLSX 单元格对应；草稿 / 反过账不入表。
+- **导入无副作用**：隔离子进程仅导入模块并完成纯渲染，未创建 `WORKBENCH_DATA_DIR`、`workbench.db` / `-wal` / `-shm`，也未回落到默认数据目录。
 - 公式注入样例保持文本；PDF 中动态文本不执行。
 - 缺字体、非字体文件、缺字、未知格式、未登记期间、缺科目、非法账套均验证失败路径；空账提示在 XLSX / PDF 均保留。
 
-**未完成的人眼目视：** 员工侧无图像识别能力，PNG 已由 `pdftoppm` 渲染到 `06-workbench/tmp/report-office-qa/`，自动几何检查通过，但“版式观感无缺陷”需管理者目视确认后才能声明。
+**未完成的人眼目视：** 员工侧无图像识别能力，PNG 已由 `pdftoppm` 渲染到 `06-workbench/tmp/report-office-qa/`，自动几何检查通过（小修前事实），但“版式观感无缺陷”需管理者目视确认后才能声明。
 
 ## 未接线与后续
 
 - 未修改 `report-export.mjs`、HTTP 路由、前端、`docs/REPORT-EXPORT.md`、`scripts/test-all.mjs` 或公共索引。
-- LOCAL01 #43 / 管理者接线时应：
+- LOCAL-05a 模块可以**单独一个 PR** 合并；接线是**另一个 PR**。LOCAL01 #43（原接线载位）**已合并关闭**，后续 HTTP / 页面接线等 LOCAL02 #47 释放窗口后由根管理者另行排工，不称接线或本模块由管理者亲写。
+- 接线时应：
   1. 在导出接口按 `format` 选择 `buildOfficeExport`，保留既有 CSV 错误契约；
   2. 设置正确的 `Content-Type` 与安全文件名（模块已返回）；
   3. 更新面向用户的导出文档与页面提示；
   4. 用真实 HTTP 下载做接口验收（仍使用合成账套）。
 - 复杂现金流分类、间接法独立勾稽、双准则官方映射、来源完整性属于后续核心任务；本模块只保留限制提示，**不声称这些问题已修复**。
+- 本轮小修后的新 head 最终独立审查与合并结果待根管理者补；本文不为新 head 预报通过。

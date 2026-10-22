@@ -3,23 +3,34 @@
 ## 1. 基本信息
 
 - 任务 ID：LOCAL-05a（五类内部报表真实 XLSX / PDF 导出）；总任务 LOCAL-05 尚未完成。
-- 状态：实施、独立审查返工与员工自测完成（2 项 P2 已修，非阻塞版式优化已完成），未提交、未接线；等待管理者复核、独立 reviewer 与共享接线验收。
+- 状态：模块实现、独立审查返工（2 项 P2 已修）与员工自测完成；本轮追加**纯 DTO 渲染无数据库副作用**小修（`report-export.mjs` 改为 `buildOfficeExport` 内动态导入，并补真实隔离子进程回归）。代码**未接线**（无 HTTP 路由、无页面入口），本任务单不代表 LOCAL-05 整体完成。
+- 代码来源：模块源冻结于 `9f585d0`（`feat(reports): add verified Excel and PDF export module`）；此后合入 `origin/main` `94a79ef4a5e1c19e1320aed2e848ba42a7121712`，当前分支 head 为 `40236c359011c481fde66cfbf3ca9e9ec2b18066`，本轮小修改动基于该 head。
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`。
 - 执行员工：pi（主 / 唯一回退模型 `tokenhub/deepseek-v4.1-flash` 锁定；未使用其他模型或子 agent）。
 - 分支：`codex/huxiaoyang-code/local-05-office`。
 - 基线（分叉时）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`。
-- 关联 Issue：#45（本任务）；共享接线另归 LOCAL01 #43。
+- 关联 Issue：#45（本任务）。LOCAL01 #43（共享接线）**已合并关闭**；后续 HTTP / 页面接线等 LOCAL02 #47 释放窗口后由根管理者另行派工，接线不由本任务承担，也不宜再派给已关闭的 #43。
+
+### 1.1 小修前的既有验收事实（根管理者已实际完成，不能当作本轮新代码的验收）
+
+以下事实发生在 20 项主套件 + 旧静态导入结构上，早于本轮无副作用小修：
+
+- 根管理者实跑模块测试 **20/20 通过、exit 0**；独立审查 **20/20**，无剩余阻塞。
+- 11 个 PDF 共 43 页几何检查：文字重叠 **0**、越界 **0**（pdfplumber）。
+- 目视 QA 目前**没有明确证据**记录在案；不得据此写「版式已目视通过」，该项仍待根管理者补（既有 `tmp/report-office-qa/` 的 PNG 可复用）。
+- 本轮小修不改动任何金额、格式、字体、分页、超长字段拒绝逻辑，因此上述事实对渲染算法仍然有效；但它不覆盖本轮新增的导入副作用修复。
 
 ## 2. 需求与边界
 
 - 目标：在既有 `06-workbench/server/report-export.mjs` 稳定 `report` DTO（`schemaVersion: 1`）之上，为 `balance-sheet`、`income-statement`、`cash-flow-statement`、`trial-balance`、`ledger` 五类内部报表生成真实 XLSX 与 PDF 二进制；保留 CSV。
 - 明确不做：
   - 不改既有 `report-export.mjs`、`tax-report-format.mjs`、`accounting.mjs`、`db.mjs`、`server.mjs`、agent tools、MCP、`scripts/test-all.mjs`、公共索引或 `public/*`。
-  - 不新增 HTTP 路由、前端入口或共享接线；接线由 LOCAL01 #43 / 管理者在独立变更中完成，之后再做真实接口验收。
+  - 不新增 HTTP 路由、前端入口或共享接线；接线在一个独立 PR 中完成（LOCAL01 #43 已合并关闭，后续等 LOCAL02 #47 释放窗口后由根管理者排工），之后再做真实接口验收。
   - 不重算会计金额、不补造缺失数据、不改变现金流比例分摊或间接法算法，不宣称完整准则映射或申报就绪。
   - 不宣称 LOCAL-05 整体完成；复杂现金流分类与双准则官方映射仍待后续核心子包。
   - 不使用真实账套、真实凭据、税局系统或旧后端做自动测试。
 - 输入：`buildReportExport(setId, {kind, period, format:'csv', code})` 返回的同一 `report` DTO。
+- **导入副作用约束（本轮新增）**：`report-office-export.mjs` 在模块顶层**不得**导入 `report-export.mjs`。后者导入 `db.mjs`，而 `db.mjs` 在导入时即打开 / 创建默认 `workbench.db`（含迁移）。后续 LOCAL-07 worker 只消费 DTO、只调用 `buildReportDocument` / `buildReportXlsx` / `buildReportPdf`，若静态导入就会因「导入模块」触发数据库打开与迁移。因此该依赖改为在 `async buildOfficeExport` 实际调用时动态 `import`；函数签名、返回值、金额来源、格式 / 字体 / 分页 / 超长字段拒绝行为全部不变，也不复制上游报表计算。
 - 输出：`buildOfficeExport(setId, options)` 返回 `{ filename, contentType, body, report, pageCount?, font? }`；CSV `body` 仍为字符串，XLSX / PDF `body` 为 `Buffer`。
 - 建议文件范围：新增 `06-workbench/server/report-office-export.mjs`、`06-workbench/test/report-office-export.test.mjs`，仅为本模块在 `06-workbench/package.json` 增加实际依赖与 `test:office-export` 脚本并生成 `package-lock.json`。
 
@@ -58,6 +69,7 @@
 - 单格边界：32767 字摘要 XLSX 完整保存为 1 个单元格且 1 元明细账金额只出现 5 次（无续行重复）；32768 字与 40,000 字摘要、40,000 字账套名、40,000 字明细账科目名元数据在 XLSX / PDF 均以 `office_text_too_long` 拒绝，错误分别定位 `sections[...]` / `accountSet.name` / `meta[i].value` 且不回显原文。
 - 尾注 / 孤页：现金流限制文字只出现 1 次（1 页）；2,000+ 字单摘要明细账仍为 4 页，最后一页同时含明细表头与尾注，没有只剩尾注的孤页；空账提示与“余额（借减贷）/ 负数表示贷方余额”说明保留。
 - 失败路径：不存在的 `REPORT_PDF_FONT`、非字体文件、字体缺字、未知格式、未登记期间、缺明细账科目、非法账套均返回稳定错误码。
+- 导入无副作用：全新子进程中**仅导入**本模块并基于合成 DTO 执行纯渲染（`buildReportDocument` → `buildReportXlsx` → `buildReportPdf`）时，即使 `WORKBENCH_DATA_DIR` 指向尚未创建的专属临时位置，也不得创建该目录 / 其父目录 / `workbench.db` / `-wal` / `-shm`，不得回落到 `06-workbench/data`，且该子进程仍须真正产出 XLSX / PDF 字节。同一进程内的检查不算证据（父进程已导入 `db.mjs`，模块缓存会掩盖副作用）；不得以 mock 数据库证明。
 - 命令与结果见第 7 节。
 
 ## 6. 文件所有权
@@ -67,6 +79,7 @@
   - `06-workbench/test/report-office-export.test.mjs`（新增）
   - `docs/tasks/LOCAL-05-OFFICE.md`、`docs/handoffs/LOCAL-05-OFFICE.md`、`docs/REPORT-OFFICE-EXPORT.md`（新增）
   - `06-workbench/package.json`（仅依赖与 `test:office-export`）、`06-workbench/package-lock.json`（新依赖锁定）
+- 本轮无副作用小修只改 `report-office-export.mjs`、`report-office-export.test.mjs` 与上述三份文档；未改 `package.json` / `package-lock.json`。
 - 共享文件未改动：`report-export.mjs`、`tax-report-format.mjs`、`accounting.mjs`、`db.mjs`、`server.mjs`、agent tools、MCP、`scripts/test-all.mjs`、`public/*`、公共索引。
 - `docs/REPORT-EXPORT.md` 不在本任务可写范围，仍描述“首版仅 CSV”；共享接线完成后需由持有该文件的变更同步更新，不能据此认为新格式已经对外可用。
 
@@ -74,20 +87,36 @@
 
 工作目录 `06-workbench`，全部使用临时合成库（`WORKBENCH_DATA_DIR` 指向系统临时目录，退出时关闭并删除），不触碰真实数据。
 
+### 7.1 本轮无副作用小修的实际命令与结果
+
 | 命令 | 结果 | 退出码 |
 |---|---|---|
-| `npm run test:office-export` | 20/20 通过（含 poppler 页数 / PNG 渲染；未设置 `REPORT_OFFICE_PYTHON` 时跳过可选几何检查） | 0 |
-| `REPORT_OFFICE_PYTHON=<验收用 Python> npm run test:office-export` | 20/20 通过；pdfplumber 对 11 个 PDF 共 43 页检查：文字重叠 0、越界 0 | 0 |
+| `node --check server/report-office-export.mjs` / `node --check test/report-office-export.test.mjs` | 两个文件语法检查通过 | 0 |
+| `npm run test:office-export` | **21/21 通过**（原 20 项全部保留 + 新增隔离子进程 1 项）；含 poppler 页数 / PNG 渲染；未设置 `REPORT_OFFICE_PYTHON` 时 pdfplumber 几何检查明确 SKIP | 0 |
 | `node test/report-export.test.mjs` | 21/21 通过（既有 CSV / DTO 回归未受影响） | 0 |
 | `node test/report-export-http.test.mjs` | 29/29 通过（既有 HTTP 导出契约未受影响） | 0 |
-| `node test/smoke.test.mjs` | 28/28 通过 | 0 |
+| 独立单次子进程检查：`WORKBENCH_DATA_DIR=<不存在的新临时路径> node --input-type=module -e 'await import("./server/report-office-export.mjs")'` | 输出 `{"dataDirExists":false,"db":false,"wal":false,"shm":false,"exports":8}`；目录前后均不存在，`06-workbench/data` 亦未被创建 | 0 |
 
-验收产物（gitignored，每次运行先清空再重建，供管理者目视 QA）：`06-workbench/tmp/report-office-qa/`。PDF 页数：五类基础报表 1 / 1 / 1 / 3 / 1 页；230 行长明细 19 页；单行 2,000+ 字摘要 4 页；4,000 字账套名 5 页；3,000 字无断词 ASCII 名称 4 页；4,000 字明细账科目名 3 页；现金流限制去重后 1 页。另有五类 XLSX 与 `pdftoppm` 渲染 PNG（资产负债表首页、余额表首页、长明细前 2 页与末 2 页、现金流 1 页、4,000 字账套名 1–5 页、无断词名称首页、4,000 字科目名 1–3 页、2,000 字摘要末 2 页）。员工侧已用独立 ToUnicode 解析器与 pdfplumber 几何检查替代像素目视；**员工未完成人眼目视，不得宣称版式已目视无缺陷**，最终视觉 QA 由管理者完成。
+无副作用证明要点：新增回归在一个**全新 Node 子进程**里完成，先断言隔离目录及其父目录尚不存在，再仅 `import` 渲染模块，然后基于合成 DTO 依次调用 `buildReportDocument` / `buildReportXlsx` / `buildReportPdf`，断言 XLSX 以 `PK` 开头、PDF 以 `%PDF-` 开头且 `pageCount >= 1`、行数 ≥ 1，最后断言隔离目录 / `workbench.db` / `-wal` / `-shm` 均未出现，且 `06-workbench/data` 与运行前一致。因为该子进程从未加载 `db.mjs`，所以证明的是真实导入无副作用，而不是 mock。
+
+### 7.2 小修前的既有自测与管理者事实（历史，不重复为本轮新证据）
+
+| 命令 / 事实 | 结果 |
+|---|---|
+| `npm run test:office-export`（冻结模块源 `9f585d0`） | 20/20 通过，exit 0 |
+| `REPORT_OFFICE_PYTHON=<验收用 Python> npm run test:office-export` | 20/20 通过；pdfplumber 对 11 个 PDF 共 43 页检查：文字重叠 0、越界 0 |
+| 根管理者实跑模块测试 + 独立审查（小修前） | 20/20 与 20/20，无剩余阻塞 |
+| `node test/smoke.test.mjs` | 28/28 通过（早前轮次，本轮未重跑） |
+
+本轮未运行 `REPORT_OFFICE_PYTHON` 几何检查，也未重跑全仓 `npm test`；上表的 20/20、43 页几何结果属小修前既有事实，不冒充本轮新代码验收。视觉 QA 仍无明确证据，待根管理者补。
+
+验收产物（gitignored，每次运行先清空再重建，供管理者目视 QA）：`06-workbench/tmp/report-office-qa/`。PDF 页数：五类基础报表 1 / 1 / 1 / 3 / 1 页；230 行长明细 19 页；单行 2,000+ 字摘要 4 页；4,000 字账套名 5 页；3,000 字无断词 ASCII 名称 4 页；4,000 字明细账科目名 3 页；现金流限制去重后 1 页。另有五类 XLSX 与 `pdftoppm` 渲染 PNG。员工侧以独立 ToUnicode 解析器与 pdfplumber 几何检查替代像素目视；**员工未完成人眼目视，不得宣称版式已目视无缺陷**。
 
 ## 8. 遗留与下一步
 
-1. 管理者阅读实际 diff，复跑上表命令，目视 `tmp/report-office-qa` PNG 与新增长元数据页面。
-2. 独立 reviewer 复核 `office_text_too_long` 边界（32767 / 32768 / 40,000）、4,000 字账套名 5 页无越界、现金流 1 页与 2,000 字摘要第 4 页非孤页。
-3. 由 LOCAL01 #43 / 管理者完成共享接线（HTTP 路由、页面前端、允许格式白名单、`docs/REPORT-EXPORT.md` 更新），再做真实接口验收。
-4. 后续核心子包：现金流复杂双向分类、间接法独立勾稽、双准则官方行次 / 科目映射；当前格式层保留限制提示，不声称已修。
-5. 本任务未提交、未推送、未合并；由管理者按审查 head 执行 Git 与 PR。
+1. **新的最终独立审查待根管理者安排**：本轮小修后的 head、PR 与合并均尚未发生，不得预报通过；旧审查 head 的 20/20 无剩余阻塞结论不自动扩展到本轮改动。
+2. 根管理者审阅实际 diff（仅 `report-office-export.mjs` + 测试 + 三份文档），并在新 head 上复跑 `npm run test:office-export` 与隔离无副作用证据。
+3. 视觉 QA 仍待根管理者在 `tmp/report-office-qa/` 的 PNG 上补做；此前不得声明「版式无缺陷」。
+4. LOCAL-05a 模块可以**单独一个 PR 合并**；共享接线（HTTP 路由、页面前端、允许格式白名单、`docs/REPORT-EXPORT.md` 更新）是**另一个 PR**，需等 LOCAL02 #47 释放窗口后由根管理者排工，且不得再派给已关闭的 LOCAL01 #43。
+5. 远端 `main` 已前进到 `b42bae9`（PR #50 仅新增独立输出边界文件），与本分支的整合由根管理者执行；员工不做 Git 操作。
+6. 后续核心子包：现金流复杂双向分类、间接法独立勾稽、双准则官方行次 / 科目映射；当前格式层只保留限制提示，不声称已修。

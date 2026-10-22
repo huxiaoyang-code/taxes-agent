@@ -1,11 +1,17 @@
 // Internal report office exports (XLSX / PDF). This module only reformats the stable
 // report DTO produced by report-export.mjs; it never recalculates bookkeeping amounts
 // and never claims tax-filing readiness or verified completeness.
+//
+// IMPORTANT: report-export.mjs (and through it db.mjs) must NOT be imported at module
+// load time. db.mjs opens (and creates) the workbench database as an import side effect,
+// so a static import here would make a pure DTO renderer (buildReportDocument /
+// buildReportXlsx / buildReportPdf) open the default database or run migrations just by
+// being loaded. The dependency is therefore loaded lazily inside buildOfficeExport, the
+// only entry point that legitimately needs account-set validation and the DTO itself.
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
-import { buildReportExport } from "./report-export.mjs";
 
 const KINDS = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
 const KINDS_TITLE = {
@@ -1071,6 +1077,8 @@ export async function buildOfficeExport(setId, options = {}) {
   const format = options.format ?? "csv";
   if (!OFFICE_FORMATS.includes(format)) fail("report_format_unsupported", { supported: OFFICE_FORMATS });
   // Reuse report-export.mjs for validation, scope checks, DTO building and CSV output.
+  // Loaded lazily (not at module scope) so importing this renderer stays database-free.
+  const { buildReportExport } = await import("./report-export.mjs");
   const base = buildReportExport(setId, { ...options, format: "csv" });
   if (format === "csv") return base;
   const document = buildReportDocument(base.report);
