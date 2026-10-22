@@ -134,8 +134,9 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
     },
   }),
   /**
-   * 索引契约：`index` 有名字时按名字核对，没有名字时按（表 + 列 + unique + partial）签名核对
-   * （用于表级 UNIQUE 约束生成的自动索引）。
+   * 索引契约：`index` 有名字时按名字核对，没有名字时按（表 + 列 + unique + partial + 谓词）签名核对
+   * （用于表级 UNIQUE 约束生成的自动索引）。部分索引的 `where` 写契约谓词，运行时与
+   * `sqlite_master.sql` 中的实际谓词做规范化整体比对。
    */
   indexes: Object.freeze([
     { index: "idx_bank_accounts_gl", table: "bank_accounts", columns: ["account_set_id", "gl_account_code"], unique: true, partial: false },
@@ -144,7 +145,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
     { index: "idx_bank_batches_file", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "source_id", "content_sha256"], unique: false, partial: false },
     { index: "idx_bank_batches_status", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
     { table: "bank_batches", columns: ["account_set_id", "bank_account_id", "batch_id"], unique: true, partial: false },
-    { index: "idx_bank_txn_ref", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "bank_ref_id"], unique: true, partial: true },
+    { index: "idx_bank_txn_ref", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "bank_ref_id"], unique: true, partial: true, where: "bank_ref_id IS NOT NULL" },
     { index: "idx_bank_txn_batch_row", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
     { index: "idx_bank_txn_scope_date", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "txn_date"], unique: false, partial: false },
     { index: "idx_bank_txn_fingerprint", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "row_fingerprint"], unique: false, partial: false },
@@ -152,13 +153,14 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
     { table: "bank_batch_rows", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
     { index: "idx_bank_ambiguities_status", table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
     { table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
-    { index: "idx_bank_matches_active_txn", table: "bank_matches", columns: ["transaction_id"], unique: true, partial: true },
-    { index: "idx_bank_matches_active_entry", table: "bank_matches", columns: ["account_set_id", "entry_id"], unique: true, partial: true },
+    { index: "idx_bank_matches_active_txn", table: "bank_matches", columns: ["transaction_id"], unique: true, partial: true, where: "status = 'confirmed'" },
+    { index: "idx_bank_matches_active_entry", table: "bank_matches", columns: ["account_set_id", "entry_id"], unique: true, partial: true, where: "status = 'confirmed'" },
     { index: "idx_bank_matches_scope", table: "bank_matches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
     { index: "idx_bank_audit_scope", table: "bank_audit_events", columns: ["account_set_id", "bank_account_id", "event_type"], unique: false, partial: false },
     { index: "idx_bank_reconcile_scope", table: "bank_reconcile_runs", columns: ["account_set_id", "bank_account_id", "period", "as_of"], unique: false, partial: false },
   ]),
-  /** 外键契约：列顺序、目标表 / 列与删除动作都必须与 DDL 一致。 */
+  /** 外键契约：列顺序、目标表 / 列与 `ON UPDATE` / `ON DELETE` 动作都必须与 DDL 一致；
+   *  运行时按表比较完整集合（含重复约束），未列外键的表实际也必须没有外键。 */
   foreignKeys: Object.freeze([
     { table: "bank_accounts", columns: ["account_set_id"], refTable: "account_sets", refColumns: ["id"], onDelete: "CASCADE" },
     { table: "bank_batches", columns: ["account_set_id", "bank_account_id"], refTable: "bank_accounts", refColumns: ["account_set_id", "bank_account_id"], onDelete: "CASCADE" },
@@ -208,19 +210,127 @@ const SCHEMA_MESSAGES = Object.freeze({
   bank_schema_missing: "当前库尚未初始化银行组件（bank_*）",
   bank_schema_future_version: "银行组件版本比当前程序更新，拒绝在未知结构上读写",
   bank_schema_version_contradiction: "银行组件版本记录与表结构矛盾，拒绝在矛盾结构上读写",
-  bank_schema_corrupt: "银行组件表结构与本版本契约不一致（缺表 / 缺列 / 主键 / 索引 / 外键动作），拒绝在损坏结构上读写",
+  bank_schema_corrupt: "银行组件表结构与本版本契约不一致（缺表 / 缺列 / 主键 / 索引签名与谓词 / 外键集合与动作 / 版本表形状），拒绝在损坏结构上读写",
 });
 
+/** 指向单引号字符串字面量起点，返回结尾单引号下标（'' 转义按两个字符处理）。 */
+function skipSqlString(text, start) {
+  let i = start + 1;
+  while (i < text.length) {
+    if (text[i] === "'") {
+      if (text[i + 1] === "'") { i += 2; continue; }
+      return i;
+    }
+    i += 1;
+  }
+  return text.length - 1;
+}
+
+/** 去掉整体外层括号（只有当首尾括号确实配对时才剥）。 */
+function stripOuterParens(text) {
+  let out = text;
+  for (;;) {
+    if (!out.startsWith("(") || !out.endsWith(")")) return out;
+    let depth = 0;
+    let paired = true;
+    for (let i = 0; i < out.length; i += 1) {
+      const ch = out[i];
+      if (ch === "'") { i = skipSqlString(out, i); continue; }
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth === 0 && i !== out.length - 1) { paired = false; break; }
+      }
+    }
+    if (!paired) return out;
+    out = out.slice(1, -1);
+  }
+}
+
+/**
+ * 谓词规范化：删除字面量之外的空白、把未加引号 / 双引号 / 反引号 / 方括号标识符统一小写，
+ * 剥掉整体外层括号；**保留单引号字符串字面量的原始大小写**。
+ * 只用于把契约里的可读谓词与 sqlite_master 中实际 DDL 文本整体比对（不做 substring 判断）。
+ */
+function canonicalCondition(text) {
+  if (text === null || text === undefined) return null;
+  const source = String(text);
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "'") {
+      const end = skipSqlString(source, i);
+      out += source.slice(i, end + 1);
+      i = end + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "`") {
+      let j = i + 1;
+      let ident = "";
+      while (j < source.length) {
+        if (source[j] === ch) {
+          if (source[j + 1] === ch) { ident += ch; j += 2; continue; }
+          break;
+        }
+        ident += source[j];
+        j += 1;
+      }
+      out += ident.toLowerCase();
+      i = j + 1;
+      continue;
+    }
+    if (ch === "[") {
+      const close = source.indexOf("]", i + 1);
+      const ident = close > 0 ? source.slice(i + 1, close) : source.slice(i + 1);
+      out += ident.toLowerCase();
+      i = close > 0 ? close + 1 : source.length;
+      continue;
+    }
+    if (/\s/.test(ch)) { i += 1; continue; }
+    out += ch.toLowerCase();
+    i += 1;
+  }
+  return stripOuterParens(out) || null;
+}
+
+/** 从 sqlite_master.sql 里取出索引列清单之后的 WHERE 谓词原文（无则 null）。 */
+function indexWhereSql(sql) {
+  const text = String(sql ?? "");
+  if (!text) return null;
+  let depth = 0;
+  let end = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "'") { i = skipSqlString(text, i); continue; }
+    if (ch === "(") { depth += 1; continue; }
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  if (end < 0) return null;
+  const tail = text.slice(end + 1).trim();
+  const m = /^WHERE\b([\s\S]+)$/i.exec(tail);
+  return m ? (m[1].trim() || null) : null;
+}
+
 function indexSignatures(db, table) {
-  return db.prepare(`PRAGMA index_list(${table})`).all().map((idx) => ({
-    name: String(idx.name),
-    unique: Number(idx.unique) === 1,
-    partial: Number(idx.partial) === 1,
-    origin: String(idx.origin ?? ""),
-    columns: db.prepare(`PRAGMA index_info(${idx.name})`).all()
-      .sort((a, b) => Number(a.seqno) - Number(b.seqno))
-      .map((c) => String(c.name)),
-  }));
+  return db.prepare(`PRAGMA index_list(${table})`).all().map((idx) => {
+    const name = String(idx.name);
+    const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`).get(name);
+    return {
+      name,
+      unique: Number(idx.unique) === 1,
+      partial: Number(idx.partial) === 1,
+      origin: String(idx.origin ?? ""),
+      columns: db.prepare(`PRAGMA index_info(${idx.name})`).all()
+        .sort((a, b) => Number(a.seqno) - Number(b.seqno))
+        .map((c) => String(c.name)),
+      // 部分索引的实际 WHERE 谓词（规范化后整体比对）；普通索引必须为 null。
+      where: canonicalCondition(indexWhereSql(row?.sql)),
+    };
+  });
 }
 
 function foreignKeySignatures(db, table) {
@@ -230,6 +340,7 @@ function foreignKeySignatures(db, table) {
     const id = Number(row.id);
     const entry = groups.get(id) ?? {
       refTable: String(row.table),
+      onUpdate: String(row.on_update ?? "NO ACTION").toUpperCase(),
       onDelete: String(row.on_delete ?? "NO ACTION").toUpperCase(),
       rows: [],
     };
@@ -242,6 +353,7 @@ function foreignKeySignatures(db, table) {
       columns: ordered.map((r) => r.from),
       refTable: entry.refTable,
       refColumns: ordered.map((r) => r.to),
+      onUpdate: entry.onUpdate,
       onDelete: entry.onDelete,
     };
   });
@@ -256,7 +368,10 @@ const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]
  * - 没有任何 bank_* 表 → initialized:false / code `bank_schema_missing`（可以走迁移门槛）；
  * - 版本比本程序更新 → `bank_schema_future_version`；
  * - 版本记录与表集合矛盾（有表无版本、版本行不是唯一的 v1 等）→ `bank_schema_version_contradiction`；
- * - 其余结构偏差 → `bank_schema_corrupt`（problems 里逐项给出表 / 列 / 主键 / 索引 / 外键）。
+ * - 版本表本身形状不对（version 列缺失 / 改名）→ problems 里给 `bank_schema_version_table_corrupt`，
+ *   此时**不读取 version**，也不把形状问题伪装成矛盾或未来版本；
+ * - 其余结构偏差 → `bank_schema_corrupt`（problems 里逐项给出表 / 列 / 主键 / 索引签名与谓词 /
+ *   外键完整集合与动作）。
  * 本函数不做全表内容扫描，不写库。
  */
 export function bankSchemaContract(db) {
@@ -276,11 +391,26 @@ export function bankSchemaContract(db) {
     };
   }
   const hasVersionTable = bankTables.includes("bank_component_migrations");
-  const versions = hasVersionTable
+  // 先验证版本表形状再读 version：缺列 / 改名时直接 SELECT 会抛原始 SQLite 错误，
+  // 这里必须给出结构化损坏结果，而不是把 ERR_SQLITE_ERROR 交给上层。
+  const versionColumns = hasVersionTable ? columnNames(db, "bank_component_migrations") : [];
+  const versionReadable = hasVersionTable && versionColumns.includes("version");
+  const versions = versionReadable
     ? db.prepare(`SELECT version FROM bank_component_migrations ORDER BY version`).all()
       .map((r) => Number(r.version))
     : [];
   const version = versions.length ? Math.max(...versions) : 0;
+  if (hasVersionTable && !versionReadable) {
+    const spec = BANK_SCHEMA_CONTRACT.tables.bank_component_migrations;
+    problems.push({
+      code: "bank_schema_version_table_corrupt",
+      detail: {
+        table: "bank_component_migrations",
+        missing: spec.columns.filter((c) => !versionColumns.includes(c)),
+        columns: versionColumns,
+      },
+    });
+  }
 
   if (versions.some((v) => v > BANK_SCHEMA_VERSION)) {
     problems.push({
@@ -293,7 +423,7 @@ export function bankSchemaContract(db) {
       code: "bank_schema_version_contradiction",
       detail: { reason: "component_migrations_missing", tables: bankTables.slice(0, 20) },
     });
-  } else if (versions.length !== 1 || versions[0] !== BANK_SCHEMA_VERSION) {
+  } else if (versionReadable && (versions.length !== 1 || versions[0] !== BANK_SCHEMA_VERSION)) {
     problems.push({
       code: "bank_schema_version_contradiction",
       detail: { versions, target: BANK_SCHEMA_VERSION, reason: "version_rows_not_exactly_target" },
@@ -339,46 +469,78 @@ export function bankSchemaContract(db) {
   };
   for (const want of BANK_SCHEMA_CONTRACT.indexes) {
     const have = indexesFor(want.table);
-    const match = have.find((idx) => (want.index
-      ? idx.name === want.index
-      : (idx.unique === want.unique && idx.partial === want.partial && sameList(idx.columns, [...want.columns]))));
+    const wantWhere = canonicalCondition(want.where);
+    const signature = (idx) => idx.unique === want.unique && idx.partial === want.partial
+      && sameList(idx.columns, [...want.columns]) && idx.where === wantWhere;
+    // 有名字的索引必须按名字找到，再整体比对列 / unique / partial / 实际 WHERE 谓词；
+    // 无名字的是表级 UNIQUE 约束生成的自动索引，按完整签名匹配。
+    const match = have.find((idx) => (want.index ? idx.name === want.index : signature(idx)));
     if (!match) {
       problems.push({
         code: "bank_schema_index_missing",
         detail: {
           table: want.table, index: want.index ?? null, columns: [...want.columns],
-          unique: want.unique, partial: want.partial,
+          unique: want.unique, partial: want.partial, where: want.where ?? null,
         },
       });
       continue;
     }
-    if (match.unique !== want.unique || match.partial !== want.partial
-      || !sameList(match.columns, [...want.columns])) {
+    if (!signature(match)) {
       problems.push({
         code: "bank_schema_index_mismatch",
         detail: {
           table: want.table, index: match.name,
-          expected: { columns: [...want.columns], unique: want.unique, partial: want.partial },
-          actual: { columns: match.columns, unique: match.unique, partial: match.partial },
+          expected: {
+            columns: [...want.columns], unique: want.unique, partial: want.partial,
+            where: want.where ?? null,
+          },
+          actual: {
+            columns: match.columns, unique: match.unique, partial: match.partial,
+            where: match.where,
+          },
         },
       });
     }
   }
 
+  // 外键按表比较**完整集合**（含重复约束），不是「找到必需项就通过」：
+  // 额外 / 重复 / 动作不符的约束都会改变真实删除行为，必须拒绝。
+  // 契约里没有外键条目的表（含 bank_audit_events / bank_reconcile_runs）实际也必须没有外键。
+  const expectedFksByTable = new Map();
   for (const want of BANK_SCHEMA_CONTRACT.foreignKeys) {
-    if (!columnsByTable.has(want.table)) continue;
-    const have = foreignKeySignatures(db, want.table);
-    const match = have.find((fk) => fk.refTable === want.refTable
-      && fk.onDelete === want.onDelete
-      && sameList(fk.columns, [...want.columns])
-      && sameList(fk.refColumns, [...want.refColumns]));
-    if (!match) {
+    const list = expectedFksByTable.get(want.table) ?? [];
+    list.push(want);
+    expectedFksByTable.set(want.table, list);
+  }
+  const fkKey = (fk) => JSON.stringify([
+    fk.columns, fk.refTable, fk.refColumns,
+    String(fk.onUpdate ?? "NO ACTION").toUpperCase(),
+    String(fk.onDelete ?? "NO ACTION").toUpperCase(),
+  ]);
+  for (const table of Object.keys(BANK_SCHEMA_CONTRACT.tables)) {
+    if (!columnsByTable.has(table)) continue;
+    const expected = expectedFksByTable.get(table) ?? [];
+    const actual = foreignKeySignatures(db, table);
+    const remaining = [...actual];
+    for (const want of expected) {
+      const key = fkKey(want);
+      const index = remaining.findIndex((fk) => fkKey(fk) === key);
+      if (index >= 0) { remaining.splice(index, 1); continue; }
       problems.push({
         code: "bank_schema_foreign_key_missing",
         detail: {
-          table: want.table, columns: [...want.columns], refTable: want.refTable,
+          table, columns: [...want.columns], refTable: want.refTable,
           refColumns: [...want.refColumns], onDelete: want.onDelete,
-          actual: have.slice(0, 10),
+          actual: actual.slice(0, 10),
+        },
+      });
+    }
+    for (const extra of remaining) {
+      problems.push({
+        code: "bank_schema_foreign_key_unexpected",
+        detail: {
+          table, columns: extra.columns, refTable: extra.refTable,
+          refColumns: extra.refColumns, onDelete: extra.onDelete, onUpdate: extra.onUpdate,
         },
       });
     }
@@ -427,19 +589,29 @@ export function assertBankSchemaReady(db) {
 
 export function bankSchemaVersion(db) {
   if (!tableExists(db, "bank_component_migrations")) return 0;
+  // 版本表形状不对时不能直接 SELECT version（否则抛原始 SQLite 错误）。
+  if (!columnNames(db, "bank_component_migrations").includes("version")) return 0;
   const row = db.prepare(`SELECT COALESCE(MAX(version),0) AS v FROM bank_component_migrations`).get();
   return Number(row?.v || 0);
+}
+
+/** 只取实际存在的列，避免版本表 / 备份表形状损坏时读状态抛原始 SQL 错误。 */
+function selectExistingColumns(db, table, columns, orderBy) {
+  if (!tableExists(db, table)) return [];
+  const have = columnNames(db, table);
+  const picked = columns.filter((c) => have.includes(c));
+  if (!picked.length) return [];
+  const order = picked.includes(orderBy) ? orderBy : "rowid";
+  return db.prepare(`SELECT ${picked.join(", ")} FROM ${table} ORDER BY ${order}`).all();
 }
 
 /** 只读自检：组件版本、表、迁移 / 备份记录与结构契约状态。 */
 export function bankSchemaState(db) {
   const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all().map((r) => r.name);
-  const migrations = tableExists(db, "bank_component_migrations")
-    ? db.prepare(`SELECT version, applied_at, note FROM bank_component_migrations ORDER BY version`).all()
-    : [];
-  const backups = tableExists(db, "bank_component_backups")
-    ? db.prepare(`SELECT id, version, path, bytes, integrity, created_at, note FROM bank_component_backups ORDER BY id`).all()
-    : [];
+  const migrations = selectExistingColumns(db, "bank_component_migrations",
+    ["version", "applied_at", "note"], "version");
+  const backups = selectExistingColumns(db, "bank_component_backups",
+    ["id", "version", "path", "bytes", "integrity", "created_at", "note"], "id");
   const contract = bankSchemaContract(db);
   return {
     version: bankSchemaVersion(db),

@@ -499,3 +499,46 @@ test("CLI 组件结构契约损坏：未来版本 / 缺表在任何命令动作�
   rmSync(futurePath, { force: true });
   rmSync(missingPath, { force: true });
 });
+
+test("CLI 版本表形状损坏：status / 写入命令都结构化拒绝（exit 5），不显示原始 SQL 错误也不写入", () => {
+  const brokenPath = join(baseDir, "contract-broken-version.db");
+  db.prepare("VACUUM INTO ?").run(brokenPath);
+  {
+    const conn = new DatabaseSync(brokenPath);
+    try {
+      // 只损坏版本表形状：version 列被改名（旧实现会直接 SELECT version 抛 ERR_SQLITE_ERROR）。
+      conn.exec(`ALTER TABLE bank_component_migrations RENAME COLUMN version TO broken_version`);
+    } finally { conn.close(); }
+  }
+  const snapshot = (path) => {
+    const conn = new DatabaseSync(path);
+    try {
+      const names = conn.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all()
+        .map((r) => String(r.name)).sort();
+      const counts = Object.fromEntries(names.map((n) => [n,
+        Number(conn.prepare(`SELECT COUNT(*) AS n FROM "${n}"`).get().n)]));
+      return { names, counts };
+    } finally { conn.close(); }
+  };
+  const before = snapshot(brokenPath);
+
+  for (const args of [
+    ["status", "--db", brokenPath, "--account-set", String(setA.id), "--bank-account", "BANK-A"],
+    ["account-register", "--db", brokenPath, "--account-set", String(setA.id),
+      "--bank-account", "BANK-BROKEN", "--source", "local-statement", "--gl-code", "1002"],
+  ]) {
+    const result = run(args);
+    assert.equal(result.status, 5, `${args[0]} exit=${result.status}\nSTDERR ${result.stderr}`);
+    assert.equal(result.stdout, "", "失败时不得输出成功结果");
+    assert.doesNotMatch(result.stderr, /ERR_SQLITE|SQLITE_ERROR|no such column|PRAGMA/i,
+      "不得显示原始 SQLite 错误 / SQL 文本");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.error.code, "bank_schema_corrupt");
+    assert.ok(parsed.error.details.problems.some((p) => p.code === "bank_schema_version_table_corrupt"
+      && p.detail.table === "bank_component_migrations" && p.detail.missing.includes("version")),
+    "必须给出版本表形状损坏的结构化证据");
+  }
+
+  assert.deepEqual(snapshot(brokenPath), before, "版本表形状损坏拒绝时不得写入 / 补建任何表");
+  rmSync(brokenPath, { force: true });
+});

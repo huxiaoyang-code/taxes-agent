@@ -1,6 +1,6 @@
 # 银行流水与持久对账契约 · LOCAL-BANK（LOCAL-04 交付）
 
-状态：**实施 + 首轮独立审查 5 项阻塞修复与回归完成，待管理者复验 / 提交 / PR / 合并**；本轮不声称最终已通过（审查基线 `e2545216226b87262508d8a94f38426415670d8c`）。本文件不预写 PR 编号、已审 head 或 merge。
+状态：**实施 + 首轮独立审查 5 项阻塞修复 + 结构契约复审收敛修复与回归完成，待管理者复验 / 提交 / PR / 合并**；本轮不声称最终已通过（本轮返工基线 `46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；上一轮阻塞审查基线 `e2545216226b87262508d8a94f38426415670d8c`）。本文件不预写 PR 编号、已审 head 或 merge。
 - 远端载体：[Issue #53](https://github.com/huxiaoyang-code/youshu-fork/issues/53)（`Refs #20` / `Refs #13`）
 - 基线：`257f96275031eefa484699dd71bd012e2d221e51`（含已审 PR #52 导出模块、PR #50 输出策略模块）
 - 分支：`codex/huxiaoyang-code/local-04-bank`；工作区：`.worktrees/local-04-bank`
@@ -66,8 +66,9 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 ### 4.1 组件结构契约（v1，供备份 / 恢复与后续接线核对）
 
 组件结构以代码常量 `BANK_SCHEMA_CONTRACT`（`server/bank-storage.mjs`）为唯一权威，并由
-`bankSchemaContract(db)` 只读核对。**本节列出的列 / 主键 / UNIQUE / 索引 / 外键动作 = 运行时真实门槛**，
-后续 LOCAL-06 备份组合、恢复与集成窗口可直接 `import { BANK_SCHEMA_CONTRACT }` 核对，不要另行猜测结构。
+`bankSchemaContract(db)` 只读核对。**本节列出的列 / 主键 / UNIQUE / 索引签名与实际 `WHERE` 谓词 /
+外键完整集合与动作 = 运行时真实门槛**，后续 LOCAL-06 备份组合、恢复与集成窗口可直接
+`import { BANK_SCHEMA_CONTRACT }` 核对，不要另行猜测结构。
 
 版本：`BANK_SCHEMA_VERSION = 1`；`bank_component_migrations` 必须**有且只有一行 `version = 1`**。
 本版本**没有 v2 迁移**，也不伪造 v2。
@@ -86,6 +87,12 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 | `bank_reconcile_runs` | `id, account_set_id, bank_account_id, currency, period, as_of, status, book_close_cents, adjusted_book_cents, statement_close_cents, adjusted_bank_cents, difference_cents, result_json, stale, stale_reason, created_at` | `id` |
 
 索引与 UNIQUE（`unique` / `partial` 均参与核对；无名字的项是表级 UNIQUE 约束生成的自动索引）：
+
+部分索引除了同名 / 同列 / 同 `unique` / 同 `partial`，还必须与表中写明的 `WHERE` 谓词一致：
+`sqlite_master.sql` 中的实际谓词会被规范化（删除字面量外空白、统一引号标识符大小写、剥外层括号，
+**保留字符串字面量大小写**）后与契约谓词**整体比对**；不做宽泛 substring 判断。因此
+`WHERE status='cancelled'`、`WHERE status <> 'confirmed'`、`WHERE bank_ref_id IS NOT NULL AND 1=1`
+都会在同名同列同 UNIQUE/partial 的情况下被拒绝，而产品实际 DDL 的空白 / 引号写法差异不会误判。
 
 | 表 | 索引 / 约束 | 列 | unique | partial |
 |---|---|---|---|---|
@@ -109,7 +116,12 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 | `bank_audit_events` | `idx_bank_audit_scope` | `(account_set_id, bank_account_id, event_type)` | 否 | 否 |
 | `bank_reconcile_runs` | `idx_bank_reconcile_scope` | `(account_set_id, bank_account_id, period, as_of)` | 否 | 否 |
 
-外键（列顺序 + 目标列 + `ON DELETE` 动作都参与核对）：
+外键（列顺序 + 目标列 + `ON DELETE` / `ON UPDATE` 动作都参与核对）：
+
+外键按表比较**完整集合**（多重集，不按目标表去重）：缺必需项给 `bank_schema_foreign_key_missing`，
+额外 / 重复 / 动作不符的约束给 `bank_schema_foreign_key_unexpected`。契约未列出外键的表
+（含 `bank_audit_events` / `bank_reconcile_runs`）实际也**必须没有外键**，不能在审计 / 运行记录表上
+加 `REFERENCES account_sets(id) ON DELETE CASCADE` 来改变真实删除行为。
 
 | 表 | 列 | → 目标 | ON DELETE |
 |---|---|---|---|
@@ -123,7 +135,8 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 | `bank_ambiguities` | `(account_set_id, bank_account_id, batch_id)` | `bank_batches(...)` | CASCADE |
 | `bank_matches` | `transaction_id` | `bank_transactions(id)` | SET NULL |
 
-`bank_audit_events` / `bank_reconcile_runs` **没有外键**（审计证据与运行记录不随业务删除消失）。
+`bank_audit_events` / `bank_reconcile_runs` **没有外键**（审计证据与运行记录不随业务删除消失）；
+契约按表比较完整外键集合，所以给这两张表加任何额外外键都会被结构化拒绝。
 
 ## 5. 账户与科目合同
 
@@ -382,12 +395,16 @@ node scripts/bank-reconcile.mjs <command> --db <库文件> [选项] [--format js
   领域 `resolveBankScope` / `registerBankAccount` 都调用同一套 `bankSchemaContract(db)` + `assertBankSchemaReady(db)`：
   - 版本比本程序新（如 v1 库里有一条 `version=2`）→ `bank_schema_future_version`；
   - 版本记录与表集合矛盾（有表无版本行、版本行不是唯一的 v1）→ `bank_schema_version_contradiction`；
-  - 缺表 / 缺列 / 主键不符 / 缺 UNIQUE 或索引签名不符 / 外键列或 `ON DELETE` 动作不符 /
-    额外的未声明 `bank_*` 表 → `bank_schema_corrupt`；
+  - 版本表本身形状损坏（`version` 列缺失 / 被改名）→ problems 含 `bank_schema_version_table_corrupt`，
+    最终码为 `bank_schema_corrupt`；实现**先验证版本表形状再读 `version`**，不把 `ERR_SQLITE_ERROR` /
+    原始 SQL 错误抛给领域或 CLI；
+  - 缺表 / 缺列 / 主键不符 / 缺 UNIQUE 或索引签名不符 / 部分索引 `WHERE` 谓词不符 /
+    外键完整集合或动作不符（含额外 / 重复外键）/ 额外的未声明 `bank_*` 表 → `bank_schema_corrupt`；
   - 完全没有任何 `bank_*` 表才进入备份门槛迁移；
   - 拒绝时**不做任何 DDL / 写入**，不用 `CREATE TABLE IF NOT EXISTS` 静默修补坏库，失败即无写入；
   - 只做结构核对（`sqlite_master` + PRAGMA），**不扫全表内容**，不做昂贵内容校验。
-- CLI 对以上错误码统一 exit 5（依赖未就绪）；`details.problems` 给出结构问题证据（表 / 列 / 索引 / 外键）。
+- CLI 对以上错误码统一 exit 5（依赖未就绪）；`details.problems` 给出结构问题证据（表 / 列 / 索引签名与谓词 / 外键集合）。
+  版本表形状损坏时，领域只读入口与 CLI `status` 同样是**非写入拒绝**：不执行 DDL、不补建表、不显示原始 SQL 错误。
 - CLI 的 `init-db` 是唯一允许建库的入口：它先确认目标文件不存在（且文件名必须是 `workbench.db`），
   声明创建事实，设置 `WORKBENCH_DATA_DIR` 指向显式目录后调用产品真实建库入口 `server/db.mjs`，
   再在同一进程内初始化 `bank_*`。已有库加入 `bank_*` 时 CLI 支持 `--backup-service <模块>`。
@@ -419,9 +436,9 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 | 套件 | 命令（在 `06-workbench` 目录） | 结果 |
 |---|---|---|
 | CSV / 映射 / 规范化 | `node --test test/bank-import.test.mjs` | 16 / 16 通过 |
-| 持久化 / 匹配 / 失效 / 余额调节 | `node --test test/bank-reconciliation.test.mjs` | 26 / 26 通过 |
-| CLI 端到端（子进程） | `node --test test/bank-reconcile-cli.test.mjs` | 10 / 10 通过 |
-| 三套合计 | `node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs` | 52 / 52 通过，exit 0 |
+| 持久化 / 匹配 / 失效 / 余额调节 | `node --test test/bank-reconciliation.test.mjs` | 29 / 29 通过 |
+| CLI 端到端（子进程） | `node --test test/bank-reconcile-cli.test.mjs` | 11 / 11 通过 |
+| 三套合计 | `node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs` | 56 / 56 通过，exit 0（约 11.1s） |
 | 既有全套回归 | `npm test` | 上一轮 47 / 47 套件通过；**本轮未重跑**（本轮只改银行包内 10 个文件，未动上游共享代码） |
 
 三套件**尚未注册**到 `scripts/test-all.mjs`：该文件属于共享测试总入口，按任务边界由后续共享接线窗口登记；
@@ -445,6 +462,33 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 - 同一复现脚本在冻结 head 上 29 / 51 项断言失败（含上述 5 类现象）；修复后 51 / 51 通过。
 - 新增 8 个回归用例（1 导入 + 6 领域 + 1 CLI）在冻结 head 上全部失败、在修复后全部通过；原 44 个用例两侧都通过。
 
+### 13.2 结构契约复审收敛（本轮 3 项 P2）
+
+返工基线为 `46e0fc0ecb74703cc8482aab9a1cf3f85839f232`。原分页 / 截止日 / 事务 / CSV 四项与大数据真实探针
+已独审通过，本轮只收敛结构门槛与必要测试文档；三套用例原 52 项保留未删弱。
+
+| P2 | 返工前真实表现（冻结 head `46e0fc0`） | 修复 | 回归用例 |
+|---|---|---|---|
+| 部分索引只比 `partial` 标志、忽略 `WHERE` | 把 `idx_bank_matches_active_txn` 重建为同名同列同 UNIQUE/partial 但 `WHERE status='cancelled'`，`bankSchemaContract` 仍 ok、`ensureBankSchema` 仍返回 already-initialized | `indexSignatures` 读取 `sqlite_master.sql` 的实际谓词，规范化后**整体**比对；三条部分索引（`idx_bank_matches_active_txn` / `idx_bank_matches_active_entry` / `idx_bank_txn_ref`）错谓词一律 `bank_schema_corrupt` | `部分索引契约核对真实 WHERE 谓词…`（领域；含正确谓词的空白 / 引号写法兼容） |
+| 外键只找必需项、不拒绝额外 / 重复约束 | `bank_audit_events` 仅增加 `account_set_id REFERENCES account_sets(id) ON DELETE CASCADE`（并恢复原索引）后 contract 仍 ok；真实删除账套后审计行 1 → 0 | 按表比较完整外键多重集（列组 + 目标 + `ON DELETE` / `ON UPDATE`），额外 / 重复约束逐条给 `bank_schema_foreign_key_unexpected`；audit / reconcile-runs 原本无 FK 时实际也必须无 FK | `外键契约比较完整集合…`（领域；合法结构真实删除后审计仍 1，额外 FK 真实删除后审计变 0，重复同目标 FK 两条都暴露） |
+| 版本表缺列时先查询 `version` 导致 SQLite 异常 | `ALTER TABLE bank_component_migrations RENAME COLUMN version TO broken_version` 后 `bankSchemaContract` 直接抛 `ERR_SQLITE_ERROR: no such column: version` | 先验证版本表形状（`version` 列存在）再读版本；形状坏时给 `bank_schema_version_table_corrupt`（最终 `bank_schema_corrupt`），`bankSchemaVersion` / `bankSchemaState` / 领域入口 / CLI `status` 都不抛原始 SQL、不写入；正常未来版本仍 `bank_schema_future_version` | `版本表形状缺失…`（领域）、`CLI 版本表形状损坏…`（子进程，exit 5 且不显示 SQLite 错误） |
+
+红 / 绿证据（同一临时探针分别导入冻结 head 的实现与返工实现，真实临时 SQLite）：
+
+```
+冻结 head 46e0fc0：错索引谓词 contractOk=true / ensure=already-initialized；
+                   audit 额外 FK contractOk=true，真实删除账套后 audit 1→0；
+                   版本表改名后 contract 抛 ERR_SQLITE_ERROR(no such column: version)
+返工实现：       错索引谓词 contractOk=false / bank_schema_corrupt / ensure 拒绝；
+                   audit 额外 FK contractOk=false / bank_schema_corrupt；
+                   版本表改名后 contract 返回 ok=false / bank_schema_corrupt（不抛原始 SQL）
+```
+
+本轮实际运行：`bank-import` 16 / 16、`bank-reconciliation` 29 / 29、`bank-reconcile-cli` 11 / 11，
+三套合计 56 / 56 通过（约 11.1s）；原 52 项未删弱，新增 4 个用例（3 领域 + 1 CLI）。
+冻结 head `46e0fc0` 实测：3 个领域新用例 3 / 3 失败；CLI 新用例 exit 3（原始 SQLite 错误被当作内部错误）
+而非要求的 exit 5；返工实现后 4 / 4 通过。
+
 ## 14. 限制与未完成项（不声称已交付完成）
 
 1. **已有库迁移不可用**：等待 LOCAL-06 已审备份合同合并后，由集成窗口完成真实迁移前备份、
@@ -465,8 +509,10 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 9. **对账单完整性**：银行截止余额由操作者声明并与覆盖期流水净额自校验；不读取银行原件、
    不自动判断对账单是否覆盖全部交易，只按显式覆盖范围与来源说明给状态。
 10. **不做**：银行网站 / 银行 API、SaaS / 多租户、自动调整凭证、自动结账、发票 / 税务适配。
-11. **结构契约的边界**：`bankSchemaContract` 只核对结构 / 版本（表 / 列 / 主键 / UNIQUE / 索引 / 外键动作 /
-    额外表），**不做内容一致性、行数或哈希比对**；也不做缓存，每次调用都重新读 `sqlite_master` + PRAGMA。
+11. **结构契约的边界**：`bankSchemaContract` 只核对结构 / 版本（表 / 列 / 主键 / UNIQUE / 索引签名与
+    规范化谓词 / 外键完整集合与动作 / 版本表形状 / 额外表），**不做内容一致性、行数或哈希比对**；
+    也不做缓存，每次调用都重新读 `sqlite_master` + PRAGMA。谓词比对是**规范化文本整体相等**，
+    不是语义等价判断：逻辑等价但写法不同的谓词会被保守拒绝，必须在升级时同步改契约与迁移。
     额外或未知的 `bank_*` 表会被当作「契约外结构」拒绝——将来真的加表必须先升版本并补迁移。
 12. **内部完整扫描的成本**：失效核验 / 对账未达项按完整集合读（键集游标分块）；数据量很大时
     耗时随匹配数增长（501 笔全确认约 8 秒级），本版本不做增量 / 缓存机制，也不以展示分页换正确性。

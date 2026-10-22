@@ -1,8 +1,8 @@
 # 交接 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
-- 状态：**实施 + 首轮独立审查 5 项阻塞修复与回归完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
-- 审查基线（冻结 head）：`e2545216226b87262508d8a94f38426415670d8c`；本轮只改原 10 个文件，未新增 / 未越界。
-- 基线：`257f96275031eefa484699dd71bd012e2d221e51`；分支 `codex/huxiaoyang-code/local-04-bank`；工作区 `.worktrees/local-04-bank`
+- 状态：**实施 + 首轮独立审查 5 项阻塞修复 + 结构契约复审收敛（3 项 P2）与回归完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
+- 本轮返工基线（冻结 head）：`46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；原分页 / 截止日 / 事务 / CSV 四项及大数据真实探针已独审通过，本轮只收敛结构门槛及必要测试文档，仍只改原 10 个文件。
+- 上一轮阻塞审查基线：`e2545216226b87262508d8a94f38426415670d8c`；基线 `257f96275031eefa484699dd71bd012e2d221e51`；分支 `codex/huxiaoyang-code/local-04-bank`；工作区 `.worktrees/local-04-bank`
 - 远端载体：[Issue #53](https://github.com/huxiaoyang-code/youshu-fork/issues/53)（`Refs #20` / `Refs #13`）
 - 任务单：[tasks/LOCAL-04-BANK](../tasks/LOCAL-04-BANK.md) · 契约：[LOCAL-BANK](../LOCAL-BANK.md)
 - 执行模型：按管理者派工锁定的授权模型（GLM 5.3 / DeepSeek V4.1 Flash 范围内的显式锁定），未启动其他模型或员工子 agent。
@@ -24,8 +24,9 @@ docs/tasks/LOCAL-04-BANK.md
 docs/handoffs/LOCAL-04-BANK.md
 ```
 
-`git status` 只显示以上 10 个文件（本轮首轮审查修复在冻结 head `e2545216` 上改其中 7 个：4 实现 + 3 测试，
-再加 3 个文档更新）；无 `data/`、无临时库、无日志、无 `package.json` / 锁文件 / `test-all.mjs` 改动。
+`git status` 只显示以上 10 个文件（首轮审查修复改其中 7 个：4 实现 + 3 测试；本轮结构契约复审收敛再改
+4 实现文件中的 `bank-storage.mjs` + 2 个测试 + 3 文档，仍不新增 / 不越界）；无 `data/`、无临时库、无日志、
+无 `package.json` / 锁文件 / `test-all.mjs` 改动。
 
 ## 2. 关键设计决定（审查重点）
 
@@ -51,7 +52,7 @@ docs/handoffs/LOCAL-04-BANK.md
    操作者声明并与覆盖期流水净额自校验；调节后两边与差额按契约公式输出；差额非 0、覆盖不完整、
    未决歧义、失效匹配都降级为 `pending_review` / `incomplete`，不生成 / 修改任何凭证。
 
-## 2.1 首轮独立审查 5 项阻塞的修复（本轮）
+## 2.1 首轮独立审查 5 项阻塞的修复（上一轮）
 
 审查基线为冻结 head `e2545216226b87262508d8a94f38426415670d8c`。复现方式：把该 head 的 4 个实现文件
 导出到临时目录的独立副本，再对同一复现脚本双重运行（冻结 head / 修复后），全部使用真实临时 SQLite、
@@ -77,6 +78,34 @@ docs/handoffs/LOCAL-04-BANK.md
 本轮改动仍限于原 10 个文件：4 个实现 + 3 个测试修改；3 个文档更新。未改共享核心 / backup / 其他员工文件，
 未新增依赖，未完成「已有库安装 / 备份恢复」闭环（见 §4）。
 
+## 2.2 结构契约复审收敛（本轮 3 项 P2，返工基线 `46e0fc0`）
+
+原分页 / 截止日 / 事务 / CSV 四项与大数据真实探针已独审通过；本轮只修结构门槛，未改业务语义。
+
+| # | 返工前真实表现（冻结 head `46e0fc0`） | 根因 | 修复位置 |
+|---|---|---|---|
+| 1 | 把 `idx_bank_matches_active_txn` 重建为同名同列同 UNIQUE/partial 但 `WHERE status='cancelled'` 后，`bankSchemaContract` 仍 ok、`ensureBankSchema` 返回 already-initialized | 索引契约只比较名字 / 列 / unique / partial 标志，未比较部分索引的实际 `WHERE` 谓词 | `bank-storage.mjs`：`indexSignatures` 读 `sqlite_master.sql` 提取谓词，`canonicalCondition` 规范化后**整体相等**比对；`BANK_SCHEMA_CONTRACT` 为 `idx_bank_matches_active_txn` / `idx_bank_matches_active_entry` / `idx_bank_txn_ref` 写明谓词；错谓词一律 `bank_schema_corrupt`，产品 DDL 的空白 / 引号写法不误判 |
+| 2 | `bank_audit_events` 重建时仅增加 `account_set_id REFERENCES account_sets(id) ON DELETE CASCADE` 并恢复原索引后 contract 仍 ok；真实删除账套后审计行 1→0 | 外键只找必需项，不拒绝额外 / 重复约束，且按目标表覆盖会让重复约束不可见 | 按表比较完整外键**多重集**（列组 + 目标 + `ON DELETE` / `ON UPDATE`）；缺项给 `bank_schema_foreign_key_missing`，额外 / 重复逐条给 `bank_schema_foreign_key_unexpected`；契约未列外键的表（含 audit / reconcile-runs）实际也必须无外键 |
+| 3 | `ALTER TABLE bank_component_migrations RENAME COLUMN version TO broken_version` 后 `bankSchemaContract` 直接抛 `ERR_SQLITE_ERROR: no such column: version` | 先 `SELECT version` 再验证版本表形状 | 先验证 `version` 列存在再读版本；形状坏给 `bank_schema_version_table_corrupt`（最终 `bank_schema_corrupt`）；`bankSchemaVersion` / `bankSchemaState` 与领域只读 / 写入入口、CLI `status` 均结构化**非写入拒绝**，不显示原始 SQL；正常未来版本仍 `bank_schema_future_version` |
+
+真实红 / 绿证据（临时探针，真实临时 SQLite，探针在系统临时目录不入库）：
+
+```
+冻结 head 46e0fc0：错索引谓词 contractOk=true / ensure=already-initialized；
+                   audit 额外 FK contractOk=true，真实删除账套后 audit 1→0；
+                   版本表改名后 contract 抛 ERR_SQLITE_ERROR(no such column: version)
+返工实现：       错索引谓词 contractOk=false / bank_schema_corrupt / ensure 拒绝；
+                   audit 额外 FK contractOk=false / bank_schema_corrupt；
+                   版本表改名后 contract 返回 ok=false / bank_schema_corrupt（不抛原始 SQL）
+```
+
+新增回归用例（均在冻结 head 上失败、返工后通过）：
+
+- `bank-reconciliation.test.mjs`：「部分索引契约核对真实 WHERE 谓词…」、「外键契约比较完整集合…」、
+  「版本表形状缺失…」（冻结 head 实测 3 / 3 失败）
+- `bank-reconcile-cli.test.mjs`：「CLI 版本表形状损坏…」（冻结 head 实测 exit 3 而非 5；返工后 exit 5、
+  无写入、不显示 SQLite 错误）
+
 ## 3. 实际验证与关键业务输出（本次运行）
 
 环境：Windows，Node v24.15.0，`node:sqlite`。全部合成临时目录 / 合成 CSV。工作目录 `06-workbench`。
@@ -84,12 +113,13 @@ docs/handoffs/LOCAL-04-BANK.md
 | 命令 | 结果 |
 |---|---|
 | `node --test test/bank-import.test.mjs` | 16 / 16 通过 |
-| `node --test test/bank-reconciliation.test.mjs` | 26 / 26 通过 |
-| `node --test test/bank-reconcile-cli.test.mjs` | 10 / 10 通过 |
-| 三套合并 | 52 / 52 通过，exit 0（约 10.7s） |
+| `node --test test/bank-reconciliation.test.mjs` | 29 / 29 通过 |
+| `node --test test/bank-reconcile-cli.test.mjs` | 11 / 11 通过 |
+| 三套合并 | 56 / 56 通过，exit 0（约 11.1s） |
 | `npm test` | 上一轮 47 / 47 套件通过；**本轮未重跑**（只改银行包内文件，未动上游共享代码，按任务边界只跑定向 3 套） |
 
-原 44 个用例保留未改断言（15 / 20 / 9），本轮新增 8 个回归用例（1 导入 + 6 领域 + 1 CLI）。
+原 52 项用例（16 / 26 / 10）保留未删弱，本轮新增 4 个用例（3 领域 + 1 CLI）；新增用例已在冻结 head
+`46e0fc0` 上先红、返工后绿（见 §2.2）。
 
 固定手算（领域与 CLI 两处独立断言，常量写在测试里，不用被测公式生成）：
 
@@ -124,6 +154,8 @@ SQL 改金额 / 日期 / 科目 / 行号 / 删分录分别识别；触发器注�
    「同科目多银行账户」支持需按合同重新评估。
 5. 组匹配（一对多 / 多对一）仍未实现，只返回 `group_match_requires_manual` / `unsupported_group_match`。
 6. 外币 / 换汇、银行网站 / API：不在范围。
+7. **结构契约的边界**：部分索引谓词按规范化文本整体相等比较（逻辑等价但写法不同会被保守拒绝）；
+   外键按完整集合比较；版本表形状损坏只给结构化拒绝，不做自动修复 / 补迁。仍不做内容 / 行数 / 哈希校验。
 
 ## 5. 管理者复验建议
 
@@ -132,7 +164,9 @@ SQL 改金额 / 日期 / 科目 / 行号 / 删分录分别识别；触发器注�
 - 复现固定金额与 1 分差异（命令见契约 §13 与任务单 §6）；复现已有库无备份时 exit 5 且无 `bank_*`。
 - 重跑冻结 head 与本头的差异重点：501 笔全确认后的调节后 50100 / 50100（不是 50200）、反过账后 checked=501 /
   `invalidated` 长度 1、候选 `available=false`、201 批次 / 501 歧义的**真实计数**、跨日 asOf 未达项 1000 / 1000、
-  结构损坏（未来版本 / 缺表）exit 5 且无写入、对账插 run / 插 audit 失败后全组件快照不变。
+  结构损坏（未来版本 / 缺表）exit 5 且无写入、对账插 run / 插 audit 失败后全组件快照不变；
+  本轮新增：同名同列同 UNIQUE/partial 的错索引谓词被拒、audit / reconcile-runs 额外或重复 FK 被拒、
+  版本表改名后 `bank_schema_corrupt`（不是 `ERR_SQLITE_ERROR`）且 CLI 不显示原始 SQL。
 - 检查三套测试是否真的只用合成临时目录（`mkdtempSync` + `rmSync`），以及是否没有读真实库 / 凭据。
 - 关注点：文件级幂等的边界（换行 / 编码变化不算同文件）、未决歧义对批次与对账状态的降级、
   失效审计只写一次、旧匹配记录保留、`bank_*` 不写全局版本、额外 `bank_*` 表会被契约拒绝。

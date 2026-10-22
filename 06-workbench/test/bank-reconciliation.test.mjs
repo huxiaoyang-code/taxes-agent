@@ -1467,6 +1467,249 @@ test("组件结构 / 版本契约：未来版本、矛盾版本、缺表 / 缺�
   }
 });
 
+test("部分索引契约核对真实 WHERE 谓词：同名同列同 UNIQUE/partial 的错谓词拒绝，写法差异不误判", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-predicate-"));
+  const expectCorrupt = async (ctx, indexName) => {
+    const state = S.bankSchemaContract(ctx.conn);
+    assert.equal(state.ok, false, `${indexName}: 错谓词必须破坏契约`);
+    assert.equal(state.code, "bank_schema_corrupt");
+    const problem = state.problems.find((p) => p.code === "bank_schema_index_mismatch"
+      && p.detail.index === indexName);
+    assert.ok(problem, `${indexName}: 必须给出索引谓词不符的结构化问题`);
+    await assert.rejects(() => S.ensureBankSchema(ctx.conn, { dbPath: ctx.file }),
+      (e) => e.code === "bank_schema_corrupt");
+    return problem;
+  };
+
+  try {
+    // 1) 有效流水部分唯一索引：同名 / 同列 / 同 UNIQUE / 同 partial，只把谓词改错。
+    {
+      const ctx = await isolatedComponentDb(dir, "predicate-active-txn.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_matches_active_txn`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_matches_active_txn
+                         ON bank_matches (transaction_id) WHERE status = 'cancelled'`);
+        const problem = await expectCorrupt(ctx, "idx_bank_matches_active_txn");
+        assert.equal(problem.detail.expected.where, "status = 'confirmed'");
+        assert.notEqual(problem.detail.actual.where, problem.detail.expected.where);
+        // 恢复正确谓词，但换成压缩空白 + 双引号标识符：规范化后必须通过（兼容产品实际 DDL）。
+        ctx.conn.exec(`DROP INDEX idx_bank_matches_active_txn`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_matches_active_txn
+                         ON bank_matches (transaction_id) WHERE "status"  =  'confirmed'`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "空白 / 引号写法差异不得误判为坏索引");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 2) 有效分录部分唯一索引：谓词改成 status <> 'confirmed'。
+    {
+      const ctx = await isolatedComponentDb(dir, "predicate-active-entry.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_matches_active_entry`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_matches_active_entry
+                         ON bank_matches (account_set_id, entry_id) WHERE status <> 'confirmed'`);
+        const problem = await expectCorrupt(ctx, "idx_bank_matches_active_entry");
+        assert.equal(problem.detail.expected.where, "status = 'confirmed'");
+        ctx.conn.exec(`DROP INDEX idx_bank_matches_active_entry`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_matches_active_entry
+                         ON bank_matches (account_set_id, entry_id) WHERE status='confirmed'`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "去掉空格后仍应通过");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 3) 稳定流水 ID 部分唯一索引：谓词被放宽为恒真条件也必须拒绝。
+    {
+      const ctx = await isolatedComponentDb(dir, "predicate-txn-ref.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_ref`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id)
+                         WHERE bank_ref_id IS NOT NULL AND 1 = 1`);
+        const problem = await expectCorrupt(ctx, "idx_bank_txn_ref");
+        assert.equal(problem.detail.expected.where, "bank_ref_id IS NOT NULL");
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_ref`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id)
+                         WHERE "bank_ref_id" IS NOT NULL`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "引号标识符写法差异不得误判");
+      } finally { ctx.conn.close(); }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("外键契约比较完整集合：audit / reconcile-runs 额外或重复外键拒绝，合法结构保留删除后审计证据", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-fk-set-"));
+  const countIn = (conn, sql, ...args) => Number(conn.prepare(sql).get(...args).n);
+  const rebuildAudit = (ctx, foreignKeys) => {
+    ctx.conn.exec("PRAGMA foreign_keys = OFF");
+    try {
+      ctx.conn.exec(`CREATE TABLE bank_audit_events_rebuild (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_set_id INTEGER,
+        bank_account_id TEXT,
+        event_type TEXT NOT NULL,
+        subject_type TEXT NOT NULL DEFAULT '',
+        subject_id TEXT NOT NULL DEFAULT '',
+        detail_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+        ${foreignKeys ? `, ${foreignKeys}` : ""}
+      )`);
+      ctx.conn.exec(`INSERT INTO bank_audit_events_rebuild
+                       (id, account_set_id, bank_account_id, event_type, subject_type, subject_id, detail_json, created_at)
+                     SELECT id, account_set_id, bank_account_id, event_type, subject_type, subject_id, detail_json, created_at
+                       FROM bank_audit_events`);
+      ctx.conn.exec(`DROP TABLE bank_audit_events`);
+      ctx.conn.exec(`ALTER TABLE bank_audit_events_rebuild RENAME TO bank_audit_events`);
+      ctx.conn.exec(`CREATE INDEX idx_bank_audit_scope
+                       ON bank_audit_events (account_set_id, bank_account_id, event_type)`);
+    } finally {
+      ctx.conn.exec("PRAGMA foreign_keys = ON");
+    }
+  };
+
+  try {
+    // 1) 合法结构：真实业务删除账套（与 accounting.deleteAccountSet 相同的 DELETE 语句）后审计证据仍在。
+    {
+      const ctx = await isolatedComponentDb(dir, "fk-legal.db");
+      try {
+        const auditId = S.appendAuditEvent(ctx.conn, {
+          accountSetId: 1, eventType: "probe_legal", subjectType: "account_set", subjectId: "1",
+        });
+        assert.ok(auditId > 0);
+        ctx.conn.exec(`DELETE FROM account_sets WHERE id=1`);
+        assert.equal(countIn(ctx.conn, `SELECT COUNT(*) AS n FROM bank_audit_events WHERE account_set_id=1`), 1,
+          "无外键的审计表不得随账套删除消失");
+        assert.equal(countIn(ctx.conn, `SELECT COUNT(*) AS n FROM bank_accounts WHERE account_set_id=1`), 0,
+          "银行业务数据仍按既有外键级联清理");
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "合法结构删除后仍通过契约");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 2) bank_audit_events 仅增加 account_set_id -> account_sets ON DELETE CASCADE：必须拒绝。
+    {
+      const ctx = await isolatedComponentDb(dir, "fk-extra-audit.db");
+      try {
+        S.appendAuditEvent(ctx.conn, {
+          accountSetId: 1, eventType: "probe_extra", subjectType: "account_set", subjectId: "1",
+        });
+        rebuildAudit(ctx, "FOREIGN KEY (account_set_id) REFERENCES account_sets (id) ON DELETE CASCADE");
+        const state = S.bankSchemaContract(ctx.conn);
+        assert.equal(state.ok, false);
+        assert.equal(state.code, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_foreign_key_unexpected"
+          && p.detail.table === "bank_audit_events" && p.detail.refTable === "account_sets"
+          && p.detail.onDelete === "CASCADE"), "额外外键必须结构化拒绝");
+        await assert.rejects(() => S.ensureBankSchema(ctx.conn, { dbPath: ctx.file }),
+          (e) => e.code === "bank_schema_corrupt");
+        // 真实删除证据：该额外外键会把审计证据级联抹掉，这正是必须拒绝的原因。
+        ctx.conn.exec(`DELETE FROM account_sets WHERE id=1`);
+        assert.equal(countIn(ctx.conn, `SELECT COUNT(*) AS n FROM bank_audit_events WHERE account_set_id=1`), 0,
+          "额外 CASCADE 外键会让审计证据随账套删除消失");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 3) 重复同目标外键：不能按 refTable 去重掩盖，必须逐条暴露为额外约束。
+    {
+      const ctx = await isolatedComponentDb(dir, "fk-duplicate-audit.db");
+      try {
+        rebuildAudit(ctx, `FOREIGN KEY (account_set_id) REFERENCES account_sets (id) ON DELETE CASCADE,
+          FOREIGN KEY (account_set_id) REFERENCES account_sets (id) ON DELETE CASCADE`);
+        const state = S.bankSchemaContract(ctx.conn);
+        assert.equal(state.code, "bank_schema_corrupt");
+        const unexpected = state.problems.filter((p) => p.code === "bank_schema_foreign_key_unexpected"
+          && p.detail.table === "bank_audit_events" && p.detail.refTable === "account_sets");
+        assert.equal(unexpected.length, 2, "重复同目标外键必须逐条暴露，不能被 Map 覆盖");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 4) bank_reconcile_runs 原本无外键：额外外键同样必须拒绝。
+    {
+      const ctx = await isolatedComponentDb(dir, "fk-extra-reconcile.db");
+      try {
+        ctx.conn.exec("PRAGMA foreign_keys = OFF");
+        try {
+          ctx.conn.exec(`CREATE TABLE bank_reconcile_runs_rebuild (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+            bank_account_id TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            period TEXT NOT NULL,
+            as_of TEXT NOT NULL,
+            status TEXT NOT NULL,
+            book_close_cents INTEGER NOT NULL,
+            adjusted_book_cents INTEGER NOT NULL,
+            statement_close_cents INTEGER NOT NULL,
+            adjusted_bank_cents INTEGER NOT NULL,
+            difference_cents INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            stale_reason TEXT,
+            created_at TEXT NOT NULL
+          )`);
+          ctx.conn.exec(`DROP TABLE bank_reconcile_runs`);
+          ctx.conn.exec(`ALTER TABLE bank_reconcile_runs_rebuild RENAME TO bank_reconcile_runs`);
+          ctx.conn.exec(`CREATE INDEX idx_bank_reconcile_scope
+                           ON bank_reconcile_runs (account_set_id, bank_account_id, period, as_of)`);
+        } finally {
+          ctx.conn.exec("PRAGMA foreign_keys = ON");
+        }
+        const state = S.bankSchemaContract(ctx.conn);
+        assert.equal(state.code, "bank_schema_corrupt");
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_foreign_key_unexpected"
+          && p.detail.table === "bank_reconcile_runs" && p.detail.refTable === "account_sets"),
+        "运行记录表原本无外键，额外外键必须拒绝");
+      } finally { ctx.conn.close(); }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("版本表形状缺失：contract / 状态 / 领域入口结构化拒绝，不泄露原始 SQL 错误", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-version-shape-"));
+  try {
+    const ctx = await isolatedComponentDb(dir, "version-shape.db");
+    try {
+      // 只损坏版本表形状：version 列被改名。
+      ctx.conn.exec(`ALTER TABLE bank_component_migrations RENAME COLUMN version TO broken_version`);
+      const tablesBefore = bankTableNames(ctx.conn);
+      const rowsBefore = bankRowCounts(ctx.conn);
+
+      let state;
+      assert.doesNotThrow(() => { state = S.bankSchemaContract(ctx.conn); },
+        "版本表缺列时不得抛原始 SQLite 错误");
+      assert.equal(state.ok, false);
+      assert.equal(state.code, "bank_schema_corrupt");
+      assert.ok(state.problems.some((p) => p.code === "bank_schema_version_table_corrupt"
+        && p.detail.table === "bank_component_migrations"
+        && p.detail.missing.includes("version")), "必须给出版本表形状损坏的结构化问题");
+      assert.equal(state.problems.some((p) => p.code === "bank_schema_version_contradiction"), false,
+        "形状损坏不得伪装成版本矛盾");
+
+      assert.doesNotThrow(() => S.bankSchemaVersion(ctx.conn), "版本号读取不得抛原始 SQL 错误");
+      assert.equal(S.bankSchemaVersion(ctx.conn), 0, "形状损坏时不得读取 version");
+      let schemaState;
+      assert.doesNotThrow(() => { schemaState = S.bankSchemaState(ctx.conn); }, "状态自检不得抛原始 SQL 错误");
+      assert.equal(schemaState.contract.ok, false);
+      assert.ok(schemaState.contract.problemCodes.includes("bank_schema_version_table_corrupt"));
+
+      await assert.rejects(() => S.ensureBankSchema(ctx.conn, { dbPath: ctx.file }),
+        (e) => e.code === "bank_schema_corrupt", "初始化必须在损坏版本表上结构化拒绝");
+      assert.throws(() => B.registerBankAccount(ctx.conn, {
+        accountSetId: 1, bankAccountId: "BANK-VSHAPE", sourceId: "src-1", glAccountCode: "1002",
+      }), (e) => e.code === "bank_schema_corrupt", "领域写入必须结构化拒绝");
+      assert.throws(() => B.listTransactionsView(ctx.conn, { accountSetId: 1, bankAccountId: "BANK-VSHAPE" }),
+        (e) => e.code === "bank_schema_corrupt", "领域只读入口也必须结构化拒绝（非写入拒绝）");
+
+      assert.deepEqual(bankTableNames(ctx.conn), tablesBefore, "拒绝时不得补建 / 改名任何 bank_* 表");
+      assert.deepEqual(bankRowCounts(ctx.conn), rowsBefore, "拒绝时不得写入任何 bank_* 数据");
+    } finally { ctx.conn.close(); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("失效匹配复核计数先过滤再限条：>500 条已复核前缀不得掩盖后续未复核项", () => {
   const set = createSet("合成失效前缀", []);
   const bank = register(set.id, uniq("BANK")).account.bank_account_id;

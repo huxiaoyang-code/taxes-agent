@@ -1,8 +1,9 @@
 # 任务单 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
 - 类型：后端领域 + 组件持久层 + 本机 CLI + 契约文档 + 测试
-- 状态：**实施 + 首轮独立审查 5 项阻塞修复与回归完成，待管理者复验 / 提交 / PR / 合并**；本文件不预写 PR 编号、已审 head 或 merge，也不声称最终已通过。
-- 审查基线（冻结 head）：`e2545216226b87262508d8a94f38426415670d8c`；本轮仍只动原 10 个文件。
+- 状态：**实施 + 首轮独立审查 5 项阻塞修复 + 结构契约复审收敛（3 项 P2）与回归完成，待管理者复验 / 提交 / PR / 合并**；本文件不预写 PR 编号、已审 head 或 merge，也不声称最终已通过。
+- 本轮返工基线（冻结 head）：`46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；原分页 / 截止日 / 事务 / CSV 四项及大数据探针已独审通过，返工只限结构门槛及必要测试文档，仍只动原 10 个文件。
+- 上一轮阻塞审查基线：`e2545216226b87262508d8a94f38426415670d8c`。
 - 基线：`257f96275031eefa484699dd71bd012e2d221e51`（含已审 PR #52 导出模块、PR #50 输出策略模块；schema 仍为 LOCAL-01 v3）
 - 分支：`codex/huxiaoyang-code/local-04-bank`；工作区：`.worktrees/local-04-bank`
 - 负责人：`huxiaoyang-code`（已核实）
@@ -51,8 +52,8 @@
 | `06-workbench/server/bank-reconciliation.mjs` | 账户登记、导入落库、候选、确认 / 取消、读时失效核验、余额调节、状态汇总 |
 | `06-workbench/scripts/bank-reconcile.mjs` | 本机 CLI（显式 `--db`、JSON / text、错误码与退出码、`init-db`） |
 | `06-workbench/test/bank-import.test.mjs` | CSV / 映射 / 金额 / 日期 / 预检纯函数回归（16 项） |
-| `06-workbench/test/bank-reconciliation.test.mjs` | 真实临时库领域回归：幂等 / 去重 / 歧义 / 候选 / 匹配 / 失效 / 余额调节 / 分页与 asOf / 结构契约 / 对账原子性（26 项） |
-| `06-workbench/test/bank-reconcile-cli.test.mjs` | CLI 子进程端到端回归（10 项） |
+| `06-workbench/test/bank-reconciliation.test.mjs` | 真实临时库领域回归：幂等 / 去重 / 歧义 / 候选 / 匹配 / 失效 / 余额调节 / 分页与 asOf / 结构契约（含索引谓词、外键完整集合、版本表形状）/ 对账原子性（29 项） |
+| `06-workbench/test/bank-reconcile-cli.test.mjs` | CLI 子进程端到端回归（11 项） |
 | `docs/LOCAL-BANK.md` | 契约：表 / 函数 / CLI / 公式 / 错误码 / 限制 / 备份门槛 |
 | `docs/tasks/LOCAL-04-BANK.md` | 本任务单 |
 | `docs/handoffs/LOCAL-04-BANK.md` | 版本化交接（实际结果、未完成项、复验命令） |
@@ -92,6 +93,7 @@
 | 内部业务判定不读展示分页：501 笔全确认后调节后 50100 / 50100、反过账后 checked=501、候选全部标记占用、201 批次 / 501 歧义的**真实计数**、>500 已复核失效前缀不掩盖后续未复核 | 通过（首轮审查 P1 修复，冻结 head 上失败） |
 | 余额调计按 asOf 视角：合法跨日匹配不提前消除、反方向跨日与两侧都发生正常消除 | 通过（首轮审查 P1 修复） |
 | 组件结构 / 版本契约：未来版本 / 矛盾版本 / 缺表 / 缺列 / 主键 / UNIQUE / 索引签名 / 外键动作 / 额外表均在业务写前拒绝且无写入，CLI 不能绕过 | 通过（首轮审查 P2 修复，领域 + 子进程两路） |
+| 结构契约复审收敛：部分索引实际 `WHERE` 谓词、外键完整集合（额外 / 重复）、版本表形状损坏都在业务写前结构化拒绝；正确谓词的空白 / 引号写法兼容，未来版本仍拒绝，不泄露原始 SQL | 通过（本轮 3 项 P2，领域 3 + CLI 1 新增用例；冻结 head 上先红后绿） |
 | 对账结果持久化原子：插运行记录失败与插审计失败都全组件回滚，无无审计新结果、无误废弃旧结果 | 通过（首轮审查 P2 修复） |
 | CSV 错误列表总上限：201 行坏金额不崩、重复流水号追加路径共用上限、截断不误报 ok | 通过（首轮审查 P2 修复） |
 | 既有全套回归 | 上一轮 `npm test` 47 / 47 套件通过；本轮只跑定向 3 套（未改上游共享代码） |
@@ -102,13 +104,16 @@
 
 ```
 node --test test/bank-import.test.mjs          # 16 / 16 通过
-node --test test/bank-reconciliation.test.mjs  # 26 / 26 通过
-node --test test/bank-reconcile-cli.test.mjs   # 10 / 10 通过
+node --test test/bank-reconciliation.test.mjs  # 29 / 29 通过
+node --test test/bank-reconcile-cli.test.mjs   # 11 / 11 通过
 node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs
-                                                # 52 / 52 通过，exit 0
+                                                # 56 / 56 通过，exit 0（约 11.1s）
 ```
 
-原 44 个用例（15 / 20 / 9）保留未改；新增 8 个回归用例在冻结 head `e2545216` 上全部失败、在修复后全部通过。
+原 52 项用例（16 / 26 / 10）保留未删弱；本轮新增 4 个用例（3 领域 + 1 CLI）在冻结 head `46e0fc0` 上
+全部失败、在返工实现上全部通过。红 / 绿探针使用真实临时 SQLite：冻结 head 上错索引谓词仍 `ok + already-initialized`、
+audit 额外 FK 仍 `ok` 且真实删除账套后审计 1→0、版本表改名后 `bankSchemaContract` 抛 `ERR_SQLITE_ERROR`；
+返工后三处均为结构化 `bank_schema_corrupt`，审计额外 FK 被拒，版本表形状损坏不再抛原始 SQL。
 `npm test` 本轮未重跑（只改银行包内文件，未动上游共享代码），不把上一轮 47 / 47 当作本轮证据。
 
 ## 7. 未完成项（不声称整个 LOCAL-04 已交付完成）
@@ -122,14 +127,14 @@ node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/ban
    03 双准则与 1002 叶子科目映射尚未实际复验。
 4. 一对多 / 多对一人工组匹配（当前只有明确提示码，不自动占用分录）。
 5. 外币 / 换汇、银行网站 / API 接入：明确不在本包范围。
-6. 组件结构契约只核对结构 / 版本（不做内容 / 行数 / 哈希校验），且不加缓存；额外 `bank_*` 表会被拒绝，
-   真正加表必须先升版本并补迁移。
+6. 组件结构契约只核对结构 / 版本（不做内容 / 行数 / 哈希校验），且不加缓存；部分索引谓词按规范化文本整体相等
+   比较（逻辑等价但写法不同会被保守拒绝）；外键按完整集合比较；额外 `bank_*` 表会被拒绝，真正加表必须先升版本并补迁移。
 7. 内部完整扫描的性能：501 笔全确认约 8 秒级，数据量更大时耗时会线性增长；本版不做增量 / 缓存。
 
 ## 8. 交付后管理者需要做
 
 1. 阅读实际 diff（4 实现 + 3 测试 + 3 文档，无共享文件改动）；
 2. 复现关键金额与失败路径（§6 命令；固定手算 140000 / 140000 / 差额 0；1 分差异 pending_review；
-   已有库无备份 exit 5）；
+   已有库无备份 exit 5；错索引谓词 / 额外外键 / 版本表改名均在业务写前 `bank_schema_corrupt`）；
 3. 由未参与实施、不继承实施上下文的独立 Codex subagent 独审；返工仍由本员工实现；
 4. 按已验证 head 提交 / 建 PR / 合并，并补真实交接与远端 Issue 关联；本文件不预写这些结果。
