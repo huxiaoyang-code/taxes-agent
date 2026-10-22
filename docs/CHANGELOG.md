@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 
+### Changed — LOCAL-06 备份 / 验证 / 恢复：精确 v3 + v4 结构契约（2026-10-22，合并后兼容整合）
+
+- 背景：备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 验收合入（merge `98977e0`，已审源码 head `b2dcba3`），但它当时**严格只认 schema v3**；LOCAL-02 已把产品推到 v4（`asset_cards` 5 列）。本轮把备份 / 验证 / 恢复真正适配**两个精确版本**。
+- `06-workbench/server/local-backup.mjs`：`SUPPORTED_SCHEMA_VERSIONS = [3, 4]`，两份**独立**结构契约（`STRUCTURE_V3` / `STRUCTURE_V4`，差异只有 `asset_cards`）；逐表校验列名 / 声明类型 / NOT NULL / **默认值（与 `dflt_value` 逐字比对）** / 主键顺序 / UNIQUE 列组 / 外键完整集合与 `ON DELETE` / `ON UPDATE` / `MATCH` 动作（外键分组**一对一**比对，重复声明与额外分组都拒绝）/ 迁移记录连续性与迁移前备份记录；**不含该版本契约之外的表**（未来 bank / batch / audit 组件继续拒绝）。版本号只用于选契约：只抬高版本号、缺列、错默认值 / NOT NULL / 类型、迁移记录不连续、未来 v5+、零改结构但重算清单摘要的伪兼容全部拒绝。
+- v3 旧备份：只读 `verify` 与 `restore-new` 到全新目录均成功，**备份与源库都不被迁移 / 改写**；恢复出来的库仍是 v3，只有产品入口**显式**打开才走既有 v3→v4 迁移（先落 `workbench.db.pre-v4-*.bak`，5 列按真实默认值落为 `NULL / 0 / 'booked' / '' / 'purchase'`，旧卡片因此如实报 `asset_acquired_period_missing` / `asset_accumulated_mismatch`，不凭空补历史累计）。
+- v4 备份：用真实产品合成库验收（增量导入两批 + 资产 5 个补项列与期初累计 + 连续两个月计提与总账 + 真实封账 + 2 月保持 open），`createBackup → verifyBackup → restoreNew` 后用真实 `accounting.mjs` / `import-incremental.mjs` 读取并按**独立手算**核对余额 / 试算平衡 / 凭证 / 卡片 / 计提 / 批次来源 / 期间状态，并在恢复库上继续记账与计提（已封账期间写入与计提反过账被 `period_closed` 拒绝）。
+- 不改原位恢复范围 / 并发发布 / 链接保护 / 在线 WAL 一致性与 CLI 错误语义。
+- 测试：`06-workbench` 下 `node test/local-backup.test.mjs` **20 / 20 exit 0**（原 16 项保留 + 4 项新增）；`npm test` **53 / 53 套 exit 0**（本套件与已合入的 `finance-output-policy` 28 / 28、`report-office-export` 21 / 21 按任务单授权**仅追加**登记，原 50 套顺序 / 内容不变；Office 用 `REPORT_OFFICE_PYTHON` 真实跑 PDF 几何校验，未跳步）。v3 夹具由真实 v4 快照反向去掉 v4 只加列派生为**结构等价合成库**，不声称验证过真实历史 v3 账套。
+- 状态：**实现与自测完成，未提交 / 未建 PR / 未合并**，最终独立审查待做；head / merge 由管理者后补，本条不预报。
+
 ### Added — 本机产品路线 LOCAL-02：会计金额、期末完整性与连续期间（2026-10-22）
 
 - 实现与自测完成，**未提交 / 未建 PR / 未合并**，待管理者验收；[Issue #47](https://github.com/huxiaoyang-code/youshu-fork/issues/47)，基线（源码）`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`，分支 `codex/huxiaoyang-code/local-02`；**税局现场仍暂停、真实接入仍 0**，本条不涉及税局能力。
@@ -20,7 +30,7 @@
 - 独立合成预审 F1–F4 与历史状态残留已逐项修复并补定向回归：资产卡片写入口已封账 / 已过账守卫（F1）、普通后期损益结转与计提的前期依赖拒绝（F2）、零凭证但应计提期间不得跳过封账（F3）、`pending_purchase_voucher` 不再豁免原值差异与计提（F4）、历史状态与应提额不受未来 run 污染且执行时另设总额守卫。
 - 限制与下游：双准则 / 辅助核算（LOCAL-03）、复杂现金流与导出（LOCAL-05a / 05b）、完整审计与业务备份（LOCAL-06）、批量任务与 CLI（LOCAL-07）不在本包；`report-export.mjs` 未改写；空月份不自动登记，倒序反结账规则已写入契约。
 - 最终独审 review2（`fork_turns=none`）四项阻塞已逐项修复并补先红后绿定向回归：① 反过账后改寿命 / 原值 / 残值 / 起提 / 取得 / 期初累计 / 账簿状态 / 科目再重过账旧草稿一律拒绝（`depreciation_run_stale`，含分录科目校验；期末检查 / 计提入口同一口径，`posted_stale` 不再按「已过账」放行；名称 / 备注不锁死）；② 凭证**逐金额字段**拒绝非零亚分数（`0.001` / `1e-7` / `0.0049` 不再静默存 0，`0.005 → 0.01` 等正常边界保留）；③ 未入账登记（`asset_purchase_voucher_pending`）只在取得期间之后的期间计入阻塞（缺取得期间仍保守报告），不放宽真实未入账旁路；④ 计提期数写入前验证 `1 ~ 1200` 整数（`useful_life_months_invalid` / `useful_life_months_out_of_range`，技术边界不冒充法定年限），分期取额改 O(1)（`evenSplitAmountCents` / `cardMoney(card).amountAt`，`splitEvenlyCents` 限展开上限），新增 / 修改的落库 + DTO 构造同一保存点、任何后续计算失败整体回滚。
-- 修正 `import-storage.mjs` 中 `acquired_period` 迁移注释（原称「核对时回落 start_period」与实际「不回填、报 `asset_acquired_period_missing`」矛盾）；**迁移语义不变**，本轮回工未新增存储列（schema 仍 v4 同一 5 列），v3→v4 升级 / WAL 备份恢复 / 失败回滚验证保持。LOCAL-06 备份 CLI 尚未合并且当前只支持 v3，本轮不触碰。
+- 修正 `import-storage.mjs` 中 `acquired_period` 迁移注释（原称「核对时回落 start_period」与实际「不回填、报 `asset_acquired_period_missing`」矛盾）；**迁移语义不变**，本轮回工未新增存储列（schema 仍 v4 同一 5 列），v3→v4 升级 / WAL 备份恢复 / 失败回滚验证保持。LOCAL-06 备份 CLI 当时尚未合并且只支持 v3，本轮不触碰（合并后已另派兼容整合轮，见上方 Changed 条目）。
 - review3（再次独立审查）新增一项同影响面 P2 已修复：取得期间晚于计提期时，`expectedDepreciationCents`（校验已过账计提）返回 `not_existed` / 应提 0，而 `assetCardPeriodStatus` 的「本期无计提记录」分支仍按分期表算 `due` —— 导致「生成 1 月 10 → 反过账 → 改取得为 2 月 → 删旧凭证 → 再生成 1 月又成功写入 10 → 检查立即 `depreciation_run_stale`」的循环。现「本期无计提记录」分支**直接复用** `expectedDepreciationCents`（同一 helper），新增状态 `not_existed`：取得期间之前的期间不写凭证（`voucher: null` + `skipped`）、不算「应计提未计提」、不阻塞封账；旧库已有的「取得期间之前」已过账计提仍报 `posted_stale` / `depreciation_run_stale`（`expectedStatus = not_existed`）并可反过账 + 删除重算；名称 / 备注仍不锁死。回归：领域 **+2**（域 43 → 45）、HTTP **+1**（17 → 18）；既有 P3 用例的 1 月卡片状态断言 `not_started` → `not_existed`（附理由，金额 / 阻塞 / 原子性断言全部保留）。
 - 状态：**实现与自测完成（含 review1 F1–F4、review2 P1–P4 与 review3 取得期间一致性 P2 定向返工），未提交 / 未建 PR / 未合并**；head / merge 与 root 最终审查结果由管理者后补，本条不预报。
 

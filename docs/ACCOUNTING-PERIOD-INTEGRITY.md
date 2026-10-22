@@ -224,6 +224,26 @@
 `-wal` / `-shm` → 重启（会重新迁移并再备份一次）→ 逐项核对。回退把库带回**快照时点**，备份时点之后新增的
 业务会丢失，必须先保护现库并停写。完整业务备份 / 恢复体系仍归 LOCAL-06，本包不冒充完成。
 
+### 5.1 备份工具的 v3 / v4 兼容边界（LOCAL-06 备份子包）
+
+已合并的 `06-workbench/server/local-backup.mjs` / `scripts/local-backup.mjs`（LOCAL-06 备份子包）在
+**v3 与 v4 各持有独立的真实结构契约**（列 / 类型 / NOT NULL / **默认值** / 主键 / UNIQUE / 外键完整集合与动作 /
+迁移记录连续性）：
+
+- **v4 备份**：按上面 5 列的真实 `ALTER TABLE` 契约校验（`acquired_period TEXT` 可空；
+  `opening_accumulated REAL NOT NULL DEFAULT 0`、`ledger_status TEXT NOT NULL DEFAULT 'booked'`、
+  `ledger_note TEXT NOT NULL DEFAULT ''`、`origin TEXT NOT NULL DEFAULT 'purchase'`），默认值必须逐字一致；
+- **v3 旧备份**：按 v3 契约**只读验证**并**原样**恢复到全新目录（不迁移备份也不迁移源库）；
+  恢复出来的库仍是 v3，只有在**显式交给当前产品打开**时才走本包的 v3→v4 迁移（先落
+  `workbench.db.pre-v4-*.bak`）；升级后新列按默认值落为 `NULL / 0 / 'booked' / '' / 'purchase'`，
+  旧卡片因此会如实报 `asset_acquired_period_missing` / `asset_accumulated_mismatch`（不会凭空补出历史累计）；
+- **仍然拒绝**：v0 / v1 / v2 旧库（`schema_outdated`）、未来 v5+（`schema_unsupported`）、
+  bank / batch / audit 等尚未合入的组件表（`unexpected_tables`），以及只抬高版本号而结构仍是旧版本、
+  缺列、错误默认值 / NOT NULL / 类型、迁移记录不连续的伪结构（`structure_invalid` + 具体 `kind`）。
+
+因此本包的 v4 迁移与 LOCAL-06 备份可共存：先按 v4 契约备份新库，同时仍能验证 / 恢复旧 v3 备份。
+口径细节与错误码见 [LOCAL-BACKUP](LOCAL-BACKUP.md) §4 / §5。
+
 ## 6. 错误码（结构化）
 
 | code | 含义 |

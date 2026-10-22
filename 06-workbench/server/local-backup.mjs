@@ -10,17 +10,21 @@
 //    禁止直接复制主库文件、忽略 `-wal`，或用可写连接打开源库。
 //    与 import-storage.mjs 的迁移前备份契约一致（同样是 VACUUM INTO + 独立只读连接验完整性），
 //    但**不复用**「文件大小非 0 就当可用快照」的判定：这里始终重新生成并重新验证。
-// 3) 结构版本只支持**当前真实结构**：`TABLE_STRUCTURE` 逐表校验列 / 类型 / NOT NULL /
-//    主键 / UNIQUE / 外键，并校验 `schema_migrations` 记录连续且与版本一致、`schema_backups`
-//    记录存在。外键按**真实外键分组**（多列外键整体比较，不只比目标列）与期望外键**一对一**比对
-//    `ON DELETE` / `ON UPDATE` / `MATCH` 动作（同一列组对同一目标重复声明也一样逐组验动作并拒绝
-//    `foreign_key_duplicate`，绝不用「按目标键建 Map」静默覆盖）：只改动作的伪结构
-//    （例如把 `ON DELETE CASCADE` 改成 `NO ACTION`）会伪装成兼容结构，
-//    恢复后真实删除账套才失败，必须拒绝。
-//    缺表 / 缺列 / 缺关键约束 / 动作不符 / 重复或未声明的外键 / 伪造或矛盾迁移记录一律拒绝；
-//    旧版本库（< 当前支持版本）给 `schema_outdated`，未来版本给 `schema_unsupported`，
-//    都要求先由产品真实入口升级 / 换新版工具，本模块**不**替候选库初始化或迁移。
-//    未来 schema v4（LOCAL-02）合并后必须按真实契约重验并扩展本表，不得只靠「表是动态算的」放行。
+// 3) 结构版本只支持**两个精确的真实结构**：v3（LOCAL-01 迁移后结构）与 v4（LOCAL-02 资产卡片补项）。
+//    每个版本有**独立**的结构契约（`STRUCTURE_V3` / `STRUCTURE_V4`），逐表校验列名 / 声明类型 /
+//    NOT NULL / **默认值**、主键列顺序、UNIQUE 约束列组、外键，并校验 `schema_migrations` 记录
+//    从 1 到该版本连续且与版本一致、`schema_backups` 记录存在。外键按**真实外键分组**
+//    （多列外键整体比较，不只比目标列）与期望外键**一对一**比对 `ON DELETE` / `ON UPDATE` / `MATCH`
+//    动作（同一列组对同一目标重复声明也一样逐组验动作并拒绝 `foreign_key_duplicate`，绝不用
+//    「按目标键建 Map」静默覆盖）：只改动作的伪结构（例如把 `ON DELETE CASCADE` 改成 `NO ACTION`）
+//    会伪装成兼容结构，恢复后真实删除账套才失败，必须拒绝。
+//    缺表 / 缺列 / 缺关键约束 / 默认值不符 / 动作不符 / 重复或未声明的外键 / 伪造或矛盾迁移记录 /
+//    未在本契约内的表（未来组件）一律拒绝；旧版本库（< v3）给 `schema_outdated`，
+//    未来版本给 `schema_unsupported`，都要求先由产品真实入口升级 / 换新版工具，
+//    本模块**不**替候选库初始化或迁移。**只把版本号抬高而结构仍是旧版本**会被缺列 / 列类型 /
+//    默认值比对拦住（不会因为「版本号写了 4」就当成 v4）。
+//    v3 备份按 v3 契约只读验证并原样恢复到全新目标（**不**就地迁移备份 / 源库）；
+//    之后由产品真实入口打开才走既有 v3→v4 迁移路径。
 // 4) 清单（manifest.json）绑定产品 / 格式 / 格式版本 / 应用版本（信息性）/ 结构版本与迁移记录 /
 //    表清单 / 每表行数与内容摘要 / 快照字节数、sha256、页大小、journal mode。
 //    验证端只信**自己重新计算**的结果：不按清单自报的路径取文件，不信清单自报的版本 / 页大小 /
@@ -62,14 +66,22 @@ export const RESTORE_INCOMPLETE_MARKER = ".restore-incomplete";
 export const PARTIAL_PREFIX = ".partial-";
 
 /**
- * 本模块**已按真实结构验证**的 schema 版本（当前产品只有 v3）。
- * 校验内容：核心会计表 + 导入表 + 迁移 / 备份记录表的列、类型、NOT NULL、主键、UNIQUE、外键，
- * 以及 schema_migrations 记录连续性与 schema_backups 记录存在性。
+ * 本模块**已按真实结构逐项验证**的 schema 版本集合（当前真实产品最多到 v4）。
  *
- * 未来 schema v4（LOCAL-02 #47）合并后必须：先按新真实结构扩展本表并重跑本套件，
- * 再提升该值。**不允许**仅因为表清单是动态计算的就把 v4 当成已支持。
+ * - v3：LOCAL-01 迁移后的结构（核心会计表 + 导入表 + 迁移 / 备份记录表，无资产补项列）；
+ * - v4：LOCAL-02 在 v3 基础上只给 `asset_cards` 增加 5 列（取得期间 / 期初累计 / 未入账登记 /
+ *   补项原因 / 来源），表集合不变。
+ *
+ * 两个版本各自有独立结构契约（列 / 类型 / NOT NULL / 默认值 / 主键 / UNIQUE / 外键动作 /
+ * 迁移记录连续性 / 迁移前备份记录）。**不在集合内的版本一律拒绝**：更旧 → `schema_outdated`，
+ * 更新（未来 v5+）→ `schema_unsupported`。
+ *
+ * 未来再新增版本必须：按真实 DDL 新增独立结构契约、补真实 SQLite 行为与合成临时库验收、
+ * 再把它加入本集合。**不允许**仅因为表清单是动态计算的、或只把版本号抬高，就把新版本当成已支持。
  */
-export const SUPPORTED_SCHEMA_VERSION = 3;
+export const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([3, 4]);
+/** 当前支持的最高 schema 版本（`backupContract().supportedSchemaVersion`）。 */
+export const SUPPORTED_SCHEMA_VERSION = 4;
 
 /** 核心会计表（本产品业务数据；缺任何一个都不是本产品库）。 */
 const CORE_ACCOUNTING_TABLES = Object.freeze([
@@ -83,7 +95,7 @@ const CORE_ACCOUNTING_TABLES = Object.freeze([
   "asset_depreciation_runs",
 ]);
 
-/** 导入 / 版本化迁移表（LOCAL-01 schema v3 的真实结构）。 */
+/** 导入 / 版本化迁移表（LOCAL-01 schema v3 起，v4 未改变这些表）。 */
 const IMPORT_SCHEMA_TABLES = Object.freeze([
   "schema_migrations",
   "schema_backups",
@@ -95,19 +107,28 @@ const IMPORT_SCHEMA_TABLES = Object.freeze([
 ]);
 
 /**
- * 当前真实结构规范（schema v3）：逐表列名 / 声明类型 / NOT NULL、主键列顺序、
- * UNIQUE 约束列组、外键（本表列 -> 目标表(目标列)，动作见 `REAL_FOREIGN_KEY_ACTIONS`）。
- * 列规范写成 `"<TYPE>"` 或 `"<TYPE> NOT NULL"`；`INTEGER PRIMARY KEY` 在 SQLite 里
- * `PRAGMA table_info` 的 notnull 为 0，因此这类主键列按 `"INTEGER"` 声明。
+ * 真实结构规范的**共用部分**（v3 与 v4 在这些表上逐字相同 —— 真实 DDL 相同）。
+ *
+ * 逐表声明列名 / 声明类型 / NOT NULL / **默认值**、主键列顺序、UNIQUE 约束列组、
+ * 外键（本表列 -> 目标表(目标列)，动作见 `REAL_FOREIGN_KEY_ACTIONS`）。
+ * 列规范写成 `"<TYPE>[ NOT NULL][ DEFAULT <literal>]"`，`<literal>` 必须与
+ * `PRAGMA table_info` 的 `dflt_value` **逐字**一致（SQLite 原样保存 DDL 里的默认值文本）：
+ * `DEFAULT ''` → `''`、`DEFAULT 0.05` → `0.05`、`DEFAULT 'booked'` → `'booked'`。
+ * `INTEGER PRIMARY KEY` 在 SQLite 里 `PRAGMA table_info` 的 notnull 为 0、dflt 为 null，
+ * 因此这类主键列按 `"INTEGER"` 声明。
+ *
+ * v3 / v4 的差异**只有 `asset_cards`**（v4 只加 5 列），因此该表在两个版本里各自独立声明；
+ * 其余表共用本常量。**任何未来版本的差异都必须新增独立条目**，不得修改本共用常量去「顺便」
+ * 适配新版本（那会让旧版本契约静默放宽）。
  */
-const TABLE_STRUCTURE = Object.freeze({
+const TABLE_STRUCTURE_COMMON = Object.freeze({
   // ---------------- 核心会计表（db.mjs） ----------------
   account_sets: {
     columns: {
       id: "INTEGER",
       name: "TEXT NOT NULL",
-      taxpayer_type: "TEXT NOT NULL",
-      accounting_standard: "TEXT NOT NULL",
+      taxpayer_type: "TEXT NOT NULL DEFAULT '小规模纳税人'",
+      accounting_standard: "TEXT NOT NULL DEFAULT '小企业会计准则'",
       start_period: "TEXT NOT NULL",
       created_at: "TEXT NOT NULL",
     },
@@ -123,8 +144,8 @@ const TABLE_STRUCTURE = Object.freeze({
       name: "TEXT NOT NULL",
       category: "TEXT NOT NULL",
       direction: "TEXT NOT NULL",
-      contra: "INTEGER NOT NULL",
-      is_leaf: "INTEGER NOT NULL",
+      contra: "INTEGER NOT NULL DEFAULT 0",
+      is_leaf: "INTEGER NOT NULL DEFAULT 1",
     },
     primaryKey: ["id"],
     unique: [["account_set_id", "code"]],
@@ -134,8 +155,8 @@ const TABLE_STRUCTURE = Object.freeze({
     columns: {
       account_set_id: "INTEGER NOT NULL",
       code: "TEXT NOT NULL",
-      debit: "REAL NOT NULL",
-      credit: "REAL NOT NULL",
+      debit: "REAL NOT NULL DEFAULT 0",
+      credit: "REAL NOT NULL DEFAULT 0",
     },
     primaryKey: ["account_set_id", "code"],
     unique: [],
@@ -145,7 +166,7 @@ const TABLE_STRUCTURE = Object.freeze({
     columns: {
       account_set_id: "INTEGER NOT NULL",
       period: "TEXT NOT NULL",
-      status: "TEXT NOT NULL",
+      status: "TEXT NOT NULL DEFAULT 'open'",
     },
     primaryKey: ["account_set_id", "period"],
     unique: [],
@@ -157,12 +178,12 @@ const TABLE_STRUCTURE = Object.freeze({
       account_set_id: "INTEGER NOT NULL",
       period: "TEXT NOT NULL",
       voucher_date: "TEXT NOT NULL",
-      word: "TEXT NOT NULL",
+      word: "TEXT NOT NULL DEFAULT '记'",
       number: "INTEGER NOT NULL",
       summary: "TEXT",
-      status: "TEXT NOT NULL",
+      status: "TEXT NOT NULL DEFAULT 'draft'",
       created_at: "TEXT NOT NULL",
-      kind: "TEXT NOT NULL",
+      kind: "TEXT NOT NULL DEFAULT 'normal'",
     },
     primaryKey: ["id"],
     unique: [],
@@ -175,31 +196,12 @@ const TABLE_STRUCTURE = Object.freeze({
       line_no: "INTEGER NOT NULL",
       code: "TEXT NOT NULL",
       summary: "TEXT",
-      debit: "REAL NOT NULL",
-      credit: "REAL NOT NULL",
+      debit: "REAL NOT NULL DEFAULT 0",
+      credit: "REAL NOT NULL DEFAULT 0",
     },
     primaryKey: ["id"],
     unique: [],
     foreignKeys: [{ from: ["voucher_id"], table: "vouchers", to: ["id"] }],
-  },
-  asset_cards: {
-    columns: {
-      id: "INTEGER",
-      account_set_id: "INTEGER NOT NULL",
-      kind: "TEXT NOT NULL",
-      name: "TEXT NOT NULL",
-      original_cost: "REAL NOT NULL",
-      residual_rate: "REAL NOT NULL",
-      useful_life_months: "INTEGER NOT NULL",
-      start_period: "TEXT NOT NULL",
-      asset_account: "TEXT NOT NULL",
-      accum_account: "TEXT NOT NULL",
-      expense_account: "TEXT NOT NULL",
-      created_at: "TEXT NOT NULL",
-    },
-    primaryKey: ["id"],
-    unique: [],
-    foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   asset_depreciation_runs: {
     columns: {
@@ -233,7 +235,7 @@ const TABLE_STRUCTURE = Object.freeze({
       path: "TEXT NOT NULL",
       created_at: "TEXT NOT NULL",
       bytes: "INTEGER",
-      integrity: "TEXT NOT NULL",
+      integrity: "TEXT NOT NULL DEFAULT 'ok'",
       note: "TEXT",
     },
     primaryKey: ["id"],
@@ -245,10 +247,10 @@ const TABLE_STRUCTURE = Object.freeze({
   import_enterprise_account_sets: {
     columns: {
       enterprise_key: "TEXT",
-      enterprise_name: "TEXT NOT NULL",
+      enterprise_name: "TEXT NOT NULL DEFAULT ''",
       account_set_id: "INTEGER NOT NULL",
       bound_at: "TEXT NOT NULL",
-      bound_by: "TEXT NOT NULL",
+      bound_by: "TEXT NOT NULL DEFAULT 'import'",
     },
     primaryKey: ["enterprise_key"],
     unique: [["account_set_id"]],
@@ -259,9 +261,9 @@ const TABLE_STRUCTURE = Object.freeze({
       id: "INTEGER",
       source_system: "TEXT NOT NULL",
       enterprise_key: "TEXT NOT NULL",
-      enterprise_name: "TEXT NOT NULL",
+      enterprise_name: "TEXT NOT NULL DEFAULT ''",
       bound_at: "TEXT NOT NULL",
-      bound_by: "TEXT NOT NULL",
+      bound_by: "TEXT NOT NULL DEFAULT 'import'",
     },
     primaryKey: ["id"],
     unique: [["source_system", "enterprise_key"]],
@@ -278,10 +280,10 @@ const TABLE_STRUCTURE = Object.freeze({
       account_set_id: "INTEGER",
       content_fingerprint: "TEXT NOT NULL",
       status: "TEXT NOT NULL",
-      attempts: "INTEGER NOT NULL",
+      attempts: "INTEGER NOT NULL DEFAULT 1",
       created_at: "TEXT NOT NULL",
       updated_at: "TEXT NOT NULL",
-      result_json: "TEXT NOT NULL",
+      result_json: "TEXT NOT NULL DEFAULT '{}'",
       error_code: "TEXT",
       error_message: "TEXT",
     },
@@ -297,7 +299,7 @@ const TABLE_STRUCTURE = Object.freeze({
       source_voucher_id: "TEXT NOT NULL",
       account_set_id: "INTEGER NOT NULL",
       voucher_id: "INTEGER NOT NULL",
-      voucher_fingerprint: "TEXT NOT NULL",
+      voucher_fingerprint: "TEXT NOT NULL DEFAULT ''",
       content_fingerprint: "TEXT NOT NULL",
       batch_id: "TEXT NOT NULL",
       created_at: "TEXT NOT NULL",
@@ -325,6 +327,92 @@ const TABLE_STRUCTURE = Object.freeze({
   },
 });
 
+/** 列规范解析：`"<TYPE>[ NOT NULL][ DEFAULT <literal>]"`（默认值必须在末尾，与 DDL 书写一致）。 */
+const parseColumnSpec = (spec) => {
+  const match = /\s+DEFAULT\s+(.+)$/.exec(spec);
+  const defaultText = match ? match[1].trim() : null;
+  const head = match ? spec.slice(0, match.index) : spec;
+  const notNull = /\bNOT NULL\b/.test(head);
+  const type = head.replace(/\s+NOT\s+NULL\s*$/, "").trim();
+  return { type, notNull, default: defaultText };
+};
+
+/**
+ * 资产卡片（`asset_cards`）在 v3 / v4 的**独立列契约**（两份都写全，不用 spread 继承，
+ * 避免以后改一份就静默改变另一个版本）。
+ * v4 的 5 列来自 import-storage.mjs 的 `addColumnIfMissing`（只加列，旧行语义不变），
+ * 因此默认值必须与真实 DDL 逐字一致：可空 `TEXT` / `REAL NOT NULL DEFAULT 0` /
+ * `TEXT NOT NULL DEFAULT 'booked'` / `TEXT NOT NULL DEFAULT ''` / `TEXT NOT NULL DEFAULT 'purchase'`。
+ */
+const ASSET_CARDS_COLUMNS_V3 = Object.freeze({
+  id: "INTEGER",
+  account_set_id: "INTEGER NOT NULL",
+  kind: "TEXT NOT NULL DEFAULT 'fixed'",
+  name: "TEXT NOT NULL",
+  original_cost: "REAL NOT NULL",
+  residual_rate: "REAL NOT NULL DEFAULT 0.05",
+  useful_life_months: "INTEGER NOT NULL",
+  start_period: "TEXT NOT NULL",
+  asset_account: "TEXT NOT NULL",
+  accum_account: "TEXT NOT NULL",
+  expense_account: "TEXT NOT NULL DEFAULT '5602'",
+  created_at: "TEXT NOT NULL",
+});
+const ASSET_CARDS_COLUMNS_V4 = Object.freeze({
+  id: "INTEGER",
+  account_set_id: "INTEGER NOT NULL",
+  kind: "TEXT NOT NULL DEFAULT 'fixed'",
+  name: "TEXT NOT NULL",
+  original_cost: "REAL NOT NULL",
+  residual_rate: "REAL NOT NULL DEFAULT 0.05",
+  useful_life_months: "INTEGER NOT NULL",
+  start_period: "TEXT NOT NULL",
+  asset_account: "TEXT NOT NULL",
+  accum_account: "TEXT NOT NULL",
+  expense_account: "TEXT NOT NULL DEFAULT '5602'",
+  created_at: "TEXT NOT NULL",
+  acquired_period: "TEXT",
+  opening_accumulated: "REAL NOT NULL DEFAULT 0",
+  ledger_status: "TEXT NOT NULL DEFAULT 'booked'",
+  ledger_note: "TEXT NOT NULL DEFAULT ''",
+  origin: "TEXT NOT NULL DEFAULT 'purchase'",
+});
+
+const assetCardsTable = (columns) => Object.freeze({
+  columns,
+  primaryKey: ["id"],
+  unique: [],
+  foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
+});
+
+/** schema v3 完整结构契约（LOCAL-01 迁移后的真实结构）。 */
+const STRUCTURE_V3 = Object.freeze({
+  ...TABLE_STRUCTURE_COMMON,
+  asset_cards: assetCardsTable(ASSET_CARDS_COLUMNS_V3),
+});
+
+/** schema v4 完整结构契约（LOCAL-02：v3 + `asset_cards` 5 个补项列，表集合不变）。 */
+const STRUCTURE_V4 = Object.freeze({
+  ...TABLE_STRUCTURE_COMMON,
+  asset_cards: assetCardsTable(ASSET_CARDS_COLUMNS_V4),
+});
+
+/** 版本 -> 独立结构契约。不在本表里的版本一律拒绝（更旧 outdated / 更新 unsupported）。 */
+const STRUCTURES_BY_VERSION = Object.freeze({ 3: STRUCTURE_V3, 4: STRUCTURE_V4 });
+
+/**
+ * 本模块契约里出现过的全部默认值文本。拒绝明细里只回显**这些**值（或 `nonstandard`），
+ * 因此伪造默认值时不会把任意业务文本（如企业名称）带进错误输出。
+ */
+const KNOWN_DEFAULT_LITERALS = new Set(
+  Object.values(STRUCTURES_BY_VERSION)
+    .flatMap((structure) => Object.values(structure))
+    .flatMap((table) => Object.values(table.columns))
+    .map((spec) => parseColumnSpec(spec).default)
+    .filter((value) => value !== null),
+);
+
+/** 当前支持的所有版本都要必需的表集合（v3 / v4 表集合相同：v4 只加列）。 */
 const REQUIRED_TABLES = Object.freeze([
   ...CORE_ACCOUNTING_TABLES,
   ...IMPORT_SCHEMA_TABLES,
@@ -666,12 +754,6 @@ function describeContent(conn, tables) {
 }
 
 // ------------------------------------------------------------------ 真实结构校验
-const parseColumnSpec = (spec) => {
-  const notNull = /\bNOT NULL\b/.test(spec);
-  const type = spec.replace(/\s+NOT\s+NULL\s*$/, "").trim();
-  return { type, notNull };
-};
-
 const uniqueColumnGroups = (conn, table) => {
   const groups = [];
   const indexes = conn.prepare("SELECT * FROM pragma_index_list(?)").all(table);
@@ -688,11 +770,11 @@ const uniqueColumnGroups = (conn, table) => {
 };
 
 /**
- * 真实 DDL 的外键动作契约（schema v3）：`db.mjs` / `import-storage.mjs` 里**所有**外键都写作
+ * 真实 DDL 的外键动作契约（v3 与 v4 相同）：`db.mjs` / `import-storage.mjs` 里**所有**外键都写作
  * `REFERENCES <表>(<列>) ON DELETE CASCADE`（未声明 `ON UPDATE`，即 SQLite 默认 `NO ACTION`；
  * 匹配语义为默认 `NONE`）。这些动作是业务语义的一部分：改成 `NO ACTION` / `RESTRICT` 会让真实
  * 「删除账套」级联失败，改成 `SET NULL` / `SET DEFAULT` 会改写业务数据，都不是本产品结构。
- * 未来 v4 若出现不同动作的外键，必须在该外键条目上用 `actions` **逐条显式覆盖**，
+ * 任何版本若出现不同动作的外键，必须在该外键条目上用 `actions` **逐条显式覆盖**，
  * 不得把比较放宽成「任一动作均可」或关闭外键检查。
  */
 const REAL_FOREIGN_KEY_ACTIONS = Object.freeze({ onDelete: "CASCADE", onUpdate: "NO ACTION", match: "NONE" });
@@ -729,24 +811,39 @@ const foreignKeyGroups = (conn, table) => {
   return [...grouped.values()];
 };
 
-/** 逐表校验列 / 类型 / NOT NULL / 主键 / UNIQUE / 外键；返回问题清单（不含 SQL 与路径）。 */
-function structureProblems(conn, tables) {
+/**
+ * 默认值回显白名单：只回显本模块契约里的已知字面值，否则报告 `nonstandard`。
+ * （伪造默认值时不会把任意业务文本带进错误输出。）
+ */
+const reportDefaultLiteral = (value) => {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  return KNOWN_DEFAULT_LITERALS.has(text) ? text : "nonstandard";
+};
+
+/**
+ * 逐表校验列 / 类型 / NOT NULL / 默认值 / 主键 / UNIQUE / 外键；返回问题清单（不含 SQL 与路径）。
+ * `structure` 是**该版本自己的**结构契约（v3 或 v4），未在本契约里的表一律拒绝（未来组件）。
+ */
+function structureProblems(conn, tables, structure) {
   const problems = [];
   const missingTables = REQUIRED_TABLES.filter((table) => !tables.includes(table)).sort();
   if (missingTables.length) problems.push({ kind: "missing_tables", tables: missingTables.slice(0, MAX_DETAIL_ITEMS) });
   const unexpected = tables
-    .filter((table) => !Object.prototype.hasOwnProperty.call(TABLE_STRUCTURE, table))
+    .filter((table) => !Object.prototype.hasOwnProperty.call(structure, table))
     .filter((table) => !table.startsWith("sqlite_"))
     .sort();
   if (unexpected.length) problems.push({ kind: "unexpected_tables", tables: unexpected.slice(0, MAX_DETAIL_ITEMS) });
 
-  for (const [table, spec] of Object.entries(TABLE_STRUCTURE)) {
+  for (const [table, spec] of Object.entries(structure)) {
     if (!tables.includes(table)) continue;
     const columns = conn.prepare("SELECT * FROM pragma_table_info(?)").all(table).map((column) => ({
       name: String(column.name),
       type: String(column.type ?? ""),
       notNull: Number(column.notnull) === 1,
       pk: Number(column.pk),
+      defaultLiteral: column.dflt_value === null || column.dflt_value === undefined
+        ? null : String(column.dflt_value),
     }));
     const actualNames = columns.map((column) => column.name);
     const expectedNames = Object.keys(spec.columns);
@@ -764,6 +861,17 @@ function structureProblems(conn, tables) {
         problems.push({ kind: "column_type", table, column: name, expected: want.type });
       }
       if (actual.notNull !== want.notNull) problems.push({ kind: "column_not_null", table, column: name });
+      // 默认值也是结构契约的一部分：`acquired_period` 从可空变成 NOT NULL DEFAULT ''、
+      // `ledger_status` 默认值从 'booked' 改成别的值，都会让旧行 / 新行的业务语义静默改变。
+      if (actual.defaultLiteral !== want.default) {
+        problems.push({
+          kind: "column_default",
+          table,
+          column: name,
+          expected: reportDefaultLiteral(want.default),
+          actual: reportDefaultLiteral(actual.defaultLiteral),
+        });
+      }
     }
     const actualPk = columns.filter((column) => column.pk > 0)
       .sort((a, b) => a.pk - b.pk).map((column) => column.name);
@@ -868,8 +976,9 @@ function backupRecordProblems(conn, version) {
 }
 
 /**
- * 只读校验一个库是否为本产品**当前支持版本**的真实结构。
- * 顺序：必需表 → 版本（未来 / 旧版本）→ 列 / 约束 → 迁移与备份记录。
+ * 只读校验一个库是否为本产品**已独立声明契约的版本**（v3 / v4）的真实结构。
+ * 顺序：必需表 → 版本（未来 / 旧版 / 未支持）→ 该版本自己的列 / 约束 / 默认值 → 迁移与备份记录。
+ * **版本号只用于选契约**，不足以为凭：写成 4 但结构还是 v3 会被 `missing_columns` 拦住。
  * `notProductCode` 供调用方按入口语义命名（源库 / 快照）。
  */
 function inspectStructure(conn, { notProductCode }) {
@@ -880,19 +989,27 @@ function inspectStructure(conn, { notProductCode }) {
   }
   const version = Number(schemaVersion(conn));
   if (!Number.isInteger(version) || version < 0) throw expected("schema_unreadable");
-  if (version > SUPPORTED_SCHEMA_VERSION) {
-    throw expected("schema_unsupported", { found: version, supported: SUPPORTED_SCHEMA_VERSION });
+  const supported = SUPPORTED_SCHEMA_VERSIONS;
+  if (version > supported[supported.length - 1]) {
+    throw expected("schema_unsupported", { found: version, supported: supported[supported.length - 1] });
   }
-  if (version < SUPPORTED_SCHEMA_VERSION) {
-    throw expected("schema_outdated", { found: version, supported: SUPPORTED_SCHEMA_VERSION });
+  if (version < supported[0]) {
+    throw expected("schema_outdated", { found: version, supported: supported[0] });
+  }
+  const structure = STRUCTURES_BY_VERSION[version];
+  if (!structure) {
+    // 版本在区间内却没有结构契约（例如以后调整了支持集合却没补契约）：明确拒绝，不猜结构。
+    throw expected("schema_unsupported", { found: version, supported: supported[supported.length - 1] });
   }
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables),
+    ...structureProblems(conn, tables, structure),
     ...migrations.problems,
     ...backupRecordProblems(conn, version),
   ];
-  if (problems.length) throw expected("structure_invalid", { problems: problems.slice(0, MAX_DETAIL_ITEMS) });
+  if (problems.length) {
+    throw expected("structure_invalid", { schemaVersion: version, problems: problems.slice(0, MAX_DETAIL_ITEMS) });
+  }
   return { version, tables, migrations: migrations.versions };
 }
 
@@ -958,6 +1075,22 @@ const isPageSize = (value) => Number.isInteger(value) && value >= 512 && value <
 const sortedUnique = (list) => [...new Set(list)].sort();
 
 /**
+ * 清单自报 schema 版本的范围判定：更旧 → `schema_outdated`，更新（未来版本）→
+ * `schema_unsupported`，在支持集合内且确有独立契约 → `null`。
+ */
+function supportedVersionRange(version) {
+  const versions = SUPPORTED_SCHEMA_VERSIONS;
+  const newest = versions[versions.length - 1];
+  const oldest = versions[0];
+  if (version > newest) return { code: "schema_unsupported", details: { found: version, supported: newest } };
+  if (version < oldest) return { code: "schema_outdated", details: { found: version, supported: oldest } };
+  if (!Object.prototype.hasOwnProperty.call(STRUCTURES_BY_VERSION, version)) {
+    return { code: "schema_unsupported", details: { found: version, supported: newest } };
+  }
+  return null;
+}
+
+/**
  * 校验清单**自身**的字段类型与规范范围（不看快照；与快照的比对在 verifyBackup 里）。
  * 应用版本只校验「存在且是非空字符串」，**不参与兼容判定**（与文档口径一致）：
  * 格式 / 结构版本才是兼容契约。
@@ -993,12 +1126,8 @@ function validateManifest(manifest) {
   if (!isNonNegativeInteger(structure.schemaVersion)) {
     return { code: "manifest_invalid", details: { field: "structure.schemaVersion" } };
   }
-  if (structure.schemaVersion > SUPPORTED_SCHEMA_VERSION) {
-    return { code: "schema_unsupported", details: { found: structure.schemaVersion, supported: SUPPORTED_SCHEMA_VERSION } };
-  }
-  if (structure.schemaVersion < SUPPORTED_SCHEMA_VERSION) {
-    return { code: "schema_outdated", details: { found: structure.schemaVersion, supported: SUPPORTED_SCHEMA_VERSION } };
-  }
+  const manifestVersionRange = supportedVersionRange(structure.schemaVersion);
+  if (manifestVersionRange) return manifestVersionRange;
   if (!isNonNegativeInteger(structure.userVersion)) {
     return { code: "manifest_invalid", details: { field: "structure.userVersion" } };
   }
@@ -1043,12 +1172,8 @@ function validateManifest(manifest) {
   if (!isNonNegativeInteger(source.schemaVersion)) {
     return { code: "manifest_invalid", details: { field: "source.schemaVersion" } };
   }
-  if (source.schemaVersion > SUPPORTED_SCHEMA_VERSION) {
-    return { code: "schema_unsupported", details: { found: source.schemaVersion, supported: SUPPORTED_SCHEMA_VERSION } };
-  }
-  if (source.schemaVersion < SUPPORTED_SCHEMA_VERSION) {
-    return { code: "schema_outdated", details: { found: source.schemaVersion, supported: SUPPORTED_SCHEMA_VERSION } };
-  }
+  const sourceVersionRange = supportedVersionRange(source.schemaVersion);
+  if (sourceVersionRange) return sourceVersionRange;
   if (source.schemaVersion !== structure.schemaVersion) {
     return { code: "structure_mismatch", details: { field: "source.schemaVersion" } };
   }
@@ -1480,6 +1605,7 @@ export function backupContract() {
     formatVersion: BACKUP_FORMAT_VERSION,
     product: PRODUCT_ID,
     supportedSchemaVersion: SUPPORTED_SCHEMA_VERSION,
+    supportedSchemaVersions: [...SUPPORTED_SCHEMA_VERSIONS],
     productSchemaVersion: IMPORT_SCHEMA_VERSION,
     snapshotFile: SNAPSHOT_FILE,
     manifestFile: MANIFEST_FILE,

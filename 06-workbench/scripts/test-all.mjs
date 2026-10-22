@@ -59,6 +59,10 @@ const steps = [
   { name: "accounting-period-integrity", file: join(WORKBENCH, "test", "accounting-period-integrity.test.mjs"), cwd: WORKBENCH },
   { name: "accounting-period-http", file: join(WORKBENCH, "test", "accounting-period-http.test.mjs"), cwd: WORKBENCH },
   { name: "accounting-period-mcp", file: join(MCP, "accounting-period-test.mjs"), cwd: MCP },
+  // LOCAL-06 / LOCAL-05 / LOCAL-08 已合入模块的自身套件（仅追加，不改上方原有 50 个套件的内容与顺序）
+  { name: "local-backup", file: join(WORKBENCH, "test", "local-backup.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-output-policy", file: join(WORKBENCH, "test", "finance-output-policy.test.mjs"), cwd: WORKBENCH },
+  { name: "report-office-export", file: join(WORKBENCH, "test", "report-office-export.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
