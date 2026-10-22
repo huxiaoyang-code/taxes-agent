@@ -3,8 +3,22 @@
 - 任务单：[tasks/LOCAL-01](../tasks/LOCAL-01.md) · 契约：[LOCAL-IMPORT](../LOCAL-IMPORT.md)
 - 负责人：`huxiaoyang-code`（已核实）；远端载体：[Issue #43](https://github.com/huxiaoyang-code/youshu-fork/issues/43)（`Refs #20` / `Refs #13`）
 - 基线：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
-- 分支：`codex/huxiaoyang-code/local-01`（实际分支；此前文档误写为 `local-01-import-incremental`，已更正；head 与 merge **待管理者后补**，本交接不预报）
-- 状态：**实现与修复完成；未提交、未推送、未建 PR、未合并，待管理者验收**。审查与合并证据以对应 PR 与 Git 为准。
+- 分支：`codex/huxiaoyang-code/local-01`（实际分支；此前文档误写为 `local-01-import-incremental`，已更正）
+- 已审 head：`e12e71eb29dd5fc480aeebe5f0baace94bc3a4d7`
+- PR：[#46](https://github.com/huxiaoyang-code/youshu-fork/pull/46)（**已实际 MERGED**）
+- 合并提交：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（北京时间 **2026-10-22 17:13:24**）
+- 状态：**已验收合并**（源码 PR #46 已合并进 main，`origin/main` 已快进到该 merge）。边界与限制照旧成立；其余七包未完成，不因本包合并标为完成。
+
+## 0. 验收与合并结果（已发生）
+
+- 链路：基线 `0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805` → 已审 head `e12e71eb29dd5fc480aeebe5f0baace94bc3a4d7` → [PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 实际 MERGED → merge `1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（北京时间 **2026-10-22 17:13:24**）。
+- 管理者 `fetch` 后核对：merge `1a15bcc` 的**完整树与已审 head `e12e71e` 完全一致**，无额外改动混入。
+- 独立审查：**未参与实现**、`fork_turns=none`、**未读员工日志**；结论**无剩余阻塞**。
+- 实跑证据（精确 head `e12e71e`，管理者与独立审查者各自实跑）：领域 `import-incremental` **49 / 49**、HTTP + Agent `import-incremental-http` **22 / 22**、MCP `import-incremental-test` **7 / 7**，均 exit 0。
+- 独立合成复现（不参与实现的一方自建场景）：期初经合法 API 改动后**同批回放给结构化冲突且零写入**；首调 / 查询 / 回放 `sourceTrace` 逐张 **全对象相等**；自动取号 + 显式取号 `[2, 1]` 顺序**不重号**，全部通过。
+- 管理者文档校核：25 个文件 UTF-8、347 条相对链接、`git diff --check` 通过。
+- 测试口径按阶段区分：**上一冻结候选**（两处定向修复之前）管理者实跑 `npm test` **47 / 47 套 exit 0**；**最终代码**只实跑上述受影响三套，**没有在最终小修后重跑全套 47 套**，不写「最终代码 47 / 47 又跑过」。
+- 仓库**无 CI**（无 GitHub Actions）；本结论是本机管理者 + 独立审查者的实际运行证据，**不冒充 GitHub 第二账号批准**，也不把自动合并写成外部 review。
 
 ## 1. 最后定向返工（2026-10-22，Issue #43）
 
@@ -109,7 +123,7 @@
 | `node import-incremental-test.mjs` | `05-reconstruction/codex/mcp/finance-mcp` | **7 / 7** 通过，exit 0 |
 
 本段只改期初回放核验与 `sourceTrace` DTO，按任务要求只跑受影响领域 / HTTP + Agent / MCP 三套与必要边界，
-**未在最终代码上重跑无关税局套件或全套 47 套**；不声称最终代码又全套跑过，管理者按影响面完成最终验证。
+**未在最终代码上重跑无关税局套件或全套 47 套**；不声称最终代码又全套跑过。该受影响范围验证已由管理者与独立审查者在精确 head `e12e71e` 上各自实跑完成，结果见 §0。
 
 覆盖点（本轮新增 / 加强）：
 
@@ -147,6 +161,8 @@
 
 ## 6. 未完成 / 不在本包范围
 
+以下限制与边界**在本包合并后照旧成立**，不因合并而消失：
+
 1. 完整审计与变更留痕、业务数据备份 / 恢复体系 —— **LOCAL-06**。
 2. 批次取消 / 回滚单个批次、跨账套批量编排、进度推送 —— **LOCAL-07**。
 3. 追加时仍需在 `payload.accounts` 重复声明账套自定义科目（未改共享严格校验函数）——已登记限制。
@@ -160,10 +176,12 @@
   来源追踪与落库指纹、`schema_migrations` / `schema_backups` 版本化与备份流程。
 - 下游消费契约见 [LOCAL-IMPORT §12](../LOCAL-IMPORT.md)。
 
-## 8. 会话与审查事实（不预报）
+## 8. 会话与审查事实
 
-- 本轮及先前修复均由本机执行员工在独立 worktree 内实现并自测；**未执行 Git 提交 / 推送 / 合并**，未创建 PR。
-- 管理者已在上一冻结候选上独立跑过全套 **47 / 47 exit 0**；随后补验发现本段两点并退回员工最小修复。
-  最终代码只实跑了受影响领域 **49 / 49**、HTTP + Agent **22 / 22**、MCP **7 / 7**，**未再重跑 47 套全套**，不声称最终代码全套重通过。
-- 管理者最终验收、PR、合并结果**尚未发生**，待管理者后补登记；本交接不声称已合并或已通过最终独审。
-- 测试全部使用合成临时目录与随机回环端口，结束后清理；未连接既有后端、真实账套库或税局。
+- **员工阶段（历史快照）**：本轮及先前修复均由本机执行员工在独立 worktree 内实现并自测；员工本身**未执行 Git 提交 / 推送 / 合并**，未创建 PR，提交与合并由管理者执行。
+- 管理者在**上一冻结候选**（两处定向修复之前）独立跑过全套 **47 / 47 套 exit 0**；随后补验发现期初回放核验与 `sourceTrace` 两点并退回员工最小修复。
+- **最终代码**（精确 head `e12e71eb29dd5fc480aeebe5f0baace94bc3a4d7`）**未再重跑全套 47 套**；管理者与独立审查者在该 head 上各自实跑受影响领域 **49 / 49**、HTTP + Agent **22 / 22**、MCP **7 / 7**，均 exit 0。
+- 独立审查者未参与实现、`fork_turns=none`、未读员工日志，独立合成复现（期初冲突零写入 / 逐张全对象相等 / 取号 `[2, 1]` 不重号）后结论**无剩余阻塞**。
+- 合并已完成：[PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 于北京时间 **2026-10-22 17:13:24** 合并，merge `1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`；管理者 `fetch` 核实 merge 树与已审 head 完全一致。
+- 仓库**无 CI**；自动合并授权下由管理者执行合并，证据为本机实际运行 + 独立内容审查，**不伪造 GitHub review**，不声称第二账号批准。
+- 测试全部使用合成临时目录与随机回环端口，结束后清理；未连接既有后端、真实账套库或税局，真实税局接入数仍为 **0**。

@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-01 增量导入与批次幂等
 
 - 类型：后端领域 + 存储迁移 + 契约文档 + 测试
-- 状态：**实现与修复完成，待管理者验收 / 独立复验 / PR / 合并**（未提交、未建 PR；head / merge 由管理者后补，本单不预报）
+- 状态：**已验收合并**（源码 PR #46 已实际 MERGED；已审 head `e12e71eb29dd5fc480aeebe5f0baace94bc3a4d7`，merge `1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`，北京时间 2026-10-22 17:13:24，管理者 fetch 核实 merge 树 = 已审 head）
 - 基线：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
 - 分支：`codex/huxiaoyang-code/local-01`（实际分支；此前任务单误写为 `local-01-import-incremental`，已更正）
 - 负责人：`huxiaoyang-code`（已核实）
@@ -120,7 +120,7 @@
 | `node import-incremental-test.mjs`（`05-reconstruction/codex/mcp/finance-mcp`） | **7 / 7** 通过，exit 0 |
 
 本段只改期初回放核验与 `sourceTrace` DTO，按任务要求不重复跑无关税局套件；
-**未声称最终代码又全套 47 / 47 重跑**，由管理者按影响面完成最终验证。
+**未声称最终代码又全套 47 / 47 重跑**；该受影响范围验证已由管理者与独立审查者在精确 head `e12e71e` 上各自实跑完成（见 §8）。
 
 ## 6. 先前独审修复（同一任务，2026-10-22，历史）
 
@@ -147,9 +147,18 @@
    新建、纯去重、混合批次的首调 applied 与查询全对象强比较相等；预检保留 `would_create` 计划语义；
    当前真实 `state` 核验（反过账 / 修改 / 删除）不变。
 
-回归：领域 49 / 49、HTTP + Agent 22 / 22、MCP 7 / 7，均 exit 0；上一冻结候选全套 47 / 47 未在最终代码上重跑。
+回归：领域 49 / 49、HTTP + Agent 22 / 22、MCP 7 / 7，均 exit 0（管理者与独立审查者在精确 head `e12e71e` 上分别实跑）；上一冻结候选全套 47 / 47 未在最终代码上重跑。
 
-## 8. 已登记限制
+## 8. 验收与合并结果（已发生）
+
+- 链路：基线 `0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805` → 已审 head `e12e71eb29dd5fc480aeebe5f0baace94bc3a4d7` → [PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 实际 MERGED → merge `1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（北京时间 **2026-10-22 17:13:24**）。管理者 `fetch` 核实 merge 完整树与已审 head 完全一致。
+- 独立审查（未参与实现、`fork_turns=none`、未读员工日志）结论：**无剩余阻塞**。
+- 实跑（精确 head `e12e71e`，管理者与独立审查者各自实跑）：领域 **49 / 49**、HTTP + Agent **22 / 22**、MCP **7 / 7**，均 exit 0。
+- 独立合成复现：合法 API 改期初后同批回放给结构化冲突且**零写入**；首调 / 查询 / 回放 `sourceTrace` 逐张**全对象相等**；自动 + 显式取号 `[2, 1]` 顺序**不重号**。
+- 文档校核：25 个文件 UTF-8、347 条相对链接、`git diff --check` 通过。
+- 测试口径：**上一冻结候选** `npm test` 47 / 47 套 exit 0；**最终代码未再重跑全套 47 套**，不得写成「最终小修后 47 / 47 又跑过」。仓库**无 CI**，不冒充 GitHub 第二账号批准。
+
+## 9. 已登记限制
 
 见 [LOCAL-IMPORT §13](../LOCAL-IMPORT.md)：追加需重复声明账套自定义科目、自动取号凭证需显式来源 ID、
 旧无企业 ID 导入入口不提供身份认定、不自动处理历史重复账套、删除凭证后来源关联保留且需人工核对、
