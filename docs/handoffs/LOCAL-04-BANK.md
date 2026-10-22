@@ -1,8 +1,9 @@
 # 交接 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
-- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成；随后 #53 独审 2 项 P2 分窗回修：A 窗（索引键语义 + 回滚失败状态）完成，第二轮独审 P2（调用方外层事务 / 事务未建立 vs 已确认回滚）也已完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
-- 第二轮回修基线：`c8f490c6b4d4e0f4bdaa9acf378defa900334e80`；仍只改登记的 9 文件，**未改** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47），未接 HTTP / Agent / MCP，未跑全 55 套；详见 §9。
-- A 窗回修基线：`06d1bd185f68ea4f3c49f20e6cf98f6cdce613a2`；只改登记的 9 文件，**未改** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47），未接 HTTP / Agent / MCP，未跑全 55 套；详见 §8。
+- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成；随后 #53 独审 2 项 P2 分窗回修：A 窗（索引键语义 + 回滚失败状态）完成，第二轮独审 P2（调用方外层事务 / 事务未建立 vs 已确认回滚）也已完成，银行 A 最终 `950b7d6` 的独立复审已被 root 记录接受；B 窗已同步已合核心 main 并补齐备份侧银行组件索引键语义，自测完成，工作区未提交**；待 root 读 diff、复现、冻结、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
+- 第二轮回修基线：`c8f490c6b4d4e0f4bdaa9acf378defa900334e80`；B 窗开工时工作区已实际包含银行 A `950b7d6` 与核心 PR #60 merge `dfefae0`（含备份严格索引修复 `75b448d`）。
+- B 窗边界与结果：只改 13 文件 claim 的子集，**不改** `bank-reconciliation.mjs`、核心 / DB / import / HTTP / Agent / MCP / public / `scripts/test-all.mjs` / package；详见 §10。
+- A 窗回修基线：`06d1bd185f68ea4f3c49f20e6cf98f6cdce613a2`；当时只改登记的 9 文件，**未改** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47）；该缺口已在 B 窗补齐。
 - 子包基线：`ce4078222c9e5fb8508c9fe24a9183f17d46ea28`（银行 91f07eb + 核心 bd05415 + 备份 3399500 冻结组合并入最新 main `db6020a`）；子包结果见 §7。
 - 本轮返工基线（冻结 head）：`46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；原分页 / 截止日 / 事务 / CSV 四项及大数据真实探针已独审通过，本轮只收敛结构门槛及必要测试文档，仍只改原 10 个文件。
 - 上一轮阻塞审查基线：`e2545216226b87262508d8a94f38426415670d8c`；基线 `257f96275031eefa484699dd71bd012e2d221e51`；分支 `codex/huxiaoyang-code/local-04-bank`；工作区 `.worktrees/local-04-bank`
@@ -155,10 +156,10 @@ SQL 改金额 / 日期 / 科目 / 行号 / 删分录分别识别；触发器注�
 6. 外币 / 换汇、银行网站 / API：不在范围。
 7. **结构契约的边界**：部分索引谓词按规范化文本整体相等比较（逻辑等价但写法不同会被保守拒绝）；
    外键按完整集合比较；版本表形状损坏只给结构化拒绝，不做自动修复 / 补迁。仍不做内容 / 行数 / 哈希校验。
-8. **备份层未校验索引键语义（已知缺口，待后续 B 窗）**：`local-backup.mjs` 只比索引名字 / 列序 / UNIQUE /
-   partial / 谓词，不比对 collation / 方向 / 表达式。A 窗不改 backup，所以**不能宣称产品契约 / 备份验证 /
-   恢复三入口都已拒绝 collation 变体**；产品入口是 fail-closed（恢复库上导入给 `bank_schema_corrupt`），
-   备份层仍放行。集成用例已把「当前仍放行」写成显式断言，后续窗必须同步改为拒绝。
+8. **备份层索引键语义（B 窗已补齐）**：B 窗已把银行组件全部 19 条索引（PK / UNIQUE / 命名 / 自动）接入
+   逐键比对（`seqno` / collation / 方向 / 表达式 / rowid / `origin` / `partial` / 真实谓词）与主键
+   `rowidAlias` / 复合主键语义；`create`（源库）/ `verify`（快照）/ `restore-new`（恢复目标）三入口一致拒绝，
+   原集成用例中「备份仍放行」的显式断言已改为拒绝。仍不支持未来 bank v2+、batch / audit、原位覆盖 / 版本回退。
 9. **回滚未知态需调用者处置**：不自动重试、不自动重开事务、不关闭全局连接或强杀服务；未知态连接对银行
    读写与 `ensureBankSchema` 统一 `bank_connection_state_unknown`，必须先确认回滚成功 / 丢弃连接再
    `recoverBankConnectionState`。
@@ -318,9 +319,9 @@ root 在 06d 管理的 16 + 29 + 11 + 20 + 4 = **80** 对应回修前 head，仍
 ### 8.5 后续（B 窗新会话，不继续扩大本窗）
 
 1. root 冻结本窗后做独立复审；本窗不写已提交 / 已合 / 最终通过。
-2. 下一 B 窗在新会话、root 同步 #47 已合核心修复后，补 `local-backup.mjs` 银行组件索引键语义校验
-   （读 `BANK_COMPONENT_STRUCTURE.indexes[].keys` / `origin`，并同步 `test/local-backup.test.mjs` 与集成用例中
-   「备份层仍放行」的显式断言）；本窗已禁止修改 backup，未在其中留半成品。
+2. B 窗已完成：在 root 同步已合核心（PR #60 merge `dfefae0`）后，把 `local-backup.mjs` 银行组件校验改为
+   读 `BANK_COMPONENT_STRUCTURE.indexes[].keys` / `origin` / `partial` / 真实谓词与 `rowidAlias`，
+   并把集成用例中「备份层仍放行」的显式断言改为拒绝（结果见 §10）。
 3. 仍未接 HTTP / Agent / MCP / test-all；LOCAL-02 / 03 正式合同同步后须补兼容回归。
 
 ## 9. 2026-10-22 第二轮独审 P2：调用方外层事务下的「未开始」不得冒充已回滚
@@ -381,8 +382,70 @@ node --test test/local-bank-backup-integration.test.mjs   # 5 / 5
 
 1. 本包仍**不是** LOCAL-04 整体完成：HTTP / Agent / MCP / UI 与 `scripts/test-all.mjs` 未接；
    LOCAL-02 / LOCAL-03 正式合同同步后需补兼容回归；组匹配 / 外币 / 银行网站 / API 仍不做。
-2. **A 窗未完成项（B 窗风险仍在）**：`local-backup.mjs` 银行组件校验仍不比对索引键 collation / 方向 / 表达式；
-   本窗（含 A）不允许改 backup，须等 root 同步 #47 后新会话 B 窗处理，不能宣称产品 / 备份验证 / 恢复三入口一致。
+2. **A 窗未完成项已由 B 窗补齐**：`local-backup.mjs` 现按银行组件全部 19 条索引逐键比对 collation / 方向 /
+   表达式 / rowid / `origin` / `partial` / 真实谓词，并核对 `rowidAlias` / 复合主键；源库 / 快照 / 恢复目标三入口一致拒绝
+   （见 §10）。仍不支持未来 bank v2+ / batch / audit / 原位覆盖。
 3. 调用方事务不做嵌套安装 / 写银行数据；需调用方先提交或回滚自己的事务再重试；未知态仍需显式
    `recoverBankConnectionState` 或丢弃连接。
 4. root 冻结本窗后仍需独立复审；本文件不写已提交 / PR / 已合 / 最终通过。
+
+## 10. 2026-10-22 B 窗：同步已合核心并补齐备份侧银行组件索引键语义
+
+### 10.1 边界与基线
+
+- root 已正式开窗，确认银行 A 最终 `950b7d6` 的独立复审接受，无新阻塞；远端 Issue #53 / #49 已发布 13 路径正式 claim。
+- 工作区实际 HEAD 含核心 PR #60 merge `dfefae0`（含备份严格唯一性键修复 `75b448d`）；未自行 Git merge / commit。
+- 允许 13 路径：`server/local-backup.mjs`、`test/local-backup.test.mjs`、`server/bank-storage.mjs`、
+  `scripts/bank-reconcile.mjs`、`test/bank-reconciliation.test.mjs`、`test/bank-reconcile-cli.test.mjs`、
+  `test/local-bank-backup-integration.test.mjs`、`docs/LOCAL-BANK.md`、`docs/tasks/LOCAL-04-BANK.md`、本文件、
+  `docs/LOCAL-BACKUP.md`、`docs/tasks/LOCAL-06-BACKUP.md`、`docs/handoffs/LOCAL-06-BACKUP.md`。
+- **不改** `bank-reconciliation.mjs`（A 审完保持）、核心 / db / import / coaprofile / HTTP / Agent / MCP / public /
+  `scripts/test-all.mjs` / package / 共享 STATE；03B1 WIP 未读取 / 未复制；未用真实账套 / 税局。
+- 实际改动 **9 文件**（claim 的子集）：`server/local-backup.mjs`、`server/bank-storage.mjs`、
+  `test/local-bank-backup-integration.test.mjs`、`docs/LOCAL-BANK.md`、`docs/tasks/LOCAL-04-BANK.md`、本文件、
+  `docs/LOCAL-BACKUP.md`、`docs/tasks/LOCAL-06-BACKUP.md`、`docs/handoffs/LOCAL-06-BACKUP.md`；
+  未改 `test/local-backup.test.mjs`、`scripts/bank-reconcile.mjs`、`test/bank-reconciliation.test.mjs`、
+  `test/bank-reconcile-cli.test.mjs`（只重跑）。
+
+### 10.2 实际变化
+
+1. **合并冲突的真实解决（只在本清单文件内）**：核心 `75b448d` 把完整唯一性键模型接入结构校验后，
+   银行表被并入 `effectiveStructure` 但 `unique` 仍是旧空数组，导致**健康 bank 备份被 `unexpected_unique_index` 误拒**
+   （集成基线 1 / 5）。`BANK_COMPONENT_STRUCTURE` 每表补上对象形状的 `unique`（从同一份
+   `BANK_SCHEMA_CONTRACT.indexes` 静态派生）与显式 `rowidAlias`，不丢掉任一已审合同，也不从当前库动态生成期望。
+2. **备份侧逐键校验**：core `unique` 模型支持带名字 / `partial` / `where` 的条目；组件索引改用完整
+   `pragma_index_xinfo` 事实（`seqno` / collation / 方向 / 表达式 / rowid / `origin` / 真实谓词），
+   全部 19 条索引逐条比对；额外 / 缺失 / 命名与自动索引互相顶替都拒绝，不针对具体索引名特判。
+3. **rowidAlias / 复合主键**：`INTEGER PRIMARY KEY` 表按真实 rowid 别名核对（不另建主键索引、逐行相等）；
+   `bank_accounts` / `bank_batches` 复合主键按真实自动主键索引的键列与 `BINARY` 升序语义核对。
+4. **三入口一致**：`createBackup`（源库）、`verifyBackup`（快照）、`restoreNew`（恢复目标）都走同一结构校验；
+   被拒备份不得生成恢复目标。
+5. **兼容**：清单格式 / `formatVersion` / `components[].structureDigest` 口径未改；旧 core v3 / v4 与旧 bank
+   内部候选备份保持可读，不要求重生成 / 升级；到实际业务打开才按产品入口迁移。
+6. **旧合同保持**：10 表列 / 类型 / null / default、外键完整集合 / 动作、版本行、未知 trigger / view、
+   安装前 backup + verify、DBPath / 句柄一致、`BEGIN IMMEDIATE` 排他、fresh 回执、失败审计 / 回滚未知态均未回退。
+
+### 10.3 本窗实际测试（工作目录 `06-workbench`，合成临时库）
+
+```
+node test/local-backup.test.mjs                          # 22 / 22（核心 22 项含义未变）
+node test/bank-import.test.mjs                           # 16 / 16
+node test/bank-reconciliation.test.mjs                   # 40 / 40
+node test/bank-reconcile-cli.test.mjs                    # 12 / 12
+node test/local-bank-backup-integration.test.mjs         # 5 / 5（断言更新，不删旧断言）
+                                                         # 合计 95 / 95，exit 0
+```
+
+集成用例新增：源库 / 快照 / 恢复目标三入口对 `NOCASE` / `RTRIM` / `DESC` / 表达式 / 错误 partial 谓词 /
+额外唯一索引 / 命名与自动索引互顶 / `INTEGER PRIMARY KEY DESC`（rowid 别名被破坏）全部拒绝，
+快照同时重算清单字节数与 sha256（摘要自洽）仍拒绝且不生成恢复目标；健康库 `backup → verify → restore-new`
+后真实 `Ref-A` / `ref-a` 两笔继续导入成功；与真实 DDL 同义重建不被误拒。
+**未跑**全量 suite（代码只改备份 / 银行契约与文档；整合面全量由 root 冻结后执行，不为无源码变化的套件重复全量）。
+原 stdout 存在本工作区 `.agent-runs/`（未提交）。
+
+### 10.4 未完成 / 边界
+
+- 仍为 **core v3 / v4 + 可选 bank v1**；未来 v5+、bank v2+、batch / audit 与其它未登记组件仍拒绝。
+- 无 UI / 共享模型入口 / HTTP / Agent / MCP 接线；`scripts/test-all.mjs` 四个银行套件登记由 root 后续独立短窗完成。
+- LOCAL-03 双准则 / 辅助维度 / 往来合同未在本窗验收；不声称 LOCAL-04 整体或 03 科目往来已完成。
+- 不宣称已提交 / 已建 PR / 已合 / 最终通过；待 root 冻结、独立复审与 Git 收尾。

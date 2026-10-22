@@ -888,7 +888,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     }
   });
 
-  await test("索引键语义 + 备份恢复：健康备份恢复后键语义保留、大小写不同稳定 ID 可继续导入；collation 漂移被产品入口当场拒绝（备份层仍漏验，等后续窗同步）", async () => {
+  await test("索引键语义 + 备份恢复：健康备份恢复后键语义保留、大小写不同稳定 ID 可继续导入；NOCASE / RTRIM / DESC / 表达式 / 额外唯一 / 来源顶替 / 主键 rowid 漂移在源库、快照与恢复目标三入口全拒绝", async () => {
     const { dir, wire } = buildBankScenario();
     const dbPath = join(dir, "workbench.db");
     const files = join(dir, "keys-import");
@@ -935,8 +935,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     const restoredImport = okBank(importArgs(restoredPath, "CASE-REFS-RESTORED", restoredCsvPath));
     assertEqual(restoredImport.transactionIds.length, 2, "恢复库必须仍能导入只差大小写的两条稳定 ID");
 
-    // collation 漂移：先证明它真的改变写入结果（不是等价写法），再证明产品入口失败关闭。
-    // 备份层当前只比列名（A 窗不改 backup），已知缺口已登记。
+    // collation 漂移：先证明它真的改变写入结果（不是等价写法），后文再证明源库 / 快照 / 恢复三入口一致拒绝。
     {
       const probePath = join(ROOT, `keys-collation-probe-${++seq}.db`);
       const source = new DatabaseSync(dbPath);
@@ -955,40 +954,167 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
       } finally { probe.close(); }
     }
 
-    // 一份干净 bank 库（无大小写冲突数据）制造 collation 漂移，看备份 / 恢复 / 产品三层的实际行为。
-    const second = buildBankScenario();
-    const secondPath = join(second.dir, "workbench.db");
-    const tamperedPath = join(ROOT, `keys-tampered-${++seq}.db`);
-    {
-      const source = new DatabaseSync(secondPath);
-      try { source.prepare("VACUUM INTO ?").run(tamperedPath); } finally { source.close(); }
-      const tampered = new DatabaseSync(tamperedPath);
+    // 索引键语义反例：真实产品 DDL 的每一条索引都要逐键一致（seqno 顺序 / collation / 方向 /
+    // 表达式 / rowid / 来源 / partial 与真实谓词）。源库、快照、恢复目标三个入口都必须拒绝，
+    // 快照同时重算清单字节数与 sha256（摘要自洽），证明拒绝来自结构契约而不是摘要不一致。
+    const keysBase = buildBankScenario();
+    const keysBasePath = join(keysBase.dir, "workbench.db");
+    const keysBaseBackup = join(ROOT, `keys-base-backup-${++seq}`);
+    const keysBaseCreated = LB.createBackup({ dbPath: keysBasePath, outDir: keysBaseBackup });
+    assert(keysBaseCreated.ok === true, `键语义基线备份应成功：${JSON.stringify(keysBaseCreated)}`);
+    assert(LB.verifyBackup({ backupDir: keysBaseBackup }).ok === true, "键语义基线备份应可验证");
+
+    const tamperedBankDatabase = (label, statements) => {
+      const file = join(ROOT, `keys-db-${label}-${++seq}.db`);
+      const source = new DatabaseSync(keysBasePath);
+      try { source.prepare("VACUUM INTO ?").run(file); } finally { source.close(); }
+      const conn = new DatabaseSync(file);
       try {
-        tampered.exec(`DROP INDEX idx_bank_txn_ref`);
-        tampered.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+        conn.exec("PRAGMA foreign_keys = OFF");
+        conn.exec(statements);
+        conn.exec("PRAGMA foreign_keys = ON");
+      } finally { conn.close(); }
+      return file;
+    };
+    const assertNoExpressionEcho = (label, details) => {
+      assertEqual(details.includes("lower("), false, `${label}：拒绝明细不得回显索引表达式原文`);
+    };
+    // 源库入口：createBackup 必须直接拒绝，且不生成备份目录。
+    const expectSourceRejected = (label, dbFile, kinds = []) => {
+      const out = join(ROOT, `keys-source-${label}-${++seq}`);
+      const result = LB.createBackup({ dbPath: dbFile, outDir: out });
+      assertRejected(result, "source_structure_invalid", `${label} 源库`);
+      assertEqual(fs.existsSync(out), false, `${label}：源库被拒绝时不得创建备份目录`);
+      const details = JSON.stringify(result.details ?? {});
+      for (const kind of kinds) assert(details.includes(kind), `${label}：源库拒绝明细应含 ${kind}，实际 ${details}`);
+      assertNoExpressionEcho(label, details);
+      return result;
+    };
+    // 快照入口：把同一份变体写成快照并重算清单字节数 / sha256（摘要自洽），verify 仍拒绝；
+    // restore-new 不得生成目标库。
+    const expectSnapshotRejected = (label, statements, kinds = []) => {
+      const backup = copyBackup(keysBaseBackup, `keys-${label}`);
+      tamperSnapshot(backup, statements);
+      const result = expectVerifyRejected(backup, "structure_invalid", `${label} 快照`);
+      const details = JSON.stringify(result.details ?? {});
+      for (const kind of kinds) assert(details.includes(kind), `${label}：快照拒绝明细应含 ${kind}，实际 ${details}`);
+      assertNoExpressionEcho(label, details);
+      expectRestoreNotCreated(backup, `keys-${label}`);
+      return result;
+    };
+
+    // 等价重建对照：同样重建但保持真实 BINARY 升序语义，必须通过（证明拒绝来自键语义而非重建本身）。
+    const identicalRebuild = tamperedBankDatabase("identical-rebuild",
+      `DROP INDEX idx_bank_txn_scope_date;
+       CREATE INDEX idx_bank_txn_scope_date ON bank_transactions (account_set_id, bank_account_id, txn_date);`);
+    const identicalOut = join(ROOT, `keys-identical-out-${++seq}`);
+    const identicalBackup = LB.createBackup({ dbPath: identicalRebuild, outDir: identicalOut });
+    assert(identicalBackup.ok === true, `与真实 DDL 同义的重建不得被拒绝：${JSON.stringify(identicalBackup)}`);
+    assert(LB.verifyBackup({ backupDir: identicalOut }).ok === true, "同义重建库的备份必须可验证");
+
+    const indexKeyVariants = [
+      ["nocase", `DROP INDEX idx_bank_txn_ref;
+        CREATE UNIQUE INDEX idx_bank_txn_ref
+          ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
+          WHERE bank_ref_id IS NOT NULL;`, ["component_index_mismatch", "NOCASE"]],
+      ["rtrim", `DROP INDEX idx_bank_txn_scope_date;
+        CREATE INDEX idx_bank_txn_scope_date
+          ON bank_transactions (account_set_id, bank_account_id, txn_date COLLATE RTRIM);`,
+        ["component_index_mismatch", "RTRIM"]],
+      ["desc", `DROP INDEX idx_bank_txn_batch_row;
+        CREATE UNIQUE INDEX idx_bank_txn_batch_row
+          ON bank_transactions (account_set_id, bank_account_id, batch_id, row_index DESC);`,
+        ["component_index_mismatch"]],
+      ["expression", `DROP INDEX idx_bank_txn_ref;
+        CREATE UNIQUE INDEX idx_bank_txn_ref
+          ON bank_transactions (account_set_id, bank_account_id, source_id, lower(bank_ref_id))
+          WHERE bank_ref_id IS NOT NULL;`, ["component_index_mismatch", "expression"]],
+      ["partial-predicate", `DROP INDEX idx_bank_txn_ref;
+        CREATE UNIQUE INDEX idx_bank_txn_ref
+          ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id)
+          WHERE bank_ref_id IS NULL;`, ["component_index_mismatch"]],
+      ["extra-unique", "CREATE UNIQUE INDEX idx_bank_txn_summary_extra ON bank_transactions (summary);",
+        ["component_index_unexpected", "unexpected_unique_index"]],
+      ["origin-substitution", `PRAGMA foreign_keys = OFF;
+        CREATE TABLE bank_batch_rows_x (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_set_id INTEGER NOT NULL,
+          bank_account_id TEXT NOT NULL,
+          batch_id TEXT NOT NULL,
+          row_index INTEGER NOT NULL,
+          row_sha256 TEXT NOT NULL,
+          row_fingerprint TEXT,
+          status TEXT NOT NULL,
+          transaction_id INTEGER REFERENCES bank_transactions(id) ON DELETE SET NULL,
+          ambiguity_id INTEGER,
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (account_set_id, bank_account_id, batch_id)
+            REFERENCES bank_batches(account_set_id, bank_account_id, batch_id) ON DELETE CASCADE
+        );
+        INSERT INTO bank_batch_rows_x SELECT * FROM bank_batch_rows;
+        DROP TABLE bank_batch_rows;
+        ALTER TABLE bank_batch_rows_x RENAME TO bank_batch_rows;
+        CREATE UNIQUE INDEX bank_batch_rows_named
+          ON bank_batch_rows (account_set_id, bank_account_id, batch_id, row_index);
+        CREATE INDEX idx_bank_batch_rows_txn ON bank_batch_rows (transaction_id);`,
+        ["component_index_missing", "component_index_unexpected"]],
+      ["pk-key", `PRAGMA foreign_keys = OFF;
+        CREATE TABLE bank_component_migrations_x (
+          version INTEGER PRIMARY KEY DESC,
+          applied_at TEXT NOT NULL,
+          note TEXT
+        );
+        INSERT INTO bank_component_migrations_x SELECT version, applied_at, note FROM bank_component_migrations;
+        DROP TABLE bank_component_migrations;
+        ALTER TABLE bank_component_migrations_x RENAME TO bank_component_migrations;`,
+        ["rowid_alias"]],
+    ];
+    for (const [label, statements, kinds] of indexKeyVariants) {
+      const file = tamperedBankDatabase(label, statements);
+      expectSourceRejected(label, file, kinds);
+      expectSnapshotRejected(label, statements, kinds);
+      // 产品入口同样失败关闭（不是只在备份工具里拒绝）。
+      const stateConn = new DatabaseSync(file, { readOnly: true });
+      try {
+        assertEqual(S.bankSchemaContract(stateConn).ok, false, `${label}：产品结构契约必须同时拒绝`);
+      } finally { stateConn.close(); }
+    }
+
+    // 真实写入语义对照：已导入 Ref-A / ref-a 的库改成 COLLATE NOCASE 会直接撞 UNIQUE，
+    // 证明 collation 不是「等价写法」，而是改变真实业务写入。
+    {
+      const probePath = join(ROOT, `keys-collation-probe-${++seq}.db`);
+      const source = new DatabaseSync(dbPath);
+      try { source.prepare("VACUUM INTO ?").run(probePath); } finally { source.close(); }
+      const probe = new DatabaseSync(probePath);
+      try {
+        probe.exec(`DROP INDEX idx_bank_txn_ref`);
+        let collision = null;
+        try {
+          probe.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
                          ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
                          WHERE bank_ref_id IS NOT NULL`);
-        const state = S.bankSchemaContract(tampered);
-        assertEqual(state.ok, false, "collation 漂移必须破坏产品结构契约");
-        assert(state.problems.some((p) => p.code === "bank_schema_index_mismatch"
-          && p.detail.index === "idx_bank_txn_ref"), "必须给出结构化索引键不符证据");
-      } finally { tampered.close(); }
+        } catch (error) { collision = error; }
+        assert(collision && /UNIQUE|constraint/i.test(String(collision.message)),
+          "已导入 Ref-A / ref-a 的库改成 COLLATE NOCASE 会直接撞 UNIQUE：collation 改变真实写入结果");
+      } finally { probe.close(); }
     }
-    const tamperedBackup = join(ROOT, `keys-tampered-backup-${++seq}`);
-    const tamperedCreated = LB.createBackup({ dbPath: tamperedPath, outDir: tamperedBackup });
-    assert(tamperedCreated.ok === true, "已知缺口：备份创建仍会接受 collation 漂移的 bank 库");
-    const tamperedVerified = LB.verifyBackup({ backupDir: tamperedBackup });
-    // A 窗不改备份实现：备份验证器当前只比索引列名 / UNIQUE / partial / 谓词，键 collation 仍漏验。
-    // 后续备份窗同步核心修复后，这里应当改为被拒绝（届时更新本断言，不得静默放宽）。
-    assert(tamperedVerified.ok === true, "已知缺口：备份 verify 仍放行 collation 漂移（待后续窗同步）");
-    const tamperedRestore = LB.restoreNew({ backupDir: tamperedBackup, targetDir: join(ROOT, `keys-tampered-restore-${++seq}`) });
-    assert(tamperedRestore.ok === true, "已知缺口：恢复仍会成功（备份层尚未校验键语义）");
-    const tamperedRestoredPath = join(tamperedRestore.targetDir, LB.TARGET_DATABASE_FILE);
-    // 但产品入口必须失败关闭：同一个恢复库上的真实导入给结构化结构错误，不会静默按 NOCASE 写库。
-    const rejected = runBankCli(importArgs(tamperedRestoredPath, "CASE-REFS-TAMPERED"));
-    assertEqual(rejected.status, 5, `漂移恢复库上的导入必须 exit 5（实际 ${rejected.status}：${rejected.stdout}${rejected.stderr}）`);
-    assert(rejected.json && rejected.json.ok === false, "漂移恢复库上的导入不得成功");
-    assertEqual(rejected.json.error.code, "bank_schema_corrupt", "漂移恢复库必须给结构化结构错误");
+
+    // 产品入口在漂移库上同样 exit 5（结构化结构错误），不会静默按 NOCASE 写库。
+    const driftFile = tamperedBankDatabase("drift-entry",
+      `DROP INDEX idx_bank_txn_ref;
+       CREATE UNIQUE INDEX idx_bank_txn_ref
+         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
+         WHERE bank_ref_id IS NOT NULL;`);
+    const rejected = runBankCli([
+      "import", "--db", driftFile, "--account-set", String(keysBase.wire.setA), "--bank-account", "BANK-A",
+      "--source", "local-statement", "--period", "2026-01", "--batch", "CASE-REFS-TAMPERED",
+      "--csv", csvPath, "--mapping", mappingPath,
+    ]);
+    assertEqual(rejected.status, 5, `漂移库上的导入必须 exit 5（实际 ${rejected.status}：${rejected.stdout}${rejected.stderr}）`);
+    assert(rejected.json && rejected.json.ok === false, "漂移库上的导入不得成功");
+    assertEqual(rejected.json.error.code, "bank_schema_corrupt", "漂移库必须给结构化结构错误");
   });
 } finally {
   const failed = results.filter(([ok]) => !ok).length;

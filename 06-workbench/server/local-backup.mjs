@@ -815,8 +815,6 @@ const COMPONENT_REGISTRY = Object.freeze({
   }),
 });
 
-const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
-
 const tableColumnFacts = (conn, table) => conn.prepare("SELECT * FROM pragma_table_info(?)").all(table)
   .sort((a, b) => Number(a.cid) - Number(b.cid))
   .map((column) => ({
@@ -903,7 +901,43 @@ function componentVersionState(conn, tables) {
   return { readable: true, reason: null, columns, rows };
 }
 
-/** 组件索引：名字 / 列序 / UNIQUE / partial / 真实谓词 + 拒绝额外索引。 */
+/**
+ * 组件索引的**完整键事实**（只用于结构校验，不写进清单结构摘要）。
+ * 逐键给出 `seqno` / 列名 / collation / 方向 / 表达式 / rowid，并保留 `unique` / `partial` /
+ * 真实谓词 / `origin` / 名字。单独一份（而不是改 `tableIndexFacts`）是为了不改动已存在健康
+ * 内部 bank 备份的 `structureDigest` 定义：旧备份仍可验证，而严格校验由本函数提供。
+ */
+const componentIndexKeyFacts = (conn, table) => conn.prepare("SELECT * FROM pragma_index_list(?) ORDER BY name").all(table)
+  .map((index) => {
+    const name = String(index.name);
+    const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(name);
+    const keys = conn.prepare("SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno").all(name)
+      .filter((entry) => Number(entry.key) === 1)
+      .map((entry) => ({
+        seqno: Number(entry.seqno),
+        name: entry.name === null || entry.name === undefined ? null : String(entry.name),
+        expression: Number(entry.cid) === -2,
+        rowid: Number(entry.cid) === -1,
+        collation: reportCollation(entry.coll),
+        desc: Number(entry.desc) === 1,
+      }));
+    return {
+      name,
+      unique: Number(index.unique) === 1,
+      partial: Number(index.partial) === 1,
+      origin: reportOrigin(index.origin),
+      keys,
+      columns: keys.map((key) => key.name),
+      where: canonicalSqlCondition(indexWherePredicate(row?.sql)),
+    };
+  })
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+/**
+ * 组件索引契约比对：名字 / 来源 / 列序 / UNIQUE / partial / 真实谓词 / 逐键
+ * （seqno 顺序 + collation + 方向 + 表达式 + rowid）；数量 / 额外 / 缺失 / 顶替全部拒绝。
+ * 不针对某个具体索引名特判：一条正常产品 DDL 必须全部通过，任何一条键语义漂移都必须拒绝。
+ */
 function componentIndexProblems(conn, contract, tableSet) {
   const problems = [];
   const expectedByTable = new Map();
@@ -912,18 +946,35 @@ function componentIndexProblems(conn, contract, tableSet) {
     list.push(want);
     expectedByTable.set(want.table, list);
   }
+  const contractKeys = (want) => (want.keys ?? want.columns.map((column) => ({
+    column, collation: "BINARY", desc: false, expression: false, rowid: false,
+  })));
+  const sameKeys = (actualKeys, wantedKeys) => actualKeys.length === wantedKeys.length
+    && actualKeys.every((key, position) => {
+      const want = wantedKeys[position];
+      const wantExpression = want.expression === true;
+      const wantName = want.column ?? want.name ?? null;
+      return key.seqno === position
+        && key.expression === wantExpression
+        && key.rowid === (want.rowid === true)
+        && key.name === (wantExpression || wantName === null ? null : String(wantName))
+        && key.collation === reportCollation(want.collation ?? "BINARY")
+        && key.desc === (want.desc === true);
+    });
   for (const table of contract.tables) {
     if (!tableSet.has(table)) continue;
     const wants = expectedByTable.get(table) ?? [];
-    const actual = tableIndexFacts(conn, table);
+    const actual = componentIndexKeyFacts(conn, table);
     const used = new Set();
     for (const want of wants) {
       const wantWhere = canonicalSqlCondition(want.where);
-      const signature = (index) => index.unique === want.unique && index.partial === want.partial
-        && sameList(index.columns, [...want.columns]) && index.where === wantWhere;
+      const wantKeys = contractKeys(want);
+      const signature = (index) => index.origin === want.origin && index.unique === want.unique
+        && index.partial === want.partial && index.where === wantWhere
+        && sameKeys(index.keys, wantKeys);
       const match = want.index
         ? actual.find((index) => index.name === want.index)
-        : actual.find((index) => (index.origin === "u" || index.origin === "pk") && signature(index));
+        : actual.find((index) => index.origin === want.origin && signature(index));
       if (!match) {
         problems.push({
           kind: "component_index_missing",
@@ -934,6 +985,7 @@ function componentIndexProblems(conn, contract, tableSet) {
           unique: want.unique,
           partial: want.partial,
           where: want.where ?? null,
+          origin: want.origin ?? null,
         });
         continue;
       }
@@ -945,10 +997,12 @@ function componentIndexProblems(conn, contract, tableSet) {
           table,
           index: match.name,
           expected: {
-            columns: [...want.columns], unique: want.unique, partial: want.partial, where: want.where ?? null,
+            columns: [...want.columns], unique: want.unique, partial: want.partial,
+            where: want.where ?? null, origin: want.origin ?? null, keys: wantKeys,
           },
           actual: {
-            columns: match.columns, unique: match.unique, partial: match.partial, where: match.where,
+            columns: match.columns, unique: match.unique, partial: match.partial,
+            where: match.where, origin: match.origin, keys: match.keys,
           },
         });
       }
@@ -961,7 +1015,9 @@ function componentIndexProblems(conn, contract, tableSet) {
         table,
         index: index.name,
         columns: index.columns,
+        unique: index.unique,
         origin: index.origin,
+        keys: index.keys,
       });
     }
   }
@@ -1122,10 +1178,14 @@ const EXPRESSION_KEY = "expression";
 
 /**
  * 读出表上**真实存在的唯一性索引**（`PRAGMA index_list` 的 unique / origin / partial +
- * `PRAGMA index_xinfo` 的键列 / 排序规则 / 方向）：
+ * `PRAGMA index_xinfo` 的 `seqno` / 键列 / 排序规则 / 方向 / 表达式 / rowid + `sqlite_master.sql`
+ * 的部分索引谓词）：
+ *  - `name`：真实索引名（`CREATE UNIQUE INDEX` 的命名索引与自动索引都有名字）；
  *  - `keys[].name`：键列名；表达式列没有列名，标 `expression: true`；
  *  - `keys[].collation`：键列实际使用的排序规则（`BINARY` / `NOCASE` / `RTRIM` / `nonstandard`）；
- *  - `keys[].desc`：是否 `DESC`；`partial`：是否 `WHERE` 部分索引。
+ *  - `keys[].desc`：是否 `DESC`；`keys[].seqno`：键列顺序（逐键比较，顺序不同就是另一条约束）；
+ *  - `keys[].expression` / `keys[].rowid`：表达式键 / rowid 键（产品真实 DDL 都是普通列键）；
+ *  - `partial` / `where`：是否 `WHERE` 部分索引 + 规范化后的真实谓词。
  * 只收 `unique=1` 的索引：它们决定「哪些业务写入必须被拒绝」（主键 / 唯一约束 / 跨批去重），
  * 普通（非唯一）索引只影响查询性能、不改变业务规则，因此不作为结构等价证据，也不据此拒绝
  * （真实 v1 的 `idx_import_bindings_set` 在 v2 重建 `import_source_bindings` 时已随旧表删除，
@@ -1136,15 +1196,25 @@ const uniqueIndexFacts = (conn, table) => {
   const facts = [];
   for (const index of conn.prepare("SELECT * FROM pragma_index_list(?)").all(table)) {
     if (Number(index.unique) !== 1) continue;
-    const keys = conn.prepare("SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno").all(String(index.name))
-      .filter((row) => Number(row.key) === 1)
-      .map((row) => ({
-        name: row.name === null || row.name === undefined ? null : String(row.name),
-        expression: Number(row.cid) === -2,
-        collation: reportCollation(row.coll),
-        desc: Number(row.desc) === 1,
+    const name = String(index.name);
+    const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(name);
+    const keys = conn.prepare("SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno").all(name)
+      .filter((entry) => Number(entry.key) === 1)
+      .map((entry) => ({
+        seqno: Number(entry.seqno),
+        name: entry.name === null || entry.name === undefined ? null : String(entry.name),
+        expression: Number(entry.cid) === -2,
+        rowid: Number(entry.cid) === -1,
+        collation: reportCollation(entry.coll),
+        desc: Number(entry.desc) === 1,
       }));
-    facts.push({ origin: reportOrigin(index.origin), partial: Number(index.partial) === 1, keys });
+    facts.push({
+      name,
+      origin: reportOrigin(index.origin),
+      partial: Number(index.partial) === 1,
+      where: canonicalSqlCondition(indexWherePredicate(row?.sql)),
+      keys,
+    });
   }
   return facts;
 };
@@ -1152,20 +1222,35 @@ const uniqueIndexFacts = (conn, table) => {
 /** 键列名清单（表达式列用固定 token），用于拒绝明细，不回显表达式原文。 */
 const keyColumnNames = (keys) => keys.map((key) => (key.expression ? EXPRESSION_KEY : String(key.name ?? EXPRESSION_KEY)));
 
-/** 期望的唯一性约束与真实索引是否**逐项同义**（键列名 / 排序规则 / 方向 / 列序 / 非表达式 / 非部分索引）。 */
-const uniqueIndexMatches = (actual, expected) => actual.partial === false
-  && actual.origin === expected.origin
-  && actual.keys.length === expected.columns.length
-  && actual.keys.every((key, position) => key.expression === false
-    && key.name === expected.columns[position].name
-    && key.collation === expected.columns[position].collation
-    && key.desc === expected.columns[position].desc);
+/**
+ * 期望的唯一性约束与真实索引是否**逐项同义**：来源 / 名字（若契约给出）/ `partial` 与真实谓词 /
+ * 键列顺序（seqno）/ 列名 / 排序规则 / 方向 / 表达式 / rowid 都一致才算同一条约束。
+ */
+const uniqueIndexMatches = (actual, expected) => {
+  const expectedPartial = expected.partial === true;
+  if (actual.origin !== expected.origin) return false;
+  if (actual.partial !== expectedPartial) return false;
+  if (expected.index !== null && expected.index !== undefined && actual.name !== expected.index) return false;
+  if (actual.where !== canonicalSqlCondition(expected.where)) return false;
+  if (actual.keys.length !== expected.columns.length) return false;
+  return actual.keys.every((key, position) => {
+    const want = expected.columns[position];
+    const wantExpression = want.expression === true;
+    return key.seqno === position
+      && key.expression === wantExpression
+      && key.rowid === (want.rowid === true)
+      && key.name === (wantExpression ? null : String(want.name))
+      && key.collation === reportCollation(want.collation ?? "BINARY")
+      && key.desc === (want.desc === true);
+  });
+};
 
 /** 键列名相同（用于区分「约束缺失」与「约束在但比较规则 / 方向不同」）。 */
-const sameUniqueColumns = (actual, expected) => actual.partial === false
-  && actual.origin === expected.origin
+const sameUniqueColumns = (actual, expected) => actual.origin === expected.origin
+  && (expected.index === null || expected.index === undefined || actual.name === expected.index)
   && actual.keys.length === expected.columns.length
-  && actual.keys.every((key, position) => !key.expression && key.name === expected.columns[position].name);
+  && actual.keys.every((key, position) => !key.expression && !key.rowid
+    && key.name === String(expected.columns[position].name));
 
 /**
  * 真实 rowid 语义核对：`INTEGER PRIMARY KEY` 只有在**确实是 rowid 别名**时才不另建主键索引。

@@ -48,13 +48,19 @@ const REQUIRED_BASE_COLUMNS = Object.freeze({
 });
 
 /**
- * 表级结构契约：列规范（类型 / NOT NULL / 默认值）+ 主键列顺序。
+ * 表级结构契约：列规范（类型 / NOT NULL / 默认值）+ 主键列顺序 + rowid 别名语义。
  * `columns` 由列规范键派生，避免「名字数组」和「完整列规格」两份清单各自漂移。
+ *
+ * `rowidAlias` 显式登记主键是否为 `INTEGER PRIMARY KEY` 的 rowid 别名：
+ *  - `true`：不另建主键索引，主键列与 rowid 必须逐行相等（`bank_transactions` 等 `id INTEGER PRIMARY KEY`）；
+ *  - `false`：主键另有自动索引（本组件的 `bank_accounts` / `bank_batches` 复合主键）。
+ * 备份验证器按本字段核对**真实 rowid 语义**，因此这里写死事实，而不是按名字 / 列数推断。
  */
-const tableContract = (columnSpecs, primaryKey) => Object.freeze({
+const tableContract = (columnSpecs, primaryKey, { rowidAlias }) => Object.freeze({
   columns: Object.freeze(Object.keys(columnSpecs)),
   columnSpecs: Object.freeze(columnSpecs),
   primaryKey: Object.freeze([...primaryKey]),
+  rowidAlias: rowidAlias === true,
 });
 
 /**
@@ -65,9 +71,9 @@ const tableContract = (columnSpecs, primaryKey) => Object.freeze({
  * 改变真实写入行为的同名索引。`origin` 固定来源：命名索引只能来自 `CREATE INDEX`（`c`），
  * 自动索引只能来自表级 PRIMARY KEY（`pk`）或 UNIQUE 约束（`u`）。
  *
- * 注意：LOCAL-06 备份验证器当前只用条目里的 `index / table / columns / unique / partial / where`
- * 比对（`keys` / `origin` 尚未接入备份侧），该缺口已登记为后续备份窗同步项；
- * 产品自身入口一律按本契约完整拒绝。
+ * 业务写门槛（`bankSchemaContract`）与备份验证器（LOCAL-06 `local-backup.mjs`）都按
+ * `keys` / `origin` / `unique` / `partial` / `where` **逐项**比对；备份验证器还会把这些
+ * 事实写进组件结构契约并核对真实 rowid 别名语义（见 `BANK_COMPONENT_STRUCTURE`）。
  */
 const indexContract = ({ index = null, table, columns, unique, partial = false, where = null, origin }) => Object.freeze({
   index,
@@ -100,7 +106,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       version: "INTEGER",
       applied_at: "TEXT NOT NULL",
       note: "TEXT",
-    }, ["version"]),
+    }, ["version"], { rowidAlias: true }),
     bank_component_backups: tableContract({
       id: "INTEGER",
       version: "INTEGER NOT NULL",
@@ -109,7 +115,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       integrity: "TEXT NOT NULL DEFAULT 'unknown'",
       created_at: "TEXT NOT NULL",
       note: "TEXT",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
     bank_accounts: tableContract({
       account_set_id: "INTEGER NOT NULL",
       bank_account_id: "TEXT NOT NULL",
@@ -119,7 +125,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       display_name: "TEXT NOT NULL DEFAULT ''",
       bank_account_no: "TEXT NOT NULL DEFAULT ''",
       created_at: "TEXT NOT NULL",
-    }, ["account_set_id", "bank_account_id"]),
+    }, ["account_set_id", "bank_account_id"], { rowidAlias: false }),
     bank_batches: tableContract({
       account_set_id: "INTEGER NOT NULL",
       bank_account_id: "TEXT NOT NULL",
@@ -142,7 +148,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       error_message: "TEXT",
       created_at: "TEXT NOT NULL",
       updated_at: "TEXT NOT NULL",
-    }, ["account_set_id", "bank_account_id", "batch_id"]),
+    }, ["account_set_id", "bank_account_id", "batch_id"], { rowidAlias: false }),
     bank_transactions: tableContract({
       id: "INTEGER",
       account_set_id: "INTEGER NOT NULL",
@@ -162,7 +168,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       row_index: "INTEGER NOT NULL",
       origin: "TEXT NOT NULL",
       created_at: "TEXT NOT NULL",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
     bank_batch_rows: tableContract({
       id: "INTEGER",
       account_set_id: "INTEGER NOT NULL",
@@ -176,7 +182,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       ambiguity_id: "INTEGER",
       note: "TEXT NOT NULL DEFAULT ''",
       created_at: "TEXT NOT NULL",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
     bank_ambiguities: tableContract({
       id: "INTEGER",
       account_set_id: "INTEGER NOT NULL",
@@ -200,7 +206,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       resolved_transaction_id: "INTEGER",
       resolved_at: "TEXT",
       created_at: "TEXT NOT NULL",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
     bank_matches: tableContract({
       id: "INTEGER",
       account_set_id: "INTEGER NOT NULL",
@@ -218,7 +224,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       cancel_reason: "TEXT",
       invalidated_at: "TEXT",
       invalidation_reason: "TEXT",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
     bank_audit_events: tableContract({
       id: "INTEGER",
       account_set_id: "INTEGER",
@@ -228,7 +234,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       subject_id: "TEXT NOT NULL DEFAULT ''",
       detail_json: "TEXT NOT NULL DEFAULT '{}'",
       created_at: "TEXT NOT NULL",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
     bank_reconcile_runs: tableContract({
       id: "INTEGER",
       account_set_id: "INTEGER NOT NULL",
@@ -246,7 +252,7 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
       stale: "INTEGER NOT NULL DEFAULT 0",
       stale_reason: "TEXT",
       created_at: "TEXT NOT NULL",
-    }, ["id"]),
+    }, ["id"], { rowidAlias: true }),
   }),
   /**
    * 索引契约：`index` 有名字时按名字核对，没有名字时按（来源 + 表 + 完整键语义 + unique + partial + 谓词）
@@ -311,12 +317,18 @@ export const parseBankColumnSpec = (spec) => {
  * 与业务写门槛共用 `BANK_SCHEMA_CONTRACT` 的表 / 列 / 主键 / 索引 / 外键定义，
  * 只把列规范与外键动作整理成备份验证器可直接逐项比对的形状：
  *  - `tables[].columns` 是列规范对象（类型 / NOT NULL / 默认值），不是只有列名；
+ *  - `tables[].primaryKey` / `tables[].rowidAlias` 显式描述主键列序与 rowid 别名语义，
+ *    备份验证器按真实 rowid 逐行核对（不再按列名猜「是不是 rowid 别名」）；
+ *  - `tables[].unique` 用**对象数组**描述该表所有唯一性约束（主键自动索引 / 表级 UNIQUE /
+ *    命名唯一索引），每项带 `origin`、可选的 `index` 名字、`partial` / `where` 与逐键 `columns`
+ *    （`name` / `collation` / `desc` / `expression` / `rowid`）：与核心（LOCAL-02）备份契约
+ *    的「唯一性键对象」模型一致，不退回旧版「只有列名数组」的形状，也不在备份侧动态放松；
  *  - `foreignKeys[].actions` 固定 `ON DELETE` / `ON UPDATE` / `MATCH`（未声明的按 SQLite 默认
  *    `NO ACTION` / `NONE`）；
- *  - `indexes` 保留名字（若有）、列序、UNIQUE / partial 与规范化后的部分索引谓词，并携带
- *    `keys`（逐键 collation / 方向 / 是否表达式）与 `origin`（`c` / `pk` / `u`）；
- *    **备份验证器当前只读取 name / columns / unique / partial / where**，键语义与来源由
- *    `bankSchemaContract` 在产品入口拒绝，备份侧同步已登记为后续窗（未完成不冒充已完成）；
+ *  - `indexes` 保留**全部**索引条目的名字（若有）、列序、UNIQUE / partial 与规范化后的部分索引谓词，
+ *    并携带 `keys`（逐键 collation / 方向 / 是否表达式 / 是否 rowid）与 `origin`
+ *    （`c` / `pk` / `u`）；备份验证器把每一张表的实际索引集合逐条比对到该契约，
+ *    数量 / 额外 / 缺失 / 互相替代（例如命名唯一索引被表级 UNIQUE 顶替）一律拒绝；
  *  - `triggers` / `views` 固定为空：本版本真实 DDL 不创建任何触发器或视图，
  *    备份验证器会把任何引用 `bank_*` 的未登记触发器 / 视图当成未知对象拒绝。
  */
@@ -328,7 +340,24 @@ export const BANK_COMPONENT_STRUCTURE = Object.freeze({
     Object.freeze({
       columns: spec.columnSpecs,
       primaryKey: spec.primaryKey,
-      unique: Object.freeze([]),
+      rowidAlias: spec.rowidAlias === true,
+      // 唯一性键契约：直接来自同一份 BANK_SCHEMA_CONTRACT.indexes（unique=true 的条目），
+      // 每个键保留 collation / 方向 / 表达式 / rowid 语义与来源 / 名字 / 部分谓词。
+      unique: Object.freeze(BANK_SCHEMA_CONTRACT.indexes
+        .filter((entry) => entry.table === name && entry.unique === true)
+        .map((entry) => Object.freeze({
+          origin: entry.origin,
+          index: entry.index ?? null,
+          partial: entry.partial === true,
+          where: entry.where ?? null,
+          columns: Object.freeze(entry.keys.map((key) => Object.freeze({
+            name: key.column,
+            collation: key.collation,
+            desc: key.desc === true,
+            expression: key.expression === true,
+            rowid: key.rowid === true,
+          }))),
+        }))),
       foreignKeys: Object.freeze(BANK_SCHEMA_CONTRACT.foreignKeys
         .filter((fk) => fk.table === name)
         .map((fk) => Object.freeze({

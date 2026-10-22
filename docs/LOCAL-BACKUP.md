@@ -3,9 +3,19 @@
 状态：**LOCAL-06 备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 验收合并**（PR head
 `55dfe44`，merge `98977e04bd24aa293074021802191814f8c2a1d2`，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`
 独审 16 项）。
-本文件同时包含**合并后兼容整合轮**（schema v3 / v4 精确契约）的最新事实：该轮源码**尚未提交 / 未建 PR / 未合并**，
-最终独立审查待做。这仍是 LOCAL-06 的**独立子包**，不表示 LOCAL-06 整体完成（审计留痕、原位在线恢复、
-Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
+本文件同时包含**合并后兼容整合轮**（schema v3 / v4 精确契约）与 **2026-10-22 B 窗银行组件同步**的最新事实：
+两轮源码在本工作区**尚未提交 / 未建 PR / 未合并**，最终独立审查待做。这仍是 LOCAL-06 的**独立子包**，
+不表示 LOCAL-06 整体完成（审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
+
+> **2026-10-22 B 窗（银行组件索引键语义同步）**：核心已按实际 main（PR #60 merge `dfefae0`）同步，
+> `local-backup.mjs` 现同时支持 **core v3 / v4 + 可选 bank 组件 v1**。银行组件不再只比索引名字 / 列 / UNIQUE /
+> partial / 谓词：全部 19 条 PK / UNIQUE / 命名 / 自动索引逐键比较 `seqno` 顺序、`collation`、升降序、
+> 表达式 / rowid、`origin`、`partial` 与真实谓词，并按 `rowidAlias` 核对真实 rowid 别名语义；
+> 数量 / 额外 / 缺失 / 互相顶替一律拒绝。`create`（源库）、`verify`（快照）、`restore-new`（恢复目标）
+> 三个入口一致。**无 bank 的旧 v3 / v4 备份与旧 bank 内部候选备份清单保持可读**：清单格式与
+> `components[].structureDigest` 口径未改，严格校验不靠改摘要定义实现。未来 v5+、batch / audit 与其它
+> 未登记组件继续拒绝。本轮实跑：`local-backup` **22 / 22**、银行解析 **16 / 16**、领域 **40 / 40**、
+> CLI **12 / 12**、集成 **5 / 5**，均 exit 0（合成临时库，不连真实账套 / 税局）。
 
 - 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`）；
   Issue #49 保持 OPEN，用于后续兼容整合；完整审计留痕在
@@ -24,7 +34,9 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
   作为当前真实 schema 契约（当前 **v3**），不复制其迁移逻辑、不建表、不迁移、不写任何持久表。
 - 与 LOCAL-02 的关系：`#47` 独占金额 / 期末与 schema **v4** 实施；兼容整合轮已按 **真实 v4 结构**
   （`asset_cards` 5 个补项列 + 精确默认值）做独立契约与真实产品合成库验收（见 §4）。
-  bank / batch / audit 等尚未合入的组件**未**做契约，仍然一律拒绝（`unexpected_tables`）。
+- 与 LOCAL-04 的关系：**可选 bank 组件 v1** 已在 B 窗按 `BANK_COMPONENT_STRUCTURE` 接入
+  （10 表结构 / 19 条索引逐键语义 / 外键完整集合与动作 / 版本行 / 未知触发器与视图），
+  见 §4「可选 bank 组件 v1」。batch / audit 等**未登记**组件与未来 v5+ 仍一律拒绝。
 
 ## 1. 范围与非目标
 
@@ -187,7 +199,7 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
 |---|---|---|
 | 产品 | `youshu-workbench` | `backup_app_unsupported` |
 | 清单格式 | `youshu-workbench-local-backup` × `formatVersion = 1` | `backup_format_unsupported` |
-| schema / 结构 | **恰好 v3 或 v4 两个已声明的真实结构之一**（列 / 类型 / NOT NULL / **默认值** / 主键与 **rowid 别名语义** / **唯一性键的完整比较语义**（键列顺序 / 排序规则 / 方向 / 表达式 / 部分索引）/ 外键目标列与动作 / 迁移记录连续性与迁移前备份记录全量校验） | 更高版本（未来 v5+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated`；版本对但结构不符 → `structure_invalid` |
+| schema / 结构 | **恰好 v3 或 v4 两个已声明的真实结构之一**（列 / 类型 / NOT NULL / **默认值** / 主键与 **rowid 别名语义** / **唯一性键的完整比较语义**（键列顺序 / 排序规则 / 方向 / 表达式 / 部分索引）/ 外键目标列与动作 / 迁移记录连续性与迁移前备份记录全量校验）；**可选的 bank 组件 v1** 按独立组件契约额外校验（10 表完整表集 / 19 条索引逐键语义 / 外键完整集合与动作 / 版本行 / 未知触发器与视图） | 更高版本（未来 v5+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated`；版本对但结构不符 → `structure_invalid`；bank 组件半套 / 未来版本 / 结构不符 → `structure_invalid` |
 | 应用版本 | **仅记录**（校验「存在且为非空字符串」），不参与兼容判定 | 缺失 / 类型不合法 → `manifest_invalid`；不同版本号**不会**被拒绝 |
 
 - **两个版本各自独立契约**：
@@ -203,8 +215,9 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
   对更旧的库没有对应结构规范，**不为兼容旧结构盲目放行**；这类库应先用**当前产品真实入口**打开一次完成升级。
   本模块**不会**为候选库执行初始化 / 迁移来「让它通过」。
 - **表清单与内容摘要是动态的**：`structure.tables` 从 `sqlite_master` 实时计算，每表摘要也逐表计算，
-  因此新增表（如今后的 bank / batch / audit 组件）会被自动纳入绑定、并因「该版本契约里没有这张表」而**被拒绝**
-  （`structure_invalid` / `unexpected_tables`）——这就是「未合入的组件不得被当成已支持」的兜底，
+  因此新增表会被自动纳入绑定；但**只有已登记契约的表集**能通过：core v3 / v4 的 16 张表与
+  **可选 bank v1 的 10 张 `bank_*` 表**有完整契约，batch / audit 等其它组件与未来 v5+ 新增表仍会因
+  「该版本契约里没有这张表」而被拒绝（`structure_invalid` / `unexpected_tables`）——这就是「未登记组件不得被当成已支持」的兜底，
   不靠关掉 `unexpected_tables` 或只抬高版本号过关。
 - **外键动作也是结构契约**（v3 / v4 相同）：真实 DDL 里所有外键都是 `ON DELETE CASCADE` +
   默认 `ON UPDATE NO ACTION`（匹配语义默认 `NONE`），这不是风格差异而是业务语义——删除账套依赖级联。
@@ -215,6 +228,23 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
   也当作结构不符（`foreign_key_actions` / `unexpected_foreign_keys` / `foreign_key_duplicate`）。
   任何版本若出现不同动作，必须在该外键条目上逐条显式声明（`actions`），**不得**放宽成
   「任一动作均可」或关闭外键检查。
+- **可选 bank 组件 v1（2026-10-22 B 窗）**：任何 `bank_*` 表出现即进入组件校验，且必须是
+  `BANK_COMPONENT_STRUCTURE` 登记的**完整 10 表 + v1 版本行**：
+  - 表集缺失 / 额外 / 半套 / 未知 `bank_*` → `component_tables_missing` / `component_tables_unexpected`；
+  - 版本表恰好一行 v1（时间戳 / note 形状合法），未来版本 / 多行 / 矛盾 / 缺列分别给稳定
+    `component_version_*`；
+  - 每表的列类型 / NOT NULL / 默认值 / 主键列序 / 外键完整集合与 `ON DELETE` / `ON UPDATE` / `MATCH` 动作
+    直接复用核心结构比对（与产品真实 DDL 一致）；
+  - **全部 19 条 PK / UNIQUE / 命名 / 自动索引逐键比对**：`seqno` 顺序、`collation`（`BINARY` / `NOCASE` /
+    `RTRIM` / `nonstandard`）、`desc`、表达式 / rowid、`origin`（`pk` / `u` / `c`）、`partial` 与规范化真实谓词；
+    额外 / 缺失 / 语义不同 / 命名唯一索引被表级 UNIQUE 顶替一律拒绝（`component_index_*` + 核心
+    `unique` / `unexpected_unique_index`）；
+  - `INTEGER PRIMARY KEY` 表按真实 **rowid 别名**语义核对（不另建主键索引、`rowid` 与主键列逐行相等），
+    复合主键表（`bank_accounts` / `bank_batches`）按真实自动主键索引的键列与比较规则核对；
+  - `triggers` / `views` 必须为空：任何引用 `bank_*` 的未登记触发器 / 视图都会拒绝。
+  清单 `components[]` 绑定 name / version / 表集 / 结构摘要 / 内容摘要 / 行数；verify 从快照重算并逐项比对，
+  不接受漏报 / 错报 / core-only 清单虚报 bank。**无组件的旧 v3 / v4 备份与旧 bank 内部候选备份保持可读**：
+  清单格式与 `components[].structureDigest` 口径未改（严格校验独立于摘要定义），不要求重生成 / 升级。
 - **唯一性键的比较规则也是结构契约**（v3 / v4 相同，逐表由 `collationKey` 声明）：
   「哪些列唯一」不足以定义约束，**键列顺序 / 排序规则 / 升降序 / 表达式键 / 部分索引**
   都会改变「哪些业务写入必须被拒绝」。真实验证独立复现的缺陷：把 `import_voucher_sources`
@@ -483,10 +513,11 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
 2. **严格拒绝有代价**：`foreign_key_violation` / `integrity_failed` / `structure_invalid` 会拒绝整次备份。
    若真实账套历史数据本身存在外键或页级问题，或库被手工改过结构，会**先被拦住**（这是有意的安全取向），
    此时需要先人工核对（本包**不提供**修复工具，也不会替库做迁移）。
-3. **schema 只支持已声明的 v3 / v4**（§4）：v0 / v1 / v2 旧库给 `schema_outdated`，必须先用当前产品入口升级；
+3. **schema 只支持已声明的 v3 / v4，另加可选 bank 组件 v1**（§4）：v0 / v1 / v2 旧库给 `schema_outdated`，必须先用当前产品入口升级；
    v3 备份只读验证 / 原样恢复（不隐式迁移），要升到 v4 必须由产品入口显式打开。
    未来 v5 **必须**先新增独立结构契约、真实 SQLite 行为与合成临时库验收，再加入支持集合；
-   bank / batch / audit 等**尚未合入**的组件仍未做契约，带这些表的库会被 `unexpected_tables` 拒绝。
+   core v3 / v4 之外的组件目前**只登记了 bank v1**，batch / audit 等其它组件仍会被 `unexpected_tables` 拒绝
+   （不为兼容关表 / 只抬版本号）。
 4. **清单无签名**（§3.2）：防损坏 / 防不一致，不防整体伪造；结构校验能拦住「结构不符」
    （含只改外键 `ON DELETE` / `ON UPDATE` 动作的伪结构、重复声明同列外键的伪结构，
    以及只改唯一性键排序规则 / 键顺序 / 方向 / 表达式 / 部分索引的伪结构），
@@ -506,10 +537,14 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
    不是字节级的历史 v3 账套；因此本包**不声称**验证过真实历史账套的旧备份。
 9. **未验证 Windows 交付路径**：没有做干净机器安装 / 服务化 / 权限 / 杀毒软件占用等场景验证；
    junction / 硬链接规则在本机 Windows 上实测过，但不同文件系统（网络盘、同步盘）行为未验证。
-10. **索引键校验的边界**：只对**唯一性**（主键 / `UNIQUE` 约束 / 唯一索引）做语义比对，因为只有它们
-   改变「哪些写入必须被拒绝」；非唯一查询索引不作为结构证据、也不据此拒绝。`AUTOINCREMENT` 与
-   表的 `WITHOUT ROWID` 以外的存储选项不在本轮校验范围（rowid 别名语义本身会被核对）。
-   表达式 / 部分索引目前只作为**拒绝依据**出现（真实 v3 / v4 没有它们），契约没有对应的正向条目。
+10. **索引键校验的边界**：core v3 / v4 因为只有唯一性索引改变「哪些写入必须被拒绝」，只对**唯一性**
+    （主键 / `UNIQUE` 约束 / 唯一索引）做语义比对；非唯一查询索引不作为 core 结构证据、也不据此拒绝。
+    **bank 组件 v1 不同**：它的非唯一命名索引同样是已审查契约的一部分，组件校验会逐条比对全部 19 条索引
+    （包括非唯一索引）的名字 / 列序 / `origin` / `unique` / `partial` / 谓词 / 逐键 collation / 方向 / 表达式 / rowid，
+    额外 / 缺失一样拒绝。`AUTOINCREMENT` 与表的 `WITHOUT ROWID` 以外的存储选项不在本轮校验范围
+    （rowid 别名语义本身会被核对）。core 的表达式 / 部分索引目前只作为**拒绝依据**出现
+    （真实 v3 / v4 没有它们），契约没有对应的正向条目；bank v1 则有明确的正向条目
+    （两条 partial UNIQUE + 一条 partial 非唯一）。
 
 ## 10. 自测
 
@@ -568,6 +603,16 @@ node test/local-backup.test.mjs
 在 `06-workbench` 设 `REPORT_OFFICE_PYTHON` 后跑 `npm test` 为 **55 / 55 套 exit 0**（真实运行；
 Office 导出验收 21 / 21，外部 poppler + pdfplumber 对 **11 个真实 PDF** 的几何校验通过）。
 
+B 窗（银行组件同步）不改本套件的 22 项数量与含义，只实际重跑保持 **22 / 22**；银行组件侧的逐键反例与
+健康恢复放在 `test/local-bank-backup-integration.test.mjs`（**5 / 5**，数量不变、断言更新）：
+源库 / 快照 / 恢复目标三入口对 `NOCASE` / `RTRIM` / `DESC` / 表达式 / 错误 partial 谓词 / 额外唯一索引 /
+命名与自动索引互顶 / `INTEGER PRIMARY KEY DESC`（rowid 别名被破坏）全部拒绝，快照同时重算清单字节数与
+sha256（摘要自洽）仍拒绝且不生成恢复目标；健康库 `backup → verify → restore-new` 后真实 `Ref-A` / `ref-a`
+两笔继续导入成功，`idx_bank_txn_ref` 恢复为 `BINARY` 升序普通列；与真实 DDL 同义的重建不被误拒。
+本轮另实跑银行解析 **16 / 16**、领域 **40 / 40**、CLI **12 / 12**，均 exit 0（合成临时库）。
+本轮**未**重跑 `npm test` 全量：代码只改备份 / 银行契约与本包文档，整合面全量由 root 冻结后执行，
+不为无源码变化的套件重复全量结果。
+
 ## 11. 当前状态与下一步
 
 1. **已验收合并的部分**：已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）、
@@ -585,8 +630,21 @@ Office 导出验收 21 / 21，外部 poppler + pdfplumber 对 **11 个真实 PDF
    先红后绿：同一套测试在修改前模块上为 **20 / 22**（两项新测试均以「期望拒绝、实际接受」失败）。
    **清单格式与 `formatVersion` 未变**（只强化验证，不新增字段 / 不改摘要口径）。
    状态：**实现与自测完成，待 root 冻结与备份独立审查**；未提交 / 未建 PR / 未合并。
-4. **仍未支持**：v0 / v1 / v2 旧库（先用产品入口升级）、未来 v5+、bank / batch / audit 等未合入组件；
-   这些必须**显式**做结构契约与真实 SQLite 行为 + 合成临时库验收，不得用动态表清单或「旧用例通过」推定已支持。
+3.2 **B 窗（银行组件索引键语义同步，2026-10-22）**：在工作区同步实际 main（PR #60 merge `dfefae0`）后，
+   把 `BANK_COMPONENT_STRUCTURE` 的 `indexes[].keys` / `origin` / `partial` / 真实谓词与每表
+   `rowidAlias` / 对象形状的 `unique` 契约真正接入 `local-backup.mjs`：银行组件全部 19 条索引（PK / UNIQUE /
+   命名 / 自动）逐键比对 `seqno` / collation / 方向 / 表达式 / rowid / origin / partial / 谓词，
+   数量 / 额外 / 缺失 / 互相顶替一律拒绝；core 的 `unique` 比较模型扩展到支持带名字与 partial 的条目，
+   银行表结构因此与 core 新描述模型一致（不再用旧的空数组绕过）。
+   实跑：`local-backup` 22 / 22、`bank-import` 16 / 16、`bank-reconciliation` 40 / 40、
+   `bank-reconcile-cli` 12 / 12、`local-bank-backup-integration` 5 / 5，均 exit 0；
+   集成用例原先「备份仍漏验」的断言已改为拒绝，并新增三入口反例与健康恢复。
+   **清单格式 / `formatVersion` / `structureDigest` 口径未改**，旧 core v3 / v4 与旧 bank 内部候选备份保持可读；
+   拒绝基于结构契约而不是摘要口径变化。
+   状态：**实现与自测完成，待 root 冻结、独立复审与 Git 收尾**；未提交 / 未建 PR / 未合并。
+4. **仍未支持**：v0 / v1 / v2 旧库（先用产品入口升级）、未来 v5+、以及 **batch / audit 等未登记组件**；
+   core v3 / v4 与可选 bank v1 之外的组件必须**显式**做结构契约与真实 SQLite 行为 + 合成临时库验收，
+   不得用动态表清单或「旧用例通过」推定已支持。
 5. **Issue #49 保持 OPEN** 供兼容整合；完整审计留痕在
    [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)。
 6. **后续仍未实现**：原位（就地）恢复与回退编排、Windows 干净安装 / 启动 / 升级交付、
