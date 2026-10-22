@@ -597,6 +597,64 @@ test("P4：HTTP 资产写入口拒绝 2^32 / 2^32−1 / 非整数 / 超上限时
   assert.equal(check.steps.find((s) => s.id === "depreciation").status, "blocked");
 });
 
+test("取得期间一致性（review3 P2）：HTTP 取得期间变更后历史期不再生成错误计提（无 stale 循环），正确适用期可计提并封账", async () => {
+  const set = await ok("POST", "/api/account-sets", { name: "取得期间一致性公司", start_period: "2026-01" });
+  const id = set.id;
+  await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
+    { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },
+  ] });
+  const purchase = await ok("POST", `/api/account-sets/${id}/vouchers`, {
+    period: "2026-01", status: "posted",
+    entries: [{ code: "1601", debit: 100, credit: 0 }, { code: "1002", debit: 0, credit: 100 }],
+  });
+  const card = await ok("POST", `/api/account-sets/${id}/assets`, {
+    kind: "fixed", name: "取得期间设备", original_cost: 100, residual_rate: 0,
+    useful_life_months: 10, start_period: "2026-01", acquired_period: "2026-01",
+  });
+  assert.equal(card.monthly, 10); // 手算：100 ÷ 10
+  const dep = await ok("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-01" });
+  assert.equal(dep.voucher.total_debit, 10);
+  await ok("POST", `/api/account-sets/${id}/vouchers/${dep.voucher.id}/unpost`);
+  await ok("DELETE", `/api/account-sets/${id}/vouchers/${dep.voucher.id}`);
+  await ok("PATCH", `/api/account-sets/${id}/assets/${card.id}`, { acquired_period: "2026-02" });
+
+  // 旧实现：此处会再写一张一月计提 10，检查立即判 stale → 删了又生成，业务路径陷入循环。
+  const before = snapshot();
+  const rerun = await ok("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-01" });
+  assert.equal(rerun.voucher, null, "取得期间之前不生成计提凭证");
+  assert.deepEqual(rerun.runs, []);
+  assert.equal(rerun.skipped[0].status, "not_existed");
+  assert.deepEqual(snapshot(), before, "不得写入任何凭证 / run");
+  const janDep = (await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`))
+    .steps.find((s) => s.id === "depreciation");
+  assert.equal(janDep.status, "ok", JSON.stringify(janDep.blocking));
+  assert.equal(janDep.details.cards[0].status, "not_existed");
+
+  // 真实业务路径：把一月购入凭证也移到二月（一月总账不再有 1601）→ 一月可封账。
+  await ok("POST", `/api/account-sets/${id}/vouchers/${purchase.id}/unpost`);
+  await ok("DELETE", `/api/account-sets/${id}/vouchers/${purchase.id}`);
+  await ok("POST", `/api/account-sets/${id}/vouchers`, {
+    period: "2026-02", status: "posted",
+    entries: [{ code: "1601", debit: 100, credit: 0 }, { code: "1002", debit: 0, credit: 100 }],
+  });
+  const janReady = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`);
+  assert.equal(janReady.ready, true, JSON.stringify(janReady.blocking));
+  assert.equal((await ok("POST", `/api/account-sets/${id}/periods`, { period: "2026-01", status: "closed" })).status, "closed");
+
+  // 正确适用期：Agent 入口在二月计提 10 → 改名称 / 备注不锁死 → 结转 → 封账。
+  const feb = await ok("POST", "/agent/tools/depreciation_run", { accountSetId: id, period: "2026-02" });
+  assert.equal(feb.voucher.total_debit, 10);
+  await ok("PATCH", `/api/account-sets/${id}/assets/${card.id}`, { name: "改名后的设备", ledger_note: "只是备注" });
+  const febDep = (await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-02`))
+    .steps.find((s) => s.id === "depreciation");
+  assert.equal(febDep.details.cards[0].status, "posted", "名称 / 备注变更不得让已过账计提变成 stale");
+  await ok("POST", `/api/account-sets/${id}/carry-forward`, { period: "2026-02" });
+  const febCheck = await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-02`);
+  assert.equal(febCheck.ready, true, JSON.stringify(febCheck.blocking));
+  await ok("POST", `/api/account-sets/${id}/periods`, { period: "2026-02", status: "closed" });
+  assert.equal((await ok("GET", `/api/account-sets/${id}/assets`))[0].accumulated, 10);
+});
+
 test("期末检查对不存在 / 非法期间给出稳定错误码", async () => {
   await fails("GET", `/api/account-sets/${setId}/period-end-check`, undefined, 400, /period_required/);
   await fails("GET", `/api/account-sets/${setId}/period-end-check?period=2026-13`, undefined, 400, /period_invalid/);

@@ -232,6 +232,7 @@ export function expectedDepreciationCents(db, card, period, money = cardMoney(ca
 
 /**
  * 单张卡片在 period 的计提状态：
+ *  not_existed       该期间卡片尚未取得 / 入账（acquired_period 晚于 period）：不适用计提，也不阻塞
  *  not_started       未到计提开始期间（start_period 之后才开始计提，不等同取得日期）
  *  posted            本期已计提并过账，且金额仍与卡片当前定义一致
  *  posted_stale      本期已过账，但与卡片当前定义应提额（或科目）不一致：旧定义下的失效计提，
@@ -248,6 +249,11 @@ export function expectedDepreciationCents(db, card, period, money = cardMoney(ca
  * **绝不**参与历史状态 / 历史应提额判定。旧库若已存在后期 run，历史 DTO 必须如实显示「截至该期间」
  * 的应提额，由 generateDepreciation 在执行时明确拒绝（depreciation_global_over_depreciable）
  * 并给出撤销顺序，而不是篡改历史应提额来掩盖超提。
+ *
+ * 适用期 / 金额口径（重要）：「本期没有计提记录」这一支**不再自己算**，而是直接复用
+ * expectedDepreciationCents —— 与「已过账计提是否仍成立」用的是同一个判定。两处各写一套会导致
+ * 自相矛盾：生成按分期表写入一个「卡片当时还不存在」的期间计提，检查又立刻判它 posted_stale，
+ * 用户按指引删除后重新生成又写回同一张错误凭证（无限循环）。
  */
 export function assetCardPeriodStatus(db, card, period, money = cardMoney(card)) {
   const index = monthsBetween(card.start_period, period);
@@ -309,43 +315,23 @@ export function assetCardPeriodStatus(db, card, period, money = cardMoney(card))
       reason: "本期存在未过账计提记录，需先删除或恢复该凭证",
     };
   }
-  // 未到计提开始期间：与累计 / 全局余额无关，历史期间必须稳定报告 not_started。
-  if (index < 0) return { ...base, status: "not_started", reason: `计提开始期间为 ${card.start_period}` };
-  // 未入固定资产账：不能计提（否则会先记一笔没有原值入账的折旧），也不是已入账资产事实。
-  if (ledgerStatus !== "booked") {
-    return {
-      ...base,
-      status: "ledger_pending",
-      amountCents: 0n,
-      reason: "卡片登记为尚未入固定资产账：不得计提，需先补真实购入 / 期初入账并核对总账一致后改为 booked",
-    };
+  // 没有本期计提记录：适用期 / 金额口径与上面的「已过账计提校验」共用同一 helper（expectedDepreciationCents）。
+  // 取得期间 / 未入固定资产账 / 未到起提期间 / 已提足 / 已过寿命 / 按分取整为 0 全部由那一处判定，
+  // 因此「生成」与「验证」不可能再给出互相矛盾的结论。
+  const expected = expectedDepreciationCents(db, card, period, money);
+  if (expected.status === "due") {
+    return { ...base, status: "due", amountCents: expected.expectedCents };
   }
-  if (remainingCents <= 0n) {
-    return { ...base, status: "fully_depreciated", amountCents: 0n, reason: "截至本期间累计已提足，无需再提" };
-  }
-  if (index >= money.life) {
-    return {
-      ...base,
-      status: "life_expired",
-      amountCents: 0n,
-      reason: `已超过 ${money.life} 期寿命但累计未提足，需人工核对卡片或补提`,
-    };
-  }
-  // 本期应计提额 = 分期表金额（O(1) 取当期，不展开整表），但不超过「截至本期间的剩余额」。
-  // 不在这里用全局余额截断：那会把后期计提提前塞进历史期间，掩盖实际超提。
-  let dueCents = money.amountAt(index);
-  if (dueCents > remainingCents) dueCents = remainingCents;
-  if (dueCents < 0n) dueCents = 0n;
-  if (dueCents === 0n) {
-    // 极小金额按分取整后本期为 0（余额在后期提足）：不是阻塞项，也不是“已提足”。
-    return {
-      ...base,
-      status: "no_amount_due",
-      amountCents: 0n,
-      reason: "按分取整后本期应计提额为 0，余额在后续期提足",
-    };
-  }
-  return { ...base, status: "due", amountCents: dueCents };
+  // 不适用计提的期间（卡片尚未取得 / 未到起提期间 / 期间非法）不给 dueAmount（null），
+  // 保持既有 DTO 口径：0 只用于「算出来确实是 0」或「已提足 / 未入账」。
+  const notApplicable = ["not_existed", "not_started", "invalid"].includes(expected.status);
+  return {
+    ...base,
+    // invalid / not_existed / not_started / ledger_pending / fully_depreciated / life_expired / no_amount_due
+    status: expected.status,
+    ...(notApplicable ? {} : { amountCents: 0n }),
+    reason: expected.reason ?? expected.status,
+  };
 }
 
 /** 卡片的计提状态 DTO（对外 / 检查结果）：金额转回两位小数。 */
@@ -609,7 +595,7 @@ function depreciationStep(db, setId, period) {
     id: "depreciation",
     title: "应计提折旧 / 摊销完整",
     status: PERIOD_END_STATUS.OK,
-    reason: `本期应计提项均已过账（已计提 ${posted} 张，其余为未到期 / 已提足）`,
+    reason: `本期应计提项均已过账（已计提 ${posted} 张，其余为尚未取得 / 未到期 / 已提足）`,
     details,
   };
 }

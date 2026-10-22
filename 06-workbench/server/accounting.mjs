@@ -1406,7 +1406,7 @@ export function generateDepreciation(setId, period) {
       throw err;
     }
     if (!entries.length) {
-      return { voucher: null, runs: [], skipped, note: "本期无需计提（已提足或未到计提期）" };
+      return { voucher: null, runs: [], skipped, note: "本期无需计提（卡片尚未取得 / 未到计提期 / 已提足或按分取整为 0）" };
     }
     const voucher = createVoucher(setId, {
       period: p, voucher_date: lastDay(p), summary: "计提折旧与摊销",

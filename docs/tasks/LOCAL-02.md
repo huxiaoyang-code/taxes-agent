@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-02 会计金额、期末完整性与连续期间
 
 - 类型：后端领域（金额 / 计提 / 结转 / 封账 / 反操作守卫）+ 存储迁移 + 本地接线 + 契约文档 + 测试
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4），未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，**仅 10 个文档**，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
@@ -114,14 +114,18 @@
    且旧 posted run 不被当成“已完成”，并按「删除重算」解除；纯名称 / 备注不锁死；② 凭证逐金额字段拒绝 `0.001` 类亚分非零数，全库不变；
    ③ 未入账登记只在取得期间之后计入阻塞，缺取得期间仍保守报告；④ 资产新增 / 修改的寿命非整数 / 负数 / 巨大值在**写入前**拒绝且不留下半张卡片，
    分期取额为 O(1)。
+10. **取得期间一致性（review3 P2）**：取得期间晚于被生成 / 被查询期间时，生成与校验**共用同一口径**：
+   状态 `not_existed`、不写任何计提凭证、不算「应计提未计提」、不阻塞封账；改取得期间并删除旧计提后**不会又写回错误凭证**；
+   已存在的旧数据（取得期间之前的已过账计提）仍报 `depreciation_run_stale` 并可撤销重算；正确适用期可计提并封账；
+   名称 / 备注仍不锁死。
 
 ## 5. 实际测试（本机实跑，退出码为真实结果）
 
 | 命令 | 工作目录 | 结果 |
 |---|---|---|
 | `npm test`（`scripts/test-all.mjs`） | `06-workbench` | **50 / 50 套 exit 0**（最终代码实跑；含本包新增 3 套） |
-| `node test/accounting-period-integrity.test.mjs` | `06-workbench` | **43 / 43** 通过，exit 0 |
-| `node test/accounting-period-http.test.mjs` | `06-workbench` | **17 / 17** 通过，exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | `06-workbench` | **45 / 45** 通过，exit 0 |
+| `node test/accounting-period-http.test.mjs` | `06-workbench` | **18 / 18** 通过，exit 0 |
 | `node accounting-period-test.mjs` | `05-reconstruction/codex/mcp/finance-mcp` | **5 / 5** 通过，exit 0 |
 | `node test/accounting-guards.test.mjs` | `06-workbench` | 23 / 23，exit 0 |
 | `node test/accounting-derived.test.mjs` | `06-workbench` | 31 / 31，exit 0 |
@@ -195,3 +199,22 @@
 顺带修正：`import-storage.mjs` 中 `acquired_period` 迁移注释原写“核对时回落 `start_period`”，与实际「不回填、报缺项」矛盾，
 已改为准确描述（**不改迁移语义**）。本轮回工**未新增存储列**，schema 仍为 v4 的同一 5 列，v3→v4 升级 / WAL 备份恢复验证不变。
 LOCAL-06 备份 CLI 尚未合并且当前只支持 v3，本轮不触碰它；v4 兼容增量由 root 后续整合后另派。
+
+## 10. review3：取得期间一致性（同影响面 P2）
+
+独立审查确认原四项复现（P1–P4）均已关闭（域 43 / HTTP 17 / MCP 5 通过）后，新增一项同影响面 P2：
+`period-end-controls.mjs` 的 `expectedDepreciationCents`（校验已过账计提）在 `acquired_period > period` 时返回 `not_existed` / 应提 0，
+而 `assetCardPeriodStatus` 的「本期无计提记录」分支自己按分期表算 `due`、不看取得期间。
+真实复现：卡片 100 / 寿命 10 / 取得与起提 1 月 → 计提 10 → 反过账 → 改取得为 2 月 → 旧凭证重过账被正确拒绝 →
+按指引删除旧凭证 → **`generateDepreciation(1 月)` 又成功写入 10** → 检查立即 `depreciation_run_stale`（期望 0）→ 再生成也 stale：
+纠正后的业务路径陷入循环。
+
+| 项 | 修复 | 回归 |
+|---|---|---|
+| 生成 / 校验两套口径 | 「本期无计提记录」分支**删除自算**，直接复用 `expectedDepreciationCents`；新增状态 `not_existed`（与 `not_started` 分开），`not_existed` / `not_started` 不给 `dueAmount`（保持既有 DTO 口径）；`depreciation` 步骤不阻塞，`generateDepreciation` 返回 `voucher: null` + `skipped` | 领域 2 项（域 43 → 45）、HTTP 1 项（17 → 18） |
+| 已存在旧数据一致 | 旧库已有「取得期间之前」的已过账计提仍报 `posted_stale` / `depreciation_run_stale`（`expectedStatus = not_existed`）并阻止封账；撤销后不再写回，检查恢复 | 领域第 2 项（直接改库模拟旧数据） |
+| 不选「写前拒绝」 | 只加写入口拦截无法处理旧数据，并会掩盖两套判定矛盾（本次复现就是「写入允许、校验拒绝」）；改用统一适用期口径，真实矛盾（总账仍有原值）由 `asset_missing_card` 如实暴露 | 领域第 1 项（把购入凭证也移到 2 月后才可封账） |
+| 纯显示字段 | 名称 / 备注不参与一致性判断；2 月已过账后改名 / 备注仍为 `posted`，可结转并封账 | 领域第 1 项、HTTP 链末段 |
+
+既有断言变更 1 处：P3 用例「取得 2026-03 / 起提 2026-04」的 1 月卡片状态 `not_started` → `not_existed`（附理由注释，
+**金额 / 阻塞 / 原子性断言全部保留**）。既有四项 / 累计舍入 / 反操作 / 原子性规则未回退；未新增存储列、未改迁移、未触碰 backup。

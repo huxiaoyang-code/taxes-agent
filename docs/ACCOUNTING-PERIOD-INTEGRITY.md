@@ -60,6 +60,19 @@
 - 缺 `acquired_period` 时**不回落**到 `start_period`：卡片按「已存在」保守参与原值核对，并给出结构化缺项
   `asset_acquired_period_missing`（可经 `asset_update` 补登记后解除），不会伪造「前期不存在 / 本期刚购入」的证据。
 - 历史卡片可用 `origin=supplement` + `opening_accumulated`（已入账历史累计）补项；补项不改既有金额，只让核对可解释。
+- **适用期只有一套判定**（`expectedDepreciationCents`）：取得期间晚于被查询 / 被生成期间的卡片状态是 `not_existed`
+  （理由里带登记取得期间）：`generateDepreciation` 对该期间**不生成任何计提凭证**（`voucher: null` + `skipped`），
+  期末检查的 `depreciation` 步骤也不把它算作「应计提未计提」。「卡片尚未取得」与「未到起提期间」分开报
+  （`not_existed` / `not_started`），两者都不阻塞封账。
+- 反过账 → 删除旧计提 → 改 `acquired_period`（把取得 / 入账期间后移）之后，**同一期间不会再被写回旧金额**：
+  生成与验证共用同一个 helper，不会出现「生成时按分期表写入 → 检查立刻判 stale → 删除后又写回」的循环。
+  若旧库（或修改前的落库）已留下「取得期间之前」的已过账计提，一律按已过账 ≠ 已完成处理：状态 `posted_stale`、
+  `depreciation_run_stale`（`expectedStatus = not_existed`）、阻止封账并给「反过账 + 删除旧计提凭证」的撤销顺序；
+  撤销后该期间不再被写回错误凭证，检查恢复。真实矛盾（总账仍有原值、卡片说该期间不存在）由
+  `asset_reconciliation` 如实报 `asset_missing_card`，需把购入 / 期初入账凭证调到真实取得期间，而不是改判定规则迁就。
+- 若卡片同时把起提期间留在取得期间之前（`start_period < acquired_period`，本身就是矛盾登记），取得后按分期表序号
+  继续，不会自动跳期：寿命外仍未提足时 `depreciation` 步骤如实报 `life_expired`（阻止封账），修法是
+  「反过账 + 删除旧计提 run → 把 `start_period` 改到 ≥ `acquired_period` → 重新计提」。规则不把这种矛盾抹平。
 
 ### 2.3 期间口径 vs 全局口径
 
@@ -110,6 +123,10 @@
   **不接受静默改写原凭证，也不接受旧草稿直接恢复过账。**
 - 期末检查与 `generateDepreciation` 用同一口径重算：已过账金额与当前定义不一致时状态为 `posted_stale`，
   计提步骤报 `depreciation_run_stale` 并阻止封账（不再把「存在已过账 run」当作已完成）。
+- **「本期没有计提记录」这一支不再自己算适用期 / 金额**：`assetCardPeriodStatus` 直接复用 `expectedDepreciationCents`
+  （与校验已过账计提、`assertDepreciationRunsCurrent` 同一个 helper）。两处各写一套会导致自相矛盾：
+  生成按分期表写入一个「卡片当时还不存在」的期间计提，检查又立刻判它 `posted_stale`，
+  用户按指引删除后重新生成又写回同一张错误凭证（业务路径陷入循环）。
 - 可执行解除路径：`反过账 → 删除旧计提凭证（连带 run）→ 按期间顺序重新计提 → 重新结转 → 重新检查 / 封账`，
   与 F2 的倒序撤销一致；历史已过账金额在未被撤销前按原样保留，不被静默改写。
 
@@ -123,7 +140,7 @@
 |---|---|---|
 | `draft_vouchers` | 总是适用 | 本期仍有草稿凭证（先过账或删除） |
 | `trial_balance` | 总是适用 | 期末借贷不平 |
-| `depreciation` | 账套有资产卡片；无卡片 → `not_applicable` | 本期应计提未计提（`depreciation_missing` + 应提金额）、本期有未过账计提（`depreciation_draft_exists`）、已过寿命仍未提足（`depreciation_life_expired_underprovided`）、卡片登记为未入固定资产账（`asset_ledger_pending`）、**已过账但与卡片当前定义不一致（`depreciation_run_stale`）** |
+| `depreciation` | 账套有资产卡片；无卡片 → `not_applicable` | 本期应计提未计提（`depreciation_missing` + 应提金额）、本期有未过账计提（`depreciation_draft_exists`）、已过寿命仍未提足（`depreciation_life_expired_underprovided`）、卡片登记为未入固定资产账（`asset_ledger_pending`）、**已过账但与卡片当前定义不一致（`depreciation_run_stale`）**。取得期间晚于该期间的卡片为 `not_existed`（不阻塞，也不会被生成计提） |
 | `asset_reconciliation` | 有卡片或相关总账科目有余额；都没有 → `not_applicable` | 缺卡片 / 原值差异 / 累计差异 / 缺取得期间 / **该期间已存在**卡片的未入账登记（`asset_purchase_voucher_pending`，且如实报原值差异）。取得期间晚于查询期间的卡片不提前计入阻塞；缺取得期间按「已存在」保守报告 |
 | `profit_carry_forward` | 本期有损益发生或有未结转损益余额；都没有 → `not_applicable` | 损益类科目仍有余额：未结转（`profit_not_carried_forward`）或结转后又有损益分录（`profit_carry_stale`） |
 | `year_end_carry_forward` | 12 月且 3103 有余额；非 12 月 → `not_applicable` | 12 月末 3103 未结转（`year_end_not_carried`） |

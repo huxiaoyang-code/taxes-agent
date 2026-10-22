@@ -1128,7 +1128,9 @@ try {
     assert.equal(codesOf(jan).includes("asset_purchase_voucher_pending"), false, JSON.stringify(jan.blocking));
     assert.equal(stepOf(jan, "asset_reconciliation").status, "ok", JSON.stringify(stepOf(jan, "asset_reconciliation").blocking));
     assert.equal(stepOf(jan, "asset_reconciliation").details.pendingLedger.length, 0);
-    assert.equal(stepOf(jan, "depreciation").details.cards[0].status, "not_started");
+    // review3 P2：卡片取得期间在 3 月，1 月卡片还不存在 → 状态为 not_existed（不再用 not_started 混淆
+    // “尚未取得”与“未到起提期间”）；两者都不阻塞封账。
+    assert.equal(stepOf(jan, "depreciation").details.cards[0].status, "not_existed");
     assert.equal(jan.ready, true, JSON.stringify(jan.blocking));
     // 3 月（取得期间）：未入账登记与原值差异必须报出来；计提尚未开始。
     const mar = A.periodEndCheck(s, "2026-03");
@@ -1206,6 +1208,104 @@ try {
     assert.equal(listed[0].final_month, 100, "余额仍落在最后一期");
     const legacy = stepOf(A.periodEndCheck(s2, "2026-01"), "depreciation").details.cards[0];
     assert.equal(legacy.status, "no_amount_due");
+  });
+
+  await test("取得期间一致性（review3 P2）：取得期间变更后历史期不生成错误计提，旧已过账计提需撤销，正确适用期可生成并封账", async () => {
+    const s = newSet("P2-取得期间一致性");
+    A.setOpeningBalances(s, opening(s)); // 期初无 1601：资产由一月真实购入凭证入账
+    const card = A.addAssetCard(s, {
+      name: "取得期间设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    const purchase = A.createVoucher(s, {
+      period: "2026-01", status: "posted", entries: [e("1601", 100), e("1002", 0, 100)],
+    });
+    // 复现路径：一月计提 10 → 反过账 → 删除旧计提 → 把取得期间改到二月。
+    const jan = A.generateDepreciation(s, "2026-01");
+    assert.equal(jan.voucher.total_debit, 10);
+    A.unpostVoucher(s, jan.voucher.id);
+    A.deleteVoucher(s, jan.voucher.id);
+    assert.equal(A.listDepreciationRuns(s, { period: "2026-01" }).length, 0);
+    A.updateAssetCard(s, card.id, { acquired_period: "2026-02" });
+
+    // 旧实现：这里会再写一张一月计提 10，检查立刻判 stale → 「删了又生成」死循环。
+    const before = snapshot();
+    const rerun = A.generateDepreciation(s, "2026-01");
+    assert.equal(rerun.voucher, null, "取得期间之前的期间不得生成计提凭证");
+    assert.equal(rerun.runs.length, 0);
+    assert.equal(rerun.skipped[0].status, "not_existed");
+    assert.match(rerun.skipped[0].reason, /2026-02/);
+    assert.deepEqual(snapshot(), before, "不得写入任何凭证 / run");
+
+    // 生成与验证同一口径：计提步骤 ok 且卡片状态为 not_existed，不再出现 stale / missing。
+    const janCheck = A.periodEndCheck(s, "2026-01");
+    const janDep = stepOf(janCheck, "depreciation");
+    assert.equal(janDep.status, "ok", JSON.stringify(janDep.blocking));
+    assert.equal(janDep.details.cards[0].status, "not_existed");
+    assert.equal(codesOf(janCheck).includes("depreciation_run_stale"), false);
+    assert.equal(codesOf(janCheck).includes("depreciation_missing"), false);
+    // 但一月总账仍有 1601 → 如实报「缺卡片」（真实矛盾在购入凭证，不是折旧死循环）。
+    assert.ok(codesOf(janCheck).includes("asset_missing_card"), JSON.stringify(janCheck.blocking));
+
+    // 真实业务路径：把购入凭证也移到二月 → 一月可正常封账。
+    A.unpostVoucher(s, purchase.id);
+    A.deleteVoucher(s, purchase.id);
+    A.createVoucher(s, { period: "2026-02", status: "posted", entries: [e("1601", 100), e("1002", 0, 100)] });
+    const janReady = A.periodEndCheck(s, "2026-01");
+    assert.equal(janReady.ready, true, JSON.stringify(janReady.blocking));
+    assert.equal(A.setPeriodStatus(s, "2026-01", "closed").status, "closed");
+
+    // 正确适用期（二月）能生成 10；纯显示字段可改，不得把已过账计提判成 stale。
+    const feb = A.generateDepreciation(s, "2026-02");
+    assert.equal(feb.voucher.total_debit, 10);
+    A.updateAssetCard(s, card.id, { name: "改名后的设备", ledger_note: "只是备注" });
+    const febDep = stepOf(A.periodEndCheck(s, "2026-02"), "depreciation");
+    assert.equal(febDep.status, "ok", JSON.stringify(febDep.blocking));
+    assert.equal(febDep.details.cards[0].status, "posted", "名称 / 备注变更不得让已过账计提变成 stale");
+    A.carryForwardProfit(s, "2026-02");
+    const febCheck = A.periodEndCheck(s, "2026-02");
+    assert.equal(febCheck.ready, true, JSON.stringify(febCheck.blocking));
+    assert.equal(A.setPeriodStatus(s, "2026-02", "closed").status, "closed");
+    assert.equal(A.accountBalances(s, "2026-02").get("1602").natural, 10);
+    assert.equal(A.listAssetCards(s)[0].accumulated, 10);
+  });
+
+  await test("取得期间一致性（review3 P2）：库内已存在「取得期间之前」的旧计提（修复前落库）走同一口径，删除后不得写回", async () => {
+    const s = newSet("P2-旧数据取得期间");
+    A.setOpeningBalances(s, [e("1601", 100), e("3001", 0, 100)]);
+    const card = A.addAssetCard(s, {
+      name: "旧数据设备", original_cost: 100, residual_rate: 0, useful_life_months: 10,
+      start_period: "2026-01", acquired_period: "2026-01",
+    });
+    const jan = A.generateDepreciation(s, "2026-01");
+    assert.equal(jan.voucher.total_debit, 10);
+    // 模拟修复前已落库的旧数据（新写入口在已过账计提后不允许改取得期间，故直接改库）。
+    db.prepare("UPDATE asset_cards SET acquired_period='2026-02' WHERE id=?").run(card.id);
+
+    // 已过账不等于已完成：如实报 stale，不静默接受，也不掩盖内部矛盾。
+    const dep = stepOf(A.periodEndCheck(s, "2026-01"), "depreciation");
+    assert.equal(dep.status, "blocked");
+    const stale = dep.blocking.find((b) => b.code === "depreciation_run_stale");
+    assert.ok(stale, JSON.stringify(dep.blocking));
+    assert.equal(stale.details.recordedAmount, 10);
+    assert.equal(stale.details.expectedAmount, 0);
+    assert.equal(stale.details.expectedStatus, "not_existed");
+    const stale2 = await rejectsCode(() => A.generateDepreciation(s, "2026-01"), "depreciation_run_stale");
+    assert.equal(stale2.details.assets[0].expectedAmount, 0);
+
+    // 按指引删除旧计提后：同一期间不再被写回错误凭证，检查回到 ok。
+    A.unpostVoucher(s, jan.voucher.id);
+    A.deleteVoucher(s, jan.voucher.id);
+    const after = A.generateDepreciation(s, "2026-01");
+    assert.equal(after.voucher, null, "删除旧凭证后不得再生成「卡片当时还不存在」的计提");
+    assert.equal(after.skipped[0].status, "not_existed");
+    assert.equal(A.listDepreciationRuns(s, { period: "2026-01" }).length, 0);
+    assert.equal(stepOf(A.periodEndCheck(s, "2026-01"), "depreciation").status, "ok");
+    // 正确适用期（二月）照常计提：1 月不再入账，分期表按起提期间序号继续。
+    assert.equal(A.generateDepreciation(s, "2026-02").voucher.total_debit, 10);
+    // 起提期间早于取得期间本身是矛盾登记：取得后按分期表序号继续，寿命外仍未提足必须如实报 life_expired，
+    // 不能靠规则抹平（修法：反过账 + 删除旧 run → 把 start_period 改到 ≥ acquired_period → 重新计提）。
+    assert.equal(stepOf(A.periodEndCheck(s, "2026-12"), "depreciation").details.cards[0].status, "life_expired");
   });
 
   // ================================================================ 7. 迁移 v3 → v4
