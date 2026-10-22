@@ -1,11 +1,11 @@
 # LOCAL-08 交接
 
 - 任务单：[tasks/LOCAL-08](../tasks/LOCAL-08.md) · 契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)
-- 一句话：纯策略模块已由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace`，merge / main `b42bae9`）；本阶段在分支 `codex/huxiaoyang-code/local-08-adapter` 上新增**普通工具适配层**（真实临时库调用验收，19/19）、**MCP 出站信封校验**（16/16）与策略模块的 DTO spec / 无引用摘要出口（34/34），**已审源码 head `ba5d601`**。管理者实跑三层均 exit 0；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于原三套测试共 69 个用例**），transport 最后副本一致性复核亦通过。当前**已提交 / 已推送，[PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，尚无 merge SHA**；文档核对后按已授权流程合并。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口归 LOCAL-02（#47），Issue #44 保持 OPEN。
+- 一句话：纯策略模块已由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace`，merge / main `b42bae9`）；本阶段在分支 `codex/huxiaoyang-code/local-08-adapter` 上新增**普通工具适配层**、**MCP 出站信封校验**与策略模块的 DTO spec / 无引用摘要出口，**已审源码 head `ba5d601`**。管理者实跑三层均 exit 0；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于三套测试用例总数**）。LOCAL-02 兼容增量后本轮三层为策略 **35/35**、适配层 **20/20**、transport **17/17**（原 34/19/16 项含义保留），新增 `period_end_check` 只读 / `asset_update` 写与固定错误映射。当前**已提交 / 已推送，[PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，尚无 merge SHA**；文档核对后按已授权流程合并。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口归 LOCAL-02（#47），Issue #44 保持 OPEN。
 
 ## 1. 基本信息
 
-- 任务 ID / 状态：LOCAL-08 / **策略模块已合并**；适配层与 transport 已实现、已提交并推送，PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，等待文档核对后合并；仍**未挂载**、尚无 merge SHA；HTTP / Agent / MCP / CLI 未接线，Issue #44 保持 OPEN
+- 任务 ID / 状态：LOCAL-08 / **策略模块已合并**；适配层与 transport 已实现、已提交并推送，LOCAL-02 兼容增量已在现有可测试合约内补齐（策略 35/35、适配层 20/20、transport 17/17，均 exit 0）；PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，仍**未挂载**、尚无 merge SHA；HTTP / Agent / MCP / CLI 未接线，Issue #44 保持 OPEN
 - 关联 Issue：**#44**（本任务，保持 OPEN）；共享入口现归 **LOCAL-02（Issue #47，所有权未释放）**
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`
 - 执行员工与显式模型：本机 pi，主 / 回退均 `tokenhub/deepseek-v4.1-flash`（未切换、未启用子 agent）
@@ -50,11 +50,11 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
 | # | 文件 | 说明 |
 |---|---|---|
 | 1 | `06-workbench/server/finance-output-policy.mjs` | 扩普通工具 spec、无引用摘要出口、枚举出口、错误码、DAG 遍历修正；review5 导出 `PROJECTION_NUMBER_LIMIT`、`reconciles` 必需布尔 |
-| 2 | `06-workbench/test/finance-output-policy.test.mjs` | 32 → 34 项（旧 32 + review5 2；旧断言含义未削弱） |
+| 2 | `06-workbench/test/finance-output-policy.test.mjs` | 34 → 35 项（旧 34 + LOCAL-02 兼容 1；旧断言含义未削弱） |
 | 3 | `06-workbench/server/finance-model-adapter.mjs` | 新增：普通工具 → 模型信封适配层（review5 补上下文必需期间 / 可表示 ID / 真实 `projectionDropped`） |
-| 4 | `06-workbench/test/finance-model-adapter.test.mjs` | 新增：真实临时库 + 真实 `callAgentTool` 验收（17 → 19 项；含 review5 F1/F2/F3） |
+| 4 | `06-workbench/test/finance-model-adapter.test.mjs` | 新增：真实临时库 + 真实 `callAgentTool` 验收（19 → 20 项；新增 LOCAL-02 兼容回归） |
 | 5 | `05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` | 新增：纯出站信封校验 / 固定错误转换（review1 内置固定登记语义） |
-| 6 | `05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 新增：独立测试（15 → 16 项；含 review5 ID 可表示性边界） |
+| 6 | `05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 新增：独立测试（16 → 17 项；新增 LOCAL-02 兼容回归） |
 | 7 | `docs/FINANCE-OUTPUT-BOUNDARY.md` | 契约同步 |
 | 8 | `docs/tasks/LOCAL-08.md` | 任务单同步 |
 | 9 | `docs/handoffs/LOCAL-08.md` | 本文件 |
@@ -67,7 +67,7 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
 
 - **适配层（`finance-model-adapter.mjs`）**：
   - 注入 `executeRaw(name, args)`；不 import `agent-tools.mjs`；不复制业务计算 / DB / 输入业务校验 / 事务。
-  - `PLAIN_MODEL_TOOLS` 把全部普通工具分成 `static`（`finance_query_catalog` / `update_plan`）/ `context`（`account_context` / `finance_context_resolve`）/ `node_query`（`finance_query`）/ `query`（6 个）/ `batch_query`（`book_import_batch`）/ `write`（10 个）/ `create`（3 个）；`UNIMPLEMENTED_MODEL_TOOLS` 固定未实现清单；`tax_*` 只做**精确拒绝**（`model_tool_tax_excluded`），前缀不是放行规则。以上未知 / 未实现 / 税务均**不执行** `executeRaw`。
+  - `PLAIN_MODEL_TOOLS` 把全部普通工具分成 `static`（`finance_query_catalog` / `update_plan`）/ `context`（`account_context` / `finance_context_resolve`）/ `node_query`（`finance_query`）/ `query`（7 个，含 `period_end_check`）/ `batch_query`（`book_import_batch`）/ `write`（11 个，含 `asset_update`）/ `create`（3 个）；`UNIMPLEMENTED_MODEL_TOOLS` 固定未实现清单；`tax_*` 只做**精确拒绝**（`model_tool_tax_excluded`），前缀不是放行规则。以上未知 / 未实现 / 税务均**不执行** `executeRaw`。
   - `finance_query`：operation = `finance_query:<nodeId>`（nodeId 先校验登记表），只把真实 `data` 交给 spec；**每个 node 先做必需字段形状检查**（利润表 `current` / `ytd` 全部摘要字段、资产表 `assets`/`liabilities`/`totals` 数值等），否则 `model_result_invalid`，避免 wrapper / 变形 DTO 投影出全 0；非空投影兜底检查再建引用（`summarizeQueryResult` 先算一次，空即失败，不建引用）。policy 摘要对必需数值字段 / canonical 行同样严格，缺字段不再用 0 补齐。
   - **参数快照**：`callModelTool` 在任何 `await` 前深拷贝**只含自有 data 属性**的参数快照（不执行 getter、不跟随原型、拒绝循环 / 访问器 / 别名冲突 / 超深超量），预验与 `executeRaw` 使用同一份规范化 `accountSetId`；嵌套 `payload` / `entries` 也固定。调用方在异步挂起期间改 setId / 嵌套值不再串账。
   - **查询回显校验**：普通查询与 finance_query 结果若回显另一个账套，回 `model_scope_mismatch` 且不建引用。
@@ -105,9 +105,9 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
 
 | 套件 | 命令 / 工作目录 | 结果 |
 |---|---|---|
-| 策略模块 | `node test/finance-output-policy.test.mjs` / `06-workbench` | `34/34 passed`，exit 0（review5 后） |
-| 适配层 | `node test/finance-model-adapter.test.mjs` / `06-workbench` | `19/19 passed`，exit 0（review5 后） |
-| transport | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` / 仓库根 | `16/16 passed`，exit 0（review5 后；review3 时点为 14/14） |
+| 策略模块 | `node test/finance-output-policy.test.mjs` / `06-workbench` | `35/35 passed`，exit 0（LOCAL-02 兼容增量后；原 34 项含义保留） |
+| 适配层 | `node test/finance-model-adapter.test.mjs` / `06-workbench` | `20/20 passed`，exit 0（LOCAL-02 兼容增量后；原 19 项含义保留） |
+| transport | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` / 仓库根 | `17/17 passed`，exit 0（LOCAL-02 兼容增量后；原 16 项含义保留） |
 | 领域回归 | `node test/accounting-guards.test.mjs` / `06-workbench` | `23/23 通过`，exit 0 |
 | 领域回归 | `node test/accounting-derived.test.mjs` / `06-workbench` | `31/31 通过`，exit 0 |
 | 领域回归 | `node test/import-incremental.test.mjs` / `06-workbench` | `49/49 通过`，exit 0 |
@@ -115,7 +115,16 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
 
 - 适配层测试隔离：**先**建全新临时 `WORKBENCH_DATA_DIR`，**再**动态 import 真实 `accounting.mjs` / `agent-tools.mjs`；注入真实 `callAgentTool` 实际执行；3 个基础账套 + 建账类工具新建账套；合成敏感标记覆盖企业名 / 科目名 / 科目编码 / 摘要 / 往来 / 人员 / 资产名 / 源路径 / 企业身份 / 批次 ID / 来源系统；断言所有模型返回 / 转换错误 / 捕获日志无标记；结束删除临时目录。
 - 未运行：完整 `scripts/test-all.mjs`（新套件**未登记**进该共享文件，属 LOCAL-02）。
-- 管理者实跑（事实）：策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于原三套测试共 69 个用例**）；transport 最后副本一致性复核通过。
+
+### 6.1 LOCAL-02 兼容增量（本轮新增）
+
+- `period_end_check` 登记只读 `query/account_set`：形状只要求 `ready` / 固定步骤 id / 状态 / blocking；投影只含 `period` / `ready` / 步骤状态计数 / blocked 步骤 id / 阻塞计数 / 固定阻塞码，原始标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注不进入模型通道；未知值 fail closed。
+- `asset_update` 登记写 `write/account_set`：显式写调用才执行，成功必须真实 `id` 才 `applied:true`，失败保留 `applied:"unknown"` + `needsLocalReview:true`；投影最小白名单不含名称 / `ledger_note` / 科目 / 备注。
+- 新领域错误与 `period_end_check_failed` 在 policy / transport 两层均有固定 code → category 映射，不再落 `unknown`。
+- 真实临时库验收：资产原值 1200、取得 / 起提 2026-02、借贷平衡购入凭证、真实计提 95，保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路；`asset_update` 正例 + `acquired_period` 非法负例；自由文本注入不泄漏。
+- 定向输出：策略 **35/35**、适配层 **20/20**、transport **17/17**，均 exit 0；原 34 / 19 / 16 项含义未削弱。完整 `npm test` **55/55 套 exit 0**，Office **21/21**、真实 **11 PDF** 几何通过（设 `REPORT_OFFICE_PYTHON`；日志在本 worktree 忽略目录 `.agent-runs/`）。
+- 边界保持：错误清洗 / 参数快照 / 引用绑定与失效 / 预算 / 写后降级 / 并发隔离未改；**未挂真实 HTTP / Agent / MCP / CLI 入口**。状态：未提交 / 未建 PR，待 root 最终增量独审 / PR。
+- 管理者实跑（事实）：策略 **35/35**、适配层 **20/20**、transport **17/17**，均 exit 0（LOCAL-02 兼容后；原 34/19/16 项含义保留）；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于三套测试用例总数**）；transport 最后副本一致性复核通过。
 - review1：F1–F5 均已真实回归变红到绿；review3：F1–F3 定向回归（transport 14/14、适配层 17/17、策略 32/32）；review4：transport 改为「快照→校验同一快照→只返回它」并新增可变反射一致性回归（旧顺序实跑 `14/15` 变红，修正后 `15/15`；适配层 17/17、策略 32/32）；review5：上下文必需期间 / 可表示 ID 与现金流 `reconciles` 必需布尔均新增回归（策略 34/34、适配层 19/19、transport 16/16）。以上四轮均已纳入已审 head `ba5d601`，旧断言一块未删。
 
 ## 7. 真实数据边界
@@ -140,7 +149,7 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
   1. **共享文件接线**：`agent-tools.mjs` 改走适配层、`server.mjs` 错误分支改安全投影、MCP `backend.mjs` / `server.mjs` 接 `finance-model-transport`、本机回环读取入口；
   2. 把 3 个套件登记进 `06-workbench/scripts/test-all.mjs`；
   3. 真实 HTTP → Agent → 模型信封不含原文 + 本机通道可取原文的端到端集成测试；
-  4. **LOCAL-02 合并后的新期末 / 资产补项工具**：工具名与 DTO 未稳定，本阶段**不写占位 spec**（未登记 = `model_tool_unknown`，不会误执行）；待其合并、root 更新基线后按真实 DTO 补映射 + spec + 形状检查 + 测试；
+  4. **LOCAL-02 新期末 / 资产补项工具（已在现有可测试边界补齐，未接线）**：`period_end_check` 只读、`asset_update` 写、资产补项最小白名单投影、新错误码固定映射均已在 adapter / transport 合约内实现并通过定向测试；真实 HTTP / Agent / MCP 入口仍未接线，待共享入口移交后做端到端。
   5. **PR #57 待合并**：最终独审（`review_output08_final`，未参与实现）已关闭原 3 项 P2、独立探针 57/57 通过，管理者三层实跑 exit 0；PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) **已 OPEN 并 attach**，按已授权流程待本次文档核对后合并；**尚无 merge SHA，不写已合并**。
 - 风险 / 阻塞：
   - 未接线前**本契约不生效**，当前模型入口仍原样返回企业名 / 科目名 / 凭证行；
@@ -149,7 +158,7 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
   - 预算（256 refs / 单值 20 万节点 / 4 MiB / 累计 100 万节点 / 64 MiB / 15 分钟）是本地策略；真实大账套可能在单值字节或节点上限碰顶，接线时需用真实量级校核并记录调整依据，**不得默默调大后当成已验收**；
   - 写后降级会丢引用（`localRef:null`），本机需自行查证时只能靠 `accountSetId` + 操作原结果重建；
   - transport 的 operation / tool / nodeId / 错误码 / 目录是**模块内置固定登记语义**；调用方另传登记表只能进一步收紧，不传也不会退化成只校验形状。接线时仍建议用 `PLAIN_MODEL_TOOLS` + `FINANCE_QUERY_AVAILABLE`（含未实现 node）交叉核对，防止两层登记漂移。
-- 下一部分输入：读 [FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md) §9 / §10 / §11 与任务单 §4；**先取 LOCAL-02 的共享文件所有权确认**，再按 §9 顺序接线。
+- 下一部分输入：读 [FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md) §9 / §10 / §11 / §13；**先取 LOCAL-02 的共享文件所有权确认**，再按 §9 顺序接线。LOCAL-02 兼容增量已在现有可测试合约内补齐，但**未挂真实入口**，不得写成已接线 / 已端到端验收。
 - 回退：`revert` PR（禁止重写 main 历史）；适配层与 transport 未被引用，回退对既有行为零影响。
 
 ## 10. 进程 / 会话 / 日志

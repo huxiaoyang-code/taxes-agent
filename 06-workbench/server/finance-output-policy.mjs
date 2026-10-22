@@ -179,6 +179,24 @@ const ASSET_KIND_CHOICES = Object.freeze(["fixed", "intangible"]);
 const VOUCHER_STATUS_CHOICES = Object.freeze(["draft", "posted"]);
 const PERIOD_STATUS_CHOICES = Object.freeze(["open", "closed"]);
 const ASSET_KIND_TOKENS = dict({ fixed: "fixed", intangible: "intangible" });
+// LOCAL-02 资产补项字段的受控值域：只投影业务必需的已登记 token。
+const ASSET_LEDGER_STATUS_TOKENS = dict({ booked: "booked", pending_purchase_voucher: "pending_purchase_voucher" });
+const ASSET_ORIGIN_TOKENS = dict({ purchase: "purchase", supplement: "supplement", import: "import" });
+// 期末检查的固定步骤 / 固定阻塞码：未知值一律 fail closed，不把任意文本当 token。
+const PERIOD_END_STATUS_CHOICES = Object.freeze(["ok", "blocked", "not_applicable"]);
+const PERIOD_END_STEP_IDS = Object.freeze([
+  "draft_vouchers", "trial_balance", "depreciation", "asset_reconciliation",
+  "profit_carry_forward", "year_end_carry_forward", "period_sequence",
+]);
+const PERIOD_END_BLOCKING_CODES = Object.freeze([
+  "period_has_draft_vouchers", "period_unbalanced", "depreciation_run_stale",
+  "asset_ledger_pending", "depreciation_missing", "depreciation_draft_exists",
+  "depreciation_life_expired_underprovided", "asset_missing_card", "asset_cost_mismatch",
+  "asset_accumulated_mismatch", "asset_acquired_period_missing", "asset_purchase_voucher_pending",
+  "profit_not_carried_forward", "profit_carry_stale", "year_end_not_carried",
+  "previous_period_open", "previous_period_depreciation_pending",
+  "later_period_closed", "carryforward_stale",
+]);
 // 与 import-incremental.mjs 的 VOUCHER_STATE 一一对应；"inconsistent" 是批次审计里既有的复核标记。
 const TRACE_STATE_TOKENS = dict({
   ok: "ok", inconsistent: "inconsistent", missing: "missing", unposted: "unposted",
@@ -718,6 +736,46 @@ const QUERY_SPECS = dict({
   ledger_query: ledgerSummary,
   asset_list: assetListSummary,
   book_import_batch: batchAuditSummary,
+  // 期末检查只读：只投影步骤状态 / 计数 / 固定阻塞码，不投影标题、原因、message、details、
+  // 资产名 / 科目名 / 备注等任意用户文本。
+  period_end_check: (value) => {
+    const check = at(value);
+    const ready = requireBoolean(check, "ready");
+    const steps = requireArray(check, "steps");
+    let ok = 0, blocked = 0, notApplicable = 0;
+    const stepIds = [];
+    const stepStatuses = [];
+    const blockedStepIds = [];
+    for (let i = 0; i < listLen(steps); i++) {
+      const step = at(prop(steps, i));
+      const id = requireChoice(step, "id", PERIOD_END_STEP_IDS);
+      const status = requireChoice(step, "status", PERIOD_END_STATUS_CHOICES);
+      stepIds.push(id);
+      stepStatuses.push(status);
+      if (status === "ok") ok++;
+      else if (status === "blocked") { blocked++; blockedStepIds.push(id); }
+      else notApplicable++;
+    }
+    const blocking = requireArray(check, "blocking");
+    const codes = [];
+    for (let i = 0; i < listLen(blocking); i++) {
+      // 只读固定 code；message / title / details 等自由文本从不进入投影。
+      codes.push(requireChoice(at(prop(blocking, i)), "code", PERIOD_END_BLOCKING_CODES));
+    }
+    return {
+      period: requirePeriod(check, "period"),
+      ready,
+      stepCount: listLen(steps),
+      stepIds,
+      stepStatuses,
+      okStepCount: ok,
+      blockedStepCount: blocked,
+      notApplicableStepCount: notApplicable,
+      blockedStepIds: [...new Set(blockedStepIds)],
+      blockingCount: listLen(blocking),
+      blockingCodes: [...new Set(codes)],
+    };
+  },
 });
 
 // ---------------------------------------------------------------- 写动作 projection 规格
@@ -812,6 +870,32 @@ const WRITE_SPECS = dict({
         startPeriod: periodOf(v, "start_period"),
         usefulLifeMonths: num(v, "useful_life_months"),
         originalCost: money(num(v, "original_cost")),
+      };
+    },
+    evidence: (value) => (int(at(value), "id") !== undefined
+      ? { applied: true }
+      : { applied: "unknown", reason: "unverified_result" }),
+  },
+  // 资产卡片维护（LOCAL-02 新工具）：写动作，结果只投影业务必需的新增字段；
+  // 名称 / ledger_note / 科目编码等自由文本与实现细节不进入模型通道。
+  asset_update: {
+    summary: (value) => {
+      const v = at(value);
+      const acquired = prop(v, "acquired_period");
+      return {
+        assetId: requirePositiveInt(v, "id"),
+        kind: requireChoice(v, "kind", ASSET_KIND_CHOICES),
+        startPeriod: requirePeriod(v, "start_period"),
+        ...(acquired === null || acquired === undefined || acquired === ""
+          ? {}
+          : { acquiredPeriod: requirePeriod(v, "acquired_period") }),
+        originalCost: money(requireNum(v, "original_cost")),
+        usefulLifeMonths: requireNum(v, "useful_life_months"),
+        openingAccumulated: money(requireNum(v, "opening_accumulated")),
+        accumulated: money(requireNum(v, "accumulated")),
+        remaining: money(requireNum(v, "remaining")),
+        ledgerStatus: requireEnumToken(ASSET_LEDGER_STATUS_TOKENS, v, "ledger_status"),
+        origin: requireEnumToken(ASSET_ORIGIN_TOKENS, v, "origin"),
       };
     },
     evidence: (value) => (int(at(value), "id") !== undefined
@@ -1066,7 +1150,39 @@ const ERROR_CODES = dict({
   opening_amount_invalid: "opening",
   original_cost_invalid: "asset",
   useful_life_months_invalid: "asset",
+  useful_life_months_out_of_range: "asset",
   residual_rate_invalid: "asset",
+  assetId_required: "asset",
+  asset_not_found: "asset",
+  acquired_period_invalid: "asset",
+  opening_accumulated_invalid: "asset",
+  opening_accumulated_exceeds_depreciable: "asset",
+  ledger_status_invalid: "asset",
+  ledger_note_required: "asset",
+  asset_origin_invalid: "asset",
+  asset_card_affects_closed_period: "asset",
+  asset_card_locked_by_posted_runs: "asset",
+  asset_acquired_period_missing: "asset",
+  asset_purchase_voucher_pending: "asset",
+  asset_ledger_pending: "asset",
+  asset_missing_card: "asset",
+  asset_cost_mismatch: "asset",
+  asset_accumulated_mismatch: "asset",
+  period_end_check_failed: "period_end",
+  later_period_closed: "period_end",
+  later_year_end_carryforward_depends_on_period: "period_end",
+  later_profit_carryforward_depends_on_period: "period_end",
+  later_depreciation_depends_on_period: "period_end",
+  carryforward_stale: "period_end",
+  profit_not_carried_forward: "period_end",
+  profit_carry_stale: "period_end",
+  year_end_not_carried: "period_end",
+  previous_period_open: "period_end",
+  previous_period_depreciation_pending: "period_end",
+  depreciation_missing: "depreciation",
+  depreciation_run_stale: "depreciation",
+  depreciation_life_expired_underprovided: "depreciation",
+  depreciation_global_over_depreciable: "depreciation",
   voucher_number_unplanned: "voucher",
   depreciation_exceeds_depreciable: "depreciation",
   unknown_tool: "tool",

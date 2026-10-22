@@ -254,6 +254,8 @@ export const PLAIN_MODEL_TOOLS = Object.freeze({
   period_list: tool("period_list", "query", "account_set"),
   ledger_query: tool("ledger_query", "query", "account_set"),
   asset_list: tool("asset_list", "query", "account_set"),
+  // LOCAL-02 新增只读期末检查：与封账前置同一规则，输出仅经固定白名单投影。
+  period_end_check: tool("period_end_check", "query", "account_set"),
   book_import_batch: tool("book_import_batch", "batch_query", "batch"),
   voucher_create: tool("voucher_create", "write", "account_set"),
   voucher_post: tool("voucher_post", "write", "account_set"),
@@ -263,6 +265,9 @@ export const PLAIN_MODEL_TOOLS = Object.freeze({
   opening_balance_set: tool("opening_balance_set", "write", "account_set"),
   account_create: tool("account_create", "write", "account_set"),
   asset_create: tool("asset_create", "write", "account_set"),
+  // LOCAL-02 新增资产维护：明确归为写动作，只有显式写调用才执行；
+  // 未知 / 只读工具不会因名称相似被当成写执行。
+  asset_update: tool("asset_update", "write", "account_set"),
   depreciation_run: tool("depreciation_run", "write", "account_set"),
   carry_forward_profit: tool("carry_forward_profit", "write", "account_set"),
   account_set_create: tool("account_set_create", "create", "result"),
@@ -374,6 +379,19 @@ const hasLedgerShape = (value) => isRecord(value) && Array.isArray(prop(value, "
   && hasEntriesShape(prop(value, "items")) && isRecord(prop(value, "opening"))
   && hasNumber(prop(value, "opening"), "debit") && hasNumber(prop(value, "opening"), "credit")
   && hasText(value, "direction") && hasText(value, "period");
+// 期末检查只读 DTO 的固定步骤 / 状态：未知步骤或状态显式失败，不把任意文本当 token。
+const PERIOD_END_STEP_IDS = new Set([
+  "draft_vouchers", "trial_balance", "depreciation", "asset_reconciliation",
+  "profit_carry_forward", "year_end_carry_forward", "period_sequence",
+]);
+const PERIOD_END_STATUS_VALUES = new Set(["ok", "blocked", "not_applicable"]);
+const hasPeriodEndCheckShape = (value) => isRecord(value) && hasBoolean(value, "ready")
+  && hasText(value, "period") && Array.isArray(prop(value, "steps"))
+  && prop(value, "steps").every((step) => isRecord(step) && hasText(step, "id")
+    && PERIOD_END_STEP_IDS.has(prop(step, "id")) && hasText(step, "status")
+    && PERIOD_END_STATUS_VALUES.has(prop(step, "status")))
+  && Array.isArray(prop(value, "blocking"))
+  && prop(value, "blocking").every((item) => isRecord(item) && hasText(item, "code"));
 
 const PLAIN_QUERY_SHAPES = Object.freeze({
   voucher_check: (value) => typeof prop(value, "ok") === "boolean"
@@ -384,6 +402,7 @@ const PLAIN_QUERY_SHAPES = Object.freeze({
   period_list: (value) => Array.isArray(prop(value, "items"))
     && prop(value, "items").every((item) => isRecord(item) && hasText(item, "status")),
   ledger_query: hasLedgerShape,
+  period_end_check: hasPeriodEndCheckShape,
   asset_list: (value) => Array.isArray(value) && value.every((item) => isRecord(item)
     && hasText(item, "kind") && hasNumber(item, "original_cost")
     && hasNumber(item, "accumulated") && hasNumber(item, "remaining")),

@@ -2,7 +2,7 @@
 
 - 状态分四段，**不要混读**：
   1. **纯策略模块已合并**：`06-workbench/server/finance-output-policy.mjs` 经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；
-  2. **适配层 + 出站信封校验已实现、已提交并推送，PR 待合并**：`06-workbench/server/finance-model-adapter.mjs` + 真实（临时库）调用验收 `06-workbench/test/finance-model-adapter.test.mjs`；`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`。**已审源码 head `ba5d60115e52fa13805841d9abe07006b74b2c9c`**；管理者实跑策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0。最终独审 `review_output08_final` **未参与实现**，原 3 项 P2 全部关闭，独立探针 **57/57** 通过（**57 是独审探针项数，不等于原三套测试共 69 个用例**），此前 transport 最后副本一致性复核亦通过；
+  2. **适配层 + 出站信封校验已实现、已提交并推送，PR 待合并**：`06-workbench/server/finance-model-adapter.mjs` + 真实（临时库）调用验收 `06-workbench/test/finance-model-adapter.test.mjs`；`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`。**已审源码 head `ba5d60115e52fa13805841d9abe07006b74b2c9c`**；原三层为策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0；LOCAL-02 兼容增量后本轮为策略 **35/35**、适配层 **20/20**、transport **17/17**（原 34/19/16 项含义保留）。最终独审 `review_output08_final` **未参与实现**，原 3 项 P2 全部关闭，独立探针 **57/57** 通过（**57 是独审探针项数，不等于三套测试用例总数**），此前 transport 最后副本一致性复核亦通过；LOCAL-02 兼容增量仍待 root 最终增量独审 / PR；
   3. **HTTP / Agent / MCP / CLI 仍全部未接线**：`agent-tools.mjs`、`server.mjs`、MCP `backend/server/tools`、`scripts/test-all.mjs` 一律未改（共享入口归 LOCAL-02 / Issue #47）。因此**当前真实模型入口仍原样返回业务原文**；本契约尚未在真实入口生效，Issue #44 **保持 OPEN**。模块 / 适配层通过 ≠ 数据边界已生效；
   4. **PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 已 OPEN 并 attach**：从 main `98977e04bd24aa293074021802191814f8c2a1d2` 合入形成 head `e8b298e42224e2e1b884f7827e4c366881d22fc9`——该次合入仅添加 PR #55 的六个 backup 文件，本包 9 路径与 `ba5d601` 逐文件完全不变。当前**已提交 / 已推送，等待文档核对后按已授权流程合并**；**尚无 merge SHA，不预报已合并**。本次文档提交会产生新 head，管理者合并前再核对 6 个源码 / 测试文件未变。
 - **历史（review1 / review3 / review4 / review5）**：四轮定向返工当时均为「已实现并自测通过、未提交 / 未推送 / 未独审」，现均已纳入已审 head `ba5d601` 并通过最终独审；各轮问题与修复证据保留在 §14.1–§14.4，按其时点阅读，不再代表当前提交 / 审查状态。
@@ -283,29 +283,32 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 ## 12. 未实现 / 未接线（明示）
 
-- 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`）；本阶段与 review1 / review3 / review5 的回归叠加后为 **34/34、exit 0**（既有 28 + review1 3 项含义均保留）。
-- 适配层：**已实现 + 临时库真实调用验收 19/19、exit 0**（含 review5 上下文 / 现金流回归）；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
-- transport：**已实现 + 独立测试 16/16、exit 0**（含 review5 ID 可表示性边界）；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
+- 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`）；review5 后为 **34/34、exit 0**，LOCAL-02 兼容整合后补新工具 spec 为 **35/35、exit 0**（既有 34 项含义保留）。
+- 适配层：**已实现 + 临时库真实调用验收 20/20、exit 0**（含 review5 与 LOCAL-02 `period_end_check` / `asset_update` 回归）；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
+- transport：**已实现 + 独立测试 17/17、exit 0**（含 review5 与 LOCAL-02 新工具 / 新错误码回归）；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
 - 因此：**当前真实模型入口仍原样返回原文**，本契约尚未在真实入口生效；Issue #44 保持 OPEN。
 - 未做：磁盘持久化引用、多用户 / 权限体系、按用户隔离、审计落库、批量写队列、`localRead` 的 MCP / CLI 工具。
 - 未验收：真实 HTTP / Agent / MCP / CLI 端到端；真实账套（禁止）；跨重启（设计上失效）。
 - **LOCAL-02 名下的新期末 / 资产补项工具不在本包实现范围**：其入口名与 DTO 尚未稳定，适配层不为它们写占位 spec，也不据草稿伪造实现；待 LOCAL-02 合并后由 root 更新基线再补（见 §13）。
 
-## 13. 待 LOCAL-02 合并后补的入口（明确登记，不预报）
+## 13. LOCAL-02 新期末 / 资产补项工具的兼容补齐（已实现，未挂共享入口）
 
-- 期末 / 资产补项相关的**新工具名与 DTO**（`agent-tools.mjs` 归 LOCAL-02）在合并前不确定，因此：
-  - `PLAIN_MODEL_TOOLS` 暂不登记它们（未登记 → `model_tool_unknown`，不会误执行）；
-  - 不为它们写投影 spec（`SUPPORTED_OPERATIONS` 不扩张）；
-  - 合并后按真实 DTO 一次补：工具名 → operation 映射 + spec + 形状检查 + 测试，走独立小 PR。
-- 共享文件接线（`agent-tools.mjs` / `server.mjs` / MCP / `scripts/test-all.mjs`）同样待 LOCAL-02 释放所有权后按 §9 推进。
+LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配层 / transport 合约内**按真实 DTO 补齐，不依赖尚未移交的 HTTP / Agent / MCP 入口：
+
+- `period_end_check` 登记为**只读 query**（`scope: account_set`）：形状只要求 `ready` / 固定步骤 id 与状态 / `blocking`；模型投影只含期间、`ready`、步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码。标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入投影（未知步骤 / 状态 / 阻塞码 fail closed）。
+- `asset_update` 登记为**写动作**（`category: write`、`scope: account_set`、`accountSetIdSource: argument`）：只有显式写调用才执行，未知 / 只读工具不会因名称相似被当成写；成功必须真实结果含卡片 `id` 才给 `applied:true`，失败保留 `applied:"unknown"` / `needsLocalReview:true`，不伪造成功。
+- `asset_update` 投影按业务所需最小白名单：`assetId` / `kind` / `startPeriod` / `acquiredPeriod` / `originalCost` / `usefulLifeMonths` / `openingAccumulated` / `accumulated` / `remaining` / `ledgerStatus` / `origin`；**不投影**名称、`ledger_note`、科目编码 / 账户、备注等自由文本。
+- 新期间 / 资产校验错误与 `period_end_check_failed` 在 policy 与 transport 两层都有固定 code → category 映射（如 `acquired_period_invalid → asset`、`asset_card_affects_closed_period → asset`、`period_end_check_failed → period_end`、`profit_not_carried_forward → period_end`、`depreciation_run_stale → depreciation`），不再落到 `unknown` 掩盖可指导动作的错误；错误仍只回声已登记 code，不带 `message` / `details` / `stack`。
+- 原有边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套失效、4 MiB / 64 MiB / 节点预算、写后降级与并发隔离均保持原语义。
+- **仍未做**：把适配器接到 `agent-tools.mjs` / `server.mjs` / MCP `backend.mjs` / `server.mjs` / CLI；`scripts/test-all.mjs` 登记仍归 LOCAL-02 共享入口协调；真实 HTTP / MCP 端到端与真实账套未验收。
 
 ## 14. 验证记录（本阶段实际发生）
 
 | 套件 | 命令（仓库相对） | 结果 |
 |---|---|---|
-| 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 34/34 passed，exit 0（review5 后本轮实跑） |
-| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 19/19 passed，exit 0（review5 后本轮实跑） |
-| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 16/16 passed，exit 0（review5 后本轮实跑） |
+| 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 35/35 passed，exit 0（LOCAL-02 兼容整合后本轮实跑；原 34 项含义保留） |
+| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 20/20 passed，exit 0（LOCAL-02 兼容整合后本轮实跑；原 19 项含义保留） |
+| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 17/17 passed，exit 0（LOCAL-02 兼容整合后本轮实跑；原 16 项含义保留） |
 | 领域回归 | `cd 06-workbench && node test/accounting-guards.test.mjs` | 23/23 通过，exit 0（上一轮记录，review5 未重跑） |
 | 领域回归 | `cd 06-workbench && node test/accounting-derived.test.mjs` | 31/31 通过，exit 0（上一轮记录，review5 未重跑） |
 | 领域回归 | `cd 06-workbench && node test/import-incremental.test.mjs` | 49/49 通过，exit 0（上一轮记录，review5 未重跑） |
@@ -360,9 +363,18 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | 项 | 证据 |
 |---|---|
 | 已审源码 head | `ba5d60115e52fa13805841d9abe07006b74b2c9c` |
-| 管理者实跑 | 策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0 |
-| 最终独审 | `review_output08_final` 未参与实现；原 3 项 P2 全部关闭；独立探针 **57/57** 通过（**57 为独审探针项数，不等于原三套测试共 69 个用例**） |
+| 管理者实跑 | 策略 **35/35**、适配层 **20/20**、transport **17/17**，均 exit 0（LOCAL-02 兼容整合后） |
+| 最终独审 | `review_output08_final` 未参与实现；原 3 项 P2 全部关闭；独立探针 **57/57** 通过（**57 为独审探针项数，不等于三套测试用例总数**）。LOCAL-02 兼容增量仍需 root 最终增量独审 / PR 复核 |
 | 合入 main 后复核 | 从 main `98977e04bd24aa293074021802191814f8c2a1d2` 合入形成 head `e8b298e42224e2e1b884f7827e4c366881d22fc9`；该次合入仅添加 PR #55 的六个 backup 文件，本包 9 路径与已审 head 逐文件不变 |
 | PR | [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) **OPEN 并 attach**；尚无 merge SHA，不预报已合并 |
 
-仍未包含：共享 HTTP / Agent / MCP / CLI 接线、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、真实 HTTP 端到端与真实账套验收。
+仍未包含：共享 HTTP / Agent / MCP / CLI 接线、`scripts/test-all.mjs` 登记、真实 HTTP 端到端与真实账套验收。
+
+### 14.6 LOCAL-02 兼容增量（本轮新增，未挂共享入口）
+
+- 新增策略 spec：`period_end_check` 只读、`asset_update` 写；`SUPPORTED_OPERATIONS.query/write` 只追加，不改变已登记 operation 的投影语义。
+- 适配层：`PLAIN_MODEL_TOOLS` 登记 `period_end_check → query/account_set`、`asset_update → write/account_set`；`MODEL_TOOL_INVENTORY` 自动纳入，未知工具仍默认拒绝且不执行。
+- transport：固定登记表追加 `period_end_check`（query）与 `asset_update`（write），并补齐新领域错误码与期末检查固定 token / 阻塞码；校验器仍只接受已登记 code，未知值拒绝。
+- 定向验收（实际输出）：策略 **35/35**、适配层 **20/20**、transport **17/17**，均 exit 0。适配层用真实临时库完成资产 `1200` 原值、`2026-02` 取得 / 起提、借贷平衡购入凭证与真实计提，并保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路。
+- 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`）：**55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过（外部 poppler + pdfplumber）。日志在本 worktree 忽略目录 `.agent-runs/`。
+- 未做 / 待 root：真实共享入口接线、真实 HTTP / MCP 端到端、`scripts/test-all.mjs` 登记确认；本轮只证明现有可测试边界与真实 DTO 兼容。

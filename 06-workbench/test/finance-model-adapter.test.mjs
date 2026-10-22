@@ -180,6 +180,7 @@ await test("写：账户 / 期初 / 凭证 / 资产经适配器真实落库，ap
   const asset = await writeOk("asset_create", {
     accountSetId: setA.id, kind: "fixed", name: X.assetName,
     original_cost: 1200, useful_life_months: 12, start_period: "2026-02",
+    acquired_period: "2026-02", opening_accumulated: 0, ledger_status: "booked", origin: "purchase",
   });
   assert.equal(asset.projection.assetId > 0, true);
   assert.deepEqual(
@@ -199,6 +200,7 @@ await test("写：账户 / 期初 / 凭证 / 资产经适配器真实落库，ap
   assert.ok(channel);
   globalThis.__v1Id = v1Id;
   globalThis.__v2Id = v2Id;
+  globalThis.__assetId = asset.projection.assetId;
 });
 
 await test("finance_query：12 个真实 node 逐个投影，金额等于手算常量且不含原文", async () => {
@@ -482,6 +484,18 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   assert.equal(again.error.code, "already_carried_forward");
   assert.equal(again.applied, "unknown");
 
+  // 真实完整资产登记：2026-02 用借贷平衡的购入凭证入账 1200（1601 / 1002），
+  // 卡片取得 / 起提期间同为 2026-02，后续封账前置可真实通过。
+  const assetPurchase = await writeOk("voucher_create", {
+    accountSetId: setA.id, period: "2026-02", summary: X.summary, status: "posted",
+    entries: [
+      { code: "1601", summary: X.counterparty, debit: 1200, credit: 0 },
+      { code: "1002", summary: X.person, debit: 0, credit: 1200 },
+    ],
+  });
+  assert.equal(assetPurchase.projection.totalDebit, 1200);
+  assert.equal(assetPurchase.projection.totalCredit, 1200);
+
   // 折旧：1200 × (1 − 5%) ÷ 12 = 95（手算常量）
   const depreciation = await writeOk("depreciation_run", { accountSetId: setA.id, period: "2026-02" });
   assert.equal(depreciation.projection.runCount, 1);
@@ -537,6 +551,85 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   assert.equal(badAccount.ok, false);
   assert.equal(badAccount.error.code, "code_and_name_required");
   assert.equal(badAccount.applied, "unknown");
+});
+
+await test("LOCAL-02 兼容：period_end_check 只读固定投影 / asset_update 写 / 封账成功与前置拒绝", async () => {
+  const updated = await writeOk("asset_update", {
+    accountSetId: setA.id, assetId: globalThis.__assetId, patch: { ledger_note: X.summary },
+  });
+  assert.equal(updated.projection.assetId, globalThis.__assetId);
+  assert.equal(updated.projection.acquiredPeriod, "2026-02");
+  assert.equal(updated.projection.openingAccumulated, 0);
+  assert.equal(updated.projection.ledgerStatus, "booked");
+  assert.equal(updated.projection.origin, "purchase");
+  assert.equal("name" in updated.projection, false);
+  assert.equal("ledgerNote" in updated.projection, false);
+  assertNoLeak(updated, "asset_update projection");
+  assert.equal(TRANSPORT.validateModelEnvelope(updated, TRANSPORT_REGISTRY).ok, true);
+
+  // 资产新字段校验错误：真实领域错误 → 固定 asset 分类，不降成 unknown。
+  const badUpdate = await callExpectExecutions("asset_update", {
+    accountSetId: setA.id, assetId: globalThis.__assetId, patch: { acquired_period: "2026-13" },
+  }, 1);
+  assert.equal(badUpdate.ok, false);
+  assert.equal(badUpdate.error.code, "acquired_period_invalid");
+  assert.equal(badUpdate.error.category, "asset");
+  assert.equal(badUpdate.applied, "unknown");
+  assert.equal(TRANSPORT.validateModelEnvelope(badUpdate, TRANSPORT_REGISTRY).ok, true);
+
+  const jan = await queryOk("period_end_check", { accountSetId: setA.id, period: "2026-01" });
+  assert.equal(jan.projection.period, "2026-01");
+  assert.equal(jan.projection.ready, true);
+  assert.equal(jan.projection.stepCount, 7);
+  assert.equal(jan.projection.stepIds.length, 7);
+  assert.equal(jan.projection.stepStatuses.length, 7);
+  assert.equal(jan.projection.blockedStepCount, 0);
+  assert.equal(jan.projection.blockingCount, 0);
+  assert.deepEqual(jan.projection.blockingCodes, []);
+  assert.equal(TRANSPORT.validateModelEnvelope(jan, TRANSPORT_REGISTRY).ok, true);
+
+  const feb = await queryOk("period_end_check", { accountSetId: setA.id, period: "2026-02" });
+  assert.equal(feb.projection.ready, false);
+  assert.equal(feb.projection.stepIds.length, 7);
+  assert.equal(feb.projection.stepStatuses.length, 7);
+  assert.ok(feb.projection.blockingCount >= 1);
+  assert.ok(feb.projection.blockingCodes.includes("profit_not_carried_forward"));
+  assert.equal(TRANSPORT.validateModelEnvelope(feb, TRANSPORT_REGISTRY).ok, true);
+
+  // 期末检查原始 DTO 里的标题 / 原因 / blocking message / details 都是自由文本，
+  // 适配层只投影固定步骤 / 状态 / 计数 / 固定码；注入合成原文验证不泄漏。
+  const noisy = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      if (name === "period_end_check") {
+        value.steps[0].title = X.enterpriseA;
+        value.steps[0].reason = X.summary;
+        value.blocking[0].message = X.counterparty;
+        value.blocking[0].details = { assetName: X.assetName, note: X.summary };
+      }
+      return value;
+    },
+  });
+  const noisyCheck = await noisy.callModelTool("period_end_check", { accountSetId: setA.id, period: "2026-02" });
+  assert.equal(noisyCheck.ok, true);
+  assertNoLeak(noisyCheck, "noisy period_end_check");
+  assert.equal(JSON.stringify(noisyCheck.projection).includes("assetName"), false);
+  noisy.policy.dispose();
+
+  // 不满足前置：封账明确失败且给固定 period_end 分类（不是 unknown）。
+  const blockedClose = await callExpectExecutions("period_set_status", {
+    accountSetId: setA.id, period: "2026-02", status: "closed",
+  }, 1);
+  assert.equal(blockedClose.ok, false);
+  assert.equal(blockedClose.error.code, "period_end_check_failed");
+  assert.equal(blockedClose.error.category, "period_end");
+  assert.equal(blockedClose.applied, "unknown");
+  assert.equal(TRANSPORT.validateModelEnvelope(blockedClose, TRANSPORT_REGISTRY).ok, true);
+
+  // 真正封账成功路径：1 月草稿 / 试算 / 计提 / 卡片核对 / 损益结转 / 期间顺序均满足。
+  const closed = await writeOk("period_set_status", { accountSetId: setA.id, period: "2026-01", status: "closed" });
+  assert.deepEqual(closed.projection, { period: "2026-01", status: "closed" });
+  assert.equal(TRANSPORT.validateModelEnvelope(closed, TRANSPORT_REGISTRY).ok, true);
 });
 
 await test("建账类写动作：setId 只能来自真实结果；dry-run / 失败明确未绑定，不造假 ID", async () => {

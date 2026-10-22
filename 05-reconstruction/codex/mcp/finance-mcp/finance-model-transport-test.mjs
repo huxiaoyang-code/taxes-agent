@@ -90,6 +90,40 @@ const fakeExecutor = async (name, args) => {
       get entries() { throw new Error(X.message); },
     };
   }
+  if (name === 'asset_update') {
+    // LOCAL-02 新工具：自由文本（名称 / 备注 / 科目）只留给本机，模型通道只看白名单字段。
+    return {
+      id: 77, account_set_id: 3, kind: 'fixed', name: X.enterprise, ledger_note: X.summary,
+      original_cost: 1200, residual_rate: 0.05, useful_life_months: 12,
+      start_period: '2026-02', acquired_period: '2026-02', opening_accumulated: 0,
+      accumulated: 95, remaining: 1045, ledger_status: 'booked', origin: 'purchase',
+      asset_account: '1601', accum_account: '1602', expense_account: '5602', months_done: 1,
+    };
+  }
+  if (name === 'period_end_check') {
+    const step = (id, status) => ({
+      id, title: X.enterprise, reason: X.summary, status, details: { name: X.enterprise },
+    });
+    return {
+      accountSetId: 3, period: '2026-02', ready: false,
+      steps: [
+        step('draft_vouchers', 'ok'), step('trial_balance', 'ok'), step('depreciation', 'ok'),
+        step('asset_reconciliation', 'ok'), step('profit_carry_forward', 'blocked'),
+        step('year_end_carry_forward', 'not_applicable'), step('period_sequence', 'ok'),
+      ],
+      blocking: [{
+        step: 'profit_carry_forward', title: X.enterprise, code: 'profit_not_carried_forward',
+        message: X.summary, details: { note: X.message },
+      }],
+      missing: [{ step: 'profit_carry_forward', code: 'profit_not_carried_forward', message: X.summary }],
+      rules: { note: X.message },
+    };
+  }
+  if (name === 'period_set_status') {
+    const error = new Error('period_end_check_failed');
+    error.code = 'period_end_check_failed';
+    throw error;
+  }
   if (name === 'legacy_book_import') {
     return {
       dryRun: args?.dryRun !== false,
@@ -128,6 +162,42 @@ await test('有意义的成功信封能通过（不是“总是拒绝”）：�
   assert.equal(contextChecked.ok, true);
   assert.equal(JSON.stringify(contextChecked.envelope.projection).includes(X.enterprise), false);
   assert.deepEqual(contextChecked.envelope.projection.accountSetIds, [3]);
+});
+
+await test('LOCAL-02 新工具：asset_update 写 / period_end_check 只读 / 封账前置拒绝信封都能通过校验', async () => {
+  const updated = await adapter.callModelTool('asset_update', {
+    accountSetId: 3, assetId: 77, patch: { ledger_note: X.summary },
+  });
+  assert.equal(updated.ok, true);
+  assert.equal(updated.operationCategory, 'write');
+  assert.equal(updated.applied, true);
+  assert.equal(updated.projection.assetId, 77);
+  assert.equal(updated.projection.acquiredPeriod, '2026-02');
+  assert.equal(JSON.stringify(updated).includes(X.summary), false);
+
+  const check = await adapter.callModelTool('period_end_check', { accountSetId: 3, period: '2026-02' });
+  assert.equal(check.ok, true);
+  assert.equal(check.operationCategory, 'query');
+  assert.equal(check.scope, 'account_set');
+  assert.equal(check.projection.ready, false);
+  assert.equal(check.projection.stepCount, 7);
+  assert.deepEqual(check.projection.blockingCodes, ['profit_not_carried_forward']);
+  assert.equal(JSON.stringify(check.projection).includes(X.summary), false);
+  assert.equal(JSON.stringify(check.projection).includes(X.enterprise), false);
+
+  const blocked = await adapter.callModelTool('period_set_status', {
+    accountSetId: 3, period: '2026-02', status: 'closed',
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error.code, 'period_end_check_failed');
+  assert.equal(blocked.error.category, 'period_end');
+  assert.equal(blocked.applied, 'unknown');
+
+  for (const [label, envelope] of Object.entries({ updated, check, blocked })) {
+    const checked = validateModelEnvelope(envelope, REGISTRY);
+    assert.equal(checked.ok, true, `${label} 应通过：${checked.ok ? '' : checked.failure.error.code}`);
+    assertNoLeak(checked.envelope, label);
+  }
 });
 
 await test('失败信封（固定错误码）也能通过校验：未知工具 / 税务拒绝 / 未实现 node / 缺账套', async () => {

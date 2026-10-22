@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-02 会计金额、期末完整性与连续期间
 
 - 类型：后端领域（金额 / 计提 / 结转 / 封账 / 反操作守卫）+ 存储迁移 + 本地接线 + 契约文档 + 测试
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，**仅 10 个文档**，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
@@ -242,3 +242,24 @@ PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已合并（mer
 测试：备份套件 **20 / 20 exit 0**；`06-workbench` 下 `npm test` **53 / 53 套 exit 0**（含 Office 真实 PDF
 几何校验；本包领域 / HTTP / MCP 三套也在这次全量内均 exit 0，但本轮未单独重跑计数）。
 本包业务代码本轮未改，因此不声称对本包金额 / 期末逻辑做了新的独立审查。
+
+## 12. LOCAL-08 新工具模型边界兼容增量（本轮）
+
+在**不改本包会计 / DB / 期间业务实现**、不改 LOCAL-08 已有边界的前提下，把本包新增的 `period_end_check` / `asset_update` 按真实 DTO 接入 LOCAL-08 自有的可测试适配层 / transport 合约；**未挂载**共享 HTTP / Agent / MCP / CLI 入口（该共享窗口尚未移交）。
+
+- `period_end_check`：登记只读 `query/account_set`；模型投影只含期间、`ready`、固定步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码。标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入投影；未知步骤 / 状态 / 阻塞码 fail closed。
+- `asset_update`：登记写 `write/account_set`；只有显式写调用才执行，未知 / 只读工具不会因名称相似被当成写。成功必须真实结果含卡片 `id` 才 `applied:true`；失败保留 `applied:"unknown"` / `needsLocalReview:true`。投影最小白名单：`assetId` / `kind` / `startPeriod` / `acquiredPeriod` / `originalCost` / `usefulLifeMonths` / `openingAccumulated` / `accumulated` / `remaining` / `ledgerStatus` / `origin`；不含名称 / `ledger_note` / 科目 / 备注。
+- 新期间 / 资产校验错误与 `period_end_check_failed` 在 policy / transport 两层都有固定 code → category 映射（如 `acquired_period_invalid → asset`、`asset_card_affects_closed_period → asset`、`period_end_check_failed → period_end`、`profit_not_carried_forward → period_end`、`depreciation_run_stale → depreciation`），不再落 `unknown`；错误仍只回声已登记 code。
+- 适配层真实临时库 fixture 改为**真实完整资产登记**：原值 1200、`2026-02` 取得 / 起提、借贷平衡购入凭证（借 1601 / 贷 1002 各 1200）、真实计提 95；保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路；禁止 mock / bypass / 跳过封账保护。
+- 原有边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套、4 MiB / 64 MiB / 节点预算、写后降级、不可变 snapshot 与并发隔离均保持原语义。
+
+测试（本轮实际输出）：
+
+| 套件 | 结果 |
+|---|---|
+| `finance-output-policy` | **35/35**，exit 0（原 34 项含义保留） |
+| `finance-model-adapter` | **20/20**，exit 0（原 19 项含义保留） |
+| `finance-model-transport-test` | **17/17**，exit 0（原 16 项含义保留） |
+| 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`） | **55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过（外部 poppler + pdfplumber） |
+
+范围：本轮跨包只改已登记的 LOCAL-08 6 个源码 / 测试文件与 3 份 08 文档，另补 `docs/LOCAL-BACKUP.md` 独审非阻塞项；**未改**本包 `accounting.mjs` / `money.mjs` / `period-end-controls.mjs` / `import-storage.mjs` / DB / 期间业务，未改 `agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`。状态：**未提交 / 未建 PR / 未合并**，待 root 最终增量独审 / PR。

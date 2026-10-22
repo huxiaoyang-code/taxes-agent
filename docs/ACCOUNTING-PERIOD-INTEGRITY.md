@@ -280,6 +280,14 @@ Agent / MCP 侧保留同一 `code` 与 `details`。
   损益 / 计提影响传入）、`laterProfitCarryforwards` / `laterDepreciationRuns`（依赖探测）。
   LOCAL-07 批量任务应直接复用这些，不要另写一套封账规则。
 - 期初 / 凭证 / 导入的金额入口统一走 `money.mjs`；LOCAL-04 银行对账、LOCAL-05b 现金流也要沿用同一分精度规则。
+- 模型边界（LOCAL-08 适配层 / transport，**未挂共享入口**）：`period_end_check` 登记为只读 `query/account_set`，
+  模型投影只含期间 / `ready` / 固定步骤状态计数 / blocked 步骤 id / 阻塞计数 / 固定阻塞码；标题 / 原因 /
+  `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入模型通道；未知步骤 / 状态 / 阻塞码 fail closed。
+  `asset_update` 登记为写 `write/account_set`，只有显式写调用才执行，成功必须真实 `id` 才 `applied:true`；
+  投影只含 `assetId` / `kind` / `startPeriod` / `acquiredPeriod` / `originalCost` / `usefulLifeMonths` /
+  `openingAccumulated` / `accumulated` / `remaining` / `ledgerStatus` / `origin`，不含名称 / `ledger_note` / 科目 / 备注。
+  新期间 / 资产错误与 `period_end_check_failed` 在 policy / transport 两层有固定 code → category 映射，不再落 `unknown`。
+  该层**未接到** `agent-tools.mjs` / `server.mjs` / MCP / CLI，因此当前真实模型入口仍可能返回原文；接线必须另走集成 PR。
 
 ## 8. 已知限制（不在本包范围）
 
@@ -299,3 +307,5 @@ Agent / MCP 侧保留同一 `code` 与 `details`。
 10. 旧库若已存在直接用 SQL 写入的不合法寿命（`<= 0` / 非整数），读路径仍会报错；API 已不再能产生这类行，
     需要时由维护入口按 `1 ~ 1200` 的整数修正（本包不提供批量修复脚本）。
 11. 本轮回工（review2）**未新增存储列**：schema 仍为 v4 的同一 5 列，真实 v3→v4 升级 / WAL 备份恢复验证保持不变。
+12. LOCAL-08 的模型边界适配层 / transport 目前只是**可测试合约**，**未挂载**共享 HTTP / Agent / MCP / CLI 入口；
+   真实模型入口仍可能返回科目名 / 摘要等原文，不能把本轮定向测试当成端到端数据边界已生效。

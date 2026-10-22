@@ -272,7 +272,7 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
 | `source_readonly_blocked` | 只读连接无法完成 WAL 索引读取（该环境需要写 `-shm`）：先用产品真实入口打开一次再备份；本包不会改用可写连接 |
 | `source_not_product_database` | 不是本产品库（缺必需表，含缺 `import_*` / `schema_backups`） |
 | `source_structure_invalid` | 是本产品库但结构 / 约束 / 迁移记录与本模块校验的当前结构不符（明细给出问题类型与表 / 列） |
-| `schema_unsupported` | 源库 schema 版本高于本模块支持上限（未知未来版本，例如 v4） |
+| `schema_unsupported` | 源库 schema 版本高于本模块支持上限（未知未来版本，例如 v5+） |
 | `schema_outdated` | 源库 schema 版本低于本模块支持的当前结构（旧库需先用当前产品入口升级） |
 | `out_required` / `out_invalid` / `out_parent_missing` | `--out` 必须是路径，且**父目录**已存在（不递归猜位置） |
 | `out_exists` / `out_incomplete` / `out_alias` / `out_uncreatable` | 目录已存在 / 有上次残留 / 是符号链接 / 无法创建：换一个新目录 |

@@ -6,7 +6,7 @@
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，仅 10 个文档，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4、review3 取得期间一致性 P2），未提交、未推送、未建 PR、未合并，待管理者验收与 root 最终审查**
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4、review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；未提交、未推送、未建 PR、未合并，待管理者验收与 root 最终审查**
   - head / merge 由管理者后补；本交接**不预报**审查结论、head 或 merge。
   - **重要测试口径**：管理者在该 head 上跑过的 50 / 50 与已合 Office 21 / 21 **不能代表最终通过**；
     最终独立审查（`fork_turns=none`）实测四个阻塞（P1–P4），本轮回工后才在**最终代码**上重跑全套。
@@ -334,3 +334,26 @@ root 已在本 worktree 派单完成兼容整合（**不改本包任何业务实
 测试口径：备份套件 **20 / 20**（原 16 项保留，schema 版本断言随 v4 更新）+ 新增 4 项；
 `06-workbench` 下 `npm test` 为 **53 / 53 套 exit 0**（备份套件已按任务单授权仅追加登记，原 50 套顺序 / 内容不变；
 本包领域 / HTTP / MCP 三套随这次全量实跑也均 exit 0，但本轮**未单独重跑并计数**，不引用旧 45 / 18 / 5 作为本轮结果）。
+
+### 9.6 LOCAL-08 新工具模型边界兼容增量（本轮）
+
+- 目标：在不改本包会计 / DB / 期间业务实现、不改 LOCAL-08 已有边界的前提下，把本包新增的
+  `period_end_check` / `asset_update` 按真实 DTO 接入现有可测试 adapter / transport 合约；**未挂载**共享
+  HTTP / Agent / MCP / CLI 入口（共享窗口尚未移交）。
+- `period_end_check` 只读：投影只含期间、`ready`、固定步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码；
+  原始标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注不进入模型通道；未知值 fail closed。
+- `asset_update` 写：显式写调用才执行，未知 / 只读工具不会执行；成功必须真实 `id` 才 `applied:true`，
+  失败保留 `applied:"unknown"` / `needsLocalReview:true`；投影最小白名单不含名称 / `ledger_note` / 科目 / 备注。
+- 新期间 / 资产校验错误与 `period_end_check_failed` 均有固定 code → category 映射，不再落 `unknown`。
+- fixture 改为真实完整资产登记：原值 1200、`2026-02` 取得 / 起提、借贷平衡购入凭证（借 1601 / 贷 1002 各 1200）、
+  真实计提 95；保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路，未 mock / bypass / 跳过封账保护。
+- 边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套、预算、写后降级、不可变 snapshot 与并发隔离保持原语义。
+- 定向输出：策略 **35/35**（原 34 保留）、适配层 **20/20**（原 19 保留）、transport **17/17**（原 16 保留），均 exit 0。
+- 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`）：**55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过
+  （外部 poppler + pdfplumber）。首次全量运行出现一次 `import-incremental-http` 进程异常退出（exit 3221226505，
+  与本包 / 本轮改动无调用关系）；该套件单独重跑 **22/22 exit 0**，随后两次完整重跑均 **55/55 exit 0**（最终代码日志
+  `.agent-runs/local02-55-suites-20261022-214500-final.log`；全部输出均在本 worktree `.agent-runs/`，不把偶发崩溃当成业务通过，
+  也不隐藏重跑事实）。
+- 范围：跨包只改已登记的 LOCAL-08 6 个源码 / 测试文件与 3 份 08 文档，另补 `docs/LOCAL-BACKUP.md` 独审非阻塞项；
+  **未改**本包业务源码、DB、期间逻辑、`agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`。
+- 状态：**未提交 / 未建 PR / 未合并**；待 root 最终增量独审 / PR。

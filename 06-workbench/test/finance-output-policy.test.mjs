@@ -1084,5 +1084,92 @@ await test('review3 F2: 投影期间 / 状态按固定值域（自由 ASCII 不�
   }).summaryUnavailable, true);
 });
 
+await test('LOCAL-02 兼容：asset_update 写 / period_end_check 只读 / 新领域错误固定映射', () => {
+  assert.ok(M.SUPPORTED_OPERATIONS.write.includes('asset_update'));
+  assert.ok(M.SUPPORTED_OPERATIONS.query.includes('period_end_check'));
+
+  const card = {
+    id: 77, account_set_id: 5, kind: 'fixed', name: X.enterprise, ledger_note: X.note,
+    start_period: '2026-02', acquired_period: '2026-02', original_cost: 1200, residual_rate: 0.05,
+    useful_life_months: 12, opening_accumulated: 0, accumulated: 95, remaining: 1045,
+    ledger_status: 'booked', origin: 'purchase', asset_account: '1601', accum_account: '1602',
+    expense_account: '5602', months_done: 1,
+  };
+  const updated = M.summarizeWriteResult('asset_update', card);
+  assert.equal(updated.applied, true);
+  assert.equal(updated.needsLocalReview, false);
+  assert.deepEqual(updated.projection, {
+    assetId: 77, kind: 'fixed', startPeriod: '2026-02', acquiredPeriod: '2026-02',
+    originalCost: 1200, usefulLifeMonths: 12, openingAccumulated: 0, accumulated: 95,
+    remaining: 1045, ledgerStatus: 'booked', origin: 'purchase',
+  });
+  assertNoLeak(updated.projection, 'asset_update projection');
+  assert.equal(JSON.stringify(updated.projection).includes('ledger_note'), false);
+  assert.equal(JSON.stringify(updated.projection).includes('asset_account'), false);
+
+  // 未知 / 缺失 id：写结果只能 applied=unknown，不伪造成功。
+  const unknown = M.summarizeWriteResult('asset_update', { ...card, id: undefined });
+  assert.equal(unknown.applied, 'unknown');
+  assert.equal(unknown.needsLocalReview, true);
+  assert.deepEqual(unknown.projection, {});
+
+  const step = (id, status) => ({
+    id, title: X.enterprise, reason: X.summary, status, details: { name: X.accountName },
+  });
+  const check = {
+    accountSetId: 5, period: '2026-02', ready: false,
+    steps: [
+      step('draft_vouchers', 'ok'), step('trial_balance', 'ok'), step('depreciation', 'ok'),
+      step('asset_reconciliation', 'ok'), step('profit_carry_forward', 'blocked'),
+      step('year_end_carry_forward', 'not_applicable'), step('period_sequence', 'ok'),
+    ],
+    blocking: [{
+      step: 'profit_carry_forward', title: X.accountName, code: 'profit_not_carried_forward',
+      message: X.summary, details: { note: X.note },
+    }],
+    missing: [{ step: 'profit_carry_forward', code: 'profit_not_carried_forward', message: X.summary }],
+    rules: { note: X.note },
+  };
+  const projected = M.summarizeQueryResult('period_end_check', check);
+  assert.equal(projected.summaryUnavailable, false);
+  assert.deepEqual(projected.projection, {
+    period: '2026-02', ready: false, stepCount: 7,
+    stepIds: [
+      'draft_vouchers', 'trial_balance', 'depreciation', 'asset_reconciliation',
+      'profit_carry_forward', 'year_end_carry_forward', 'period_sequence',
+    ],
+    stepStatuses: ['ok', 'ok', 'ok', 'ok', 'blocked', 'not_applicable', 'ok'],
+    okStepCount: 5, blockedStepCount: 1, notApplicableStepCount: 1,
+    blockedStepIds: ['profit_carry_forward'], blockingCount: 1,
+    blockingCodes: ['profit_not_carried_forward'],
+  });
+  assertNoLeak(projected.projection, 'period_end_check projection');
+
+  // 未知步骤 / 状态 / 阻塞码一律 fail closed，不把自由文本当 token 投影。
+  assert.equal(M.summarizeQueryResult('period_end_check', {
+    ...check, steps: [{ ...check.steps[0], id: 'synthetic_sensitive_step' }],
+  }).summaryUnavailable, true);
+  assert.equal(M.summarizeQueryResult('period_end_check', {
+    ...check, steps: [{ ...check.steps[0], status: 'synthetic_sensitive_status' }],
+  }).summaryUnavailable, true);
+  assert.equal(M.summarizeQueryResult('period_end_check', {
+    ...check, blocking: [{ ...check.blocking[0], code: 'synthetic_sensitive_code' }],
+  }).summaryUnavailable, true);
+
+  // 新领域错误码必须有固定 category（不靠 unknown 掩盖可指导动作的错误）。
+  for (const [code, category] of [
+    ['assetId_required', 'asset'], ['acquired_period_invalid', 'asset'],
+    ['ledger_note_required', 'asset'], ['asset_card_affects_closed_period', 'asset'],
+    ['asset_card_locked_by_posted_runs', 'asset'], ['period_end_check_failed', 'period_end'],
+    ['later_profit_carryforward_depends_on_period', 'period_end'],
+    ['profit_not_carried_forward', 'period_end'], ['depreciation_run_stale', 'depreciation'],
+  ]) {
+    const projectedError = safeErrorProjection(new Error(code));
+    assert.equal(projectedError.error.code, code);
+    assert.equal(projectedError.error.category, category);
+    assert.notEqual(projectedError.error.category, 'unknown');
+  }
+});
+
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;
