@@ -1,18 +1,18 @@
 # 任务单 · LOCAL-08 财务输出边界（模型摘要 / 本机读取分道）
 
 - 类型：新增独立后端模块 + 独立预期合成测试 + 契约文档
-- 状态：**开发中 → 首轮员工交付已经独立审查，本轮为审查返工（review1）交付；待同一独立 reviewer 复核**（HTTP / Agent / MCP / CLI **未接线、未验收**）
+- 状态：**模块已通过独立审查**（review1 的 5 项缺陷已修复；管理者与**不参与实现**的独立 reviewer 各自实跑 `node test/finance-output-policy.test.mjs` → 28/28、exit 0），源码冻结于模块提交 `790e8db77cac2383de7c418b429784a2048b06be`；**HTTP / Agent / MCP / CLI 未接线、整体 LOCAL-08 未完成、Issue #44 保持 OPEN**；PR 与 merge 仍待管理者
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`
 - 实际分支：`codex/huxiaoyang-code/local-08`（由管理者建立，员工未执行 Git 操作）
-- 关联：Issue #44（LOCAL-08）；并行任务 LOCAL-01（Issue #43）持有 `agent-tools.mjs` / `db.mjs` / MCP / `scripts/test-all.mjs` / 索引等共享文件
+- 关联：Issue #44（LOCAL-08，**保持 OPEN**）；共享入口（`agent-tools.mjs` / `db.mjs` / MCP / `scripts/test-all.mjs` / 索引等）现归 **LOCAL-02（Issue #47）**；LOCAL-01（Issue #43 / PR #46 / merge `1a15bcc`）已验收合并，不再是等待对象
 - 交付契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)；交接：[handoffs/LOCAL-08](../handoffs/LOCAL-08.md)
 
 ## 1. 基本信息
 
 - 执行员工：本机 pi（主 / 回退模型均显式锁定 `tokenhub/deepseek-v4.1-flash`，未切换、未启用子 agent）
 - 本机管理者：成员自己的 Codex（由其独立读 diff、跑验证、写 PR 正文、执行 Git）
-- 分支：`codex/huxiaoyang-code/local-08`（**由管理者建立，员工不执行 Git 操作**；已核实工作区仅新增 5 个未跟踪文件）
-- 基线（分叉时 `origin/main` 完整 SHA）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
+- 分支：`codex/huxiaoyang-code/local-08`（**由管理者建立，员工不执行 Git 操作**）；模块与首版文档已由管理者提交为 `790e8db`，随后并入最新 main，当前合并后 head `fbb1997025f6fc69b5f867dc8878662c9a66e4d7`；本轮只改文档，**源码自 `790e8db` 起未变**
+- 分叉基线（历史）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`；**当前管理基线（已并入的最新 main）：`94a79ef4a5e1c19e1320aed2e848ba42a7121712`**
 - 工作目录：`<repo>/.worktrees/local-08`
 
 ## 2. 需求（用户 / 目标）
@@ -76,7 +76,7 @@ node test/finance-output-policy.test.mjs
 ## 5. 文件所有权与共享改动协商
 
 - 本任务**只新增**上述 5 个文件；**未触碰**任何共享受控文件：`accounting.mjs`、`coa.mjs`、`db.mjs`、`server.mjs`、`agent-tools.mjs`、`05-reconstruction/codex/mcp/finance-mcp/*`、`06-workbench/scripts/test-all.mjs`、`package.json`、`public/*`、`docs/INDEX.md`、`docs/handoffs/STATE.md`、`docs/tasks/README.md`。
-- 上述共享文件归并行任务 LOCAL-01（Issue #43）所有；接线（含把本套件登记进 `scripts/test-all.mjs`）必须等管理者释放后另行集成，本任务不申请短期所有权。
+- 上述共享文件现归 **LOCAL-02（Issue #47）** 所有；LOCAL-01（Issue #43 / PR #46 / merge `1a15bcc`）已验收合并，不再是阻塞对象。接线（含把本套件登记进 `scripts/test-all.mjs`）走**独立小 PR**：先做「普通工具适配器 + 真实（合成数据）调用测试」的**独占新文件**，再改共享文件；**该适配器与测试尚未实施**，本任务不申请共享文件所有权。
 - 新模块归属：`finance-output-policy.mjs` 为 LOCAL-08 独占新增模块，不属 `report-export` / `tax-report-format` / `tax*` / `import*` 既有归属。
 - 本轮返工的 API 形状变化（仅限本模块，未接线所以无兼容影响）：`resolveForModel` / `revokeLocalRef` 现在必须带 `accountSetId` + `operation`；`stats()` 新增 `nodes` / `nodeBudget` / `bytes` / `byteBudget`；新增 `inspectRawValue` 导出（`measureRawValue` 保留）。
 
@@ -84,15 +84,15 @@ node test/finance-output-policy.test.mjs
 
 - 前置依赖：无（纯模块 + 合成测试可先于接线开发）。
 - 可并行做前置：本模块的契约与测试**已可独立完成并自测**；**不等于**整条链路通过。
-- 阻塞路径：真实入口接线依赖 LOCAL-01 释放共享文件；不因此改共享文件或建替代入口。
-- 基线更新时重验范围：若 `accounting.mjs` 返回结构变化，需重跑本套件并核对 projection spec。
+- 阻塞路径：真实入口接线依赖当前共享文件所有者 **LOCAL-02（Issue #47）** 的协调（LOCAL-01 已合并，不再是等待对象）；不因此改共享文件或建替代入口。
+- 基线更新时重验范围：本包源码未变（`790e8db` 起），本轮不重跑业务测试；若后续并入的 main 改动 `accounting.mjs` 返回结构，需重跑本套件并核对 projection spec。
 
 ## 7. 成员 / 执行员工模型
 
 - 人类成员：本机任务派工方；执行员工本机 pi。
 - 执行员工模型：主 / 回退均 `tokenhub/deepseek-v4.1-flash`（显式锁定）。
 - 是否使用其他模型 / 子 agent：**否**。
-- 管理者是否独立于员工做内容审查：**是，待进行**（本任务单不代替审查结论）。
+- 管理者是否独立于员工做内容审查：**是，已完成**（review1 后管理者与不参与实现的独立 reviewer 各自实跑本套件 28/28、exit 0；结论见 §8）。
 - 管理者是否直接补写业务代码 / 测试 / 交付文档：**否**（如有缺陷退回员工）。
 
 ## 8. 独立验证记录
@@ -110,10 +110,12 @@ node test/finance-output-policy.test.mjs
 | 5 | P2 | 账套绑定契约不一致：`resolveForModel` 允许缺省账套、`revokeLocalRef` 忽略账套 / operation，但文档说两通道都要显式账套 | 统一为**凡引用调用都必须显式核验 `accountSetId` 与 `operation`**（含 resolve / revoke）；跨账套、换工具、缺省上下文均拒；全局工具必须另定 scope 语义，不得伪造默认账套（已写入契约 §2 / §9.7） |
 
 - 本轮员工自测（事实）：`cd <worktree>/06-workbench && node test/finance-output-policy.test.mjs` → `Finance output policy acceptance: 28/28 passed`，exit 0（旧 22 项含义保留，另增 6 项 review1 回归：operation 严格字符串 / 预校验先于执行 / 访问器与写后降级 / 字节预算 / 统一绑定 / Proxy 安全边界）。
-- 工作区卫生（事实）：同目录 `node test/accounting-guards.test.mjs` → `23/23 通过`，exit 0；全量 `scripts/test-all.mjs`（44 套）**未重跑**——本包未改任何既有文件，且该入口归 LOCAL-01（#43）。
-- 管理者验证：**待填写**（须自行读实际 diff、重跑命令、核对边界；未运行不得预先声称通过）。
-- 本轮审查复核（同一独立 reviewer）：**待进行**；本文件不预报复核结论。
-- 已审查 head / 合并：**待填写**（未提交、未建 PR、未合并）。
+- 工作区卫生（历史事实）：同目录 `node test/accounting-guards.test.mjs` → `23/23 通过`，exit 0；全量 `scripts/test-all.mjs` **未重跑**（本包未改任何既有文件）。
+- 管理者验证（**事实，已发生**）：在已审模块提交 `790e8db77cac2383de7c418b429784a2048b06be` 上，工作目录 `06-workbench`，命令 `node test/finance-output-policy.test.mjs` → `28/28 passed`、**exit 0**；并逐项核对 5 项 review1 修复落在实际 diff 上。
+- 独立复核（**事实，已发生**）：**不参与实现、未读员工日志**的独立 reviewer（`fork_turns=none`）在同一已审模块提交上自行实跑同一命令 → `28/28 passed`、**exit 0**；结论：**5 项缺陷已修复、模块审查通过**。
+- 已审模块提交：`790e8db77cac2383de7c418b429784a2048b06be`（模块 / 测试 / 契约 / 任务单 / 交接共 5 个文件）；当前合并后 head `fbb1997025f6fc69b5f867dc8878662c9a66e4d7`，`git diff 790e8db HEAD -- 06-workbench/server/finance-output-policy.mjs 06-workbench/test/finance-output-policy.test.mjs` **为空，源码未变**。
+- 本轮文档修订（**本轮事实**）：只改本任务单 / 交接 / 契约三份文档，**未重跑业务测试**（任务明确本轮无需重复）；只做格式 / 相对链接 / `git diff --check` 与变更范围检查，结果记在本文件 §10。
+- PR / 合并：**待管理者执行**（本分支尚未建 PR、未合并）；本轮文档 head 由管理者提交后在 PR 正文补记，本文件不写自引用 SHA、不预知未来提交。
 
 ## 9. 真实数据边界
 
@@ -125,16 +127,19 @@ node test/finance-output-policy.test.mjs
 
 ## 10. 验证 head
 
-- 已审查的完整 head SHA：待管理者 / 复核人填写（本轮仅在分支 `codex/huxiaoyang-code/local-08` 工作区未提交）。
-- 合并前基线：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`（本次基线）。
-- 基线变动后的重验范围：待管理者核定。
-- 合并 SHA：未合并。
+- 已审模块提交（源码 + 首版文档）：`790e8db77cac2383de7c418b429784a2048b06be`
+- 当前管理基线（最新 main）：`94a79ef4a5e1c19e1320aed2e848ba42a7121712`
+- 合并后当前 head：`fbb1997025f6fc69b5f867dc8878662c9a66e4d7`（管理者并入最新 main 后的分支 head；源码与 `790e8db` 相同）
+- 分叉基线（历史）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
+- 基线变动后的重验范围：本轮源码未变，未重跑任何业务测试；接线 PR 需在最新 main 上重跑本套件 + 新增集成测试
+- 本轮文档修订 head：**由管理者提交后补记**（本文件不写自引用 SHA）
+- PR：**待管理者创建**；合并 SHA：**未合并**（Issue #44 保持 OPEN）
 
 ## 11. 自动合并权限 / 协调记录
 
 - 自动合并：按项目授权由已登记成员自己的本机 Codex 审查验收后执行；**本文件不构成合并证据**。
 - 跨成员评审：纯新增模块、无共享文件改动，按协议可由成员本机 Codex 自审后合并；接线改动需另走集成 PR。
-- 合并协调：与 LOCAL-01（#43）**无文件交集**，无需串行；接线任务必须串行到 LOCAL-01 之后。
+- 合并协调：与 LOCAL-01（#43，已合并）**无文件交集**，无需串行；接线需与当前共享入口所有者 **LOCAL-02（Issue #47）** 协调，且走独立小 PR。
 - 已知限制：GitHub 不能原子锁 base。
 - 是否触发权限 / 仓库设置变更：否。
 
@@ -142,8 +147,8 @@ node test/finance-output-policy.test.mjs
 
 - 回退：`revert` PR（禁止重写 main 历史）；本模块未被任何入口引用，回退不影响既有行为。
 - 交接文档：[handoffs/LOCAL-08](../handoffs/LOCAL-08.md)。
-- 仍运行进程：无（本轮多次前台 `node` 测试进程均已退出，逐次核对退出码）。
-- 下一任务输入：接线任务读 [FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md) §8 / §9（最小 API + 接线清单），并在 LOCAL-01 合并后基于最新 `origin/main` 重验。
+- 仍运行进程：无（本轮只做文档修订与静态检查，前台命令均已结束并核对退出码）。
+- 下一任务输入：接线任务读 [FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md) §8 / §9（最小 API + 接线清单）；在**最新 main**（当前 `94a79ef`）上按独立小 PR 推进——先做普通工具适配器 + 真实（合成数据）调用测试的**独占新文件**（**尚未实施**），再改归 **LOCAL-02（Issue #47）** 所有的共享文件。
 
 ---
 

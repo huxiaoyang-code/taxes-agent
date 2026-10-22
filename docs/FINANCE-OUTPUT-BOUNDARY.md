@@ -1,6 +1,6 @@
 # 财务输出边界契约 · FINANCE-OUTPUT-BOUNDARY
 
-- 状态：**模块已实施（`06-workbench/server/finance-output-policy.mjs`），HTTP / Agent 工具 / MCP / CLI 全部未接线、未验收**。本轮为独立审查返工（见 §11），**不表示最终审查通过**。
+- 状态：**模块已实施并通过独立审查**（`06-workbench/server/finance-output-policy.mjs`；源码冻结于模块提交 `790e8db77cac2383de7c418b429784a2048b06be`）。review1 的 5 项缺陷已修复，管理者与**不参与实现**的独立 reviewer 各自实跑 `node test/finance-output-policy.test.mjs` → **28/28、exit 0**（见 §10 / §11）。**HTTP / Agent 工具 / MCP / CLI 仍然未接线**，整体 LOCAL-08 **未完成**，Issue #44 **保持 OPEN**；模块通过 ≠ 数据边界已在真实入口生效。
 - 归属：LOCAL-08（任务单 [tasks/LOCAL-08](tasks/LOCAL-08.md)，交接 [handoffs/LOCAL-08](handoffs/LOCAL-08.md)），Refs Issue #44；负责人 `huxiaoyang-code`，分支 `codex/huxiaoyang-code/local-08`。
 - 本文件只描述**已经写进代码并在合成测试中验证过的契约**；未实现项明确标注「未实现」，不当作已完成。
 
@@ -134,7 +134,7 @@ policy.localCompute(ref, { channel, accountSetId: 5, operation: "finance_query:v
 | 撤销 | `revokeLocalRef(ref, { channel, accountSetId, operation })`，之后两个通道都报 `output_policy_ref_unknown`；撤销立即归还节点与字节占用 |
 | 容量 | 默认最多 256 个（`maxRefs` 可配）；查询满了直接失败（`output_policy_ref_capacity_exceeded`），写满了只丢引用（`refUnavailable: "capacity"`） |
 | 节点预算 | 单值 ≤200000 节点（`valueNodes` 可配）、累计 ≤1000000 节点（`nodeBudget` 可配）；查询拒绝、写降级为 `refUnavailable:"value_limit"` / `"node_budget"` |
-| 字节预算 | 单值 ≤4 MiB（`valueBytes` 可配）、累计 ≤64 MiB（`byteBudget` 可配），口径 = 8 × 节点数 + 字符串 UTF-8 字节 + 键名 UTF-8 字节。节点数拦不住一个 8 MiB 字符串（它只是 1 个节点），所以必须单算字节；查询拒绝、写降级为 `"value_limit"` / `"byte_budget"` |
+| 字节预算 | 单值 ≤4 MiB（`valueBytes` 可配）、累计 ≤64 MiB（`byteBudget` 可配）。估算口径（按源码 `NODE_BYTE_COST = 8` 核对）= **根值固定开销 8 + 每节点 8 + 字符串 UTF-8 字节 + 键名 UTF-8 字节**；这是**保守估计，不是 JS 实际内存占用计量**（算法未因文档修订而改动）。节点数拦不住一个 8 MiB 字符串（它只是 1 个节点），所以必须单算字节；查询拒绝、写降级为 `"value_limit"` / `"byte_budget"` |
 | 扣减 | 到期、撤销、`dispose()` 都走同一清理路径归还节点/字节；`stats()` 暴露 `nodes` / `bytes` 与对应预算，供接线时核对 |
 | 存储 | **仅进程内**（`persistence: "process_memory"`）。进程重启即失效，这是设计而不是缺陷 |
 | 解引用 | 模型侧 `resolveForModel` 只返回**建引用时同一份**已冻结 projection；换 operation / 换账套一律报错 |
@@ -151,8 +151,9 @@ policy.localCompute(ref, { channel, accountSetId: 5, operation: "finance_query:v
   rawErrorIncluded: false }
 ```
 
-- `code` 只取**固定 allowlist**（账套 / 科目 / 期间 / 凭证 / 结转 / 输出策略等域码），命中才回声；否则 `operation_failed`（`category: "unknown"`）。`new Error("period_closed")` 这类以 message 承载域码的写法也能识别（因为只当查表键）。
-- **从不读取** `message` / `details` / `stack` 的内容，不把它们写进返回值或日志；`details` 只在本机进程内由调用方自己的对象持有。
+- `code` 只取**固定 allowlist**（账套 / 科目 / 期间 / 凭证 / 结转 / 输出策略等域码），命中才回声登记表里的常量；否则 `operation_failed`（`category: "unknown"`）。
+- 取值顺序是：先取自有 `code` 字符串，再取自有 `message` 字符串，**两者都只当固定 allowlist 的查表键**。所以 `new Error("period_closed")` 这类以 message 承载域码的写法仍可识别，但**回声的只有登记表常量，不回声原值**。准确表述是「读取自有 `message` 的值用于查表」，**不是「完全不读取 message」**。
+- 原 `message` / `details` / `stack` 的内容**绝不输出**到返回值或日志（`rawErrorIncluded:false`，返回对象里没有任何承载原文字段的键）；`details` 只在本机进程内由调用方自己的对象持有。
 - 不提供「用 ref 取原始错误」的接口，避免再造一个原文通道。
 
 ## 7. 形状 / 超量限制
@@ -197,19 +198,21 @@ policy.dispose();
 
 ## 9. 接线建议清单（后续集成任务，本包不做）
 
-1. **`06-workbench/server/agent-tools.mjs`（共享文件，属并行任务）**：`finance_query` 的已登记 nodeId 改为 `policy.wrapQuery(\`finance_query:${nodeId}\`, { accountSetId, value: data })`；未登记 / 未实现能力保持自己的 `not_implemented`，不要走投影兜底。传入的 operation 必须是**代码里的字符串常量**（不要把请求参数拼成 operation）。
+**共享入口归属（当前事实）**：`agent-tools.mjs` / `server.mjs` / MCP / `scripts/test-all.mjs` 等共享文件现归 **LOCAL-02（Issue #47）**；LOCAL-01（Issue #43 / PR #46 / merge `1a15bcc`）**已验收合并，不再是等待对象**。接线走**独立小 PR**，并且**先做本包独占的新文件**——普通工具适配器 + 真实（合成数据）调用测试，用于在不改共享文件的前提下先证明适配层；**该适配器与测试尚未实施**，本文件不预报其存在。
+
+1. **`06-workbench/server/agent-tools.mjs`（共享文件，现归 LOCAL-02 / Issue #47）**：`finance_query` 的已登记 nodeId 改为 `policy.wrapQuery(\`finance_query:${nodeId}\`, { accountSetId, value: data })`；未登记 / 未实现能力保持自己的 `not_implemented`，不要走投影兜底。传入的 operation 必须是**代码里的字符串常量**（不要把请求参数拼成 operation）。
 2. **写动作**：在既有 handler 内部执行完后 `policy.wrapWrite(<工具名>, { accountSetId, value })`，或在 handler 外层用 `policy.runWrite` 包一次同步调用；不要改 `accounting.mjs` 的写入顺序、事务或返回结构。用 `runWrite` 时注意它**先校验后执行**，所以未登记工具名不会产生任何写入。
 3. **`server.mjs` 错误分支**：`catch` 里把 `e` 换成 `policy.toSafeError(e, { operation })` 再返回给 `/agent/tools/*`；注意 `server.mjs` 现在会把 `e.message` / `e.details` 原样返回（会带账套名 / 科目编码），接线时一并改为安全投影。
 4. **本机读取入口**：新增本机回环接口（或直接在本机 UI 进程内调用）时，`channel` 必须由该进程启动时 `issueChannel` 得到并只留在内存，不接受请求体里的 `channel` / `local` 字段；接口仅绑定 loopback 且校验 Origin（沿用 `server.mjs` 既有策略）；每个调用都要从请求体拿 `accountSetId` 与 `operation` 做绑定校验。
 5. **MCP / CLI**：**不要**新增 `localRead` / `localCompute` 的 MCP 工具或命令行参数。MCP 只消费模型通道信封；需要原文时由本机 UI 处理。
-6. **`06-workbench/scripts/test-all.mjs`（属并行任务）**：追加 `node test/finance-output-policy.test.mjs` 入口；本包未改该文件。
+6. **`06-workbench/scripts/test-all.mjs`（共享文件，现归 LOCAL-02 / Issue #47）**：追加 `node test/finance-output-policy.test.mjs` 入口；本包未改该文件。
 7. **全局工具（如 `account_context`）**：若接线时真有**不绑定电子账套**的工具（例如纯会话 / 账户上下文元信息），必须自己定义明确 scope 语义与独立接口，**不得**伪造默认账套、不得跳过 `accountSetId` 校验，也不得复用本模块引用绕过绑定；本模块所有已登记 operation 都要求显式账套。
 8. **回归**：接线后必须补一条「真实 HTTP → Agent → 模型信封不含敏感原文 + 本机通道可取原文」的集成测试，以及一条「写动作错误不再泄漏 message」的测试。
 
-## 10. 未实现 / 未验收（明示）
+## 10. 未实现 / 未接线（明示）
 
-- 模块本身：**已实施并通过合成单测**（本轮返工后 28 项，`node test/finance-output-policy.test.mjs`，exit 0）。
-- HTTP / Agent 工具 / MCP / CLI：**未接线**，因此当前实际返回给模型的仍是原始结果；本契约**尚未生效**，不能把这个模块当成“整体边界已完成”。
+- 模块本身：**已实施 + review1 五项缺陷修复 + 独立审查通过**。管理者与不参与实现的独立 reviewer 各自在已审模块提交 `790e8db77cac2383de7c418b429784a2048b06be` 上实跑 `cd 06-workbench && node test/finance-output-policy.test.mjs` → `28/28 passed`、exit 0（合成内存对象，无库、无网络）。
+- HTTP / Agent 工具 / MCP / CLI：**未接线**，因此当前实际返回给模型的仍是原始结果；本契约**尚未在真实入口生效**，模块通过**不等于**整体数据边界完成，Issue #44 保持 OPEN。
 - 未做：磁盘持久化引用、多用户 / 权限体系、按用户隔离、审计落库、批量写队列、自动把 `finance_query` 全量 nodeId 纳入（未实现能力不需要投影）。
 - 未验收：没有真实账套、没有真实模型调用链路的端到端证据；真实账套数据与凭据始终不进入模型服务。
 - 引用只在进程内有效，进程重启后旧 ref 全部失效；上限（256 refs / 100 万节点 / 64 MiB / 15 分钟 / 单值 20 万节点 / 4 MiB）是本地策略，不是对外 SLA。
@@ -226,4 +229,6 @@ policy.dispose();
 | 4 | 内存预算只有节点数：一个 8 MiB 字符串只算 5 个节点，256 个引用可留存超量原文 | 增加**单值字节预算（`valueBytes`）与累计字节预算（`byteBudget`）**，与节点预算并列；到期 / 撤销 / `dispose` 都归还占用；`stats()` 暴露 `nodes` / `bytes` 供核对 |
 | 5 | `resolveForModel` 允许缺省账套，`revokeLocalRef` 忽略账套 / operation，与文档“两通道都显式账套”不一致 | 统一为**凡引用调用都显式核验 `accountSetId` + `operation`**；跨账套 / 换工具 / 缺省上下文分别拒绝；全局工具必须另设 scope 语义，不得伪造默认账套 |
 
-验证（员工侧事实）：`cd 06-workbench && node test/finance-output-policy.test.mjs` → `28/28 passed`，exit 0（合成内存对象，无库、无网络）；同目录 `node test/accounting-guards.test.mjs` → `23/23`，exit 0。**模块仍未接线**，因此不声明整体边界完成；最终审查结论 / head / 合并以管理者实跑与 PR 为准，本文件不预报。
+验证（均为**已实际发生**的运行，非预报）：员工侧 `cd 06-workbench && node test/finance-output-policy.test.mjs` → `28/28 passed`，exit 0（合成内存对象，无库、无网络）；同目录 `node test/accounting-guards.test.mjs` → `23/23`，exit 0。review1 后**管理者**与**不参与实现的独立 reviewer** 各自在同一已审模块提交 `790e8db` 上实跑同一命令 → `28/28 passed`、exit 0，结论为 **5 项缺陷已修复、模块审查通过**。
+
+边界说明：**模块仍未接线**，所以不声明整体数据边界完成；Issue #44 保持 OPEN；PR 与 merge 仍待管理者执行（本文件不预知未来提交，也不写未来 SHA）。
