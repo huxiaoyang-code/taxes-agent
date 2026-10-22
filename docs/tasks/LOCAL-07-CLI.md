@@ -25,7 +25,7 @@
 | `06-workbench/server/local-batch-actions.mjs` | 固定 7 类本地操作的真实领域适配（不复制金额 / 结账规则） |
 | `06-workbench/server/local-batch-report-worker.mjs` | worker 线程：只把已冻结 DTO 渲染成 XLSX / PDF（无数据库副作用） |
 | `06-workbench/scripts/local-batch.mjs` | CLI：`help/start/status/resume/cancel/retry` |
-| `06-workbench/test/local-batch-persistence.test.mjs` | 失败隔离 / 崩溃恢复 / 互斥 fence / 失效证据 / 迁移回滚 |
+| `06-workbench/test/local-batch-persistence.test.mjs` | 失败隔离 / 前序失败门禁 / 一企一套绑定 / 输入快照选择 / 报表依赖证据 / 崩溃恢复 / 互斥 fence / 迁移回滚 |
 | `06-workbench/test/local-batch-cli.test.mjs` | CLI 契约 / 20 家企业两月真实动作链 / 五类报表 / 并发证据 |
 | `docs/LOCAL-BATCH-CLI.md` | 可执行契约（CLI、manifest、状态机、锁、恢复、并发、限制） |
 | `docs/tasks/LOCAL-07-CLI.md` | 本任务单 |
@@ -39,10 +39,11 @@ report-office-export / server / Agent / MCP / test-all / package / 锁 / public 
 
 | 依赖 | 本包要求 | 当前实际 |
 |---|---|---|
-| LOCAL-01 增量导入（已合并） | 稳定 batchId / source / 内容指纹 / 一企一账套 / 跨批去重 | 已合并（PR #46，基线含） |
+| LOCAL-01 增量导入（已合并） | 稳定 batchId / source / 内容指纹 / 一企一账套 / 跨批去重 | 已合并（PR #46，基线含）；本轮只读取其企业↔账套绑定做核验，未改其代码 |
 | LOCAL-05a 纯渲染（已合并） | `buildReportDocument/buildReportXlsx/buildReportPdf` 导入无 DB 副作用 | 已合并（PR #52，基线含） |
-| LOCAL-02 金额 / 期末完整性 | `A.periodEndCheck` 的已审版本用于 `period-check` / `close` | **未合并**：阶段如实 `blocked_dependency`，不替代规则 |
-| LOCAL-06 备份恢复 | `createBackup` / `verifyBackup` / `restoreNew` 用于既有库新增 component 结构 | **未合并**：既有库拒绝 `migration_requires_backup`，只允许显式新目录初始化 |
+| LOCAL-02 金额 / 期末完整性 | `A.periodEndCheck` 的已审版本用于 `period-check` / `close` | **未合并**：阶段如实 `blocked_dependency`，不替代规则；本轮**未**伪造 check / close 完成 |
+| LOCAL-06 备份恢复 | `createBackup` / `verifyBackup` / `restoreNew` 用于既有库新增 component 结构 | **未合并**：既有库拒绝 `migration_requires_backup`，只允许显式新目录初始化；**未**做恢复续跑验收 |
+| 共享互斥 guard | 批量与手工 HTTP / Agent 入口强互斥 | **未接线**：本包只保证批量 runner 间按账套互斥，本轮未改 `server.mjs` / 未扩锁 |
 
 若依赖最终版本接口名或返回结构不同，管理者登记具体接口缺口后由续接会话对齐，**不得复制上游算法或私扩锁**。
 
@@ -56,8 +57,17 @@ report-office-export / server / Agent / MCP / test-all / package / 锁 / public 
 | D 单家失败隔离 + 去重 | `local-batch-persistence.test.mjs` D1 |
 | E 崩溃真实新进程恢复 | 同上 E1（import commit 后）、E2（计提事务中）、E3（结转事务中）、E4（产物发布后） |
 | F 两 CLI 竞争与 fence | 同上 F1–F7（同 jobKey、同账套、过期租约存活 owner、死 owner 接管、旧 token/attempt、两种取消边界） |
-| G 输入 / 证据失效 | 同上 G1（原文件改 / 缺 / 快照 hash 改）、G2（反过账 / 删除）、G3（完成文件丢失只重生成报表） |
+| G 输入 / 证据失效 | 同上 G1（原文件改 / 缺 / 快照 hash 改；普通 resume 与 retry 都拒绝）、G2（反过账 / 删除）、G3（完成文件丢失只重生成报表） |
 | H 迁移 / 备份 / 恢复 | 同上 H1（既有库拒绝自动建表）、H2（迁移中断回滚）、H3（LOCAL-06 依赖如实标注、无伪备份） |
+| I 独立审查 5 个 P1 回归（本轮新增） | 同上 I1–I5（详见下方列表） |
+
+I 组具体覆盖（新增，不替代 / 不削弱 A–H）：
+
+- I1 前序阶段 `failed` / `needs_review` 不得被越过；同一次执行内产生的 `needs_review` 同样停住；显式 retry 修复路径保留；
+- I2 一企一套绑定核验覆盖无 import / 报表 / 恢复核验，失败零写入，其它企业继续；
+- I3 报表快照 / 参数异常只影响该 item 阶段状态，不再使整 job `exit 2`；
+- I4 报表证据覆盖以前期间 / 跨年依赖，真实重算 hash 与旧产物不同；
+- I5 源 payload 金额 100→200：普通 resume 拒绝，显式快照才写旧内容并留痕。
 
 真实动作只调用既有领域：`importIncremental`（已含 `BEGIN IMMEDIATE`）、`postVoucher`、`generateDepreciation`、
 `carryForwardProfit`、`setPeriodStatus`，报表复用 `buildReportExport` + LOCAL-05 渲染。
@@ -81,8 +91,21 @@ node test/report-office-export.test.mjs && node test/report-export.test.mjs
 node test/smoke.test.mjs && node test/accounting-derived.test.mjs && node test/accounting-guards.test.mjs
 ```
 
-实际结果见 [交接](../handoffs/LOCAL-07-CLI.md)。合并前须由未参与实现的独立 Codex reviewer 审查；
+实际结果、独立审查 5 个 P1 的真实复现与修复见 [交接](../handoffs/LOCAL-07-CLI.md)。合并前须由未参与实现的独立 Codex reviewer 审查；
 本任务单不预报审查结论、head 或 merge。
+
+## 6.1 本轮（独立审查阻塞修复）已完成 / 未完成
+
+已完成（真实复现 → 修复 → 两套 CLI + persistence 实跑；详见交接 §3）：
+
+1. 前序阶段失败 / 需复核不得被越过（含同一执行内产生的 `needs_review`），显式 retry 修复路径保留；
+2. 一企一套：任何动作（含无 import / 报表 / 验证恢复）前统一核对企业↔账套绑定，失败零业务写入、其它企业继续；
+3. 首次执行与普通续跑都核验源证据，显式 `--use-saved-inputs` 才用快照并留痕原因；
+4. 报表证据覆盖全部实际依赖（以前期间 / 期初 / 累计 / 科目与期间状态，含跨年），并含全部 5 类报表；
+5. 报表快照 / 参数 / 发布异常降为 item 级阶段状态与失败隔离，不再让整 job 以 `exit 2` 中止；崩溃 / 取消 / fence 语义不变。
+
+未完成（本轮不伪造）：LOCAL-02 依赖下的真实 `period-check` / `close`；LOCAL-06 的既有库迁移与
+`createBackup → verifyBackup → restoreNew` 后新进程续跑；共享互斥 guard 接线；提交 / PR / 合并。
 
 ## 7. 完成口径
 

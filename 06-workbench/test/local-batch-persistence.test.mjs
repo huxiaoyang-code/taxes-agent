@@ -118,9 +118,6 @@ for (const spec of specs) {
     enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name,
     accountSetId: set.id, boundBy: "fixture",
   });
-  if (spec.closePeriod) {
-    A.setPeriodStatus(set.id, "2026-01", "closed");
-  }
   if (spec.assetCost) {
     A.addAssetCard(set.id, {
       kind: "fixed", name: "生产设备", original_cost: spec.assetCost, residual_rate: 0,
@@ -136,6 +133,10 @@ for (const spec of specs) {
       { code: "2211", debit: 0, credit: spec.salary },
     ],
   }) : null;
+  // 封账在草稿建立之后：用来制造「真实领域拒绝」的 post 失败（period_closed）。
+  if (spec.closePeriod) {
+    A.setPeriodStatus(set.id, "2026-01", "closed");
+  }
   out.push({
     enterpriseKey: spec.enterpriseKey, name: spec.name, setId: set.id,
     draftVoucherId: draft ? draft.id : null,
@@ -808,10 +809,24 @@ await test("G1 原始资料被改 / 缺失 / 快照 hash 被改：retry 稳定�
   assert.equal(first.status, 1);
   assert.equal(cliJson(first).items[0].stages[0].errorCode, "import_validation_rejected");
 
-  // 1) 原文件被改成另一份合法内容 → input_changed（不静默接受新文件）。
+  // 1) 先显式 retry（源文件尚未变）把失败的 import 重新排队到 pending：这是真实操作顺序。
+  const beforeChange = runCli(["retry", "--data-dir", dataDir, "--job-key", "input-changed"]);
+  assert.equal(beforeChange.status, 0, beforeChange.stderr);
+  assert.deepEqual(cliJson(beforeChange).reopened.map((entry) => entry.stageKey), [`import:${spec.enterpriseKey}-b1`]);
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "pending");
+
+  // 2) 原文件被改成另一份合法内容后再普通 resume → input_changed（拒绝静默沿用旧快照，零写入）。
   const altered = payloadFor(spec);
   altered.vouchers[0].sourceVoucherId = `${spec.enterpriseKey}-altered`;
   writeFileSync(payloadPath, JSON.stringify(altered), "utf8");
+  const plainResume = runCli(["resume", "--data-dir", dataDir, "--job-key", "input-changed"]);
+  assert.equal(plainResume.status, 1, plainResume.stderr);
+  assert.equal(cliJson(plainResume).items[0].inputBlocked, "input_changed");
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "needs_review");
+  assert.equal(count(dataDir, `SELECT error_code FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "input_changed");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 0, "源文件已变时不得写入凭证");
+
+  // 3) retry 仍稳定拒绝（不静默接受新文件）。
   const changed = runCli(["retry", "--data-dir", dataDir, "--job-key", "input-changed"]);
   const changedJson = cliJson(changed);
   assert.equal(changed.status, 0, changed.stderr);
@@ -819,22 +834,25 @@ await test("G1 原始资料被改 / 缺失 / 快照 hash 被改：retry 稳定�
   assert.equal(changedJson.inputNotes[0].problem, "input_changed");
   assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "needs_review");
 
-  // 2) 显式「仅用已保存快照」：仍使用旧（非法）快照，不会悄悄用新文件。
+  // 4) 显式「仅用已保存快照」：仍使用旧（非法）快照，不会悄悄用新文件；选择与原因留痕。
   const snapshotOnly = runCli(["retry", "--data-dir", dataDir, "--job-key", "input-changed", "--use-saved-inputs"]);
   assert.equal(snapshotOnly.status, 0, snapshotOnly.stderr);
   assert.equal(cliJson(snapshotOnly).inputNotes[0].problem, "input_changed_using_saved_snapshot");
-  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "input-changed"]);
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "input-changed", "--use-saved-inputs"]);
   assert.equal(resumed.status, 1);
+  assert.equal(cliJson(resumed).allowSnapshotOnly, true);
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 0, "非法快照不得写入凭证");
   assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "failed");
 
-  // 3) 原文件消失。
+  // 5) 原文件消失。
   rmSync(payloadPath);
   const missing = runCli(["retry", "--data-dir", dataDir, "--job-key", "input-changed"]);
   assert.equal(cliJson(missing).inputNotes[0].problem, "input_missing");
   assert.equal(count(dataDir, `SELECT error_code FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "input_missing");
 
-  // 4) 已保存快照的 hash 被改动 → 执行时 input_changed（不按坏快照继续）。
+  // 6) 已保存快照的 hash 被改动 → 执行时 input_changed（不按坏快照继续）。
+  //    先把源文件恢复成与登记指纹一致的内容，确保这一条只验证「快照被改」而不混入源文件变化。
+  writeFileSync(payloadPath, JSON.stringify(altered), "utf8");
   const db = new DatabaseSync(join(dataDir, "workbench.db"));
   db.prepare(`UPDATE local_batch_inputs SET source_hash=?`).run("0".repeat(64));
   db.prepare(`UPDATE local_batch_stages SET status='pending' WHERE stage_key LIKE 'import:%'`).run();
@@ -1035,6 +1053,580 @@ await test("H3 LOCAL-06 备份 / restore-new 未合并：如实标依赖，不�
   assert.ok(!files.some((name) => name.startsWith("local_batch_")), "拒绝时不得改动结构");
   assert.equal(existsSync(join(dataDir, "local-batch-backup")), false);
   assert.equal(existsSync(join(dataDir, "local_batch_component")), false);
+});
+
+// ---------------------------------------------------------------- I. 独立审查 5 个 P1 的真实回归（新增，非 mock）
+/** 真实领域接口：建未绑定账套（可带草稿凭证 / 额外报表期间），用于绑定核验测试。 */
+const EXTRA_SET_CODE = `
+import { db } from "./server/db.mjs";
+import * as A from "./server/accounting.mjs";
+const specs = JSON.parse(process.env.EXTRA_SPECS);
+const out = [];
+for (const spec of specs) {
+  const set = A.createAccountSet({
+    name: spec.name, taxpayer_type: "小规模纳税人",
+    accounting_standard: "小企业会计准则", start_period: "2026-01",
+  });
+  if (spec.reportPeriod) A.ensurePeriod(set.id, spec.reportPeriod);
+  const draft = spec.salary ? A.createVoucher(set.id, {
+    period: "2026-01", voucher_date: "2026-01-05", word: "记", number: 9,
+    summary: "未绑定账套草稿", status: "draft",
+    entries: [
+      { code: "5602", debit: spec.salary, credit: 0 },
+      { code: "2211", debit: 0, credit: spec.salary },
+    ],
+  }) : null;
+  out.push({ setId: set.id, draftId: draft ? draft.id : null, name: set.name });
+}
+console.log(JSON.stringify(out));
+`;
+function createExtraSets(dataDir, specs) {
+  const result = runNode(EXTRA_SET_CODE, { env: { WORKBENCH_DATA_DIR: dataDir, EXTRA_SPECS: JSON.stringify(specs) } });
+  assert.equal(result.status, 0, `extra set 失败：${result.stderr}`);
+  return JSON.parse(String(result.stdout).trim().split(/\r?\n/).at(-1));
+}
+
+/** 真实领域接口：跨年旧账（2025-12 已过账）+ 本年 2026-01 已过账 + 登记 2026-02。 */
+const PRIOR_BOOK_CODE = `
+import { db } from "./server/db.mjs";
+import * as A from "./server/accounting.mjs";
+import { insertEnterpriseAccountSet } from "./server/import-storage.mjs";
+const spec = JSON.parse(process.env.PRIOR_SPEC);
+const set = A.createAccountSet({
+  name: spec.name, taxpayer_type: "小规模纳税人",
+  accounting_standard: "小企业会计准则", start_period: "2025-12",
+});
+insertEnterpriseAccountSet(db, { enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name, accountSetId: set.id, boundBy: "fixture" });
+A.setOpeningBalances(set.id, [
+  { code: "1002", debit: "50000", credit: "" },
+  { code: "3001", debit: "", credit: "50000" },
+]);
+const dec = A.createVoucher(set.id, {
+  period: "2025-12", voucher_date: "2025-12-10", word: "记", number: 1, summary: "上年收入", status: "posted",
+  entries: [{ code: "1002", debit: "1000", credit: 0 }, { code: "5001", debit: 0, credit: "1000" }],
+});
+const jan = A.createVoucher(set.id, {
+  period: "2026-01", voucher_date: "2026-01-10", word: "记", number: 2, summary: "本年收入", status: "posted",
+  entries: [{ code: "1002", debit: "2000", credit: 0 }, { code: "5001", debit: 0, credit: "2000" }],
+});
+A.ensurePeriod(set.id, "2026-02");
+console.log(JSON.stringify({ setId: set.id, decId: dec.id, janId: jan.id }));
+`;
+function createPriorBook(dataDir, spec) {
+  const result = runNode(PRIOR_BOOK_CODE, { env: { WORKBENCH_DATA_DIR: dataDir, PRIOR_SPEC: JSON.stringify(spec) } });
+  assert.equal(result.status, 0, `prior book 失败：${result.stderr}`);
+  return JSON.parse(String(result.stdout).trim().split(/\r?\n/).at(-1));
+}
+
+/** 真实领域接口：过账 / 反过账指定凭证（证据失效模拟）。 */
+const VOUCHER_STATE_CODE = `
+import * as A from "./server/accounting.mjs";
+const action = process.env.VOUCHER_ACTION;
+A[action](Number(process.env.SET_ID), Number(process.env.VOUCHER_ID));
+console.log(JSON.stringify({ action }));
+`;
+function setVoucherState(dataDir, setId, voucherId, action) {
+  const result = runNode(VOUCHER_STATE_CODE, {
+    env: { WORKBENCH_DATA_DIR: dataDir, SET_ID: String(setId), VOUCHER_ID: String(voucherId), VOUCHER_ACTION: action },
+  });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+/** 真实重算报表 CSV 的字节 hash（不读已发布产物，不信任旧快照）。 */
+const RECOMPUTE_REPORT_CODE = `
+import { createHash } from "node:crypto";
+import { buildReportExport } from "./server/report-export.mjs";
+const options = { kind: process.env.KIND, period: process.env.PERIOD, format: "csv" };
+if (process.env.CODE) options.code = process.env.CODE;
+const built = buildReportExport(Number(process.env.SET_ID), options);
+console.log(JSON.stringify({ hash: createHash("sha256").update(built.body).digest("hex"), bytes: Buffer.byteLength(built.body) }));
+`;
+function recomputeReportHash(dataDir, setId, kind, period) {
+  const result = runNode(RECOMPUTE_REPORT_CODE, {
+    env: { WORKBENCH_DATA_DIR: dataDir, SET_ID: String(setId), KIND: kind, PERIOD: period },
+  });
+  assert.equal(result.status, 0, `重算报表失败：${result.stderr}`);
+  return JSON.parse(String(result.stdout).trim().split(/\r?\n/).at(-1));
+}
+
+const fileHash = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const stageRow = (dataDir, stageKey, enterpriseKey) => {
+  const db = openDb(dataDir);
+  try {
+    return db.prepare(`SELECT s.status, s.error_code, s.attempt, s.evidence_json FROM local_batch_stages s
+        JOIN local_batch_items i ON i.id=s.item_id WHERE i.enterprise_key=? AND s.stage_key=?`)
+      .get(enterpriseKey, stageKey);
+  } finally { db.close(); }
+};
+
+await test("I1 前序阶段失败 / 需复核时不得越过去执行后序阶段（含同一次执行内的 needs_review）", () => {
+  const dataDir = join(ROOT, "i1-data");
+  const outDir = join(ROOT, "i1-out");
+  primeDataDir(dataDir);
+  const specs = [
+    { itemKey: "item-a", enterpriseKey: "91350000PRIOR0001A", name: "前序失败甲", revenue: 0, other: 0, capital: 20000, assetCost: 600, life: 12, salary: 60 },
+    // 乙的 post 引用了尚未登记的来源凭证（真实 source_voucher_not_found）；补齐导入后走显式 retry 应能完成。
+    { itemKey: "item-b", enterpriseKey: "91350000PRIOR0002A", name: "前序失败乙", revenue: 500, other: 0, capital: 30000, assetCost: 1200, life: 12 },
+  ];
+  const fixture = createFixture(dataDir, specs);
+  const [a, b] = specs.map((spec, index) => ({
+    itemKey: spec.itemKey, spec, fixture: fixture[index],
+  }));
+  const periodSpec = (entry, post) => ({
+    period: "2026-01",
+    post,
+    depreciation: true,
+    carryforward: { yearEnd: false },
+    reports: [{ kind: "trial-balance", formats: ["csv"] }],
+  });
+  const manifestPath = writeManifest("i1", jobManifest({
+    jobKey: "prior-stage-stop",
+    items: [
+      itemFor(a.fixture, a.spec, periodSpec(a, { vouchers: [{ voucherId: 999999 }] })),
+      itemFor(b.fixture, b.spec, periodSpec(b, { vouchers: [{ sourceVoucherId: `${b.spec.enterpriseKey}-sale` }] })),
+    ],
+  }));
+
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  const startedJson = cliJson(started);
+  assert.equal(started.status, 1, `${started.stderr} ${started.stdout}`);
+  assert.equal(startedJson.status, "needs_review");
+  // 甲：post 真的失败（voucher_not_found），计提 / 结转 / 报表全部未执行。
+  assert.equal(stageRow(dataDir, "post", a.spec.enterpriseKey).status, "failed");
+  assert.equal(stageRow(dataDir, "post", a.spec.enterpriseKey).error_code, "voucher_not_found");
+  for (const stageKey of ["depreciation", "carryforward", "report:trial-balance:csv"]) {
+    const row = stageRow(dataDir, stageKey, a.spec.enterpriseKey);
+    assert.equal(row.status, "needs_review", `甲 ${stageKey} 不得被执行`);
+    assert.equal(row.error_code, "prior_stage_unresolved");
+    assert.equal(row.attempt, 0, `甲 ${stageKey} 不得被认领`);
+  }
+  // 乙：同样停在 post（真实 source_voucher_not_found），计提未执行。
+  assert.equal(stageRow(dataDir, "post", b.spec.enterpriseKey).error_code, "source_voucher_not_found");
+  assert.equal(stageRow(dataDir, "depreciation", b.spec.enterpriseKey).status, "needs_review");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 0, "post 失败后不得补做计提");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 1, "仅甲一张草稿凭证，无新增");
+
+  // 关键回归（原 P1）：不修复、不 retry 直接普通 resume，也不得跳去计提。
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "prior-stage-stop"]);
+  assert.equal(resumed.status, 1, `${resumed.stderr} ${resumed.stdout}`);
+  const resumedJson = cliJson(resumed);
+  assert.equal(resumedJson.status, "needs_review");
+  const resumedItemA = resumedJson.items.find((entry) => entry.itemKey === "item-a");
+  assert.deepEqual(resumedItemA.stages, [], "普通 resume 不得执行甲的任何后序阶段");
+  assert.equal(stageRow(dataDir, "post", a.spec.enterpriseKey).error_code, "voucher_not_found");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 0, "普通 resume 不得越权补做计提");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 1);
+  const depAttempts = (() => {
+    const db = openDb(dataDir);
+    try { return db.prepare(`SELECT attempt FROM local_batch_stages WHERE stage_key='depreciation' ORDER BY id`).all().map((row) => row.attempt); }
+    finally { db.close(); }
+  })();
+  assert.deepEqual(depAttempts, [0, 0], "未修复前计提阶段一次都不得被认领");
+
+  // 正常显式 retry 修复路径必须保留：真实补齐来源凭证（新任务导入同一账套）→ retry 乙 → resume。
+  const lateImportPath = writeManifest("i1-late", jobManifest({
+    jobKey: "prior-stage-late-import",
+    items: [itemFor(b.fixture, b.spec, {
+      period: "2026-01",
+      imports: [{ batchId: `${b.spec.enterpriseKey}-late`, mode: "append", confirmNewBinding: true, payload: payloadFor(b.spec) }],
+    })],
+  }));
+  const lateImport = runCli(["start", "--data-dir", dataDir, "--manifest", lateImportPath, "--output-dir", outDir]);
+  assert.equal(lateImport.status, 0, `${lateImport.stderr} ${lateImport.stdout}`);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, b.fixture.setId), 1, "补齐的是同一来源凭证");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 0, "补齐导入本身不得触发计提");
+  const retried = runCli(["retry", "--data-dir", dataDir, "--job-key", "prior-stage-stop", "--item", "item-b"]);
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.deepEqual(cliJson(retried).reopened.map((entry) => entry.stageKey), [
+    "post", "depreciation", "carryforward", "report:trial-balance:csv",
+  ]);
+  const resumedB = runCli(["resume", "--data-dir", dataDir, "--job-key", "prior-stage-stop"]);
+  assert.equal(resumedB.status, 1, "甲仍未修复：整个 job 不可能是 succeeded");
+  assert.equal(stageRow(dataDir, "depreciation", b.spec.enterpriseKey).status, "succeeded");
+  assert.equal(stageRow(dataDir, "report:trial-balance:csv", b.spec.enterpriseKey).status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 1, "乙只计提一次");
+  assert.equal(r2(count(dataDir, `SELECT amount FROM asset_depreciation_runs`)), 100);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs WHERE account_set_id=?`, a.fixture.setId), 0, "甲始终零计提");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, b.fixture.setId), 3, "来源凭证 + 计提 + 结转");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, a.fixture.setId), 1, "甲无新增凭证");
+
+  // 同一次执行内产生 needs_review 也必须停住该 item 后序：
+  // 一个新任务对同一账套同一期间再跑计提（该期间已由其它任务真实计提并过账）→ 真实领域返回「有卡片到期但本次无动作」，
+  // 阶段登记 needs_review；其后的结转 / 报表不得被执行。
+  const reviewPath = writeManifest("i1-review", jobManifest({
+    jobKey: "prior-stage-needs-review",
+    items: [itemFor(b.fixture, b.spec, {
+      period: "2026-01",
+      depreciation: true,
+      carryforward: { yearEnd: false },
+      reports: [{ kind: "trial-balance", formats: ["csv"] }],
+    })],
+  }));
+  const carryBefore = count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, b.fixture.setId);
+  const reviewRun = runCli(["start", "--data-dir", dataDir, "--manifest", reviewPath, "--output-dir", outDir]);
+  assert.equal(reviewRun.status, 1, `${reviewRun.stderr} ${reviewRun.stdout}`);
+  const reviewStage = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT s.status, s.error_code FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id
+          WHERE i.job_id=(SELECT id FROM local_batch_jobs WHERE job_key='prior-stage-needs-review') ORDER BY s.stage_order`).all();
+    } finally { db.close(); }
+  })();
+  assert.deepEqual(reviewStage.map((row) => [row.status, row.error_code]), [
+    ["needs_review", "depreciation_due_but_no_action"],
+    ["needs_review", "prior_stage_unresolved"],
+    ["needs_review", "prior_stage_unresolved"],
+  ], JSON.stringify(reviewStage));
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, b.fixture.setId), carryBefore,
+    "needs_review 后不得继续结转");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(
+      SELECT id FROM local_batch_items WHERE job_id=(SELECT id FROM local_batch_jobs WHERE job_key='prior-stage-needs-review'))`), 0,
+  "needs_review 后不得生成报表产物");
+});
+
+await test("I2 一企一套：任何动作（含无 import / 报表 / 验证恢复）前核对企业↔账套绑定，失败零写入", () => {
+  const dataDir = join(ROOT, "i2-data");
+  const outDir = join(ROOT, "i2-out");
+  primeDataDir(dataDir);
+  const specs = [
+    { itemKey: "item-a", enterpriseKey: "91350000REVIEW000A", name: "绑定甲", revenue: 0, other: 0, capital: 10000, salary: 11 },
+    { itemKey: "item-b", enterpriseKey: "91350000REVIEW000B", name: "绑定乙", revenue: 0, other: 0, capital: 20000, salary: 22 },
+    { itemKey: "item-c", enterpriseKey: "91350000REVIEW000C", name: "绑定丙", revenue: 0, other: 0, capital: 30000 },
+  ];
+  const fixture = createFixture(dataDir, specs);
+  const [extra1, extra2] = createExtraSets(dataDir, [
+    { name: "未绑定账套一", salary: 33 },
+    { name: "未绑定账套二", reportPeriod: "2026-02" },
+  ]);
+  // 甲 / 丙 都拿「不属于本企业」的未绑定账套；乙正常。
+  const manifestPath = writeManifest("i2", jobManifest({
+    jobKey: "binding-guard",
+    items: [
+      { ...itemFor(fixture[0], specs[0], {
+        period: "2026-01",
+        post: { vouchers: [{ voucherId: extra1.draftId }] },
+        carryforward: { yearEnd: false },
+        reports: [{ kind: "trial-balance", formats: ["csv"] }],
+      }), accountSetId: extra1.setId },
+      itemFor(fixture[1], specs[1], {
+        period: "2026-01",
+        post: { vouchers: [{ voucherId: fixture[1].draftVoucherId }] },
+        carryforward: { yearEnd: false },
+        reports: [{ kind: "trial-balance", formats: ["csv"] }],
+      }),
+      {
+        itemKey: "item-c",
+        source: { system: "local-export", enterpriseKey: specs[2].enterpriseKey, enterpriseName: specs[2].name },
+        accountSetId: extra2.setId,
+        periods: [{ period: "2026-02", reports: [{ kind: "balance-sheet", formats: ["csv"] }] }],
+      },
+    ],
+  }));
+
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  const startedJson = cliJson(started);
+  assert.equal(started.status, 1, `${started.stderr} ${started.stdout}`);
+  assert.equal(startedJson.status, "needs_review");
+  for (const itemKey of ["item-a", "item-c"]) {
+    const item = startedJson.items.find((entry) => entry.itemKey === itemKey);
+    assert.equal(item.bindingBlocked, "enterprise_binding_mismatch", `${itemKey} 必须先被绑定核验拦住`);
+    assert.deepEqual(item.stages, [], `${itemKey} 不得执行任何阶段`);
+  }
+  // 未绑定账套上真实无任何业务变化：草稿仍是草稿，没有新增凭证 / 产物。
+  const unboundDraft = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT status FROM vouchers WHERE id=?`).get(extra1.draftId);
+    } finally { db.close(); }
+  })();
+  assert.equal(unboundDraft.status, "draft", "不得向未绑定账套过账");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, extra1.setId), 1, "只保留原草稿");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`), 0);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(SELECT id FROM local_batch_items WHERE item_key='item-c')`), 0, "报表分支也要先核绑定");
+  // 其它企业正常完成：乙的草稿真实过账 + 结转 + 报表产物。
+  const bVoucher = (() => {
+    const db = openDb(dataDir);
+    try { return db.prepare(`SELECT status FROM vouchers WHERE id=?`).get(fixture[1].draftVoucherId); }
+    finally { db.close(); }
+  })();
+  assert.equal(bVoucher.status, "posted", "其它企业必须继续");
+  assert.equal(stageRow(dataDir, "report:trial-balance:csv", specs[1].enterpriseKey).status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(SELECT id FROM local_batch_items WHERE item_key='item-b')`), 1);
+
+  // 报表阶段自身（buildReportSnapshots）也必须拒绝：不只 import / post 分支被修。
+  const itemCId = count(dataDir, `SELECT id FROM local_batch_items WHERE item_key='item-c'`);
+  const reportGuard = runNode(`
+import * as actions from "./server/local-batch-actions.mjs";
+const item = { id: Number(process.env.ITEM_ID), enterprise_key: process.env.ENTERPRISE_KEY, account_set_id: Number(process.env.SET_ID) };
+try {
+  actions.buildReportSnapshots({ item, period: "2026-02", reports: [{ kind: "balance-sheet" }] });
+  console.log(JSON.stringify({ threw: false }));
+} catch (error) {
+  console.log(JSON.stringify({ threw: true, code: error.code }));
+}
+`, { env: {
+    WORKBENCH_DATA_DIR: dataDir,
+    ITEM_ID: String(itemCId),
+    ENTERPRISE_KEY: specs[2].enterpriseKey,
+    SET_ID: String(extra2.setId),
+  } });
+  assert.equal(reportGuard.status, 0, reportGuard.stderr);
+  assert.deepEqual(JSON.parse(String(reportGuard.stdout).trim().split(/\r?\n/).at(-1)), { threw: true, code: "enterprise_binding_mismatch" });
+
+  // 普通 resume 也先核绑定：零业务变化（乙 attempts 不变、未绑定账套仍是草稿）。
+  const attemptsBefore = (() => {
+    const db = openDb(dataDir);
+    try { return db.prepare(`SELECT stage_key, attempt FROM local_batch_stages ORDER BY id`).all(); } finally { db.close(); }
+  })();
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "binding-guard"]);
+  assert.equal(resumed.status, 1, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(cliJson(resumed).items.find((entry) => entry.itemKey === "item-a").bindingBlocked, "enterprise_binding_mismatch");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=?`, extra1.setId), 1);
+  const attemptsAfter = (() => {
+    const db = openDb(dataDir);
+    try { return db.prepare(`SELECT stage_key, attempt FROM local_batch_stages ORDER BY id`).all(); } finally { db.close(); }
+  })();
+  assert.deepEqual(attemptsAfter.map((row) => ({ stage_key: row.stage_key, attempt: row.attempt })),
+    attemptsBefore.map((row) => ({ stage_key: row.stage_key, attempt: row.attempt })));
+
+  // 已成功阶段的验证 / 恢复路径同样核绑定：真实删除企业绑定后 resume → needs_review 且不倒重入账。
+  const artifact = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT artifact_key, bytes_hash, relative_path FROM local_batch_artifacts
+          WHERE item_id=(SELECT id FROM local_batch_items WHERE item_key='item-b')`).get();
+    } finally { db.close(); }
+  })();
+  const vouchersBefore = count(dataDir, `SELECT COUNT(*) FROM vouchers`);
+  const db = new DatabaseSync(join(dataDir, "workbench.db"));
+  db.prepare(`DELETE FROM import_enterprise_account_sets WHERE enterprise_key=?`).run(specs[1].enterpriseKey);
+  db.close();
+  const afterRebind = runCli(["resume", "--data-dir", dataDir, "--job-key", "binding-guard"]);
+  assert.equal(afterRebind.status, 1);
+  const reboundItem = cliJson(afterRebind).items.find((entry) => entry.itemKey === "item-b");
+  assert.equal(reboundItem.verified.ok, false, "绑定被改必须让已成功阶段转复核");
+  assert.equal(stageRow(dataDir, "post", specs[1].enterpriseKey).error_code, "evidence_changed");
+  assert.match(stageRow(dataDir, "post", specs[1].enterpriseKey).evidence_json, /enterprise_binding_missing/);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), vouchersBefore, "复核不得倒重入账");
+  assert.equal(fileHash(join(outDir, artifact.relative_path)), artifact.bytes_hash, "已发布产物不得被改写");
+});
+
+await test("I3 报表快照 / 参数异常：只影响该 item 阶段状态，其它企业继续，不当成 job 级基础设施错误", () => {
+  const dataDir = join(ROOT, "i3-data");
+  const outDir = join(ROOT, "i3-out");
+  primeDataDir(dataDir);
+  const specs = [
+    { itemKey: "item-1", enterpriseKey: "91350000SNAP0001A", name: "快照异常甲", revenue: 0, other: 0, capital: 10000 },
+    { itemKey: "item-2", enterpriseKey: "91350000SNAP0002A", name: "快照正常乙", revenue: 0, other: 0, capital: 20000, salary: 40 },
+  ];
+  const fixture = createFixture(dataDir, specs);
+  const manifestPath = writeManifest("i3", jobManifest({
+    jobKey: "snapshot-isolation",
+    items: [
+      // 甲请求未登记的 2026-02 报表：真实领域接口抛 period_not_registered。
+      {
+        itemKey: "item-1",
+        source: { system: "local-export", enterpriseKey: specs[0].enterpriseKey, enterpriseName: specs[0].name },
+        accountSetId: fixture[0].setId,
+        periods: [{
+          period: "2026-02",
+          reports: [
+            { kind: "balance-sheet", formats: ["csv", "xlsx"] },
+            { kind: "ledger", formats: ["csv"], code: "9999" },
+          ],
+        }],
+      },
+      itemFor(fixture[1], specs[1], {
+        period: "2026-01",
+        post: { vouchers: [{ voucherId: fixture[1].draftVoucherId }] },
+        reports: [{ kind: "trial-balance", formats: ["csv"] }],
+      }),
+    ],
+  }));
+
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  const startedJson = cliJson(started);
+  // 关键回归（原 P1）：快照异常不得让整 job 退 2 / 两家都 pending。
+  assert.equal(started.status, 1, `${started.stderr} ${started.stdout}`);
+  assert.equal(startedJson.ok, false);
+  assert.equal(startedJson.status, "failed");
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key='report:balance-sheet:csv'`), "failed");
+  assert.equal(count(dataDir, `SELECT error_code FROM local_batch_stages WHERE stage_key='report:balance-sheet:csv'`), "period_not_registered");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_stages WHERE status='running'`), 0);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(SELECT id FROM local_batch_items WHERE item_key='item-1')`), 0);
+  // 第二家正常：草稿真实过账 + 报表产物落地。
+  assert.equal(count(dataDir, `SELECT status FROM vouchers WHERE id=?`, fixture[1].draftVoucherId), "posted");
+  assert.equal(stageRow(dataDir, "report:trial-balance:csv", specs[1].enterpriseKey).status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(SELECT id FROM local_batch_items WHERE item_key='item-2')`), 1);
+
+  // 修复后显式 retry 仍可完成：真实登记 2026-02 + 修好账套科目后只重开该 item 的报表阶段。
+  const fix = runNode(`
+import * as A from "./server/accounting.mjs";
+A.ensurePeriod(Number(process.env.SET_ID), "2026-02");
+A.addAccount(Number(process.env.SET_ID), { code: "9999", name: "测试明细", category: "资产", direction: "debit" });
+console.log("fixed");
+`, { env: { WORKBENCH_DATA_DIR: dataDir, SET_ID: String(fixture[0].setId) } });
+  assert.equal(fix.status, 0, fix.stderr);
+  const retried = runCli(["retry", "--data-dir", dataDir, "--job-key", "snapshot-isolation", "--item", "item-1"]);
+  assert.equal(retried.status, 0, retried.stderr);
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "snapshot-isolation"]);
+  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(cliJson(resumed).status, "succeeded");
+  assert.equal(stageRow(dataDir, "report:balance-sheet:csv", specs[0].enterpriseKey).status, "succeeded");
+  assert.equal(stageRow(dataDir, "report:ledger:csv:9999", specs[0].enterpriseKey).status, "succeeded");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_artifacts WHERE item_id=(SELECT id FROM local_batch_items WHERE item_key='item-1')`), 3);
+});
+
+await test("I4 报表证据覆盖以前期间 / 跨年依赖：反过账旧期后 resume 必须转复核，且旧产物 hash 与真实重算不同", () => {
+  const dataDir = join(ROOT, "i4-data");
+  const outDir = join(ROOT, "i4-out");
+  primeDataDir(dataDir);
+  const spec = { enterpriseKey: "91350000PRIORBOOK1A", name: "跨年报表依赖" };
+  const book = createPriorBook(dataDir, spec);
+  const manifestPath = writeManifest("i4", jobManifest({
+    jobKey: "report-prior-dependency",
+    items: [{
+      itemKey: "item-1",
+      source: { system: "local-export", enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name },
+      accountSetId: book.setId,
+      periods: [{
+        period: "2026-02",
+        reports: [
+          { kind: "balance-sheet", formats: ["csv"] },
+          { kind: "income-statement", formats: ["csv"] },
+          { kind: "cash-flow-statement", formats: ["csv"] },
+          { kind: "trial-balance", formats: ["csv"] },
+          { kind: "ledger", formats: ["csv"], code: "1002" },
+        ],
+      }],
+    }],
+  }));
+  const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(started.status, 0, `${started.stderr} ${started.stdout}`);
+  const artifacts = (() => {
+    const db = openDb(dataDir);
+    try { return db.prepare(`SELECT stage_key, bytes_hash, relative_path, snapshot_hash FROM local_batch_artifacts ORDER BY id`).all(); }
+    finally { db.close(); }
+  })();
+  assert.equal(artifacts.length, 5, "五类报表全部真实生成（不会只覆盖单一案例）");
+  const balanceArtifact = artifacts.find((entry) => entry.stage_key === "report:balance-sheet:csv");
+  const publishedPath = join(outDir, balanceArtifact.relative_path);
+  assert.equal(fileHash(publishedPath), balanceArtifact.bytes_hash);
+  const publishedBefore = fileHash(publishedPath);
+
+  // 真实反过账 2025-12（跨年以前期间）：2026-02 报表内容真的变了。
+  setVoucherState(dataDir, book.setId, book.decId, "unpostVoucher");
+  const recomputed = recomputeReportHash(dataDir, book.setId, "balance-sheet", "2026-02");
+  assert.notEqual(recomputed.hash, publishedBefore, "反过账旧期后真实重算的报表 hash 必须不同（证明依赖真实存在）");
+  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "report-prior-dependency"]);
+  const resumedJson = cliJson(resumed);
+  // 关键回归（原 P1）：不得再 exit 0 / succeeded / verified.ok=true。
+  assert.equal(resumed.status, 1, `${resumed.stderr} ${resumed.stdout}`);
+  assert.equal(resumedJson.status, "needs_review");
+  assert.equal(resumedJson.items[0].verified.ok, false);
+  const reportStageKeys = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT stage_key, status, error_code, evidence_json FROM local_batch_stages
+          WHERE stage_key LIKE 'report:%' ORDER BY stage_key`).all();
+    } finally { db.close(); }
+  })();
+  assert.equal(reportStageKeys.length, 5);
+  for (const stage of reportStageKeys) {
+    assert.equal(stage.status, "needs_review", `${stage.stage_key} 应因以前期间变化转复核`);
+    assert.equal(stage.error_code, "evidence_changed");
+    assert.match(stage.evidence_json, /report_evidence_changed/);
+  }
+  const cashFlowRecomputed = recomputeReportHash(dataDir, book.setId, "cash-flow-statement", "2026-02");
+  const cashFlowArtifact = artifacts.find((entry) => entry.stage_key === "report:cash-flow-statement:csv");
+  assert.notEqual(cashFlowRecomputed.hash, cashFlowArtifact.bytes_hash, "跨年旧期变化同样改变现金流量表");
+  assert.equal(fileHash(publishedPath), publishedBefore, "已发布产物不得被覆盖");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 2, "复核不得倒重入账");
+
+  // 恢复旧期凭证 → retry → resume：真实证据回到原值，已发布产物按 hash 复用（不重复渲染）。
+  setVoucherState(dataDir, book.setId, book.decId, "postVoucher");
+  const retry = runCli(["retry", "--data-dir", dataDir, "--job-key", "report-prior-dependency"]);
+  assert.equal(retry.status, 0, retry.stderr);
+  const recovered = runCli(["resume", "--data-dir", dataDir, "--job-key", "report-prior-dependency"]);
+  assert.equal(recovered.status, 0, `${recovered.stderr} ${recovered.stdout}`);
+  const recoveredStages = (() => {
+    const db = openDb(dataDir);
+    try {
+      return db.prepare(`SELECT stage_key, evidence_json FROM local_batch_stages WHERE stage_key LIKE 'report:%' ORDER BY stage_key`).all();
+    } finally { db.close(); }
+  })();
+  assert.ok(recoveredStages.every((row) => JSON.parse(row.evidence_json).recovered === true), "文件未变时按 hash 补记，不重复渲染");
+  assert.equal(fileHash(publishedPath), publishedBefore);
+
+  // 同年以前期间同样必须被覆盖：反过账 2026-01 后 resume 再次转复核。
+  setVoucherState(dataDir, book.setId, book.janId, "unpostVoucher");
+  const recomputedJan = recomputeReportHash(dataDir, book.setId, "income-statement", "2026-02");
+  const incomeArtifact = artifacts.find((entry) => entry.stage_key === "report:income-statement:csv");
+  assert.notEqual(recomputedJan.hash, incomeArtifact.bytes_hash);
+  const sameYear = runCli(["resume", "--data-dir", dataDir, "--job-key", "report-prior-dependency"]);
+  assert.equal(sameYear.status, 1, `${sameYear.stderr} ${sameYear.stdout}`);
+  assert.equal(cliJson(sameYear).status, "needs_review");
+  assert.equal(stageRow(dataDir, "report:income-statement:csv", spec.enterpriseKey).error_code, "evidence_changed");
+});
+
+await test("I5 已持久 pending 导入任务：源 payloadFile 金额 100→200 时普通 resume 拒绝，显式快照才写旧内容并留痕", () => {
+  const dataDir = join(ROOT, "i5-data");
+  const outDir = join(ROOT, "i5-out");
+  primeDataDir(dataDir);
+  const spec = { itemKey: "item-1", enterpriseKey: "91350000INPUT0009A", name: "快照选择", revenue: 100, other: 0, capital: 5000, closePeriod: true };
+  const [fixture] = createFixture(dataDir, [spec]);
+  const payloadPath = join(ROOT, "i5-payload.json");
+  writeFileSync(payloadPath, JSON.stringify(payloadFor(spec)), "utf8");
+  const manifestPath = writeManifest("i5", jobManifest({
+    jobKey: "saved-input-policy",
+    items: [{
+      itemKey: spec.itemKey,
+      source: { system: "local-export", enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name },
+      accountSetId: fixture.setId,
+      periods: [{
+        period: "2026-01",
+        imports: [{ batchId: `${spec.enterpriseKey}-b1`, mode: "append", confirmNewBinding: true, payloadFile: "i5-payload.json" }],
+        carryforward: { yearEnd: false },
+      }],
+    }],
+  }));
+  // 第一步：真实领域失败（期间已封账）把 import 留在 failed，随后显式 retry 变成 pending。
+  const first = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+  assert.equal(first.status, 1, `${first.stderr} ${first.stdout}`);
+  assert.ok(["period_closed", "opening_rewrite_period_closed"].includes(cliJson(first).items[0].stages[0].errorCode));
+  reopenPeriod(dataDir, fixture.setId);
+  const retried = runCli(["retry", "--data-dir", dataDir, "--job-key", "saved-input-policy"]);
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.deepEqual(cliJson(retried).reopened.map((entry) => entry.stageKey), [`import:${spec.enterpriseKey}-b1`, "carryforward"]);
+  assert.equal(count(dataDir, `SELECT status FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "pending");
+
+  // 第二步：源 payloadFile 金额 100 → 200（合法文件变化），普通 resume 必须拒绝静默沿用旧内容。
+  const changedPayload = payloadFor(spec);
+  changedPayload.vouchers[0].entries[0].debit = "200";
+  writeFileSync(payloadPath, JSON.stringify(changedPayload), "utf8");
+  const plain = runCli(["resume", "--data-dir", dataDir, "--job-key", "saved-input-policy"]);
+  const plainJson = cliJson(plain);
+  assert.equal(plain.status, 1, `${plain.stderr} ${plain.stdout}`);
+  assert.equal(plainJson.status, "needs_review");
+  assert.equal(plainJson.allowSnapshotOnly, false);
+  assert.equal(plainJson.items[0].inputBlocked, "input_changed");
+  assert.equal(stageRow(dataDir, "import:" + spec.enterpriseKey + "-b1", spec.enterpriseKey).status, "needs_review");
+  assert.equal(stageRow(dataDir, "import:" + spec.enterpriseKey + "-b1", spec.enterpriseKey).error_code, "input_changed");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 0, "源文件已变时不得按旧快照写入");
+
+  // 第三步：显式 --use-saved-inputs：写入的是**旧快照**的 100，不是新文件的 200，且原因留痕。
+  const savedResume = runCli(["resume", "--data-dir", dataDir, "--job-key", "saved-input-policy", "--use-saved-inputs"]);
+  assert.equal(savedResume.status, 0, `${savedResume.stderr} ${savedResume.stdout}`);
+  const savedJson = cliJson(savedResume);
+  assert.equal(savedJson.allowSnapshotOnly, true);
+  assert.equal(savedJson.status, "succeeded");
+  const importEvidence = JSON.parse(stageRow(dataDir, "import:" + spec.enterpriseKey + "-b1", spec.enterpriseKey).evidence_json);
+  assert.deepEqual(importEvidence.inputEvidence, { mode: "saved_snapshot", reason: "input_changed", sourceHash: importEvidence.inputEvidence.sourceHash });
+  assert.match(importEvidence.inputEvidence.sourceHash, /^[0-9a-f]{64}$/);
+  const revenue = count(dataDir, `SELECT COALESCE(SUM(e.credit),0) FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
+      WHERE v.status='posted' AND e.code='5001'`);
+  assert.equal(r2(revenue), 100, "显式快照必须写旧内容 100（不是新文件 200）");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='carryforward'`), 1);
 });
 
 // ---------------------------------------------------------------- 收尾

@@ -33,7 +33,7 @@ const [A, { db }, importStorage, importIncrementalModule, reportExportModule] = 
   import("./report-export.mjs"),
 ]);
 const {
-  getEnterpriseAccountSet, getVoucherSource, persistedVoucherFingerprint,
+  getAccountSetEnterprise, getEnterpriseAccountSet, getVoucherSource, persistedVoucherFingerprint,
 } = importStorage;
 const { getImportBatch, importIncremental } = importIncrementalModule;
 const { buildReportExport } = reportExportModule;
@@ -60,25 +60,95 @@ function sanitizeError(error) {
 }
 
 // ---------------------------------------------------------------- 证据指纹
-/** 某账套某期间的业务证据摘要：已过账凭证（含分录指纹）+ 期初 + 期间状态。 */
+/**
+ * 某账套某期间的业务证据摘要。
+ *
+ * 报表实际读取的范围（见 report-export.mjs）：账套登记、科目定义、全部期初余额、
+ * 自启用期间起至该期末的已过账凭证及分录（试算 / 三表 / 明细账都用 `period BETWEEN start AND period`，
+ * 现金流量表还要逐月回看），以及该期末及以前期间的期间状态。
+ * 因此摘要**必须**覆盖：以前期间（含跨年）、期初、本年累计、科目 / 账套定义变动、期间状态。
+ * 只按 `period=?` 取本期凭证会漏掉以前期间被反过账 / 改金额 / 删除（报表内容已变、旧产物却仍被当成功）。
+ * 本期之后的数据不在此报表依赖范围内，不进入摘要（避免无意义的失效告警）。
+ */
 export function businessDigest(db, setId, period) {
-  const vouchers = db.prepare(
-    `SELECT id, period, voucher_date, word, number, summary, status, kind FROM vouchers
-      WHERE account_set_id=? AND period=? ORDER BY id`,
-  ).all(setId, period).map((voucher) => {
-    const entries = db.prepare(
-      `SELECT code, summary, debit, credit FROM voucher_entries WHERE voucher_id=? ORDER BY line_no`,
-    ).all(voucher.id);
-    return {
-      id: voucher.id, status: voucher.status, kind: voucher.kind,
-      fingerprint: persistedVoucherFingerprint(voucher, entries),
-    };
-  });
+  const accountSet = db.prepare(
+    `SELECT id, name, start_period, accounting_standard FROM account_sets WHERE id=?`,
+  ).get(setId) || null;
+  const accounts = db.prepare(
+    `SELECT code, name, category, direction, contra, is_leaf FROM accounts WHERE account_set_id=? ORDER BY code`,
+  ).all(setId);
   const openings = db.prepare(
     `SELECT code, debit, credit FROM opening_balances WHERE account_set_id=? ORDER BY code`,
   ).all(setId);
-  const periodStatus = db.prepare(`SELECT status FROM periods WHERE account_set_id=? AND period=?`).get(setId, period);
-  return sha256(canonicalJson({ setId, period, vouchers, openings, periodStatus: periodStatus?.status ?? null }));
+  const periodRows = db.prepare(
+    `SELECT period, status FROM periods WHERE account_set_id=? AND period<=? ORDER BY period`,
+  ).all(setId, period);
+  const voucherRows = db.prepare(
+    `SELECT id, period, voucher_date, word, number, summary, status, kind FROM vouchers
+      WHERE account_set_id=? AND status='posted' AND period<=? ORDER BY period, id`,
+  ).all(setId, period);
+  const entryRows = db.prepare(
+    `SELECT e.voucher_id, e.line_no, e.code, e.summary, e.debit, e.credit
+       FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
+      WHERE v.account_set_id=? AND v.status='posted' AND v.period<=?
+      ORDER BY e.voucher_id, e.line_no`,
+  ).all(setId, period);
+  const entriesByVoucher = new Map();
+  for (const entry of entryRows) {
+    if (!entriesByVoucher.has(entry.voucher_id)) entriesByVoucher.set(entry.voucher_id, []);
+    entriesByVoucher.get(entry.voucher_id).push(entry);
+  }
+  const vouchers = voucherRows.map((voucher) => ({
+    id: voucher.id, period: voucher.period, status: voucher.status, kind: voucher.kind,
+    fingerprint: persistedVoucherFingerprint(voucher, entriesByVoucher.get(voucher.id) || []),
+  }));
+  return sha256(canonicalJson({
+    setId, period, accountSet, accounts, openings, periods: periodRows, vouchers,
+  }));
+}
+
+/**
+ * 统一核实「规范企业身份 ↔ 账套」绑定（一家企业一个账套），任何阶段执行前都先过这一关。
+ * - 绑定的账套与本次声明的账套不一致：enterprise_binding_mismatch；
+ * - 声明的账套已绑定到其它企业：account_set_enterprise_mismatch；
+ * - 非首次建账/绑定阶段却找不到该企业绑定：enterprise_binding_missing。
+ * 抛错发生在任何写操作之前，因此失败本身不产生业务变化。
+ */
+export function resolveItemBinding({ db, item, stage = null, allowUnboundSet = false }) {
+  const declared = item.account_set_id === undefined || item.account_set_id === null
+    ? null : Number(item.account_set_id);
+  const binding = getEnterpriseAccountSet(db, item.enterprise_key);
+  const boundSetId = binding ? Number(binding.account_set_id) : null;
+  const resolved = declared ?? boundSetId;
+  const unboundAllowed = allowUnboundSet || (stage ? stageAllowsUnboundSet(stage) : false);
+  if (boundSetId !== null && resolved !== null && boundSetId !== resolved) {
+    throw domainError("enterprise_binding_mismatch", "企业身份已绑定其它账套：一家企业只有一个账套", {
+      boundAccountSetId: boundSetId, declaredAccountSetId: resolved,
+    });
+  }
+  if (resolved === null) {
+    if (unboundAllowed) return { accountSetId: null, binding, bound: false };
+    throw domainError("account_set_unresolved", "本 item 未声明账套，且该企业身份尚未绑定账套");
+  }
+  const setBinding = getAccountSetEnterprise(db, resolved);
+  if (setBinding && setBinding.enterprise_key !== item.enterprise_key) {
+    throw domainError("account_set_enterprise_mismatch", "该账套已绑定其它企业身份：一个账套只能属于一家企业", {
+      declaredAccountSetId: resolved,
+    });
+  }
+  if (boundSetId === null && !unboundAllowed) {
+    throw domainError("enterprise_binding_missing", "该企业身份尚未绑定任何账套：拒绝在未建立绑定时执行", {
+      declaredAccountSetId: resolved,
+    });
+  }
+  return { accountSetId: resolved, binding, bound: boundSetId !== null };
+}
+
+/** 首次建账或显式确认新绑定允许「还未绑定 / 未建账」的状态。 */
+function stageAllowsUnboundSet(stage) {
+  if (!String(stage.stage_key).startsWith(IMPORT_STAGE_PREFIX)) return false;
+  const spec = safeParse(stage.spec_json);
+  return spec.mode === "create" || spec.confirmNewBinding === true;
 }
 
 function voucherEvidence(voucher) {
@@ -175,6 +245,11 @@ export function executeImportStage(ctx) {
     batchId: spec.batchId,
     mode: spec.mode,
     status: result.status,
+    // 源证据留痕：默认要求本次执行前源文件指纹一致；只有操作者显式 --use-saved-inputs
+    // （或 retry 显式选择快照）才允许沿用快照，且必须记录选择与原因。
+    inputEvidence: ctx.inputPolicy
+      ? { mode: "saved_snapshot", reason: ctx.inputPolicy.problem ?? "explicit_use_saved_inputs", sourceHash: bytesHash }
+      : { mode: "source_file_verified", sourceHash: bytesHash },
     accountSetId,
     accountSetCreated: result.created?.accountSetCreated === true,
     vouchersCreated: Number(result.created?.vouchersCreated ?? 0),
@@ -477,7 +552,9 @@ export function executeCloseStage(ctx) {
  */
 export function buildReportSnapshots({ item, period, reports }) {
   return withReadSnapshot(db, () => {
-    const setId = item.account_set_id;
+    // 报表同样先核实企业与账套绑定（无 import / 无写阶段的任务也能被检出）。
+    const binding = resolveItemBinding({ db, item });
+    const setId = binding.accountSetId;
     if (!setId) throw domainError("account_set_unresolved", "报表面向的账套未确定");
     const businessHash = businessDigest(db, setId, period);
     const list = [];
@@ -528,6 +605,22 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
   const evidence = safeParse(stage.evidence_json);
   const key = stage.stage_key;
   try {
+    // 任何已成功阶段的恢复核验都先确认企业 / 账套绑定未被改到别的账套（一企一账套）。
+    const evidenceSetId = evidence.accountSetId === undefined || evidence.accountSetId === null
+      ? null : Number(evidence.accountSetId);
+    const binding = getEnterpriseAccountSet(db, item.enterprise_key);
+    const boundSetId = binding ? Number(binding.account_set_id) : null;
+    const expectedSetId = evidenceSetId ?? (item.account_set_id === null ? null : Number(item.account_set_id));
+    if (expectedSetId !== null && boundSetId !== null && boundSetId !== expectedSetId) {
+      return { ok: false, reason: "enterprise_binding_changed" };
+    }
+    if (expectedSetId !== null && boundSetId === null) {
+      const setBinding = getAccountSetEnterprise(db, expectedSetId);
+      if (setBinding && setBinding.enterprise_key !== item.enterprise_key) {
+        return { ok: false, reason: "account_set_enterprise_changed" };
+      }
+      return { ok: false, reason: "enterprise_binding_missing" };
+    }
     if (key.startsWith(IMPORT_STAGE_PREFIX)) {
       const batch = getImportBatch(evidence.batchId);
       if (!batch?.batch || batch.batch.status !== "completed") return { ok: false, reason: "import_batch_state_changed" };
@@ -628,12 +721,18 @@ function safeParse(text) {
 export function executeStage(ctx) {
   const key = ctx.stage.stage_key;
   try {
-    if (key.startsWith(IMPORT_STAGE_PREFIX)) return executeImportStage(ctx);
-    if (key === STAGE_KEYS.POST) return executePostStage(ctx);
-    if (key === STAGE_KEYS.DEPRECIATION) return executeDepreciationStage(ctx);
-    if (key === STAGE_KEYS.CARRYFORWARD) return executeCarryForwardStage(ctx);
-    if (key === STAGE_KEYS.PERIOD_CHECK) return executePeriodCheckStage(ctx);
-    if (key === STAGE_KEYS.CLOSE) return executeCloseStage(ctx);
+    // 任何阶段（含无 import 的过账 / 计提 / 结转 / 检查 / 结账）开始前统一核实企业↔账套绑定，
+    // 抛错发生在任何写操作之前，且异常码会被 runner 归到 needs_review（失败隔离、其它企业继续）。
+    const binding = resolveItemBinding({ db: ctx.db, item: ctx.item, stage: ctx.stage });
+    const scoped = binding.accountSetId !== null && binding.accountSetId !== ctx.item.account_set_id
+      ? { ...ctx, item: { ...ctx.item, account_set_id: binding.accountSetId } }
+      : ctx;
+    if (key.startsWith(IMPORT_STAGE_PREFIX)) return executeImportStage(scoped);
+    if (key === STAGE_KEYS.POST) return executePostStage(scoped);
+    if (key === STAGE_KEYS.DEPRECIATION) return executeDepreciationStage(scoped);
+    if (key === STAGE_KEYS.CARRYFORWARD) return executeCarryForwardStage(scoped);
+    if (key === STAGE_KEYS.PERIOD_CHECK) return executePeriodCheckStage(scoped);
+    if (key === STAGE_KEYS.CLOSE) return executeCloseStage(scoped);
     throw domainError("stage_key_unsupported", "阶段类型不在固定白名单内", { stageKey: key });
   } catch (error) {
     if (error?.code) throw error;

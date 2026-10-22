@@ -722,6 +722,39 @@ export function getInput(db, { jobId, itemId, batchId }) {
     .get(`${jobId}:${itemId}:${batchId}`) || null;
 }
 
+/**
+ * 单条输入快照的源证据核验：再次读取原始文件字节并与登记指纹比较。
+ * 返回 { ok, problem, sourceHash, currentHash }：problem ∈ input_missing / input_changed。
+ * 内联 payload（无外部文件）只有已保存快照本身可比，按 input_hash 前一步核验（见 actions）。
+ */
+export function checkInputEvidence(input) {
+  if (!input) return { ok: false, problem: "input_snapshot_missing" };
+  if (!input.source_path) return { ok: true, problem: null, external: false };
+  let bytes = null;
+  try { bytes = readFileSync(input.source_path); } catch { bytes = null; }
+  if (!bytes) return { ok: false, problem: "input_missing", external: true, sourceHash: input.source_hash };
+  const currentHash = sha256(bytes);
+  if (currentHash !== input.source_hash) {
+    return { ok: false, problem: "input_changed", external: true, sourceHash: input.source_hash, currentHash };
+  }
+  return { ok: true, problem: null, external: true, sourceHash: input.source_hash, currentHash };
+}
+
+/** 某 job 全部输入快照的源证据核验（普通续跑 / 首次执行前的统一入口）。 */
+export function verifyInputEvidence(db, { jobId }) {
+  const rows = db.prepare(`SELECT * FROM local_batch_inputs WHERE job_id=? ORDER BY item_id, period, batch_id`).all(jobId);
+  const problems = [];
+  for (const row of rows) {
+    const check = checkInputEvidence(row);
+    if (check.ok) continue;
+    problems.push({
+      itemId: row.item_id, period: row.period, batchId: row.batch_id,
+      problem: check.problem, external: check.external === true,
+    });
+  }
+  return { ok: problems.length === 0, checked: rows.length, problems };
+}
+
 // ---------------------------------------------------------------- 阶段状态
 export function claimStage(db, { stageId, instance, token, inputHash }) {
   const info = db.prepare(`UPDATE local_batch_stages
@@ -754,12 +787,17 @@ export function writeStageResult(db, {
   return Number(info.changes) === 1;
 }
 
-/** 不经过 owner 的结果登记（用于接管已死 owner 后重置 / 取消等管理动作）。 */
-export function resetStage(db, { stageId, status, errorCode, errorMessage }) {
+/**
+ * 不经过 owner 的结果登记（用于接管已死 owner 后重置 / 取消等管理动作）。
+ * evidence 可选：用于把「为什么停下」这类可审计原因写入阶段证据。
+ */
+export function resetStage(db, { stageId, status, errorCode, errorMessage, evidence }) {
   db.prepare(`UPDATE local_batch_stages
-      SET status=?, error_code=?, error_message=?, owner_instance=NULL, fencing_token=NULL, updated_at=?
+      SET status=?, error_code=?, error_message=?, evidence_json=COALESCE(?, evidence_json),
+          owner_instance=NULL, fencing_token=NULL, updated_at=?
       WHERE id=?`)
-    .run(status, errorCode ?? null, errorMessage ? String(errorMessage).slice(0, 500) : null, nowIso(), stageId);
+    .run(status, errorCode ?? null, errorMessage ? String(errorMessage).slice(0, 500) : null,
+      evidence === undefined ? null : canonicalJson(evidence), nowIso(), stageId);
 }
 
 // ---------------------------------------------------------------- 锁 / fencing

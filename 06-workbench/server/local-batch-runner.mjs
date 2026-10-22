@@ -234,6 +234,8 @@ const EVIDENCE_CONFLICT_CODES = new Set([
   "input_changed", "input_missing", "input_snapshot_missing", "input_payload_invalid",
   "account_set_unresolved", "depreciation_run_inconsistent", "depreciation_due_but_no_action",
   "depreciation_amount_mismatch", "year_end_carry_expected", "close_not_confirmed",
+  // 企业与账套绑定不符：保守转人工复核，不写入任何业务数据。
+  "enterprise_binding_mismatch", "enterprise_binding_missing", "account_set_enterprise_mismatch",
 ]);
 
 function stageFailureStatus(error) {
@@ -279,11 +281,40 @@ function markItemPendingCancelled(itemId, reason) {
 }
 
 /**
+ * 把某个 item 从 fromIndex 起的仍未开始阶段标成 needs_review（不执行）。
+ * 用于「前序阶段失败 / 需复核」或「企业与账套绑定无法核实」时停止该 item 的后续阶段，
+ * 已提交的会计动作与已成功阶段保持原样，其它企业继续。
+ */
+function blockPendingStages({ stages, fromIndex = 0, errorCode, errorMessage, evidence }) {
+  let marked = 0;
+  for (let index = fromIndex; index < stages.length; index += 1) {
+    const stage = stages[index];
+    if (stage.status !== STAGE_STATUS.PENDING) continue;
+    storage.resetStage(db, {
+      stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW,
+      errorCode, errorMessage, evidence,
+    });
+    marked += 1;
+  }
+  return marked;
+}
+
+/** 该 item 是否有「首次建账 / 显式新绑定」这类允许尚未绑定的阶段。 */
+function itemAllowsUnboundSet(stages) {
+  return stages.some((stage) => {
+    if (!stage.stage_key.startsWith(`${STAGE_KEYS.IMPORT}:`)) return false;
+    const spec = safeJson(stage.spec_json);
+    return spec.mode === "create" || spec.confirmNewBinding === true;
+  });
+}
+
+/**
  * 主执行流程。返回 { status, jobId, jobKey, active, phases }。
  * 只有持有 job 锁的执行实例能推进阶段；第二个同 jobKey 进程会得到 active=true。
  */
 export async function executeJob({
   job, instance = newInstanceId(), pid = process.pid, hooks = null, log = () => {},
+  allowSnapshotOnly = false,
 } = {}) {
   if (!job) throw batchError("job_required", {});
   const lock = { resourceKey: `job:${job.id}`, instance };
@@ -314,6 +345,27 @@ export async function executeJob({
       const itemReport = { itemKey: item.item_key, itemId: item.id, stages: [] };
       report.items.push(itemReport);
       const stages = listStages(db, item.id);
+      // 每个 item 的**任何**动作（含无 import 的过账 / 计提 / 结转 / 检查 / 结账 / 报表 / 恢复核验）之前，
+      // 先统一核实「规范企业身份 ↔ 账套」绑定：一家企业只有一个账套。
+      // 核实失败直接在本 item 内停止，零业务写入，其它企业继续。
+      let bindingInfo;
+      try {
+        bindingInfo = actions.resolveItemBinding({ db, item, allowUnboundSet: itemAllowsUnboundSet(stages) });
+      } catch (error) {
+        const code = String(error?.code || "enterprise_binding_error").slice(0, 120);
+        itemReport.bindingBlocked = code;
+        itemReport.blockedStages = blockPendingStages({
+          stages, errorCode: code,
+          errorMessage: "企业与账套绑定无法核实：本 item 未执行任何动作",
+          evidence: { reason: "item_binding_unverified", errorCode: code },
+        });
+        const hasPending = stages.some((stage) => stage.status === STAGE_STATUS.PENDING);
+        if (!hasPending) {
+          // 无待办阶段：已成功阶段的上游证据核验会把它们转 needs_review（不盲目续跑）。
+          itemReport.verified = verifySucceededStages(item, stages, job.output_dir);
+        }
+        continue;
+      }
       const hasWork = stages.some((stage) => stage.status === STAGE_STATUS.PENDING);
       if (!hasWork) {
         // 没有待执行阶段，仍核验已成功阶段的上游证据（恢复时不能只看队列表）。
@@ -321,9 +373,12 @@ export async function executeJob({
         continue;
       }
       storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
+      const lockItem = bindingInfo.accountSetId && bindingInfo.accountSetId !== item.account_set_id
+        ? { ...item, account_set_id: bindingInfo.accountSetId }
+        : item;
       let itemLocks;
       try {
-        itemLocks = acquireItemLocks({ item, instance, pid, hooks });
+        itemLocks = acquireItemLocks({ item: lockItem, instance, pid, hooks });
       } catch (error) {
         itemReport.lockBlocked = error?.code || "lock_error";
         for (const stage of stages.filter((entry) => entry.status === STAGE_STATUS.PENDING)) {
@@ -345,12 +400,46 @@ export async function executeJob({
           }
           continue;
         }
-        for (const stage of stages) {
-          if (stage.status !== STAGE_STATUS.PENDING) continue;
+        // 线性按「期间 → 阶段顺序」推进：任何前序 failed / needs_review 都不得被越过去执行后序阶段
+        // （例如 post 失败后绝不能直接补做计提），同一次执行里产生 needs_review 也同样停住该 item。
+        let stop = null;
+        for (let index = 0; index < stages.length; index += 1) {
+          const stage = stages[index];
           if (stage.stage_key.startsWith(`${STAGE_KEYS.REPORT}:`)) continue;
+          if ([STAGE_STATUS.FAILED, STAGE_STATUS.NEEDS_REVIEW].includes(stage.status)) {
+            stop = { index, stage, errorCode: stage.error_code || "prior_stage_unresolved" };
+            break;
+          }
+          if (stage.status !== STAGE_STATUS.PENDING) continue;
           if (jobCancelled(job.id)) {
             itemReport.cancelled = markItemPendingCancelled(item.id, "cancelled_by_operator");
             break;
+          }
+          // 输入源证据：首次执行与普通续跑都核验源文件；显式 --use-saved-inputs 才允许沿用快照，
+          // 且把选择与原因写进阶段证据（不静默改用旧内容）。
+          let inputPolicy = null;
+          if (stage.stage_key.startsWith(`${STAGE_KEYS.IMPORT}:`)) {
+            const importSpec = safeJson(stage.spec_json);
+            const input = storage.getInput(db, { jobId: job.id, itemId: item.id, batchId: importSpec.batchId });
+            const check = storage.checkInputEvidence(input);
+            itemReport.inputEvidence = [...(itemReport.inputEvidence || []), {
+              period: stage.period, batchId: importSpec.batchId, ok: check.ok === true,
+              problem: check.problem ?? null, external: check.external === true,
+            }];
+            if (!check.ok) {
+              const code = String(check.problem || "input_changed").slice(0, 120);
+              if (!allowSnapshotOnly) {
+                storage.resetStage(db, {
+                  stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW, errorCode: code,
+                  errorMessage: "源资料证据已变化 / 丢失：拒绝静默沿用已保存快照",
+                  evidence: { inputEvidence: { problem: code, batchId: importSpec.batchId, period: stage.period } },
+                });
+                itemReport.inputBlocked = code;
+                stop = { index, stage: { ...stage, error_code: code }, errorCode: code };
+                break;
+              }
+              inputPolicy = { mode: "saved_snapshot", problem: code };
+            }
           }
           storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
           renewItemLocks(itemLocks);
@@ -359,7 +448,7 @@ export async function executeJob({
           if (!claim.claimed) continue;
           const ctx = {
             db, stage: claim.stage, item: currentItem, spec: safeJson(stage.spec_json),
-            lock, attempt: claim.attempt, hooks,
+            lock, attempt: claim.attempt, hooks, inputPolicy,
           };
           let result;
           try {
@@ -372,13 +461,33 @@ export async function executeJob({
             if (hooks?.onStageError) hooks.onStageError({ stage: claim.stage, error });
             const failure = failStage({ stage: claim.stage, lock, attempt: claim.attempt, error });
             itemReport.stages.push({ stageKey: stage.stage_key, period: stage.period, ...failure, attempt: claim.attempt });
+            stop = { index, stage: claim.stage, errorCode: failure.errorCode };
             break;
           }
           if (hooks?.afterStageCommit) hooks.afterStageCommit({ stage: claim.stage, item: currentItem, result });
+          if ([STAGE_STATUS.FAILED, STAGE_STATUS.NEEDS_REVIEW].includes(result?.status)) {
+            // 阶段自身登记了 failed / needs_review（如计提应提未提）：同样停止该 item 的后续阶段。
+            stop = { index, stage: claim.stage, errorCode: result.errorCode ?? result.status };
+            break;
+          }
           if (jobCancelled(job.id)) {
             itemReport.cancelled = markItemPendingCancelled(item.id, "cancelled_by_operator");
             break;
           }
+        }
+        if (stop) {
+          itemReport.stopped = {
+            stageKey: stop.stage.stage_key, period: stop.stage.period, errorCode: stop.errorCode,
+          };
+          itemReport.blockedStages = blockPendingStages({
+            stages, fromIndex: stop.index + 1, errorCode: "prior_stage_unresolved",
+            errorMessage: "前序阶段失败 / 需复核：本阶段未执行，待显式 retry 修复后再续跑",
+            evidence: {
+              blockedBy: {
+                period: stop.stage.period, stageKey: stop.stage.stage_key, errorCode: stop.errorCode,
+              },
+            },
+          });
         }
         // 报表快照：仍持有该 item 的锁，保证快照对应的业务证据不被同账套其它执行者改动。
         const pendingReports = listPendingStages(db, item.id).filter((stage) => stage.stage_key.startsWith(`${STAGE_KEYS.REPORT}:`));
@@ -398,14 +507,29 @@ export async function executeJob({
               const kindKey = `${spec.kind}|${spec.code ?? ""}`;
               byPeriod.get(key).set(kindKey, { kind: spec.kind, code: spec.code ?? null });
             }
-            for (const [period, kinds] of byPeriod) {
-              const snapshots = actions.buildReportSnapshots({
-                item: finalItem, period, reports: [...kinds.values()],
-              });
-              for (const snapshot of snapshots.reports) {
-                actions.persistSnapshot({ jobId: job.id, itemId: item.id, snapshot });
+            try {
+              for (const [period, kinds] of byPeriod) {
+                const snapshots = actions.buildReportSnapshots({
+                  item: finalItem, period, reports: [...kinds.values()],
+                });
+                for (const snapshot of snapshots.reports) {
+                  actions.persistSnapshot({ jobId: job.id, itemId: item.id, snapshot });
+                }
+                itemReport.snapshots = [...(itemReport.snapshots || []), { period, kinds: [...kinds.values()].map((entry) => entry.kind) }];
               }
-              itemReport.snapshots = [...(itemReport.snapshots || []), { period, kinds: [...kinds.values()].map((entry) => entry.kind) }];
+            } catch (error) {
+              // 快照 / 参数 / 账套异常只影响本 item 的报表阶段，不把整个 job 变成不可恢复的基础设施错误，
+              // 也不影响其它企业继续执行。
+              const status = stageFailureStatus(error);
+              const code = String(error?.code || "report_snapshot_failed").slice(0, 120);
+              itemReport.snapshotError = { errorCode: code, status };
+              for (const stage of listPendingStages(db, item.id).filter((entry) => entry.stage_key.startsWith(`${STAGE_KEYS.REPORT}:`))) {
+                storage.resetStage(db, {
+                  stageId: stage.id, status, errorCode: code,
+                  errorMessage: "报表快照生成失败：请查看错误码后修复并显式 retry",
+                  evidence: { errorCode: code, phase: "report_snapshot", period: stage.period },
+                });
+              }
             }
           }
         }
@@ -631,21 +755,22 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
 /** 依据已在 DB 之外验证 / 展开的 manifest 计划创建（或幂等返回）job 并执行。 */
 export async function createAndRun({
   manifest, manifestHash, manifestJson, plans, inputs, outputDir, hooks = null, instance = newInstanceId(),
+  allowSnapshotOnly = false,
 }) {
   const resolvedOutput = resolve(outputDir);
   ensureDir(resolvedOutput);
   const { job, created } = storage.createJob(db, {
     manifest, manifestHash, manifestJson, outputDir: resolvedOutput, plans, inputs,
   });
-  const result = await executeJob({ job: getJob(db, job.id), instance, hooks });
+  const result = await executeJob({ job: getJob(db, job.id), instance, hooks, allowSnapshotOnly });
   return { ...result, created, manifestHash };
 }
 
-export async function resumeJob({ jobKey, hooks = null, instance = newInstanceId() } = {}) {
+export async function resumeJob({ jobKey, hooks = null, instance = newInstanceId(), allowSnapshotOnly = false } = {}) {
   const job = getJobByKey(db, jobKey);
   if (!job) throw batchError("job_not_found", { jobKey });
   // 即使 job 已 succeeded 也要真正执行一次：恢复必须先重新核验已成功阶段的上游证据。
-  const result = await executeJob({ job, instance, hooks });
+  const result = await executeJob({ job, instance, hooks, allowSnapshotOnly });
   return result;
 }
 

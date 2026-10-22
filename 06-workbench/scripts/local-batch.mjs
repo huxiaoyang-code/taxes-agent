@@ -213,6 +213,12 @@ async function dispatch({ command, options }) {
         itemKey: item.itemKey,
         cancelled: item.cancelled ?? 0,
         lockBlocked: item.lockBlocked ?? null,
+        bindingBlocked: item.bindingBlocked ?? null,
+        inputBlocked: item.inputBlocked ?? null,
+        inputEvidence: item.inputEvidence ?? [],
+        stopped: item.stopped ?? null,
+        blockedStages: item.blockedStages ?? 0,
+        snapshotError: item.snapshotError ?? null,
         stages: item.stages ?? [],
         snapshots: item.snapshots ?? [],
       })),
@@ -270,11 +276,16 @@ async function dispatch({ command, options }) {
   process.env.WORKBENCH_DATA_DIR = dataDir;
   const runner = await import("../server/local-batch-runner.mjs");
   storage.ensureBatchSchema(runner.database, { freshDatabase: false });
-  if (options.flags.has("--use-saved-inputs")) {
-    // 显式选择「仅用已保存快照续跑」：先核验快照存在，再继续执行。
+  const allowSnapshotOnly = options.flags.has("--use-saved-inputs");
+  if (allowSnapshotOnly) {
+    // 显式选择「仅用已保存快照续跑」：先核验快照存在 / 源文件状态，再继续执行（选择与原因会写进阶段证据）。
     storage.resetStagesForRetry(runner.database, { jobKey, allowSnapshotOnly: true });
   }
-  const result = await runner.resumeJob({ jobKey });
+  // 普通 resume 同样先核验源证据：源文件被改 / 丢失且未显式选择快照时拒绝静默沿用旧内容。
+  // 这里额外给出一份执行前的 job 级源证据摘要（不代替逐阶段核验，也不写任何账务）。
+  const resumeJobRow = storage.getJobByKey(runner.database, jobKey);
+  const inputEvidence = resumeJobRow ? storage.verifyInputEvidence(runner.database, { jobId: resumeJobRow.id }) : null;
+  const result = await runner.resumeJob({ jobKey, allowSnapshotOnly });
   const status = result.finalStatus ?? result.status;
   emit({
     ok: status === storage.JOB_STATUS.SUCCEEDED,
@@ -284,6 +295,8 @@ async function dispatch({ command, options }) {
     status,
     active: result.active === true,
     alreadyComplete: result.alreadyComplete === true,
+    allowSnapshotOnly,
+    inputEvidence,
     renders: result.renders ?? 0,
     reset: result.reset ?? [],
     items: result.items ?? [],

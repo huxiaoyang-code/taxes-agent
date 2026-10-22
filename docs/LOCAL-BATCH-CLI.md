@@ -132,7 +132,17 @@ import(按清单) → post → depreciation → carryforward → period-check �
   报表要核产物文件字节 hash。
 - `not_applicable` 必须有真实领域证据（例如无资产卡片 / 未到计提期 / 已提足），不能用开关绕过。证据存
   `local_batch_stages.evidence_json`（卡片、runs、原因码）。
-- 某 item 阶段失败只停止**该 item** 的后续阶段，其它企业继续。
+- 某 item 阶段失败只停止**该 item** 的后续阶段，其它企业继续。执行器按「期间 → 阶段顺序」线性推进：
+  遇到任何前序 `failed` / `needs_review` 就不再执行后序阶段（后序未开始阶段标 `needs_review` +
+  `prior_stage_unresolved`，证据里记 `blockedBy`）；**同一次执行**内某阶段自身登记 `needs_review`
+  （例如计提「有卡片到期但本次无动作」）同样立刻停止该 item 后序。已提交的会计动作与已成功阶段不倒撤。
+  只有显式 `retry` 才重开这些阶段；`succeeded` / `not_applicable` 永不重跑。
+- 每次执行（首次 `start` 与普通 `resume`）在推进前都要过两道核验，失败一律只影响该 item、零业务写入：
+  1. **企业 ↔ 账套绑定**（一家企业一个账套）：item 声明的账套与 `import_enterprise_account_sets` 绑定不一致 →
+     `enterprise_binding_mismatch`；声明的账套已绑定其它企业 → `account_set_enterprise_mismatch`；
+     非首次建账 / 非显式新绑定却没有任何绑定 → `enterprise_binding_missing`。该核验覆盖**全部**动作，
+     含无 import 的过账 / 计提 / 结转 / 检查 / 结账 / 报表 / 恢复核验，不只在导入分支。
+  2. **源输入证据**（见 §7）：源文件被改 / 丢失且未显式选择快照 → `input_changed` / `input_missing`。
 - `blocked_dependency` 表示依赖接口未就绪（当前 = LOCAL-02 期末检查）；报表不因此停止（内部报表不依赖封账）。
 - 状态转换持久化，每次写入都带 `owner_instance` + `fencing_token` + `attempt` 的 CAS 校验。
 
@@ -186,10 +196,14 @@ import(按清单) → post → depreciation → carryforward → period-check �
 - 读源资料时**一次取得字节**，hash 与 JSON 解析使用同一份字节；超限 / 空文件 / 读一半 / 非法 JSON 一律拒绝。
 - 原始字节存入 `local_batch_inputs`；manifest 规范 JSON 存入 job。源文件之后变化不会改变已保存快照。
 - `retry` / `resume` 前校验源文件：
-  - 文件被改 → `input_changed`（needs_review），不套旧 batchId 继续；
-  - 文件消失 → `input_missing`；
-  - 显式 `--use-saved-inputs` → 仅用受保护快照续跑，并在状态 / 输出里标明 `input_changed_using_saved_snapshot`；
-  - 快照 hash 被改 → 执行时 `input_changed`。
+  - **普通 `resume`（以及首次 `start`）也核验**：源文件被改 → `input_changed`（needs_review，零业务写入），
+    文件消失 → `input_missing`；不会静默把已保存快照的旧内容当成本次结果继续；
+  - 显式 `--use-saved-inputs` → 才允许仅用受保护快照续跑，且导入阶段证据写入
+    `inputEvidence = { mode: "saved_snapshot", reason: "input_changed"|"input_missing", sourceHash }`；
+    未使用该开关时证据为 `mode: "source_file_verified"`（原因留痕，可审计）；
+  - 快照 hash 被改 → 执行时 `input_changed`；
+  - `resume` 输出在 `items[].inputEvidence` / `items[].inputBlocked` 与顶层 `inputEvidence` 中给出执行前的 job 级源证据摘要。
+- **已完成项证据规则保持不变**：已 `succeeded` 的导入沿用其登记快照与逐张 `sourceTrace`，不因源文件后来变化重跑。
 - 崩溃恢复协议：
 
 | 崩溃点 | 恢复行为 |
@@ -208,9 +222,17 @@ import(按清单) → post → depreciation → carryforward → period-check �
 - 五类报表：资产负债表、利润表、现金流量表、科目余额表、明细账（`ledger` 按科目编码）。
 - 主线程在**一个只读事务**内用现有 `buildReportExport` 生成 DTO / CSV，并计算：
   - `dtoHash`（DTO 规范 JSON 哈希）；
-  - `businessHash`（该账套该期间全部已过账凭证 + 分录指纹 + 期初 + 期间状态的摘要）；
+  - `businessHash`（该账套该期间报表**实际依赖**的全部入账数据摘要，见下）；
   - `snapshotHash = H(dtoHash, businessHash, format, code)`。
   事务立即释放，之后不再有数据库写事务。
+- `businessHash` 的边界按报表真实读取范围（`report-export.mjs`）：账套登记（名称 / 启用期间 / 会计准则）、
+  科目定义、**全部**期初余额、该账套自启用期间起到该期末的**全部已过账凭证与分录指纹**（含以前期间、跨年、
+  本年累计；现金流量表还要逐月回看）、以及该期末及以前期间的期间状态。
+  因此以前期间被反过账 / 改金额 / 删除、期初或科目定义变化、期间被重开都会让旧报表证据失效（`needs_review`）；
+  本期之后的数据不在依赖范围内，不进入摘要（不会因后续月份开工就误报失效）。
+- 报表快照异常（例如期间未登记 `period_not_registered`、明细账科目不存在 `account_not_found`、绑定不符）
+  只把**该 item** 的报表阶段标成 `failed` / `needs_review` 并写错误码与证据，其它企业继续执行；
+  不再让整个 job 以参数 / 基础设施错误退出（`exit 2`）。
 - worker 线程（`local-batch-report-worker.mjs`）只消费 DTO，调用已审 LOCAL-05 纯渲染函数；
   **不 import db.mjs / accounting / report-export / buildOfficeExport**，不重算金额。
 - `concurrency` 是真实 worker 线程数（1..8）。SQLite 写串行、渲染并发。同一时刻最多 `concurrency` 个渲染任务被认领。
@@ -236,7 +258,8 @@ import(按清单) → post → depreciation → carryforward → period-check �
 
 ```bash
 node test/local-batch-cli.test.mjs          # 9 组：CLI 契约 / 20 家企业两月真实动作链 / 五类 CSV+XLSX+PDF / 并发证据
-node test/local-batch-persistence.test.mjs  # 18 组：失败隔离 / 崩溃恢复 / 互斥与 fence / 失效证据 / 迁移回滚
+node test/local-batch-persistence.test.mjs  # 23 组：失败隔离 / 前序失败停住 / 一企一套绑定 / 崩溃恢复 / 互斥与 fence /
+                                            #        失效证据 / 输入快照选择 / 报表依赖证据 / 迁移回滚
 ```
 
 两份测试全部使用**真实 CLI 子进程 + 真实 SQLite + 真实领域接口 + 真实 XLSX/PDF 渲染**，
@@ -256,3 +279,7 @@ node test/local-batch-persistence.test.mjs  # 18 组：失败隔离 / 崩溃恢�
 4. 报表仍然是内部报表：数据完整性「未核实」、不是税局申报模板；PDF 依赖本机中文字体，字节可能随字体 / 元数据变化，
    已完成产物按记录 hash 校验，重新生成视为新 attempt。
 5. 未接入税局、未使用真实账套 / 凭据；「20 家企业」是**合成数据**，不代表任何真实客户或税务并发验收。
+6. 报表失效判定按「实际依赖」而非「全账套任意变化」：本期之后的数据、与报表无关的资产卡片变动不会触发重算；
+   但账套登记 / 科目定义 / 期初 / 期间的任何变化都会让相关期间报表证据失效（审慎优先）。
+7. 企业与账套绑定核验依赖 `import_enterprise_account_sets` 这一已合并的上游结构；本 CLI 只读核验，
+   不改绑定、不新增绑定接口。
