@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { extname, join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as A from "./accounting.mjs";
+import { getImportBatch, importIncremental } from "./import-incremental.mjs";
 import { buildReportExport } from "./report-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
@@ -183,6 +184,47 @@ async function api(req, res, url, m) {
   }
   if (p === "/api/import/templates" && m === "GET") {
     return json(res, 200, TEMPLATES);
+  }
+  // 增量导入（LOCAL-01）：稳定来源 / 企业身份 + 批次幂等 + 来源凭证去重 / 冲突。
+  // 与旧导入一致：默认 dryRun=true，只有显式 dryRun=false 才落库。
+  if (p === "/api/import/incremental" && m === "POST") {
+    const b = await readBody(req);
+    const payload = b.payload
+      || (b.texts ? A.parseImportTexts(b.texts, b.meta || {}) : null)
+      || (b.files ? A.parseImportTexts(decodeFiles(b.files, b.encoding), b.meta || {}) : null);
+    try {
+      const result = importIncremental({
+        payload,
+        dryRun: b.dryRun !== false,
+        batchId: b.batchId ?? b.batch_id,
+        source: b.source,
+        mode: b.mode,
+        accountSetId: b.accountSetId ?? b.account_set_id,
+        confirmNewBinding: b.confirmNewBinding === true,
+      });
+      const status = result.status === "applied" ? 201
+        : result.status === "conflict" ? 409
+          : result.status === "rejected" ? 400 : 200;
+      return json(res, status, result);
+    } catch (e) {
+      if (e?.code === "account_set_not_found") {
+        return json(res, 404, { error: "account_set_not_found", message: "目标账套不存在", details: null });
+      }
+      // 事务已回滚；不把失败写成成功，也不向前端泄漏内部细节。
+      return json(res, 500, { error: "import_failed", message: "增量导入失败（事务已回滚）", details: null });
+    }
+  }
+  if (m === "GET" && (match = p.match(/^\/api\/import\/batches\/([^/]+)$/))) {
+    try {
+      return json(res, 200, getImportBatch(decodeURIComponent(match[1])));
+    } catch (e) {
+      const code = e?.code || e?.message;
+      return json(res, code === "batch_not_found" ? 404 : 400, {
+        error: code === "batch_not_found" ? "batch_not_found" : "batchId_required",
+        message: code === "batch_not_found" ? "批次不存在" : "必须提供批次 ID",
+        details: null,
+      });
+    }
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/ledger$/))) {
     const id = +match[1], code = url.searchParams.get("code"), period = url.searchParams.get("period");
