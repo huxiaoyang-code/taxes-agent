@@ -4,6 +4,7 @@
 - 状态（分两段，**不要混读**）：
   1. **纯策略模块已合并**：经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；
   2. **本阶段（适配层）已实现并自测通过，未挂载**：普通工具适配层 + 真实（临时库）调用验收 + MCP 出站信封校验 + 契约 / 任务单 / 交接更新。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口（`agent-tools.mjs` / `server.mjs` / MCP 注册与传输 / `scripts/test-all.mjs`）归 **LOCAL-02（Issue #47，返工中）**，本轮未改。Issue #44 **保持 OPEN**。
+  3. **review1 五项独立审查返工已完成并自测通过（未提交 / 未合并）**：F1 transport 允许键校验、F2 参数快照防串账、F3 摘要必需字段、F4 真实错误码 / create+result、F5 写结果未知语义。最终独立审查、PR、合并仍由管理者后续执行。
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`
 - 实际分支：`codex/huxiaoyang-code/local-08-adapter`（由管理者从上述 main 建立；员工未执行任何 Git 操作）
 - 交付契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)；交接：[handoffs/LOCAL-08](../handoffs/LOCAL-08.md)
@@ -77,10 +78,10 @@
 ```bash
 cd 06-workbench
 node test/finance-output-policy.test.mjs      # 31/31 passed, exit 0
-node test/finance-model-adapter.test.mjs      # 12/12 passed, exit 0
+node test/finance-model-adapter.test.mjs      # 15/15 passed, exit 0
 
 # 仓库根目录
-node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   # 7/7 passed, exit 0
+node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   # 11/11 passed, exit 0
 ```
 
 - 不通过处理：退回同一员工修复，记录阻塞；不得删改旧断言或放宽到「只要不报错」。
@@ -118,8 +119,8 @@ node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   
 | 套件 | 命令（工作目录） | 结果 |
 |---|---|---|
 | 策略模块 | `node test/finance-output-policy.test.mjs`（`06-workbench`） | `31/31 passed`，exit 0 |
-| 适配层 | `node test/finance-model-adapter.test.mjs`（`06-workbench`） | `12/12 passed`，exit 0 |
-| transport | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs`（仓库根） | `7/7 passed`，exit 0 |
+| 适配层 | `node test/finance-model-adapter.test.mjs`（`06-workbench`） | `15/15 passed`，exit 0 |
+| transport | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs`（仓库根） | `11/11 passed`，exit 0 |
 | 领域回归 | `node test/accounting-guards.test.mjs`（`06-workbench`） | `23/23 通过`，exit 0 |
 | 领域回归 | `node test/accounting-derived.test.mjs`（`06-workbench`） | `31/31 通过`，exit 0 |
 | 领域回归 | `node test/import-incremental.test.mjs`（`06-workbench`） | `49/49 通过`，exit 0 |
@@ -129,6 +130,19 @@ node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs   
 - 适配层测试隔离与数据：**先**建全新临时 `WORKBENCH_DATA_DIR`，**再**动态 import 真实模块；测试结束删除临时目录；未读旧后端、未连真实账套、未联网。
 - 独立审查 / 管理者验证 / PR / 合并：**由管理者在本阶段交付后执行**（本文件不写未来 SHA、不预报 PR）。
 - 上一阶段（纯策略模块）审查证据保留：首轮 22/22 审查未过 → 修复 5 项后 28/28，管理者与不参与实现的独立 reviewer 各自实跑通过，PR #50 合并。
+
+### 8.1 review1 五项独立审查返工（本轮实际发生）
+
+| 项 | 修复 | 真实回归 |
+|---|---|---|
+| F1 | transport 每个允许键在所有适用分支完整校验；adapter 版本 / operation / tool / nodeId / category / scope / appliedReason / 错误码 / 目录内置固定语义；projection 只允许固定 token 或期间；getter / Proxy 异常固定失败 | 普通 JSON 负例覆盖成功 / 失败 / write / global / static / catalog / error；真实适配层成功与失败信封仍能通过；11/11 |
+| F2 | 任何异步边界前深拷贝自有 data 属性快照；拒绝访问器 / 原型 / 别名冲突 / 超量；嵌套 payload 固定；查询回显账套不匹配不建引用 | 真实 `callAgentTool` 两账套 A/B：查询改 setId、写改 setId + 改嵌套 entries，断言实际两库行与 ref 所属；参数复用 / 原型 / 别名 / getter 负例；15/15 |
+| F3 | 全部 query 摘要必需字段 / 类型严格校验；缺字段明确失败，不用 0 冒充；真 0 保留 | 真实利润表删除 `data.ytd["营业收入"]`、试算表删除 totals 字段均返回 `model_result_invalid`；真零值收入仍成功；15/15 |
+| F4 | 统一 operationCategory（含 create / node_query / batch_query / unimplemented）、scope（含 result）、固定错误码映射与大驼峰真实码 | 真实 `account_set_create({})`、无效 `book_import_incremental`、缺 nodeId / voucherId、领域查询错误与 dry-run 正例全部通过 transport；11/11 |
+| F5 | 写场景通用连接错误保守 `outcome/writeOutcome:unknown`；仅可证发前失败为 `not_sent`；写操作不自动重试 | 纯函数回归 + 全新合成回环服务（请求发出后断连）验证；11/11 |
+
+- 本轮未提交、未推送、未合并；不得把本次自测写成最终独立审查通过。
+- 仍未完成：共享 HTTP / Agent / MCP / CLI 接线（LOCAL-02 #47 释放所有权后另行小 PR）、3 个套件登记进 `scripts/test-all.mjs`、LOCAL-02 合并后的新期末 / 资产补项工具（工具名与 DTO 稳定后按真实 DTO 补映射 + spec + 测试）。
 
 ## 9. 真实数据边界
 

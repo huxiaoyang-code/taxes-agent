@@ -66,7 +66,8 @@ const { callAgentTool, AGENT_TOOL_NAMES } = await import("../server/agent-tools.
 const { COA } = await import("../server/coa.mjs");
 const ADAPTER = await import("../server/finance-model-adapter.mjs");
 const { FinanceOutputPolicy, OUTPUT_POLICY_VERSION } = await import("../server/finance-output-policy.mjs");
-const { createFinanceModelAdapter, FINANCE_QUERY_AVAILABLE, FINANCE_QUERY_UNIMPLEMENTED, PLAIN_MODEL_TOOLS } = ADAPTER;
+const TRANSPORT = await import("../../05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs");
+const { createFinanceModelAdapter, FINANCE_QUERY_AVAILABLE, FINANCE_QUERY_UNIMPLEMENTED, PLAIN_MODEL_TOOLS, UNIMPLEMENTED_MODEL_TOOLS } = ADAPTER;
 
 // ---------------------------------------------------------------- 执行计数 + 真实适配器
 const executed = [];
@@ -76,6 +77,14 @@ const executeRaw = async (name, args) => {
 };
 const adapter = createFinanceModelAdapter({ executeRaw });
 const policy = adapter.policy;
+const TRANSPORT_REGISTRY = {
+  operations: [
+    ...Object.values(PLAIN_MODEL_TOOLS).map((spec) => spec.operation).filter((operation) => typeof operation === "string"),
+    ...FINANCE_QUERY_AVAILABLE.map((nodeId) => `finance_query:${nodeId}`),
+  ],
+  tools: [...Object.keys(PLAIN_MODEL_TOOLS), ...UNIMPLEMENTED_MODEL_TOOLS],
+  nodeIds: [...FINANCE_QUERY_AVAILABLE, ...FINANCE_QUERY_UNIMPLEMENTED],
+};
 
 async function callExpectExecutions(name, args, times) {
   const before = executed.length;
@@ -777,7 +786,13 @@ await test("async 写语义：真实拒绝 / 同步抛错 / 写后投影失败�
       nodeId: "report.balance_sheet",
       label: "x",
       data: {
-        period: "2026-01", assets: [{ label: "货币资金", value: 1, huge: "y".repeat(4 * 1024 * 1024 + 1) }],
+        period: "2026-01",
+        assets: [
+          { label: "货币资金", value: 1, huge: "y".repeat(4 * 1024 * 1024 + 1) },
+          { label: "应收账款", value: 0 },
+          { label: "存货", value: 0 },
+          { label: "固定资产账面价值", value: 0 },
+        ],
         liabilities: [], totals: { assets: 1, liabilities: 0, equity: 1 }, balanced: true,
       },
     }),
@@ -843,6 +858,186 @@ await test("投影 / 绑定 / 过期 / 伪造 channel：跨账套、换 operatio
   assert.equal(stats.nodeBudget, 1_000_000);
   assert.equal(stats.byteBudget, 64 * 1024 * 1024);
   assert.ok(stats.byteBudget === 67108864);
+});
+
+await test("review2 F2: async 边界前固定参数快照，调用方改账套 / 嵌套 payload 不能串账", async () => {
+  const delayed = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      // 模拟真实 async 工具：在 Promise 挂起之后才读取参数。
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return callAgentTool(name, args);
+    },
+  });
+  const channelD = delayed.policy.issueChannel("local_ui");
+
+  // 查询：预验 C，调用方改成 B；真实执行必须仍是 C，且引用只能属于 C。
+  const queryArgs = { accountSetId: setC.id };
+  const pendingQuery = delayed.callModelTool("account_list", queryArgs);
+  queryArgs.accountSetId = setB.id;
+  const queryEnvelope = await pendingQuery;
+  assert.equal(queryEnvelope.ok, true, `查询不应串账：${JSON.stringify(queryEnvelope.error || null)}`);
+  assert.equal(queryEnvelope.accountSetId, setC.id);
+  const raw = delayed.policy.localRead(queryEnvelope.localRef, {
+    channel: channelD, accountSetId: setC.id, operation: "account_list",
+  });
+  assert.equal(raw.value.accountSetId, setC.id);
+  expectCode(
+    () => delayed.policy.localRead(queryEnvelope.localRef, { channel: channelD, accountSetId: setB.id, operation: "account_list" }),
+    "output_policy_ref_cross_account",
+  );
+
+  // 写：预验 C，调用方改账号并改嵌套 entries；真实必须只写 C 一次，金额保持快照值。
+  const vouchersBeforeC = A.listVouchers(setC.id, { period: "2026-01" }).length;
+  const vouchersBeforeB = A.listVouchers(setB.id).length;
+  const writeArgs = {
+    accountSetId: setC.id, period: "2026-01", summary: X.summary,
+    entries: [
+      { code: "1002", summary: X.counterparty, debit: 11, credit: 0 },
+      { code: "5001", summary: X.person, debit: 0, credit: 11 },
+    ],
+  };
+  const pendingWrite = delayed.callModelTool("voucher_create", writeArgs);
+  writeArgs.accountSetId = setB.id;
+  writeArgs.entries[0].debit = 999;
+  writeArgs.entries.push({ code: "1002", debit: 1, credit: 0 });
+  const writeEnvelope = await pendingWrite;
+  assert.equal(writeEnvelope.ok, true, `写不应串账：${JSON.stringify(writeEnvelope.error || null)}`);
+  assert.equal(writeEnvelope.applied, true);
+  assert.equal(writeEnvelope.accountSetId, setC.id);
+  assert.equal(A.listVouchers(setC.id, { period: "2026-01" }).length, vouchersBeforeC + 1);
+  assert.equal(A.listVouchers(setB.id).length, vouchersBeforeB, "B 账套不得被写入");
+  const createdVoucher = A.listVouchers(setC.id, { period: "2026-01" })
+    .find((voucher) => voucher.id === writeEnvelope.projection.voucherId);
+  assert.deepEqual(createdVoucher.entries.map((entry) => [entry.code, entry.debit, entry.credit]),
+    [["1002", 11, 0], ["5001", 0, 11]]);
+  assertNoLeak(writeEnvelope, "snapshot write envelope");
+
+  // 查询结果回显另一个账套：不建错误绑定引用。
+  const mismatched = createFinanceModelAdapter({
+    executeRaw: async () => ({ accountSetId: setB.id, items: [] }),
+  });
+  const mismatchEnvelope = await mismatched.callModelTool("account_list", { accountSetId: setC.id });
+  assert.equal(mismatchEnvelope.ok, false);
+  assert.equal(mismatchEnvelope.error.code, "model_scope_mismatch");
+  assert.equal("localRef" in mismatchEnvelope, false);
+
+  // 原型继承 / 别名冲突 / 访问器：执行前安全拒绝，不调用真实工具，也不执行 getter。
+  let guardCalls = 0;
+  const guard = createFinanceModelAdapter({
+    executeRaw: async (name, args) => { guardCalls++; return callAgentTool(name, args); },
+  });
+  const inherited = Object.create({ accountSetId: setB.id });
+  inherited.account_set_id = setC.id;
+  const inheritedEnvelope = await guard.callModelTool("account_list", inherited);
+  assert.equal(inheritedEnvelope.ok, false);
+  assert.equal(inheritedEnvelope.error.code, "model_arguments_invalid");
+  const conflictEnvelope = await guard.callModelTool("account_list", {
+    accountSetId: setC.id, account_set_id: setB.id,
+  });
+  assert.equal(conflictEnvelope.ok, false);
+  assert.equal(conflictEnvelope.error.code, "account_set_id_conflict");
+  let accessorCalls = 0;
+  const accessorArgs = {};
+  Object.defineProperty(accessorArgs, "accountSetId", {
+    enumerable: true,
+    get() { accessorCalls++; return setC.id; },
+  });
+  const accessorEnvelope = await guard.callModelTool("account_list", accessorArgs);
+  assert.equal(accessorEnvelope.ok, false);
+  assert.equal(accessorEnvelope.error.code, "model_arguments_invalid");
+  assert.equal(accessorCalls, 0, "参数快照不得执行 getter");
+  assert.equal(guardCalls, 0, "参数非法时不得调用真实工具");
+  assertNoLeak(accessorEnvelope, "snapshot rejection");
+  delayed.policy.dispose();
+});
+
+await test("review2 F3: 真实利润表删除 ytd 字段 / 变形结果必须失败，不用 0 冒充；真零值保留", async () => {
+  const zero = await queryOk("finance_query", {
+    accountSetId: setC.id, nodeId: "report.income_statement", period: "2026-01",
+  });
+  assert.equal(zero.projection.currentRevenue, 0);
+  assert.equal(zero.projection.ytdRevenue, 0);
+
+  const mutateIncome = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      if (name === "finance_query" && value?.data?.ytd) delete value.data.ytd["营业收入"];
+      return value;
+    },
+  });
+  const brokenIncome = await mutateIncome.callModelTool("finance_query", {
+    accountSetId: setC.id, nodeId: "report.income_statement", period: "2026-01",
+  });
+  assert.equal(brokenIncome.ok, false);
+  assert.equal(brokenIncome.error.code, "model_result_invalid");
+  assert.equal(JSON.stringify(brokenIncome).includes("ytdRevenue"), false);
+
+  const mutateTrial = createFinanceModelAdapter({
+    executeRaw: async (name, args) => {
+      const value = await callAgentTool(name, args);
+      if (name === "finance_query" && value?.data?.totals) delete value.data.totals.closing_debit;
+      return value;
+    },
+  });
+  const brokenTrial = await mutateTrial.callModelTool("finance_query", {
+    accountSetId: setC.id, nodeId: "report.trial_balance", period: "2026-01",
+  });
+  assert.equal(brokenTrial.ok, false);
+  assert.equal(brokenTrial.error.code, "model_result_invalid");
+  assertNoLeak(brokenIncome, "broken income summary");
+  assertNoLeak(brokenTrial, "broken trial summary");
+});
+
+await test("review2 F4: 真实 create / 增量 / 缺参错误与未应用写结果都能通过 transport", async () => {
+  const createFailure = await callExpectExecutions("account_set_create", {}, 1);
+  assert.equal(createFailure.ok, false);
+  assert.equal(createFailure.error.code, "name_required");
+  assert.equal(createFailure.operationCategory, "create");
+  assert.equal(createFailure.scope, "result");
+  assert.equal(TRANSPORT.validateModelEnvelope(createFailure, TRANSPORT_REGISTRY).ok, true);
+
+  const incrementalFailure = await callExpectExecutions("book_import_incremental", {}, 1);
+  assert.equal(incrementalFailure.ok, false);
+  assert.equal(incrementalFailure.error.code, "import_validation_failed");
+  assert.equal(incrementalFailure.operationCategory, "create");
+  assert.equal(incrementalFailure.scope, "result");
+  assert.equal(TRANSPORT.validateModelEnvelope(incrementalFailure, TRANSPORT_REGISTRY).ok, true);
+
+  const noNode = await callExpectExecutions("finance_query", { accountSetId: setC.id }, 0);
+  assert.equal(noNode.ok, false);
+  assert.equal(noNode.error.code, "nodeId_required");
+  assert.equal(TRANSPORT.validateModelEnvelope(noNode, TRANSPORT_REGISTRY).ok, true);
+
+  const noVoucher = await callExpectExecutions("voucher_post", { accountSetId: setC.id }, 1);
+  assert.equal(noVoucher.ok, false);
+  assert.equal(noVoucher.error.code, "voucherId_required");
+  assert.equal(TRANSPORT.validateModelEnvelope(noVoucher, TRANSPORT_REGISTRY).ok, true);
+
+  const queryError = await callExpectExecutions("ledger_query", {
+    accountSetId: setC.id, code: "NO-SUCH-CODE", period: "2026-01",
+  }, 1);
+  assert.equal(queryError.ok, false);
+  assert.equal(queryError.error.code, "account_not_found");
+  assert.equal(TRANSPORT.validateModelEnvelope(queryError, TRANSPORT_REGISTRY).ok, true);
+
+  for (const [name, code] of [["voucher_approve", "model_tool_unknown"], ["tax_login_start", "model_tool_tax_excluded"], ["invoice_collect", "model_tool_not_implemented"]]) {
+    const envelope = await callExpectExecutions(name, {}, 0);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.error.code, code);
+    assert.equal(TRANSPORT.validateModelEnvelope(envelope, TRANSPORT_REGISTRY).ok, true);
+  }
+
+  // 真实 legacy dry-run：未应用写结果 applied:false / needsLocalReview:true 保留为正例。
+  const dryRun = await callExpectExecutions("legacy_book_import", {
+    payload: {
+      account_set: { name: X.importName, start_period: "2026-01" },
+      accounts: [], opening_balances: [], vouchers: [],
+    },
+  }, 1);
+  assert.equal(dryRun.ok, true);
+  assert.equal(dryRun.applied, false);
+  assert.equal(dryRun.needsLocalReview, true);
+  assert.equal(TRANSPORT.validateModelEnvelope(dryRun, TRANSPORT_REGISTRY).ok, true);
 });
 
 await test("模型返回 / 错误投影 / 测试日志都不含合成敏感原文", async () => {

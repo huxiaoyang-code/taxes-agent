@@ -51,6 +51,8 @@ projection 只允许：**有限数值**（2 位小数、绝对值 ≤ 1e12）、
 
 `finance_query`（operation = `finance_query:<nodeId>`）：
 
+> 摘要字段的必需性：每个 node 的投影 spec 只读**真实 DTO 的必需字段/类型**；缺字段、类型不符或必需 canonical 行缺失时明确失败（`model_result_invalid` / `output_policy_value_invalid`），**不用 0 或空对象伪造真实数值**。真实的 0 仍正常保留。
+
 | operation | 允许字段 |
 |---|---|
 | `finance_query:enterprise_account.account_set` | `accountSetId` `startPeriod` `taxpayerType`(small_scale/general) `accountingStandard`(small_business/enterprise) `hasDisplayName` |
@@ -237,12 +239,13 @@ adapter.policy.localRead(envelope.localRef, { channel, accountSetId: 5, operatio
   - `create`：`account_set_create` / `legacy_book_import` / `book_import_incremental`。
 - `UNIMPLEMENTED_MODEL_TOOLS`（`declaration_query` / `exec` / `finance_task_status` / `invoice_*`）**不执行**，回固定 `model_tool_not_implemented`；`tax_*` 一律回 `model_tool_tax_excluded`（前缀只用于精确拒绝，**不是**放行规则）；其它未知工具回 `model_tool_unknown`。均不调用 `executeRaw`。
 - **未知 / 未实现 node 不执行**：`model_node_unknown` / `model_node_not_implemented`。
-- **真实返回形状**：`finance_query` 必须回 `{ nodeId, label, data }`；适配层只把 `data` 交给 spec，并先做**每个 node 的必需字段形状检查**（例如资产表必须含 `assets` / `liabilities` / `totals` 数值），否则回 `model_result_invalid`——绝不让 wrapper 或变形 DTO 投影成「全 0 报表」。
+- **真实返回形状**：`finance_query` 必须回 `{ nodeId, label, data }`；适配层只把 `data` 交给 spec，并先做**每个 node 的必需字段形状检查**（例如利润表必须含 `current` / `ytd` 的全部摘要字段，资产表必须含 `assets` / `liabilities` / `totals` 数值），否则回 `model_result_invalid`——绝不让 wrapper 或变形 DTO 投影成「全 0 报表」。
 - **全局上下文（合法全局操作）**：无 `accountSetId` 时 `scope:"global"`，只给 `accountSetCount` / `returnedCount` / `pageOffset` / `pageLimit` / `truncated` / `hasNextPage` / `nextOffset` / `accountSetIds[]` / `startPeriods[]` / `taxpayerTypes[]` / `accountingStandards[]` / `displayNameFlags[]` / `selectionRequirement` / `persisted:false`；**不伪造 `setId=0/1`**，也**不建引用**（`localRef:null`、`refUnavailable:"global_scope"`）。默认每页 10、上限 32；超页大小 / 负 offset 在**执行前**回 `model_context_page_invalid`。指定账套时做真实归属校验（不在列表里回 `account_set_not_found`），并只给该账套的期间计数等摘要。
 - **create 类写动作的 setId 只能来自真实结果**：`account_set_create` 取结果 `id`；`legacy_book_import` 取 `created.id`；`book_import_incremental` 取 `created.accountSetId` / 顶层 `accountSetId` / `batch.accountSetId`（按序，全部校验正安全整数）。没有可信 ID（dry-run / 校验失败 / 未建账）时回**未绑定摘要**：`accountSetId:null`、`localRef:null`、`refUnavailable:"not_applied"|"unbound_scope"`，绝不造假 ID。
 - **`book_import_batch`**：账套只由真实结果 `batch.accountSetId` 决定；入参 `accountSetId` 仅用于核对，不匹配回 `model_scope_mismatch`（绝不替换结果所属账套）。批次 ID / 来源系统 / 企业身份 / 凭证号不出投影。
 - **普通写动作**：`accountSetId` 在执行前校验；若结果回显的 `account_set_id` 与入参不一致，保留真实 `applied` 但不绑定引用（`refUnavailable:"scope_mismatch"`）。
-- **async 写**：先预验 → `await executeRaw` **一次** → 再包装。写失败分两相：执行前拒绝 = `applied:false` + `appliedReason:"rejected_before_execution"`；执行后异常 = `applied:"unknown"` + `needsLocalReview:true` + `refUnavailable:"outcome_unknown"`。**不重复写**。
+- **参数快照（防异步串账）**：`callModelTool` 在任何 `await` 前先把调用参数深拷贝为**只含自有 data 属性**的稳定快照（拒绝访问器 / 非普通原型 / 循环 / 超深超量；`accountSetId` 与 `account_set_id` 冲突直接拒绝），预验与 `executeRaw` 使用同一份规范化账套值；嵌套 `payload` / `entries` 也保持调用瞬间的值。查询结果回显的账套与预验不一致时回 `model_scope_mismatch` 且**不建引用**。
+- **async 写**：先预验 → `await executeRaw` **一次** → 再包装。写失败分两相：执行前拒绝 = `applied:false` + `appliedReason:"rejected_before_execution"`；执行后异常 = `applied:"unknown"` + `appliedReason:"unverified_result"`。两者只要不是 `applied:true` 都标 `needsLocalReview:true`；**不重复写**。
 - 信封附加字段：`adapter`（版本）、`tool`、`scope`、`nodeId`、`accountSetIdSource`（`argument` / `result`）、`operationCategory`。全部是代码常量或已校验值。
 
 ## 11. 出站信封校验（transport，已实现，未挂载）
@@ -260,18 +263,20 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 ```
 
 - 严格字段白名单：未知字段回 `envelope_unexpected_field`；`message` / `details` / `stack` / `path` / `raw` / `apiBase` / 企业名等敏感键回 `envelope_sensitive_field`；两者都**不回显字段名或值**。
-- 契约校验：`outputPolicy === "finance-output-policy/v1"`、`channel === "model"`、`rawValuesIncluded === false`、`ok` 布尔；成功信封必须有 `projection` 与 `localRef`。
-- `operation` 必须是**登记表成员**（登记表由调用方传入，通常来自 `PLAIN_MODEL_TOOLS` + `FINANCE_QUERY_AVAILABLE`），不拼接未验证输入；`nodeId` 同样校验登记表。
-- `projection` 再校验一次形状（数值上限 / token / 期间 / 数组 / 深度 / 节点），`localRef` 必为 `finref_` 形状，`refPersistence` 仅 `process_memory` / `none`，`refExpiresAt` 必须是带引用的 ISO 时间。
-- 写信封：`applied` 三态必须显式，`applied !== true` 时 `needsLocalReview` 必须为 `true`。
-- 运输失败：`TRANSPORT_FAILURES` 固定常量（不可达 / 超时 / 非 JSON / 非 2xx / 非对象 / 各类信封错误）。**写场景一律 `retriable:false` + `writeOutcome:"unknown"` + `retryBlockedBy:"write_outcome_unknown"`**，避免把「可能已落库」误当成可重试；只有只读的不可达 / 超时才是 `retriable:true`。
+- **每个允许键在所有适用分支都完整校验**：成功查询信封不接受 `adapter` 以外的任意版本、`appliedReason`、`error`、`catalog`、`accountSetIdSource`；失败信封如带 `projection` / `appliedReason` / 目录也按同一规则校验；非写失败不接受引用字段；不适用字段直接拒绝，而不是“键名在白名单就放行”。
+- 契约校验：`outputPolicy === "finance-output-policy/v1"`、`adapter === "finance-model-adapter/v1"`、`channel === "model"`、`rawValuesIncluded === false`、`ok` 布尔；成功信封必须有 `projection` 与 `localRef`。
+- `operation` / `tool` / `nodeId` / `operationCategory` / `scope` / `appliedReason` / 错误码 / 目录都使用**模块内置固定登记语义**；调用方另传登记表只能进一步收紧，**不传也不会退化成“只校验形状”**。operation 与 category/scope/tool/nodeId 必须互相一致；错误码必须命中固定 code → category 映射（含 `nodeId_required` / `voucherId_required` 等真实大驼峰码），任意码被拒绝。
+- `projection` 再校验一次形状（数值上限 / **固定受控 token 或期间** / 数组 / 深度 / 节点；任意 ASCII 业务串不能伪装成状态），嵌套敏感键同样拒绝；`localRef` 必为 `finref_` 形状，`refPersistence` 仅 `process_memory` / `none`，`refExpiresAt` 必须是带引用的 ISO 时间，引用与降级原因互斥。
+- 写信封：`applied` 三态必须显式，`applied !== true` 时 `needsLocalReview` 必须为 `true` 并带固定 `appliedReason`；`applied:true` 不接受 `appliedReason`。
+- 运输失败：`TRANSPORT_FAILURES` 固定常量（不可达 / 超时 / 非 JSON / 非 2xx / 非对象 / 各类信封错误）。**通用连接错误（如 unreachable）不能证明未发送，写场景按 `outcome:"unknown"` + `writeOutcome:"unknown"` + `retryBlockedBy:"write_outcome_unknown"` 保守处理**；只有可证发前失败（`backend_not_configured`）才是 `outcome/writeOutcome:"not_sent"`。写场景一律 `retriable:false`；只有只读的不可达 / 超时才是 `retriable:true`。
+- `parseModelEnvelope` / `validateModelEnvelope` 对 getter、Proxy `ownKeys` / `getPrototypeOf` 等反射异常一律转换固定失败码，不抛出原始 message。
 - 校验器**不会总是拒绝**：真实适配层产出的查询 / 写 / 静态 / 全局上下文信封都能通过（已测）。
 
 ## 12. 未实现 / 未接线（明示）
 
 - 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`），员工本轮在分支上新增 3 项测试后为 **31/31、exit 0**（既有 28 项含义保留）。
-- 适配层：**已实现 + 临时库真实调用验收 12/12、exit 0**；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
-- transport：**已实现 + 独立测试 7/7、exit 0**；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
+- 适配层：**已实现 + 临时库真实调用验收 15/15、exit 0**；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
+- transport：**已实现 + 独立测试 11/11、exit 0**；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
 - 因此：**当前真实模型入口仍原样返回原文**，本契约尚未在真实入口生效；Issue #44 保持 OPEN。
 - 未做：磁盘持久化引用、多用户 / 权限体系、按用户隔离、审计落库、批量写队列、`localRead` 的 MCP / CLI 工具。
 - 未验收：真实 HTTP / Agent / MCP / CLI 端到端；真实账套（禁止）；跨重启（设计上失效）。
@@ -290,8 +295,8 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | 套件 | 命令（仓库相对） | 结果 |
 |---|---|---|
 | 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 31/31 passed，exit 0 |
-| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 12/12 passed，exit 0 |
-| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 7/7 passed，exit 0 |
+| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 15/15 passed，exit 0 |
+| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 11/11 passed，exit 0 |
 | 领域回归 | `cd 06-workbench && node test/accounting-guards.test.mjs` | 23/23 通过，exit 0 |
 | 领域回归 | `cd 06-workbench && node test/accounting-derived.test.mjs` | 31/31 通过，exit 0 |
 | 领域回归 | `cd 06-workbench && node test/import-incremental.test.mjs` | 49/49 通过，exit 0 |
@@ -300,3 +305,15 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 未运行：完整 `scripts/test-all.mjs`（新套件**未登记**进该共享入口，属 LOCAL-02 文件；无意义多跑）。未验证：真实 HTTP / MCP 端到端、真实账套、跨重启。
 
 适配层测试的隔离方式：**先**建全新临时 `WORKBENCH_DATA_DIR`，**再**动态 import 真实 `accounting.mjs` / `agent-tools.mjs`，注入真实 `callAgentTool` 实际执行（两企业以上、多账套、合成敏感标记覆盖企业名 / 科目名 / 摘要 / 往来 / 人员 / 资产名 / 源路径 / 企业身份 / 批次 ID / 来源系统）；主要写动作真实落库、手工常量核对金额、断言只执行一次；所有模型返回 / 转换错误 / 测试捕获日志均不含合成标记。
+
+### 14.1 独立审查 review1 五项修复（本轮实际发生）
+
+| 项 | 问题 | 修复 / 回归 |
+|---|---|---|
+| F1 | transport 即使拿到完整登记表，仍允许 adapter / appliedReason / error.message 等任意原文穿过 | 每个允许键在所有分支完整校验；adapter 版本、operation / tool / nodeId / category / scope / appliedReason / 错误码 / 目录内置固定语义；projection 字符串只允许固定 token 或期间；getter / Proxy 异常固定失败；普通 JSON 负例全覆盖 |
+| F2 | 预验 A、异步 executeRaw 读被调用方改成 B，查询引用可读到 B 的 raw | 在任何 await 前深拷贝自有 data 属性快照（拒绝访问器 / 原型 / 别名冲突 / 超量），预验与执行共用同一规范化 `accountSetId`；嵌套 payload 同样固定；查询结果回显账套不匹配不建引用；真实 A/B 两库行与 ref 所属已断言 |
+| F3 | 真实利润表删除 `data.ytd["营业收入"]` 后仍成功且 `ytdRevenue:0` | 全部 query 摘要的必需字段/类型严格校验；缺字段明确 `model_result_invalid`，真 0 保留；真实结果删 ytd / trial totals 字段回归 |
+| F4 | 真实 `account_set_create({})` / 无效增量导入的 `create` + `result` 与 `nodeId_required` / `voucherId_required` 被 transport 误拒 | 两层统一 operationCategory（含 create / node_query / batch_query / unimplemented）、scope（含 result）、固定错误码映射与大驼峰真实码；legacy dry-run applied:false / needsLocalReview:true 保留正例 |
+| F5 | `classifyTransportFailure('unreachable', {forWrite:true})` 同时给出 `outcome:not_sent` 与 `writeOutcome:unknown` | 通用连接错误无法证明未发送，写场景保守 `outcome/writeOutcome:unknown`；仅 `backend_not_configured` 为可证发前 `not_sent`；合成回环服务验证请求发出后断连按 unknown 处理 |
+
+本文件不声称最终独立审查已通过、PR 已创建或已合并；这些仍由管理者后续执行。

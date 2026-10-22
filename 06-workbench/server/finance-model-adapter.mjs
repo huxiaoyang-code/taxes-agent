@@ -18,6 +18,7 @@
 // （回调返回 Promise，写没发生就已被当成功包装）。这里统一按
 // 「先做所有可预验校验 → await 真实写一次 → 再做投影/引用」的顺序，包装阶段失败只降级，
 // 绝不把已发生的写报成失败，也绝不重复执行写。
+import { Buffer } from "node:buffer";
 import {
   FinanceOutputPolicy,
   OUTPUT_POLICY_VERSION,
@@ -61,6 +62,105 @@ const periodOf = (obj, key) => {
 };
 const isPlainArgs = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const policyError = (code) => new OutputPolicyError(code, code);
+
+// ---------------------------------------------------------------- 参数快照（预验与执行必须看到同一份值）
+// `callModelTool` 是 async：如果直接把调用方对象交给 executeRaw，调用方可以在 Promise 挂起期间
+// 改 `args.accountSetId`（或嵌套 entries），形成“预验 A、执行 B”的串账。这里在任何异步边界之前
+// 复制出一份只含自有 data 属性的稳定快照，并拒绝访问器 / 原型 / 别名冲突 / 超量形状。
+const MAX_ARG_DEPTH = 32;
+const MAX_ARG_NODES = 200000;
+const MAX_ARG_BYTES = 4 * 1024 * 1024;
+const MAX_ARG_ARRAY = 20000;
+const BLOCKED_ARG_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function normalizeAccountSetIdValue(raw) {
+  let id;
+  if (typeof raw === "number") id = raw;
+  else if (typeof raw === "string" && raw.trim() !== "") id = Number(raw);
+  else throw policyError("account_set_id_invalid");
+  if (!Number.isSafeInteger(id) || id <= 0) throw policyError("account_set_id_invalid");
+  return id;
+}
+
+function snapshotArguments(args) {
+  let nodes = 0;
+  let bytes = 0;
+  const ancestors = new Set();
+  const walk = (value, depth) => {
+    nodes++;
+    bytes += 8;
+    if (nodes > MAX_ARG_NODES || bytes > MAX_ARG_BYTES) throw policyError("model_arguments_invalid");
+    if (value === null) return null;
+    const type = typeof value;
+    if (type === "string") {
+      bytes += Buffer.byteLength(value, "utf8");
+      if (bytes > MAX_ARG_BYTES) throw policyError("model_arguments_invalid");
+      return value;
+    }
+    if (type === "number") {
+      if (!Number.isFinite(value)) throw policyError("model_arguments_invalid");
+      return value;
+    }
+    if (type === "boolean") return value;
+    if (type === "undefined") return undefined;
+    if (type !== "object") throw policyError("model_arguments_invalid");
+    if (depth > MAX_ARG_DEPTH || ancestors.has(value)) throw policyError("model_arguments_invalid");
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        const length = prop(value, "length");
+        if (!Number.isSafeInteger(length) || length < 0 || length > MAX_ARG_ARRAY) {
+          throw policyError("model_arguments_invalid");
+        }
+        const keys = Object.keys(value);
+        if (keys.length !== length) throw policyError("model_arguments_invalid");
+        if (Object.getOwnPropertySymbols(value).length > 0) throw policyError("model_arguments_invalid");
+        const out = new Array(length);
+        for (let i = 0; i < length; i++) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+          if (!descriptor || !own(descriptor, "value")) throw policyError("model_arguments_invalid");
+          bytes += Buffer.byteLength(String(i), "utf8");
+          out[i] = walk(descriptor.value, depth + 1);
+        }
+        return out;
+      }
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) throw policyError("model_arguments_invalid");
+      if (Object.getOwnPropertySymbols(value).length > 0) throw policyError("model_arguments_invalid");
+      const out = Object.create(null);
+      for (const key of Object.keys(value)) {
+        if (BLOCKED_ARG_KEYS.has(key)) throw policyError("model_arguments_invalid");
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !own(descriptor, "value")) throw policyError("model_arguments_invalid");
+        bytes += Buffer.byteLength(key, "utf8");
+        if (bytes > MAX_ARG_BYTES) throw policyError("model_arguments_invalid");
+        const child = walk(descriptor.value, depth + 1);
+        if (child !== undefined) out[key] = child;
+      }
+      return out;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  const snapshot = walk(args, 0);
+  // 两个别名只能有一个规范化值：冲突直接拒绝，避免预验与真实工具各读一个。
+  const camel = prop(snapshot, "accountSetId");
+  const snake = prop(snapshot, "account_set_id");
+  const camelPresent = camel !== undefined && camel !== null && camel !== "";
+  const snakePresent = snake !== undefined && snake !== null && snake !== "";
+  delete snapshot.account_set_id;
+  if (!camelPresent && !snakePresent) {
+    delete snapshot.accountSetId;
+  } else if (camelPresent && snakePresent) {
+    const a = normalizeAccountSetIdValue(camel);
+    const b = normalizeAccountSetIdValue(snake);
+    if (a !== b) throw policyError("account_set_id_conflict");
+    snapshot.accountSetId = a;
+  } else {
+    snapshot.accountSetId = normalizeAccountSetIdValue(camelPresent ? camel : snake);
+  }
+  return snapshot;
+}
 
 // ---------------------------------------------------------------- finance_query node 登记表
 // 与 agent-tools.mjs 的 QUERY / QUERY_UNIMPLEMENTED 一一对应（本模块不 import 它，因此需
@@ -207,17 +307,12 @@ const REGISTERED_OPERATIONS = new Set([
  * 只接受 number 或数字字符串，避免 `Number(true) === 1` 之类的隐式转换选错账套。
  */
 function readAccountSetId(args, { required }) {
-  const raw = prop(args, "accountSetId") ?? prop(args, "account_set_id");
+  const raw = prop(args, "accountSetId");
   if (raw === undefined || raw === null || raw === "") {
     if (required) throw policyError("account_set_id_required");
     return null;
   }
-  let id;
-  if (typeof raw === "number") id = raw;
-  else if (typeof raw === "string" && raw.trim() !== "") id = Number(raw);
-  else throw policyError("account_set_id_invalid");
-  if (!Number.isSafeInteger(id) || id <= 0) throw policyError("account_set_id_invalid");
-  return id;
+  return normalizeAccountSetIdValue(raw);
 }
 
 /** 全局上下文分页：有界、可继续选择；超界明确拒绝而不是静默少给。 */
@@ -246,47 +341,69 @@ function readPage(args) {
 // 目的：真实 DTO 意外变形时显式失败，而不是投影出一份静默为 0 / 空的“假报表”。
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hasNumber = (obj, key) => typeof prop(obj, key) === "number" && Number.isFinite(prop(obj, key));
+const hasText = (obj, key) => typeof prop(obj, key) === "string";
+const hasAllNumbers = (obj, keys) => keys.every((key) => hasNumber(obj, key));
+const hasEntriesShape = (items) => Array.isArray(items) && items.every((item) => isRecord(item)
+  && hasNumber(item, "debit") && hasNumber(item, "credit"));
+const hasLedgerShape = (value) => isRecord(value) && Array.isArray(prop(value, "items"))
+  && hasEntriesShape(prop(value, "items")) && isRecord(prop(value, "opening"))
+  && hasNumber(prop(value, "opening"), "debit") && hasNumber(prop(value, "opening"), "credit")
+  && hasText(value, "direction") && hasText(value, "period");
 
 const PLAIN_QUERY_SHAPES = Object.freeze({
   voucher_check: (value) => typeof prop(value, "ok") === "boolean"
     && hasNumber(value, "total_debit") && hasNumber(value, "total_credit") && Array.isArray(prop(value, "errors")),
   account_list: (value) => Array.isArray(prop(value, "items")),
-  opening_balance_get: (value) => Array.isArray(prop(value, "items")),
-  period_list: (value) => Array.isArray(prop(value, "items")),
-  ledger_query: (value) => Array.isArray(prop(value, "items")) && isRecord(prop(value, "opening"))
-    && typeof prop(value, "direction") === "string",
-  asset_list: (value) => Array.isArray(value),
+  opening_balance_get: (value) => Array.isArray(prop(value, "items"))
+    && hasEntriesShape(prop(value, "items")),
+  period_list: (value) => Array.isArray(prop(value, "items"))
+    && prop(value, "items").every((item) => isRecord(item) && hasText(item, "status")),
+  ledger_query: hasLedgerShape,
+  asset_list: (value) => Array.isArray(value) && value.every((item) => isRecord(item)
+    && hasText(item, "kind") && hasNumber(item, "original_cost")
+    && hasNumber(item, "accumulated") && hasNumber(item, "remaining")),
   book_import_batch: (value) => isRecord(prop(value, "batch")) && Array.isArray(prop(value, "sourceTrace")),
 });
 
 const FINANCE_QUERY_SHAPES = Object.freeze({
   "enterprise_account.account_set": (data) => isRecord(data) && hasNumber(data, "id")
-    && typeof prop(data, "start_period") === "string",
-  "enterprise_account.subject_system.all": (data) => Array.isArray(data) && listLen(data) > 0,
+    && hasText(data, "start_period") && hasText(data, "name")
+    && hasText(data, "taxpayer_type") && hasText(data, "accounting_standard"),
+  "enterprise_account.subject_system.all": (data) => Array.isArray(data) && listLen(data) > 0
+    && data.every((item) => isRecord(item) && hasText(item, "category")
+      && hasNumber(item, "is_leaf") && hasNumber(item, "contra")),
   // 凭证列表 / 汇总允许真的为空（那是真实业务状态，不是变形）。
   "voucher.generated.list": (data) => Array.isArray(data),
   "voucher.generated.summary": (data) => Array.isArray(data),
   "voucher.draft.summary": (data) => Array.isArray(data),
   "voucher.detail": (data) => isRecord(data) && hasNumber(data, "id")
-    && typeof prop(data, "period") === "string" && Array.isArray(prop(data, "entries")),
+    && hasText(data, "period") && hasText(data, "status") && hasEntriesShape(prop(data, "entries")),
   "report.balance_sheet": (data) => isRecord(data) && Array.isArray(prop(data, "assets"))
     && Array.isArray(prop(data, "liabilities")) && isRecord(prop(data, "totals"))
-    && hasNumber(prop(data, "totals"), "assets") && hasNumber(prop(data, "totals"), "liabilities")
-    && hasNumber(prop(data, "totals"), "equity"),
+    && hasAllNumbers(prop(data, "totals"), ["assets", "liabilities", "equity"])
+    && hasText(data, "period"),
   "report.income_statement": (data) => isRecord(data) && isRecord(prop(data, "current"))
-    && isRecord(prop(data, "ytd")) && hasNumber(prop(data, "current"), "营业收入")
-    && hasNumber(prop(data, "current"), "净利润"),
+    && isRecord(prop(data, "ytd"))
+    && hasAllNumbers(prop(data, "current"), [
+      "营业收入", "营业成本", "销售费用", "管理费用", "财务费用", "利润总额", "净利润",
+    ])
+    && hasAllNumbers(prop(data, "ytd"), ["营业收入", "净利润"])
+    && hasText(data, "period"),
   "report.cash_flow_statement": (data) => isRecord(data) && isRecord(prop(data, "totals"))
-    && isRecord(prop(data, "cash")) && hasNumber(prop(data, "totals"), "operating")
-    && hasNumber(prop(data, "cash"), "begin") && hasNumber(prop(data, "cash"), "end"),
+    && isRecord(prop(data, "cash")) && Array.isArray(prop(data, "operating"))
+    && Array.isArray(prop(data, "investing")) && Array.isArray(prop(data, "financing"))
+    && hasAllNumbers(prop(data, "totals"), ["operating", "investing", "financing", "net_increase"])
+    && hasAllNumbers(prop(data, "cash"), ["begin", "end"]) && hasText(data, "period"),
   "period_end.summary": (data) => isRecord(data) && Array.isArray(prop(data, "periods"))
+    && prop(data, "periods").every((item) => isRecord(item) && hasText(item, "status"))
     && isRecord(prop(data, "trial_balance")) && isRecord(prop(prop(data, "trial_balance"), "totals"))
-    && hasNumber(prop(prop(data, "trial_balance"), "totals"), "closing_debit"),
+    && hasAllNumbers(prop(prop(data, "trial_balance"), "totals"), ["closing_debit", "closing_credit"])
+    && hasText(prop(data, "trial_balance"), "period"),
   "report.trial_balance": (data) => isRecord(data) && Array.isArray(prop(data, "lines"))
-    && isRecord(prop(data, "totals")) && hasNumber(prop(data, "totals"), "closing_debit")
-    && hasNumber(prop(data, "totals"), "closing_credit"),
-  "ledger.general": (data) => isRecord(data) && Array.isArray(prop(data, "items"))
-    && isRecord(prop(data, "opening")) && typeof prop(data, "direction") === "string",
+    && isRecord(prop(data, "totals")) && hasAllNumbers(prop(data, "totals"), [
+      "opening_debit", "opening_credit", "period_debit", "period_credit", "closing_debit", "closing_credit",
+    ]) && hasText(data, "period"),
+  "ledger.general": hasLedgerShape,
 });
 
 /** 从**真实结果**里取账套 ID：只认登记过的可信字段，且必须是正安全整数。 */
@@ -334,7 +451,8 @@ function envelopeFromSafeError(base, { tool: toolName, category, scope, accountS
   if (category === "write" || category === "create") {
     const beforeExecution = executed !== true;
     envelope.applied = beforeExecution ? false : "unknown";
-    envelope.needsLocalReview = !beforeExecution;
+    // 与 policy 的无引用摘要保持一致：只要不是 applied:true 就必须标记本机复核。
+    envelope.needsLocalReview = true;
     envelope.appliedReason = beforeExecution ? "rejected_before_execution" : "unverified_result";
     envelope.projection = Object.freeze({});
     envelope.projectionDropped = 0;
@@ -551,6 +669,8 @@ export function createFinanceModelAdapter(options = {}) {
       accountSetId = readAccountSetId(args, { required: true });
       executed = true;
       const value = await Promise.resolve().then(() => executeRaw(toolName, args));
+      const echoed = resolveEchoedAccountSetId(value);
+      if (echoed !== null && echoed !== accountSetId) throw policyError("model_scope_mismatch");
       const shape = PLAIN_QUERY_SHAPES[operation];
       if (typeof shape !== "function" || !shape(value)) throw policyError("model_result_invalid");
       const summary = summarizeQueryResult(operation, value);
@@ -595,6 +715,8 @@ export function createFinanceModelAdapter(options = {}) {
       }
       if (prop(result, "not_implemented") === true) throw policyError("model_node_not_implemented");
       if (prop(result, "nodeId") !== nodeId || !own(result, "data")) throw policyError("model_result_invalid");
+      const echoed = resolveEchoedAccountSetId(result);
+      if (echoed !== null && echoed !== accountSetId) throw policyError("model_scope_mismatch");
       const data = prop(result, "data");
       const shape = FINANCE_QUERY_SHAPES[nodeId];
       if (typeof shape !== "function" || !shape(data)) throw policyError("model_result_invalid");
@@ -764,9 +886,10 @@ export function createFinanceModelAdapter(options = {}) {
   async function runCreateTool(toolName, spec, args) {
     const operation = spec.operation;
     let executed = false;
+    let claimedAccountSetId = null;
     try {
       // 若调用方给了 accountSetId，只做类型预验（append 模式的目标账套）；null 表示未指定。
-      readAccountSetId(args, { required: false });
+      claimedAccountSetId = readAccountSetId(args, { required: false });
       executed = true;
       const value = await Promise.resolve().then(() => executeRaw(toolName, args));
       const resolvedAccountSetId = resolveCreateAccountSetId(operation, value);
@@ -775,6 +898,10 @@ export function createFinanceModelAdapter(options = {}) {
         // 默认 dry-run / 校验未通过 / 未真正建账：明确「未绑定」，绝不造假 ID。
         const refUnavailable = summary.applied === false ? "not_applied" : "unbound_scope";
         return unboundWriteEnvelope(toolName, operation, summary, refUnavailable);
+      }
+      if (claimedAccountSetId !== null && claimedAccountSetId !== resolvedAccountSetId) {
+        // 入参账套与真实结果不一致：写已经发生，但绝不能把引用绑到另一个账套。
+        return unboundWriteEnvelope(toolName, operation, summary, "scope_mismatch");
       }
       try {
         return {
@@ -807,16 +934,23 @@ export function createFinanceModelAdapter(options = {}) {
     if (!isPlainArgs(args)) {
       return failure("model_arguments_invalid", { tool: name, operation: spec.operation, category: spec.category });
     }
+    let snapshot;
+    try {
+      // 在任何 await / Promise 之前固定参数：预验与 executeRaw 看到同一份规范化值。
+      snapshot = snapshotArguments(args);
+    } catch (error) {
+      return failureFromError(error, { tool: name, operation: spec.operation, category: spec.category });
+    }
     try {
       if (spec.category === "static") {
-        return name === "finance_query_catalog" ? buildStaticCatalog(name) : buildPlanSummary(name, args);
+        return name === "finance_query_catalog" ? buildStaticCatalog(name) : buildPlanSummary(name, snapshot);
       }
-      if (spec.category === "context") return await runContextTool(name, spec, args);
-      if (spec.category === "node_query") return await runFinanceQuery(args);
-      if (spec.category === "query") return await runAccountSetQuery(name, spec, args);
-      if (spec.category === "batch_query") return await runBatchQuery(spec, args);
-      if (spec.category === "write") return await runAccountSetWrite(name, spec, args);
-      return await runCreateTool(name, spec, args);
+      if (spec.category === "context") return await runContextTool(name, spec, snapshot);
+      if (spec.category === "node_query") return await runFinanceQuery(snapshot);
+      if (spec.category === "query") return await runAccountSetQuery(name, spec, snapshot);
+      if (spec.category === "batch_query") return await runBatchQuery(spec, snapshot);
+      if (spec.category === "write") return await runAccountSetWrite(name, spec, snapshot);
+      return await runCreateTool(name, spec, snapshot);
     } catch (error) {
       // 兜底：任何意料之外的异常都只出固定错误码，绝不把 message / details / stack 带回模型。
       return failureFromError(error, { tool: name, operation: spec.operation, category: spec.category });

@@ -737,7 +737,15 @@ await test('review1: 访问器 / 恶意对象不会在摘要阶段触发 getter�
 await test('review1: 字节预算——单个大字符串与累计持有都受限，撤销 / 过期后扣除', () => {
   const longText = '合成长文本'.repeat(20); // 5 个汉字 × 3 B × 20 = 300 B
   assert.equal(Buffer.byteLength(longText, 'utf8'), 300);
-  const small = { period: '2026-01', note: longText }; // 节点很少，字节很多
+  const small = {
+    period: '2026-01',
+    lines: [],
+    totals: {
+      opening_debit: 0, opening_credit: 0, period_debit: 0, period_credit: 0,
+      closing_debit: 0, closing_credit: 0,
+    },
+    note: longText,
+  }; // 节点很少，字节很多
 
   // （1）单值字节上限：节点预算把不住，必须靠字节预算
   expectCode(
@@ -899,7 +907,7 @@ await test('adapter-prep: 普通工具 DTO spec 存在，无引用摘要只回�
   assertNoLeak(accounts.projection, 'account_list projection');
 
   const batch = summarizeQueryResult('book_import_batch', {
-    batch: { id: X.taxId, status: 'completed', mode: 'create', accountSetId: 9, result: { vouchersCreated: 2 } },
+    batch: { id: X.taxId, status: 'completed', mode: 'create', accountSetId: 9, result: { accountSetCreated: false, vouchersCreated: 2, vouchersDeduplicated: 0 } },
     source: { system: X.person, enterpriseKey: X.taxId },
     sourceTrace: [{ sourceVoucherId: X.taxId, voucherId: 31, state: 'ok' }, { state: 'inconsistent' }],
     voucherCount: 2,
@@ -907,6 +915,7 @@ await test('adapter-prep: 普通工具 DTO spec 存在，无引用摘要只回�
   assert.deepEqual(batch.projection, {
     batchStatus: 'completed', batchMode: 'create', accountSetId: 9, traceCount: 2, okTraceCount: 1,
     inconsistentTraceCount: 1, voucherCount: 2, accountSetCreated: false, vouchersCreated: 2,
+    vouchersDeduplicated: 0,
   });
   assertNoLeak(batch.projection, 'book_import_batch projection');
 

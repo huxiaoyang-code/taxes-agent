@@ -106,6 +106,43 @@ const int = (obj, key) => {
   const v = num(obj, key);
   return Number.isSafeInteger(v) && v > 0 ? v : undefined;
 };
+const invalidSummary = (what) => new OutputPolicyError("output_policy_value_invalid", `摘要必需字段缺失或类型不符：${what}`);
+const requireNum = (obj, key) => {
+  const v = prop(obj, key);
+  if (typeof v !== "number" || !Number.isFinite(v)) throw invalidSummary(key);
+  return v;
+};
+const requireText = (obj, key) => {
+  const v = prop(obj, key);
+  if (typeof v !== "string") throw invalidSummary(key);
+  return v;
+};
+const requireBoolean = (obj, key) => {
+  const v = prop(obj, key);
+  if (typeof v !== "boolean") throw invalidSummary(key);
+  return v;
+};
+const requirePositiveInt = (obj, key) => {
+  const v = int(obj, key);
+  if (v === undefined) throw invalidSummary(key);
+  return v;
+};
+const requireRecord = (obj, key) => {
+  const v = prop(obj, key);
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw invalidSummary(key);
+  return v;
+};
+const requireArray = (obj, key, max = MAX_RAW_ARRAY) => {
+  const v = prop(obj, key);
+  if (!Array.isArray(v)) throw invalidSummary(key);
+  if (listLen(v) > max) throw new OutputPolicyError("output_policy_value_too_large", `${key} 数组长度超过上限`);
+  return v;
+};
+const requireArrayValue = (value, what, max = MAX_RAW_ARRAY) => {
+  if (!Array.isArray(value)) throw invalidSummary(what);
+  if (listLen(value) > max) throw new OutputPolicyError("output_policy_value_too_large", `${what} 数组长度超过上限`);
+  return value;
+};
 const periodOf = (obj, key) => {
   const v = text(obj, key);
   return typeof v === "string" && PROJ_PERIOD_RE.test(v) ? v : undefined;
@@ -125,7 +162,12 @@ const money = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v
 const sumField = (list, key) => {
   let total = 0;
   const length = listLen(list);
-  for (let i = 0; i < length; i++) total += num(prop(list, i), key) || 0;
+  for (let i = 0; i < length; i++) {
+    const row = prop(list, i);
+    const value = prop(row, key);
+    if (typeof value !== "number" || !Number.isFinite(value)) throw invalidSummary(key);
+    total += value;
+  }
   return total;
 };
 /** 引用参数先验类型：`REF_PATTERN.test(obj)` 会对对象调用 ToString，等于执行用户代码。 */
@@ -339,14 +381,13 @@ export function measureRawValue(root, maxNodes = DEFAULT_VALUE_NODES) {
 // ---------------------------------------------------------------- 查询 projection 规格
 // 每个 spec 只按固定键名取值：键名是代码常量，不是数据驱动，未知字段默认不出现。
 const voucherListSummary = (value) => {
-  const list = Array.isArray(value) ? value : [];
+  const list = requireArrayValue(value, "vouchers");
   const length = listLen(list);
-  if (length > MAX_RAW_ARRAY) throw new OutputPolicyError("output_policy_value_too_large", "凭证数量超过上限");
   let entries = 0, posted = 0, draft = 0;
   for (let i = 0; i < length; i++) {
     const v = at(prop(list, i));
-    entries += listLen(listOf(v, "entries"));
-    const status = text(v, "status");
+    entries += listLen(requireArray(v, "entries"));
+    const status = requireText(v, "status");
     if (status === "posted") posted++;
     else if (status === "draft") draft++;
   }
@@ -369,17 +410,22 @@ const lineValue = (rows, label) => {
   const length = listLen(rows);
   for (let i = 0; i < length; i++) {
     const row = at(prop(rows, i));
-    if (text(row, "label") === label) return num(row, "value");
+    if (text(row, "label") === label) {
+      const value = prop(row, "value");
+      if (typeof value !== "number" || !Number.isFinite(value)) throw invalidSummary(label);
+      return value;
+    }
   }
-  return undefined;
+  throw invalidSummary(label);
 };
 const voucherDetailSummary = (value) => {
   const v = at(value);
-  const entries = listOf(v, "entries");
+  const entries = requireArray(v, "entries");
   const debit = sumField(entries, "debit");
   const credit = sumField(entries, "credit");
   return {
-    voucherId: int(v, "id"), period: periodOf(v, "period"), status: enumToken(STATUS_TOKENS, text(v, "status")),
+    voucherId: requirePositiveInt(v, "id"), period: requireText(v, "period"),
+    status: requireText(v, "status"),
     lineCount: listLen(entries), totalDebit: money(debit), totalCredit: money(credit),
     balanced: Math.abs(debit - credit) < 0.005,
   };
@@ -388,32 +434,33 @@ const voucherDetailSummary = (value) => {
 // ---- 普通工具（非 finance_query）的真实 DTO 摘要 ----
 // 账套 / 科目目录：只给计数与受控枚举，科目编码、名称一律不返回。
 const accountDirectorySummary = (value) => {
-  const accounts = Array.isArray(value) ? value : itemsOf(value);
+  const accounts = Array.isArray(value) ? value : requireArray(at(value), "items");
   const length = listLen(accounts);
-  if (length > MAX_RAW_ARRAY) throw new OutputPolicyError("output_policy_value_too_large", "科目数量超过上限");
   const counts = { assets: 0, liabilities: 0, equity: 0, cost: 0, profit_loss: 0 };
   let leaf = 0, contra = 0;
   for (let i = 0; i < length; i++) {
     const account = at(prop(accounts, i));
-    const token = enumToken(CATEGORY_TOKENS, text(account, "category"));
+    const token = enumToken(CATEGORY_TOKENS, requireText(account, "category"));
     if (token) counts[token]++;
-    if (num(account, "is_leaf") === 1) leaf++;
-    if (num(account, "contra") === 1) contra++;
+    if (requireNum(account, "is_leaf") === 1) leaf++;
+    if (requireNum(account, "contra") === 1) contra++;
   }
   return { accountCount: length, leafCount: leaf, contraCount: contra, byCategory: counts };
 };
 // 明细账：兼容 finance_query（裸 generalLedger）与 ledger_query（带 accountSetId 的包装）。
 const ledgerSummary = (value) => {
   const ledger = at(value);
-  const items = listOf(ledger, "items");
-  const opening = at(prop(ledger, "opening"));
-  const openingDebit = num(opening, "debit") || 0;
-  const openingCredit = num(opening, "credit") || 0;
+  const period = requireText(ledger, "period");
+  const direction = requireText(ledger, "direction");
+  const items = requireArray(ledger, "items");
+  const opening = requireRecord(ledger, "opening");
+  const openingDebit = requireNum(opening, "debit");
+  const openingCredit = requireNum(opening, "credit");
   const periodDebit = sumField(items, "debit");
   const periodCredit = sumField(items, "credit");
   return {
-    period: periodOf(ledger, "period"),
-    direction: enumToken(DIRECTION_TOKENS, text(ledger, "direction")),
+    period,
+    direction: enumToken(DIRECTION_TOKENS, direction),
     itemCount: listLen(items),
     openingDebit: money(openingDebit), openingCredit: money(openingCredit),
     periodDebit: money(periodDebit), periodCredit: money(periodCredit),
@@ -422,7 +469,7 @@ const ledgerSummary = (value) => {
 };
 // 期初余额读取：只给条数与借贷合计（含是否平衡），不返回科目编码或逐项金额。
 const openingBalanceSummary = (value) => {
-  const items = itemsOf(value);
+  const items = requireArray(at(value), "items");
   const debit = sumField(items, "debit");
   const credit = sumField(items, "credit");
   return {
@@ -433,11 +480,11 @@ const openingBalanceSummary = (value) => {
 };
 // 期间清单：只给状态计数。
 const periodListSummary = (value) => {
-  const items = itemsOf(value);
+  const items = requireArray(at(value), "items");
   const length = listLen(items);
   let open = 0, closed = 0;
   for (let i = 0; i < length; i++) {
-    const status = text(at(prop(items, i)), "status");
+    const status = requireText(at(prop(items, i)), "status");
     if (status === "open") open++;
     else if (status === "closed") closed++;
   }
@@ -446,28 +493,30 @@ const periodListSummary = (value) => {
 // 凭证预检：只给是否通过、错误条数与借贷合计。
 const voucherCheckSummary = (value) => {
   const v = at(value);
-  const debit = num(v, "total_debit") || 0;
-  const credit = num(v, "total_credit") || 0;
+  const ok = requireBoolean(v, "ok");
+  const debit = requireNum(v, "total_debit");
+  const credit = requireNum(v, "total_credit");
+  const errors = requireArray(v, "errors");
   return {
-    checkOk: prop(v, "ok") === true,
-    errorCount: listLen(listOf(v, "errors")),
+    checkOk: ok,
+    errorCount: listLen(errors),
     totalDebit: money(debit), totalCredit: money(credit),
     balanced: Math.abs(debit - credit) < 0.005,
   };
 };
 // 资产卡片清单：只给张数与金额合计，卡片名称 / 科目编码不返回。
 const assetListSummary = (value) => {
-  const cards = Array.isArray(value) ? value : [];
+  const cards = requireArrayValue(value, "asset cards");
   const length = listLen(cards);
-  if (length > MAX_RAW_ARRAY) throw new OutputPolicyError("output_policy_value_too_large", "资产卡片数量超过上限");
   let fixed = 0, intangible = 0, cost = 0, accumulated = 0, remaining = 0;
   for (let i = 0; i < length; i++) {
     const card = at(prop(cards, i));
-    if (text(card, "kind") === "intangible") intangible++;
+    const kind = requireText(card, "kind");
+    if (kind === "intangible") intangible++;
     else fixed++;
-    cost += num(card, "original_cost") || 0;
-    accumulated += num(card, "accumulated") || 0;
-    remaining += num(card, "remaining") || 0;
+    cost += requireNum(card, "original_cost");
+    accumulated += requireNum(card, "accumulated");
+    remaining += requireNum(card, "remaining");
   }
   return {
     cardCount: length, fixedCount: fixed, intangibleCount: intangible,
@@ -477,25 +526,33 @@ const assetListSummary = (value) => {
 // 导入批次审计：批次 ID / 来源系统 / 企业身份 / 凭证号一律不返回，只给状态 token 与计数。
 const batchAuditSummary = (value) => {
   const v = at(value);
-  const batch = at(prop(v, "batch"));
-  const result = at(prop(batch, "result"));
-  const trace = listOf(v, "sourceTrace");
+  const batch = requireRecord(v, "batch");
+  const resultValue = prop(batch, "result");
+  const result = resultValue === null || resultValue === undefined ? null : at(resultValue);
+  if (resultValue !== null && resultValue !== undefined && result === EMPTY) throw invalidSummary("batch.result");
+  const trace = requireArray(v, "sourceTrace");
   const length = listLen(trace);
   let ok = 0, inconsistent = 0;
   for (let i = 0; i < length; i++) {
-    const state = text(at(prop(trace, i)), "state");
+    const state = requireText(at(prop(trace, i)), "state");
     if (state === "ok") ok++;
     else if (state === "inconsistent") inconsistent++;
   }
+  const batchStatus = requireText(batch, "status");
+  const batchMode = requireText(batch, "mode");
+  const accountSetId = int(batch, "accountSetId");
+  if (accountSetId === undefined && prop(batch, "accountSetId") !== undefined
+    && prop(batch, "accountSetId") !== null) throw invalidSummary("batch.accountSetId");
+  const voucherCount = requireNum(v, "voucherCount");
   return {
-    batchStatus: enumToken(BATCH_STATUS_TOKENS, text(batch, "status")),
-    batchMode: enumToken(MODE_TOKENS, text(batch, "mode")),
-    accountSetId: int(batch, "accountSetId"),
+    batchStatus: enumToken(BATCH_STATUS_TOKENS, batchStatus),
+    batchMode: enumToken(MODE_TOKENS, batchMode),
+    accountSetId,
     traceCount: length, okTraceCount: ok, inconsistentTraceCount: inconsistent,
-    voucherCount: num(v, "voucherCount"),
-    accountSetCreated: prop(result, "accountSetCreated") === true,
-    vouchersCreated: num(result, "vouchersCreated"),
-    vouchersDeduplicated: num(result, "vouchersDeduplicated"),
+    voucherCount,
+    accountSetCreated: result ? requireBoolean(result, "accountSetCreated") : undefined,
+    vouchersCreated: result ? requireNum(result, "vouchersCreated") : undefined,
+    vouchersDeduplicated: result ? requireNum(result, "vouchersDeduplicated") : undefined,
   };
 };
 
@@ -503,11 +560,11 @@ const QUERY_SPECS = dict({
   "finance_query:enterprise_account.account_set": (value) => {
     const set = at(value);
     return {
-      accountSetId: int(set, "id"),
-      startPeriod: periodOf(set, "start_period"),
-      taxpayerType: enumToken(TAXPAYER_TOKENS, text(set, "taxpayer_type")),
-      accountingStandard: enumToken(STANDARD_TOKENS, text(set, "accounting_standard")),
-      hasDisplayName: (text(set, "name") || "").length > 0,
+      accountSetId: requirePositiveInt(set, "id"),
+      startPeriod: requireText(set, "start_period"),
+      taxpayerType: enumToken(TAXPAYER_TOKENS, requireText(set, "taxpayer_type")),
+      accountingStandard: enumToken(STANDARD_TOKENS, requireText(set, "accounting_standard")),
+      hasDisplayName: requireText(set, "name").length > 0,
     };
   },
   "finance_query:enterprise_account.subject_system.all": accountDirectorySummary,
@@ -517,93 +574,96 @@ const QUERY_SPECS = dict({
   "finance_query:voucher.detail": voucherDetailSummary,
   "finance_query:report.balance_sheet": (value) => {
     const sheet = at(value);
-    const totals = at(prop(sheet, "totals"));
-    const assets = listOf(sheet, "assets");
-    const liabilities = listOf(sheet, "liabilities");
-    const totalAssets = num(totals, "assets") || 0;
-    const totalLiabilities = num(totals, "liabilities") || 0;
-    const totalEquity = num(totals, "equity") || 0;
+    const totals = requireRecord(sheet, "totals");
+    const assets = requireArray(sheet, "assets");
+    const liabilities = requireArray(sheet, "liabilities");
+    const totalAssets = requireNum(totals, "assets");
+    const totalLiabilities = requireNum(totals, "liabilities");
+    const totalEquity = requireNum(totals, "equity");
     return {
-      period: periodOf(sheet, "period"),
+      period: requireText(sheet, "period"),
       assets: money(totalAssets), liabilities: money(totalLiabilities), equity: money(totalEquity),
       balanced: prop(sheet, "balanced") === true
         || Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.005,
       lineCount: listLen(assets) + listLen(liabilities),
       // 固定 canonical 行（标签来自 accounting.mjs 代码常量，不是数据内容）
-      cash: money(lineValue(assets, "货币资金") || 0),
-      receivables: money(lineValue(assets, "应收账款") || 0),
-      inventory: money(lineValue(assets, "存货") || 0),
-      fixedAssetsNet: money(lineValue(assets, "固定资产账面价值") || 0),
+      cash: money(lineValue(assets, "货币资金")),
+      receivables: money(lineValue(assets, "应收账款")),
+      inventory: money(lineValue(assets, "存货")),
+      fixedAssetsNet: money(lineValue(assets, "固定资产账面价值")),
     };
   },
   "finance_query:report.income_statement": (value) => {
     const statement = at(value);
-    const current = at(prop(statement, "current"));
-    const ytd = at(prop(statement, "ytd"));
-    const line = (source, label) => money(num(source, label) || 0);
+    const current = requireRecord(statement, "current");
+    const ytd = requireRecord(statement, "ytd");
     return {
-      period: periodOf(statement, "period"),
-      currentRevenue: line(current, "营业收入"),
-      currentCost: line(current, "营业成本"),
-      currentExpenses: line(current, "销售费用") + line(current, "管理费用") + line(current, "财务费用"),
-      currentProfitBeforeTax: line(current, "利润总额"),
-      currentNetProfit: line(current, "净利润"),
-      ytdRevenue: line(ytd, "营业收入"),
-      ytdNetProfit: line(ytd, "净利润"),
+      period: requireText(statement, "period"),
+      currentRevenue: money(requireNum(current, "营业收入")),
+      currentCost: money(requireNum(current, "营业成本")),
+      currentExpenses: money(requireNum(current, "销售费用") + requireNum(current, "管理费用")
+        + requireNum(current, "财务费用")),
+      currentProfitBeforeTax: money(requireNum(current, "利润总额")),
+      currentNetProfit: money(requireNum(current, "净利润")),
+      ytdRevenue: money(requireNum(ytd, "营业收入")),
+      ytdNetProfit: money(requireNum(ytd, "净利润")),
     };
   },
   "finance_query:report.cash_flow_statement": (value) => {
     const statement = at(value);
-    const totals = at(prop(statement, "totals"));
-    const cash = at(prop(statement, "cash"));
-    const operating = num(totals, "operating") || 0;
-    const investing = num(totals, "investing") || 0;
-    const financing = num(totals, "financing") || 0;
-    const begin = num(cash, "begin") || 0;
-    const end = num(cash, "end") || 0;
+    const totals = requireRecord(statement, "totals");
+    const cash = requireRecord(statement, "cash");
+    const operating = requireNum(totals, "operating");
+    const investing = requireNum(totals, "investing");
+    const financing = requireNum(totals, "financing");
+    const netIncrease = requireNum(totals, "net_increase");
+    const begin = requireNum(cash, "begin");
+    const end = requireNum(cash, "end");
+    const operatingRows = requireArray(statement, "operating");
+    const investingRows = requireArray(statement, "investing");
+    const financingRows = requireArray(statement, "financing");
     return {
-      period: periodOf(statement, "period"),
+      period: requireText(statement, "period"),
       operating: money(operating), investing: money(investing), financing: money(financing),
-      netIncrease: money(num(totals, "net_increase") || operating + investing + financing),
+      netIncrease: money(netIncrease),
       cashBegin: money(begin), cashEnd: money(end), cashChange: money(end - begin),
       reconciles: prop(statement, "reconciles") === true,
-      lineCount: listLen(listOf(statement, "operating")) + listLen(listOf(statement, "investing"))
-        + listLen(listOf(statement, "financing")),
+      lineCount: listLen(operatingRows) + listLen(investingRows) + listLen(financingRows),
     };
   },
   "finance_query:report.trial_balance": (value) => {
     const balance = at(value);
-    const totals = at(prop(balance, "totals"));
-    const closingDebit = num(totals, "closing_debit") || 0;
-    const closingCredit = num(totals, "closing_credit") || 0;
+    const totals = requireRecord(balance, "totals");
+    const closingDebit = requireNum(totals, "closing_debit");
+    const closingCredit = requireNum(totals, "closing_credit");
     return {
-      period: periodOf(balance, "period"),
-      lineCount: listLen(listOf(balance, "lines")),
-      openingDebit: money(num(totals, "opening_debit") || 0),
-      openingCredit: money(num(totals, "opening_credit") || 0),
-      periodDebit: money(num(totals, "period_debit") || 0),
-      periodCredit: money(num(totals, "period_credit") || 0),
+      period: requireText(balance, "period"),
+      lineCount: listLen(requireArray(balance, "lines")),
+      openingDebit: money(requireNum(totals, "opening_debit")),
+      openingCredit: money(requireNum(totals, "opening_credit")),
+      periodDebit: money(requireNum(totals, "period_debit")),
+      periodCredit: money(requireNum(totals, "period_credit")),
       closingDebit: money(closingDebit), closingCredit: money(closingCredit),
       balanced: Math.abs(closingDebit - closingCredit) < 0.005,
     };
   },
   "finance_query:period_end.summary": (value) => {
     const summary = at(value);
-    const periods = listOf(summary, "periods");
+    const periods = requireArray(summary, "periods");
     const periodCount = listLen(periods);
     let open = 0, closed = 0;
     for (let i = 0; i < periodCount; i++) {
-      const status = text(at(prop(periods, i)), "status");
+      const status = requireText(at(prop(periods, i)), "status");
       if (status === "open") open++;
       else if (status === "closed") closed++;
     }
-    const balance = at(prop(summary, "trial_balance"));
-    const totals = at(prop(balance, "totals"));
-    const closingDebit = num(totals, "closing_debit") || 0;
-    const closingCredit = num(totals, "closing_credit") || 0;
+    const balance = requireRecord(summary, "trial_balance");
+    const totals = requireRecord(balance, "totals");
+    const closingDebit = requireNum(totals, "closing_debit");
+    const closingCredit = requireNum(totals, "closing_credit");
     return {
       periodCount, openPeriodCount: open, closedPeriodCount: closed,
-      period: periodOf(balance, "period"),
+      period: requireText(balance, "period"),
       closingDebit: money(closingDebit), closingCredit: money(closingCredit),
       balanced: Math.abs(closingDebit - closingCredit) < 0.005,
     };
@@ -936,11 +996,16 @@ const ERROR_CODES = dict({
   model_node_unknown: "tool",
   model_node_not_implemented: "tool",
   model_arguments_invalid: "input",
+  account_set_id_conflict: "input",
   model_context_page_invalid: "input",
   model_scope_mismatch: "input",
   model_result_invalid: "output_policy",
   // ---- main 里已有、会被入口转发的领域域码（只回声常量，不回声原文）----
+  operation_failed: "unknown",
+  accountSetId_required: "account_set",
+  accountSetId_invalid: "account_set",
   nodeId_required: "input",
+  items_required: "input",
   import_validation_failed: "import",
   import_conflict: "import",
   batch_not_found: "import",
@@ -1418,7 +1483,7 @@ export class FinanceOutputPolicy {
       projection,
       projectionDropped: dropped,
       localRef: stored.ref,
-      refPersistence: REF_PERSISTENCE,
+      refPersistence: stored.ref ? REF_PERSISTENCE : "none",
       rawValuesIncluded: false,
     };
     if (evidence.reason) envelope.appliedReason = evidence.reason;
