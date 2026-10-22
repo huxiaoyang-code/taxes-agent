@@ -1,6 +1,10 @@
 # 代码管理索引 · CODE INDEX
 
-> **2026-10-22 新增（本机产品路线）：[增量导入契约](LOCAL-IMPORT.md)** · [任务](tasks/LOCAL-01.md) · [交接](handoffs/LOCAL-01.md) · [八包总览](tasks/INDEPENDENT-PRODUCT-WORK.md)。新增 `06-workbench/server/import-incremental.mjs`（领域：三种导入用法 / **一企一账套规范企业身份** / 批次 / 内容指纹 / 去重与结构化冲突 / 凭证状态核验 / 自动号码预分配 / 单事务）、`import-storage.mjs`（**schema v3**：企业→账套唯一关系 + 来源证据 + 落库指纹 + `import_batch_vouchers` 逐张批次关联，**先备份后建新结构**的迁移事务，迁移失败重新备份且不复用过期快照），并接线 `db.mjs`、`server.mjs`（`POST /api/import/incremental`、`GET /api/import/batches/:id`）、`agent-tools.mjs`（`book_import_incremental` / `book_import_batch`）与 MCP `tools.mjs`（同两个工具，`origin: local`）；旧 `importAccountSet` / `legacy_book_import` 不变。测试：上一冻结候选 `npm test` **47 / 47 套 exit 0**；最后定向修复后实跑领域 49 / 49、HTTP + Agent 22 / 22、MCP 7 / 7，均 exit 0（合成临时库 + 随机回环端口）；最终代码未重跑全套。最后定向返工：`create` 同批回放也核验当前真实期初（合法 API 改期初后不再伪报 replay），实际执行 / 查询 / 回放统一 `sourceTrace` 逐张 DTO。**税局现场仍暂停、真实接入仍 0**；本包不影响税局模块。状态：**已验收合并**：基线 `0c4e0dd` → 已审 head `e12e71e` → [PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 已实际 MERGED → merge `1a15bcce`（北京时间 2026-10-22 17:13:24），独立审查无剩余阻塞；最终代码只实跑受影响三套，未重跑全套 47 套，仓库无 CI。
+> **2026-10-22 新增（合并后兼容整合）：[本机备份 / 验证 / 恢复契约](LOCAL-BACKUP.md)** · [任务](tasks/LOCAL-06-BACKUP.md) · [交接](handoffs/LOCAL-06-BACKUP.md)。备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 合入（merge `98977e0`，已审源码 head `b2dcba3`），但它当时**严格只认 schema v3**，而 LOCAL-02 已把产品推到 v4（`asset_cards` 5 列）；本轮把 `06-workbench/server/local-backup.mjs` 改为 **v3 / v4 两份独立精确契约**（列 / 类型 / NOT NULL / **默认值** / 主键 / UNIQUE / 外键完整集合与动作 / 迁移记录连续性 / 迁移前备份记录），逐表校验且**不出现契约外的表**；版本号只用于选契约——只抬高版本号、缺列、错默认值 / NOT NULL / 类型、迁移记录不连续、未来 v5+、未知组件表、以及「篡改快照后重算清单摘要」的伪兼容全部拒绝。v3 旧备份只读验证 / 恢复到全新目录（不迁移备份与源库），只由产品入口显式打开才升 v4；v4 备份用真实产品合成库（资产补项 + 期初累计 + 连续两期计提与总账 + 真实封账 + 导入批次来源）实际 `backup → verify → restore-new` 并再用真实入口读取与继续记账 / 计提。测试：`node test/local-backup.test.mjs` **20 / 20 exit 0**（原 16 项保留 + 4 项新增）；`npm test` **53 / 53 套 exit 0**（本套件与已合入的 `finance-output-policy` / `report-office-export` 仅追加登记，原 50 套顺序 / 内容不变）。状态：**实现与自测完成，未提交 / 未建 PR / 未合并**，最终独审待做；head / merge 由管理者后补。
+
+> **2026-10-22 新增（本机产品路线）：[会计金额 / 期末完整性契约](ACCOUNTING-PERIOD-INTEGRITY.md)** · [任务](tasks/LOCAL-02.md) · [交接](handoffs/LOCAL-02.md) · [八包总览](tasks/INDEPENDENT-PRODUCT-WORK.md)。新增 `06-workbench/server/money.mjs`（人民币**分精度** + 唯一 `ROUND_HALF_UP`；上限按完整原值判定；极小负数 / 极小正数不静默归 0；存续金额不受单笔上限约束；不可保分合计显式拒绝）与 `period-end-controls.mjs`（七步期末检查 / 封账前置 / 前期可改性守卫 / 卡片期间状态 + 卡片与总账核对）；`accounting.mjs` 全金额路径改整数分、折旧分期表在寿命内恰好提足、期间口径累计不被后期污染、结转失效检测；`import-storage.mjs` schema **v4**（`asset_cards` 加 `acquired_period` / `opening_accumulated` / `ledger_status` / `ledger_note` / `origin`，先备份后建结构）；接线 `server.mjs`（`GET /api/account-sets/:id/period-end-check`、`PATCH /api/account-sets/:id/assets/:assetId`、守卫错误码 → 409）、`agent-tools.mjs` 与 MCP `tools.mjs`（`period_end_check` / `asset_update`，`origin: local`）。更晚期间已封账或已过账派生凭证（年末结转 / 普通损益结转 / 计提）时，新建 / 过账 / 反过账 / 删除 / 反结账 / 计提 / 结转 / 增量导入与资产卡片事实维护一致拒绝并给撤销顺序；未入账登记不豁免原值核对也不得计提。测试口径：**最终代码**实跑 `npm test` **50 / 50 套 exit 0**（本包新增领域 **43 / 43**、HTTP + Agent **17 / 17**、MCP **5 / 5**，全合成临时库 + 随机回环端口）。**旧候选 50 / 50（38 / 13 / 4）不代表最终通过**：最终独审（review2）实测四个阻塞——旧折旧草稿重过账仍按原金额过账、凭证亚分金额静默存 0、未入账登记未按取得期间过滤、巨大寿命先落库后 DTO 抛错——已逐项修复并补先红后绿回归；review3 再补一项同影响面 P2（取得期间晚于计提期时生成 / 校验两套口径矛盾导致「删了又生成 → 立即 stale」循环），已统一复用 `expectedDepreciationCents` 并补定向回归（域 43→**45**、HTTP 17→**18**，MCP 5）。管理者实施中提前复现的四类金额边界与独立预审 F1–F4 / 历史状态残留均已修复并补定向回归。**税局现场仍暂停、真实接入仍 0**；本包不碰税局模块。状态：**实现与自测完成（含 review1 F1–F4、review2 P1–P4 与 review3 取得期间一致性 P2 定向返工），未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**；head / merge 由管理者后补，本条不预报。
+
+> **2026-10-22 前包已验收合并：[增量导入契约](LOCAL-IMPORT.md)** · [任务](tasks/LOCAL-01.md) · [交接](handoffs/LOCAL-01.md) · [八包总览](tasks/INDEPENDENT-PRODUCT-WORK.md)。新增 `06-workbench/server/import-incremental.mjs`（领域：三种导入用法 / **一企一账套规范企业身份** / 批次 / 内容指纹 / 去重与结构化冲突 / 凭证状态核验 / 自动号码预分配 / 单事务）、`import-storage.mjs`（**schema v3**：企业→账套唯一关系 + 来源证据 + 落库指纹 + `import_batch_vouchers` 逐张批次关联，**先备份后建新结构**的迁移事务，迁移失败重新备份且不复用过期快照），并接线 `db.mjs`、`server.mjs`（`POST /api/import/incremental`、`GET /api/import/batches/:id`）、`agent-tools.mjs`（`book_import_incremental` / `book_import_batch`）与 MCP `tools.mjs`（同两个工具，`origin: local`）；旧 `importAccountSet` / `legacy_book_import` 不变。测试：上一冻结候选 `npm test` **47 / 47 套 exit 0**；最后定向修复后实跑领域 49 / 49、HTTP + Agent 22 / 22、MCP 7 / 7，均 exit 0（合成临时库 + 随机回环端口）；最终代码未重跑全套。最后定向返工：`create` 同批回放也核验当前真实期初（合法 API 改期初后不再伪报 replay），实际执行 / 查询 / 回放统一 `sourceTrace` 逐张 DTO。**税局现场仍暂停、真实接入仍 0**；本包不影响税局模块。状态：**已验收合并**：基线 `0c4e0dd` → 已审 head `e12e71e` → [PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 已实际 MERGED → merge `1a15bcce`（北京时间 2026-10-22 17:13:24），独立审查无剩余阻塞；最终代码只实跑受影响三套，未重跑全套 47 套，仓库无 CI。
 
 > **2026-10-21 新增：[税局接口目录](TAX-API-CATALOG.md)** · [任务](tasks/TAX-API-CATALOG.md) · [交接](handoffs/TAX-API-CATALOG.md)。把现成逆向报告明确列举的税局接口整理成 29 模块 / 131 条结构化目录，后端与 MCP 可检索 / 分页 / 详情 / 参数校验 / 调用准备，并附统一结果分类器。只读合同：未连接税局，本包线上已验证 0 条；完整可调用契约 0 条（缺响应 / 企业 / 权限前置条件）。初审问题已修复，待冻结后复审。
 
@@ -21,6 +25,7 @@
 | 我想…… | 去哪里 |
 |---|---|
 | 增量导入（连续多月 / 去重 / 幂等） | [增量导入契约](LOCAL-IMPORT.md) · [任务](tasks/LOCAL-01.md) · `06-workbench/server/import-incremental.mjs` |
+| 金额精度 / 折旧计提 / 期末检查 / 封账前置 / 反操作守卫 | [会计金额与期末完整性](ACCOUNTING-PERIOD-INTEGRITY.md) · [任务](tasks/LOCAL-02.md) · `06-workbench/server/money.mjs` · `period-end-controls.mjs` |
 | 看本机产品路线的八包计划 | [本机独立产品工作](tasks/INDEPENDENT-PRODUCT-WORK.md) |
 | 跑起来看效果 | [§6 命令速查](#6-命令速查) → `06-workbench` |
 | 看线上站点分析结论 | [`../REPORT.md`](../REPORT.md) |
@@ -82,6 +87,8 @@
 │   ├── agent-tools.mjs   工具注册与输入校验、真实能力目录
 │   ├── tax-gateway.mjs   税务会话/地区适配契约（真实接入数 0）
 │   ├── accounting.mjs    领域层：账套/科目/期初/期间/凭证/余额/报表
+│   ├── money.mjs         金额：人民币分精度与十进制边界规则
+│   ├── period-end-controls.mjs  期末检查 / 封账前置 / 前期可改性守卫
 │   ├── coa.mjs           领域数据：小企业会计准则科目表
 │   └── db.mjs            持久层：SQLite 建表与连接
 ├── public/               前端（零构建）
@@ -104,7 +111,9 @@
 |---|---|---|---|
 | `db.mjs` | `db` | 建表/连接（account_sets, accounts, opening_balances, periods, vouchers(**kind**), voucher_entries, asset_cards, asset_depreciation_runs）含老库自动迁移 | `node:sqlite` |
 | `coa.mjs` | `COA`, `STANDARDS` | 标准科目表（60+，含备抵科目标记 `contra`） | — |
-| `accounting.mjs` | 账套/科目/期初/期间：`createAccountSet` `listAccounts` `setOpeningBalances` `ensurePeriod` `setPeriodStatus`；凭证：`checkVoucher` `createVoucher` `listVouchers` `getVoucher` `postVoucher` `unpostVoucher` `deleteVoucher`；报表：`accountBalances` `trialBalance` `balanceSheet` `incomeStatement` `generalLedger` `cashFlowStatement`；**P1**：`carryForwardProfit` `listAssetCards` `addAssetCard` `deleteAssetCard` `listDepreciationRuns` `generateDepreciation`；**导入**：`parseCsv` `parseImportTexts` `validateImportPayload` `importAccountSet` | 全部记账与报表算法 | `db.mjs`, `coa.mjs` |
+| `accounting.mjs` | 账套/科目/期初/期间：`createAccountSet` `listAccounts` `setOpeningBalances` `ensurePeriod` `setPeriodStatus` `periodEndCheck`；凭证：`checkVoucher` `createVoucher` `listVouchers` `getVoucher` `postVoucher` `unpostVoucher` `deleteVoucher`；报表：`accountBalances` `trialBalance` `balanceSheet` `incomeStatement` `generalLedger` `cashFlowStatement`；**P1**：`carryForwardProfit` `listAssetCards` `addAssetCard` `updateAssetCard` `deleteAssetCard` `listDepreciationRuns` `generateDepreciation`；**导入**：`parseCsv` `parseImportTexts` `validateImportPayload` `importAccountSet` | 全部记账与报表算法（金额一律整数分） | `db.mjs`, `coa.mjs`, `money.mjs`, `period-end-controls.mjs` |
+| `money.mjs` | `parseMoney` `requireCents` `storedCents` `centsToNumber` `formatCents` `sumCents` `mulCentsByRatio` `mulDivCents` `splitEvenlyCents` `monthsBetween` | 人民币分精度与十进制边界规则（唯一 `ROUND_HALF_UP`、上限 / 负数 / 非有限 / 保分输出校验） | — |
+| `period-end-controls.mjs` | `buildPeriodEndCheck` `assertPeriodCloseable` `assertPeriodMutable` `assertAssetCardWriteAllowed` `assetCardPeriodStatus` `cardMoney` `balancesThrough` | 期末七步检查、封账前置、前期可改性守卫、资产卡片维护守卫、卡片期间状态与卡片/总账核对 | `money.mjs` |
 
 ### 3.2 接口层 `server/`
 

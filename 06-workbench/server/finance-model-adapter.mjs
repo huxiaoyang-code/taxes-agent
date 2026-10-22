@@ -26,6 +26,7 @@ import {
   SUPPORTED_OPERATIONS,
   OutputPolicyError,
   enumTokenOf,
+  isPeriodEndCheckConsistent,
   safeErrorProjection,
   sanitizeProjection,
   summarizeQueryResult,
@@ -254,6 +255,8 @@ export const PLAIN_MODEL_TOOLS = Object.freeze({
   period_list: tool("period_list", "query", "account_set"),
   ledger_query: tool("ledger_query", "query", "account_set"),
   asset_list: tool("asset_list", "query", "account_set"),
+  // LOCAL-02 新增只读期末检查：与封账前置同一规则，输出仅经固定白名单投影。
+  period_end_check: tool("period_end_check", "query", "account_set"),
   book_import_batch: tool("book_import_batch", "batch_query", "batch"),
   voucher_create: tool("voucher_create", "write", "account_set"),
   voucher_post: tool("voucher_post", "write", "account_set"),
@@ -263,6 +266,9 @@ export const PLAIN_MODEL_TOOLS = Object.freeze({
   opening_balance_set: tool("opening_balance_set", "write", "account_set"),
   account_create: tool("account_create", "write", "account_set"),
   asset_create: tool("asset_create", "write", "account_set"),
+  // LOCAL-02 新增资产维护：明确归为写动作，只有显式写调用才执行；
+  // 未知 / 只读工具不会因名称相似被当成写执行。
+  asset_update: tool("asset_update", "write", "account_set"),
   depreciation_run: tool("depreciation_run", "write", "account_set"),
   carry_forward_profit: tool("carry_forward_profit", "write", "account_set"),
   account_set_create: tool("account_set_create", "create", "result"),
@@ -374,6 +380,12 @@ const hasLedgerShape = (value) => isRecord(value) && Array.isArray(prop(value, "
   && hasEntriesShape(prop(value, "items")) && isRecord(prop(value, "opening"))
   && hasNumber(prop(value, "opening"), "debit") && hasNumber(prop(value, "opening"), "credit")
   && hasText(value, "direction") && hasText(value, "period");
+// 期末检查只读 DTO：结构 + `ready` / 步骤 / 阻塞的**全局一致性**由 policy 的纯函数校验
+// （与本模块同属纯模块，不 import period-end-controls.mjs，避免把会打开业务 DB 的模块
+// 拉进模型边界）。缺步骤 / 重复步骤 / 未知状态 / ready 与 blocking 或 blocked 步骤矛盾 /
+// 阻塞不归属到真实 blocked 步骤，一律视为结果无效，不建引用。
+const hasPeriodEndCheckShape = (value) => isRecord(value) && hasText(value, "period")
+  && isPeriodEndCheckConsistent(value);
 
 const PLAIN_QUERY_SHAPES = Object.freeze({
   voucher_check: (value) => typeof prop(value, "ok") === "boolean"
@@ -384,6 +396,7 @@ const PLAIN_QUERY_SHAPES = Object.freeze({
   period_list: (value) => Array.isArray(prop(value, "items"))
     && prop(value, "items").every((item) => isRecord(item) && hasText(item, "status")),
   ledger_query: hasLedgerShape,
+  period_end_check: hasPeriodEndCheckShape,
   asset_list: (value) => Array.isArray(value) && value.every((item) => isRecord(item)
     && hasText(item, "kind") && hasNumber(item, "original_cost")
     && hasNumber(item, "accumulated") && hasNumber(item, "remaining")),

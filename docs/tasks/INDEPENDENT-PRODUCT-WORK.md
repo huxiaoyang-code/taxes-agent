@@ -1,7 +1,10 @@
 # 本机独立产品工作 · 八包总览
 
-状态：**规划表 + LOCAL-01 已验收合并（源码 [PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46)）、LOCAL-05a / LOCAL-08 独立模块进行中**。用户 2026-10-22 新指示允许恢复本机产品
-方向的工作，覆盖旧的「暂停本地扩建」；**税局现场仍然暂停**，真实接入数仍为 **0**，本文件不把任何税局能力写成已打通。
+状态（2026-10-22 最终）：**LOCAL-01 已验收合并**（源码 [PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) + 交接 PR #48，已审 head `e12e71e`、merge `1a15bcce`）；
+**LOCAL-02 最终候选已独立审查接受，每项在其自身候选上独立接受（核心 `review_core02_final` 在 `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0`、其业务源码经后续到 98a 未改变；输出协议 `review_output08_final` 在 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795`、源后续未改；备份 `review_backup06_final` 在精确 98a），
+源码 head `98a29d1c2e3e8d2e513aadf79a0aca7b04cc45c7`，已创建 Draft [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60)，未合并**；
+**LOCAL-06 备份 PR #55 已合（当时只认 v3）、审计 A PR #58 已合，v3 / v4 扩展在 PR #60 内待合；LOCAL-05a 纯模块 PR #52 已合、真实 HTTP / UI 预整合未合；LOCAL-08 策略 PR #50 与 adapter / transport PR #57 已合、共享入口仍未接线（Issue #44 OPEN）；LOCAL-03 / 04 / 07 已审候选未合；Windows 交付（Issue #59）实施中不预报**。
+用户 2026-10-22 新指示允许恢复本机产品方向的工作，覆盖旧「暂停本地扩建」；**税局现场仍然暂停**，真实接入数仍为 **0**，本文件不把任何税局能力写成已打通；也不预报任何审查结论 / head / merge SHA。
 
 - 负责人（全部包）：`huxiaoyang-code`（已核实）；总载体 [Issue #20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)，
   业务追踪 `Refs #13` / `Refs #14` / `Refs #17`。
@@ -19,17 +22,18 @@
 | 包 | 目标（对应原任务单） | 主要依赖 | 状态 |
 |---|---|---|---|
 | **LOCAL-01 定向增量导入与连续月份** | 首次建账与向指定已有账套追加两种入口；来源标识 / 批次 / 幂等判定 / 重复与修订冲突报告；预检与正式共用规则；开放期间追加、失败原子回滚、导入来源记录（**增量导入**） | 无（首个可开工包） | **已验收合并**：[PR #46](https://github.com/huxiaoyang-code/youshu-fork/pull/46) 已实际 MERGED，已审 head `e12e71e`、merge `1a15bcce`（北京时间 2026-10-22 17:13:24），独立审查无剩余阻塞（[任务单](LOCAL-01.md) · [契约](../LOCAL-IMPORT.md) · [交接](../handoffs/LOCAL-01.md)） |
-| LOCAL-02 会计金额、期末完整性与连续期间 | 金额精度 / 舍入一致策略、资产卡片与总账核对、必需期末步骤与封账前置、反操作对后续期间的影响（**金额 / 期末**） | LOCAL-01 | 已分配 / 待开工 |
-| LOCAL-03 双准则与辅助核算 | 先两套准则的科目 / 报表映射与兼容迁移，再项目 / 部门 / 往来辅助维度贯通期初、发生额、余额与查询（**双准则 / 辅助**） | LOCAL-01、LOCAL-02 | 已分配 / 待开工 |
-| LOCAL-04 银行流水与对账 | 本地流水文件导入与字段映射、流水去重、与银行账匹配、人工确认 / 取消匹配、差异与未达项、对账状态与期间关联（**银行对账**；不接银行网站、不新增凭据服务） | LOCAL-01 批次语义、LOCAL-03 必要科目 / 往来契约 | 已分配 / 待开工 |
-| LOCAL-05 内部 Excel/PDF 与报表准确性 | 两条线：**05a** 独立 Excel/PDF 导出模块及接线（复用稳定报表 DTO）；**05b** 会计核心中的双准则映射、复杂现金流与独立金额核验（**Excel/PDF 与口径**） | 05a 可并行；05b 随 LOCAL-02 / LOCAL-03 串行 | **05a 进行中**（独立导出模块，Issue #45；模块常规 16 项 / 7 个 PDF 共 31 页初验通过，**超长字段边界返工中**，不声称已整体完成）；**05b 已分配 / 待开工** |
-| LOCAL-06 审计、备份恢复与本机交付 | 账务关键动作审计；SQLite 一致性备份 / 恢复；版本化迁移与回退；干净 Windows 安装 / 启动 / 升级说明及验证（**审计 / 备份 / 本机交付**） | 随每次持久化设计同步；LOCAL-01 首次迁移前先满足最小恢复条件 | 已分配 / 待开工 |
-| LOCAL-07 持久批量任务与 CLI | 多账套批量导入 / 计提 / 结转 / 结账 / 出表的持久任务状态与阶段检查点、逐账套结果、重试 / 取消边界、重启恢复、同账套互斥、去重及 CLI（**持久批量 CLI**） | LOCAL-01 / LOCAL-02 / LOCAL-06 与已稳定导出 | 已分配 / 待开工 |
-| LOCAL-08 普通财务工具的数据输出边界 | 区分操作者本机查看与模型工具输出；普通财务工具的最小化摘要、受控引用、必要本机计算路径与明确错误，保持本机合法查看 / 导出能力（**普通财务模型边界**） | 独立投影 / 策略模块可并行；`agent-tools.mjs` / MCP 注册 / 后端接口串行接线 | **进行中**：独立模块 28 项已过独审，但**尚未实际接线**，Issue #44（证据归该包自身任务 / 交接，本包不产出、不预报结果） |
+| LOCAL-02 会计金额、期末完整性与连续期间 | 金额精度 / 舍入一致策略、资产卡片与总账核对、必需期末步骤与封账前置、反操作对后续期间的影响（**金额 / 期末**） | LOCAL-01 | **最终候选已独审接受（核心在 `bd05415`、输出在 `3a8ae7a`、备份在精确 98a，各自独立接受），Draft [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 未合并**（[Issue #47](https://github.com/huxiaoyang-code/youshu-fork/issues/47)，基线 `1a15bcce`（源码），分支 `codex/huxiaoyang-code/local-02`）：源码 head `98a29d1c`（含已合 main `e86d248`）；root 在精确 98a 实跑完整 `npm test` **55 / 55 套 exit 0**、Office **21 / 21**、**11 PDF** 几何、备份 **22 / 22**（合成临时库 + 随机回环端口）；文档验收与实际 merge 由 root 执行（[任务单](LOCAL-02.md) · [契约](../ACCOUNTING-PERIOD-INTEGRITY.md) · [交接](../handoffs/LOCAL-02.md)） |
+| LOCAL-03 双准则与辅助核算 | 先两套准则的科目 / 报表映射与兼容迁移，再项目 / 部门 / 往来辅助维度贯通期初、发生额、余额与查询（**双准则 / 辅助**） | LOCAL-01、LOCAL-02 | 纯规则候选 `47866a32` 独审通过、root 41；**未合**，B1 待 02 落到实际 main；辅助维度**未实施** |
+| LOCAL-04 银行流水与对账 | 本地流水文件导入与字段映射、流水去重、与银行账匹配、人工确认 / 取消匹配、差异与未达项、对账状态与期间关联（**银行对账**；不接银行网站、不新增凭据服务） | LOCAL-01 批次语义、LOCAL-03 必要科目 / 往来契约 | 纯模块与安装 / backup 候选，A 修复 `c8f490c6` 正在独审；**未合**；bank backup 完整索引键同步与 03 契约未完成，**不报整体验收** |
+| LOCAL-05 内部 Excel/PDF 与报表准确性 | 两条线：**05a** 独立 Excel/PDF 导出模块及接线（复用稳定报表 DTO）；**05b** 会计核心中的双准则映射、复杂现金流与独立金额核验（**Excel/PDF 与口径**） | 05a 可并行；05b 随 LOCAL-02 / LOCAL-03 串行 | **05a 纯模块 [PR #52](https://github.com/huxiaoyang-code/youshu-fork/pull/52) 已合；真实 HTTP / UI 预整合候选 `d5816078` 员工 / manager 各 56 通过 + 11 PDF、独立条件接受，未合，待 02 落到实际 main 后最终同步**；**05b 待开工**（复杂 CF + 双准则准确性属后续） |
+| LOCAL-06 审计、备份恢复与本机交付 | 账务关键动作审计；SQLite 一致性备份 / 恢复；版本化迁移与回退；干净 Windows 安装 / 启动 / 升级说明及验证（**审计 / 备份 / 本机交付**） | 随每次持久化设计同步；LOCAL-01 首次迁移前先满足最小恢复条件 | **备份子包已验收合并**（[PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)，merge `98977e0`，已审源码 head `b2dcba3`，**当时只认 v3**）；**审计 A 已合**（Issue #54，[PR #58](https://github.com/huxiaoyang-code/youshu-fork/pull/58)，final `c923c62`、merge `e86d248`，2026-10-22T12:59:58Z，**仅原语 / 只读 CLI**，28 audit + 22 ledger 管理验证、原独审 9 组接受；实际业务接线 / 现库安装 / 恢复链未完成）；**v3 / v4 备份扩展（两份精确契约 + 唯一性键语义）在 Draft PR #60 候选内，独立 `review_backup06_final` 已在精确 98a 接受（自跑 22 / 22 exit 0），未合并**；**LOCAL-06 整体仍未完成**，也不支持 v0–v2、未来 v5+ 与 bank / batch / audit 组件（[契约](../LOCAL-BACKUP.md) · [任务](LOCAL-06-BACKUP.md) · [交接](../handoffs/LOCAL-06-BACKUP.md)） |
+| LOCAL-07 持久批量任务与 CLI | 多账套批量导入 / 计提 / 结转 / 结账 / 出表的持久任务状态与阶段检查点、逐账套结果、重试 / 取消边界、重启恢复、同账套互斥、去重及 CLI（**持久批量 CLI**） | LOCAL-01 / LOCAL-02 / LOCAL-06 与已稳定导出 | 模块 / CLI 最终 `11f1877f` 独审通过（**限已实现范围**），root 9 + 25；**未合**；真实 20 家 7 阶段、共享互斥、备份恢复集成未完，**不能宣传 `<1s` 锁上限** |
+| LOCAL-08 普通财务工具的数据输出边界 | 区分操作者本机查看与模型工具输出；普通财务工具的最小化摘要、受控引用、必要本机计算路径与明确错误，保持本机合法查看 / 导出能力（**普通财务模型边界**） | 独立投影 / 策略模块可并行；`agent-tools.mjs` / MCP 注册 / 后端接口串行接线 | 策略 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50)、adapter / transport [PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) **已合**（PR57 merge `db6020a`）；**输出协议 2 项 P2 回修（`3a8ae7a`，独立 `review_output08_final` 接受）与 02 真实 DTO 兼容在 Draft PR #60 候选内**；**共享 HTTP / Agent / MCP 调用入口仍未接线，Issue #44 保持 OPEN** |
 
 ## 核心修改主线（按原任务单并行约束）
 
-1. **LOCAL-01 已验收合并；下一核心为 LOCAL-02 金额 / 期末完整性**；可同时推进 LOCAL-05 的独立导出模块（05a）、LOCAL-06 的独立备份工具或 LOCAL-08 的投影策略。
+1. **LOCAL-01 已验收合并；LOCAL-02 最终候选已独审接受、待 root 文档验收与合并**；LOCAL-05 的独立导出模块（05a，已合）、
+   LOCAL-06 的备份工具（PR #55 已合，v3 / v4 扩展在 PR #60 内）或 LOCAL-08 的投影策略（PR #50 / #57 已合）可并行推进。
 2. **LOCAL-01 → LOCAL-02 → LOCAL-03 是核心修改主线**；LOCAL-04 依赖明确契约后接入；
    LOCAL-07 完成真实本地操作集成后验收；LOCAL-06 需随每次持久化设计同步，首次迁移前先满足最小恢复条件。
 3. 共享文件（`accounting.mjs` / `coa.mjs` / `db.mjs` / `server.mjs` / `agent-tools.mjs` / MCP 注册 /

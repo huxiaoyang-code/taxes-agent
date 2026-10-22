@@ -186,14 +186,21 @@ try {
   });
 
   await test("opening_balance_set / opening_balance_get", async () => {
+    // LOCAL-02：合成账套的固定资产 60000 以**期初已入账**的真实业务事实存在，
+    // 这样后面的卡片原值才能与总账核对一致（不能用「未入账登记」跳过差异）。
     const w = await client.call("opening_balance_set", {
       accountSetId: setId,
-      items: [{ code: "1002", debit: 100000, credit: 0 }, { code: "3001", debit: 0, credit: 100000 }],
+      items: [
+        { code: "1002", debit: 100000, credit: 0 },
+        { code: "1601", debit: 60000, credit: 0 },
+        { code: "3001", debit: 0, credit: 160000 },
+      ],
     });
     assert.equal(w.isError, false, w.text);
     const r = await client.call("opening_balance_get", { accountSetId: setId });
     assert.equal(r.isError, false, r.text);
     assert.equal(r.data.items.find((o) => o.code === "1002").debit, 100000);
+    assert.equal(r.data.items.find((o) => o.code === "1601").debit, 60000);
   });
 
   await test("opening_balance_set 不存在的科目被拒绝", async () => {
@@ -310,9 +317,10 @@ try {
 
   // ---------------- 四个扩展工具 ----------------
   await test("asset_create 新增固定资产卡片", async () => {
+    // LOCAL-02：原值已在期初入账（1601 = 60000），因此卡片默认 booked 即可参与卡片 / 总账核对。
     const r = await client.call("asset_create", {
       accountSetId: setId, kind: "fixed", name: "办公设备", original_cost: 60000,
-      residual_rate: 0.05, useful_life_months: 60, start_period: "2026-01",
+      residual_rate: 0.05, useful_life_months: 60, start_period: "2026-01", acquired_period: "2026-01",
     });
     assert.equal(r.isError, false, r.text);
     assert.equal(r.data.monthly, 950);

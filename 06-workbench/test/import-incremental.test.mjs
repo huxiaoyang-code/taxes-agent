@@ -800,7 +800,8 @@ try {
   });
 
   await test("已封账期间拒绝新增凭证；反结账后可正常追加", () => {
-    // Set B 已有 2026-01 已过账凭证，可结账。
+    // Set B 已有 2026-01 已过账凭证，可结账。LOCAL-02：本期有损益发生，封账前先结转本期损益。
+    A.carryForwardProfit(setB, "2026-01");
     A.setPeriodStatus(setB, "2026-01", "closed");
     const payload = {
       account_set: meta("合成乙公司"),
