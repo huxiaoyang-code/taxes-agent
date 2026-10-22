@@ -6,11 +6,15 @@
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，仅 10 个文档，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4、review3 取得期间一致性 P2），未提交、未推送、未建 PR、未合并，待管理者验收与 root 最终审查**
-  - head / merge 由管理者后补；本交接**不预报**审查结论、head 或 merge。
+- 状态：**最终候选已独立审查通过（每项在各自候选上独立接受：核心 `review_core02_final` 在 `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0`、其业务源码经后续到 98a 未改变；输出协议 `review_output08_final` 在 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795`、源后续未改；备份 `review_backup06_final` 在精确 `98a29d1c2e3e8d2e513aadf79a0aca7b04cc45c7`）；已提交、已推送并创建 Draft PR [#60](https://github.com/huxiaoyang-code/youshu-fork/pull/60)，未合并（尚无 merge SHA，本交接不预报）**；文档验收与合并由 root 执行，合并后由 root 补记实际 merge SHA（详见 §10）。
+  - root 在精确 98a 上实跑：完整 **55 / 55 套 exit 0**、Office **21 / 21**、真实 **11 PDF** 几何检查、备份 **22 / 22**；日志为忽略目录内相对证据名 `local-02-manager-indexkeys-final55.log`；`3a` 上的另一次 55 / 55 是**独立运行**，两者不互相冒充归属。
+  - 下文 §9.6–§9.8 与任务单 §12–§14 的「未提交 / 未建 PR / 待 root 独审」是各自**阶段快照**（当时事实），最终状态以本节与 §10 为准，**不改写历史**。
   - **重要测试口径**：管理者在该 head 上跑过的 50 / 50 与已合 Office 21 / 21 **不能代表最终通过**；
     最终独立审查（`fork_turns=none`）实测四个阻塞（P1–P4），本轮回工后才在**最终代码**上重跑全套。
     review3 又发现一项同影响面 P2（见 §9.4），已统一口径并补定向回归后重新实跑。
+  - **测试结果分段**：`04c38d4` 上的 55 / 55（含 §9.6）属回修前事实；§9.7 回修后的完整 55 / 55
+    重跑结果在 §9.7 末尾按实际日志记录，不把回修前绿测试当成回修后验收；
+    §9.8（备份索引键语义回修）另有自己的定向 22 / 22 与一次完整 55 / 55 日志，不引用旧 55 / 55 代替。
 - 共享文档 release：管理者已在 `.agent-runs/local-02-docs-release.md` 释放 STATE / NEXT-SESSION /
   任务看板 / 八包总览 / INDEX / CHANGELOG / 接管计划，本包按自身事实追加（不覆盖前包已验收结果）。
 
@@ -334,3 +338,130 @@ root 已在本 worktree 派单完成兼容整合（**不改本包任何业务实
 测试口径：备份套件 **20 / 20**（原 16 项保留，schema 版本断言随 v4 更新）+ 新增 4 项；
 `06-workbench` 下 `npm test` 为 **53 / 53 套 exit 0**（备份套件已按任务单授权仅追加登记，原 50 套顺序 / 内容不变；
 本包领域 / HTTP / MCP 三套随这次全量实跑也均 exit 0，但本轮**未单独重跑并计数**，不引用旧 45 / 18 / 5 作为本轮结果）。
+
+### 9.6 LOCAL-08 新工具模型边界兼容增量（上一轮，head `04c38d4`）
+
+- 目标：在不改本包会计 / DB / 期间业务实现、不改 LOCAL-08 已有边界的前提下，把本包新增的
+  `period_end_check` / `asset_update` 按真实 DTO 接入现有可测试 adapter / transport 合约；**未挂载**共享
+  HTTP / Agent / MCP / CLI 入口（共享窗口尚未移交）。
+- `period_end_check` 只读：投影只含期间、`ready`、固定步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码；
+  原始标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注不进入模型通道；未知值 fail closed。
+- `asset_update` 写：显式写调用才执行，未知 / 只读工具不会执行；成功必须真实 `id` 才 `applied:true`，
+  失败保留 `applied:"unknown"` / `needsLocalReview:true`；投影最小白名单不含名称 / `ledger_note` / 科目 / 备注。
+- 新期间 / 资产校验错误与 `period_end_check_failed` 均有固定 code → category 映射，不再落 `unknown`。
+- fixture 改为真实完整资产登记：原值 1200、`2026-02` 取得 / 起提、借贷平衡购入凭证（借 1601 / 贷 1002 各 1200）、
+  真实计提 95；保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路，未 mock / bypass / 跳过封账保护。
+- 边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套、预算、写后降级、不可变 snapshot 与并发隔离保持原语义。
+- 定向输出（**上一轮，head `04c38d4`**）：策略 **35/35**（原 34 保留）、适配层 **20/20**（原 19 保留）、transport **17/17**（原 16 保留），均 exit 0。该组结果属**回修前**状态，不能当作本轮（§9.7）已通过。
+- 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`，**上一轮，head `04c38d4`**）：**55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过
+  （外部 poppler + pdfplumber）。**日志归属按实际事实更正**（此前行文有误）：一次 `import-incremental-http` 进程异常退出
+  （exit 3221226505）出现在**员工 target22** 那一次运行；随后**员工连续两次完整 55/55**；**root 的独立 55/55 是在 `04c`**，
+  日志为 `.agent-runs/local-02-manager-final55.log`——`.agent-runs/local02-55-suites-20261022-214500-final.log` 是**员工**日志，
+  **不是 root 日志**。该异常**原因仍未定位**，已登记
+  [Issue #49 comment 6340922839](https://github.com/huxiaoyang-code/youshu-fork/issues/49#issuecomment-6340922839)；
+  不据此下「与本次改动无关」或其他因果结论，不把偶发崩溃当成业务通过。
+- root 在 **3a** 的最终 55/55 是另一次运行，日志名 `.agent-runs/local-02-manager-output-review1-final55.log`；
+  独立 output 审查已在 3a 接受。**上述 root / 员工运行与本轮备份自测严格区分**：本轮只实跑
+  `node test/local-backup.test.mjs` 与一次 `npm test`（日志名与结果见 §9.8），不引用旧 55/55 作为本轮备份证据。
+- 范围：跨包只改已登记的 LOCAL-08 6 个源码 / 测试文件与 3 份 08 文档，另补 `docs/LOCAL-BACKUP.md` 独审非阻塞项；
+  **未改**本包业务源码、DB、期间逻辑、`agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`。
+
+### 9.7 输出协议 2 项 P2 回修（本轮，回修候选待 root 复审）
+
+独立审查在 head `04c38d4` 上复现两个 P2，**均已修复并补先红后绿定向回归**；绿测试不能代替这两项验收：
+
+| 项 | 复现 | 回修 |
+|---|---|---|
+| P2-1 真实长阻塞码被通用预算吞掉 | `depreciation_life_expired_underprovided`（39 字符）与 `previous_period_depreciation_pending`（36 字符）虽在阻塞码白名单，仍被 `PROJ_TOKEN_RE`（最多 32 字符）过滤；真实结果为 `ok:true` / `blockingCount:1` / `blockingCodes:[]` / `projectionDropped:1`，而 transport 侧却通过（其自有 token 表已含这两条） | 通用 token 32 字符预算与 40 字符长度上限**均未改**，只给**已登记固定代码常量的精确字面量**开窄通道（policy 的 `REGISTERED_CODE_LITERALS` + `isProjectionStringAllowed`，标量与数组两路共用）；未知码仍 fail closed。回归：19 条真实阻塞码**逐条**（非仅两个示例）完整投影 + `projectionDropped:0`；未登记 37 字符串 / 41 字符串 / 中文原文仍丢弃或拒绝 |
+| P2-2 只验单字段不验 DTO 全局一致性 | `ready:true` + `steps:[]` + `blocking:[]`、`ready:true` + 7 个重复 `draft_vouchers`、`ready:true` + 全 blocked 且 `blocking` 非空，都被投影成功、建了引用并通过 transport | 新增纯函数 `isPeriodEndCheckConsistent`（policy，**不 import** 会开业务 DB 的 `period-end-controls.mjs`）：7 个已登记步骤唯一齐全、状态值域、每条 `blocking` 归属真实 blocked 步骤、`ready` ⇔ 无阻塞、每个 blocked 步骤至少一条原因（不机械比较原因数 = 步骤数）；policy 据此 fail closed，adapter 在同一判定上直接报 `model_result_invalid` 且**不建 ref** |
+
+- 回修后三层实跑：策略 **37/37**、适配层 **21/21**、transport **18/18**，均 exit 0；原 35 / 20 / 17 项含义保留，snapshot / 引用预算 / 并发隔离未回退。
+- 完整门禁（回修后，本轮实跑）：先跑上述三套定向，再在 `06-workbench` 设 `REPORT_OFFICE_PYTHON=<验收 Python>` 跑 `npm test` → **55 / 55 套 exit 0**（汇总行「全部 55 个套件通过（55/55）」，进程 exit 0），Office **21/21**、真实 **11 PDF** 几何通过。最终代码日志 `.agent-runs/local02-55-suites-20261022-204605-rewrite2-final.log`（同一代码状态下的早先一次完整运行 `…-204310-rewrite2.log` 也是 55/55；其后只调整了注释位置，代码行为未变，仍以最终日志为准）。
+  本次**未重现** §9.6 的 exit 3221226505；该异常仍**原因未定位**，不下因果结论，后续稳定性由 root 的 Windows 交付检查继续跟踪。
+- 新增真实正例（真实临时库，不改业务源码）：`2026-01` 起账 → 1 期寿命导入卡片（`2026-02` 取得、`2026-01` 起提）→ `2026-03` 真实购入凭证 → 期末检查 `blockingCount:3` / `blockingCodes:['depreciation_life_expired_underprovided','previous_period_depreciation_pending','previous_period_open']` / `projectionDropped:0` / `blockedStepIds:['depreciation','period_sequence']`，transport 通过。
+- 真负例：以真实 DTO 为基底注入 `ready:true + steps:[]`、7 个重复 `draft_vouchers`、全 blocked + `ready:true`、缺步 / 多步 / 阻塞归属未阻塞或未知步骤，一律 `model_result_invalid`、`localRef` 不存在且 policy 引用池不变；同 harness 不改内容的对照仍成功建引用。
+- 改动范围（本轮回修）：`06-workbench/server/finance-output-policy.mjs`（长码窄通道 + `isPeriodEndCheckConsistent` + spec 一致性前置）、`06-workbench/server/finance-model-adapter.mjs`（改用共享一致性判定，不 import 业务 DB 模块）、三套测试文件（`test/finance-output-policy.test.mjs`、`test/finance-model-adapter.test.mjs`、MCP `finance-model-transport-test.mjs`）。**`finance-model-transport.mjs` 源码本轮未改**：它的 `PROJECTION_TOKENS` 已登记这 19 条码且单字符串上限 40 已能容纳 39 字符长码，因此“transport 通过而 policy 丢码”的不一致只在 policy 侧；本轮只是把一致性写进 transport 测试。未改本包会计 / DB / 期间业务、`agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`、备份 / 339 代码与测试。
+- 状态：**回修候选，待 root 独立增量复审**；未挂真实 shared 入口（HTTP / Agent / MCP / CLI）；未提交 / 未建 PR / 未合并。
+
+### 9.8 核心备份索引键语义回修（本轮，待 root 冻结与备份独立审查）
+
+独立审查在银行候选上发现并**实际证实**：继承 339（无 bank 组件）的核心备份模块同样有缺陷——
+`import_voucher_sources` 的表级 `UNIQUE (source_system, enterprise_key, source_voucher_id)` 只把最后一列
+改成 `COLLATE NOCASE`（列 / 默认值 / 外键全部不变）时，旧模块 `create` / `verify` / `restore` **全部放行**；
+恢复后真实增量导入已存 `Ref-A` 再 append `ref-a` 抛 `ERR_SQLITE_ERROR`，而正常 `BINARY` 对照是 `applied`
+且两条来源并存。根因：`uniqueColumnGroups` 只用 `pragma_index_info` 读列名，没验真实唯一性的**比较规则**。
+
+| 项 | 复现 / 根因 | 回修 | 回归 |
+|---|---|---|---|
+| 唯一性比较规则未校验 | 只改 `COLLATE NOCASE` / `RTRIM` 即可改变「哪些写入被拒」，旧版三入口全放行 | 契约升级为 `uniqueConstraint(origin, collationKey(...))`（主键 `pk` / `UNIQUE` `u` 逐条，默认 `BINARY` + `ASC`），验证改读 `PRAGMA index_xinfo`（键列 / `cid` 表达式 / `coll` 排序规则 / `desc` 方向）与 `index_list`（`unique` / `origin` / `partial`），与契约**一对一**匹配 | 域：`NOCASE` / `RTRIM` / 主键文字键 `NOCASE` / 主键键列 `DESC` 均 `unique`（`reason` + 固定令牌明细） |
+| 额外 / 重复 / `origin=c` 唯一索引被忽略 | 旧版只看 `origin='u'`，且 `partial` / 表达式 / 无名列直接 `continue` | `origin=c` 的命名唯一索引同样参与比对，契约外一律 `unexpected_unique_index`；v1 已删除的 `idx_import_bindings_set` **不要求存在**，加回即被拒 | 域：复活旧命名索引 / 同键重复声明 / 表达式（`expression` 令牌）/ `WHERE` 部分索引均拒绝 |
+| `INTEGER PRIMARY KEY` 只看列名 | 改为 `DESC` / `WITHOUT ROWID` 后不再是 rowid 别名，旧版无感 | 新增 `rowidAlias` 契约：`true` 的表必须**无主键索引**且 `rowid` 与主键列逐行相等 → `rowid_alias`；多列文字主键按真实主键索引比对 | 域：`vouchers.id INTEGER PRIMARY KEY DESC` 被拒 |
+| 误拒边界 | 强化后不能把正常库 / 旧产物拦住 | 非唯一索引不作为结构证据、也不拒绝；清单格式与 `formatVersion` **未变**（只强化验证） | 域：与真实 DDL **同义重建**的表 / 额外非唯一索引照常备份与验证；v3 / v4 正常对照均通过 |
+| 错误输出 | 不能回 SQL / 路径 / 自由原值 | 明细只含表名 / 列名 / 计数 + 固定令牌（`pk` / `u` / `c`、`BINARY` / `NOCASE` / `RTRIM`、`expression`、升降序布尔），未知排序规则只报 `nonstandard` | 域：逐变体断言明细不含 `CREATE TABLE` / `COLLATE` / `SELECT` / 本机路径 / 账套名 / 企业标识 / 表达式原文 |
+
+- **旧产物向后兼容（实跑事实，不属新用例）**：修改**前**用冻结源码生成真实 v4 / v3 合成备份（16 表 88 / 87 行），
+  修改后：清单与快照 sha256 **未变**、`verify` 通过、`restore-new` 成功、恢复文件仍是备份时的 schema 版本（3 / 4），
+  恢复库的期初 / 余额 / 凭证 / 来源凭证 ID 与旧事实一致；在恢复库上用真实增量导入追加只差大小写的 `ref-a`
+  仍为 `applied` 且 `Ref-A` / `ref-a` 两条并存（费用 700 → 705）。同一 `NOCASE` 变体改前被三入口放行、
+  改后被源库与快照两侧同时拒绝且不产恢复目标。本机忽略目录证据：`.agent-runs/l02-backup-prefix/`（旧工具产物、
+  `pre-fix-defect.log`、`post-fix-check.log`）与 `.agent-runs/local02-backup-indexkeys-{focused,full55}.log`。
+- **测试**（本轮实跑）：`node test/local-backup.test.mjs` → **22 / 22 exit 0**（原 20 项含义全保留，新增第 21 项 v4 十变体
+  + 两组正常对照、第 22 项 v3 旧快照三变体 + v3 正常对照）；设 `REPORT_OFFICE_PYTHON` 后 `npm test` → **55 / 55 套 exit 0**
+  （Office **21 / 21**、真实 **11 PDF** 几何通过）。**先红后绿**：同一套测试换回修改前模块（SHA256 回位核实）为 **20 / 22**，
+  两个新项均以「期望拒绝、实际接受」失败；恢复修改后代码后 **22 / 22**。
+- **限制**：只对**唯一性**索引做语义比对（非唯一索引不改变业务规则）；`AUTOINCREMENT` 等存储选项不在本轮范围；
+  表达式 / 部分索引目前只作为拒绝依据（真实 v3 / v4 没有它们）；未使用真实账套 / 税局；未改清单格式。
+- **范围**：只改 `06-workbench/server/local-backup.mjs`、`06-workbench/test/local-backup.test.mjs` 与
+  `docs/LOCAL-BACKUP.md` / 本任务单 / 本交接；**未改**会计 / DB / 期间 / 金额 / 迁移、输出 policy / adapter / transport、
+  其它测试、`scripts/test-all.mjs`（该套件已在其中，无需重登记）。
+- 状态：**实现与自测完成，待 root 冻结与备份独立审查**；未提交 / 未建 PR / 未合并。
+  （上述为 §9.8 阶段快照；已被 §10 的最终审查与 PR 事实取代。）
+
+## 10. 最终出版状态（已发生的审查与 PR 事实）
+
+本节只登记**已实际发生**的事实，不预报合并；任务单 §15 为同一事实的对应章节。
+
+### 10.1 源码构成（head `98a29d1`）
+
+| 组成 | 提交 | 审查 |
+|---|---|---|
+| 核心金额 / 期末 / 连续期间（含真实入口与 schema v4） | `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0` | `review_core02_final` **接受** |
+| 输出协议（长阻塞码窄通道 + 期末检查 DTO 全局一致性） | `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` | `review_output08_final` **接受** |
+| 备份精确 v3 / v4 契约 | `33995009109cb922c86c9a5e9847e95554faaa4b` | 已独审 |
+| 备份唯一性键语义加强 | `75b448dccbb964653713fae2b62fa3e365417d1a` | 已独审，合入当前 main 后冻结为 `98a` |
+
+- 核心 `bd05415` 业务与输出源 `3a8ae7a` **未在 `75` / `98a` 改变**；`75` 只动备份自有源码 / 测试与三份文档。
+- `98a29d1` 同时包含已合 main 的 `e86d248c2a573b12c884f311fb01952f209e2563`（LOCAL-06 审计 A，PR #58），本包未改审计代码。
+
+### 10.2 审查接受要点
+
+- **`review_core02_final`**：金额 / 期末 / 期间的**真实入口**与 v4 迁移接受，无剩余阻塞。
+- **`review_backup06_final`**：自跑 **22 / 22 exit 0**；用**修复前**工具对真实合成产品 v3 / v4 生成旧备份，新工具
+  `verify` / `restore-new` 后 schema 3 / 4 与 manifest / snapshot 哈希**全部不变**；恢复库上真实 `importIncremental` 追加 `ref-a`
+  与既有 `Ref-A` **并存**；v3 仅在业务入口显式打开时升 v4。`NOCASE` 变体：旧工具接受，新工具 `source` / `verify` / `restore`
+  **三入口均拒绝且无目标输出**；`xinfo` 完整键 / 来源 / 一一数量与额外 unique 拒绝通过。限制：`AUTOINCREMENT` 等存储选项
+  **不在**严格验证范围，不声明已验证。
+- **`review_output08_final`**：**61** 回修探针 + **47** 旧控制 + **3** 真实临时领域场景，两项 P2 均关闭。
+  其中 **37 policy / 21 adapter / 18 transport 为员工自测结果**，不是 root 计数；**共享模型入口（HTTP / Agent / MCP / CLI）仍未接线**。
+
+### 10.3 root 实跑与未定位项
+
+- 精确 98a：`npm test` **55 / 55 套 exit 0**；Office **21 / 21** 与真实 **11 PDF** 几何检查通过；备份套件 **22 / 22**。
+- 一次历史 HTTP 原生退出 **3221226505** 原因**仍未定位**：后续定向 22 项与多轮 55 套均通过，但**不**据此宣称已定位或
+  修好本机环境；Windows 交付稳定性由 Issue #59 继续跟踪。
+- 9.6 曾把员工 `214500` 日志当成 root 日志的写法**已更正**，不回退。
+
+### 10.4 PR 与合并（不预报）
+
+- PR [#60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 已创建为 **Draft**，覆盖本包已审候选（核心 + 备份 v3 / v4
+  + 输出协议 + LOCAL-08 兼容增量）；**当前未合并**，本交接**不写任何 merge SHA**。
+- 本次文档提交落在同一 PR；**最终文档验收与合并由 root 执行**，合并后由 root 补记实际 merge SHA；
+  Issue [#47](https://github.com/huxiaoyang-code/youshu-fork/issues/47) 的关闭时点由 root 安排（当前未关闭）。
+
+### 10.5 边界与文档范围
+
+- 全部证据为合成临时库 / 随机回环端口；未使用真实账套、凭据或税局，**真实接入 0**，税局现场仍暂停。
+- 本轮（最终文档轮）**只改 8 份交付文档**，不改源码 / 测试 / 脚本 / `package.json`：
+  `docs/tasks/LOCAL-02.md`、`docs/handoffs/LOCAL-02.md`、`docs/handoffs/STATE.md`、`docs/tasks/README.md`、
+  `docs/tasks/INDEPENDENT-PRODUCT-WORK.md`、`docs/FINANCE-OUTPUT-BOUNDARY.md`、`docs/tasks/LOCAL-08.md`、`docs/handoffs/LOCAL-08.md`。
+- 审查对应关系与任务单 §15.1 一致：核心在 `bd05415`、输出在 `3a8ae7a`、备份在精确 98a，**每项独立接受**，不写成「核心与备份均在 98a」。

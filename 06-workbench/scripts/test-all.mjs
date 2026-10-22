@@ -63,6 +63,9 @@ const steps = [
   { name: "local-backup", file: join(WORKBENCH, "test", "local-backup.test.mjs"), cwd: WORKBENCH },
   { name: "finance-output-policy", file: join(WORKBENCH, "test", "finance-output-policy.test.mjs"), cwd: WORKBENCH },
   { name: "report-office-export", file: join(WORKBENCH, "test", "report-office-export.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-08 PR57 已合入的适配层 / 出站信封校验自身套件（仅追加，不改上方原有 53 个套件的内容与顺序）
+  { name: "finance-model-adapter", file: join(WORKBENCH, "test", "finance-model-adapter.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-model-transport-mcp", file: join(MCP, "finance-model-transport-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {
