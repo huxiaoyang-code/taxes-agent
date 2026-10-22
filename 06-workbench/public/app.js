@@ -349,46 +349,87 @@ function addAssetDialog() {
 }
 
 // ------------------------------------------------------------------ 报表
+const REPORT_FORMATS = {
+  csv: {
+    label: "CSV", extension: ".csv",
+    mime: /^text\/csv\b/i,
+    magic: (bytes) => bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf,
+    magicError: "服务器返回的内容不是带 UTF-8 BOM 的 CSV，下载已取消",
+  },
+  xlsx: {
+    label: "Excel 工作簿", extension: ".xlsx",
+    mime: /^application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet$/i,
+    magic: (bytes) => bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04,
+    magicError: "服务器返回的内容不是有效的 Excel（XLSX）工作簿，下载已取消",
+  },
+  pdf: {
+    label: "PDF", extension: ".pdf",
+    mime: /^application\/pdf\b/i,
+    magic: (bytes) => bytes.length >= 5 && String.fromCharCode(...bytes.subarray(0, 5)) === "%PDF-",
+    magicError: "服务器返回的内容不是有效的 PDF 文档，下载已取消",
+  },
+};
+// Fixed user-facing wording: never render server stack traces, environment details or font paths.
+const REPORT_ERROR_MESSAGES = {
+  period_required: "请选择报表期间", period_invalid: "报表期间格式不正确", period_before_start: "期间早于账套启用期间",
+  period_not_registered: "该期间尚未登记，请先在期间页登记", account_set_not_found: "账套不存在，请重新选择",
+  account_code_required: "请选择明细账科目", account_not_found: "所选科目不存在，请重新选择",
+  report_kind_unsupported: "不支持此报表类型", report_format_unsupported: "不支持此导出格式",
+  report_data_invalid: "报表金额数据异常（含非有限数值），已取消导出",
+  office_text_too_long: "报表中有字段超过单格长度上限，无法生成该格式；请缩短账套名称、科目名称或摘要后重试",
+  pdf_font_unavailable: "服务器缺少可嵌入的中文字体，暂时无法生成 PDF；请改用 CSV 或 Excel",
+  pdf_font_glyph_missing: "当前中文字体缺少报表所需字符，无法生成 PDF；请改用 CSV 或 Excel",
+  report_export_failed: "服务器生成报表失败，请稍后重试",
+};
+function reportErrorMessage(error, status) {
+  if (error && typeof error.error === "string" && REPORT_ERROR_MESSAGES[error.error]) return REPORT_ERROR_MESSAGES[error.error];
+  if (status >= 500 || !error?.message) return `导出失败（HTTP ${status}），请稍后重试`;
+  return String(error.message);
+}
 function fillCodeSelect() { $("#rCode").innerHTML = ACCOUNTS.map((a) => `<option value="${a.code}">${a.code} ${esc(a.name)}</option>`).join(""); }
 async function downloadReport() {
-  const status = $("#reportExportStatus"), button = $("#btnExportReport");
+  const status = $("#reportExportStatus"), button = $("#btnExportReport"), formatSelect = $("#rFormat");
   status.textContent = "";
   if (!SET_ID) { status.textContent = "请先选择或新建账套"; return; }
   const kind = $("#rKind").value, period = $("#rPeriod").value, code = $("#rCode").value;
+  const format = formatSelect.value, spec = REPORT_FORMATS[format];
   const source = `${SET?.name || `账套 ${SET_ID}`} · ${period}`;
+  if (!spec) { status.textContent = "请选择导出格式"; return; }
   if (!period) { status.textContent = "请选择报表期间"; return; }
   if (kind === "ledger" && !code) { status.textContent = "请选择明细账科目"; return; }
-  const query = new URLSearchParams({ period, format: "csv" });
+  const query = new URLSearchParams({ period, format });
   if (kind === "ledger") query.set("code", code);
-  button.disabled = true;
-  status.textContent = "正在生成 CSV…";
+  button.disabled = true; formatSelect.disabled = true;
+  status.textContent = `正在生成 ${spec.label}…`;
   try {
     const response = await fetch(`/api/account-sets/${SET_ID}/reports/${kind}/export?${query}`);
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      const messages = {
-        period_required: "请选择报表期间", period_invalid: "报表期间格式不正确", period_before_start: "期间早于账套启用期间",
-        period_not_registered: "该期间尚未登记，请先在期间页登记", account_set_not_found: "账套不存在，请重新选择",
-        account_code_required: "请选择明细账科目", account_not_found: "所选科目不存在，请重新选择",
-        report_kind_unsupported: "不支持此报表类型", report_format_unsupported: "不支持此导出格式",
-      };
-      throw new Error(messages[error.error] || error.message || `导出失败（HTTP ${response.status}）`);
+      throw new Error(reportErrorMessage(error, response.status));
     }
-    if (!/^text\/csv\b/i.test(response.headers.get("content-type") || "")) throw new Error("服务器未返回 CSV，下载已取消");
+    // Check the declared type before reading bytes: an HTML/JSON error page must never be saved as a report.
+    const contentType = response.headers.get("content-type") || "";
+    if (!spec.mime.test(contentType)) throw new Error(`服务器返回的类型不是 ${spec.label}，下载已取消`);
     const disposition = response.headers.get("content-disposition") || "";
     const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-    const filename = encodedName ? decodeURIComponent(encodedName) : `${kind}-${period}.csv`;
-    const blob = await response.blob();
+    const filename = encodedName ? decodeURIComponent(encodedName) : `${kind}-${period}${spec.extension}`;
+    if (!filename.toLowerCase().endsWith(spec.extension)) throw new Error(`服务器返回的文件名与所选格式（${spec.label}）不一致，下载已取消`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const lengthHeader = response.headers.get("content-length");
+    if (lengthHeader !== null && Number(lengthHeader) !== bytes.length) throw new Error("下载内容不完整（长度与响应头不一致），已取消保存");
+    if (!spec.magic(bytes)) throw new Error(spec.magicError);
+    const blob = new Blob([bytes], { type: contentType });
     const url = URL.createObjectURL(blob), link = document.createElement("a");
     link.href = url; link.download = filename;
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    status.textContent = `${source}：CSV 已生成并开始下载（仅供内部使用）`;
+    status.textContent = `${source}：${spec.label} 已生成并开始下载（仅供内部使用，非税局申报文件）`;
   } catch (e) {
     status.textContent = `${source}：导出失败：${e.message}`;
     toast(status.textContent, true);
   } finally {
     button.disabled = !SET_ID;
+    formatSelect.disabled = false;
   }
 }
 async function runReport() {

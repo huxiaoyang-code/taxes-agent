@@ -66,6 +66,8 @@ const steps = [
   // LOCAL-08 PR57 已合入的适配层 / 出站信封校验自身套件（仅追加，不改上方原有 53 个套件的内容与顺序）
   { name: "finance-model-adapter", file: join(WORKBENCH, "test", "finance-model-adapter.test.mjs"), cwd: WORKBENCH },
   { name: "finance-model-transport-mcp", file: join(MCP, "finance-model-transport-test.mjs"), cwd: MCP },
+  // LOCAL-05 接线（真实 Office HTTP 套件；仅末尾追加，不改上方原有 55 个套件的内容与顺序）
+  { name: "report-office-http", file: join(WORKBENCH, "test", "report-office-http.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
