@@ -43,6 +43,12 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { IMPORT_SCHEMA_VERSION, schemaVersion } from "./import-storage.mjs";
+import {
+  BANK_COMPONENT_STRUCTURE,
+  BANK_TABLES,
+  canonicalSqlCondition,
+  indexWherePredicate,
+} from "./bank-storage.mjs";
 
 /** 备份清单格式标识；格式不匹配一律拒绝恢复。 */
 export const BACKUP_FORMAT = "youshu-workbench-local-backup";
@@ -753,6 +759,307 @@ function describeContent(conn, tables) {
   return { digest, tables: tableMap };
 }
 
+// ------------------------------------------------------------------ 可选组件（当前仅 bank v1）
+/**
+ * 已审查的组件注册表：名字 / 版本 / 表集合 / 完整结构契约。
+ * 这里**不**按 `bank_*` 前缀或动态表名白名单放行：只有完整表集 + 版本内容 + 完整结构都符合
+ * 注册表里的 v1 契约才被当成受支持组件。
+ */
+const COMPONENT_REGISTRY = Object.freeze({
+  bank: Object.freeze({
+    name: BANK_COMPONENT_STRUCTURE.name,
+    version: BANK_COMPONENT_STRUCTURE.version,
+    tables: Object.freeze([...BANK_TABLES].sort()),
+    structure: BANK_COMPONENT_STRUCTURE,
+  }),
+});
+
+const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
+
+const tableColumnFacts = (conn, table) => conn.prepare("SELECT * FROM pragma_table_info(?)").all(table)
+  .sort((a, b) => Number(a.cid) - Number(b.cid))
+  .map((column) => ({
+    name: String(column.name),
+    type: String(column.type ?? ""),
+    notNull: Number(column.notnull) === 1,
+    pk: Number(column.pk),
+    defaultLiteral: column.dflt_value === null || column.dflt_value === undefined
+      ? null : String(column.dflt_value),
+  }));
+
+const tableIndexFacts = (conn, table) => conn.prepare("SELECT * FROM pragma_index_list(?)").all(table)
+  .map((index) => {
+    const name = String(index.name);
+    const row = conn.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(name);
+    return {
+      name,
+      unique: Number(index.unique) === 1,
+      partial: Number(index.partial) === 1,
+      origin: String(index.origin ?? ""),
+      columns: conn.prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno").all(name)
+        .map((column) => String(column.name)),
+      where: canonicalSqlCondition(indexWherePredicate(row?.sql)),
+    };
+  })
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+const tableForeignKeyFacts = (conn, table) => {
+  const rows = conn.prepare("SELECT * FROM pragma_foreign_key_list(?)").all(table)
+    .sort((a, b) => Number(a.id) - Number(b.id) || Number(a.seq) - Number(b.seq));
+  const grouped = new Map();
+  for (const row of rows) {
+    const id = String(row.id);
+    if (!grouped.has(id)) {
+      grouped.set(id, {
+        refTable: String(row.table),
+        onDelete: String(row.on_delete ?? "NO ACTION").toUpperCase(),
+        onUpdate: String(row.on_update ?? "NO ACTION").toUpperCase(),
+        match: String(row.match ?? "NONE").toUpperCase(),
+        rows: [],
+      });
+    }
+    grouped.get(id).rows.push({ seq: Number(row.seq), from: String(row.from), to: row.to === null || row.to === undefined ? null : String(row.to) });
+  }
+  return [...grouped.values()].map((group) => {
+    const ordered = group.rows.sort((a, b) => a.seq - b.seq);
+    return {
+      columns: ordered.map((entry) => entry.from),
+      refTable: group.refTable,
+      refColumns: ordered.map((entry) => entry.to),
+      onDelete: group.onDelete,
+      onUpdate: group.onUpdate,
+      match: group.match,
+    };
+  });
+};
+
+const componentObjectFacts = (conn, tableSet) => conn.prepare(
+  "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('trigger','view') ORDER BY type, name",
+).all()
+  .filter((object) => tableSet.has(String(object.tbl_name ?? ""))
+    || /^bank_/i.test(String(object.name ?? ""))
+    || /\bbank_[a-z0-9_]+\b/i.test(String(object.sql ?? "")))
+  .map((object) => ({
+    type: String(object.type),
+    name: String(object.name),
+    table: String(object.tbl_name ?? ""),
+    sql: String(object.sql ?? ""),
+  }));
+
+/** 只读读取组件版本表内容；列缺失时给结构化状态而不是抛原始 SQL 错误。 */
+function componentVersionState(conn, tables) {
+  const table = "bank_component_migrations";
+  if (!tables.includes(table)) return { readable: false, reason: "table_missing", columns: [], rows: [] };
+  const columns = conn.prepare("SELECT * FROM pragma_table_info(?)").all(table).map((column) => String(column.name));
+  if (!columns.includes("version")) return { readable: false, reason: "version_column_missing", columns, rows: [] };
+  const selected = ["version", "applied_at", "note"].filter((name) => columns.includes(name));
+  const rows = conn.prepare(`SELECT ${selected.join(", ")} FROM ${table} ORDER BY version`).all()
+    .map((row) => ({
+      version: Number(row.version),
+      appliedAt: row.applied_at === undefined ? undefined : row.applied_at,
+      note: row.note === undefined ? undefined : row.note,
+    }));
+  return { readable: true, reason: null, columns, rows };
+}
+
+/** 组件索引：名字 / 列序 / UNIQUE / partial / 真实谓词 + 拒绝额外索引。 */
+function componentIndexProblems(conn, contract, tableSet) {
+  const problems = [];
+  const expectedByTable = new Map();
+  for (const want of contract.structure.indexes) {
+    const list = expectedByTable.get(want.table) ?? [];
+    list.push(want);
+    expectedByTable.set(want.table, list);
+  }
+  for (const table of contract.tables) {
+    if (!tableSet.has(table)) continue;
+    const wants = expectedByTable.get(table) ?? [];
+    const actual = tableIndexFacts(conn, table);
+    const used = new Set();
+    for (const want of wants) {
+      const wantWhere = canonicalSqlCondition(want.where);
+      const signature = (index) => index.unique === want.unique && index.partial === want.partial
+        && sameList(index.columns, [...want.columns]) && index.where === wantWhere;
+      const match = want.index
+        ? actual.find((index) => index.name === want.index)
+        : actual.find((index) => (index.origin === "u" || index.origin === "pk") && signature(index));
+      if (!match) {
+        problems.push({
+          kind: "component_index_missing",
+          component: contract.name,
+          table,
+          index: want.index ?? null,
+          columns: [...want.columns],
+          unique: want.unique,
+          partial: want.partial,
+          where: want.where ?? null,
+        });
+        continue;
+      }
+      used.add(match.name);
+      if (!signature(match)) {
+        problems.push({
+          kind: "component_index_mismatch",
+          component: contract.name,
+          table,
+          index: match.name,
+          expected: {
+            columns: [...want.columns], unique: want.unique, partial: want.partial, where: want.where ?? null,
+          },
+          actual: {
+            columns: match.columns, unique: match.unique, partial: match.partial, where: match.where,
+          },
+        });
+      }
+    }
+    for (const index of actual) {
+      if (used.has(index.name)) continue;
+      problems.push({
+        kind: "component_index_unexpected",
+        component: contract.name,
+        table,
+        index: index.name,
+        columns: index.columns,
+        origin: index.origin,
+      });
+    }
+  }
+  return problems;
+}
+
+/** 版本表 / 备份证据表的内容约束（不只是结构形状）。 */
+function componentContentProblems(conn, contract, tableSet) {
+  const problems = [];
+  const version = componentVersionState(conn, [...tableSet]);
+  if (!version.readable) {
+    problems.push({
+      kind: "component_version_table_corrupt",
+      component: contract.name,
+      reason: version.reason,
+      columns: version.columns,
+    });
+  } else {
+    const versions = version.rows.map((row) => row.version);
+    const hasFuture = versions.some((value) => Number.isInteger(value) && value > contract.version);
+    const exact = versions.length === 1 && versions[0] === contract.version;
+    if (hasFuture) {
+      problems.push({ kind: "component_version_future", component: contract.name, versions, target: contract.version });
+    } else if (!exact) {
+      problems.push({
+        kind: "component_version_contradiction",
+        component: contract.name,
+        versions,
+        target: contract.version,
+        reason: versions.length === 1 ? "version_not_target" : "version_rows_not_exactly_one",
+      });
+    }
+    if (exact) {
+      const row = version.rows[0];
+      if (typeof row.appliedAt !== "string" || !row.appliedAt || Number.isNaN(Date.parse(row.appliedAt))) {
+        problems.push({ kind: "component_version_timestamp", component: contract.name });
+      }
+      if (row.note !== null && row.note !== undefined && typeof row.note !== "string") {
+        problems.push({ kind: "component_version_note", component: contract.name });
+      }
+    }
+  }
+
+  const backupTable = "bank_component_backups";
+  if (tableSet.has(backupTable)) {
+    const columns = conn.prepare("SELECT * FROM pragma_table_info(?)").all(backupTable).map((column) => String(column.name));
+    const required = ["version", "path", "bytes", "integrity", "created_at"];
+    if (required.every((name) => columns.includes(name))) {
+      const rows = conn.prepare(`SELECT ${required.join(", ")} FROM ${backupTable} ORDER BY id`).all();
+      const badVersion = rows.filter((row) => {
+        const value = Number(row.version);
+        return !Number.isInteger(value) || value < 1 || value > contract.version;
+      }).length;
+      if (badVersion) problems.push({ kind: "component_backup_records_version", component: contract.name, count: badVersion });
+      const badPath = rows.filter((row) => typeof row.path !== "string" || !row.path).length;
+      if (badPath) problems.push({ kind: "component_backup_records_path", component: contract.name, count: badPath });
+      const badBytes = rows.filter((row) => row.bytes !== null && row.bytes !== undefined
+        && (!Number.isInteger(Number(row.bytes)) || Number(row.bytes) < 0)).length;
+      if (badBytes) problems.push({ kind: "component_backup_records_bytes", component: contract.name, count: badBytes });
+      const badIntegrity = rows.filter((row) => typeof row.integrity !== "string" || !row.integrity).length;
+      if (badIntegrity) problems.push({ kind: "component_backup_records_integrity", component: contract.name, count: badIntegrity });
+      const badTimestamp = rows.filter((row) => typeof row.created_at !== "string"
+        || !row.created_at || Number.isNaN(Date.parse(row.created_at))).length;
+      if (badTimestamp) problems.push({ kind: "component_backup_records_timestamp", component: contract.name, count: badTimestamp });
+    }
+  }
+  return problems;
+}
+
+/**
+ * 识别 / 校验可选组件。返回 `{present, name, version, tableSet, tables, problems}`。
+ * 任何 `bank_*` 表出现即进入组件校验：必须完整表集 + 唯一 v1 版本 + 完整结构与索引 + 无未知触发器 / 视图。
+ */
+function inspectComponent(conn, tables) {
+  const contract = COMPONENT_REGISTRY.bank;
+  const actualTables = tables.filter((name) => name.startsWith("bank_")).sort();
+  const tableSet = new Set(actualTables);
+  const componentObjects = componentObjectFacts(conn, tableSet);
+  if (!actualTables.length && !componentObjects.length) {
+    return { present: false, name: contract.name, version: null, tableSet, tables: [], problems: [] };
+  }
+  const expected = contract.tables;
+  const problems = [];
+  const missing = expected.filter((table) => !tableSet.has(table));
+  const unexpected = actualTables.filter((table) => !expected.includes(table));
+  if (missing.length) problems.push({ kind: "component_tables_missing", component: contract.name, tables: missing.slice(0, MAX_DETAIL_ITEMS) });
+  if (unexpected.length) problems.push({ kind: "component_tables_unexpected", component: contract.name, tables: unexpected.slice(0, MAX_DETAIL_ITEMS) });
+
+  const versionState = componentVersionState(conn, actualTables);
+  const version = versionState.readable && versionState.rows.length === 1
+    && Number.isInteger(versionState.rows[0].version) ? versionState.rows[0].version : null;
+  problems.push(...componentIndexProblems(conn, contract, tableSet));
+  problems.push(...componentContentProblems(conn, contract, tableSet));
+  for (const object of componentObjects) {
+    problems.push({
+      kind: object.type === "trigger" ? "component_trigger_unexpected" : "component_view_unexpected",
+      component: contract.name,
+      type: object.type,
+      name: object.name,
+      table: object.table,
+    });
+  }
+  return { present: true, name: contract.name, version, tableSet, tables: actualTables, problems };
+}
+
+/** 组件结构的规范化事实（用于清单 structureDigest 绑定与 verify 重算）。 */
+function componentStructureFacts(conn, contract, component) {
+  const tables = contract.tables.map((table) => ({
+    name: table,
+    columns: component.tableSet.has(table) ? tableColumnFacts(conn, table) : [],
+    primaryKey: component.tableSet.has(table)
+      ? conn.prepare("SELECT * FROM pragma_table_info(?)").all(table)
+        .filter((column) => Number(column.pk) > 0)
+        .sort((a, b) => Number(a.pk) - Number(b.pk))
+        .map((column) => String(column.name))
+      : [],
+    indexes: component.tableSet.has(table) ? tableIndexFacts(conn, table) : [],
+    foreignKeys: component.tableSet.has(table) ? tableForeignKeyFacts(conn, table) : [],
+  }));
+  return {
+    name: contract.name,
+    version: component.version,
+    tables,
+    objects: componentObjectFacts(conn, component.tableSet),
+  };
+}
+
+const componentStructureDigest = (conn, contract, component) =>
+  sha256Text(JSON.stringify(componentStructureFacts(conn, contract, component)));
+
+/** 组件内容摘要：只覆盖该组件的表，与全库内容摘要分开绑定。 */
+function componentContentDigest(component, content) {
+  const tables = [...component.tables].sort();
+  return sha256Text(tables.map((table) => {
+    const facts = content.tables[table];
+    return `${table}|${facts ? facts.rows : 0}|${facts ? facts.digest : ""}`;
+  }).join("\n"));
+}
+
 // ------------------------------------------------------------------ 真实结构校验
 const uniqueColumnGroups = (conn, table) => {
   const groups = [];
@@ -1001,16 +1308,26 @@ function inspectStructure(conn, { notProductCode }) {
     // 版本在区间内却没有结构契约（例如以后调整了支持集合却没补契约）：明确拒绝，不猜结构。
     throw expected("schema_unsupported", { found: version, supported: supported[supported.length - 1] });
   }
+  // 可选组件：任何 `bank_*` 表出现就按已登记 v1 契约完整校验；旧的无组件库不受影响。
+  const component = inspectComponent(conn, tables);
+  const effectiveStructure = component.present
+    ? { ...structure, ...COMPONENT_REGISTRY.bank.structure.tables }
+    : structure;
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables, structure),
+    ...structureProblems(conn, tables, effectiveStructure),
+    ...component.problems,
     ...migrations.problems,
     ...backupRecordProblems(conn, version),
   ];
   if (problems.length) {
-    throw expected("structure_invalid", { schemaVersion: version, problems: problems.slice(0, MAX_DETAIL_ITEMS) });
+    throw expected("structure_invalid", {
+      schemaVersion: version,
+      components: component.present ? [component.name] : [],
+      problems: problems.slice(0, MAX_DETAIL_ITEMS),
+    });
   }
-  return { version, tables, migrations: migrations.versions };
+  return { version, tables, migrations: migrations.versions, component };
 }
 
 /**
@@ -1029,6 +1346,18 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
   const userVersion = Number(pragmaRows(conn, "PRAGMA user_version")[0] ?? 0);
   const sqliteVersion = String(conn.prepare("SELECT sqlite_version() AS v").get().v ?? "unknown");
   const content = describeContent(conn, structure.tables);
+  const components = [];
+  if (structure.component && structure.component.present) {
+    const contract = COMPONENT_REGISTRY.bank;
+    components.push({
+      name: contract.name,
+      version: structure.component.version,
+      tables: [...structure.component.tables].sort(),
+      structureDigest: componentStructureDigest(conn, contract, structure.component),
+      contentDigest: componentContentDigest(structure.component, content),
+      rows: structure.component.tables.reduce((sum, table) => sum + content.tables[table].rows, 0),
+    });
+  }
   return {
     structure: {
       schemaVersion: structure.version,
@@ -1037,6 +1366,7 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
       migrations: structure.migrations,
       tables: structure.tables,
     },
+    components,
     content,
     snapshot: { journalMode, pageSize },
   };
@@ -1164,6 +1494,48 @@ function validateManifest(manifest) {
     if (!isSha256(facts.digest)) return { code: "manifest_invalid", details: { field: "content.tables.digest" } };
   }
 
+  // 可选组件清单：只有已登记的名字 / 版本 / 表集才能声明；不存在的组件一律拒绝。
+  if (manifest.components !== undefined) {
+    if (!Array.isArray(manifest.components)) return { code: "manifest_invalid", details: { field: "components" } };
+    const seen = new Set();
+    for (const entry of manifest.components) {
+      if (!isPlainObject(entry)) return { code: "manifest_invalid", details: { field: "components" } };
+      if (!isNonEmptyString(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
+      const contract = COMPONENT_REGISTRY[entry.name];
+      if (!contract) return { code: "component_unsupported", details: { component: entry.name } };
+      if (seen.has(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
+      seen.add(entry.name);
+      if (!Number.isInteger(entry.version) || entry.version < 1) {
+        return { code: "manifest_invalid", details: { field: "components.version" } };
+      }
+      if (entry.version > contract.version) {
+        return { code: "component_version_unsupported", details: { component: entry.name, found: entry.version, supported: contract.version } };
+      }
+      if (entry.version !== contract.version) {
+        return { code: "component_version_unsupported", details: { component: entry.name, found: entry.version, supported: contract.version } };
+      }
+      if (!Array.isArray(entry.tables) || !entry.tables.length
+        || entry.tables.some((name) => !isNonEmptyString(name))) {
+        return { code: "manifest_invalid", details: { field: "components.tables" } };
+      }
+      if (sortedUnique(entry.tables).length !== entry.tables.length) {
+        return { code: "manifest_invalid", details: { field: "components.tables" } };
+      }
+      if (entry.tables.join("\u0000") !== contract.tables.join("\u0000")) {
+        return { code: "component_tables_mismatch", details: { component: entry.name } };
+      }
+      if (!isSha256(entry.structureDigest)) {
+        return { code: "manifest_invalid", details: { field: "components.structureDigest" } };
+      }
+      if (!isSha256(entry.contentDigest)) {
+        return { code: "manifest_invalid", details: { field: "components.contentDigest" } };
+      }
+      if (!isNonNegativeInteger(entry.rows)) {
+        return { code: "manifest_invalid", details: { field: "components.rows" } };
+      }
+    }
+  }
+
   const source = manifest.source;
   if (!isPlainObject(source)) return { code: "manifest_invalid", details: { field: "source" } };
   if (!isNonEmptyString(source.file)) return { code: "manifest_invalid", details: { field: "source.file" } };
@@ -1263,6 +1635,7 @@ export function createBackup({ dbPath, outDir, now = () => new Date() } = {}) {
         journalMode: facts.snapshot.journalMode,
       },
       structure: facts.structure,
+      ...(facts.components.length ? { components: facts.components } : {}),
       content: facts.content,
     };
     const manifestPartial = `${PARTIAL_PREFIX}${process.pid}-${randomTag()}.json`;
@@ -1288,6 +1661,9 @@ export function createBackup({ dbPath, outDir, now = () => new Date() } = {}) {
         migrations: manifest.structure.migrations,
         tables: manifest.structure.tables.length,
         rows: Object.values(manifest.content.tables).reduce((sum, entry) => sum + entry.rows, 0),
+        components: (manifest.components ?? []).map((entry) => ({
+          name: entry.name, version: entry.version, tables: entry.tables.length, rows: entry.rows,
+        })),
         snapshotBytes: manifest.snapshot.bytes,
         snapshotSha256: manifest.snapshot.sha256,
         durability: durabilityReport(finalDirState),
@@ -1342,6 +1718,41 @@ function incompleteArtifacts(backupDir) {
   // 备份目录内若出现快照的 -wal / -shm / -journal，说明快照依赖附属文件，不是单文件一致快照。
   const sidecars = names.filter((name) => SIDECAR_SUFFIXES.some((suffix) => name === `${SNAPSHOT_FILE}${suffix}`));
   return { leftovers: sortedUnique(leftovers), sidecars: sortedUnique(sidecars), names };
+}
+
+/** 清单组件绑定与快照重算事实逐项比对；名称 / 版本 / 表集 / 结构摘要 / 内容摘要 / 行数都要一致。 */
+function componentBindingProblems(manifestComponents, actualComponents) {
+  const recorded = manifestComponents ?? [];
+  if (recorded.length !== actualComponents.length) {
+    return {
+      code: "component_mismatch",
+      details: {
+        field: "components",
+        recorded: recorded.map((entry) => entry.name),
+        actual: actualComponents.map((entry) => entry.name),
+      },
+    };
+  }
+  for (const actual of actualComponents) {
+    const entry = recorded.find((candidate) => candidate.name === actual.name);
+    if (!entry) return { code: "component_mismatch", details: { field: "components", component: actual.name } };
+    if (entry.version !== actual.version) {
+      return { code: "component_mismatch", details: { component: actual.name, field: "version" } };
+    }
+    if (entry.tables.join("\u0000") !== actual.tables.join("\u0000")) {
+      return { code: "component_mismatch", details: { component: actual.name, field: "tables" } };
+    }
+    if (entry.structureDigest !== actual.structureDigest) {
+      return { code: "component_mismatch", details: { component: actual.name, field: "structureDigest" } };
+    }
+    if (entry.contentDigest !== actual.contentDigest) {
+      return { code: "component_mismatch", details: { component: actual.name, field: "contentDigest" } };
+    }
+    if (entry.rows !== actual.rows) {
+      return { code: "component_mismatch", details: { component: actual.name, field: "rows" } };
+    }
+  }
+  return null;
 }
 
 /**
@@ -1411,6 +1822,9 @@ export function verifyBackup({ backupDir } = {}) {
     if (facts.structure.userVersion !== manifest.structure.userVersion) {
       return rejected("structure_mismatch", { field: "userVersion" });
     }
+    // ---- 可选组件绑定：不信清单自报，按快照重算的版本 / 结构 / 内容摘要比对 ----
+    const componentBinding = componentBindingProblems(manifest.components, facts.components ?? []);
+    if (componentBinding) return rejected(componentBinding.code, componentBinding.details);
     // ---- 可重算的物理属性：不信清单自报 ----
     if (facts.snapshot.pageSize !== manifest.snapshot.pageSize) {
       return rejected("snapshot_metadata_mismatch", {
@@ -1447,6 +1861,9 @@ export function verifyBackup({ backupDir } = {}) {
         migrations: manifest.structure.migrations,
         tables: manifest.structure.tables.length,
         rows: Object.values(manifest.content.tables).reduce((sum, entry) => sum + entry.rows, 0),
+        components: (manifest.components ?? []).map((entry) => ({
+          name: entry.name, version: entry.version, tables: entry.tables.length, rows: entry.rows,
+        })),
         snapshotBytes: manifest.snapshot.bytes,
         snapshotSha256: manifest.snapshot.sha256,
       },
@@ -1541,6 +1958,9 @@ export function restoreNew({ backupDir, targetDir, now = () => new Date() } = {}
       || published.structure.migrations.join(",") !== manifest.structure.migrations.join(",")) {
       throw expected("restore_verify_failed");
     }
+    if (componentBindingProblems(manifest.components, published.components ?? [])) {
+      throw expected("restore_verify_failed");
+    }
     const strayRestore = SIDECAR_SUFFIXES.map((suffix) => `${databasePath}${suffix}`).filter((file) => lstatOrNull(file));
     if (strayRestore.length) throw expected("restore_verify_failed", { sidecars: strayRestore.length });
 
@@ -1563,6 +1983,14 @@ export function restoreNew({ backupDir, targetDir, now = () => new Date() } = {}
         migrations: manifest.structure.migrations,
         tables: manifest.structure.tables,
       },
+      components: (manifest.components ?? []).map((entry) => ({
+        name: entry.name,
+        version: entry.version,
+        tables: entry.tables,
+        structureDigest: entry.structureDigest,
+        contentDigest: entry.contentDigest,
+        rows: entry.rows,
+      })),
     };
     created.push(MANIFEST_FILE);
     writeSyncedFile(manifestCopyPath, `${JSON.stringify(manifest, null, 2)}\n`, "write_failed");
@@ -1584,6 +2012,9 @@ export function restoreNew({ backupDir, targetDir, now = () => new Date() } = {}
         migrations: manifest.structure.migrations,
         tables: manifest.structure.tables.length,
         rows: Object.values(manifest.content.tables).reduce((sum, entry) => sum + entry.rows, 0),
+        components: (manifest.components ?? []).map((entry) => ({
+          name: entry.name, version: entry.version, tables: entry.tables.length, rows: entry.rows,
+        })),
         snapshotBytes: manifest.snapshot.bytes,
         snapshotSha256: manifest.snapshot.sha256,
         restoredAt: receipt.restoredAt,
@@ -1612,5 +2043,12 @@ export function backupContract() {
     targetDatabase: TARGET_DATABASE_FILE,
     coreTables: [...CORE_ACCOUNTING_TABLES],
     requiredTables: [...REQUIRED_TABLES],
+    components: Object.values(COMPONENT_REGISTRY).map((component) => ({
+      name: component.name,
+      version: component.version,
+      tables: [...component.tables],
+      contractDigest: sha256Text(JSON.stringify(component.structure)),
+      // 说明：这是**契约定义**摘要，不是某个具体库的结构摘要；具体库的摘要写在清单 components[].structureDigest。
+    })),
   };
 }

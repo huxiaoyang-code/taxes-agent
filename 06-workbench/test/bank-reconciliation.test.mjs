@@ -13,7 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const dataDir = mkdtempSync(join(tmpdir(), "wb-bank-"));
@@ -122,7 +122,7 @@ test("银行组件使用独立 bank_* 命名空间与组件版本，不改全局
   const userVersion = db.prepare(`PRAGMA user_version`).get();
   assert.equal(Number(Object.values(userVersion)[0]), 0, "不得写 PRAGMA user_version");
   const globalMigrations = db.prepare(`SELECT version, note FROM schema_migrations ORDER BY version`).all();
-  assert.deepEqual(globalMigrations.map((m) => Number(m.version)), [1, 2, 3], "不得写 LOCAL-01 的 schema_migrations");
+  assert.deepEqual(globalMigrations.map((m) => Number(m.version)), [1, 2, 3, 4], "不得写 LOCAL-01 的 schema_migrations");
 
   // 已存在的文件不能被再次声明为新库。
   assert.throws(() => S.claimFreshDatabase({ dbPath }), (e) => e.code === "fresh_database_file_exists");
@@ -170,7 +170,7 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
 
       // 备份校验不通过 -> migration_backup_invalid。
       const invalid = {
-        createBackup: () => ({ backupDir: join(dir, "fake-backup") }),
+        ...fakeBackupService(file2),
         verifyBackup: () => ({ ok: false, status: "corrupt" }),
       };
       await assert.rejects(
@@ -179,14 +179,33 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
       );
       assert.equal(countIn(conn2, `SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'bank_%'`), 0);
 
+      // 弱 mock 不得放行：verify 返回 true / 只有 integrity、create 不返回真实快照字段都要拒绝。
+      const booleanVerify = { ...fakeBackupService(file2), verifyBackup: () => true };
+      await assert.rejects(
+        () => S.ensureBankSchema(conn2, { dbPath: file2, backupService: booleanVerify }),
+        (e) => e.code === "migration_backup_invalid",
+      );
+      const integrityOnly = { ...fakeBackupService(file2), verifyBackup: () => ({ integrity: "ok" }) };
+      await assert.rejects(
+        () => S.ensureBankSchema(conn2, { dbPath: file2, backupService: integrityOnly }),
+        (e) => e.code === "migration_backup_invalid",
+      );
+      const noSnapshotFacts = {
+        ...fakeBackupService(file2),
+        createBackup: ({ outDir }) => ({ ok: true, status: "ok", backupDir: join(outDir, "fake-backup"), bytes: 1 }),
+      };
+      await assert.rejects(
+        () => S.ensureBankSchema(conn2, { dbPath: file2, backupService: noSnapshotFacts }),
+        (e) => e.code === "migration_backup_failed",
+      );
+      assert.equal(countIn(conn2, `SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'bank_%'`), 0);
+
       // 仅顺序验证（不是 LOCAL-06 真实迁移验收）：DDL 只在备份校验返回 ok 之后发生。
       const calls = [];
+      const full = fakeBackupService(file2);
       const fake = {
-        createBackup: ({ dbPath: p, outDir }) => {
-          calls.push("createBackup");
-          return { backupDir: join(outDir, "fake-backup"), bytes: 1 };
-        },
-        verifyBackup: () => { calls.push("verifyBackup"); return { ok: true }; },
+        createBackup: (options) => { calls.push("createBackup"); return full.createBackup(options); },
+        verifyBackup: (options) => { calls.push("verifyBackup"); return full.verifyBackup(options); },
       };
       const migrated = await S.ensureBankSchema(conn2, { dbPath: file2, backupService: fake });
       assert.equal(migrated.migrated, true);
@@ -1307,6 +1326,27 @@ function bankRowCounts(conn) {
   ]));
 }
 
+/** 仅用于门槛顺序 / 结构篡改夹具的「形状完整」fake；真实备份链路由独立 integration 测试验证。 */
+function fakeBackupService(file) {
+  const sha = "a".repeat(64);
+  const manifest = {
+    snapshot: { file: "workbench.db.snapshot", bytes: 1, sha256: sha },
+    source: { file: basename(file) },
+    structure: { schemaVersion: 0 },
+    components: [],
+  };
+  return {
+    createBackup: ({ outDir }) => ({
+      ok: true, status: "ok", backupDir: join(outDir, "fake-backup"),
+      backupMeta: { snapshotBytes: 1, snapshotSha256: sha }, manifest,
+    }),
+    verifyBackup: () => ({
+      ok: true, status: "ok",
+      summary: { snapshotBytes: 1, snapshotSha256: sha }, manifest,
+    }),
+  };
+}
+
 /** 造一个「已迁移好银行组件」的独立临时库（最小真实账务结构 + 1002 叶子科目 + 1 个账套）。 */
 async function isolatedComponentDb(dir, name) {
   const file = join(dir, name);
@@ -1315,10 +1355,7 @@ async function isolatedComponentDb(dir, name) {
   createLegacySchema(conn);
   conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
               VALUES (1, '1002', '银行存款', '资产', 'debit', 0, 1)`);
-  const backup = {
-    createBackup: ({ outDir }) => ({ backupDir: join(outDir, "fake-backup"), bytes: 1 }),
-    verifyBackup: () => ({ ok: true }),
-  };
+  const backup = fakeBackupService(file);
   const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: backup });
   assert.equal(migrated.migrated, true);
   assert.equal(S.bankSchemaContract(conn).ok, true, "健康组件库必须通过结构契约");

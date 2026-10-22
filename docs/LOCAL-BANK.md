@@ -37,7 +37,7 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 | 文件 | 职责 |
 |---|---|
 | `06-workbench/server/bank-import.mjs` | 纯函数：CSV 解析、字段映射校验、日期 / 金额 / 方向规范化、预检、指纹与限制。**无数据库副作用**。 |
-| `06-workbench/server/bank-storage.mjs` | `bank_*` 独立命名空间、组件版本 `bank_component_migrations`、结构契约 `BANK_SCHEMA_CONTRACT` / `bankSchemaContract` / `assertBankSchemaReady`、迁移前备份门槛、创建事实回执、CRUD / 审计 / 对账运行记录；以及内部完整判定用的键集游标扫描与 SQL 聚合（展示分页 API 与内部 API 严格分开）。 |
+| `06-workbench/server/bank-storage.mjs` | `bank_*` 独立命名空间、组件版本 `bank_component_migrations`、结构契约 `BANK_SCHEMA_CONTRACT` / `BANK_COMPONENT_STRUCTURE` / `bankSchemaContract` / `assertBankSchemaReady`、迁移前真实备份门槛（全新子目录 + 严格字段 + `BEGIN IMMEDIATE` 排他安装）、创建事实回执、CRUD / 审计 / 对账运行记录；以及内部完整判定用的键集游标扫描与 SQL 聚合（展示分页 API 与内部 API 严格分开）。 |
 | `06-workbench/server/bank-reconciliation.mjs` | 账户登记、导入落库（单事务）、批次 / 流水 / 歧义查询、候选、确认 / 取消、读时失效核验、余额调节、状态汇总。 |
 | `06-workbench/scripts/bank-reconcile.mjs` | 本机 CLI：显式 `--db`、JSON / text 输出、稳定错误码与退出码；`init-db` 使用产品真实建库入口创建新库。 |
 
@@ -66,9 +66,9 @@ MCP / `scripts/test-all.mjs` / `package.json` / 锁文件 / `public/*` / 共享 
 ### 4.1 组件结构契约（v1，供备份 / 恢复与后续接线核对）
 
 组件结构以代码常量 `BANK_SCHEMA_CONTRACT`（`server/bank-storage.mjs`）为唯一权威，并由
-`bankSchemaContract(db)` 只读核对。**本节列出的列 / 主键 / UNIQUE / 索引签名与实际 `WHERE` 谓词 /
-外键完整集合与动作 = 运行时真实门槛**，后续 LOCAL-06 备份组合、恢复与集成窗口可直接
-`import { BANK_SCHEMA_CONTRACT }` 核对，不要另行猜测结构。
+`bankSchemaContract(db)` 只读核对。**本节列出的列名 / 类型 / NOT NULL / 默认值 / 主键 / UNIQUE /
+索引签名与实际 `WHERE` 谓词 / 外键完整集合与动作 = 运行时真实门槛**；LOCAL-06 备份组合使用同一权威
+派生的 `BANK_COMPONENT_STRUCTURE`（列规范 + 外键动作 + 索引 + 空触发器 / 视图集合），不要另行猜测结构。
 
 版本：`BANK_SCHEMA_VERSION = 1`；`bank_component_migrations` 必须**有且只有一行 `version = 1`**。
 本版本**没有 v2 迁移**，也不伪造 v2。
@@ -409,24 +409,41 @@ node scripts/bank-reconcile.mjs <command> --db <库文件> [选项] [--format js
   声明创建事实，设置 `WORKBENCH_DATA_DIR` 指向显式目录后调用产品真实建库入口 `server/db.mjs`，
   再在同一进程内初始化 `bank_*`。已有库加入 `bank_*` 时 CLI 支持 `--backup-service <模块>`。
 
-**当前状态（如实）**：LOCAL-06 已审查备份实现尚未合并进本分支（候选 PR #55 仍 OPEN），因此**已有库的银行组件迁移尚未可用**，
-CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试证明此时不创建任何 `bank_*` 表。
-注意：该候选的严格拒绝只针对 schema v3 的 `unexpected_tables`，**不等于**已支持 `bank_*` 额外表的恢复组合；
-本包不读取未合并候选当已支持，也不修改其文件。要声称「现库安装 / 备份恢复闭环」，必须先把
-本组件 §4.1 的结构 / 版本契约（表 / 列 / PK / UNIQUE / 索引 / FK 动作 / 版本 v1）与已审 backup 组合明确对齐，
-由集成窗口重新核验后才能宣称。
-新库生命周期（`init-db` / 进程内创建事实）与全部业务功能已可真实运行。
-若后续 LOCAL-06 合同与本包的注入点不一致，由集成窗口按真实合并合同调整，不在本包修改 backup 白名单或降版本。
+**当前状态（如实）**：本分支已把已审 LOCAL-06 备份实现与本组件结构契约真实打通，`--backup-service <server/local-backup.mjs>`
+可直接用于已有库安装。实现与验收事实：
+
+- **真实备份目录**：安装不再把已有 `dataDir` 当 `outDir`，而是创建设置在 `<dataDir>/bank-component-backups/pre-bank-v1-*`
+  下的全新专属子目录；`createBackup` 的 `outDir` 必须不存在，与本实现一致。
+- **严格读取真实返回字段**：create 必须 `ok === true` 并返回非空 `backupDir` 与真实
+  `backupMeta.snapshotBytes / snapshotSha256`；verify 必须独立返回 `ok === true` / `status === 'ok'`，
+  且摘要与 create 一致；还要绑定清单来源文件、当前核心 schema 版本，并拒绝迁移前已含组件。
+  `true`、仅 `{ integrity: 'ok' }`、仅 `{ ok: true }` 的弱 mock 都会被拒绝。
+- **连接与库路径绑定**：安装前用 `PRAGMA database_list` 核对调用方连接的真实文件就是 `dbPath`，
+  不一致返回 `database_handle_mismatch`，不会备份 A 却往 B 装。
+- **排他安装窗口**：已有库的备份 + DDL + 版本 / 备份记录在同一个 `BEGIN IMMEDIATE` 写事务内完成；
+  安装期间其他连接无法提交新业务写入，不会把「备份后、DDL 前」的并发写入当成已保护。
+  `VACUUM INTO` 由备份服务在独立只读连接上执行，不需要在本事务内运行。
+- **失败边界**：create 失败 / verify 失败 / DDL 后结构自检失败都整体回滚；原库 schema / 数据 /
+  全局迁移版本不变，不留半套 `bank_*` 表或版本行。失败时迁移前备份目录保留（可人工核对），
+  但不会登记为成功迁移证据。
+- **组件备份支持（可选 bank v1）**：`local-backup.mjs` 在 core v3 / v4 精确契约之外增加可选的
+  bank 组件 v1：必须完整 10 表、列类型 / NOT NULL / 默认值、主键、UNIQUE、命名 / 部分索引真实
+  `WHERE` 谓词、外键完整集合与动作、版本表恰好一行 v1、无未登记触发器 / 视图；任何半套 /
+  未来 / 额外 `bank_*` 或 audit / batch 等未知表仍拒绝。
+- **清单绑定**：有组件时清单显式记录 `components[]` 的 name / version / 表集 / 结构摘要 / 内容摘要 /
+  行数；verify 从快照重算并逐项比对，不接受清单漏报或错报。**无组件的旧 v3 / v4 备份继续原样
+  verify / restore-new，不升级，清单形状不被强制改写。**
+- 备份模块只 import 无默认库副作用的 `bank-storage.mjs` 结构与谓词规范化函数，不 import
+  `db.mjs` / `accounting.mjs` / actions / runner，导入备份模块不会打开或创建默认数据目录。
 
 **停写 / 维护窗口与恢复损失边界（执行前提，不是已保证）**：
 
-- 备份是「迁移前某一时点」的快照。SQLite 的 `VACUUM INTO` 不能在事务内执行，因此 CLI 在备份前
-  无法把外部连接写入也锁住；本包**不声称**能阻止其他进程在备份时点与组件 DDL 之间提交写入。
-- 因此已有库迁移必须在操作者确认的**停写维护窗口**内执行：先关闭其他会写该库的进程（后端 / Agent / 脚本），
-  再由单个 CLI 进程运行迁移；DDL 本身在 `BEGIN IMMEDIATE` 单事务内完成，失败整体回滚。
-- 恢复损失边界：备份时点**之后**提交的任何业务写入都不在快照内；若用该备份恢复，这些写入会丢失。
-  迁移前如需更高保证，应先自行保护现库、停写并在恢复后逐项核对；本组件不冒充 LOCAL-06 的完整恢复工具。
-- 失败时的可验证备份文件保留在原地（未登记为成功迁移证据），便于人工核对后重试或回退。
+- 组件安装已用 `BEGIN IMMEDIATE` 排他写事务覆盖「备份 + DDL」；这防止其他连接在该窗口提交新写入，
+  但**不等于**整个产品在安装期间可以继续服务：操作者仍应在维护窗口内关闭其他写入进程，
+  以免它们在等待锁时超时失败。
+- 恢复损失边界：备份是安装前某一时点的快照。安装成功后的业务写入不在该备份内；若用它恢复，
+  安装后的银行组件与业务写入都会消失，必须由操作者明确确认后再执行 `restore-new`。
+- 本包只支持恢复到全新目标；原位覆盖、通用版本回退、审计 / 批量组件的恢复接线均未交付。
 
 ## 13. 验收与测试（本次实际运行）
 
@@ -438,11 +455,25 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 | CSV / 映射 / 规范化 | `node --test test/bank-import.test.mjs` | 16 / 16 通过 |
 | 持久化 / 匹配 / 失效 / 余额调节 | `node --test test/bank-reconciliation.test.mjs` | 29 / 29 通过 |
 | CLI 端到端（子进程） | `node --test test/bank-reconcile-cli.test.mjs` | 11 / 11 通过 |
-| 三套合计 | `node --test test/bank-import.test.mjs test/bank-reconciliation.test.mjs test/bank-reconcile-cli.test.mjs` | 56 / 56 通过，exit 0（约 11.1s） |
-| 既有全套回归 | `npm test` | 上一轮 47 / 47 套件通过；**本轮未重跑**（本轮只改银行包内 10 个文件，未动上游共享代码） |
+| LOCAL-06 备份 / 验证 / 恢复 | `node --test test/local-backup.test.mjs` | 20 / 20 通过 |
+| 银行现库安装 / 组件备份集成 | `node --test test/local-bank-backup-integration.test.mjs` | 4 / 4 场景通过（含 40+ 金额 / 故障 / 篡改断言） |
+| 五套合计 | 依次运行以上文件（不使用 `npm test` 总入口） | 80 / 80 通过，exit 0 |
 
-三套件**尚未注册**到 `scripts/test-all.mjs`：该文件属于共享测试总入口，按任务边界由后续共享接线窗口登记；
-本包不修改它，因此 `npm test` 不包含这三个套件。
+五套件**尚未注册**到 `scripts/test-all.mjs`：该文件属于共享测试总入口，按任务边界由后续共享接线窗口登记；
+本包不修改它，因此 `npm test` 不包含这些套件。
+
+### 13.3 本轮现库安装 / 组件备份集成验收（真实临时库）
+
+基线：`ce4078222c9e5fb8508c9fe24a9183f17d46ea28`（银行 91f07eb + 核心 bd05415 + 备份 3399500 冻结组合）。
+以下全部为合成临时库，不读取真实账套 / 银行文件 / 凭据；原始 stdout 保存在本工作区 `.agent-runs/`（未提交）。
+
+| 场景 | 关键断言 | 结果 |
+|---|---|---|
+| core4 + 遗留 WAL 安装 | 安装前真实 create + verify；备份按 v4、无 bank 组件、包含 WAL 已提交凭证；恢复到全新目标后核心账套 / 凭证 / 分录一致；安装后完整 10 表、全局 schema 仍 v4、备份证据 1 条；重跑幂等且不新增备份 | 通过 |
+| 银行固定手算 + 安装后备份恢复 | 账面 1120.00 = 1000 + 200 + 50 - 100 - 30；对账单 1110.00 = 1000 + 200 + 20 - 100 - 10；四类未达 50 / 30 / 20 / 10（分：5000 / 3000 / 2000 / 1000）；调节账面 = 调节银行 = 1130.00，差额 0；不生成调整凭证；backup → verify → restore-new 后金额 / 批次 / 4 笔流水 / 2 笔确认 / 运行记录保留；取消匹配与反过账后 stale / invalidation 可见；乙账套账面 600.00、流水 1 笔不受甲账套影响 | 通过 |
+| core3 兼容路径 | 派生结构等价 v3 库先被 v3 契约接受；安装 bank 后核心仍 v3；backup 清单仍按 v3 并绑定 bank v1；恢复后仍 v3、完整 10 表、核心业务保留、不自动升级 | 通过 |
+| 故障 | create 抛错 → `migration_backup_failed`；真实 create 后删除快照 → 真实 verify 失败 `migration_backup_invalid`；DDL 后自检失败 → 整体回滚、失败备份保留可验证但不登记；错 DBPath → `database_handle_mismatch` 且两库无写入；安装持锁期间另一连接写入被 `SQLITE_BUSY` 拒绝 | 通过 |
+| 篡改矩阵 | 少表 / 多表 / 未知组件表；同名错 partial 谓词；FK 额外 / 重复 / 动作改；版本表缺列 / 多行 / 未来；列类型 / 默认值 / NOT NULL；未知 trigger；清单组件漏报 / 错报 future 版本 / 错结构摘要 / 错表集 / core-only 虚报 bank。每项都重算快照字节数与 sha256 后仍被结构 / 清单契约拒绝，且 `restore-new` 不生成目标库 | 通过 |
 
 ### 13.1 首轮独立审查 5 项阻塞：真实复现与回归
 
@@ -491,13 +522,13 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
 
 ## 14. 限制与未完成项（不声称已交付完成）
 
-1. **已有库迁移不可用**：等待 LOCAL-06 已审备份合同合并后，由集成窗口完成真实迁移前备份、
-   WAL 已提交内容、迁移失败回滚、备份恢复新目标、银行组件 / 审计 / 来源 / 金额完整性验收。
-   本包只用失败分支与「DDL 发生在备份校验之后」的顺序测试证明门槛，**未把 fake backup 当迁移验收**。
+1. **已有库安装已打通，但仍有明确边界**：真实迁移前备份（含 WAL 已提交内容）、失败回滚、
+   `backup → verify → restore-new` 与银行流水 / 来源批次 / 确认取消 / 未达金额完整性已验证（§13.3）。
+   未交付：原位覆盖恢复、通用版本回退、审计 / 批量组件的安装与恢复接线（后续独立包）。
 2. **共享接线未做**：HTTP / Agent / MCP / UI 与 `scripts/test-all.mjs` 均未接入，由共享串行窗口另开任务；
    当前交付的是可直接调用的 Node CLI 与领域 API。
-3. **LOCAL-02 / LOCAL-03 未合并**：本包按当前真实 v3 schema 读取账务；LOCAL-02 的金额 / 期末完整性、
-   LOCAL-03 的辅助核算维度稳定后，需补真实兼容回归与版本记录，并再评估「同科目多银行账户」的辅助维度支持。
+3. **LOCAL-02 / LOCAL-03 合并依赖**：本包已按真实 v3 / v4（资产补项 5 列）结构读取账户，
+   但 LOCAL02 最终合并到正式 main、LOCAL-03 辅助核算维度稳定后仍需重新核验；当前不声称 LOCAL04 整体 / 03 科目往来完成。
 4. **组匹配未实现**：只返回提示码 `group_match_requires_manual` / `unsupported_group_match`，不自动组合。
 5. **单一币种**：只有 CNY（分），无外币、无换汇、无汇率字段。
 6. **一个银行账户绑定一个叶子科目**：没有辅助维度时，同科目多个银行账户会被拒绝；
@@ -516,7 +547,8 @@ CLI 对这类库返回 `migration_backup_unavailable`（exit 5），并有测试
     额外或未知的 `bank_*` 表会被当作「契约外结构」拒绝——将来真的加表必须先升版本并补迁移。
 12. **内部完整扫描的成本**：失效核验 / 对账未达项按完整集合读（键集游标分块）；数据量很大时
     耗时随匹配数增长（501 笔全确认约 8 秒级），本版本不做增量 / 缓存机制，也不以展示分页换正确性。
-13. **现库安装 / 备份恢复闭环未完成**：LOCAL-06 候选未合并且只按 v3 严拒额外表；银行组件的结构 / 版本
-    与 backup 的组合尚未由集成窗口核验，不声称现库迁移 / 恢复已可用（详见 §12）。
+13. **现库安装 / 组件备份恢复已实现，但不是完整恢复平台**：只支持 core v3 / v4 + 可选 bank v1、
+    只恢复到全新目标；无组件旧备份继续原样验证 / 恢复。audit / batch 组件、原位覆盖、版本回退、
+    HTTP / Agent / MCP 接线均未在本包交付（详见 §12 / §13.3）。
 14. **03 双准则与 1002 叶子科目契约未复验**：本包只接受 `1002` 或其显式明细作为资产类借方叶子科目；
     LOCAL-03 的双准则 / 辅助维度合并后必须重新核验，不能声称已完成 03 依赖。

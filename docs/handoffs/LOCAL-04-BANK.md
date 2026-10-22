@@ -1,13 +1,16 @@
 # 交接 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
-- 状态：**实施 + 首轮独立审查 5 项阻塞修复 + 结构契约复审收敛（3 项 P2）与回归完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
+- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
+- 子包基线：`ce4078222c9e5fb8508c9fe24a9183f17d46ea28`（银行 91f07eb + 核心 bd05415 + 备份 3399500 冻结组合并入最新 main `db6020a`）；子包结果见 §7。
 - 本轮返工基线（冻结 head）：`46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；原分页 / 截止日 / 事务 / CSV 四项及大数据真实探针已独审通过，本轮只收敛结构门槛及必要测试文档，仍只改原 10 个文件。
 - 上一轮阻塞审查基线：`e2545216226b87262508d8a94f38426415670d8c`；基线 `257f96275031eefa484699dd71bd012e2d221e51`；分支 `codex/huxiaoyang-code/local-04-bank`；工作区 `.worktrees/local-04-bank`
 - 远端载体：[Issue #53](https://github.com/huxiaoyang-code/youshu-fork/issues/53)（`Refs #20` / `Refs #13`）
 - 任务单：[tasks/LOCAL-04-BANK](../tasks/LOCAL-04-BANK.md) · 契约：[LOCAL-BANK](../LOCAL-BANK.md)
 - 执行模型：按管理者派工锁定的授权模型（GLM 5.3 / DeepSeek V4.1 Flash 范围内的显式锁定），未启动其他模型或员工子 agent。
 
-## 1. 本次实际交付
+## 1. 本次实际交付（原 56 项包历史记录）
+
+> 2026-10-22 现库安装 / 备份子包的实际边界与测试见 §7；下列是原银行包首轮交付历史。
 
 只新增 10 个文件，未修改任何共享文件：
 
@@ -138,14 +141,8 @@ SQL 改金额 / 日期 / 科目 / 行号 / 删分录分别识别；触发器注�
 
 ## 4. 未完成项 / 下一步（不得视为整体已完成）
 
-1. **已有库迁移与升级验收**：等 LOCAL-06 已审备份实现合并，接真实合同（`createBackup` /
-   `verifyBackup` / `restoreNew` 与 v3 支持确认），补迁移前备份、WAL 已提交内容、迁移失败回滚、
-   恢复新目标、组件 / 审计 / 来源 / 金额完整性证据；届时把 `--backup-service` 接到真实模块。
-   **本组件结构与版本组合要求**：LOCAL-06 候选（PR #55）已独审但**仍 OPEN**，且其严格拒绝只针对 schema v3 的
-   `unexpected_tables`，**不等于**已支持 `bank_*` 额外表；要可宣称「现库安装 / 备份恢复闭环」，必须先按
-   `docs/LOCAL-BANK.md` §4.1 的结构 / 版本契约（表 / 列 / PK / UNIQUE / 索引 / FK 动作 / 组件 v1）与已审 backup
-   明确组合，由集成窗口重新核验。本包**不**读取未合并候选当已支持，也**不**修改其文件。
-   当前**不声称**旧库迁移可用，也不修改 backup 白名单或降版本；本包仍只有组件 v1，不伪造 v2。
+1. ~~已有库迁移与升级验收~~：**已由 §7 子包完成**（真实 create + verify、WAL 已提交内容、失败回滚、
+   backup → verify → restore-new、银行流水 / 批次 / 确认取消 / 未达金额完整性）。仍不包含原位覆盖恢复与通用版本回退。
 2. **03 双准则 / 1002 叶子科目尚未复验**：本包只接受 `1002` 或其显式明细作为资产类借方叶子科目，
    且首版一个银行账户绑一个叶子科目；LOCAL-03 双准则与辅助维度合并后必须重新验，不能声称已完成 03 依赖。
 3. **共享接线**：HTTP / Agent / MCP / UI 与 `scripts/test-all.mjs`（三套件登记）另开共享串行窗口；
@@ -178,3 +175,78 @@ SQL 改金额 / 日期 / 科目 / 行号 / 删分录分别识别；触发器注�
   凭据、税局窗口 / 后端 / 私有采集资料；未启动浏览器。
 - 未修改共享 STATE / 索引 / 其他 docs / backup 候选 / 其他员工文件；本包状态由管理者在收口时统一登记。
 - 复验可使用相对路径与合成值；不要把本机绝对路径 / PID / 原始日志写入 Git。
+
+## 7. 2026-10-22 子包交接：现库安装 / 组件备份真实整合
+
+### 7.1 工作区与边界
+
+- 基线 `ce4078222c9e5fb8508c9fe24a9183f17d46ea28`；分支 `codex/huxiaoyang-code/local-04-bank`，工作区 `.worktrees/local-04-bank`。
+- 只动远端 53 + 47 已登记的 10 文件边界：本轮实际修改 `server/bank-storage.mjs`、`server/local-backup.mjs`、
+  `test/bank-reconciliation.test.mjs`、`test/bank-reconcile-cli.test.mjs`，新增 `test/local-bank-backup-integration.test.mjs`，
+  并更新本包三份文档（`docs/LOCAL-BANK.md` / `docs/tasks/LOCAL-04-BANK.md` / 本文件）。
+  `scripts/bank-reconcile.mjs` 与 `test/local-backup.test.mjs` 未改（无需改 / 47 冻结的 20 项保持原样）。
+- **未修改**：`accounting.mjs` / `db.mjs` / `import-storage.mjs` / 其他组件 / `server.mjs` / Agent / MCP /
+  `scripts/test-all.mjs` / `package.json` / `docs/LOCAL-BACKUP.md` 及其他公共 backup docs。
+- 未执行 Git 提交 / 推送 / 合并；未读取真实账套 / 凭据 / 税局；未启动浏览器。
+
+### 7.2 实现要点
+
+1. **真实安装备份目录**：`ensureBankSchema` 分配全新 `<dataDir>/bank-component-backups/pre-bank-v1-*`，
+   不再把已有 `dataDir` 直接当 `outDir`。
+2. **真实字段与绑定校验**：create 必须 `ok` + `backupDir` + `backupMeta.snapshotBytes/sha256`；
+   verify 必须 `ok` + `status='ok'`，摘要与 create 一致，并绑定源文件名 / 核心 schema 版本 / 迁移前无组件。
+   `true` / `integrity:'ok'` / 仅 `{ok:true}` mock 全部拒绝。
+3. **连接路径绑定**：`PRAGMA database_list` 核对真实连接文件 = `dbPath`，否则 `database_handle_mismatch`。
+4. **排他安装**：已有库备份 + DDL + 记录在同一个 `BEGIN IMMEDIATE` 内；其他连接在窗口内提交写入会收到
+   `SQLITE_BUSY`；DDL 后自检失败整体回滚，失败备份保留但不登记为成功证据。
+5. **结构契约扩展**：`BANK_SCHEMA_CONTRACT` 增加列类型 / NOT NULL / 默认值和额外索引拒绝；
+   新增 `BANK_COMPONENT_STRUCTURE` 供 backup 使用。`bankSchemaContract` **不拒绝**合成测试触发器
+   （原有注入失败回归保留）；备份验证器拒绝任何未登记 / 引用 `bank_*` 的 trigger 或 view。
+6. **backup 可选 bank v1**：完整 10 表 + 版本内容 + 类型 / 默认值 / NOT NULL / PK / UNIQUE / 索引签名与
+   真实 partial 谓词 / 外键完整集合与动作 / 无未知对象；manifest 可选 `components[]` 绑定 name / version /
+   tables / structureDigest / contentDigest / rows；create / verify / restore-new 三层重算比对。
+7. **旧备份兼容**：无 bank 的 v3 / v4 备份清单保持无 `components`，继续原样 verify / restore-new，不升级。
+8. **拒绝边界**：未知 / 半套 / 未来 / 错报组件、额外 `bank_*` 或 audit / batch 未知表、清单漏报 / 错报均拒绝；
+   被拒备份不生成恢复目标。
+
+### 7.3 实际自测（全部合成临时库）
+
+工作目录 `06-workbench`；stdout 全文保存在本工作区 `.agent-runs/`（未提交）：
+
+```
+node --test test/bank-import.test.mjs                        # 16 / 16, exit 0
+node --test test/bank-reconciliation.test.mjs                # 29 / 29, exit 0
+node --test test/bank-reconcile-cli.test.mjs                 # 11 / 11, exit 0
+node --test test/local-backup.test.mjs                       # 20 / 20, exit 0
+node --test test/local-bank-backup-integration.test.mjs      # 4 / 4 场景, exit 0
+```
+
+`git diff --check` exit 0；改动范围仅上述子包边界文件（无 `data/`、无临时库、无日志、无共享入口 / package / 其他 docs）。
+
+五套合计 **80 / 80**。集成场景包含：core4 + 遗留 WAL 安装前备份可还原原核心；安装后固定手算
+1120 / 1110 / 四类未达 50/30/20/10 / 调节双方 1130 / 差额 0 / 不生成调整凭证；backup → verify →
+restore-new 后 4 流水 / 1 批次 / 2 确认 / 运行记录保留；取消匹配与反过账后 stale / invalidation 可见；
+双账套隔离；已安装重跑幂等；core3 兼容不升级；create / verify / DDL 失败回滚；错 DBPath 不写；
+安装期间外部写入被排他拒绝；17 个结构篡改 + 6 个清单错报子项重算快照摘要后仍拒绝且不生成恢复目标。
+
+基线漂移说明：核心 import schema 已到 v4，原银行测试中两处 `schema_migrations` 静态期望从 `[1,2,3]` / `3`
+更新为 `[1,2,3,4]` / `4`，断言语义仍是「银行组件不得写全局迁移版本」。
+
+### 7.4 未完成 / 后续依赖（不得声称整体完成）
+
+1. 只支持 core v3 / v4 + 可选 bank v1；audit / batch 组件、原位覆盖恢复、通用版本回退、HTTP / Agent / MCP 接线未交付。
+2. `scripts/test-all.mjs` / `package.json` / 公共 backup 三文档未改；新集成套件尚未注册总入口，
+   公共 backup docs 需后续专门同步本包新增的 components 兼容事实。
+3. 本子包**不合并**：LOCAL02 正式合入并同步最终修复前，只作为预整合；最终合并仍必须由 root 同步 02 正式 main。
+4. 不得据此声称 LOCAL04 整体 / LOCAL03 科目往来已完成；上游整合后 root 需全量回归（本包只跑影响面五套）。
+5. 未把「mock 备份成功」当真实验收：新增集成套件全部使用真实 `server/local-backup.mjs`；失败分支另外使用
+   可控包装器注入故障，且断言原库无半套 DDL / 版本 / 数据。
+
+### 7.5 管理者复验建议
+
+- 先读 `server/bank-storage.mjs` 的 `runBackupGate` / `ensureBankSchema` / `BANK_COMPONENT_STRUCTURE`，
+  再读 `server/local-backup.mjs` 的 `inspectComponent` / `componentStructureDigest` / `componentBindingProblems`
+  与 manifest components 校验；最后看集成测试的四类场景与篡改矩阵。
+- 复验命令即 §7.3；重点核对：安装备份目录为全新子目录、失败时原库无 `bank_*` / 版本变化、
+  恢复后金额 1130 / 1130 / 0、core3 不升级、篡改项全部 `structure_invalid` 或 `component_*` 且无恢复目标。
+- 独立审查由未参与实施 / 本规划的审查者执行；员工不执行 Git 写。

@@ -79,7 +79,7 @@ test("init-db：在不存在路径上通过真实创建入口建库并初始化 
   const created = okJson(["init-db", "--db", dbPath]);
   assert.equal(created.bankSchema.migrated, true);
   assert.equal(created.bankSchema.creation, "fresh-database");
-  assert.equal(created.importSchema.to, 3);
+  assert.equal(created.importSchema.to, 4, "当前核心已到 schema v4（资产补项）");
   assert.ok(existsSync(dbPath));
   expectError(["init-db", "--db", dbPath], "db_already_exists", 2);
   expectError(["init-db", "--db", join(baseDir, "other.db")], "init_db_filename_required", 2);
@@ -438,7 +438,7 @@ test("CLI 每一步都真实持久化：重新打开库能看到批次、流水�
     };
     for (const [name, value] of Object.entries(tables)) assert.ok(value > 0, `${name} 必须持久化`);
     const globalVersion = Number(probe.prepare(`SELECT MAX(version) AS v FROM schema_migrations`).get().v);
-    assert.equal(globalVersion, 3, "银行组件不得改动全局迁移版本");
+    assert.equal(globalVersion, 4, "银行组件不得改动全局迁移版本");
     const userVersion = Number(Object.values(probe.prepare(`PRAGMA user_version`).get())[0]);
     assert.equal(userVersion, 0);
     assert.equal(readFileSync(dbPath).length > 0, true);

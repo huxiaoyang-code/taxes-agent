@@ -17,8 +17,8 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { existsSync, openSync, closeSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdirSync, openSync, closeSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 /** 本文件负责的组件 schema 版本。 */
 export const BANK_SCHEMA_VERSION = 1;
@@ -48,7 +48,17 @@ const REQUIRED_BASE_COLUMNS = Object.freeze({
 });
 
 /**
- * 组件结构契约（schema v1）：表 / 关键列 / 主键 / 索引（含 UNIQUE 与部分索引）/ 外键动作。
+ * 表级结构契约：列规范（类型 / NOT NULL / 默认值）+ 主键列顺序。
+ * `columns` 由列规范键派生，避免「名字数组」和「完整列规格」两份清单各自漂移。
+ */
+const tableContract = (columnSpecs, primaryKey) => Object.freeze({
+  columns: Object.freeze(Object.keys(columnSpecs)),
+  columnSpecs: Object.freeze(columnSpecs),
+  primaryKey: Object.freeze([...primaryKey]),
+});
+
+/**
+ * 组件结构契约（v1）：表 / 关键列 / 主键 / 索引（含 UNIQUE 与部分索引）/ 外键动作。
  *
  * 用途：
  *  - 业务写前结构自检（`assertBankSchemaReady`）：缺表 / 缺列 / 主键 / UNIQUE / FK 动作不符
@@ -61,77 +71,157 @@ const REQUIRED_BASE_COLUMNS = Object.freeze({
 export const BANK_SCHEMA_CONTRACT = Object.freeze({
   version: BANK_SCHEMA_VERSION,
   tables: Object.freeze({
-    bank_component_migrations: {
-      columns: Object.freeze(["version", "applied_at", "note"]),
-      primaryKey: Object.freeze(["version"]),
-    },
-    bank_component_backups: {
-      columns: Object.freeze(["id", "version", "path", "bytes", "integrity", "created_at", "note"]),
-      primaryKey: Object.freeze(["id"]),
-    },
-    bank_accounts: {
-      columns: Object.freeze([
-        "account_set_id", "bank_account_id", "source_id", "currency", "gl_account_code",
-        "display_name", "bank_account_no", "created_at",
-      ]),
-      primaryKey: Object.freeze(["account_set_id", "bank_account_id"]),
-    },
-    bank_batches: {
-      columns: Object.freeze([
-        "account_set_id", "bank_account_id", "source_id", "batch_id", "currency", "period",
-        "content_sha256", "mapping_fingerprint", "normalization_version", "status", "row_count",
-        "imported_rows", "reused_rows", "ambiguous_rows", "attempts", "replay_of_batch",
-        "result_json", "error_code", "error_message", "created_at", "updated_at",
-      ]),
-      primaryKey: Object.freeze(["account_set_id", "bank_account_id", "batch_id"]),
-    },
-    bank_transactions: {
-      columns: Object.freeze([
-        "id", "account_set_id", "bank_account_id", "source_id", "currency", "txn_date", "period",
-        "direction", "amount_cents", "summary", "bank_ref_id", "balance_after_cents",
-        "content_fingerprint", "row_fingerprint", "batch_id", "row_index", "origin", "created_at",
-      ]),
-      primaryKey: Object.freeze(["id"]),
-    },
-    bank_batch_rows: {
-      columns: Object.freeze([
-        "id", "account_set_id", "bank_account_id", "batch_id", "row_index", "row_sha256",
-        "row_fingerprint", "status", "transaction_id", "ambiguity_id", "note", "created_at",
-      ]),
-      primaryKey: Object.freeze(["id"]),
-    },
-    bank_ambiguities: {
-      columns: Object.freeze([
-        "id", "account_set_id", "bank_account_id", "source_id", "batch_id", "row_index", "txn_date",
-        "period", "direction", "amount_cents", "summary", "currency", "row_fingerprint",
-        "content_fingerprint", "batch_row_sha256", "candidate_transaction_ids", "status", "decision",
-        "decision_reason", "resolved_transaction_id", "resolved_at", "created_at",
-      ]),
-      primaryKey: Object.freeze(["id"]),
-    },
-    bank_matches: {
-      columns: Object.freeze([
-        "id", "account_set_id", "bank_account_id", "currency", "transaction_id", "voucher_id",
-        "entry_id", "entry_line_no", "status", "snapshot_json", "reason", "confirmed_at",
-        "cancelled_at", "cancel_reason", "invalidated_at", "invalidation_reason",
-      ]),
-      primaryKey: Object.freeze(["id"]),
-    },
-    bank_audit_events: {
-      columns: Object.freeze([
-        "id", "account_set_id", "bank_account_id", "event_type", "subject_type", "subject_id",
-        "detail_json", "created_at",
-      ]),
-      primaryKey: Object.freeze(["id"]),
-    },
-    bank_reconcile_runs: {
-      columns: Object.freeze([
-        "id", "account_set_id", "bank_account_id", "currency", "period", "as_of", "status",
-        "book_close_cents", "adjusted_book_cents", "statement_close_cents", "adjusted_bank_cents",
-        "difference_cents", "result_json", "stale", "stale_reason", "created_at",
-      ]),
-      primaryKey: Object.freeze(["id"]),
-    },
+    bank_component_migrations: tableContract({
+      version: "INTEGER",
+      applied_at: "TEXT NOT NULL",
+      note: "TEXT",
+    }, ["version"]),
+    bank_component_backups: tableContract({
+      id: "INTEGER",
+      version: "INTEGER NOT NULL",
+      path: "TEXT NOT NULL",
+      bytes: "INTEGER",
+      integrity: "TEXT NOT NULL DEFAULT 'unknown'",
+      created_at: "TEXT NOT NULL",
+      note: "TEXT",
+    }, ["id"]),
+    bank_accounts: tableContract({
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      source_id: "TEXT NOT NULL",
+      currency: "TEXT NOT NULL",
+      gl_account_code: "TEXT NOT NULL",
+      display_name: "TEXT NOT NULL DEFAULT ''",
+      bank_account_no: "TEXT NOT NULL DEFAULT ''",
+      created_at: "TEXT NOT NULL",
+    }, ["account_set_id", "bank_account_id"]),
+    bank_batches: tableContract({
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      source_id: "TEXT NOT NULL",
+      batch_id: "TEXT NOT NULL",
+      currency: "TEXT NOT NULL",
+      period: "TEXT NOT NULL",
+      content_sha256: "TEXT NOT NULL",
+      mapping_fingerprint: "TEXT NOT NULL",
+      normalization_version: "TEXT NOT NULL",
+      status: "TEXT NOT NULL",
+      row_count: "INTEGER NOT NULL DEFAULT 0",
+      imported_rows: "INTEGER NOT NULL DEFAULT 0",
+      reused_rows: "INTEGER NOT NULL DEFAULT 0",
+      ambiguous_rows: "INTEGER NOT NULL DEFAULT 0",
+      attempts: "INTEGER NOT NULL DEFAULT 1",
+      replay_of_batch: "TEXT",
+      result_json: "TEXT NOT NULL DEFAULT '{}'",
+      error_code: "TEXT",
+      error_message: "TEXT",
+      created_at: "TEXT NOT NULL",
+      updated_at: "TEXT NOT NULL",
+    }, ["account_set_id", "bank_account_id", "batch_id"]),
+    bank_transactions: tableContract({
+      id: "INTEGER",
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      source_id: "TEXT NOT NULL",
+      currency: "TEXT NOT NULL",
+      txn_date: "TEXT NOT NULL",
+      period: "TEXT NOT NULL",
+      direction: "TEXT NOT NULL",
+      amount_cents: "INTEGER NOT NULL",
+      summary: "TEXT NOT NULL DEFAULT ''",
+      bank_ref_id: "TEXT",
+      balance_after_cents: "INTEGER",
+      content_fingerprint: "TEXT NOT NULL",
+      row_fingerprint: "TEXT NOT NULL",
+      batch_id: "TEXT NOT NULL",
+      row_index: "INTEGER NOT NULL",
+      origin: "TEXT NOT NULL",
+      created_at: "TEXT NOT NULL",
+    }, ["id"]),
+    bank_batch_rows: tableContract({
+      id: "INTEGER",
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      batch_id: "TEXT NOT NULL",
+      row_index: "INTEGER NOT NULL",
+      row_sha256: "TEXT NOT NULL",
+      row_fingerprint: "TEXT",
+      status: "TEXT NOT NULL",
+      transaction_id: "INTEGER",
+      ambiguity_id: "INTEGER",
+      note: "TEXT NOT NULL DEFAULT ''",
+      created_at: "TEXT NOT NULL",
+    }, ["id"]),
+    bank_ambiguities: tableContract({
+      id: "INTEGER",
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      source_id: "TEXT NOT NULL",
+      batch_id: "TEXT NOT NULL",
+      row_index: "INTEGER NOT NULL",
+      txn_date: "TEXT NOT NULL",
+      period: "TEXT NOT NULL",
+      direction: "TEXT NOT NULL",
+      amount_cents: "INTEGER NOT NULL",
+      summary: "TEXT NOT NULL DEFAULT ''",
+      currency: "TEXT NOT NULL",
+      row_fingerprint: "TEXT NOT NULL",
+      content_fingerprint: "TEXT NOT NULL",
+      batch_row_sha256: "TEXT NOT NULL",
+      candidate_transaction_ids: "TEXT NOT NULL DEFAULT '[]'",
+      status: "TEXT NOT NULL",
+      decision: "TEXT",
+      decision_reason: "TEXT",
+      resolved_transaction_id: "INTEGER",
+      resolved_at: "TEXT",
+      created_at: "TEXT NOT NULL",
+    }, ["id"]),
+    bank_matches: tableContract({
+      id: "INTEGER",
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      currency: "TEXT NOT NULL",
+      transaction_id: "INTEGER",
+      voucher_id: "INTEGER NOT NULL",
+      entry_id: "INTEGER NOT NULL",
+      entry_line_no: "INTEGER NOT NULL",
+      status: "TEXT NOT NULL",
+      snapshot_json: "TEXT NOT NULL",
+      reason: "TEXT NOT NULL DEFAULT ''",
+      confirmed_at: "TEXT NOT NULL",
+      cancelled_at: "TEXT",
+      cancel_reason: "TEXT",
+      invalidated_at: "TEXT",
+      invalidation_reason: "TEXT",
+    }, ["id"]),
+    bank_audit_events: tableContract({
+      id: "INTEGER",
+      account_set_id: "INTEGER",
+      bank_account_id: "TEXT",
+      event_type: "TEXT NOT NULL",
+      subject_type: "TEXT NOT NULL DEFAULT ''",
+      subject_id: "TEXT NOT NULL DEFAULT ''",
+      detail_json: "TEXT NOT NULL DEFAULT '{}'",
+      created_at: "TEXT NOT NULL",
+    }, ["id"]),
+    bank_reconcile_runs: tableContract({
+      id: "INTEGER",
+      account_set_id: "INTEGER NOT NULL",
+      bank_account_id: "TEXT NOT NULL",
+      currency: "TEXT NOT NULL",
+      period: "TEXT NOT NULL",
+      as_of: "TEXT NOT NULL",
+      status: "TEXT NOT NULL",
+      book_close_cents: "INTEGER NOT NULL",
+      adjusted_book_cents: "INTEGER NOT NULL",
+      statement_close_cents: "INTEGER NOT NULL",
+      adjusted_bank_cents: "INTEGER NOT NULL",
+      difference_cents: "INTEGER NOT NULL",
+      result_json: "TEXT NOT NULL",
+      stale: "INTEGER NOT NULL DEFAULT 0",
+      stale_reason: "TEXT",
+      created_at: "TEXT NOT NULL",
+    }, ["id"]),
   }),
   /**
    * 索引契约：`index` 有名字时按名字核对，没有名字时按（表 + 列 + unique + partial + 谓词）签名核对
@@ -174,6 +264,56 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
   ]),
 });
 
+/** 列规范解析：`"<TYPE>[ NOT NULL][ DEFAULT <literal>]"`（默认值必须在末尾，与 DDL 书写一致）。 */
+export const parseBankColumnSpec = (spec) => {
+  const match = /\s+DEFAULT\s+(.+)$/.exec(spec);
+  const defaultText = match ? match[1].trim() : null;
+  const head = match ? spec.slice(0, match.index) : spec;
+  const notNull = /\bNOT NULL\b/.test(head);
+  const type = head.replace(/\s+NOT\s+NULL\s*$/, "").trim();
+  return { type, notNull, default: defaultText };
+};
+
+/**
+ * 备份 / 恢复支持所用的完整银行组件结构契约（schema v1）。
+ *
+ * 与业务写门槛共用 `BANK_SCHEMA_CONTRACT` 的表 / 列 / 主键 / 索引 / 外键定义，
+ * 只把列规范与外键动作整理成备份验证器可直接逐项比对的形状：
+ *  - `tables[].columns` 是列规范对象（类型 / NOT NULL / 默认值），不是只有列名；
+ *  - `foreignKeys[].actions` 固定 `ON DELETE` / `ON UPDATE` / `MATCH`（未声明的按 SQLite 默认
+ *    `NO ACTION` / `NONE`）；
+ *  - `indexes` 保留名字（若有）、列序、UNIQUE / partial 与规范化后的部分索引谓词；
+ *  - `triggers` / `views` 固定为空：本版本真实 DDL 不创建任何触发器或视图，
+ *    备份验证器会把任何引用 `bank_*` 的未登记触发器 / 视图当成未知对象拒绝。
+ */
+export const BANK_COMPONENT_STRUCTURE = Object.freeze({
+  name: "bank",
+  version: BANK_SCHEMA_VERSION,
+  tables: Object.freeze(Object.fromEntries(Object.entries(BANK_SCHEMA_CONTRACT.tables).map(([name, spec]) => [
+    name,
+    Object.freeze({
+      columns: spec.columnSpecs,
+      primaryKey: spec.primaryKey,
+      unique: Object.freeze([]),
+      foreignKeys: Object.freeze(BANK_SCHEMA_CONTRACT.foreignKeys
+        .filter((fk) => fk.table === name)
+        .map((fk) => Object.freeze({
+          from: Object.freeze([...fk.columns]),
+          table: fk.refTable,
+          to: Object.freeze([...fk.refColumns]),
+          actions: Object.freeze({
+            onDelete: fk.onDelete ?? "NO ACTION",
+            onUpdate: fk.onUpdate ?? "NO ACTION",
+            match: fk.match ?? "NONE",
+          }),
+        }))),
+    }),
+  ]))),
+  indexes: BANK_SCHEMA_CONTRACT.indexes,
+  triggers: Object.freeze([]),
+  views: Object.freeze([]),
+});
+
 const nowIso = () => new Date().toISOString();
 /** 结构化业务错误：CLI / 上层按 code 映射退出码，不打印原始 SQL。 */
 export function bankError(code, message, details) {
@@ -210,7 +350,7 @@ const SCHEMA_MESSAGES = Object.freeze({
   bank_schema_missing: "当前库尚未初始化银行组件（bank_*）",
   bank_schema_future_version: "银行组件版本比当前程序更新，拒绝在未知结构上读写",
   bank_schema_version_contradiction: "银行组件版本记录与表结构矛盾，拒绝在矛盾结构上读写",
-  bank_schema_corrupt: "银行组件表结构与本版本契约不一致（缺表 / 缺列 / 主键 / 索引签名与谓词 / 外键集合与动作 / 版本表形状），拒绝在损坏结构上读写",
+  bank_schema_corrupt: "银行组件表结构与本版本契约不一致（缺表 / 缺列 / 列类型 / NOT NULL / 默认值 / 主键 / 索引签名与谓词 / 额外索引 / 外键集合与动作 / 版本表形状），拒绝在损坏结构上读写",
 });
 
 /** 指向单引号字符串字面量起点，返回结尾单引号下标（'' 转义按两个字符处理）。 */
@@ -314,6 +454,11 @@ function indexWhereSql(sql) {
   const m = /^WHERE\b([\s\S]+)$/i.exec(tail);
   return m ? (m[1].trim() || null) : null;
 }
+
+/** 供备份 / 恢复验证器复用同一套部分索引谓词规范化（避免两处判定漂移）。 */
+export const canonicalSqlCondition = canonicalCondition;
+/** 供备份 / 恢复验证器从 sqlite_master 取部分索引的 WHERE 原文。 */
+export const indexWherePredicate = indexWhereSql;
 
 function indexSignatures(db, table) {
   return db.prepare(`PRAGMA index_list(${table})`).all().map((idx) => {
@@ -450,6 +595,29 @@ export function bankSchemaContract(db) {
     if (missing.length || extra.length) {
       problems.push({ code: "bank_schema_column_mismatch", detail: { table: name, missing, extra } });
     }
+    // 列类型 / NOT NULL / 默认值同样是结构契约：只比列名会让「同名但语义不通」的列通过。
+    for (const [columnName, columnSpec] of Object.entries(spec.columnSpecs)) {
+      const actual = info.find((c) => String(c.name) === columnName);
+      if (!actual) continue;
+      const want = parseBankColumnSpec(columnSpec);
+      if (String(actual.type ?? "").trim().toUpperCase() !== want.type.toUpperCase()) {
+        problems.push({
+          code: "bank_schema_column_type",
+          detail: { table: name, column: columnName, expected: want.type, actual: String(actual.type ?? "") },
+        });
+      }
+      if ((Number(actual.notnull) === 1) !== want.notNull) {
+        problems.push({ code: "bank_schema_column_not_null", detail: { table: name, column: columnName } });
+      }
+      const actualDefault = actual.dflt_value === null || actual.dflt_value === undefined
+        ? null : String(actual.dflt_value);
+      if (actualDefault !== want.default) {
+        problems.push({
+          code: "bank_schema_column_default",
+          detail: { table: name, column: columnName, expected: want.default === null ? null : "contract", actual: actualDefault === null ? null : "different" },
+        });
+      }
+    }
     const primaryKey = info.filter((c) => Number(c.pk) > 0)
       .sort((a, b) => Number(a.pk) - Number(b.pk))
       .map((c) => String(c.name));
@@ -467,13 +635,14 @@ export function bankSchemaContract(db) {
     if (!indexesByTable.has(table)) indexesByTable.set(table, indexSignatures(db, table));
     return indexesByTable.get(table);
   };
+  const matchedIndexes = new Map();
   for (const want of BANK_SCHEMA_CONTRACT.indexes) {
     const have = indexesFor(want.table);
     const wantWhere = canonicalCondition(want.where);
     const signature = (idx) => idx.unique === want.unique && idx.partial === want.partial
       && sameList(idx.columns, [...want.columns]) && idx.where === wantWhere;
     // 有名字的索引必须按名字找到，再整体比对列 / unique / partial / 实际 WHERE 谓词；
-    // 无名字的是表级 UNIQUE 约束生成的自动索引，按完整签名匹配。
+    // 无名字的是表级主键 / UNIQUE 约束生成的自动索引，按完整签名匹配。
     const match = have.find((idx) => (want.index ? idx.name === want.index : signature(idx)));
     if (!match) {
       problems.push({
@@ -485,6 +654,9 @@ export function bankSchemaContract(db) {
       });
       continue;
     }
+    const used = matchedIndexes.get(want.table) ?? new Set();
+    used.add(match.name);
+    matchedIndexes.set(want.table, used);
     if (!signature(match)) {
       problems.push({
         code: "bank_schema_index_mismatch",
@@ -498,6 +670,21 @@ export function bankSchemaContract(db) {
             columns: match.columns, unique: match.unique, partial: match.partial,
             where: match.where,
           },
+        },
+      });
+    }
+  }
+  // 契约之外的额外索引同样拒绝：未登记的 UNIQUE / partial 索引会改变真实写入行为。
+  for (const table of Object.keys(BANK_SCHEMA_CONTRACT.tables)) {
+    if (!columnsByTable.has(table)) continue;
+    const used = matchedIndexes.get(table) ?? new Set();
+    for (const idx of indexesFor(table)) {
+      if (used.has(idx.name)) continue;
+      problems.push({
+        code: "bank_schema_index_unexpected",
+        detail: {
+          table, index: idx.name, columns: idx.columns, unique: idx.unique,
+          partial: idx.partial, where: idx.where, origin: idx.origin,
         },
       });
     }
@@ -908,13 +1095,18 @@ const COMPONENT_DDL = [
 ];
 
 /**
- * 备份门槛：只有注入的 LOCAL-06 一致备份实现成功生成并通过校验后才返回备份证据。
+ * 备份门槛：只有注入的真实备份实现成功生成、且对**真实返回字段**完成验证后才返回备份证据。
+ *
+ * 这里刻意不接受 `true` / `{ integrity: 'ok' }` / 只有 `{ ok: true }` 的弱 mock：
+ *  - create 必须 `ok === true` 并返回非空 `backupDir` 与真实 `backupMeta.snapshotBytes / snapshotSha256`；
+ *  - verify 必须独立返回 `ok === true`、`status === 'ok'`，且快照字节 / 摘要与 create 一致；
+ *  - verify 返回的清单要绑定同一个源文件名与当前核心 schema 版本，且迁移前不得已含组件。
  * 备份实现可以是同步或返回 Promise。
  */
-async function runBackupGate({ backupService, dbPath, outDir, version }) {
+async function runBackupGate({ backupService, dbPath, outDir, version, expectedSchemaVersion }) {
   if (!backupService || typeof backupService.createBackup !== "function" || typeof backupService.verifyBackup !== "function") {
     throw bankError("migration_backup_unavailable", "已有库加入 / 升级 bank_* 之前必须先完成可验证的一致备份；" +
-      "当前未提供已审查的 LOCAL-06 备份实现（createBackup / verifyBackup）。", { dbPath });
+      "当前未提供已审查的 LOCAL-06 备份实现（createBackup / verifyBackup）。", { version });
   }
   let created;
   try {
@@ -924,11 +1116,23 @@ async function runBackupGate({ backupService, dbPath, outDir, version }) {
       reason: String(e?.message || e).slice(0, 200),
     });
   }
-  const backupDir = created && typeof created === "object"
-    ? (created.backupDir ?? created.outDir ?? created.path ?? created.dir ?? null)
-    : null;
-  if (!backupDir || typeof backupDir !== "string") {
+  if (!created || typeof created !== "object" || created.ok !== true) {
+    throw bankError("migration_backup_failed", "备份实现没有返回成功的真实备份结果", {
+      version, status: created && typeof created === "object" ? created.status ?? null : null,
+    });
+  }
+  const backupDir = created.backupDir;
+  if (typeof backupDir !== "string" || !backupDir.trim()) {
     throw bankError("migration_backup_failed", "备份实现未返回可校验的备份位置", { version });
+  }
+  const meta = created.backupMeta;
+  const snapshotBytes = Number(meta?.snapshotBytes);
+  const snapshotSha256 = meta?.snapshotSha256;
+  if (!Number.isInteger(snapshotBytes) || snapshotBytes <= 0
+    || typeof snapshotSha256 !== "string" || !/^[a-f0-9]{64}$/.test(snapshotSha256)) {
+    throw bankError("migration_backup_failed", "备份实现没有返回真实快照字节数 / 摘要，不能把未验证的备份当迁移保护", {
+      version,
+    });
   }
   let verified;
   try {
@@ -938,41 +1142,180 @@ async function runBackupGate({ backupService, dbPath, outDir, version }) {
       reason: String(e?.message || e).slice(0, 200),
     });
   }
-  const ok = verified === true
-    || (verified && typeof verified === "object" && (verified.ok === true || verified.integrity === "ok"));
-  if (!ok) {
+  // 只接受 verify 真实返回的 ok / status，不接受 true 或仅有 integrity 字符串的旧 mock。
+  if (!verified || typeof verified !== "object" || verified.ok !== true || verified.status !== "ok") {
     throw bankError("migration_backup_invalid", "迁移前备份校验未通过，原库未改动", {
-      detail: verified && typeof verified === "object" ? { status: verified.status ?? null } : null,
+      detail: verified && typeof verified === "object" ? { status: verified.status ?? null, code: verified.code ?? null } : null,
     });
+  }
+  const summary = verified.summary;
+  if (!summary || Number(summary.snapshotBytes) !== snapshotBytes || summary.snapshotSha256 !== snapshotSha256) {
+    throw bankError("migration_backup_invalid", "备份校验结果与生成结果不是同一份快照，拒绝把陈旧 / 错位备份当迁移保护", {
+      detail: { reason: "snapshot_binding" },
+    });
+  }
+  const manifest = verified.manifest;
+  if (!manifest || !manifest.snapshot
+    || Number(manifest.snapshot.bytes) !== snapshotBytes || manifest.snapshot.sha256 !== snapshotSha256) {
+    throw bankError("migration_backup_invalid", "备份清单没有绑定同一份快照，拒绝继续安装", {
+      detail: { reason: "manifest_binding" },
+    });
+  }
+  if (!manifest.source || manifest.source.file !== basename(dbPath)) {
+    throw bankError("migration_backup_invalid", "备份清单的来源文件与当前安装库不一致，拒绝备份 A 却安装 B", {
+      detail: { reason: "source_file" },
+    });
+  }
+  if (expectedSchemaVersion !== null && Number(manifest.structure?.schemaVersion) !== expectedSchemaVersion) {
+    throw bankError("migration_backup_invalid", "备份清单的核心 schema 版本与当前安装库不一致", {
+      detail: { reason: "source_schema", expected: expectedSchemaVersion },
+    });
+  }
+  if (Array.isArray(manifest.components) && manifest.components.length) {
+    throw bankError("migration_backup_invalid", "迁移前备份已包含组件表，与本次「未安装」状态不符", {
+      detail: { reason: "component_present" },
+    });
+  }
+  if (created.manifest) {
+    if (!created.manifest.snapshot
+      || Number(created.manifest.snapshot.bytes) !== snapshotBytes
+      || created.manifest.snapshot.sha256 !== snapshotSha256
+      || created.manifest.source?.file !== basename(dbPath)) {
+      throw bankError("migration_backup_invalid", "备份生成结果自身不一致，拒绝继续安装", {
+        detail: { reason: "created_manifest_binding" },
+      });
+    }
   }
   return {
     backupDir,
-    bytes: Number.isFinite(Number(created?.bytes)) ? Number(created.bytes) : null,
+    bytes: snapshotBytes,
     integrity: "ok",
+    sha256: snapshotSha256,
+    formatVersion: manifest.formatVersion ?? null,
+    schemaVersion: manifest.structure?.schemaVersion ?? null,
   };
+}
+
+/** 当前 SQLite 连接实际指向的文件（`PRAGMA database_list` 的 main）。 */
+function databaseHandleFile(db) {
+  let rows;
+  try {
+    rows = db.prepare(`PRAGMA database_list`).all();
+  } catch {
+    throw bankError("database_handle_unreadable", "无法读取当前数据库连接的文件信息，拒绝继续", null);
+  }
+  const main = rows.find((row) => String(row.name) === "main");
+  const file = main && typeof main.file === "string" && main.file ? resolve(String(main.file)) : null;
+  return file;
+}
+
+const sameFilePath = (a, b) => (process.platform === "win32"
+  ? String(a).toLowerCase() === String(b).toLowerCase()
+  : String(a) === String(b));
+
+/**
+ * 核对调用方传进来的连接 **就是** dbPath 指向的文件。
+ * 不用 `dbPath` 自己声称的路径去代替真实连接事实，避免「备份 A 却往 B 安装」。
+ */
+function assertDatabaseHandleMatchesPath(db, absPath) {
+  const handleFile = databaseHandleFile(db);
+  if (!handleFile) {
+    throw bankError("database_handle_unbound", "当前连接不是磁盘上的单文件账务库，拒绝安装银行组件", null);
+  }
+  let realHandle = handleFile;
+  let realExpected = absPath;
+  try { realHandle = realpathSync(handleFile); } catch { /* 文件刚创建 / 已存在时以 resolve 结果比较 */ }
+  try { realExpected = realpathSync(absPath); } catch { /* 同上 */ }
+  if (!sameFilePath(realHandle, realExpected)) {
+    throw bankError("database_handle_mismatch", "数据库连接与传入的库路径不一致，拒绝对另一个库做迁移备份 / DDL", {
+      expectedFile: basename(absPath),
+      actualFile: basename(handleFile),
+    });
+  }
+}
+
+/** 当前库已登记的核心 schema 版本（迁移记录缺失时返回 null，不做推断）。 */
+function coreSchemaVersionOf(db) {
+  if (!tableExists(db, "schema_migrations")) return null;
+  const columns = columnNames(db, "schema_migrations");
+  if (!columns.includes("version")) return null;
+  const row = db.prepare(`SELECT MAX(version) AS version FROM schema_migrations`).get();
+  const value = Number(row?.version);
+  return Number.isInteger(value) ? value : null;
+}
+
+/**
+ * 为本次安装生成一个**尚不存在**的专属备份子目录。
+ * 真实 LOCAL-06 `createBackup` 要求 outDir 全新；直接把已有 dataDir 传进去会稳定拒绝。
+ */
+function allocateBackupOutDir({ absPath, dataDir }) {
+  const root = join(resolve(dataDir || dirname(absPath)), "bank-component-backups");
+  try {
+    mkdirSync(root, { recursive: true });
+  } catch {
+    throw bankError("migration_backup_failed", "无法创建银行组件迁移备份目录，原库未改动", {
+      reason: "backup_root_unavailable",
+    });
+  }
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const candidate = join(root, `pre-bank-v1-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`);
+    if (!existsSync(candidate)) return candidate;
+  }
+  throw bankError("migration_backup_failed", "无法分配唯一的迁移备份目录，原库未改动", {
+    reason: "backup_dir_exhausted",
+  });
+}
+
+/** 组件 DDL + 版本 / 备份证据：单事务内执行，调用方负责提交 / 回滚。 */
+function runComponentDdl(db, { from, creation, backup }) {
+  for (const statement of COMPONENT_DDL) db.exec(statement);
+  if (backup) {
+    db.prepare(`INSERT INTO bank_component_backups (version, path, bytes, integrity, created_at, note)
+                VALUES (?,?,?,?,?,?)`)
+      .run(BANK_SCHEMA_VERSION, backup.backupDir, backup.bytes, backup.integrity, nowIso(),
+        `${creation}; snapshot sha256=${backup.sha256}`);
+  }
+  db.prepare(`INSERT INTO bank_component_migrations (version, applied_at, note) VALUES (?,?,?)`)
+    .run(BANK_SCHEMA_VERSION, nowIso(), `LOCAL-04 bank component (${creation})`);
+  // DDL 后立即按契约自检；不合约就不留半个结构。
+  const after = bankSchemaContract(db);
+  if (!after.ok) {
+    throw bankError(after.code, after.message, {
+      from,
+      to: BANK_SCHEMA_VERSION,
+      problems: after.problems.slice(0, 20),
+    });
+  }
+  return { migrated: true, from, to: BANK_SCHEMA_VERSION, creation, backup };
 }
 
 /**
  * 初始化 / 升级银行组件结构。
  *
- * 版本 / 结构契约（未来版本、矛盾版本、缺表 / 缺列 / 主键 / UNIQUE / FK 动作）：
+ * 版本 / 结构契约（未来版本、矛盾版本、缺表 / 缺列 / 主键 / UNIQUE / 索引 / FK 动作 / 额外索引）：
  *  - 已符合本版本契约 → 幂等 no-op（already-initialized）；
  *  - 已经有 bank_* 结构但与契约不符 → 结构化拒绝，**不做任何 DDL / 备份 / 写入**，
  *    也不用 CREATE IF NOT EXISTS 静默修补坏库；
  *  - 完全没有 bank_* 表 → 走已有库备份门槛 / 新库创建事实后建组件。
+ *
+ * 已有库的备份与 DDL 在**同一个 `BEGIN IMMEDIATE` 写事务**内完成：备份期间其他连接无法提交新的
+ * 业务写入，DDL 失败 / 备份失败整体回滚，因此不会把「备份之后、DDL 之前」的并发写入当成已保护。
+ * VACUUM INTO 由注入的备份实现在**独立只读连接**上执行，不需要在本事务内执行。
  *
  * @param {DatabaseSync} db 显式连接
  * @param {object} options
  * @param {string} options.dbPath 当前库文件路径（备份与创建事实都绑定它）
  * @param {object|null} options.receipt claimFreshDatabase() 返回的进程内创建回执
  * @param {object|null} options.backupService LOCAL-06 备份服务（createBackup / verifyBackup）
- * @param {string|null} options.dataDir 备份输出目录（默认库文件所在目录）
+ * @param {string|null} options.dataDir 备份输出根目录（默认库文件所在目录；实际备份目录是其中全新的子目录）
  * @returns {Promise<{migrated:boolean, from:number, to:number, creation:string, backup:object|null}>}
  */
 export async function ensureBankSchema(db, options = {}) {
   const { dbPath, receipt = null, backupService = null, dataDir = null } = options;
   if (!dbPath) throw bankError("db_path_required", "初始化银行组件必须显式提供库路径");
   const abs = resolve(String(dbPath));
+  // 连接事实必须先绑定到 dbPath，之后的备份 / DDL 才可能是同一个库。
+  assertDatabaseHandleMatchesPath(db, abs);
   const contract = bankSchemaContract(db);
   const from = contract.version;
   if (contract.ok) {
@@ -989,42 +1332,77 @@ export async function ensureBankSchema(db, options = {}) {
   assertBaseSchema(db);
 
   const fresh = consumeFreshClaim(receipt, abs);
-  let creation = "fresh-database";
+  if (fresh) {
+    // 新库：创建事实已在进程内验证，不需要也不允许伪造迁移前备份。
+    try {
+      return inTransaction(db, () => runComponentDdl(db, {
+        from,
+        creation: "fresh-database",
+        backup: null,
+      }));
+    } catch (e) {
+      if (e && typeof e.code === "string" && e.code.startsWith("bank_schema_")) throw e;
+      throw bankError("bank_migration_failed", "银行组件结构初始化失败，原库已回滚", {
+        from,
+        to: BANK_SCHEMA_VERSION,
+        reason: String(e?.message || e).slice(0, 200),
+      });
+    }
+  }
+
+  // 已有库：备份 + DDL 必须在同一个排他写事务内。
+  if ((txnDepth.get(db) || 0) > 0) {
+    throw bankError("migration_transaction_conflict",
+      "银行组件安装不能在调用方已开启的事务内执行（备份无法覆盖未提交写入）", { from, to: BANK_SCHEMA_VERSION });
+  }
+  const creation = from === 0 ? "existing-database" : "component-upgrade";
+  const expectedSchemaVersion = coreSchemaVersionOf(db);
+  const outDir = allocateBackupOutDir({ absPath: abs, dataDir });
   let backup = null;
-  if (!fresh) {
-    creation = from === 0 ? "existing-database" : "component-upgrade";
+  try {
+    db.exec("BEGIN IMMEDIATE");
+  } catch (e) {
+    throw bankError("migration_lock_failed", "无法获取安装所需的数据库写锁，原库未改动", {
+      reason: String(e?.message || e).slice(0, 120),
+    });
+  }
+  try {
+    // 取得写锁后重新核对连接与结构；其他连接在这段时间内无法提交新的业务写入。
+    assertDatabaseHandleMatchesPath(db, abs);
+    const current = bankSchemaContract(db);
+    if (current.ok) {
+      db.exec("ROLLBACK");
+      return {
+        migrated: false, from: current.version, to: current.version,
+        creation: "already-initialized", backup: null,
+      };
+    }
+    if (current.initialized) {
+      throw bankError(current.code, current.message, {
+        from: current.version,
+        to: BANK_SCHEMA_VERSION,
+        problems: current.problems.slice(0, 20),
+      });
+    }
+    assertBaseSchema(db);
     backup = await runBackupGate({
       backupService,
       dbPath: abs,
-      outDir: dataDir || dirname(abs),
+      outDir,
       version: BANK_SCHEMA_VERSION,
+      expectedSchemaVersion,
     });
-  }
-
-  // ---- 组件 DDL + 版本记录：单事务；失败整体回滚 ----
-  try {
-    return inTransaction(db, () => {
-      for (const statement of COMPONENT_DDL) db.exec(statement);
-      if (backup) {
-        db.prepare(`INSERT INTO bank_component_backups (version, path, bytes, integrity, created_at, note)
-                    VALUES (?,?,?,?,?,?)`)
-          .run(BANK_SCHEMA_VERSION, backup.backupDir, backup.bytes, backup.integrity, nowIso(), creation);
-      }
-      db.prepare(`INSERT INTO bank_component_migrations (version, applied_at, note) VALUES (?,?,?)`)
-        .run(BANK_SCHEMA_VERSION, nowIso(), `LOCAL-04 bank component (${creation})`);
-      // DDL 后立即按契约自检；不合约就不留半个结构。
-      const after = bankSchemaContract(db);
-      if (!after.ok) {
-        throw bankError(after.code, after.message, {
-          from,
-          to: BANK_SCHEMA_VERSION,
-          problems: after.problems.slice(0, 20),
-        });
-      }
-      return { migrated: true, from, to: BANK_SCHEMA_VERSION, creation, backup };
-    });
+    const result = runComponentDdl(db, { from, creation, backup });
+    db.exec("COMMIT");
+    return result;
   } catch (e) {
-    if (e && typeof e.code === "string" && e.code.startsWith("bank_schema_")) throw e;
+    try { db.exec("ROLLBACK"); } catch { /* 回滚失败时仍抛出原始领域错误 */ }
+    if (e && typeof e.code === "string" && (
+      e.code.startsWith("bank_schema_")
+      || e.code.startsWith("migration_")
+      || e.code.startsWith("database_handle_")
+      || e.code === "schema_not_supported"
+    )) throw e;
     throw bankError("bank_migration_failed", "银行组件结构初始化失败，原库已回滚", {
       from,
       to: BANK_SCHEMA_VERSION,
