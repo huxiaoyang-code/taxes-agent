@@ -57,6 +57,14 @@ const USAGE = `local-audit（只读）
   restore-operations | restore-operation | restore-pending |
   restore-transitions | restore-stats                      --ledger <path>`;
 
+/** 命令成功输出但需要非 0 退出码（例如 schema 的 unsupported / invalid）。 */
+class CliResult {
+  constructor(payload, exitCode = 0) {
+    this.payload = payload;
+    this.exitCode = exitCode;
+  }
+}
+
 /** 固定错误码 → 退出码；不回显用户值。 */
 const EXIT_CODES = {
   audit_filter_invalid: 2,
@@ -69,6 +77,7 @@ const EXIT_CODES = {
   audit_database_missing: 3,
   audit_database_invalid: 3,
   restore_ledger_missing: 3,
+  restore_ledger_invalid: 3,
   audit_schema_inconsistent: 3,
   audit_schema_newer: 3,
   restore_ledger_inconsistent: 3,
@@ -173,6 +182,7 @@ function runSchema(options) {
   rejectUnknown(options, ["db"]);
   const db = openAuditDatabase(requirePath(options, "db"), { readOnly: true });
   try {
+    // 完整结构断言（表 / 列 / 版本 / 触发器定义 / 活动实例），不只“三表存在”。
     const state = inspectAuditSchema(db);
     const out = {
       component: AUDIT_COMPONENT,
@@ -181,9 +191,13 @@ function runSchema(options) {
       version: state.version,
       tables: state.present,
       activeInstanceId: state.activeInstanceId,
+      ok: state.ok,
+      state: state.state,
     };
-    if (state.installed) out.ok = true;
-    return out;
+    if (state.problems.length) out.problems = state.problems;
+    // ok / unsupported（更高版本）/ invalid（缺表 / 缺列 / 缺触发器 / 同名无效触发器）分开表达；
+    // 非 ok 按契约 exit 3，且只读打开不修改 DB。
+    return state.ok ? out : new CliResult(out, 3);
   } finally {
     db.close();
   }
@@ -317,8 +331,9 @@ export function main(argv = process.argv.slice(2)) {
   }
   try {
     const out = handler(parsed.options);
-    process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
-    return 0;
+    const payload = out instanceof CliResult ? out.payload : out;
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return out instanceof CliResult ? out.exitCode : 0;
   } catch (e) {
     const code = e instanceof AuditError ? e.code : "audit_cli_failed";
     process.stderr.write(`${JSON.stringify({ error: code })}\n`);

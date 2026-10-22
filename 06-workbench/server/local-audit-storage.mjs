@@ -51,10 +51,44 @@ export const AUDIT_TABLES = Object.freeze([
   "audit_database_instances",
   "audit_events",
 ]);
-export const AUDIT_TRIGGERS = Object.freeze([
-  "audit_events_no_update",
-  "audit_events_no_delete",
-]);
+
+/** 实例登记允许的固定技术枚举（不接受任何外部自由文本 / 路径 / 用户标识）。 */
+export const AUDIT_INSTANCE_NOTES = Object.freeze(["initial", "restore-new"]);
+
+/**
+ * append-only 触发器的规范定义。结构检查逐字比对（忽略空白 / 大小写），
+ * 因此「同名但无效」的触发器不会被当成已保护。
+ */
+export const AUDIT_TRIGGER_SQL = Object.freeze({
+  audit_events_no_update: `CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events
+     BEGIN SELECT RAISE(ABORT, 'audit_events_append_only'); END`,
+  audit_events_no_delete: `CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events
+     BEGIN SELECT RAISE(ABORT, 'audit_events_append_only'); END`,
+  // SQLite 默认 recursive_triggers=0：INSERT OR REPLACE 触发的隐式删除**不会**触发 DELETE 触发器，
+  // 于是「读原行 → 改 event_id → 按原 seq/dedupe_key 插回」可以悄悄替换历史。
+  // 这里在 BEFORE INSERT 阶段（早于冲突行的隐式删除）拒绝任何与既有行冲突的插入，
+  // 覆盖默认连接下的 INSERT OR REPLACE / REPLACE INTO / UPSERT；合法幂等仍由
+  // appendAuditEvent 在写入前返回已有事件，正常 AUTOINCREMENT 插入（NEW.seq = NULL）不受影响。
+  audit_events_no_replace: `CREATE TRIGGER audit_events_no_replace BEFORE INSERT ON audit_events
+     WHEN EXISTS (SELECT 1 FROM audit_events
+                  WHERE seq = NEW.seq OR event_id = NEW.event_id OR dedupe_key = NEW.dedupe_key)
+     BEGIN SELECT RAISE(ABORT, 'audit_events_append_only'); END`,
+});
+export const AUDIT_TRIGGERS = Object.freeze(Object.keys(AUDIT_TRIGGER_SQL));
+
+/** 结构检查的必需列；缺列时先给固定结构化拒绝，再去查询（避免原始 SQLite 报错）。 */
+const AUDIT_REQUIRED_COLUMNS = Object.freeze({
+  audit_components: Object.freeze(["component", "version", "installed_at", "note"]),
+  audit_database_instances: Object.freeze([
+    "instance_id", "created_at", "parent_instance_id", "is_active", "note_code",
+  ]),
+  audit_events: Object.freeze([
+    "seq", "event_id", "dedupe_key", "database_instance_id", "occurred_at", "action", "outcome",
+    "result_code", "reason_code", "actor", "operation_id", "parent_operation_id", "attempt",
+    "account_set_id", "voucher_id", "period", "job_id", "item_id", "stage_id", "correlation",
+    "content_digest",
+  ]),
+});
 
 const OUTCOME_CHECK = `('succeeded','rejected','failed','no_change','replayed','interrupted','unknown')`;
 
@@ -70,7 +104,7 @@ const V1_STATEMENTS = Object.freeze([
      created_at TEXT NOT NULL,
      parent_instance_id TEXT,
      is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)),
-     note TEXT
+     note_code TEXT NOT NULL DEFAULT 'initial' CHECK (note_code IN ('initial','restore-new'))
    )`,
   `CREATE UNIQUE INDEX idx_audit_instances_active
      ON audit_database_instances (is_active) WHERE is_active = 1`,
@@ -102,10 +136,8 @@ const V1_STATEMENTS = Object.freeze([
   `CREATE INDEX idx_audit_events_action ON audit_events (action, seq)`,
   `CREATE INDEX idx_audit_events_period ON audit_events (period, seq)`,
   // append-only：审计行不允许被改写 / 删除（业务对象删除不影响这些行，因为事件本身没有外键）。
-  `CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events
-     BEGIN SELECT RAISE(ABORT, 'audit_events_append_only'); END`,
-  `CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events
-     BEGIN SELECT RAISE(ABORT, 'audit_events_append_only'); END`,
+  // 三个触发器覆盖 UPDATE / DELETE / INSERT OR REPLACE（默认 recursive_triggers=0 也成立）。
+  ...Object.values(AUDIT_TRIGGER_SQL),
 ]);
 
 const MIGRATIONS = Object.freeze([
@@ -118,36 +150,98 @@ const listTables = (db) =>
     .all()
     .map((r) => r.name);
 
-const listTriggers = (db) =>
-  db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name`).all().map((r) => r.name);
+const listTriggers = (db, names) =>
+  db.prepare(`SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger' AND name IN (${names.map(() => "?").join(",")})`)
+    .all(...names);
 
-const tableExists = (db, name) =>
-  !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(name);
+const normalizeSql = (text) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+
+const columnsOf = (db, name) => db.prepare(`PRAGMA table_info(${name})`).all().map((r) => r.name);
 
 /**
  * 只读检查审计组件状态。**不创建任何对象、不写库**。
- * @returns {{tables:string[], present:string[], installed:boolean, version:number, target:number, activeInstanceId:string|null}}
+ *
+ * 结构检查先于任何列查询：缺表 / 缺列 / 未知或更高版本 / 触发器缺失或同名但定义不符 /
+ * 活动实例不是恰好一个，都会得到固定 `state`，不会把原始 SQLite 报错当结论。
+ *
+ * @returns {{tables:string[], present:string[], installed:boolean, version:number, target:number,
+ *   activeInstanceId:string|null, activeInstanceCount:number, problems:string[],
+ *   state:"ok"|"not_installed"|"invalid"|"unsupported", ok:boolean}}
  */
 export function inspectAuditSchema(db) {
   const tables = listTables(db);
   const present = AUDIT_TABLES.filter((name) => tables.includes(name));
+  const missingTables = AUDIT_TABLES.filter((name) => !tables.includes(name));
+
+  const missingColumns = {};
+  for (const name of present) {
+    const columns = columnsOf(db, name);
+    const missing = AUDIT_REQUIRED_COLUMNS[name].filter((column) => !columns.includes(column));
+    if (missing.length) missingColumns[name] = missing;
+  }
+  const columnsReady = missingTables.length === 0 && Object.keys(missingColumns).length === 0;
+
   let version = 0;
-  let activeInstanceId = null;
-  if (present.includes("audit_components")) {
+  if (columnsReady) {
     const row = db.prepare(`SELECT version FROM audit_components WHERE component=?`).get(AUDIT_COMPONENT);
     if (row && Number.isSafeInteger(Number(row.version))) version = Number(row.version);
   }
-  if (present.includes("audit_database_instances")) {
-    const row = db.prepare(`SELECT instance_id FROM audit_database_instances WHERE is_active=1`).get();
-    if (row) activeInstanceId = String(row.instance_id);
+
+  let activeInstanceId = null;
+  let activeInstanceCount = 0;
+  if (columnsReady) {
+    const rows = db.prepare(`SELECT instance_id FROM audit_database_instances WHERE is_active=1`).all();
+    activeInstanceCount = rows.length;
+    if (rows.length === 1) activeInstanceId = String(rows[0].instance_id);
   }
+
+  const triggerRows = listTriggers(db, AUDIT_TRIGGERS);
+  const triggerMap = new Map(triggerRows.map((row) => [row.name, row]));
+  const missingTriggers = AUDIT_TRIGGERS.filter((name) => !triggerMap.has(name));
+  const invalidTriggers = AUDIT_TRIGGERS.filter((name) => {
+    const row = triggerMap.get(name);
+    return !!row && normalizeSql(row.sql) !== normalizeSql(AUDIT_TRIGGER_SQL[name]);
+  });
+
+  const problems = [];
+  if (missingTables.length) problems.push("missing_tables");
+  if (Object.keys(missingColumns).length) problems.push("missing_columns");
+  if (columnsReady && version > AUDIT_SCHEMA_VERSION) {
+    problems.push("version_newer");
+  } else if (columnsReady && version !== AUDIT_SCHEMA_VERSION) {
+    problems.push("version_unknown");
+  }
+  if (present.length) {
+    if (missingTriggers.length) problems.push("missing_triggers");
+    if (invalidTriggers.length) problems.push("invalid_triggers");
+  }
+  if (columnsReady && activeInstanceCount === 0) problems.push("no_active_instance");
+  if (columnsReady && activeInstanceCount > 1) problems.push("multiple_active_instances");
+
+  let state;
+  if (!present.length) state = "not_installed";
+  else if (missingTables.length || Object.keys(missingColumns).length) state = "invalid";
+  else if (version > AUDIT_SCHEMA_VERSION) state = "unsupported";
+  else if (version !== AUDIT_SCHEMA_VERSION) state = "invalid";
+  else if (missingTriggers.length || invalidTriggers.length) state = "invalid";
+  else if (activeInstanceCount !== 1) state = "invalid";
+  else state = "ok";
+
   return {
     tables,
     present,
-    installed: present.length === AUDIT_TABLES.length,
+    missingTables,
+    missingColumns,
+    installed: missingTables.length === 0,
     version,
     target: AUDIT_SCHEMA_VERSION,
     activeInstanceId,
+    activeInstanceCount,
+    missingTriggers,
+    invalidTriggers,
+    problems,
+    state,
+    ok: state === "ok",
   };
 }
 
@@ -158,20 +252,30 @@ export function currentAuditInstanceId(db) {
   return String(row.instance_id);
 }
 
-function assertInstalledSchema(db) {  const state = inspectAuditSchema(db);
-  if (state.present.length !== AUDIT_TABLES.length) {
+function assertInstalledSchema(db) {
+  const state = inspectAuditSchema(db);
+  if (state.missingTables.length) {
     throw fail("audit_schema_inconsistent", { reason: "missing_tables", tableCount: state.present.length });
   }
-  if (state.version !== AUDIT_SCHEMA_VERSION) {
-    throw fail(state.version > AUDIT_SCHEMA_VERSION ? "audit_schema_newer" : "audit_schema_inconsistent", {
+  if (Object.keys(state.missingColumns).length) {
+    throw fail("audit_schema_inconsistent", {
+      reason: "missing_columns", tableCount: Object.keys(state.missingColumns).length,
+    });
+  }
+  if (state.version > AUDIT_SCHEMA_VERSION) {
+    throw fail("audit_schema_newer", {
       reason: "version", version: state.version, target: AUDIT_SCHEMA_VERSION,
     });
   }
-  if (!state.activeInstanceId) throw fail("audit_schema_inconsistent", { reason: "no_active_instance" });
-  const triggers = listTriggers(db);
-  if (!AUDIT_TRIGGERS.every((name) => triggers.includes(name))) {
-    throw fail("audit_schema_inconsistent", { reason: "missing_triggers" });
+  if (state.version !== AUDIT_SCHEMA_VERSION) {
+    throw fail("audit_schema_inconsistent", {
+      reason: "version", version: state.version, target: AUDIT_SCHEMA_VERSION,
+    });
   }
+  if (state.activeInstanceCount === 0) throw fail("audit_schema_inconsistent", { reason: "no_active_instance" });
+  if (state.activeInstanceCount > 1) throw fail("audit_schema_inconsistent", { reason: "multiple_active_instances" });
+  if (state.missingTriggers.length) throw fail("audit_schema_inconsistent", { reason: "missing_triggers" });
+  if (state.invalidTriggers.length) throw fail("audit_schema_inconsistent", { reason: "invalid_triggers" });
   return state;
 }
 
@@ -221,7 +325,7 @@ export function ensureAuditSchema(db, options = {}) {
       db.prepare(`INSERT INTO audit_components (component, version, installed_at, note) VALUES (?,?,?,?)`)
         .run(AUDIT_COMPONENT, migration.version, new Date().toISOString(), migration.note);
     }
-    db.prepare(`INSERT INTO audit_database_instances (instance_id, created_at, parent_instance_id, is_active, note)
+    db.prepare(`INSERT INTO audit_database_instances (instance_id, created_at, parent_instance_id, is_active, note_code)
                 VALUES (?,?,?,?,?)`)
       .run(randomUUID(), new Date().toISOString(), null, 1, "initial");
 
@@ -538,7 +642,12 @@ export function verifyAuditEvents(db) {
  */
 export function markAuditInstanceFork(db, { parentInstanceId, note = "restore-new" } = {}) {
   if (!isTechId(parentInstanceId)) throw fail("audit_operation_invalid", { field: "parentInstanceId" });
-  if (typeof note !== "string" || note.length > 64) throw fail("audit_operation_invalid", { field: "note" });
+  // note 是固定技术枚举，不是自由文本：外部路径 / 用户标识 / 摘要一律不接受，
+  // 数据库列还有 CHECK 约束兜底，错误信息只给字段名不回显原值。
+  if (typeof note !== "string" || !AUDIT_INSTANCE_NOTES.includes(note)) {
+    throw fail("audit_operation_invalid", { field: "note" });
+  }
+  assertInstalledSchema(db);
   return runInTransaction(db, () => {
     const active = currentAuditInstanceId(db);
     if (active !== parentInstanceId) {
@@ -551,7 +660,7 @@ export function markAuditInstanceFork(db, { parentInstanceId, note = "restore-ne
     }
     const instanceId = randomUUID();
     db.prepare(`UPDATE audit_database_instances SET is_active=0 WHERE instance_id=?`).run(parentInstanceId);
-    db.prepare(`INSERT INTO audit_database_instances (instance_id, created_at, parent_instance_id, is_active, note)
+    db.prepare(`INSERT INTO audit_database_instances (instance_id, created_at, parent_instance_id, is_active, note_code)
                 VALUES (?,?,?,?,?)`)
       .run(instanceId, new Date().toISOString(), parentInstanceId, 1, note);
     return { instanceId, parentInstanceId, created: true };

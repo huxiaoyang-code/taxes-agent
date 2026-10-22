@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-06 AUDIT（A 包：审计组件与恢复 ledger 原语）
 
 - 类型：后端存储 / 契约 / 只读 CLI / 恢复 ledger 原语 + 测试 + 文档
-- 状态：**A 包实现与自测完成，待管理者审查 / PR / 合并**（B、C 未开始）
+- 状态：**A 包已按独审 5 项 + unknown 边界返工完成，待复审 / PR / 合并**（B、C 未开始）
 - 基线：`257f96275031eefa484699dd71bd012e2d221e51`（已合并 main）
 - 分支 / worktree：`codex/huxiaoyang-code/local-06-audit` / `D:/有数云fork/.worktrees/local-06-audit`
 - 人类负责人：`huxiaoyang-code`（已核实）
@@ -17,10 +17,12 @@
 3. 事务原语：事务内 append、回滚后失败事件 append、外层事务 + 内层 SAVEPOINT、提交结果不明确的固定处理、
    审计不可写时明确 `audit_unavailable`。
 4. 只读过滤分页查询（参数化、固定排序、稳定游标、limit 上限）与只读 CLI（显式 `--db` / `--ledger`，
-   无默认数据目录，无现库初始化入口）。
+   无默认数据目录，无现库初始化入口；`schema` 执行完整结构断言并按契约 exit 3）。
 5. 独立恢复 ledger：started / prepared / succeeded / failed / rejected / unknown、幂等与冲突、
-   故障注入下不伪造终态、显式 reconcile 原语。
+   故障注入下不伪造终态、显式 reconcile 原语；unknown 保持可对账并可显式核验。
 6. 真实临时 SQLite 验收（两个新测试文件），不改 `scripts/test-all.mjs` / `package.json`。
+7. 独审修复：实例分叉 note 固定枚举；默认连接下审计 / ledger 历史不可被 `INSERT OR REPLACE` 替换；
+   终态幂等按完整字段；结构断言覆盖列 / 触发器定义；unknown 不退出可对账集合。
 
 ## 2. 非目标
 
@@ -57,12 +59,18 @@
 | 不同 attempt 失败分别保留；post/unpost/post 不被粗糙去重 | ✅ attempt 1/2/3 三条事件 |
 | 业务对象不存在 / 删除后审计保留；两账套不串数据 | ✅ 事件无外键；范围过滤互斥 |
 | 分页无重复 / 无遗漏；非法过滤失败且无注入 | ✅ 23 条分页 + 注入串全部 `audit_filter_invalid` |
-| 合成敏感哨兵不进库 / 不进 CLI / 不进错误 | ✅ payload / summary / name / batchId / error.* / 未知 metadata |
+| 合成敏感哨兵不进库 / 不进 CLI / 不进错误 | ✅ payload / summary / name / batchId / error.* / 未知 metadata；**另含本机路径哨兵** |
 | schema 缺表 / 坏版本拒绝；现库无验证备份拒绝且库不变 | ✅ 含传 `freshDatabase:true` 仍拒绝 |
 | 初始化异常回滚；查询不创建库 | ✅ 故障注入后无半截对象；只读打开缺文件不创建 |
+| **实例分叉 note 只接受固定枚举** | ✅ `initial` / `restore-new`；自由文本 / `C:\private\...` 路径 → `audit_operation_invalid`，数据库 CHECK 兜底，CLI / 错误无哨兵 |
+| **默认连接不能替换审计历史** | ✅ `recursive_triggers=0` 下 `INSERT OR REPLACE`（seq / event_id / dedupe_key）被 BEFORE INSERT 触发器拒绝；原事件 / 摘要自检不变，合法幂等仍 `appended:false` |
+| **schema 完整结构断言** | ✅ 更高版本 → CLI `exit 3` + `state:unsupported`；缺触发器 / 缺列 → `exit 3` + `state:invalid`；只读不改库 |
 | ledger started / 终态真实持久化、幂等、冲突 | ✅ 关闭重开后仍可读；冲突不覆盖 |
+| **ledger 终态幂等按完整字段** | ✅ 同请求 `changed:false`；同 status 改 resultCode / reasonCode / noteCode → `restore_state_conflict`，原库与迁移历史不变；可迁移行上的非法 status/resultCode 组合 → `restore_operation_invalid` |
 | ledger 故障注入不能伪造终态 | ✅ 触发器阻止 UPDATE → 状态仍 `prepared`，无终态字段 |
+| **ledger 触发器真实保护 + 结构检查** | ✅ 缺失或同名无效触发器 → ensure / 只读 open 均 `restore_ledger_inconsistent`；REPLACE 迁移历史被拒；缺列先结构检查给固定拒绝 |
 | ledger reconcile 证据不足维持未知、证据完整补记 | ✅ 三种证据不足场景 + 幂等补记 |
+| **unknown 保持可对账** | ✅ prepared→unknown 后 reconcile 调用证据 callback；证据不足保持 unknown 且在待对账列表；完整证据 → succeeded；unknown 不得被盲改 failed |
 | 审计不可写 / 提交结果不明确 | ✅ `audit_unavailable`（`auditPersisted:false`）/ `audit_commit_unknown` |
 
 **未完成的验收（不得声称已完成）**：B 的真实 HTTP / Agent / MCP 领域事件验收；C 的真实
@@ -75,18 +83,25 @@ A 不满足「LOCAL06 审计已覆盖全部动作」。
 
 | 命令 | 结果 |
 |---|---|
-| `node test/local-audit.test.mjs` | **25 / 25 通过，exit 0** |
-| `node test/local-restore-audit.test.mjs` | **18 / 18 通过，exit 0** |
+| `node test/local-audit.test.mjs` | **28 / 28 通过，exit 0** |
+| `node test/local-restore-audit.test.mjs` | **22 / 22 通过，exit 0** |
 
 两套使用 `mkdtemp` 合成临时目录、导入前锁定 `WORKBENCH_DATA_DIR`、真实 `node:sqlite` 文件库、
 真实子进程调用 CLI；进程结束清理本人创建的路径（清理失败即非 0 退出）。
 **未修改 `scripts/test-all.mjs` / `package.json`**，因此 `npm test` 不包含这两套；
 本轮未重跑其它套件，不声称全套回归通过。
 
+修复前先红：同一套新测试跑 `HEAD` 代码为审计 `25/28`、ledger `16/22`（共 9 项失败，含 2 项加强的旧用例），
+修复后为 `28/28`、`22/22`；原 25 / 18 项未弱化。
+
 ## 6. 后续开放条件
 
 - **B**：LOCAL-02 真正合并 + 核心独占窗口 + 已审 backup 对当前 schema/audit 的支持到位后，才能接
   `db.mjs` / `accounting.mjs` / `import-incremental.mjs` 与真实 HTTP / Agent / MCP 验收。
+  **本轮未接线任何领域入口**，不声称审计已覆盖实际动作。
 - **C**：backup / LOCAL-07 实际合并或原 owner 明确转交后，接恢复 / 批量 / 快照验收；
-  本包不重做调度器，不编辑 04 bank 文件。
+  本包不重做调度器，不编辑 04 bank 文件。**真实 `createBackup` / `verifyBackup` / `restoreNew`、
+  安装备份与 pending→reconcile 接线仍未完成**；unknown → succeeded 只是之后显式核验的结果，
+  不声称跨库原子。
+- 既有库组件安装（先备份验证）仍未实现，A 只有「明确拒绝」门槛。
 - 原位恢复保护、版本回退、Windows 交付仍列后续包。

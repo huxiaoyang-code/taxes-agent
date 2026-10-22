@@ -51,7 +51,8 @@ audit_database_instances(
   created_at TEXT NOT NULL,
   parent_instance_id TEXT,              -- 恢复分叉时记录父实例
   is_active INTEGER NOT NULL CHECK (is_active IN (0,1)),
-  note TEXT
+  note_code TEXT NOT NULL DEFAULT 'initial'
+    CHECK (note_code IN ('initial','restore-new'))  -- 固定技术枚举，不接受自由文本 / 路径
 )  -- 部分唯一索引：同一时刻只有一个活动实例
 
 audit_events(
@@ -77,13 +78,22 @@ audit_events(
 )
 ```
 
-- **append-only**：`audit_events_no_update` / `audit_events_no_delete` 触发器对 UPDATE / DELETE 直接
-  `RAISE(ABORT)`；索引覆盖 `(account_set_id, seq)`、`(operation_id, attempt, seq)`、`(action, seq)`、`(period, seq)`。
+- **append-only**：`audit_events_no_update` / `audit_events_no_delete` / `audit_events_no_replace` 三个
+  触发器对 UPDATE / DELETE 直接 `RAISE(ABORT)`；`audit_events_no_replace` 在 **BEFORE INSERT** 阶段拒绝
+  与既有行冲突的插入（`seq` / `event_id` / `dedupe_key` 任一命中），因此 SQLite 默认
+  `recursive_triggers=0` 下的 `INSERT OR REPLACE` / `REPLACE INTO` / UPSERT 也不能「先删后插」替换历史。
+  正常 AUTOINCREMENT 插入（`NEW.seq` 为 NULL）与合法幂等（写入前返回已有事件）不受影响。
+  索引覆盖 `(account_set_id, seq)`、`(operation_id, attempt, seq)`、`(action, seq)`、`(period, seq)`。
+  结构断言会逐字比对三个触发器的定义；同名但定义不符（如空 body）的触发器不会被当成已保护。
+  不声称抵御数据库管理员主动 `DROP TRIGGER` / 直接改写数据库文件——这类行为由结构断言发现并拒绝，
+  不是「已阻止」。
 - **无外键**：账套 / 凭证删除后事件保留；失败尝试即使没有实际对象 ID 也可留痕；范围隔离靠生产者从真实对象
   核对 `accountSetId`，查询条件本身也是技术 ID。
-- **实例分叉**：`markAuditInstanceFork` 保持旧实例历史事件不变，只把活动实例切到新分叉实例（记录父实例），
-  新副本的未来事件使用新 instance ID；同一父实例重复调用幂等，父实例不是当前活动实例时给
-  `audit_instance_conflict`。
+- **实例分叉**：`markAuditInstanceFork(db, { parentInstanceId, note })` 保持旧实例历史事件不变，只把活动实例
+  切到新分叉实例（记录父实例），新副本的未来事件使用新 instance ID；`note` 只接受固定枚举
+  `initial` / `restore-new`（默认 `restore-new`），外部路径 / 用户标识 / 摘要等自由文本一律
+  `audit_operation_invalid`（只回字段名，不回显原值），数据库列 CHECK 约束兜底。同一父实例重复调用幂等，
+  父实例不是当前活动实例时给 `audit_instance_conflict`。
 - 只读完整性自检 `verifyAuditEvents(db)` 重算 `content_digest`，返回 `{ checked, mismatched }`。
 
 ## 4. 事件字段白名单与固定词表
@@ -187,8 +197,8 @@ LS.runAuditedOperation(db, { context, terminal }, (audit) => {
 | 库状态 | 行为 |
 |---|---|
 | 无任何表（真空库） | 单事务建结构 → 事务内自检（表 / 版本 / 活动实例）→ `COMMIT`；失败整体回滚 |
-| 已装且版本 = 1 | `{ installed: false }`，不重建、不重复写版本（含已有业务表的正常启动场景） |
-| 已装但缺表 / 缺版本行 / 缺触发器 | `audit_schema_inconsistent` |
+| 已装且版本 = 1 且列 / 触发器定义完整 | `{ installed: false }`，不重建、不重复写版本（含已有业务表的正常启动场景） |
+| 已装但缺表 / 缺列 / 缺版本行 / 缺触发器 / 同名无效触发器 | `audit_schema_inconsistent`（`details.reason` 为固定码） |
 | 组件版本 > 1 | `audit_schema_newer` |
 | **含其他业务表（既有库）** | **`audit_install_requires_verified_backup` 明确拒绝，库内容零改动** |
 
@@ -216,7 +226,6 @@ LS.assertAuditSchema(db)    // 只读结构断言
 查询不建表、不初始化、不写库。**结构不一致 / 版本更高**的库直接拒绝查询。
 
 CLI（`06-workbench/scripts/local-audit.mjs`，**只读**、必须显式路径、无默认数据目录、无初始化入口）：
-
 ```bash
 node scripts/local-audit.mjs schema  --db <workbench.db>
 node scripts/local-audit.mjs instances --db <workbench.db>
@@ -237,39 +246,70 @@ node scripts/local-audit.mjs restore-transitions  --ledger <ledger.db> --operati
 退出码：`0` 成功、`2` 参数 / 过滤非法、`3` 文件 / 结构 / 版本不可用、`4` 其他不可用。
 错误只输出固定码（`{"error":"audit_filter_invalid"}` 形态），不回显用户值或本机路径。输出恒为 JSON。
 
+`schema` 不是「三张表存在就算 ok」：它执行完整结构断言（表 / 必需列 / 组件版本 / 三个触发器定义 /
+活动实例恰好一个），并返回 `{ ok, state, problems?, version, targetVersion, ... }`：
+
+| state | 含义 | 退出码 |
+|---|---|---|
+| `ok` | 结构、版本、触发器、活动实例都成立 | 0 |
+| `unsupported` | 组件版本高于本代码目标版本 | 3 |
+| `invalid` | 缺表 / 缺列 / 缺触发器 / 同名无效触发器 / 活动实例异常 / 版本未知 | 3 |
+| `not_installed` | 库可打开但审计组件未安装 | 3 |
+
+`schema` 只读打开，**不修复、不建表、不改版本**；`problems` 只含固定码，不含列名 / 用户值。
+
 ## 10. 恢复操作 ledger（独立 SQLite）
 
 `restore_ledger_meta` / `restore_operations` / `restore_operation_events`（迁移历史 append-only）。
 调用方**显式**提供路径，并自行放于备份 / 目标目录之外；ledger 不存原始路径、业务金额、凭据或异常原文。
 
+迁移历史通过 `restore_events_no_update` / `restore_events_no_delete` / `restore_events_no_replace`
+三个触发器保护（后者在 BEFORE INSERT 阶段拒绝与既有 `id` 冲突的插入），默认连接下的
+`INSERT OR REPLACE` 也不能替换历史行。已安装检查和只读打开都会逐字比对三个触发器定义：
+缺触发器或**同名但定义不符**（空 body 等）一律 `restore_ledger_inconsistent`。
+
 状态机：
 
 ```
 started ──prepare──► prepared ──publish+receipt──► succeeded
-   │                    │
-   └────fail/reject────► failed | rejected | unknown
-prepared ──reconcile（证据完整）──► succeeded
+   │                    │                              ▲
+   └────fail/reject────► failed | rejected              │
+   │                    │                              │
+   └────unknown（结果待确认）─────────────────────────┘
+prepared / unknown ──reconcile（证据完整）──► succeeded
 ```
+
+`unknown` **不是终态、也不退出可对账集合**：它表示「结果待确认」。`listPendingRestoreOperations` 与
+`restore-pending` 同时列出 `started` / `prepared` / `unknown`；只有带持久化 receipt 且证据完整时，
+`completeRestoreOperation` / `reconcileRestoreOperation` 才能把它转成 `succeeded`。证据不足 / 回调抛错 /
+回执或摘要不一致时**保持 unknown 不改状态**，只追加 `restore_reconcile_pending` 迁移记录，之后仍可再次核验；
+不允许把 unknown 猜成成功，也不允许当失败盲重试（`failRestoreOperation` 不能把 unknown 改成 failed/rejected）。
 
 | 原语 | 语义 |
 |---|---|
-| `beginRestoreOperation(db, {operationId, backupDigest, backupBytes, backupSchemaVersion, componentVersions, producer, noteCode})` | 发布前持久化 `started`；同 operationId 同数据幂等，任一不一致 → `restore_operation_conflict` |
+| `beginRestoreOperation(db, {operationId, backupDigest, backupBytes, backupSchemaVersion, componentVersions, producer, noteCode})` | 发布前持久化 `started`；同 operationId 同数据幂等，任一不一致（含 `noteCode`）→ `restore_operation_conflict` |
 | `markRestorePrepared(db, {operationId, receipt})` | 持久化 operation-bound receipt；不同 receipt → `restore_receipt_mismatch` |
-| `completeRestoreOperation(db, {operationId, receipt, backupDigest, targetDigest, targetInstanceId})` | **只能**从 `prepared` 迁移，且 receipt / backupDigest 必须与登记一致；已 succeeded 且证据一致 → 幂等；证据不一致 → 冲突 |
-| `failRestoreOperation(db, {operationId, status, resultCode, reasonCode})` | `failed` / `rejected` / `unknown`；已 succeeded 不可改写；同值重复幂等 |
-| `reconcileRestoreOperation(db, {operationId, verifyPublished})` | 只基于显式目标 + 回执 + 备份摘要补记终态；不重做恢复、不复制 / 覆盖目录；证据不足 → `terminal:'unknown'` 且**不改状态**，只追加 `restore_reconcile_pending` 迁移记录 |
-| `getRestoreOperation` / `listPendingRestoreOperations` / `queryRestoreOperations` / `listRestoreTransitions` / `restoreLedgerStats` | 只读 |
+| `completeRestoreOperation(db, {operationId, receipt, backupDigest, targetDigest, targetInstanceId})` | 从 `prepared` 或**带 receipt 的 unknown** 迁移，且 receipt / backupDigest 必须与登记一致；已 succeeded 且证据一致 → 幂等；证据不一致 → 冲突 |
+| `failRestoreOperation(db, {operationId, status, resultCode, reasonCode, noteCode})` | `failed` / `rejected` / `unknown`；**同请求（含 noteCode）幂等**；failed / rejected / unknown 已存在时任一字段不同 → `restore_state_conflict`，原库不变；status 与 resultCode 必须合法配对（可迁移行）：`failed→restore_new_failed`、`rejected→restore_new_rejected`、`unknown→restore_unknown / restore_published_pending` |
+| `reconcileRestoreOperation(db, {operationId, verifyPublished})` | 只基于显式目标 + 回执 + 备份摘要补记终态；不重做恢复、不复制 / 覆盖目录；**已持久化 receipt 的 prepared / unknown（含 prepared→unknown）都会调用证据 callback**；未持久化 receipt 的 started / unknown 无法证明「发布已完成」，只记录待对账；证据不足 → `terminal:'unknown'` 且**不改状态**，只追加 `restore_reconcile_pending` 迁移记录 |
+| `getRestoreOperation` / `listPendingRestoreOperations` / `queryRestoreOperations` / `listRestoreTransitions` / `restoreLedgerStats` | 只读；先结构断言（缺表 / 缺列 / 缺触发器 / 无效触发器给固定结构化拒绝），再查询 |
 
-**不能伪造终态**：`succeeded` 需要「已 prepared + receipt 一致 + backupDigest 一致 + 合法 target 摘要 / 实例」；
-写入故障整体回滚（测试用真实触发器 RAISE 验证状态仍为 `prepared`，无 `terminal_at`、无 succeeded 迁移记录）。
-底层写入失败（IO / 锁 / 触发器）统一归一为 `restore_ledger_write_failed`，不把原始 SQLite 文本当业务结论。
+**不能伪造终态**：`succeeded` 需要「已 prepared（或带 receipt 的 unknown）+ receipt 一致 +
+backupDigest 一致 + 合法 target 摘要 / 实例」；写入故障整体回滚（测试用真实触发器 RAISE 验证状态仍为
+`prepared`，无 `terminal_at`、无 succeeded 迁移记录）。底层写入失败（IO / 锁 / 触发器）统一归一为
+`restore_ledger_write_failed`，不把原始 SQLite 文本当业务结论。
+
+**未知版本 / 缺列**：`ensureRestoreLedgerSchema`、`openRestoreLedger` 与全部读写 API 都先做结构检查
+（`PRAGMA table_info` + 必需列清单），缺列时直接给 `restore_ledger_inconsistent`（`details.reason=missing_columns`），
+不会先查列再抛原始 `no such column`。核查是只读的，不做任何「自动修复」。
 
 **发布后记账失败**：目标已发布但 ledger 终态没写成时，业务结果应报 `restore_new_...` +
-`restore_published_pending`（ledger 保持 `prepared`），随后用 `reconcileRestoreOperation` 在重启后补记；
-不得把已发布结果报成「业务已回滚」，也不得重复复制目录。
+`restore_published_pending`（ledger 保持 `prepared`，或用 unknown + `restore_published_pending` 显式标注结果待确认），
+随后用 `reconcileRestoreOperation` 在重启后补记；不得把已发布结果报成「业务已回滚」，也不得重复复制目录。
 
 **跨库语义**：ledger 与业务库是两个数据库，本包**不**声称原子提交；只提供两阶段 + 可对账原语，
-真实恢复接线与窗口覆盖由 C 包验收。
+真实恢复接线与窗口覆盖由 C 包验收。「unknown → succeeded」同理只是**之后**的显式核验结果，
+不是跨库原子事务。
 
 **关联方式**：业务库中 `action=restore.new` 事件的 `operationId` 与 ledger 行的 `operation_id` 相同，
 ledger 的 `target_instance_id` 与恢复后库的活动审计实例一致；两处都只含技术 ID / 摘要，
@@ -289,17 +329,17 @@ normalizeAuditEvent(raw, context, server), auditEventDedupeKey(event), auditEven
 classifyFailure(error), inTransaction(db), runInTransaction(db, fn)
 
 // 业务库审计存储（server/local-audit-storage.mjs）
-AUDIT_TABLES, AUDIT_TRIGGERS
+AUDIT_TABLES, AUDIT_TRIGGERS, AUDIT_TRIGGER_SQL, AUDIT_INSTANCE_NOTES
 inspectAuditSchema(db), assertAuditSchema(db), ensureAuditSchema(db, {faultInjection?})
 openAuditDatabase(path, {readOnly=true})
-currentAuditInstanceId(db), markAuditInstanceFork(db, {parentInstanceId, note}), listAuditInstances(db)
+currentAuditInstanceId(db), markAuditInstanceFork(db, {parentInstanceId, note:'initial'|'restore-new'}), listAuditInstances(db)
 appendAuditEvent(db, event, {context})                    // 必须在事务内
 queryAuditEvents(db, filter), getAuditEvent(db, {eventId|seq}), auditEventStats(db), verifyAuditEvents(db)
 runAuditedOperation(db, {context, terminal}, fn, {testHooks?})   // testHooks 仅供测试
 appendDeferredFailure(db, error)
 
 // 恢复 ledger（server/local-restore-audit.mjs）
-RESTORE_LEDGER_COMPONENT, RESTORE_LEDGER_SCHEMA_VERSION, RESTORE_LEDGER_TABLES,
+RESTORE_LEDGER_COMPONENT, RESTORE_LEDGER_SCHEMA_VERSION, RESTORE_LEDGER_TABLES, RESTORE_TRIGGERS
 RESTORE_STATUSES, RESTORE_RESULT_CODES, RESTORE_REASON_CODES
 normalizeComponentVersions(raw)
 inspectRestoreLedger(db), ensureRestoreLedgerSchema(db), openRestoreLedger(path, {create, readOnly})
@@ -346,10 +386,14 @@ B 接线要点（契约约束，不是已完成的实现）：
 
 ```bash
 cd 06-workbench
-node test/local-audit.test.mjs          # 25/25，exit 0
-node test/local-restore-audit.test.mjs  # 18/18，exit 0
+node test/local-audit.test.mjs          # 28/28，exit 0
+node test/local-restore-audit.test.mjs  # 22/22，exit 0
 ```
 
 两套均为合成临时目录（`mkdtemp`，先设 `WORKBENCH_DATA_DIR`，进程结束清理本人创建的路径）、
 真实 `node:sqlite` 文件库（非内存 mock）、不监听端口；CLI 用真实子进程调用。
 **未**修改 `scripts/test-all.mjs` / `package.json`，因此 `npm test` 不包含这两套；也不代表其它套件被重跑。
+
+本轮独审修复的回归先对**修复前代码**（`HEAD` 的 4 个代码文件 + 新测试）实跑，确认红：
+审计 `25/28`、ledger `16/22`，共 9 项新增 / 加严测试失败（审计 3 项、ledger 6 项，其中 2 项是
+原有用例的加强版）；修复后两套分别为 `28/28`、`22/22`（exit 0）。原有的 25 / 18 项均保留、未降级。

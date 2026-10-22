@@ -3,7 +3,8 @@
  * LOCAL-06 AUDIT（A 包）恢复操作 ledger 原语验收。
  *
  * 只验收**独立 ledger 原语**：begin / prepared / succeeded / failed|rejected|unknown / reconcile、
- * 幂等与冲突、故障注入下不伪造终态、只读分页查询与 CLI。
+ * 幂等与冲突（终态按完整字段）、故障注入下不伪造终态、触发器定义保护、缺列 / 未知版本结构拒绝、
+ * unknown 保持可对账并可显式核验、只读分页查询与 CLI。
  * **不含**真实 restore-new 接线（C 包）：本套件不复制 / 覆盖任何目录，也不声称跨库原子提交。
  *
  * 全部合成临时目录 + 合成摘要；不使用任何真实备份、目标库或凭据。
@@ -288,6 +289,81 @@ try {
     assert.equal(stats.total, 3);
   });
 
+  test("fail 终态幂等按完整字段：同请求 changed:false，任一冲突字段拒绝且原库不变", () => {
+    const db = openLedger(ledgerPath(), { create: true });
+    LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-terminal" }));
+    const request = {
+      operationId: "restore-op-terminal", status: "failed", resultCode: "restore_new_failed", reasonCode: "internal_error",
+    };
+    assert.equal(LR.failRestoreOperation(db, request).changed, true);
+    const snapshot = () => ({
+      operation: LR.getRestoreOperation(db, "restore-op-terminal"),
+      transitions: LR.listRestoreTransitions(db, "restore-op-terminal"),
+      rows: db.prepare(`SELECT COUNT(*) n FROM restore_operations`).get().n,
+    });
+    const before = snapshot();
+
+    assert.equal(LR.failRestoreOperation(db, request).changed, false, "同请求必须幂等");
+    // 初审复现：同一 failed 状态只改 resultCode / reasonCode 曾被当成新迁移。
+    assert.throws(() => LR.failRestoreOperation(db, {
+      operationId: "restore-op-terminal", status: "failed", resultCode: "restore_new_failed", reasonCode: "restore_verify_failed",
+    }), (e) => e.code === "restore_state_conflict");
+    assert.throws(() => LR.failRestoreOperation(db, {
+      operationId: "restore-op-terminal", status: "failed", resultCode: "restore_new_failed", reasonCode: "internal_error",
+      noteCode: "reconcile",
+    }), (e) => e.code === "restore_state_conflict");
+    // status 与 resultCode 的非法组合：不能把 failed 行写成 succeeded 结果码。
+    // 已终态的行优先报状态冲突（任一不同字段都不允许覆写）。
+    assert.throws(() => LR.failRestoreOperation(db, {
+      operationId: "restore-op-terminal", status: "failed", resultCode: "restore_new_succeeded", reasonCode: "none",
+    }), (e) => e.code === "restore_state_conflict");
+    assert.throws(() => LR.failRestoreOperation(db, {
+      operationId: "restore-op-terminal", status: "rejected", resultCode: "restore_new_rejected", reasonCode: "none",
+    }), (e) => e.code === "restore_state_conflict");
+
+    assert.deepEqual(snapshot(), before, "冲突拒绝后原库必须完全不变（含迁移历史）");
+
+    // 仍可迁移的行上，非法 status / resultCode 组合同样拒绝。
+    LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-illegal" }));
+    assert.throws(() => LR.failRestoreOperation(db, {
+      operationId: "restore-op-illegal", status: "failed", resultCode: "restore_new_succeeded", reasonCode: "none",
+    }), (e) => e.code === "restore_operation_invalid");
+    assert.equal(LR.getRestoreOperation(db, "restore-op-illegal").status, "started");
+
+    // unknown 也可记录「已发布但终态待确认」的固定组合。
+    LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-published" }));
+    const published = LR.failRestoreOperation(db, {
+      operationId: "restore-op-published", status: "unknown", resultCode: "restore_published_pending", reasonCode: "none",
+    });
+    assert.equal(published.operation.status, "unknown");
+    assert.equal(published.operation.resultCode, "restore_published_pending");
+
+    // 其他终态入口同样幂等 / 冲突：begin 的 noteCode、prepared 的 receipt、succeeded 的证据。
+    assert.throws(() => LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-terminal", noteCode: "reconcile" })),
+      (e) => e.code === "restore_operation_conflict");
+
+    const preparedDb = openLedger(ledgerPath(), { create: true });
+    LR.beginRestoreOperation(preparedDb, beginArgs({ operationId: "restore-op-prepared" }));
+    LR.markRestorePrepared(preparedDb, { operationId: "restore-op-prepared", receipt: RECEIPT });
+    const preparedBefore = LR.getRestoreOperation(preparedDb, "restore-op-prepared");
+    assert.throws(() => LR.markRestorePrepared(preparedDb, {
+      operationId: "restore-op-prepared", receipt: "e".repeat(64),
+    }), (e) => e.code === "restore_receipt_mismatch");
+    assert.deepEqual(LR.getRestoreOperation(preparedDb, "restore-op-prepared"), preparedBefore);
+
+    // begin 带 noteCode 时，重复的 fail（不显式改 note）仍幂等；显式不同 note 才冲突。
+    const noteDb = openLedger(ledgerPath(), { create: true });
+    LR.beginRestoreOperation(noteDb, beginArgs({ operationId: "restore-op-note", noteCode: "reconcile" }));
+    const noteRequest = {
+      operationId: "restore-op-note", status: "failed", resultCode: "restore_new_failed", reasonCode: "internal_error",
+    };
+    assert.equal(LR.failRestoreOperation(noteDb, noteRequest).changed, true);
+    assert.equal(LR.failRestoreOperation(noteDb, noteRequest).changed, false);
+    assert.equal(LR.getRestoreOperation(noteDb, "restore-op-note").noteCode, "reconcile");
+    assert.throws(() => LR.failRestoreOperation(noteDb, { ...noteRequest, noteCode: "another" }),
+      (e) => e.code === "restore_state_conflict");
+  });
+
   test("故障注入（写入触发器 RAISE）：complete 整体回滚，状态保持 prepared", () => {
     const db = openLedger(ledgerPath(), { create: true });
     LR.beginRestoreOperation(db, beginArgs());
@@ -360,14 +436,88 @@ try {
     assert.equal(LR.restoreLedgerStats(db).byStatus.find((s) => s.status === "succeeded").count, 1);
   });
 
-  test("待对账列表只含 started / prepared，且排序稳定", () => {
+  test("unknown 是可对账状态：证据 callback 被调用、证据不足保留、完整证据转 succeeded、冲突保护", () => {
+    const db = openLedger(ledgerPath(), { create: true });
+    const operationId = "restore-op-unknown-path";
+    LR.beginRestoreOperation(db, beginArgs({ operationId }));
+    LR.markRestorePrepared(db, { operationId, receipt: RECEIPT });
+    const unknown = LR.failRestoreOperation(db, {
+      operationId, status: "unknown", resultCode: "restore_unknown", reasonCode: "internal_error",
+    });
+    assert.equal(unknown.operation.status, "unknown");
+    // 「结果待确认」必须留在可对账集合里，而不是永远退出。
+    assert.deepEqual(LR.listPendingRestoreOperations(db, { limit: 10 }).map((o) => o.operationId), [operationId]);
+    // unknown 不得被盲当失败 / 盲重试改写。
+    assert.throws(() => LR.failRestoreOperation(db, {
+      operationId, status: "failed", resultCode: "restore_new_failed", reasonCode: "internal_error",
+    }), (e) => e.code === "restore_state_conflict");
+
+    let calls = 0;
+    const insufficient = LR.reconcileRestoreOperation(db, {
+      operationId,
+      verifyPublished: () => { calls += 1; return null; },
+    });
+    assert.equal(calls, 1, "unknown 必须调用显式核验 callback");
+    assert.equal(insufficient.reconciled, false);
+    assert.equal(insufficient.terminal, "unknown");
+    assert.equal(insufficient.operation.status, "unknown", "证据不足保留 unknown，不猜成功");
+    assert.equal(LR.listPendingRestoreOperations(db, { limit: 10 }).length, 1, "仍可再次核验");
+
+    const wrongReceipt = LR.reconcileRestoreOperation(db, {
+      operationId,
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: "9".repeat(64) }),
+    });
+    assert.equal(wrongReceipt.reconciled, false);
+    assert.equal(wrongReceipt.operation.status, "unknown");
+
+    const done = LR.reconcileRestoreOperation(db, {
+      operationId,
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+    });
+    assert.equal(done.reconciled, true);
+    assert.equal(done.operation.status, "succeeded");
+    assert.equal(done.operation.targetDigest, DIGEST_TARGET);
+    assert.deepEqual(
+      LR.listRestoreTransitions(db, operationId).map((t) => `${t.fromStatus}->${t.toStatus}`),
+      ["null->started", "started->prepared", "prepared->unknown", "unknown->unknown", "unknown->unknown", "unknown->succeeded"],
+    );
+    assert.deepEqual(LR.listPendingRestoreOperations(db, { limit: 10 }), []);
+
+    // 终态后证据不一致 → 冲突，不得改写已核验的 succeeded。
+    assert.throws(() => LR.completeRestoreOperation(db, {
+      operationId, receipt: RECEIPT, backupDigest: DIGEST_A,
+      targetDigest: "9".repeat(64), targetInstanceId: "instance-2",
+    }), (e) => e.code === "restore_digest_mismatch");
+    assert.equal(LR.getRestoreOperation(db, operationId).targetInstanceId, "instance-1");
+
+    // started → unknown（无 receipt）也保留在待对账列表，但不会被猜成成功。
+    const startedUnknown = "restore-op-unknown-started";
+    LR.beginRestoreOperation(db, beginArgs({ operationId: startedUnknown }));
+    LR.failRestoreOperation(db, {
+      operationId: startedUnknown, status: "unknown", resultCode: "restore_unknown", reasonCode: "internal_error",
+    });
+    assert.ok(LR.listPendingRestoreOperations(db, { limit: 10 }).some((o) => o.operationId === startedUnknown));
+    const noReceipt = LR.reconcileRestoreOperation(db, {
+      operationId: startedUnknown,
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+    });
+    assert.equal(noReceipt.reconciled, false);
+    assert.equal(noReceipt.terminal, "unknown");
+    assert.equal(noReceipt.operation.status, "unknown");
+  });
+
+  test("待对账列表包含 started / prepared / unknown，且排序稳定", () => {
     const db = openLedger(ledgerPath(), { create: true });
     LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-a" }));
     LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-b" }));
     LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-c" }));
     LR.failRestoreOperation(db, { operationId: "restore-op-c", resultCode: "restore_new_failed", reasonCode: "internal_error" });
+    LR.beginRestoreOperation(db, beginArgs({ operationId: "restore-op-u" }));
+    LR.failRestoreOperation(db, {
+      operationId: "restore-op-u", status: "unknown", resultCode: "restore_unknown", reasonCode: "internal_error",
+    });
     const pending = LR.listPendingRestoreOperations(db, { limit: 10 });
-    assert.deepEqual(pending.map((p) => p.operationId), ["restore-op-a", "restore-op-b"]);
+    assert.deepEqual(pending.map((p) => p.operationId), ["restore-op-a", "restore-op-b", "restore-op-u"]);
     assert.throws(() => LR.listPendingRestoreOperations(db, { limit: 0 }), (e) => e.code === "restore_operation_invalid");
   });
 
@@ -442,11 +592,77 @@ try {
     reopened.close();
   });
 
-  test("append-only：迁移历史不可改 / 不可删", () => {
+  test("append-only：迁移历史不可改 / 不可删 / 不可被 INSERT OR REPLACE 替换", () => {
     const db = openLedger(ledgerPath(), { create: true });
     LR.beginRestoreOperation(db, beginArgs());
+    const event = db.prepare(`SELECT * FROM restore_operation_events`).get();
     assert.throws(() => db.prepare(`UPDATE restore_operation_events SET to_status='succeeded'`).run());
     assert.throws(() => db.prepare(`DELETE FROM restore_operation_events`).run());
+    assert.throws(() => db.prepare(`INSERT OR REPLACE INTO restore_operation_events
+        (id, operation_id, at, from_status, to_status, result_code, reason_code, note_code)
+        VALUES (?,?,?,?,?,?,?,?)`).run(
+      event.id, event.operation_id, event.at, event.from_status, "succeeded", "restore_new_succeeded", "none", null,
+    ), "默认 recursive_triggers=0 下 REPLACE 也必须被拒绝");
+    assert.deepEqual(LR.listRestoreTransitions(db, "restore-op-1").map((t) => t.toStatus), ["started"]);
+  });
+
+  test("已安装 / 只读打开都验证必需触发器定义：DROP 或同名无效触发器均拒绝", () => {
+    const invalidPath = ledgerPath();
+    const invalidDb = openLedger(invalidPath, { create: true });
+    LR.beginRestoreOperation(invalidDb, beginArgs());
+    invalidDb.exec(`DROP TRIGGER restore_events_no_delete`);
+    invalidDb.exec(`CREATE TRIGGER restore_events_no_delete BEFORE DELETE ON restore_operation_events BEGIN SELECT 1; END`);
+    let thrown = null;
+    try { LR.ensureRestoreLedgerSchema(invalidDb); } catch (e) { thrown = e; }
+    assert.ok(thrown, "同名无效触发器不得假通过");
+    assert.equal(thrown.code, "restore_ledger_inconsistent");
+    assert.equal(thrown.details.reason, "invalid_triggers");
+    assert.throws(() => LR.restoreLedgerStats(invalidDb), (e) => e.code === "restore_ledger_inconsistent");
+    invalidDb.close();
+    assert.throws(() => LR.openRestoreLedger(invalidPath, { readOnly: true }),
+      (e) => e.code === "restore_ledger_inconsistent" && e.details.reason === "invalid_triggers");
+
+    const missingPath = ledgerPath();
+    const missingDb = openLedger(missingPath, { create: true });
+    LR.beginRestoreOperation(missingDb, beginArgs());
+    missingDb.exec(`DROP TRIGGER restore_events_no_delete`);
+    assert.throws(() => LR.ensureRestoreLedgerSchema(missingDb),
+      (e) => e.code === "restore_ledger_inconsistent" && e.details.reason === "missing_triggers");
+    missingDb.close();
+    assert.throws(() => LR.openRestoreLedger(missingPath, { readOnly: true }),
+      (e) => e.code === "restore_ledger_inconsistent" && e.details.reason === "missing_triggers");
+  });
+
+  test("未知版本 / 缺列先结构检查后查询：固定结构化拒绝，不回原始 SQLite 文本、不改库", () => {
+    const missingColumnPath = ledgerPath();
+    const missingColumn = openLedger(missingColumnPath, { create: true });
+    LR.beginRestoreOperation(missingColumn, beginArgs());
+    missingColumn.exec(`ALTER TABLE restore_operations DROP COLUMN note_code`);
+    const calls = [
+      () => LR.ensureRestoreLedgerSchema(missingColumn),
+      () => LR.getRestoreOperation(missingColumn, "restore-op-1"),
+      () => LR.listPendingRestoreOperations(missingColumn),
+      () => LR.queryRestoreOperations(missingColumn, {}),
+      () => LR.listRestoreTransitions(missingColumn, "restore-op-1"),
+      () => LR.restoreLedgerStats(missingColumn),
+      () => LR.beginRestoreOperation(missingColumn, beginArgs({ operationId: "restore-op-new" })),
+    ];
+    for (const call of calls) {
+      let failure = null;
+      try { call(); } catch (e) { failure = e; }
+      assert.ok(failure, "缺列必须结构化拒绝");
+      assert.equal(failure.code, "restore_ledger_inconsistent");
+      assert.equal(failure.details.reason, "missing_columns");
+      assert.equal(/no such column|SQLITE_ERROR/i.test(failure.message), false, "不得回原始 SQLite 文本");
+    }
+    missingColumn.close();
+    assert.throws(() => LR.openRestoreLedger(missingColumnPath, { readOnly: true }),
+      (e) => e.code === "restore_ledger_inconsistent" && e.details.reason === "missing_columns");
+    const probe = new DatabaseSync(missingColumnPath, { readOnly: true });
+    try {
+      const columns = probe.prepare(`PRAGMA table_info(restore_operations)`).all().map((r) => r.name);
+      assert.equal(columns.includes("note_code"), false, "只读检查不得修复结构");
+    } finally { probe.close(); }
   });
 
   test("CLI 只读：restore-stats / restore-operations / restore-operation / restore-pending / restore-transitions", () => {

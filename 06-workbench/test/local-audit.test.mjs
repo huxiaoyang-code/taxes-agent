@@ -16,7 +16,8 @@
  *  - 留痕：业务对象不存在 / 删除后事件保留、两账套不串数据、分页稳定、非法过滤与注入失败；
  *  - 隐私：合成敏感哨兵（payload / 摘要 / 名称 / 用户 batchId / error.message / code / details /
  *    stack / 未知 metadata）不进数据库、不进错误信息、不进 CLI 输出；
- *  - 恢复分叉实例、append-only 与内容摘要篡改检测。
+ *  - 恢复分叉实例（note 固定枚举）、append-only（含默认连接下的 INSERT OR REPLACE 防护）、
+ *    同名无效触发器识别、内容摘要篡改检测与 CLI schema 完整结构断言。
  *
  * 运行（在 06-workbench 目录）：`node test/local-audit.test.mjs`
  */
@@ -41,6 +42,8 @@ const LS = await import("../server/local-audit-storage.mjs");
 /** 合成敏感哨兵：不得出现在数据库、错误信息或 CLI 输出。 */
 const SENTINEL = "SYNTH-91350000ZZ0001X-张合成-2026Q1-payload";
 const SENTINEL2 = "SYNTH-BATCH-用户批次-敏感-0002";
+/** 初审复现值：实例分叉 note 曾可把本机敏感路径直接持久化。 */
+const SENTINEL_PATH = "C:\\private\\customer-secret.db";
 
 const results = [];
 const test = (name, fn) => {
@@ -636,6 +639,114 @@ try {
     assert.equal(instances.find((i) => i.isActive).parentInstanceId, parent);
   });
 
+  test("实例分叉 note 只接受固定技术枚举：自由文本 / 本机路径拒绝且不入库、不回显", () => {
+    const { db, file } = auditDbWithBusiness();
+    const parent = LS.currentAuditInstanceId(db);
+    for (const bad of [SENTINEL_PATH, SENTINEL, "restore-new ", ""]) {
+      let thrown = null;
+      try { LS.markAuditInstanceFork(db, { parentInstanceId: parent, note: bad }); } catch (e) { thrown = e; }
+      assert.ok(thrown, "自由 note 必须被拒绝");
+      assert.equal(thrown.code, "audit_operation_invalid");
+      assert.deepEqual(thrown.details, { field: "note" }, "错误只给字段名，不回显原值");
+      const serialized = `${thrown.message} ${JSON.stringify(thrown.details ?? {})}`;
+      if (bad) assert.equal(serialized.includes(bad), false, "错误信息不得回显 note 原值");
+    }
+    // 未产生任何分叉实例 / 未落库任何自由文本。
+    assert.equal(db.prepare(`SELECT COUNT(*) n FROM audit_database_instances`).get().n, 1);
+    // 数据库 CHECK 约束兜底：直接 SQL 写自由文本同样失败。
+    assert.throws(() => db.prepare(`UPDATE audit_database_instances SET note_code=?`).run(SENTINEL_PATH));
+    // 合法枚举仍可正常恢复分叉。
+    const fork = LS.markAuditInstanceFork(db, { parentInstanceId: parent, note: "restore-new" });
+    assert.equal(fork.created, true);
+    assert.deepEqual(
+      db.prepare(`SELECT note_code FROM audit_database_instances ORDER BY note_code`).all().map((r) => r.note_code),
+      ["initial", "restore-new"],
+    );
+    const cli = runCli(["instances", "--db", file]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(`${cli.stdout}${cli.stderr}`.includes(SENTINEL_PATH), false, "CLI 不得输出分叉 note 原文");
+  });
+
+  test("默认 recursive_triggers=0 下也不能用 INSERT OR REPLACE 替换历史事件", () => {
+    const { db } = auditDbWithBusiness();
+    assert.equal(Number(db.prepare(`PRAGMA recursive_triggers`).get().recursive_triggers), 0);
+    const context = ctx({ operationId: "op-replace-1", accountSetId: 1 });
+    LA.runInTransaction(db, () => LS.appendAuditEvent(db, baseEvent(), { context }));
+    const before = LS.queryAuditEvents(db, {}).events[0];
+    const row = db.prepare(`SELECT * FROM audit_events WHERE seq=?`).get(before.seq);
+
+    // 初审复现：读原行、只改 event_id，按原 seq / dedupe_key 插回 → 旧事件会消失。
+    assert.throws(() => db.prepare(`INSERT OR REPLACE INTO audit_events
+        (seq,event_id,dedupe_key,database_instance_id,occurred_at,action,outcome,result_code,reason_code,
+         actor,operation_id,parent_operation_id,attempt,account_set_id,voucher_id,period,job_id,item_id,
+         stage_id,correlation,content_digest)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      row.seq, "11111111-1111-4111-8111-111111111111", row.dedupe_key, row.database_instance_id,
+      row.occurred_at, row.action, "failed", row.result_code, row.reason_code, row.actor, row.operation_id,
+      row.parent_operation_id, row.attempt, row.account_set_id, row.voucher_id, row.period, row.job_id,
+      row.item_id, row.stage_id, row.correlation, row.content_digest,
+    ));
+    assert.deepEqual(LS.queryAuditEvents(db, {}).events[0], before, "原事件必须原样保留");
+    assert.deepEqual(LS.verifyAuditEvents(db), { checked: 1, mismatched: [] });
+
+    // 合法幂等 / 事务不受影响：同事件重放仍是 appended:false。
+    const again = LA.runInTransaction(db, () => LS.appendAuditEvent(db, baseEvent(), { context })).result;
+    assert.equal(again.appended, false);
+    assert.equal(again.event.seq, before.seq);
+    assert.equal(countEvents(db), 1);
+
+    // 同名但无效的触发器不能被当成已保护。
+    db.exec(`DROP TRIGGER audit_events_no_delete`);
+    db.exec(`CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT 1; END`);
+    assert.throws(() => LS.assertAuditSchema(db), (e) => e.code === "audit_schema_inconsistent");
+    assert.throws(() => LS.queryAuditEvents(db, {}), (e) => e.code === "audit_schema_inconsistent");
+  });
+
+  test("CLI schema 做完整结构断言：更高版本 unsupported、缺触发器 / 缺列 invalid，均 exit 3 且不改库", () => {
+    const { db, file } = auditDbWithBusiness();
+    db.prepare(`UPDATE audit_components SET version=? WHERE component=?`)
+      .run(LA.AUDIT_SCHEMA_VERSION + 1, LA.AUDIT_COMPONENT);
+    const newer = runCli(["schema", "--db", file]);
+    assert.equal(newer.status, 3, newer.stderr);
+    const newerOut = JSON.parse(newer.stdout);
+    assert.equal(newerOut.ok, false);
+    assert.equal(newerOut.state, "unsupported");
+    assert.equal(newerOut.version, LA.AUDIT_SCHEMA_VERSION + 1);
+    assert.equal(
+      Number(db.prepare(`SELECT version FROM audit_components WHERE component=?`).get(LA.AUDIT_COMPONENT).version),
+      LA.AUDIT_SCHEMA_VERSION + 1,
+      "只读 schema 不得修改库",
+    );
+
+    db.prepare(`UPDATE audit_components SET version=? WHERE component=?`)
+      .run(LA.AUDIT_SCHEMA_VERSION, LA.AUDIT_COMPONENT);
+    db.exec(`DROP TRIGGER audit_events_no_delete`);
+    const invalid = runCli(["schema", "--db", file]);
+    assert.equal(invalid.status, 3, invalid.stderr);
+    const invalidOut = JSON.parse(invalid.stdout);
+    assert.equal(invalidOut.ok, false);
+    assert.equal(invalidOut.state, "invalid");
+    assert.ok(invalidOut.problems.includes("missing_triggers"));
+    const triggerNames = db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger'`).all().map((r) => r.name);
+    assert.equal(triggerNames.includes("audit_events_no_delete"), false, "只读 schema 不得修复触发器");
+
+    // 缺列同样先结构检查、给 invalid，而不是原始 SQLite 错误。
+    const noColumn = auditDbWithBusiness();
+    noColumn.db.exec(`ALTER TABLE audit_events DROP COLUMN stage_id`);
+    const missing = runCli(["schema", "--db", noColumn.file]);
+    assert.equal(missing.status, 3, missing.stderr);
+    const missingOut = JSON.parse(missing.stdout);
+    assert.equal(missingOut.state, "invalid");
+    assert.ok(missingOut.problems.includes("missing_columns"));
+    assert.throws(() => LS.queryAuditEvents(noColumn.db, {}), (e) => e.code === "audit_schema_inconsistent");
+
+    const ok = runCli(["schema", "--db", auditDbWithBusiness().file]);
+    assert.equal(ok.status, 0, ok.stderr);
+    const okOut = JSON.parse(ok.stdout);
+    assert.equal(okOut.ok, true);
+    assert.equal(okOut.state, "ok");
+  });
+
   test("append-only 与内容摘要：改写 / 删除被拒，绕过触发器后可被完整性自检发现", () => {
     const { db } = auditDbWithBusiness();
     const context = ctx({ operationId: "op-integrity-1", accountSetId: 1, period: "2026-01" });
@@ -701,6 +812,7 @@ try {
     const text = dumpDatabases();
     assert.equal(text.includes(SENTINEL), false, "数据库内容不得出现哨兵");
     assert.equal(text.includes(SENTINEL2), false, "数据库内容不得出现用户批次哨兵");
+    assert.equal(text.includes(SENTINEL_PATH), false, "数据库内容不得出现本机路径哨兵");
   });
 
   const failed = results.filter(([ok]) => !ok).length;

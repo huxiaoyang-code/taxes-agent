@@ -25,12 +25,53 @@ export const RESTORE_LEDGER_TABLES = Object.freeze([
   "restore_operation_events",
 ]);
 
+/**
+ * append-only 触发器的规范定义；结构检查逐字比对（忽略空白 / 大小写），
+ * 所以「同名但无效」的触发器不会被当成已保护。
+ *
+ * no_replace 针对 SQLite 默认 `recursive_triggers=0` 下的 INSERT OR REPLACE：
+ * 隐式删除不会触发 DELETE 触发器，因此必须在 BEFORE INSERT 阶段就拒绝与既有 id 冲突的插入。
+ */
+export const RESTORE_TRIGGER_SQL = Object.freeze({
+  restore_events_no_update: `CREATE TRIGGER restore_events_no_update BEFORE UPDATE ON restore_operation_events
+     BEGIN SELECT RAISE(ABORT, 'restore_events_append_only'); END`,
+  restore_events_no_delete: `CREATE TRIGGER restore_events_no_delete BEFORE DELETE ON restore_operation_events
+     BEGIN SELECT RAISE(ABORT, 'restore_events_append_only'); END`,
+  restore_events_no_replace: `CREATE TRIGGER restore_events_no_replace BEFORE INSERT ON restore_operation_events
+     WHEN EXISTS (SELECT 1 FROM restore_operation_events WHERE id = NEW.id)
+     BEGIN SELECT RAISE(ABORT, 'restore_events_append_only'); END`,
+});
+export const RESTORE_TRIGGERS = Object.freeze(Object.keys(RESTORE_TRIGGER_SQL));
+
+/** 结构检查的必需列；缺列时先给固定结构化拒绝，再去查询。 */
+const RESTORE_REQUIRED_COLUMNS = Object.freeze({
+  restore_ledger_meta: Object.freeze(["component", "version", "installed_at", "note"]),
+  restore_operations: Object.freeze([
+    "operation_id", "started_at", "updated_at", "status", "result_code", "reason_code",
+    "backup_digest", "backup_bytes", "backup_schema_version", "component_versions", "producer",
+    "receipt", "target_digest", "target_instance_id", "prepared_at", "published_at", "terminal_at",
+    "attempts", "note_code",
+  ]),
+  restore_operation_events: Object.freeze([
+    "id", "operation_id", "at", "from_status", "to_status", "result_code", "reason_code", "note_code",
+  ]),
+});
+
 /** 恢复操作状态机：started → prepared → succeeded | failed | rejected | unknown。 */
 export const RESTORE_STATUSES = Object.freeze(["started", "prepared", "succeeded", "failed", "rejected", "unknown"]);
-const PENDING_STATUSES = Object.freeze(["started", "prepared"]);
+/** 需要后续对账 / 核验的状态：未知结果不得从可对账集合里消失。 */
+const PENDING_STATUSES = Object.freeze(["started", "prepared", "unknown"]);
 
-/** 终态（不可再迁移，除幂等重放）。 */
+/** 终态（不可再迁移，除幂等重放）。unknown 不是终态：只能由带证据的核验转成 succeeded。 */
 const TERMINAL_STATUSES = Object.freeze(["succeeded", "failed", "rejected"]);
+
+/** 各终态的合法 resultCode 组合：status 与 resultCode 不能任意拼接。 */
+const FAIL_RESULT_CODES = Object.freeze({
+  failed: Object.freeze(["restore_new_failed"]),
+  rejected: Object.freeze(["restore_new_rejected"]),
+  // unknown 表示「结果待确认」：已发布但终态未确认也用 published_pending。
+  unknown: Object.freeze(["restore_unknown", "restore_published_pending"]),
+});
 
 /** 本 ledger 自己的固定 resultCode 词表（不复用审计事件词表，避免两套语义混淆）。 */
 export const RESTORE_RESULT_CODES = Object.freeze([
@@ -131,10 +172,8 @@ const V1_STATEMENTS = Object.freeze([
      note_code TEXT
    )`,
   `CREATE INDEX idx_restore_events_operation ON restore_operation_events (operation_id, id)`,
-  `CREATE TRIGGER restore_events_no_update BEFORE UPDATE ON restore_operation_events
-     BEGIN SELECT RAISE(ABORT, 'restore_events_append_only'); END`,
-  `CREATE TRIGGER restore_events_no_delete BEFORE DELETE ON restore_operation_events
-     BEGIN SELECT RAISE(ABORT, 'restore_events_append_only'); END`,
+  // append-only：迁移历史不可改写 / 删除 / 被 INSERT OR REPLACE 替换（默认连接同样成立）。
+  ...Object.values(RESTORE_TRIGGER_SQL),
 ]);
 
 // ------------------------------------------------------------------ 结构
@@ -143,28 +182,82 @@ const listTables = (db) =>
     .all()
     .map((r) => r.name);
 
-/** 只读检查 ledger 结构（不建表、不写库）。 */
+const normalizeSql = (text) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+const columnsOf = (db, name) => db.prepare(`PRAGMA table_info(${name})`).all().map((r) => r.name);
+
+/**
+ * 只读检查 ledger 结构（不建表、不写库）。
+ *
+ * 结构检查先于任何列查询：缺表 / 缺列 / 未知或更高版本 / 触发器缺失或同名但定义不符，
+ * 都会得到固定 `state`，而不是把原始 SQLite 报错当结论。
+ */
 export function inspectRestoreLedger(db) {
   const tables = listTables(db);
   const present = RESTORE_LEDGER_TABLES.filter((name) => tables.includes(name));
+  const missingTables = RESTORE_LEDGER_TABLES.filter((name) => !tables.includes(name));
+
+  const missingColumns = {};
+  for (const name of present) {
+    const columns = columnsOf(db, name);
+    const missing = RESTORE_REQUIRED_COLUMNS[name].filter((column) => !columns.includes(column));
+    if (missing.length) missingColumns[name] = missing;
+  }
+  const columnsReady = missingTables.length === 0 && Object.keys(missingColumns).length === 0;
+
   let version = 0;
-  if (present.includes("restore_ledger_meta")) {
+  if (columnsReady) {
     const row = db.prepare(`SELECT version FROM restore_ledger_meta WHERE component=?`).get(RESTORE_LEDGER_COMPONENT);
     if (row && Number.isSafeInteger(Number(row.version))) version = Number(row.version);
   }
+
+  const triggerRows = db
+    .prepare(`SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name IN (${RESTORE_TRIGGERS.map(() => "?").join(",")})`)
+    .all(...RESTORE_TRIGGERS);
+  const triggerMap = new Map(triggerRows.map((row) => [row.name, row]));
+  const missingTriggers = RESTORE_TRIGGERS.filter((name) => !triggerMap.has(name));
+  const invalidTriggers = RESTORE_TRIGGERS.filter((name) => {
+    const row = triggerMap.get(name);
+    return !!row && normalizeSql(row.sql) !== normalizeSql(RESTORE_TRIGGER_SQL[name]);
+  });
+
+  const problems = [];
+  if (missingTables.length) problems.push("missing_tables");
+  if (Object.keys(missingColumns).length) problems.push("missing_columns");
+  if (columnsReady && version > RESTORE_LEDGER_SCHEMA_VERSION) problems.push("version_newer");
+  else if (columnsReady && version !== RESTORE_LEDGER_SCHEMA_VERSION) problems.push("version_unknown");
+  if (present.length) {
+    if (missingTriggers.length) problems.push("missing_triggers");
+    if (invalidTriggers.length) problems.push("invalid_triggers");
+  }
+
+  let state;
+  if (!present.length) state = "not_installed";
+  else if (missingTables.length || Object.keys(missingColumns).length) state = "invalid";
+  else if (version > RESTORE_LEDGER_SCHEMA_VERSION) state = "unsupported";
+  else if (version !== RESTORE_LEDGER_SCHEMA_VERSION) state = "invalid";
+  else if (missingTriggers.length || invalidTriggers.length) state = "invalid";
+  else state = "ok";
+
   return {
     tables,
     present,
-    installed: present.length === RESTORE_LEDGER_TABLES.length,
+    missingTables,
+    missingColumns,
+    installed: missingTables.length === 0,
     version,
     target: RESTORE_LEDGER_SCHEMA_VERSION,
+    missingTriggers,
+    invalidTriggers,
+    problems,
+    state,
+    ok: state === "ok",
   };
 }
 
 /**
- * 受保护的 ledger 初始化：只接受空 SQLite（或已装且版本一致的 ledger）。
+ * 受保护的 ledger 初始化：只接受空 SQLite（或已装且结构 / 版本 / 触发器完整且一致的 ledger）。
  * 已含其他表 → `restore_ledger_foreign_tables`（不把业务库当 ledger 用）；
- * 版本更高 / 缺表 → 固定错误码拒绝。
+ * 版本更高 / 缺表 / 缺列 / 缺触发器 / 同名无效触发器 → 固定错误码拒绝。
  */
 export function ensureRestoreLedgerSchema(db) {
   if (!db || typeof db.exec !== "function") throw fail("restore_operation_invalid", { field: "db" });
@@ -173,12 +266,7 @@ export function ensureRestoreLedgerSchema(db) {
     if (state.present.length !== RESTORE_LEDGER_TABLES.length) {
       throw fail("restore_ledger_inconsistent", { reason: "partial_tables" });
     }
-    if (state.version > RESTORE_LEDGER_SCHEMA_VERSION) {
-      throw fail("restore_ledger_incompatible", { reason: "newer_version", version: state.version });
-    }
-    if (state.version !== RESTORE_LEDGER_SCHEMA_VERSION) {
-      throw fail("restore_ledger_inconsistent", { reason: "version", version: state.version });
-    }
+    assertLedgerSchema(db);
     return { installed: false, version: state.version };
   }
   const foreign = state.tables.filter((name) => !RESTORE_LEDGER_TABLES.includes(name));
@@ -200,11 +288,22 @@ export function ensureRestoreLedgerSchema(db) {
 
 function assertLedgerSchema(db) {
   const state = inspectRestoreLedger(db);
-  if (!state.installed) throw fail("restore_ledger_inconsistent", { reason: "missing_tables" });
-  if (state.version !== RESTORE_LEDGER_SCHEMA_VERSION) {
-    throw fail(state.version > RESTORE_LEDGER_SCHEMA_VERSION ? "restore_ledger_incompatible" : "restore_ledger_inconsistent",
-      { reason: "version", version: state.version });
+  if (state.missingTables.length) {
+    throw fail("restore_ledger_inconsistent", { reason: "missing_tables", tableCount: state.present.length });
   }
+  if (Object.keys(state.missingColumns).length) {
+    throw fail("restore_ledger_inconsistent", {
+      reason: "missing_columns", tableCount: Object.keys(state.missingColumns).length,
+    });
+  }
+  if (state.version > RESTORE_LEDGER_SCHEMA_VERSION) {
+    throw fail("restore_ledger_incompatible", { reason: "version", version: state.version });
+  }
+  if (state.version !== RESTORE_LEDGER_SCHEMA_VERSION) {
+    throw fail("restore_ledger_inconsistent", { reason: "version", version: state.version });
+  }
+  if (state.missingTriggers.length) throw fail("restore_ledger_inconsistent", { reason: "missing_triggers" });
+  if (state.invalidTriggers.length) throw fail("restore_ledger_inconsistent", { reason: "invalid_triggers" });
   return state;
 }
 
@@ -273,8 +372,10 @@ const getRow = (db, operationId) =>
 /**
  * ledger 写入统一在一条短事务内完成；底层写入失败（IO / 锁 / 触发器）归一成固定错误码，
  * 不把原始 SQLite 文本当业务结论，也不留半个终态。
+ * 写之前先做结构断言：未知版本 / 缺列 / 缺触发器 / 同名无效触发器给固定结构化拒绝。
  */
 const guardedWrite = (db, fn) => {
+  assertLedgerSchema(db);
   try {
     return runInTransaction(db, fn).result;
   } catch (e) {
@@ -323,7 +424,8 @@ export function beginRestoreOperation(db, input = {}) {
         && Number(existing.backup_bytes) === backupBytes
         && (existing.backup_schema_version === null ? null : Number(existing.backup_schema_version)) === backupSchemaVersion
         && JSON.stringify(normalizeComponentVersions(JSON.parse(existing.component_versions))) === componentJson
-        && existing.producer === producer;
+        && existing.producer === producer
+        && (existing.note_code ?? null) === (noteCode ?? null);
       if (!same) throw fail("restore_operation_conflict", { reason: "begin_reused_with_different_data" });
       return { created: false, operation: toOperationDto(existing) };
     }
@@ -373,6 +475,8 @@ export function markRestorePrepared(db, { operationId, receipt } = {}) {
  *
  * 约束（不可伪造终态）：
  *   - 必须已持久化 started 与 prepared，且 receipt / backupDigest 与登记一致；
+ *   - 从 unknown 进入时也必须已有 receipt，且证据（receipt / backupDigest / target）完全一致：
+ *     这代表「结果待确认」经显式核验后得到的可靠终态，不是猜成功；
  *   - 只接受 64 位低 hex 的 targetDigest 与技术 targetInstanceId；
  *   - 已在 succeeded 且证据一致 → 幂等 `{ changed: false }`；证据不一致 → 冲突。
  */
@@ -396,9 +500,13 @@ export function completeRestoreOperation(db, input = {}) {
     if (TERMINAL_STATUSES.includes(row.status)) {
       throw fail("restore_state_conflict", { reason: "already_terminal", status: row.status });
     }
-    if (row.status !== "prepared") {
+    if (row.status !== "prepared" && row.status !== "unknown") {
       // started（未 prepare）不足以证明发布已完成：拒绝补记成功。
       throw fail("restore_state_conflict", { reason: "not_prepared", status: row.status });
+    }
+    if (!row.receipt) {
+      // 没有持久化 receipt 就不能证明「发布已完成」，unknown 仍必须保持未完成。
+      throw fail("restore_state_conflict", { reason: "no_receipt_evidence", status: row.status });
     }
     if (row.receipt !== receipt) throw fail("restore_receipt_mismatch", { reason: "terminal_receipt_differs" });
     if (row.backup_digest !== backupDigest) throw fail("restore_digest_mismatch", { reason: "backup_digest_differs" });
@@ -411,7 +519,7 @@ export function completeRestoreOperation(db, input = {}) {
                  WHERE operation_id=?`)
       .run(targetDigest, targetInstanceId, now, now, now, operationId);
     insertTransition(db, {
-      operationId, fromStatus: "prepared", toStatus: "succeeded",
+      operationId, fromStatus: row.status, toStatus: "succeeded",
       resultCode: "restore_new_succeeded", reasonCode: "none",
     });
     return { changed: true, operation: toOperationDto(getRow(db, operationId)) };
@@ -419,8 +527,14 @@ export function completeRestoreOperation(db, input = {}) {
 }
 
 /**
- * 记录失败 / 拒绝 / 无法判定终态。已 succeeded 的操作不可被改写（`restore_state_conflict`）。
- * 同状态同 resultCode / reasonCode 的重复调用幂等。
+ * 记录失败 / 拒绝 / 无法判定终态。
+ *
+ * - 已 succeeded 不可被改写；failed / rejected 为终态，unknown 表示「结果待确认」，
+ *   都不能被不同字段的请求覆写（必须走带证据的 complete / reconcile 或保持 unknown）。
+ * - 同一请求（status / resultCode / reasonCode / noteCode 全相同）幂等，返回 `changed:false`；
+ *   任一字段不同 → `restore_state_conflict`，原库不变（不 UPDATE、不追加迁移记录）。
+ * - status 与 resultCode 必须合法配对：failed→restore_new_failed、rejected→restore_new_rejected、
+ *   unknown→restore_unknown；不允许把 failed 行改成 restore_new_succeeded。
  */
 export function failRestoreOperation(db, input = {}) {
   const { operationId, status = "failed", resultCode, reasonCode = "none", noteCode = null } = input;
@@ -436,11 +550,19 @@ export function failRestoreOperation(db, input = {}) {
     const row = getRow(db, operationId);
     if (!row) throw fail("restore_operation_invalid", { reason: "operation_missing" });
     if (row.status === "succeeded") throw fail("restore_state_conflict", { reason: "already_succeeded" });
-    if (row.status === status && row.result_code === resultCode && row.reason_code === reasonCode) {
-      return { changed: false, operation: toOperationDto(row) };
+    // noteCode 为 null 时 UPDATE 用 COALESCE 保留原值；因此「同请求」判定只在调用方显式给出
+    // noteCode 时要求与库内一致，不给时沿用原值，重复调用仍然幂等。
+    const noteMatches = noteCode === null || (row.note_code ?? null) === noteCode;
+    const same = row.status === status && row.result_code === resultCode
+      && row.reason_code === reasonCode && noteMatches;
+    if (same) return { changed: false, operation: toOperationDto(row) };
+    if (TERMINAL_STATUSES.includes(row.status) || row.status === "unknown") {
+      // 终态 / 待确认结果不能被不同字段的失败调用改写；状态冲突优先于具体字段组合报错。
+      throw fail("restore_state_conflict", { reason: "terminal_fields_differ", status: row.status });
     }
-    if (TERMINAL_STATUSES.includes(row.status) && row.status !== status) {
-      throw fail("restore_state_conflict", { reason: "already_terminal", status: row.status });
+    // 只有真正可迁移的 started / prepared 才检查 status / resultCode 合法性。
+    if (!FAIL_RESULT_CODES[status].includes(resultCode)) {
+      throw fail("restore_operation_invalid", { field: "resultCode", status });
     }
     const now = new Date().toISOString();
     db.prepare(`UPDATE restore_operations
@@ -460,9 +582,12 @@ export function failRestoreOperation(db, input = {}) {
  *
  * 只基于「调用方给出的显式目标 + operationId + 备份摘要 + 重新校验的已发布库」：
  *   - 不重做恢复、不复制 / 覆盖目录、不修改备份；
- *   - 证据不足（未 prepared / 回调抛错 / 回执或摘要不一致）→ 不改状态，返回
+ *   - started / prepared / **unknown** 都在可对账集合内：unknown 是「结果待确认」，
+ *     不会因为一次证据不足就永久退出待对账列表；带 receipt 的 unknown 只要证据完整即可转 succeeded；
+ *   - 证据不足（未持久化 receipt / 回调抛错 / 回执或摘要不一致）→ 不改状态，返回
  *     `{ reconciled:false, terminal:'unknown' }` 并追加一条 `restore_reconcile_pending` 迁移记录；
  *   - 证据完整 → 与 `completeRestoreOperation` 相同的约束下补记 succeeded，幂等。
+ *   - 跨库（ledger ↔ 目标库）非原子：本原语只做显式核验，不假装原子提交。
  */
 export function reconcileRestoreOperation(db, input = {}) {
   const { operationId, verifyPublished } = input;
@@ -470,15 +595,17 @@ export function reconcileRestoreOperation(db, input = {}) {
   if (typeof verifyPublished !== "function") {
     throw fail("restore_operation_invalid", { field: "verifyPublished" });
   }
+  assertLedgerSchema(db);
 
   const row = getRow(db, operationId);
   if (!row) throw fail("restore_operation_invalid", { reason: "operation_missing" });
   if (row.status === "succeeded") return { reconciled: false, changed: false, terminal: "succeeded", operation: toOperationDto(row) };
   if (!PENDING_STATUSES.includes(row.status)) {
+    // failed / rejected 是已确认终态，不参与猜成功。
     return { reconciled: false, changed: false, terminal: row.status, operation: toOperationDto(row) };
   }
-  if (row.status !== "prepared") {
-    // started 尚未持久化 receipt：无法证明「发布已完成」，保持未完成。
+  if (!row.receipt) {
+    // started（或从未持久化 receipt 的 unknown）无法证明「发布已完成」，保持未完成。
     recordReconcilePending(db, operationId, row.status);
     return { reconciled: false, changed: false, terminal: "unknown", operation: toOperationDto(getRow(db, operationId)) };
   }
@@ -492,7 +619,7 @@ export function reconcileRestoreOperation(db, input = {}) {
     && evidence.receipt === row.receipt
     && (evidence.backupDigest === undefined || evidence.backupDigest === row.backup_digest);
   if (!usable) {
-    recordReconcilePending(db, operationId, "prepared");
+    recordReconcilePending(db, operationId, row.status);
     return { reconciled: false, changed: false, terminal: "unknown", operation: toOperationDto(getRow(db, operationId)) };
   }
 
@@ -525,15 +652,17 @@ function recordReconcilePending(db, operationId, fromStatus) {
 /** 单条恢复操作；不存在返回 null。 */
 export function getRestoreOperation(db, operationId) {
   if (!isTechId(operationId)) throw fail("restore_operation_invalid", { field: "operationId" });
+  assertLedgerSchema(db);
   const row = getRow(db, operationId);
   return row ? toOperationDto(row) : null;
 }
 
-/** 需要后续对账 / 重试的恢复操作（started / prepared），按开始时间排序。 */
+/** 需要后续对账 / 核验的恢复操作（started / prepared / unknown），按开始时间排序。 */
 export function listPendingRestoreOperations(db, { limit = 50 } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
     throw fail("restore_operation_invalid", { field: "limit" });
   }
+  assertLedgerSchema(db);
   const rows = db.prepare(`SELECT ${OPERATION_COLUMNS} FROM restore_operations
                             WHERE status IN (${PENDING_STATUSES.map(() => "?").join(",")})
                             ORDER BY started_at ASC, operation_id ASC LIMIT ?`)
@@ -548,6 +677,7 @@ export function queryRestoreOperations(db, filter = {}) {
   if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
     throw fail("restore_operation_invalid", { field: "filter" });
   }
+  assertLedgerSchema(db);
   const allowed = ["status", "producer", "resultCode", "afterStartedAt", "afterOperationId", "limit"];
   let unknown = 0;
   for (const key of Object.keys(filter)) if (!allowed.includes(key)) unknown += 1;
@@ -609,6 +739,7 @@ export function queryRestoreOperations(db, filter = {}) {
 /** 只读：某操作的迁移历史（append-only）。 */
 export function listRestoreTransitions(db, operationId) {
   if (!isTechId(operationId)) throw fail("restore_operation_invalid", { field: "operationId" });
+  assertLedgerSchema(db);
   return db.prepare(`SELECT id, at, from_status, to_status, result_code, reason_code, note_code
                        FROM restore_operation_events WHERE operation_id=? ORDER BY id`)
     .all(operationId)
@@ -625,6 +756,7 @@ export function listRestoreTransitions(db, operationId) {
 
 /** 只读状态计数。 */
 export function restoreLedgerStats(db) {
+  assertLedgerSchema(db);
   const byStatus = db.prepare(`SELECT status, COUNT(*) AS n FROM restore_operations GROUP BY status ORDER BY status`)
     .all().map((r) => ({ status: r.status, count: Number(r.n) }));
   const total = byStatus.reduce((sum, item) => sum + item.count, 0);
