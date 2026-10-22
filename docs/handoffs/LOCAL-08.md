@@ -1,12 +1,12 @@
 # LOCAL-08 交接
 
 - 任务单：[tasks/LOCAL-08](../tasks/LOCAL-08.md) · 契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)
-- 一句话：纯策略模块已由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace`，merge / main `b42bae9`）；本阶段在分支 `codex/huxiaoyang-code/local-08-adapter` 上新增**普通工具适配层**（真实临时库调用验收，19/19）、**MCP 出站信封校验**（16/16）与策略模块的 DTO spec / 无引用摘要出口（34/34）。**review1 五项 + review3 三项 + review4 一项 + review5 三项（新鲜独审 3 个 P2）均已完成并自测通过，未提交 / 未合并**；上轮独审进程在给出完整结论前中止，**不能写本轮已最终通过**。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口归 LOCAL-02（#47，返工中），Issue #44 保持 OPEN。
+- 一句话：纯策略模块已由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace`，merge / main `b42bae9`）；本阶段在分支 `codex/huxiaoyang-code/local-08-adapter` 上新增**普通工具适配层**（真实临时库调用验收，19/19）、**MCP 出站信封校验**（16/16）与策略模块的 DTO spec / 无引用摘要出口（34/34），**已审源码 head `ba5d601`**。管理者实跑三层均 exit 0；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于原三套测试共 69 个用例**），transport 最后副本一致性复核亦通过。当前**已提交 / 已推送，[PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，尚无 merge SHA**；文档核对后按已授权流程合并。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口归 LOCAL-02（#47），Issue #44 保持 OPEN。
 
 ## 1. 基本信息
 
-- 任务 ID / 状态：LOCAL-08 / **策略模块已合并；适配层与 transport 已实现，review1 五项 + review3 三项 + review4 一项（最后副本一致性）+ review5 三项（新鲜独审 P2：scoped 期间 / 可表示 ID / `reconciles` 必需布尔）修正均自测通过，未挂载 / 未提交 / 未合并**；PR / 最终独立审查 / 合并由管理者后续执行
-- 关联 Issue：**#44**（本任务，保持 OPEN）；共享入口现归 **LOCAL-02（Issue #47，返工中）**
+- 任务 ID / 状态：LOCAL-08 / **策略模块已合并**；适配层与 transport 已实现、已提交并推送，PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，等待文档核对后合并；仍**未挂载**、尚无 merge SHA；HTTP / Agent / MCP / CLI 未接线，Issue #44 保持 OPEN
+- 关联 Issue：**#44**（本任务，保持 OPEN）；共享入口现归 **LOCAL-02（Issue #47，所有权未释放）**
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`
 - 执行员工与显式模型：本机 pi，主 / 回退均 `tokenhub/deepseek-v4.1-flash`（未切换、未启用子 agent）
 - 本机管理者：成员自己的 Codex（独立审查、提交、合并由其执行）
@@ -17,7 +17,8 @@
 
 - 本阶段分叉基线（本阶段起点 = 最新 main）：`b42bae9ae76e54aeda63bcc4db0dc34663286b7d`
 - 上一阶段已审模块 head：`f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`（PR #50 合并，merge 时间 2026-10-22T09:57:25Z）
-- 本阶段改动：见 §4（9 个文件）；本阶段 head / PR / merge：**由管理者后续补记**，交接不写自引用 SHA、不预报未来提交
+- 本阶段改动：见 §4（9 个文件）；本阶段**已审源码 head `ba5d60115e52fa13805841d9abe07006b74b2c9c`**；从 main `98977e04bd24aa293074021802191814f8c2a1d2` 合入形成 head `e8b298e42224e2e1b884f7827e4c366881d22fc9`（该次合入仅添加 PR #55 六个 backup 文件，本包 9 路径逐文件不变）
+- PR：[#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 已 OPEN 并 attach；**merge SHA 待合并后补记**，不预报已合并；本次文档修改会产生新 head，管理者合并前再核 6 个源码 / 测试文件未变
 - 重验范围：本阶段 3 个套件 + 受影响领域回归（§6）；接线 PR 需在最新 main 上再重跑并补端到端集成测试
 - 交接对象：后续接线任务（Agent 工具 / HTTP / MCP 后端 / 本机 UI 读取入口），以及 LOCAL-02 合并后的新工具补项
 
@@ -114,13 +115,13 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
 
 - 适配层测试隔离：**先**建全新临时 `WORKBENCH_DATA_DIR`，**再**动态 import 真实 `accounting.mjs` / `agent-tools.mjs`；注入真实 `callAgentTool` 实际执行；3 个基础账套 + 建账类工具新建账套；合成敏感标记覆盖企业名 / 科目名 / 科目编码 / 摘要 / 往来 / 人员 / 资产名 / 源路径 / 企业身份 / 批次 ID / 来源系统；断言所有模型返回 / 转换错误 / 捕获日志无标记；结束删除临时目录。
 - 未运行：完整 `scripts/test-all.mjs`（新套件**未登记**进该共享文件，属 LOCAL-02）。
-- 管理者独立验证 / PR / 合并：**由管理者在本阶段交付后执行**；本文件不声称管理者已跑过，也不写未来 SHA。
-- review1：F1–F5 均已真实回归变红到绿；review3：F1–F3 定向回归（transport 14/14、适配层 17/17、策略 32/32）；review4：transport 改为「快照→校验同一快照→只返回它」并新增可变反射一致性回归（旧顺序实跑 `14/15` 变红，修正后 `15/15`；适配层 17/17、策略 32/32）；review5：上下文必需期间 / 可表示 ID 与现金流 `reconciles` 必需布尔均新增回归，三层实跑策略 `34/34`、适配层 `19/19`、transport `16/16`（旧断言一块未删）。本轮**未提交 / 未推送 / 未合并**，不得把本次自测写成最终独立审查通过。
+- 管理者实跑（事实）：策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于原三套测试共 69 个用例**）；transport 最后副本一致性复核通过。
+- review1：F1–F5 均已真实回归变红到绿；review3：F1–F3 定向回归（transport 14/14、适配层 17/17、策略 32/32）；review4：transport 改为「快照→校验同一快照→只返回它」并新增可变反射一致性回归（旧顺序实跑 `14/15` 变红，修正后 `15/15`；适配层 17/17、策略 32/32）；review5：上下文必需期间 / 可表示 ID 与现金流 `reconciles` 必需布尔均新增回归（策略 34/34、适配层 19/19、transport 16/16）。以上四轮均已纳入已审 head `ba5d601`，旧断言一块未删。
 
 ## 7. 真实数据边界
 
 - 是否触碰真实账套 / 凭据：**否**。
-- 临时数据目录 / 合成样例：**只在新临时目录**（系统临时目录下的随机子目录）建合成账套；`git status` 无临时库 / 日志入库；`.agent-runs/` 未新增文件。
+- 临时数据目录 / 合成样例：**只在新临时目录**（系统临时目录下的随机子目录）建合成账套；`git status` 无临时库 / 日志入库。
 - 是否访问真实税局 / 外部系统：**否**；未启动税局浏览器 / 后端，未调用任何税务工具。
 - 凭据 / 会话 / 验证码：未涉及，未记录。
 - 仓库文档不写本机绝对路径 / 进程 ID / 私有日志：是。
@@ -140,7 +141,7 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
   2. 把 3 个套件登记进 `06-workbench/scripts/test-all.mjs`；
   3. 真实 HTTP → Agent → 模型信封不含原文 + 本机通道可取原文的端到端集成测试；
   4. **LOCAL-02 合并后的新期末 / 资产补项工具**：工具名与 DTO 未稳定，本阶段**不写占位 spec**（未登记 = `model_tool_unknown`，不会误执行）；待其合并、root 更新基线后按真实 DTO 补映射 + spec + 形状检查 + 测试；
-  5. **本包最终独立审查 / PR / 合并**：review3 三项残留（F1/F2/F3）、review4 最后副本一致性与 review5 三项 P2 均已修复并自测通过（策略 34/34、适配层 19/19、transport 16/16），但**均未提交 / 未推送 / 未合并**，且上轮独审进程在完整结论前中止，仍需 root 最后独立复审；不得写成已验收。
+  5. **PR #57 待合并**：最终独审（`review_output08_final`，未参与实现）已关闭原 3 项 P2、独立探针 57/57 通过，管理者三层实跑 exit 0；PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) **已 OPEN 并 attach**，按已授权流程待本次文档核对后合并；**尚无 merge SHA，不写已合并**。
 - 风险 / 阻塞：
   - 未接线前**本契约不生效**，当前模型入口仍原样返回企业名 / 科目名 / 凭证行；
   - 接线时若把 `localRead` 误挂到 `/agent/tools/*` 或 MCP，会立刻形成「模型取原文」的洞：接线评审必须逐条核对契约 §9；
@@ -153,9 +154,9 @@ import { validateModelEnvelope, parseModelEnvelope, transportFailure, classifyTr
 
 ## 10. 进程 / 会话 / 日志
 
-- 仍运行进程：无。本轮全部为前台命令（测试 / 语法检查 / 文档检查），均已结束并核对退出码。
+- 仍运行进程：本次员工侧无子进程残留。本轮文档核对全部为前台只读命令（`git log` / `git status` / `git diff --check` / 文档检查），均已结束；此结论仅限本次员工会话，不代表全仓没有其他成员正在运行的员工。
 - 临时探针：核对 DTO 形状 / 循环引用 / 合成分页时跑过一次性 `node -e` 脚本，用完即弃；未建临时文件进仓库。
-- 原始日志：本机终端输出，未落盘到仓库；`.agent-runs/` 未新增文件；仓库内只写不含敏感数据的摘要。
+- 原始日志：员工输出与管理验收日志保存在本机被 Git 忽略的管理目录；版本化文档只记录脱敏摘要。
 - 上下文：本阶段完成后按章程关闭本员工会话；下一部分 / 复核使用新进程、新会话（`--no-session`），只载入任务单、契约与必要源码。
 
 ---

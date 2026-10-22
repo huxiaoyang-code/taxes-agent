@@ -1,13 +1,11 @@
 # 财务输出边界契约 · FINANCE-OUTPUT-BOUNDARY
 
-- 状态分五段，**不要混读**：
+- 状态分四段，**不要混读**：
   1. **纯策略模块已合并**：`06-workbench/server/finance-output-policy.mjs` 经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；
-  2. **普通工具适配层已实现但未挂载**：`06-workbench/server/finance-model-adapter.mjs` + 真实（临时库）调用验收 `06-workbench/test/finance-model-adapter.test.mjs`；
-  3. **出站信封校验已实现但未挂载**：`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`；
-  4. **第三轮定向返工（review3）已实现并自测通过，未提交 / 未合并**：F1 transport 每个允许键独立校验 + 纯数据快照（拒绝悬空 `projectionDropped` 与任意层级访问器）、F2 投影期间 / 状态固定值域、F3 `finance_query` 数据层账套核对。
-  5. **第四轮定向修正（review4，最后副本一致性）已实现并自测通过，未提交 / 未合并**：transport 的「校验对象」与「返回对象」现在是同一份快照（先生成有界纯数据快照 → 再对同一快照完整校验 → 只返回该快照），并补可变反射输入回归；transport 14 → **15/15**。最终独立审查、PR、合并仍由管理者后续执行。
-  6. **第五轮定向返工（review5，新鲜独审 3 个 P2）已实现并自测通过，未提交 / 未合并**：① scoped `account_context` 的 `start_period` 由「可选 `periodOf`」改为**必需合法月份**（与 global 分支一致）；② global / scoped 上下文对**不可投影的 ID**（超过 projection 数值上限 1e12）**明确拒绝**，不再静默删掉 `accountSetIds`，且 `projectionDropped` 回真实消毒计数而不是固定 0；③ `report.cash_flow_statement` 的 `reconciles` 改为**必需布尔**，缺失 / 类型错一律 `model_result_invalid`，不再把未知伪造成 `false`。三层实跑：策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0；**尚未**最终独立审查 / PR / 合并。
-- **HTTP / Agent / MCP / CLI 仍全部未接线**：`agent-tools.mjs`、`server.mjs`、MCP `backend/server/tools`、`scripts/test-all.mjs` 一律未改（共享入口归 LOCAL-02 / Issue #47）。因此**当前真实模型入口仍原样返回业务原文**；本契约尚未在真实入口生效，Issue #44 **保持 OPEN**。模块 / 适配层通过 ≠ 数据边界已生效。
+  2. **适配层 + 出站信封校验已实现、已提交并推送，PR 待合并**：`06-workbench/server/finance-model-adapter.mjs` + 真实（临时库）调用验收 `06-workbench/test/finance-model-adapter.test.mjs`；`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`。**已审源码 head `ba5d60115e52fa13805841d9abe07006b74b2c9c`**；管理者实跑策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0。最终独审 `review_output08_final` **未参与实现**，原 3 项 P2 全部关闭，独立探针 **57/57** 通过（**57 是独审探针项数，不等于原三套测试共 69 个用例**），此前 transport 最后副本一致性复核亦通过；
+  3. **HTTP / Agent / MCP / CLI 仍全部未接线**：`agent-tools.mjs`、`server.mjs`、MCP `backend/server/tools`、`scripts/test-all.mjs` 一律未改（共享入口归 LOCAL-02 / Issue #47）。因此**当前真实模型入口仍原样返回业务原文**；本契约尚未在真实入口生效，Issue #44 **保持 OPEN**。模块 / 适配层通过 ≠ 数据边界已生效；
+  4. **PR [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 已 OPEN 并 attach**：从 main `98977e04bd24aa293074021802191814f8c2a1d2` 合入形成 head `e8b298e42224e2e1b884f7827e4c366881d22fc9`——该次合入仅添加 PR #55 的六个 backup 文件，本包 9 路径与 `ba5d601` 逐文件完全不变。当前**已提交 / 已推送，等待文档核对后按已授权流程合并**；**尚无 merge SHA，不预报已合并**。本次文档提交会产生新 head，管理者合并前再核对 6 个源码 / 测试文件未变。
+- **历史（review1 / review3 / review4 / review5）**：四轮定向返工当时均为「已实现并自测通过、未提交 / 未推送 / 未独审」，现均已纳入已审 head `ba5d601` 并通过最终独审；各轮问题与修复证据保留在 §14.1–§14.4，按其时点阅读，不再代表当前提交 / 审查状态。
 - 归属：LOCAL-08（[任务单](tasks/LOCAL-08.md)、[交接](handoffs/LOCAL-08.md)），Refs Issue #44；负责人 `huxiaoyang-code`；分支 `codex/huxiaoyang-code/local-08-adapter`（由管理者从上述 main 建立）。
 - 本文件只描述**已经写进代码并在合成 / 临时库测试中验证过的契约**；未实现项一律标注「未实现」。
 
@@ -206,7 +204,7 @@ policy.dispose();
 
 ## 9. 接线建议清单（后续集成任务，本包不做）
 
-**共享入口归属（当前事实）**：`agent-tools.mjs` / `server.mjs` / MCP 注册与传输 / `scripts/test-all.mjs` / `package.json` / `public/*` / 共享索引文档归 **LOCAL-02（Issue #47）**，且该任务当前在返工中；本轮**未改**其中任何文件。LOCAL-01（#43）已合并。
+**共享入口归属（当前事实）**：`agent-tools.mjs` / `server.mjs` / MCP 注册与传输 / `scripts/test-all.mjs` / `package.json` / `public/*` / 共享索引文档归 **LOCAL-02（Issue #47）**，其共享所有权尚未释放；本轮**未改**其中任何文件。LOCAL-01（#43）已合并。
 
 1. **`06-workbench/server/agent-tools.mjs`**：`finance_query` 改为 `adapter.callModelTool(...)` 或至少 `policy.wrapQuery(...)`，未实现 node 保持自己的 `not_implemented`；operation 必须是**代码里的字符串常量**（适配层已保证）。
 2. **写动作**：异步写必须用 `createFinanceModelAdapter({ executeRaw: callAgentTool })`，**不要**用 `policy.runWrite` 包 async 回调；不要改 `accounting.mjs` 的写入顺序、事务或返回结构。
@@ -291,7 +289,7 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 - 因此：**当前真实模型入口仍原样返回原文**，本契约尚未在真实入口生效；Issue #44 保持 OPEN。
 - 未做：磁盘持久化引用、多用户 / 权限体系、按用户隔离、审计落库、批量写队列、`localRead` 的 MCP / CLI 工具。
 - 未验收：真实 HTTP / Agent / MCP / CLI 端到端；真实账套（禁止）；跨重启（设计上失效）。
-- **LOCAL-02 返工中的新期末 / 资产补项工具不在本包实现范围**：其入口名与 DTO 尚未稳定，适配层不为它们写占位 spec，也不据草稿伪造实现；待 LOCAL-02 合并后由 root 更新基线再补（见 §13）。
+- **LOCAL-02 名下的新期末 / 资产补项工具不在本包实现范围**：其入口名与 DTO 尚未稳定，适配层不为它们写占位 spec，也不据草稿伪造实现；待 LOCAL-02 合并后由 root 更新基线再补（见 §13）。
 
 ## 13. 待 LOCAL-02 合并后补的入口（明确登记，不预报）
 
@@ -317,7 +315,7 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 适配层测试的隔离方式：**先**建全新临时 `WORKBENCH_DATA_DIR`，**再**动态 import 真实 `accounting.mjs` / `agent-tools.mjs`，注入真实 `callAgentTool` 实际执行（两企业以上、多账套、合成敏感标记覆盖企业名 / 科目名 / 摘要 / 往来 / 人员 / 资产名 / 源路径 / 企业身份 / 批次 ID / 来源系统）；主要写动作真实落库、手工常量核对金额、断言只执行一次；所有模型返回 / 转换错误 / 测试捕获日志均不含合成标记。
 
-### 14.1 独立审查 review1 五项修复（本轮实际发生）
+### 14.1 独立审查 review1 五项修复（历史记录）
 
 | 项 | 问题 | 修复 / 回归 |
 |---|---|---|
@@ -327,9 +325,9 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | F4 | 真实 `account_set_create({})` / 无效增量导入的 `create` + `result` 与 `nodeId_required` / `voucherId_required` 被 transport 误拒 | 两层统一 operationCategory（含 create / node_query / batch_query / unimplemented）、scope（含 result）、固定错误码映射与大驼峰真实码；legacy dry-run applied:false / needsLocalReview:true 保留正例 |
 | F5 | `classifyTransportFailure('unreachable', {forWrite:true})` 同时给出 `outcome:not_sent` 与 `writeOutcome:unknown` | 通用连接错误无法证明未发送，写场景保守 `outcome/writeOutcome:unknown`；仅 `backend_not_configured` 为可证发前 `not_sent`；合成回环服务验证请求发出后断连按 unknown 处理 |
 
-本文件不声称最终独立审查已通过、PR 已创建或已合并；这些仍由管理者后续执行。
+（历史记录）本项修复当时尚未提交 / 未推送 / 未独审；现况见文首状态段与 §14.5。
 
-### 14.2 第三轮定向返工 review3（本轮实际发生）
+### 14.2 第三轮定向返工 review3（历史记录）
 
 | 项 | 复核发现 | 修复 / 回归 |
 |---|---|---|
@@ -337,17 +335,17 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | F2 | 摘要必需字段从 `periodOf` / 状态枚举退化为 `requireText`，sanitizer 接受小写 token：`data.period='synthetic_sensitive_period'` 与 `voucher.detail.status` 任意业务 token 均原文泄漏 | 新增 `requirePeriod` / `requireEnumToken` / `requireChoice`；每个投影字段同时校验缺失与自己的固定值域（`YYYY-MM`、固定枚举 / 集合），逐点审 `requireText` 调用；真实适配器注入 ASCII 标记 / 非法月份 / 缺字段 / 真零正例回归 |
 | F3 | scope 核对只看 wrapper；`finance_query` 请求 A 实际返回 B 的 `data` 时 wrapper 无 id 漏过，得到 A 绑定引用 + B 数据 | 按 node 核对可信 data 字段（账套 `data.id`、凭证 `data.account_set_id`、列表逐行）；不一致固定 `model_scope_mismatch` 且不建引用；聚合节点不臆造必需字段；真实 `callAgentTool` A/B 两库注入覆盖 |
 
-三层测试：策略 **32/32**、适配层 **17/17**、transport **14/14**（review3 时点），均 exit 0（本轮实际输出）。本轮**未提交 / 未推送 / 未合并**；最终独立审查、共享入口接线（LOCAL-02）、`scripts/test-all.mjs` 登记与 LOCAL-02 新工具补项均**未完成**，不得写成已验收。
+三层测试：策略 **32/32**、适配层 **17/17**、transport **14/14**（review3 时点），均 exit 0（本轮实际输出）。**（历史）**当时未提交 / 未推送 / 未独审；后续已由 review4 / review5 与最终独审覆盖，现况见文首状态段与 §14.5。共享入口接线（LOCAL-02）、`scripts/test-all.mjs` 登记与 LOCAL-02 新工具补项**仍未完成**。
 
-### 14.3 第四轮定向修正 review4：最后副本一致性（本轮实际发生）
+### 14.3 第四轮定向修正 review4：最后副本一致性（历史记录）
 
 | 项 | 复核发现 | 修复 / 回归 |
 |---|---|---|
 | F1 | 最终副本顺序不一致：`validateEnvelope` 先 `validateEnvelopeInner(original)`，成功后再对 `original` 做 `plainSnapshot`，**返回的副本本身没有校验**。合成复现：合法 query 对象让 `adapter` 的 `getOwnPropertyDescriptor` 前几次返回合法版本串、之后返回普通对象，结果仍 `ok:true` 且返回了不符合固定类型的 `adapter` | 新增第二遍：先生成**有界纯数据快照**，再对**同一快照**完整校验并只返回该快照（第一遍原对象校验只保留既有固定错误码，不决定返回值）。getter 仍不执行、非普通原型 / Symbol / `toJSON` / 函数 / 深度与大小上限全部保留。回归：`adapter`、嵌套 `projection.assets` 的描述符中途换值都被拒或只返回校验过的值；始终合法的可变输入返回对象再次完整校验仍通过且等于返回值；普通 plain JSON 正例不受影响 |
 
-本项三层实际输出：策略 **32/32**、适配层 **17/17**、transport **15/15**（14 → 15，新增 1 项可变反射一致性回归），均 exit 0。已用旧顺序实跑确认新回归会**变红**（`14/15`、exit 1），恢复修正后 `15/15`、exit 0。本轮**未提交 / 未推送 / 未合并**；共享入口接线（LOCAL-02 #47）、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、最终独立审查与 PR / 合并均**未完成**，不得写成已验收。
+本项三层实际输出：策略 **32/32**、适配层 **17/17**、transport **15/15**（14 → 15，新增 1 项可变反射一致性回归），均 exit 0。已用旧顺序实跑确认新回归会**变红**（`14/15`、exit 1），恢复修正后 `15/15`、exit 0。**（历史）**当时未提交 / 未推送 / 未独审；该一致性复核现仍通过，并已纳入已审 head `ba5d601`。共享入口接线（LOCAL-02 #47）与 LOCAL-02 新期末 / 资产补项工具仍**未完成**。
 
-### 14.4 第五轮定向返工 review5（新鲜独立审查，3 个 P2）
+### 14.4 第五轮定向返工 review5（历史记录，最终独审前最后一次定向修复）
 
 | 项 | 复核发现 | 修复 / 回归 |
 |---|---|---|
@@ -355,4 +353,16 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 | P2-2 全局上下文 ID | 唯一合法正安全整数 `id=1000000000001`（>1e12）通过 ID 校验后被投影消毒器当超界数值删除，得到 `accountSetIds:[]`、`returnedCount:1`、`truncated:false`、`projectionDropped:0`：既无法选择又无提示 | 新增可表示 ID 边界（= projection 数值上限 1e12）：global 列表 ID / scoped 账套 ID / `enterprise_account.account_set` 的 `data.id` 超界即 `model_result_invalid`，不静默删除；global / scoped 的 `projectionDropped` 改为 `sanitizeProjection` 真实计数，不再固定 0。合法边界 `999999999999` / `1e12` 仍成功且能通过 transport；transport 新增 boundary 回归（上限内接受、超界 `envelope_projection_invalid`） |
 | P2-3 现金流 `reconciles` | 完整合法零值现金流 DTO 删掉 `reconciles` 后仍成功，`projection.reconciles=false` 并生成引用：把未知勾稽状态伪造成 `false` | 策略 spec 改为 `requireBoolean(statement,"reconciles")`，适配层形状检查同时要求布尔；缺失 / 字符串 / 数字均 `model_result_invalid` 且不建引用，真正 `false` 之业务状态原样保留。策略层新增缺失 / 类型错失败与真 `false` 正例回归 |
 
-三层本轮实际输出：策略 **34/34**（32 → 34：新增现金流布尔回归 + 数值上限边界）、适配层 **19/19**（17 → 19：新增上下文期间 / ID 回归 + 现金流布尔回归）、transport **16/16**（15 → 16：新增 ID 可表示性边界），均 exit 0（实际输出）。已验行为未回退：旧 32 / 17 / 15 项断言含义未削弱。本轮**未重跑**四套领域回归（与 review5 根因无直接关系，不声称重跑）。**未提交 / 未推送 / 未合并**；共享入口接线（LOCAL-02 #47）、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、最终独立审查与 PR / 合并均**未完成**，不得写成已验收。
+三层本轮实际输出：策略 **34/34**（32 → 34：新增现金流布尔回归 + 数值上限边界）、适配层 **19/19**（17 → 19：新增上下文期间 / ID 回归 + 现金流布尔回归）、transport **16/16**（15 → 16：新增 ID 可表示性边界），均 exit 0（实际输出）。已验行为未回退：旧 32 / 17 / 15 项断言含义未削弱。本轮**未重跑**四套领域回归（与 review5 根因无直接关系，不声称重跑）。**（历史）**当时未提交 / 未推送 / 未独审；此后原 3 项 P2 已由最终独审确认关闭（§14.5）。共享入口接线（LOCAL-02 #47）、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具仍**未完成**。
+
+### 14.5 当前验收状态（管理者实跑 + 最终独审）
+
+| 项 | 证据 |
+|---|---|
+| 已审源码 head | `ba5d60115e52fa13805841d9abe07006b74b2c9c` |
+| 管理者实跑 | 策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0 |
+| 最终独审 | `review_output08_final` 未参与实现；原 3 项 P2 全部关闭；独立探针 **57/57** 通过（**57 为独审探针项数，不等于原三套测试共 69 个用例**） |
+| 合入 main 后复核 | 从 main `98977e04bd24aa293074021802191814f8c2a1d2` 合入形成 head `e8b298e42224e2e1b884f7827e4c366881d22fc9`；该次合入仅添加 PR #55 的六个 backup 文件，本包 9 路径与已审 head 逐文件不变 |
+| PR | [#57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) **OPEN 并 attach**；尚无 merge SHA，不预报已合并 |
+
+仍未包含：共享 HTTP / Agent / MCP / CLI 接线、`scripts/test-all.mjs` 登记、LOCAL-02 新期末 / 资产补项工具、真实 HTTP 端到端与真实账套验收。
