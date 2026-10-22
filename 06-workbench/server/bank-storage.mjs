@@ -894,19 +894,34 @@ const txnDepth = new WeakMap();
 /** 回滚未确认（failed / unknown）的连接：在调用方明确恢复或丢弃前，禁止继续银行读写。 */
 const unusableConnections = new WeakMap();
 
+/** 连接是否真的有活动事务（只读连接事实，不推断是谁开的）；无法判断给 null。 */
+const transactionActiveOf = (db) => (typeof db?.isTransaction === "boolean" ? db.isTransaction : null);
+
+/** 调用方自己开启的事务 / 保存点：不在银行 `inTransaction` 管理的层里。 */
+const hasExternalTransaction = (db) => transactionActiveOf(db) === true
+  && (txnDepth.get(db) || 0) === 0;
+
 /**
- * 连接事务状态：`clean`（可继续用）或 `rollback_unconfirmed`（上一次回滚未确认）。
- * 回滚失败后连接可能仍持有未提交写入，不能在下次操作里假装成功。
+ * 连接事务状态：
+ *  - `clean`：银行可以自己开启并提交事务；
+ *  - `external_transaction`：连接上有调用方自己的事务 / 保存点（银行既没有开，也不会提交 / 回滚它）；
+ *  - `rollback_unconfirmed`：上一次回滚未确认，连接可能仍持有未提交写入。
+ * `writable` 只表示「银行可以自己开事务并提交」；未知态与调用方事务都不满足。
+ * `transactionActive` 反映连接真实事实（`db.isTransaction`），不按银行是否管理那层事务来猜。
  */
 export function bankConnectionState(db) {
   const depth = txnDepth.get(db) || 0;
   const failure = unusableConnections.get(db) ?? null;
+  const active = transactionActiveOf(db);
+  const external = !failure && depth === 0 && active === true;
   return {
     transactionDepth: depth,
-    transactionState: failure ? "rollback_unconfirmed" : "clean",
-    writable: !failure,
+    transactionState: failure ? "rollback_unconfirmed" : (external ? "external_transaction" : "clean"),
+    writable: !failure && !external,
+    bankManagedTransaction: depth > 0,
+    externalTransaction: external,
     stage: failure ? failure.stage : null,
-    transactionActive: failure ? failure.transactionActive : false,
+    transactionActive: failure ? failure.transactionActive : active === true,
   };
 }
 
@@ -916,8 +931,8 @@ export function bankConnectionState(db) {
  */
 export function recoverBankConnectionState(db) {
   const failure = unusableConnections.get(db);
-  if (!failure) return { transactionState: "clean", recovered: false };
-  const active = typeof db?.isTransaction === "boolean" ? db.isTransaction : null;
+  if (!failure) return { transactionState: bankConnectionState(db).transactionState, recovered: false };
+  const active = transactionActiveOf(db);
   if (active !== false) {
     throw bankError("bank_connection_recovery_refused",
       "连接仍处于未决事务，必须先确认回滚成功或丢弃该连接后再恢复", {
@@ -942,7 +957,7 @@ function assertConnectionUsable(db) {
 }
 
 const markConnectionUnknown = (db, stage) => {
-  const active = typeof db?.isTransaction === "boolean" ? db.isTransaction : null;
+  const active = transactionActiveOf(db);
   unusableConnections.set(db, { stage, transactionActive: active });
   // 未知连接不再当作可嵌套事务，避免外层把内层失败当成可继续。
   txnDepth.delete(db);
@@ -969,10 +984,44 @@ const rollbackUnconfirmedError = (stage, transactionActive, cause = null) => ban
   },
 );
 
-/** 事务结果类错误：已区分已确认回滚与 failed / unknown，不得被上层改写成「已回滚」。 */
+/** 事务结果类错误：已区分已确认回滚与 failed / unknown / 未开始，不得被上层改写成「已回滚」。 */
 const isTransactionOutcomeError = (e) => e?.code === "bank_transaction_rollback_failed"
   || e?.code === "bank_transaction_discarded"
+  || e?.code === "bank_transaction_conflict"
+  || e?.code === "bank_transaction_begin_failed"
   || e?.code === "bank_connection_state_unknown";
+
+/**
+ * 事务冲突：连接上已有事务（调用方自己的，或银行尚未结束的嵌套层），银行不会在其中开事务，
+ * 也不会提交 / 回滚那一层。`bankManaged` 区分「调用方事务」与「银行自己的嵌套层」。
+ */
+const transactionConflictError = (stage, { bankManaged = false } = {}) => bankError(
+  "bank_transaction_conflict",
+  "连接上已有进行中的事务：银行不会在其中开启事务，也不会提交或回滚那一层；本次操作未开始，"
+  + "也没有任何写入，请先由调用方提交或回滚自己的事务后再重试",
+  {
+    stage,
+    started: false,
+    rolledBack: false,
+    transactionState: bankManaged ? "bank_transaction_active" : "external_transaction",
+    transactionActive: true,
+    bankManaged,
+  },
+);
+
+/** 事务 / 保存点没建立起来：本层没有开始，也没有可回滚的写入，绝不冒充「已回滚」。 */
+const transactionBeginFailedError = (stage, transactionActive, cause = null) => bankError(
+  "bank_transaction_begin_failed",
+  "银行事务未能开始（未取得事务 / 保存点）：本次没有写入，也没有回滚任何事务；可释放占用后重试",
+  {
+    stage,
+    started: false,
+    rolledBack: false,
+    transactionState: "not_started",
+    transactionActive,
+    ...(causeCodeToken(cause) ? { causeCode: causeCodeToken(cause) } : {}),
+  },
+);
 
 /** 回滚已确认（回滚命令真实成功）：可以明确说「本次操作未提交」，连接重归可用。 */
 const rollbackDiscardedError = (stage) => bankError(
@@ -999,6 +1048,13 @@ const rollbackCommandsFor = (savepoint) => (savepoint
 /**
  * 显式事务（外层 BEGIN IMMEDIATE，嵌套使用 SAVEPOINT）。
  *
+ * 开始事务前先分三种边界（不能一律说「已回滚」）：
+ *  - 连接上已有**调用方**事务 / 保存点：直接 `bank_transaction_conflict`，银行不开事务、
+ *    也绝不提交或回滚调用方事务（本层什么都没做）；
+ *  - BEGIN / SAVEPOINT 没建立起来：`bank_transaction_begin_failed` + `rolledBack:false`，
+ *    本层没有开始也没有回滚任何写入（`transactionState: "not_started"`）；
+ *  - 已开始的事务失败，才进入下面的回滚状态机。
+ *
  * 失败时**必须区分三种结果**（不能一律说「已回滚」）：
  *  - 回滚已确认：原错误原样上抛，连接可继续用（调用方看到的是业务失败，不是回滚失败）；
  *  - 回滚失败 / 未知：给 `bank_transaction_rollback_failed` + `rolledBack:false`，并把连接标记为不可用
@@ -1011,8 +1067,15 @@ export function inTransaction(db, fn) {
   assertConnectionUsable(db);
   const depth = txnDepth.get(db) || 0;
   const savepoint = depth > 0 ? `bank_sp_${depth}` : null;
-  if (savepoint) db.exec(`SAVEPOINT ${savepoint}`);
-  else db.exec("BEGIN IMMEDIATE");
+  // 调用方自己的事务：银行既不在里面开事务，也不会对它 ROLLBACK / COMMIT。
+  if (!savepoint && hasExternalTransaction(db)) throw transactionConflictError("begin");
+  try {
+    if (savepoint) db.exec(`SAVEPOINT ${savepoint}`);
+    else db.exec("BEGIN IMMEDIATE");
+  } catch (e) {
+    // 事务 / 保存点没有建立：本层没有任何写入可回滚，绝不能报「已回滚」或去回滚外层。
+    throw transactionBeginFailedError(savepoint ? "savepoint" : "begin", transactionActiveOf(db), e);
+  }
   txnDepth.set(db, depth + 1);
   let out;
   try {
@@ -1025,6 +1088,10 @@ export function inTransaction(db, fn) {
     }
     // 内层回滚未确认、但本层已确认回滚（保存点或整个事务）：结果从「unknown」变成「已确认回滚」。
     if (e && e.code === "bank_transaction_rollback_failed") throw rollbackDiscardedError("outer-rollback");
+    // 内层「事务没开始」被外层放弃：本层已确认回滚整层，结果从「未开始」变成「已确认放弃」。
+    if (e && (e.code === "bank_transaction_begin_failed" || e.code === "bank_transaction_conflict")) {
+      throw rollbackDiscardedError("outer-abort");
+    }
     throw e;
   }
   // 内层回滚已经失败但错误被调用方吞掉：本层不得提交，整层放弃。
@@ -1515,6 +1582,9 @@ function runComponentDdl(db, { from, creation, backup }) {
  * 失败语义：只有 ROLLBACK 真实成功才返回 `bank_migration_failed` + `rolledBack:true`；
  * 回滚失败 / 未确认时返回 `bank_transaction_rollback_failed` + `rolledBack:false`，
  * 并把连接标为不可用（后续银行读写给 `bank_connection_state_unknown`），不假装「原库已回滚」。
+ * 事务冲突（连接上已有调用方事务 / 保存点，或银行自己的未结束嵌套层）在**任何 DDL / 备份 /
+ * 回执消耗之前**给 `bank_transaction_conflict` + `rolledBack:false` + `started:false`：不提交、
+ * 也不回滚那层事务；BEGIN / SAVEPOINT 没建立起来时给 `bank_transaction_begin_failed`。
  *
  * @param {DatabaseSync} db 显式连接
  * @param {object} options
@@ -1546,18 +1616,28 @@ export async function ensureBankSchema(db, options = {}) {
   }
   // 先核对账务核心结构；不是受支持的库就不做任何 DDL / 备份。
   assertBaseSchema(db);
+  // 安装（新库初始化 / 已有库迁移）必须由银行在最外层自己开事务：
+  // 连接上已有调用方事务 / 保存点（或银行自己的未结束嵌套层）时，在消耗创建回执 / 分配备份目录 /
+  // 任何 DDL 之前就拒绝，既不提交也不回滚那层事务，也不把它误报成「已回滚」。
+  const activeDepth = txnDepth.get(db) || 0;
+  if (activeDepth > 0 || transactionActiveOf(db) === true) {
+    throw transactionConflictError("begin", { bankManaged: activeDepth > 0 });
+  }
 
-  const fresh = consumeFreshClaim(receipt, abs);
+  // 只用「仍然有效」的创建事实选路；安装确认提交后才消耗回执，拒绝 / 未开始的调用不烧掉回执。
+  const fresh = hasFreshDatabaseClaim(receipt, abs);
   if (fresh) {
     // 新库：创建事实已在进程内验证，不需要也不允许伪造迁移前备份。
     try {
-      return inTransaction(db, () => runComponentDdl(db, {
+      const result = inTransaction(db, () => runComponentDdl(db, {
         from,
         creation: "fresh-database",
         backup: null,
       }));
+      consumeFreshClaim(receipt, abs);
+      return result;
     } catch (e) {
-      // 回滚未确认 / 已确认放弃：原样上抛，不能改写成一个「已回滚」的安装失败。
+      // 事务冲突 / 未开始 / 回滚未确认 / 已确认放弃：原样上抛，不能改写成一个「已回滚」的安装失败。
       if (isTransactionOutcomeError(e)) throw e;
       if (e && typeof e.code === "string" && e.code.startsWith("bank_schema_")) throw e;
       throw bankError("bank_migration_failed", "银行组件结构初始化失败，已确认回滚（未留下半成品）", {
@@ -1571,10 +1651,6 @@ export async function ensureBankSchema(db, options = {}) {
   }
 
   // 已有库：备份 + DDL 必须在同一个排他写事务内。
-  if ((txnDepth.get(db) || 0) > 0) {
-    throw bankError("migration_transaction_conflict",
-      "银行组件安装不能在调用方已开启的事务内执行（备份无法覆盖未提交写入）", { from, to: BANK_SCHEMA_VERSION });
-  }
   const creation = from === 0 ? "existing-database" : "component-upgrade";
   const expectedSchemaVersion = coreSchemaVersionOf(db);
   const outDir = allocateBackupOutDir({ absPath: abs, dataDir });
@@ -1582,7 +1658,15 @@ export async function ensureBankSchema(db, options = {}) {
   try {
     db.exec("BEGIN IMMEDIATE");
   } catch (e) {
+    // BEGIN 没建立：不存在可回滚的写入；若是连接上已有事务则按事务冲突报告（不碰那层事务）。
+    if (transactionActiveOf(db) === true) {
+      throw transactionConflictError("begin", { bankManaged: (txnDepth.get(db) || 0) > 0 });
+    }
     throw bankError("migration_lock_failed", "无法获取安装所需的数据库写锁，原库未改动", {
+      started: false,
+      rolledBack: false,
+      transactionState: "not_started",
+      transactionActive: transactionActiveOf(db),
       ...(causeCodeToken(e) ? { causeCode: causeCodeToken(e) } : {}),
     });
   }

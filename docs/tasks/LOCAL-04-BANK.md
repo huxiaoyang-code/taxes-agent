@@ -1,7 +1,8 @@
 # 任务单 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
 - 类型：后端领域 + 组件持久层 + 本机 CLI + 契约文档 + 测试
-- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成；随后 #53 独审 2 项 P2 分窗回修，本轮 A 窗（索引键语义 + 回滚失败状态）已完成，待管理者复验 / 提交 / PR / 合并**。本文件不预写 PR 编号、已审 head 或 merge，也不声称最终已通过。
+- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成；随后 #53 独审 2 项 P2 分窗回修：A 窗（索引键语义 + 回滚失败状态）完成，第二轮独审 P2（调用方外层事务 / 事务未建立 vs 已确认回滚）已完成，待管理者复验 / 提交 / PR / 合并**。本文件不预写 PR 编号、已审 head 或 merge，也不声称最终已通过。
+- 第二轮独审回修基线：`c8f490c6b4d4e0f4bdaa9acf378defa900334e80`；仍只改 §10.1 登记的 9 文件，**未改** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47），未接 HTTP / Agent / MCP；详见 §11。
 - A 窗回修基线：`06d1bd185f68ea4f3c49f20e6cf98f6cdce613a2`；A 窗只改 §10.1 登记的 9 文件，**未改** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47），也未接 HTTP / Agent / MCP。
 - 子包基线：`ce4078222c9e5fb8508c9fe24a9183f17d46ea28`（银行 91f07eb + 核心 bd05415 + 备份 3399500 冻结组合并入最新 main `db6020a`）
 - 本轮返工基线（原 56 包冻结 head）：`46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；原分页 / 截止日 / 事务 / CSV 四项及大数据探针已独审通过，返工只限结构门槛及必要测试文档。
@@ -100,11 +101,14 @@
 | 结构契约复审收敛：部分索引实际 `WHERE` 谓词、外键完整集合（额外 / 重复）、版本表形状损坏都在业务写前结构化拒绝；正确谓词的空白 / 引号写法兼容，未来版本仍拒绝，不泄露原始 SQL | 通过（本轮 3 项 P2，领域 3 + CLI 1 新增用例；冻结 head 上先红后绿） |
 | 索引键语义：`COLLATE NOCASE` / `RTRIM` / `DESC` / 表达式键 / 额外唯一索引 / 命名与自动索引互顶都在任何业务写前 `bank_schema_corrupt`；正常结构下只差大小写的稳定 ID 两条都导入 | 通过（A 窗 P2-1，领域 2 + CLI 1 + 集成 1 用例） |
 | 回滚状态：真实 `COMMIT` busy（DELETE journal 读事务）后确认回滚才说已回滚；回滚失败 / 未知给固定错误 + 标志，未知连接拒绝银行读写与安装，需显式恢复 / 丢弃；fresh 与嵌套 SAVEPOINT 同样；导入失败审计不伪造已留痕 | 通过（A 窗 P2-2，领域 5 用例；`ROLLBACK` 失败为单点注入，不是实测磁盘故障） |
+| 事务冲突 / 事务未建立：调用方已有外层事务时安装与写入在消耗回执 / 备份 / DDL 前即 `bank_transaction_conflict`（`started:false` / `rolledBack:false` / `transactionActive:true`），调用方事务与未提交行保持原样、银行未安装；`bankConnectionState` 不说 `transactionActive:false`；调用方结束后同一回执可完成新库安装、现库可安装、写入恢复；`BEGIN` / `SAVEPOINT` 没建立给 `bank_transaction_begin_failed`，嵌套层整层放弃给 `bank_transaction_discarded`；调用方事务里不写失败审计 | 通过（第二轮独审 P2，领域 4 用例，冻结 head 上 4 / 4 失败） |
 | 对账结果持久化原子：插运行记录失败与插审计失败都全组件回滚，无无审计新结果、无误废弃旧结果 | 通过（首轮审查 P2 修复） |
 | CSV 错误列表总上限：201 行坏金额不崩、重复流水号追加路径共用上限、截断不误报 ok | 通过（首轮审查 P2 修复） |
 | 既有全套回归 | 上一轮 `npm test` 47 / 47 套件通过；本轮只跑定向 3 套（未改上游共享代码） |
 
 ## 6. 实际测试命令与结果（本次运行）
+
+> 第二轮独审 P2 的本轮实际运行与先红后绿证据见 §11.4；下列为 A 窗记录（仍然成立）。
 
 工作目录 `06-workbench`：
 
@@ -138,14 +142,16 @@ audit 额外 FK 仍 `ok` 且真实删除账套后审计 1→0、版本表改名�
 8. **备份层索引键语义校验缺口**：`local-backup.mjs` 只比索引名字 / 列序 / UNIQUE / partial / 谓词，不比对
    collation / 方向 / 表达式；A 窗不改 backup，已登记给后续备份窗（root 同步 #47 后），因此**不能宣称
    产品 / 备份验证 / 恢复三入口都已拒绝 collation 变体**。
-9. **回滚未知态需调用者处置**：不自动重试、不自动重开事务、不关闭全局连接或强杀服务；CLI 单次进程失败后
-   丢弃连接（退出），不把未知态当成功。
+9. **回滚未知态 / 调用方事务需调用者处置**：不自动重试、不自动重开事务、不关闭全局连接或强杀服务；CLI 单次进程失败后
+   丢弃连接（退出），不把未知态当成功。连接上已有调用方事务 / 保存点时一律 `bank_transaction_conflict`（本次未开始，
+   不提交 / 不回滚那层事务），**不提供**在调用方事务里嵌套安装 / 写银行数据；需调用方先自行提交或回滚后重试。
 
 ## 8. 交付后管理者需要做
 
 1. 阅读实际 diff（4 实现 + 3 测试 + 3 文档，无共享文件改动）；
 2. 复现关键金额与失败路径（§6 命令；固定手算 140000 / 140000 / 差额 0；1 分差异 pending_review；
-   已有库无备份 exit 5；错索引谓词 / 额外外键 / 版本表改名均在业务写前 `bank_schema_corrupt`）；
+   已有库无备份 exit 5；错索引谓词 / 额外外键 / 版本表改名均在业务写前 `bank_schema_corrupt`；
+   调用方外层事务下 `bank_transaction_conflict` 且 `isTransaction` / 未提交行不变，调用方结束后可安装）；
 3. 由未参与实施、不继承实施上下文的独立 Codex subagent 独审；返工仍由本员工实现；
 4. 按已验证 head 提交 / 建 PR / 合并，并补真实交接与远端 Issue 关联；本文件不预写这些结果。
 
@@ -260,3 +266,68 @@ root 在 06d 管理的 16 + 29 + 11 + 20 + 4 = **80** 是回修前 head 的结�
 1 集成用例，旧断言未删弱。真实 `COMMIT` busy 是 DELETE-journal 读事务实测（产品 WAL 路径当前无此失败）；
 `ROLLBACK` 失败是**单点注入**，不声称已实测真实磁盘故障。绿测不等于独审通过：root 冻结后仍需独立复审；
 下一 B 窗新会话同步 #47 后补备份侧索引键语义，不继续扩大本窗。
+
+## 11. 2026-10-22 第二轮独审 P2：调用方外层事务 / 未开始不得冒充已确认回滚
+
+### 11.1 边界
+
+- 回修基线：head `c8f490c6b4d4e0f4bdaa9acf378defa900334e80`；仍只在 §10.1 登记的 9 文件范围内改动，
+  实际改动 7 个（3 实现 + 1 测试 + 3 文档；CLI / 集成两个测试只重跑未改）；
+  **禁止** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47）、共享 core / `scripts/test-all.mjs`、
+  `docs/05` / `docs/08`。未接 HTTP / Agent / MCP / UI，未跑全 55 套，未用真实账套 / 税据。
+
+### 11.2 回修前真实表现（独审复现，已由本窗重新确认）
+
+真实新库 + 有效 `claimFreshDatabase` 回执，调用方先 `db.exec('BEGIN IMMEDIATE')` 并插 1 条合成 `account_sets`，
+再 `await ensureBankSchema(db, { dbPath, receipt })`：
+
+- `inTransaction` 的 `BEGIN IMMEDIATE` 在 `try` 外抛错，fresh 分支仍包成 `bank_migration_failed` +
+  `rolledBack:true` / `transactionState:'rolled_back'`，消息称「已确认回滚（未留下半成品）」；
+  实际 `db.isTransaction=true`、未提交行仍在、10 张 `bank_*` 表 0，且没有执行 `ROLLBACK`；
+- `bankConnectionState` 却返回 `writable:true` / `transactionActive:false`（与实际活动外层事务不符）；
+- 创建回执被消耗，调用方结束后同一回执重试落到已有库备份门槛（`migration_backup_unavailable`），
+  本应可完成的新库安装反而失败；
+- 现库分支同一场景给 `migration_lock_failed`（不是事务冲突）；调用方事务里导入只抛原始 `ERR_SQLITE_ERROR`；
+  `BEGIN` / `SAVEPOINT` 没建立时没有任何结构化错误，也无法与「已确认回滚」区分。
+
+### 11.3 修复
+
+1. `inTransaction` 在 `BEGIN` / `SAVEPOINT` 之前先识别调用方事务：`bank_transaction_conflict` +
+   `started:false` / `rolledBack:false` / `transactionState:'external_transaction'` / `transactionActive:true` /
+   `bankManaged:false`；不开事务、也**不**提交 / 回滚调用方事务。`BEGIN` / `SAVEPOINT` 没建立起来时给
+   `bank_transaction_begin_failed` + `transactionState:'not_started'`，不把连接拉黑（没有写入可回滚）。
+2. `ensureBankSchema`（新库与现库）在任何 DDL / 备份目录 / 回执消耗**之前**做同一冲突检查（银行嵌套层给
+   `bankManaged:true`）；新库分支只在安装确认提交后才消耗回执；现库 `BEGIN` 失败且 `db.isTransaction=true` 时按冲突
+   报告（不再写成锁失败）；`migration_lock_failed` 也带 `started:false` / `rolledBack:false`。
+3. `bankConnectionState` 的 `transactionState` 为 `clean` / `external_transaction` / `rollback_unconfirmed`，
+   `transactionActive` 直接来自 `db.isTransaction`，`writable` 只表示「银行可自行开事务并提交」
+   （未知态与调用方事务都不满足），并新增 `externalTransaction` / `bankManagedTransaction` 标志。
+4. 导入失败审计：调用方事务仍在进行时不写进它，固定 `auditFailure`（「调用方事务仍在进行（银行未启动自己的事务），
+   本次失败审计未写入」）+ `auditRecorded:false`；未知态文案保持不变。
+5. CLI：`bank_transaction_conflict` / `bank_transaction_begin_failed` 映射为 exit 5（写入被阻断），
+   不泄露原始 SQL / 路径。
+6. 保持：本库管理的嵌套事务成功与外层整层放弃语义、真实 `COMMIT` busy 四象限、单点 `ROLLBACK` 注入结论均不变；
+   **未**用自动关闭用户连接 / 强杀服务解决。
+
+### 11.4 本窗实际测试（工作目录 `06-workbench`，合成临时库）
+
+```
+node --test test/bank-reconciliation.test.mjs             # 40 / 40（36 → 40）
+node --test test/bank-reconcile-cli.test.mjs              # 12 / 12（断言未改，验证新错误码不破坏既有 exit 码）
+node --test test/local-bank-backup-integration.test.mjs   # 5 / 5（回滚与备份四象限保持）
+                                                          # 受影响三套 57 / 57，exit 0
+```
+
+`bank-import` 16 与 `local-backup` 20 本轮内容未改、**未重跑**（不写「又跑过」）。
+新增领域 4 用例先红后绿：将冻结 head `c8f490c` 的三份实现文件（不通过 Git 提交，仅临时替换后恢复）跑同一 4 个用例，
+结果 **4 / 4 失败**（新库分支 `bank_migration_failed(rolledBack:true)`、现库分支 `migration_lock_failed`、
+导入抛原始 `ERR_SQLITE_ERROR`、BEGIN 失败无结构化错误）；本轮实现下 **4 / 4 通过**。
+CLI 无法从子进程制造调用方事务，故本轮只有错误码 → exit 5 的映射，无对应子进程用例（不伪造）。
+
+### 11.5 未完成 / A 与本包边界
+
+- 本包仍**不是** LOCAL-04 整体完成：HTTP / Agent / MCP / UI 与 `scripts/test-all.mjs` 接线未做；
+  LOCAL-02 / LOCAL-03 正式合同同步后需补兼容回归；组匹配、外币、银行网站 / API 仍不做。
+- 备份层索引键语义仍是已知缺口（§7.8），待 root 同步 #47 后的 B 窗处理；本窗未改 backup，也未宣称三入口一致。
+- 调用方事务不做「嵌套安装 / 写银行数据」支持；需要时由调用方先提交或回滚自己的事务再重试（未知态仍需显式
+  `recoverBankConnectionState` 或丢弃连接）。

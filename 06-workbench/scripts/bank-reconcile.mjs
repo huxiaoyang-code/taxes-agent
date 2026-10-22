@@ -57,6 +57,8 @@ const BLOCKED_CODES = new Set([
   "fresh_database_file_exists", "fresh_database_path_required",
   // 事务回滚未确认 / 连接状态未知：写入结果不确定，必须人工恢复或丢弃连接后再继续。
   "bank_transaction_rollback_failed", "bank_connection_state_unknown",
+  // 事务冲突 / 事务没建立：本次没有写入（也没有回滚任何东西），属于写入被阻断，可处理后重试。
+  "bank_transaction_conflict", "bank_transaction_begin_failed",
 ]);
 
 function exitCodeFor(code) {

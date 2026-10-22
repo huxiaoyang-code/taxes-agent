@@ -11,7 +11,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -2290,6 +2290,174 @@ test("导入失败审计：回滚未确认时如实标记未留痕，未知连�
   } finally {
     try { conn.close(); } catch { /* ignore */ }
     try { reader.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+// ------------------------------------------------------------------ 调用方外层事务（未开始 vs 已确认回滚）
+test("新库 + 创建回执 + 调用方外层事务：拒绝安装但不提交 / 不回滚调用方事务，不误报回滚，回执保留，结束后恢复", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-fresh-outer-txn-"));
+  const file = join(dir, "workbench.db");
+  const receipt = S.claimFreshDatabase({ dbPath: file });
+  const conn = new DatabaseSync(file);
+  try {
+    createLegacySchema(conn);
+    conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
+                VALUES (1, '1002', '银行存款', '资产', 'debit', 0, 1)`);
+    // 调用方自己开事务，并插入 1 条真实未提交账套（未 COMMIT 的 pending 行）。
+    conn.exec("BEGIN IMMEDIATE");
+    conn.exec(`INSERT INTO account_sets (name, start_period, created_at)
+                VALUES ('调用方未提交账套', '2026-01', '2026-01-01T00:00:00.000Z')`);
+    const pendingBefore = countIn(conn, `SELECT COUNT(*) AS n FROM account_sets`);
+
+    let error = null;
+    try { await S.ensureBankSchema(conn, { dbPath: file, receipt }); } catch (e) { error = e; }
+    assert.equal(error?.code, "bank_transaction_conflict",
+      "调用方事务里安装必须给事务冲突，而不是「已确认回滚的安装失败」");
+    assert.equal(error?.details?.rolledBack, false, "没有发生回滚，绝不能标记 rolledBack:true");
+    assert.equal(error?.details?.started, false, "银行没有开始事务");
+    assert.equal(error?.details?.transactionState, "external_transaction");
+    assert.equal(error?.details?.transactionActive, true);
+    assert.equal(error?.details?.bankManaged, false);
+    assert.doesNotMatch(String(error?.message), /已回滚|已确认回滚|未留下半成品/, "不得把没回滚说成已回滚");
+    assert.doesNotMatch(String(error?.message), /SQLITE|BEGIN|ROLLBACK|\.db/i, "不得回显原始 SQL / 库路径");
+
+    // 调用方事务与未提交行仍在，银行什么都没装。
+    assert.equal(conn.isTransaction, true, "银行入口失败不得提交 / 回滚调用方事务");
+    assert.equal(countIn(conn, `SELECT COUNT(*) AS n FROM account_sets`), pendingBefore, "调用方未提交行必须仍在");
+    assert.equal(countIn(conn, `SELECT COUNT(*) AS n FROM account_sets WHERE name='调用方未提交账套'`), 1);
+    assert.deepEqual(bankTableNames(conn), [], "拒绝安装后不得留下任何 bank_* 表");
+    const state = S.bankConnectionState(conn);
+    assert.equal(state.transactionState, "external_transaction");
+    assert.equal(state.externalTransaction, true);
+    assert.equal(state.transactionActive, true, "实际活动的外层事务不得被说成 transactionActive:false");
+    assert.equal(state.writable, false, "调用方事务进行中，银行不能自称可写");
+    assert.equal(S.hasFreshDatabaseClaim(receipt, file), true, "被拒绝的调用不得烧掉创建回执");
+
+    // 调用方明确结束自己的事务（回滚自己那条未提交账套）：同一回执必须还能完成新库安装。
+    conn.exec("ROLLBACK");
+    assert.equal(conn.isTransaction, false);
+    assert.equal(countIn(conn, `SELECT COUNT(*) AS n FROM account_sets`), pendingBefore - 1);
+    assert.equal(S.bankConnectionState(conn).writable, true);
+    const migrated = await S.ensureBankSchema(conn, { dbPath: file, receipt });
+    assert.equal(migrated.migrated, true, "调用方结束后同一回执必须仍可完成新库安装");
+    assert.equal(migrated.creation, "fresh-database");
+    assert.equal(S.bankSchemaContract(conn).ok, true);
+    assert.equal(B.registerBankAccount(conn, {
+      accountSetId: 1, bankAccountId: "BANK-OUTER", sourceId: "src-1", glAccountCode: "1002",
+    }).created, true, "结束后健康银行操作必须恢复");
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("现库安装 + 调用方外层事务：冲突先于备份 / DDL 与回执消耗，调用方结束后安装恢复", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-existing-outer-txn-"));
+  const { conn, file } = legacyOnlyDb(dir, "existing-outer.db");
+  try {
+    conn.exec("BEGIN IMMEDIATE");
+    conn.exec(`INSERT INTO account_sets (name, start_period, created_at)
+                VALUES ('现库外层未提交账套', '2026-01', '2026-01-01T00:00:00.000Z')`);
+    const pendingBefore = countIn(conn, `SELECT COUNT(*) AS n FROM account_sets`);
+    let error = null;
+    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) }); } catch (e) { error = e; }
+    assert.equal(error?.code, "bank_transaction_conflict", "现库安装同样必须先给事务冲突，而不是锁失败 / 已回滚");
+    assert.equal(error?.details?.rolledBack, false);
+    assert.equal(error?.details?.started, false);
+    assert.equal(error?.details?.transactionState, "external_transaction");
+    assert.equal(error?.details?.transactionActive, true);
+    assert.equal(conn.isTransaction, true, "不得回滚调用方事务");
+    assert.equal(countIn(conn, `SELECT COUNT(*) AS n FROM account_sets`), pendingBefore);
+    assert.deepEqual(bankTableNames(conn), []);
+    assert.equal(existsSync(join(dir, "bank-component-backups")), false,
+      "冲突拒绝必须发生在分配迁移备份目录之前");
+    assert.equal(S.bankConnectionState(conn).transactionActive, true);
+    assert.equal(S.bankConnectionState(conn).writable, false);
+    assert.equal(S.recoverBankConnectionState(conn).transactionState, "external_transaction",
+      "没有未知标记时也必须如实报告调用方事务（不能说成 clean）");
+
+    conn.exec("ROLLBACK");
+    const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    assert.equal(migrated.migrated, true, "调用方结束后现库安装必须恢复");
+    assert.equal(S.bankSchemaContract(conn).ok, true);
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("BEGIN / SAVEPOINT 没建立起来：不冒充已回滚、不拉黑连接，嵌套层整层放弃仍如实标记", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-begin-failed-"));
+  const ctx = await isolatedComponentDb(dir, "begin-failed.db");
+  const conn = ctx.conn;
+  const realExec = conn.exec.bind(conn);
+  try {
+    // a) 外层 BEGIN 本身失败（锁忙类）：本层没有开始，也没有可回滚的写入。
+    conn.exec = (sql) => {
+      if (/^BEGIN/i.test(String(sql))) throw ioError("begin");
+      return realExec(sql);
+    };
+    assert.throws(() => S.inTransaction(conn, () => "noop"),
+      (e) => e.code === "bank_transaction_begin_failed" && e.details?.rolledBack === false
+        && e.details?.started === false && e.details?.transactionState === "not_started",
+      "BEGIN 没建立必须给「未开始」，不能冒充已回滚");
+    assert.equal(conn.isTransaction, false, "BEGIN 失败后不得留下事务");
+    assert.equal(S.bankConnectionState(conn).writable, true, "没开始过事务的连接不能被拉黑成未知态");
+
+    // b) 嵌套 SAVEPOINT 建立失败：内层未开始，外层确认回滚后整层放弃。
+    let injected = 0;
+    conn.exec = (sql) => {
+      if (/^SAVEPOINT/i.test(String(sql)) && injected === 0) { injected += 1; throw ioError("savepoint"); }
+      return realExec(sql);
+    };
+    assert.throws(() => S.inTransaction(conn, () => S.inTransaction(conn, () => "inner")),
+      (e) => e.code === "bank_transaction_discarded" && e.details?.rolledBack === true
+        && e.details?.transactionState === "rolled_back",
+      "内层保存点没建立、外层已确认回滚时必须给「已确认放弃」");
+    assert.equal(injected, 1, "只注入一次 SAVEPOINT 失败");
+    assert.equal(conn.isTransaction, false);
+    assert.equal(S.bankConnectionState(conn).writable, true);
+  } finally {
+    try { conn.exec = realExec; } catch { /* ignore */ }
+    try { conn.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("导入失败审计不写进调用方事务：如实标记未留痕，调用方结束后正常导入恢复", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-audit-outer-txn-"));
+  const ctx = await isolatedComponentDb(dir, "audit-outer.db");
+  const conn = ctx.conn;
+  try {
+    B.registerBankAccount(conn, {
+      accountSetId: 1, bankAccountId: "BANK-OUTER-AUDIT", sourceId: "src-1", glAccountCode: "1002",
+    });
+    const options = {
+      accountSetId: 1, bankAccountId: "BANK-OUTER-AUDIT", sourceId: "src-1", period: "2026-01",
+      batchId: "OUTER-AUDIT-1",
+      csvText: csvAmountDirection([{ date: "2026-01-05", summary: "收款", amount: "10.00", direction: "inflow", refId: "OA-1" }]),
+      mapping: MAPPING_AMOUNT_DIRECTION,
+    };
+    const auditBefore = countIn(conn, `SELECT COUNT(*) AS n FROM bank_audit_events`);
+    conn.exec("BEGIN IMMEDIATE");
+    let error = null;
+    try { B.importBankBatch(conn, options); } catch (e) { error = e; }
+    assert.equal(error?.code, "bank_transaction_conflict");
+    assert.equal(error?.auditRecorded, false, "调用方事务里不得声称失败审计已记录");
+    assert.match(String(error?.auditFailure), /调用方事务/);
+    assert.doesNotMatch(String(error?.auditFailure), /回滚失败/, "不能把调用方事务说成回滚失败");
+    assert.equal(countIn(conn, `SELECT COUNT(*) AS n FROM bank_batches`), 0, "失败审计不得写进调用方事务");
+    assert.equal(countIn(conn, `SELECT COUNT(*) AS n FROM bank_audit_events`), auditBefore, "不得新增失败审计");
+    assert.equal(conn.isTransaction, true, "调用方事务必须保持原样");
+
+    conn.exec("ROLLBACK");
+    const imported = B.importBankBatch(conn, options);
+    assert.equal(imported.transactionIds.length, 1, "调用方结束后正常导入必须恢复");
+    assert.equal(S.getBatch(conn, { accountSetId: 1, bankAccountId: "BANK-OUTER-AUDIT", batchId: "OUTER-AUDIT-1" }).status,
+      "completed");
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

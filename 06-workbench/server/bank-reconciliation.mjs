@@ -580,11 +580,15 @@ export function importBankBatch(db, options = {}) {
       };
     });
   } catch (e) {
-    // 只有「回滚已确认」的连接才能继续在独立事务里写失败审计；
-    // 回滚未确认 / 状态未知时不得假称「失败已留痕」，也不在未知连接上再开事务。
-    if (!bankConnectionState(db).writable) {
+    // 只有「银行可自行开事务并确认回滚」的连接才能继续在独立事务里写失败审计：
+    // 回滚未确认 / 状态未知时不得假称「失败已留痕」；调用方事务仍在进行时也不能把审计写进去
+    //（那会跟调用方事务一起被提交 / 回滚，属于「误写 + 虚称已记录」），且不在那层事务里再开事务。
+    const connection = bankConnectionState(db);
+    if (!connection.writable) {
       e.auditRecorded = false;
-      e.auditFailure = "连接事务状态未确认（回滚失败），本次失败审计未写入；需先恢复或丢弃连接";
+      e.auditFailure = connection.externalTransaction
+        ? "调用方事务仍在进行（银行未启动自己的事务），本次失败审计未写入；请由调用方提交或回滚自己的事务后再重试"
+        : "连接事务状态未确认（回滚失败），本次失败审计未写入；需先恢复或丢弃连接";
       throw e;
     }
     // 业务事务已确认回滚；失败审计在独立事务里写，写入失败也如实返回。
