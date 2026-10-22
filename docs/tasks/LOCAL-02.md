@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-02 会计金额、期末完整性与连续期间
 
 - 类型：后端领域（金额 / 计提 / 结转 / 封账 / 反操作守卫）+ 存储迁移 + 本地接线 + 契约文档 + 测试
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；独立审查的 2 项输出协议 P2 已回修（见 §13），本轮为**回修候选待 root 独立增量复审**；未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，**仅 10 个文档**，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
@@ -243,23 +243,45 @@ PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已合并（mer
 几何校验；本包领域 / HTTP / MCP 三套也在这次全量内均 exit 0，但本轮未单独重跑计数）。
 本包业务代码本轮未改，因此不声称对本包金额 / 期末逻辑做了新的独立审查。
 
-## 12. LOCAL-08 新工具模型边界兼容增量（本轮）
+## 12. LOCAL-08 新工具模型边界兼容增量（上一轮，head `04c38d4`）
 
 在**不改本包会计 / DB / 期间业务实现**、不改 LOCAL-08 已有边界的前提下，把本包新增的 `period_end_check` / `asset_update` 按真实 DTO 接入 LOCAL-08 自有的可测试适配层 / transport 合约；**未挂载**共享 HTTP / Agent / MCP / CLI 入口（该共享窗口尚未移交）。
 
-- `period_end_check`：登记只读 `query/account_set`；模型投影只含期间、`ready`、固定步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码。标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入投影；未知步骤 / 状态 / 阻塞码 fail closed。
+- `period_end_check`：登记只读 `query/account_set`；模型投影只含期间、`ready`、固定步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码。标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入投影；未知步骤 / 状态 / 阻塞码 fail closed。其后由 §13 把形状校验升级为**全局一致性**（7 步唯一齐全 + `ready` / blocking / blocked 步骤语义一致）。
 - `asset_update`：登记写 `write/account_set`；只有显式写调用才执行，未知 / 只读工具不会因名称相似被当成写。成功必须真实结果含卡片 `id` 才 `applied:true`；失败保留 `applied:"unknown"` / `needsLocalReview:true`。投影最小白名单：`assetId` / `kind` / `startPeriod` / `acquiredPeriod` / `originalCost` / `usefulLifeMonths` / `openingAccumulated` / `accumulated` / `remaining` / `ledgerStatus` / `origin`；不含名称 / `ledger_note` / 科目 / 备注。
 - 新期间 / 资产校验错误与 `period_end_check_failed` 在 policy / transport 两层都有固定 code → category 映射（如 `acquired_period_invalid → asset`、`asset_card_affects_closed_period → asset`、`period_end_check_failed → period_end`、`profit_not_carried_forward → period_end`、`depreciation_run_stale → depreciation`），不再落 `unknown`；错误仍只回声已登记 code。
 - 适配层真实临时库 fixture 改为**真实完整资产登记**：原值 1200、`2026-02` 取得 / 起提、借贷平衡购入凭证（借 1601 / 贷 1002 各 1200）、真实计提 95；保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路；禁止 mock / bypass / 跳过封账保护。
 - 原有边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套、4 MiB / 64 MiB / 节点预算、写后降级、不可变 snapshot 与并发隔离均保持原语义。
 
-测试（本轮实际输出）：
+测试（**上一轮，head `04c38d4`** 实际输出；回修后的本轮结果见 §13）：
 
 | 套件 | 结果 |
 |---|---|
 | `finance-output-policy` | **35/35**，exit 0（原 34 项含义保留） |
 | `finance-model-adapter` | **20/20**，exit 0（原 19 项含义保留） |
 | `finance-model-transport-test` | **17/17**，exit 0（原 16 项含义保留） |
-| 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`） | **55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过（外部 poppler + pdfplumber） |
+| 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`） | **55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过（外部 poppler + pdfplumber）。首次全量时 `import-incremental-http` 曾一次异常退出 exit 3221226505，**原因未定位**，不下因果结论；该套件单独重跑 22/22、后续完整重跑均 55/55 exit 0 |
 
 范围：本轮跨包只改已登记的 LOCAL-08 6 个源码 / 测试文件与 3 份 08 文档，另补 `docs/LOCAL-BACKUP.md` 独审非阻塞项；**未改**本包 `accounting.mjs` / `money.mjs` / `period-end-controls.mjs` / `import-storage.mjs` / DB / 期间业务，未改 `agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`。状态：**未提交 / 未建 PR / 未合并**，待 root 最终增量独审 / PR。
+
+## 13. 输出协议独立审查 2 项 P2 回修（本轮，回修候选待 root 复审）
+
+独立审查在 head `04c38d4` 上复现两个 P2（均不是“绿测试能覆盖”的问题），已逐项回修并补先红后绿定向回归；**不改本包会计 / DB / 期间业务源码**。
+
+| 项 | 复现 | 回修 | 回归 |
+|---|---|---|---|
+| P2-1 真实长阻塞码被通用预算吞掉 | `depreciation_life_expired_underprovided`（39 字符）/ `previous_period_depreciation_pending`（36 字符）虽在白名单，仍被通用 `PROJ_TOKEN_RE`（最多 32）过滤；真实输出 `ok:true` / `blockingCount:1` / `blockingCodes:[]` / `projectionDropped:1`，transport 却通过 | 通用 32 字符 token 预算与 40 字符长度上限**均未改**，只给**已登记固定代码常量的精确字面量**开窄通道（`REGISTERED_CODE_LITERALS` + `isProjectionStringAllowed`，sanitize 标量 / 数组两路共用）；policy、adapter、transport 三层都要求同一批已登记码，未知码仍 fail closed | 策略：19 条真实阻塞码**逐条**（非仅两个示例）完整投影 + `projectionDropped:0`；两条长码同时出现、同一码多条原因仍完整；未登记 37 字符串 / 41 字符串 / 中文原文仍被丢弃或拒绝。transport：长码信封通过、未登记 / 超长 / 中文 token 仍 `envelope_projection_invalid` |
+| P2-2 只验单字段不验 DTO 全局一致性 | `ready:true` + `steps:[]` + `blocking:[]`、`ready:true` + 7 个重复 `draft_vouchers`、`ready:true` + 全 blocked 且 `blocking` 非空，都被投影成功、建 ref、transport 通过 | 新增纯函数 `isPeriodEndCheckConsistent`（policy 内，**不 import** 会开业务 DB 的 `period-end-controls.mjs`，保持纯模块边界）：7 个已登记步骤唯一齐全、状态值域、每条顶层 `blocking` 归属真实 blocked 步骤、`ready` ⇔ 无阻塞、每个 blocked 步骤至少一条原因（不机械比较原因数 = 步骤数）；policy 据此 fail closed，adapter 在同一判定上直接报 `model_result_invalid` 且不建 ref | 策略：10 类矛盾 / 缺步 / 重复 DTO 均 `summaryUnavailable`，合法正例仍投影。适配层：以**真实临时库 7 步 DTO**为基底注入同类负例，均 `model_result_invalid`、`localRef` 不存在、policy 引用池不变；同 harness 不改内容的对照仍成功建引用；真实长码正例 `blockingCount:3` / `projectionDropped:0` / transport 通过 |
+
+测试（本轮实际输出）：
+
+| 命令 | 结果 |
+|---|---|
+| `node test/finance-output-policy.test.mjs`（`06-workbench`） | **37 / 37**，exit 0（原 35 项含义保留） |
+| `node test/finance-model-adapter.test.mjs`（`06-workbench`） | **21 / 21**，exit 0（原 20 项含义保留） |
+| `node finance-model-transport-test.mjs`（`05-reconstruction/codex/mcp/finance-mcp`） | **18 / 18**，exit 0（原 17 项含义保留） |
+| 设 `REPORT_OFFICE_PYTHON` 后 `npm test`（`06-workbench`） | **55 / 55 套 exit 0**，Office **21 / 21**、真实 **11 PDF** 几何通过；最终代码日志 `.agent-runs/local02-55-suites-20261022-204605-rewrite2-final.log` |
+
+限制与事实边界：共享 HTTP / Agent / MCP / CLI 入口仍未接线（本包自己的 `period_end_check` / `asset_update` 真实入口不在输出协议层）；真实账套 / 税局未使用；本轮**未定位** §12 记录的 `import-incremental-http` exit 3221226505 原因（本次完整重跑未重现，不下因果结论，由 root 的 Windows 交付稳定性检查继续跟踪）。状态：**回修候选，待 root 独立增量复审**；未提交 / 未建 PR / 未合并。
+
+改动文件：`server/finance-output-policy.mjs`、`server/finance-model-adapter.mjs`、`test/finance-output-policy.test.mjs`、`test/finance-model-adapter.test.mjs`、MCP `finance-model-transport-test.mjs`。**transport 源码未改**（其 token 表已登记这 19 条码、上限 40 能容纳 39 字符），因此只补测试锁定一致性。本包会计 / DB / 期间源码与备份（339 / 53 同 worktree 已交付部分）均未改。

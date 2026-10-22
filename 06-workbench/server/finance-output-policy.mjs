@@ -197,6 +197,64 @@ const PERIOD_END_BLOCKING_CODES = Object.freeze([
   "previous_period_open", "previous_period_depreciation_pending",
   "later_period_closed", "carryforward_stale",
 ]);
+const PERIOD_END_STEP_ID_SET = new Set(PERIOD_END_STEP_IDS);
+const PERIOD_END_STATUS_SET = new Set(PERIOD_END_STATUS_CHOICES);
+/**
+ * 已登记固定代码常量的字面量集合。
+ * 这些是**本模块自己的代码常量**（不是用户文本），其中最长的一条
+ * （`depreciation_life_expired_underprovided`，39 字符）超过通用 token 的 32 字符预算。
+ * 通用 token 预算不允许因此放宽（那会把任意自由字母串放进模型通道），所以只按
+ * **精确字面量**给它们开一条窄通道，见 isProjectionStringAllowed。
+ */
+const REGISTERED_CODE_LITERALS = new Set(PERIOD_END_BLOCKING_CODES);
+
+/**
+ * 期末检查 DTO 的**全局一致性**（结构 + 步骤 / 阻塞语义），只读自有 data 属性。
+ * 与 period-end-controls.buildPeriodEndCheck 的真实形状一一对应：
+ *   - `period_end_check` 只读工具不传 `skip`，因此步骤恒为 7 个已登记步骤，**唯一且齐全**；
+ *   - 步骤状态只有 ok / blocked / not_applicable（真实域没有 skipped 之类状态）；
+ *   - 顶层 `blocking` 每条都带产生它的 `step`（buildPeriodEndCheck 逐条附上）；
+ *   - `ready` ⇔ 没有 blocked 步骤且 `blocking` 为空；每个 blocked 步骤至少一条真实阻塞。
+ * 一个步骤可以有**多条**阻塞原因（例如每张资产一条），多个步骤也可以共用同一个码，
+ * 因此只校验「blocked 步骤 ⇔ 至少一条该步骤的阻塞」，不机械比较原因条数与步骤数。
+ * 返回 true / false；调用方决定错误码（策略层抛 output_policy_value_invalid，
+ * 适配层报 model_result_invalid），两者都不创建引用。
+ */
+export function isPeriodEndCheckConsistent(value) {
+  const check = at(value);
+  const ready = prop(check, "ready");
+  if (typeof ready !== "boolean") return false;
+  const steps = prop(check, "steps");
+  if (!Array.isArray(steps) || listLen(steps) !== PERIOD_END_STEP_IDS.length) return false;
+  const statusById = new Map();
+  let blockedSteps = 0;
+  for (let i = 0; i < PERIOD_END_STEP_IDS.length; i++) {
+    const step = at(prop(steps, i));
+    const id = prop(step, "id");
+    const status = prop(step, "status");
+    if (typeof id !== "string" || !PERIOD_END_STEP_ID_SET.has(id)) return false;
+    if (statusById.has(id)) return false; // 重复步骤：投影会给出 8 个 id 却只有 7 个语义步骤
+    if (typeof status !== "string" || !PERIOD_END_STATUS_SET.has(status)) return false;
+    statusById.set(id, status);
+    if (status === "blocked") blockedSteps++;
+  }
+  if (statusById.size !== PERIOD_END_STEP_IDS.length) return false; // 缺步骤（齐全）
+  const blocking = prop(check, "blocking");
+  if (!Array.isArray(blocking)) return false;
+  const blockingCount = listLen(blocking);
+  const blockedWithReason = new Set();
+  for (let i = 0; i < blockingCount; i++) {
+    const item = at(prop(blocking, i));
+    const stepId = prop(item, "step");
+    // 阻塞必须归属到一个**真实 blocked** 的步骤：不认识的步骤 / 未阻塞步骤都是矛盾。
+    if (typeof stepId !== "string" || statusById.get(stepId) !== "blocked") return false;
+    blockedWithReason.add(stepId);
+  }
+  if (ready !== (blockingCount === 0)) return false; // ready 与阻塞计数一致
+  if (ready !== (blockedSteps === 0)) return false; // ready 与步骤状态一致
+  if (blockedWithReason.size !== blockedSteps) return false; // 每个 blocked 步骤都要有真实原因
+  return true;
+}
 // 与 import-incremental.mjs 的 VOUCHER_STATE 一一对应；"inconsistent" 是批次审计里既有的复核标记。
 const TRACE_STATE_TOKENS = dict({
   ok: "ok", inconsistent: "inconsistent", missing: "missing", unposted: "unposted",
@@ -302,6 +360,17 @@ export const enumTokenOf = (name, raw) => {
 
 // ---------------------------------------------------------------- projection 消毒
 /**
+ * projection 允许的字符串：
+ *   ① 通用 token（≤ 32 字符小写）与合法期间——自由文本 / 中文业务名 / 任意 ASCII 串仍按原预算丢弃；
+ *   ② **精确等于**已登记固定代码常量的字面量（不受通用 token 长度限制）。
+ * ② 只对代码常量表生效，不读取任何用户数据，也不放宽通用 token 的 32 字符预算 / 长度上限。
+ * 真实域码（例如 39 字符的 `depreciation_life_expired_underprovided`）因此可以完整表示，
+ * 而不是被通用预算静默丢弃、只剩下 `projectionDropped` 计数。
+ */
+const isProjectionStringAllowed = (value) => REGISTERED_CODE_LITERALS.has(value)
+  || (value.length <= PROJ_MAX_STRING && (PROJ_TOKEN_RE.test(value) || PROJ_PERIOD_RE.test(value)));
+
+/**
  * 白名单形状消毒：只保留有限数值（2 位小数、绝对值上限）、布尔、状态 token、期间，
  * 以及最多 32 个同类标量的数组、最多 3 层 / 96 节点的普通对象。
  * 其他一切（自由文本、中文业务名、Date/Map/类实例、函数、Symbol、BigInt、访问器属性）全部丢弃并计数。
@@ -320,7 +389,7 @@ function sanitizeInto(target, source, state, depth) {
     } else if (typeof value === "boolean") {
       target[key] = value;
     } else if (typeof value === "string") {
-      if (value.length > PROJ_MAX_STRING || !(PROJ_TOKEN_RE.test(value) || PROJ_PERIOD_RE.test(value))) {
+      if (!isProjectionStringAllowed(value)) {
         state.dropped++;
         continue;
       }
@@ -335,8 +404,7 @@ function sanitizeInto(target, source, state, depth) {
         else if (typeof item === "boolean") out.push(item);
         // 数组元素与标量值同一套白名单：状态 token 或期间（期间也是契约声明的允许类型），
         // 自由文本 / 中文业务名 / 任意长字符串仍然丢弃。
-        else if (typeof item === "string" && item.length <= PROJ_MAX_STRING
-          && (PROJ_TOKEN_RE.test(item) || PROJ_PERIOD_RE.test(item))) out.push(item);
+        else if (typeof item === "string" && isProjectionStringAllowed(item)) out.push(item);
         else state.dropped++;
       }
       target[key] = out;
@@ -738,7 +806,11 @@ const QUERY_SPECS = dict({
   book_import_batch: batchAuditSummary,
   // 期末检查只读：只投影步骤状态 / 计数 / 固定阻塞码，不投影标题、原因、message、details、
   // 资产名 / 科目名 / 备注等任意用户文本。
+  // 先做**全局一致性**校验（7 个已登记步骤唯一齐全 / ready 与 blocked 及阻塞计数一致 /
+  // 每条阻塞归属于真实 blocked 步骤），再做计数：只校验单字段会把「ready:true + 空步骤」、
+  // 「7 个重复步骤」或「ready:true + 全 blocked」这类矛盾 DTO 投影成一份看起来正常的摘要。
   period_end_check: (value) => {
+    if (!isPeriodEndCheckConsistent(value)) throw invalidSummary("period_end_check");
     const check = at(value);
     const ready = requireBoolean(check, "ready");
     const steps = requireArray(check, "steps");

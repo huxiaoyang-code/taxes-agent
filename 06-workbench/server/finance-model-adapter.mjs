@@ -26,6 +26,7 @@ import {
   SUPPORTED_OPERATIONS,
   OutputPolicyError,
   enumTokenOf,
+  isPeriodEndCheckConsistent,
   safeErrorProjection,
   sanitizeProjection,
   summarizeQueryResult,
@@ -379,19 +380,12 @@ const hasLedgerShape = (value) => isRecord(value) && Array.isArray(prop(value, "
   && hasEntriesShape(prop(value, "items")) && isRecord(prop(value, "opening"))
   && hasNumber(prop(value, "opening"), "debit") && hasNumber(prop(value, "opening"), "credit")
   && hasText(value, "direction") && hasText(value, "period");
-// 期末检查只读 DTO 的固定步骤 / 状态：未知步骤或状态显式失败，不把任意文本当 token。
-const PERIOD_END_STEP_IDS = new Set([
-  "draft_vouchers", "trial_balance", "depreciation", "asset_reconciliation",
-  "profit_carry_forward", "year_end_carry_forward", "period_sequence",
-]);
-const PERIOD_END_STATUS_VALUES = new Set(["ok", "blocked", "not_applicable"]);
-const hasPeriodEndCheckShape = (value) => isRecord(value) && hasBoolean(value, "ready")
-  && hasText(value, "period") && Array.isArray(prop(value, "steps"))
-  && prop(value, "steps").every((step) => isRecord(step) && hasText(step, "id")
-    && PERIOD_END_STEP_IDS.has(prop(step, "id")) && hasText(step, "status")
-    && PERIOD_END_STATUS_VALUES.has(prop(step, "status")))
-  && Array.isArray(prop(value, "blocking"))
-  && prop(value, "blocking").every((item) => isRecord(item) && hasText(item, "code"));
+// 期末检查只读 DTO：结构 + `ready` / 步骤 / 阻塞的**全局一致性**由 policy 的纯函数校验
+// （与本模块同属纯模块，不 import period-end-controls.mjs，避免把会打开业务 DB 的模块
+// 拉进模型边界）。缺步骤 / 重复步骤 / 未知状态 / ready 与 blocking 或 blocked 步骤矛盾 /
+// 阻塞不归属到真实 blocked 步骤，一律视为结果无效，不建引用。
+const hasPeriodEndCheckShape = (value) => isRecord(value) && hasText(value, "period")
+  && isPeriodEndCheckConsistent(value);
 
 const PLAIN_QUERY_SHAPES = Object.freeze({
   voucher_check: (value) => typeof prop(value, "ok") === "boolean"

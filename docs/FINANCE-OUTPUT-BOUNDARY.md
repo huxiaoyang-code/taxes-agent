@@ -165,7 +165,7 @@ projection 只允许：**有限数值**（2 位小数、绝对值 ≤ 1e12）、
 | 原数据遍历（形状） | 只接受普通对象 / 数组 / 标量；**拒绝真正的循环引用、访问器属性（getter）、`Map`/`Date`/类实例**；**允许共享引用（DAG）**——同一对象出现在两个兄弟字段是合法 DTO（例如增量导入结果的 `created.sourceTrace` 与顶层 `sourceTrace`） | 查询报 `output_policy_value_invalid`；写结果降级为 `localRef:null` + `refUnavailable:"value_invalid"`，`applied` 照实报 |
 | 原数据遍历（大小） | ≤200000 节点 / 单值、单值 ≤4 MiB、≤32 层、单个数组 ≤5000 | 查询报 `output_policy_value_too_large` / `..._capacity_exceeded`；写结果降级为 `localRef:null` + `refUnavailable:"value_limit"` / `"byte_budget"`，`applied` 照实报 |
 | 检查顺序 | **先做形状 + 节点/字节检查，再看摘要**；摘要只经 `Object.getOwnPropertyDescriptor` 读自有 data 属性 | 访问器属性不会在摘要阶段被触发；形状非法时写通道直接跳过摘要 |
-| projection | ≤96 节点、≤3 层、数组 ≤32、字符串 ≤40 且必须是 token / 期间 | 非法值丢弃并计入 `projectionDropped` |
+| projection | ≤96 节点、≤3 层、数组 ≤32、字符串 ≤40 且必须是 token / 期间 / **已登记固定代码常量的精确字面量**（§14.7） | 非法值丢弃并计入 `projectionDropped` |
 | 本机算术 | ≤8 段路径、1 个 `[]`、≤512 数组、≤1024 节点 | `output_policy_path_invalid` / `output_policy_value_too_large` |
 
 **恶意对象边界（不夸大）**：JS 反射无法完全避免触发 Proxy 陷阱（`ownKeys` / `getOwnPropertyDescriptor` 本身就是陷阱），所以**不声称**“零陷阱执行”。承诺的边界是：不触发访问器 getter、不顺着原型链取值、失败即安全拒绝、字节/节点/深度上限防止大批量持有撑爆内存。
@@ -295,7 +295,7 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配层 / transport 合约内**按真实 DTO 补齐，不依赖尚未移交的 HTTP / Agent / MCP 入口：
 
-- `period_end_check` 登记为**只读 query**（`scope: account_set`）：形状只要求 `ready` / 固定步骤 id 与状态 / `blocking`；模型投影只含期间、`ready`、步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码。标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入投影（未知步骤 / 状态 / 阻塞码 fail closed）。
+- `period_end_check` 登记为**只读 query**（`scope: account_set`）：模型的 DTO 形状按真实 `buildPeriodEndCheck` 校验——**7 个已登记步骤唯一齐全**（该工具不传 `skip`，没有“合法子集”或 `skipped` 状态）、状态只有 `ok` / `blocked` / `not_applicable`、每条顶层 `blocking` 都带产生它的 `step`、`ready` ⇔ 没有 blocked 步骤且没有阻塞项。缺步骤 / 重复步骤 / `ready:true` + 空步骤或全 blocked / blocked 步骤没有阻塞 / 阻塞归属到未阻塞或未知步骤，一律 `model_result_invalid` 且**不建引用**（条目数不等于步骤数：一个步骤可以有多条真实原因，多个步骤也可共用同一个码）。模型投影只含期间、`ready`、步骤状态计数、blocked 步骤 id、阻塞计数与固定阻塞码。标题 / 原因 / `message` / `details` / 资产名 / 科目名 / 备注等任意用户文本不进入投影（未知步骤 / 状态 / 阻塞码 fail closed）。
 - `asset_update` 登记为**写动作**（`category: write`、`scope: account_set`、`accountSetIdSource: argument`）：只有显式写调用才执行，未知 / 只读工具不会因名称相似被当成写；成功必须真实结果含卡片 `id` 才给 `applied:true`，失败保留 `applied:"unknown"` / `needsLocalReview:true`，不伪造成功。
 - `asset_update` 投影按业务所需最小白名单：`assetId` / `kind` / `startPeriod` / `acquiredPeriod` / `originalCost` / `usefulLifeMonths` / `openingAccumulated` / `accumulated` / `remaining` / `ledgerStatus` / `origin`；**不投影**名称、`ledger_note`、科目编码 / 账户、备注等自由文本。
 - 新期间 / 资产校验错误与 `period_end_check_failed` 在 policy 与 transport 两层都有固定 code → category 映射（如 `acquired_period_invalid → asset`、`asset_card_affects_closed_period → asset`、`period_end_check_failed → period_end`、`profit_not_carried_forward → period_end`、`depreciation_run_stale → depreciation`），不再落到 `unknown` 掩盖可指导动作的错误；错误仍只回声已登记 code，不带 `message` / `details` / `stack`。
@@ -306,9 +306,9 @@ LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配�
 
 | 套件 | 命令（仓库相对） | 结果 |
 |---|---|---|
-| 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 35/35 passed，exit 0（LOCAL-02 兼容整合后本轮实跑；原 34 项含义保留） |
-| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 20/20 passed，exit 0（LOCAL-02 兼容整合后本轮实跑；原 19 项含义保留） |
-| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 17/17 passed，exit 0（LOCAL-02 兼容整合后本轮实跑；原 16 项含义保留） |
+| 策略模块 | `cd 06-workbench && node test/finance-output-policy.test.mjs` | 37/37 passed，exit 0（输出协议回修后本轮实跑；原 35 项含义保留） |
+| 适配层（真实临时库） | `cd 06-workbench && node test/finance-model-adapter.test.mjs` | 21/21 passed，exit 0（输出协议回修后本轮实跑；原 20 项含义保留） |
+| 出站信封校验 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 18/18 passed，exit 0（输出协议回修后本轮实跑；原 17 项含义保留） |
 | 领域回归 | `cd 06-workbench && node test/accounting-guards.test.mjs` | 23/23 通过，exit 0（上一轮记录，review5 未重跑） |
 | 领域回归 | `cd 06-workbench && node test/accounting-derived.test.mjs` | 31/31 通过，exit 0（上一轮记录，review5 未重跑） |
 | 领域回归 | `cd 06-workbench && node test/import-incremental.test.mjs` | 49/49 通过，exit 0（上一轮记录，review5 未重跑） |
@@ -378,3 +378,16 @@ LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配�
 - 定向验收（实际输出）：策略 **35/35**、适配层 **20/20**、transport **17/17**，均 exit 0。适配层用真实临时库完成资产 `1200` 原值、`2026-02` 取得 / 起提、借贷平衡购入凭证与真实计提，并保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路。
 - 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`）：**55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过（外部 poppler + pdfplumber）。日志在本 worktree 忽略目录 `.agent-runs/`。
 - 未做 / 待 root：真实共享入口接线、真实 HTTP / MCP 端到端、`scripts/test-all.mjs` 登记确认；本轮只证明现有可测试边界与真实 DTO 兼容。
+
+### 14.7 输出协议独立审查 2 项 P2 回修（本轮，待 root 复审）
+
+独立审查在该 head（`04c38d4`）上复现两个 P2，均已修复并补先红后绿的定向回归；**此前 55/55 绿测试不能代表这两项已通过**。
+
+| 项 | 复核发现 | 修复 / 回归 |
+|---|---|---|
+| P2-1 长阻塞码被通用预算吞掉 | 真实域码 `depreciation_life_expired_underprovided`（39 字符）与 `previous_period_depreciation_pending`（36 字符）虽在阻塞码白名单里，却仍被通用 `PROJ_TOKEN_RE`（最多 32 字符）丢弃：真实响应为 `ok:true` / `blockingCount:1` / `blockingCodes:[]` / `projectionDropped:1`，模型只看到“有 1 个阻塞却没有码”，transport 侧却仍通过（其自有 token 表已含这两条） | 不动通用 token 预算（32 字符）与 40 字符长度上限，只给**已登记固定代码常量的精确字面量**开窄通道（`REGISTERED_CODE_LITERALS` + `isProjectionStringAllowed`，sanitize 的标量与数组两路共用）；策略 / 适配层 / transport 三层都要求同一批已登记码，未知码仍 fail closed。回归：19 个真实阻塞码**逐个**（非只两个示例）都完整投影且 `projectionDropped:0`；两条长码同时出现、同一码多条原因仍完整；未登记 37 字符 token / 41 字符串 / 中文原文仍被丢弃或拒绝 |
+| P2-2 只验单字段不验 DTO 全局一致性 | `ready:true` + `steps:[]` + `blocking:[]`、`ready:true` + 七个重复 `draft_vouchers`、`ready:true` + 全 blocked 且 `blocking` 非空，都被投影成功、建了引用并通过 transport | 新增纯函数 `isPeriodEndCheckConsistent`（policy 内，**不 import** 会打开业务 DB 的 `period-end-controls.mjs`）：7 个已登记步骤唯一齐全、状态值域、每条 `blocking` 归属真实 blocked 步骤、`ready` ⇔ 无阻塞、每个 blocked 步骤至少一条原因（不机械比较原因数 = 步骤数）；策略层据此 fail closed，适配层在同一判定上直接报 `model_result_invalid` 且不建引用。回归：真实临时库 7 步 DTO（长码 + 多条原因）正例对照 + 上述矛盾 / 缺步 / 重复 / 错归属 7 条真负例，均不建引用、引用池不变 |
+
+本轮回修后三层实际输出：策略 **37/37**（35 → 37）、适配层 **21/21**（20 → 21）、transport **18/18**（17 → 18），均 exit 0；原 35 / 20 / 17 项含义全部保留，snapshot 引用 / 过期 / 跨账套 / 预算 / 并发隔离未回退。真实正例使用真实 API 建库：`2026-02` 取得、`2026-01` 起提的 1 期寿命卡片 + `2026-03` 真实购入凭证，期末检查返回 `blockingCount:3` / `blockingCodes:['depreciation_life_expired_underprovided','previous_period_depreciation_pending','previous_period_open']` / `projectionDropped:0`。
+
+未改变：共享 HTTP / Agent / MCP / CLI 接线、真实 HTTP 端到端、`scripts/test-all.mjs` 归属、真实账套验收。状态：**回修候选，待 root 独立增量复审**。

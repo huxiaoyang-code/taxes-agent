@@ -200,6 +200,50 @@ await test('LOCAL-02 新工具：asset_update 写 / period_end_check 只读 / �
   }
 });
 
+await test('LOCAL-02 回修1：已登记长阻塞码（39 / 36 字符）在 transport 层完整通过，未登记超长 token 仍拒绝', async () => {
+  // 真实域里的两条长码都是已登记常量：信封必须原样通过，而不是被投影预算截断 / 拒绝。
+  const longCodeAdapter = createFinanceModelAdapter({
+    executeRaw: async (name) => {
+      if (name !== 'period_end_check') return {};
+      const step = (id, status) => ({ id, title: X.enterprise, reason: X.summary, status });
+      return {
+        accountSetId: 3, period: '2026-09', ready: false,
+        steps: [
+          step('draft_vouchers', 'ok'), step('trial_balance', 'ok'),
+          step('depreciation', 'blocked'), step('asset_reconciliation', 'ok'),
+          step('profit_carry_forward', 'ok'), step('year_end_carry_forward', 'not_applicable'),
+          step('period_sequence', 'blocked'),
+        ],
+        blocking: [
+          { step: 'depreciation', title: X.enterprise, code: 'depreciation_life_expired_underprovided', message: X.summary },
+          { step: 'period_sequence', title: X.enterprise, code: 'previous_period_depreciation_pending', message: X.summary },
+        ],
+        missing: [],
+        rules: { note: X.message },
+      };
+    },
+  });
+  const longCheck = await longCodeAdapter.callModelTool('period_end_check', { accountSetId: 3, period: '2026-09' });
+  assert.equal(longCheck.ok, true);
+  assert.equal(longCheck.projectionDropped, 0);
+  assert.deepEqual(longCheck.projection.blockingCodes, [
+    'depreciation_life_expired_underprovided', 'previous_period_depreciation_pending',
+  ]);
+  const checkedLong = validateModelEnvelope(longCheck, REGISTRY);
+  assert.equal(checkedLong.ok, true, `已登记长码应通过：${checkedLong.ok ? '' : checkedLong.failure.error.code}`);
+  assertNoLeak(checkedLong.envelope, 'long blocking codes');
+  longCodeAdapter.policy.dispose();
+
+  // 通用 token 预算 / 长度上限没有被放宽：未登记的长串即使看起来像代码也拒绝。
+  const unregistered = { ...longCheck, projection: { ...longCheck.projection, blockingCodes: ['unregistered_long_code_for_projection_xyz'] } };
+  expectFailure(validateModelEnvelope(unregistered, REGISTRY), 'envelope_projection_invalid');
+  const tooLong = { ...longCheck, projection: { ...longCheck.projection, blockingCodes: ['a'.repeat(41)] } };
+  expectFailure(validateModelEnvelope(tooLong, REGISTRY), 'envelope_projection_invalid');
+  // 中文业务文本仍进不了投影
+  const freeText = { ...longCheck, projection: { ...longCheck.projection, blockingCodes: [X.enterprise] } };
+  expectFailure(validateModelEnvelope(freeText, REGISTRY), 'envelope_projection_invalid');
+});
+
 await test('失败信封（固定错误码）也能通过校验：未知工具 / 税务拒绝 / 未实现 node / 缺账套', async () => {
   const envelopes = [
     await adapter.callModelTool('voucher_approve', {}),

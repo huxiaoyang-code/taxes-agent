@@ -6,11 +6,13 @@
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，仅 10 个文档，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4、review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；未提交、未推送、未建 PR、未合并，待管理者验收与 root 最终审查**
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4、review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；独立审查的 2 项输出协议 P2（详见 §9.7）已回修，本轮为回修候选待 root 独立增量复审；未提交、未推送、未建 PR、未合并**
   - head / merge 由管理者后补；本交接**不预报**审查结论、head 或 merge。
   - **重要测试口径**：管理者在该 head 上跑过的 50 / 50 与已合 Office 21 / 21 **不能代表最终通过**；
     最终独立审查（`fork_turns=none`）实测四个阻塞（P1–P4），本轮回工后才在**最终代码**上重跑全套。
     review3 又发现一项同影响面 P2（见 §9.4），已统一口径并补定向回归后重新实跑。
+  - **测试结果分段**：`04c38d4` 上的 55 / 55（含 §9.6）属回修前事实；本轮 §9.7 回修后的完整 55 / 55
+    重跑结果在 §9.7 末尾按实际日志记录，不把回修前绿测试当成回修后验收。
 - 共享文档 release：管理者已在 `.agent-runs/local-02-docs-release.md` 释放 STATE / NEXT-SESSION /
   任务看板 / 八包总览 / INDEX / CHANGELOG / 接管计划，本包按自身事实追加（不覆盖前包已验收结果）。
 
@@ -335,7 +337,7 @@ root 已在本 worktree 派单完成兼容整合（**不改本包任何业务实
 `06-workbench` 下 `npm test` 为 **53 / 53 套 exit 0**（备份套件已按任务单授权仅追加登记，原 50 套顺序 / 内容不变；
 本包领域 / HTTP / MCP 三套随这次全量实跑也均 exit 0，但本轮**未单独重跑并计数**，不引用旧 45 / 18 / 5 作为本轮结果）。
 
-### 9.6 LOCAL-08 新工具模型边界兼容增量（本轮）
+### 9.6 LOCAL-08 新工具模型边界兼容增量（上一轮，head `04c38d4`）
 
 - 目标：在不改本包会计 / DB / 期间业务实现、不改 LOCAL-08 已有边界的前提下，把本包新增的
   `period_end_check` / `asset_update` 按真实 DTO 接入现有可测试 adapter / transport 合约；**未挂载**共享
@@ -348,12 +350,28 @@ root 已在本 worktree 派单完成兼容整合（**不改本包任何业务实
 - fixture 改为真实完整资产登记：原值 1200、`2026-02` 取得 / 起提、借贷平衡购入凭证（借 1601 / 贷 1002 各 1200）、
   真实计提 95；保留**真实封账成功**与 `period_end_check_failed` **前置拒绝**两条路，未 mock / bypass / 跳过封账保护。
 - 边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套、预算、写后降级、不可变 snapshot 与并发隔离保持原语义。
-- 定向输出：策略 **35/35**（原 34 保留）、适配层 **20/20**（原 19 保留）、transport **17/17**（原 16 保留），均 exit 0。
-- 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`）：**55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过
-  （外部 poppler + pdfplumber）。首次全量运行出现一次 `import-incremental-http` 进程异常退出（exit 3221226505，
-  与本包 / 本轮改动无调用关系）；该套件单独重跑 **22/22 exit 0**，随后两次完整重跑均 **55/55 exit 0**（最终代码日志
-  `.agent-runs/local02-55-suites-20261022-214500-final.log`；全部输出均在本 worktree `.agent-runs/`，不把偶发崩溃当成业务通过，
-  也不隐藏重跑事实）。
+- 定向输出（**上一轮，head `04c38d4`**）：策略 **35/35**（原 34 保留）、适配层 **20/20**（原 19 保留）、transport **17/17**（原 16 保留），均 exit 0。该组结果属**回修前**状态，不能当作本轮（§9.7）已通过。
+- 完整 `npm test`（设 `REPORT_OFFICE_PYTHON`，**上一轮，head `04c38d4`**）：**55/55 套 exit 0**；Office **21/21**、真实 **11 PDF** 几何通过
+  （外部 poppler + pdfplumber）。首次全量运行出现一次 `import-incremental-http` 进程异常退出（exit 3221226505）；
+  **退出码原因仍未定位**，不据此下「与本次改动无关」或其他因果结论；已实测的后续事实：该套件单独重跑 **22/22 exit 0**，
+  root 另跑一次完整 **55/55 exit 0**（最终代码日志 `.agent-runs/local02-55-suites-20261022-214500-final.log`；全部输出均在本 worktree `.agent-runs/`）。
+  不把偶发崩溃当成业务通过，也不隐藏重跑事实；root 会将 Windows 交付稳定性纳入后续检查，本轮**未定位原因、不做因果断言**。
 - 范围：跨包只改已登记的 LOCAL-08 6 个源码 / 测试文件与 3 份 08 文档，另补 `docs/LOCAL-BACKUP.md` 独审非阻塞项；
   **未改**本包业务源码、DB、期间逻辑、`agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`。
-- 状态：**未提交 / 未建 PR / 未合并**；待 root 最终增量独审 / PR。
+
+### 9.7 输出协议 2 项 P2 回修（本轮，回修候选待 root 复审）
+
+独立审查在 head `04c38d4` 上复现两个 P2，**均已修复并补先红后绿定向回归**；绿测试不能代替这两项验收：
+
+| 项 | 复现 | 回修 |
+|---|---|---|
+| P2-1 真实长阻塞码被通用预算吞掉 | `depreciation_life_expired_underprovided`（39 字符）与 `previous_period_depreciation_pending`（36 字符）虽在阻塞码白名单，仍被 `PROJ_TOKEN_RE`（最多 32 字符）过滤；真实结果为 `ok:true` / `blockingCount:1` / `blockingCodes:[]` / `projectionDropped:1`，而 transport 侧却通过（其自有 token 表已含这两条） | 通用 token 32 字符预算与 40 字符长度上限**均未改**，只给**已登记固定代码常量的精确字面量**开窄通道（policy 的 `REGISTERED_CODE_LITERALS` + `isProjectionStringAllowed`，标量与数组两路共用）；未知码仍 fail closed。回归：19 条真实阻塞码**逐条**（非仅两个示例）完整投影 + `projectionDropped:0`；未登记 37 字符串 / 41 字符串 / 中文原文仍丢弃或拒绝 |
+| P2-2 只验单字段不验 DTO 全局一致性 | `ready:true` + `steps:[]` + `blocking:[]`、`ready:true` + 7 个重复 `draft_vouchers`、`ready:true` + 全 blocked 且 `blocking` 非空，都被投影成功、建了引用并通过 transport | 新增纯函数 `isPeriodEndCheckConsistent`（policy，**不 import** 会开业务 DB 的 `period-end-controls.mjs`）：7 个已登记步骤唯一齐全、状态值域、每条 `blocking` 归属真实 blocked 步骤、`ready` ⇔ 无阻塞、每个 blocked 步骤至少一条原因（不机械比较原因数 = 步骤数）；policy 据此 fail closed，adapter 在同一判定上直接报 `model_result_invalid` 且**不建 ref** |
+
+- 回修后三层实跑：策略 **37/37**、适配层 **21/21**、transport **18/18**，均 exit 0；原 35 / 20 / 17 项含义保留，snapshot / 引用预算 / 并发隔离未回退。
+- 完整门禁（回修后，本轮实跑）：先跑上述三套定向，再在 `06-workbench` 设 `REPORT_OFFICE_PYTHON=<验收 Python>` 跑 `npm test` → **55 / 55 套 exit 0**（汇总行「全部 55 个套件通过（55/55）」，进程 exit 0），Office **21/21**、真实 **11 PDF** 几何通过。最终代码日志 `.agent-runs/local02-55-suites-20261022-204605-rewrite2-final.log`（同一代码状态下的早先一次完整运行 `…-204310-rewrite2.log` 也是 55/55；其后只调整了注释位置，代码行为未变，仍以最终日志为准）。
+  本次**未重现** §9.6 的 exit 3221226505；该异常仍**原因未定位**，不下因果结论，后续稳定性由 root 的 Windows 交付检查继续跟踪。
+- 新增真实正例（真实临时库，不改业务源码）：`2026-01` 起账 → 1 期寿命导入卡片（`2026-02` 取得、`2026-01` 起提）→ `2026-03` 真实购入凭证 → 期末检查 `blockingCount:3` / `blockingCodes:['depreciation_life_expired_underprovided','previous_period_depreciation_pending','previous_period_open']` / `projectionDropped:0` / `blockedStepIds:['depreciation','period_sequence']`，transport 通过。
+- 真负例：以真实 DTO 为基底注入 `ready:true + steps:[]`、7 个重复 `draft_vouchers`、全 blocked + `ready:true`、缺步 / 多步 / 阻塞归属未阻塞或未知步骤，一律 `model_result_invalid`、`localRef` 不存在且 policy 引用池不变；同 harness 不改内容的对照仍成功建引用。
+- 改动范围（本轮回修）：`06-workbench/server/finance-output-policy.mjs`（长码窄通道 + `isPeriodEndCheckConsistent` + spec 一致性前置）、`06-workbench/server/finance-model-adapter.mjs`（改用共享一致性判定，不 import 业务 DB 模块）、三套测试文件（`test/finance-output-policy.test.mjs`、`test/finance-model-adapter.test.mjs`、MCP `finance-model-transport-test.mjs`）。**`finance-model-transport.mjs` 源码本轮未改**：它的 `PROJECTION_TOKENS` 已登记这 19 条码且单字符串上限 40 已能容纳 39 字符长码，因此“transport 通过而 policy 丢码”的不一致只在 policy 侧；本轮只是把一致性写进 transport 测试。未改本包会计 / DB / 期间业务、`agent-tools.mjs` / `server.mjs` / MCP 入口 / `scripts/test-all.mjs`、备份 / 339 代码与测试。
+- 状态：**回修候选，待 root 独立增量复审**；未挂真实 shared 入口（HTTP / Agent / MCP / CLI）；未提交 / 未建 PR / 未合并。

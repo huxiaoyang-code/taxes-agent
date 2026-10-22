@@ -22,6 +22,7 @@ const X = {
   enterpriseB: "合成机密企业名称乙",
   enterpriseC: "合成机密企业名称丙",
   enterpriseD: "合成机密企业名称丁",
+  enterpriseE: "合成机密企业名称癸",
   importName: "合成机密导入企业辛",
   incrementalName: "合成机密增量企业壬",
   accountName: "合成机密科目名称乙",
@@ -630,6 +631,110 @@ await test("LOCAL-02 兼容：period_end_check 只读固定投影 / asset_update
   const closed = await writeOk("period_set_status", { accountSetId: setA.id, period: "2026-01", status: "closed" });
   assert.deepEqual(closed.projection, { period: "2026-01", status: "closed" });
   assert.equal(TRANSPORT.validateModelEnvelope(closed, TRANSPORT_REGISTRY).ok, true);
+});
+
+await test("LOCAL-02 回修1/2：真实 7 步期末检查长阻塞码完整、错误 DTO 形状（缺 / 重 / 矛盾）一律 model_result_invalid 不建引用", async () => {
+  // 真实业务链：新账套 → 1 期寿命的导入卡片（2026-02 取得、起提 2026-01）→ 2026-03 真实购入凭证。
+  // 手算预期：卡片在 2026-02 已是「超过寿命未提足」（index 1 ≥ life 1，累计 0 < 原值 1200），
+  // 因 2026-02 未封账且不能跳过，2026-03 的期末检查应同时给出三条真实阻塞：
+  //   depreciation 步骤：depreciation_life_expired_underprovided（39 字符）
+  //   period_sequence 步骤：previous_period_depreciation_pending（36 字符）+ previous_period_open
+  const setE = await writeOk("account_set_create", {
+    name: X.enterpriseE, start_period: "2026-01", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则",
+  });
+  const setIdE = setE.projection.accountSetId;
+  const card = await writeOk("asset_create", {
+    accountSetId: setIdE, kind: "fixed", name: X.assetName,
+    original_cost: 1200, residual_rate: 0, useful_life_months: 1, start_period: "2026-01",
+    acquired_period: "2026-02", opening_accumulated: 0, ledger_status: "booked", origin: "import",
+  });
+  assert.equal(card.projection.assetId > 0, true);
+  const buy = await writeOk("voucher_create", {
+    accountSetId: setIdE, period: "2026-03", summary: X.summary, status: "posted",
+    entries: [
+      { code: "1601", summary: X.counterparty, debit: 1200, credit: 0 },
+      { code: "1002", summary: X.person, debit: 0, credit: 1200 },
+    ],
+  });
+  assert.equal(buy.projection.status, "posted");
+
+  const check = await queryOk("period_end_check", { accountSetId: setIdE, period: "2026-03" });
+  assert.equal(check.projection.ready, false);
+  assert.equal(check.projection.stepCount, 7);
+  assert.equal(check.projection.stepIds.length, 7);
+  assert.equal(check.projection.stepStatuses.length, 7);
+  assert.deepEqual(check.projection.blockedStepIds, ["depreciation", "period_sequence"]);
+  assert.equal(check.projection.blockedStepCount, 2);
+  assert.equal(check.projection.blockingCount, 3);
+  assert.deepEqual(check.projection.blockingCodes, [
+    "depreciation_life_expired_underprovided",
+    "previous_period_depreciation_pending",
+    "previous_period_open",
+  ]);
+  // 两条真实长码都必须**完整**到达模型通道：投影丢弃计数为 0。
+  assert.equal(check.projectionDropped, 0);
+  assert.equal(JSON.stringify(check).includes(X.assetName), false);
+  assert.equal(TRANSPORT.validateModelEnvelope(check, TRANSPORT_REGISTRY).ok, true);
+  // 同一账套的未封账期间仍是真实阻塞（不能把长码丢弃后当成可封账）。
+  const denied = await callExpectExecutions("period_set_status", {
+    accountSetId: setIdE, period: "2026-03", status: "closed",
+  }, 1);
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error.code, "period_end_check_failed");
+
+  // 真实 DTO 作为基底，注入矛盾形状：一律 model_result_invalid，且不创建任何引用。
+  const realCheck = await callAgentTool("period_end_check", { accountSetId: setIdE, period: "2026-03" });
+  const tamperedAdapter = (mutate) => createFinanceModelAdapter({
+    executeRaw: async (name, args) => (name === "period_end_check"
+      ? mutate(structuredClone(realCheck))
+      : callAgentTool(name, args)),
+  });
+  const expectInvalidDto = async (label, mutate) => {
+    const probe = tamperedAdapter(mutate);
+    const before = probe.policy.stats().refs;
+    const envelope = await probe.callModelTool("period_end_check", { accountSetId: setIdE, period: "2026-03" });
+    assert.equal(envelope.ok, false, label);
+    assert.equal(envelope.error.code, "model_result_invalid", label);
+    assert.equal(envelope.error.category, "output_policy", label);
+    assert.equal(envelope.localRef, undefined, `${label}：失败不得建引用`);
+    assert.equal(probe.policy.stats().refs, before, `${label}：引用池不得变化`);
+    assertNoLeak(envelope, label);
+    probe.policy.dispose();
+  };
+  // 正例对照：同一套 harness 不改内容时确实成功并建引用（证明上面的拒绝不是“总是拒绝”）。
+  const control = tamperedAdapter((value) => value);
+  const controlEnvelope = await control.callModelTool("period_end_check", { accountSetId: setIdE, period: "2026-03" });
+  assert.equal(controlEnvelope.ok, true);
+  assert.equal(control.policy.stats().refs, 1);
+  control.policy.dispose();
+
+  await expectInvalidDto("ready:true + steps:[] + blocking:[]", (value) => ({
+    ...value, ready: true, steps: [], blocking: [], missing: [],
+  }));
+  await expectInvalidDto("ready:true + 7 个重复 draft_vouchers", (value) => ({
+    ...value,
+    ready: true,
+    steps: value.steps.map((step) => ({ ...step, id: "draft_vouchers", status: "ok" })),
+    blocking: [],
+    missing: [],
+  }));
+  await expectInvalidDto("ready:true + 全部步骤 blocked + blocking 非空", (value) => ({
+    ...value,
+    ready: true,
+    steps: value.steps.map((step) => ({ ...step, status: "blocked" })),
+  }));
+  await expectInvalidDto("缺一个步骤", (value) => ({
+    ...value, steps: value.steps.slice(0, 6), blocking: [], missing: [], ready: true,
+  }));
+  await expectInvalidDto("多一个重复步骤", (value) => ({
+    ...value, steps: [...value.steps, { ...value.steps[0] }],
+  }));
+  await expectInvalidDto("blocking 归属到未阻塞步骤", (value) => ({
+    ...value, blocking: value.blocking.map((item) => ({ ...item, step: "draft_vouchers" })),
+  }));
+  await expectInvalidDto("未知步骤 id（自由文本不得当 token）", (value) => ({
+    ...value, steps: [...value.steps.slice(0, 6), { ...value.steps[6], id: "synthetic_sensitive_step" }],
+  }));
 });
 
 await test("建账类写动作：setId 只能来自真实结果；dry-run / 失败明确未绑定，不造假 ID", async () => {
