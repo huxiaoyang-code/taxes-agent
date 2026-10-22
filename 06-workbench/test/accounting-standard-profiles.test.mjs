@@ -1302,6 +1302,277 @@ test("规则描述可序列化、行项目与合计依赖闭合，现金流规�
   );
 });
 
+// ================================================================ 6. 独审回修：往来反向余额与现金流用途歧义
+test("独审P1：小企往来反向余额按明细方向列示，1122/2202/1123/2203 双向且多明细不抵消", () => {
+  const accounts = [
+    ...catalogOf(SMALL),
+    A("112201", "资产", "debit"),
+    A("112202", "资产", "debit"),
+    A("220201", "负债", "credit"),
+    A("220202", "负债", "credit"),
+    A("112301", "资产", "debit"),
+    A("112302", "资产", "debit"),
+    A("220301", "负债", "credit"),
+    A("220302", "负债", "credit"),
+  ];
+  const result = bs(
+    SMALL,
+    accounts,
+    money([
+      ["1002", 100000],
+      ["112201", 30000],
+      ["112202", -10000],
+      ["220201", -20000],
+      ["220202", 5000],
+      ["112301", 7000],
+      ["112302", -3000],
+      ["220301", -4000],
+      ["220302", 2000],
+      ["3001", -107000],
+    ])
+  );
+  assert.equal(result.complete, true);
+  assert.deepStrictEqual(result.diagnostics, []);
+  assertDeepFrozen(result, "reverse statement");
+  // 112201 借 30000 与 112202 贷 10000 不得净额为 20000；贷方余额另列预收。
+  assert.equal(rowValue(result, "accounts-receivable"), 32000);
+  assert.equal(rowValue(result, "advances-from-customers"), 14000);
+  // 220202 借 5000 另列预付；112301 借 7000 保留，112302 贷 3000 另列应付。
+  assert.equal(rowValue(result, "prepayments"), 12000);
+  assert.equal(rowValue(result, "accounts-payable"), 23000);
+  assert.equal(result.totals.assets, 144000);
+  assert.equal(result.totals.liabilities, 37000);
+  assert.equal(result.totals.equity, 107000);
+  assert.equal(result.totals.liabilitiesAndEquity, 144000);
+  assert.deepStrictEqual(
+    result.reclassifications
+      .map(
+        (item) =>
+          `${item.accountCode}:${item.fromRowId}->${item.toRowId}:${item.amountMinor}`
+      )
+      .sort(),
+    [
+      "112202:accounts-receivable->advances-from-customers:-10000",
+      "112302:prepayments->accounts-payable:-3000",
+      "220202:accounts-payable->prepayments:5000",
+      "220302:advances-from-customers->accounts-receivable:2000",
+    ].sort()
+  );
+  const reciprocal = getAccountingReportRules(SMALL).balanceSheet.reciprocal;
+  assert.equal(reciprocal["1122"].targetRowId, "advances-from-customers");
+  assert.equal(reciprocal["2203"].targetRowId, "accounts-receivable");
+  assert.equal(reciprocal["1123"].targetRowId, "accounts-payable");
+  assert.equal(reciprocal["2202"].targetRowId, "prepayments");
+
+  // 独审原始复现：现金 10000 + 应收账款贷方 10000，应列资产 10000 / 负债 10000，
+  // 不得给“资产负债均 0 且 complete=true”的伪完整结果。
+  const auditExample = bs(
+    SMALL,
+    catalogOf(SMALL),
+    money([
+      ["1002", 10000],
+      ["1122", -10000],
+    ])
+  );
+  assert.equal(auditExample.complete, true);
+  assert.deepStrictEqual(auditExample.diagnostics, []);
+  assert.equal(rowValue(auditExample, "accounts-receivable"), 0);
+  assert.equal(rowValue(auditExample, "advances-from-customers"), 10000);
+  assert.equal(auditExample.totals.assets, 10000);
+  assert.equal(auditExample.totals.liabilities, 10000);
+  assert.equal(auditExample.totals.equity, 0);
+  assert.equal(auditExample.totals.liabilitiesAndEquity, 10000);
+});
+
+test("独审P1：企业应收账款贷方不冒充预收/合同负债，缺合同明细给 incomplete", () => {
+  const result = bs(
+    ENTERPRISE,
+    catalogOf(ENTERPRISE),
+    money([
+      ["1002", 10000],
+      ["1122", -10000],
+    ])
+  );
+  assert.equal(result.complete, false);
+  const diagnostic = result.diagnostics.find(
+    (item) => item.code === "account_reverse_balance_requires_detail"
+  );
+  assert.ok(diagnostic, "必须给出往来反向余额待明细诊断");
+  assert.equal(diagnostic.accountCode, "1122");
+  assert.equal(diagnostic.matchedRoot, "1122");
+  assert.equal(
+    diagnostic.reason,
+    "receivable-credit-balance-contract-liability-vs-advance-requires-detail"
+  );
+  assert.equal(rowValue(result, "accounts-receivable"), 0);
+  assert.equal(rowValue(result, "advances-from-customers"), 0);
+  assert.equal(result.totals.assets, 10000);
+  assert.equal(result.totals.liabilities, 0);
+  assert.deepStrictEqual(result.reclassifications, []);
+  const reciprocal = getAccountingReportRules(ENTERPRISE).balanceSheet.reciprocal;
+  assert.equal(reciprocal["1122"].targetRowId, null);
+  assert.equal(
+    reciprocal["1122"].reason,
+    "receivable-credit-balance-contract-liability-vs-advance-requires-detail"
+  );
+
+  // 预收账款借方同样涉及合同资产 / 应收细类，不能静默并入应收账款。
+  const advancesDebit = bs(
+    ENTERPRISE,
+    catalogOf(ENTERPRISE),
+    money([
+      ["1002", 10000],
+      ["2203", 5000],
+    ])
+  );
+  assert.equal(advancesDebit.complete, false);
+  const advanceDiagnostic = advancesDebit.diagnostics.find(
+    (item) => item.code === "account_reverse_balance_requires_detail"
+  );
+  assert.ok(advanceDiagnostic);
+  assert.equal(advanceDiagnostic.accountCode, "2203");
+  assert.equal(
+    advanceDiagnostic.reason,
+    "advance-receipt-debit-balance-receivable-vs-contract-asset-requires-detail"
+  );
+  assert.equal(rowValue(advancesDebit, "advances-from-customers"), 0);
+  assert.equal(rowValue(advancesDebit, "accounts-receivable"), 0);
+  assert.equal(advancesDebit.totals.assets, 10000);
+  assert.equal(advancesDebit.totals.liabilities, 0);
+});
+
+test("独审P1：企业应付借方→预付款项、预付贷方→应付账款可确定列示", () => {
+  const result = bs(
+    ENTERPRISE,
+    catalogOf(ENTERPRISE),
+    money([
+      ["1002", 10000],
+      ["2202", 5000],
+      ["1123", -3000],
+      ["4001", -12000],
+    ])
+  );
+  assert.equal(result.complete, true);
+  assert.deepStrictEqual(result.diagnostics, []);
+  assert.equal(rowValue(result, "prepayments"), 5000);
+  assert.equal(rowValue(result, "accounts-payable"), 3000);
+  assert.equal(result.totals.assets, 15000);
+  assert.equal(result.totals.liabilities, 3000);
+  assert.equal(result.totals.equity, 12000);
+  assert.equal(result.totals.liabilitiesAndEquity, 15000);
+  assert.equal(result.reclassifications.length, 2);
+});
+
+test("独审P1：无已核实列示规则的相反余额给 incomplete，不静默冲减资产或负债", () => {
+  const notes = bs(
+    SMALL,
+    catalogOf(SMALL),
+    money([
+      ["1002", 10000],
+      ["1121", -5000],
+    ])
+  );
+  assert.equal(notes.complete, false);
+  const notesDiagnostic = notes.diagnostics.find(
+    (item) => item.code === "account_reverse_balance_requires_detail"
+  );
+  assert.ok(notesDiagnostic);
+  assert.equal(notesDiagnostic.accountCode, "1121");
+  assert.equal(notesDiagnostic.reason, "reverse-balance-presentation-not-defined");
+  assert.equal(rowValue(notes, "notes-receivable"), 0);
+  assert.equal(notes.totals.assets, 10000);
+
+  const tax = bs(
+    SMALL,
+    catalogOf(SMALL),
+    money([
+      ["1002", 10000],
+      ["2221", 5000],
+    ])
+  );
+  assert.equal(tax.complete, false);
+  const taxDiagnostic = tax.diagnostics.find(
+    (item) => item.code === "account_reverse_balance_requires_detail"
+  );
+  assert.ok(taxDiagnostic);
+  assert.equal(taxDiagnostic.accountCode, "2221");
+  assert.equal(rowValue(tax, "taxes-payable"), 0);
+  assert.equal(tax.totals.liabilities, 0);
+  assert.equal(tax.totals.assets, 10000);
+});
+
+test("独审P2：普通非金融企业应收股利/应收利息收现按 investing，不误列 operating", () => {
+  for (const profileId of [SMALL, ENTERPRISE]) {
+    for (const code of ["1131", "1132"]) {
+      const result = classifyAccountingCashCounterpart(profileId, A(code, "资产", "debit"));
+      assert.equal(result.category, "investing", `${profileId} ${code} 应为 investing`);
+      assert.equal(result.matchedRoot, code);
+      assert.equal(result.reason, null);
+    }
+    const investment = profileId === SMALL ? "5111" : "6111";
+    const income = classifyAccountingCashCounterpart(profileId, A(investment, "损益", "credit"));
+    assert.equal(income.category, "investing");
+  }
+  const shortTerm = classifyAccountingCashCounterpart(SMALL, A("1101", "资产", "debit"));
+  assert.equal(shortTerm.category, "investing");
+});
+
+test("独审P2：用途不明科目返回 unknown+固定 reason，不把单一对方当分类充足", () => {
+  const cases = [
+    [SMALL, "1123", "资产", "debit", "prepayment-purpose-ambiguous"],
+    [ENTERPRISE, "1123", "资产", "debit", "prepayment-purpose-ambiguous"],
+    [SMALL, "5603", "损益", "debit", "finance-expense-interest-vs-fee-ambiguous"],
+    [ENTERPRISE, "6603", "损益", "debit", "finance-expense-interest-vs-fee-ambiguous"],
+    [SMALL, "5301", "损益", "credit", "non-operating-income-purpose-ambiguous"],
+    [ENTERPRISE, "6301", "损益", "credit", "non-operating-income-purpose-ambiguous"],
+    [SMALL, "5711", "损益", "debit", "non-operating-expense-purpose-ambiguous"],
+    [ENTERPRISE, "6711", "损益", "debit", "non-operating-expense-purpose-ambiguous"],
+    [SMALL, "1221", "资产", "debit", "other-receivable-purpose-ambiguous"],
+    [ENTERPRISE, "1221", "资产", "debit", "other-receivable-purpose-ambiguous"],
+    [SMALL, "2241", "负债", "credit", "other-payable-purpose-ambiguous"],
+    [ENTERPRISE, "2241", "负债", "credit", "other-payable-purpose-ambiguous"],
+    [SMALL, "1801", "资产", "debit", "long-term-deferred-expense-purpose-ambiguous"],
+    [ENTERPRISE, "1801", "资产", "debit", "long-term-deferred-expense-purpose-ambiguous"],
+  ];
+  for (const [profileId, code, category, direction, reason] of cases) {
+    const result = classifyAccountingCashCounterpart(
+      profileId,
+      A(code, category, direction)
+    );
+    assert.equal(result.category, "unknown", `${profileId} ${code} 应 unknown`);
+    assert.equal(result.reason, reason, `${profileId} ${code} 的 reason 必须固定`);
+    assert.equal(result.matchedRoot, code);
+  }
+  for (const profileId of [SMALL, ENTERPRISE]) {
+    const interest = classifyAccountingCashCounterpart(profileId, A("2231", "负债", "credit"));
+    assert.equal(interest.category, "unknown");
+    assert.equal(interest.reason, "interest-payment-classification-ambiguous");
+  }
+});
+
+test("独审P2：现金/受限现金判定仍 unknown，正向投资分类保留", () => {
+  for (const profileId of [SMALL, ENTERPRISE]) {
+    for (const code of ["1001", "1002", "1012"]) {
+      const result = classifyAccountingCashCounterpart(profileId, A(code, "资产", "debit"));
+      assert.equal(result.category, "unknown");
+      assert.equal(result.reason, "counterpart_is_cash");
+    }
+    for (const code of ["1601", "1604", "1701"]) {
+      const result = classifyAccountingCashCounterpart(profileId, A(code, "资产", "debit"));
+      assert.equal(result.category, "investing");
+    }
+    const rules = getAccountingReportRules(profileId);
+    assert.ok(
+      rules.cashFlow.unsupported.includes("cash-equivalents-and-restricted-cash-judgement")
+    );
+    assert.ok(
+      rules.cashFlow.ambiguousRoots.some(
+        (item) => item.root === "1123" && item.reason === "prepayment-purpose-ambiguous"
+      )
+    );
+  }
+});
+
 test("生产模块 import 图纯净：只互相依赖，无数据库 / 文件 / 网络 / 环境变量副作用", () => {
   const profilePath = new URL("../server/accounting-profiles.mjs", import.meta.url);
   const rulesPath = new URL("../server/accounting-report-rules.mjs", import.meta.url);

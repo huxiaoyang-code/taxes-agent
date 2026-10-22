@@ -259,6 +259,33 @@ function enterpriseBalanceSheetRows(plRoots) {
   ];
 }
 
+// ---------------------------------------------------------------- 往来反向余额列示
+// 官方小企附录要求按明细科目余额方向分列：应收账款贷方余额列预收账款、应付账款借方
+// 余额列预付账款，预付账款贷方余额列应付账款、预收账款借方余额列应收账款。
+// 企业 profile 下应收账款贷方 / 预收账款借方还涉及“预收款项 vs 合同负债 / 合同资产”
+// 的合同细类，基础科目无法确定，故明确 incomplete，不冒充已列示。
+const REVERSE_BALANCE_DEFAULT_REASON = "reverse-balance-presentation-not-defined";
+const RECIPROCAL_BALANCE_RULES = {
+  "small-2011-basic-v1": {
+    "1122": { targetRowId: "advances-from-customers" },
+    "2203": { targetRowId: "accounts-receivable" },
+    "1123": { targetRowId: "accounts-payable" },
+    "2202": { targetRowId: "prepayments" },
+  },
+  "enterprise-2019-general-basic-v1": {
+    "2202": { targetRowId: "prepayments" },
+    "1123": { targetRowId: "accounts-payable" },
+    "1122": {
+      targetRowId: null,
+      reason: "receivable-credit-balance-contract-liability-vs-advance-requires-detail",
+    },
+    "2203": {
+      targetRowId: null,
+      reason: "advance-receipt-debit-balance-receivable-vs-contract-asset-requires-detail",
+    },
+  },
+};
+
 // ---------------------------------------------------------------- 利润表行
 function incomeStatementRows(codes) {
   return [
@@ -338,10 +365,6 @@ const CASH_FLOW_RULES = {
     operatingRoots: [
       "1121",
       "1122",
-      "1123",
-      "1131",
-      "1132",
-      "1221",
       "1401",
       "1402",
       "1403",
@@ -353,34 +376,33 @@ const CASH_FLOW_RULES = {
       "2203",
       "2211",
       "2221",
-      "2241",
       "4001",
       "5001",
       "5051",
-      "5301",
       "5401",
       "5402",
       "5403",
       "5601",
       "5602",
-      "5603",
-      "5711",
       "5801",
     ],
-    investingRoots: ["1101", "1601", "1602", "1604", "1701", "1702", "1801", "5111"],
+    investingRoots: ["1101", "1131", "1132", "1601", "1602", "1604", "1701", "1702", "5111"],
     financingRoots: ["2001", "2232", "2501", "2701", "3001", "3002", "3101", "3103", "3104"],
     ambiguousRoots: [
+      { root: "1123", reason: "prepayment-purpose-ambiguous" },
+      { root: "1221", reason: "other-receivable-purpose-ambiguous" },
+      { root: "1801", reason: "long-term-deferred-expense-purpose-ambiguous" },
       { root: "2231", reason: "interest-payment-classification-ambiguous" },
+      { root: "2241", reason: "other-payable-purpose-ambiguous" },
+      { root: "5301", reason: "non-operating-income-purpose-ambiguous" },
+      { root: "5603", reason: "finance-expense-interest-vs-fee-ambiguous" },
+      { root: "5711", reason: "non-operating-expense-purpose-ambiguous" },
     ],
   },
   "enterprise-2019-general-basic-v1": {
     operatingRoots: [
       "1121",
       "1122",
-      "1123",
-      "1131",
-      "1132",
-      "1221",
       "1401",
       "1402",
       "1403",
@@ -392,24 +414,27 @@ const CASH_FLOW_RULES = {
       "2203",
       "2211",
       "2221",
-      "2241",
       "5001",
       "6001",
       "6051",
-      "6301",
       "6401",
       "6402",
       "6403",
       "6601",
       "6602",
-      "6603",
-      "6711",
       "6801",
     ],
-    investingRoots: ["1601", "1602", "1604", "1701", "1702", "1801", "6111"],
+    investingRoots: ["1131", "1132", "1601", "1602", "1604", "1701", "1702", "6111"],
     financingRoots: ["2001", "2232", "2501", "2701", "4001", "4002", "4101", "4103", "4104"],
     ambiguousRoots: [
+      { root: "1123", reason: "prepayment-purpose-ambiguous" },
+      { root: "1221", reason: "other-receivable-purpose-ambiguous" },
+      { root: "1801", reason: "long-term-deferred-expense-purpose-ambiguous" },
       { root: "2231", reason: "interest-payment-classification-ambiguous" },
+      { root: "2241", reason: "other-payable-purpose-ambiguous" },
+      { root: "6301", reason: "non-operating-income-purpose-ambiguous" },
+      { root: "6603", reason: "finance-expense-interest-vs-fee-ambiguous" },
+      { root: "6711", reason: "non-operating-expense-purpose-ambiguous" },
     ],
   },
 };
@@ -448,6 +473,7 @@ function buildRules(profile) {
         totals: {},
         unsupported: [],
         requiredDetails: [],
+        reciprocal: {},
       },
       incomeStatement: {
         engineMode: "legacy-compatibility",
@@ -524,6 +550,26 @@ function buildRules(profile) {
   }
 
   const cashFlow = CASH_FLOW_RULES[profile.id];
+  const reciprocal = RECIPROCAL_BALANCE_RULES[profile.id] || {};
+  const cashFlowRoots = [
+    ...cashFlow.operatingRoots,
+    ...cashFlow.investingRoots,
+    ...cashFlow.financingRoots,
+    ...cashFlow.ambiguousRoots.map((item) => item.root),
+  ];
+  const seenCashFlowRoots = new Set();
+  for (const root of cashFlowRoots) {
+    if (!coaRoots.has(root)) {
+      throw ruleError(
+        "report_rule_root_unknown",
+        `profile ${profile.id} 的现金流规则引用了不存在的科目 ${root}`
+      );
+    }
+    if (seenCashFlowRoots.has(root)) {
+      throw ruleError("report_rule_invalid", `profile ${profile.id} 的现金流分类科目重复：${root}`);
+    }
+    seenCashFlowRoots.add(root);
+  }
   const rules = {
     profileId: profile.id,
     reportMappingVersion: profile.reportMappingVersion,
@@ -536,6 +582,7 @@ function buildRules(profile) {
       totals: BS_TOTALS,
       unsupported: unsupportedAccounts,
       requiredDetails,
+      reciprocal,
     },
     incomeStatement: {
       engineMode: "profile-rules",
@@ -577,6 +624,45 @@ function buildRules(profile) {
   for (const row of incomeRows) {
     for (const root of row.roots || []) {
       incomeStatementIndex.set(root, { rowId: row.rowId, via: "row" });
+    }
+  }
+
+  // 校验往来反向列示规则：来源根必须是已映射的资产负债表行，目标行必须是反向自然方向的
+  // 资产 / 负债行；不能自动列示的项必须有固定的未解决原因。
+  for (const [rootCode, mapping] of Object.entries(reciprocal)) {
+    const root = profile.coa.find((item) => item.code === rootCode);
+    if (!root) {
+      throw ruleError(
+        "report_rule_root_unknown",
+        `profile ${profile.id} 的往来反向规则引用了不存在的科目 ${rootCode}`
+      );
+    }
+    const source = balanceSheetIndex.get(rootCode);
+    if (!source || source.via !== "row") {
+      throw ruleError(
+        "report_rule_invalid",
+        `profile ${profile.id} 的往来反向规则 ${rootCode} 未映射到资产负债表行`
+      );
+    }
+    if (mapping.targetRowId) {
+      const targetRow = balanceSheetRows.find((row) => row.rowId === mapping.targetRowId);
+      if (!targetRow || targetRow.kind !== "accounts") {
+        throw ruleError(
+          "report_rule_invalid",
+          `profile ${profile.id} 的往来反向规则目标行 ${mapping.targetRowId} 不存在`
+        );
+      }
+      if (targetRow.natural === root.direction) {
+        throw ruleError(
+          "report_rule_invalid",
+          `profile ${profile.id} 的往来反向规则 ${rootCode} -> ${mapping.targetRowId} 自然方向未互逆`
+        );
+      }
+    } else if (typeof mapping.reason !== "string" || mapping.reason.trim() === "") {
+      throw ruleError(
+        "report_rule_invalid",
+        `profile ${profile.id} 的往来反向规则 ${rootCode} 缺少未解决原因`
+      );
     }
   }
 
@@ -835,6 +921,7 @@ export function evaluateAccountingStatement(profileId, options = {}) {
       complete: false,
       rows: [],
       totals: {},
+      reclassifications: [],
       diagnostics: [
         {
           code: "legacy_engine_required",
@@ -854,6 +941,7 @@ export function evaluateAccountingStatement(profileId, options = {}) {
 
   const rowSums = new Map();
   const diagnostics = [];
+  const reclassifications = [];
   let unclosedSum = 0;
 
   for (const item of amountList) {
@@ -935,6 +1023,54 @@ export function evaluateAccountingStatement(profileId, options = {}) {
         unclosedSum = safeAdd(unclosedSum, item.netMinor, `未结转损益 ${item.code}`);
         continue;
       }
+      // 往来反向余额：逐科目按自身余额方向判断，不先按行净额相加；已核实配对
+      // 按官方列示行重分类，未定义列示的相反余额给 incomplete，不静默冲减。
+      const direction = resolved.effective.direction;
+      const reverseBalance = direction === "debit" ? item.netMinor < 0 : item.netMinor > 0;
+      const reverseSensitive = ["资产", "负债", "成本"].includes(
+        resolved.effective.category
+      );
+      if (reverseBalance && reverseSensitive) {
+        const mapping = statement.reciprocal?.[resolved.matchedRoot];
+        if (mapping && mapping.targetRowId) {
+          const targetRow = statement.rows.find(
+            (row) => row.rowId === mapping.targetRowId
+          );
+          if (!targetRow) {
+            throw ruleError(
+              "report_rule_invalid",
+              `往来反向列示目标行 ${mapping.targetRowId} 不存在`
+            );
+          }
+          const targetCurrent = rowSums.get(mapping.targetRowId) || 0;
+          rowSums.set(
+            mapping.targetRowId,
+            safeAdd(
+              targetCurrent,
+              item.netMinor,
+              `往来反向列示 ${mapping.targetRowId} / ${item.code}`
+            )
+          );
+          reclassifications.push({
+            accountCode: item.code,
+            matchedRoot: resolved.matchedRoot,
+            fromRowId: usage.rowId,
+            toRowId: mapping.targetRowId,
+            amountMinor: item.netMinor,
+          });
+          continue;
+        }
+        diagnostics.push({
+          code: "account_reverse_balance_requires_detail",
+          severity: "error",
+          message: `科目 ${item.code}（${resolved.accountName ?? ""}）出现与自然方向相反的余额，本包未定义可确定的列示行`,
+          accountCode: item.code,
+          matchedRoot: resolved.matchedRoot,
+          reason: mapping?.reason ?? REVERSE_BALANCE_DEFAULT_REASON,
+          amountMinor: item.netMinor,
+        });
+        continue;
+      }
       const current = rowSums.get(usage.rowId) || 0;
       rowSums.set(
         usage.rowId,
@@ -1005,6 +1141,7 @@ export function evaluateAccountingStatement(profileId, options = {}) {
     complete: diagnostics.length === 0,
     rows,
     totals,
+    reclassifications,
     diagnostics,
   });
 }

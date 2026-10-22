@@ -41,9 +41,9 @@
 
 | 接口 | 契约 |
 |---|---|
-| `getAccountingReportRules(profileId)` | 冻结、可序列化的规则描述：`profileId / reportMappingVersion / engineMode`、资产负债表与利润表的 `rowId / label / 科目规则 / 合计依赖`、基础现金流分类规则、`unsupported` / `requiredDetails` 清单 |
+| `getAccountingReportRules(profileId)` | 冻结、可序列化的规则描述：`profileId / reportMappingVersion / engineMode`、资产负债表与利润表的 `rowId / label / 科目规则 / 合计依赖`、往来反向列示 `reciprocal`、基础现金流分类规则、`unsupported` / `requiredDetails` 清单 |
 | `resolveAccountingAccountRule(profileId, account)` | 解析单个科目：`matchedRoot`、`isDetail`、`roles`、`effective`、`scope`、`statements`、`diagnostics`；名称仅展示 |
-| `evaluateAccountingStatement(profileId, { kind, accounts, amounts })` | 纯计算 `balance-sheet` / `income-statement` |
+| `evaluateAccountingStatement(profileId, { kind, accounts, amounts })` | 纯计算 `balance-sheet` / `income-statement`，返回行项目、合计、往来反向余额 `reclassifications` 与 `diagnostics` |
 | `classifyAccountingCashCounterpart(profileId, account)` | 单一对方科目现金交易的 `operating` / `investing` / `financing`，否则 `unknown` + `reason` |
 
 ## 2. 金额契约（阶段 B 必须遵守）
@@ -55,8 +55,9 @@
   阶段 B 必须用 LOCAL-02 已验金额函数与已验证查询生成输入，不重写舍入。
 - 拒绝 `NaN`、`Infinity`、字符串、非整数、`null`、重复 `code`、`amounts` 引用不存在的科目；
   累计溢出安全整数 → `amount_overflow`；**不接受隐式归 0**。
-- 返回：`{ profileId, reportMappingVersion, engineMode, kind, complete, rows:[{ id, label, valueMinor }], totals, diagnostics }`，
-  全部金额为安全整数分，返回对象深度冻结。
+- 返回：`{ profileId, reportMappingVersion, engineMode, kind, complete, rows:[{ id, label, valueMinor }], totals, reclassifications, diagnostics }`，
+  全部金额为安全整数分，返回对象深度冻结。`reclassifications` 记录已确定的往来反向余额列示
+  （`accountCode / matchedRoot / fromRowId / toRowId / amountMinor`），不产生错误诊断、不影响 `complete`。
 
 符号与列示约定：
 
@@ -66,6 +67,14 @@
   （= −Σ 损益科目借减贷）。因此结转前后同一业务**期末净资产不变**，未结转损益直接增减未分配利润。
 - 利润表：收入取贷方净额（红冲可为负），费用取借方净额（红冲可为负），允许亏损。
 - 生产成本按各自口径计入存货：小企 `4001`、企业 `5001`；企业 `5001` 不是收入，企业 `4001` 不是存货。
+- 往来反向余额：按每个科目自身余额方向逐项判断，**不先把同一行明细净额相加**。小企
+  `1122` 贷方→`2203` 预收账款、`2203` 借方→`1122` 应收账款、`2202` 借方→`1123` 预付账款、
+  `1123` 贷方→`2202` 应付账款；重分类写入 `reclassifications`，不产生错误诊断。企业
+  `2202/1123` 双向同样列示；企业 `1122` 贷方 / `2203` 借方因预收款项与合同负债 / 合同资产
+  需合同细类，给 `account_reverse_balance_requires_detail`，不计入合计且 `complete=false`。
+  其他未定义列示行的相反余额同样给该诊断，不静默冲减资产或负债，也不把它归因于
+  “流动 / 非流动期限重分类暂缓”。权益类（利润分配 / 本年利润等）的借方余额是亏损 /
+  减少，仍按负值展示，不套用往来反向诊断。
 
 ## 3. 三个 profile
 
@@ -110,6 +119,9 @@
 当前 `unsupported` 示例：小企 `4401 工程施工`；企业 `1101 交易性金融资产`、`1471 存货跌价准备`、
 `1511 长期股权投资`、`6701 资产减值损失`。
 
+scope 三态描述**科目定义本身**；往来反向余额是**金额方向**问题，不改变 scope，
+另以 `account_reverse_balance_requires_detail` 诊断或 `reclassifications` 列示处理。
+
 ## 4. 报表行项目（内部简化报表）
 
 ### 4.1 资产负债表
@@ -123,6 +135,11 @@
 - 企业按已核实范围汇总：`1131 / 1132 / 1221` 合并为「其他应收款」一行。
 - 合计：`assets` / `liabilities` / `equity` / `liabilitiesAndEquity`。
 - 原值 / 累计折旧摊销为展示行，不进入资产总计；未使用且已核实的行项目不因「余额为 0」而阻断报表。
+- 往来反向余额列示：小企行项目按附录第69页要求按明细科目余额方向分列
+  （`1122` 贷方→预收账款、`2203` 借方→应收账款、`2202` 借方→预付账款、`1123` 贷方→应付账款）；
+  企业只对可确定的 `2202` 借方→预付款项、`1123` 贷方→应付账款双向分列，`1122` 贷方 /
+  `2203` 借方的预收款项与合同负债 / 合同资产细类未确定时给 incomplete。
+  `getAccountingReportRules(...).balanceSheet.reciprocal` 暴露这些映射与未解决原因。
 
 ### 4.2 利润表
 
@@ -137,20 +154,34 @@
 `classifyAccountingCashCounterpart` 只处理**单一对方科目、可解释**的基础交易：
 
 - 资本 / 资本公积 / 盈余公积 / 本年利润 / 利润分配、借款、长期应付款、应付股利（利润）→ `financing`；
-- 固定资产、在建工程、无形资产、长期待摊费用、短期投资、投资收益 → `investing`；
-- 日常收入 / 成本 / 费用 / 存货 / 往来 / 税费 / 生产成本 → `operating`；
-- 现金科目之间互转 → `unknown`（`counterpart_is_cash`）；应付利息 → `unknown`（分类口径不唯一）；
+- 固定资产、在建工程、无形资产、短期投资、投资收益、应收股利、应收利息 → `investing`
+  （普通非金融企业投资股利 / 债券利息收现）；
+- 日常商品 / 劳务收入、成本、存货、生产成本、应收应付 / 预收、应付职工薪酬、应交税费、
+  税金及附加、销售 / 管理费用、所得税费用 → `operating`；
+- 现金科目之间互转 → `unknown`（`counterpart_is_cash`）；应付利息 → `unknown`
+  （`interest-payment-classification-ambiguous`）；
+- 用途 / 细类不明：预付账款（可能预付工程款 `investing`）、财务费用（借款利息 `financing`
+  vs 手续费 `operating`）、营业外收入 / 支出、其他应收 / 应付、长期待摊费用 → `unknown`
+  + 固定 `reason`（`prepayment-purpose-ambiguous`、`finance-expense-interest-vs-fee-ambiguous`、
+  `non-operating-income-purpose-ambiguous`、`non-operating-expense-purpose-ambiguous`、
+  `other-receivable-purpose-ambiguous`、`other-payable-purpose-ambiguous`、
+  `long-term-deferred-expense-purpose-ambiguous`）；
 - 未映射科目、scope 不足、语义冲突 → `unknown` + 明确 `reason`。
 
+**单一对方科目不是分类充足的充分条件**：同一科目可能因用途 / 合同 / 资产细类不同而归入
+不同现金流类别；本包只在用途可从科目语义确定时给 `operating / investing / financing`，
+否则明确 `unknown`。
+
 **未实现**（阶段 B / LOCAL-05b 承担）：复合凭证按比例分摊、现金等价物与受限资金判定、
-完整现金流量表引擎与间接法调节表。阶段 B 继续负责现金凭证筛选与金额分配验证。
+完整现金流量表引擎与间接法调节表。受限现金 / 现金等价物不因单一现金科目自动归入经营 /
+投资 / 筹资，仍为 `unknown`；阶段 B 继续负责现金凭证筛选与金额分配验证。
 
 ## 6. legacy 分支（防历史重解释）
 
 - `getAccountingReportRules("legacy-small-coa-v1").engineMode === "legacy-compatibility"`，
   两个报表 `rows` 与 `totals` 为空，明确由阶段 B 旧报表兼容路径承接。
 - `evaluateAccountingStatement("legacy-small-coa-v1", …)` 返回 `complete: false`、`rows: []`、`totals: {}`、
-  诊断 `legacy_engine_required`，**不返回假装算出的完整金额**。
+  `reclassifications: []`、诊断 `legacy_engine_required`，**不返回假装算出的完整金额**。
 - legacy COA 是基线 `06-workbench/server/coa.mjs` 的逐项静态快照：保留顺序、
   `code / name / category / direction` 与 `contra` 的有无和值，不纠错旧名称、不增科目、不合并、不排序；
   独立冻结，不运行时引用可变 COA 数组。
@@ -165,10 +196,10 @@
 | sourceId | 文件 / 文号 | 标题 | URL | 本包适用范围 |
 |---|---|---|---|---|
 | `mof-2011-17` | 财会〔2011〕17号 | 小企业会计准则（正文） | https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852319878.pdf | 适用边界与报表基本要求 |
-| `mof-2011-17-appendix` | 财会〔2011〕17号 | 小企业会计准则附录（科目、主要账务处理、报表） | https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf | 小企基础科目与报表行项目；科目编号为参考编号 |
+| `mof-2011-17-appendix` | 财会〔2011〕17号 | 小企业会计准则附录（科目、主要账务处理、报表） | https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf | 小企基础科目与报表行项目；含附录第69页往来反向余额按明细方向列示；科目编号为参考编号 |
 | `mof-2006-18-appendix` | 财会〔2006〕18号 | 企业会计准则应用指南附录：会计科目和主要账务处理（商务部政府法规库转录） | https://policy.mofcom.gov.cn/claw/clawContent.shtml?id=13655 | 只取已核实的基础科目条目；不整篇视为 2026 现行 |
 | `mof-2023-01-cas-guide-reply` | 财政部会计司答复 | 企业会计准则科目需结合 2014 年以来应用指南 | https://www.mof.gov.cn/bd/mhwzzxly/hjs/202301/t20230104_3861971.htm | 说明 2006 附录不是唯一现行依据 |
-| `mof-2019-06-appendix-2` | 财会〔2019〕6号 | 一般企业财务报表格式（附件2：已执行新金融 / 收入 / 租赁准则） | https://www.mof.gov.cn/gkml/caizhengwengao/wg201901/wg201905/201909/P020190912379331344319.pdf | 企业内部一般报表行项目基础；附件1 不作为 2026 默认 |
+| `mof-2019-06-appendix-2` | 财会〔2019〕6号 | 一般企业财务报表格式（附件2：已执行新金融 / 收入 / 租赁准则） | https://www.mof.gov.cn/gkml/caizhengwengao/wg201901/wg201905/201909/P020190912379331344319.pdf | 企业内部一般报表行项目基础；含第9-10、80页投资收款，第8、81-82页预付工程与利息支出的分类基础；附件1 不作为 2026 默认 |
 | `mof-2017-22` | 财会〔2017〕22号 | 企业会计准则第14号——收入 | https://m.mof.gov.cn/zcfb/201707/t20170719_2653110.htm | 新收入准则替代旧收入 / 建造合同处理；复杂合同业务未实现 |
 | `mof-2026-07-interpretation-20` | 财会〔2026〕7号 | 企业会计准则解释第20号 | https://kjs.mof.gov.cn/zhengcefabu/202606/t20260615_3991686.htm | 含金融资产合同现金流量特征与货币缺乏可兑换性；本包不实现其分类计量与追溯调整 |
 | `repo-coa-baseline` | — | 派工基线 `coa.mjs` 逐项快照 | — | 仅 legacy 兼容读取，不是新企业模板依据 |
@@ -176,7 +207,8 @@
 ## 8. 明确未覆盖的业务（2026 范围）
 
 - 金融工具分类与计量（含解释第20号相关衔接与货币缺乏可兑换性）、长期股权投资；
-- 租赁、递延所得税、减值计算与减值分摊、期末期限重分类；
+- 租赁、递延所得税、减值计算与减值分摊、流动 / 非流动期限重分类（如一年内到期的长期借款）；
+  往来反向余额列示已按基础 profile 实现，不归入此项；
 - 新收入准则下的复杂合同资产负债、履约成本、退货等业务（旧工程施工模板不作为普遍现行模板）；
 - 合并报表、外币折算、行业专用业务（金融 / 保险等）；
 - 自动算税、纳税调整、税局申报文件与任何税局上传格式；
@@ -211,16 +243,24 @@
 | `account_scope_unsupported` | 对应业务本包未实现（`unsupported`） |
 | `account_scope_unknown` | 支持状态不可判定 |
 | `account_out_of_statement` | 该科目不进入所请求的报表（如成本科目进利润表） |
+| `account_reverse_balance_requires_detail` | 资产 / 负债 / 成本科目出现与自然方向相反的余额，且无已核实列示行；`reason` 固定说明缺什么明细 |
 | `legacy_engine_required` | legacy 账套必须走阶段 B 旧报表兼容路径 |
 
 现金流分类 `unknown` 的 `reason`：`counterpart_unmapped`、`counterpart_is_cash`、
 `counterpart_scope_requires_detail`、`counterpart_scope_unsupported`、
-`interest-payment-classification-ambiguous`、`classification_not_verified`、`legacy_engine_required`，
-以及科目语义冲突的对应诊断码。
+`interest-payment-classification-ambiguous`、`prepayment-purpose-ambiguous`、
+`finance-expense-interest-vs-fee-ambiguous`、`non-operating-income-purpose-ambiguous`、
+`non-operating-expense-purpose-ambiguous`、`other-receivable-purpose-ambiguous`、
+`other-payable-purpose-ambiguous`、`long-term-deferred-expense-purpose-ambiguous`、
+`classification_not_verified`、`legacy_engine_required`，以及科目语义冲突的对应诊断码。
+往来反向余额 `account_reverse_balance_requires_detail` 的 `reason`：
+`receivable-credit-balance-contract-liability-vs-advance-requires-detail`、
+`advance-receipt-debit-balance-receivable-vs-contract-asset-requires-detail`、
+`reverse-balance-presentation-not-defined`。
 
 ## 10. 阶段 A / 阶段 B 边界
 
-阶段 A（本次）只交付纯模块与定向测试：**纯规则已实现并自测、尚未接线，阶段 B 未完成**。
+阶段 A（本次）只交付纯模块与定向测试：**纯规则已实现并自测、独审回修待复审、尚未接线，阶段 B 未完成**。
 以下仍属阶段 B，且不得用纯模块单测替代：
 
 1. 持久 profile 字段与旧账套 `legacy` 迁移（含迁移前一致备份、WAL 恢复、失败原子性）；

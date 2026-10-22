@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-03a 双准则科目、报表映射与旧账套兼容迁移
 
 - 类型：会计 profile / 报表规则（阶段 A 纯模块）→ 持久迁移 + 真实接线（阶段 B）
-- 状态：**阶段 A 纯规则已实现并自测，尚未接线；阶段 B 未完成**（未提交、未建 PR、未合并）
+- 状态：**阶段 A 纯规则已实现并自测；独审回修已落地，待复审；尚未接线；阶段 B 未完成**（未提交、未建 PR、未合并）
 - 基线：`98977e04bd24aa293074021802191814f8c2a1d2`（root 核实的最新 main，PR #55 合并后）
 - 分支：`codex/huxiaoyang-code/local-03a`（独立 worktree，工作区名 `local-03a`）
 - 负责人：`huxiaoyang-code`（已核实）
@@ -33,7 +33,7 @@
 |---|---|
 | `06-workbench/server/accounting-profiles.mjs` | 三个 profile 的科目表 / 角色 / 来源 / 支持范围；新建 profile 选择与结构化拒绝 |
 | `06-workbench/server/accounting-report-rules.mjs` | 报表行项目规则、科目解析、纯计算、现金流对方科目分类 |
-| `06-workbench/test/accounting-standard-profiles.test.mjs` | 31 项定向回归（纯合成、内联 fixture，无 DB / 服务） |
+| `06-workbench/test/accounting-standard-profiles.test.mjs` | 38 项定向回归（原 31 + 独审回修 7；纯合成、内联 fixture，无 DB / 服务） |
 | `docs/tasks/LOCAL-03a.md` | 本任务单（阶段边界、验收、阶段 B 门槛） |
 | `docs/handoffs/LOCAL-03a.md` | 可恢复交接（基线 / 分支 / 命令 / 接口 / 待办） |
 | `docs/ACCOUNTING-STANDARDS.md` | profile 接口、来源、支持 / 不支持范围、错误码 |
@@ -62,6 +62,11 @@
 - scope 三态 `mapped / requires_detail / unsupported`：每个预置科目都有可说明状态与原因；
   非零未映射 / 待明细 / 未支持 / 语义冲突 → `complete=false` 且给出明确 code / 原因，
   totals 不伪报已核准完整；未使用的零余额复杂科目不阻断基础样例。
+- 往来反向余额：小企按附录第 69 页按明细方向列示 `1122↔2203`、`1123↔2202`；企业仅
+  `2202↔1123` 可确定双向，`1122/2203` 需合同细类时 incomplete；其他相反余额给
+  `account_reverse_balance_requires_detail`，不静默冲减，不称“期限重分类暂缓”。
+- 现金流分类：`1131/1132` → `investing`；`1123`、`5603/6603`、`5301/6301`、`5711/6711`、
+  `1221/2241`、`1801` 用途不明 → `unknown` + 固定 reason；单一对方科目不构成分类充足。
 
 ## 5. 阶段 A 验收（实际执行）
 
@@ -71,7 +76,9 @@
 node test/accounting-standard-profiles.test.mjs
 ```
 
-结果：**31 / 31 通过，exit 0**（2026-10-22，合成内联数据，无数据库、无服务、无网络）。
+结果：**38 / 38 通过，exit 0**（2026-10-22，合成内联数据，无数据库、无服务、无网络）。
+独审回修先红后绿：新增 7 项回归在修复前为 **31 / 38（7 项红）**，修复后 **38 / 38 绿**；
+原 31 项保持通过。
 覆盖：
 
 1. legacy COA 与现状 `coa.mjs` 完整逐项等值（含字段存在性 / `contra` / 顺序），profile / 嵌套对象深冻结、
@@ -86,6 +93,12 @@ node test/accounting-standard-profiles.test.mjs
 5. 现金流对方分类：小企 `3001` / 企业 `4001` → `financing`；小企 `4001` / 企业 `5001` → `operating`；
    固定资产购入 → `investing`；未知 / 现金 / 应付利息 → `unknown` + 明确 reason。
 6. 生产模块 import 图纯净：profiles 无 import，rules 只依赖 profiles；无 db / 文件 / 网络 / 环境变量引用。
+7. 独审回修 P1：小企 `1122/2203`、`1123/2202` 双向反向余额实算，多明细不净额抵消；
+   企业 `2202/1123` 可确定列示，`1122/2203` 缺合同细类 incomplete；无列示规则的相反余额
+   （如 `1121` 贷方、`2221` 借方）incomplete，不静默冲减。
+8. 独审回修 P2：`1131/1132` 投资收款 `investing`；`1123`、财务费用、营业外收支、
+   其他应收应付、长期待摊 `unknown` + 固定 reason；现金 / 受限现金仍 `unknown`，
+   正向投资分类（固定资产 / 在建工程 / 无形资产 / 短期投资 / 投资收益）保留。
 
 阶段 A **未**执行也无法替代：迁移、真实建账 / 导入 / 结转 / 封账、HTTP / Agent / MCP、
 导出接线、真实连续链与全套回归。
