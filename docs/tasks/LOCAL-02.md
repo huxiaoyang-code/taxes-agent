@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-02 会计金额、期末完整性与连续期间
 
 - 类型：后端领域（金额 / 计提 / 结转 / 封账 / 反操作守卫）+ 存储迁移 + 本地接线 + 契约文档 + 测试
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；独立审查的 2 项输出协议 P2 已回修（见 §13），本轮为**回修候选待 root 独立增量复审**；未提交 / 未建 PR / 未合并，待管理者验收与 root 最终审查**（head / merge 由管理者后补，本文件不预报）
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量与输出协议 2 项 P2 回修（见 §13）；本轮额外完成核心备份索引键语义回修（见 §14）；待 root 冻结与备份独立审查；未提交 / 未建 PR / 未合并**（head / merge 由管理者后补，本文件不预报）
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，**仅 10 个文档**，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
@@ -285,3 +285,36 @@ PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已合并（mer
 限制与事实边界：共享 HTTP / Agent / MCP / CLI 入口仍未接线（本包自己的 `period_end_check` / `asset_update` 真实入口不在输出协议层）；真实账套 / 税局未使用；本轮**未定位** §12 记录的 `import-incremental-http` exit 3221226505 原因（本次完整重跑未重现，不下因果结论，由 root 的 Windows 交付稳定性检查继续跟踪）。状态：**回修候选，待 root 独立增量复审**；未提交 / 未建 PR / 未合并。
 
 改动文件：`server/finance-output-policy.mjs`、`server/finance-model-adapter.mjs`、`test/finance-output-policy.test.mjs`、`test/finance-model-adapter.test.mjs`、MCP `finance-model-transport-test.mjs`。**transport 源码未改**（其 token 表已登记这 19 条码、上限 40 能容纳 39 字符），因此只补测试锁定一致性。本包会计 / DB / 期间源码与备份（339 / 53 同 worktree 已交付部分）均未改。
+
+## 14. 核心备份索引键语义回修（本轮，待 root 冻结与备份独审）
+
+独立审查在银行候选上发现并**实际证实**：继承旧版本（339，无 bank 组件）的核心备份模块也存在缺陷——
+`import_voucher_sources` 表级 `UNIQUE (source_system, enterprise_key, source_voucher_id)` 只把最后一列改成
+`COLLATE NOCASE`（列 / 默认值 / 外键全部不变）时，旧模块 `create` / `verify` / `restore` **全部放行**；
+恢复后真实增量导入已存 `Ref-A` 再追加 `ref-a` 抛 `ERR_SQLITE_ERROR`，而正常 `BINARY` 对照是 `applied`
+且两条来源并存。根因：`uniqueColumnGroups` 只用 `pragma_index_info` 读列名，没有校验真实唯一性的**比较规则**。
+
+本轮只改备份自有文件（本模块源码 / 测试 + 三份文档：契约 / 任务单 / 交接），**未改**会计 / DB / 期间 / 金额 / schema 迁移、
+输出 policy / adapter / transport、其它测试、`scripts/test-all.mjs`（无需重登记，套件已在其中）。
+
+| 项 | 修复 | 回归 |
+|---|---|---|
+| 唯一性键语义不完整 | 契约从「列名组」升级为 `uniqueConstraint(origin, collationKey(...))`：主键索引（`pk`）/ `UNIQUE` 约束（`u`）逐条声明，键列默认 `BINARY` + `ASC`；验证改用 `PRAGMA index_xinfo` 的键列 / `cid`（表达式）/ `coll`（排序规则）/ `desc`（方向）+ `index_list` 的 `unique` / `origin` / `partial`，与契约**一对一**匹配 | 域：`NOCASE` / `RTRIM` / 主键文字键 `NOCASE` / 主键键列 `DESC` 四种变体均 `unique`（语义不同，给 `reason` 与固定令牌明细） |
+| 额外 / 重复 / `origin=c` 唯一索引被忽略 | 不再只看 `origin='u'`：`origin=c` 的命名唯一索引同样参与比对，契约外一律 `unexpected_unique_index`；v1 已删除的 `idx_import_bindings_set` 不要求存在，重新加回即被拒 | 域：复活旧命名唯一索引 / 同一唯一键重复声明 / 表达式（令牌 `expression`）/ `WHERE` 部分索引四种变体均拒绝 |
+| `INTEGER PRIMARY KEY` 只看列名 | 新增 `rowidAlias` 契约：`true` 的表必须**没有**主键索引且 `rowid` 与主键列逐行相等（`WITHOUT ROWID` / `INTEGER PRIMARY KEY DESC` 都不符）→ `rowid_alias`；多列文字主键按真实主键索引比对 | 域：`vouchers.id INTEGER PRIMARY KEY DESC` 被拒（`rowid_alias` + 额外主键索引） |
+| 正常结构 / 旧产物不得误拒 | 非唯一查询索引不作为结构证据、也不据此拒绝；清单格式与 `formatVersion` **未变**（只强化验证，不新增字段） | 域：与真实 DDL **同义重建**的表、额外非唯一索引均正常备份 / 验证；两种 v3 / v4 均继续通过 |
+| 旧工具产物向后兼容 | 修改**前**用冻结源码生成真实 v4 / v3 合成备份（16 表 / 88 行与 87 行），修改后核对 | 实跑事实：清单 / 快照 sha256 未变、`verify` + `restore-new` 成功、恢复文件仍是备份时版本、期初 / 余额 / 凭证 / 来源一致；恢复库上真实增量导入追加 `ref-a` 仍 `applied` 且 `Ref-A` / `ref-a` 共存（费用 700 → 705）；同一 `NOCASE` 变体改前被放行、改后被源库与快照两侧同时拒绝 |
+| 错误输出边界 | 明细只含表名 / 列名 / 计数 + 固定令牌（`pk` / `u` / `c`、`BINARY` / `NOCASE` / `RTRIM`、`expression`、布尔升降序），未知排序规则只报 `nonstandard` | 域：每个变体都断言明细**不含** `CREATE TABLE` / `COLLATE` / `SELECT` / 本机路径 / 账套名 / 企业标识 / 表达式原文 |
+
+测试（本轮实跑）：`node test/local-backup.test.mjs`（`06-workbench`）→ **22 / 22 exit 0**（原 20 项含义全保留，
+新增第 21 项 v4 十变体 + 两组正常对照、第 22 项 v3 旧快照三变体 + v3 正常对照）；
+设 `REPORT_OFFICE_PYTHON` 后 `npm test` → **55 / 55 套 exit 0**（Office **21 / 21**、真实 **11 PDF** 几何通过）。
+先红后绿：同一套测试换回修改前模块（SHA256 回位核实）为 **20 / 22**，两个新项均以「期望拒绝、实际接受」失败，
+恢复修改后代码后 **22 / 22**。
+
+限制与事实边界：只对**唯一性**索引做语义比对（非唯一索引不改变业务规则）；`AUTOINCREMENT` 等存储选项不在本轮范围；
+表达式 / 部分索引目前只作为拒绝依据（真实 v3 / v4 没有）；未使用真实账套 / 税局；未改清单格式。
+状态：**实现与自测完成，待 root 冻结与备份独立审查**；未提交 / 未建 PR / 未合并。
+
+改动文件：`06-workbench/server/local-backup.mjs`、`06-workbench/test/local-backup.test.mjs`、
+`docs/LOCAL-BACKUP.md`、`docs/tasks/LOCAL-02.md`、`docs/handoffs/LOCAL-02.md`。

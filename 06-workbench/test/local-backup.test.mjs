@@ -2052,6 +2052,283 @@ process.stdout.write(JSON.stringify({
     const claimedV3 = tamperedDatabase("v4-claimed-v3", "DELETE FROM schema_migrations WHERE version = 4", v4Snapshot);
     assertSourceRejected(claimedV3, "source_structure_invalid", ["unexpected_columns"]);
   });
+
+  // ================================================================ 19. 唯一性键比较语义（v4）
+  await test("唯一性键比较语义：NOCASE / RTRIM / 主键文字键 / 键列顺序 / 升降序 / 表达式 / 部分索引 / 额外与重复唯一索引在源库与重算摘要的快照都被拒绝", () => {
+    // 独立复现（银行候选、继承自旧版本的核心缺陷）：只把 import_voucher_sources 表级 UNIQUE 的
+    // 最后一列改成 COLLATE NOCASE，列 / 默认值 / 外键全部不变，旧版本 create / verify / restore 全部放行；
+    // 而恢复后真实 IM 已存 Ref-A 再 append ref-a 会撞收敛（正常 BINARY 对照是 applied 且两条）。
+    // 下面用同一份真实快照的变体重算清单字节数与 sha256，确认只有唯一性键的**完整比较语义**能拦住它。
+    const v4Snapshot = join(BACKUP_DIR, LB.SNAPSHOT_FILE);
+    const assertSourceRejected = (dbFile, code, kinds = []) => {
+      const before = sha256File(dbFile);
+      const out = join(ROOT, `out-key-${Math.random().toString(16).slice(2)}`);
+      const result = runCli(["backup", "--db", dbFile, "--out", out]);
+      assertRejected(result, code);
+      assert.equal(fs.existsSync(out), false, "唯一性语义不符的源库不得创建备份目录");
+      assert.equal(sha256File(dbFile), before, "被拒绝时源库必须完全不变");
+      const details = JSON.stringify(result.json?.details ?? {});
+      for (const kind of kinds) assert.ok(details.includes(kind), `拒绝明细应含 ${kind}，实际 ${details}`);
+      // 错误不得回显 SQL / 本机路径 / 业务原值。
+      for (const forbidden of ["CREATE TABLE", "COLLATE", "SELECT ", ROOT, META.name, ENTERPRISE_KEY]) {
+        assert.equal(details.includes(forbidden), false, `拒绝明细不得回显 ${forbidden}：${details}`);
+      }
+      return result;
+    };
+    const assertSnapshotRejected = (label, file, kinds) => {
+      const dir = copyBackup();
+      replaceSnapshot(dir, file);
+      const manifest = JSON.parse(fs.readFileSync(join(dir, LB.MANIFEST_FILE), "utf8"));
+      assert.equal(manifest.snapshot.sha256, sha256File(join(dir, LB.SNAPSHOT_FILE)),
+        "前置条件：清单字节数与 sha256 已跟着变体重算（摘要本身自洽）");
+      const verify = runCli(["verify", "--backup", dir]);
+      assertRejected(verify, "structure_invalid");
+      const details = JSON.stringify(verify.json?.details ?? {});
+      for (const kind of kinds) assert.ok(details.includes(kind), `快照拒绝明细应含 ${kind}，实际 ${details}`);
+      const target = join(ROOT, `t-key-${label}`);
+      assertRejected(runCli(["restore-new", "--backup", dir, "--target", target]), "structure_invalid");
+      assert.equal(fs.existsSync(target), false, "唯一性语义不符的备份不得被恢复（不得留半成品目标）");
+      return details;
+    };
+
+    // ---- 变体 1 / 2：真实表级 UNIQUE 的最后一列改 COLLATE NOCASE / RTRIM ----
+    const voucherSourcesDdl = (uniqueClause) => `
+      CREATE TABLE import_voucher_sources_x (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_system TEXT NOT NULL,
+        enterprise_key TEXT NOT NULL,
+        source_voucher_id TEXT NOT NULL,
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+        voucher_id INTEGER NOT NULL,
+        voucher_fingerprint TEXT NOT NULL DEFAULT '',
+        content_fingerprint TEXT NOT NULL,
+        batch_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        ${uniqueClause}
+      );
+      INSERT INTO import_voucher_sources_x SELECT * FROM import_voucher_sources;
+      DROP TABLE import_voucher_sources;
+      ALTER TABLE import_voucher_sources_x RENAME TO import_voucher_sources;
+    `;
+    // 等价重建（除比较规则外逐字相同）必须被放行：证明拒绝来自比较语义，不是重建 / 重命名本身。
+    const identicalRebuild = tamperedDatabase("unique-identical",
+      voucherSourcesDdl("UNIQUE (source_system, enterprise_key, source_voucher_id)"));
+    const identicalOut = join(ROOT, "out-unique-identical");
+    const identicalResult = runCli(["backup", "--db", identicalRebuild, "--out", identicalOut]);
+    assert.equal(identicalResult.code, 0,
+      `与真实 DDL 同义的重建不得被拒绝：${identicalResult.stdout}${identicalResult.stderr}`);
+    assert.equal(runCli(["verify", "--backup", identicalOut]).code, 0, "同义重建库的备份必须可验证");
+
+    // 前置条件：NOCASE 变体真的改变了业务（真实 SQLite 行为），不是「无害的结构差异」。
+    const nocaseVariant = tamperedDatabase("unique-nocase",
+      voucherSourcesDdl("UNIQUE (source_system, enterprise_key, source_voucher_id COLLATE NOCASE)"));
+    const rtrimVariant = tamperedDatabase("unique-rtrim",
+      voucherSourcesDdl("UNIQUE (source_system, enterprise_key, source_voucher_id COLLATE RTRIM)"));
+    const sourceVoucherIds = (file) => {
+      const conn = openSnapshot(file);
+      try {
+        return conn.prepare("SELECT source_voucher_id FROM import_voucher_sources ORDER BY id").all()
+          .map((row) => String(row.source_voucher_id));
+      } finally { conn.close(); }
+    };
+    const originalIds = sourceVoucherIds(v4Snapshot);
+    assert.deepEqual(sourceVoucherIds(nocaseVariant), originalIds, "变体不得改动已有数据（否则内容摘要就能拦住）");
+    const probeNocase = new DatabaseSync(nocaseVariant);
+    try {
+      probeNocase.exec("BEGIN");
+      try {
+        assert.throws(() => probeNocase.exec(`INSERT INTO import_voucher_sources
+          (source_system, enterprise_key, source_voucher_id, account_set_id, voucher_id,
+           content_fingerprint, batch_id, created_at)
+          SELECT source_system, enterprise_key, lower(source_voucher_id), account_set_id, voucher_id,
+                 content_fingerprint, batch_id, created_at FROM import_voucher_sources LIMIT 1`),
+        /UNIQUE constraint failed/,
+        "前置条件：NOCASE 下只差大小写的来源凭证 ID 必须撞唯一约束（这正是必须拒绝它的原因）");
+      } finally { probeNocase.exec("ROLLBACK"); }
+    } finally { probeNocase.close(); }
+    const controlProbe = new DatabaseSync(v4Snapshot);
+    try {
+      // 正常对照：BINARY 下小写形式不命中已存的同字母大写来源 ID（两套语义在业务上确实不同）。
+      assert.ok(originalIds.some((id) => id !== id.toLowerCase()), "前置条件：快照里应有含大写的来源 ID");
+      const hits = controlProbe.prepare(
+        "SELECT COUNT(*) AS n FROM import_voucher_sources WHERE source_voucher_id = lower(?)",
+      ).get(originalIds[0]);
+      assert.equal(Number(hits.n), 0, "对照：BINARY 下大小写不同的来源 ID 不互相命中");
+    } finally { controlProbe.close(); }
+
+    // ---- 变体 3：主键里的文字键比较规则（opening_balances 的 code 是主键文字列）----
+    const pkNocase = tamperedDatabase("unique-pk-nocase", `
+      CREATE TABLE opening_balances_x (
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+        code TEXT COLLATE NOCASE NOT NULL,
+        debit REAL NOT NULL DEFAULT 0,
+        credit REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (account_set_id, code)
+      );
+      INSERT INTO opening_balances_x SELECT * FROM opening_balances;
+      DROP TABLE opening_balances;
+      ALTER TABLE opening_balances_x RENAME TO opening_balances;
+    `);
+
+    // ---- 变体 4：主键键列降序（真实 DDL 是升序）----
+    const pkDesc = tamperedDatabase("unique-pk-desc", `
+      CREATE TABLE periods_x (
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+        period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+        PRIMARY KEY (account_set_id, period DESC)
+      );
+      INSERT INTO periods_x SELECT * FROM periods;
+      DROP TABLE periods;
+      ALTER TABLE periods_x RENAME TO periods;
+    `);
+
+    // ---- 变体 5：UNIQUE 键列顺序反转（(code, account_set_id) 是另一条约束）----
+    const reversedUnique = tamperedDatabase("unique-reversed", `
+      CREATE TABLE accounts_x (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+        code TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, direction TEXT NOT NULL,
+        contra INTEGER NOT NULL DEFAULT 0, is_leaf INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (code, account_set_id)
+      );
+      INSERT INTO accounts_x SELECT * FROM accounts;
+      DROP TABLE accounts;
+      ALTER TABLE accounts_x RENAME TO accounts;
+    `);
+
+    // ---- 变体 6：把 v1 已删除的旧命名唯一索引加回来（现结构没有它，不得按旧 DDL 认）----
+    const resurrectedIndex = tamperedDatabase("unique-resurrected",
+      "CREATE UNIQUE INDEX idx_import_bindings_set ON import_source_bindings (enterprise_key, source_system)");
+
+    // ---- 变体 7：同一唯一键再声明一次（origin=c 的命名重复）----
+    const duplicateUnique = tamperedDatabase("unique-duplicate",
+      "CREATE UNIQUE INDEX ux_voucher_source_dup ON import_voucher_sources (source_system, enterprise_key, source_voucher_id)");
+
+    // ---- 变体 8 / 9：表达式唯一索引 / 部分唯一索引 ----
+    const expressionUnique = tamperedDatabase("unique-expression", "CREATE UNIQUE INDEX ux_expr ON vouchers ((id + 0))");
+    const partialUnique = tamperedDatabase("unique-partial",
+      "CREATE UNIQUE INDEX ux_partial ON vouchers (account_set_id, period, word, number) WHERE status = 'posted'");
+
+    // ---- 变体 10：INTEGER PRIMARY KEY DESC（不再是 rowid 别名，另建了降序主键索引）----
+    const rowidDesc = tamperedDatabase("unique-rowid-desc", `
+      CREATE TABLE vouchers_x (
+        id INTEGER PRIMARY KEY DESC,
+        account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+        period TEXT NOT NULL, voucher_date TEXT NOT NULL, word TEXT NOT NULL DEFAULT '记',
+        number INTEGER NOT NULL, summary TEXT, status TEXT NOT NULL DEFAULT 'draft',
+        created_at TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'normal'
+      );
+      INSERT INTO vouchers_x SELECT * FROM vouchers;
+      DROP TABLE vouchers;
+      ALTER TABLE vouchers_x RENAME TO vouchers;
+    `);
+
+    const variants = [
+      ["nocase", nocaseVariant, ["unique", "import_voucher_sources", "NOCASE", "semantics"]],
+      ["rtrim", rtrimVariant, ["unique", "import_voucher_sources", "RTRIM"]],
+      ["pk-nocase", pkNocase, ["unique", "opening_balances", "pk", "NOCASE"]],
+      ["pk-desc", pkDesc, ["unique", "periods", "pk"]],
+      ["reversed", reversedUnique, ["unique", "unexpected_unique_index", "accounts"]],
+      ["resurrected", resurrectedIndex, ["unexpected_unique_index", "import_source_bindings"]],
+      ["duplicate", duplicateUnique, ["unexpected_unique_index", "import_voucher_sources"]],
+      ["expression", expressionUnique, ["unexpected_unique_index", "expression"]],
+      ["partial", partialUnique, ["unexpected_unique_index", "vouchers"]],
+      ["rowid-desc", rowidDesc, ["rowid_alias", "vouchers"]],
+    ];
+    for (const [label, file, kinds] of variants) {
+      // 19.1 源库入口
+      const sourceResult = assertSourceRejected(file, "source_structure_invalid", kinds);
+      // 表达式索引的拒绝明细不得回显表达式原文
+      if (label === "expression") {
+        assert.equal(JSON.stringify(sourceResult.json?.details ?? {}).includes("id + 0"), false,
+          "拒绝明细不得回显索引表达式原文");
+      }
+      // 19.2 快照入口：重算字节数与 sha256 后仍被真实结构校验拦住
+      assertSnapshotRejected(label, file, kinds);
+    }
+
+    // 19.3 正常索引不误拒绝：额外**非唯一**查询索引不改变唯一性 / 去重语义，不得据此拒绝
+    const perfIndex = tamperedDatabase("unique-perf-index", "CREATE INDEX ux_perf ON vouchers (period)");
+    const perfOut = join(ROOT, "out-perf-index");
+    const perfResult = runCli(["backup", "--db", perfIndex, "--out", perfOut]);
+    assert.equal(perfResult.code, 0, `非唯一索引不得被误拒：${perfResult.stdout}${perfResult.stderr}`);
+    assert.equal(runCli(["verify", "--backup", perfOut]).code, 0, "带非唯一索引的合法备份必须可验证");
+    // 19.4 真实 v4 备份本身仍正常（没有把正常结构误判成额外唯一索引），且清单格式未变
+    assert.equal(runCli(["verify", "--backup", BACKUP_DIR]).code, 0, "真实 v4 备份必须继续通过");
+    const realManifest = JSON.parse(fs.readFileSync(join(BACKUP_DIR, LB.MANIFEST_FILE), "utf8"));
+    assert.equal(Object.prototype.hasOwnProperty.call(realManifest, "indexes"), false,
+      "清单格式未变：不新增索引字段（防止旧清单结构摘要无故失配）");
+    assert.deepEqual(realManifest.structure.tables, [...realManifest.structure.tables].sort(),
+      "清单结构字段仍只有原有的版本 / 迁移 / 表清单");
+  });
+
+  // ================================================================ 20. 唯一性键比较语义（v3 旧快照）
+  await test("v3 旧快照的唯一性语义变体（NOCASE / 主键文字键 / 复活旧命名唯一索引）同样拒绝且不产恢复目标", () => {
+    const v3Source = join(ROOT, "v3-key-source.db");
+    deriveV3Database(join(V4_BACKUP, LB.SNAPSHOT_FILE), v3Source);
+    const v3Backup = join(ROOT, "backup-v3-key");
+    const backup = runCli(["backup", "--db", v3Source, "--out", v3Backup]);
+    assert.equal(backup.code, 0, `v3 对照备份应成功：${backup.stdout}${backup.stderr}`);
+    const v3Snapshot = join(v3Backup, LB.SNAPSHOT_FILE);
+    assert.equal(JSON.parse(fs.readFileSync(join(v3Backup, LB.MANIFEST_FILE), "utf8")).structure.schemaVersion, 3);
+
+    const variants = [
+      ["v3-nocase", `
+        CREATE TABLE import_voucher_sources_x (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source_system TEXT NOT NULL, enterprise_key TEXT NOT NULL,
+          source_voucher_id TEXT NOT NULL,
+          account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+          voucher_id INTEGER NOT NULL,
+          voucher_fingerprint TEXT NOT NULL DEFAULT '',
+          content_fingerprint TEXT NOT NULL, batch_id TEXT NOT NULL, created_at TEXT NOT NULL,
+          UNIQUE (source_system, enterprise_key, source_voucher_id COLLATE NOCASE)
+        );
+        INSERT INTO import_voucher_sources_x SELECT * FROM import_voucher_sources;
+        DROP TABLE import_voucher_sources;
+        ALTER TABLE import_voucher_sources_x RENAME TO import_voucher_sources;
+      `, ["unique", "import_voucher_sources", "NOCASE"]],
+      ["v3-pk-nocase", `
+        CREATE TABLE opening_balances_x (
+          account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+          code TEXT COLLATE NOCASE NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (account_set_id, code)
+        );
+        INSERT INTO opening_balances_x SELECT * FROM opening_balances;
+        DROP TABLE opening_balances;
+        ALTER TABLE opening_balances_x RENAME TO opening_balances;
+      `, ["unique", "opening_balances", "NOCASE"]],
+      ["v3-resurrected",
+        "CREATE UNIQUE INDEX idx_import_bindings_set ON import_source_bindings (enterprise_key, source_system)",
+        ["unexpected_unique_index", "import_source_bindings"]],
+    ];
+    for (const [label, statements, kinds] of variants) {
+      const file = tamperedDatabase(label, statements, v3Snapshot);
+      const out = join(ROOT, `out-${label}`);
+      const sourceResult = runCli(["backup", "--db", file, "--out", out]);
+      assertRejected(sourceResult, "source_structure_invalid");
+      const sourceDetails = JSON.stringify(sourceResult.json?.details ?? {});
+      for (const kind of kinds) assert.ok(sourceDetails.includes(kind), `${label} 应含 ${kind}，实际 ${sourceDetails}`);
+      assert.equal(fs.existsSync(out), false, "v3 变体源库不得创建备份目录");
+
+      const dir = join(ROOT, `backup-${label}`);
+      fs.cpSync(v3Backup, dir, { recursive: true });
+      replaceSnapshot(dir, file);
+      const verify = runCli(["verify", "--backup", dir]);
+      assertRejected(verify, "structure_invalid");
+      const verifyDetails = JSON.stringify(verify.json?.details ?? {});
+      for (const kind of kinds) assert.ok(verifyDetails.includes(kind), `${label} 快照应含 ${kind}，实际 ${verifyDetails}`);
+      assert.ok(verifyDetails.includes("\"schemaVersion\":3"), `v3 拒绝明细应指向 3，实际 ${verifyDetails}`);
+      const target = join(ROOT, `t-${label}`);
+      assertRejected(runCli(["restore-new", "--backup", dir, "--target", target]), "structure_invalid");
+      assert.equal(fs.existsSync(target), false, "v3 变体备份不得被恢复");
+    }
+    // 正常对照：未变形的 v3 备份仍然可验证 / 可恢复
+    assert.equal(runCli(["verify", "--backup", v3Backup]).code, 0, "真实 v3 备份必须继续通过");
+    const controlTarget = join(ROOT, "t-v3-key-control");
+    assert.equal(runCli(["restore-new", "--backup", v3Backup, "--target", controlTarget]).code, 0,
+      "真实 v3 备份必须继续可恢复");
+  });
 } catch (error) {
   console.error("测试初始化失败：", error);
   results.push([false, "初始化"]);
