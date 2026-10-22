@@ -1,0 +1,446 @@
+#!/usr/bin/env node
+/**
+ * LOCAL-04 银行对账 CLI 端到端回归（每个命令都是独立子进程）。
+ *
+ * 覆盖：显式 --db 强制、无参 / 拼错路径不创建默认库、新库真实创建入口、
+ * 预检 / 导入 / 批次 / 流水 / 候选 / 确认 / 取消 / 再确认 / 歧义判定 / 余额调节 / 状态 / 审计
+ * 的跨进程持久化与幂等；错误码与退出码；已有库无备份时拒绝迁移（exit 5）。
+ *
+ * 全部使用合成临时目录、合成企业与合成 CSV，不读取真实账套 / 银行文件 / 凭据。
+ * 运行：node test/bank-reconcile-cli.test.mjs（在 06-workbench 目录）
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+
+const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
+const CLI = join(WORKBENCH, "scripts", "bank-reconcile.mjs");
+const baseDir = mkdtempSync(join(tmpdir(), "wb-bank-cli-"));
+const dbPath = join(baseDir, "workbench.db");
+
+process.on("exit", () => {
+  try { if (db) db.close(); } catch { /* ignore */ }
+  try { rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
+});
+
+function run(args, { env = {} } = {}) {
+  const clean = { ...process.env };
+  delete clean.WORKBENCH_DATA_DIR;
+  const result = spawnSync(process.execPath, [CLI, ...args], {
+    cwd: WORKBENCH, env: { ...clean, ...env }, encoding: "utf8", timeout: 120000,
+  });
+  return { status: result.status, stdout: (result.stdout || "").trim(), stderr: (result.stderr || "").trim() };
+}
+
+function okJson(args, options) {
+  const result = run(args, options);
+  assert.equal(result.status, 0, `${args.join(" ")} exit=${result.status}\nSTDOUT ${result.stdout}\nSTDERR ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  return parsed;
+}
+
+function expectError(args, code, status, options) {
+  const result = run(args, options);
+  assert.equal(result.status, status, `${args.join(" ")} exit=${result.status}\nSTDOUT ${result.stdout}\nSTDERR ${result.stderr}`);
+  assert.equal(result.stdout, "", "失败时不得往 stdout 写成功结果");
+  const parsed = JSON.parse(result.stderr);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.error.code, code, `期望 ${code}，实际 ${parsed.error.code}：${parsed.error.message}`);
+  assert.ok(!/SELECT |INSERT INTO|UPDATE |constraint failed at|at Object\./i.test(result.stderr),
+    "错误输出不得包含原始 SQL / 堆栈");
+  return parsed;
+}
+
+const file = (name, content) => {
+  const path = join(baseDir, name);
+  writeFileSync(path, content, "utf8");
+  return path;
+};
+const money = (text) => text;
+
+// ------------------------------------------------------------------ 新库创建 + 合成账务
+let db;
+let A;
+let setA;
+let setB;
+let setC;
+let voucherOut;
+let voucherIn;
+let entryOut;
+let entryIn;
+
+test("init-db：在不存在路径上通过真实创建入口建库并初始化 bank_*；已存在则拒绝", async () => {
+  const created = okJson(["init-db", "--db", dbPath]);
+  assert.equal(created.bankSchema.migrated, true);
+  assert.equal(created.bankSchema.creation, "fresh-database");
+  assert.equal(created.importSchema.to, 3);
+  assert.ok(existsSync(dbPath));
+  expectError(["init-db", "--db", dbPath], "db_already_exists", 2);
+  expectError(["init-db", "--db", join(baseDir, "other.db")], "init_db_filename_required", 2);
+
+  // 用真实会计 API 在同一库建两个企业账套、期初、posted / 草稿凭证。
+  process.env.WORKBENCH_DATA_DIR = baseDir;
+  ({ db } = await import("../server/db.mjs"));
+  A = await import("../server/accounting.mjs");
+
+  setA = A.createAccountSet({ name: "合成甲公司", start_period: "2026-01" });
+  A.setOpeningBalances(setA.id, [
+    { code: "1002", debit: 800, credit: 0 },
+    { code: "3001", debit: 0, credit: 800 },
+  ]);
+  voucherIn = A.createVoucher(setA.id, {
+    period: "2026-01", voucher_date: "2026-01-10", status: "posted",
+    entries: [{ code: "1002", debit: 300, credit: 0 }, { code: "1122", debit: 0, credit: 300 }],
+  });
+  voucherOut = A.createVoucher(setA.id, {
+    period: "2026-01", voucher_date: "2026-01-11", status: "posted",
+    entries: [{ code: "5602", debit: 100, credit: 0 }, { code: "1002", debit: 0, credit: 100 }],
+  });
+  A.createVoucher(setA.id, {
+    period: "2026-01", voucher_date: "2026-01-12", status: "draft",
+    entries: [{ code: "1002", debit: 50, credit: 0 }, { code: "1122", debit: 0, credit: 50 }],
+  });
+  setB = A.createAccountSet({ name: "合成乙公司", start_period: "2026-01" });
+  A.setOpeningBalances(setB.id, [
+    { code: "1002", debit: 100, credit: 0 },
+    { code: "3001", debit: 0, credit: 100 },
+  ]);
+  entryOut = db.prepare(`SELECT id FROM voucher_entries WHERE voucher_id=? AND code='1002'`).get(voucherOut.id).id;
+  entryIn = db.prepare(`SELECT id FROM voucher_entries WHERE voucher_id=? AND code='1002'`).get(voucherIn.id).id;
+
+  // 第三个账套：余额调节固定手算场景（两边期初 800.00，未达收 300/500，未达付 100/100）。
+  setC = A.createAccountSet({ name: "合成丙公司", start_period: "2026-01" });
+  A.setOpeningBalances(setC.id, [
+    { code: "1002", debit: 800, credit: 0 },
+    { code: "3001", debit: 0, credit: 800 },
+  ]);
+  A.createVoucher(setC.id, {
+    period: "2026-01", voucher_date: "2026-01-10", status: "posted",
+    entries: [{ code: "1002", debit: 300, credit: 0 }, { code: "1122", debit: 0, credit: 300 }],
+  });
+  A.createVoucher(setC.id, {
+    period: "2026-01", voucher_date: "2026-01-11", status: "posted",
+    entries: [{ code: "5602", debit: 100, credit: 0 }, { code: "1002", debit: 0, credit: 100 }],
+  });
+});
+
+const mappingPath = file("mapping.json", JSON.stringify({
+  columns: { date: "日期", summary: "摘要", amount: "金额", direction: "方向", refId: "流水号" },
+  amountMode: "amount_direction",
+  directionLabels: { inflow: ["收"], outflow: ["付"] },
+  currency: "CNY",
+}, null, 2));
+const mappingNoRefPath = file("mapping-noref.json", JSON.stringify({
+  columns: { date: "日期", summary: "摘要", amount: "金额", direction: "方向" },
+  amountMode: "amount_direction",
+  directionLabels: { inflow: ["收"], outflow: ["付"] },
+  currency: "CNY",
+}, null, 2));
+const csvA = file("statement-a.csv", "\uFEFF日期,摘要,金额,方向,流水号\r\n"
+  + "2026-01-20,客户回款,\"500.00\",收,CLI-1\r\n"
+  + "2026-01-11,支付货款,100.00,付,CLI-2\r\n");
+
+test("CLI 账户登记：两企业各自银行账户，跨账套引用与重复科目被拒绝", () => {
+  const a = okJson(["account-register", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--source", "local-statement", "--gl-code", "1002",
+    "--name", "基本户", "--number", "6222****0001"]);
+  assert.equal(a.created, true);
+  assert.equal(a.account.currency, "CNY");
+  const b = okJson(["account-register", "--db", dbPath, "--account-set", String(setB.id),
+    "--bank-account", "BANK-B", "--source", "local-statement", "--gl-code", "1002"]);
+  assert.equal(b.created, true);
+
+  const list = okJson(["accounts", "--db", dbPath, "--account-set", String(setA.id)]);
+  assert.equal(list.accounts.length, 1);
+  assert.equal(list.accounts[0].bankAccountId, "BANK-A");
+
+  expectError(["account-register", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A2", "--source", "local-statement", "--gl-code", "1002"],
+  "bank_gl_account_already_bound", 3);
+  expectError(["account-register", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-U", "--source", "local-statement", "--gl-code", "1002", "--currency", "USD"],
+  "currency_unsupported", 2);
+  expectError(["account-register", "--db", dbPath, "--account-set", "99999",
+    "--bank-account", "BANK-X", "--source", "local-statement", "--gl-code", "1002"],
+  "account_set_not_found", 2);
+});
+
+test("CLI 预检不写库；导入 / 同批重试 / 同文件新批次都幂等", () => {
+  const before = db.prepare(`SELECT COUNT(*) AS n FROM bank_transactions`).get().n;
+  const preview = okJson(["import-preview", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--source", "local-statement", "--period", "2026-01",
+    "--csv", csvA, "--mapping", mappingPath]);
+  assert.equal(preview.preview.ok, true, JSON.stringify(preview.preview.errors));
+  assert.equal(preview.preview.stats.validRows, 2);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM bank_transactions`).get().n, before, "预检不得写库");
+
+  const imported = okJson(["import", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--source", "local-statement", "--period", "2026-01",
+    "--batch", "CLI-A1", "--csv", csvA, "--mapping", mappingPath]);
+  assert.equal(imported.replay, false);
+  assert.equal(imported.batch.status, "completed");
+  assert.equal(imported.batch.importedRows, 2);
+
+  const replay = okJson(["import", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--source", "local-statement", "--period", "2026-01",
+    "--batch", "CLI-A1", "--csv", csvA, "--mapping", mappingPath]);
+  assert.equal(replay.replay, true);
+  assert.equal(replay.replayKind, "same-batch");
+
+  const fileReplay = okJson(["import", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--source", "local-statement", "--period", "2026-01",
+    "--batch", "CLI-A2", "--csv", csvA, "--mapping", mappingPath]);
+  assert.equal(fileReplay.replay, true);
+  assert.equal(fileReplay.replayOfBatchId, "CLI-A1");
+  assert.equal(fileReplay.batch.noNewTransactions, undefined);
+  assert.equal(fileReplay.batch.result.noNewTransactions, true);
+
+  const txns = okJson(["transactions", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A"]);
+  assert.equal(txns.transactions.length, 2);
+  assert.equal(txns.totals.inflowCents, 50000);
+  assert.equal(txns.totals.outflowCents, 10000);
+
+  const batches = okJson(["batches", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A"]);
+  assert.equal(batches.batches.length, 2);
+  assert.ok(batches.batches.every((b) => b.status === "completed"));
+});
+
+test("CLI 候选 / 确认 / 取消 / 再确认跨进程持久；草稿不参与候选", () => {
+  const txns = okJson(["transactions", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--status", "unmatched"]);
+  const outflow = txns.transactions.find((t) => t.direction === "outflow");
+  const inflow = txns.transactions.find((t) => t.direction === "inflow");
+
+  const candOut = okJson(["candidates", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--transaction", String(outflow.transactionId)]);
+  assert.equal(candOut.selection, "single");
+  assert.equal(candOut.candidates[0].voucherId, voucherOut.id);
+  assert.equal(candOut.candidates[0].entryId, entryOut);
+
+  // 未确认前不能取消匹配；确认必须给理由。
+  expectError(["confirm", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--transaction", String(outflow.transactionId), "--voucher", String(voucherOut.id),
+    "--entry", String(entryOut), "--reason", ""], "missing_argument", 2);
+
+  const confirmed = okJson(["confirm", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--transaction", String(outflow.transactionId),
+    "--voucher", String(voucherOut.id), "--entry", String(entryOut), "--reason", "回单与凭证一致"]);
+  assert.equal(confirmed.match.status, "confirmed");
+  assert.equal(confirmed.match.snapshot.amountCents, 10000);
+
+  expectError(["confirm", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--transaction", String(outflow.transactionId), "--voucher", String(voucherOut.id),
+    "--entry", String(entryOut), "--reason", "重复确认"], "match_already_confirmed", 3);
+
+  // 草稿凭证的分录不能确认。
+  const draft = db.prepare(`SELECT v.id AS voucher_id, e.id AS entry_id FROM vouchers v
+                              JOIN voucher_entries e ON e.voucher_id=v.id
+                             WHERE v.account_set_id=? AND v.status='draft' AND e.code='1002'`).get(setA.id);
+  expectError(["confirm", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--transaction", String(inflow.transactionId), "--voucher", String(draft.voucher_id),
+    "--entry", String(draft.entry_id), "--reason", "草稿"], "voucher_not_posted", 3);
+
+  const matches = okJson(["matches", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A"]);
+  assert.equal(matches.matches.length, 1);
+  const matchId = matches.matches[0].matchId;
+
+  expectError(["cancel", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--match", String(matchId), "--reason", ""], "missing_argument", 2);
+  const cancelled = okJson(["cancel", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--match", String(matchId), "--reason", "凭证摘要录错，重新核对"]);
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.match.status, "cancelled");
+  const cancelledAgain = okJson(["cancel", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--match", String(matchId), "--reason", "重复取消"]);
+  assert.equal(cancelledAgain.idempotent, true);
+
+  const reconfirmed = okJson(["confirm", "--db", dbPath, "--account-set", String(setA.id),
+    "--bank-account", "BANK-A", "--transaction", String(outflow.transactionId),
+    "--voucher", String(voucherOut.id), "--entry", String(entryOut), "--reason", "改正后重新确认"]);
+  assert.notEqual(reconfirmed.match.matchId, matchId);
+
+  const status = okJson(["status", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A"]);
+  assert.equal(status.matches.confirmed, 1);
+  assert.equal(status.matches.cancelled, 1);
+  assert.equal(status.transactions.matched, 1);
+
+  const audit = okJson(["audit", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A"]);
+  const types = audit.events.map((e) => e.eventType);
+  assert.ok(types.includes("match_confirmed"));
+  assert.ok(types.includes("match_cancelled"));
+  assert.ok(audit.events.filter((e) => e.eventType === "match_cancelled").length === 1, "重复取消不得重复刷审计");
+});
+
+test("CLI 余额调节：固定手算 140000/140000 差额 0；1 分差异降级为待核对；text 输出可读", () => {
+  const csvC = file("statement-c.csv", "日期,摘要,金额,方向,流水号\n"
+    + "2026-01-20,银行收款,500.00,收,REC-C1\n"
+    + "2026-01-21,银行付款,100.00,付,REC-C2\n");
+  okJson(["account-register", "--db", dbPath, "--account-set", String(setC.id),
+    "--bank-account", "BANK-C", "--source", "local-statement", "--gl-code", "1002"]);
+  const imported = okJson(["import", "--db", dbPath, "--account-set", String(setC.id),
+    "--bank-account", "BANK-C", "--source", "local-statement", "--period", "2026-01",
+    "--batch", "CLI-C1", "--csv", csvC, "--mapping", mappingPath]);
+  assert.equal(imported.batch.importedRows, 2);
+
+  const reconciled = okJson(["reconcile", "--db", dbPath, "--account-set", String(setC.id),
+    "--bank-account", "BANK-C", "--period", "2026-01", "--as-of", "2026-01-31",
+    "--statement-open", "800.00", "--statement-close", "1200.00",
+    "--coverage-from", "2026-01-01", "--coverage-to", "2026-01-31",
+    "--statement-source", "合成 2026-01 银行对账单"]);
+  assert.equal(reconciled.status, "reconciled");
+  assert.equal(reconciled.book.closingCents, 100000);
+  assert.equal(reconciled.statement.computedCloseCents, 120000);
+  assert.equal(reconciled.outstanding.totals.bookReceivedBankMissingCents, 30000);
+  assert.equal(reconciled.outstanding.totals.bookPaidBankMissingCents, 10000);
+  assert.equal(reconciled.outstanding.totals.bankReceivedBookMissingCents, 50000);
+  assert.equal(reconciled.outstanding.totals.bankPaidBookMissingCents, 10000);
+  assert.equal(reconciled.adjusted.bookCents, 140000);
+  assert.equal(reconciled.adjusted.bankCents, 140000);
+  assert.equal(reconciled.adjusted.differenceCents, 0);
+
+  const cents = okJson(["reconcile", "--db", dbPath, "--account-set", String(setC.id),
+    "--bank-account", "BANK-C", "--period", "2026-01", "--as-of", "2026-01-31",
+    "--statement-open", "800.00", "--statement-close", "1199.99",
+    "--coverage-from", "2026-01-01", "--coverage-to", "2026-01-31",
+    "--statement-source", "合成对账单（期末少 1 分）"]);
+  assert.equal(cents.status, "pending_review");
+  assert.equal(cents.statement.computedCloseCents, 120000);
+  assert.equal(cents.statement.differenceCents, -1);
+  assert.equal(cents.adjusted.bookCents, 140000);
+  assert.equal(cents.adjusted.bankCents, 139999);
+  assert.equal(cents.adjusted.differenceCents, 1);
+  assert.ok(cents.issues.some((i) => i.code === "statement_balance_mismatch"));
+
+  const text = run(["reconcile", "--db", dbPath, "--account-set", String(setC.id),
+    "--bank-account", "BANK-C", "--period", "2026-01", "--as-of", "2026-01-31",
+    "--statement-open", "800.00", "--statement-close", "1200.00",
+    "--coverage-from", "2026-01-01", "--coverage-to", "2026-01-31",
+    "--statement-source", "合成 2026-01 银行对账单", "--format", "text"]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /调节后账面 = 1400\.00/);
+  assert.match(text.stdout, /调节后银行 = 1400\.00/);
+  assert.match(text.stdout, /差额 = 0\.00/);
+});
+
+test("CLI 无稳定 ID 疑似重复：保存证据、人工判定、跨进程幂等", () => {
+  const csvDup = file("amb-1.csv", "日期,摘要,金额,方向\n2026-01-05,同摘要,50.00,收\n2026-01-05,同摘要,50.00,收\n");
+  const csvOverlap = file("amb-2.csv", "日期,摘要,金额,方向\n2026-01-05,同摘要,50.00,收\n");
+  const first = okJson(["import", "--db", dbPath, "--account-set", String(setB.id),
+    "--bank-account", "BANK-B", "--source", "local-statement", "--period", "2026-01",
+    "--batch", "AMB-1", "--csv", csvDup, "--mapping", mappingNoRefPath]);
+  assert.equal(first.batch.status, "completed");
+  assert.equal(first.batch.importedRows, 2, "文件内同特征两条记录可能是两笔，必须都保留");
+
+  const second = okJson(["import", "--db", dbPath, "--account-set", String(setB.id),
+    "--bank-account", "BANK-B", "--source", "local-statement", "--period", "2026-01",
+    "--batch", "AMB-2", "--csv", csvOverlap, "--mapping", mappingNoRefPath]);
+  assert.equal(second.batch.status, "pending_review");
+  assert.equal(second.batch.ambiguousRows, 1);
+
+  const pending = okJson(["ambiguities", "--db", dbPath, "--account-set", String(setB.id), "--bank-account", "BANK-B"]);
+  assert.equal(pending.pending, 1);
+  const ambiguityId = pending.ambiguities[0].ambiguityId;
+  assert.equal(pending.ambiguities[0].candidateTransactionIds.length, 2);
+
+  expectError(["resolve-ambiguity", "--db", dbPath, "--account-set", String(setB.id), "--bank-account", "BANK-B",
+    "--ambiguity", String(ambiguityId), "--decision", "maybe", "--reason", "x"], "ambiguity_decision_invalid", 2);
+  expectError(["resolve-ambiguity", "--db", dbPath, "--account-set", String(setB.id), "--bank-account", "BANK-B",
+    "--ambiguity", String(ambiguityId), "--decision", "same", "--reason", "x"], "ambiguity_target_required", 3);
+
+  const resolved = okJson(["resolve-ambiguity", "--db", dbPath, "--account-set", String(setB.id),
+    "--bank-account", "BANK-B", "--ambiguity", String(ambiguityId),
+    "--decision", "distinct", "--reason", "两张回单是两笔不同交易"]);
+  assert.equal(resolved.resolved, true);
+  const idempotent = okJson(["resolve-ambiguity", "--db", dbPath, "--account-set", String(setB.id),
+    "--bank-account", "BANK-B", "--ambiguity", String(ambiguityId),
+    "--decision", "distinct", "--reason", "重复提交"]);
+  assert.equal(idempotent.idempotent, true);
+  const after = okJson(["ambiguities", "--db", dbPath, "--account-set", String(setB.id), "--bank-account", "BANK-B"]);
+  assert.equal(after.pending, 0);
+  const txns = okJson(["transactions", "--db", dbPath, "--account-set", String(setB.id), "--bank-account", "BANK-B"]);
+  assert.equal(txns.transactions.length, 3, "判定不同一笔后新增 1 笔");
+});
+
+test("CLI 错误路径：显式 --db、无默认库、业务冲突退出码、非本产品库", () => {
+  // 无参 / 未知命令 / 缺 --db 都不能创建默认库。
+  expectError([], "usage_error", 2);
+  expectError(["unknown-command"], "unknown_command", 2);
+  expectError(["transactions", "--account-set", "1"], "missing_argument", 2);
+  expectError(["transactions", "--db", join(baseDir, "missing.db"), "--account-set", "1"],
+    "db_not_found", 2);
+  assert.equal(existsSync(join(WORKBENCH, "data")), false, "CLI 不得创建默认 data/workbench.db");
+
+  const plain = file("not-a-db.txt", "这不是数据库\n");
+  expectError(["transactions", "--db", plain, "--account-set", "1"], "db_not_workbench", 2);
+
+  // 业务冲突：同批次改内容。
+  const conflictCsv = file("conflict.csv", "日期,摘要,金额,方向,流水号\n2026-01-20,客户回款,501.00,收,CLI-1\n");
+  expectError(["import", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--source", "local-statement", "--period", "2026-01", "--batch", "CLI-A1",
+    "--csv", conflictCsv, "--mapping", mappingPath], "batch_content_conflict", 3);
+  // 预检失败给行级证据（exit 3，不写任何流水）。
+  const badAmount = file("bad.csv", "日期,摘要,金额,方向,流水号\n2026-01-20,x,1.234,收,BAD-1\n");
+  const rejected = expectError(["import", "--db", dbPath, "--account-set", String(setA.id), "--bank-account", "BANK-A",
+    "--source", "local-statement", "--period", "2026-01", "--batch", "CLI-BAD",
+    "--csv", badAmount, "--mapping", mappingPath], "import_rejected", 3);
+  assert.equal(rejected.error.details.errors[0].code, "amount_precision");
+
+  // 已有库有账务结构但没有 bank_*：无备份实现时返回 migration_backup_unavailable（exit 5）。
+  const legacyDir = mkdtempSync(join(tmpdir(), "wb-bank-cli-legacy-"));
+  try {
+    const legacyPath = join(legacyDir, "workbench.db");
+    const bootstrap = spawnSync(process.execPath, ["-e", "await import('./server/db.mjs')"], {
+      cwd: WORKBENCH, env: { ...process.env, WORKBENCH_DATA_DIR: legacyDir }, encoding: "utf8",
+    });
+    assert.equal(bootstrap.status, 0, bootstrap.stderr);
+    assert.ok(existsSync(legacyPath));
+    expectError(["status", "--db", legacyPath, "--account-set", "1", "--bank-account", "BANK-A"],
+      "migration_backup_unavailable", 5);
+    expectError(["status", "--db", legacyPath, "--account-set", "1", "--bank-account", "BANK-A",
+      "--backup-service", join(legacyDir, "missing-backup.mjs")], "backup_service_not_found", 5);
+    const probe = new DatabaseSync(legacyPath);
+    try {
+      const bankTables = probe.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'bank_%'`).get().n;
+      assert.equal(Number(bankTables), 0, "备份门槛未过时不得创建任何 bank_* 表");
+    } finally { probe.close(); }
+  } finally {
+    rmSync(legacyDir, { recursive: true, force: true });
+  }
+});
+
+test("CLI 帮助：不接触数据库、不创建库", () => {
+  const help = okJson(["help"]);
+  assert.ok(help.commands.some((c) => c.command === "reconcile"));
+  const flagHelp = run(["--help"]);
+  assert.equal(flagHelp.status, 0);
+  assert.match(flagHelp.stdout, /usage/);
+  assert.equal(existsSync(join(WORKBENCH, "data")), false);
+});
+
+test("CLI 每一步都真实持久化：重新打开库能看到批次、流水、匹配与对账运行记录", () => {
+  const probe = new DatabaseSync(dbPath);
+  try {
+    probe.exec("PRAGMA foreign_keys = ON");
+    const tables = {
+      batches: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_batches`).get().n),
+      transactions: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_transactions`).get().n),
+      rows: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_batch_rows`).get().n),
+      matches: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_matches`).get().n),
+      ambiguities: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_ambiguities`).get().n),
+      audits: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_audit_events`).get().n),
+      reconcileRuns: Number(probe.prepare(`SELECT COUNT(*) AS n FROM bank_reconcile_runs`).get().n),
+    };
+    for (const [name, value] of Object.entries(tables)) assert.ok(value > 0, `${name} 必须持久化`);
+    const globalVersion = Number(probe.prepare(`SELECT MAX(version) AS v FROM schema_migrations`).get().v);
+    assert.equal(globalVersion, 3, "银行组件不得改动全局迁移版本");
+    const userVersion = Number(Object.values(probe.prepare(`PRAGMA user_version`).get())[0]);
+    assert.equal(userVersion, 0);
+    assert.equal(readFileSync(dbPath).length > 0, true);
+  } finally { probe.close(); }
+});
