@@ -187,7 +187,7 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
 |---|---|---|
 | 产品 | `youshu-workbench` | `backup_app_unsupported` |
 | 清单格式 | `youshu-workbench-local-backup` × `formatVersion = 1` | `backup_format_unsupported` |
-| schema / 结构 | **恰好 v3 或 v4 两个已声明的真实结构之一**（列 / 类型 / NOT NULL / **默认值** / 主键 / UNIQUE / 外键目标列与动作 / 迁移记录连续性与迁移前备份记录全量校验） | 更高版本（未来 v5+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated`；版本对但结构不符 → `structure_invalid` |
+| schema / 结构 | **恰好 v3 或 v4 两个已声明的真实结构之一**（列 / 类型 / NOT NULL / **默认值** / 主键与 **rowid 别名语义** / **唯一性键的完整比较语义**（键列顺序 / 排序规则 / 方向 / 表达式 / 部分索引）/ 外键目标列与动作 / 迁移记录连续性与迁移前备份记录全量校验） | 更高版本（未来 v5+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated`；版本对但结构不符 → `structure_invalid` |
 | 应用版本 | **仅记录**（校验「存在且为非空字符串」），不参与兼容判定 | 缺失 / 类型不合法 → `manifest_invalid`；不同版本号**不会**被拒绝 |
 
 - **两个版本各自独立契约**：
@@ -215,6 +215,24 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
   也当作结构不符（`foreign_key_actions` / `unexpected_foreign_keys` / `foreign_key_duplicate`）。
   任何版本若出现不同动作，必须在该外键条目上逐条显式声明（`actions`），**不得**放宽成
   「任一动作均可」或关闭外键检查。
+- **唯一性键的比较规则也是结构契约**（v3 / v4 相同，逐表由 `collationKey` 声明）：
+  「哪些列唯一」不足以定义约束，**键列顺序 / 排序规则 / 升降序 / 表达式键 / 部分索引**
+  都会改变「哪些业务写入必须被拒绝」。真实验证独立复现的缺陷：把 `import_voucher_sources`
+  表级 `UNIQUE (source_system, enterprise_key, source_voucher_id)` 的**最后一列改成 `COLLATE NOCASE`**，
+  列 / 默认值 / 外键完全不变——旧版本 `create` / `verify` / `restore` **全部放行**（清单字节数与 sha256
+  也自洽），但恢复后真实增量导入「已存 `Ref-A` 再追加 `ref-a`」会抛 `ERR_SQLITE_ERROR`，
+  而正常 `BINARY` 对照是 `applied` 且两条来源并存。因此本模块按 `PRAGMA index_xinfo` 逐条比对
+  **真实唯一性索引**的 origin（`pk` 主键 / `u` `UNIQUE` 约束 / `c` `CREATE UNIQUE INDEX`）、
+  键列名与顺序、排序规则（`BINARY` / `NOCASE` / `RTRIM`）、升降序、表达式键、`WHERE` 部分索引，
+  并与契约**一对一**匹配：语义不同 → `unique`（`reason: "semantics"`）、缺失 → `unique`
+  （`reason: "missing"`）、额外 / 重复 / 契约外的唯一索引（含 `origin=c` 的命名唯一索引）→
+  `unexpected_unique_index`。`INTEGER PRIMARY KEY` **不另建主键索引**（rowid 别名），按真实 rowid 语义
+  核对（`rowid <> 主键列` 逐行比较；`WITHOUT ROWID` / `INTEGER PRIMARY KEY DESC` 都不符）→ `rowid_alias`；
+  多列文字主键（`opening_balances(account_set_id, code)`、`periods(account_set_id, period)`）按其**真实主键索引**
+  的键列与比较规则比对。真实 v3 / v4 **没有**命名唯一索引：v1 的 `idx_import_bindings_set` 在 v2 重建
+  `import_source_bindings` 时已随旧表删除，**不得按旧 DDL 要求它存在**，快照里重新加上它会被拒绝。
+  **非唯一**的普通查询索引只影响性能、不改变唯一性 / 去重语义，因此既不作为结构等价证据、
+  也不据此拒绝（避免把正常库误拒）。
 - **新增版本必须先加契约**：未来 v5 需新增独立结构契约、真实 SQLite 行为与合成临时库验收，
   再加入 `SUPPORTED_SCHEMA_VERSIONS`；模块最高支持版本（`backupContract().supportedSchemaVersion`）
   必须与产品 `IMPORT_SCHEMA_VERSION` 对齐（测试里有显式断言）。
@@ -238,7 +256,13 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
    - 必需表齐全（8 张核心会计表 + `schema_migrations` / `schema_backups` + 5 张 `import_*`），
      且没有该版本契约之外的业务表（`unexpected_tables`）；
    - 每张表的列名集合、声明类型、`NOT NULL`、**默认值**（与 `PRAGMA table_info.dflt_value` 逐字比对，
-     不符 → `column_default`）、主键列与顺序、UNIQUE 约束列组全部匹配；
+     不符 → `column_default`）、主键列与顺序全部匹配；
+   - **唯一性键的完整比较语义**按 `PRAGMA index_list` + `PRAGMA index_xinfo` 逐条比对：主键 / `UNIQUE` 约束的
+     键列名与顺序、排序规则（`BINARY` / `NOCASE` / `RTRIM`）、升降序、表达式键、`WHERE` 部分索引，
+     以及与契约**一对一**匹配（额外 / 重复 / 契约外的唯一索引，含 `origin=c` 的 `CREATE UNIQUE INDEX`，
+     一律拒绝）；`INTEGER PRIMARY KEY` 必须确实是 rowid 别名（不另建主键索引，且 `rowid` 与主键列逐行相等）；
+     UNIQUE 键列组本身缺失 → `unique`，语义不同 → `unique`（带 `collation` / `desc` / `expression` 明细），
+     额外唯一索引 → `unexpected_unique_index`，不是真实 rowid 别名 → `rowid_alias`；
    - 外键按 `PRAGMA foreign_key_list` 的分组（`id`）与期望外键**一对一**整体比对：本表列组 → 目标表列组
      **以及** `ON DELETE` / `ON UPDATE` / `MATCH` 动作；每个实际分组都要验动作，且不接受未声明的额外
      外键与重复声明（同列组同目标多个分组）（多列外键按 `seq` 聚合，不只比单个目标列）；
@@ -246,8 +270,10 @@ Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
    - `schema_migrations` 记录必须是从 1 到当前版本**连续**、`applied_at` 可解析；
    - `schema_backups` 必须至少有一条迁移前备份记录，形状（版本 / 路径 / 时间 / integrity）合法；
    - 任一项不成立 → `structure_invalid`（明细只含问题类型、表名、列名、计数、版本号，以及约束动作关键字
-     如 `CASCADE` / `NO ACTION` / `NONE` 和**已知**默认值字面值（未知默认值只报 `nonstandard`）；
-     **不含**业务原文）。
+     如 `CASCADE` / `NO ACTION` / `NONE`、索引来源 `pk` / `u` / `c`、排序规则令牌
+     `BINARY` / `NOCASE` / `RTRIM`（未知排序规则只报 `nonstandard`）、表达式键令牌 `expression`、
+     升降序布尔值和**已知**默认值字面值（未知默认值只报 `nonstandard`）；**不含**业务原文、
+     索引表达式原文与 DDL SQL）；
      结构指纹不成立 / 缺表 → 判定非本产品库；
 8. 实际 schema 版本与清单 `structure.schemaVersion`、`source.schemaVersion` 一致，
    `structure.migrations` 与真实迁移记录逐项一致，`user_version` 一致；
@@ -462,8 +488,11 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
    未来 v5 **必须**先新增独立结构契约、真实 SQLite 行为与合成临时库验收，再加入支持集合；
    bank / batch / audit 等**尚未合入**的组件仍未做契约，带这些表的库会被 `unexpected_tables` 拒绝。
 4. **清单无签名**（§3.2）：防损坏 / 防不一致，不防整体伪造；结构校验能拦住「结构不符」
-   （含只改外键 `ON DELETE` / `ON UPDATE` 动作的伪结构，以及重复声明同列外键的伪结构），
+   （含只改外键 `ON DELETE` / `ON UPDATE` 动作的伪结构、重复声明同列外键的伪结构，
+   以及只改唯一性键排序规则 / 键顺序 / 方向 / 表达式 / 部分索引的伪结构），
    但拦住的是结构而不是恶意同构伪造。
+   本轮的索引键语义校验**未改变清单格式**（不新增索引字段，`formatVersion` 仍为 1），
+   因此旧工具生成的合法 v3 / v4 清单不会因新增内部校验而摘要失配。
 5. **内容摘要是全表扫描**：大库（几十万凭证）备份 / 验证会明显变慢，且内存占用随单表行数增长
    （逐行规范序列化）；当前按本机单用户规模设计，未做增量 / 分块优化。
 6. **源库保护的边界**：只承诺「主库与 `-wal` 字节不变、不被 checkpoint / 删除」；
@@ -477,6 +506,10 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
    不是字节级的历史 v3 账套；因此本包**不声称**验证过真实历史账套的旧备份。
 9. **未验证 Windows 交付路径**：没有做干净机器安装 / 服务化 / 权限 / 杀毒软件占用等场景验证；
    junction / 硬链接规则在本机 Windows 上实测过，但不同文件系统（网络盘、同步盘）行为未验证。
+10. **索引键校验的边界**：只对**唯一性**（主键 / `UNIQUE` 约束 / 唯一索引）做语义比对，因为只有它们
+   改变「哪些写入必须被拒绝」；非唯一查询索引不作为结构证据、也不据此拒绝。`AUTOINCREMENT` 与
+   表的 `WITHOUT ROWID` 以外的存储选项不在本轮校验范围（rowid 别名语义本身会被核对）。
+   表达式 / 部分索引目前只作为**拒绝依据**出现（真实 v3 / v4 没有它们），契约没有对应的正向条目。
 
 ## 10. 自测
 
@@ -488,8 +521,8 @@ node test/local-backup.test.mjs
 
 覆盖与真实结果见交接文档 [handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md) §3。
 
-当前（兼容整合轮）**20 / 20 通过、exit 0**，其中 1–16 是 PR #55 已验收的原有 16 项（全部保留，
-仅在 schema 版本断言上从 v3 改为 v4），17–20 是本轮新增：
+当前（索引键语义回修轮）**22 / 22 通过、exit 0**；兼容整合轮是 **20 / 20**，其中 1–16 是 PR #55 已验收的原有 16 项
+（全部保留，仅在 schema 版本断言上从 v3 改为 v4），17–20 是兼容整合轮新增，21–22 是本轮新增：
 
 - **v4 真实产品合成库全链路**：真实产品入口建库（增量导入两批 + 资产卡片 5 个补项列 + 期初累计 +
   连续两个月计提与总账 + 1 月真实封账 + 2 月保持 open），`createBackup` → `verifyBackup` → `restoreNew`，
@@ -502,6 +535,22 @@ node test/local-backup.test.mjs
 - **伪兼容拒绝**：只抬高版本号（v3 结构 + version=4 记录）、缺列、错默认值、错 null、错类型、
   未知组件表、未来 v5、迁移记录不连续、v4 结构却声称 v3，以及把快照换成伪结构并**重算清单 sha256** 的
   快照侧伪兼容；全部给稳定 code，且源库字节不变、不创建输出目录 / 恢复目标。
+- **唯一性键比较语义（本轮新增，第 21 项，v4）**：`import_voucher_sources` 表级 `UNIQUE` 最后一列改
+  `COLLATE NOCASE` / `RTRIM`、`opening_balances` 主键文字列 `code` 改 `COLLATE NOCASE`、`periods` 主键键列 `DESC`、
+  `accounts` 的 `UNIQUE` 键列顺序反转、把 v1 已删除的 `idx_import_bindings_set` 加回、同一唯一键重复声明成命名索引、
+  表达式唯一索引、`WHERE` 部分唯一索引、`vouchers.id INTEGER PRIMARY KEY DESC`（不再是 rowid 别名）——
+  十种变体在**源库入口**与**重算清单字节数 + sha256 的快照入口**均被拒绝（`unique` / `unexpected_unique_index` /
+  `rowid_alias`），恢复不产目标目录、源库字节不变、错误明细不含 SQL / 表达式原文 / 本机路径 / 业务原文；
+  同时保留两组正常对照：与真实 DDL **同义重建**的表、额外**非唯一**查询索引都不被误拒，真实 v4 备份照旧通过。
+  用例里先验证了「NOCASE 下只差大小写的来源 ID 真的会撞唯一约束」这个前置事实，因此拒绝不是风格问题。
+- **唯一性键比较语义（本轮新增，第 22 项，v3 旧快照）**：同一组 NOCASE / 主键文字键 / 复活旧命名唯一索引
+  变体在**真实 v3 快照**上同样被拒绝（`structure_invalid` 且明细指向 `schemaVersion: 3`），恢复不产目标；
+  未变形的 v3 备份仍可验证 / 可恢复。
+- **旧工具产物向后兼容（本轮实跑事实，不属新用例）**：先**用修改前的冻结源码**生成真实 v4 / v3 合成备份
+  （16 表 / 88 行与 87 行，清单 sha256 与快照 sha256 已记录到忽略目录），修改后该两个备份
+  `verify` 仍通过、清单 / 快照字节未变、`restore-new` 成功、恢复文件仍是备份时的 schema 版本，
+  期初 / 余额 / 凭证 / 来源凭证 ID 与旧工具记录一致；恢复库上真实增量导入追加只差大小写的 `ref-a`
+  仍为 `applied` 且 `Ref-A` / `ref-a` 两条并存（费用 700 → 705）——即旧工具生成的合法清单不因新增内部校验而失配。
 
 已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`（PR #55）上是 **16 / 16**，分别由管理者与
 未参与实现、fork 为 none 的独立审查各实跑一次；独立审查另实跑五种外键变体（`ON DELETE NO ACTION`、
@@ -514,9 +563,10 @@ node test/local-backup.test.mjs
 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、`smoke` 28 / 28 是更早一轮返工后的
 受影响回归结果；本包只改自己的文件、未动共享业务源码，因此没有把它们当作本轮证据。
 
-聚合入口：本轮按任务单授权**仅追加**本套件与两个已合入模块套件（`finance-output-policy` 28 / 28、
+聚合入口：按任务单授权**仅追加**本套件与两个已合入模块套件（`finance-output-policy` 28 / 28、
 `report-office-export` 21 / 21）到 `scripts/test-all.mjs`，原有 50 套顺序与内容不变；
-在 `06-workbench` 跑 `npm test` 为 **53 / 53 套 exit 0**（真实运行，含 Office 真实 PDF 几何校验）。
+在 `06-workbench` 设 `REPORT_OFFICE_PYTHON` 后跑 `npm test` 为 **55 / 55 套 exit 0**（真实运行；
+Office 导出验收 21 / 21，外部 poppler + pdfplumber 对 **11 个真实 PDF** 的几何校验通过）。
 
 ## 11. 当前状态与下一步
 
@@ -524,8 +574,17 @@ node test/local-backup.test.mjs
    五种外键变体在源库与快照两侧均被拒绝、正常结构恢复后真实删除账套成功；已随 PR #55 合并。
 2. **合并事实**：PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 MERGED，
    merge `98977e04bd24aa293074021802191814f8c2a1d2`（北京时间 2026-10-22）；已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`。
-3. **兼容整合轮状态**：v3 + v4 精确契约、20 / 20 自测、`npm test` 53 / 53 已在本机真实跑过；
+3. **兼容整合轮状态**：v3 + v4 精确契约、20 / 20 自测、`npm test` 已在本机真实跑过；
    该轮源码 / 测试 / 文档**尚未提交、未建 PR、未合并**，最终独立审查待做（不预报 head / merge）。
+3.1 **索引键语义回修轮（本轮）**：独立审查在银行候选上发现并实际证实「继承旧版本的本模块也挡不住
+   唯一性比较规则变化」这一缺陷（`COLLATE NOCASE` 变体旧版本 `create` / `verify` / `restore` 全部放行，
+   恢复后真实增量导入 `Ref-A` / `ref-a` 行为与正常库不同）。本轮把结构契约升级为**完整唯一性键语义**
+   （`PRAGMA index_xinfo` 的键列 / 排序规则 / 方向 / 表达式 + `index_list` 的 origin / partial + 真实 rowid 语义），
+   并新增十种变体与两组正常对照、v3 旧快照变体、旧工具产物向后兼容核对。
+   实跑：`node test/local-backup.test.mjs` **22 / 22 exit 0**；`npm test` **55 / 55 套 exit 0**。
+   先红后绿：同一套测试在修改前模块上为 **20 / 22**（两项新测试均以「期望拒绝、实际接受」失败）。
+   **清单格式与 `formatVersion` 未变**（只强化验证，不新增字段 / 不改摘要口径）。
+   状态：**实现与自测完成，待 root 冻结与备份独立审查**；未提交 / 未建 PR / 未合并。
 4. **仍未支持**：v0 / v1 / v2 旧库（先用产品入口升级）、未来 v5+、bank / batch / audit 等未合入组件；
    这些必须**显式**做结构契约与真实 SQLite 行为 + 合成临时库验收，不得用动态表清单或「旧用例通过」推定已支持。
 5. **Issue #49 保持 OPEN** 供兼容整合；完整审计留痕在

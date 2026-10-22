@@ -12,7 +12,9 @@
 //    但**不复用**「文件大小非 0 就当可用快照」的判定：这里始终重新生成并重新验证。
 // 3) 结构版本只支持**两个精确的真实结构**：v3（LOCAL-01 迁移后结构）与 v4（LOCAL-02 资产卡片补项）。
 //    每个版本有**独立**的结构契约（`STRUCTURE_V3` / `STRUCTURE_V4`），逐表校验列名 / 声明类型 /
-//    NOT NULL / **默认值**、主键列顺序、UNIQUE 约束列组、外键，并校验 `schema_migrations` 记录
+//    NOT NULL / **默认值**、主键列顺序与 **rowid 别名语义**、唯一性键的**完整比较语义**
+//    （键列顺序 / 排序规则 `BINARY` / `NOCASE` / `RTRIM` / 升降序 / 表达式 / 部分索引），以及
+//    外键，并校验 `schema_migrations` 记录
 //    从 1 到该版本连续且与版本一致、`schema_backups` 记录存在。外键按**真实外键分组**
 //    （多列外键整体比较，不只比目标列）与期望外键**一对一**比对 `ON DELETE` / `ON UPDATE` / `MATCH`
 //    动作（同一列组对同一目标重复声明也一样逐组验动作并拒绝 `foreign_key_duplicate`，绝不用
@@ -72,7 +74,8 @@ export const PARTIAL_PREFIX = ".partial-";
  * - v4：LOCAL-02 在 v3 基础上只给 `asset_cards` 增加 5 列（取得期间 / 期初累计 / 未入账登记 /
  *   补项原因 / 来源），表集合不变。
  *
- * 两个版本各自有独立结构契约（列 / 类型 / NOT NULL / 默认值 / 主键 / UNIQUE / 外键动作 /
+ * 两个版本各自有独立结构契约（列 / 类型 / NOT NULL / 默认值 / 主键 / 唯一性键比较语义 /
+ * 外键动作 /
  * 迁移记录连续性 / 迁移前备份记录）。**不在集合内的版本一律拒绝**：更旧 → `schema_outdated`，
  * 更新（未来 v5+）→ `schema_unsupported`。
  *
@@ -107,15 +110,35 @@ const IMPORT_SCHEMA_TABLES = Object.freeze([
 ]);
 
 /**
+ * 唯一性比较的一个键列（真实 DDL 没写 `COLLATE` 时 SQLite 的默认是 `BINARY` + `ASC`）。
+ * 排序规则 / 方向 / 键列顺序都是业务语义：`NOCASE` 会让 `Ref-A` 与 `ref-a` 撞唯一约束。
+ */
+const collationKey = (name, collation = "BINARY") => Object.freeze({ name, collation, desc: false });
+/** 一条**真实存在**的唯一性约束：`pk` = 主键索引，`u` = 表级 / 列级 `UNIQUE (...)` 约束。 */
+const uniqueConstraint = (origin, ...columns) => Object.freeze({ origin, columns: Object.freeze(columns) });
+
+/**
  * 真实结构规范的**共用部分**（v3 与 v4 在这些表上逐字相同 —— 真实 DDL 相同）。
  *
- * 逐表声明列名 / 声明类型 / NOT NULL / **默认值**、主键列顺序、UNIQUE 约束列组、
+ * 逐表声明列名 / 声明类型 / NOT NULL / **默认值**、主键列顺序、**唯一性键的完整比较语义**、
  * 外键（本表列 -> 目标表(目标列)，动作见 `REAL_FOREIGN_KEY_ACTIONS`）。
  * 列规范写成 `"<TYPE>[ NOT NULL][ DEFAULT <literal>]"`，`<literal>` 必须与
  * `PRAGMA table_info` 的 `dflt_value` **逐字**一致（SQLite 原样保存 DDL 里的默认值文本）：
  * `DEFAULT ''` → `''`、`DEFAULT 0.05` → `0.05`、`DEFAULT 'booked'` → `'booked'`。
  * `INTEGER PRIMARY KEY` 在 SQLite 里 `PRAGMA table_info` 的 notnull 为 0、dflt 为 null，
  * 因此这类主键列按 `"INTEGER"` 声明。
+ *
+ * 唯一性除了「哪些列」还有**比较规则**：
+ * - `unique` 逐条声明真实存在的唯一性约束（`pk` 主键索引 / `u` = `UNIQUE (...)` 约束），
+ *   每条用 `collationKey(<列>[, <排序规则>])` 给出键列，默认就是真实 DDL 的 `BINARY` + `ASC`；
+ *   键列顺序、`COLLATE NOCASE` / `RTRIM`、`DESC`、表达式键、`WHERE` 部分索引都会改变
+ *   「哪些业务写入必须被拒绝」，因此逐项比对，**不按列名集合放宽**；
+ * - 真实 v3 / v4 没有命名唯一索引（v1 的 `idx_import_bindings_set` 在 v2 重建
+ *   `import_source_bindings` 时已随旧表删除，**不得按旧 DDL 要求它存在**）；
+ *   快照里出现契约外的唯一索引（含 `origin=c` 的 `CREATE UNIQUE INDEX`）一律拒绝；
+ * - `rowidAlias: true` 表示主键就是 `INTEGER PRIMARY KEY` 的 rowid 别名（不另建主键索引），
+ *   按真实 rowid 语义核对；`false` 表示主键有自己的一条唯一索引（列名 / 排序规则照常比对）；
+ * - 非唯一的普通查询索引不改变唯一性 / 去重语义，不作为结构等价证据，也不据此拒绝。
  *
  * v3 / v4 的差异**只有 `asset_cards`**（v4 只加 5 列），因此该表在两个版本里各自独立声明；
  * 其余表共用本常量。**任何未来版本的差异都必须新增独立条目**，不得修改本共用常量去「顺便」
@@ -133,6 +156,7 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       created_at: "TEXT NOT NULL",
     },
     primaryKey: ["id"],
+    rowidAlias: true,
     unique: [],
     foreignKeys: [],
   },
@@ -148,7 +172,8 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       is_leaf: "INTEGER NOT NULL DEFAULT 1",
     },
     primaryKey: ["id"],
-    unique: [["account_set_id", "code"]],
+    rowidAlias: true,
+    unique: [uniqueConstraint("u", collationKey("account_set_id"), collationKey("code"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   opening_balances: {
@@ -159,7 +184,8 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       credit: "REAL NOT NULL DEFAULT 0",
     },
     primaryKey: ["account_set_id", "code"],
-    unique: [],
+    rowidAlias: false,
+    unique: [uniqueConstraint("pk", collationKey("account_set_id"), collationKey("code"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   periods: {
@@ -169,7 +195,8 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       status: "TEXT NOT NULL DEFAULT 'open'",
     },
     primaryKey: ["account_set_id", "period"],
-    unique: [],
+    rowidAlias: false,
+    unique: [uniqueConstraint("pk", collationKey("account_set_id"), collationKey("period"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   vouchers: {
@@ -186,6 +213,7 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       kind: "TEXT NOT NULL DEFAULT 'normal'",
     },
     primaryKey: ["id"],
+    rowidAlias: true,
     unique: [],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
@@ -200,6 +228,7 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       credit: "REAL NOT NULL DEFAULT 0",
     },
     primaryKey: ["id"],
+    rowidAlias: true,
     unique: [],
     foreignKeys: [{ from: ["voucher_id"], table: "vouchers", to: ["id"] }],
   },
@@ -214,7 +243,9 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       created_at: "TEXT NOT NULL",
     },
     primaryKey: ["id"],
-    unique: [["account_set_id", "asset_id", "period"]],
+    rowidAlias: true,
+    unique: [uniqueConstraint("u", collationKey("account_set_id"), collationKey("asset_id"),
+      collationKey("period"))],
     foreignKeys: [
       { from: ["account_set_id"], table: "account_sets", to: ["id"] },
       { from: ["asset_id"], table: "asset_cards", to: ["id"] },
@@ -225,6 +256,7 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
   schema_migrations: {
     columns: { version: "INTEGER", applied_at: "TEXT NOT NULL", note: "TEXT" },
     primaryKey: ["version"],
+    rowidAlias: true,
     unique: [],
     foreignKeys: [],
   },
@@ -239,6 +271,7 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       note: "TEXT",
     },
     primaryKey: ["id"],
+    rowidAlias: true,
     unique: [],
     foreignKeys: [],
   },
@@ -253,7 +286,9 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       bound_by: "TEXT NOT NULL DEFAULT 'import'",
     },
     primaryKey: ["enterprise_key"],
-    unique: [["account_set_id"]],
+    rowidAlias: false,
+    unique: [uniqueConstraint("pk", collationKey("enterprise_key")),
+      uniqueConstraint("u", collationKey("account_set_id"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   import_source_bindings: {
@@ -266,7 +301,8 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       bound_by: "TEXT NOT NULL DEFAULT 'import'",
     },
     primaryKey: ["id"],
-    unique: [["source_system", "enterprise_key"]],
+    rowidAlias: true,
+    unique: [uniqueConstraint("u", collationKey("source_system"), collationKey("enterprise_key"))],
     foreignKeys: [{
       from: ["enterprise_key"], table: "import_enterprise_account_sets", to: ["enterprise_key"],
     }],
@@ -288,7 +324,8 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       error_message: "TEXT",
     },
     primaryKey: ["batch_id"],
-    unique: [],
+    rowidAlias: false,
+    unique: [uniqueConstraint("pk", collationKey("batch_id"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   import_voucher_sources: {
@@ -305,7 +342,9 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       created_at: "TEXT NOT NULL",
     },
     primaryKey: ["id"],
-    unique: [["source_system", "enterprise_key", "source_voucher_id"]],
+    rowidAlias: true,
+    unique: [uniqueConstraint("u", collationKey("source_system"), collationKey("enterprise_key"),
+      collationKey("source_voucher_id"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
   import_batch_vouchers: {
@@ -322,7 +361,8 @@ const TABLE_STRUCTURE_COMMON = Object.freeze({
       created_at: "TEXT NOT NULL",
     },
     primaryKey: ["id"],
-    unique: [["batch_id", "source_voucher_id"]],
+    rowidAlias: true,
+    unique: [uniqueConstraint("u", collationKey("batch_id"), collationKey("source_voucher_id"))],
     foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
   },
 });
@@ -381,6 +421,7 @@ const ASSET_CARDS_COLUMNS_V4 = Object.freeze({
 const assetCardsTable = (columns) => Object.freeze({
   columns,
   primaryKey: ["id"],
+  rowidAlias: true,
   unique: [],
   foreignKeys: [{ from: ["account_set_id"], table: "account_sets", to: ["id"] }],
 });
@@ -754,19 +795,84 @@ function describeContent(conn, tables) {
 }
 
 // ------------------------------------------------------------------ 真实结构校验
-const uniqueColumnGroups = (conn, table) => {
-  const groups = [];
-  const indexes = conn.prepare("SELECT * FROM pragma_index_list(?)").all(table);
-  for (const index of indexes) {
+/**
+ * 排序规则 token：只回显 SQLite 内置的三种，其它（自定义 / 伪造）统一报 `nonstandard`，
+ * 因此拒绝明细里不会出现任意业务文本。
+ */
+const INDEX_COLLATIONS = new Set(["BINARY", "NOCASE", "RTRIM"]);
+const reportCollation = (value) => {
+  const text = String(value ?? "").toUpperCase();
+  return INDEX_COLLATIONS.has(text) ? text : "nonstandard";
+};
+/** 索引来源 token（`pk` 主键 / `u` `UNIQUE` 约束 / `c` `CREATE [UNIQUE] INDEX`）。 */
+const INDEX_ORIGINS = new Set(["pk", "u", "c"]);
+const reportOrigin = (value) => {
+  const text = String(value ?? "");
+  return INDEX_ORIGINS.has(text) ? text : "nonstandard";
+};
+/** 表达式键列的固定 token（绝不回显索引表达式原文）。 */
+const EXPRESSION_KEY = "expression";
+
+/**
+ * 读出表上**真实存在的唯一性索引**（`PRAGMA index_list` 的 unique / origin / partial +
+ * `PRAGMA index_xinfo` 的键列 / 排序规则 / 方向）：
+ *  - `keys[].name`：键列名；表达式列没有列名，标 `expression: true`；
+ *  - `keys[].collation`：键列实际使用的排序规则（`BINARY` / `NOCASE` / `RTRIM` / `nonstandard`）；
+ *  - `keys[].desc`：是否 `DESC`；`partial`：是否 `WHERE` 部分索引。
+ * 只收 `unique=1` 的索引：它们决定「哪些业务写入必须被拒绝」（主键 / 唯一约束 / 跨批去重），
+ * 普通（非唯一）索引只影响查询性能、不改变业务规则，因此不作为结构等价证据，也不据此拒绝
+ * （真实 v1 的 `idx_import_bindings_set` 在 v2 重建 `import_source_bindings` 时已随旧表删除，
+ * 不得按旧 DDL 要求它存在）。`origin=c` 的命名唯一索引与 `u` / `pk` 同列比对：
+ * 额外 / 重复 / 语义不同的唯一索引一律参与拒绝。
+ */
+const uniqueIndexFacts = (conn, table) => {
+  const facts = [];
+  for (const index of conn.prepare("SELECT * FROM pragma_index_list(?)").all(table)) {
     if (Number(index.unique) !== 1) continue;
-    if (String(index.origin) !== "u") continue; // 只看 UNIQUE 约束（pk 单独校验，普通索引不算）
-    if (Number(index.partial) === 1) continue;
-    const columns = conn.prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno").all(String(index.name))
-      .map((row) => String(row.name));
-    if (!columns.length || columns.some((name) => !name || name === "null")) continue;
-    groups.push(columns.join(","));
+    const keys = conn.prepare("SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno").all(String(index.name))
+      .filter((row) => Number(row.key) === 1)
+      .map((row) => ({
+        name: row.name === null || row.name === undefined ? null : String(row.name),
+        expression: Number(row.cid) === -2,
+        collation: reportCollation(row.coll),
+        desc: Number(row.desc) === 1,
+      }));
+    facts.push({ origin: reportOrigin(index.origin), partial: Number(index.partial) === 1, keys });
   }
-  return groups;
+  return facts;
+};
+
+/** 键列名清单（表达式列用固定 token），用于拒绝明细，不回显表达式原文。 */
+const keyColumnNames = (keys) => keys.map((key) => (key.expression ? EXPRESSION_KEY : String(key.name ?? EXPRESSION_KEY)));
+
+/** 期望的唯一性约束与真实索引是否**逐项同义**（键列名 / 排序规则 / 方向 / 列序 / 非表达式 / 非部分索引）。 */
+const uniqueIndexMatches = (actual, expected) => actual.partial === false
+  && actual.origin === expected.origin
+  && actual.keys.length === expected.columns.length
+  && actual.keys.every((key, position) => key.expression === false
+    && key.name === expected.columns[position].name
+    && key.collation === expected.columns[position].collation
+    && key.desc === expected.columns[position].desc);
+
+/** 键列名相同（用于区分「约束缺失」与「约束在但比较规则 / 方向不同」）。 */
+const sameUniqueColumns = (actual, expected) => actual.partial === false
+  && actual.origin === expected.origin
+  && actual.keys.length === expected.columns.length
+  && actual.keys.every((key, position) => !key.expression && key.name === expected.columns[position].name);
+
+/**
+ * 真实 rowid 语义核对：`INTEGER PRIMARY KEY` 只有在**确实是 rowid 别名**时才不另建主键索引。
+ * 这里直接按 rowid 与主键列逐行比较；`WITHOUT ROWID` 表读不到 rowid（同样判为不符）。
+ */
+const rowidAliasMatches = (conn, table, column) => {
+  try {
+    const row = conn.prepare(
+      `SELECT COUNT(*) AS n FROM ${quoteIdent(table)} WHERE rowid <> ${quoteIdent(column)}`,
+    ).get();
+    return Number(row?.n ?? 1) === 0;
+  } catch {
+    return false;
+  }
 };
 
 /**
@@ -822,7 +928,8 @@ const reportDefaultLiteral = (value) => {
 };
 
 /**
- * 逐表校验列 / 类型 / NOT NULL / 默认值 / 主键 / UNIQUE / 外键；返回问题清单（不含 SQL 与路径）。
+ * 逐表校验列 / 类型 / NOT NULL / 默认值 / 主键（含 rowid 别名）/ 唯一性键完整语义 / 外键；
+ * 返回问题清单（不含 SQL 与路径）。
  * `structure` 是**该版本自己的**结构契约（v3 或 v4），未在本契约里的表一律拒绝（未来组件）。
  */
 function structureProblems(conn, tables, structure) {
@@ -876,9 +983,58 @@ function structureProblems(conn, tables, structure) {
     const actualPk = columns.filter((column) => column.pk > 0)
       .sort((a, b) => a.pk - b.pk).map((column) => column.name);
     if (actualPk.join(",") !== spec.primaryKey.join(",")) problems.push({ kind: "primary_key", table });
-    const uniqueGroups = uniqueColumnGroups(conn, table);
-    for (const wanted of spec.unique) {
-      if (!uniqueGroups.includes(wanted.join(","))) problems.push({ kind: "unique", table, columns: wanted });
+    // ---- 唯一性键的完整比较语义：PK / UNIQUE / 真正存在的命名唯一索引 ----
+    // 列名相同不等于同一条约束：排序规则（NOCASE / RTRIM）、键列顺序、升序 / 降序、表达式键、
+    // 部分索引都会改变「哪些写入必须被拒绝」，所以逐项比对，并拒绝任何契约外的唯一索引。
+    const actualUnique = uniqueIndexFacts(conn, table);
+    const claimed = actualUnique.map(() => false);
+    for (const expected of spec.unique) {
+      const columns = expected.columns.map((column) => column.name);
+      const origin = reportOrigin(expected.origin);
+      const exact = actualUnique.findIndex((actual, position) => !claimed[position]
+        && uniqueIndexMatches(actual, expected));
+      if (exact >= 0) {
+        claimed[exact] = true;
+        continue;
+      }
+      const near = actualUnique.findIndex((actual, position) => !claimed[position]
+        && sameUniqueColumns(actual, expected));
+      if (near >= 0) {
+        claimed[near] = true;
+        const actual = actualUnique[near];
+        problems.push({
+          kind: "unique",
+          table,
+          origin,
+          columns,
+          reason: "semantics",
+          collation: actual.keys.map((key) => key.collation),
+          desc: actual.keys.map((key) => key.desc),
+          expression: actual.keys.some((key) => key.expression),
+        });
+      } else {
+        problems.push({ kind: "unique", table, origin, columns, reason: "missing" });
+      }
+    }
+    const unexpectedUnique = actualUnique.filter((_, position) => !claimed[position]);
+    if (unexpectedUnique.length) {
+      problems.push({
+        kind: "unexpected_unique_index",
+        table,
+        indexes: unexpectedUnique.slice(0, MAX_DETAIL_ITEMS).map((actual) => ({
+          origin: actual.origin,
+          partial: actual.partial,
+          columns: keyColumnNames(actual.keys).slice(0, MAX_DETAIL_ITEMS),
+        })),
+      });
+    }
+    // `INTEGER PRIMARY KEY` 不另建主键索引：按**真实 rowid 语义**核对（不是只看列名）。
+    if (spec.rowidAlias === true) {
+      const pkIndexes = actualUnique.filter((actual) => actual.origin === "pk");
+      const column = spec.primaryKey[0];
+      if (pkIndexes.length || !rowidAliasMatches(conn, table, column)) {
+        problems.push({ kind: "rowid_alias", table, column });
+      }
     }
     // 外键：目标列组 + 动作（ON DELETE / ON UPDATE / MATCH）整体比对。
     // 实际外键分组与期望外键**一对一**匹配：不能按目标键建 Map（会把重复分组覆盖成一条），

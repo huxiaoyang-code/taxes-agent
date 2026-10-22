@@ -1,5 +1,7 @@
 # 财务输出边界契约 · FINANCE-OUTPUT-BOUNDARY
 
+> **当前状态注记（2026-10-22 最终文档轮）**：输出协议候选源码 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` 已由独立 `review_output08_final` **接受**（**61** 回修探针 + **47** 旧控制 + **3** 真实临时领域场景，两项 P2 均已关闭）；其中 **37 policy / 21 adapter / 18 transport 为员工自测**，不是 root 计数。该候选已随 LOCAL-02 的 Draft [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 提交，**未合并**，尚无 merge SHA；adapter / transport 模块本身已经 [PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 合入 main（merge `db6020a`）。**共享 HTTP / Agent / MCP / CLI 入口仍未接线**，Issue #44 保持 OPEN。下方四段状态与 §14 各轮的「未提交 / 待审」是各自**阶段快照**，与本节事实不冲突，不改写历史。
+
 - 状态分四段，**不要混读**：
   1. **纯策略模块已合并**：`06-workbench/server/finance-output-policy.mjs` 经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；
   2. **适配层 + 出站信封校验已实现、已提交并推送，PR 待合并**：`06-workbench/server/finance-model-adapter.mjs` + 真实（临时库）调用验收 `06-workbench/test/finance-model-adapter.test.mjs`；`05-reconstruction/codex/mcp/finance-mcp/finance-model-transport.mjs` + `finance-model-transport-test.mjs`。**已审源码 head `ba5d60115e52fa13805841d9abe07006b74b2c9c`**；原三层为策略 **34/34**、适配层 **19/19**、transport **16/16**，均 exit 0；LOCAL-02 兼容增量后本轮为策略 **35/35**、适配层 **20/20**、transport **17/17**（原 34/19/16 项含义保留）。最终独审 `review_output08_final` **未参与实现**，原 3 项 P2 全部关闭，独立探针 **57/57** 通过（**57 是独审探针项数，不等于三套测试用例总数**），此前 transport 最后副本一致性复核亦通过；LOCAL-02 兼容增量仍待 root 最终增量独审 / PR；

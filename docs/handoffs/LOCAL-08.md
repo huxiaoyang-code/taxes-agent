@@ -1,5 +1,7 @@
 # LOCAL-08 交接
 
+> **当前状态注记（2026-10-22 最终文档轮）**：输出协议候选源码 `3a8ae7a` 已由独立 `review_output08_final` **接受**（61 回修探针 + 47 旧控制 + 3 真实临时领域场景，两项 P2 关闭）；**37 policy / 21 adapter / 18 transport 是员工自测**，不是 root 计数。该候选已随 Draft [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 提交、**未合并**；adapter / transport 模块本身已经 [PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 合入 main（merge `db6020a`）。**共享 HTTP / Agent / MCP / CLI 入口仍未接线，Issue #44 保持 OPEN**。下文「回修候选 / 待 root 复审」是各自**阶段快照**，不改写历史。
+
 - 任务单：[tasks/LOCAL-08](../tasks/LOCAL-08.md) · 契约：[FINANCE-OUTPUT-BOUNDARY](../FINANCE-OUTPUT-BOUNDARY.md)
 - 一句话：纯策略模块已由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace`，merge / main `b42bae9`）；本阶段在分支 `codex/huxiaoyang-code/local-08-adapter` 上新增**普通工具适配层**、**MCP 出站信封校验**与策略模块的 DTO spec / 无引用摘要出口，**已审源码 head `ba5d601`**。管理者实跑三层均 exit 0；最终独审 `review_output08_final` 未参与实现，原 3 项 P2 全关，独立探针 **57/57** 通过（**不等于三套测试用例总数**）。LOCAL-02 兼容增量后三层为策略 **35/35**、适配层 **20/20**、transport **17/17**（原 34/19/16 项含义保留），新增 `period_end_check` 只读 / `asset_update` 写与固定错误映射。**独立审查又复现 2 个 P2（长阻塞码被通用 token 预算吞掉、期末检查 DTO 只验单字段不验全局一致性）已回修，回修后为策略 37/37、适配层 21/21、transport 18/18，均 exit 0；完整 55/55 属回修前 head `04c38d4`，回修后完整重跑见 LOCAL-02 交接**。当前**已提交 / 已推送，[PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) OPEN 并 attach，尚无 merge SHA**；**本轮为回修候选，待 root 独立增量复审**。**HTTP / Agent / MCP / CLI 仍未接线**，共享入口归 LOCAL-02（#47），Issue #44 保持 OPEN。
 
