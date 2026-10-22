@@ -1,3 +1,5 @@
+> **2026-10-22 新增（本机产品路线）：[LOCAL-01 增量导入与批次幂等](../LOCAL-IMPORT.md)** · [任务](../tasks/LOCAL-01.md) · [交接](LOCAL-01.md) · [八包总览](../tasks/INDEPENDENT-PRODUCT-WORK.md)。用户 2026-10-22 指示允许本机产品方向工作，覆盖旧「暂停本地扩建」；**税局现场仍暂停、真实接入仍 0**，本条不改写税局状态。负责人 `huxiaoyang-code`（已核实），Refs #20 / #13，Issue #43，基线 `0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`，实际分支 `codex/huxiaoyang-code/local-01`（此前误写为 `local-01-import-incremental`，已更正；head / merge 由管理者后补）。产品口径：**一家企业只需要一个账套**，多企业批量 = 多个账套；身份来自规范 `source.enterpriseKey`，同企业跨来源必须引导到已有账套（`enterprise_already_bound` + `mode=append`，不新建第二本），同账套不得绑另一企业，来源证据需 `confirmNewBinding=true` 且身份一致。三类用法：旧 `importAccountSet` 兼容不变（无身份认定）、`mode=create` 有企业 / 批次首次建账、`mode=append` 指定同一企业账套追加。同批重试幂等（含重启）、跨批同来源凭证去重；内容修订 / 本批自身重复 / 业务字号冲突 / 身份不匹配 / 科目不兼容 / 封账 / 期初覆盖全部结构化冲突且不写入；**凭证被本机反过账 / 修改 / 删除后**去重与回放给 `source_voucher_voucher_unposted` / `_modified` / `_missing` 冲突，不伪报完成，删除后登记保留；已完成批次不被失败审计覆写。第二轮独审修复：填空账套期初同批只读回放（库内期初不一致 / 换批改期初仍拒绝）、自动取号计划阶段统一预分配（预检所见 = 落库，同字号不重号）、跨批去重逐张批次追踪（`import_batch_vouchers`，查询 / 回放 / 首调一致，重启可恢复）。最后定向返工：`create` 同批回放也按批次记录账套核验当前真实期初（合法 API 改期初后给结构化冲突；首次正式执行仍合法、无期初批次不凭空要求快照），正式执行 / 批次查询 / 回放统一 `sourceTrace` 逐张 DTO 字段。单事务覆盖企业绑定 / 来源证据 / 批次 / 凭证 / 期间 / 科目，中途故障整体回滚。存储 schema **v3**：**先备份、后建新结构**（备份保持迁移前结构）；迁移事务失败原库 schema / 业务不变；每次升级重新备份（失败重试也重新备份），不复用过期 / 损坏快照；v1 / v2 候选库可逐级升级并回填落库指纹与批次关联，自相矛盾则迁移失败交人工核对；回退已文档化（**恢复会回到快照时点，备份时点后新增业务会丢失；需先保护现库 / 停写 / 恢复后核对，最小工具不冒充 LOCAL-06**）。测试：上一冻结候选全套 47 / 47 exit 0；最终代码定向实跑领域 49 / 49、HTTP+Agent 22 / 22、MCP 7 / 7 均 exit 0（全合成临时库 + 随机回环端口）；最终代码未重跑全套，由管理者按影响面验收。状态：**实现与修复完成，未提交 / 未建 PR / 未合并**，待管理者验收；八包按用户原任务单：LOCAL-05a 导出模块（#45）实施中、LOCAL-08 输出边界（#44）修复中，LOCAL-02 / 03 / 04 / 05b / 06 / 07 待开工；旧「暂停本地扩建」安排已由用户 2026-10-22 指示覆盖（仅限本机产品路线），**税局专项仍暂停、真实接入 0**。下方旧入口按历史阅读。
+
 > **2026-10-21 新增：[TAX-EDGE-DOWNLOAD-FIX](../TAX-EDGE-DOWNLOAD-FIX.md)** · [任务](../tasks/TAX-EDGE-DOWNLOAD-FIX.md) · [交接](TAX-EDGE-DOWNLOAD-FIX.md)。负责人 `huxiaoyang-code`，Refs #20 / #13 / #17，基线 `2bc05d3680b456ccecb7bf1a16b64107017114b1`，分支 `codex/huxiaoyang-code/tax-edge-download-fix`。用户确认同企业同条件下常用 Edge 能下载发票、旧后端专用 Edge 查询 / 下载失败；本机两者版本相同 `155.0.4283.62`，旧专用 `inprivate=true`、常用 `false`。按官方 `blockthirdpartycookies`（InPrivate 默认阻止第三方 Cookie）形成**可信兼容性假说，非实测税局根因**。仅改 4 文件：传输层移除 `--inprivate`，保留 ACL 独立临时 profile / loopback CDP / 清理；诊断层由强制 InPrivate 改为兼容旧 owned InPrivate / 新 owned normal，拒绝重复畸形 `inprivate` 与 guest / headless / unsafe，其余 owner / profile / 端口 / ACL 不放宽；两测试。员工 `browser-session` 46 + `diagnostic` 5 通过；管理者在当前冻结代码上**实际完整运行 `test-all` 44 / 44 套 exit 0**。真实验证：root 另开隔离后端（空白运行目录 / 随机 loopback 端口），新专用 Edge 已实际启动并核对 `normal=true` / 独立 profile / loopback / 同版本，旧四进程与用户原常用 Edge 保留未改；新窗口待用户人工登录后同条件复验，**当前不声明查询 / 下载成功**，不读凭据 / 业务原值入模型，端口 / PID / ref / 路径只入 ignored checkpoint 不入 Git。只读审查发现 observer 仅同 target / session + 主 frame / loader，新标签 / OOPIF 可能不可见；未实现 `downloadWillBegin` / `progress` 或文件接收、`downloadPerformed` 固定 false——列为后续技术待办，非企业补材料、非已证实失败原因，本 PR 不把模式修复冒充数据链打通。旧探索暂停已由用户「直接排查修复」授权恢复。状态：**代码 + 管理者回归完成，独立内容审查进行中，真实同条件下载待用户人工反馈，PR 尚未创建**（[PR #41](https://github.com/huxiaoyang-code/youshu-fork/pull/41) 已合并 `2bc05d3` 可作前置交接，不改其历史文档）。
 
 # 新会话入口 · NEXT SESSION
@@ -60,7 +62,7 @@
 
 ## 方向（不可漂移）
 
-本机**单用户**财税工作台，可对多个企业 / 账套批量处理；**不做多租户 / SaaS / 租户权限平台 / 对外服务**（开发多人不改变产品形态）。只保留账套隔离、操作日志、备份恢复、凭据安全等本机需要。全国电子税务局是产品目标，当前只有预留接口、真实接入 0。详见 [章程](../PROJECT-CHARTER.md) 与 [ROADMAP](../ROADMAP.md)。
+本机**单用户**财税工作台；**一家企业一个账套**，多企业批量处理对应多个账套；**不做多租户 / SaaS / 租户权限平台 / 对外服务**（开发多人不改变产品形态），也不做一企多账簿 / `bookKey`。只保留账套隔离、操作日志、备份恢复、凭据安全等本机需要。全国电子税务局是产品目标，当前只有预留接口、真实接入 0。详见 [章程](../PROJECT-CHARTER.md) 与 [ROADMAP](../ROADMAP.md)。
 
 ## 已完成
 
@@ -140,7 +142,7 @@ PR #1–#12 与 #15 已合并；Issue #13 / #14 仍 OPEN（不是 PR），子 PR
 真实验证（账号 → 验证码 → 授权企业 → 实际财务数据来源）是第二步，需我在本机参与；
 验证码只从实际接收渠道取得并在本机输入，不进模型 / 日志 / Git。
 
-方向仍为本机单用户、可多账套批量；不做多租户 / SaaS / 对外服务。全国电子税务局真实接入 0。
+方向仍为本机单用户；一家企业一个账套，多企业批量 = 多账套；不做多租户 / SaaS / 对外服务，不做一企多账簿 / `bookKey`。全国电子税务局真实接入 0。
 执行员工只允许 GLM 5.3 / DeepSeek V4.1 Flash（主 / 回退显式锁定），该约束不限制你自己的模型。
 你（本机 Codex）负责审查验收、Git/PR 与合并，不直接写业务代码 / 测试 / 交付文档；
 只有缺必要范围或授权时才问我。
@@ -161,7 +163,7 @@ docs/REPORT-EXPORT.md、docs/TAX-REPORT-FORMAT.md、docs/PROJECT-CHARTER.md、do
 当前导出返回 422 tax_template_unverified，拒绝输出本身不算 B2 交付。
 同时向负责人汇总 RC-3 核心缺口（如间接法末行、两套准则共用同一 COA、复杂混合现金流）。
 
-边界：产品本机单用户、可多账套批量；不做多租户 / SaaS / 对外服务；全国电子税务局真实接入 0；
+边界：产品本机单用户；一家企业一个账套，多企业批量 = 多账套；不做多租户 / SaaS / 对外服务；全国电子税务局真实接入 0；
 税局是否提供科目 / 期初 / 凭证 / 银行 / 发票不可先行承诺。
 我用自己的 GitHub / Codex / 模型服务凭据，不复制负责人 token / config / session / 账套 DB。
 我的本地执行员工只允许 GLM 5.3 或 DeepSeek V4.1 Flash（主 / 回退显式锁定）；不用其他模型或子 agent；

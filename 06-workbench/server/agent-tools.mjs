@@ -8,6 +8,7 @@
 //   - 未实现：返回 { not_implemented: true, ... }（HTTP 200，由 MCP 层转成 isError）。
 //   - 参数/领域错误：抛 ToolError 或领域异常，由 HTTP 层映射成 4xx 结构化错误。
 import * as A from "./accounting.mjs";
+import { getImportBatch, importIncremental } from "./import-incremental.mjs";
 import { TaxGateway, TaxError } from "./tax-gateway.mjs";
 import { TaxAcquisition } from "./tax-acquisition.mjs";
 import { FujianBrowserSessions } from "./tax-fujian-session.mjs";
@@ -345,6 +346,32 @@ const HANDLERS = dict({
     return A.importAccountSet(payload, { dryRun: args.dryRun !== false });
   },
 
+  // ---- 增量导入（LOCAL-01）：稳定来源 / 企业身份 + 批次幂等 + 来源凭证去重 / 冲突 ----
+  book_import_incremental: (args) => {
+    const payload = args.payload
+      || (args.texts ? A.parseImportTexts(args.texts, args.meta || {}) : null)
+      || (args.files ? A.parseImportTexts(decodeFiles(args.files, args.encoding), args.meta || {}) : null);
+    const result = importIncremental({
+      payload,
+      // 与既有导入一致：默认只预检，只有显式 dryRun=false 才落库。
+      dryRun: args.dryRun !== false,
+      batchId: args.batchId ?? args.batch_id,
+      source: args.source,
+      mode: args.mode,
+      accountSetId: args.accountSetId ?? args.account_set_id,
+      confirmNewBinding: args.confirmNewBinding === true || args.confirm_new_binding === true,
+    });
+    return incrementalOutcome(result);
+  },
+
+  book_import_batch: (args) => {
+    const batchId = args.batchId ?? args.batch_id;
+    if (batchId === undefined || batchId === null || String(batchId).trim() === "") {
+      throw new ToolError("batchId_required", "必须提供批次 ID batchId");
+    }
+    return getImportBatch(batchId);
+  },
+
   // ---- 账套 / 科目 / 期初 ----
   account_set_create: (args) => {
     const name = str(args.name);
@@ -444,6 +471,30 @@ const HANDLERS = dict({
     note: "本地分支未实现计划持久化：仅回显入参，不会保存到磁盘或数据库",
   }),
 });
+
+/**
+ * 增量导入结果 → Agent 工具返回 / 错误：
+ * - rejected（参数 / 严格校验失败）→ import_validation_failed；
+ * - conflict（身份 / 去重 / 封账 / 期初覆盖等结构化冲突）→ import_conflict；
+ * - 其余（preview / applied / idempotent_replay）原样返回，不把失败伪装成成功。
+ */
+function incrementalOutcome(result) {
+  if (result.status === "rejected") {
+    throw new ToolError(
+      "import_validation_failed",
+      `增量导入被拒绝：${result.errors[0] || "参数或数据不合法"}`,
+      { errors: result.errors, validation: result.validation, conflicts: result.conflicts },
+    );
+  }
+  if (result.status === "conflict") {
+    throw new ToolError(
+      "import_conflict",
+      `增量导入存在结构化冲突：${result.conflicts.map((c) => c.code).join(", ")}`,
+      { conflicts: result.conflicts, validation: result.validation },
+    );
+  }
+  return result;
+}
 
 function contextTool(args) {
   const setId = optionalAccountSetId(args);

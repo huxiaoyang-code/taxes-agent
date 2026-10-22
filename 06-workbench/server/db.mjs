@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
+import { ensureImportSchema } from "./import-storage.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WORKBENCH_DATA_DIR || join(__dirname, "..", "data");
@@ -110,3 +111,8 @@ const voucherCols = db.prepare(`PRAGMA table_info(vouchers)`).all().map((c) => c
 if (!voucherCols.includes("kind")) {
   db.exec(`ALTER TABLE vouchers ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal'`);
 }
+
+// ---- LOCAL-01 增量导入表 / 版本化迁移 ----
+// 先产生一致备份，再把新增结构放进迁移事务（见 import-storage.mjs）；
+// 每次真正升级都重新备份，启动时版本已达目标则不备份；迁移失败整体回滚并抛 migration_failed。
+export const importSchema = ensureImportSchema(db, { dataDir: DATA_DIR });

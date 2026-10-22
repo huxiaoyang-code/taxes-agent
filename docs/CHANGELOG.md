@@ -5,6 +5,21 @@
 
 ## [Unreleased]
 
+### Added — 本机产品路线 LOCAL-01：增量导入与批次幂等（2026-10-22）
+
+- 用户 2026-10-22 新指示允许本机产品方向工作（覆盖旧「暂停本地扩建」）；**税局现场仍暂停、真实接入仍 0**，本条不改变税局状态。
+- 用户同日澄清：**一家企业只需要一个账套**，多企业批量处理对应多个账套；旧文档中「一企多账套」含义被覆盖，**一企多账簿 / `bookKey` 方向已撤回、从未实施、不得新增**。
+- 新增[增量导入契约](LOCAL-IMPORT.md)、[任务单](tasks/LOCAL-01.md)、[交接](handoffs/LOCAL-01.md)与[八包总览](tasks/INDEPENDENT-PRODUCT-WORK.md)（按用户原任务单完整映射八包：LOCAL-05a 导出模块 #45 实施中、LOCAL-08 输出边界 #44 修复中，其余待开工；LOCAL-01 未合并）。
+- 新增 `06-workbench/server/import-incremental.mjs`：区分旧首次创建（`importAccountSet` 兼容不变、无身份认定）/ `mode=create`（有规范企业身份 + 批次首次建账）/ `mode=append`（指定同一企业账套追加）；规范 `source.enterpriseKey`（NFKC + trim，不按名称 / 大小写猜认）+ `batchId` + 来源凭证 ID + sha256 内容指纹；同批重试（含重启）幂等、跨批同来源凭证去重、内容修订 / 本批自身重复 / 业务字号冲突 / 身份不匹配 / 科目不兼容 / 封账 / 期初覆盖返回结构化冲突且不写入。
+- 一企一账套：`import_enterprise_account_sets` 以 `enterprise_key` 主键 + `account_set_id` UNIQUE 在数据库层保证；同企业跨来源 `create` 返回 `enterprise_already_bound` 并引导 `mode=append` 到已有账套（不新建第二本）；同账套绑另一企业一律拒绝；新增来源证据需 `confirmNewBinding=true` 且身份一致。
+- 来源凭证状态：本机反过账 / 修改 / 删除后，去重与回放返回 `source_voucher_voucher_unposted` / `_modified` / `_missing` 结构化冲突，不按来源指纹伪报完成；删除后来源登记保留（去掉 `vouchers` 外键）；`markBatchFailed` 不会覆写已完成批次。
+- 第二轮独审修复：填空账套期初同批只读回放（核对库内实际期初，换批改期初 / 库内被改动仍拒绝）、自动取号在计划阶段统一预分配（预检所见 = 落库，同期间同字号不重号）、跨批去重逐张批次追踪（`import_batch_vouchers`，查询 / 回放 / 首调一致并指向既有凭证）。
+- 最后定向返工（Issue #43）：`create` 同批回放也按 `batchRecord.account_set_id` 核验当前真实期初（合法 API 改期初后给 `batch_replay_state_incomplete`，首次正式执行仍合法，无期初批次不凭空要求快照）；`sourceTrace` 正式执行补齐 `action`，与批次查询 / 回放使用同一组逐张 DTO 字段，新建 / 纯去重 / 混合批次首调与查询全对象一致。
+- 新增 `06-workbench/server/import-storage.mjs`：schema **v3**（7 张表，含 `import_enterprise_account_sets` 与 `import_batch_vouchers`）；**先备份、后建新结构**（备份保持迁移前结构）；迁移事务失败原库 schema / 业务不变；每次升级重新备份（失败重试也重新备份），不复用 `size>0` 的过期 / 损坏快照；v1 / v2 候选库可逐级升级并回填落库指纹与批次关联；回退方式已文档化：**恢复会回到备份（快照）时点，备份时点后新增业务会丢失，必须先保护现库 / 停写 / 恢复后核对；最小工具不冒充 LOCAL-06 全备份恢复完成**。
+- 接线（只导入）：`db.mjs` 启动迁移、`server.mjs`（`POST /api/import/incremental`、`GET /api/import/batches/:id`）、`agent-tools.mjs`（`book_import_incremental` / `book_import_batch`）、MCP `tools.mjs`（同两个工具，`origin: local`）。旧 `importAccountSet` / `/api/import/account-set` / `legacy_book_import` 行为与返回结构不变。
+- 测试（全合成临时库 + 随机回环端口，不连旧后端）：上一冻结候选领域 46 / 46、HTTP + Agent 21 / 21、MCP 7 / 7，`import-strict` 54 / 54、`voucher-amount-guards` 103 / 103、`npm test` **47 / 47 套 exit 0**；最后定向修复后最终代码实跑领域 **49 / 49**、HTTP + Agent **22 / 22**、MCP **7 / 7**，均 exit 0，**未再重跑全套 47 套**，由管理者按影响面完成最终验证。
+- 前端、`report-export.mjs`、`tax-report-format.mjs`、`public/*`、`package.json` 与税局模块未改；状态为未提交 / 未建 PR / 未合并，待管理者验收。
+
 ### Added — 税局数据与往期文件探索（2026-10-20 启动，2026-10-21 更新）
 
 - [PR #40](https://github.com/huxiaoyang-code/youshu-fork/pull/40) 已创建、开放候审；用户今日停止探索，仅收尾交接。代码已独审，当前文档待最终 head 审查，未合并。
