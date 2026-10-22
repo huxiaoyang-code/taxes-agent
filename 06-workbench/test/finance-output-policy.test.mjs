@@ -868,5 +868,91 @@ await test('review1: Proxy 陷阱无法完全避免触发，但失败必须是�
   policy.dispose();
 });
 
+await test('adapter-prep: project 数组同时接受状态 token 与期间，自由文本仍被丢弃', () => {
+  const { value, dropped } = sanitizeProjection({
+    periods: ['2026-01', 'ok_token', X.summary, 12, true],
+    labels: [X.enterprise, X.accountName, '2026-13'],
+  });
+  assert.deepEqual(value, { periods: ['2026-01', 'ok_token', 12, true], labels: [] });
+  assert.equal(dropped, 4);
+  assertNoLeak(value, 'period/token array projection');
+});
+
+await test('adapter-prep: 普通工具 DTO spec 存在，无引用摘要只回白名单字段且不泄漏原值', () => {
+  const { summarizeQueryResult, summarizeWriteResult } = M;
+  assert.ok(M.SUPPORTED_OPERATIONS.query.includes('account_list'));
+  assert.ok(M.SUPPORTED_OPERATIONS.query.includes('book_import_batch'));
+  assert.ok(M.SUPPORTED_OPERATIONS.write.includes('book_import_incremental'));
+
+  const accounts = summarizeQueryResult('account_list', {
+    accountSetId: 5,
+    items: [
+      { code: X.accountCode, name: X.accountName, category: '资产', direction: 'debit', is_leaf: 1, contra: 0 },
+      { code: '1602', name: '累计折旧', category: '资产', direction: 'credit', is_leaf: 1, contra: 1 },
+    ],
+  });
+  assert.deepEqual(accounts.projection, {
+    accountCount: 2, leafCount: 2, contraCount: 1,
+    byCategory: { assets: 2, liabilities: 0, equity: 0, cost: 0, profit_loss: 0 },
+  });
+  assert.equal(accounts.summaryUnavailable, false);
+  assertNoLeak(accounts.projection, 'account_list projection');
+
+  const batch = summarizeQueryResult('book_import_batch', {
+    batch: { id: X.taxId, status: 'completed', mode: 'create', accountSetId: 9, result: { vouchersCreated: 2 } },
+    source: { system: X.person, enterpriseKey: X.taxId },
+    sourceTrace: [{ sourceVoucherId: X.taxId, voucherId: 31, state: 'ok' }, { state: 'inconsistent' }],
+    voucherCount: 2,
+  });
+  assert.deepEqual(batch.projection, {
+    batchStatus: 'completed', batchMode: 'create', accountSetId: 9, traceCount: 2, okTraceCount: 1,
+    inconsistentTraceCount: 1, voucherCount: 2, accountSetCreated: false, vouchersCreated: 2,
+  });
+  assertNoLeak(batch.projection, 'book_import_batch projection');
+
+  const preview = summarizeWriteResult('book_import_incremental', {
+    status: 'preview', accountSetId: null, validation: { ok: true },
+    conflicts: [{ code: 'x', message: X.summary }], errors: [],
+    planned: { accountSetCreated: true, vouchersToCreate: ['a', 'b'], vouchersDeduplicated: ['c'] },
+    source: { enterpriseKey: X.taxId, enterpriseName: X.enterprise }, batch: { id: X.taxId },
+  });
+  assert.equal(preview.applied, false);
+  assert.equal(preview.appliedReason, 'dry_run');
+  assert.equal(preview.needsLocalReview, true);
+  assert.equal(preview.projection.status, 'preview');
+  assert.equal(preview.projection.plannedVouchers, 2);
+  assert.equal(preview.projection.plannedVouchersDeduplicated, 1);
+  assert.equal(preview.projection.conflictCount, 1);
+  assertNoLeak({ ...preview, projection: preview.projection }, 'incremental projection');
+
+  const applied = summarizeWriteResult('book_import_incremental', {
+    status: 'applied', created: { accountSetId: 11, accountSetCreated: true, vouchersCreated: 1 },
+  });
+  assert.equal(applied.applied, true);
+  assert.equal(applied.projection.accountSetId, 11);
+
+  expectCode(() => summarizeQueryResult('finance_query:enterprise_account.bank', {}), 'output_policy_unknown_operation');
+});
+
+await test('adapter-prep: 共享引用（DAG）是合法 DTO，不算循环；真循环仍拒绝', () => {
+  const shared = { rows: [{ amount: 1 }] };
+  const dag = { created: { sourceTrace: shared.rows }, sourceTrace: shared.rows };
+  const { nodes, bytes } = M.inspectRawValue(dag, 1000, 1_000_000);
+  assert.ok(nodes >= 4 && bytes > 0);
+  const policy = new FinanceOutputPolicy();
+  const envelope = policy.wrapWrite('legacy_book_import', {
+    accountSetId: 5,
+    value: { dryRun: false, validation: { ok: true, errors: [], warnings: [] }, created: { id: 9, sourceTrace: shared.rows }, sourceTrace: shared.rows },
+  });
+  assert.equal(envelope.applied, true);
+  assert.match(envelope.localRef, /^finref_/);
+  assert.equal(envelope.projection.createdAccountSetId, 9);
+  policy.dispose();
+
+  const cyclic = { created: {} };
+  cyclic.created.self = cyclic;
+  expectCode(() => M.inspectRawValue(cyclic), 'output_policy_value_invalid');
+});
+
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;
