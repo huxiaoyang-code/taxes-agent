@@ -537,6 +537,62 @@ test("每个预置科目都有可说明 scope 状态，未映射项进入规则�
   );
 });
 
+test("来源元数据：小企附录 85 页与企业 2019 附件2 18 页的页码/条目不互相错挂", () => {
+  const small = getAccountingProfile(SMALL).sources.find(
+    (source) => source.sourceId === "mof-2011-17-appendix"
+  );
+  const enterprise = getAccountingProfile(ENTERPRISE).sources.find(
+    (source) => source.sourceId === "mof-2019-06-appendix-2"
+  );
+  assert.ok(small, "小企 profile 必须记录附录来源");
+  assert.ok(enterprise, "企业 profile 必须记录 2019 附件2 来源");
+  assert.equal(small.pageCount, 85, "小企附录实际页数");
+  assert.equal(enterprise.pageCount, 18, "企业 2019 附件2 实际页数");
+  assert.equal(
+    small.url,
+    "https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf"
+  );
+  assert.equal(
+    enterprise.url,
+    "https://www.mof.gov.cn/gkml/caizhengwengao/wg201901/wg201905/201909/P020190912379331344319.pdf"
+  );
+  assert.match(small.title, /小企业会计准则附录/);
+  assert.match(enterprise.title, /附件2/);
+
+  // 小企附录 69 / 70 / 72 / 73 / 80-82 页条目必须挂在小企来源。
+  for (const page of ["69", "70", "72", "73", "81"]) {
+    assert.ok(
+      small.applicableScope.includes(`第${page}页`),
+      `小企附录适用范围应引用第${page}页`
+    );
+  }
+  assert.ok(small.applicableScope.includes("第80-82页"));
+  // 18 页的企业附件2 不得挂小企附录 80-82 页。
+  assert.ok(!enterprise.applicableScope.includes("第80页"));
+  assert.ok(!enterprise.applicableScope.includes("第81页"));
+  assert.ok(!enterprise.applicableScope.includes("第82页"));
+  assert.ok(enterprise.applicableScope.includes("第15-16页"));
+  assert.ok(enterprise.applicableScope.includes("第5页"));
+
+  const citedPages = (text) =>
+    [...text.matchAll(/第(\d+)(?:-(\d+))?页/g)].flatMap((match) =>
+      match[2] ? [Number(match[1]), Number(match[2])] : [Number(match[1])]
+    );
+  for (const [source, scope] of [
+    [small, small.applicableScope],
+    [enterprise, enterprise.applicableScope],
+  ]) {
+    const pages = citedPages(scope);
+    assert.ok(pages.length > 0, `${source.sourceId} 必须记录具体页码`);
+    for (const page of pages) {
+      assert.ok(
+        page >= 1 && page <= source.pageCount,
+        `${source.sourceId} 引用第${page}页超出实际 ${source.pageCount} 页`
+      );
+    }
+  }
+});
+
 // ================================================================ 3. 报表快照（手算字面量）
 test("小企三期资产负债表快照：2025-11 / 2025-12 / 2026-01", () => {
   const smallAccounts = catalogOf(SMALL);
@@ -1482,23 +1538,69 @@ test("独审P1：无已核实列示规则的相反余额给 incomplete，不静�
   assert.equal(rowValue(notes, "notes-receivable"), 0);
   assert.equal(notes.totals.assets, 10000);
 
-  const tax = bs(
+  const payable = bs(
     SMALL,
     catalogOf(SMALL),
     money([
       ["1002", 10000],
-      ["2221", 5000],
+      ["2201", 5000],
     ])
   );
-  assert.equal(tax.complete, false);
-  const taxDiagnostic = tax.diagnostics.find(
+  assert.equal(payable.complete, false);
+  const payableDiagnostic = payable.diagnostics.find(
     (item) => item.code === "account_reverse_balance_requires_detail"
   );
-  assert.ok(taxDiagnostic);
-  assert.equal(taxDiagnostic.accountCode, "2221");
-  assert.equal(rowValue(tax, "taxes-payable"), 0);
-  assert.equal(tax.totals.liabilities, 0);
-  assert.equal(tax.totals.assets, 10000);
+  assert.ok(payableDiagnostic);
+  assert.equal(payableDiagnostic.accountCode, "2201");
+  assert.equal(payableDiagnostic.reason, "reverse-balance-presentation-not-defined");
+  assert.equal(rowValue(payable, "notes-payable"), 0);
+  assert.equal(payable.totals.liabilities, 0);
+  assert.equal(payable.totals.assets, 10000);
+});
+
+test("独审二轮P2：小企应交税费借方按附录第73页(28)负号列示，资产负债勾稽完整", () => {
+  const result = bs(
+    SMALL,
+    catalogOf(SMALL),
+    money([
+      ["1002", 90000],
+      ["2221", 10000],
+      ["3001", -100000],
+    ])
+  );
+  assert.equal(result.complete, true);
+  assert.deepStrictEqual(result.diagnostics, []);
+  assert.equal(rowValue(result, "taxes-payable"), -10000);
+  assert.equal(result.totals.assets, 90000);
+  assert.equal(result.totals.liabilities, -10000);
+  assert.equal(result.totals.equity, 100000);
+  assert.equal(result.totals.liabilitiesAndEquity, 90000);
+  assert.deepStrictEqual(result.reclassifications, []);
+  const rules = getAccountingReportRules(SMALL);
+  assert.deepStrictEqual(rules.balanceSheet.negativePresentation, {
+    "2221": {
+      reason: "small-enterprise-appendix-p73-item-28-taxes-payable-debit-negative",
+    },
+  });
+  assert.equal(rules.balanceSheet.reciprocal["2221"], undefined);
+
+  // 正常贷方余额仍按正数应交税费列示，负号规则只处理借方余额。
+  const normal = bs(
+    SMALL,
+    catalogOf(SMALL),
+    money([
+      ["1002", 90000],
+      ["2221", -10000],
+      ["3001", -80000],
+    ])
+  );
+  assert.equal(normal.complete, true);
+  assert.deepStrictEqual(normal.diagnostics, []);
+  assert.equal(rowValue(normal, "taxes-payable"), 10000);
+  assert.equal(normal.totals.assets, 90000);
+  assert.equal(normal.totals.liabilities, 10000);
+  assert.equal(normal.totals.equity, 80000);
+  assert.equal(normal.totals.liabilitiesAndEquity, 90000);
 });
 
 test("独审P2：普通非金融企业应收股利/应收利息收现按 investing，不误列 operating", () => {
@@ -1557,7 +1659,7 @@ test("独审P2：现金/受限现金判定仍 unknown，正向投资分类保留
       assert.equal(result.category, "unknown");
       assert.equal(result.reason, "counterpart_is_cash");
     }
-    for (const code of ["1601", "1604", "1701"]) {
+    for (const code of ["1601", "1701"]) {
       const result = classifyAccountingCashCounterpart(profileId, A(code, "资产", "debit"));
       assert.equal(result.category, "investing");
     }
@@ -1571,6 +1673,36 @@ test("独审P2：现金/受限现金判定仍 unknown，正向投资分类保留
       )
     );
   }
+});
+
+test("独审二轮P2：1604 在建工程用途不明返回 unknown+固定 reason，不统一列 investing", () => {
+  for (const profileId of [SMALL, ENTERPRISE]) {
+    const result = classifyAccountingCashCounterpart(profileId, A("1604", "资产", "debit"));
+    assert.equal(result.category, "unknown", `${profileId} 1604 应 unknown`);
+    assert.equal(result.matchedRoot, "1604");
+    assert.equal(result.reason, "construction-in-progress-purpose-ambiguous");
+    const rules = getAccountingReportRules(profileId);
+    assert.ok(!rules.cashFlow.investingRoots.includes("1604"), `${profileId} 1604 不得无条件 investing`);
+    assert.ok(
+      rules.cashFlow.ambiguousRoots.some(
+        (item) =>
+          item.root === "1604" &&
+          item.reason === "construction-in-progress-purpose-ambiguous"
+      ),
+      `${profileId} 必须固定记录 1604 用途不明 reason`
+    );
+  }
+  // 可判断的正向投资分类保留，不因 1604 歧义把所有长期资产改为 unknown。
+  for (const profileId of [SMALL, ENTERPRISE]) {
+    for (const code of ["1601", "1701"]) {
+      const result = classifyAccountingCashCounterpart(profileId, A(code, "资产", "debit"));
+      assert.equal(result.category, "investing", `${profileId} ${code} 应保持 investing`);
+    }
+  }
+  assert.equal(
+    classifyAccountingCashCounterpart(SMALL, A("1101", "资产", "debit")).category,
+    "investing"
+  );
 });
 
 test("生产模块 import 图纯净：只互相依赖，无数据库 / 文件 / 网络 / 环境变量副作用", () => {

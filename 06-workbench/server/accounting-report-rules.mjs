@@ -286,6 +286,17 @@ const RECIPROCAL_BALANCE_RULES = {
   },
 };
 
+// 合法负列示：只登记已核实允许以负号保留在本行的科目，单独于往来反向重分类处理。
+// 小企附录第73页(28)明确应交税费期末借方余额以“－”号填列；备抵常规余额按有符号金额
+// 进入净值，权益亏损 / 损益红冲不进入资产 / 负债 / 成本反向分支。企业 profile 未核实对应条目，不扩张。
+const NEGATIVE_PRESENTATION_RULES = {
+  "small-2011-basic-v1": {
+    "2221": {
+      reason: "small-enterprise-appendix-p73-item-28-taxes-payable-debit-negative",
+    },
+  },
+};
+
 // ---------------------------------------------------------------- 利润表行
 function incomeStatementRows(codes) {
   return [
@@ -386,9 +397,10 @@ const CASH_FLOW_RULES = {
       "5602",
       "5801",
     ],
-    investingRoots: ["1101", "1131", "1132", "1601", "1602", "1604", "1701", "1702", "5111"],
+    investingRoots: ["1101", "1131", "1132", "1601", "1602", "1701", "1702", "5111"],
     financingRoots: ["2001", "2232", "2501", "2701", "3001", "3002", "3101", "3103", "3104"],
     ambiguousRoots: [
+      { root: "1604", reason: "construction-in-progress-purpose-ambiguous" },
       { root: "1123", reason: "prepayment-purpose-ambiguous" },
       { root: "1221", reason: "other-receivable-purpose-ambiguous" },
       { root: "1801", reason: "long-term-deferred-expense-purpose-ambiguous" },
@@ -424,9 +436,10 @@ const CASH_FLOW_RULES = {
       "6602",
       "6801",
     ],
-    investingRoots: ["1131", "1132", "1601", "1602", "1604", "1701", "1702", "6111"],
+    investingRoots: ["1131", "1132", "1601", "1602", "1701", "1702", "6111"],
     financingRoots: ["2001", "2232", "2501", "2701", "4001", "4002", "4101", "4103", "4104"],
     ambiguousRoots: [
+      { root: "1604", reason: "construction-in-progress-purpose-ambiguous" },
       { root: "1123", reason: "prepayment-purpose-ambiguous" },
       { root: "1221", reason: "other-receivable-purpose-ambiguous" },
       { root: "1801", reason: "long-term-deferred-expense-purpose-ambiguous" },
@@ -474,6 +487,7 @@ function buildRules(profile) {
         unsupported: [],
         requiredDetails: [],
         reciprocal: {},
+        negativePresentation: {},
       },
       incomeStatement: {
         engineMode: "legacy-compatibility",
@@ -551,6 +565,7 @@ function buildRules(profile) {
 
   const cashFlow = CASH_FLOW_RULES[profile.id];
   const reciprocal = RECIPROCAL_BALANCE_RULES[profile.id] || {};
+  const negativePresentation = NEGATIVE_PRESENTATION_RULES[profile.id] || {};
   const cashFlowRoots = [
     ...cashFlow.operatingRoots,
     ...cashFlow.investingRoots,
@@ -583,6 +598,7 @@ function buildRules(profile) {
       unsupported: unsupportedAccounts,
       requiredDetails,
       reciprocal,
+      negativePresentation,
     },
     incomeStatement: {
       engineMode: "profile-rules",
@@ -606,6 +622,7 @@ function buildRules(profile) {
       "内部简化行项目，不是法定完整财务报表，也不是税局上传文件。",
       "报表金额必须由阶段 B 的已验证查询 / 金额函数生成；本模块不判断期间、posted 或结转。",
       "税费 / 财务费用只汇总已记录分录，不等于自动算税。",
+      "小企应交税费 2221 借方余额按附录第73页(28)以负号列示；在建工程 1604 的现金流用途不明时返回 unknown，不统一列为投资活动。",
     ],
   };
 
@@ -662,6 +679,44 @@ function buildRules(profile) {
       throw ruleError(
         "report_rule_invalid",
         `profile ${profile.id} 的往来反向规则 ${rootCode} 缺少未解决原因`
+      );
+    }
+  }
+
+  // 校验合法负列示规则：必须是已映射到本行、自然方向一致的科目；不能与往来反向
+  // 重分类重叠，也不允许空原因。负列示只保留在本行，不改列其他行。
+  for (const [rootCode, mapping] of Object.entries(negativePresentation)) {
+    const root = profile.coa.find((item) => item.code === rootCode);
+    if (!root) {
+      throw ruleError(
+        "report_rule_root_unknown",
+        `profile ${profile.id} 的负列示规则引用了不存在的科目 ${rootCode}`
+      );
+    }
+    const source = balanceSheetIndex.get(rootCode);
+    if (!source || source.via !== "row") {
+      throw ruleError(
+        "report_rule_invalid",
+        `profile ${profile.id} 的负列示规则 ${rootCode} 未映射到资产负债表行`
+      );
+    }
+    const row = balanceSheetRows.find((item) => item.rowId === source.rowId);
+    if (!row || row.natural !== root.direction) {
+      throw ruleError(
+        "report_rule_invalid",
+        `profile ${profile.id} 的负列示规则 ${rootCode} 自然方向不一致`
+      );
+    }
+    if (reciprocal[rootCode]) {
+      throw ruleError(
+        "report_rule_invalid",
+        `profile ${profile.id} 的科目 ${rootCode} 不能同时定义负列示与往来反向列示`
+      );
+    }
+    if (typeof mapping.reason !== "string" || mapping.reason.trim() === "") {
+      throw ruleError(
+        "report_rule_invalid",
+        `profile ${profile.id} 的负列示规则 ${rootCode} 缺少核实原因`
       );
     }
   }
@@ -1023,53 +1078,59 @@ export function evaluateAccountingStatement(profileId, options = {}) {
         unclosedSum = safeAdd(unclosedSum, item.netMinor, `未结转损益 ${item.code}`);
         continue;
       }
-      // 往来反向余额：逐科目按自身余额方向判断，不先按行净额相加；已核实配对
-      // 按官方列示行重分类，未定义列示的相反余额给 incomplete，不静默冲减。
+      // 往来反向余额：逐科目按自身余额方向判断，不先按行净额相加；已核实合法负列示
+      // 保留在本行，已核实配对按官方列示行重分类，未定义列示的相反余额给 incomplete，
+      // 不静默冲减。
       const direction = resolved.effective.direction;
       const reverseBalance = direction === "debit" ? item.netMinor < 0 : item.netMinor > 0;
       const reverseSensitive = ["资产", "负债", "成本"].includes(
         resolved.effective.category
       );
       if (reverseBalance && reverseSensitive) {
-        const mapping = statement.reciprocal?.[resolved.matchedRoot];
-        if (mapping && mapping.targetRowId) {
-          const targetRow = statement.rows.find(
-            (row) => row.rowId === mapping.targetRowId
-          );
-          if (!targetRow) {
-            throw ruleError(
-              "report_rule_invalid",
-              `往来反向列示目标行 ${mapping.targetRowId} 不存在`
+        const negativePresentation =
+          statement.negativePresentation?.[resolved.matchedRoot];
+        if (!negativePresentation) {
+          const mapping = statement.reciprocal?.[resolved.matchedRoot];
+          if (mapping && mapping.targetRowId) {
+            const targetRow = statement.rows.find(
+              (row) => row.rowId === mapping.targetRowId
             );
+            if (!targetRow) {
+              throw ruleError(
+                "report_rule_invalid",
+                `往来反向列示目标行 ${mapping.targetRowId} 不存在`
+              );
+            }
+            const targetCurrent = rowSums.get(mapping.targetRowId) || 0;
+            rowSums.set(
+              mapping.targetRowId,
+              safeAdd(
+                targetCurrent,
+                item.netMinor,
+                `往来反向列示 ${mapping.targetRowId} / ${item.code}`
+              )
+            );
+            reclassifications.push({
+              accountCode: item.code,
+              matchedRoot: resolved.matchedRoot,
+              fromRowId: usage.rowId,
+              toRowId: mapping.targetRowId,
+              amountMinor: item.netMinor,
+            });
+            continue;
           }
-          const targetCurrent = rowSums.get(mapping.targetRowId) || 0;
-          rowSums.set(
-            mapping.targetRowId,
-            safeAdd(
-              targetCurrent,
-              item.netMinor,
-              `往来反向列示 ${mapping.targetRowId} / ${item.code}`
-            )
-          );
-          reclassifications.push({
+          diagnostics.push({
+            code: "account_reverse_balance_requires_detail",
+            severity: "error",
+            message: `科目 ${item.code}（${resolved.accountName ?? ""}）出现与自然方向相反的余额，本包未定义可确定的列示行`,
             accountCode: item.code,
             matchedRoot: resolved.matchedRoot,
-            fromRowId: usage.rowId,
-            toRowId: mapping.targetRowId,
+            reason: mapping?.reason ?? REVERSE_BALANCE_DEFAULT_REASON,
             amountMinor: item.netMinor,
           });
           continue;
         }
-        diagnostics.push({
-          code: "account_reverse_balance_requires_detail",
-          severity: "error",
-          message: `科目 ${item.code}（${resolved.accountName ?? ""}）出现与自然方向相反的余额，本包未定义可确定的列示行`,
-          accountCode: item.code,
-          matchedRoot: resolved.matchedRoot,
-          reason: mapping?.reason ?? REVERSE_BALANCE_DEFAULT_REASON,
-          amountMinor: item.netMinor,
-        });
-        continue;
+        // 已核实合法负列示：保留在本行，由行自然方向计算为负值，不改列其他行。
       }
       const current = rowSums.get(usage.rowId) || 0;
       rowSums.set(

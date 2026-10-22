@@ -41,7 +41,7 @@
 
 | 接口 | 契约 |
 |---|---|
-| `getAccountingReportRules(profileId)` | 冻结、可序列化的规则描述：`profileId / reportMappingVersion / engineMode`、资产负债表与利润表的 `rowId / label / 科目规则 / 合计依赖`、往来反向列示 `reciprocal`、基础现金流分类规则、`unsupported` / `requiredDetails` 清单 |
+| `getAccountingReportRules(profileId)` | 冻结、可序列化的规则描述：`profileId / reportMappingVersion / engineMode`、资产负债表与利润表的 `rowId / label / 科目规则 / 合计依赖`、往来反向列示 `reciprocal`、合法负列示 `negativePresentation`、基础现金流分类规则、`unsupported` / `requiredDetails` 清单 |
 | `resolveAccountingAccountRule(profileId, account)` | 解析单个科目：`matchedRoot`、`isDetail`、`roles`、`effective`、`scope`、`statements`、`diagnostics`；名称仅展示 |
 | `evaluateAccountingStatement(profileId, { kind, accounts, amounts })` | 纯计算 `balance-sheet` / `income-statement`，返回行项目、合计、往来反向余额 `reclassifications` 与 `diagnostics` |
 | `classifyAccountingCashCounterpart(profileId, account)` | 单一对方科目现金交易的 `operating` / `investing` / `financing`，否则 `unknown` + `reason` |
@@ -75,6 +75,10 @@
   其他未定义列示行的相反余额同样给该诊断，不静默冲减资产或负债，也不把它归因于
   “流动 / 非流动期限重分类暂缓”。权益类（利润分配 / 本年利润等）的借方余额是亏损 /
   减少，仍按负值展示，不套用往来反向诊断。
+- 小企应交税费 `2221` 期末借方余额按附录第73页(28)以负号列示，属**合法负列示**：
+  保留在“应交税费”本行、不按往来反向诊断、不改列其他行；该规则按 profile / 科目登记在
+  `balanceSheet.negativePresentation`，不扩张到未核实科目或其他 profile。合法负列示、
+  备抵常规余额（有符号金额）、权益亏损 / 损益红冲与往来反向重分类分别处理，不共用一条方向规则。
 
 ## 3. 三个 profile
 
@@ -135,11 +139,12 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 - 企业按已核实范围汇总：`1131 / 1132 / 1221` 合并为「其他应收款」一行。
 - 合计：`assets` / `liabilities` / `equity` / `liabilitiesAndEquity`。
 - 原值 / 累计折旧摊销为展示行，不进入资产总计；未使用且已核实的行项目不因「余额为 0」而阻断报表。
-- 往来反向余额列示：小企行项目按附录第69页要求按明细科目余额方向分列
+- 往来反向余额列示：小企行项目按附录第69页(4)、第70页(5)、第72页(25)(26)要求按明细科目余额方向分列
   （`1122` 贷方→预收账款、`2203` 借方→应收账款、`2202` 借方→预付账款、`1123` 贷方→应付账款）；
   企业只对可确定的 `2202` 借方→预付款项、`1123` 贷方→应付账款双向分列，`1122` 贷方 /
   `2203` 借方的预收款项与合同负债 / 合同资产细类未确定时给 incomplete。
-  `getAccountingReportRules(...).balanceSheet.reciprocal` 暴露这些映射与未解决原因。
+  `getAccountingReportRules(...).balanceSheet.reciprocal` 暴露这些映射与未解决原因；
+  `balanceSheet.negativePresentation` 单独暴露已核实的合法负列示（小企 `2221`，附录第73页(28)）。
 
 ### 4.2 利润表
 
@@ -154,8 +159,11 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 `classifyAccountingCashCounterpart` 只处理**单一对方科目、可解释**的基础交易：
 
 - 资本 / 资本公积 / 盈余公积 / 本年利润 / 利润分配、借款、长期应付款、应付股利（利润）→ `financing`；
-- 固定资产、在建工程、无形资产、短期投资、投资收益、应收股利、应收利息 → `investing`
+- 固定资产、无形资产、短期投资、投资收益、应收股利、应收利息 → `investing`
   （普通非金融企业投资股利 / 债券利息收现）；
+- `1604` 在建工程用途不明 → `unknown`（`construction-in-progress-purpose-ambiguous`）：
+  可能是购建长期资产 `investing`、资本化借款利息 `financing` 或工程人员薪酬 `operating`，
+  单一科目不能确定；不把在建工程统一列为投资活动；
 - 日常商品 / 劳务收入、成本、存货、生产成本、应收应付 / 预收、应付职工薪酬、应交税费、
   税金及附加、销售 / 管理费用、所得税费用 → `operating`；
 - 现金科目之间互转 → `unknown`（`counterpart_is_cash`）；应付利息 → `unknown`
@@ -193,13 +201,17 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 
 规则定义只引用 `sourceId`，不复制长篇法规原文。所有来源在 2026-10-22 核对。
 
+页数按官方 PDF 实际页数核对：小企附录 85 页（第69/70/72/73/81页条目已逐页核对），
+企业2019附件2 18 页（第2-3、4-8、15-16页条目已逐页核对）；两者不互相借用页码。
+`source` 对象另记录 `pageCount`（小企附录 85、企业2019附件2 18），测试校验引用页码不超过实际页数。
+
 | sourceId | 文件 / 文号 | 标题 | URL | 本包适用范围 |
 |---|---|---|---|---|
 | `mof-2011-17` | 财会〔2011〕17号 | 小企业会计准则（正文） | https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852319878.pdf | 适用边界与报表基本要求 |
-| `mof-2011-17-appendix` | 财会〔2011〕17号 | 小企业会计准则附录（科目、主要账务处理、报表） | https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf | 小企基础科目与报表行项目；含附录第69页往来反向余额按明细方向列示；科目编号为参考编号 |
+| `mof-2011-17-appendix` | 财会〔2011〕17号 | 小企业会计准则附录（科目、主要账务处理、报表） | https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf | 小企基础科目与报表行项目；附录共 85 页：第69页(4)应收账款贷方→预收账款、第70页(5)预付账款贷方→应付账款、第72页(25)(26)应付账款借方→预付账款与预收账款借方→应收账款、第73页(28)应交税费借方余额负号列示、第80-82页现金流量表分类说明（第81页3.(2)⑤购建长期资产现金不含资本化借款费用与在建工程人员薪酬）；科目编号为参考编号 |
 | `mof-2006-18-appendix` | 财会〔2006〕18号 | 企业会计准则应用指南附录：会计科目和主要账务处理（商务部政府法规库转录） | https://policy.mofcom.gov.cn/claw/clawContent.shtml?id=13655 | 只取已核实的基础科目条目；不整篇视为 2026 现行 |
 | `mof-2023-01-cas-guide-reply` | 财政部会计司答复 | 企业会计准则科目需结合 2014 年以来应用指南 | https://www.mof.gov.cn/bd/mhwzzxly/hjs/202301/t20230104_3861971.htm | 说明 2006 附录不是唯一现行依据 |
-| `mof-2019-06-appendix-2` | 财会〔2019〕6号 | 一般企业财务报表格式（附件2：已执行新金融 / 收入 / 租赁准则） | https://www.mof.gov.cn/gkml/caizhengwengao/wg201901/wg201905/201909/P020190912379331344319.pdf | 企业内部一般报表行项目基础；含第9-10、80页投资收款，第8、81-82页预付工程与利息支出的分类基础；附件1 不作为 2026 默认 |
+| `mof-2019-06-appendix-2` | 财会〔2019〕6号 | 一般企业财务报表格式（适用于已执行新金融准则、新收入准则和新租赁准则的企业，附件2） | https://www.mof.gov.cn/gkml/caizhengwengao/wg201901/wg201905/201909/P020190912379331344319.pdf | 企业内部一般报表行项目基础；附件2共 18 页：资产负债表第2-3页、项目说明第4-8页（含第5页在建工程、第6-7页应付账款含预付账款贷方、第8页合同资产/合同负债），现金流量表第15-16页（购建长期资产、分配股利利润或偿付利息）；附件1 不作为 2026 默认 |
 | `mof-2017-22` | 财会〔2017〕22号 | 企业会计准则第14号——收入 | https://m.mof.gov.cn/zcfb/201707/t20170719_2653110.htm | 新收入准则替代旧收入 / 建造合同处理；复杂合同业务未实现 |
 | `mof-2026-07-interpretation-20` | 财会〔2026〕7号 | 企业会计准则解释第20号 | https://kjs.mof.gov.cn/zhengcefabu/202606/t20260615_3991686.htm | 含金融资产合同现金流量特征与货币缺乏可兑换性；本包不实现其分类计量与追溯调整 |
 | `repo-coa-baseline` | — | 派工基线 `coa.mjs` 逐项快照 | — | 仅 legacy 兼容读取，不是新企业模板依据 |
@@ -243,13 +255,13 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 | `account_scope_unsupported` | 对应业务本包未实现（`unsupported`） |
 | `account_scope_unknown` | 支持状态不可判定 |
 | `account_out_of_statement` | 该科目不进入所请求的报表（如成本科目进利润表） |
-| `account_reverse_balance_requires_detail` | 资产 / 负债 / 成本科目出现与自然方向相反的余额，且无已核实列示行；`reason` 固定说明缺什么明细 |
+| `account_reverse_balance_requires_detail` | 资产 / 负债 / 成本科目出现与自然方向相反的余额，且无已核实列示行（已核实合法负列示如小企 `2221` 除外）；`reason` 固定说明缺什么明细 |
 | `legacy_engine_required` | legacy 账套必须走阶段 B 旧报表兼容路径 |
 
 现金流分类 `unknown` 的 `reason`：`counterpart_unmapped`、`counterpart_is_cash`、
 `counterpart_scope_requires_detail`、`counterpart_scope_unsupported`、
 `interest-payment-classification-ambiguous`、`prepayment-purpose-ambiguous`、
-`finance-expense-interest-vs-fee-ambiguous`、`non-operating-income-purpose-ambiguous`、
+`construction-in-progress-purpose-ambiguous`、`finance-expense-interest-vs-fee-ambiguous`、`non-operating-income-purpose-ambiguous`、
 `non-operating-expense-purpose-ambiguous`、`other-receivable-purpose-ambiguous`、
 `other-payable-purpose-ambiguous`、`long-term-deferred-expense-purpose-ambiguous`、
 `classification_not_verified`、`legacy_engine_required`，以及科目语义冲突的对应诊断码。
@@ -260,7 +272,24 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 
 ## 10. 阶段 A / 阶段 B 边界
 
-阶段 A（本次）只交付纯模块与定向测试：**纯规则已实现并自测、独审回修待复审、尚未接线，阶段 B 未完成**。
+阶段 A（本次）只交付纯模块与定向测试：**纯规则已实现并自测、第二轮独审最小回修已落地待复审、尚未接线，阶段 B 未完成**。
+
+### 10.1 第二轮独审最小回修（待复审，不代表已通过）
+
+- **旧错误 1（P2）**：`2221` 等资产 / 负债 / 成本反向余额曾被同一条 blanket 判断挡住；
+  小企 `2221` 借方余额被置 0 且 `complete=false`。现按小企附录第73页(28)单独登记
+  `negativePresentation`：输入 `1002:+90000、2221:+10000、3001:-100000`（分）得
+  应交税费 `-10000`、资产 `90000`、负债和所有者权益 `90000`、`complete=true`。
+  旧测试中“2221 借方应 incomplete”的错误预期已删除，改用未定义列示的 `2201` 反向余额。
+- **旧错误 2（P2）**：`1604` 在建工程曾无条件 `investing`。现两 profile 均改为
+  `unknown` + `construction-in-progress-purpose-ambiguous`；资本化借款利息应 `financing`、
+  工程人员薪酬应 `operating`，无用途信息不能确定。`1601/1701` 等可判断正向分类保留。
+- **旧错误 3（P3）**：来源元数据曾把 85 页小企附录的第80-82页挂到 18 页企业2019附件2。
+  现小企附录来源记录第69/70/72/73/80-82页，企业2019附件2来源记录第2-3、4-8、15-16页；
+  两者分别记录 `pageCount: 85 / 18`，测试按实际页数校验。
+- **实际计数**：定向测试 `41/41` 通过、exit 0；新增 3 项回归在修复前为 `38/41`（3 项红），
+  修复后 `41/41` 绿。未参与实现的独立复审尚未给出通过结论。
+
 以下仍属阶段 B，且不得用纯模块单测替代：
 
 1. 持久 profile 字段与旧账套 `legacy` 迁移（含迁移前一致备份、WAL 恢复、失败原子性）；
