@@ -1,5 +1,7 @@
 # 任务单 · LOCAL-08 财务输出边界（模型摘要 / 本机读取分道 + 普通工具适配层）
 
+> **当前状态注记（2026-10-22 最终文档轮）**：输出协议候选源码 `3a8ae7a` 已由独立 `review_output08_final` **接受**（61 回修探针 + 47 旧控制 + 3 真实临时领域场景，两项 P2 关闭）；**37 policy / 21 adapter / 18 transport 是员工自测**，不是 root 计数。该候选（含 LOCAL-02 真实 DTO 兼容）已随 Draft [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 提交，**未合并**；adapter / transport 模块本身已经 [PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 合入 main（merge `db6020a`）。**共享 HTTP / Agent / MCP 入口仍未接线，Issue #44 保持 OPEN**。下方「未提交 / 待 root 复审」是各自**阶段快照**，不改写历史。
+
 - 类型：独立后端模块 + 适配层 + 出站信封校验 + 独立验收测试 + 契约文档
 - 状态（分段，**不要混读**）：
   1. **纯策略模块已合并**：经独立审查后由 [PR #50](https://github.com/huxiaoyang-code/youshu-fork/pull/50) 合并（已审 head `f211ace5b90e6dc5f240c8bb870ffbf5eb11662b`，merge / main `b42bae9ae76e54aeda63bcc4db0dc34663286b7d`，2026-10-22T09:57:25Z）；

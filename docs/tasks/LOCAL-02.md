@@ -1,7 +1,11 @@
 # 任务单 · LOCAL-02 会计金额、期末完整性与连续期间
 
 - 类型：后端领域（金额 / 计提 / 结转 / 封账 / 反操作守卫）+ 存储迁移 + 本地接线 + 契约文档 + 测试
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与 review2 最终独审四项返工 P1–P4，以及 review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量与输出协议 2 项 P2 回修（见 §13）；本轮额外完成核心备份索引键语义回修（见 §14）；待 root 冻结与备份独立审查；未提交 / 未建 PR / 未合并**（head / merge 由管理者后补，本文件不预报）
+- 状态：**最终候选已独立审查通过；已提交、已推送并创建 Draft PR [#60](https://github.com/huxiaoyang-code/youshu-fork/pull/60)（未合并，尚无 merge SHA，本文件不预报）**
+  - 源码 head（本分支实际）`98a29d1c2e3e8d2e513aadf79a0aca7b04cc45c7`，其中已包含已合入 main 的 `e86d248c2a573b12c884f311fb01952f209e2563`（LOCAL-06 审计 A，PR #58）。
+  - 独立审查（均未参与实现、不继承实施上下文）已接受，**每项在各自的候选上独立接受、不合并成同一次审查**：核心 `review_core02_final` 在 `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0`（其业务源码经后续提交到 98a 未改变）、输出协议 `review_output08_final` 在 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795`（源后续未改）、备份 `review_backup06_final` 在**精确 98a**（最终 22 / 22 与旧备份兼容独审）。
+  - root 在精确 98a 上实跑：完整 **55 / 55 套 exit 0**、Office **21 / 21**、真实 **11 PDF** 几何检查、备份 **22 / 22**；日志为忽略目录内相对证据名 `local-02-manager-indexkeys-final55.log`（员工自带日志另计，不混归属）。
+  - 下文 §12–§14 的「未提交 / 未建 PR / 待 root 独审」是各自**阶段快照**（当时事实），最终状态以本节与 §15 为准，历史文本不改写。
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，**仅 10 个文档**，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
@@ -318,3 +322,42 @@ PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已合并（mer
 
 改动文件：`06-workbench/server/local-backup.mjs`、`06-workbench/test/local-backup.test.mjs`、
 `docs/LOCAL-BACKUP.md`、`docs/tasks/LOCAL-02.md`、`docs/handoffs/LOCAL-02.md`。
+
+## 15. 最终出版状态（本轮纯文档，权威）
+
+本节只记录**已经发生的事实**，不预报合并结果。§11–§14 的阶段结论（含各自「未提交 / 未建 PR / 待独审」）按其时点阅读。
+
+### 15.1 源码构成（head `98a29d1`）
+
+| 组成 | 提交 | 独立审查 |
+|---|---|---|
+| 核心金额 / 期末 / 连续期间（金额、期末、期间真实入口与 schema v4） | `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0` | `review_core02_final` **接受** |
+| 输出协议（长阻塞码窄通道 + 期末检查 DTO 全局一致性） | `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` | `review_output08_final` **接受** |
+| 备份精确 v3 / v4 契约 | `33995009109cb922c86c9a5e9847e95554faaa4b` | 已独审 |
+| 备份唯一性键语义加强 | `75b448dccbb964653713fae2b62fa3e365417d1a` | 已独审，合当前 main 后冻结为 98a |
+
+- 核心 `bd05415` 的业务与输出源 `3a8ae7a` **在 `75` / `98a` 上未被改动**；`75` 只改备份自有源码 / 测试与三份文档。
+- 审查对应必须逐项一致，不合并成「均在 98a」：核心 `review_core02_final` 在 `bd05415`、输出 `review_output08_final` 在 `3a8ae7a`、备份 `review_backup06_final` 在**精确 98a**；核心业务源码与输出源码经后续提交到 98a 未改变。不引用更早候选的绿测试代替。
+
+### 15.2 独立审查接受要点（事实）
+
+- `review_core02_final`：金额 / 期末 / 期间**真实入口**与 v4 迁移接受，无剩余阻塞。
+- `review_backup06_final`：自跑备份 **22 / 22 exit 0**；用**修复前**工具对真实合成产品 v3 / v4 生成旧备份，新工具 `verify` / `restore-new` 后 schema 3 / 4 与 manifest / snapshot 哈希**均不变**；恢复库上真实 `importIncremental` 追加 `ref-a` 与既有 `Ref-A` **并存**；v3 仅在业务入口显式打开时升 v4。`NOCASE` 变体：旧工具接受，新工具 `source` / `verify` / `restore` **三入口均拒绝且无目标输出**；`xinfo` 完整键 / 来源 / 一一数量与额外 unique 拒绝通过。限制：`AUTOINCREMENT` 等存储选项**不在**严格验证范围（不声明已验证）。
+- `review_output08_final`：**61** 回修探针 + **47** 旧控制 + **3** 真实临时领域场景，两项 P2 均关闭。其中 **37 policy / 21 adapter / 18 transport 为员工自测结果**，不是 root 计数；**共享模型入口（HTTP / Agent / MCP / CLI）仍未接线**。
+
+### 15.3 root 实跑与已知未定位项
+
+- 精确 98a：`npm test` **55 / 55 套 exit 0**；Office **21 / 21** 与 **11 PDF** 几何检查通过；备份套件 **22 / 22**。root 此前在 `3a` 的 55 / 55 是**另一次运行**，两者日志不互相冒充。
+- 一次历史 HTTP 原生退出 **3221226505** 的原因**仍未定位**：后续定向 22 项与多轮 55 套重跑均通过，但**不得**据此宣称已定位或修好本机环境；Windows 交付稳定性（Issue #59，含七份新增文件包）继续跟踪。
+- 9.6 曾把员工 `214500` 日志误记为 root 日志的写法**已更正**，不回退。
+
+### 15.4 PR 与合并（不预报）
+
+- PR [#60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 已创建为 **Draft**，标题 / 正文范围为本包已审候选（核心 + 备份 v3 / v4 + 输出协议 + LOCAL-08 兼容增量），**当前未合并**。
+- 本任务单与交接的最终文档提交在该 PR 上；**文档验收与合并由 root 执行**，合并后由 root 补记实际 merge SHA。本节不写任何 merge SHA，也不声称文档已通过 root 验收。
+- Issue [#47](https://github.com/huxiaoyang-code/youshu-fork/issues/47) 随 PR 合并与交接归档后按 root 安排关闭；当前未关闭。
+
+### 15.5 边界
+
+- 全部证据来自**合成临时库 / 随机回环端口**；未使用真实账套、凭据或税局，**真实接入仍为 0**，税局现场仍暂停。
+- 本轮（最终文档轮）**只改 8 份交付文档**，不改源码 / 测试 / 脚本 / `package.json`：`docs/tasks/LOCAL-02.md`、`docs/handoffs/LOCAL-02.md`、`docs/handoffs/STATE.md`、`docs/tasks/README.md`、`docs/tasks/INDEPENDENT-PRODUCT-WORK.md`、`docs/FINANCE-OUTPUT-BOUNDARY.md`、`docs/tasks/LOCAL-08.md`、`docs/handoffs/LOCAL-08.md`。

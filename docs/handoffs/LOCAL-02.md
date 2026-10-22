@@ -6,8 +6,9 @@
 - 基线（源码）：`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`（LOCAL-01 源码 PR #46 合并）
   - 工作区已由管理者快进到 `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 交接 PR #48，仅 10 个文档，源码无变化）
 - 分支：`codex/huxiaoyang-code/local-02`
-- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态、review2 最终独审四项 P1–P4、review3 取得期间一致性 P2），并完成 LOCAL-08 新工具模型边界兼容增量；独立审查的 2 项输出协议 P2（详见 §9.7）已回修；本轮额外完成核心备份索引键语义回修（详见 §9.8）；未提交、未推送、未建 PR、未合并（待 root 冻结与备份独立审查）**
-  - head / merge 由管理者后补；本交接**不预报**审查结论、head 或 merge。
+- 状态：**最终候选已独立审查通过（每项在各自候选上独立接受：核心 `review_core02_final` 在 `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0`、其业务源码经后续到 98a 未改变；输出协议 `review_output08_final` 在 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795`、源后续未改；备份 `review_backup06_final` 在精确 `98a29d1c2e3e8d2e513aadf79a0aca7b04cc45c7`）；已提交、已推送并创建 Draft PR [#60](https://github.com/huxiaoyang-code/youshu-fork/pull/60)，未合并（尚无 merge SHA，本交接不预报）**；文档验收与合并由 root 执行，合并后由 root 补记实际 merge SHA（详见 §10）。
+  - root 在精确 98a 上实跑：完整 **55 / 55 套 exit 0**、Office **21 / 21**、真实 **11 PDF** 几何检查、备份 **22 / 22**；日志为忽略目录内相对证据名 `local-02-manager-indexkeys-final55.log`；`3a` 上的另一次 55 / 55 是**独立运行**，两者不互相冒充归属。
+  - 下文 §9.6–§9.8 与任务单 §12–§14 的「未提交 / 未建 PR / 待 root 独审」是各自**阶段快照**（当时事实），最终状态以本节与 §10 为准，**不改写历史**。
   - **重要测试口径**：管理者在该 head 上跑过的 50 / 50 与已合 Office 21 / 21 **不能代表最终通过**；
     最终独立审查（`fork_turns=none`）实测四个阻塞（P1–P4），本轮回工后才在**最终代码**上重跑全套。
     review3 又发现一项同影响面 P2（见 §9.4），已统一口径并补定向回归后重新实跑。
@@ -414,3 +415,53 @@ root 已在本 worktree 派单完成兼容整合（**不改本包任何业务实
   `docs/LOCAL-BACKUP.md` / 本任务单 / 本交接；**未改**会计 / DB / 期间 / 金额 / 迁移、输出 policy / adapter / transport、
   其它测试、`scripts/test-all.mjs`（该套件已在其中，无需重登记）。
 - 状态：**实现与自测完成，待 root 冻结与备份独立审查**；未提交 / 未建 PR / 未合并。
+  （上述为 §9.8 阶段快照；已被 §10 的最终审查与 PR 事实取代。）
+
+## 10. 最终出版状态（已发生的审查与 PR 事实）
+
+本节只登记**已实际发生**的事实，不预报合并；任务单 §15 为同一事实的对应章节。
+
+### 10.1 源码构成（head `98a29d1`）
+
+| 组成 | 提交 | 审查 |
+|---|---|---|
+| 核心金额 / 期末 / 连续期间（含真实入口与 schema v4） | `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0` | `review_core02_final` **接受** |
+| 输出协议（长阻塞码窄通道 + 期末检查 DTO 全局一致性） | `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` | `review_output08_final` **接受** |
+| 备份精确 v3 / v4 契约 | `33995009109cb922c86c9a5e9847e95554faaa4b` | 已独审 |
+| 备份唯一性键语义加强 | `75b448dccbb964653713fae2b62fa3e365417d1a` | 已独审，合入当前 main 后冻结为 `98a` |
+
+- 核心 `bd05415` 业务与输出源 `3a8ae7a` **未在 `75` / `98a` 改变**；`75` 只动备份自有源码 / 测试与三份文档。
+- `98a29d1` 同时包含已合 main 的 `e86d248c2a573b12c884f311fb01952f209e2563`（LOCAL-06 审计 A，PR #58），本包未改审计代码。
+
+### 10.2 审查接受要点
+
+- **`review_core02_final`**：金额 / 期末 / 期间的**真实入口**与 v4 迁移接受，无剩余阻塞。
+- **`review_backup06_final`**：自跑 **22 / 22 exit 0**；用**修复前**工具对真实合成产品 v3 / v4 生成旧备份，新工具
+  `verify` / `restore-new` 后 schema 3 / 4 与 manifest / snapshot 哈希**全部不变**；恢复库上真实 `importIncremental` 追加 `ref-a`
+  与既有 `Ref-A` **并存**；v3 仅在业务入口显式打开时升 v4。`NOCASE` 变体：旧工具接受，新工具 `source` / `verify` / `restore`
+  **三入口均拒绝且无目标输出**；`xinfo` 完整键 / 来源 / 一一数量与额外 unique 拒绝通过。限制：`AUTOINCREMENT` 等存储选项
+  **不在**严格验证范围，不声明已验证。
+- **`review_output08_final`**：**61** 回修探针 + **47** 旧控制 + **3** 真实临时领域场景，两项 P2 均关闭。
+  其中 **37 policy / 21 adapter / 18 transport 为员工自测结果**，不是 root 计数；**共享模型入口（HTTP / Agent / MCP / CLI）仍未接线**。
+
+### 10.3 root 实跑与未定位项
+
+- 精确 98a：`npm test` **55 / 55 套 exit 0**；Office **21 / 21** 与真实 **11 PDF** 几何检查通过；备份套件 **22 / 22**。
+- 一次历史 HTTP 原生退出 **3221226505** 原因**仍未定位**：后续定向 22 项与多轮 55 套均通过，但**不**据此宣称已定位或
+  修好本机环境；Windows 交付稳定性由 Issue #59 继续跟踪。
+- 9.6 曾把员工 `214500` 日志当成 root 日志的写法**已更正**，不回退。
+
+### 10.4 PR 与合并（不预报）
+
+- PR [#60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 已创建为 **Draft**，覆盖本包已审候选（核心 + 备份 v3 / v4
+  + 输出协议 + LOCAL-08 兼容增量）；**当前未合并**，本交接**不写任何 merge SHA**。
+- 本次文档提交落在同一 PR；**最终文档验收与合并由 root 执行**，合并后由 root 补记实际 merge SHA；
+  Issue [#47](https://github.com/huxiaoyang-code/youshu-fork/issues/47) 的关闭时点由 root 安排（当前未关闭）。
+
+### 10.5 边界与文档范围
+
+- 全部证据为合成临时库 / 随机回环端口；未使用真实账套、凭据或税局，**真实接入 0**，税局现场仍暂停。
+- 本轮（最终文档轮）**只改 8 份交付文档**，不改源码 / 测试 / 脚本 / `package.json`：
+  `docs/tasks/LOCAL-02.md`、`docs/handoffs/LOCAL-02.md`、`docs/handoffs/STATE.md`、`docs/tasks/README.md`、
+  `docs/tasks/INDEPENDENT-PRODUCT-WORK.md`、`docs/FINANCE-OUTPUT-BOUNDARY.md`、`docs/tasks/LOCAL-08.md`、`docs/handoffs/LOCAL-08.md`。
+- 审查对应关系与任务单 §15.1 一致：核心在 `bd05415`、输出在 `3a8ae7a`、备份在精确 98a，**每项独立接受**，不写成「核心与备份均在 98a」。
