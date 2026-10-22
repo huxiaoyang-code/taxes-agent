@@ -68,6 +68,11 @@ const steps = [
   { name: "finance-model-transport-mcp", file: join(MCP, "finance-model-transport-test.mjs"), cwd: MCP },
   // LOCAL-05 接线（真实 Office HTTP 套件；仅末尾追加，不改上方原有 55 个套件的内容与顺序）
   { name: "report-office-http", file: join(WORKBENCH, "test", "report-office-http.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-04 银行对账（领域 / 对账 / CLI / 备份集成；仅末尾追加，不改上方原有 56 个套件的内容与顺序）
+  { name: "bank-import", file: join(WORKBENCH, "test", "bank-import.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-reconciliation", file: join(WORKBENCH, "test", "bank-reconciliation.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-reconcile-cli", file: join(WORKBENCH, "test", "bank-reconcile-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "local-bank-backup-integration", file: join(WORKBENCH, "test", "local-bank-backup-integration.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
