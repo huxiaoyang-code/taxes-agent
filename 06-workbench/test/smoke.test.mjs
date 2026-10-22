@@ -71,9 +71,12 @@ try {
   });
 
   await test("保存期初余额（借=贷）", async () => {
+    // 真实业务事实：期初已投入固定资产 60000（原值已入固定资产账），
+    // 因此 1601 期初 = 60000，实收资本 = 100000 + 60000 = 160000。
     await api("PUT", `/api/account-sets/${setId}/opening-balances`, { items: [
       { code: "1002", debit: 100000, credit: 0 },
-      { code: "3001", debit: 0, credit: 100000 },
+      { code: "1601", debit: 60000, credit: 0 },
+      { code: "3001", debit: 0, credit: 160000 },
     ] });
   });
 
@@ -113,7 +116,8 @@ try {
   await test("试算平衡：期末借 = 期末贷", async () => {
     const tb = await api("GET", `/api/account-sets/${setId}/reports/trial-balance?period=2026-01`);
     assert.equal(tb.totals.closing_debit, tb.totals.closing_credit);
-    assert.equal(tb.totals.closing_debit, 111300);
+    // 手算：货币资金 98000 + 应收 11300 + 固定资产原值 60000（期初已入账） + 管理费用 2000 = 171300。
+    assert.equal(tb.totals.closing_debit, 171300);
   });
 
   await test("资产负债表平衡（计提前）", async () => {
@@ -135,6 +139,8 @@ try {
     asset = await api("POST", `/api/account-sets/${setId}/assets`, {
       kind: "fixed", name: "办公设备", original_cost: 60000,
       residual_rate: 0.05, useful_life_months: 60, start_period: "2026-01",
+      // LOCAL-02：显式登记取得 / 入账期间（不能用计提开始期间推测取得日）。
+      acquired_period: "2026-01",
     });
     assert.equal(asset.monthly, 950);
     assert.equal(asset.depreciable, 57000);
@@ -162,7 +168,9 @@ try {
   await test("P1 计提后资产负债表仍平衡", async () => {
     const bs = await api("GET", `/api/account-sets/${setId}/reports/balance-sheet?period=2026-01`);
     assert.equal(bs.balanced, true);
-    assert.equal(bs.totals.assets, 108350);
+    // 手算：货币资金 98000 + 应收 11300 + 固定资产净值（60000 − 950）59050 = 168350；
+    // 负债 = 应交税费 1300；权益 = 实收资本 160000（含期初投入固定资产 60000）+ 净利 7050 = 167050；1300 + 167050 = 168350。
+    assert.equal(bs.totals.assets, 168350);
   });
 
   // ---------------- P1: 现金流量表 ----------------

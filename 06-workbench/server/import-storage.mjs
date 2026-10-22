@@ -25,9 +25,10 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { centsToNumber, parseMoney } from "./money.mjs";
 
 /** 本文件负责的 schema 版本。新增列 / 新增表必须新增 migration 并递增版本。 */
-export const IMPORT_SCHEMA_VERSION = 3;
+export const IMPORT_SCHEMA_VERSION = 4;
 
 /** 本文件创建的持久对象（供自检 / 测试断言使用）。 */
 export const IMPORT_TABLES = [
@@ -44,7 +45,12 @@ const nowIso = () => new Date().toISOString();
 
 // ---------------------------------------------------------------- 规范内容指纹
 // 放在存储层：迁移时要用它给历史来源登记回填「落库后指纹」，避免与领域层循环依赖。
-const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+// 金额统一按分归一化（ROUND_HALF_UP），与领域层写入口径一致，不用浮点乘法。
+const money2 = (value) => {
+  const parsed = parseMoney(value, { allowNegative: true, label: "金额" });
+  if (!parsed.ok) throw new Error(`money_invalid:${parsed.code}`);
+  return centsToNumber(parsed.cents);
+};
 const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
 
 /**
@@ -60,7 +66,7 @@ export function voucherFingerprint(v = {}) {
     number: typeof v.number === "number" ? v.number : null,
     summary: v.summary || "",
     entries: (Array.isArray(v.entries) ? v.entries : []).map((e) => [
-      String(e.code ?? ""), r2(e.debit), r2(e.credit), String(e.summary ?? ""),
+      String(e.code ?? ""), money2(e.debit), money2(e.credit), String(e.summary ?? ""),
     ]),
   }));
 }
@@ -269,7 +275,6 @@ function backfillBatchVouchers(db) {
 }
 
 const V3_STATEMENTS = [
-  // ---- 批次 → 逐张来源凭证关联：去重命中的来源凭证也按「本批次」留痕 ----
   // 跨批去重不会新增第二张凭证，但必须能回答「这一批到底处理了哪些来源凭证、各自是新建还是去重」。
   // 只存关联（不复制来源凭证 / 凭证），因此不会伪造第二个来源或第二张凭证；
   // 来源当前状态仍由 import_voucher_sources + 实时核验得出。
@@ -293,6 +298,33 @@ const V3_STATEMENTS = [
   backfillBatchVouchers,
 ];
 
+// ---------------------------------------------------------------- schema v4
+/** 加列前先看当前列（旧库 / 新建库 / 重试都要幂等）；表不存在时跳过（合成旧库可能只有子集表）。 */
+const columnExists = (db, table, column) => {
+  if (!tableExists(db, table)) return true; // 表不存在：跳过，不报错
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+};
+const addColumnIfMissing = (table, column, ddl) => (db) => {
+  if (columnExists(db, table, column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+};
+
+/**
+ * LOCAL-02 资产卡片补项契约（只加列，不改旧行语义）：
+ *  acquired_period      显式取得 / 入账期间；留 NULL 表示未登记（不臆造取得日期，核对时回落 start_period）
+ *  opening_accumulated  补项期初累计（历史已入账的累计折旧 / 摊销，计入剩余可计提额）
+ *  ledger_status        booked=参与卡片/总账核对；pending_purchase_voucher=已显式登记“尚未入固定资产账”
+ *  ledger_note          未入账 / 补项原因（必填于非 booked）
+ *  origin               purchase / supplement / import（补项来源留痕）
+ */
+const V4_STATEMENTS = [
+  addColumnIfMissing("asset_cards", "acquired_period", "TEXT"),
+  addColumnIfMissing("asset_cards", "opening_accumulated", "REAL NOT NULL DEFAULT 0"),
+  addColumnIfMissing("asset_cards", "ledger_status", "TEXT NOT NULL DEFAULT 'booked'"),
+  addColumnIfMissing("asset_cards", "ledger_note", "TEXT NOT NULL DEFAULT ''"),
+  addColumnIfMissing("asset_cards", "origin", "TEXT NOT NULL DEFAULT 'purchase'"),
+];
+
 const MIGRATIONS = [
   {
     version: 1,
@@ -308,6 +340,11 @@ const MIGRATIONS = [
     version: 3,
     note: "LOCAL-01 逐张批次追踪：批次->来源凭证关联（新建 / 去重各自留痕），回填历史批次",
     steps: V3_STATEMENTS,
+  },
+  {
+    version: 4,
+    note: "LOCAL-02 资产卡片补项契约：取得期间 / 期初累计 / 未入账登记 / 来源（只加列，旧行默认值不变）",
+    steps: V4_STATEMENTS,
   },
 ];
 

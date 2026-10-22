@@ -55,6 +55,10 @@ const steps = [
   { name: "import-incremental", file: join(WORKBENCH, "test", "import-incremental.test.mjs"), cwd: WORKBENCH },
   { name: "import-incremental-http", file: join(WORKBENCH, "test", "import-incremental-http.test.mjs"), cwd: WORKBENCH },
   { name: "import-incremental-mcp", file: join(MCP, "import-incremental-test.mjs"), cwd: MCP },
+  // LOCAL-02 金额精度 / 期末完整性 / 连续期间：领域 + HTTP/Agent + MCP 真实链路（仅追加）
+  { name: "accounting-period-integrity", file: join(WORKBENCH, "test", "accounting-period-integrity.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-period-http", file: join(WORKBENCH, "test", "accounting-period-http.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-period-mcp", file: join(MCP, "accounting-period-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {

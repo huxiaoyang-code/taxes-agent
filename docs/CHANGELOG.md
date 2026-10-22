@@ -5,6 +5,22 @@
 
 ## [Unreleased]
 
+### Added — 本机产品路线 LOCAL-02：会计金额、期末完整性与连续期间（2026-10-22）
+
+- 实现与自测完成，**未提交 / 未建 PR / 未合并**，待管理者验收；[Issue #47](https://github.com/huxiaoyang-code/youshu-fork/issues/47)，基线（源码）`1a15bcce3bf3b1f0d390746d85be7cfd1ace7ea3`，分支 `codex/huxiaoyang-code/local-02`；**税局现场仍暂停、真实接入仍 0**，本条不涉及税局能力。
+- 新增[金额 / 期末 / 连续期间契约](ACCOUNTING-PERIOD-INTEGRITY.md)、[任务单](tasks/LOCAL-02.md)、[交接](handoffs/LOCAL-02.md)。
+- 新增 `06-workbench/server/money.mjs`：人民币**分精度**（内部 BigInt 整数分）+ 唯一 `ROUND_HALF_UP` 舍入；上限按完整原值判定（`999999999999.994` / `999999999999.9900000001` 拒绝）；极小负数（含 `-1e-10` / `-0.000…1`）拒绝、极小正数带 `subCent` 标记不静默归 0；存续金额（累计余额、补项累计）不受单笔上限约束；输出合计不能保分即 `money_total_not_representable`，不静默丢一分。
+- 新增 `06-workbench/server/period-end-controls.mjs`：七步期末检查（草稿 / 试算平衡 / 应计提 / 卡片与总账核对 / 损益结转 / 年末结转 / 连续期间顺序，每步给 `ok` / `blocked` / `not_applicable` 与理由）、封账前置断言、前期可改性守卫、卡片期间状态（按被查询期间计算累计，另给全局参考值）与卡片/总账核对。连续期间不只按凭证：零凭证但应计提的更早期间报 `previous_period_depreciation_pending`，真正无适用业务的空期仍可跳过。
+- `accounting.mjs`：凭证 / 期初 / 导入 / 资产 / 折旧 / 结转 / 余额 / 报表全部改整数分；折旧按分期表在寿命内恰好提足（`100 / 3 = 33.33 + 33.33 + 33.34`，不再把尾差推到寿命外），极小金额前期 `no_amount_due`；结转失效检测（`carryforward_stale`），不再按「曾经执行过」放行；封账同时校验草稿、试算、计提、卡片/总账、损益/年末结转与连续期间顺序。
+- 反操作守卫覆盖新建 / 过账 / 反过账 / 删除 / 反结账 / 计提 / 结转 / 增量导入与资产卡片维护：更晚期间已封账给 `later_period_closed`（含倒序反结账顺序），更晚期间已过账年末结转给 `later_year_end_carryforward_depends_on_period`；普通损益结转读累计余额，因此更晚已过账普通结转 / 计提同样构成依赖（`later_profit_carryforward_depends_on_period` / `later_depreciation_depends_on_period`）；卡片事实影响已封账期间或已有已过账计提时给 `asset_card_affects_closed_period` / `asset_card_locked_by_posted_runs`（纯显示信息可改）。全部先判定后写库，拒绝时库不变。
+- schema **v4**（`import-storage.mjs`）：`asset_cards` 只加 5 列（`acquired_period` / `opening_accumulated` / `ledger_status` / `ledger_note` / `origin`），沿用「先备份、后建结构、事务回滚、版本记录」；缺取得期间是显式缺项（不回落 `start_period`），经 `asset_update` 补登记可解除；「尚未入固定资产账」需显式登记并写原因，但登记本身不是原值入账证据：仍报原值差异、不得计提（`asset_ledger_pending`），需真实补录购入 / 期初入账后改回 `booked`。
+- 接线：`server.mjs`（`GET /api/account-sets/:id/period-end-check`、`PATCH /api/account-sets/:id/assets/:assetId`、守卫错误码 → 409）、`agent-tools.mjs`（`period_end_check` / `asset_update`）、MCP `tools.mjs`（同两个工具，`origin: local`）。
+- 测试（全合成临时库 + 随机回环端口，不连旧后端 / 真实账套 / 税局）：新增领域 38 / 38、HTTP + Agent 13 / 13、MCP 4 / 4；`npm test` **50 / 50 套 exit 0**。既有套件只补真实业务事实（封账前结转、卡片取得期间 / 期初已入账固定资产），金额与失败原子性断言保留；`accounting-derived` 的折旧尾差期望按新舍入规则更新并附独立手算。
+- 管理者实施中提前复现的四类金额边界已修复并补独立回归：9 位标度截断导致的极小值 / 超界原值误收、合计转 Number 丢一分、单笔上限误加给存续金额、资产取得期间静默回落与期间口径累计被后期污染。
+- 独立合成预审 F1–F4 与历史状态残留已逐项修复并补定向回归：资产卡片写入口已封账 / 已过账守卫（F1）、普通后期损益结转与计提的前期依赖拒绝（F2）、零凭证但应计提期间不得跳过封账（F3）、`pending_purchase_voucher` 不再豁免原值差异与计提（F4）、历史状态与应提额不受未来 run 污染且执行时另设总额守卫。
+- 限制与下游：双准则 / 辅助核算（LOCAL-03）、复杂现金流与导出（LOCAL-05a / 05b）、完整审计与业务备份（LOCAL-06）、批量任务与 CLI（LOCAL-07）不在本包；`report-export.mjs` 未改写；空月份不自动登记，倒序反结账规则已写入契约。
+- 状态：**实现与自测完成（含 review1 定向返工 F1–F4 与历史状态），未提交 / 未建 PR / 未合并**；head / merge 与独立 subagent 审查结果由管理者后补，本条不预报。
+
 ### Added — 本机产品路线 LOCAL-01：增量导入与批次幂等（2026-10-22）
 
 - 用户 2026-10-22 新指示允许本机产品方向工作（覆盖旧「暂停本地扩建」）；**税局现场仍暂停、真实接入仍 0**，本条不改变税局状态。
