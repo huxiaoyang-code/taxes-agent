@@ -2,15 +2,20 @@
 
 本文件描述**新增的独立导出模块** `06-workbench/server/report-office-export.mjs`。它复用 [REPORT-EXPORT](REPORT-EXPORT.md) 的稳定报表 DTO，为五类内部报表生成真实 XLSX / PDF，同时保留 CSV。
 
-**当前状态：模块已实现、独立审查返工并通过员工合成自测（模块套件 21/21），但尚未接入 HTTP / 前端；本轮新增的“纯 DTO 渲染无数据库副作用”小修已完成员工自测，新的最终独立审查 / PR / 合并待根管理者执行。** 返工已修复两项独立 review 复现的 P2：PDF 超长首页元数据越界、XLSX 超过 Excel 单格上限仍成功生成；同时去除了重复尾注并避免尾注孤页。既有 `docs/REPORT-EXPORT.md` 仍描述“首版仅 CSV”，因为共享接线尚未做；在接线完成前，用户不能通过页面或 `/api/.../export?format=xlsx|pdf` 使用本模块。
+**当前状态：模块已实现、独立审查返工并通过员工合成自测（模块套件 21/21），但尚未接入 HTTP / 前端；本轮新增的“纯 DTO 渲染无数据库副作用”小修已完成员工自测，并在源码冻结提交 `1e11d1c` 上由根管理者实跑通过（21/21、exit 0、含 pdfplumber 几何；视觉 QA 在旧模块源码上已完成）。当前 head 的最终独立审查正在由最终独立 reviewer 进行，结论未出，本文不预报；该源码的文档提交 head / PR 由根管理者后续填写。** 返工已修复两项独立 review 复现的 P2：PDF 超长首页元数据越界、XLSX 超过 Excel 单格上限仍成功生成；同时去除了重复尾注并避免尾注孤页。既有 `docs/REPORT-EXPORT.md` 仍描述“首版仅 CSV”，因为共享接线尚未做；在接线完成前，用户不能通过页面或 `/api/.../export?format=xlsx|pdf` 使用本模块。
 
 - 分支：`codex/huxiaoyang-code/local-05-office`
-- 模块源冻结：`9f585d0`；合入 `origin/main` `94a79ef4a5e1c19e1320aed2e848ba42a7121712` 后的当前分支 head：`40236c359011c481fde66cfbf3ca9e9ec2b18066`
+- 模块源冻结：`9f585d0`；纯 DTO 无副作用修改的源码冻结提交：`1e11d1c`；当前分支 head：`5ba31adcbe32e9e7b7b99cec39b41db729572fb3`（= `1e11d1c` 与最新 `origin/main` `b42bae9ae76e54aeda63bcc4db0dc34663286b7d` 的合并；新 main 只新增独立 LOCAL08 模块，导出代码不变）
 - 基线（分叉时）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`
 - Issue：#45（LOCAL-05a）；LOCAL-05 整体未完成，本模块未接线。
 - 合成验收产物：`06-workbench/tmp/report-office-qa/`（gitignored）。
 
-小修前的既有验收事实（不得当作本轮新代码验收）：根管理者实跑模块测试 20/20、独立审查 20/20（无剩余阻塞），pdfplumber 检查 11 个 PDF 共 43 页文字重叠 0 / 越界 0。视觉 QA 目前无明确证据，待根管理者补。
+既有验收事实分两类，不可混用也不可互相否定：
+
+- **旧模块源码 `9f585d0`（渲染逻辑未变）**：根管理者实跑模块测试 20/20、独立 reviewer 20/20，无剩余阻塞；pdfplumber 检查 11 个 PDF 共 43 页文字重叠 0 / 越界 0；根管理者**已实际渲染 11 个 PDF（43 页）并检查全部 5 张 contact sheet**，确认中文、分页、表格可读、无视觉阻塞——视觉检查已完成，不是待办。渲染输出在 `06-workbench/tmp/report-office-full-qa-v2`（gitignored）。
+- **当前纯 DTO 修改（`1e11d1c` 内容，只改为动态 `import` 并新增隔离回归，不改渲染）**：根管理者在该提交内容上实跑 `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export`，**21/21 通过、exit 0**，并明确输出 `pdfplumber geometry verified for 11 PDFs`。
+
+既有视觉 / 几何证据覆盖的是**未改变的渲染逻辑**；本次新增隔离回归证明的是**纯 DTO 导入不打开数据库**。两者各自成立，不因文档或无关基线更新而失效。
 
 ## 使用
 
@@ -164,18 +169,20 @@ Poppler（`pdfinfo` / `pdftoppm`）与 Python + pdfplumber 仅用于**验收检�
 | 命令 | 结果 | 退出码 |
 |---|---|---|
 | `node --check server/report-office-export.mjs` / `node --check test/report-office-export.test.mjs` | 语法检查通过 | 0 |
-| `npm run test:office-export` | **21/21 通过**（原 20 项全保留 + 1 项隔离子进程回归）；pdfplumber 几何检查在本轮未设 `REPORT_OFFICE_PYTHON` 时明确 SKIP | 0 |
+| `npm run test:office-export`（员工自测，未设 `REPORT_OFFICE_PYTHON`） | **21/21 通过**（原 20 项全保留 + 1 项隔离子进程回归）；pdfplumber 几何检查明确 SKIP | 0 |
+| `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export`（根管理者在 `1e11d1c` 内容上实跑） | **21/21 通过**，输出 `pdfplumber geometry verified for 11 PDFs` | 0 |
 | `node test/report-export.test.mjs` | 21/21 通过 | 0 |
 | `node test/report-export-http.test.mjs` | 29/29 通过 | 0 |
 | `WORKBENCH_DATA_DIR=<不存在的新临时路径> node --input-type=module -e 'await import("./server/report-office-export.mjs")'` | `{"dataDirExists":false,"db":false,"wal":false,"shm":false}`，未见目录 / 库 / WAL / SHM | 0 |
 
-### 小修前的既有自测与管理事实（历史，非本轮新证据）
+### 旧模块源码 `9f585d0` 的既有验收（渲染逻辑未变，仍然有效）
 
 | 命令 / 事实 | 结果 |
 |---|---|
 | `npm run test:office-export` | 20/20 通过，退出码 0 |
 | `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export` | 20/20 通过；pdfplumber 检查 11 个 PDF（43 页）无文字重叠、无越界 |
-| 根管理者实跑模块测试 + 独立审查 | 20/20 与 20/20，无剩余阻塞 |
+| 根管理者实跑模块测试 + 独立 reviewer | 20/20 与 20/20，无剩余阻塞 |
+| 根管理者目视 QA（11 个 PDF / 43 页，全部 5 张 contact sheet 逐张检查） | 中文、分页、表格可读，无视觉阻塞 |
 | `node test/report-export.test.mjs` / `node test/report-export-http.test.mjs` / `node test/smoke.test.mjs` | 21/21、29/29、28/28（早前轮次） |
 
 覆盖要点：
@@ -190,7 +197,9 @@ Poppler（`pdfinfo` / `pdftoppm`）与 Python + pdfplumber 仅用于**验收检�
 - 公式注入样例保持文本；PDF 中动态文本不执行。
 - 缺字体、非字体文件、缺字、未知格式、未登记期间、缺科目、非法账套均验证失败路径；空账提示在 XLSX / PDF 均保留。
 
-**未完成的人眼目视：** 员工侧无图像识别能力，PNG 已由 `pdftoppm` 渲染到 `06-workbench/tmp/report-office-qa/`，自动几何检查通过（小修前事实），但“版式观感无缺陷”需管理者目视确认后才能声明。
+**视觉 QA 已完成：** 旧模块源码 `9f585d0` 的 11 个 PDF（43 页）已由根管理者实际渲染并逐张检查全部 5 张 contact sheet（输出在 `06-workbench/tmp/report-office-full-qa-v2`），中文 / 分页 / 表格可读、无视觉阻塞。本轮只改动态 `import` 并新增隔离回归，渲染逻辑未变，故该视觉证据继续覆盖本次源码。员工自身无图像识别能力，因此不做像素目视，也不重复执行该渲染。
+
+复验范围按实际源码变动决定：仅文档或无关基线（例如新增独立 LOCAL08 模块）更新不要求重跑整套测试；只有渲染 / 导入逻辑本身变动时才需重新执行对应检查。本轮改动只涉及导入方式与回归用例，故运行了整套模块套件而无需重做视觉 QA。
 
 ## 未接线与后续
 
@@ -202,4 +211,4 @@ Poppler（`pdfinfo` / `pdftoppm`）与 Python + pdfplumber 仅用于**验收检�
   3. 更新面向用户的导出文档与页面提示；
   4. 用真实 HTTP 下载做接口验收（仍使用合成账套）。
 - 复杂现金流分类、间接法独立勾稽、双准则官方映射、来源完整性属于后续核心任务；本模块只保留限制提示，**不声称这些问题已修复**。
-- 本轮小修后的新 head 最终独立审查与合并结果待根管理者补；本文不为新 head 预报通过。
+- 当前 head `5ba31ad`（`1e11d1c` + main `b42bae9`）正由最终独立 reviewer 审查，结论未出，本文不预报通过；文档提交 head / PR 由根管理者后续填写。

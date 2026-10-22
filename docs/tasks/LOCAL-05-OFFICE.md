@@ -3,22 +3,28 @@
 ## 1. 基本信息
 
 - 任务 ID：LOCAL-05a（五类内部报表真实 XLSX / PDF 导出）；总任务 LOCAL-05 尚未完成。
-- 状态：模块实现、独立审查返工（2 项 P2 已修）与员工自测完成；本轮追加**纯 DTO 渲染无数据库副作用**小修（`report-export.mjs` 改为 `buildOfficeExport` 内动态导入，并补真实隔离子进程回归）。代码**未接线**（无 HTTP 路由、无页面入口），本任务单不代表 LOCAL-05 整体完成。
-- 代码来源：模块源冻结于 `9f585d0`（`feat(reports): add verified Excel and PDF export module`）；此后合入 `origin/main` `94a79ef4a5e1c19e1320aed2e848ba42a7121712`，当前分支 head 为 `40236c359011c481fde66cfbf3ca9e9ec2b18066`，本轮小修改动基于该 head。
+- 状态：模块实现、独立审查返工（2 项 P2 已修）与员工自测完成；本轮追加**纯 DTO 渲染无数据库副作用**小修（`report-export.mjs` 改为 `buildOfficeExport` 内动态导入，并补真实隔离子进程回归），已由根管理者在 `1e11d1c` 内容上实跑 **21/21、exit 0**（含 pdfplumber 几何）；旧模块源码的视觉 QA 也已由根管理者完成。代码**未接线**（无 HTTP 路由、无页面入口），本任务单不代表 LOCAL-05 整体完成；当前 head 正由最终独立 reviewer 审查，结论不预报。
+- 代码来源：模块源冻结于 `9f585d0`（`feat(reports): add verified Excel and PDF export module`）；纯 DTO 无副作用修改的源码冻结提交：`1e11d1c`；当前分支 head：`5ba31adcbe32e9e7b7b99cec39b41db729572fb3`（= `1e11d1c` 与最新 `origin/main` `b42bae9ae76e54aeda63bcc4db0dc34663286b7d` 的合并；新 main 只新增独立 LOCAL08 模块，导出代码不变）。
 - 负责人（人类成员 / GitHub）：`huxiaoyang-code`。
 - 执行员工：pi（主 / 唯一回退模型 `tokenhub/deepseek-v4.1-flash` 锁定；未使用其他模型或子 agent）。
 - 分支：`codex/huxiaoyang-code/local-05-office`。
 - 基线（分叉时）：`0c4e0dd622fc35bcb5d6e6af3620c6f971b2a805`。
 - 关联 Issue：#45（本任务）。LOCAL01 #43（共享接线）**已合并关闭**；后续 HTTP / 页面接线等 LOCAL02 #47 释放窗口后由根管理者另行派工，接线不由本任务承担，也不宜再派给已关闭的 #43。
 
-### 1.1 小修前的既有验收事实（根管理者已实际完成，不能当作本轮新代码的验收）
+### 1.1 既有验收事实（已由根管理者完成，两类分开记录，互不覆盖也不互相否定）
 
-以下事实发生在 20 项主套件 + 旧静态导入结构上，早于本轮无副作用小修：
+**旧模块源码 `9f585d0`（渲染逻辑自那以后未变）：**
 
-- 根管理者实跑模块测试 **20/20 通过、exit 0**；独立审查 **20/20**，无剩余阻塞。
+- 根管理者实跑模块测试 **20/20 通过、exit 0**；独立 reviewer **20/20**，无剩余阻塞。
 - 11 个 PDF 共 43 页几何检查：文字重叠 **0**、越界 **0**（pdfplumber）。
-- 目视 QA 目前**没有明确证据**记录在案；不得据此写「版式已目视通过」，该项仍待根管理者补（既有 `tmp/report-office-qa/` 的 PNG 可复用）。
-- 本轮小修不改动任何金额、格式、字体、分页、超长字段拒绝逻辑，因此上述事实对渲染算法仍然有效；但它不覆盖本轮新增的导入副作用修复。
+- 根管理者**已实际渲染 11 个 PDF（共 43 页）并逐张检查全部 5 张 contact sheet**，确认中文、分页、表格可读、无视觉阻塞。视觉检查**已完成**，不是待办；渲染输出在 `06-workbench/tmp/report-office-full-qa-v2`（gitignored）。
+
+**当前纯 DTO 修改（`1e11d1c` 内容，只改动态 `import` + 新增隔离回归，不改渲染）：**
+
+- 根管理者实跑 `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export`：**21/21 被接受、exit 0**，明确输出 `pdfplumber geometry verified for 11 PDFs`。
+- 原 pure 员工在中断前同样完成过 21/21、exit 0（含几何）；恢复员工做文档与回归后亦 exit 0。
+
+既有视觉 / 几何证据覆盖的是**未改变的渲染逻辑**；本次新增隔离回归证明的是**纯 DTO 导入不打开数据库**。只有渲染 / 导入逻辑本身变动才需重做对应检查，仅文档或无关基线（如新增独立 LOCAL08 模块）更新不要求重跑整套。
 
 ## 2. 需求与边界
 
@@ -92,31 +98,33 @@
 | 命令 | 结果 | 退出码 |
 |---|---|---|
 | `node --check server/report-office-export.mjs` / `node --check test/report-office-export.test.mjs` | 两个文件语法检查通过 | 0 |
-| `npm run test:office-export` | **21/21 通过**（原 20 项全部保留 + 新增隔离子进程 1 项）；含 poppler 页数 / PNG 渲染；未设置 `REPORT_OFFICE_PYTHON` 时 pdfplumber 几何检查明确 SKIP | 0 |
+| `npm run test:office-export`（员工自测，未设 `REPORT_OFFICE_PYTHON`） | **21/21 通过**（原 20 项全部保留 + 新增隔离子进程 1 项）；含 poppler 页数 / PNG 渲染；pdfplumber 几何检查明确 SKIP | 0 |
+| `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export`（根管理者在 `1e11d1c` 内容上实跑） | **21/21 通过**，`pdfplumber geometry verified for 11 PDFs` | 0 |
 | `node test/report-export.test.mjs` | 21/21 通过（既有 CSV / DTO 回归未受影响） | 0 |
 | `node test/report-export-http.test.mjs` | 29/29 通过（既有 HTTP 导出契约未受影响） | 0 |
 | 独立单次子进程检查：`WORKBENCH_DATA_DIR=<不存在的新临时路径> node --input-type=module -e 'await import("./server/report-office-export.mjs")'` | 输出 `{"dataDirExists":false,"db":false,"wal":false,"shm":false,"exports":8}`；目录前后均不存在，`06-workbench/data` 亦未被创建 | 0 |
 
 无副作用证明要点：新增回归在一个**全新 Node 子进程**里完成，先断言隔离目录及其父目录尚不存在，再仅 `import` 渲染模块，然后基于合成 DTO 依次调用 `buildReportDocument` / `buildReportXlsx` / `buildReportPdf`，断言 XLSX 以 `PK` 开头、PDF 以 `%PDF-` 开头且 `pageCount >= 1`、行数 ≥ 1，最后断言隔离目录 / `workbench.db` / `-wal` / `-shm` 均未出现，且 `06-workbench/data` 与运行前一致。因为该子进程从未加载 `db.mjs`，所以证明的是真实导入无副作用，而不是 mock。
 
-### 7.2 小修前的既有自测与管理者事实（历史，不重复为本轮新证据）
+### 7.2 旧模块源码 `9f585d0` 的既有验收（渲染逻辑未变，仍然有效）
 
 | 命令 / 事实 | 结果 |
 |---|---|
 | `npm run test:office-export`（冻结模块源 `9f585d0`） | 20/20 通过，exit 0 |
 | `REPORT_OFFICE_PYTHON=<验收用 Python> npm run test:office-export` | 20/20 通过；pdfplumber 对 11 个 PDF 共 43 页检查：文字重叠 0、越界 0 |
-| 根管理者实跑模块测试 + 独立审查（小修前） | 20/20 与 20/20，无剩余阻塞 |
+| 根管理者实跑模块测试 + 独立 reviewer | 20/20 与 20/20，无剩余阻塞 |
+| 根管理者目视 QA（11 个 PDF / 43 页，全部 5 张 contact sheet） | 中文、分页、表格可读，无视觉阻塞（输出在 `06-workbench/tmp/report-office-full-qa-v2`） |
 | `node test/smoke.test.mjs` | 28/28 通过（早前轮次，本轮未重跑） |
 
-本轮未运行 `REPORT_OFFICE_PYTHON` 几何检查，也未重跑全仓 `npm test`；上表的 20/20、43 页几何结果属小修前既有事实，不冒充本轮新代码验收。视觉 QA 仍无明确证据，待根管理者补。
+员工自测未设 `REPORT_OFFICE_PYTHON`；21/21 几何结果由根管理者在 `1e11d1c` 内容上实跑取得（见 1.1 与 7.1），不因员工未设环境变量而失效。视觉 QA 已在旧模块源码 `9f585d0` 上由根管理者完成（11 个 PDF / 43 页、5 张 contact sheet），本轮只改导入方式与回归，渲染逻辑未变，故该视觉证据继续覆盖；既有证据不「一概不适用」。
 
-验收产物（gitignored，每次运行先清空再重建，供管理者目视 QA）：`06-workbench/tmp/report-office-qa/`。PDF 页数：五类基础报表 1 / 1 / 1 / 3 / 1 页；230 行长明细 19 页；单行 2,000+ 字摘要 4 页；4,000 字账套名 5 页；3,000 字无断词 ASCII 名称 4 页；4,000 字明细账科目名 3 页；现金流限制去重后 1 页。另有五类 XLSX 与 `pdftoppm` 渲染 PNG。员工侧以独立 ToUnicode 解析器与 pdfplumber 几何检查替代像素目视；**员工未完成人眼目视，不得宣称版式已目视无缺陷**。
+验收产物（gitignored）：`06-workbench/tmp/report-office-qa/` 与视觉 QA 渲染输出 `06-workbench/tmp/report-office-full-qa-v2/`。PDF 页数：五类基础报表 1 / 1 / 1 / 3 / 1 页；230 行长明细 19 页；单行 2,000+ 字摘要 4 页；4,000 字账套名 5 页；3,000 字无断词 ASCII 名称 4 页；4,000 字明细账科目名 3 页；现金流限制去重后 1 页。另有五类 XLSX 与 `pdftoppm` 渲染 PNG。员工以独立 ToUnicode 解析器与 pdfplumber 几何检查辅助；像素目视由根管理者完成。
 
 ## 8. 遗留与下一步
 
-1. **新的最终独立审查待根管理者安排**：本轮小修后的 head、PR 与合并均尚未发生，不得预报通过；旧审查 head 的 20/20 无剩余阻塞结论不自动扩展到本轮改动。
-2. 根管理者审阅实际 diff（仅 `report-office-export.mjs` + 测试 + 三份文档），并在新 head 上复跑 `npm run test:office-export` 与隔离无副作用证据。
-3. 视觉 QA 仍待根管理者在 `tmp/report-office-qa/` 的 PNG 上补做；此前不得声明「版式无缺陷」。
+1. **最终独立审查进行中**：当前 head `5ba31adcbe32e9e7b7b99cec39b41db729572fb3`（`1e11d1c` + main `b42bae9`）正由最终独立 reviewer 审阅，结论未出，本任务单不预报；该源码的文档提交 head / PR 由根管理者后续填写。
+2. 根管理者审阅实际 diff（仅 `report-office-export.mjs` + 测试 + 三份文档）；源码变更已完成复验（含 `REPORT_OFFICE_PYTHON` 的 21/21 与隔离无副作用证据），后续仅文档 / 无关基线更新不要求重跑整套。
+3. 视觉 QA 已在旧模块源码 `9f585d0` 上完成（11 个 PDF / 43 页、5 张 contact sheet，无视觉阻塞），渲染逻辑未变；除非渲染逻辑再改，不重复目视。
 4. LOCAL-05a 模块可以**单独一个 PR 合并**；共享接线（HTTP 路由、页面前端、允许格式白名单、`docs/REPORT-EXPORT.md` 更新）是**另一个 PR**，需等 LOCAL02 #47 释放窗口后由根管理者排工，且不得再派给已关闭的 LOCAL01 #43。
-5. 远端 `main` 已前进到 `b42bae9`（PR #50 仅新增独立输出边界文件），与本分支的整合由根管理者执行；员工不做 Git 操作。
+5. 远端 `main` 已前进到 `b42bae9`（PR #50 仅新增独立输出边界文件），已由根管理者合入本分支并得到当前 head `5ba31ad`；员工不做 Git 操作。
 6. 后续核心子包：现金流复杂双向分类、间接法独立勾稽、双准则官方行次 / 科目映射；当前格式层只保留限制提示，不声称已修。
