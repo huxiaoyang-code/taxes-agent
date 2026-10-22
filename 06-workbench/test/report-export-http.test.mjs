@@ -18,6 +18,8 @@ A.setOpeningBalances(set.id, [{ code: "1002", debit: 1000 }, { code: "3001", cre
 A.createVoucher(set.id, { period: "2026-01", status: "posted", summary: "合成收入", entries: [
   { code: "1002", debit: 200 }, { code: "5001", credit: 200 },
 ] });
+// LOCAL-02 封账前置：本期有损益发生，封账前必须先结转本期损益。
+A.carryForwardProfit(set.id, "2026-01");
 A.setPeriodStatus(set.id, "2026-01", "closed");
 A.createVoucher(set.id, { period: "2026-02", status: "posted", summary: "二月合成收入", entries: [
   { code: "1002", debit: 50 }, { code: "5001", credit: 50 },

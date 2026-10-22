@@ -14,15 +14,28 @@
   - `/export-data` 恢复**原严格 CSV 格式契约**：缺省 / `csv` 返回同一 DTO，`xlsx` / `pdf` / `yaml` / 空 `format=` 仍为 400 `report_format_unsupported`（`details: {supported:["csv"]}`），不静默转 CSV、不为纯 DTO 生成 Office 附件；
   - 两套测试都补了明确的两条路由契约回归（新真实 HTTP 6 项全部保留）。
 - **正式证据**：在冻结 head `71894a1` 上，`node test/report-office-http.test.mjs`（真实 `server/server.mjs` 子进程）**6/6 通过、exit 0**；既有 `node test/report-export-http.test.mjs` **31/31 通过、exit 0**；`node test/report-export.test.mjs` **21/21 通过、exit 0**。准备阶段的“临时替身 6/6”**不作为验收证据**。
-- **独立审查已完成（2026-10-22）**：审查者未参与实现、未读员工日志（`fork_turns=none`），在上述 head 上实跑上表两套 HTTP（6/6、31/31）并做页面脚本探针（三格式触发下载；422 / 500 / MIME / 扩展名 / 长度 / 魔数失败均取消保存且控件恢复；内部路径不显示）。**探针不是真浏览器**。
+- **独立审查已完成（2026-10-22）**：审查者未参与实现、未读员工日志（`fork_turns=none`），**其审查 head 是 `71894a1`，不是当前预整合候选**；在该 head 上实跑上表两套 HTTP（6/6、31/31）并做页面脚本探针（三格式触发下载；422 / 500 / MIME / 扩展名 / 长度 / 魔数失败均取消保存且控件恢复；内部路径不显示）。**探针不是真浏览器**。
 - **页面实测（root 管理者）**：真实 IAB 新标签页 + 本机 loopback 服务 + 合成账套（期初银行 1,000 / 资本 1,000；收入 800、费用 300；预览银行 1,500），CSV / XLSX / PDF 分别页面选择并点击，均显示“已生成并开始下载”、按钮恢复；服务 / 库 / 标签页已自清理，截图在 root 忽略目录。**只声称页面实际生成并触发下载**；未检查浏览器保存位置，也未新增 PDF 几何。
-- **当前状态：已提交 `71894a1`（本分支 1 个提交，相对 `origin/main` ahead 1 / behind 9），未建 PR / 未合并，尚未合入 LOCAL02**。员工不执行 Git；源码已独审（含源码、HTTP 与页面触发下载），可进入整合；整合、PR 与合并由根管理者执行。
-- **本轮只改文档（2026-10-22）**：源 / 测试不动，只修正 4 份文档（含本轮追加所有权的 `docs/REPORT-EXPORT.md`）里 3 处与代码不符的表述（`/export-data?format=xlsx` 实为 400、接线轮未重跑模块 21/21 几何、UI 不做 `filename` / `filename*` 同名比对）；`git diff --check` 简报退出即止，不重复跑测试。
-- **前轮结果不冒充本轮**：源码 Office 生成器未变，前轮 `REPORT_OFFICE_PYTHON=<验收 Python> npm run test:office-export` 的 21/21（含 11 PDF 几何）**只标前轮，本轮未重跑**；视觉 / 几何结论也不因本轮文档与路由契约修复而重做。
+- **当前状态：本包源码冻结在 `71894a1`，并已在冻结核心 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` 之上完成预整合候选**（见下节「预整合轮」），**未建 PR / 未合并，不是最终 main**。员工不执行 Git；**前轮页面验收用**的后台 / 服务 / 临时库已清理（仅指那一轮，不概括当前进程 / 会话）；整合、PR、合并与最终 main 同步后的独审仍待。
+- **历史轮次（2026-10-22 文档纠正）**：那一轮只改文档（含本轮追加所有权的 `docs/REPORT-EXPORT.md`），修正 3 处与代码不符的表述（`/export-data?format=xlsx` 实为 400、接线轮未重跑模块 21/21 几何、UI 不做 `filename` / `filename*` 同名比对）；该记录按历史保留，当前状态以「预整合轮」为准。
+- **前轮结果不冒充本轮**：源码 Office 生成器未变，模块轮 / 接线前轮的 21/21（含 11 PDF 几何）与视觉 QA **各自只属于其轮次**；预整合轮的全量 56 套里又顺带实跑了 `office-export` 21/21 与 pdfplumber 几何（见下节），但那不是重新做像素目视。
 - **原合并前阻塞已解决**：`test/report-export-http.test.mjs` 失效旧断言已在本分支修正（该文件已在 Issue #45 comment 6340280514 追加认领，提交 `71894a1` 共 **8 个文件**）。
-- 当前没有需要保留的本地服务、后台进程或会话；临时库、隔离临时目录与 gitignored 临时替身均已清理或删除。
+- （历史阶段事实，仅指前轮页面验收）前轮页面验收用的本地服务 / 后台进程 / 会话已清理，临时库、隔离临时目录与 gitignored 临时替身已删除；该句只描述那一轮，不概括当前进程 / 会话状态。
 
-## 本阶段变更（8 个文件）
+## 预整合轮（2026-10-22，冻结核心 3a8 之上的候选）
+
+本轮把本包接线候选叠到**冻结核心** `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` 之上，只做预整合，不扩展范围：
+
+- **唯一冲突**：`06-workbench/server/server.mjs` 顶部（`REPORT_INPUT_ERRORS` 之后）。Office 侧新增 `REPORT_NOT_FOUND_ERRORS` / `REPORT_REJECTED_ERRORS` / `REPORT_FONT_ERRORS` / `reportError()`，核心侧新增 `PERIOD_GUARD_CODES`，两边都插在同一个位置。解决方式是**语义并列保留**：先保留 Office 固定错误映射（400 / 404 / 422 / 500、固定中文文案、`details: null`），紧接保留核心期间守卫错误码集合（HTTP 409 + 明细），两套行为都在、互不覆盖；没有改该文件的其它路由 / 中间件 / 启停逻辑，也没碰公共 UI 或业务模块。
+- **`06-workbench/scripts/test-all.mjs`**：只在**末尾追加** `{ name: "report-office-http" }` 与一行注释，套件总数 **55 → 56**；原 55 个套件的内容与顺序一字未动，未删改任何旧断言。登记所有权本轮由 LOCAL02 #47 释放给 Issue #45（共享 `docs/handoffs/STATE.md` / 公共索引仍归 #47，本任务不改）。
+- **四份文档**：本交接、`docs/tasks/LOCAL-05-OFFICE.md`、`docs/REPORT-OFFICE-EXPORT.md`、`docs/REPORT-EXPORT.md` 同步为当前事实，并消除“test-all 仍 47 / 新套件未登记 / 尚未合入 02”这类过时当前状态表述（历史验收叙述明确标为历史保留）。
+- **自动带入的其它文件**不归本任务修改，未读也未改其他 worktree 的 WIP。
+
+**本轮实跑（员工自测 + 管理者独立复验，两层结论一致）**：在 `06-workbench` 设 `REPORT_OFFICE_PYTHON` 后执行 `npm test`（真实 56 套、临时合成库、随机回环端口），员工自测与管理者独立复验均为**全部 56 个套件 exit 0（56/56）**，两者都含 `office-export` 21/21（`Office export acceptance: 21/21 passed`）与 `pdfplumber geometry verified for 11 PDFs`；日志各自保全在忽略目录。员工侧关键套件实际结果：`report-office-http` **6/6**、`report-office-export` **21/21**、`report-export-http` **31/31**、`report-export` **21/21**、`accounting-period-integrity` **45/45**、`accounting-period-http` **18/18**、`accounting-period-mcp` **5/5**、`local-backup` **20/20**。**未只跑部分、未 skip 几何、未弱化断言。**
+
+**边界**：这只是**冻结核心之上的预整合候选**，不是最终 `main`；LOCAL-02 #47 备份修复落到实际 main 后，需在真正的最终 main 上同步这同一份补丁，并在该 head 上重新独审与实跑。最终审查 / PR / 合并仍待；LOCAL-05 整体、双准则与复杂现金流仍未完成。
+
+## 本阶段变更（接线轮 8 个文件）
 
 新增：
 
@@ -46,9 +59,11 @@
 - `06-workbench/test/report-office-http.test.mjs`（新套件本轮仅补预览格式断言）：6 个用例保持不变（CSV / XLSX / PDF 五类真实下载与手算、预览 DTO、输入校验、生成失败无半截附件、下载后全库快照不变）；预览用例新增 `xlsx` / `pdf` / `yaml` / 空 `format=` 的严格 400 `report_format_unsupported` 断言。
 - `docs/REPORT-OFFICE-EXPORT.md`、`docs/tasks/LOCAL-05-OFFICE.md`、`docs/handoffs/LOCAL-05-OFFICE.md`：同步合并事实、接线与两条路由契约、回归修复、实测结果与待完成项。
 
-刻意未改：
+（接线轮历史记录）刻意未改：
 
-- `scripts/test-all.mjs`（归 LOCAL02 #47，仍为 47 套）、Agent / MCP、`accounting.mjs`、`db.mjs`、`report-export.mjs`、`tax-report-format.mjs`、`report-office-export.mjs`（源码 Office 生成器未变）、`public/` 其他文件、`package.json` / `package-lock.json`、公共索引、`docs/REPORT-EXPORT.md`。
+- `scripts/test-all.mjs`（当时归 LOCAL02 #47（仍 47 套）、Agent / MCP、`accounting.mjs`、`db.mjs`、`report-export.mjs`、`tax-report-format.mjs`、`report-office-export.mjs`（源码 Office 生成器未变）、`public/` 其他文件、`package.json` / `package-lock.json`、公共索引、`docs/REPORT-EXPORT.md`。
+
+预整合轮的变化仅限：`server.mjs` 顶部冲突语义解决、`scripts/test-all.mjs` 末尾登记 1 个套件（已获所有权释放），以及四份文档同步；其余仍不改。
 
 ## 已实施的挂载语义（根管理者审查时对照）
 
@@ -74,7 +89,7 @@
 
 接线准备阶段（挂载前）的 3 通过 / 3 失败与 gitignored 临时替身 6/6 均为**历史记录**，不作为验收证据；正式证据是上表真实服务的 6/6。
 
-未跑全库 `npm test`：`scripts/test-all.mjs` 仍为 47 套且归 LOCAL02 #47（本任务未改），本分支尚未合入 CORE-02，因此**不声称全套通过**；全量回归待根管理者合 02 与登记后统一执行。
+（接线轮历史记录）当时未跑全库 `npm test`（当时 `scripts/test-all.mjs` 仍为 47 套且归 LOCAL02 #47）。**当前状态已变化，以「预整合轮」节为准**：套件已登记为 56，员工自测与管理者独立复验均 **56 / 56 exit 0**（含 `office-export` 21/21 与 pdfplumber 11 PDF 几何）。
 
 ### 模块阶段既有验收（已合并，仍然有效）
 
@@ -100,22 +115,22 @@
 
 ## 明确未完成 / 未声称
 
-- **已提交但未建 PR / 未合并**：`71894a1` 已在分支上，但无 PR、未合入 `main`，也**未合入 LOCAL02**；页面与路由变更对主工作区尚未生效。
-- **独立审查已完成；范围有边界**：源码、两套真实 HTTP 与页面脚本探针已独审，root 也已在真实页面点击三格式并看到“已生成并开始下载”。**未检查浏览器实际保存位置**，**未新增 PDF 几何结论**（几何仍只指前轮 11 PDF）；真实附件二进制重开以 HTTP 套件为证据。
-- **`scripts/test-all.mjs` 未登记**：新套件尚未进统一入口（仍 47 套），由 LOCAL02 #47 窗口合并后补；本任务不跑全库 `npm test`。
+- **未建 PR / 未合并，也不是最终 main**：`71894a1` 是本包源码冻结 head；本轮在其上完成**冻结核心 3a8 的预整合候选**，无 PR、未合入 `main`，页面 / 路由 / 统一入口变更对用户主工作区尚未生效。#47 备份修复落到实际 main 后，需在最终 main 上再同步一次本补丁。
+- **独立审查已完成，但审查 head 是 `71894a1`，不是当前预整合候选**。边界：源码、两套真实 HTTP 与页面脚本探针已独审，root 也已在真实页面点击三格式并看到“已生成并开始下载”；**未检查浏览器实际保存位置**；真实附件二进制重开以 HTTP 套件为证据。**“几何仍只指前轮 11 PDF”只属于接线历史轮**：本次预整合轮实跑 56 套，其中含 11 PDF 的 `pdfplumber` 几何并输出 `pdfplumber geometry verified for 11 PDFs`，但**仍未重新做像素目视**。最终 `main` 同步后独立审查仍待。
+- **`scripts/test-all.mjs` 已登记（预整合轮）**：新套件已追加在末尾（55 → 56，原 55 个套件顺序 / 内容不变）；员工自测与管理者独立复验均 **56/56 exit 0**，两者都含 Office 21/21 与 11 PDF 几何。最终 `main` 同步后的独审 / PR / 合并仍待。
 - **`docs/REPORT-EXPORT.md` 已在本轮修正**：文件所有权已追加到 Issue #45；已准确交代“`report-export.mjs` 为纯 CSV DTO、`/export-data` 严格 CSV DTO、`/export` 真实三格式、失败无附件”，原“首版仅 CSV”标为已被接线取代的历史表述，不把内部报表称为法定双准则 / 官方申报格式。
 - **未修复会计算法**：现金流比例分摊、间接法非独立勾稽、双准则官方映射、来源完整性仍按既有状态保留提示；不声称 LOCAL-03 或双准则完成。
 - **未宣称申报就绪**：所有文件均为内部报表。
 
 ## 下一任务输入（根管理者）
 
-- 本候选已在冻结 head `71894a1` 上完成独立审查：实跑两套 HTTP — `node test/report-office-http.test.mjs`（要求 6/6、exit 0）、`node test/report-export-http.test.mjs`（要求 31/31、exit 0）；页面已完成脚本探针与 root 真实点击三格式（均触发下载）。若需重做前轮 11 PDF 几何，另设窗口并在 `REPORT_OFFICE_PYTHON` 下运行，本轮不计入也不重复。
-- 做整合：本分支相对 `origin/main` behind 9，需先更新到最新 main、处理 LOCAL02 共享文件冲突（`server.mjs` / `scripts/test-all.mjs`）后再建 PR。
-- 合并后再由持有 `scripts/test-all.mjs` 的变更（LOCAL02 #47）把新 HTTP 套件纳入统一入口（登记后统一全量回归）；`docs/REPORT-EXPORT.md` 已在本轮同步，无需再改。
-- 若挂载实现与文档契约不同（状态码或错误码），先确认契约变更并同步相关导出文档（本任务 4 份），不能只改测试断言。
+- 本候选已在冻结 head `71894a1` 上完成独立审查：实跑两套 HTTP — `node test/report-office-http.test.mjs`（要求 6/6、exit 0）、`node test/report-export-http.test.mjs`（要求 31/31、exit 0）；页面已完成脚本探针与 root 真实点击三格式（均触发下载）；该独审 head 是 `71894a1`，**不是当前预整合候选**，最终 `main` 同步后独审仍待。**“11 PDF 几何另设窗口、本轮不计入也不重复”只属于接线历史轮**：本次预整合已在 `REPORT_OFFICE_PYTHON` 下设 56 套实跑，含 11 PDF `pdfplumber` 几何；仍未重新做像素目视。
+- 预整合已完成：`server.mjs` 顶部冲突语义解决（Office 固定错误映射 + 核心 `PERIOD_GUARD_CODES` 并列保留）、`scripts/test-all.mjs` 末尾登记（55 → 56）、四份文档同步；员工自测与管理者独立复验均 56 / 56 exit 0（含 Office 21/21 与 11 PDF 几何）。
+- 剩余工作：读 diff、在**实际最终 main**（含 #47 备份修复）上同步本补丁并实跑验收；建 PR / 合并 / 最终审查均由管理者执行。若挂载实现与文档契约不同（状态码或错误码），先确认契约变更并同步本任务 4 份文档，不能只改测试断言。
 
 ## Git / 回退
 
-- 员工未提交、未推送、未合并；本分支基于 `257f962`，导出路由、页面变更与路由契约回归已提交为 `71894a1` 并实测（6/6 + 31/31 + 21/21），源码也已独审，待整合 / PR / 合并。
+- 员工本轮未执行任何 Git 写命令（无 add / commit / push / merge），预整合改动留在工作区由管理者处理。导出路由、页面变更、路由契约回归已冻结在 `71894a1`；预整合轮只做 `server.mjs` 冲突语义解决 + `test-all.mjs` 末尾登记 + 四份文档。
+- 本机实测：预整合后 `npm test` **56 / 56 套 exit 0**，员工自测与管理者独立复验结论一致（均含 Office 21/21 与 11 PDF 几何）；完整输出在忽略目录日志。最终 `main` 同步后的独审 / PR / 合并仍待。
 - 若合并后发现缺陷，按项目规则用新的 revert PR 回退，禁止重写 main 历史。
 - 临时替身 / 探针脚本只存在于 gitignored `06-workbench/tmp/`，已删除，不入库。

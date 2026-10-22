@@ -326,7 +326,7 @@ try {
     const card = await okCall("asset_create", {
       accountSetId: mainSetId, kind: "fixed", name: "生产设备",
       original_cost: MAIN.assetCost, residual_rate: MAIN.residualRate,
-      useful_life_months: MAIN.lifeMonths, start_period: "2026-01",
+      useful_life_months: MAIN.lifeMonths, start_period: "2026-01", acquired_period: "2026-01",
     });
     eq(card.original_cost, MAIN.assetCost);
     eq(card.residual_rate, MAIN.residualRate);

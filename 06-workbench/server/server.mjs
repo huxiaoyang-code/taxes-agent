@@ -66,6 +66,16 @@ function reportError(e) {
   return { status: 500, body: { error: "report_export_failed", message: "报表导出失败，请稍后重试", details: null } };
 }
 
+// 前期可改性守卫 / 封账前置 / 资产卡片维护守卫的结构化错误码：HTTP 入口给 409 + 明细，不降级成 500。
+const PERIOD_GUARD_CODES = new Set([
+  "later_period_closed", "later_year_end_carryforward_depends_on_period",
+  "later_profit_carryforward_depends_on_period", "later_depreciation_depends_on_period",
+  "period_end_check_failed", "carryforward_stale",
+  "asset_card_affects_closed_period", "asset_card_locked_by_posted_runs",
+  "asset_ledger_pending", "depreciation_global_over_depreciable", "depreciation_exceeds_depreciable",
+  "depreciation_run_stale",
+]);
+
 // ------------------------------------------------------------------ 路由表
 async function api(req, res, url, m) {
   const p = url.pathname;
@@ -187,8 +197,27 @@ async function api(req, res, url, m) {
     if (m === "GET") return json(res, 200, A.listAssetCards(id));
     if (m === "POST") return json(res, 201, A.addAssetCard(id, await readBody(req)));
   }
-  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/assets\/(\d+)$/)) && m === "DELETE") {
-    return json(res, 200, A.deleteAssetCard(+match[1], +match[2]));
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/assets\/(\d+)$/))) {
+    const id = +match[1], assetId = +match[2];
+    if (m === "DELETE") return json(res, 200, A.deleteAssetCard(id, assetId));
+    // 资产卡片维护 / 补项（取得期间、期初累计、未入账登记），用于解除卡片与总账差异造成的封账阻塞。
+    if (m === "PATCH") return json(res, 200, A.updateAssetCard(id, assetId, await readBody(req)));
+  }
+  // 期末检查（只读）：与封账前置同一套规则，逐步给适用 / 不适用理由与明确缺项。
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/period-end-check$/)) && m === "GET") {
+    const period = url.searchParams.get("period");
+    if (!period) return json(res, 400, { error: "period_required", message: "必须提供 period（YYYY-MM）" });
+    try {
+      return json(res, 200, A.periodEndCheck(+match[1], period));
+    } catch (e) {
+      const code = e?.message || String(e);
+      const status = ["account_set_not_found", "period_invalid", "period_before_start"].includes(code) ? 400 : 500;
+      return json(res, status, {
+        error: status === 500 ? "period_end_check_failed" : code,
+        message: status === 500 ? "期末检查失败" : code,
+        details: status === 500 ? null : e.details ?? null,
+      });
+    }
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/depreciation$/)) && m === "POST") {
     const b = await readBody(req);
@@ -236,6 +265,10 @@ async function api(req, res, url, m) {
       if (e?.code === "account_set_not_found") {
         return json(res, 404, { error: "account_set_not_found", message: "目标账套不存在", details: null });
       }
+      // 前期可改性 / 封账前置守卫：给结构化 409 + 可执行的依赖处理顺序，不降级成 500。
+      if (e?.code && PERIOD_GUARD_CODES.has(e.code)) {
+        return json(res, 409, { error: e.code, message: e.message, details: e.details ?? null });
+      }
       // 事务已回滚；不把失败写成成功，也不向前端泄漏内部细节。
       return json(res, 500, { error: "import_failed", message: "增量导入失败（事务已回滚）", details: null });
     }
@@ -272,8 +305,9 @@ async function api(req, res, url, m) {
       }
       // 领域层异常（如 voucher_invalid / period_closed）：保留原 message 与 details。
       const msg = e?.message || String(e);
-      return json(res, /not_found$/.test(msg) ? 404 : 400, {
-        error: msg, message: msg, tool: name, details: e?.details ?? null,
+      const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
+      return json(res, guard ? 409 : /not_found$/.test(msg) ? 404 : 400, {
+        error: guard ? e.code : msg, message: msg, tool: name, details: e?.details ?? null,
       });
     }
   }
@@ -323,7 +357,11 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/agent/")) return await api(req, res, url, method);
     return await serveStatic(res, url.pathname);
   } catch (e) {
-    return json(res, 400, { error: e.message || String(e), details: e.details || null });
+    const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
+    return json(res, guard ? 409 : 400, {
+      error: guard ? e.code : e.message || String(e),
+      details: e.details || null,
+    });
   }
 });
 

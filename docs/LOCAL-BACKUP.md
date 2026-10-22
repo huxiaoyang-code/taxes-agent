@@ -1,24 +1,30 @@
 # 本机一致性备份 / 验证 / 恢复到全新目标 · LOCAL-BACKUP（LOCAL-06 独立子包契约）
 
-状态：**子包源码已通过管理验收与最终独立审查；PR
-[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN，等待本次文档核对后按已授权流程合并**
-（实际 merge SHA 尚未产生，本文件不预报、也不标记 MERGED）。这是 LOCAL-06 的**独立子包**，不表示 LOCAL-06
-整体完成（审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
+状态：**LOCAL-06 备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 验收合并**（PR head
+`55dfe44`，merge `98977e04bd24aa293074021802191814f8c2a1d2`，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`
+独审 16 项）。
+本文件同时包含**合并后兼容整合轮**（schema v3 / v4 精确契约）的最新事实：该轮源码**尚未提交 / 未建 PR / 未合并**，
+最终独立审查待做。这仍是 LOCAL-06 的**独立子包**，不表示 LOCAL-06 整体完成（审计留痕、原位在线恢复、
+Windows 干净安装 / 启动 / 升级、整套交付仍未实现）。
 
 - 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`）；
   Issue #49 保持 OPEN，用于后续兼容整合；完整审计留痕在
   [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
 - PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)（base `257f96275031eefa484699dd71bd012e2d221e51`，
-  已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）
+  PR head `55dfe44`，**已审源码** head `b2dcba35e87e9ebb75245dcc874aa41705b31243`，**已 MERGED**，
+  merge `98977e04bd24aa293074021802191814f8c2a1d2`）；
+  兼容整合轮在此基础上改 3 个源码 / 测试文件（+ 仅追加的 `scripts/test-all.mjs` 登记）
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`；分支 `codex/huxiaoyang-code/local-06-backup`
 - 任务单：[tasks/LOCAL-06-BACKUP](tasks/LOCAL-06-BACKUP.md) · 交接：[handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md)
-- 精确文件归属：本包**只新增 6 个文件**（见任务单 §3），不修改任何共享文件
-  （`db.mjs` / `import-storage.mjs` / `accounting.mjs` / `server.mjs` / `agent-tools.mjs` / MCP 注册 /
-  `scripts/test-all.mjs` / `package.json` / `public/*` / 公共索引文档均未改）。
+- 精确文件归属：本包**只改动自己的 6 个文件**（见任务单 §3），共享文件仅按兼容整合轮任务单**追加**
+  `scripts/test-all.mjs` 的三条已合入套件登记（不改原有 50 套的顺序 / 内容）；
+  其余共享文件（`db.mjs` / `import-storage.mjs` / `accounting.mjs` / `server.mjs` / `agent-tools.mjs` / MCP 注册 /
+  `package.json` / `public/*` / 公共索引文档均未改）。
 - 与 LOCAL-01 的关系：本包**读取** `import-storage.mjs` 的 `IMPORT_SCHEMA_VERSION` / `schemaVersion()`
   作为当前真实 schema 契约（当前 **v3**），不复制其迁移逻辑、不建表、不迁移、不写任何持久表。
-- 与 LOCAL-02 的关系：`#47` 在另一隔离 worktree 独占金额 / 期末与 schema **v4** 实施；本包基于当前 main 的 v3，
-  **不假装兼容 v4**（见 §4）。
+- 与 LOCAL-02 的关系：`#47` 独占金额 / 期末与 schema **v4** 实施；兼容整合轮已按 **真实 v4 结构**
+  （`asset_cards` 5 个补项列 + 精确默认值）做独立契约与真实产品合成库验收（见 §4）。
+  bank / batch / audit 等尚未合入的组件**未**做契约，仍然一律拒绝（`unexpected_tables`）。
 
 ## 1. 范围与非目标
 
@@ -104,7 +110,7 @@
   "source": {                                 // 备份时源库事实（只记文件名，不记本机绝对路径）
     "file": "workbench.db",
     "bytes": 159744,
-    "schemaVersion": 3,
+    "schemaVersion": 4,
     "journalMode": "wal"
   },
   "snapshot": {                               // 发布产物的物理绑定（全部会被重新计算核对）
@@ -115,10 +121,10 @@
     "journalMode": "delete"
   },
   "structure": {                              // 结构绑定
-    "schemaVersion": 3,                       // 必须等于受支持的真实结构版本（当前仅 3）
+    "schemaVersion": 4,                       // 必须是已声明的真实结构版本（当前：3 或 4）
     "userVersion": 0,
     "sqliteVersion": "3.51.3",                // 生成端 SQLite 版本（信息性；类型仍校验）
-    "migrations": [1, 2, 3],                  // 必须与真实 schema_migrations 记录一致且从 1 连续
+    "migrations": [1, 2, 3, 4],              // 必须与真实 schema_migrations 记录一致且从 1 连续
     "tables": ["account_sets", "..."]         // sqlite_master 的全部表，动态计算（新增表自动纳入）
   },
   "content": {                                // 内容绑定
@@ -140,6 +146,10 @@
   **哪些只作记录、无法重算**：`source.bytes`（源库在备份后仍会写入）、`source.journalMode`、
   `structure.sqliteVersion`、`appVersion`、`createdAt` —— 这些仍会校验**类型 / 规范范围**，
   但不作为「快照就是这份数据」的证据。`source.schemaVersion` 必须与 `structure.schemaVersion` 一致。
+- **schemaVersion 只用来选契约，不足以为凭**：写成 4 但结构仍是 v3（缺 5 个补项列）、写成 3 但已带 v4 列、
+  或默认值 / NOT NULL / 类型 / 迁移记录不连续，都会按**真实结构**被 `structure_invalid` /
+  `manifest_invalid` 拦住（不会因为版本号而放行，也不把 `unexpected_tables` 关掉）。
+  已知支持的版本集合由 `backupContract().supportedSchemaVersions`（当前 `[3, 4]`）显式暴露。
 
 ### 3.2 清单的信任边界
 
@@ -177,28 +187,37 @@
 |---|---|---|
 | 产品 | `youshu-workbench` | `backup_app_unsupported` |
 | 清单格式 | `youshu-workbench-local-backup` × `formatVersion = 1` | `backup_format_unsupported` |
-| schema / 结构 | **恰好当前真实结构版本 v3**（列 / 类型 / NOT NULL / 主键 / UNIQUE / 外键目标列与动作 / 迁移记录全量校验） | 更高版本（未来 v4+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated` |
+| schema / 结构 | **恰好 v3 或 v4 两个已声明的真实结构之一**（列 / 类型 / NOT NULL / **默认值** / 主键 / UNIQUE / 外键目标列与动作 / 迁移记录连续性与迁移前备份记录全量校验） | 更高版本（未来 v5+）→ `schema_unsupported`；更低版本（v0 / v1 / v2 旧库）→ `schema_outdated`；版本对但结构不符 → `structure_invalid` |
 | 应用版本 | **仅记录**（校验「存在且为非空字符串」），不参与兼容判定 | 缺失 / 类型不合法 → `manifest_invalid`；不同版本号**不会**被拒绝 |
 
-- 为什么**只支持 v3**：本模块校验的是**具体结构**（每张表、每个关键列与约束、迁移记录连续性）。
-  对 v0 / v1 / v2 旧库，本模块没有对应的结构规范，**不为兼容旧结构盲目放行**；这类库应先用**当前产品
-  真实入口**打开一次完成升级（LOCAL-01 会在迁移前自己生成一份备份），再用本工具备份。
+- **两个版本各自独立契约**：
+  - **v3**（LOCAL-01 迁移后、**无**资产补项列）：旧备份按 v3 契约**只读验证**并**原样**恢复到全新目录；
+    验证 / 恢复**不迁移备份也不迁移源库**（备份目录与源库字节不变）；恢复出来的库仍是 v3，
+    只有在把它**显式交给当前产品打开**时才走既有 v3→v4 迁移路径（会留下 `workbench.db.pre-v4-*.bak`、
+    推进迁移记录到 4，并按真实 DDL 默认值把 5 个新列落为 `NULL / 0 / 'booked' / '' / 'purchase'`）；
+  - **v4**（v3 + `asset_cards` 5 个补项列）：按真实 `ALTER TABLE` 契约校验列类型 / NOT NULL / **默认值**
+    （`acquired_period TEXT`、`opening_accumulated REAL NOT NULL DEFAULT 0`、
+    `ledger_status TEXT NOT NULL DEFAULT 'booked'`、`ledger_note TEXT NOT NULL DEFAULT ''`、
+    `origin TEXT NOT NULL DEFAULT 'purchase'`），v4 的备份能被当前工具验证与恢复，恢复后能用真实产品入口继续记账 / 计提。
+- 为什么**不支持 v0 / v1 / v2**：本模块校验的是**具体结构**（每张表、每个关键列与约束、默认值、迁移记录连续性）。
+  对更旧的库没有对应结构规范，**不为兼容旧结构盲目放行**；这类库应先用**当前产品真实入口**打开一次完成升级。
   本模块**不会**为候选库执行初始化 / 迁移来「让它通过」。
 - **表清单与内容摘要是动态的**：`structure.tables` 从 `sqlite_master` 实时计算，每表摘要也逐表计算，
-  因此未来新增表会被自动纳入绑定、并因「未在本模块结构规范内」而**被拒绝**（`structure_invalid` /
-  `unexpected_tables`）——这正是「不得把 v4 当成已支持」的兜底。
-- **外键动作也是结构契约**：真实 v3 DDL 里所有外键都是 `ON DELETE CASCADE` + 默认 `ON UPDATE NO ACTION`
-  （匹配语义默认 `NONE`），这不是风格差异而是业务语义——删除账套依赖级联。只改动作的伪结构
-  （例如把 `periods.account_set_id` 的 `ON DELETE CASCADE` 改成 `NO ACTION`）列 / 主键 / 数据 / 迁移记录
-  都可以完全不变、内容摘要也完全一致，但恢复后真实「删除账套」会抛外键错误。因此本模块按
-  `PRAGMA foreign_key_list` 的**外键分组**（多列外键整体比较）逐项比对 `ON DELETE` / `ON UPDATE` /
-  `MATCH`，并把未声明的额外外键也当作结构不符（`foreign_key_actions` / `unexpected_foreign_keys`）。
-  未来 v4 若有不同动作，必须在该外键条目上逐条显式声明（`actions`），**不得**放宽成「任一动作均可」
-  或关闭外键检查。
-- **v4 合并后必须重验**：LOCAL-02（#47）合并 schema v4 后，**必须**在最新 main 上按真实契约扩展
-  `TABLE_STRUCTURE`（列 / 约束 / 迁移记录）、重跑 `node test/local-backup.test.mjs`，并复核是否需要
-  提升 `formatVersion`。模块导出的 `SUPPORTED_SCHEMA_VERSION` 与产品 `IMPORT_SCHEMA_VERSION`
-  必须同步（测试里有显式断言）。
+  因此新增表（如今后的 bank / batch / audit 组件）会被自动纳入绑定、并因「该版本契约里没有这张表」而**被拒绝**
+  （`structure_invalid` / `unexpected_tables`）——这就是「未合入的组件不得被当成已支持」的兜底，
+  不靠关掉 `unexpected_tables` 或只抬高版本号过关。
+- **外键动作也是结构契约**（v3 / v4 相同）：真实 DDL 里所有外键都是 `ON DELETE CASCADE` +
+  默认 `ON UPDATE NO ACTION`（匹配语义默认 `NONE`），这不是风格差异而是业务语义——删除账套依赖级联。
+  只改动作的伪结构（例如把 `periods.account_set_id` 的 `ON DELETE CASCADE` 改成 `NO ACTION`）
+  列 / 主键 / 数据 / 迁移记录都可以完全不变、内容摘要也完全一致，但恢复后真实「删除账套」会抛外键错误。
+  因此本模块按 `PRAGMA foreign_key_list` 的**外键分组**（多列外键整体比较）逐项比对
+  `ON DELETE` / `ON UPDATE` / `MATCH`，并把未声明的额外外键与**重复声明**（同列组同目标多组）
+  也当作结构不符（`foreign_key_actions` / `unexpected_foreign_keys` / `foreign_key_duplicate`）。
+  任何版本若出现不同动作，必须在该外键条目上逐条显式声明（`actions`），**不得**放宽成
+  「任一动作均可」或关闭外键检查。
+- **新增版本必须先加契约**：未来 v5 需新增独立结构契约、真实 SQLite 行为与合成临时库验收，
+  再加入 `SUPPORTED_SCHEMA_VERSIONS`；模块最高支持版本（`backupContract().supportedSchemaVersion`）
+  必须与产品 `IMPORT_SCHEMA_VERSION` 对齐（测试里有显式断言）。
 - 反向（旧应用打开新备份）：`formatVersion` / `schema_unsupported` 会明确拒绝，
   旧应用不会误读新结构；需要恢复时应使用**不旧于**备份的工具版本。
 
@@ -215,18 +234,20 @@
 5. 文件字节数与 `snapshot.bytes` 一致；sha256 与 `snapshot.sha256` 一致；
 6. 以 **`readOnly`** 打开快照，执行固定 `PRAGMA integrity_check` / `PRAGMA foreign_key_check`
    与固定 `SELECT`：**不执行备份里的任何 SQL，也不初始化 / 迁移候选库**；
-7. **真实结构校验**（`TABLE_STRUCTURE`，schema v3）：
+7. **真实结构校验**（按版本选择它的独立契约：v3 → `STRUCTURE_V3`，v4 → `STRUCTURE_V4`）：
    - 必需表齐全（8 张核心会计表 + `schema_migrations` / `schema_backups` + 5 张 `import_*`），
-     且没有本规范之外的业务表；
-   - 每张表的列名集合、声明类型、`NOT NULL`、主键列与顺序、UNIQUE 约束列组全部匹配；
+     且没有该版本契约之外的业务表（`unexpected_tables`）；
+   - 每张表的列名集合、声明类型、`NOT NULL`、**默认值**（与 `PRAGMA table_info.dflt_value` 逐字比对，
+     不符 → `column_default`）、主键列与顺序、UNIQUE 约束列组全部匹配；
    - 外键按 `PRAGMA foreign_key_list` 的分组（`id`）与期望外键**一对一**整体比对：本表列组 → 目标表列组
      **以及** `ON DELETE` / `ON UPDATE` / `MATCH` 动作；每个实际分组都要验动作，且不接受未声明的额外
      外键与重复声明（同列组同目标多个分组）（多列外键按 `seq` 聚合，不只比单个目标列）；
      只改动作的伪结构 → `foreign_key_actions`，重复声明 → `foreign_key_duplicate`；
    - `schema_migrations` 记录必须是从 1 到当前版本**连续**、`applied_at` 可解析；
    - `schema_backups` 必须至少有一条迁移前备份记录，形状（版本 / 路径 / 时间 / integrity）合法；
-   - 任一项不成立 → `structure_invalid`（明细只含问题类型、表名、列名、计数，以及约束动作关键字
-     如 `CASCADE` / `NO ACTION` / `NONE`；**不含**业务原文）。
+   - 任一项不成立 → `structure_invalid`（明细只含问题类型、表名、列名、计数、版本号，以及约束动作关键字
+     如 `CASCADE` / `NO ACTION` / `NONE` 和**已知**默认值字面值（未知默认值只报 `nonstandard`）；
+     **不含**业务原文）。
      结构指纹不成立 / 缺表 → 判定非本产品库；
 8. 实际 schema 版本与清单 `structure.schemaVersion`、`source.schemaVersion` 一致，
    `structure.migrations` 与真实迁移记录逐项一致，`user_version` 一致；
@@ -251,7 +272,7 @@
 | `source_readonly_blocked` | 只读连接无法完成 WAL 索引读取（该环境需要写 `-shm`）：先用产品真实入口打开一次再备份；本包不会改用可写连接 |
 | `source_not_product_database` | 不是本产品库（缺必需表，含缺 `import_*` / `schema_backups`） |
 | `source_structure_invalid` | 是本产品库但结构 / 约束 / 迁移记录与本模块校验的当前结构不符（明细给出问题类型与表 / 列） |
-| `schema_unsupported` | 源库 schema 版本高于本模块支持上限（未知未来版本，例如 v4） |
+| `schema_unsupported` | 源库 schema 版本高于本模块支持上限（未知未来版本，例如 v5+） |
 | `schema_outdated` | 源库 schema 版本低于本模块支持的当前结构（旧库需先用当前产品入口升级） |
 | `out_required` / `out_invalid` / `out_parent_missing` | `--out` 必须是路径，且**父目录**已存在（不递归猜位置） |
 | `out_exists` / `out_incomplete` / `out_alias` / `out_uncreatable` | 目录已存在 / 有上次残留 / 是符号链接 / 无法创建：换一个新目录 |
@@ -331,7 +352,13 @@
 
 本包自测就是用**当前真实入口**验证的：子进程设置 `WORKBENCH_DATA_DIR=<新目标目录>`，
 import 真实 `accounting.mjs` / `import-incremental.mjs`，读到的期初、两个月余额、试算平衡、
-利润表与来源追踪与手算预期、与备份时点完全一致（见交接 §3）。
+利润表与来源追踪与手算预期、与备份时点完全一致；v4 场景还读出资产卡片 5 个补项列 / 期初累计 /
+连续两个月计提与总账 / 封账状态 / 两批导入批次与来源，并在恢复库上继续记账与计提（见交接 §3）。
+
+**恢复一个 v3 备份得到的是 v3 库**（不做隐式迁移）：要交给当前产品使用，就把它作为数据目录**显式打开一次**，
+由产品自己的 v3→v4 迁移路径升级（会先做一份 `workbench.db.pre-v4-*.bak`）；升级后的实际差异已在自测中断言
+（新列按默认值落为 `NULL / 0 / 'booked' / '' / 'purchase'`，旧卡片因此会报 `asset_acquired_period_missing` /
+`asset_accumulated_mismatch` 等真实缺项，而不是凭空补出历史累计）。
 
 **不自动切换**：本子包不修改正在使用的数据目录、不改环境变量、不停止正在运行的产品进程。
 
@@ -388,14 +415,16 @@ createBackup({ dbPath, outDir, now? })
 
 verifyBackup({ backupDir })
   -> { ok, status, code, details, backupDir?, manifest?, summary? }
-     // summary.migrations = [1,2,3]
+     // summary.migrations = [1,2,3]（v3 备份）或 [1,2,3,4]（v4 备份）
 
 restoreNew({ backupDir, targetDir, now? })
   -> { ok, status, code, details, stage?, targetDir?, database?, receipt?, durability?, summary? }
 
 backupContract()
-  -> { format, formatVersion, product, supportedSchemaVersion, productSchemaVersion,
-       snapshotFile, manifestFile, targetDatabase, coreTables, requiredTables }
+  -> { format, formatVersion, product, supportedSchemaVersion, supportedSchemaVersions,
+       productSchemaVersion, snapshotFile, manifestFile, targetDatabase, coreTables, requiredTables }
+     // supportedSchemaVersions = [3, 4]（每个版本都有独立结构契约）
+     // supportedSchemaVersion = 4（最高支持版本，必须与产品 IMPORT_SCHEMA_VERSION 对齐）
 ```
 
 约定：
@@ -428,8 +457,10 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
 2. **严格拒绝有代价**：`foreign_key_violation` / `integrity_failed` / `structure_invalid` 会拒绝整次备份。
    若真实账套历史数据本身存在外键或页级问题，或库被手工改过结构，会**先被拦住**（这是有意的安全取向），
    此时需要先人工核对（本包**不提供**修复工具，也不会替库做迁移）。
-3. **只支持当前 v3 结构**（§4）：v0 / v1 / v2 旧库给 `schema_outdated`，必须先用当前产品入口升级；
-   v4 合并后必须扩展结构规范并重验。
+3. **schema 只支持已声明的 v3 / v4**（§4）：v0 / v1 / v2 旧库给 `schema_outdated`，必须先用当前产品入口升级；
+   v3 备份只读验证 / 原样恢复（不隐式迁移），要升到 v4 必须由产品入口显式打开。
+   未来 v5 **必须**先新增独立结构契约、真实 SQLite 行为与合成临时库验收，再加入支持集合；
+   bank / batch / audit 等**尚未合入**的组件仍未做契约，带这些表的库会被 `unexpected_tables` 拒绝。
 4. **清单无签名**（§3.2）：防损坏 / 防不一致，不防整体伪造；结构校验能拦住「结构不符」
    （含只改外键 `ON DELETE` / `ON UPDATE` 动作的伪结构，以及重复声明同列外键的伪结构），
    但拦住的是结构而不是恶意同构伪造。
@@ -439,8 +470,11 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
    `-shm` 的读锁 / 读标记可能变化（§2.1），它不承载业务数据。
 7. **耐久性边界**：文件内容在 `rename` 前 `fsync`；**Windows 无法 `fsync` 目录项**，
    断电可能丢失刚发布的文件名（按未完成处理），不承诺目录项持久化。
-8. **未验证真实账套**：所有自测都是合成数据（临时目录 + 合成账套 / 批次 / 来源），
+8. **未验证真实账套**：所有自测都是合成数据（临时目录 + 合成账套 / 批次 / 来源 / 资产卡片），
    没有接触真实财务数据，**不构成真实财务正确性验证**；也没有任何税局相关动作。
+   v3 夹具是从**真实 v4 产品快照**用 SQLite `DROP COLUMN` 反向去掉 v4 只加列并回退迁移记录 4 得到的
+   **结构等价合成库**（用例里逐列断言列 / 类型 / NOT NULL / 默认值 / 迁移记录确实是 v3），
+   不是字节级的历史 v3 账套；因此本包**不声称**验证过真实历史账套的旧备份。
 9. **未验证 Windows 交付路径**：没有做干净机器安装 / 服务化 / 权限 / 杀毒软件占用等场景验证；
    junction / 硬链接规则在本机 Windows 上实测过，但不同文件系统（网络盘、同步盘）行为未验证。
 
@@ -452,31 +486,48 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
 node test/local-backup.test.mjs
 ```
 
-覆盖与真实结果见交接文档 [handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md) §3。已审源码
-head `b2dcba35e87e9ebb75245dcc874aa41705b31243` 上 **16 / 16 通过、exit 0**，分别由管理者与
+覆盖与真实结果见交接文档 [handoffs/LOCAL-06-BACKUP](handoffs/LOCAL-06-BACKUP.md) §3。
+
+当前（兼容整合轮）**20 / 20 通过、exit 0**，其中 1–16 是 PR #55 已验收的原有 16 项（全部保留，
+仅在 schema 版本断言上从 v3 改为 v4），17–20 是本轮新增：
+
+- **v4 真实产品合成库全链路**：真实产品入口建库（增量导入两批 + 资产卡片 5 个补项列 + 期初累计 +
+  连续两个月计提与总账 + 1 月真实封账 + 2 月保持 open），`createBackup` → `verifyBackup` → `restoreNew`，
+  再用真实 `accounting.mjs` / `import-incremental.mjs` 读出并**独立手算核对**期初 / 两个月余额 /
+  试算平衡 / 凭证清单 / 计提记录 / 卡片补项与累计 / 批次与来源 / 期初检查步骤状态；
+- **v4 恢复库上的真实后续操作**：继续记账、继续计提 3 月，且已封账期间的写入 / 计提反过账被 `period_closed` 拒绝；
+- **v3 旧备份语义**：只读验证（源库与备份字节均不变）→ 恢复到全新目录（仍是 v3）→ 产品入口显式升级到 v4
+  （新增迁移前备份文件、迁移记录 4、5 列按真实默认值落库、旧卡片缺项如实报告）→ 升级后的库能按 v4 备份 / 验证，
+  旧 v3 备份仍只读可用；
+- **伪兼容拒绝**：只抬高版本号（v3 结构 + version=4 记录）、缺列、错默认值、错 null、错类型、
+  未知组件表、未来 v5、迁移记录不连续、v4 结构却声称 v3，以及把快照换成伪结构并**重算清单 sha256** 的
+  快照侧伪兼容；全部给稳定 code，且源库字节不变、不创建输出目录 / 恢复目标。
+
+已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`（PR #55）上是 **16 / 16**，分别由管理者与
 未参与实现、fork 为 none 的独立审查各实跑一次；独立审查另实跑五种外键变体（`ON DELETE NO ACTION`、
 `ON UPDATE CASCADE`、`CASCADE + RESTRICT`、逆序重复、两个同 `CASCADE`），源库与重算清单 hash 的快照
 两侧均被拒绝且不创建输出 / 目标，正常结构恢复后真实 `accounting.deleteAccountSet` 成功级联。
+本轮的 20 项在外键分组一对一比对之上保留了这三种动作 / 重复变体用例（第 11 项）。
 
 历史状态必须分开看：head `829541a`（六文件源码 `ddadb03`）的 15 / 15 与第一轮 16 / 16 都曾漏掉
 「重复声明同列同目标外键可绕过」，因此**未最终通过**，已被当前的外键分组一对一比对取代。
 `import-incremental` 49 / 49、`import-incremental-http` 22 / 22、`smoke` 28 / 28 是更早一轮返工后的
-受影响回归结果；本包只改自己的 6 个文件、未动共享源码，因此没有把它们当作当前证据。
-该套件**未**接入 `scripts/test-all.mjs`（共享文件，不在本包文件所有权内），因此 `npm test` 暂不包含本套件。
-本次仅更新文档的提交**不改变源码**，因此不重跑上述 16 个用例；已审源码 head 仍是 `b2dcba3`，
-由管理者在合并前核对源码未变。
+受影响回归结果；本包只改自己的文件、未动共享业务源码，因此没有把它们当作本轮证据。
+
+聚合入口：本轮按任务单授权**仅追加**本套件与两个已合入模块套件（`finance-output-policy` 28 / 28、
+`report-office-export` 21 / 21）到 `scripts/test-all.mjs`，原有 50 套顺序与内容不变；
+在 `06-workbench` 跑 `npm test` 为 **53 / 53 套 exit 0**（真实运行，含 Office 真实 PDF 几何校验）。
 
 ## 11. 当前状态与下一步
 
-1. **已完成的验收**：已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）、
-   五种外键变体在源库与快照两侧均被拒绝、正常结构恢复后真实删除账套成功、`git diff --check` 通过、
-   源码工作区干净；**当前没有已发现的阻塞项**。
-2. **PR 状态**：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN 并附当前任务说明，
-   等待本次文档核对后按已授权流程合并；**实际 merge SHA 尚未产生**，不伪造、不标记 MERGED。
-3. **本次文档提交会产生新的 PR head**，但**已审源码 head 仍是 `b2dcba3`**；本次不改源码 / 测试 / CLI，
-   由管理者核对源码未变。
-4. **严格只支持当前 schema v3**：v4（LOCAL-02 #47）以及 bank / batch / audit 等组件必须后续**显式**
-   做结构组合与真实 SQLite 行为与合成临时库验收，不得用动态表清单或「旧用例通过」推定已支持。
+1. **已验收合并的部分**：已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）、
+   五种外键变体在源库与快照两侧均被拒绝、正常结构恢复后真实删除账套成功；已随 PR #55 合并。
+2. **合并事实**：PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 MERGED，
+   merge `98977e04bd24aa293074021802191814f8c2a1d2`（北京时间 2026-10-22）；已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`。
+3. **兼容整合轮状态**：v3 + v4 精确契约、20 / 20 自测、`npm test` 53 / 53 已在本机真实跑过；
+   该轮源码 / 测试 / 文档**尚未提交、未建 PR、未合并**，最终独立审查待做（不预报 head / merge）。
+4. **仍未支持**：v0 / v1 / v2 旧库（先用产品入口升级）、未来 v5+、bank / batch / audit 等未合入组件；
+   这些必须**显式**做结构契约与真实 SQLite 行为 + 合成临时库验收，不得用动态表清单或「旧用例通过」推定已支持。
 5. **Issue #49 保持 OPEN** 供兼容整合；完整审计留痕在
    [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)。
 6. **后续仍未实现**：原位（就地）恢复与回退编排、Windows 干净安装 / 启动 / 升级交付、
