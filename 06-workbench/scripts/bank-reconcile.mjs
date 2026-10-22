@@ -12,7 +12,7 @@
 //    默认不打印原始 SQL、堆栈或整份 CSV。
 //
 // 退出码：0 成功；2 用法 / 路径 / 范围参数错误；3 业务拒绝或冲突；
-//         4 内部错误（未输出 SQL/堆栈）；5 依赖未就绪（备份 / 结构门槛）。
+//         4 内部错误（未输出 SQL/堆栈）；5 依赖未就绪 / 写入被阻断（备份 / 结构门槛 / 回滚未确认）。
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -55,6 +55,8 @@ const BLOCKED_CODES = new Set([
   "bank_schema_future_version", "bank_schema_version_contradiction", "bank_schema_corrupt",
   "backup_service_not_found", "backup_service_invalid", "db_path_required",
   "fresh_database_file_exists", "fresh_database_path_required",
+  // 事务回滚未确认 / 连接状态未知：写入结果不确定，必须人工恢复或丢弃连接后再继续。
+  "bank_transaction_rollback_failed", "bank_connection_state_unknown",
 ]);
 
 function exitCodeFor(code) {
@@ -346,7 +348,7 @@ function help() {
       2: "用法 / 路径 / 范围参数错误",
       3: "业务拒绝或冲突（预检失败、批次冲突、匹配冲突等）",
       4: "内部错误（默认不输出 SQL / 堆栈）",
-      5: "依赖未就绪（LOCAL-06 备份 / 结构门槛）",
+      5: "依赖未就绪 / 写入被阻断（LOCAL-06 备份、结构门槛、事务回滚未确认）",
     },
     notes: [
       "业务命令必须显式 --db；无参 / 拼错路径不会创建或打开默认库。",

@@ -1,6 +1,7 @@
 # 交接 · LOCAL-04-BANK 本地银行 CSV、持久对账与余额调节
 
-- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
+- 状态：原 56 项银行包已独审并合入冻结核；**2026-10-22 追加「现库安装 / 组件备份」子包，真实集成验收完成；随后 #53 独审 2 项 P2 分窗回修，A 窗（索引键语义 + 回滚失败状态）完成，工作区未提交**；待管理者读 diff、复现、独审、提交 / PR / 合并。**不声称最终已通过**。本文件不预写 PR、head、merge。
+- A 窗回修基线：`06d1bd185f68ea4f3c49f20e6cf98f6cdce613a2`；只改登记的 9 文件，**未改** `server/local-backup.mjs` / `test/local-backup.test.mjs`（已交 #47），未接 HTTP / Agent / MCP，未跑全 55 套；详见 §8。
 - 子包基线：`ce4078222c9e5fb8508c9fe24a9183f17d46ea28`（银行 91f07eb + 核心 bd05415 + 备份 3399500 冻结组合并入最新 main `db6020a`）；子包结果见 §7。
 - 本轮返工基线（冻结 head）：`46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；原分页 / 截止日 / 事务 / CSV 四项及大数据真实探针已独审通过，本轮只收敛结构门槛及必要测试文档，仍只改原 10 个文件。
 - 上一轮阻塞审查基线：`e2545216226b87262508d8a94f38426415670d8c`；基线 `257f96275031eefa484699dd71bd012e2d221e51`；分支 `codex/huxiaoyang-code/local-04-bank`；工作区 `.worktrees/local-04-bank`
@@ -153,6 +154,13 @@ SQL 改金额 / 日期 / 科目 / 行号 / 删分录分别识别；触发器注�
 6. 外币 / 换汇、银行网站 / API：不在范围。
 7. **结构契约的边界**：部分索引谓词按规范化文本整体相等比较（逻辑等价但写法不同会被保守拒绝）；
    外键按完整集合比较；版本表形状损坏只给结构化拒绝，不做自动修复 / 补迁。仍不做内容 / 行数 / 哈希校验。
+8. **备份层未校验索引键语义（已知缺口，待后续 B 窗）**：`local-backup.mjs` 只比索引名字 / 列序 / UNIQUE /
+   partial / 谓词，不比对 collation / 方向 / 表达式。A 窗不改 backup，所以**不能宣称产品契约 / 备份验证 /
+   恢复三入口都已拒绝 collation 变体**；产品入口是 fail-closed（恢复库上导入给 `bank_schema_corrupt`），
+   备份层仍放行。集成用例已把「当前仍放行」写成显式断言，后续窗必须同步改为拒绝。
+9. **回滚未知态需调用者处置**：不自动重试、不自动重开事务、不关闭全局连接或强杀服务；未知态连接对银行
+   读写与 `ensureBankSchema` 统一 `bank_connection_state_unknown`，必须先确认回滚成功 / 丢弃连接再
+   `recoverBankConnectionState`。
 
 ## 5. 管理者复验建议
 
@@ -223,7 +231,7 @@ node --test test/local-bank-backup-integration.test.mjs      # 4 / 4 场景, exi
 
 `git diff --check` exit 0；改动范围仅上述子包边界文件（无 `data/`、无临时库、无日志、无共享入口 / package / 其他 docs）。
 
-五套合计 **80 / 80**。集成场景包含：core4 + 遗留 WAL 安装前备份可还原原核心；安装后固定手算
+五套合计 **80 / 80**（A 窗后 89 / 89，见 §8.4）。集成场景包含：core4 + 遗留 WAL 安装前备份可还原原核心；安装后固定手算
 1120 / 1110 / 四类未达 50/30/20/10 / 调节双方 1130 / 差额 0 / 不生成调整凭证；backup → verify →
 restore-new 后 4 流水 / 1 批次 / 2 确认 / 运行记录保留；取消匹配与反过账后 stale / invalidation 可见；
 双账套隔离；已安装重跑幂等；core3 兼容不升级；create / verify / DDL 失败回滚；错 DBPath 不写；
@@ -250,3 +258,66 @@ restore-new 后 4 流水 / 1 批次 / 2 确认 / 运行记录保留；取消匹�
 - 复验命令即 §7.3；重点核对：安装备份目录为全新子目录、失败时原库无 `bank_*` / 版本变化、
   恢复后金额 1130 / 1130 / 0、core3 不升级、篡改项全部 `structure_invalid` 或 `component_*` 且无恢复目标。
 - 独立审查由未参与实施 / 本规划的审查者执行；员工不执行 Git 写。
+
+## 8. 2026-10-22 A 窗：#53 独审 2 项 P2 回修交接
+
+### 8.1 工作区与边界
+
+- 回修基线：head `06d1bd185f68ea4f3c49f20e6cf98f6cdce613a2`；分支 / 工作区不变。
+- 本窗只改登记的 9 文件：`06-workbench/server/bank-storage.mjs`、
+  `06-workbench/server/bank-reconciliation.mjs`、`06-workbench/scripts/bank-reconcile.mjs`、
+  `06-workbench/test/bank-reconciliation.test.mjs`、`06-workbench/test/bank-reconcile-cli.test.mjs`、
+  `06-workbench/test/local-bank-backup-integration.test.mjs`、`docs/LOCAL-BANK.md`、任务单、本交接。
+- 禁止且未改：`server/local-backup.mjs` / `test/local-backup.test.mjs`（核心备份两文件已交 #47）、
+  共享 core / `scripts/test-all.mjs`、`docs/05`、`docs/08`；未读其他 worktree 的 WIP / 日志。
+- 未接 HTTP / Agent / MCP / UI；未跑全 55 套（已知 02 输出兼容候选未同步，不越界修）；未执行 Git 写、未用真实数据 / 税局。
+
+### 8.2 P2-1 索引键语义（不只比列名）
+
+- 回修前：`idx_bank_txn_ref` 最后键改 `bank_ref_id COLLATE NOCASE`（列名 / UNIQUE / partial / WHERE 不变）时
+  `bankSchemaContract` 仍 ok，备份 verify / restore 也 ok；恢复库上真实导入 `Ref-A` / `ref-a` 第二笔 UNIQUE 失败，
+  正常结构下两笔都成功。
+- 回修后：`indexSignatures` 改读 `pragma_index_xinfo`（seqno 顺序 + `coll` + `desc` + 是否表达式 / rowid），
+  并核对 `origin`（命名 `c`、自动 `pk` / `u`）；契约对全部 19 条索引固定「普通列 + BINARY + 升序 + 非表达式」；
+  `COLLATE NOCASE` / `RTRIM` / `DESC` / 表达式 / 额外唯一约束 / 命名与自动索引互顶都是 `bank_schema_corrupt`
+  且不写入；健康结构 import `Ref-A` + `ref-a` 两条都成功。
+- 旧断言未删弱；新增领域 2 + CLI 1 + 集成 1 用例。
+
+### 8.3 P2-2 回滚失败不得冒充已回滚
+
+- 回修前：真实 DELETE-journal 读事务使安装 `COMMIT` 实际 `database is locked`（正常 `ROLLBACK` 后
+  `isTransaction=false`、bank 表 0）；再仅注入 `ROLLBACK` 抛 I/O 错误，仍报「原库已回滚」，
+  而 `db.isTransaction=true`、同连接内 10 张 bank 表 / 版本行未提交；fresh `inTransaction` 同样吞错。
+- 回修后状态机（固定错误 / 标志，不回显原始 SQL / 路径）：
+  - 已确认回滚：原错误上抛；`ensureBankSchema` 给 `bank_migration_failed` + `rolledBack:true`；
+  - 已确认整体放弃：`bank_transaction_discarded` + `rolledBack:true`（内层 SAVEPOINT 失败但外层回滚成功 /
+    被调用方吞掉时外层绝不 `COMMIT`）；
+  - 回滚失败 / 未知：`bank_transaction_rollback_failed` + `rolledBack:false` + `transactionActive`，
+    连接标未知 → 后续银行读写与 `ensureBankSchema` 给 `bank_connection_state_unknown`；
+    恢复只能 `recoverBankConnectionState`（仍在事务中给 `bank_connection_recovery_refused`）或丢弃连接；
+  - 导入失败审计只在确认回滚的连接上写；未知态 `auditRecorded=false` + `auditFailure` 明说未写入，
+    不伪造已留痕，也不能在该连接上成功复用。
+- 新增领域 5 用例（真实 COMMIT_BUSY、单点 ROLLBACK 注入、fresh 分支、嵌套 SAVEPOINT、导入审计）。
+
+### 8.4 本窗实际测试（`06-workbench`，合成临时库）
+
+```
+node --test test/bank-import.test.mjs                     # 16 / 16
+node --test test/bank-reconciliation.test.mjs             # 36 / 36（29 → 36）
+node --test test/bank-reconcile-cli.test.mjs              # 12 / 12（11 → 12）
+node --test test/local-backup.test.mjs                    # 20 / 20（未回退）
+node --test test/local-bank-backup-integration.test.mjs   # 5 / 5（4 → 5）
+                                                          # 合计 89 / 89，exit 0
+```
+
+root 在 06d 管理的 16 + 29 + 11 + 20 + 4 = **80** 对应回修前 head，仍成立；本窗新增 7 领域 + 1 CLI + 1 集成用例。
+`ROLLBACK` 失败是**单点注入**，不声称实测真实磁盘故障；真实 COMMIT busy 用 DELETE-journal 读事务实测
+（产品 WAL 路径当前无此失败）。绿测不等于独审通过。
+
+### 8.5 后续（B 窗新会话，不继续扩大本窗）
+
+1. root 冻结本窗后做独立复审；本窗不写已提交 / 已合 / 最终通过。
+2. 下一 B 窗在新会话、root 同步 #47 已合核心修复后，补 `local-backup.mjs` 银行组件索引键语义校验
+   （读 `BANK_COMPONENT_STRUCTURE.indexes[].keys` / `origin`，并同步 `test/local-backup.test.mjs` 与集成用例中
+   「备份层仍放行」的显式断言）；本窗已禁止修改 backup，未在其中留半成品。
+3. 仍未接 HTTP / Agent / MCP / test-all；LOCAL-02 / 03 正式合同同步后须补兼容回归。

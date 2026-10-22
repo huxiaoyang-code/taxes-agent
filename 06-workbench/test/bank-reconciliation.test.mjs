@@ -214,7 +214,7 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
       assert.equal(S.bankSchemaVersion(conn2), 1);
     } finally { conn2.close(); }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1500,7 +1500,7 @@ test("组件结构 / 版本契约：未来版本、矛盾版本、缺表 / 缺�
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1571,7 +1571,7 @@ test("部分索引契约核对真实 WHERE 谓词：同名同列同 UNIQUE/parti
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1699,7 +1699,7 @@ test("外键契约比较完整集合：audit / reconcile-runs 额外或重复外
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1743,7 +1743,7 @@ test("版本表形状缺失：contract / 状态 / 领域入口结构化拒绝，
       assert.deepEqual(bankRowCounts(ctx.conn), rowsBefore, "拒绝时不得写入任何 bank_* 数据");
     } finally { ctx.conn.close(); }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1788,4 +1788,508 @@ test("失效匹配复核计数先过滤再限条：>500 条已复核前缀不得
   assert.equal(issue.details.items.length, 1);
   assert.equal(issue.details.items[0].entryId, unmatchedEntryId);
   assert.equal(result.status, "pending_review");
+});
+
+
+// ------------------------------------------------------------------ 索引键语义（collation / 方向 / 表达式 / 来源）
+test("索引键语义契约：collation / 方向 / 表达式 / 额外唯一索引都拒绝，正常大小写不同稳定 ID 仍可导入", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-index-keys-"));
+  const expectCorrupt = (ctx) => {
+    const state = S.bankSchemaContract(ctx.conn);
+    assert.equal(state.ok, false, "同名同列同名谓词的键语义漂移必须破坏契约");
+    assert.equal(state.code, "bank_schema_corrupt");
+    return state;
+  };
+  const assertIndexRejected = async (ctx, indexName, patch) => {
+    const state = expectCorrupt(ctx);
+    const problem = state.problems.find((p) => p.code === "bank_schema_index_mismatch"
+      && p.detail.index === indexName);
+    assert.ok(problem, `${indexName}: 必须给出结构化索引键不符问题`);
+    patch?.(problem);
+    const rowsBefore = bankRowCounts(ctx.conn);
+    for (const [label, call] of contractWriteCalls(ctx.conn)) {
+      assert.throws(call, (e) => e.code === "bank_schema_corrupt", `${indexName}: ${label} 必须在写入前拒绝`);
+    }
+    await assert.rejects(() => S.ensureBankSchema(ctx.conn, { dbPath: ctx.file }),
+      (e) => e.code === "bank_schema_corrupt", `${indexName}: 初始化不得静默修补`);
+    assert.deepEqual(bankRowCounts(ctx.conn), rowsBefore, `${indexName}: 拒绝时不得写入任何 bank_* 数据`);
+  };
+
+  try {
+    // 1) 有效流水部分唯一索引：名字 / 列名 / UNIQUE / partial / 谓词全不变，只把最后一个键改成 COLLATE NOCASE。
+    {
+      const ctx = await isolatedComponentDb(dir, "keys-nocase.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_ref`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
+                         WHERE bank_ref_id IS NOT NULL`);
+        await assertIndexRejected(ctx, "idx_bank_txn_ref", (problem) => {
+          assert.deepEqual(problem.detail.actual.columns,
+            ["account_set_id", "bank_account_id", "source_id", "bank_ref_id"], "列名不变");
+          assert.equal(problem.detail.actual.unique, true);
+          assert.equal(problem.detail.actual.partial, true);
+          assert.equal(problem.detail.actual.where, S.canonicalSqlCondition("bank_ref_id IS NOT NULL"), "谓词仍相同");
+          assert.equal(problem.detail.actual.keys.at(-1).collation, "NOCASE");
+          assert.equal(problem.detail.expected.keys.at(-1).collation, "BINARY");
+          assert.equal(problem.detail.actual.origin, "c", "来源仍是显式 CREATE INDEX");
+        });
+
+        // 真实语义对照：同样的两条「只差大小写」的稳定 ID，在 NOCASE 索引下第 2 条必然撞 UNIQUE。
+        const now = new Date().toISOString();
+        ctx.conn.prepare(`INSERT INTO bank_accounts
+            (account_set_id, bank_account_id, source_id, currency, gl_account_code, display_name, bank_account_no, created_at)
+            VALUES (1, 'BANK-KEYS', 'src-1', 'CNY', '1002', '', '', ?)`).run(now);
+        ctx.conn.prepare(`INSERT INTO bank_batches
+            (account_set_id, bank_account_id, source_id, batch_id, currency, period, content_sha256,
+             mapping_fingerprint, normalization_version, status, created_at, updated_at)
+            VALUES (1, 'BANK-KEYS', 'src-1', 'B-KEYS', 'CNY', '2026-01', 'x', 'y', 'z', 'pending', ?, ?)`)
+          .run(now, now);
+        const insertTxn = (refId, rowIndex) => ctx.conn.prepare(`INSERT INTO bank_transactions
+            (account_set_id, bank_account_id, source_id, currency, txn_date, period, direction,
+             amount_cents, summary, bank_ref_id, content_fingerprint, row_fingerprint, batch_id, row_index, origin, created_at)
+            VALUES (1, 'BANK-KEYS', 'src-1', 'CNY', '2026-01-05', '2026-01', 'inflow', 1000, '', ?, 'c', 'r', 'B-KEYS', ?, 'imported', ?)`)
+          .run(refId, rowIndex, now);
+        insertTxn("Ref-A", 0);
+        assert.throws(() => insertTxn("ref-a", 1), /UNIQUE|constraint/i,
+          "COLLATE NOCASE 会让只差大小写的稳定 ID 在唯一索引里相撞（正常 DDL 不会）");
+        ctx.conn.exec(`DELETE FROM bank_transactions`);
+
+        // 恢复产品真实 DDL（BINARY 升序）后契约立即通过。
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_ref`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id)
+                         WHERE bank_ref_id IS NOT NULL`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "恢复 BINARY 后必须通过");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 2) 非唯一普通索引的 RTRIM collation。
+    {
+      const ctx = await isolatedComponentDb(dir, "keys-rtrim.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_scope_date`);
+        ctx.conn.exec(`CREATE INDEX idx_bank_txn_scope_date
+                         ON bank_transactions (account_set_id, bank_account_id, txn_date COLLATE RTRIM)`);
+        await assertIndexRejected(ctx, "idx_bank_txn_scope_date", (problem) => {
+          assert.equal(problem.detail.actual.keys.at(-1).collation, "RTRIM");
+          assert.equal(problem.detail.actual.unique, false);
+        });
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_scope_date`);
+        ctx.conn.exec(`CREATE INDEX idx_bank_txn_scope_date
+                         ON bank_transactions (account_set_id, bank_account_id, txn_date)`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "恢复普通升序索引后必须通过");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 3) 最后键改成 DESC（列名 / UNIQUE / 谓词都不变）。
+    {
+      const ctx = await isolatedComponentDb(dir, "keys-desc.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_batch_row`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_txn_batch_row
+                         ON bank_transactions (account_set_id, bank_account_id, batch_id, row_index DESC)`);
+        await assertIndexRejected(ctx, "idx_bank_txn_batch_row", (problem) => {
+          assert.equal(problem.detail.actual.keys.at(-1).desc, true);
+          assert.equal(problem.detail.expected.keys.at(-1).desc, false);
+        });
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_batch_row`);
+        ctx.conn.exec(`CREATE UNIQUE INDEX idx_bank_txn_batch_row
+                         ON bank_transactions (account_set_id, bank_account_id, batch_id, row_index)`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "恢复升序后必须通过");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 4) 表达式键（列名 / 数量看起来一样，实际是 lower(row_fingerprint) 表达式）。
+    {
+      const ctx = await isolatedComponentDb(dir, "keys-expression.db");
+      try {
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_fingerprint`);
+        ctx.conn.exec(`CREATE INDEX idx_bank_txn_fingerprint
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, lower(row_fingerprint))`);
+        await assertIndexRejected(ctx, "idx_bank_txn_fingerprint", (problem) => {
+          assert.equal(problem.detail.actual.keys.length, 4);
+          assert.equal(problem.detail.actual.keys.at(-1).column, null, "表达式键没有列名");
+          assert.equal(problem.detail.actual.keys.at(-1).expression, true);
+        });
+        ctx.conn.exec(`DROP INDEX idx_bank_txn_fingerprint`);
+        ctx.conn.exec(`CREATE INDEX idx_bank_txn_fingerprint
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, row_fingerprint)`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "恢复列引用后必须通过");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 5) 契约之外的额外索引：普通列上的额外 UNIQUE 约束同样必须拒绝（不是只看「必需索引都在」）。
+    {
+      const ctx = await isolatedComponentDb(dir, "keys-extra-unique.db");
+      try {
+        ctx.conn.exec(`CREATE UNIQUE INDEX bank_probe_extra_unique
+                         ON bank_transactions (summary)`);
+        const state = expectCorrupt(ctx);
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_index_unexpected"
+          && p.detail.index === "bank_probe_extra_unique"), "额外 UNIQUE 索引必须结构化拒绝");
+        const rowsBefore = bankRowCounts(ctx.conn);
+        for (const [label, call] of contractWriteCalls(ctx.conn)) {
+          assert.throws(call, (e) => e.code === "bank_schema_corrupt", `额外 UNIQUE: ${label} 必须拒绝`);
+        }
+        await assert.rejects(() => S.ensureBankSchema(ctx.conn, { dbPath: ctx.file }),
+          (e) => e.code === "bank_schema_corrupt", "额外 UNIQUE: 初始化不得静默修补");
+        assert.deepEqual(bankRowCounts(ctx.conn), rowsBefore, "额外 UNIQUE: 拒绝时不得写入");
+        ctx.conn.exec(`DROP INDEX bank_probe_extra_unique`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "移除额外唯一索引后必须通过");
+      } finally { ctx.conn.close(); }
+    }
+
+    // 6) 用另一个命名索引重复表级 UNIQUE 的形状：自动索引的来源 / 唯一性集合不得被顶替或放宽。
+    {
+      const ctx = await isolatedComponentDb(dir, "keys-dup-unique.db");
+      try {
+        ctx.conn.exec(`CREATE UNIQUE INDEX bank_probe_dup_unique
+                         ON bank_batch_rows (account_set_id, bank_account_id, batch_id, row_index)`);
+        const state = expectCorrupt(ctx);
+        assert.ok(state.problems.some((p) => p.code === "bank_schema_index_unexpected"
+          && p.detail.index === "bank_probe_dup_unique"), "重复的表级 UNIQUE 形状必须作为额外索引拒绝");
+        ctx.conn.exec(`DROP INDEX bank_probe_dup_unique`);
+        assert.equal(S.bankSchemaContract(ctx.conn).ok, true, "移除后必须通过");
+      } finally { ctx.conn.close(); }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("真实导入对照：只有大小写不同的稳定流水 ID 在正常结构下两条都成功，索引键全部是 BINARY 升序普通列", () => {
+  const set = createSet("合成大小写稳定ID", []);
+  const bank = register(set.id, uniq("BANK")).account.bank_account_id;
+  const contractIndex = S.BANK_SCHEMA_CONTRACT.indexes.find((idx) => idx.index === "idx_bank_txn_ref");
+  assert.ok(contractIndex, "契约必须登记 idx_bank_txn_ref");
+  assert.deepEqual(contractIndex.keys.map((key) => [key.column, key.collation, key.desc, key.expression]), [
+    ["account_set_id", "BINARY", false, false],
+    ["bank_account_id", "BINARY", false, false],
+    ["source_id", "BINARY", false, false],
+    ["bank_ref_id", "BINARY", false, false],
+  ], "产品真实 DDL 的键语义必须固定为 BINARY 升序普通列");
+  assert.equal(contractIndex.origin, "c");
+
+  const result = importCsv(set.id, bank, uniq("CASE-REF"), csvAmountDirection([
+    { date: "2026-01-05", summary: "收款甲", amount: "10.00", direction: "inflow", refId: "Ref-A" },
+    { date: "2026-01-06", summary: "收款乙", amount: "20.00", direction: "inflow", refId: "ref-a" },
+  ]));
+  assert.equal(result.transactionIds.length, 2, "正常结构下只差大小写的稳定 ID 必须两条都导入");
+  assert.equal(txnCount(set.id, bank), 2);
+  const refs = db.prepare(`SELECT bank_ref_id FROM bank_transactions
+                            WHERE account_set_id=? AND bank_account_id=? ORDER BY bank_ref_id`).all(set.id, bank)
+    .map((row) => row.bank_ref_id).sort();
+  assert.deepEqual(refs, ["Ref-A", "ref-a"], "两条稳定 ID 必须原样保留大小写");
+});
+
+
+// ------------------------------------------------------------------ 事务回滚状态（安装 / 嵌套保存点 / 导入审计）
+const ioError = (stage) => {
+  const error = new Error(`injected ${stage} I/O error`);
+  error.code = "ERR_SQLITE_ERROR";
+  return error;
+};
+
+/** 未安装 bank_* 的最简真实库；journal=DELETE 时可用另一连接持 SHARED 读锁制造真实 COMMIT busy。 */
+function legacyOnlyDb(dir, name, journal = null) {
+  const file = join(dir, name);
+  const conn = new DatabaseSync(file);
+  if (journal) conn.exec(`PRAGMA journal_mode = ${journal}`);
+  createLegacySchema(conn);
+  conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
+              VALUES (1, '1002', '银行存款', '资产', 'debit', 0, 1)`);
+  return { conn, file };
+}
+
+test("安装 COMMIT 真实失败（DELETE journal 读事务）：确认回滚后 isTransaction=false、bank 表 0，可重试成功", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-commit-busy-"));
+  const { conn, file } = legacyOnlyDb(dir, "commit-busy.db", "DELETE");
+  const reader = new DatabaseSync(file);
+  try {
+    // 真实读事务：另一连接持 SHARED 锁，安装的 COMMIT 需要 EXCLUSIVE → SQLITE_BUSY。
+    reader.exec("BEGIN");
+    reader.prepare("SELECT COUNT(*) AS n FROM account_sets").get();
+    let error = null;
+    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) }); } catch (e) { error = e; }
+    assert.equal(error?.code, "bank_migration_failed", "真实 COMMIT busy 必须结构化失败，而不是静默成功");
+    assert.equal(error?.details?.rolledBack, true, "回滚真实成功后必须明确 rolledBack:true");
+    assert.equal(error?.details?.transactionState, "rolled_back");
+    assert.equal(conn.isTransaction, false, "确认回滚后连接不得仍持有事务");
+    assert.deepEqual(bankTableNames(conn), [], "确认回滚后不得留下 bank_* 表");
+    assert.equal(S.bankConnectionState(conn).writable, true, "已确认回滚的连接必须仍可用（不是被永久拉黑）");
+
+    // 释放读锁后同一连接重试必须成功：失败没有污染事务层或结构。
+    reader.exec("COMMIT");
+    const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    assert.equal(retried.migrated, true);
+    assert.equal(S.bankSchemaContract(conn).ok, true, "重试后组件结构必须完整");
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    try { reader.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("仅注入 ROLLBACK 抛错（单点注入，不是实测磁盘故障）：不得声称已回滚，未知连接拒绝继续银行写入", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-rollback-inject-"));
+  const { conn, file } = legacyOnlyDb(dir, "rollback-inject.db", "DELETE");
+  const reader = new DatabaseSync(file);
+  const realExec = conn.exec.bind(conn);
+  let injected = 0;
+  try {
+    reader.exec("BEGIN");
+    reader.prepare("SELECT COUNT(*) AS n FROM account_sets").get();
+    // 只让第一次 ROLLBACK 抛 I/O 错误；COMMIT 仍是真实的 SQLITE_BUSY。
+    conn.exec = (sql) => {
+      if (/^ROLLBACK/i.test(String(sql)) && injected === 0) {
+        injected += 1;
+        throw ioError("rollback");
+      }
+      return realExec(sql);
+    };
+    let error = null;
+    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) }); } catch (e) { error = e; }
+    assert.equal(injected, 1, "只注入一次 ROLLBACK 失败");
+    assert.equal(error?.code, "bank_transaction_rollback_failed", "回滚失败必须与「已确认回滚」区分");
+    assert.equal(error?.details?.rolledBack, false, "不得标记 rolledBack:true");
+    assert.equal(error?.details?.transactionState, "rollback_unconfirmed");
+    assert.equal(error?.details?.transactionActive, true);
+    assert.doesNotMatch(String(error?.message), /原库已回滚|安装完成|已确认回滚/, "不得假称业务回滚 / 安装完成");
+    assert.equal(conn.isTransaction, true, "单点注入后事务仍活着（真实磁盘故障未实测，此处只验证状态机）");
+    // 同连接内确实还有未提交的 10 张 bank_* 表与版本行 —— 这正是不能假装「已回滚」的原因。
+    assert.deepEqual(bankTableNames(conn), [...S.BANK_TABLES].sort(), "未知态下未提交的组件结构仍挂在该连接上");
+    assert.equal(S.bankSchemaVersion(conn), S.BANK_SCHEMA_VERSION);
+    assert.equal(S.bankConnectionState(conn).transactionState, "rollback_unconfirmed");
+    assert.equal(S.bankConnectionState(conn).writable, false);
+
+    // 未知态连接禁止继续银行读写（读入口同样拒绝），也不能再开事务。
+    for (const [label, call] of contractWriteCalls(conn)) {
+      assert.throws(call, (e) => e.code === "bank_connection_state_unknown", `未知态: ${label} 必须拒绝`);
+    }
+    assert.throws(() => S.inTransaction(conn, () => "noop"), (e) => e.code === "bank_connection_state_unknown");
+    await assert.rejects(() => S.ensureBankSchema(conn, { dbPath: file }),
+      (e) => e.code === "bank_connection_state_unknown", "未知态连接不得被当成「已初始化 / 可安装」");
+    // 恢复前必须拒绝：连接仍持有未决事务。
+    assert.throws(() => S.recoverBankConnectionState(conn), (e) => e.code === "bank_connection_recovery_refused");
+    // 调用者明确恢复：先真实 ROLLBACK，再显式确认可用。
+    conn.exec = realExec;
+    realExec("ROLLBACK");
+    assert.equal(conn.isTransaction, false);
+    assert.deepEqual(bankTableNames(conn), [], "确认回滚后未提交结构必须消失");
+    const recovered = S.recoverBankConnectionState(conn);
+    assert.equal(recovered.recovered, true);
+    assert.equal(S.bankConnectionState(conn).writable, true);
+
+    reader.exec("COMMIT");
+    const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    assert.equal(retried.migrated, true, "恢复后重装必须成功（不是复用未知连接）");
+  } finally {
+    try { conn.exec = realExec; } catch { /* ignore */ }
+    try { conn.close(); } catch { /* ignore */ }
+    try { reader.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("新库分支：COMMIT / ROLLBACK 失败都不冒充「原库已回滚 / 安装完成」，确认回滚才可继续", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-fresh-txn-"));
+  try {
+    // a) COMMIT 与 ROLLBACK 都失败（单点注入）：未知态，不得声称已回滚。
+    {
+      const file = join(dir, "fresh-unknown.db");
+      const receipt = S.claimFreshDatabase({ dbPath: file });
+      const { conn } = legacyOnlyDb(dir, "fresh-unknown.db");
+      const realExec = conn.exec.bind(conn);
+      conn.exec = (sql) => {
+        if (/^(COMMIT|ROLLBACK)/i.test(String(sql))) throw ioError("commit-rollback");
+        return realExec(sql);
+      };
+      let error = null;
+      try { await S.ensureBankSchema(conn, { dbPath: file, receipt }); } catch (e) { error = e; }
+      assert.equal(error?.code, "bank_transaction_rollback_failed", "新库分支同样必须区分回滚失败");
+      assert.doesNotMatch(String(error?.message), /原库已回滚|安装完成|已确认回滚|未留下/, "不得假称新库已回滚 / 安装完成");
+      assert.equal(error?.details?.rolledBack, false);
+      assert.equal(conn.isTransaction, true);
+      assert.deepEqual(bankTableNames(conn), [...S.BANK_TABLES].sort(), "未知态下未提交的新库结构仍在连接上");
+      conn.exec = realExec;
+      realExec("ROLLBACK");
+      assert.deepEqual(bankTableNames(conn), [], "确认回滚后新库不得留下半成品");
+      S.recoverBankConnectionState(conn);
+      const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+      assert.equal(migrated.migrated, true, "恢复后走已有库路径必须能正常安装");
+      conn.close();
+    }
+
+    // b) 只有 COMMIT 失败、ROLLBACK 真实成功：明确「已确认回滚」。
+    {
+      const file = join(dir, "fresh-confirmed.db");
+      const receipt = S.claimFreshDatabase({ dbPath: file });
+      const { conn } = legacyOnlyDb(dir, "fresh-confirmed.db");
+      const realExec = conn.exec.bind(conn);
+      conn.exec = (sql) => {
+        if (/^COMMIT/i.test(String(sql))) throw ioError("commit");
+        return realExec(sql);
+      };
+      let error = null;
+      try { await S.ensureBankSchema(conn, { dbPath: file, receipt }); } catch (e) { error = e; }
+      assert.equal(error?.code, "bank_migration_failed");
+      assert.equal(error?.details?.rolledBack, true, "确认回滚后才可以说已回滚");
+      assert.equal(error?.details?.transactionState, "rolled_back");
+      assert.doesNotMatch(String(error?.message), /未确认|未知/, "已确认回滚的错误不得写成未知态");
+      assert.equal(conn.isTransaction, false);
+      assert.deepEqual(bankTableNames(conn), [], "确认回滚后不得留下半成品");
+      conn.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("嵌套 SAVEPOINT 回滚失败：不提交半成品，区分已确认整体回滚与未知态", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-nested-savepoint-"));
+  const ctx = await isolatedComponentDb(dir, "nested-savepoint.db");
+  const conn = ctx.conn;
+  const realExec = conn.exec.bind(conn);
+  const insertProbe = (label) => conn.prepare(`INSERT INTO bank_audit_events
+      (account_set_id, bank_account_id, event_type, subject_type, subject_id, detail_json, created_at)
+      VALUES (1, 'BANK-NESTED', ?, '', '', '{}', ?)`).run(label, new Date().toISOString());
+  const auditCount = () => Number(conn.prepare(`SELECT COUNT(*) AS n FROM bank_audit_events`).get().n);
+  const before = auditCount();
+  let injected = 0;
+  try {
+    // a) 内层 SAVEPOINT 回滚失败、外层整体回滚成功：已确认放弃，不得留下内层半成品。
+    conn.exec = (sql) => {
+      if (/^ROLLBACK TO/i.test(String(sql)) && injected === 0) {
+        injected += 1;
+        throw ioError("savepoint-rollback");
+      }
+      return realExec(sql);
+    };
+    assert.throws(
+      () => S.inTransaction(conn, () => S.inTransaction(conn, () => {
+        insertProbe("inner-failure");
+        throw new Error("inner-domain-failure");
+      })),
+      (e) => e.code === "bank_transaction_discarded" && e.details?.rolledBack === true
+        && e.details?.transactionState === "rolled_back",
+      "内层回滚未确认但外层确认整体回滚时必须给 discarded / rolledBack:true",
+    );
+    assert.equal(conn.isTransaction, false);
+    assert.equal(auditCount(), before, "整体回滚后不得留下内层写入");
+
+    // b) 内层回滚失败被调用方吞掉：外层绝不 COMMIT。
+    injected = 0;
+    conn.exec = (sql) => {
+      if (/^ROLLBACK TO/i.test(String(sql)) && injected === 0) {
+        injected += 1;
+        throw ioError("savepoint-rollback");
+      }
+      return realExec(sql);
+    };
+    assert.throws(
+      () => S.inTransaction(conn, () => {
+        try {
+          S.inTransaction(conn, () => {
+            insertProbe("swallowed-failure");
+            throw new Error("inner-domain-failure");
+          });
+        } catch { /* 调用方吞掉内层错误 */ }
+        return "would-be-committed";
+      }),
+      (e) => e.code === "bank_transaction_discarded" && e.details?.rolledBack === true,
+      "内层回滚失败被吞掉后外层必须放弃事务，而不是提交半成品",
+    );
+    assert.equal(conn.isTransaction, false);
+    assert.equal(auditCount(), before, "被吞掉的内层失败同样不得留下写入");
+
+    // c) 内层与外层回滚都失败：未知态，禁止继续银行读写，需显式恢复。
+    conn.exec = (sql) => {
+      if (/^ROLLBACK/i.test(String(sql))) throw ioError("rollback");
+      return realExec(sql);
+    };
+    assert.throws(
+      () => S.inTransaction(conn, () => S.inTransaction(conn, () => {
+        insertProbe("double-failure");
+        throw new Error("inner-domain-failure");
+      })),
+      (e) => e.code === "bank_transaction_rollback_failed" && e.details?.rolledBack === false,
+    );
+    assert.equal(conn.isTransaction, true, "外层回滚也失败时事务仍活着，不能声称已回滚");
+    assert.equal(S.bankConnectionState(conn).transactionState, "rollback_unconfirmed");
+    assert.throws(() => S.inTransaction(conn, () => "noop"), (e) => e.code === "bank_connection_state_unknown");
+    assert.throws(() => B.registerBankAccount(conn, {
+      accountSetId: 1, bankAccountId: "BANK-NESTED-2", sourceId: "src-1", glAccountCode: "1002",
+    }), (e) => e.code === "bank_connection_state_unknown", "未知态连接禁止继续银行写入");
+    conn.exec = realExec;
+    realExec("ROLLBACK");
+    assert.equal(S.recoverBankConnectionState(conn).transactionState, "clean");
+    assert.equal(auditCount(), before, "确认回滚后所有未提交写入必须消失");
+  } finally {
+    try { conn.exec = realExec; } catch { /* ignore */ }
+    try { conn.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("导入失败审计：回滚未确认时如实标记未留痕，未知连接禁止成功复用（真实 COMMIT_BUSY + 单点注入）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wb-bank-import-audit-"));
+  const { conn, file } = legacyOnlyDb(dir, "import-audit.db", "DELETE");
+  const reader = new DatabaseSync(file);
+  try {
+    const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    assert.equal(migrated.migrated, true);
+    B.registerBankAccount(conn, {
+      accountSetId: 1, bankAccountId: "BANK-AUDIT", sourceId: "src-1", glAccountCode: "1002",
+    });
+    const options = {
+      accountSetId: 1, bankAccountId: "BANK-AUDIT", sourceId: "src-1", period: "2026-01",
+      batchId: "AUDIT-1",
+      csvText: csvAmountDirection([{ date: "2026-01-05", summary: "收款", amount: "10.00", direction: "inflow", refId: "AU-1" }]),
+      mapping: MAPPING_AMOUNT_DIRECTION,
+    };
+    const realExec = conn.exec.bind(conn);
+    let injected = 0;
+    // 真实读事务让导入的 COMMIT 撞 SQLITE_BUSY；再只注入一次 ROLLBACK 的 I/O 错误（非实测磁盘故障）。
+    reader.exec("BEGIN");
+    reader.prepare("SELECT COUNT(*) AS n FROM account_sets").get();
+    conn.exec = (sql) => {
+      if (/^ROLLBACK/i.test(String(sql)) && injected === 0) {
+        injected += 1;
+        throw ioError("rollback");
+      }
+      return realExec(sql);
+    };
+    let error = null;
+    try { B.importBankBatch(conn, options); } catch (e) { error = e; }
+    assert.equal(error?.code, "bank_transaction_rollback_failed");
+    assert.equal(error?.auditRecorded, false, "回滚未确认时不得声称失败已留痕");
+    assert.match(String(error?.auditFailure), /未确认|未写入/, "必须如实说明失败审计未写入");
+    assert.equal(conn.isTransaction, true);
+    assert.equal(S.bankConnectionState(conn).writable, false);
+
+    // 未知连接不能成功复用：同样参数再导入直接结构化拒绝，而不是「恰好成功」。
+    assert.throws(() => B.importBankBatch(conn, options), (e) => e.code === "bank_connection_state_unknown");
+    assert.throws(() => B.listTransactionsView(conn, { accountSetId: 1, bankAccountId: "BANK-AUDIT" }),
+      (e) => e.code === "bank_connection_state_unknown");
+
+    conn.exec = realExec;
+    realExec("ROLLBACK");
+    reader.exec("COMMIT");
+    assert.equal(S.recoverBankConnectionState(conn).transactionState, "clean");
+    assert.equal(Number(conn.prepare(`SELECT COUNT(*) AS n FROM bank_batches WHERE batch_id='AUDIT-1'`).get().n), 0,
+      "未知态下不得留下伪造的失败批次 / 审计记录");
+
+    // 恢复后重新导入成功，批次状态是 completed（不是「被记成失败后又冒充成功」）。
+    const retried = B.importBankBatch(conn, options);
+    assert.equal(retried.replay, false);
+    assert.equal(retried.transactionIds.length, 1);
+    const batch = S.getBatch(conn, { accountSetId: 1, bankAccountId: "BANK-AUDIT", batchId: "AUDIT-1" });
+    assert.equal(batch.status, "completed");
+    assert.equal(Number(conn.prepare(`SELECT COUNT(*) AS n FROM bank_transactions WHERE account_set_id=1 AND bank_account_id='BANK-AUDIT'`).get().n), 1);
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    try { reader.close(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
 });

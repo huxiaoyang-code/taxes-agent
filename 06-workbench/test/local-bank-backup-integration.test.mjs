@@ -887,6 +887,109 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
       expectRestoreNotCreated(claimed, "manifest-claims-bank");
     }
   });
+
+  await test("索引键语义 + 备份恢复：健康备份恢复后键语义保留、大小写不同稳定 ID 可继续导入；collation 漂移被产品入口当场拒绝（备份层仍漏验，等后续窗同步）", async () => {
+    const { dir, wire } = buildBankScenario();
+    const dbPath = join(dir, "workbench.db");
+    const files = join(dir, "keys-import");
+    fs.mkdirSync(files, { recursive: true });
+    const mappingPath = join(files, "mapping.json");
+    fs.writeFileSync(mappingPath, JSON.stringify({
+      columns: { date: "日期", summary: "摘要", amount: "金额", direction: "方向", refId: "流水号" },
+      amountMode: "amount_direction",
+      directionLabels: { inflow: ["收"], outflow: ["付"] },
+      currency: "CNY",
+    }), "utf8");
+    const csvPath = join(files, "case-refs.csv");
+    fs.writeFileSync(csvPath, "日期,摘要,金额,方向,流水号\n2026-01-05,收款甲,10.00,收,Ref-A\n2026-01-06,收款乙,20.00,收,ref-a\n", "utf8");
+    // 恢复库用另一份内容（不同流水号命名空间），避免同一文件被识别为历史批次回放。
+    const restoredCsvPath = join(files, "case-refs-restored.csv");
+    fs.writeFileSync(restoredCsvPath, "日期,摘要,金额,方向,流水号\n2026-01-15,收款丙,30.00,收,Ref-B\n2026-01-16,收款丁,40.00,收,ref-b\n", "utf8");
+    const importArgs = (dbFile, batchId, csvFile = csvPath) => [
+      "import", "--db", dbFile, "--account-set", String(wire.setA), "--bank-account", "BANK-A",
+      "--source", "local-statement", "--period", "2026-01", "--batch", batchId,
+      "--csv", csvFile, "--mapping", mappingPath,
+    ];
+    const first = okBank(importArgs(dbPath, "CASE-REFS"));
+    assertEqual(first.transactionIds.length, 2, "健康结构与真实 DDL 下只差大小写的稳定 ID 必须两条都导入");
+
+    // 健康备份 → verify → restore-new：恢复库的索引键语义必须保留，产品入口可继续导入。
+    const backupDir = join(ROOT, `keys-backup-${++seq}`);
+    const created = LB.createBackup({ dbPath, outDir: backupDir });
+    assert(created.ok === true, `健康 bank 备份应成功：${JSON.stringify(created)}`);
+    assert(LB.verifyBackup({ backupDir }).ok === true, "健康 bank 备份应可验证");
+    const restored = LB.restoreNew({ backupDir, targetDir: join(ROOT, `keys-restored-${++seq}`) });
+    assert(restored.ok === true, `健康备份应可恢复到全新目标：${JSON.stringify(restored)}`);
+    const restoredPath = join(restored.targetDir, LB.TARGET_DATABASE_FILE);
+    const restoredConn = new DatabaseSync(restoredPath);
+    try {
+      assertEqual(S.bankSchemaContract(restoredConn).ok, true, "恢复库必须满足完整索引键语义契约（BINARY 升序普通列）");
+      const keys = restoredConn.prepare("SELECT * FROM pragma_index_xinfo('idx_bank_txn_ref')").all()
+        .filter((row) => Number(row.key) === 1)
+        .map((row) => [String(row.name), String(row.coll).toUpperCase(), Number(row.desc)]);
+      assertEqual(JSON.stringify(keys), JSON.stringify([
+        ["account_set_id", "BINARY", 0], ["bank_account_id", "BINARY", 0],
+        ["source_id", "BINARY", 0], ["bank_ref_id", "BINARY", 0],
+      ]), "恢复后 idx_bank_txn_ref 的键语义必须与产品真实 DDL 一致");
+    } finally { restoredConn.close(); }
+    const restoredImport = okBank(importArgs(restoredPath, "CASE-REFS-RESTORED", restoredCsvPath));
+    assertEqual(restoredImport.transactionIds.length, 2, "恢复库必须仍能导入只差大小写的两条稳定 ID");
+
+    // collation 漂移：先证明它真的改变写入结果（不是等价写法），再证明产品入口失败关闭。
+    // 备份层当前只比列名（A 窗不改 backup），已知缺口已登记。
+    {
+      const probePath = join(ROOT, `keys-collation-probe-${++seq}.db`);
+      const source = new DatabaseSync(dbPath);
+      try { source.prepare("VACUUM INTO ?").run(probePath); } finally { source.close(); }
+      const probe = new DatabaseSync(probePath);
+      try {
+        probe.exec(`DROP INDEX idx_bank_txn_ref`);
+        let collision = null;
+        try {
+          probe.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
+                         WHERE bank_ref_id IS NOT NULL`);
+        } catch (error) { collision = error; }
+        assert(collision && /UNIQUE|constraint/i.test(String(collision.message)),
+          "已导入 Ref-A / ref-a 的库改成 COLLATE NOCASE 会直接撞 UNIQUE：collation 改变真实写入结果");
+      } finally { probe.close(); }
+    }
+
+    // 一份干净 bank 库（无大小写冲突数据）制造 collation 漂移，看备份 / 恢复 / 产品三层的实际行为。
+    const second = buildBankScenario();
+    const secondPath = join(second.dir, "workbench.db");
+    const tamperedPath = join(ROOT, `keys-tampered-${++seq}.db`);
+    {
+      const source = new DatabaseSync(secondPath);
+      try { source.prepare("VACUUM INTO ?").run(tamperedPath); } finally { source.close(); }
+      const tampered = new DatabaseSync(tamperedPath);
+      try {
+        tampered.exec(`DROP INDEX idx_bank_txn_ref`);
+        tampered.exec(`CREATE UNIQUE INDEX idx_bank_txn_ref
+                         ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
+                         WHERE bank_ref_id IS NOT NULL`);
+        const state = S.bankSchemaContract(tampered);
+        assertEqual(state.ok, false, "collation 漂移必须破坏产品结构契约");
+        assert(state.problems.some((p) => p.code === "bank_schema_index_mismatch"
+          && p.detail.index === "idx_bank_txn_ref"), "必须给出结构化索引键不符证据");
+      } finally { tampered.close(); }
+    }
+    const tamperedBackup = join(ROOT, `keys-tampered-backup-${++seq}`);
+    const tamperedCreated = LB.createBackup({ dbPath: tamperedPath, outDir: tamperedBackup });
+    assert(tamperedCreated.ok === true, "已知缺口：备份创建仍会接受 collation 漂移的 bank 库");
+    const tamperedVerified = LB.verifyBackup({ backupDir: tamperedBackup });
+    // A 窗不改备份实现：备份验证器当前只比索引列名 / UNIQUE / partial / 谓词，键 collation 仍漏验。
+    // 后续备份窗同步核心修复后，这里应当改为被拒绝（届时更新本断言，不得静默放宽）。
+    assert(tamperedVerified.ok === true, "已知缺口：备份 verify 仍放行 collation 漂移（待后续窗同步）");
+    const tamperedRestore = LB.restoreNew({ backupDir: tamperedBackup, targetDir: join(ROOT, `keys-tampered-restore-${++seq}`) });
+    assert(tamperedRestore.ok === true, "已知缺口：恢复仍会成功（备份层尚未校验键语义）");
+    const tamperedRestoredPath = join(tamperedRestore.targetDir, LB.TARGET_DATABASE_FILE);
+    // 但产品入口必须失败关闭：同一个恢复库上的真实导入给结构化结构错误，不会静默按 NOCASE 写库。
+    const rejected = runBankCli(importArgs(tamperedRestoredPath, "CASE-REFS-TAMPERED"));
+    assertEqual(rejected.status, 5, `漂移恢复库上的导入必须 exit 5（实际 ${rejected.status}：${rejected.stdout}${rejected.stderr}）`);
+    assert(rejected.json && rejected.json.ok === false, "漂移恢复库上的导入不得成功");
+    assertEqual(rejected.json.error.code, "bank_schema_corrupt", "漂移恢复库必须给结构化结构错误");
+  });
 } finally {
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);

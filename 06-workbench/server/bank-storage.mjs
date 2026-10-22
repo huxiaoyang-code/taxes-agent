@@ -58,6 +58,31 @@ const tableContract = (columnSpecs, primaryKey) => Object.freeze({
 });
 
 /**
+ * 索引契约条目：列序 + UNIQUE / partial / 谓词 + **完整键语义**（`keys`）+ 来源 `origin`。
+ *
+ * 产品真实 DDL 里每个索引键都是「普通列 + `BINARY` 排序规则 + 升序 + 非表达式」。把这一事实
+ * 写进契约（而不是只记列名），才能拒绝 `COLLATE NOCASE` / `RTRIM` / `DESC` / 表达式等
+ * 改变真实写入行为的同名索引。`origin` 固定来源：命名索引只能来自 `CREATE INDEX`（`c`），
+ * 自动索引只能来自表级 PRIMARY KEY（`pk`）或 UNIQUE 约束（`u`）。
+ *
+ * 注意：LOCAL-06 备份验证器当前只用条目里的 `index / table / columns / unique / partial / where`
+ * 比对（`keys` / `origin` 尚未接入备份侧），该缺口已登记为后续备份窗同步项；
+ * 产品自身入口一律按本契约完整拒绝。
+ */
+const indexContract = ({ index = null, table, columns, unique, partial = false, where = null, origin }) => Object.freeze({
+  index,
+  table,
+  columns: Object.freeze([...columns]),
+  unique,
+  partial,
+  where: where ?? null,
+  origin,
+  keys: Object.freeze(columns.map((column) => Object.freeze({
+    column, collation: "BINARY", desc: false, expression: false, rowid: false,
+  }))),
+});
+
+/**
  * 组件结构契约（v1）：表 / 关键列 / 主键 / 索引（含 UNIQUE 与部分索引）/ 外键动作。
  *
  * 用途：
@@ -224,30 +249,36 @@ export const BANK_SCHEMA_CONTRACT = Object.freeze({
     }, ["id"]),
   }),
   /**
-   * 索引契约：`index` 有名字时按名字核对，没有名字时按（表 + 列 + unique + partial + 谓词）签名核对
-   * （用于表级 UNIQUE 约束生成的自动索引）。部分索引的 `where` 写契约谓词，运行时与
-   * `sqlite_master.sql` 中的实际谓词做规范化整体比对。
+   * 索引契约：`index` 有名字时按名字核对，没有名字时按（来源 + 表 + 完整键语义 + unique + partial + 谓词）
+   * 签名核对（用于表级 PRIMARY KEY / UNIQUE 约束生成的自动索引）。部分索引的 `where` 写契约谓词，
+   * 运行时与 `sqlite_master.sql` 中的实际谓词做规范化整体比对。
+   *
+   * 每个条目同时固定**完整索引键语义**（`keys`：逐键列名 / collation / 方向 / 是否表达式 / 是否 rowid）
+   * 与索引来源 `origin`（命名索引只能来自 `CREATE INDEX` 的 `c`；自动索引只能是 `pk` / `u`）。
+   * 只比列名会让「同样的列名但 collation 变了」蒙混过关：例如给 `bank_ref_id` 加
+   * `COLLATE NOCASE`，`Ref-A` 与 `ref-a` 会在 UNIQUE 索引里相撞，同一份流水从「2 条成功」
+   * 变成「第 2 条 UNIQUE 失败」。方向（DESC）与表达式同理。
    */
   indexes: Object.freeze([
-    { index: "idx_bank_accounts_gl", table: "bank_accounts", columns: ["account_set_id", "gl_account_code"], unique: true, partial: false },
-    { index: "idx_bank_accounts_source", table: "bank_accounts", columns: ["account_set_id", "source_id"], unique: false, partial: false },
-    { table: "bank_accounts", columns: ["account_set_id", "bank_account_id"], unique: true, partial: false },
-    { index: "idx_bank_batches_file", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "source_id", "content_sha256"], unique: false, partial: false },
-    { index: "idx_bank_batches_status", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
-    { table: "bank_batches", columns: ["account_set_id", "bank_account_id", "batch_id"], unique: true, partial: false },
-    { index: "idx_bank_txn_ref", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "bank_ref_id"], unique: true, partial: true, where: "bank_ref_id IS NOT NULL" },
-    { index: "idx_bank_txn_batch_row", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
-    { index: "idx_bank_txn_scope_date", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "txn_date"], unique: false, partial: false },
-    { index: "idx_bank_txn_fingerprint", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "row_fingerprint"], unique: false, partial: false },
-    { index: "idx_bank_batch_rows_txn", table: "bank_batch_rows", columns: ["transaction_id"], unique: false, partial: false },
-    { table: "bank_batch_rows", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
-    { index: "idx_bank_ambiguities_status", table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
-    { table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, partial: false },
-    { index: "idx_bank_matches_active_txn", table: "bank_matches", columns: ["transaction_id"], unique: true, partial: true, where: "status = 'confirmed'" },
-    { index: "idx_bank_matches_active_entry", table: "bank_matches", columns: ["account_set_id", "entry_id"], unique: true, partial: true, where: "status = 'confirmed'" },
-    { index: "idx_bank_matches_scope", table: "bank_matches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, partial: false },
-    { index: "idx_bank_audit_scope", table: "bank_audit_events", columns: ["account_set_id", "bank_account_id", "event_type"], unique: false, partial: false },
-    { index: "idx_bank_reconcile_scope", table: "bank_reconcile_runs", columns: ["account_set_id", "bank_account_id", "period", "as_of"], unique: false, partial: false },
+    indexContract({ index: "idx_bank_accounts_gl", table: "bank_accounts", columns: ["account_set_id", "gl_account_code"], unique: true, origin: "c" }),
+    indexContract({ index: "idx_bank_accounts_source", table: "bank_accounts", columns: ["account_set_id", "source_id"], unique: false, origin: "c" }),
+    indexContract({ table: "bank_accounts", columns: ["account_set_id", "bank_account_id"], unique: true, origin: "pk" }),
+    indexContract({ index: "idx_bank_batches_file", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "source_id", "content_sha256"], unique: false, origin: "c" }),
+    indexContract({ index: "idx_bank_batches_status", table: "bank_batches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, origin: "c" }),
+    indexContract({ table: "bank_batches", columns: ["account_set_id", "bank_account_id", "batch_id"], unique: true, origin: "pk" }),
+    indexContract({ index: "idx_bank_txn_ref", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "bank_ref_id"], unique: true, partial: true, where: "bank_ref_id IS NOT NULL", origin: "c" }),
+    indexContract({ index: "idx_bank_txn_batch_row", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, origin: "c" }),
+    indexContract({ index: "idx_bank_txn_scope_date", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "txn_date"], unique: false, origin: "c" }),
+    indexContract({ index: "idx_bank_txn_fingerprint", table: "bank_transactions", columns: ["account_set_id", "bank_account_id", "source_id", "row_fingerprint"], unique: false, origin: "c" }),
+    indexContract({ index: "idx_bank_batch_rows_txn", table: "bank_batch_rows", columns: ["transaction_id"], unique: false, origin: "c" }),
+    indexContract({ table: "bank_batch_rows", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, origin: "u" }),
+    indexContract({ index: "idx_bank_ambiguities_status", table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "status"], unique: false, origin: "c" }),
+    indexContract({ table: "bank_ambiguities", columns: ["account_set_id", "bank_account_id", "batch_id", "row_index"], unique: true, origin: "u" }),
+    indexContract({ index: "idx_bank_matches_active_txn", table: "bank_matches", columns: ["transaction_id"], unique: true, partial: true, where: "status = 'confirmed'", origin: "c" }),
+    indexContract({ index: "idx_bank_matches_active_entry", table: "bank_matches", columns: ["account_set_id", "entry_id"], unique: true, partial: true, where: "status = 'confirmed'", origin: "c" }),
+    indexContract({ index: "idx_bank_matches_scope", table: "bank_matches", columns: ["account_set_id", "bank_account_id", "status"], unique: false, origin: "c" }),
+    indexContract({ index: "idx_bank_audit_scope", table: "bank_audit_events", columns: ["account_set_id", "bank_account_id", "event_type"], unique: false, origin: "c" }),
+    indexContract({ index: "idx_bank_reconcile_scope", table: "bank_reconcile_runs", columns: ["account_set_id", "bank_account_id", "period", "as_of"], unique: false, origin: "c" }),
   ]),
   /** 外键契约：列顺序、目标表 / 列与 `ON UPDATE` / `ON DELETE` 动作都必须与 DDL 一致；
    *  运行时按表比较完整集合（含重复约束），未列外键的表实际也必须没有外键。 */
@@ -282,7 +313,10 @@ export const parseBankColumnSpec = (spec) => {
  *  - `tables[].columns` 是列规范对象（类型 / NOT NULL / 默认值），不是只有列名；
  *  - `foreignKeys[].actions` 固定 `ON DELETE` / `ON UPDATE` / `MATCH`（未声明的按 SQLite 默认
  *    `NO ACTION` / `NONE`）；
- *  - `indexes` 保留名字（若有）、列序、UNIQUE / partial 与规范化后的部分索引谓词；
+ *  - `indexes` 保留名字（若有）、列序、UNIQUE / partial 与规范化后的部分索引谓词，并携带
+ *    `keys`（逐键 collation / 方向 / 是否表达式）与 `origin`（`c` / `pk` / `u`）；
+ *    **备份验证器当前只读取 name / columns / unique / partial / where**，键语义与来源由
+ *    `bankSchemaContract` 在产品入口拒绝，备份侧同步已登记为后续窗（未完成不冒充已完成）；
  *  - `triggers` / `views` 固定为空：本版本真实 DDL 不创建任何触发器或视图，
  *    备份验证器会把任何引用 `bank_*` 的未登记触发器 / 视图当成未知对象拒绝。
  */
@@ -460,18 +494,37 @@ export const canonicalSqlCondition = canonicalCondition;
 /** 供备份 / 恢复验证器从 sqlite_master 取部分索引的 WHERE 原文。 */
 export const indexWherePredicate = indexWhereSql;
 
+/**
+ * 索引事实：名字 / 来源 / UNIQUE / partial / 真实谓词 / **完整键语义**。
+ * 用 `pragma_index_xinfo` 而不是 `pragma_index_info`：只有 xinfo 才给出每个键的
+ * collation（`coll`）、方向（`desc`）与是否表达式（`cid === -2` / 名字为 null），
+ * 这些都会改变 UNIQUE / 排序的真实语义。
+ */
 function indexSignatures(db, table) {
   return db.prepare(`PRAGMA index_list(${table})`).all().map((idx) => {
     const name = String(idx.name);
     const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`).get(name);
+    const keys = db.prepare(`SELECT * FROM pragma_index_xinfo(?)`).all(name)
+      .filter((key) => Number(key.key) === 1)
+      .sort((a, b) => Number(a.seqno) - Number(b.seqno))
+      .map((key) => {
+        const cid = Number(key.cid);
+        return {
+          column: key.name === null || key.name === undefined ? null : String(key.name),
+          collation: String(key.coll ?? "BINARY").toUpperCase(),
+          desc: Number(key.desc) === 1,
+          expression: cid === -2,
+          rowid: cid === -1,
+        };
+      });
     return {
       name,
       unique: Number(idx.unique) === 1,
       partial: Number(idx.partial) === 1,
       origin: String(idx.origin ?? ""),
-      columns: db.prepare(`PRAGMA index_info(${idx.name})`).all()
-        .sort((a, b) => Number(a.seqno) - Number(b.seqno))
-        .map((c) => String(c.name)),
+      // 列名只从键语义派生，避免出现「键里有 NOCASE / 表达式，columns 却仍是普通列名」。
+      columns: keys.map((key) => key.column),
+      keys,
       // 部分索引的实际 WHERE 谓词（规范化后整体比对）；普通索引必须为 null。
       where: canonicalCondition(indexWhereSql(row?.sql)),
     };
@@ -636,20 +689,40 @@ export function bankSchemaContract(db) {
     return indexesByTable.get(table);
   };
   const matchedIndexes = new Map();
+  // 契约键语义归一：漏写 collation / desc / expression 时按产品真实 DDL 的默认（BINARY / 升序 / 普通列）。
+  const contractKeys = (want) => (want.keys ?? []).map((key) => ({
+    column: key.column ?? null,
+    collation: String(key.collation ?? "BINARY").toUpperCase(),
+    desc: key.desc === true,
+    expression: key.expression === true,
+    rowid: key.rowid === true,
+  }));
+  const sameKeys = (actualKeys, wantedKeys) => actualKeys.length === wantedKeys.length
+    && actualKeys.every((key, i) => {
+      const want = wantedKeys[i];
+      return key.column === want.column
+        && key.collation === want.collation
+        && key.desc === want.desc
+        && key.expression === want.expression
+        && key.rowid === want.rowid;
+    });
   for (const want of BANK_SCHEMA_CONTRACT.indexes) {
     const have = indexesFor(want.table);
     const wantWhere = canonicalCondition(want.where);
+    const wantKeys = contractKeys(want);
     const signature = (idx) => idx.unique === want.unique && idx.partial === want.partial
-      && sameList(idx.columns, [...want.columns]) && idx.where === wantWhere;
-    // 有名字的索引必须按名字找到，再整体比对列 / unique / partial / 实际 WHERE 谓词；
-    // 无名字的是表级主键 / UNIQUE 约束生成的自动索引，按完整签名匹配。
-    const match = have.find((idx) => (want.index ? idx.name === want.index : signature(idx)));
+      && sameList(idx.columns, [...want.columns]) && idx.where === wantWhere
+      && sameKeys(idx.keys, wantKeys);
+    // 有名字的索引必须按名字找到，再整体比对来源 / 列 / unique / partial / 实际 WHERE 谓词 / 完整键语义；
+    // 无名字的是表级 PRIMARY KEY / UNIQUE 约束生成的自动索引，按来源 + 完整签名匹配。
+    const match = have.find((idx) => (want.index ? idx.name === want.index : idx.origin === want.origin && signature(idx)));
     if (!match) {
       problems.push({
         code: "bank_schema_index_missing",
         detail: {
           table: want.table, index: want.index ?? null, columns: [...want.columns],
           unique: want.unique, partial: want.partial, where: want.where ?? null,
+          origin: want.origin ?? null, keys: wantKeys,
         },
       });
       continue;
@@ -657,24 +730,24 @@ export function bankSchemaContract(db) {
     const used = matchedIndexes.get(want.table) ?? new Set();
     used.add(match.name);
     matchedIndexes.set(want.table, used);
-    if (!signature(match)) {
+    if (!signature(match) || match.origin !== want.origin) {
       problems.push({
         code: "bank_schema_index_mismatch",
         detail: {
           table: want.table, index: match.name,
           expected: {
             columns: [...want.columns], unique: want.unique, partial: want.partial,
-            where: want.where ?? null,
+            where: want.where ?? null, origin: want.origin ?? null, keys: wantKeys,
           },
           actual: {
             columns: match.columns, unique: match.unique, partial: match.partial,
-            where: match.where,
+            where: match.where, origin: match.origin, keys: match.keys,
           },
         },
       });
     }
   }
-  // 契约之外的额外索引同样拒绝：未登记的 UNIQUE / partial 索引会改变真实写入行为。
+  // 契约之外的额外索引同样拒绝：未登记的 UNIQUE / partial / 表达式索引会改变真实写入行为。
   for (const table of Object.keys(BANK_SCHEMA_CONTRACT.tables)) {
     if (!columnsByTable.has(table)) continue;
     const used = matchedIndexes.get(table) ?? new Set();
@@ -684,7 +757,7 @@ export function bankSchemaContract(db) {
         code: "bank_schema_index_unexpected",
         detail: {
           table, index: idx.name, columns: idx.columns, unique: idx.unique,
-          partial: idx.partial, where: idx.where, origin: idx.origin,
+          partial: idx.partial, where: idx.where, origin: idx.origin, keys: idx.keys,
         },
       });
     }
@@ -765,6 +838,8 @@ export function bankSchemaContract(db) {
  * 所有写入口（登记 / 导入 / 匹配 / 歧义 / 对账）都经由 resolveBankScope 等调用本函数。
  */
 export function assertBankSchemaReady(db) {
+  // 回滚未确认的连接可能仍持着未提交的银行写入：在结构 / 版本检查之前就要拒绝继续读写。
+  assertConnectionUsable(db);
   const state = bankSchemaContract(db);
   if (state.ok) return state;
   throw bankError(state.code, state.message, {
@@ -816,26 +891,161 @@ export function bankSchemaState(db) {
 
 // ------------------------------------------------------------------ 事务
 const txnDepth = new WeakMap();
+/** 回滚未确认（failed / unknown）的连接：在调用方明确恢复或丢弃前，禁止继续银行读写。 */
+const unusableConnections = new WeakMap();
 
-/** 显式事务（外层 BEGIN IMMEDIATE，嵌套使用 SAVEPOINT）。失败回滚并原样抛错。 */
+/**
+ * 连接事务状态：`clean`（可继续用）或 `rollback_unconfirmed`（上一次回滚未确认）。
+ * 回滚失败后连接可能仍持有未提交写入，不能在下次操作里假装成功。
+ */
+export function bankConnectionState(db) {
+  const depth = txnDepth.get(db) || 0;
+  const failure = unusableConnections.get(db) ?? null;
+  return {
+    transactionDepth: depth,
+    transactionState: failure ? "rollback_unconfirmed" : "clean",
+    writable: !failure,
+    stage: failure ? failure.stage : null,
+    transactionActive: failure ? failure.transactionActive : false,
+  };
+}
+
+/**
+ * 明确恢复连接：只在调用方已确认连接不再持有未决事务（回滚成功 / 丢弃并重建连接）后才解除阻断。
+ * 仍在事务里就拒绝恢复，避免把「未提交写入」当成已清理。
+ */
+export function recoverBankConnectionState(db) {
+  const failure = unusableConnections.get(db);
+  if (!failure) return { transactionState: "clean", recovered: false };
+  const active = typeof db?.isTransaction === "boolean" ? db.isTransaction : null;
+  if (active !== false) {
+    throw bankError("bank_connection_recovery_refused",
+      "连接仍处于未决事务，必须先确认回滚成功或丢弃该连接后再恢复", {
+        transactionActive: active,
+      });
+  }
+  unusableConnections.delete(db);
+  txnDepth.delete(db);
+  return { transactionState: "clean", recovered: true };
+}
+
+/** 未知态连接的写 / 读门槛：固定错误 + 固定标志，不回显原始 SQL 或库路径。 */
+function assertConnectionUsable(db) {
+  const failure = unusableConnections.get(db);
+  if (!failure) return;
+  throw bankError("bank_connection_state_unknown",
+    "上一次事务回滚未确认，连接可能仍持有未提交写入；已停止继续银行读写，请先确认回滚成功或丢弃连接", {
+      stage: failure.stage,
+      transactionState: "rollback_unconfirmed",
+      transactionActive: failure.transactionActive,
+    });
+}
+
+const markConnectionUnknown = (db, stage) => {
+  const active = typeof db?.isTransaction === "boolean" ? db.isTransaction : null;
+  unusableConnections.set(db, { stage, transactionActive: active });
+  // 未知连接不再当作可嵌套事务，避免外层把内层失败当成可继续。
+  txnDepth.delete(db);
+  return active;
+};
+
+/** 只保留形如错误码的令牌，避免把原始 SQL / 驱动文本 / 路径带进错误输出。 */
+const causeCodeToken = (error) => {
+  const code = error && typeof error.code === "string" ? error.code : null;
+  return code && /^[A-Za-z0-9_]{1,60}$/.test(code) ? code : null;
+};
+
+/** 回滚失败：**不**声称已回滚，给出固定状态标志。 */
+const rollbackUnconfirmedError = (stage, transactionActive, cause = null) => bankError(
+  "bank_transaction_rollback_failed",
+  "事务回滚未确认：连接可能仍持有未提交写入，已停止继续使用该连接；"
+  + "请先确认回滚成功或丢弃连接（不能把本次操作当成已回滚 / 已完成）",
+  {
+    stage,
+    rolledBack: false,
+    transactionState: "rollback_unconfirmed",
+    transactionActive,
+    ...(causeCodeToken(cause) ? { causeCode: causeCodeToken(cause) } : {}),
+  },
+);
+
+/** 事务结果类错误：已区分已确认回滚与 failed / unknown，不得被上层改写成「已回滚」。 */
+const isTransactionOutcomeError = (e) => e?.code === "bank_transaction_rollback_failed"
+  || e?.code === "bank_transaction_discarded"
+  || e?.code === "bank_connection_state_unknown";
+
+/** 回滚已确认（回滚命令真实成功）：可以明确说「本次操作未提交」，连接重归可用。 */
+const rollbackDiscardedError = (stage) => bankError(
+  "bank_transaction_discarded",
+  "本次操作未提交：失败后已确认回滚（未留下半成品）",
+  { stage, rolledBack: true, transactionState: "rolled_back", transactionActive: false },
+);
+
+/** 回滚命令：返回是否**确认**回滚成功；成功则清理未知标记，失败则把连接标记为未知态。 */
+const runRollback = (db, commands, stage) => {
+  try {
+    for (const sql of commands) db.exec(sql);
+    unusableConnections.delete(db);
+    return { rolledBack: true, transactionActive: false };
+  } catch {
+    return { rolledBack: false, transactionActive: markConnectionUnknown(db, stage) };
+  }
+};
+
+const rollbackCommandsFor = (savepoint) => (savepoint
+  ? [`ROLLBACK TO ${savepoint}`, `RELEASE ${savepoint}`]
+  : ["ROLLBACK"]);
+
+/**
+ * 显式事务（外层 BEGIN IMMEDIATE，嵌套使用 SAVEPOINT）。
+ *
+ * 失败时**必须区分三种结果**（不能一律说「已回滚」）：
+ *  - 回滚已确认：原错误原样上抛，连接可继续用（调用方看到的是业务失败，不是回滚失败）；
+ *  - 回滚失败 / 未知：给 `bank_transaction_rollback_failed` + `rolledBack:false`，并把连接标记为不可用
+ *    （后续银行读写给 `bank_connection_state_unknown`），绝不假称「已回滚 / 已安装 / 已留痕」；
+ *  - 内层回滚失败后外层已确认整体回滚：给 `bank_transaction_discarded` + `rolledBack:true`。
+ * 内层 SAVEPOINT 回滚失败即使被调用方吞掉，外层也**不会** COMMIT：整层放弃并如实报告。
+ * 未知态连接的恢复只能由调用方显式确认（`recoverBankConnectionState`）或丢弃连接后重建。
+ */
 export function inTransaction(db, fn) {
+  assertConnectionUsable(db);
   const depth = txnDepth.get(db) || 0;
   const savepoint = depth > 0 ? `bank_sp_${depth}` : null;
   if (savepoint) db.exec(`SAVEPOINT ${savepoint}`);
   else db.exec("BEGIN IMMEDIATE");
   txnDepth.set(db, depth + 1);
+  let out;
   try {
-    const out = fn();
+    out = fn();
+  } catch (e) {
+    const rollback = runRollback(db, rollbackCommandsFor(savepoint), savepoint ? "savepoint" : "begin");
+    txnDepth.set(db, depth);
+    if (!rollback.rolledBack) {
+      throw rollbackUnconfirmedError(savepoint ? "savepoint" : "begin", rollback.transactionActive, e);
+    }
+    // 内层回滚未确认、但本层已确认回滚（保存点或整个事务）：结果从「unknown」变成「已确认回滚」。
+    if (e && e.code === "bank_transaction_rollback_failed") throw rollbackDiscardedError("outer-rollback");
+    throw e;
+  }
+  // 内层回滚已经失败但错误被调用方吞掉：本层不得提交，整层放弃。
+  if (unusableConnections.has(db)) {
+    const rollback = runRollback(db, rollbackCommandsFor(savepoint), "abort");
+    txnDepth.set(db, depth);
+    if (!rollback.rolledBack) throw rollbackUnconfirmedError("abort", rollback.transactionActive, null);
+    throw rollbackDiscardedError("abort");
+  }
+  try {
     if (savepoint) db.exec(`RELEASE ${savepoint}`);
     else db.exec("COMMIT");
     txnDepth.set(db, depth);
     return out;
   } catch (e) {
-    try {
-      if (savepoint) { db.exec(`ROLLBACK TO ${savepoint}`); db.exec(`RELEASE ${savepoint}`); }
-      else db.exec("ROLLBACK");
-    } catch { /* 回滚失败时仍抛出原始错误 */ }
+    // COMMIT / RELEASE 失败（例如真实 SQLITE_BUSY）：事务可能仍活着，必须真的回滚才能说「已回滚」。
+    const rollback = runRollback(db, rollbackCommandsFor(savepoint), savepoint ? "release" : "commit");
     txnDepth.set(db, depth);
+    if (!rollback.rolledBack) {
+      throw rollbackUnconfirmedError(savepoint ? "release" : "commit", rollback.transactionActive, e);
+    }
     throw e;
   }
 }
@@ -1302,6 +1512,10 @@ function runComponentDdl(db, { from, creation, backup }) {
  * 业务写入，DDL 失败 / 备份失败整体回滚，因此不会把「备份之后、DDL 之前」的并发写入当成已保护。
  * VACUUM INTO 由注入的备份实现在**独立只读连接**上执行，不需要在本事务内执行。
  *
+ * 失败语义：只有 ROLLBACK 真实成功才返回 `bank_migration_failed` + `rolledBack:true`；
+ * 回滚失败 / 未确认时返回 `bank_transaction_rollback_failed` + `rolledBack:false`，
+ * 并把连接标为不可用（后续银行读写给 `bank_connection_state_unknown`），不假装「原库已回滚」。
+ *
  * @param {DatabaseSync} db 显式连接
  * @param {object} options
  * @param {string} options.dbPath 当前库文件路径（备份与创建事实都绑定它）
@@ -1313,6 +1527,8 @@ function runComponentDdl(db, { from, creation, backup }) {
 export async function ensureBankSchema(db, options = {}) {
   const { dbPath, receipt = null, backupService = null, dataDir = null } = options;
   if (!dbPath) throw bankError("db_path_required", "初始化银行组件必须显式提供库路径");
+  // 回滚未确认的连接可能仍持着未提交的组件 DDL / 版本行：不能在上面继续「安装 / 已初始化」判断。
+  assertConnectionUsable(db);
   const abs = resolve(String(dbPath));
   // 连接事实必须先绑定到 dbPath，之后的备份 / DDL 才可能是同一个库。
   assertDatabaseHandleMatchesPath(db, abs);
@@ -1341,11 +1557,15 @@ export async function ensureBankSchema(db, options = {}) {
         backup: null,
       }));
     } catch (e) {
+      // 回滚未确认 / 已确认放弃：原样上抛，不能改写成一个「已回滚」的安装失败。
+      if (isTransactionOutcomeError(e)) throw e;
       if (e && typeof e.code === "string" && e.code.startsWith("bank_schema_")) throw e;
-      throw bankError("bank_migration_failed", "银行组件结构初始化失败，原库已回滚", {
+      throw bankError("bank_migration_failed", "银行组件结构初始化失败，已确认回滚（未留下半成品）", {
         from,
         to: BANK_SCHEMA_VERSION,
-        reason: String(e?.message || e).slice(0, 200),
+        rolledBack: true,
+        transactionState: "rolled_back",
+        ...(causeCodeToken(e) ? { causeCode: causeCodeToken(e) } : {}),
       });
     }
   }
@@ -1363,7 +1583,7 @@ export async function ensureBankSchema(db, options = {}) {
     db.exec("BEGIN IMMEDIATE");
   } catch (e) {
     throw bankError("migration_lock_failed", "无法获取安装所需的数据库写锁，原库未改动", {
-      reason: String(e?.message || e).slice(0, 120),
+      ...(causeCodeToken(e) ? { causeCode: causeCodeToken(e) } : {}),
     });
   }
   try {
@@ -1371,7 +1591,8 @@ export async function ensureBankSchema(db, options = {}) {
     assertDatabaseHandleMatchesPath(db, abs);
     const current = bankSchemaContract(db);
     if (current.ok) {
-      db.exec("ROLLBACK");
+      const rollback = runRollback(db, ["ROLLBACK"], "already-initialized");
+      if (!rollback.rolledBack) throw rollbackUnconfirmedError("already-initialized", rollback.transactionActive, null);
       return {
         migrated: false, from: current.version, to: current.version,
         creation: "already-initialized", backup: null,
@@ -1396,17 +1617,24 @@ export async function ensureBankSchema(db, options = {}) {
     db.exec("COMMIT");
     return result;
   } catch (e) {
-    try { db.exec("ROLLBACK"); } catch { /* 回滚失败时仍抛出原始领域错误 */ }
+    // COMMIT 失败（例如真实 SQLITE_BUSY）时事务可能仍活着：只有 ROLLBACK 真实成功才能说「已回滚」。
+    const rollback = runRollback(db, ["ROLLBACK"], "migration");
+    if (!rollback.rolledBack) {
+      throw rollbackUnconfirmedError("migration", rollback.transactionActive, e);
+    }
+    if (isTransactionOutcomeError(e)) throw e;
     if (e && typeof e.code === "string" && (
       e.code.startsWith("bank_schema_")
       || e.code.startsWith("migration_")
       || e.code.startsWith("database_handle_")
       || e.code === "schema_not_supported"
     )) throw e;
-    throw bankError("bank_migration_failed", "银行组件结构初始化失败，原库已回滚", {
+    throw bankError("bank_migration_failed", "银行组件结构初始化失败，已确认回滚（未留下半成品）", {
       from,
       to: BANK_SCHEMA_VERSION,
-      reason: String(e?.message || e).slice(0, 200),
+      rolledBack: true,
+      transactionState: "rolled_back",
+      ...(causeCodeToken(e) ? { causeCode: causeCodeToken(e) } : {}),
     });
   }
 }

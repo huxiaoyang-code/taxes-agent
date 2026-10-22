@@ -542,3 +542,52 @@ test("CLI 版本表形状损坏：status / 写入命令都结构化拒绝（exit
   assert.deepEqual(snapshot(brokenPath), before, "版本表形状损坏拒绝时不得写入 / 补建任何表");
   rmSync(brokenPath, { force: true });
 });
+
+test("CLI 索引键语义漂移：COLLATE NOCASE / DESC / 表达式在任何命令动作前拒绝（exit 5）且不写入", () => {
+  const snapshot = (path) => {
+    const conn = new DatabaseSync(path);
+    try {
+      const names = conn.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all()
+        .map((r) => String(r.name)).filter((name) => name.startsWith("bank_")).sort();
+      const counts = Object.fromEntries(names.map((name) => [name,
+        Number(conn.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get().n)]));
+      return { names, counts };
+    } finally { conn.close(); }
+  };
+  const cases = [
+    ["nocase", `DROP INDEX idx_bank_txn_ref;
+                CREATE UNIQUE INDEX idx_bank_txn_ref
+                  ON bank_transactions (account_set_id, bank_account_id, source_id, bank_ref_id COLLATE NOCASE)
+                  WHERE bank_ref_id IS NOT NULL`, "idx_bank_txn_ref"],
+    ["desc", `DROP INDEX idx_bank_txn_batch_row;
+              CREATE UNIQUE INDEX idx_bank_txn_batch_row
+                ON bank_transactions (account_set_id, bank_account_id, batch_id, row_index DESC)`, "idx_bank_txn_batch_row"],
+    ["expression", `DROP INDEX idx_bank_txn_fingerprint;
+                    CREATE INDEX idx_bank_txn_fingerprint
+                      ON bank_transactions (account_set_id, bank_account_id, source_id, lower(row_fingerprint))`, "idx_bank_txn_fingerprint"],
+  ];
+  for (const [label, sql, indexName] of cases) {
+    const path = join(baseDir, `contract-keys-${label}.db`);
+    db.prepare("VACUUM INTO ?").run(path);
+    {
+      const conn = new DatabaseSync(path);
+      try { conn.exec(sql); } finally { conn.close(); }
+    }
+    const before = snapshot(path);
+    for (const args of [
+      ["status", "--db", path, "--account-set", String(setA.id), "--bank-account", "BANK-A"],
+      ["account-register", "--db", path, "--account-set", String(setA.id),
+        "--bank-account", `BANK-${label.toUpperCase()}`, "--source", "local-statement", "--gl-code", "1002"],
+    ]) {
+      const result = run(args);
+      assert.equal(result.status, 5, `${label}/${args[0]} exit=${result.status}\nSTDERR ${result.stderr}`);
+      assert.equal(result.stdout, "", `${label}: 失败时不得输出成功结果`);
+      const parsed = JSON.parse(result.stderr);
+      assert.equal(parsed.error.code, "bank_schema_corrupt", `${label}: 必须给结构错误`);
+      assert.ok(parsed.error.details.problems.some((p) => p.code === "bank_schema_index_mismatch"
+        && p.detail.index === indexName), `${label}: 必须给出 ${indexName} 的键语义不符证据`);
+    }
+    assert.deepEqual(snapshot(path), before, `${label}: 拒绝时不得写入 / 补建任何 bank_* 表`);
+    rmSync(path, { force: true });
+  }
+});

@@ -27,6 +27,7 @@ import {
 import {
   appendAuditEvent,
   assertBankSchemaReady,
+  bankConnectionState,
   bankError,
   bankSchemaState,
   countBatchesByStatus,
@@ -579,7 +580,14 @@ export function importBankBatch(db, options = {}) {
       };
     });
   } catch (e) {
-    // 业务事务已回滚；失败审计在独立事务里写，写入失败也如实返回。
+    // 只有「回滚已确认」的连接才能继续在独立事务里写失败审计；
+    // 回滚未确认 / 状态未知时不得假称「失败已留痕」，也不在未知连接上再开事务。
+    if (!bankConnectionState(db).writable) {
+      e.auditRecorded = false;
+      e.auditFailure = "连接事务状态未确认（回滚失败），本次失败审计未写入；需先恢复或丢弃连接";
+      throw e;
+    }
+    // 业务事务已确认回滚；失败审计在独立事务里写，写入失败也如实返回。
     const failure = {
       accountSetId: setId, bankAccountId: scope.account.bank_account_id, batchId: batch, sourceId: source,
       currency: "CNY", period, contentSha256: fileDigest, mappingFingerprint,
@@ -591,7 +599,12 @@ export function importBankBatch(db, options = {}) {
         e.auditRecorded = true;
       } catch (auditErr) {
         e.auditRecorded = false;
-        e.auditFailure = String(auditErr?.message || auditErr).slice(0, 200);
+        // 固定措辞 + 可选稳定错误码，不回显原始 SQL / 驱动文本 / 路径。
+        const auditCode = typeof auditErr?.code === "string" && /^[a-z][a-z0-9_]{2,60}$/i.test(auditErr.code)
+          ? auditErr.code : null;
+        e.auditFailure = auditCode
+          ? `失败审计未能写入（${auditCode}）`
+          : "失败审计未能写入（已如实返回）";
       }
     }
     throw e;
