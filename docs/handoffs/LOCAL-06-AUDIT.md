@@ -2,23 +2,30 @@
 
 - 日期：2026-10-22（本机时间）
 - 人类负责人：`huxiaoyang-code`（已核实）
-- 实现员工：本机 pi，主 / 唯一回退均为已核实的 tokenhub `deepseek-v4.1-flash`，新进程无会话持久化，
-  未使用子 agent；**未执行 commit / push / merge**，Git 由 root 管理。
-- 基线：`257f96275031eefa484699dd71bd012e2d221e51`（已合并 main）
-- 分支 / worktree：`codex/huxiaoyang-code/local-06-audit` / `D:/有数云fork/.worktrees/local-06-audit`
-- 远端载体：[Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
+- 实现员工：本机 pi，主 / 唯一回退均为已核实的 tokenhub `deepseek-v4.1-flash`；本次为新的 pi 进程、
+  无会话持久化，未启用子 agent；**未执行 commit / push / merge**，Git 由 root 管理。
+- 已审源码 head：`63d03840bff2d28a662514340e7b873f9997e149`（未参与实现的 `review_audit06_final`
+  通过原 5 项问题修复 + 后续 9 组复审）
+- 整合候选 head：`104336a5a66dd4ed43a31a2f618d0ebe7828bd8e`（由管理者将精确 `main`
+  `db6020aa381965d3143a4f1fd895a8cceaf8e937` 合入本分支形成；本包 9 文件与源码 head 逐字未变）
+- 基线：`257f96275031eefa484699dd71bd012e2d221e51`（A 包开发基线，已合并 main）
+- 分支：`codex/huxiaoyang-code/local-06-audit`
+- 远端载体：[Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54) / [Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)，均保持 OPEN
 - 契约：[LOCAL-AUDIT](../LOCAL-AUDIT.md) · 任务单：[tasks/LOCAL-06-AUDIT](../tasks/LOCAL-06-AUDIT.md)
 
 ## 1. 状态
 
-**A 包已按独审 5 项 + unknown 边界返工完成，待复审 / PR / 合并。B、C 未开始，未占用共享文件。**
+**A 包已通过最终独立审查（原 5 项 + 后续 9 组复审），已并入整合候选 head；
+本包未创建 PR、未合并，待文档更新后的最终 head 增量复核。B、C 未开始，未占用共享文件。**
 
-- 本轮只新增 9 个文件（4 代码 + 2 测试 + 3 文档），`git status` 无任何既有文件改动；
+- 包内共 9 个文件（4 代码 + 2 测试 + 3 文档），`63d0384` → `104336a` 之间逐字未变（`git diff` 为空），
+  未动任何既有源码 / 测试 / CLI / schema；
 - 未修改 `scripts/test-all.mjs` / `package.json`，新测试**不在** `npm test` 内；
-- 未读取 LOCAL-02 / backup / LOCAL-07 候选实现源码、日志或私有历史，未复制其候选代码；
+- 未读取其他包候选实现源码、日志或私有历史，未复制其候选代码（main 已含独立备份子包，本包不调用、
+  不依赖其实现细节）；
 - 未接触真实账套库、备份产物、税局凭据或私有数据目录；所有测试均为合成临时库；
 - **B / C 仍未接线**；既有库组件安装与真实 `createBackup` / `verifyBackup` / `restoreNew`、
-  安装备份流程均**未完成**；unknown → succeeded 只是显式核验结果，**不声称跨库原子**。
+  安装备份流程均**未完成**，现库仍一律拒绝；unknown → succeeded 只是显式核验结果，**不声称跨库原子**。
 
 ## 2. 实际交付
 
@@ -36,22 +43,31 @@
 
 ## 3. 实跑证据
 
-工作目录 `06-workbench`（基线 `257f962`）：
+工作目录 `06-workbench`（两个 head 必须区分）：
 
+```bash
+node test/local-audit.test.mjs          # 28/28，exit 0
+node test/local-restore-audit.test.mjs  # 22/22，exit 0
 ```
-node test/local-audit.test.mjs          → 28/28 通过，exit 0
-node test/local-restore-audit.test.mjs  → 22/22 通过，exit 0
-```
+
+| head | 实跑者 | 结果 |
+|---|---|---|
+| 已审源码 `63d0384` | 管理者 | `28/28`、`22/22`，exit 0 |
+| 整合候选 `104336a`（9 文件与 `63d0384` 逐字一致） | 管理者 | 合成临时库 `28/28`、`22/22`，exit 0 |
+
+历史实施自测记录（修复前代码）：`25/28`、`16/22`；不作为已审 `63d0384` 或整合 `104336a`
+的管理者红测证据。
 
 两套均：`mkdtemp` 临时目录 → 先设 `WORKBENCH_DATA_DIR` → 真实 `node:sqlite` 文件库 →
 真实子进程 CLI → 结束关闭句柄并删除本人创建的临时目录（清理失败即 exit≠0）。
 关键合成场景均以真实数据库行为验证（触发器 `RAISE(ABORT)` 注入、`BEGIN`/`SAVEPOINT` 回滚、
 关闭重开、`INSERT OR REPLACE` 实际拒绝、整库转储扫描哨兵），没有以 mock array / console 输出代替持久化。
 
-**修复前先红**：把同两份测试放到 `HEAD` 的 4 个代码文件上实跑，审计 `25/28`、ledger `16/22`
-（共 9 项失败，含 2 项原有加强用例）；修复后 `28/28`、`22/22`。原 25 / 18 项全部保留、未弱化。
-
-**未重跑**其它套件；不声称全套回归通过。仓库无 CI，不冒充 GitHub 第二账号批准。
+原始运行日志保存在本机 Git 忽略的管理目录，不入 Git，本文件不写本机路径。
+所有测试均为合成临时库，即真实 SQLite 行为验证均使用合成临时库；未做真库验证。
+只读 CLI 的产品边界（契约 §9）不变。
+本次文档更新**未重跑**业务测试；其它套件也未重跑，不声称全套回归通过。
+仓库无 CI，不冒充 GitHub 第二账号批准。
 
 ## 4. 关键设计决定（审查关注点）
 
@@ -94,19 +110,23 @@ node test/local-restore-audit.test.mjs  → 22/22 通过，exit 0
 
 | 项 | 依赖 |
 |---|---|
-| B：领域入口接线（`db.mjs` / `accounting.mjs` / `import-incremental.mjs`）+ 真实 HTTP / Agent / MCP 验收 | LOCAL-02 真正合并 + 核心独占窗口 + 已审 backup 支持 |
-| C：真实 `createBackup` / `verifyBackup` / `restoreNew`、安装备份、pending→reconcile、批量续跑 / fence 验收 | backup、LOCAL-07 实际合并或原 owner 明确转交 |
-| 既有库组件安装（先备份验证） | 已审 backup 模块 |
+| 本包收尾：文档更新后的最终 head 增量复核 → 建 PR / attach → 合并 | 原独立审查者（未参与实现）；主线合并锁在 root，本任务无合并权 |
+| B：领域入口接线（`db.mjs` / `accounting.mjs` / `import-incremental.mjs`）+ 真实 HTTP / Agent / MCP 验收 | LOCAL-02 真正合并 + 核心独占窗口 + 独立备份子包就位 |
+| C：真实 `createBackup` / `verifyBackup` / `restoreNew`、安装备份、pending→reconcile、批量续跑 / fence 验收 | 独立备份子包、LOCAL-07 实际合并或原 owner 明确转交 |
+| 既有库组件安装（先备份验证） | B 接线安装前后备份验证；本包只保留拒绝门槛 |
 | 多版本组件升级路径 | 后续包（当前仅 v1，未知更高版本拒绝） |
 | 原位恢复保护 / 版本回退 / Windows 交付 | 后续独立包 |
 
 **边界声明（不得省略）**：B / C 未接线；真实 `createBackup` / `verifyBackup` / `restoreNew`、
-安装备份流程与「pending → reconcile」实际接线都未完成；审计组件对既有业务库仍只给「明确拒绝」门槛；
+安装备份流程与「pending → reconcile」实际接线都未完成；现库安装仍一律拒绝；本包不具跨库原子事务；
 unknown → succeeded 是之后显式核验的结果，ledger 与业务库**非跨库原子**；不声称 LOCAL06 审计已覆盖全部动作。
 
 ## 6. 恢复本包现场的方法
 
-1. `git -C D:/有数云fork/.worktrees/local-06-audit status --short` 与 `git log --oneline -1` 核对基线；
-2. 直接运行 §3 两条命令（无需任何真实数据或端口）；
-3. 需要接口细节读 [LOCAL-AUDIT](../LOCAL-AUDIT.md) §11，不要从候选工作区猜实现；
-4. 下一部分（B）使用新进程 / 新会话，只载入任务单、本交接与 `docs/LOCAL-AUDIT.md`。
+1. 在本仓库（分支 `codex/huxiaoyang-code/local-06-audit`，不得直接改 main）核对 `git status --short` /
+   `git log --oneline -1`；变更范围应限于 4 代码 + 2 测试 + 本 3 个文档；A 包原语的已审源码 head 仍为
+   `63d0384`，合入 main 后的整合／文档 head 为 `104336a` 及其后续；
+2. 在 `06-workbench` 目录直接运行 §3 两条命令（无需任何真实数据或端口）；
+3. 需要接口细节读 [LOCAL-AUDIT](../LOCAL-AUDIT.md) §11，不要从其他候选分支猜实现；
+4. 最终 head 增量复核 → PR 由管理者 / 原独立审查者接手；B 包使用新进程 / 新会话，
+   只载入任务单、本交接与 `docs/LOCAL-AUDIT.md`。
