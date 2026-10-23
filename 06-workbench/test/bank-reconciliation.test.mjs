@@ -44,9 +44,12 @@ const B = await import("../server/bank-reconciliation.mjs");
 
 process.on("exit", () => {
   try { db.close(); } catch { /* ignore */ }
-  rmSync(dataDir, { recursive: true, force: true });
+  if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true });
 });
 
+const LB = await import("../server/local-backup.mjs");
+const coreFixture = LB.createBackup({ dbPath, outDir: join(fixtureRoot, "official-pristine-core") });
+assert.equal(coreFixture.ok, true, JSON.stringify(coreFixture));
 const coreUserVersion = db.prepare("PRAGMA user_version").get().user_version;
 const schema = await S.ensureBankSchema(db, { dbPath, receipt });
 assert.equal(schema.migrated, true);
@@ -186,7 +189,7 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
 
       // 备份校验不通过 -> migration_backup_invalid。
       const invalid = {
-        ...fakeBackupService(file2),
+        ...realBackupService(file2),
         verifyBackup: () => ({ ok: false, status: "corrupt" }),
       };
       await assert.rejects(
@@ -196,18 +199,18 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
       assert.equal(countIn(conn2, `SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'bank_%'`), 0);
 
       // 弱 mock 不得放行：verify 返回 true / 只有 integrity、create 不返回真实快照字段都要拒绝。
-      const booleanVerify = { ...fakeBackupService(file2), verifyBackup: () => true };
+      const booleanVerify = { ...realBackupService(file2), verifyBackup: () => true };
       await assert.rejects(
         () => S.ensureBankSchema(conn2, { dbPath: file2, backupService: booleanVerify }),
         (e) => e.code === "migration_backup_invalid",
       );
-      const integrityOnly = { ...fakeBackupService(file2), verifyBackup: () => ({ integrity: "ok" }) };
+      const integrityOnly = { ...realBackupService(file2), verifyBackup: () => ({ integrity: "ok" }) };
       await assert.rejects(
         () => S.ensureBankSchema(conn2, { dbPath: file2, backupService: integrityOnly }),
         (e) => e.code === "migration_backup_invalid",
       );
       const noSnapshotFacts = {
-        ...fakeBackupService(file2),
+        ...realBackupService(file2),
         createBackup: ({ outDir }) => ({ ok: true, status: "ok", backupDir: join(outDir, "fake-backup"), bytes: 1 }),
       };
       await assert.rejects(
@@ -216,9 +219,9 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
       );
       assert.equal(countIn(conn2, `SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'bank_%'`), 0);
 
-      // 仅顺序验证（不是 LOCAL-06 真实迁移验收）：DDL 只在备份校验返回 ok 之后发生。
+      // 包装官方真备份验证调用顺序：DDL 只在官方校验返回 ok 且源内容绑定后发生。
       const calls = [];
-      const full = fakeBackupService(file2);
+      const full = realBackupService(file2);
       const fake = {
         createBackup: (options) => { calls.push("createBackup"); return full.createBackup(options); },
         verifyBackup: (options) => { calls.push("verifyBackup"); return full.verifyBackup(options); },
@@ -230,7 +233,7 @@ test("迁移门槛：非本产品库 / 已有库无备份服务 / 备份失败 �
       assert.equal(S.bankSchemaVersion(conn2), 1);
     } finally { conn2.close(); }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -239,40 +242,23 @@ function countIn(conn, sql, ...args) {
 }
 
 function createLegacySchema(conn) {
-  conn.exec(`
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE account_sets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-      taxpayer_type TEXT NOT NULL DEFAULT '小规模纳税人',
-      accounting_standard TEXT NOT NULL DEFAULT '小企业会计准则',
-      start_period TEXT NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE accounts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
-      code TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, direction TEXT NOT NULL,
-      contra INTEGER NOT NULL DEFAULT 0, is_leaf INTEGER NOT NULL DEFAULT 1,
-      UNIQUE (account_set_id, code));
-    CREATE TABLE opening_balances (
-      account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
-      code TEXT NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0,
-      PRIMARY KEY (account_set_id, code));
-    CREATE TABLE periods (
-      account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
-      period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
-      PRIMARY KEY (account_set_id, period));
-    CREATE TABLE vouchers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
-      period TEXT NOT NULL, voucher_date TEXT NOT NULL, word TEXT NOT NULL DEFAULT '记',
-      number INTEGER NOT NULL, summary TEXT, status TEXT NOT NULL DEFAULT 'draft',
-      kind TEXT NOT NULL DEFAULT 'normal', created_at TEXT NOT NULL);
-    CREATE TABLE voucher_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      voucher_id INTEGER NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
-      line_no INTEGER NOT NULL, code TEXT NOT NULL, summary TEXT,
-      debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0);
-    INSERT INTO account_sets (name, start_period, created_at) VALUES ('合成旧库公司', '2025-12', '2025-12-01T00:00:00.000Z');
-  `);
+  // Official complete core fixture: retain every failure injection below, but do
+  // not let a shape-only fake bypass the real snapshot/source-content gate.
+  const seed = new DatabaseSync(join(coreFixture.backupDir, LB.SNAPSHOT_FILE), { readOnly: true });
+  try {
+    conn.exec("PRAGMA foreign_keys=OFF");
+    const tables = seed.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    for (const table of tables) conn.exec(table.sql);
+    for (const table of tables) {
+      const rows = seed.prepare('SELECT * FROM "'+table.name+'"').all();
+      for (const row of rows) {
+        const cols=Object.keys(row); conn.prepare('INSERT INTO "'+table.name+'" ('+cols.map(c=>'"'+c+'"').join(',')+') VALUES ('+cols.map(()=>'?').join(',')+')').run(...Object.values(row));
+      }
+    }
+    for (const row of seed.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index','trigger','view') AND sql IS NOT NULL ORDER BY type,name").all()) conn.exec(row.sql);
+    conn.exec("PRAGMA foreign_keys=ON");
+    conn.prepare("INSERT INTO account_sets (name,start_period,created_at) VALUES ('合成旧库公司','2025-12','2025-12-01T00:00:00.000Z')").run();
+  } finally { seed.close(); }
 }
 
 // ------------------------------------------------------------------ 账户登记
@@ -1342,26 +1328,8 @@ function bankRowCounts(conn) {
   ]));
 }
 
-/** 仅用于门槛顺序 / 结构篡改夹具的「形状完整」fake；真实备份链路由独立 integration 测试验证。 */
-function fakeBackupService(file) {
-  const sha = "a".repeat(64);
-  const manifest = {
-    snapshot: { file: "workbench.db.snapshot", bytes: 1, sha256: sha },
-    source: { file: basename(file) },
-    structure: { schemaVersion: 0 },
-    components: [],
-  };
-  return {
-    createBackup: ({ outDir }) => ({
-      ok: true, status: "ok", backupDir: join(outDir, "fake-backup"),
-      backupMeta: { snapshotBytes: 1, snapshotSha256: sha }, manifest,
-    }),
-    verifyBackup: () => ({
-      ok: true, status: "ok",
-      summary: { snapshotBytes: 1, snapshotSha256: sha }, manifest,
-    }),
-  };
-}
+/** Real official backups; individual callers still inject their original failure. */
+function realBackupService(_file) { return LB; }
 
 /** 造一个「已迁移好银行组件」的独立临时库（最小真实账务结构 + 1002 叶子科目 + 1 个账套）。 */
 async function isolatedComponentDb(dir, name) {
@@ -1371,7 +1339,7 @@ async function isolatedComponentDb(dir, name) {
   createLegacySchema(conn);
   conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
               VALUES (1, '1002', '银行存款', '资产', 'debit', 0, 1)`);
-  const backup = fakeBackupService(file);
+  const backup = realBackupService(file);
   const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: backup });
   assert.equal(migrated.migrated, true);
   assert.equal(S.bankSchemaContract(conn).ok, true, "健康组件库必须通过结构契约");
@@ -1516,7 +1484,7 @@ test("组件结构 / 版本契约：未来版本、矛盾版本、缺表 / 缺�
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1587,7 +1555,7 @@ test("部分索引契约核对真实 WHERE 谓词：同名同列同 UNIQUE/parti
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1715,7 +1683,7 @@ test("外键契约比较完整集合：audit / reconcile-runs 额外或重复外
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1759,7 +1727,7 @@ test("版本表形状缺失：contract / 状态 / 领域入口结构化拒绝，
       assert.deepEqual(bankRowCounts(ctx.conn), rowsBefore, "拒绝时不得写入任何 bank_* 数据");
     } finally { ctx.conn.close(); }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -1970,7 +1938,7 @@ test("索引键语义契约：collation / 方向 / 表达式 / 额外唯一索�
       } finally { ctx.conn.close(); }
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2028,7 +1996,7 @@ test("安装 COMMIT 真实失败（DELETE journal 读事务）：确认回滚后
     reader.exec("BEGIN");
     reader.prepare("SELECT COUNT(*) AS n FROM account_sets").get();
     let error = null;
-    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) }); } catch (e) { error = e; }
+    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) }); } catch (e) { error = e; }
     assert.equal(error?.code, "bank_migration_failed", "真实 COMMIT busy 必须结构化失败，而不是静默成功");
     assert.equal(error?.details?.rolledBack, true, "回滚真实成功后必须明确 rolledBack:true");
     assert.equal(error?.details?.transactionState, "rolled_back");
@@ -2038,13 +2006,13 @@ test("安装 COMMIT 真实失败（DELETE journal 读事务）：确认回滚后
 
     // 释放读锁后同一连接重试必须成功：失败没有污染事务层或结构。
     reader.exec("COMMIT");
-    const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) });
     assert.equal(retried.migrated, true);
     assert.equal(S.bankSchemaContract(conn).ok, true, "重试后组件结构必须完整");
   } finally {
     try { conn.close(); } catch { /* ignore */ }
     try { reader.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2066,7 +2034,7 @@ test("仅注入 ROLLBACK 抛错（单点注入，不是实测磁盘故障）：�
       return realExec(sql);
     };
     let error = null;
-    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) }); } catch (e) { error = e; }
+    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) }); } catch (e) { error = e; }
     assert.equal(injected, 1, "只注入一次 ROLLBACK 失败");
     assert.equal(error?.code, "bank_transaction_rollback_failed", "回滚失败必须与「已确认回滚」区分");
     assert.equal(error?.details?.rolledBack, false, "不得标记 rolledBack:true");
@@ -2099,13 +2067,13 @@ test("仅注入 ROLLBACK 抛错（单点注入，不是实测磁盘故障）：�
     assert.equal(S.bankConnectionState(conn).writable, true);
 
     reader.exec("COMMIT");
-    const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) });
     assert.equal(retried.migrated, true, "恢复后重装必须成功（不是复用未知连接）");
   } finally {
     try { conn.exec = realExec; } catch { /* ignore */ }
     try { conn.close(); } catch { /* ignore */ }
     try { reader.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2133,7 +2101,7 @@ test("新库分支：COMMIT / ROLLBACK 失败都不冒充「原库已回滚 / �
       realExec("ROLLBACK");
       assert.deepEqual(bankTableNames(conn), [], "确认回滚后新库不得留下半成品");
       S.recoverBankConnectionState(conn);
-      const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+      const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) });
       assert.equal(migrated.migrated, true, "恢复后走已有库路径必须能正常安装");
       conn.close();
     }
@@ -2159,7 +2127,7 @@ test("新库分支：COMMIT / ROLLBACK 失败都不冒充「原库已回滚 / �
       conn.close();
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2245,7 +2213,7 @@ test("嵌套 SAVEPOINT 回滚失败：不提交半成品，区分已确认整体
   } finally {
     try { conn.exec = realExec; } catch { /* ignore */ }
     try { conn.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2254,7 +2222,7 @@ test("导入失败审计：回滚未确认时如实标记未留痕，未知连�
   const { conn, file } = legacyOnlyDb(dir, "import-audit.db", "DELETE");
   const reader = new DatabaseSync(file);
   try {
-    const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) });
     assert.equal(migrated.migrated, true);
     B.registerBankAccount(conn, {
       accountSetId: 1, bankAccountId: "BANK-AUDIT", sourceId: "src-1", glAccountCode: "1002",
@@ -2307,7 +2275,7 @@ test("导入失败审计：回滚未确认时如实标记未留痕，未知连�
   } finally {
     try { conn.close(); } catch { /* ignore */ }
     try { reader.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2366,7 +2334,7 @@ test("新库 + 创建回执 + 调用方外层事务：拒绝安装但不提交 /
     }).created, true, "结束后健康银行操作必须恢复");
   } finally {
     try { conn.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2379,7 +2347,7 @@ test("现库安装 + 调用方外层事务：冲突先于备份 / DDL 与回执�
                 VALUES ('现库外层未提交账套', '2026-01', '2026-01-01T00:00:00.000Z')`);
     const pendingBefore = countIn(conn, `SELECT COUNT(*) AS n FROM account_sets`);
     let error = null;
-    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) }); } catch (e) { error = e; }
+    try { await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) }); } catch (e) { error = e; }
     assert.equal(error?.code, "bank_transaction_conflict", "现库安装同样必须先给事务冲突，而不是锁失败 / 已回滚");
     assert.equal(error?.details?.rolledBack, false);
     assert.equal(error?.details?.started, false);
@@ -2396,12 +2364,12 @@ test("现库安装 + 调用方外层事务：冲突先于备份 / DDL 与回执�
       "没有未知标记时也必须如实报告调用方事务（不能说成 clean）");
 
     conn.exec("ROLLBACK");
-    const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: fakeBackupService(file) });
+    const migrated = await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) });
     assert.equal(migrated.migrated, true, "调用方结束后现库安装必须恢复");
     assert.equal(S.bankSchemaContract(conn).ok, true);
   } finally {
     try { conn.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2439,7 +2407,7 @@ test("BEGIN / SAVEPOINT 没建立起来：不冒充已回滚、不拉黑连接�
   } finally {
     try { conn.exec = realExec; } catch { /* ignore */ }
     try { conn.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -2476,7 +2444,7 @@ test("导入失败审计不写进调用方事务：如实标记未留痕，调�
       "completed");
   } finally {
     try { conn.close(); } catch { /* ignore */ }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

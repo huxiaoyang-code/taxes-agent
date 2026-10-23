@@ -71,6 +71,20 @@ import {
   updateBatch,
 } from "./bank-storage.mjs";
 
+import { inspectAuxiliarySchema } from "./auxiliary-storage.mjs";
+import { entryPartyAllocation } from "./auxiliary-accounting.mjs";
+
+/** Live display only: no party field enters matching, snapshots or invalidation. */
+function entryPartyView(db, accountSetId, entryId) {
+  const coreVersion = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version;
+  const state = inspectAuxiliarySchema(db, coreVersion);
+  if (!state.present) return { installed: false, status: "not_installed", accountSetId, entryId };
+  if (state.problems.length) throw bankError("aux_structure_invalid", "辅助组件结构或版本损坏，不能展示往来分配");
+  const target = db.prepare("SELECT 1 FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.id=? AND v.account_set_id=?").get(entryId, accountSetId);
+  if (!target) return { installed: true, status: "entry_unavailable", accountSetId, entryId };
+  return { installed: true, ...entryPartyAllocation(db, { accountSetId, entryId }) };
+}
+
 const MAX_CENTS = BigInt(MAX_AMOUNT_CENTS);
 const BATCH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REASON_MAX = 500;
@@ -1035,6 +1049,7 @@ export function listCandidates(db, options = {}) {
     const item = {
       voucherId: Number(row.voucher_id),
       entryId: Number(row.entry_id),
+      partyAllocation: entryPartyView(db, scope.setId, Number(row.entry_id)),
       lineNo: Number(row.line_no),
       period: row.period,
       voucherDate: row.voucher_date,
@@ -1290,6 +1305,7 @@ function matchView(db, match) {
     transactionId: match.transaction_id === null ? null : Number(match.transaction_id),
     voucherId: Number(match.voucher_id),
     entryId: Number(match.entry_id),
+    partyAllocation: entryPartyView(db, Number(match.account_set_id), Number(match.entry_id)),
     entryLineNo: Number(match.entry_line_no),
     status: match.status,
     reason: match.reason,

@@ -1,3 +1,5 @@
+> 2026-10-23 LOCAL04A（Issue53 comment6364708982，17路径窗内实际15变更）已完成本片自测：固定官方backup/held源内容门、仅展示的真实分录往来DTO、两安装序及六正式套exit0/hash同。详见[当前交接](../handoffs/LOCAL-04-BANK.md)；本片未独立验收/PR合并，Issue53保持OPEN；B的REST/raw Agent/页面/MCP及最终整84待新会话。原八包5/8，04/06/07及最终整链仍未完。下方为历史任务记录。
+
 > **2026-10-23 最终出版候选补记（优先于下方历史阶段）**：银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。
 >
 > 创建保护：O_EXCL保留创建fd、私有不可变receipt / marker身份与seed，SQLite打开前文件对象预检；真实连接hook在核心DDL / WAL / migration前见证，银行安装拒绝未见证连接。已有库仍须备份并验证；调用方BEGIN拒绝保留回执，确认提交后消费，银行release使用 `preserveDatabase` 保留库文件。通用guard仅复用已审Windows / Node24边界，不承诺绝对抗恶意同进程 / 物理伪造或Linux保护。旧core3 P1替换场景确有核心pre-v4备份；旧95/60绿测不覆盖后来fresh P1，原红与环境失败按下文原文保留。源码9路径冻结，本轮只登记与文档、未重跑财务套件、未自审、无Git写。
