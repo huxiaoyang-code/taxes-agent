@@ -1,3 +1,7 @@
+> **2026-10-23 已验收合并补记（优先于下方历史阶段）**：[PR #66](https://github.com/huxiaoyang-code/youshu-fork/pull/66) 于 2026-10-23T04:33:39Z 已合并：已审 head `9f7817f889ff6d2fa985dc343611ef965a4dcd8b`，main merge `2b3639e5ec80468f9e5acb0b886546f22dc5ada6`，tree `0c5bad9ccbdc8e46275252da0f8a2a464ae4d51e` 一致。root 该 head 完整 **61/61 套 exit0**，含 Office21/21 与11 PDF geometry / Poppler；fresh独审全部定向suite及17 probe接受，Issue44已 CLOSED（completed）。后续03新profile输出适配属03后续窗口。
+>
+> 银行出版窗口基于该实际main追加4套为静态65；最终65与银行fresh独审 / PR63合并待root，不能混作本包61套已通过的证据。下方候选 / OPEN / 未合并与失败条目按各自历史时点保留。
+
 > **2026-10-23 当前整合候选（优先于下方各阶段快照）**：[Issue #44 精确窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6357299894) 登记整体31文件；本轮只允许其中11文件的入口登记与交接。已冻结24文件源候选 `b3b68db8b8db0af398376ee752646783e0bb4b7b` 无冲突纳入 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 的 main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，整合起点 `c764278a9e41a3ce502e662ffa56b0dc18ab307a`。PR65 已审 head 为 `37bcb286041f76d85c01ff5f6078727497570425`。
 >
 > 统一测试入口原59套完整保留并保持顺序，末尾仅追加 `local-batch-persistence.test.mjs` 与 `local-batch-cli.test.mjs`，当前静态登记 **61套**；银行4套尚未 main，本轮不登记。此前24文件候选的8套 **131/131 exit 0** 是既有受影响验证证据，不代表当前31文件候选已完成全61套验证。**最终61套、fresh独立审查、PR与合并均待 root**；本轮仅入口语法 / 静态计数 / diff检查，无业务或正式测试修改、无财务测试重跑。Issue #44 保持 OPEN。旧55套子进程成功而统一入口整体exit1、后续56/59成功均保留原时点，不覆盖历史。

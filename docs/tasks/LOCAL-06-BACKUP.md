@@ -5,7 +5,9 @@
   merge `98977e04bd24aa293074021802191814f8c2a1d2`，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`
   独审 16 项）；
   **合并后兼容整合轮（schema v3 / v4 精确契约）实现 + 自测完成，未提交 / 未建 PR / 未合并，最终独立审查待做**
-  （不预报 head / merge）。（不代表 LOCAL-06 整体完成；`829541a` 冻结候选的 15 / 15 与第一轮 16 / 16 均因漏掉
+  （不预报 head / merge）；**2026-10-22 B 窗又同步已合核心（PR #60 merge `dfefae0`）并登记可选 bank 组件 v1，
+  银行组件全部 19 条索引逐键校验、五套定向 95 / 95，同样未提交 / 未建 PR / 未合并**。
+  （不代表 LOCAL-06 整体完成；`829541a` 冻结候选的 15 / 15 与第一轮 16 / 16 均因漏掉
   重复声明外键而**未最终通过**，已被当前的外键分组一对一比对取代）
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 合并后主线，schema **v3**）
 - 分支：`codex/huxiaoyang-code/local-06-backup`
@@ -109,8 +111,9 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
   `server/server.mjs`、`server/agent-tools.mjs`、MCP 注册（`05-reconstruction/codex/mcp/finance-mcp/*`）、
   `package.json`、`public/*` 与其它 docs；只按需**只读**；
 - `scripts/test-all.mjs` **仅允许追加已合入模块的测试登记**（原 50 套顺序 / 内容不变）；
-- 不猜 schema：v3 与 v4 各有**真实 DDL 推导的精确契约**；bank / batch / audit 等**尚未合入**的组件
-  与未来 v5+ 继续一律拒绝，不为兼容关表 / 只抬版本号；
+- 不猜 schema：v3 与 v4 各有**真实 DDL 推导的精确契约**；B 窗按已合 LOCAL-04 银行契约额外登记
+  **可选 bank 组件 v1**（完整 10 表 + 19 条索引逐键语义 + 外键 / 版本行 / 未知对象），
+  batch / audit 等其它组件与未来 v5+ 继续一律拒绝，不为兼容关表 / 只抬版本号；
 - 不接税局、不访问浏览器 / 税局后端 / 真实账套 / 凭据；不做自动测试以外的真实数据动作；
 - 不引入第三方依赖、不写安装器；
 - 不做 Git 提交 / 推送 / 合并。
@@ -228,7 +231,7 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 - 原位恢复接入契约见 [LOCAL-BACKUP §6.5](../LOCAL-BACKUP.md)，属后续共享维护窗口任务，**本包未实现**。
 - 审计留痕（谁在什么时候备份 / 恢复 / 恢复到哪个目标）属 LOCAL-06 审计部分，**本包未实现**，
   完整审计在 [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)。
-- **v5+ 与未合入组件仍严格拒绝**：未来 schema 新版本、bank / batch / audit 等组件必须**显式**做结构契约
+- **v5+ 与未登记组件仍严格拒绝**：未来 schema 新版本、bank v2+、batch / audit 等其它组件必须**显式**做结构契约
   （逐列 / 逐约束 / 逐动作）/ 真实 SQLite 行为与合成临时库验收，并复核 `formatVersion`，
   不得只靠动态表清单、只抬版本号或「旧用例通过」推定已支持。
 
@@ -246,3 +249,24 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 | 仓库卫生 | `git diff --check` 通过；`git status` 仅有本包授权文件 |
 
 后续文档 / 源码的提交由管理者执行；兼容整合轮源码 head 与 merge 由管理者提交时复核与补齐。
+
+## 9. 2026-10-22 B 窗：同步已合核心 + 可选 bank 组件索引键语义
+
+- 边界：本窗按 root 正式开窗与远端 Issue #49 / #53 的 13 路径 claim 工作；只改备份 / 银行契约 / 6 份文档的
+  交集子集，**不改** 核心 / DB / import / HTTP / Agent / MCP / public / `scripts/test-all.mjs` / package；
+  未自行 Git merge / commit，未用真实账套 / 税局。
+- 兼容范围：**core v3 / v4 + 可选 bank 组件 v1**。无 bank 的旧 v3 / v4 备份与旧 bank 内部候选备份
+  继续原样 verify / restore-new，不升级；清单格式 / `formatVersion` / `components[].structureDigest` 口径未改。
+- 银行组件校验：完整 10 表 + 版本行恰好一行 v1 + 列类型 / NOT NULL / 默认值 / 主键列序与 `rowidAlias`、
+  **全部 19 条 PK / UNIQUE / 命名 / 自动索引逐键比对**（`seqno` 顺序 / collation / 方向 / 表达式 / rowid /
+  `origin` / `partial` / 真实谓词）、外键完整集合与动作、无未知 trigger / view。
+  数量 / 额外 / 缺失 / 命名与自动索引互顶一律拒绝；不针对某个索引名特判。
+- 三入口一致：`createBackup`（源库）/ `verifyBackup`（快照）/ `restoreNew`（恢复目标）都拒绝
+  `NOCASE` / `RTRIM` / `DESC` / 表达式 / 错 partial 谓词 / 额外唯一 / 互顶 / `INTEGER PRIMARY KEY DESC`（rowid 别名破坏）；
+  快照同时重算字节数与 sha256（摘要自洽）仍拒绝且不生成恢复目标。
+- 健康恢复：健康 bank 库 `backup → verify → restore-new` 后索引键仍为 `BINARY` 升序普通列，
+  真实 `Ref-A` / `ref-a` 两笔继续导入成功；与真实 DDL 同义重建不被误拒。
+- 实跑：`local-backup` **22 / 22**（数量与含义不变）、银行解析 **16 / 16**、领域 **40 / 40**、CLI **12 / 12**、
+  集成 **5 / 5**，合计 **95 / 95，exit 0**（合成临时库）。**未跑**全量 `npm test`：整合面全量由 root 冻结后执行。
+- 仍未支持：v0 / v1 / v2 旧库、未来 v5+、bank v2+、batch / audit 等未登记组件、原位覆盖 / 版本回退；
+  未接 HTTP / Agent / MCP / UI / 共享模型入口；不声称 LOCAL-06 整体完成，也不声称已提交 / 已建 PR / 已合。

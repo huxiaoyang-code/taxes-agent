@@ -14,7 +14,8 @@
   但因外键动作未校验、以及第一轮 16 / 16 又漏掉「重复声明同列同目标外键可绕过」而**未最终通过**，
   已被当前的**外键分组一对一比对**取代（详见 §3.0）。
 - 状态：**子包已合并；合并后兼容整合轮（schema v3 / v4 精确契约）实现 + 自测完成，未提交 / 未建 PR /
-  未合并，最终独立审查待做**（不预报 head / merge）
+  未合并，最终独立审查待做**（不预报 head / merge）；**2026-10-22 B 窗已同步已合核心（PR #60 merge `dfefae0`）
+  并登记可选 bank 组件 v1，五套定向 95 / 95，同样未提交 / 未建 PR / 未合并**（见 §8）
 - 范围：LOCAL-06 的**独立子包**（备份 / 验证 / 恢复全新目标）；LOCAL-06 整体**未完成**
   （审计留痕、原位在线恢复、Windows 干净安装 / 启动 / 升级交付均未实现）
 
@@ -349,7 +350,8 @@
    定时 / 批量入口均未实现；本包只交付「备份 / 验证 / 恢复全新目标」。
 4. **仍未支持的版本 / 组件**：v0 / v1 / v2 旧库给 `schema_outdated`（先用当前产品入口升级，
    本模块不替候选库初始化 / 迁移）；未来 v5+ 给 `schema_unsupported`；
-   bank / batch / audit 等**尚未合入**的组件表仍被 `unexpected_tables` 拒绝（不为兼容关表 / 只抬版本号）。
+   core v3 / v4 之外的组件目前只登记了 **bank v1**（B 窗），batch / audit 等其它组件与 bank v2+ 仍被
+   `unexpected_tables` / 组件契约拒绝（不为兼容关表 / 只抬版本号）。
 5. **源库保护边界**：主库与 `-wal` 字节不变、不被删除；`-shm` 读锁 / 读标记可能变化（锁协调）。
    某环境若只读连接无法读 WAL 索引，会明确 `source_readonly_blocked`，不使用可写连接绕过。
 6. **耐久性边界**：文件内容 `fsync` 后再 `rename`；Windows 无法 `fsync` 目录项，
@@ -387,3 +389,25 @@
   `git diff --check` 无输出（无空白 / 冲突标记问题）。
 - 员工不执行 Git 提交 / 推送 / 合并；上述范围与新 PR head 由管理者提交时复核，
   **实际 head / merge SHA 以管理者提交与合并结果为准**。
+
+## 8. 2026-10-22 B 窗：同步已合核心 + 可选 bank 组件索引键语义
+
+- 边界：root 正式开窗，远端 Issue #49 / #53 已发布 13 路径 claim；本窗只改其中的备份 / 银行契约 / 文档子集，
+  **不改**核心 / DB / import / HTTP / Agent / MCP / public / `test-all` / package；未自行 Git 写，未用真实账套 / 税局。
+- 兼容范围：**core v3 / v4 + 可选 bank 组件 v1**；无 bank 的旧 v3 / v4 备份与旧 bank 内部候选备份继续可读，
+  不要求重生成 / 升级；清单格式 / `formatVersion` / `components[].structureDigest` 口径未改。
+- 银行组件校验：完整 10 表 + 版本行恰好一行 v1 + 列类型 / NOT NULL / 默认值 / 主键列序与 `rowidAlias`、
+  **全部 19 条 PK / UNIQUE / 命名 / 自动索引逐键比对**（`seqno` / collation / 方向 / 表达式 / rowid /
+  `origin` / `partial` / 真实谓词）、外键完整集合与动作、无未知 trigger / view；
+  数量 / 额外 / 缺失 / 命名与自动索引互顶一律拒绝。
+- 三入口：`createBackup`（源库）/ `verifyBackup`（快照）/ `restoreNew`（恢复目标）对 `NOCASE` / `RTRIM` /
+  `DESC` / 表达式 / 错 partial 谓词 / 额外唯一 / 互顶 / `INTEGER PRIMARY KEY DESC` 全部拒绝；
+  快照同时重算字节数与 sha256（摘要自洽）仍拒绝且不生成恢复目标。
+- 健康恢复：`backup → verify → restore-new` 后索引键仍为 `BINARY` 升序普通列，真实 `Ref-A` / `ref-a`
+  两笔继续导入成功；与真实 DDL 同义重建不被误拒。
+- 实跑：`local-backup` **22 / 22**（数量与含义不变）、银行解析 **16 / 16**、领域 **40 / 40**、CLI **12 / 12**、
+  集成 **5 / 5**，合计 **95 / 95，exit 0**（合成临时库）。**未跑**全量 `npm test`：整合面全量由 root 冻结后执行。
+- 仍未支持：v0 / v1 / v2、未来 v5+、bank v2+、batch / audit 等未登记组件、原位覆盖 / 版本回退；
+  未接 HTTP / Agent / MCP / UI / 共享模型入口；不声称 LOCAL-06 整体完成，也不声称已提交 / 已建 PR / 已合。
+- 下一会话恢复：先读真实 Git / 本文件 §8 / 任务单 §9；核对工作区 HEAD 是否仍含 PR #60 merge `dfefae0` 与银行 A `950b7d6`，
+  再跑五套定向；不要把本文件的历史 20 / 20 或 55 / 55 当作本轮证据。

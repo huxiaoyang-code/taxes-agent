@@ -13,7 +13,9 @@
 //      无任何 schema 对象）写到文件名偏移 0，并把本进程随机 nonce 写进页 1 头部的 user_version、
 //      把 "LB07" 魔数写进 application_id。写入目标是 fd 绑定的文件对象，**因此按路径替换文件
 //      （包括 ABA：换走再换回）都不能改变这段写入落在哪个对象上**；外部文件永远不会被写。
-//   3) 任何核心 DDL / WAL / 迁移写之前，`db.mjs` 通过本模块用**同一条已打开的连接**读页 1 头部：
+//   3) 首次读页 SQL 前，先以身份绑定的纯文件只读句柄核页头标记（db-init 另核完整空种子与大小），
+//      防止拒绝旧 WAL 库时 SQLite 自身产生 sidecar。随后在任何核心 DDL / WAL / 迁移写之前，
+//      `db.mjs` 通过本模块用**同一条已打开的连接**读页 1 头部：
 //      只有读到本进程的 31 位随机 nonce + 魔数、且 `PRAGMA database_list` / `db.location()` 指向目标、
 //      且创建 fd 的 fstat 身份未变、路径身份未变、连接里还没有任何 schema 对象，才允许继续。
 //      这个 nonce 只是**本地随机识别标记**，不是秘密、也不是认证凭据：它同时写进所有权标记 JSON、
@@ -48,7 +50,7 @@
 
 import { randomInt } from "node:crypto";
 import {
-  closeSync, fsyncSync, fstatSync, lstatSync, readFileSync, realpathSync, unlinkSync, writeSync,
+  closeSync, fsyncSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, unlinkSync, writeSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -281,6 +283,44 @@ function inspectClaimFd(facts) {
   return { dev: String(stat.dev), ino: String(stat.ino), size: Number(stat.size) };
 }
 
+/**
+ * 首次 SQLite 读页前检查实际文件内容，避免读旧 WAL 库的 PRAGMA 自身创建 sidecar。
+ * 07 的创建 fd 是 wx（只写），因此另开只读 fd；必须将它的 fstat 身份与私有创建事实匹配。
+ * 这补足已证实的预检后原地填充窗口，不能保证抵抗检查后持续恶意物理改写。
+ */
+function assertClaimFileContents(facts, { phase, requirePristine }) {
+  let reader;
+  try {
+    reader = openSync(facts.dbPath, "r");
+    const stat = fstatSync(reader);
+    const created = inspectClaimFd(facts);
+    const path = inspectClaimPaths(facts);
+    if (!stat.isFile() || !sameIdentity(identityOf(stat), facts.identity)
+        || !sameIdentity(created, facts.identity) || !sameIdentity(path, facts.identity)) {
+      throw guardError("fresh_database_replaced", { phase }, "纯文件读取句柄不是本次创建对象");
+    }
+    const bytes = Buffer.alloc(requirePristine ? PAGE_SIZE : 100);
+    if (readSync(reader, bytes, 0, bytes.length, 0) !== bytes.length
+        || bytes.subarray(0, 16).toString("latin1") !== "SQLite format 3\u0000"
+        || bytes.readUInt32BE(PAGE1_OFFSET_APPLICATION_ID) !== facts.applicationId
+        || bytes.readUInt32BE(PAGE1_OFFSET_USER_VERSION) !== facts.nonce
+        || (requirePristine && (Number(stat.size) !== PAGE_SIZE || created.size !== PAGE_SIZE
+          || path.size !== PAGE_SIZE || !bytes.equals(seededPage1(facts.nonce))))) {
+      throw guardError("fresh_database_foreign_content", { phase }, "首次读页前文件内容不是本次创建的预期内容");
+    }
+    const after = fstatSync(reader);
+    if (!sameIdentity(identityOf(after), facts.identity) || Number(after.size) !== Number(stat.size)
+        || !sameIdentity(inspectClaimPaths(facts), facts.identity)) {
+      throw guardError("fresh_database_replaced", { phase }, "纯文件核验期间创建对象发生变化");
+    }
+  } catch (error) {
+    if (isDatabaseIdentityCode(error?.code)) throw error;
+    throw guardError("fresh_database_unreadable", { phase }, "首次读页前无法完成纯文件内容核验");
+  } finally {
+    if (reader !== undefined) try { closeSync(reader); } catch { /* 只关闭本次打开的读取句柄 */ }
+  }
+}
+
 function connectionFacts(db) {
   const main = db.prepare(`PRAGMA database_list`).all().find((row) => row.name === "main") || null;
   const applicationId = Number(db.prepare(`PRAGMA application_id`).get()?.application_id ?? NaN);
@@ -295,7 +335,7 @@ function connectionFacts(db) {
 /**
  * 把「本进程创建事实」与「实际打开的连接」绑定校验。
  * 只读：只执行 PRAGMA / SELECT，绝不在连接上写入。顺序：
- *   文件身份（替换 / 别名）→ 创建 fd 身份 → 连接页 1 nonce / 魔数 / 路径 → 复核身份。
+ *   文件身份（替换 / 别名）→ 创建 fd 身份 → 纯文件内容 → 连接页 1 nonce / 魔数 / 路径 → 复核身份。
  */
 export function assertConnectionOwnsClaim(db, facts, { phase = "verify", requirePristine = false } = {}) {
   if (!db || typeof db.prepare !== "function") {
@@ -317,6 +357,7 @@ export function assertConnectionOwnsClaim(db, facts, { phase = "verify", require
     throw guardError("fresh_database_replaced", { phase }, "本进程创建的文件对象已被替换 / 清空");
   }
   let conn;
+  assertClaimFileContents(facts, { phase, requirePristine });
   try { conn = connectionFacts(db); } catch {
     // 连接存在但读不到页 1 头部（例如同路径同 dev/ino 但内容已被改写成非 SQLite 文件）：
     // 仍然是 fail-closed，且不向上暴露原生 SQLite 错误当成「基础设施错误」。
@@ -403,6 +444,7 @@ function assertMarkerOwnership(facts) {
 function verifySeedWithSqlite(facts) {
   let probe = null;
   try {
+    assertClaimFileContents(facts, { phase: "stamp-verify", requirePristine: true });
     probe = new DatabaseSync(facts.dbPath, { readOnly: true });
     const applicationId = Number(probe.prepare(`PRAGMA application_id`).get()?.application_id ?? NaN);
     const userVersion = Number(probe.prepare(`PRAGMA user_version`).get()?.user_version ?? NaN);
@@ -524,8 +566,10 @@ function isPristineClaimDatabase(facts) {
  * 只删除「文件对象仍是创建时 dev/ino 且内容仍是本进程写下的那份」的自己的标记，以及
  * 「身份仍是创建时 dev/ino 且仍只有页 1 种子」的自己创建的库文件；被替换（含同 nonce 的新对象）/ 已有核心表 /
  * 外部零字节文件一律保留现场。重复 release 是无副作用的 no-op。
+ * preserveDatabase=true 完全跳过库文件的 SQLite 探测和删除；用于必须保留现场且不能让
+ * 只读 SQLite 探测为被原地改写的旧 WAL 库创建 sidecar 的调用方。默认清理行为保持不变。
  */
-export function releaseFreshClaimFacts(token) {
+export function releaseFreshClaimFacts(token, { preserveDatabase = false } = {}) {
   const facts = token && typeof token === "object" ? CLAIM_FACTS.get(token) : null;
   if (!facts) return { released: false, markerRemoved: false, databaseRemoved: false };
   CLAIM_FACTS.delete(token);
@@ -542,7 +586,7 @@ export function releaseFreshClaimFacts(token) {
   } catch { /* 标记已被替换 / 删除 / 内容被改写：不碰他人对象 */ }
   try { closeSync(facts.markerFd); } catch { /* 句柄已关闭不影响结论 */ }
   let databaseRemoved = false;
-  try {
+  if (!preserveDatabase) try {
     const stat = lstatSync(facts.dbPath);
     if (!stat.isSymbolicLink() && stat.isFile() && sameIdentity(identityOf(stat), facts.identity)
         && samePath(realpathSync(facts.dbPath), facts.dbPath) && isPristineClaimDatabase(facts)) {

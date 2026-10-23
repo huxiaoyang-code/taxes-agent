@@ -75,6 +75,11 @@ const steps = [
   // LOCAL-07 B1 已合 PR65 的持久化与 CLI 套件；仅末尾追加，原 59 套完整保留。
   { name: "local-batch-persistence", file: join(WORKBENCH, "test", "local-batch-persistence.test.mjs"), cwd: WORKBENCH },
   { name: "local-batch-cli", file: join(WORKBENCH, "test", "local-batch-cli.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-04 银行组件；仅末尾追加，原 main 61 套逐字原序保留。
+  { name: "bank-import", file: join(WORKBENCH, "test", "bank-import.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-reconciliation", file: join(WORKBENCH, "test", "bank-reconciliation.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-reconcile-cli", file: join(WORKBENCH, "test", "bank-reconcile-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "local-bank-backup-integration", file: join(WORKBENCH, "test", "local-bank-backup-integration.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
