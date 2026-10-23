@@ -72,6 +72,9 @@ const steps = [
   { name: "finance-model-entry", file: join(WORKBENCH, "test", "finance-model-entry.test.mjs"), cwd: WORKBENCH },
   { name: "finance-model-http", file: join(WORKBENCH, "test", "finance-model-http.test.mjs"), cwd: WORKBENCH },
   { name: "finance-model-entry-mcp", file: join(MCP, "finance-model-entry-test.mjs"), cwd: MCP },
+  // LOCAL-07 B1 已合 PR65 的持久化与 CLI 套件；仅末尾追加，原 59 套完整保留。
+  { name: "local-batch-persistence", file: join(WORKBENCH, "test", "local-batch-persistence.test.mjs"), cwd: WORKBENCH },
+  { name: "local-batch-cli", file: join(WORKBENCH, "test", "local-batch-cli.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
