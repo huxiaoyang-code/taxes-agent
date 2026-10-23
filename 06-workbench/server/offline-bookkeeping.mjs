@@ -88,7 +88,7 @@ export function buildOfflineCandidates(input) {
           conflict(raw && (!['unknown', 'operating_service'].includes(raw.purpose) || raw.nature !== 'service'), 'purpose', '新行政用途与原始事实已明确的资产、个人、存货或非服务性质矛盾，请核对有效版本');
           ask(f.purpose === 'organizational_administration' && f.nonAsset === true && f.nonProjectCost === true, 'missing_administrative_use', 'purpose/nonAsset/nonProjectCost', '说明为组织行政日常用途、服务对象以及非资产非项目成本的实际依据');
           ask(f.benefitFrom && f.benefitTo && f.benefitBasis, 'missing_benefit_period', 'benefitFrom/benefitTo/benefitBasis', '提供全部受益起止日及仅当月受益的业务依据');
-          ask(f.benefitFrom <= f.benefitTo && f.benefitFrom?.slice(0, 7) === r.date.slice(0, 7) && f.benefitTo?.slice(0, 7) === r.date.slice(0, 7) && f.completionDate?.slice(0, 7) === r.date.slice(0, 7), 'unsupported_benefit_span', 'benefitFrom/benefitTo', '跨月或部分受益须提供具体服务范围，当前不按月份自动均摊');
+          ask(f.completionDate && f.benefitFrom <= f.benefitTo && f.benefitFrom?.slice(0, 7) === f.completionDate.slice(0, 7) && f.benefitTo?.slice(0, 7) === f.completionDate.slice(0, 7), 'unsupported_benefit_span', 'benefitFrom/benefitTo', '跨月或部分受益须提供具体服务范围，当前不按月份自动均摊');
           conflict(raw?.benefitPeriod?.state === 'known' && (raw.benefitPeriod.from !== f.benefitFrom || raw.benefitPeriod.to !== f.benefitTo), 'benefitPeriod', '新旧受益期不一致，请核对原始依据及有效版本');
         }
         conflict(supplement.facts.some(x => x.data.kind === 'service_prepayment' && x.data.relatedInvoiceRefs?.some(ref => sameRef(ref, r))), 'relatedInvoiceRefs', '该发票又关联期末未履约预付款，请核对同一合同履约与费用确认，避免重复候选');

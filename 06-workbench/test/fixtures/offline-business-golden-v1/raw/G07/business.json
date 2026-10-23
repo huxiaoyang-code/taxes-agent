@@ -1,0 +1,30 @@
+{
+  "version": "business-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G07",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "facts": [
+    {
+      "factId": "basic-sale-0",
+      "date": "2026-01-13",
+      "nature": "service",
+      "performance": "completed",
+      "settlement": "unpaid",
+      "purpose": "unknown",
+      "benefitPeriod": {
+        "state": "unknown",
+        "from": null,
+        "to": null
+      },
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-GOLDEN-G07",
+        "code": "",
+        "number": "0000001234567890123401"
+      }
+    }
+  ]
+}

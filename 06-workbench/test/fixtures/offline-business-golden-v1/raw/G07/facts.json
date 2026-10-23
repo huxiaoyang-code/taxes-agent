@@ -1,0 +1,32 @@
+{
+  "version": "offline-accounting-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G07",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "facts": [
+    {
+      "factId": "sale-0",
+      "kind": "service_sale",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-GOLDEN-G07",
+        "code": "",
+        "number": "0000001234567890123401"
+      },
+      "contractId": "G07-SALE-0",
+      "serviceStartDate": "2026-01-13",
+      "completionDate": "2026-01-13",
+      "collectionRightDate": "2026-01-13",
+      "mainService": true,
+      "ordinaryService": true
+    }
+  ]
+}

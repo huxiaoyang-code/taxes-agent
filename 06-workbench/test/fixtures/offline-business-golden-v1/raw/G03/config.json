@@ -1,0 +1,14 @@
+{
+  "version": "offline-action-input/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G03",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "profileId": "small-2011-basic-v1",
+  "declaration": "declaration.json",
+  "accountingFacts": "facts.json",
+  "materialsInput": "materials.json"
+}
