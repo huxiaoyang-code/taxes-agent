@@ -1,0 +1,27 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [
+    {
+      "debitAccount": "1002",
+      "creditAccount": "5001",
+      "amount": "312.48"
+    }
+  ],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": null,
+  "derivation": "Q2(01)+Q3(10)未结转累计发生额1001.23+312.48=1313.71；5001不是正式跨期结账余额。历史版本链接仅工程样例，非已确认申报历史。",
+  "expectedPreCloseTrialBalances": {
+    "1002": "1313.71",
+    "5001": "-1313.71"
+  },
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

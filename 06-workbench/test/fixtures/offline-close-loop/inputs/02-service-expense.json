@@ -1,0 +1,66 @@
+{
+  "kind": "manifest",
+  "version": "offline-close-loop/1",
+  "id": "manifest-1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-E1",
+    "accountSetId": "synthetic-book-1",
+    "period": "2026-Q2",
+    "currency": "CNY"
+  },
+  "sourceVersion": "v1",
+  "mode": "business_materials",
+  "profileId": "small-2011-basic-v1",
+  "taxpayerStatus": "small_scale_candidate",
+  "region": "CN-FJ-ZZ",
+  "evidence": [
+    {
+      "kind": "evidence",
+      "version": "offline-close-loop/1",
+      "id": "e1",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-E1",
+        "accountSetId": "synthetic-book-1",
+        "period": "2026-Q2",
+        "currency": "CNY"
+      },
+      "sourceVersion": "v1",
+      "category": "business_declaration",
+      "format": "json",
+      "locator": "e1-local",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "documentDate": "2026-04-01",
+      "status": "provided",
+      "sourceLocation": {
+        "sheet": null,
+        "row": null,
+        "field": null
+      },
+      "coveragePeriod": "2026-Q2"
+    }
+  ],
+  "facts": [
+    {
+      "factId": "expense",
+      "type": "service_expense",
+      "state": "known",
+      "date": "2026-04-01",
+      "amount": "80.16",
+      "evidenceRefs": [
+        {
+          "evidenceId": "e1",
+          "sourceVersion": "v1"
+        }
+      ],
+      "reasonCode": null,
+      "business": {
+        "nature": "service",
+        "performance": "completed",
+        "settlement": "paid",
+        "vatTreatment": "unknown"
+      }
+    }
+  ],
+  "history": [],
+  "supersedes": null
+}

@@ -1,0 +1,20 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [
+    "inventory"
+  ],
+  "syntheticArithmetic": null,
+  "derivation": "不支持存货结转，保留阻塞，不要求客户编制分录。",
+  "expectedPreCloseTrialBalances": {},
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

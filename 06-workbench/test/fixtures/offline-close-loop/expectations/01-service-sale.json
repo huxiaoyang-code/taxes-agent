@@ -1,0 +1,33 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [
+    {
+      "debitAccount": "1002",
+      "creditAccount": "5001",
+      "amount": "1001.23"
+    }
+  ],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": {
+    "testOnly": true,
+    "base": "1001.23",
+    "numerator": "7",
+    "denominator": "100",
+    "roundedAmount": "70.09"
+  },
+  "derivation": "工程约定：服务已完成且款项已收，金额全记收入；真实价税拆分未核，不代表生产分录。100123分 × 7 / 100 = 7008.61分，半入为7009分。",
+  "expectedPreCloseTrialBalances": {
+    "1002": "1001.23",
+    "5001": "-1001.23"
+  },
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

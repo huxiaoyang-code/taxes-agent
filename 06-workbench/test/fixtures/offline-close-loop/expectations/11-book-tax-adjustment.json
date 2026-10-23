@@ -1,0 +1,33 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [
+    {
+      "debitAccount": "5602",
+      "creditAccount": "1002",
+      "amount": "141.57"
+    }
+  ],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": {
+    "testOnly": true,
+    "base": "162.70",
+    "numerator": "7",
+    "denominator": "100",
+    "roundedAmount": "11.39"
+  },
+  "derivation": "独立工程账税差异演算：141.57+21.13=162.70，合成乘数11.389半入11.39；无真实所得税扣除规则与自动调整能力。",
+  "expectedPreCloseTrialBalances": {
+    "5602": "141.57",
+    "1002": "-141.57"
+  },
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

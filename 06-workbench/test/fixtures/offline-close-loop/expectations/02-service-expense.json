@@ -1,0 +1,27 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [
+    {
+      "debitAccount": "5602",
+      "creditAccount": "1002",
+      "amount": "80.16"
+    }
+  ],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": null,
+  "derivation": "合成已付服务费：费用增加80.16，银行减少80.16；税额未知。",
+  "expectedPreCloseTrialBalances": {
+    "5602": "80.16",
+    "1002": "-80.16"
+  },
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}
