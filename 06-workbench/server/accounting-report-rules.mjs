@@ -369,8 +369,8 @@ const IS_TOTALS = {
 };
 
 // ---------------------------------------------------------------- 现金流对方科目分类
-// 只覆盖“单一对方科目、可解释”的基础交易；复杂复合凭证分摊、现金等价物 / 受限资金
-// 判定与完整现金流量表归阶段 B / LOCAL-05b。
+// 分类根供单一对方及严格全额材料 / 设备复合交易复用；复合交易守卫在cashFlowStatement。
+// 任意复合分摊、现金等价物 / 受限资金判定及完整现金流量表仍不支持。
 const CASH_FLOW_RULES = {
   "small-2011-basic-v1": {
     operatingRoots: [
@@ -609,7 +609,7 @@ function buildRules(profile) {
     },
     cashFlow: {
       engineMode: "counterpart-classification-only",
-      scope: "single-counterpart-simple-vouchers-only",
+      scope: "single-counterpart-and-full-cash-material-equipment-only",
       operatingRoots: cashFlow.operatingRoots,
       investingRoots: cashFlow.investingRoots,
       financingRoots: cashFlow.financingRoots,

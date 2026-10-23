@@ -62,6 +62,62 @@ try {
   voucher(s, '2026-02', [e('100201', 200), e('5001', 0, 200)]);
   voucher(s, '2026-02', [e('5602', 20), e('1002', 0, 20)]);
 
+  await test('P2: opening, raw posted movements, ledger running and totals preserve every cent; unsafe totals reject', () => {
+    const id = make('合成导出整数分', '2025-12');
+    const opening = [], entries = [];
+    for (let i = 0; i < 1000; i++) {
+      const code = '1002' + String(i + 1).padStart(4, '0');
+      A.addAccount(id, { code, name: '合成分精度' + i, category: '资产', direction: 'debit' });
+      opening.push(e(code, i === 0 ? 900000000000.01 : 0.01));
+      entries.push(e('1002', i === 0 ? 900000000000.01 : 0.01));
+    }
+    opening.push(e('3001', 0, 900000000010)); A.setOpeningBalances(id, opening);
+    entries.push(e('3001', 0, 900000000010)); voucher(id, '2025-12', entries);
+    voucher(id, '2026-01', [e('1002', 0.03), e('3001', 0, 0.03)]);
+    const dec = report(id, 'trial-balance', '2025-12');
+    for (const field of ['opening_debit', 'opening_credit', 'period_debit', 'period_credit', 'ytd_debit', 'ytd_credit']) assert.equal(dec.data.totals[field], 900000000010, field);
+    assert.equal(dec.data.totals.closing_debit, 1800000000020); assert.equal(dec.data.totals.closing_credit, 1800000000020);
+    const jan = report(id, 'trial-balance', '2026-01');
+    assert.equal(jan.data.totals.opening_debit, 1800000000020); assert.equal(jan.data.totals.closing_debit, 1800000000020.03);
+    assert.equal(jan.data.totals.ytd_debit, 0.03);
+    const ledger = report(id, 'ledger', '2025-12', { code: '1002' });
+    assert.deepEqual(ledger.data.opening, { debit: 900000000010, credit: 0 });
+    assert.deepEqual(ledger.data.current, { debit: 900000000010, credit: 0 });
+    assert.equal(ledger.data.items.at(-1).balance, 1800000000020);
+    assert.deepEqual(ledger.data.closing, { debit: 1800000000020, credit: 0 });
+    const cash = report(id, 'cash-flow-statement', '2026-01');
+    assert.equal(cash.data.ytd.totals.financing, 0.03); assert.equal(cash.data.ytd.cash.change, 0.03);
+    const csv = csvRows(out(id, 'ledger', '2025-12', { code: '1002' }).body);
+    assert.deepEqual(csv.find(row => row[0] === '期末' && row.length === 3), ['期末', '1800000000020.00', '0.00']);
+    for (const [a, b] of [[45035996273704.95, 45035996273704.96], [45035996273704.96, 45035996273704.96]]) {
+      for (const field of ['debit', 'credit']) {
+        const bad = make('合成超界拒绝', '2026-01');
+        db.prepare('INSERT INTO opening_balances(account_set_id,code,debit,credit) VALUES(?,?,?,?)').run(bad, '1001', field === 'debit' ? a : 0, field === 'credit' ? a : 0);
+        db.prepare('INSERT INTO opening_balances(account_set_id,code,debit,credit) VALUES(?,?,?,?)').run(bad, '1002', field === 'debit' ? b : 0, field === 'credit' ? b : 0);
+        assert.throws(() => out(bad, 'trial-balance'), error => error.code === 'report_data_invalid');
+      }
+    }
+  });
+  await test('P2: legal 100 cash/capital details total 90071992547409.90 in real CSV without toFixed cent drift', () => {
+    const id = make('合成合法极界CSV', '2026-01'), opening = [];
+    for (let i = 0; i < 100; i++) {
+      const amount = i === 0 ? 900719925474.99 : 900719925474.09;
+      for (const [prefix, category, direction] of [['1002', '资产', 'debit'], ['3001', '权益', 'credit']]) {
+        const code = prefix + String(i + 1).padStart(4, '0');
+        A.addAccount(id, { code, name: '合成合法边界' + code, category, direction });
+        opening.push({ code, [direction]: amount });
+      }
+    }
+    A.setOpeningBalances(id, opening);
+    const trial = out(id, 'trial-balance');
+    assert.equal(trial.report.data.totals.opening_debit, 90071992547409.9); assert.equal(trial.report.data.totals.closing_credit, 90071992547409.9);
+    const totals = csvRows(trial.body).find(row => row[0] === '合计');
+    for (const column of [3, 4, 9, 10]) assert.equal(totals[column], '90071992547409.90');
+    const ledger = out(id, 'ledger', '2026-01', { code: '1002' });
+    assert.deepEqual(csvRows(ledger.body).find(row => row[0] === '期间期初' && row.length === 3), ['期间期初', '90071992547409.90', '0.00']);
+    assert.deepEqual(csvRows(ledger.body).find(row => row[0] === '期末' && row.length === 3), ['期末', '90071992547409.90', '0.00']);
+    assert.ok(!ledger.body.includes('90071992547409.91'));
+  });
   await test('balance sheet: opening and January key lines have independent amounts', () => {
     const r = report(s, 'balance-sheet');
     assert.equal(r.data.totals.assets, 2890); assert.equal(r.data.totals.equity, 2890);
@@ -84,7 +140,7 @@ try {
     const income = csvRows(out(s, 'income-statement', '2026-02').body);
     assert.deepEqual(income.find(row => row[0] === '净利润'), ['净利润', '180.00', '430.00']);
     const cash = csvRows(out(s, 'cash-flow-statement', '2026-02').body);
-    assert.deepEqual(cash.find(row => row[0] === '现金净增加额'), ['现金净增加额', '', '', '180.00', '530.00']);
+    assert.deepEqual(cash.find(row => row[0] === '现金净增加额'), ['现金净增加额', '', '', '180.00', '230.00']);
     const trial = csvRows(out(s, 'trial-balance', '2026-02').body);
     assert.deepEqual(trial.find(row => row[0] === '100201').slice(3), ['600.00', '0.00', '200.00', '0.00', '600.00', '0.00', '800.00', '0.00']);
     const ledger = csvRows(out(s, 'ledger', '2026-02', { code: '1002' }).body);
@@ -141,15 +197,31 @@ try {
   });
   await test('cash flow: mixed inventory/equipment purchase and monthly/YTD reconciliation', () => {
     const jan = report(s, 'cash-flow-statement').data, feb = report(s, 'cash-flow-statement', '2026-02').data;
-    assert.deepEqual(jan.totals, { operating: 350, investing: 0, financing: 0, net_increase: 350 });
-    assert.deepEqual(jan.cash, { begin: 1440, end: 1490, change: 50 }); assert.equal(jan.reconciles, false);
-    assert.equal(jan.reportStatus.complete, false); assert.equal(jan.reportStatus.partialValues, true);
-    assert.equal(jan.unknown.length, 1);
+    assert.deepEqual(jan.totals, { operating: 230, investing: -180, financing: 0, net_increase: 50 });
+    assert.deepEqual(jan.cash, { begin: 1440, end: 1490, change: 50 }); assert.equal(jan.reconciles, true);
+    assert.equal(jan.reportStatus.complete, true); assert.equal(jan.reportStatus.partialValues, false);
+    assert.equal(jan.unknown.length, 0);
     assert.equal(feb.totals.operating, 180); assert.equal(feb.totals.net_increase, 180);
-    assert.deepEqual(feb.ytd.totals, { operating: 530, investing: 0, financing: 0, net_increase: 530 });
-    assert.deepEqual(feb.ytd.cash, { begin: 1440, end: 1670, change: 230 }); assert.equal(feb.ytd.reconciles, false);
-    assert.equal(feb.reportStatus.complete, true); assert.equal(feb.ytd.reportStatus.complete, false);
-    assert.equal(report(s, "cash-flow-statement", "2026-02").reportStatus.partialValues, true);
+    assert.deepEqual(feb.ytd.totals, { operating: 410, investing: -180, financing: 0, net_increase: 230 });
+    assert.deepEqual(feb.ytd.cash, { begin: 1440, end: 1670, change: 230 }); assert.equal(feb.ytd.reconciles, true);
+    assert.equal(feb.reportStatus.complete, true); assert.equal(feb.ytd.reportStatus.complete, true);
+    assert.equal(report(s, "cash-flow-statement", "2026-02").reportStatus.partialValues, false);
+  });
+  await test('true unknown history remains partial through later month and resets only next year', () => {
+    const id = make('合成在建用途未知', '2025-11');
+    A.setOpeningBalances(id, [e('1002', 1000), e('3001', 0, 1000)]);
+    voucher(id, '2025-11', [e('1604', 100), e('1002', 0, 100)]);
+    voucher(id, '2025-12', [e('1002', 20), e('5001', 0, 20)]);
+    voucher(id, '2026-01', [e('1403', 12.01), e('1601', 18.02), e('1002', 0, 30.03)]);
+    const dec = report(id, 'cash-flow-statement', '2025-12');
+    assert.equal(dec.data.reportStatus.complete, true); assert.equal(dec.data.ytd.reportStatus.complete, false);
+    assert.equal(dec.reportStatus.partialValues, true); assert.equal(dec.data.ytd.totals.net_increase, 20);
+    assert.deepEqual(dec.data.ytd.cash, { begin: 1000, end: 920, change: -80 });
+    assert.ok(dec.reportStatus.diagnostics.some(d => d.code === 'cash_flow_classification_incomplete'));
+    const jan = report(id, 'cash-flow-statement', '2026-01');
+    assert.equal(jan.reportStatus.complete, true); assert.equal(jan.reportStatus.partialValues, false);
+    assert.deepEqual(jan.data.ytd.totals, { operating: -12.01, investing: -18.02, financing: 0, net_increase: -30.03 });
+    assert.deepEqual(jan.data.ytd.cash, { begin: 920, end: 889.97, change: -30.03 });
   });
   await test('year-end carryforward changes equity location without wiping December profit', () => {
     const d = report(s, 'income-statement', '2025-12').data;
@@ -297,7 +369,7 @@ try {
   });
 } finally {
   db?.close();
-  if (results.every(Boolean)) rmSync(dataDir, { recursive: true, force: true });
+  if (process.env.KEEP_FIXTURES !== "1" && results.every(Boolean)) rmSync(dataDir, { recursive: true, force: true });
   else console.log(`Failed fixture retained: ${dataDir}`);
 }
 console.log(`\nReport export acceptance: ${results.filter(Boolean).length}/${results.length} passed`);

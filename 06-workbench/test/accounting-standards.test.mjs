@@ -283,10 +283,11 @@ try {
     A.setOpeningBalances(mixed, [e("1002", 500), e("3001", 0, 500)]);
     post(mixed, "2026-01", [e("1403", 120), e("1601", 180), e("1002", 0, 300)]);
     const mixedCf = A.cashFlowStatement(mixed, "2026-01");
-    assert.equal(mixedCf.classificationComplete, false);
-    assert.equal(mixedCf.totals.operating, 0);
-    assert.equal(mixedCf.totals.investing, 0);
-    assert.ok(mixedCf.unknown.some((item) => item.reason === "multi-counterpart-allocation-not-implemented"));
+    assert.equal(mixedCf.classificationComplete, true);
+    assert.deepEqual(mixedCf.totals, { operating: -120, investing: -180, financing: 0, net_increase: -300 });
+    assert.deepEqual(mixedCf.cash, { begin: 500, end: 200, change: -300 });
+    assert.deepEqual(mixedCf.unknown, []); assert.equal(mixedCf.reconciles, true);
+    assert.equal(mixedCf.reportStatus.complete, true);
   });
 
   // ================================================================ 3. 资产 / 折旧 / 摊销
@@ -806,6 +807,26 @@ try {
     assert.deepEqual(okIs.unresolvedAmounts.current, []);
   });
 
+  await test("P2：真实现金期初与导出1000细目精确到分，正负超界不生成DTO", async () => {
+    const { buildReportExport } = await import("../server/report-export.mjs");
+    const id = create("合成分精度只读", SMALL);
+    const opening = [];
+    for (let i = 0; i < 1000; i++) {
+      const code = "1002" + String(i + 1).padStart(4, "0");
+      A.addAccount(id, { code, name: "合成精度明细" + i, category: "资产", direction: "debit" });
+      opening.push(e(code, i === 0 ? 900000000000.01 : 0.01));
+    }
+    opening.push(e("3001", 0, 900000000010)); A.setOpeningBalances(id, opening);
+    assert.deepEqual(A.cashFlowStatement(id, "2026-01").cash, { begin: 900000000010, end: 900000000010, change: 0 });
+    const out = buildReportExport(id, { kind: "trial-balance", period: "2026-01" });
+    assert.equal(out.report.data.totals.opening_debit, 900000000010); assert.equal(out.report.data.totals.closing_debit, 900000000010);
+    for (const field of ["debit", "credit"]) {
+      const bad = create("合成越界只读", SMALL);
+      for (const code of ["1001", "1002"]) db.prepare("INSERT INTO opening_balances(account_set_id,code,debit,credit) VALUES(?,?,?,?)").run(bad, code, field === "debit" ? 45035996273704.96 : 0, field === "credit" ? 45035996273704.96 : 0);
+      assert.throws(() => buildReportExport(bad, { kind: "trial-balance", period: "2026-01" }), err => err.code === "report_data_invalid");
+    }
+  });
+
   await test("现金流：同一凭证双向现金 + 双向非现金无法唯一配对，保留 gross 事实与歧义诊断", () => {
     const setId = create("现金流配对歧义", ENTERPRISE);
     A.setOpeningBalances(setId, [e("1001", 100), e("4001", 0, 100)]);
@@ -895,23 +916,71 @@ try {
     assert.equal(pb.reconciles, true);
   });
 
-  await test("现金流：复合多类别凭证不按比例分摊，保留可核对金额并明确不完整", () => {
-    const setId = create("现金流复合多类", SMALL);
-    A.setOpeningBalances(setId, [e("1002", 500), e("3001", 0, 500)]);
-    post(setId, "2026-01", [e("1403", 120), e("1601", 180), e("1002", 0, 300)]);
-    const cf = A.cashFlowStatement(setId, "2026-01");
-    assert.equal(cf.classificationComplete, false);
-    assert.equal(cf.totals.operating, 0);
-    assert.equal(cf.totals.investing, 0);
-    assert.deepEqual(
-      cf.unknown.map((item) => [item.direction, item.reason, item.value]),
-      [["outflow", "multi-counterpart-allocation-not-implemented", -300]],
-      "未分类金额按方向保留，不伪造经营 / 投资金额",
-    );
-    assert.deepEqual(cf.cash, { begin: 500, end: 200, change: -300 });
-    assert.equal(cf.reconciles, false, "未分类金额不伪装成已勾稽");
-    assert.ok(cf.reportStatus.diagnostics.some((d) => d.code === "cash_flow_classification_incomplete"));
-  });
+  for (const [standard, capital] of [[SMALL, "3001"], [ENTERPRISE, "4001"]]) {
+    await test(standard + "：全额材料设备复合收付、明细重排与生命周期只读", () => {
+      const setId = create("合成全额复合", standard, "2025-11");
+      A.setOpeningBalances(setId, [e("1002", 1000), e(capital, 0, 1000)]);
+      for (const code of ["140301", "160101", "100201"]) A.addAccount(setId, { code, name: "合成合法明细" + code, category: "资产", direction: "debit" });
+      post(setId, "2025-11", [e("1403", 120), e("1601", 180), e("1002", 0, 300)]);
+      post(setId, "2025-12", [e("1002", 50), e("1601", 0, 30), e("1403", 0, 20)]);
+      post(setId, "2026-01", [e("1601", 18.02), e("1002", 0, 30.03), e("1403", 12.01)]);
+      const snapshot = () => JSON.stringify(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name}) => [name, db.prepare('SELECT * FROM "' + name + '" ORDER BY rowid').all()]));
+      const before = snapshot();
+      for (const [period, totals, cash] of [
+        ["2025-11", { operating: -120, investing: -180, financing: 0, net_increase: -300 }, { begin: 1000, end: 700, change: -300 }],
+        ["2025-12", { operating: 20, investing: 30, financing: 0, net_increase: 50 }, { begin: 700, end: 750, change: 50 }],
+        ["2026-01", { operating: -12.01, investing: -18.02, financing: 0, net_increase: -30.03 }, { begin: 750, end: 719.97, change: -30.03 }],
+      ]) {
+        const cf = A.cashFlowStatement(setId, period);
+        assert.deepEqual(cf.totals, totals); assert.deepEqual(cf.cash, cash);
+        assert.deepEqual(cf.unknown, []); assert.equal(cf.classificationComplete, true);
+        assert.equal(cf.reportStatus.complete, true); assert.equal(cf.reconciles, true);
+      }
+      assert.equal(snapshot(), before, "所有表内容在读取前后完全相同");
+      const draft = A.createVoucher(setId, { period: "2026-02", status: "draft", entries: [
+        e("100201", 0, 70.01), e("140301", 11.27), e("160101", 68.74), e("1403", 20), e("1002", 0, 30),
+      ] });
+      assert.equal(A.cashFlowStatement(setId, "2026-02").totals.net_increase, 0);
+      A.postVoucher(setId, draft.id);
+      const active = A.cashFlowStatement(setId, "2026-02");
+      assert.deepEqual(active.totals, { operating: -31.27, investing: -68.74, financing: 0, net_increase: -100.01 });
+      assert.deepEqual(active.cash, { begin: 719.97, end: 619.96, change: -100.01 });
+      assert.deepEqual(active.unknown, []); assert.equal(active.reconciles, true);
+      A.unpostVoucher(setId, draft.id);
+      assert.equal(A.cashFlowStatement(setId, "2026-02").totals.net_increase, 0);
+      A.postVoucher(setId, draft.id);
+      assert.deepEqual(A.cashFlowStatement(setId, "2026-02").totals, active.totals, "重过账仅计一次");
+      const reordered = create("合成顺序与重复根", standard);
+      post(reordered, "2026-01", [e("1601", 68.74), e("1403", 20), e("1002", 0, 100.01), e("1403", 11.27)]);
+      assert.deepEqual(A.cashFlowStatement(reordered, "2026-01").totals, active.totals);
+    });
+    await test(standard + "：部分结算/处置损益/未知/双侧复合仍失败关闭且无部分成功桶", () => {
+      const fixtures = [
+        [e("1403", 120), e("1601", 180), e("1002", 0, 100), e("2202", 0, 200)],
+        [e("1002", 150), e("1601", 0, 100), e(standard === SMALL ? "5301" : "6301", 0, 50)],
+        [e("1403", 120), e("1604", 180), e("1002", 0, 300)],
+        [e("1403", 120), e("1601", 180), e("1403", 0, 20), e("1002", 0, 280)],
+        [e("1403", 120), e("1601", 180), e("1002", 0, 300), e("1001", 10), e(capital, 0, 10)],
+      ];
+      for (const entries of fixtures) {
+        const id = create("合成真正未知", standard); post(id, "2026-01", entries);
+        const cf = A.cashFlowStatement(id, "2026-01");
+        assert.equal(cf.classificationComplete, false); assert.equal(cf.reportStatus.complete, false);
+        assert.deepEqual(cf.totals, { operating: 0, investing: 0, financing: 0, net_increase: 0 });
+        assert.ok(cf.unknown.length); assert.ok(cf.diagnostics.some(d => d.code === "cash_flow_classification_incomplete"));
+      }
+      for (const [code, update] of [["140301", "category='负债',direction='credit'"], ["160101", "contra=1"], ["100201", "contra=1"]]) {
+        const id = create("合成历史语义冲突", standard);
+        for (const detail of ["140301", "160101", "100201"]) A.addAccount(id, { code: detail, name: "合成明细", category: "资产", direction: "debit" });
+        post(id, "2026-01", [e("140301", 120), e("160101", 180), e("100201", 0, 300)]);
+        db.prepare("UPDATE accounts SET " + update + " WHERE account_set_id=? AND code=?").run(id, code);
+        const cf = A.cashFlowStatement(id, "2026-01");
+        assert.equal(cf.classificationComplete, false); assert.equal(cf.reportStatus.complete, false);
+        assert.deepEqual(cf.totals, { operating: 0, investing: 0, financing: 0, net_increase: 0 });
+        assert.equal(cf.unknown[0].value, -300);
+      }
+    });
+  }
 
   await test("现金流：现金明细语义被历史损坏时按权威方向算余额、保留冲突诊断且不静默完整", () => {
     // 合法自定义现金明细：100201 资产 / debit，正常应完整且经营流入 100。

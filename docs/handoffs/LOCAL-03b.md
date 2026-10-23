@@ -1,3 +1,9 @@
+# PR71 实际验收合并（2026-10-23）
+
+> 2026-10-23 当前真实状态：[PR71](https://github.com/huxiaoyang-code/youshu-fork/pull/71) 已于 `2026-10-23T11:31:28Z` 合并，已审 head `154704863beef6f1a7a13c0b9f6b9b71db6137e3`，merge `b20bba0e969c77b4f91b5e93b278cc5a9140ad54`，Issue64 已 CLOSED；LOCAL01 Issue43亦 CLOSED，01/02/03/08原范围共4/8完成。准确验证与限制见 [LOCAL03b交接](LOCAL-03b.md)。04/05/06/07及最终整链未完；UI文件上传未知不属于原01必须项，不能称已验。以下候选/未合叙述保留原时点历史。
+
+root修前完整83套全部exit0/close；两个最小P2后除policy新增金额摘要和newmodel外源码hash不变。第二P2后root最终五套全部exit0/close（newmodel92），独立cents900000000010、ledger六合计完整及12正负界外拒绝通过；**没有第二P2后最终完整83重跑证据**，修前83不冒称修后完整验收。全新未实施者独立接受完整154，无剩余确认P1/P2；旧9组真实链及新HTTP/MCP ±1120000000000.51拒绝、±1e12六合计/ref完整、24界内/30界外共54例均exit0/close，22hash相同。LOCAL01原业务验收已有正式版本证据，UI上传未知不扩大其原范围。
+
 # B2b 第二P2：辅助账簿六金额完整投影守卫（2026-10-23，候选）
 
 Root保存的修前完整head为 `a6e19b074e27a51ff62ae04ac4fd0cae225875d5`（未push/PR）；全新未参与实施的审查者确认新增辅助账簿摘要P2：真实期初700000000000.07 + 借400000000000.11 - 贷0.03，raw closing正确1100000000000.15，但原摘要未核六合计的模型上限，sanitizeProjection丢closing/debitBalance后仍ok=true并签发localRef。该完整候选暂不接受；此前员工完整83、root修前83及分精度修后必要五门均只保留各自真实时点，不能证明本P2不存在。
