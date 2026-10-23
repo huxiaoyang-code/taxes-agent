@@ -2058,7 +2058,7 @@ export function legacyCashFlowStatement(setId, period) {
  * 旧账套（legacy）仍走旧兼容计算（完整性由 legacy_profile_compatibility 单独表达）。
  */
 export function cashFlowStatement(setId, period) {
-  const { profile, roles, context } = accountSetProfile(setId);
+  const { set, profile, roles, context } = accountSetProfile(setId);
   if (profile.legacy) {
     const data = legacyCashFlowStatement(setId, period);
     const reportStatus = legacyReportStatus("cash-flow-statement", false);
@@ -2081,6 +2081,8 @@ export function cashFlowStatement(setId, period) {
   const addBucket = (category, code, cents) =>
     bucket[category].set(code, (bucket[category].get(code) || 0n) + cents);
   const unknown = [];
+  // 参与本期现金 gross 的现金细目（含双向、内部划转），用于后文准则语义校验。
+  const cashParticipantCodes = new Set();
 
   for (const voucher of rows(
     `SELECT id FROM vouchers WHERE account_set_id=? AND status='posted' AND kind<>'carryforward' AND period=?`,
@@ -2099,6 +2101,7 @@ export function cashFlowStatement(setId, period) {
       if (isCash(entry.code)) {
         inflow += debit;
         outflow += credit;
+        cashParticipantCodes.add(entry.code);
         continue;
       }
       if (debit !== 0n) {
@@ -2112,10 +2115,35 @@ export function cashFlowStatement(setId, period) {
     const totalOf = (map) => [...map.values()].reduce((sum, value) => sum + value, 0n);
     const debitTotal = totalOf(debitCounterparties);
     const creditTotal = totalOf(creditCounterparties);
-    // 能归到非现金对方的金额 = min(该方向现金总额, 该方向非现金总额)：
-    // 差额只能是现金科目之间的划转（对方也是现金），既不分类，也不臆造比例分摊。
-    const inflowToNonCash = inflow < creditTotal ? inflow : creditTotal;
-    const outflowToNonCash = outflow < debitTotal ? outflow : debitTotal;
+    // 同一凭证的现金收付可以有多种合法配对：现金内部划转 t 只需吸收「超出非现金对方的现金部分」，
+    // 因此 t ∈ [tMin, tMax]：tMin = max(0, 流入 − 非现金贷方) = max(0, 流出 − 非现金借方)
+    // （平衡凭证上两者相等，这里取较大值以防数据异常），tMax = min(流入, 流出)。
+    // 只有区间收敛为单点时才可确定外部现金收付金额；否则同一批分录既可能是
+    // 「内部划转 + 非现金对非现金」，也可能是「外部现金收付 + 部分内部划转」，
+    // 不得假定其中一种，也不得用净额 0 消除双向 gross 事实或把假定金额写进经营 / 投资 / 筹资。
+    const minInternalIn = inflow > creditTotal ? inflow - creditTotal : 0n;
+    const minInternalOut = outflow > debitTotal ? outflow - debitTotal : 0n;
+    const minInternal = minInternalIn > minInternalOut ? minInternalIn : minInternalOut;
+    const maxInternal = inflow < outflow ? inflow : outflow;
+    if (minInternal !== maxInternal) {
+      unknown.push({
+        direction: "inflow",
+        category: "unknown",
+        reason: "ambiguous-cash-counterpart-pairing",
+        value: centsToNumber(inflow),
+      });
+      if (outflow !== 0n) {
+        unknown.push({
+          direction: "outflow",
+          category: "unknown",
+          reason: "ambiguous-cash-counterpart-pairing",
+          value: centsToNumber(-outflow),
+        });
+      }
+      continue;
+    }
+    const inflowToNonCash = inflow - minInternal;
+    const outflowToNonCash = outflow - minInternal;
     const classify = (signedCents, counterparties, direction) => {
       if (signedCents === 0n || counterparties.size === 0) return;
       if (counterparties.size > 1) {
@@ -2166,9 +2194,58 @@ export function cashFlowStatement(setId, period) {
 
   const balEnd = centsView(accountBalances(setId, period));
   const balBegin = centsView(accountBalances(setId, prevPeriod(period)));
-  const cashAt = (balances) => sumByPrefixCents(balances, cashRoots);
-  const cashBeginCents = cashAt(balBegin);
-  const cashEndCents = cashAt(balEnd);
+  // 现金余额按真实「借方 − 贷方」整数分事实汇总，不盲信库内可能已损坏的 direction：
+  // profile 角色已确定现金是资产 / 借方，任何「负债 / 贷方」声明只能作为待诊断冲突，
+  // 不能把借方现金余额翻成负数，也不能把它静默抹为 0。
+  const cashNetByCode = (throughPeriod) => {
+    const netByCode = new Map();
+    const add = (code, cents) => netByCode.set(code, (netByCode.get(code) ?? 0n) + cents);
+    for (const opening of getOpeningBalances(setId)) {
+      if (isCash(opening.code)) add(opening.code, storedCents(opening.debit) - storedCents(opening.credit));
+    }
+    for (const entry of postedEntryRows(db, setId, { fromPeriod: set.start_period, toPeriod: throughPeriod })) {
+      if (isCash(entry.code)) add(entry.code, storedCents(entry.debit) - storedCents(entry.credit));
+    }
+    return netByCode;
+  };
+  const cashBeginByCode = cashNetByCode(prevPeriod(period));
+  const cashEndByCode = cashNetByCode(period);
+  const sumCashCents = (netByCode) => [...netByCode.values()].reduce((total, cents) => total + cents, 0n);
+  const cashBeginCents = sumCashCents(cashBeginByCode);
+  const cashEndCents = sumCashCents(cashEndByCode);
+  for (const [code, cents] of cashBeginByCode) if (cents !== 0n) cashParticipantCodes.add(code);
+  for (const [code, cents] of cashEndByCode) if (cents !== 0n) cashParticipantCodes.add(code);
+
+  // 参与现金 gross / 期初 / 期末的所有现金细目都要用 profile 权威语义（类别 / 方向 / 备抵）校验：
+  // 合法自定义明细（如 100201 资产 / debit）通过；历史损坏 / 未映射记录保留诊断，
+  // 不静默 complete，也不把金额从可核余额里抹掉。
+  const CASH_SEMANTICS_REASON = {
+    "category-conflict": "account-category-conflict",
+    "direction-conflict": "account-direction-conflict",
+    "contra-conflict": "account-contra-conflict",
+    "account-metadata-invalid": "account-metadata-invalid",
+  };
+  const cashSemanticsIssues = [];
+  for (const code of cashParticipantCodes) {
+    const account = byCode.get(code);
+    const semantics = account ? accountProfileSemantics(profile, account) : null;
+    if (!semantics || !semantics.matchedRoot) {
+      cashSemanticsIssues.push({
+        accountCode: code,
+        diagnostics: [{ code: "report_account_unmapped", reason: "account-not-in-profile" }],
+      });
+      continue;
+    }
+    if (semantics.reasons.length) {
+      cashSemanticsIssues.push({
+        accountCode: code,
+        diagnostics: semantics.reasons.map((reason) => ({
+          code: "report_account_semantics_mismatch",
+          reason: CASH_SEMANTICS_REASON[reason] ?? "account-metadata-invalid",
+        })),
+      });
+    }
+  }
 
   const earnings = incomeStatement(setId, period);
   // 折旧 / 摊销只认已过账借方对方科目（累计折旧 / 摊销角色前缀）。
@@ -2204,9 +2281,21 @@ export function cashFlowStatement(setId, period) {
     reportKind: "cash-flow-statement",
     reason,
   }));
+  for (const issue of cashSemanticsIssues) {
+    for (const diagnostic of issue.diagnostics) {
+      extraDiagnostics.push({
+        code: diagnostic.code,
+        severity: "error",
+        reportKind: "cash-flow-statement",
+        accountCode: issue.accountCode,
+        reason: diagnostic.reason,
+      });
+    }
+  }
+  const classificationComplete = unknown.length === 0 && cashSemanticsIssues.length === 0;
   const reportStatus = profileReportStatus(
     "cash-flow-statement",
-    { complete: unknown.length === 0, diagnostics: [] },
+    { complete: classificationComplete, diagnostics: [] },
     { profile, context, extraDiagnostics },
   );
 
@@ -2220,7 +2309,7 @@ export function cashFlowStatement(setId, period) {
     investing,
     financing,
     unknown,
-    classificationComplete: unknown.length === 0,
+    classificationComplete,
     totals: {
       operating: n(operatingCents),
       investing: n(investingCents),

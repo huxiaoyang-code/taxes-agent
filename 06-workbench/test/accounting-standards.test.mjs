@@ -802,13 +802,55 @@ try {
     assert.deepEqual(okIs.unresolvedAmounts.current, []);
   });
 
-  await test("现金流：同一凭证双向现金保留 gross，经营入 100 / 投资出 100 不再被净额 0 跳过", () => {
-    const setId = create("现金流双向", ENTERPRISE);
+  await test("现金流：同一凭证双向现金 + 双向非现金无法唯一配对，保留 gross 事实与歧义诊断", () => {
+    const setId = create("现金流配对歧义", ENTERPRISE);
+    A.setOpeningBalances(setId, [e("1001", 100), e("4001", 0, 100)]);
+    post(setId, "2026-01", [
+      e("1002", 100), e("1001", 0, 100),
+      e("1601", 100), e("4001", 0, 100),
+    ]);
+    const cf = A.cashFlowStatement(setId, "2026-01");
+    // 同一批分录既可解释为「内部存现 100 + 非现金资产出资 100」，也可解释为
+    // 「现金出资 100 + 现金购建资产 100」。缺唯一可核配对时不得假定任一方向。
+    assert.deepEqual(cf.totals, { operating: 0, investing: 0, financing: 0, net_increase: 0 });
+    assert.deepEqual(
+      cf.unknown.map((item) => [item.direction, item.reason, item.value]),
+      [
+        ["inflow", "ambiguous-cash-counterpart-pairing", 100],
+        ["outflow", "ambiguous-cash-counterpart-pairing", -100],
+      ],
+      "保留真实借贷方向的现金 gross 事实，不写入经营 / 投资 / 筹资合计",
+    );
+    assert.deepEqual(cf.cash, { begin: 100, end: 100, change: 0 });
+    assert.equal(cf.classificationComplete, false);
+    assert.equal(cf.reportStatus.complete, false);
+    assert.ok(cf.reportStatus.diagnostics.some((d) => d.code === "cash_flow_classification_incomplete"));
+  });
+
+  await test("现金流：R1 同凭证经营收入 + 资产购建不足以唯一配对，改为 gross + 明确不完整", () => {
+    const setId = create("现金流R1配对歧义", ENTERPRISE);
     A.setOpeningBalances(setId, [e("1002", 500), e("4001", 0, 500)]);
-    A.createVoucher(setId, {
-      period: "2026-01", status: "posted",
-      entries: [e("1002", 100), e("6001", 0, 100), e("1601", 100), e("1002", 0, 100)],
-    });
+    post(setId, "2026-01", [e("1002", 100), e("6001", 0, 100), e("1601", 100), e("1002", 0, 100)]);
+    const cf = A.cashFlowStatement(setId, "2026-01");
+    // 也可读成「1002 内部划转 100 + 1601 对 6001 的非现金交易」，不能假装知道经营 / 投资配对。
+    assert.deepEqual(cf.totals, { operating: 0, investing: 0, financing: 0, net_increase: 0 });
+    assert.deepEqual(
+      cf.unknown.map((item) => [item.direction, item.reason, item.value]),
+      [
+        ["inflow", "ambiguous-cash-counterpart-pairing", 100],
+        ["outflow", "ambiguous-cash-counterpart-pairing", -100],
+      ],
+    );
+    assert.deepEqual(cf.cash, { begin: 500, end: 500, change: 0 });
+    assert.equal(cf.classificationComplete, false);
+    assert.equal(cf.reportStatus.complete, false);
+  });
+
+  await test("现金流：两个独立凭证各自单一对方，经营入 100 / 投资出 100 可唯一配对", () => {
+    const setId = create("现金流独立凭证", ENTERPRISE);
+    A.setOpeningBalances(setId, [e("1002", 500), e("4001", 0, 500)]);
+    post(setId, "2026-01", [e("1002", 100), e("6001", 0, 100)]);
+    post(setId, "2026-01", [e("1601", 100), e("1002", 0, 100)]);
     const cf = A.cashFlowStatement(setId, "2026-01");
     assert.equal(cf.totals.operating, 100, "经营流入 100");
     assert.equal(cf.totals.investing, -100, "投资流出 100");
@@ -865,6 +907,39 @@ try {
     assert.deepEqual(cf.cash, { begin: 500, end: 200, change: -300 });
     assert.equal(cf.reconciles, false, "未分类金额不伪装成已勾稽");
     assert.ok(cf.reportStatus.diagnostics.some((d) => d.code === "cash_flow_classification_incomplete"));
+  });
+
+  await test("现金流：现金明细语义被历史损坏时按权威方向算余额、保留冲突诊断且不静默完整", () => {
+    // 合法自定义现金明细：100201 资产 / debit，正常应完整且经营流入 100。
+    const okSet = create("现金流合法现金明细", ENTERPRISE);
+    A.addAccount(okSet, { code: "100201", name: "工行基本户", category: "资产", direction: "debit" });
+    post(okSet, "2026-01", [e("100201", 100), e("6001", 0, 100)]);
+    const ok = A.cashFlowStatement(okSet, "2026-01");
+    assert.equal(ok.totals.operating, 100);
+    assert.deepEqual(ok.cash, { begin: 0, end: 100, change: 100 });
+    assert.equal(ok.classificationComplete, true);
+    assert.equal(ok.reportStatus.complete, true);
+
+    // 同编码明细被模拟历史异常改成负债 / credit：库内 direction 已不可信。
+    const brokenSet = create("现金流损坏现金明细", ENTERPRISE);
+    A.addAccount(brokenSet, { code: "100201", name: "工行基本户", category: "资产", direction: "debit" });
+    post(brokenSet, "2026-01", [e("100201", 100), e("6001", 0, 100)]);
+    db.prepare(`UPDATE accounts SET category='负债', direction='credit' WHERE account_set_id=? AND code='100201'`)
+      .run(brokenSet);
+    const cf = A.cashFlowStatement(brokenSet, "2026-01");
+    // 借方 100 的整数分事实仍在：余额按现金角色的权威方向（资产 / 借）汇总，不翻成 -100，也不抹为 0。
+    assert.deepEqual(cf.cash, { begin: 0, end: 100, change: 100 });
+    assert.equal(cf.totals.operating, 100, "单一对方科目 6001 的经营流入事实仍可核对");
+    assert.equal(cf.classificationComplete, false, "现金明细语义冲突不得静默完整");
+    assert.equal(cf.reportStatus.complete, false);
+    assert.ok(cf.reportStatus.diagnostics.some(
+      (d) => d.code === "report_account_semantics_mismatch"
+        && d.accountCode === "100201" && d.reason === "account-category-conflict",
+    ));
+    assert.ok(cf.reportStatus.diagnostics.some(
+      (d) => d.code === "report_account_semantics_mismatch"
+        && d.accountCode === "100201" && d.reason === "account-direction-conflict",
+    ));
   });
 
   await test("现金流：退款按反向独立分类；红字负数金额仍被守卫拒绝", async () => {

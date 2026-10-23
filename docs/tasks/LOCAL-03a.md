@@ -1,7 +1,7 @@
 # 任务单 · LOCAL-03a 双准则科目、报表映射与旧账套兼容迁移
 
 - 类型：会计 profile / 报表规则（阶段 A 纯模块）→ 持久迁移 + 真实接线（阶段 B1 / B2）
-- 状态：**阶段 A 纯规则已实现并自测、独立接受；阶段 B1（核心领域 / 迁移 / 真实手算链）已在 worktree 实现并自测，未提交、未建 PR、未合并；B1 独审返修 R1（5 项具体缺陷）已实现并通过自测，但尚未独立复审；HTTP / Agent / MCP / 导出 / v5 备份与全套注册仍属 B2**
+- 状态：**阶段 A 纯规则已实现并自测、独立接受；阶段 B1（核心领域 / 迁移 / 真实手算链）已在 worktree 实现并自测，未提交、未建 PR、未合并；B1 独审返修 R1（5 项）已实现并自测，但 fresh 独审仍拒绝其中 2 项（现金流 `min` 隐含配对、现金明细损坏 direction）；R2 已修复这 2 项并自测，尚无独立复审结论；HTTP / Agent / MCP / 导出 / v5 备份与全套注册仍属 B2**
 - 基线：阶段 A `98977e04bd24aa293074021802191814f8c2a1d2`；B1 实际 main `dfefae0553052474b8a9308105443714bc5d9cfb`（LOCAL-02 #47 / PR #60 已合），合并 main 后的本地起点 `f7e69bd`
 - 分支：`codex/huxiaoyang-code/local-03a`（独立 worktree，工作区名 `local-03a`）
 - 负责人：`huxiaoyang-code`（已核实）
@@ -193,7 +193,7 @@ node test/accounting-standard-profiles.test.mjs
 | 命令 | 结果 |
 |---|---|
 | `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
-| `node test/accounting-standards.test.mjs`（新增） | 17 / 17 exit 0 |
+| `node test/accounting-standards.test.mjs`（新增） | 17 / 17 exit 0（B1）→ R1 25 / 25 → **R2 28 / 28** |
 | `node test/accounting-standards-migration.test.mjs`（新增） | 6 / 6 exit 0 |
 | `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
 | `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
@@ -242,3 +242,26 @@ node test/accounting-standard-profiles.test.mjs
   `finance-model-adapter` 20 / 21、`local-backup` 0 / 1（v5 拒绝）仍归 B2；
   `report-office-export` 本 worktree 缺 `exceljs` 无法运行（环境限制，非本包改动）。
 - 未提交、未推送、未合并；不等同于复审通过，也不代表 03 / 05b 完成。
+
+### 8.7 B1 独审返修 R2（2026-10-22，同模型新会话，未提交 / 未复审）
+
+- 触发：R1 的 5 项修复经 fresh 独审仍拒绝 2 项：
+  1. P1 现金流 `min(现金, 非现金)` 隐含未经证明的配对（企业期初 借 1001 100 / 贷 4001 100，本期同凭证
+     借 1002 100 / 贷 1001 100 / 借 1601 100 / 贷 4001 100 → 原给投资 −100 / 筹资 100 / `complete=true`）；
+  2. P2 现金编码分支直接归类、余额依赖损坏 `direction`（合法 `100201` 被改成负债 / credit 后经营 100 但
+     现金 end/change = −100 且 `complete=true`）。
+- 本轮可写 7 路径：`accounting.mjs`、必要时 `period-end-controls.mjs`、`accounting-standards.test.mjs`、
+  `accounting-standards-migration.test.mjs`、`ACCOUNTING-STANDARDS.md`、本任务单、`handoffs/LOCAL-03a.md`。
+  **未碰** `db.mjs`（07）、纯 profile / rules、入口（08）、backup（53）、Office / export、
+  package / test-all / 共享 docs。实际只改 `accounting.mjs`、2 个测试、3 份 docs。
+- 修复：内部划转 `t` 可行区间唯一才分类，否则 gross + `ambiguous-cash-counterpart-pairing` + 不完整；
+  R1 的“同凭证 1002/6001 + 1601/1002”改为 gross + incomplete，另用两个独立凭证验证经营 +100 / 投资 −100；
+  参与现金 gross / 期初 / 期末的现金细目用 profile 权威语义校验，余额按真实借减贷汇总，冲突保留诊断。
+- 实跑（cwd=`06-workbench`，合成临时库）：`accounting-standards` **28 / 28**、
+  `accounting-standards-migration` **6 / 6**、`accounting-standard-profiles` 41 / 41、
+  `accounting-guards` 23 / 23、`accounting-derived` 31 / 31、`accounting-period-integrity` 45 / 45、
+  `import-strict` 54 / 54、`import-incremental` 49 / 49、`voucher-amount-guards` 103 / 103、
+  `local-audit` 28 / 28，全部 exit 0。
+- R2 **未重跑** R1 已实跑的 HTTP / 导出 / Office / smoke / adapter / backup；
+  这些项仍保留既有事实与 B2 归属（v5 backup、Office / export、smoke、adapter 未接线），不声称已修复。
+- 未提交、未推送、未合并；R2 不等同于复审通过，也不代表 LOCAL-03a 整包完成。

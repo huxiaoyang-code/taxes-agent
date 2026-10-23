@@ -185,23 +185,48 @@ scope 三态描述**科目定义本身**；往来反向余额是**金额方向**
 完整现金流量表引擎与间接法调节表。受限现金 / 现金等价物不因单一现金科目自动归入经营 /
 投资 / 筹资，仍为 `unknown`；阶段 B 继续负责现金凭证筛选与金额分配验证。
 
-### 5.1 同一凭证的 gross 双向现金（R1 返修，2026-10-22）
+### 5.1 同一凭证的 gross 双向现金与配对可证性（R1 + R2 返修，2026-10-22）
 
 现金凭证不再按「整张凭证的现金净额」处理（净额 0 会被直接跳过，导致真实的两笔交易消失）：
 
-- 现金流入 = 该凭证现金科目**借方合计**；现金流出 = 现金科目**贷方合计**，两者分别保留；
-- 能归到非现金对方的金额 = `min(该方向现金总额, 该方向非现金总额)`；差额只能是现金科目之间的划转，
-  不分类、不产生未分类诊断，但现金 `begin / end / change` 仍如实反映；
+- 现金流入 = 该凭证现金科目**借方合计**；现金流出 = 现金科目**贷方合计**，两者始终按真实借贷方向保留；
+- 同一凭证的现金内部划转金额 `t` 只需吸收「超出非现金对方的现金部分」，因此
+  `t ∈ [max(0, 流入 − 非现金贷方), min(流入, 流出)]`（凭证平衡保证两项下界相等）：
+  - `t` 收敛为单点 → 外部现金收付金额可证：流入 − `t`、流出 − `t`；差额只能是现金科目之间的划转；
+  - `t` 存在多个可能值（同一凭证同时有现金流入 / 流出，且借方与贷方都有非现金对方）→ 配对不唯一：
+    不分类、不把假定金额写进经营 / 投资 / 筹资合计，按方向给 `unknown` +
+    `ambiguous-cash-counterpart-pairing`（`inflow` 保留流入 gross 正数、`outflow` 保留流出 gross 负数），
+    `classificationComplete=false`、`reportStatus.complete=false`；现金 `begin / end / change` 仍如实反映；
 - 该方向只有一个非现金对方科目 → 按 `classifyAccountingCashCounterpart` 归类；
-- 该方向有多个非现金对方科目 → `unknown` + `multi-counterpart-allocation-not-implemented`，
-  `unknown[].value` 保留该方向的带符号金额、`unknown[].direction` 标记 `inflow / outflow`，
-  `classificationComplete=false` 且给 `cash_flow_classification_incomplete`；
-- 绝不按比例分摊、绝不用净额 0 消除诊断，也不把未分类金额塞进经营 / 投资 / 筹资。
+- 该方向有多个非现金对方科目 → `unknown` + `multi-counterpart-allocation-not-implemented`；
+- 纯现金内部划转（`t` 唯一且外部金额为 0）→ 三类 0、`unknown` 空、`classificationComplete=true`；
+- 绝不按比例分摊、绝不用净额 0 消除双向 gross 事实，也不靠摘要 / 名称 / 行顺序猜配对。
 
-已验证的固定口径（合成数据）：同一凭证「借 1002 100 / 贷 6001 100 / 借 1601 100 / 贷 1002 100」
-→ 经营流入 +100、投资流出 -100、净增加 0、`reconciles=true`；现金科目之间划转 → 三类的 0、
-`unknown` 空、`classificationComplete=true`；部分现金 + 应收 / 应付 → 按对方方向归类（60 / -70）；
-复合多类别（借 1403 120 + 借 1601 180 / 贷 1002 300）→ `unknown -300`、不分类、`reconciles=false`。
+已验证的固定口径（合成数据 + 独立字面量）：
+
+- 同一凭证「期初 借 1001 100 / 贷 4001 100；本期 借 1002 100 / 贷 1001 100 / 借 1601 100 / 贷 4001 100」→
+  三类 0、`unknown` 保留流入 +100 / 流出 −100、`classificationComplete=false`：同一批分录既可读成
+  「内部存现 + 非现金资产出资」，也可读成「现金出资 + 现金购建资产」，不得假定其中一种；
+- 同一凭证「借 1002 100 / 贷 6001 100 / 借 1601 100 / 贷 1002 100」→ 同样 gross + incomplete，
+  不假装知道经营 / 投资配对（R1 曾按 `min` 给出经营 +100 / 投资 -100，R2 已改正）；
+- 两个**独立**凭证「借 1002 100 / 贷 6001 100」与「借 1601 100 / 贷 1002 100」→
+  经营 +100 / 投资 −100、`unknown` 空、完整勾稽；
+- 现金内部划转 → 三类 0、`unknown` 空、`classificationComplete=true`；部分现金 + 应收 / 应付 →
+  按对方方向归类（60 / −70）；复合多类别（借 1403 120 + 借 1601 180 / 贷 1002 300）→
+  `unknown -300`、不分类、`reconciles=false`。
+
+### 5.2 现金细目的权威语义与余额（R2 返修，2026-10-22）
+
+- 参与本期现金 gross 与期初 / 期末余额的**全部现金细目**，都必须用 profile 根科目语义校验
+  类别 / 方向 / 备抵；合法自定义明细（如 `100201` 资产 / debit）通过；
+- 现金 `begin / end` 按真实「借方 − 贷方」整数分事实汇总（同一科目前缀只计一次），
+  **不盲信库内可能已损坏的 `direction`**：`100201` 被历史异常改成负债 / credit 时，
+  借方 100 仍计为现金 100，不会翻成 −100，也不会抹为 0；
+- 语义冲突 / 未映射保留 `report_account_semantics_mismatch`
+  （`account-category-conflict` / `account-direction-conflict` / `account-contra-conflict`）或
+  `report_account_unmapped` 诊断，`classificationComplete=false`、`reportStatus.complete=false`；
+  金额事实（含可核经营 / 投资 / 筹资分类）仍保留，不静默完整；
+- legacy 账套仍走旧兼容路径，不重算旧账，`legacy_profile_compatibility` 明确不完整。
 
 ## 6. legacy 分支（防历史重解释）
 
@@ -419,8 +444,10 @@ context = { profileId, accounts? }   // 由服务端在定位 append 目标 / �
     `max(账套启用期间, 当年 1 月)`；**不按库内 `category === 损益` 预过滤**（否则被错误登记成资产 / 负债的
     收入会连同金额一起消失，得到漂亮零表）：按准则映射判断是否属于利润表范围，未映射编码交给规则给
     `account_unmapped` + 金额事实；冲突科目给 `report_account_semantics_mismatch` 且 `complete=false`；
-  - 现金流：按方向分类**单一非现金对方科目**的基础现金凭证（gross 双向规则见 §5.1）；复合对方科目不按
-    比例分摊、不猜现金等价物 / 受限现金，给 `cash_flow_classification_incomplete`，且不把未分类金额塞进
+  - 现金流：按方向分类**单一非现金对方科目**的基础现金凭证（gross 双向与配对可证性见 §5.1）；
+    配对不唯一时不假定类别，按方向保留 gross 事实到 `unknown`；现金细目的类别 / 方向 / 备抵
+    用 profile 权威语义校验，余额按真实借减贷汇总（见 §5.2）；复合对方科目不按比例分摊、
+    不猜现金等价物 / 受限现金，给 `cash_flow_classification_incomplete`，且不把未分类金额塞进
     经营 / 投资 / 筹资。
 - legacy 走**真实旧兼容计算**（原 `balanceSheet` / `incomeStatement` / `cashFlowStatement` 逻辑），
   返回 `legacy_compatibility` + `complete=false`；不把阶段 A 的 `legacy_engine_required` 空值当完成。
@@ -469,6 +496,8 @@ unresolvedAmounts = [{ reportKind, accountCode, matchedRoot?, amountMinor, reaso
 unresolvedAmounts = { current: [...], ytd: [...] }
 // 现金流未分类项增加方向标记
 unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reason, value }]
+// reason 包含 ambiguous-cash-counterpart-pairing（同凭证双向现金配对不唯一）
+// 现金细目语义冲突另给 report_account_semantics_mismatch / report_account_unmapped（含 accountCode）
 ```
 
   这些金额**绝不**写进任何报表行或合计（不漂亮归零、不误分类），只作为人工核对事实；
@@ -494,7 +523,7 @@ unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reas
 | 命令 | 结果 |
 |---|---|
 | `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
-| `node test/accounting-standards.test.mjs` | 25 / 25 exit 0（B1 原 17 + R1 新增 8） |
+| `node test/accounting-standards.test.mjs` | 28 / 28 exit 0（B1 原 17 + R1 新增 8 + R2 新增 3） |
 | `node test/accounting-standards-migration.test.mjs` | 6 / 6 exit 0 |
 | `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
 | `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
@@ -513,6 +542,10 @@ unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reas
   利润表冲突收入不被预过滤丢弃且保留 `amountMinor=-10000`；同凭证双向现金 gross（经营 +100 / 投资 -100）；
   现金内部划转 / 部分现金 + 应收（60）/ 部分现金 + 应付（-70）；复合多类别 `unknown -300`；退款 -100 +
   负数金额拒绝；`0.30 = 0.10 + 0.20` 整数分平衡 + 真正 1 分不平；未知 profile 只回 `field/reason`。
+- R2 返修（2026-10-22）新增 3 项并改写 R1 的 1 项：原“同凭证双向现金→经营 +100 / 投资 -100”改为
+  “同凭证双向现金 + 双向非现金→三类 0、gross +100/−100、incomplete”；另增 R1 收入 + 资产同凭证的同一歧义；
+  两个独立凭证验证可证经营 +100 / 投资 −100；现金明细 `100201` 被改成负债 / credit 后余额仍为借减贷 100、
+  经营 100 保留、类别 / 方向冲突诊断 + `classificationComplete=false`（合法 `100201` 对照仍完整）。
 - `accounting-standards-migration.test.mjs`：真实 v4 合成旧库（企业标签 + 旧小企 COA + 已完成 create 批次）
   与 v3 合成旧库；迁移前 v4 备份 `verify` / `restore-new` 到全新目录成功，恢复库由真实 `db.mjs` 入口升 v5；
   v4→v5 备份含 WAL 已提交批次、业务行 / 指纹 / 原标签不变、所有旧账套为 legacy；旧 create 批次**新进程**重放
@@ -523,15 +556,15 @@ unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reas
 
 ### 11.8 B1 未做 / 待 B2（不得据此宣称整体交付）
 
-1. **v5 备份 / 恢复**：`local-backup.mjs` 当前仍严格只支持 v3 / v4；B1 **未修改**该文件与 CLI / 测试。
+1. **v5 备份 / 恢复**：`local-backup.mjs` 当前仍严格只支持 v3 / v4；B1 / R2 **未修改**该文件与 CLI / 测试。
    v5 库备份会被明确拒绝，必须等银行 #53 最终结构与窗口释放后在 B2 增加 `STRUCTURE_V5` 与完整测试；
    B1 已实际验证 **v4 迁移前备份**可 `verify` / `restore-new` 并由真实入口升 v5。
 2. **入口接线**：`server.mjs`、`agent-tools.mjs`、MCP `tools.mjs` 未改；`accountingContext` / `reportStatus`
    尚未进入 HTTP / Agent / MCP DTO。B2 才接真实入口与连续链。
 3. **导出 / Office**：`report-export.mjs` / `report-office-export.mjs` 未改；B1 只保证核心返回值与旧主要字段兼容。
-   现有 `report-export` 套件有 3 项因新 profile 行项目 / 累计折旧符号 / 复合现金流口径差异失败（R1 后 18 / 21；
-   原 17 / 21，原因是同一凭证单向现金分类修好后“混合现金凭证”一项转绿），
-   已登记为 B2（05 导出）适配项，未删断言、未改导出源码。
+   现有 `report-export` 套件在 R1 后为 18 / 21（原 17 / 21），R2 **未重跑、未改导出源码**；已知差异为
+   新 profile 行项目 / 累计折旧符号 / 复合现金流口径，登记为 B2（05 导出）适配项，未删断言。
+   `report-office-export` 在本 worktree 仍缺 `exceljs` 依赖，R2 未运行、未安装依赖。
 4. **08 输出边界**：新增字段 / 行项目计数差异需 08 在 B2 更新精确允许字段与未知键处理；B1 未改 08 文件。
 5. **测试注册**：`scripts/test-all.mjs` 未改；B1 三套新测试尚未注册。
 6. **公共交接**：`docs/handoffs/STATE.md`、`NEXT-SESSION.md`、任务索引 / INDEX / CHANGELOG 未改（归 root 释放窗口）。
@@ -558,8 +591,9 @@ unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reas
 
 已验证边界（不宣称全）：
 
-- 多对方科目、现金与现金混合划转的**部分归属**按 `min(该方向现金总额, 该方向非现金总额)` 归属到非现金对方，
-  差额视为现金内部划转；不对多对方方向做任何比例分摊。
+- 多对方科目、现金与现金混合划转的**部分归属**在 R1 曾按 `min(该方向现金总额, 该方向非现金总额)` 处理；
+  R2 已确认该 `min` 隐含未经证明的配对，改为「内部划转区间唯一才分类，否则保留 gross + 歧义诊断」
+  （见 §5.1 / §12.1）；仍不对多对方方向做任何比例分摊。
 - 未映射自定义损益科目仍按声明方向结转（报表同时报 `account_unmapped`），不因缺根科目而拒绝写入。
 - 红字（负数金额）仍被金额守卫拒绝；冲销走反方向分录，不靠负值改方向。
 - 利润表 / 资产负债表冲突金额**不**进入任何报表行，只以 `unresolvedAmounts` 暴露（可核金额 + 诊断原因）。
@@ -573,3 +607,35 @@ unknown[] = [{ code?, direction: "inflow" | "outflow", category: "unknown", reas
 `import-incremental-http` 22、`report-export-http` 29、`finance-output-policy` 37 均通过。
 受控未通过（未删断言）：`report-export` 18/21、`smoke` 27/28、`finance-model-adapter` 20/21、
 `local-backup` 0/1（v5 拒绝）；`report-office-export` **未能运行**（本 worktree 缺 `exceljs` 依赖）。
+
+### 12.1 B1 独审返修 R2（2026-10-22，未合并、不代表已通过复审）
+
+触发：R1 的 5 项修复经新会话 fresh 独审仍有 2 项不接受。本轮只改 7 个路径（`accounting.mjs` 必要时
+`period-end-controls.mjs`、2 个测试、3 份 docs），未碰 `db.mjs` / 纯 profile / rules / 入口 / 备份 / Office / 导出。
+
+| # | R2 拒绝项 | 修复 |
+|---|---|---|
+| P1 | 同一凭证 `min(现金, 非现金)` 隐含未证明配对：企业期初 借 1001 100 / 贷 4001 100，本期同凭证 借 1002 100 / 贷 1001 100 / 借 1601 100 / 贷 4001 100，原给投资 −100 / 筹资 100 / `complete=true` / `unknown=[]`，编造了类别 | 计算内部划转 `t` 的可行区间；只有 `t` 唯一才分类，否则按方向保留真实 gross 到 `unknown` + `ambiguous-cash-counterpart-pairing`，三类 0、`classificationComplete=false`；R1 的“同凭证 1002/6001 + 1601/1002”同样改为 gross + incomplete，另用两个独立凭证验证经营 +100 / 投资 −100 |
+| P2 | 现金编码分支直接按前缀归类、余额按库内 `direction` 推 `natural`：合法 `100201` 被历史改成负债 / credit 后经营 100 但现金 end/change = −100 且 `complete=true` | 参与现金 gross 与期初 / 期末的现金细目全部用 profile 权威语义校验类别 / 方向 / 备抵；余额按真实借减贷整数分汇总，不盲信损坏 `direction`；冲突 / 未映射保留诊断且 `classificationComplete=false`，金额不翻负、不抹 0 |
+
+R2 实跑（cwd=`06-workbench`，合成临时库，TEMP/TMP 为本会话专属目录）：
+
+| 命令 | 结果 |
+|---|---|
+| `node test/accounting-standards.test.mjs` | **28 / 28 exit 0**（R1 25 + 新 3；其中 R1 的 1 项按真实事实改写） |
+| `node test/accounting-standards-migration.test.mjs` | **6 / 6 exit 0** |
+| `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
+| `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
+| `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45 / 45 exit 0 |
+| `node test/import-strict.test.mjs` | 54 / 54 exit 0 |
+| `node test/import-incremental.test.mjs` | 49 / 49 exit 0 |
+| `node test/voucher-amount-guards.test.mjs` | 103 / 103 exit 0 |
+| `node test/local-audit.test.mjs` | 28 / 28 exit 0 |
+
+- R2 未重跑 R1 已实跑的 HTTP 套件、导出 / Office / smoke / adapter / backup；这些项的既有事实与
+  B2 归属保留在 §11.8，不声称本轮重跑。
+- 仍**未**实现：复合现金流分摊、受限资金 / 现金等价物、分录级配对证据字段、期限重分类等；
+  配对不可证时如实给 gross + 歧义诊断，而不是新建 schema / 破坏指纹。
+- 未提交、未推送、未合并；R2 仍需独立复审，也不代表 LOCAL-03a 整包完成。
+

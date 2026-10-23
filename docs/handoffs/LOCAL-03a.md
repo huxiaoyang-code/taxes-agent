@@ -1,7 +1,8 @@
 # 交接 · LOCAL-03a 阶段 A（纯 profile / 报表规则）→ 阶段 B1（持久 profile + 真实领域 / 迁移）
 
 - 状态：**阶段 A 47866a3 已独立接受 / root 41 项；阶段 B1 已在 worktree 实现并自测（17 + 6 项新领域 / 迁移，
-  B1 清单全绿）；B1 独审返修 R1（5 项具体缺陷）已实现并自测（新 8 项）但仍未独立复审；
+  B1 清单全绿）；R1（5 项）已实现并自测，但 fresh 独审仍拒绝其中 2 项（现金流 `min` 隐含配对、
+  现金明细损坏 direction）；R2 已修复这 2 项并自测（standards 28 / 28），尚无独立复审结论；
   未提交、未推送、未建 PR、未合并；HTTP / Agent / MCP / 导出 / v5 备份 / test-all / 全套仍属 B2**
 - 阶段 A 基线：`98977e04bd24aa293074021802191814f8c2a1d2`；B1 实际 main
   `dfefae0553052474b8a9308105443714bc5d9cfb`（LOCAL-02 #47 / PR #60 已合），本地合入后起点 `f7e69bd`
@@ -346,3 +347,50 @@ M  docs/handoffs/LOCAL-03a.md
 - 仍属 B2：入口接线、导出 / Office 适配、v5 备份、测试注册、公共交接；复合现金流分摊 /
   受限资金 / 期限重分类等业务边界未变（见 [ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §8 / §12）。
 - 真实账套 / 税局 / 凭据全程未使用；真实税局接入仍为 0。
+
+## 10. B1 独审返修 R2（2026-10-22，同模型新会话，未提交 / 未复审）
+
+### 10.1 事实
+
+- R1 的 5 项修复经 fresh 独审仍拒绝 2 项；本轮可写范围收紧为 7 路径：
+  `06-workbench/server/accounting.mjs`、必要时 `period-end-controls.mjs`、
+  `test/accounting-standards.test.mjs`、`test/accounting-standards-migration.test.mjs`、
+  `docs/ACCOUNTING-STANDARDS.md`、`docs/tasks/LOCAL-03a.md`、本交接。
+- **未改**：`db.mjs`（07）、纯 profile / rules、入口（08）、backup（53）、Office / export、
+  package / test-all / 共享 docs。实际只改 `accounting.mjs`、2 个测试、3 份 docs。
+- 未新建分录配对字段、未改 schema / 指纹；不可证的配对如实保留 gross + 歧义诊断。
+
+### 10.2 修复要点（细节见 [ACCOUNTING-STANDARDS](../ACCOUNTING-STANDARDS.md) §5.1 / §5.2 / §12.1）
+
+1. **P1 配对可证性**：计算现金内部划转金额 `t` 的可行区间
+   `[max(0, 流入−非现金贷方), min(流入, 流出)]`；只有 `t` 唯一时才按单一对方科目分类，
+   否则三类 0、`unknown` 按方向保留真实 gross + `ambiguous-cash-counterpart-pairing`，
+   `classificationComplete=false`、`reportStatus.complete=false`。
+   原 R1 “同凭证 1002/6001 + 1601/1002”改为 gross + incomplete；另用两个独立凭证验证
+   经营 +100 / 投资 −100。
+2. **P2 现金细目语义 / 余额**：参与现金 gross 与期初 / 期末的现金细目都用 profile 权威语义校验
+   类别 / 方向 / 备抵；现金余额按真实借减贷整数分汇总，不盲信损坏 `direction`；
+   冲突 / 未映射保留 `report_account_semantics_mismatch` / `report_account_unmapped` 诊断，
+   金额不翻负、不抹 0、不静默完整。
+
+### 10.3 实跑（cwd=`06-workbench`，合成临时库，TEMP/TMP 为本会话专属目录）
+
+| 命令 | 结果 |
+|---|---|
+| `node test/accounting-standards.test.mjs` | **28 / 28 exit 0**（原 25 + 新 3；1 项按真实事实改写） |
+| `node test/accounting-standards-migration.test.mjs` | **6 / 6 exit 0** |
+| `node test/accounting-standard-profiles.test.mjs` | 41 / 41 exit 0 |
+| `node test/accounting-guards.test.mjs` | 23 / 23 exit 0 |
+| `node test/accounting-derived.test.mjs` | 31 / 31 exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45 / 45 exit 0 |
+| `node test/import-strict.test.mjs` | 54 / 54 exit 0 |
+| `node test/import-incremental.test.mjs` | 49 / 49 exit 0 |
+| `node test/voucher-amount-guards.test.mjs` | 103 / 103 exit 0 |
+| `node test/local-audit.test.mjs` | 28 / 28 exit 0 |
+
+- R2 **未重跑** R1 已实跑的 HTTP / 导出 / Office / smoke / adapter / backup；
+  既有结果与 B2 归属保留在 §9.4 / §8.5，不声称本轮重跑。
+- 仍属 B2：入口接线、导出 / Office 适配、v5 备份、测试注册、公共交接；复合现金流分摊 /
+  受限资金 / 期限重分类等业务边界未变。
+- 未提交、未推送、未合并；R2 不等同于独立复审通过，也不代表 LOCAL-03a 整包完成。
+
