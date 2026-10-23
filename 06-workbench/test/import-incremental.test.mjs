@@ -1592,6 +1592,52 @@ try {
       [["V1", "deduplicated"], ["V3", "created"]]);
   });
 
+  for (const [standard, code] of [["小企业会计准则", "560201"], ["企业会计准则", "660201"]]) {
+    for (const mode of ["create", "append"]) {
+      test(`${standard} ${mode}：新增明细类别/方向 dry/apply 拒绝且包括批次全表零写`, () => {
+        const source = { system: "synthetic-semantics", ...identityFixture() };
+        const setId = mode === "append" ? A.createAccountSet({ enterprise: source, name: "合成追加目标", accounting_standard: standard, start_period: "2026-01" }).id : undefined;
+        const snapshot = () => db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+          .map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]);
+        for (const bad of [{ category: "资产", direction: "debit" }, { category: "损益", direction: "credit" }]) {
+          const args = { mode, source, accountSetId: setId, confirmNewBinding: true,
+            batchId: `semantics-${source.enterpriseKey}-${bad.category}-${bad.direction}`,
+            payload: { account_set: meta("合成语义拒绝", { accounting_standard: standard }),
+              accounts: [{ code, name: "合成明细", ...bad }] } };
+          const before = snapshot();
+          for (const dryRun of [true, false]) {
+            const result = IM.importIncremental({ ...args, dryRun });
+            assert.equal(result.status, IM.STATUS.REJECTED);
+            assert.equal(result.validation.ok, false);
+            assert.equal(result.validation.profileError.code, "account_semantics_conflict");
+            assert.deepEqual(snapshot(), before, "静态拒绝不得新增 failed batch 或任何业务/来源元数据");
+          }
+        }
+      });
+      test(`${standard} ${mode}：合法明细金额与 completed 批次 ID/指纹只读重放`, () => {
+        const source = { system: "synthetic-semantics", ...identityFixture() };
+        const setId = mode === "append" ? A.createAccountSet({ enterprise: source, name: "合成合法追加", accounting_standard: standard, start_period: "2026-01" }).id : undefined;
+        const args = { mode, source, accountSetId: setId, confirmNewBinding: true, batchId: `semantics-legal-${source.enterpriseKey}`,
+          payload: { account_set: meta("合成合法明细", { accounting_standard: standard }),
+            accounts: [{ code, name: "合成明细", category: "损益", direction: "debit" }],
+            vouchers: [journal("2026-01", "2026-01-03", 1, "合成独立金额", [
+              { code, debit: 37.25, credit: 0 }, { code: "1002", debit: 0, credit: 37.25 },
+            ], "SYNTHETIC-DETAIL-1")] } };
+        assert.equal(IM.importIncremental({ ...args, dryRun: true }).validation.ok, true);
+        const applied = IM.importIncremental({ ...args, dryRun: false });
+        assert.equal(applied.status, IM.STATUS.APPLIED, JSON.stringify(applied));
+        const target = setId || db.prepare("SELECT account_set_id FROM import_batches WHERE batch_id=?").get(args.batchId).account_set_id;
+        assert.equal(A.incomeStatement(target, "2026-01").current["净利润"], -37.25);
+        const before = fullSnapshot();
+        for (const dryRun of [true, false]) {
+          const replay = IM.importIncremental({ ...args, dryRun });
+          assert.equal(replay.validation.ok, true, JSON.stringify(replay));
+          assert.deepEqual(fullSnapshot(), before, "所有旧 ID、指纹、attempt、时间戳必须逐字段不变");
+        }
+      });
+    }
+  }
+
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;

@@ -2706,6 +2706,23 @@ export function normalizeImportPayload(payload = {}, context = null) {
     if (code && !isStandard && !isDuplicate) {
       if (!["debit", "credit"].includes(direction)) errors.push(`科目 ${code} 方向缺失或非法（新增科目必须为 debit/credit）：${rawDir || "(空)"}`);
       if (!ACCOUNT_CATEGORIES.includes(rawCat)) errors.push(`科目 ${code} 类别缺失或非法（新增科目必须为 资产/负债/权益/成本/损益）：${rawCat || "(空)"}`);
+      // 与 addAccount 共用 profile 根科目语义；已有科目与重复行不参与新增校验。
+      if (profile && aname && ["debit", "credit"].includes(direction) && ACCOUNT_CATEGORIES.includes(rawCat)) {
+        const semantics = accountProfileSemantics(profile, { code, name: aname, category: rawCat, direction, contra: false });
+        if (semantics.reasons.length) {
+          const reason = semantics.reasons[0];
+          const failure = {
+            code: "account_semantics_conflict",
+            message: `自定义科目与 profile ${profile.id} 根科目语义冲突`,
+            details: {
+              field: reason === "category-conflict" ? "category" : reason === "direction-conflict" ? "direction" : "contra",
+              accountCode: code, matchedRoot: semantics.matchedRoot, reason,
+            },
+          };
+          profileError ||= failure;
+          errors.push(`${failure.code}: 科目 ${code} ${failure.message}`);
+        }
+      }
     }
     normalizedAccounts.push({ code, name: aname, category: rawCat, direction });
   });

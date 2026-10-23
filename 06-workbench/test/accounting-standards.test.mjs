@@ -1092,6 +1092,41 @@ try {
     });
   }
 
+  for (const [standard, code] of [[SMALL, "560201"], [ENTERPRISE, "660201"]]) {
+    await test(`${standard}：legacy 新增明细语义 dry/apply 一致拒绝且全表零写`, () => {
+      const snapshot = () => db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+        .map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]);
+      for (const bad of [{ category: "资产", direction: "debit" }, { category: "损益", direction: "credit" }]) {
+        const payload = { account_set: { name: "语义零写合成", accounting_standard: standard, start_period: "2026-01" },
+          accounts: [{ code, name: "合成明细", ...bad }] };
+        const enterprise = identityFixture();
+        const before = snapshot();
+        for (const dryRun of [true, false]) {
+          const result = A.importAccountSet(payload, { enterprise, dryRun });
+          assert.equal(result.validation.ok, false);
+          assert.equal(result.validation.profileError.code, "account_semantics_conflict");
+          assert.equal(result.validation.profileError.details.field, bad.category === "资产" ? "category" : "direction");
+          assert.equal(result.created, null);
+          assert.deepEqual(snapshot(), before);
+        }
+      }
+    });
+    await test(`${standard}：legacy 合法同根明细独立金额与标准科目兼容`, () => {
+      const payload = { account_set: { name: "合法明细合成", accounting_standard: standard, start_period: "2026-01" },
+        accounts: [{ code, name: "合成明细", category: "损益", direction: "debit" },
+          { code: "1002", name: "不覆盖标准名称", category: "负债", direction: "credit" }],
+        vouchers: [{ period: "2026-01", date: "2026-01-03", number: 1,
+          entries: [e(code, 37.25), e("1002", 0, 37.25)] }] };
+      const enterprise = identityFixture();
+      const preview = A.importAccountSet(payload, { enterprise, dryRun: true });
+      assert.equal(preview.validation.ok, true, JSON.stringify(preview));
+      const result = A.importAccountSet(payload, { enterprise, dryRun: false });
+      assert.equal(result.validation.ok, true);
+      assert.equal(A.incomeStatement(result.created.id, "2026-01").current["净利润"], -37.25);
+      assert.equal(A.listAccounts(result.created.id).find((a) => a.code === "1002").name, "银行存款");
+    });
+  }
+
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;

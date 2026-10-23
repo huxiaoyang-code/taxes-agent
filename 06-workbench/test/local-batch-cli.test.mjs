@@ -761,7 +761,7 @@ await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX 金额与独�
         assert.equal(r2(csvNumber(balanceCsv, "负债合计", 3)), 0, `${itemKey} ${period} 负债合计`);
         assert.equal(r2(csvNumber(balanceCsv, "所有者权益合计", 3)), expected.totalEquity, `${itemKey} ${period} 所有者权益`);
         assert.equal(r2(csvNumber(balanceCsv, "固定资产账面价值", 3)), expected.fixedNet, `${itemKey} ${period} 固定资产净值`);
-        assert.equal(r2(csvNumber(balanceCsv, "减：累计折旧", 3)), expected.accum, `${itemKey} ${period} 累计折旧`);
+        assert.equal(r2(csvNumber(balanceCsv, "减：累计折旧", 3)), expected.accum === 0 ? 0 : -expected.accum, `${itemKey} ${period} 累计折旧`);
         assert.equal(String(csvRow(balanceCsv, "资产负债表平衡", 1)).trim(), "是");
         const incomeCsv = parseCsv(readFileSync(join(folder, `income-statement-${period}.csv`), "utf8"));
         const netRow = incomeCsv.find((row) => firstCell(row) === "净利润");
@@ -792,6 +792,7 @@ await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX 金额与独�
         assert.equal(numeric(xlsxRow(incomeXlsx, "净利润")[1]), jan ? c.p1 : c.p2, `${itemKey} ${period} XLSX 净利润`);
         const balanceXlsx = await loadXlsx(join(folder, `balance-sheet-${period}.xlsx`));
         assert.equal(numeric(xlsxRow(balanceXlsx, "资产总计")[2]), jan ? c.totalAssets1 : c.totalAssets2, `${itemKey} ${period} XLSX 资产总计`);
+        assert.equal(numeric(xlsxRow(balanceXlsx, "减：累计折旧")[2]), (jan ? c.accum1 : c.accum2) === 0 ? 0 : -(jan ? c.accum1 : c.accum2), `${itemKey} ${period} XLSX 累计折旧`);
         const trialXlsx = await loadXlsx(join(folder, `trial-balance-${period}.xlsx`));
         const xlsxTotal = xlsxRow(trialXlsx, "合计");
         assert.equal(r2(Number(xlsxTotal[9])), r2(Number(xlsxTotal[10])), `${itemKey} ${period} XLSX 余额表合计平衡`);
@@ -1285,7 +1286,7 @@ await test("B4 代表性报表：企业1五类两月 + 企业2 的 PDF 文本金
       assertPdfRow(linesOf("balance-sheet"), "负债合计", [0, 0], context);
       assertPdfRow(linesOf("balance-sheet"), "所有者权益合计", [expected.openingEquity, expected.totalEquity], context);
       assertPdfRow(linesOf("balance-sheet"), "固定资产账面价值", [expected.openingFixedNet, expected.fixedNet], context);
-      assertPdfRow(linesOf("balance-sheet"), "减：累计折旧", [expected.openingAccum, expected.accum], context);
+      assertPdfRow(linesOf("balance-sheet"), "减：累计折旧", [expected.openingAccum === 0 ? 0 : -expected.openingAccum, expected.accum === 0 ? 0 : -expected.accum], context);
       assert.ok(bsText.replace(/\s+/g, "").includes("期末：资产=负债+所有者权益是"), `${context} PDF 缺少期末平衡结论`);
       const bsCsv = parseCsv(readFileSync(`${fileBase(c, period, "balance-sheet")}.csv`, "utf8"));
       assert.equal(r2(csvNumber(bsCsv, "资产总计", 2)), expected.openingTotalAssets, `${context} CSV 资产总计期初`);
@@ -1293,6 +1294,9 @@ await test("B4 代表性报表：企业1五类两月 + 企业2 的 PDF 文本金
       const bsXlsx = await loadXlsx(`${fileBase(c, period, "balance-sheet")}.xlsx`);
       assert.equal(numeric(xlsxRow(bsXlsx, "资产总计")[1]), expected.openingTotalAssets, `${context} XLSX 资产总计期初`);
       assert.equal(numeric(xlsxRow(bsXlsx, "资产总计")[2]), expected.totalAssets, `${context} XLSX 资产总计期末`);
+
+      assert.equal(numeric(xlsxRow(bsXlsx, "减：累计折旧")[1]), expected.openingAccum === 0 ? 0 : -expected.openingAccum, `${context} XLSX 累计折旧期初`);
+      assert.equal(numeric(xlsxRow(bsXlsx, "减：累计折旧")[2]), expected.accum === 0 ? 0 : -expected.accum, `${context} XLSX 累计折旧期末`);
 
       // ---- 利润表（本期 / 本年累计）
       assertPdfRow(linesOf("income-statement"), "营业收入", [expected.revenue, expected.cumulativeRevenue], context);

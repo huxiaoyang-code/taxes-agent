@@ -23,7 +23,7 @@ async function withBackend(synthetic, run) {
     const fixture = `
       const {taxGateway} = await import(${moduleUrl('agent-tools.mjs')});
       const A = await import(${moduleUrl('accounting.mjs')});
-      A.createAccountSet({name:'PRIVATE_SYNTHETIC_BOOK',start_period:'2026-09'});
+      A.createAccountSet({name:'PRIVATE_SYNTHETIC_BOOK',start_period:'2026-09',enterprise:{enterpriseKey:'SYNTHETIC-TAX-ACQUISITION-BOOK-001'}});
       let calls = 0;
       taxGateway.registerAdapter({
         adapterId:'synthetic-readonly',region:'350000',version:'test',label:'Synthetic test only',
