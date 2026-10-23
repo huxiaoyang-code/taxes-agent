@@ -680,3 +680,15 @@ LOCAL-03 双准则 / 辅助维度 / 往来合同未在本窗验收，不声称 L
 旧 P1 的 core3 替换案例在银行守卫之前已触发核心 v4 迁移，**确有核心 pre-v4 备份**；问题是银行绕过自己的安装前备份，不能表述为「从无任何备份」。本轮负测确认 core3/4 业务字节、凭证行、版本行不变，不新增 WAL / SHM / 迁移或银行备份目录。故障注入只在测试生成的 ESM loader 内，没有生产绕过开关。
 
 全部合成 fixture 由本轮新建的专属 workspace 根承载，TEMP / TMP / fallback DATA 先指向该根，创建前核验祖先不是 reparse point；未访问真实账套或税局。回滚确认 / 未知态、调用方 BEGIN 与严格索引验收仍保留。测试结果与环境失败详见本任务和交接的本轮条目；本候选待管理者独审、冻结与 Git 收尾，不代表 LOCAL-04 整体完成。
+
+## 2026-10-23 首次读页前纯文件核验 P2 窄修（待最终独审）
+
+本条补充并限定前述历史候选结论。冻结旧候选 `ac3fe2943872ab9a4ac97c2b1763b9abf53d6c74` 的独立复现明确拒绝：在银行 `assertPristineCreationFiles` 返回后、readOnly SQLite 连接核验前，同 inode 填充普通已关闭 WAL 业务库，拒绝码正确且主库字节不变，但首次读页 `PRAGMA application_id` 会生成 0 字节 WAL / 32768 字节 SHM。constructor 和 `PRAGMA database_list` 本身没有生成 sidecar；未观察到业务 DDL、迁移或银行备份。这是拒绝过程的文件污染 P2，不能写成已证业务损坏，也不能用旧 150 项或旧候选 65 入口成功解除它。
+
+本轮仅修改守卫、银行 CLI 测试和银行三文档（Issue #53 comment6357702843 的五路径窗口）。守卫在 connectionFacts 首次 SQL 前，用新开的纯文件只读 fd 核验页头魔数、application_id 与 nonce；db-init 还要求实际大小和完整 4096 字节种子一致。新读取 fd 的 fstat 必须与私有创建身份及保留创建句柄、路径身份匹配；finally 仅关闭本次自有读取句柄。07 创建 fd 仍可为只写 `wx`，不要求改为读写。stamp 的种子验证也先做同样纯文件核验。原 marker、创建身份与实际 SQLite 连接核验继续保留，银行失败 release 继续 preserveDatabase；没有扩改 storage、生产故障开关或协议。
+
+正式 CLI 新增精确预检后同 inode WAL 注入用例，原 14 项及业务断言保留。旧源码下该新用例 exit 1，失败于新增 WAL 断言；新源码下 exit 0，拒绝 `fresh_database_foreign_content`，主库字节、业务行 991、迁移版本 3 和 user_version 73 保持，拒绝时无 WAL / SHM / DDL / 迁移或备份目录。独立 SQL 验证安排在 sidecar 断言之后，避免把测试自身读取所建文件误算成被测入口行为。
+
+本轮在 `06-workbench` 的受影响自测实际通过，均 exit 0：`node test/bank-reconciliation.test.mjs` 43/43、`node test/bank-reconcile-cli.test.mjs` 15/15、`node test/local-bank-backup-integration.test.mjs` 5/5、`node test/local-backup.test.mjs` 22/22、`node test/local-batch-persistence.test.mjs` 39/39、`node test/local-batch-cli.test.mjs` 11/11，合计 135 项。junction 用获批准的真实合成构造验证，没有 skip。07 CLI 首轮 10/11 exit 1 是本次漏设 `REPORT_OFFICE_PYTHON`；补设指定内置 Python 后完整 11/11 exit 0，初轮日志保留。纯文件自有探针另有正常只写创建 fd 成功、读取 EIO、短读三组：后两组在任何 SQLite SQL 前拒绝，读取 fd 关闭，创建 fd 未误关，主库不变且无 sidecar。
+
+全部 TEMP / TMP / fallback DATA 在本轮新建 workspace 专属根内，事先核验祖先无 reparse point，只用合成 fixture 与自有子进程；未扫描清理全局 TEMP、未读取真实账套或税局凭据。日志、命令和最终五路径 SHA256 见管理者本机忽略目录 `.agent-runs/bank-narrow-wal-p2-delivery-20261023.md`。本次实现未执行 Git 写操作，未运行新候选全 65 入口，未声明最终独审接受、PR ready / 合并或 LOCAL-04 整体完成。边界仅闭合已实证时序及同根因文件内容检查，不承诺检查后无限持续恶意物理并发改写；下一步由管理者冻结新 head、fresh 独审和最终回归验收。

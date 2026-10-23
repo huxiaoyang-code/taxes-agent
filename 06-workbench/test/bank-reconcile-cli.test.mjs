@@ -674,6 +674,47 @@ test("真实 init-db 在 core3/4 旧业务替换与同 inode 填充后于核心 
   }
 });
 
+test("真实 init-db 在文件预检后同 inode 填充旧 WAL 库：拒绝且不产生 sidecar", () => {
+  const dir = fixtureFs.mkdtempSync(join(fixtureRoot, "late-wal-"));
+  const donorPath = join(dir, "donor.db"), target = join(dir, "workbench.db");
+  const donor = new DatabaseSync(donorPath);
+  donor.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version=73;
+    CREATE TABLE existing_business(id INTEGER); INSERT INTO existing_business VALUES(991);
+    CREATE TABLE schema_migrations(version INTEGER); INSERT INTO schema_migrations VALUES(3);`);
+  donor.close();
+  const before = readFileSync(donorPath);
+  assert.equal(before[18], 2, "donor must retain WAL header after normal close");
+  const hook = join(dir, "late-hook.mjs");
+  const search = "  assertPristineCreationFiles(claim);";
+  const injection = `lateFs.writeFileSync(claim.dbPath,lateFs.readFileSync(${JSON.stringify(donorPath)}));`;
+  writeFileSync(hook, `import {registerHooks} from "node:module";
+    registerHooks({load(url,ctx,next){const r=next(url,ctx);
+      if(!url.endsWith("/server/bank-storage.mjs"))return r;
+      const s=String(r.source);const search=${JSON.stringify(search)};
+      if(s.split(search).length!==2)throw new Error("late hook mismatch");
+      return {...r,source:'import * as lateFs from "node:fs";\\n'+s.replace(search,search+${JSON.stringify(injection)})};}});`);
+  const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, CLI, "init-db", "--db", target], {
+    cwd: WORKBENCH, env: { ...process.env, NODE_NO_WARNINGS: "1" }, encoding: "utf8", timeout: 120000,
+  });
+  assert.equal(result.status, 3, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(JSON.parse(result.stderr).error.code, "fresh_database_foreign_content");
+  assert.deepEqual(readFileSync(target), before, "refusal preserves main database bytes");
+  assert.equal(existsSync(target + "-wal"), false, "refusal must not create WAL");
+  assert.equal(existsSync(target + "-shm"), false, "refusal must not create SHM");
+  assert.deepEqual(fixtureFs.readdirSync(dir).sort(), ["donor.db", "late-hook.mjs", "workbench.db"],
+    "no migration or backup directories created");
+  // SQL checks follow the sidecar assertions: this independent read can itself create WAL/SHM.
+  const check = new DatabaseSync(target, { readOnly: true });
+  try {
+    assert.deepEqual(check.prepare("SELECT id FROM existing_business").all().map(row => row.id), [991]);
+    assert.equal(check.prepare("SELECT MAX(version) v FROM schema_migrations").get().v, 3);
+    assert.equal(check.prepare("PRAGMA user_version").get().user_version, 73);
+    assert.equal(check.prepare("SELECT COUNT(*) n FROM sqlite_master").get().n, 2);
+  } finally { check.close(); }
+  assert.deepEqual(readFileSync(target), before);
+});
+
 test("真实 init-db 对 marker 同字节新对象、open/fstat 故障拒绝并关闭自己的创建句柄", () => {
   for (const mode of ["marker-replace", "open-failure", "fstat-failure"]) {
     const dir = fixtureFs.mkdtempSync(join(fixtureRoot, `fault-${mode}-`));
