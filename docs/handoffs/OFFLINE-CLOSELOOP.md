@@ -1,5 +1,37 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-03B kind P2窄修（当前候选）
+
+下方旧34/34与root初验均为修前真实记录，不是最终接受。fresh对完整本地head `ba92c03436870fe9af54eebd611dda54fba42973`明确REJECT P2：`06-workbench/.agent-runs/review-offline03b/kind.mjs`真实销售posted后仅把voucher.kind改carryforward，桥仍recovered；持久指纹未包含kind，而此分类会被利润表排除。旧head未发布/PR/合并，保留拒绝SHA与probe证据。
+
+root仅解冻posting-target、新posting-test和既有3docs，其他产品文件保持硬只读；没有扩功能/再委派/Git写。本次在原日期/行序/金额/来源全部门不变基础上，恢复proof显式要求`v.kind==='normal'`，三种支持候选均正常业务。异常kind返回needs_local_review、posting_stored_entries_inconsistent、applied unknown，不重复入账或换ID。
+
+新增第35组用全新classification合成fixture在**当前policy**下实际逐三类applied，再分别改carryforward/depreciation/unknown；query与execute均精确按stored_entries门拒绝，确认operationId/dependencyDigest/policyDigest仍相同，不能靠代码漂移semantic conflict假通过。每次改回normal都重新recovered，原voucherId不变、凭证/审计计数不增。修后实施最终`node test/offline-posting.test.mjs` **35/35、exit0、skip0**，已授权require_escalated只在合成临时范围真实建立Windows hardlink，所有本次child已close，无自有运行进程。未重跑无关全量/未改旧断言；最终root独立冻结验证、fresh独审及PR/合并仍待。完成后重新硬冻结8路径并交root精确SHA；后续发现问题先报root，不在其验证期间擅改runtime。
+
+## 2026-10-24 PR102实际已合与OFFLINE-03B正式单笔过账实施候选
+
+[PR102](https://github.com/huxiaoyang-code/youshu-fork/pull/102)已实际合并：已审head `6824058`，实际merge/main `0c995076bdf1e78ece6689f486b67443d4c5bc71`；交付[#81 comment6376601145](https://github.com/huxiaoyang-code/youshu-fork/issues/81#issuecomment-6376601145)/[#76 comment6376601499](https://github.com/huxiaoyang-code/youshu-fork/issues/76#issuecomment-6376601499)。下方04C“待PR/未合”均保留历史时点。#54可信领域接线已随PR100实际merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`合入、PR101共享docs merge `f74460f30699c2740b2163743050b78845979885`亦已合；不是本片阻塞，也不意味着#80/#81整体完成。
+
+OFFLINE-03B基于上述PR102merge实施，远端[#80认领comment6376617065](https://github.com/huxiaoyang-code/youshu-fork/issues/80#issuecomment-6376617065)/[#54协调comment6376617349](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376617349)。用户明确授权本轮唯一继承当前会话模型writer，禁止再委派/pi/Claude/TokenHub/其它模型执行器/Git写。root管理、独立验收/Git，另需全新未实施者独审。本片当前仅实施候选，**尚未root最终冻结验收/独审/PR/合并**。唯一八文件窗口见[任务单OFFLINE-03B](../tasks/OFFLINE-03B.md)，其余core/import/audit/batch/旧28guard/旧tests/STATE/NEXT/package/test-all均只读。
+
+新接口 `runOfflinePosting(request)` 与CLI `node scripts/offline-posting.mjs --input <posting-request.json> --output <NEW-result.json>`（cwd06-workbench）。严格prepare/query/execute、显式action inputPath、target DB路径/活动实例/正整数账套/规范企业及单task/businessKey；execute需operationId/dependencyDigest/policyDigest确认。实际原件CSV/XLSX/JSON或material store→现有openOfflineActionInput/buildOfflineActionPlanFromFiles→既有三种候选→公开withRequestMetadata({actor:'cli'})/IM.importIncremental单笔append。只支持已有同企业唯一绑定，不新建/改绑；首次新来源证据显式确认，后续options固定规范化。default持久chart逐本笔name/category/direction/contra/leaf及无子树、2221、aux/封账明确补门，不猜明细或要求客户制分录。
+
+稳定operationId/batchId均64hex，namespace/实际DBinstance/企业/实际set/businessKey派生，不含金额/日期/period/合同/策略/contentVersion。审计request绑定该业务task.dependencyDigest和最终固定科目/aux/代码policy，不用整文件/candidate摘要；同JSON重排/增独立业务/局部补件不误阻，amount或仅factbasis变更保持原ID并冲突。query真实readOnly，不import默认db；先公开queryOperation再只读核实际request/action/actor/target/attempt及storage batch/source/link、当前posted凭证/指纹和实际逐行分金额。stored子分、Infinity、负值拒绝，不借money2舍入恢复。正常execute返回原业务value和IM.getImportBatch；restart仅返回重新证明的recovered，绝不声称原response/resultDigest重放。只有not_found+无对应batch/source+fresh重验才首次调用；failed/pending/unknown/unavailable/矛盾都停，不复写、换ID或增attempt。
+
+固定fresh Node worker排除父缓存DB/应用；native-only facade在spawn前实读39本地mjs闭包，经私有expectedCode envelope由worker在app/DB前比对，再由worker加载后/执行前/commit后与父返回后复验。相对模块路径+bytes摘要允许等字节搬安装目录。没有expected的worker直跑不得执行应用。实际worker已parse自脚本、首次hash前持续替换自身/普通bookkeeping的复制树回归均零凭证/零import审计并返回unknown+稳定ID；不把这个已观察启动窗遮作ABA限制。不证明Node/外部包字节或未观察的检查间改后恢复。
+
+本机输出保存scope/target、当前candidate原件SHA/字段位置/会计事实pointer/规则和fileEvidence；实际entryId/lineNo通过candidateEntryIndex逐行映射sourceFields/factSources/ruleSources。stdout仅固定status/applied，wx输出先预留；IO失败、超时或掉响应不误报未写。先持久查再读材料，已commit但原件缺失仍applied true/needs_local_review，pending缺原件仍unknown；完成提交后输入变化或publication失败须query。每个close独立尽力，不覆盖持久结果。60秒timeout/SIGKILL仅本次child，无常驻服务/后台重试。
+
+修后实施新套（cwd06-workbench）**`node test/offline-posting.test.mjs`34/34、exit0、skip0**，以已授权require_escalated只在合成临时目录真实建立Windows hardlink，不skip沙箱EPERM。合成独立销售891.37净+8.91VAT=900.28、行政279.68（3月8日票/3月19日完成）、预付153.29实际posted/source/审计/逐行结果；actual XLSX→receipt store→正式写账及stale原件；同JSON增独立业务/重排、amount/basis更正、跨企业/规范ID/实例/profile/leaf/2221/aux/封账、existing source无匹配operation拒绝均通过。真实业务触发器失败rollback+持久failed；失败登记再失败留pending，清故障/重启也不增attempt。真实关闭worker stdout管道使commit后exit5，重启query恢复，凭证/成功审计仍各1；没有将删除响应文件的模拟代替该真实IO故障。
+
+root已独立报告新套34/34、真实hardlink/skip0、exit0（`.agent-runs/root-posting-final.log`），并以其自行制作原件验证净389123/VAT3891.23/行政834.27（1月票/2月19日完成）/预付1279.63实际3posted、7entries；periodmovements借贷各395128.13，实际opening银行/资本各2000不变、银行closing720.37、closing借贷各395848.50。逐actual entry→raw/fact/rule/fileEvidence、无重复来源确认重启不增成功、重排稳定、onlybasis冲突、删原件保applied、actual .001/Infinity/负值拒绝并恢复均报通过。根probe为`.agent-runs/manager-posting-execute.mjs`及其balance/acceptance.json；实施未读取其预期作运行输入。root上述运行后本片最后仅补ro打开后/查询返回前/commit后同一fd与路径对象的三处现有身份重验，随后实施再次完整34/34、exit0，五个新增mjs语法检查exit0；root最终以冻结字节为准，不能把早于最后三行的结果冒称完整最终冻结验收。
+
+必要旧影响套同cwd：**`node test/offline-action-plan.test.mjs`33/33、`node test/offline-bookkeeping.test.mjs`43/43、`node test/offline-vat.test.mjs`22/22均exit0、skip0**。这些实跑在父pre/post清单返工前；旧模块字节未改，最终新增manifest不执行旧规则，但root可在最终冻结按影响复验，不用旧结果冒最终root验收。没有跑无关全量/新增依赖/改旧断言。
+
+真实失败与修复保留：root独立prepare首稿opID77字符触audit64上限；新namespace入64hex后通过。实施第一轮采购合成票号含字母，被材料严格拒；改规范数字夹具，未放宽输入。行政首次append将业务月作启用期间，被现有import拒绝account_set_start_period_mismatch；改取实际账套start_period。actual hardlink受限沙箱EPERM先exit1，保留夹具，随后获授权沙箱外34项实际通过。初稿31/32通过不覆盖bootstrap自parse→hash窗，按root要求补父pre/post和两项真实复制树回归后34/34；不删除先前失败事实。
+
+维护入口在`申报流程/`运行 `python tools/flow.py status`仍仅旧human-pl SHA mismatch/exit1，未加载/修改原件。开发只读源码和合成临时资料/DB，无真实账套/凭据/客户消息/全局配置，所有本次子进程实际close，无自有后台进程。#80仍缺自动多笔连续流水线/更正政策；#79整项、#77会计生产审定、#81两合法税期及#82确认接线仍未完成；税局真实接入0。所有结果periodComplete/submittable=false。
+
 ## 2026-10-24 OFFLINE-04C late-cache P2 返工：独立 Node worker（当前候选）
 
 下方PR99/04C首稿19项均是返工前历史，不能证明晚加载guard之前的模块缓存边界。fresh实际 `.agent-runs/reviewer-history/late-cache-probe.mjs`：复制树先import原tax，再将磁盘calculateOfflineVat改throw DISK_CODE_SENTINEL，最后首次import history/guard；首稿仍mint并把新磁盘SHA绑定旧4071.91结果。root确认P2后解除冻结并授权8→9文件（新增worker，#81 comment6376375135），未改旧28模块或缩小代码字节承诺。
