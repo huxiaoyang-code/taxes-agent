@@ -45,7 +45,7 @@ function onDisk(fn) {
       return child;
     };
     fn({ dir, config, configPath, output, save, run });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { if (process.env.KEEP_FIXTURES !== '1' && process.env.WORKBENCH_TEST_KEEP_FIXTURES !== '1') rmSync(dir, { recursive: true, force: true }); }
 }
 
 test('nonzero invoice, quoted BOM Chinese CSV and business facts preserve independent expected cents', () => {

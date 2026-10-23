@@ -1,3 +1,11 @@
+> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+
+原legacy/金融纯validator在安全data-only预检后保NaN/Infinity及有限非法输入的原validation DTO/错误优先级；静态拒绝全表零写。aux附录复用原纯data validator保getter0与原aux错误码。真正写时重验且使用原payload/金额/企业身份/三指纹。业务批次/requestId回放若是新技术operation，记精确no_change观察；固定技术ID的同binding终态重放全表/序列零变，不执行callback，改请求确定冲突。aux执行中实体/第二mapping/allocation/request-receipt八真实故障现保failed batch/attempt/source和失败receipt同提交；失败元数据/审计RAISE则零部分写、pending保留。prepare BEGIN/COMMIT与业务controlledSP/outerROLLBACK未知按真实层分别核证，仍未知不自动重试。
+
+## 2026-10-24 W2b 审计接线候选
+
+首次旧导入和incremental create/append通过同步可信coordinator拥有外层事务，内部会计/辅助组合不重复伪造post事件。原payload、两profile、企业身份及导入三指纹算法未改。 静态参数/来源/规范mode/scope由原纯校验在prepare前核验，原REJECTED/throw与dryRun flags保持、全部表零写；私有admission阶段不产生附录回放副作用，outer执行完整重验。真实执行中失败在确认rollback后，由固定字段队列把原失败批次/attempt/source trace及全局失败终态同COMMIT；batch child与父失败同COMMIT，任一写失败全rollback留pending待核，create失败accountSetId为null。preview/validation失败不记执行成功，旧无审计批次的当前replay只记no_change观察，不回填历史。真实batch import效果/来源完成/审计/checkpoint现同COMMIT，消除原import先提交再checkpoint的窗口；旧afterImportCommit测试钩子名保留，但在本片外层提交之前调用。稳定operationId的重放只读核digest；不能精确还原旧DTO时返回applied=true待核，不能调用导入函数重建结果。
+
  > 2026-10-23 B2b 当前候选：B2a 已随 PR70 实际合并；HTTP `/api/import/incremental` 与 Agent/MCP `book_import_incremental` 已显式透传顶层数据 `auxiliaryAppendix`，保留无附录旧行为与指纹。模型按真实双层状态/committed判断写入，核心回放仍可能新增辅助写；pending/unknown不假称持久成功，导入ref不臆造proof/实体明细。候选仍待管理验收/fresh独审/PR，实际证据统一见 [辅助交接](handoffs/LOCAL-03b.md)。下方旧候选状态保留追溯。
 
 > 2026-10-23 更新：双准则/企业身份部分已随 PR68 合并；辅助 A+B1 已随 PR69 合并，真实证据见 [LOCAL03a交接](handoffs/LOCAL-03a.md) 与 [辅助交接](handoffs/LOCAL-03b.md)。下方候选措辞保留作原阶段历史。当前 B2a 在领域层增加同事务辅助附录，已自测、尚待管理验收/独审/PR；真实 HTTP/Agent/MCP 透传与模型投影留 B2b。

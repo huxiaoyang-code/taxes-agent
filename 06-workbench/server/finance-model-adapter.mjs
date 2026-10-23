@@ -1,3 +1,4 @@
+import { operationErrorEvidence } from './local-audit-coordinator.mjs';
 // finance-model-adapter.mjs — 普通财务工具的「模型边界适配层」（**未挂载到 HTTP / MCP**）。
 //
 // 职责：把 agent-tools.mjs 的普通财务工具调用变成**模型通道信封**。
@@ -613,10 +614,9 @@ function failureFromError(error, context = {}) {
   const registered = typeof context.operation === "string" && REGISTERED_OPERATIONS.has(context.operation)
     ? context.operation
     : undefined;
-  return envelopeFromSafeError(
-    safeErrorProjection(error, registered ? { operation: registered } : {}),
-    context,
-  );
+  const result=envelopeFromSafeError(safeErrorProjection(error,registered?{operation:registered}:{}),context);
+  const audit=operationErrorEvidence(error);if(audit){result.applied=audit.applied;result.needsLocalReview=audit.applied===true?audit.needsLocalReview:true;if(audit.applied===true){delete result.appliedReason;result.localRef=null;result.refPersistence='none';result.refUnavailable='summary_unavailable';}}
+  return result;
 }
 
 function unboundEnvelope({ tool: toolName, operation, category, scope, projection, projectionDropped, summary, refUnavailable }) {

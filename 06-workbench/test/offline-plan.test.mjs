@@ -54,7 +54,7 @@ function disk(fn, data = input()) {
       return child;
     };
     fn({ dir, config, configPath, save, run, read: name => JSON.parse(readFileSync(join(dir, name), 'utf8')) });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { if (process.env.KEEP_FIXTURES !== '1' && process.env.WORKBENCH_TEST_KEEP_FIXTURES !== '1') rmSync(dir, { recursive: true, force: true }); }
 }
 
 test('independent full service evidence branch ready, final never completed or authorized', () => {

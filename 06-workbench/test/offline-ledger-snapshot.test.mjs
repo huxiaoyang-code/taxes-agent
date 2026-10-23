@@ -13,6 +13,7 @@ const root = mkdtempSync(join(fixtureParent, 'offline-ledger-synthetic-'));
 process.env.TEMP = root; process.env.TMP = root;
 process.env.WORKBENCH_DATA_DIR = join(root, 'seed');
 mkdirSync(process.env.WORKBENCH_DATA_DIR);
+let legacyDb,legacySource,setupCompleted=false;
 let db, source, failed = 0, passed = 0;
 const test = async (name, fn) => {
   try { await fn(); passed++; console.log('PASS ' + name); }
@@ -36,6 +37,42 @@ try {
   const draft = A.createVoucher(id, { period: '2026-02', voucher_date: '2026-02-17', summary: '合成草稿', entries: [{ code: '5602', debit: 74.29 }, { code: '1002', credit: 74.29 }] });
   const other = A.createAccountSet({ name: '合成乙', start_period: '2026-01', enterprise: { enterpriseKey: 'SYNTHETIC-SNAPSHOT-OTHER' } });
   const scope = { enterpriseKey: key, accountSetId: id, fromPeriod: '2026-01', toPeriod: '2026-03' };
+  // Private exact15-table historical core/import copy; default seed keeps audit2.
+  const LB=await import('../server/local-backup.mjs');
+  const tables=LB.backupContract().requiredTables;
+  assert.equal(tables.length,15);
+  const legacyDir=join(root,'legacy-core');mkdirSync(legacyDir);const legacyFile=join(legacyDir,'workbench.db');
+  let reader;
+  try {
+    reader=new DatabaseSync(file,{readOnly:true});reader.exec('BEGIN');LB.assertSupportedDatabaseConnection(reader);
+    const facts=()=>JSON.stringify(tables.map(name=>({name,sql:reader.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(name).sql,rows:reader.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()})));
+    const before=facts(),sourceLogical=logical();
+    legacyDb=new DatabaseSync(legacyFile);legacyDb.exec('PRAGMA foreign_keys=OFF; BEGIN');
+    const objects=reader.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY rowid').all().filter(o=>tables.includes(o.tbl_name));
+    for(const object of objects.filter(o=>o.type==='table'))legacyDb.exec(object.sql);
+    for(const name of tables){const rows=reader.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all();for(const row of rows){const keys=Object.keys(row);legacyDb.prepare('INSERT INTO "'+name+'" ('+keys.map(k=>'"'+k+'"').join(',')+') VALUES ('+keys.map(()=>'?').join(',')+')').run(...keys.map(k=>row[k]));}}
+    legacyDb.exec('DELETE FROM sqlite_sequence');
+    const sequence=reader.prepare('SELECT name,seq FROM sqlite_sequence ORDER BY rowid').all().filter(r=>tables.includes(r.name));
+    for(const row of sequence)legacyDb.prepare('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)').run(row.name,row.seq);
+    for(const object of objects.filter(o=>o.type!=='table')){assert.ok(!/\b(?:audit_|local_batch_|aux_|bank_)/i.test(object.sql));legacyDb.exec(object.sql);}
+    legacyDb.exec('COMMIT; PRAGMA foreign_keys=ON');
+    assert.deepEqual(legacyDb.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(legacyDb.prepare('PRAGMA integrity_check').get().integrity_check,'ok');LB.assertSupportedDatabaseConnection(legacyDb);
+    assert.equal(JSON.stringify(tables.map(name=>({name,sql:legacyDb.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(name).sql,rows:legacyDb.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()}))),before);
+    assert.deepEqual(legacyDb.prepare('SELECT name,seq FROM sqlite_sequence ORDER BY rowid').all(),sequence);
+    assert.deepEqual(legacyDb.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(r=>r.version),[1,2,3,4,5]);
+    assert.equal(legacyDb.prepare("SELECT debit FROM opening_balances WHERE account_set_id=? AND code='1002'").get(id).debit,837.19);
+    assert.deepEqual(legacyDb.prepare('SELECT debit,credit FROM voucher_entries WHERE voucher_id=? ORDER BY line_no').all(postedId).map(r=>[r.debit,r.credit]),[[1297.43,0],[0,1284.58],[0,12.85]]);
+    assert.equal(legacyDb.prepare('SELECT debit FROM voucher_entries WHERE voucher_id=? AND line_no=1').get(draft.id).debit,74.29);
+    assert.equal(facts(),before);assert.equal(logical(),sourceLogical);
+    reader.exec('ROLLBACK');
+  } finally {if(reader){if(reader.isTransaction)reader.exec('ROLLBACK');reader.close();console.log('legacy seed reader actualclose');}}
+  legacySource=openReadonlyLedgerSource(legacyFile);
+  const captureLegacy=()=>captureLedgerSnapshot(legacySource,scope);
+  const currentLegacy=s=>assert.equal(validateLedgerSnapshot(legacySource,s).status,'current');
+  const staleLegacy=s=>assert.equal(validateLedgerSnapshot(legacySource,s).status,'stale');
+  assert.equal((await import('../server/local-audit-storage.mjs')).inspectAuditSchema(legacyDb).state,'not_installed');
+  assert.equal((await import('../server/local-batch-storage.mjs')).inspectBatchSchema(legacyDb).state,'not_installed');
+  setupCompleted=true;
   source = openReadonlyLedgerSource(file);
   const capture = () => captureLedgerSnapshot(source, scope);
   const current = snapshot => assert.equal(validateLedgerSnapshot(source, snapshot).status, 'current');
@@ -53,8 +90,13 @@ try {
     assert.equal(s.sources.checks[0].status, 'matches_persisted_content'); assert.equal(s.sources.checks[0].batchAssociation, 'registered');
     assert.equal(s.sources.checks[0].originalFileVerification, 'unverified'); current(s);
   });
+  await test('default product audit2 remains verified with exact amounts and repeated capture is readonly', async()=>{
+    const audit=await import('../server/local-audit-storage.mjs');assert.equal(audit.inspectAuditSchema(db).version,2);assert.equal(audit.inspectAuditSchema(db).ok,true);
+    const before=logical(),snapshot=capture();assert.equal(snapshot.instance.status,'verified_local_audit_instance');assert.equal(snapshot.instance.instanceId,audit.currentAuditInstanceId(db));
+    assert.equal(snapshot.openingBalances.find(r=>r.code==='1002').debitMinor,83719);assert.equal(snapshot.vouchers.find(r=>r.id===postedId).entries[0].debitMinor,129743);assert.equal(snapshot.vouchers.find(r=>r.id===draft.id).entries[0].debitMinor,7429);current(snapshot);capture();assert.equal(logical(),before);
+  });
   await test('three months are enumerated and missing March/coverage/history are never a zero-declaration conclusion', () => {
-    const s = capture(); assert.deepEqual(s.scope.requestedPeriods, ['2026-01', '2026-02', '2026-03']);
+    const s = captureLegacy(); assert.deepEqual(s.scope.requestedPeriods, ['2026-01', '2026-02', '2026-03']);
     assert.deepEqual(s.completeness.missingPeriods, ['2026-03']);
     assert.equal(s.completeness.zeroDeclaration, 'not_assessed'); assert.equal(s.completeness.coverage, 'unverified');
     assert.equal(s.completeness.priorHistoryCompleteness, 'unverified'); assert.equal(s.completeness.openingCompleteness, 'unverified');
@@ -202,29 +244,30 @@ try {
     assert.equal(logical(), before); assert.equal(existsSync(defaultDir), false); assert.equal(existsSync(absent), false);
   });
   await test('official batch instance installation/change stales even while audit remains absent', async () => {
-    const before = capture(); assert.equal(before.batchInstance.status, 'unknown');
+    const before = captureLegacy(); assert.equal(before.batchInstance.status, 'unknown');
     const batch = await import('../server/local-batch-storage.mjs');
-    await batch.installBatchSchema(db, { dbPath: file, outDir: join(root, 'before-batch') });
-    stale(before); const s = capture(); assert.equal(s.instance.status, 'unverified'); assert.equal(s.batchInstance.status, 'persisted_unverified');
+    await batch.installBatchSchema(legacyDb, { dbPath: legacyFile, outDir: join(root, 'before-batch') });
+    staleLegacy(before); const s = captureLegacy(); assert.equal(s.instance.status, 'unverified'); assert.equal(s.batchInstance.status, 'persisted_unverified');
     const original = s.batchInstance.rows.find(r => r.is_active === 1).instance_id;
-    db.prepare('UPDATE local_batch_database_instances SET instance_id=? WHERE instance_id=?').run('synthetic-new-batch-instance', original);
-    try { stale(s); assert.equal(capture().batchInstance.rows.find(r => r.is_active === 1).instance_id, 'synthetic-new-batch-instance'); }
-    finally { db.prepare('UPDATE local_batch_database_instances SET instance_id=? WHERE instance_id=?').run(original, 'synthetic-new-batch-instance'); }
+    legacyDb.prepare('UPDATE local_batch_database_instances SET instance_id=? WHERE instance_id=?').run('synthetic-new-batch-instance', original);
+    try { staleLegacy(s); assert.equal(captureLegacy().batchInstance.rows.find(r => r.is_active === 1).instance_id, 'synthetic-new-batch-instance'); }
+    finally { legacyDb.prepare('UPDATE local_batch_database_instances SET instance_id=? WHERE instance_id=?').run(original, 'synthetic-new-batch-instance'); }
   });
   await test('existing official audit instance is bound when present; installation invalidates old instance-less product', async () => {
-    const s = capture(); const audit = await import('../server/local-audit-storage.mjs');
-    await audit.installAuditSchema(db, { dbPath: file, outDir: join(root, 'before-audit') });
-    stale(s); const withAudit = capture(); assert.equal(withAudit.instance.status, 'verified_local_audit_instance');
-    assert.equal(withAudit.instance.instanceId, audit.currentAuditInstanceId(db)); current(withAudit);
+    const s = captureLegacy(); const audit = await import('../server/local-audit-storage.mjs');
+    await audit.installAuditSchema(legacyDb, { dbPath: legacyFile, outDir: join(root, 'before-audit') });
+    staleLegacy(s); const withAudit = captureLegacy(); assert.equal(withAudit.instance.status, 'verified_local_audit_instance');
+    assert.equal(withAudit.instance.instanceId, audit.currentAuditInstanceId(legacyDb)); currentLegacy(withAudit);
   });
   await test('invalid audit schema never authenticates an instance but active persisted row changes still stale', () => {
-    db.exec('DROP TRIGGER audit_events_no_update');
-    const auditId = db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get().instance_id;
-    const s = capture(); assert.equal(s.instance.status, 'unverified'); assert.equal(s.instance.instanceId, null);
+    legacyDb.exec('DROP TRIGGER audit_events_no_update');
+    const auditId = legacyDb.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get().instance_id;
+    const s = captureLegacy(); assert.equal(s.instance.status, 'unverified'); assert.equal(s.instance.instanceId, null);
     assert.equal(s.instance.rows.find(r => r.is_active === 1).instance_id, auditId);
-    db.prepare('UPDATE audit_database_instances SET instance_id=? WHERE instance_id=?').run('synthetic-new-unverified-instance', auditId);
-    try { stale(s); const next = capture(); assert.equal(next.instance.status, 'unverified'); assert.equal(next.instance.rows.find(r => r.is_active === 1).instance_id, 'synthetic-new-unverified-instance'); }
-    finally { db.prepare('UPDATE audit_database_instances SET instance_id=? WHERE instance_id=?').run(auditId, 'synthetic-new-unverified-instance'); }
+    legacyDb.exec('PRAGMA foreign_keys=OFF');
+    legacyDb.prepare('UPDATE audit_database_instances SET instance_id=? WHERE instance_id=?').run('synthetic-new-unverified-instance', auditId);
+    try { staleLegacy(s); const next = captureLegacy(); assert.equal(next.instance.status, 'unverified'); assert.equal(next.instance.rows.find(r => r.is_active === 1).instance_id, 'synthetic-new-unverified-instance'); }
+    finally {try {legacyDb.prepare('UPDATE audit_database_instances SET instance_id=? WHERE instance_id=?').run(auditId, 'synthetic-new-unverified-instance');}finally{legacyDb.exec('PRAGMA foreign_keys=ON');}assert.deepEqual(legacyDb.prepare('PRAGMA foreign_key_check').all(),[]);}
   });
   await test('path replacement either rejects old connection or is explicitly blocked by unchanged Windows sharing', () => {
     const directory = join(root, 'replacement-dir'); mkdirSync(directory);
@@ -278,9 +321,12 @@ try {
     assert.throws(() => capture(), /ledger_source_unavailable/); assert.throws(() => validateLedgerSnapshot(source, s), /ledger_source_unavailable/);
   });
 } finally {
-  source?.close(); db?.close();
+  const closeErrors=[];
+  for(const close of [()=>legacySource?.close(),()=>{if(legacyDb){if(legacyDb.isTransaction)legacyDb.exec('ROLLBACK');legacyDb.close();}},()=>source?.close(),()=>db?.close()]){try{close();console.log('snapshot handle actualclose');}catch(error){closeErrors.push(error);}}
   console.log(`offline-ledger-snapshot ${passed}/${passed + failed}; DB actualclose`);
-  if (!failed && process.env.KEEP_FIXTURES !== '1') rmSync(root, { recursive: true, force: true });
-  else console.log('Synthetic fixtures retained: ' + root);
+  if (setupCompleted&&!failed&&!closeErrors.length&&process.env.KEEP_FIXTURES!=='1'&&process.env.WORKBENCH_TEST_KEEP_FIXTURES!=='1')rmSync(root,{recursive:true,force:true});
+  else console.log('Synthetic fixtures retained: '+root);
+  if(closeErrors.length)throw new AggregateError(closeErrors,'snapshot_close_failed');
 }
+
 if (failed) process.exitCode = 1;

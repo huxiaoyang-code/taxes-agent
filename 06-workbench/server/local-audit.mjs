@@ -18,6 +18,54 @@
 import { createHash, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 
+// Result hashing is deliberately separate from the integer-only audit/event format.
+// Descriptors are inspected before reading values, including arrays; getters never run.
+export function auditResultSnapshot(value) {
+  const seen = new Set();
+  const visit = (v, arraySlot = false) => {
+    if (v === undefined) return arraySlot ? null : undefined;
+    if (v === null || typeof v === 'string' || typeof v === 'boolean') return v;
+    if (typeof v === 'number') { if (!Number.isFinite(v)) throw auditError('audit_result_invalid'); return Object.is(v, -0) ? 0 : v; }
+    if (typeof v !== 'object' || nodeTypes.isProxy(v) || seen.has(v)) throw auditError('audit_result_invalid');
+    const array = Array.isArray(v), proto = Object.getPrototypeOf(v);
+    if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) throw auditError('audit_result_invalid');
+    const descriptors = Object.getOwnPropertyDescriptors(v);
+    if (Reflect.ownKeys(descriptors).some(k => typeof k !== 'string' || !Object.hasOwn(descriptors[k], 'value'))) throw auditError('audit_result_invalid');
+    seen.add(v);
+    let out;
+    if (array) {
+      const n = descriptors.length?.value;
+      if (!Number.isSafeInteger(n) || n < 0 || Object.keys(descriptors).some(k => k !== 'length' && (!/^(0|[1-9][0-9]*)$/.test(k) || Number(k) >= n))) throw auditError('audit_result_invalid');
+      out = Array.from({length:n}, (_, i) => visit(descriptors[String(i)]?.value, true));
+    } else {
+      out = Object.create(null);
+      for (const k of Object.keys(descriptors).sort()) { const x = visit(descriptors[k].value); if (x !== undefined) Object.defineProperty(out,k,{value:x,enumerable:true}); }
+    }
+    seen.delete(v); return Object.freeze(out);
+  };
+  return value === undefined ? Object.freeze({version:1,rootKind:'undefined'}) : Object.freeze({version:1,rootKind:'json',value:visit(value)});
+}
+export function serializeAuditResult(value) {
+  const snapshot=auditResultSnapshot(value);
+  const encode=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(encode).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+encode(v[k])).join(',')+'}';
+  return encode(snapshot);
+}
+export function auditResultDigest(value) { return createHash('sha256').update(serializeAuditResult(value), 'utf8').digest('hex'); }
+export const AUDIT_RESULT_REF_TYPES = Object.freeze(['account_set','voucher','year_end_voucher','asset_card','aux_entity','voucher_entry','bank_transaction','bank_match','bank_ambiguity','bank_reconcile_run','account_key','import_batch_key','bank_account_key']);
+export function normalizeAuditResultRefs(refs) {
+  if (!Array.isArray(refs)) throw auditError('audit_result_invalid');
+  const rows=refs.map(r=>{
+    if (!r || typeof r !== 'object' || nodeTypes.isProxy(r)) throw auditError('audit_result_invalid');
+    const desc=Object.getOwnPropertyDescriptors(r);
+    if (Reflect.ownKeys(desc).some(k=>typeof k!=='string'||!Object.hasOwn(desc[k],'value'))) throw auditError('audit_result_invalid');
+    const type=desc.type?.value, natural=['account_key','import_batch_key','bank_account_key'].includes(type), key=natural?'keyDigest':'id';
+    if (!AUDIT_RESULT_REF_TYPES.includes(type)||Object.keys(desc).sort().join(',')!==[key,'type'].sort().join(',') || (natural ? !/^[a-f0-9]{64}$/.test(desc[key].value) : !isTechnicalRowId(desc[key].value))) throw auditError('audit_result_invalid');
+    return {type,[key]:desc[key].value};
+  }).sort((a,b)=>AUDIT_RESULT_REF_TYPES.indexOf(a.type)-AUDIT_RESULT_REF_TYPES.indexOf(b.type)||(a.id!==undefined&&b.id!==undefined?a.id-b.id:String(a.keyDigest).localeCompare(String(b.keyDigest))));
+  if (new Set(rows.map(r=>JSON.stringify(r))).size!==rows.length) throw auditError('audit_result_invalid');
+  return rows;
+}
+
 /** 业务库内审计组件名（与 LOCAL-02 的全局 schema 版本相互独立）。 */
 export const AUDIT_COMPONENT = "business-audit";
 /** 审计组件自身结构版本；新增列 / 表必须新增迁移并递增版本。 */
@@ -26,6 +74,11 @@ export const AUDIT_SCHEMA_VERSION = 2;
 // ------------------------------------------------------------------ 固定词表
 /** 固定 action 词表（领域入口统一记账的粒度）。 */
 export const AUDIT_ACTIONS = Object.freeze([
+  "account_set.create", "account_set.bind", "account_set.delete", "account.create", "opening.replace",
+  "period.ensure", "period.status", "voucher.create", "voucher.create_posted", "voucher.delete",
+  "asset.create", "asset.update", "asset.delete", "asset.depreciate", "profit.carry_forward",
+  "aux.entity.create", "aux.entity.update", "aux.allocations.replace", "aux.requirement.set",
+  "bank.account.register", "bank.import", "bank.ambiguity.resolve", "bank.match.confirm", "bank.match.cancel", "bank.reconcile", "bank.refresh",
   "import.create",
   "import.append",
   "import.legacy",
@@ -139,6 +192,7 @@ export const AUDIT_REASON_CODES = Object.freeze([
   "audit_schema_install_failed",
   "audit_install_requires_verified_backup",
   "audit_result_invalid",
+  "audit_result_unavailable",
   "audit_operation_conflict",
   "audit_operation_pending",
   "audit_authorization_invalid",

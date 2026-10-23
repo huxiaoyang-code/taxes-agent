@@ -1,3 +1,15 @@
+> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+
+root50必要定点＋R3四probe已实际接受；当前只待最终候选保存/fresh审查与PR，不重复实现/测试。精确金额、路径实测与R1夹具被原finally自行清理的限制见LOCAL06当前root验收交接。
+
+当前唯一实施窗口为页头66路径，员工65文件已自测并停止，root在6465必要验收已通过，等待最终新独审；本轮不新开实现、不重复运行已绿且字节未变的大矩阵。准确版本、自测/失败及原97注册边界见 LOCAL06 当前修复交接。PR87已合事实保留，后续本W2b尚无PR/merge。
+
+## 2026-10-24 最初882/49窗口实施记录（历史）
+
+基线PR87 merge `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`；Issue54本片最初46路径，加两处真实旧fixture与模型真实rollback断言的最小扩窗共49（bank-reconciliation.test.mjs仅索引建序；local-audit-install.test.mjs仅新仅core夹具、不改原断言；finance-model-adapter.test.mjs仅真实私有rollback案例并加强失败receipt/业务零变）。范围是真实领域/HTTP/rawAgent/model/MCP/CLI、receipt2可信结果重放、受控保存点/metadata/固定child以及batch最小效果+审计+checkpoint接线。已实施并必要自测，尚未root最终验收/全新独审/PR/合并；不关闭06/07、不标八包完成。接口与限制见[LOCAL-AUDIT](../LOCAL-AUDIT.md)。
+
+历史49窗口 [Issue54 49路径认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6372348975)：原46，加银行/core-only两处夹具与模型真实rollback断言的最小窗口；其余旧测试只读。
+
 > 2026-10-23 W2a 当前任务：基线PR74 merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`；[Issue54精确21路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6366469014)，负责人huxiaoyang-code。唯一经用户明确授权的fallback实施者完成本片实现与自测后冻结，root独立验收、全新未实施者独审与Git/PR；本任务不直接关闭Issue54。范围仅audit2基础、strict官方备份、owner-only/durable pending/私有单用授权/receipt-only与audit先装后bank/aux兼容。实际业务接线/统一锁/批量/恢复分叉/Windows不在本片。下一片先W3a batch1/2严格备份与保护升级，再W2b可信coordinator，随后W3b/W4/Windows/最终整链；不得预放行batch。原八包01/02/03/04/05/08为6/8，06/07未完、税局0。实际验收证据见[审计交接](../handoffs/LOCAL-06-AUDIT.md)，不预报PR/合并。
 # 任务单 · LOCAL-06 AUDIT（A 包：审计组件与恢复 ledger 原语）
 

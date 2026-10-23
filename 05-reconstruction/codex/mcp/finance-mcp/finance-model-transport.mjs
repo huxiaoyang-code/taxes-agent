@@ -305,6 +305,26 @@ const PROJECTION_TOKENS = new Set([
 
 // 固定错误码 → 固定 category。未登记码一律拒绝（不能靠“看起来像 token”穿过）。
 const ERROR_CATEGORY_BY_CODE = Object.freeze({
+  audit_operation_invalid: "audit",
+  audit_result_invalid: "audit",
+  audit_result_unavailable: "audit",
+  audit_operation_conflict: "audit",
+  audit_operation_pending: "audit",
+  audit_authorization_invalid: "audit",
+  audit_transaction_conflict: "audit",
+  audit_operation_protocol_required: "audit",
+  audit_admission_busy: "audit",
+  audit_backup_invalid: "audit",
+  audit_backup_source_mismatch: "audit",
+  audit_database_missing: "audit",
+  audit_database_invalid: "audit",
+  audit_unavailable: "audit",
+  audit_write_failed: "audit",
+  audit_commit_unknown: "audit",
+  audit_schema_inconsistent: "audit",
+  audit_schema_newer: "audit",
+  audit_install_requires_verified_backup: "audit",
+
   bank_draft_result_unavailable: "bank",
   bank_draft_input_invalid: "bank",
   bank_draft_scope_invalid: "bank",

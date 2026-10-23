@@ -335,7 +335,7 @@ try {
     // 安装前备份：真实 verify、无 bank 组件、包含 WAL 已提交业务；恢复回原核心。
     const preVerified = LB.verifyBackup({ backupDir: preInstall });
     assert(preVerified.ok === true, `安装前备份必须真实 verify 通过：${JSON.stringify(preVerified)}`);
-    assertEqual(preVerified.components?.length ?? 0, 0, "安装前备份不得已含银行组件");
+    assertEqual(JSON.stringify(preVerified.manifest.components.map(c=>[c.name,c.version])), JSON.stringify([["business-audit",2]]), "安装前已有真实audit2而无bank");
     const preSnapshot = readDbFacts(join(preInstall, LB.SNAPSHOT_FILE));
     assertEqual(preSnapshot.bankTables.length, 0, "安装前备份快照不得有 bank_* 表");
     assertEqual(preSnapshot.vouchers, 5, "安装前备份必须包含 WAL 中已提交的凭证");
@@ -425,26 +425,36 @@ try {
     const postDir = join(ROOT, `post-bank-backup-${++seq}`);
     const created = LB.createBackup({ dbPath, outDir: postDir });
     assert(created.ok === true, `安装后真实备份应成功：${JSON.stringify(created)}`);
-    assertEqual(created.backupMeta.components.length, 1, "清单必须绑定一个 bank 组件");
-    assertEqual(created.backupMeta.components[0].version, 1, "清单绑定真实组件版本 v1");
-    assertEqual(created.backupMeta.components[0].tables, 10, "清单绑定完整 10 表");
+    assertEqual(created.backupMeta.components.length, 2, "清单精确绑定bank及business-audit2");
+    const bankMeta=created.backupMeta.components.find(c=>c.name==="bank"),auditMeta=created.backupMeta.components.find(c=>c.name==="business-audit");
+    assertEqual(auditMeta.version,2);assertEqual(auditMeta.tables,4);
+    assertEqual(bankMeta.version, 1, "清单绑定真实组件版本 v1");
+    assertEqual(bankMeta.tables, 10, "清单绑定完整 10 表");
     const verified = LB.verifyBackup({ backupDir: postDir });
     assert(verified.ok === true, `安装后备份 must verify：${JSON.stringify(verified)}`);
     assertEqual(verified.summary.snapshotSha256, created.backupMeta.snapshotSha256, "verify 摘要必须等于 create 摘要");
     const manifest = JSON.parse(fs.readFileSync(join(postDir, LB.MANIFEST_FILE), "utf8"));
-    assertEqual(manifest.components.length, 1, "清单应有组件条目");
-    assertEqual(manifest.components[0].name, "bank");
-    assertEqual(manifest.components[0].version, 1);
-    assert(/^[a-f0-9]{64}$/.test(manifest.components[0].structureDigest), "结构摘要必须绑定真实结构");
-    assert(/^[a-f0-9]{64}$/.test(manifest.components[0].contentDigest), "内容摘要必须绑定真实内容");
-    assert(manifest.components[0].tables.includes("bank_transactions"), "组件表集必须含 bank_transactions");
-    assert(!manifest.components[0].tables.includes("audit_events"), "不得把未知组件表写进 bank 组件");
+    assertEqual(manifest.components.length, 2, "清单应有精确两个组件");
+    const bankComponent=manifest.components.find(c=>c.name==="bank"),auditComponent=manifest.components.find(c=>c.name==="business-audit");
+    assertEqual(JSON.stringify(manifest.components.map(c=>c.name).sort()),JSON.stringify(["bank","business-audit"]));
+    assertEqual(auditComponent.version,2);assertEqual(JSON.stringify(auditComponent.tables),JSON.stringify(["audit_components","audit_database_instances","audit_events","audit_operations"]));
+    for(const key of ["structureDigest","contentDigest"])assert(/^[a-f0-9]{64}$/.test(auditComponent[key]),"真实audit2摘要");
+    assertEqual(bankComponent.name, "bank");
+    assertEqual(bankComponent.version, 1);
+    assert(/^[a-f0-9]{64}$/.test(bankComponent.structureDigest), "结构摘要必须绑定真实结构");
+    assert(/^[a-f0-9]{64}$/.test(bankComponent.contentDigest), "内容摘要必须绑定真实内容");
+    assert(bankComponent.tables.includes("bank_transactions"), "组件表集必须含 bank_transactions");
+    assert(!bankComponent.tables.includes("audit_events"), "不得把未知组件表写进 bank 组件");
 
     const restoredDir = join(ROOT, `restored-bank-${++seq}`);
     const restored = LB.restoreNew({ backupDir: postDir, targetDir: restoredDir });
     assert(restored.ok === true, `恢复全新目标应成功：${JSON.stringify(restored)}`);
-    assertEqual(restored.receipt.components.length, 1, "恢复回执应记录组件");
-    assertEqual(restored.receipt.components[0].name, "bank");
+    assertEqual(restored.receipt.components.length, 2, "恢复回执应记录全部真实组件");
+    assertEqual(restored.receipt.components.find(c=>c.name==="bank").name, "bank");
+
+    const auditTables=["audit_components","audit_database_instances","audit_events","audit_operations"];
+    const sourceAudit=new DatabaseSync(dbPath,{readOnly:true}),restoredAudit=new DatabaseSync(join(restoredDir,LB.TARGET_DATABASE_FILE),{readOnly:true});
+    try{for(const table of auditTables)assertEqual(JSON.stringify(restoredAudit.prepare("SELECT * FROM "+table+" ORDER BY rowid").all()),JSON.stringify(sourceAudit.prepare("SELECT * FROM "+table+" ORDER BY rowid").all()),"审计四表逐行恢复");}finally{try{restoredAudit.close();}finally{sourceAudit.close();}}
 
     // 在恢复库上重新打开真实产品入口：金额、匹配、批次、期间关联保留；取消 / 反过账后 stale 可见。
     const resultFile = join(ROOT, `restored-facts-${++seq}.json`);
@@ -877,20 +887,20 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     }
     {
       const wrongVersion = copyBackup(validBackup, "manifest-component-version");
-      mutateManifest(wrongVersion, (manifest) => { manifest.components[0].version = 2; });
+      mutateManifest(wrongVersion, (manifest) => { manifest.components.find(c=>c.name==="bank").version = 2; });
       expectVerifyRejected(wrongVersion, "component_version_unsupported", "清单错报未来组件版本");
       expectRestoreNotCreated(wrongVersion, "manifest-component-version");
     }
     {
       const wrongDigest = copyBackup(validBackup, "manifest-component-digest");
-      mutateManifest(wrongDigest, (manifest) => { manifest.components[0].structureDigest = "0".repeat(64); });
+      mutateManifest(wrongDigest, (manifest) => { manifest.components.find(c=>c.name==="bank").structureDigest = "0".repeat(64); });
       expectVerifyRejected(wrongDigest, "component_mismatch", "清单结构摘要错报");
       expectRestoreNotCreated(wrongDigest, "manifest-component-digest");
     }
     {
       const wrongTables = copyBackup(validBackup, "manifest-component-tables");
       mutateManifest(wrongTables, (manifest) => {
-        manifest.components[0].tables = manifest.components[0].tables.filter((name) => name !== "bank_matches");
+        manifest.components.find(c=>c.name==="bank").tables = manifest.components.find(c=>c.name==="bank").tables.filter((name) => name !== "bank_matches");
       });
       expectVerifyRejected(wrongTables, "component_tables_mismatch", "清单组件表集错报");
       expectRestoreNotCreated(wrongTables, "manifest-component-tables");
@@ -898,7 +908,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     {
       // 无 bank 的旧备份清单不得被追加虚假组件声明。
       const unknownComponent = copyBackup(validBackup, "manifest-unknown-component");
-      mutateManifest(unknownComponent, (manifest) => { manifest.components[0].name = "audit"; });
+      mutateManifest(unknownComponent, (manifest) => { manifest.components.find(c=>c.name==="bank").name = "audit"; });
       expectVerifyRejected(unknownComponent, "component_unsupported", "清单声明未登记组件");
       expectRestoreNotCreated(unknownComponent, "manifest-unknown-component");
     }

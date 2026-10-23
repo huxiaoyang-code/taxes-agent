@@ -1,3 +1,4 @@
+import { hasActiveAuditExecution,withAuditSavepoint } from './local-audit-storage.mjs';
 // local-batch-storage.mjs — 持久批量任务（LOCAL-07）的存储层：manifest 校验 / 任务 / 阶段 /
 // 锁与 fencing / 输入快照 / 报表产物元数据 / 状态汇总。
 //
@@ -1261,6 +1262,7 @@ export function verifyInputEvidence(db, { jobId }) {
 
 // ---------------------------------------------------------------- 阶段状态
 export function claimStage(db, { stageId, instance, token, inputHash }) {
+  const previous=getStage(db,stageId);if(previous&&stageAuditNeedsReview(db,previous))FAIL('audit_operation_pending');
   const info = db.prepare(`UPDATE local_batch_stages
       SET status=?, attempt=attempt+1, owner_instance=?, fencing_token=?, input_hash=COALESCE(?, input_hash),
           error_code=NULL, error_message=NULL, started_at=?, updated_at=?
@@ -1406,6 +1408,8 @@ export function assertFence(db, { resourceKey, instance, token }) {
  * fn 内抛错时整体回滚（会计效果与 checkpoint 一起撤销）。
  */
 export function withFencedTransaction(db, { resourceKey, instance, token }, fn) {
+  if(hasActiveAuditExecution(db))return withAuditSavepoint(db,()=>{assertFence(db,{resourceKey,instance,token});const out=fn();assertFence(db,{resourceKey,instance,token});return out;});
+  if(db.isTransaction)FAIL('audit_transaction_conflict');
   db.exec("BEGIN IMMEDIATE");
   try {
     assertFence(db, { resourceKey, instance, token });
@@ -1742,6 +1746,8 @@ export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null,
         (!period || stage.period === period) && (!stageKey || stage.stage_key === stageKey)
       ));
       for (const stage of stages) {
+        const unresolved=stageAuditNeedsReview(db,stage);
+        if(unresolved){resetStage(db,{stageId:stage.id,status:STAGE_STATUS.NEEDS_REVIEW,errorCode:'audit_operation_pending'});skipped.push({itemKey:item.item_key,period:stage.period,stageKey:stage.stage_key,status:STAGE_STATUS.NEEDS_REVIEW});continue;}
         if (TERMINAL_OK.has(stage.status) || stage.status === STAGE_STATUS.RUNNING) {
           skipped.push({ itemKey: item.item_key, period: stage.period, stageKey: stage.stage_key, status: stage.status });
           continue;
@@ -1830,3 +1836,17 @@ export function markItemNeedsReview(db, { itemId, stageId, status, errorCode, er
 }
 
 export { DatabaseSync };
+
+// The persistent stage/attempt tuple is the audit association; no invented schema column.
+export function stageAuditOperationId(stage){return `stage:${stage.id}:${stage.attempt}`;}
+export function stageAuditNeedsReview(db,stage){
+ if(!stage.attempt)return false;
+ const present=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_operations'").get();if(!present)return false;
+ const row=db.prepare("SELECT state FROM audit_operations WHERE (operation_id=? OR operation_id LIKE ?) AND attempt=1 AND state='pending' LIMIT 1").get(stageAuditOperationId(stage),stageAuditOperationId(stage)+'.%');
+ return row?.state==='pending';
+}
+
+export function assertClaimedStage(db,{stageId,instance,token,attempt}) {
+ const row=db.prepare('SELECT status,owner_instance,fencing_token,attempt FROM local_batch_stages WHERE id=?').get(stageId);
+ if(!row||row.status!==STAGE_STATUS.RUNNING||row.owner_instance!==instance||row.fencing_token!==token||row.attempt!==attempt)FAIL('fence_lost');
+}

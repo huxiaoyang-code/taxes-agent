@@ -71,7 +71,7 @@ function spawnNode(code, { env = {} } = {}) {
   child.stdout.on("data", (chunk) => { stdout += chunk; });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   const done = new Promise((resolvePromise) => {
-    child.on("close", (status, signal) => resolvePromise({ status, signal, stdout, stderr }));
+    child.on("close", (status, signal) => {console.log("owned child actualclose",status,signal);resolvePromise({ status, signal, stdout, stderr });});
   });
   return { child, done };
 }
@@ -218,7 +218,8 @@ const pause = () => {
   const cell = new Int32Array(new SharedArrayBuffer(4));
   while (!existsSync(gate) && Date.now() < deadline) Atomics.wait(cell, 0, 0, 50);
 };
-if (mode === "kill-after-import") hooks.afterImportCommit = kill;
+if (mode === "kill-after-import") hooks.afterStageCommit = ({stage,result})=>{if(stage.stage_key.startsWith('import:')&&result?.status==='succeeded')kill();};
+if (mode === "kill-in-import") hooks.afterImportCommit=kill;
 if (mode === "kill-in-depreciation") hooks.inDepreciationTransaction = kill;
 if (mode === "kill-in-carryforward") hooks.inCarryForwardTransaction = kill;
 if (mode === "kill-near-close") hooks.nearCloseCommit = kill;
@@ -237,7 +238,7 @@ if (mode === "draft-after-check") {
   };
 }
 if (mode === "kill-after-publish") hooks.afterArtifactPublish = kill;
-if (mode === "pause-after-import") hooks.afterImportCommit = pause;
+if (mode === "pause-after-import") hooks.afterStageCommit=({stage,result})=>{if(stage.stage_key.startsWith('import:')&&result?.status==='succeeded')pause();};
 if (mode === "pause-after-report-stage") hooks.afterReportStage = pause;
 if (mode === "pause-after-stage") hooks.afterStageCommit = pause;
 const result = await runner.createAndRun({
@@ -256,6 +257,25 @@ const count = (dataDir, sql, ...args) => {
   const db = openDb(dataDir);
   try { return scalar(db, sql, ...args); } finally { db.close(); }
 };
+
+function assertPendingQuarantine(dataDir,jobKey,stageKey) {
+ const snapshot=()=>{const db=openDb(dataDir);try{
+  const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+  const mutable=['local_batch_jobs','local_batch_items','local_batch_stages','local_batch_locks'];
+  return {schema:db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all(),
+   stage:db.prepare('SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON s.item_id=i.id JOIN local_batch_jobs j ON i.job_id=j.id WHERE j.job_key=? AND s.stage_key=?').get(jobKey,stageKey),
+   pending:db.prepare("SELECT * FROM audit_operations WHERE state='pending' ORDER BY database_instance_id,operation_id,attempt").all(),
+   business:JSON.stringify(tables.filter(r=>!mutable.includes(r.name)).map(({name})=>[name,db.prepare('SELECT * FROM "'+name.replaceAll('"','""')+'"').all().map(r=>JSON.stringify(r)).sort()]))};
+ }finally{db.close();}};
+ const before=snapshot();assert.ok(before.pending.length);const parent=storage.stageAuditOperationId(before.stage);assert.ok(before.pending.some(r=>r.operation_id===parent));
+ for(const command of ['resume','retry','resume']) {
+  const args=[command,'--data-dir',dataDir,'--job-key',jobKey];
+  const observed=runNode(`import {DatabaseSync} from 'node:sqlite';const original=DatabaseSync.prototype.setAuthorizer;let admissions=0;DatabaseSync.prototype.setAuthorizer=function(fn){if(fn!==null)admissions++;return original.call(this,fn);};process.once('exit',()=>{DatabaseSync.prototype.setAuthorizer=original;console.log(JSON.stringify({auditCallbackAdmissions:admissions}));});process.argv=${JSON.stringify([process.execPath,'cli'])}.concat(JSON.parse(process.env.OBSERVED_ARGS));await import(${JSON.stringify(pathToFileURL(CLI).href)});`,{env:{WORKBENCH_DATA_DIR:dataDir,OBSERVED_ARGS:JSON.stringify(args)}});
+  const lines=String(observed.stdout).trim().split(/\r?\n/);const measured=JSON.parse(lines.pop());assert.equal(measured.auditCallbackAdmissions,0,'no real audited callback may be admitted for old pending');console.log('measured audit callback admissions',jobKey,command,measured.auditCallbackAdmissions);
+  assert.equal(observed.status,command==='retry'?0:1,observed.stdout+observed.stderr);if(command!=='retry')assert.equal(JSON.parse(lines.pop()).status,'needs_review');
+  const after=snapshot();assert.equal(after.stage.attempt,before.stage.attempt);assert.equal(after.stage.status,'needs_review');assert.deepEqual(after.schema,before.schema);const fixed=['id','item_id','period','stage_key','stage_order','input_hash','spec_json','attempt','outcome_hash','evidence_json'];assert.deepEqual(fixed.map(k=>after.stage[k]),fixed.map(k=>before.stage[k]));assert.deepEqual(after.pending,before.pending);assert.equal(after.business,before.business);
+ }
+}
 
 // ---------------------------------------------------------------- manifest 构件
 const r2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
@@ -429,7 +449,7 @@ function crashManifest(kind, spec, fixture) {
   return jobManifest({ jobKey: `crash-${kind}`, items: [itemFor(fixture, spec, periodSpec)] });
 }
 
-await test("E1 导入 commit 后 checkpoint 前 SIGKILL：重启回放不重复入账，阶段 attempt 递增", async () => {
+await test("E1 导入与 checkpoint/父子审计同 commit 后 SIGKILL：重启不重复入账、原 attempt 保持", async () => {
   const { dataDir, outDir, spec, fixture } = crashFixture("e1");
   const manifestPath = writeManifest("e1", crashManifest("import", spec, fixture));
   const crashed = await spawnNode(RUN_JOB_CODE, {
@@ -438,7 +458,8 @@ await test("E1 导入 commit 后 checkpoint 前 SIGKILL：重启回放不重复�
   assert.notEqual(crashed.status, 0, "子进程应被 SIGKILL 终止");
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM import_batches WHERE batch_id=? AND status='completed'`, `${spec.enterpriseKey}-b1`), 1, "导入已提交");
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 2, "草稿凭证 + 导入凭证已提交");
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_stages WHERE status='running'`), 1, "checkpoint 未落");
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_stages WHERE status='succeeded' AND stage_key LIKE 'import:%'`),1,'checkpoint与导入同commit');
+  const committed=openDb(dataDir);try{const stage=committed.prepare("SELECT * FROM local_batch_stages WHERE stage_key LIKE 'import:%'").get();const id=storage.stageAuditOperationId(stage);const rows=committed.prepare('SELECT * FROM audit_operations WHERE operation_id=? OR parent_operation_id=?').all(id,id);assert.equal(rows.length,2);assert.ok(rows.every(r=>r.state==='succeeded'&&r.receipt_json));}finally{committed.close();}
 
   const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "crash-import"]);
   assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
@@ -449,12 +470,19 @@ await test("E1 导入 commit 后 checkpoint 前 SIGKILL：重启回放不重复�
   try {
     const stage = db.prepare(`SELECT status, attempt FROM local_batch_stages WHERE stage_key LIKE 'import:%'`).get();
     assert.equal(stage.status, "succeeded");
-    assert.equal(stage.attempt, 2, "第二阶段为崩溃后的第二次尝试");
+    assert.equal(stage.attempt, 1, "已提交checkpoint不重新执行/增attempt");
     assert.equal(scalar(db, `SELECT COUNT(*) FROM local_batch_stages WHERE status='running'`), 0);
   } finally { db.close(); }
 });
 
-await test("E2 计提事务中 SIGKILL：事务回滚，重启后重新计提且只生成一张计提凭证", async () => {
+await test("E1b 导入outer事务内 SIGKILL：来源/业务/checkpoint零提交、pending禁止自动重执",async()=>{
+ const {dataDir,outDir,spec,fixture}=crashFixture('e1b');const manifestPath=writeManifest('e1b',crashManifest('import',spec,fixture));
+ const crashed=await spawnNode(RUN_JOB_CODE,{env:{WORKBENCH_DATA_DIR:dataDir,MANIFEST_PATH:manifestPath,OUT_DIR:outDir,HOOK_MODE:'kill-in-import'}}).done;assert.notEqual(crashed.status,0);
+ assert.equal(count(dataDir,'SELECT COUNT(*) FROM import_batches'),0);assert.equal(count(dataDir,'SELECT COUNT(*) FROM import_voucher_sources'),0);assert.equal(count(dataDir,'SELECT COUNT(*) FROM vouchers'),1);
+ const handle=openDb(dataDir);let stage;try{stage=handle.prepare("SELECT stage_key FROM local_batch_stages WHERE stage_key LIKE 'import:%'").get().stage_key;}finally{handle.close();}assertPendingQuarantine(dataDir,'crash-import',stage);
+});
+
+await test("E2 计提事务中 SIGKILL：pending待核零重执，独立成功仅计提50一次", async () => {
   const { dataDir, outDir, spec, fixture } = crashFixture("e2");
   const manifestPath = writeManifest("e2", crashManifest("depreciation", spec, fixture));
   const crashed = await spawnNode(RUN_JOB_CODE, {
@@ -463,14 +491,15 @@ await test("E2 计提事务中 SIGKILL：事务回滚，重启后重新计提且
   assert.notEqual(crashed.status, 0);
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 0, "事务内崩溃必须回滚计提效果");
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='depreciation'`), 0);
-  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "crash-depreciation"]);
-  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 1);
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='depreciation'`), 1);
-  assert.equal(r2(count(dataDir, `SELECT amount FROM asset_depreciation_runs`)), 50);
+  assertPendingQuarantine(dataDir,'crash-depreciation','depreciation');
+  const normal=crashFixture('e2-normal');const normalPath=writeManifest('e2-normal',crashManifest('depreciation',normal.spec,normal.fixture));
+  const resumed=runCli(['start','--data-dir',normal.dataDir,'--manifest',normalPath,'--output-dir',normal.outDir]);assert.equal(resumed.status,0,resumed.stderr+resumed.stdout);
+  assert.equal(count(normal.dataDir, `SELECT COUNT(*) FROM asset_depreciation_runs`), 1);
+  assert.equal(count(normal.dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='depreciation'`), 1);
+  assert.equal(r2(count(normal.dataDir, `SELECT amount FROM asset_depreciation_runs`)), 50);
 });
 
-await test("E3 结转事务中 SIGKILL：重启后只结转一次，3103 余额正确", async () => {
+await test("E3 结转事务中 SIGKILL：pending待核零重执，独立成功利润1090", async () => {
   const { dataDir, outDir, spec, fixture } = crashFixture("e3");
   const manifestPath = writeManifest("e3", crashManifest("carryforward", spec, fixture));
   const crashed = await spawnNode(RUN_JOB_CODE, {
@@ -478,11 +507,12 @@ await test("E3 结转事务中 SIGKILL：重启后只结转一次，3103 余额�
   }).done;
   assert.notEqual(crashed.status, 0);
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='carryforward'`), 0, "结转事务必须回滚");
-  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "crash-carryforward"]);
-  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='carryforward'`), 1);
+  assertPendingQuarantine(dataDir,'crash-carryforward','carryforward');
+  const normal=crashFixture('e3-normal');const normalPath=writeManifest('e3-normal',crashManifest('carryforward',normal.spec,normal.fixture));
+  const resumed=runCli(['start','--data-dir',normal.dataDir,'--manifest',normalPath,'--output-dir',normal.outDir]);assert.equal(resumed.status,0,resumed.stderr+resumed.stdout);
+  assert.equal(count(normal.dataDir, `SELECT COUNT(*) FROM vouchers WHERE kind='carryforward'`), 1);
   // 收入 1200 - 工资 60 - 折旧 50 = 1090
-  const profit = count(dataDir, `SELECT COALESCE(SUM(e.credit),0) - COALESCE(SUM(e.debit),0) FROM voucher_entries e
+  const profit = count(normal.dataDir, `SELECT COALESCE(SUM(e.credit),0) - COALESCE(SUM(e.debit),0) FROM voucher_entries e
       JOIN vouchers v ON v.id=e.voucher_id WHERE v.kind='carryforward' AND e.code='3103'`);
   assert.equal(r2(profit), 1090);
 });
@@ -571,6 +601,8 @@ await test("F2 同账套两任务：第二个任务保守拒绝（lock_active）
       HOOK_MODE: "pause-after-import", GATE_FILE: gatePrefix,
     },
   });
+  let finished;
+  try {
   await waitFor("第一个任务进入导入后暂停点", () => count(dataDir, `SELECT COUNT(*) FROM import_batches WHERE status='completed'`) >= 1);
   const secondPath = writeManifest("f2-second", jobManifest({
     jobKey: "lock-second",
@@ -585,9 +617,9 @@ await test("F2 同账套两任务：第二个任务保守拒绝（lock_active）
   assert.equal(secondJson.status, "needs_review");
   const blocked = secondJson.items[0];
   assert.ok(["lock_active", "owner_active"].includes(blocked.lockBlocked) || blocked.stages.every((stage) => stage.status === "needs_review"), JSON.stringify(blocked));
-  writeFileSync(gatePrefix, "go");
-  const finished = await running.done;
-  assert.equal(finished.status, 0, finished.stderr);
+
+  } finally {writeFileSync(gatePrefix,"go");finished=await running.done;}
+  assert.equal(finished.status,0,finished.stderr);
   const db = openDb(dataDir);
   try {
     assert.equal(scalar(db, `SELECT COUNT(*) FROM vouchers`), 2, "只允许第一个任务写入");
@@ -2055,7 +2087,7 @@ function closeOnlyManifest(jobKey, spec, fixture) {
   });
 }
 
-await test("E5 close 事务中 SIGKILL（效果未提交）：期间保持 open，重启后重新封账一次", async () => {
+await test("E5 close 事务中 SIGKILL（效果未提交）：期间保持open，pending待核零重执", async () => {
   const dataDir = join(ROOT, "e5-data");
   const outDir = join(ROOT, "e5-out");
   primeDataDir(dataDir);
@@ -2069,11 +2101,9 @@ await test("E5 close 事务中 SIGKILL（效果未提交）：期间保持 open�
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 0,
     "未提交的 close 效果必须回滚");
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM local_batch_stages WHERE status='running' AND stage_key='close'`), 1);
-  const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "close-crash-before"]);
-  assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
-  assert.equal(cliJson(resumed).status, "succeeded");
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId), 1);
-  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, fixture.setId), 1, "结转不重复");
+  assertPendingQuarantine(dataDir,'close-crash-before','close');
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM periods WHERE account_set_id=? AND period='2026-01' AND status='closed'`, fixture.setId),0);
+  assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers WHERE account_set_id=? AND kind='carryforward'`, fixture.setId),1,'结转不重复');
 });
 
 await test("E6 close 已提交后进程中断：新进程 resume 识别已提交合法效果，补 checkpoint 不重复封账", async () => {
@@ -2646,7 +2676,7 @@ function dbFingerprint(dbPath) {
   } finally { probe.close(); }
 }
 
-await test("H7 跨路径：活动创建事实下核心首次打开另一个库必须在任何写之前拒绝", () => {
+await test("H7 跨路径：活动创建事实下核心首次打开另一个库必须在任何写之前拒绝", async () => {
   // B：另建的合成既有库（DELETE journal + sentinel 行），模拟「另一个数据目录里已有的账套库」。
   const bDir = join(ROOT, "h7-b");
   mkdirSync(bDir, { recursive: true });
@@ -2714,15 +2744,15 @@ await test("H7 跨路径：活动创建事实下核心首次打开另一个库�
     } finally { otherProbe.close(); }
   }
 
-  // 4) 全部释放后（无任何活动创建事实）普通业务入口行为不变：照常打开既有库并建立核心结构。
-  const normal = runCrossPath({ claimDirs: [join(ROOT, "h7-r1"), join(ROOT, "h7-r2")], target: bDir, release: true });
-  assert.equal(normal.errorCode, null, JSON.stringify(normal));
-  assert.equal(normal.opened, true, "没有任何活动创建事实时普通入口不得被拦截");
-  const after = dbFingerprint(bDb);
-  assert.equal(after.rows, before.rows, "既有 sentinel 行不变");
-  assert.ok(after.tables.includes("sentinel"), "B 仍是同一个既有库");
-  assert.ok(after.tables.length > before.tables.length, "普通入口照常建立核心结构（旧行为不变）");
-  assert.equal(after.journalMode, "wal", "普通入口照常设 WAL（与旧实现一致）");
+  // 4) Unknown default import still rejects strict structure; it is not promised zero-write.
+  const strictBefore=dbFingerprint(bDb),directoryBefore=readdirSync(bDir).sort();
+  const readonly=new DatabaseSync(bDb,{readOnly:true});try{const LB=await import('../server/local-backup.mjs');assert.throws(()=>LB.assertSupportedDatabaseConnection(readonly),e=>e.code==='not_product_database');}finally{readonly.close();}
+  assert.deepEqual(dbFingerprint(bDb),strictBefore);assert.deepEqual(readdirSync(bDir).sort(),directoryBefore);
+  const unknown=runCrossPath({claimDirs:[join(ROOT,'h7-r1'),join(ROOT,'h7-r2')],target:bDir,release:true});assert.equal(unknown.errorCode,'structure_invalid');assert.equal(unknown.opened,false);assert.equal(dbFingerprint(bDb).rows,before.rows);console.log('unknown default import rejected; core-init side effects are not claimed zero');
+  const cDir=join(ROOT,'h7-supported');primeDataDir(cDir);const [c]=createFixture(cDir,[{name:'supported ordinary open',enterpriseKey:'SYN-H7-C',salary:47.29}]);
+  const business=()=>{const handle=openDb(cDir);try{return JSON.stringify(['account_sets','accounts','opening_balances','periods','vouchers','voucher_entries','asset_cards','asset_depreciation_runs','import_enterprise_account_sets','import_source_bindings','import_batches','import_voucher_sources','import_batch_vouchers'].map(t=>[t,handle.prepare('SELECT * FROM '+t+' ORDER BY rowid').all()]));}finally{handle.close();}};
+  const supportedBefore=business();const normal=runCrossPath({claimDirs:[join(ROOT,'h7-cr1'),join(ROOT,'h7-cr2')],target:cDir,release:true});assert.equal(normal.errorCode,null,JSON.stringify(normal));assert.equal(normal.opened,true);assert.equal(business(),supportedBefore);assert.equal(count(cDir,'SELECT SUM(debit) FROM voucher_entries'),47.29);
+
 });
 
 // ---------------------------------------------------------------- H8 所有权标记归属：只认创建时的不可变身份

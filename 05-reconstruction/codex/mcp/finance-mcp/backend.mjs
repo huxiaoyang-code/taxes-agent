@@ -93,6 +93,7 @@ export async function callBackend(name, args, catalog) {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        ...(args?.operationId?{"X-Workbench-Operation-Id":args.operationId}:{}),
         ...(API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {}),
       },
       body: JSON.stringify(args ?? {}),

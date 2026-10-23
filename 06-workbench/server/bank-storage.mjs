@@ -1,3 +1,4 @@
+import { readAuditMetadata, hasActiveAuditExecution, withAuditSavepoint,auditConnectionQuarantined,recoverBankAuditAdmission } from './local-audit-storage.mjs';
 // bank-storage.mjs — LOCAL-04 银行组件持久层：bank_* 独立命名空间、组件版本与迁移门槛。
 //
 // 设计约束（LOCAL-04 / LOCAL-06 依赖）：
@@ -393,7 +394,7 @@ export const tableExists = (db, name) =>
 
 function columnNames(db, table) {
   if (!tableExists(db, table)) return [];
-  return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => String(c.name));
+  return readAuditMetadata(db,'table_info',table).map((c) => String(c.name));
 }
 
 /** 只读核对当前库是否是本产品账务库且结构可用；不可用完返回 schema_not_supported。 */
@@ -532,10 +533,10 @@ export const indexWherePredicate = indexWhereSql;
  * 这些都会改变 UNIQUE / 排序的真实语义。
  */
 function indexSignatures(db, table) {
-  return db.prepare(`PRAGMA index_list(${table})`).all().map((idx) => {
+  return readAuditMetadata(db,'index_list',table).map((idx) => {
     const name = String(idx.name);
     const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`).get(name);
-    const keys = db.prepare(`SELECT * FROM pragma_index_xinfo(?)`).all(name)
+    const keys = readAuditMetadata(db,'index_xinfo',name)
       .filter((key) => Number(key.key) === 1)
       .sort((a, b) => Number(a.seqno) - Number(b.seqno))
       .map((key) => {
@@ -563,7 +564,7 @@ function indexSignatures(db, table) {
 }
 
 function foreignKeySignatures(db, table) {
-  const rows = db.prepare(`PRAGMA foreign_key_list(${table})`).all();
+  const rows = readAuditMetadata(db,'foreign_key_list',table);
   const groups = new Map();
   for (const row of rows) {
     const id = Number(row.id);
@@ -671,7 +672,7 @@ export function bankSchemaContract(db) {
       problems.push({ code: "bank_schema_table_missing", detail: { table: name } });
       continue;
     }
-    const info = db.prepare(`PRAGMA table_info(${name})`).all();
+    const info = readAuditMetadata(db,'table_info',name);
     const columns = info.map((c) => String(c.name));
     columnsByTable.set(name, columns);
     const missing = spec.columns.filter((c) => !columns.includes(c));
@@ -961,7 +962,7 @@ export function bankConnectionState(db) {
  * 仍在事务里就拒绝恢复，避免把「未提交写入」当成已清理。
  */
 export function recoverBankConnectionState(db) {
-  const failure = unusableConnections.get(db);
+  const failure = unusableConnections.get(db)??(auditConnectionQuarantined(db)?{stage:'audit-admission',transactionActive:transactionActiveOf(db)}:null);
   if (!failure) return { transactionState: bankConnectionState(db).transactionState, recovered: false };
   const active = transactionActiveOf(db);
   if (active !== false) {
@@ -970,6 +971,7 @@ export function recoverBankConnectionState(db) {
         transactionActive: active,
       });
   }
+  recoverBankAuditAdmission(db);
   unusableConnections.delete(db);
   txnDepth.delete(db);
   return { transactionState: "clean", recovered: true };
@@ -977,7 +979,7 @@ export function recoverBankConnectionState(db) {
 
 /** 未知态连接的写 / 读门槛：固定错误 + 固定标志，不回显原始 SQL 或库路径。 */
 function assertConnectionUsable(db) {
-  const failure = unusableConnections.get(db);
+  const failure = unusableConnections.get(db)??(auditConnectionQuarantined(db)?{stage:'audit-admission',transactionActive:transactionActiveOf(db)}:null);
   if (!failure) return;
   throw bankError("bank_connection_state_unknown",
     "上一次事务回滚未确认，连接可能仍持有未提交写入；已停止继续银行读写，请先确认回滚成功或丢弃连接", {
@@ -1095,6 +1097,7 @@ const rollbackCommandsFor = (savepoint) => (savepoint
  * 未知态连接的恢复只能由调用方显式确认（`recoverBankConnectionState`）或丢弃连接后重建。
  */
 export function inTransaction(db, fn) {
+  if (hasActiveAuditExecution(db)) return withAuditSavepoint(db,fn);
   assertConnectionUsable(db);
   const depth = txnDepth.get(db) || 0;
   const savepoint = depth > 0 ? `bank_sp_${depth}` : null;
@@ -2407,3 +2410,8 @@ export function listReconcileRuns(db, { accountSetId, bankAccountId, limit = 20 
 }
 
 export { nowIso as bankNowIso };
+
+export function assertBankPublicAdmission(db) {
+ assertConnectionUsable(db);
+ if(db.isTransaction&&!hasActiveAuditExecution(db))throw transactionConflictError('begin');
+}

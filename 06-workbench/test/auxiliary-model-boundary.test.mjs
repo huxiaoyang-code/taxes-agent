@@ -7,6 +7,7 @@ const E=await import('../server/finance-model-entry.mjs');
 const {createFinanceModelAdapter}=await import('../server/finance-model-adapter.mjs');
 const {summarizeWriteResult,summarizeQueryResult}=await import('../server/finance-output-policy.mjs');
 const {callAgentTool}=await import('../server/agent-tools.mjs');
+const allRows=()=>JSON.stringify(h.db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").all().concat(h.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>({name,rows:h.db.prepare('SELECT * FROM \"'+name+'\" ORDER BY rowid').all()}))));
 const logs=[], originals={};for(const k of ['log','warn','error']){originals[k]=console[k];console[k]=(...a)=>{logs.push(a.join(' '));originals[k](...a);};}
 let checks=0;const ok=async(name,args,applied)=>{const r=await E.callModelTool(name,args);noLeak(r);assert.equal(r.ok,true,JSON.stringify(r));if(applied!==undefined)assert.equal(r.applied,applied);checks++;return r;};
 const mustReject=async(name,args)=>{const r=await E.callModelTool(name,args);assert.equal(r.ok,false);noLeak(r);checks++;return r;};
@@ -75,12 +76,12 @@ try {
   for(const patch of [{accountSetId:set+100},{operation:'auxiliary_entries'},{channel:'local'},{channel:{}},{local:true}])assert.throws(()=>E.readLocalReference({...context,...patch}));
   E.revokeLocalReference(context);assert.throws(()=>E.readLocalReference(context));
   const before=h.db.prepare('SELECT COUNT(*) n FROM aux_entities').get().n;
-  h.db.exec('BEGIN');try {const staged=await ok('auxiliary_entity_create',{accountSetId:set,kind:'party',code:'PENDING',name:MARK,requestId:MARK+'pending'},'unknown');assert.equal(staged.projection.durability,'pending_outer_commit');assert.equal(staged.needsLocalReview,true);}finally{h.db.exec('ROLLBACK');}
+  h.db.exec('BEGIN');try {const unchanged=allRows(),staged=await mustReject('auxiliary_entity_create',{accountSetId:set,kind:'party',code:'PENDING',name:MARK,requestId:MARK+'pending'});assert.equal(staged.error.code,'audit_transaction_conflict');assert.equal(staged.applied,false);assert.equal(staged.localRef,null);assert.equal(staged.rawValuesIncluded,false);assert.equal(h.db.isTransaction,true);assert.equal(allRows(),unchanged);}finally{h.db.exec('ROLLBACK');}
   assert.equal(h.db.prepare('SELECT COUNT(*) n FROM aux_entities').get().n,before);
   const completed={...req,auxiliaryAppendix:{version:1,requestId:MARK+'empty-new',reason:MARK,entities:[],entries:[],openings:[]}};
   const added=await ok('book_import_incremental',completed,true);assert.equal(added.projection.status,'idempotent_replay');assert.equal(added.projection.auxiliary.entityCount,0);
   await ok('book_import_incremental',completed,false);
-  h.db.exec('BEGIN');try {const pending=await ok('book_import_incremental',completed,'unknown');assert.equal(pending.projection.auxiliary.status,'replayed');}finally{h.db.exec('ROLLBACK');}
+  h.db.exec('BEGIN');try {const unchanged=allRows(),pending=await mustReject('book_import_incremental',completed);assert.equal(pending.error.code,'audit_transaction_conflict');assert.equal(pending.applied,false);assert.equal(pending.localRef,null);assert.equal(pending.rawValuesIncluded,false);assert.equal(h.db.isTransaction,true);assert.equal(allRows(),unchanged);}finally{h.db.exec('ROLLBACK');}
   const bad={...req,auxiliaryAppendix:{...req.auxiliaryAppendix,reason:MARK+'changed'}};await mustReject('book_import_incremental',bad);
  }
  for(const args of [{accountSetId:true},{accountSetId:sets[0],dbPath:MARK},{accountSetId:sets[0],account_set_id:sets[1]},{accountSetId:sets[0],account_set_id:null},new Proxy({accountSetId:sets[0]},{}),{accountSetId:sets[0],dbPath:undefined},Object.defineProperty({accountSetId:sets[0]},'kind',{enumerable:true,get(){throw Error(MARK);}})])await mustReject('auxiliary_entities',args);

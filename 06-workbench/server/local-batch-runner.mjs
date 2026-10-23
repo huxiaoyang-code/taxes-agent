@@ -1,3 +1,4 @@
+import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
 // local-batch-runner.mjs — LOCAL-07 持久批量任务的编排层：manifest → 计划 → 逐账套执行 →
 // 报表快照 → worker 线程并发渲染 → 受控发布 → 状态机 / 取消 / 重试 / 重启恢复。
 //
@@ -216,6 +217,7 @@ function recoverInterruptedStages(jobId) {
   const rows = listStagesByStatus(db, jobId, [STAGE_STATUS.RUNNING]);
   const reset = [];
   for (const stage of rows) {
+    if(storage.stageAuditNeedsReview(db,stage)){storage.resetStage(db,{stageId:stage.id,status:STAGE_STATUS.NEEDS_REVIEW,errorCode:'audit_operation_pending'});continue;}
     storage.resetStage(db, {
       stageId: stage.id, status: STAGE_STATUS.PENDING,
       errorCode: "interrupted_previous_owner", errorMessage: "上一执行者已结束，阶段重新排队",
@@ -245,6 +247,7 @@ const EVIDENCE_CONFLICT_CODES = new Set([
 
 function stageFailureStatus(error) {
   const code = error?.code || "";
+  if (code.startsWith("audit_")) return STAGE_STATUS.NEEDS_REVIEW;
   if (code === "dependency_unavailable") return STAGE_STATUS.BLOCKED_DEPENDENCY;
   if (code.startsWith("lock_") || code === "owner_active" || code === "fence_lost") return STAGE_STATUS.NEEDS_REVIEW;
   if (EVIDENCE_CONFLICT_CODES.has(code)) return STAGE_STATUS.NEEDS_REVIEW;
@@ -572,6 +575,13 @@ export async function executeJob({
       }
       renderTasks.push({ stage, spec, snapshot, item: storage.getItem(db, stage.item_id) });
     }
+    // Round-robin by item so independent enterprises enter the first worker wave.
+    // Preserve each item's original report order and all existing claim/publish fences.
+    const itemQueues=new Map();
+    for(const task of renderTasks){const queue=itemQueues.get(task.stage.item_id)??[];queue.push(task);itemQueues.set(task.stage.item_id,queue);}
+    const fairTasks=[];let offset=0;
+    while(fairTasks.length<renderTasks.length){for(const queue of itemQueues.values())if(offset<queue.length)fairTasks.push(queue[offset]);offset++;}
+    renderTasks.splice(0,renderTasks.length,...fairTasks);
     report.renderConcurrency = pool.size;
     const results = [];
     const runOne = async (task) => {
@@ -678,7 +688,7 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
   // 恢复协议：文件已完整发布（含 publish 后、checkpoint 前崩溃）、只是阶段没落 → hash 一致则补记，不重渲染。
   if (existing && ["published", "publishing"].includes(existing.status) && existing.snapshot_hash === snapshotHash
       && existsSync(finalPath) && hashFile(finalPath) === existing.bytes_hash) {
-    storage.withFencedTransaction(db, lock, () => {
+    auditedReportStep({db,job,item,stage,lock,attempt,phase:'recover'},()=>{
       db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=?`)
         .run("published", storage.nowIso(), existing.id);
       const ok = storage.writeStageResult(db, {
@@ -729,7 +739,7 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
   if (hooks?.beforeArtifactPublish) hooks.beforeArtifactPublish({ stage, item, relativePath });
 
   // 先登记 publishing（含预期 hash），再发布文件；崩溃后可按 hash 确认并补记。
-  storage.withFencedTransaction(db, lock, () => {
+  auditedReportStep({db,job,item,stage,lock,attempt,phase:'publishing'},()=>{
     const row = db.prepare(`SELECT id FROM local_batch_artifacts WHERE artifact_key=?`).get(artifactKey);
     if (row) {
       db.prepare(`UPDATE local_batch_artifacts
@@ -751,7 +761,7 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
   });
   const published = publishFile({ bytes, bytesHash, relativePath, outputDir });
   if (hooks?.afterArtifactPublish) hooks.afterArtifactPublish({ stage, item, relativePath, published });
-  storage.withFencedTransaction(db, lock, () => {
+  auditedReportStep({db,job,item,stage,lock,attempt,phase:'published'},()=>{
     db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE artifact_key=?`)
       .run("published", storage.nowIso(), artifactKey);
     const ok = storage.writeStageResult(db, {
@@ -798,3 +808,9 @@ export async function resumeJob({ jobKey, hooks = null, instance = newInstanceId
 export { refreshStatuses, getJobByKey };
 /** 业务库连接（CLI 在动态 import 本模块后用于建立 / 校验批量结构）。 */
 export const database = db;
+
+// File rendering/publication stays outside SQLite. Only verified metadata steps
+// own short synchronous audit transactions; this does not claim cross-media atomicity.
+function auditedReportStep({db,job,item,stage,lock,attempt,phase},fn) {
+ return runAuditedBatchStage(db,{action:'batch.stage',operationId:storage.stageAuditOperationId({...stage,attempt})+'.report-'+phase,scope:{kind:'account_set',value:item.account_set_id},context:{jobId:String(job.id),itemId:String(item.id),stageId:String(stage.id),period:stage.period},request:{stageId:stage.id,attempt,phase,inputHash:stage.input_hash}},[],()=>storage.withFencedTransaction(db,lock,()=>{fn();return {phase};}));
+}

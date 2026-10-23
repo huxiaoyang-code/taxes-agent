@@ -57,6 +57,30 @@ const snapshot = () => Object.fromEntries(
       .map((row) => JSON.stringify(row)).sort(),
   ]),
 );
+
+// Only these audited dynamic operations may append terminal audit rows.
+// Original snapshot() remains full for all static invalid-input assertions.
+function assertAuditAppend(after,before,actions,message,state='failure') {
+ const row=v=>typeof v==='string'?JSON.parse(v):v;
+ const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
+ assert.deepEqual(business(after),business(before),message);
+ for(const table of ['audit_events','audit_operations'])for(const original of before[table]??[])assert.ok((after[table]??[]).some(v=>JSON.stringify(v)===JSON.stringify(original)),table+' history must remain exact');
+ const added=table=>(after[table]??[]).filter(v=>!(before[table]??[]).some(old=>JSON.stringify(old)===JSON.stringify(v))).map(row);
+ const events=added('audit_events').sort((a,b)=>a.seq-b.seq),ops=added('audit_operations');
+ assert.deepEqual(events.map(e=>e.action),actions);assert.equal(ops.length,actions.length);
+ for(const event of events){
+  const operation=ops.find(o=>o.operation_id===event.operation_id&&o.attempt===event.attempt&&o.database_instance_id===event.database_instance_id);assert.ok(operation);
+  if(state==='failure')assert.ok(['failed','rejected'].includes(operation.state));else assert.equal(operation.state,state);
+  assert.equal(event.outcome,operation.state);assert.equal(event.action,operation.action);assert.ok(operation.receipt_json);
+  const receipt=JSON.parse(operation.receipt_json);
+  assert.deepEqual(Object.keys(receipt).sort(),['receiptVersion','databaseInstanceId','operationId','attempt','state','resultCode','reasonCode','eventId','eventSeq','targets','resultRefs','resultDigest'].sort());
+  assert.equal(receipt.receiptVersion,2);assert.equal(receipt.operationId,operation.operation_id);assert.equal(receipt.databaseInstanceId,operation.database_instance_id);assert.equal(receipt.attempt,operation.attempt);assert.equal(receipt.state,operation.state);assert.equal(receipt.eventId,event.event_id);assert.equal(receipt.eventSeq,event.seq);assert.equal(receipt.resultCode,event.result_code);assert.equal(receipt.reasonCode,event.reason_code);assert.match(receipt.resultDigest,/^[a-f0-9]{64}$/);
+  assert.deepEqual(receipt.targets,{accountSetId:event.account_set_id,voucherId:event.voucher_id,period:event.period,jobId:event.job_id,itemId:event.item_id,stageId:event.stage_id,correlation:event.correlation});
+ }
+ const seq=value=>(value.sqlite_sequence??[]).map(row).find(r=>r.name==='audit_events')?.seq??0;
+ assert.equal(seq(after)-seq(before),actions.length);
+}
+
 const opening = (setId) => [e("1002", 1000), e("3001", 0, 1000)];
 
 try {
@@ -439,7 +463,7 @@ try {
       assert.equal(err.details.assets[0].globalAccumulated, 93.33);
       assert.equal(err.details.assets[0].dueAmount, 33.33);
       assert.match(err.details.guidance, /倒序/);
-      assert.deepEqual(snapshot(), before, "拒绝时不得写入任何计提凭证 / run");
+      assertAuditAppend(snapshot(), before, ["asset.depreciate"], "拒绝时不得写入任何计提凭证 / run");
       // 按正确倒序撤销后期凭证（反过账 → 删除，连带旧库多提 run）后按期间重算。
       A.unpostVoucher(s, feb.id);
       A.deleteVoucher(s, feb.id);
@@ -481,7 +505,7 @@ try {
     const before = snapshot();
     const depErr = await rejectsCode(() => A.generateDepreciation(s, "2026-01"), "asset_ledger_pending");
     assert.match(depErr.details.guidance, /购入|入账/);
-    assert.deepEqual(snapshot(), before, "未入账卡片不得生成任何折旧凭证");
+    assertAuditAppend(snapshot(), before, ["asset.depreciate"], "未入账卡片不得生成任何折旧凭证");
     // 任意备注都不能解除阻塞（不能靠写一个理由跳过原值差异）。
     A.updateAssetCard(s, card.id, { ledger_note: "已人工确认差异，直接封账" });
     assert.ok(codesOf(A.periodEndCheck(s, "2026-01")).includes("asset_cost_mismatch"));
@@ -534,7 +558,7 @@ try {
       name: "封账后补录", original_cost: 100, residual_rate: 0, useful_life_months: 3,
       start_period: "2026-02", acquired_period: "2026-01",
     }), "asset_card_affects_closed_period");
-    assert.deepEqual(snapshot(), before, "拒绝卡片维护必须保持全库不变");
+    assertAuditAppend(snapshot(), before, ["asset.update", "asset.update", "asset.update", "asset.update", "asset.update", "asset.update", "asset.update", "asset.update", "asset.delete", "asset.create"], "拒绝卡片维护必须保持全库不变");
     assert.equal(A.periodStatus(s, "2026-01"), "closed");
     assert.deepEqual(codesOf(A.periodEndCheck(s, "2026-01")), [], "已封账期间的核对结论不得被静默改变");
     // 纯显示信息（名称 / 备注）可正常维护，不影响任何金额与期间事实。
@@ -570,7 +594,7 @@ try {
     try {
       await rejects(() => A.updateAssetCard(s, card.id, { name: "改一半", original_cost: 120 }), /inject_card_update_fail/);
     } finally { db.prepare = original; }
-    assert.deepEqual(snapshot(), before, "卡片写入失败不得留下部分字段修改");
+    assertAuditAppend(snapshot(), before, ["asset.update"], "卡片写入失败不得留下部分字段修改");
     const unchanged = A.listAssetCards(s)[0];
     assert.equal(unchanged.name, "原子性设备");
     assert.equal(unchanged.original_cost, 100);
@@ -584,7 +608,7 @@ try {
         start_period: "2026-02", acquired_period: "2026-01",
       }), /inject_card_insert_fail/);
     } finally { db.prepare = original; }
-    assert.deepEqual(snapshot(), before, "新增失败不得留下半张卡片");
+    assertAuditAppend(snapshot(), before, ["asset.update", "asset.create"], "新增失败不得留下半张卡片");
     assert.equal(A.listAssetCards(s).length, 1);
 
     // 落库之后的 DTO 构造失败也必须整体回滚（review2 P4）：
@@ -599,7 +623,7 @@ try {
         start_period: "2026-02", acquired_period: "2026-01",
       }), /inject_card_dto_fail/);
     } finally { db.prepare = original; }
-    assert.deepEqual(snapshot(), before, "DTO 构造失败必须回滚已落库的卡片");
+    assertAuditAppend(snapshot(), before, ["asset.update", "asset.create", "asset.create"], "DTO 构造失败必须回滚已落库的卡片");
     assert.equal(A.listAssetCards(s).length, 1);
     db.prepare = (sql) => {
       if (/SELECT \* FROM asset_cards WHERE account_set_id=\? AND id=\?/.test(sql)) throw new Error("inject_card_dto_fail");
@@ -608,7 +632,7 @@ try {
     try {
       await rejects(() => A.updateAssetCard(s, card.id, { name: "改名失败" }), /inject_card_dto_fail/);
     } finally { db.prepare = original; }
-    assert.deepEqual(snapshot(), before, "DTO 构造失败必须回滚已更新的字段");
+    assertAuditAppend(snapshot(), before, ["asset.update", "asset.create", "asset.create", "asset.update"], "DTO 构造失败必须回滚已更新的字段");
     assert.equal(A.listAssetCards(s)[0].name, "原子性设备");
   });
 
@@ -631,7 +655,7 @@ try {
     await rejectsCode(() => A.createVoucher(s, {
       period: "2026-01", status: "draft", entries: [e("5602", 3), e("1002", 0, 3)],
     }), "later_profit_carryforward_depends_on_period");
-    assert.deepEqual(snapshot(), before, "拒绝后不得留下任何写入（含草稿）");
+    assertAuditAppend(snapshot(), before, ["voucher.unpost", "voucher.create_posted", "voucher.create"], "拒绝后不得留下任何写入（含草稿）");
     assert.equal(A.getVoucher(s, jan.id).status, "posted");
     // 正确顺序：反过账后期结转 → 修改前期 → 重新结转。
     A.unpostVoucher(s, febCarry.voucher.id);
@@ -666,7 +690,7 @@ try {
     const err = await rejectsCode(() => A.unpostVoucher(s, janDep.id), "later_depreciation_depends_on_period");
     assert.deepEqual(err.details.runs.map((r) => r.voucherId), [febDep.id]);
     assert.match(err.details.guidance, /倒序/);
-    assert.deepEqual(snapshot(), before);
+    assertAuditAppend(snapshot(),before,['voucher.unpost']);
     assert.equal(A.getVoucher(s, janDep.id).status, "posted");
     // 正确顺序：反过账后期计提 → 反过账前期 → 删除旧计提凭证 → 按期间重新计提。
     A.unpostVoucher(s, febDep.id);
@@ -699,7 +723,7 @@ try {
     const before = snapshot();
     const err = await rejectsCode(() => A.setPeriodStatus(s, "2026-02", "closed"), "period_end_check_failed");
     assert.ok(err.details.blocking.some((b) => b.code === "previous_period_depreciation_pending"));
-    assert.deepEqual(snapshot(), before, "拒绝封账不得改变账簿与期间状态");
+    assertAuditAppend(snapshot(), before, ["period.close"], "拒绝封账不得改变账簿与期间状态");
     assert.equal(A.periodStatus(s, "2026-02"), "open");
     // 正确顺序：一月计提 33.33 → 结转 → 封账；二月已有计提 → 结转 → 封账；三月 33.34 → 结转 → 封账。
     assert.equal(A.generateDepreciation(s, "2026-01").voucher.total_debit, 33.33);
@@ -936,7 +960,7 @@ try {
     } finally {
       db.prepare = original;
     }
-    assert.deepEqual(snapshot(), before, "封账失败不得写入任何内容");
+    assertAuditAppend(snapshot(), before, ["period.close"], "封账失败不得写入任何内容");
     assert.equal(A.periodStatus(s, "2026-01"), "open");
     assert.equal(A.setPeriodStatus(s, "2026-01", "closed").status, "closed", "恢复后仍可封账");
   });
@@ -956,7 +980,7 @@ try {
     } finally {
       db.prepare = original;
     }
-    assert.deepEqual(snapshot(), before, "失败后不得残留结转凭证或期间登记");
+    assertAuditAppend(snapshot(), before, ["profit.carry_forward"], "失败后不得残留结转凭证或期间登记");
     assert.equal(A.listVouchers(s, { period: "2026-01" }).length, 1);
     // 未被结转阻塞住：恢复后正常结转并可封账。
     assert.equal(A.carryForwardProfit(s, "2026-01", { yearEnd: true }).profit, 70);
@@ -987,7 +1011,7 @@ try {
     assert.equal(err.details.stale[0].recordedAmount, 10);
     assert.equal(err.details.stale[0].expectedAmount, 20);
     assert.match(err.details.guidance, /删除|重新计提/);
-    assert.deepEqual(snapshot(), before, "拒绝重过账不得写入任何内容");
+    assertAuditAppend(snapshot(), before, ["voucher.post"], "拒绝重过账不得写入任何内容");
     assert.equal(A.getVoucher(s, jan.voucher.id).status, "draft", "旧凭证必须保持草稿，不被静默改过账");
 
     // 旧草稿仍是本期未过账计提：期末检查阻止封账（不能凭“有计提记录”放行）。
@@ -1051,7 +1075,7 @@ try {
       const before = snapshot();
       const err = await rejectsCode(() => A.postVoucher(s, jan.voucher.id), "depreciation_run_stale");
       assert.equal(err.details.stale[0].expectedAmount, item.expected, item.label);
-      assert.deepEqual(snapshot(), before, `${item.label}：拒绝重过账不得写入`);
+      assertAuditAppend(snapshot(),before,['voucher.post'],`${item.label}：拒绝重过账不得写入`);
     }
 
     // 科目映射：金额没变但分录科目不再与卡片一致 → 同样拒绝重过账。
@@ -1240,7 +1264,7 @@ try {
     assert.equal(rerun.runs.length, 0);
     assert.equal(rerun.skipped[0].status, "not_existed");
     assert.match(rerun.skipped[0].reason, /2026-02/);
-    assert.deepEqual(snapshot(), before, "不得写入任何凭证 / run");
+    assertAuditAppend(snapshot(),before,['asset.depreciate'],'不得写入任何凭证 / run','no_change');
 
     // 生成与验证同一口径：计提步骤 ok 且卡片状态为 not_existed，不再出现 stale / missing。
     const janCheck = A.periodEndCheck(s, "2026-01");

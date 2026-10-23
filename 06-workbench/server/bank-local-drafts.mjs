@@ -1,5 +1,7 @@
+import { withRequestMetadata,currentRequestMetadata } from './local-audit-coordinator.mjs';
+import { isTechId } from './local-audit.mjs';
 // Process-local input vault. No database, filesystem or network access.
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, randomUUID } from "node:crypto";
 import { types } from "node:util";
 
 export const BANK_ACTION_TO_TOOL = Object.freeze(Object.assign(Object.create(null), {
@@ -65,9 +67,10 @@ export class BankLocalDrafts {
   }
   prepare(accountSetId, raw, internal=false) {
     scope(accountSetId);const b=data(raw);
-    if(!b||Array.isArray(b)||Object.keys(b).some(k=>!["tool","payload","confirm","accountSetId"].includes(k))) fail("bank_draft_input_invalid");
+    if(!b||Array.isArray(b)||Object.keys(b).some(k=>!["tool","payload","confirm","accountSetId","operationId"].includes(k))) fail("bank_draft_input_invalid");
     if(b.accountSetId!==undefined&&b.accountSetId!==accountSetId) fail("bank_draft_scope_mismatch");
     if(!BANK_TOOLS.includes(b.tool)||b.tool==="bank_import"&&!internal) fail("bank_draft_tool_invalid");
+    const operationId=b.operationId??randomUUID();if(!isTechId(operationId))fail('audit_operation_invalid');
     const payload=b.payload;
     if(!payload||Array.isArray(payload)||typeof payload!=="object"||Object.keys(payload).some(k=>!FIELDS[b.tool].includes(k))) fail("bank_draft_input_invalid");
     if(BANK_WRITE_TOOLS.includes(b.tool)&&b.confirm!==true) fail("bank_draft_confirmation_required");
@@ -85,8 +88,8 @@ export class BankLocalDrafts {
     if(bytes>2*1024*1024) fail("bank_draft_payload_too_large");
     this.#sweep();if(this.#records.size>=32||this.#bytes+bytes>16*1024*1024) fail("bank_draft_capacity");
     const draftRef="bankdraft_"+randomBytes(24).toString("hex"), expiresAt=this.#clock()+600000;
-    this.#records.set(draftRef,{accountSetId,tool:b.tool,payload,hash:hash(payload),bytes,expiresAt,state:"prepared",previewOK:false,revoked:false});this.#bytes+=bytes;
-    return {accountSetId,draftRef,tool:b.tool,expiresAt:new Date(expiresAt).toISOString()};
+    this.#records.set(draftRef,{accountSetId,operationId,tool:b.tool,payload,hash:hash(payload),bytes,expiresAt,state:"prepared",previewOK:false,revoked:false});this.#bytes+=bytes;
+    return {accountSetId,draftRef,operationId,tool:b.tool,expiresAt:new Date(expiresAt).toISOString()};
   }
   approveImport(accountSetId,raw) {
     const b=data(raw);if(!b||Array.isArray(b)||Object.keys(b).length!==1||typeof b.previewRef!=="string") fail("bank_draft_input_invalid");
@@ -98,15 +101,18 @@ export class BankLocalDrafts {
     const b=data(raw);if(!b||Array.isArray(b)||Object.keys(b).length!==1||typeof b.draftRef!=="string") fail("bank_draft_input_invalid");
     const r=this.#get(accountSetId,b.draftRef);r.revoked=true;if(r.state!=="executing"){this.#records.delete(b.draftRef);this.#bytes-=r.bytes;}return {accountSetId,revoked:true};
   }
+  operationIdFor(accountSetId,draftRef,tool) {return this.#get(accountSetId,draftRef,tool).operationId;}
   async execute(tool,raw,execute) {
     const a=bankCallArgs(raw),r=this.#get(a.accountSetId,a.draftRef,tool),write=BANK_WRITE_TOOLS.includes(tool);
+    const requested=currentRequestMetadata();if(requested?.explicit===true&&requested.operationId!==r.operationId)fail('audit_operation_conflict');
     if(r.state==="unknown") fail("bank_draft_outcome_unknown");
     if(r.state==="executing") fail("bank_draft_busy");
     if(write&&r.state==="completed"&&!r.value) fail("bank_draft_result_unavailable");
     if(write&&r.state==="completed") return {...structuredClone(r.value),evidence:{durability:"committed",performed:false,replayed:true}};
     if(write) r.state="executing";
     try {
-      const value=await execute({...r.payload,accountSetId:r.accountSetId});
+      const current=currentRequestMetadata();
+      const value=await withRequestMetadata({operationId:r.operationId,actor:current?.actor??'agent',explicit:true},()=>execute({...r.payload,accountSetId:r.accountSetId}));
       if(tool==="bank_import_preview") r.previewOK=value?.result?.preview?.ok===true;
       if(write) {
         // Cache never makes the vault exceed its total memory budget. A successful

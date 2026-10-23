@@ -1,3 +1,64 @@
+> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+
+## 2026-10-24 root实际必要验收通过（最终fresh尚待）
+
+root在同65候选与相同完整WB/MCP源码、依赖上机械核对50个必要定点：R1实际36绿，原14红在R2短合成根实际全部exit＋close0，共50/50；包含7个新main offline定点。R3四真实独立probe的result.independentPassed=true，全部actual0/close、源前后同。这不是新完整97；原完整97的73通过/24失败和原日志仍保留。最终新domain实际21组/49events已到达并exit0；旧case前native134原因仍未知，不能归为已定位。
+
+根独立业务事实：领域两企银行200；private8组，真实银行3行/707分，双故障零部分写＋2pending，真实child17/18重启不重执。HTTP/MCP独立余额51129/114763分，batch64870/123110分，checkpoint与parent-terminal两真实SQL故障各hit1并全回滚。纯preflight60/60，11347＋1929＝13276分，五条历史只读重放全表零变。渲染两企各60凭证、收入237000分、银行10237000分，每mode14个真产物；parallel peak3且实际不同企业/worker thread时间区间交叠，serial peak1，14child全exit0/close。该两企C1/C2真实复验不替代W3b20企业全链或统一锁。
+
+Windows/管理限制按实证记录：官方同源受控诊断输出目录67字符成功backup＋verify、224字符返回snapshot_failed，两次源全行同且连接真close。仅此路径边界实测，使用短路径，不推测全局阈值/具体journal原因，不改产品。R1 manager漏用owned目录保留preload，部分原测试finally无条件rm自行删夹具目录，数量未知，日志/result仍在，不能称所有root失败现场都保留。修正后的manager preserver只拦owned目录递归删除；产品partial文件和非递归cleanup保持真实。早期员工preload按recursive参数保留partial的作用边界另见ignored交付，不混同两者。
+
+根已归档accepted-business-evidence、原frozen/delivery/manifest；本轮只补13docs并重算清单，52份非docs字节保持，不重跑50、不改测试/包/Git。候选commit、最终新none-fork未实施者fresh、PR/merge仍由root随后实际执行；原八包6/8，06/07、W3b/W4、Windows与全部目标未完成，税局真实接入0。所有自有child已退出，无待命进程，收口后立即停止。
+
+## 2026-10-24 员工原6465修复交付（根验收之前的历史）
+
+root实际从e280快进6465前后，65份WIP的bytes/SHA全同；18份上游文件不在66窗，index空。新直接依赖fflate0.8.3/saxes5.0.1及212个非root package记录与新lock匹配，由root核验，无重装。下面必要业务测试在e280修复过程的各自实际源版本执行；整合后原业务/测试字节同，按root要求未重复业务套，不声称新BASE已做完整验收。最终65路径哈希以新repair-final-files为准，原domain交付/冻结/旧97日志只读保留。
+
+修复包括安全data-only纯金融/legacy/aux前检（不放松S_result/C）、metadata保原own undefined/holes payload、本机REST原码/详情与模型固定屏障、银行安全错误保真proof、CLI机器唯一JSON及显式ID预存、aux/I真私有outer失败队列与原追溯、严格动态失败审计夹具、真实afterStageCommit与pending callback0、真实15表历史fixture、现代audit2精确联合备份，以及渲染item轮转。单用户同库多企业、一企一套；不是每企独立目录。
+
+必要自测均真实exit＋close0（完整命令、run根、源hash/失败版本另存本机新delivery；不把下面不同版本数字合并成全97通过）：
+
+| 必要定点 | 实际结果与范围 |
+| --- | --- |
+| accounting-guards / import-strict / smoke | 23/23、54/54、28/28，保原非有限输入错误及validation DTO |
+| voucher-amount / period-integrity / period-http | 103/103、45/45、18/18；原静态ALL零写保留；动态失败逐案核业务/来源/非审计序列零变与严格receipt2，真实SQL/DTO中途故障均到达 |
+| finance-model-http / MCP finance-model-entry | 16/16、11/11，含模型银行坏draft安全壳及真实丢响应不重写 |
+| local-audit-domain | repair前段21组实际0（含新增恶意输入/getter0/状态优先级）；之后源有窄修，最终整套由root独立进程验收，不能以该21组代替 |
+| HTTP / CLI / MCP audit入口 | 最后实际7/6/4组0；CLI含真实bank稳定ID成功唯一JSON、跨进程保committed；MCP真实stdio→HTTP及同ID重放/冲突 |
+| 原I领域 / model adapter / identity HTTP | 最后57/57、22/22、5/5；原I测试保持只读，无删改断言 |
+| bank CLI / bank HTTP / MCP bank | 原15/15、REST15＋raw15、真实stdio15×双profile；1130/1130.01、审批/TTL/scope/敏感哨兵/运输未知均保；CLI新增成功信封ID另由audit CLI实测 |
+| auxiliary-core / auxiliary-model / auxiliary-import | 完整原入口0、92checks、56checks；caller拒绝全零，真实dimension_invalid/先写后故障回滚，八SQL故障与两失败写RAISE，四真实未知窗口及旧pending/序列/history保持 |
+| bank-backup / aux-backup / bank-aux integration | 5/5、bank0/1双组合、两安装序×三profile；book1120/statement1110/双方1130；官方backup/verify/restore/继续写，严格坏组件及错源负例均到达 |
+| local-batch-install / readonly batch-backup | 13组 / 8组0，原48 core/组件矩阵和46字段×两版本=92反例全保；379.23/68.59、历史core3/4与audit0/1/2仍真 |
+| batch persistence必要选点 | E1/E1b/E2/E3/E5/E6/F2/H7八选点0；随后仅全表pending加强实际重跑E1b/E2/E3/E5四选点0，保50/1090相邻正常金额，不能称全部persistence又跑 |
+| offline-ledger-snapshot | 27/27，原26＋默认audit2正例；15表legacy副本不删seed审计，837.19/1297.43/74.29与原坏库/路径/CLI全保 |
+| 静态检查 | 整合前52个修改/新增mjs node --check0、diff check0；整合保持其字节，本次仅13docs与ignored交付更改 |
+
+旧完整97已经实际close1：73套通过、24失败；所有失败现场保留。旧domain在任何case输出前native134（cjsPreparseModuleExports/v8 Empty MaybeLocal），cause仍unknown，不猜为产品/依赖问题、不吞异常。修复过程中首轮snapshot夹具/动态审计数量/aux caller/CLI/parser等真实红例也保留；Windows普通sandbox的一次HTTP EACCES仅经同命令escalated实际5/5才算通过，未改断言。
+
+原93注册逐字原序保留，只末尾加audit domain/http/cli/mcp四条成97；未私自注册后来独立模块，员工未full/npm test、未600/1000/大bank43。新的root完整候选验收、最终domain独立进程、fair跨企实际区间探针、新none-fork独审和PR/merge均待根按最终hash实际执行，未预填接受。W3b20企统一锁/完整故障、W4恢复分叉/重绑、Windows和最终链继续，原八包6/8，06/07未关闭，税局真实0，页面filechooser未知。
+
+本次所有自有child实际退出并取close，正常DB有finally关闭；故意kill的窗口如实记signal，不能声称kill后finally正常执行。无自有后台/待命进程；交付即实际停止，不Git、不spawn、不调用其他模型服务。下面为最初各阶段历史，不覆盖本节当前事实。
+
+## 2026-10-24 最初882/49窗口实施交付（历史）
+
+身份为 huxiaoyang-code 本机本轮唯一获明确授权的 fallback；不派子agent、不调用其它模型服务、未提交/推送/合并。基线为已合 [PR87](https://github.com/huxiaoyang-code/youshu-fork/pull/87) 的 `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`，已审W3a head `f11e92dfad79e975fbdaa6bab68c41ee44a59b5a`。实际修改48文件（49允许路径内，local-backup.mjs本轮无需改字节，仍通过其引用的严格audit内容核验接收receipt2）。当前 [Issue54认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6372348975) 49允许路径：原46，加银行夹具、audit安装仅core夹具与模型真实rollback断言三个最小窗口；import等其余旧测试未改。未整合后来main，未提交/PR/合并。
+
+已落真实同步 A/I/aux/bank 与 HTTP/raw/model/MCP/CLI 外层审计、receipt2严格结果摘要/refs与只读重放、受控保存点/固定metadata/私有child和batch最小原子接线。原合法小数/undefined、payload、两profile、企业身份及导入三指纹保持。请求digest-first不存金额原文，不声称逐金额字段做整数分投影。I静态纯前检在prepare前保全表零写，outer重验；I/bank固定失败队列仅在确认真实rollback后，与所有绑定父子失败终态同COMMIT，任一失败写全rollback留pending。接口、S_result_v1和未完边界见[当前合同](../LOCAL-AUDIT.md)。
+
+实际必要自测（均用独立合成根，业务导入前设置专属TEMP/TMP/DATA和两KEEP，源码前后hash、实际exit与close另交ignored delivery）：
+
+- `node test/local-audit-domain.test.mjs` 最终20组exit0：双profile各银行借200/收入贷200；posted/post-unpost-post3事件；caller BEGIN/SP零写仍在；小数/undefined安全摘要；拒恶意对象与任意事务/DDL/PRAGMA/audit写；删除后跨进程同ID只读重放；官方backup→verify→restore-new→again；实际batch两企业、10业务父阶段与CSV、fence失效零效果；I/bank失败元数据和全局RAISE零部分写；真实import child正常失败父子共同终态，失败记录/父audit RAISE则共同pending、reset不增旧attempt；非import ID复用到I确定拒绝。
+- `node test/local-audit-http.test.mjs` 最终7组exit0，真实自有HTTP child：create/replay/conflict、raw posted/model unpost；银行prepare→preview→approve→import，自动响应header等于draft真实receipt ID，显式冲突仍拒。
+- `node test/local-audit-cli.test.mjs` 最终5组exit0、六child实际close；跨进程稳定ID不增实体/事件，不能重建则applied=true+audit_result_unavailable保committed；receipt2只读查询及缺库不建。
+- MCP目录 `node local-audit-test.mjs` 最终4组exit0，真实stdio→HTTP、稳定ID首执/重放/冲突、凭证总1，MCP与后端child均actualclose0。
+- 原 `import-incremental.test.mjs` 最终57/57 exit0，全部原断言/两个profile四组合静态全表零写/来源追踪/attempt不改；`finance-model-adapter.test.mjs` 最终22/22 exit0，只有10个真实private rollback案例改applied=false并逐案加强失败receipt持久化和全部非audit业务/批次/来源/序列零变，mock/伪error/无证据unknown保持。旧entry15/15、policy42/42、bank-local-drafts整套actual0为各自影响版本，未冒称最终全量重跑。
+- 原 `local-audit-operation.test.mjs` 近期全套actual0，包含真实COMMIT BUSY、四受控中断窗、同时两进程同ID总一次137分效果，故意SIGTERM的child记真实signal close，不称finally正常退出；`local-audit-backup-integration.test.mjs` 5组actual0；`local-audit-install.test.mjs` 原24组合/四安装序等escalated整套actual0，保硬链接/junction不skip。仅core夹具源/目标9.79/28.63、原历史v3/4签名/金额不改；旧aux/企业身份/必要batch install定点actual0见delivery。
+
+银行43套的准确版本边界：旧find实现第一轮13通过/30失败、exit1、712060ms；Map线性核验后第二轮41/43、exit1、415604ms，501case保原规模与367619ms耗时。剩两例真实原错误/隔离语义以最小私有准入恢复修正后，仅 `node --test --test-name-pattern='导入失败审计：回滚未确认|导入失败审计不写进调用方事务' test/bank-reconciliation.test.mjs` 原断言2/2 exit0/1112ms，不宣称最终43重跑。原进程自然退出；root精确停止检查只得到already_exited、未实际TerminateProcess。所有产品/夹具失败根及日志保留；最后新增测试曾误用stage.job_id、KEEP预载误拦incomplete删除，均真实exit1后按真实item关联/只保递归夹具修正，不列通过。
+
+35个修改/新增mjs语法检查exit0。test-all原93注册逐字原序保留，只末追加domain/http/cli/mcp四条成97；员工未跑full/npm test，root待员工停止后冻结一次最终完整入口。当前全部自有child实际close、DB finallyclose，无自有后台服务，交付后冻结停止。root最终整合/验收/fresh未实施者独审及Git另做；本候选未声称通过这些门。原八包6/8，LOCAL06/07、W3b统一锁/20企业完整故障矩阵、W4恢复分叉/重绑、Windows与最终链未完；税局真实接入0，浏览器UI未实操。下方记录保留各历史时点。
+
 > **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 ## 2026-10-23 W2a 实施自测交接（未管理验收、未PR、未合并）

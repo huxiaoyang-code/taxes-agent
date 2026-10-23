@@ -112,6 +112,11 @@ const steps = [
   // LOCAL07 W3a: original 91 entries remain verbatim and in order.
   { name: "local-batch-install", file: join(WORKBENCH, "test", "local-batch-install.test.mjs"), cwd: WORKBENCH },
   { name: "local-batch-backup-integration", file: join(WORKBENCH, "test", "local-batch-backup-integration.test.mjs"), cwd: WORKBENCH },
+  // LOCAL06 W2b: the preceding 93 entries are unchanged and retain their order.
+  { name: "local-audit-domain", file: join(WORKBENCH, "test", "local-audit-domain.test.mjs"), cwd: WORKBENCH },
+  { name: "local-audit-http", file: join(WORKBENCH, "test", "local-audit-http.test.mjs"), cwd: WORKBENCH },
+  { name: "local-audit-cli", file: join(WORKBENCH, "test", "local-audit-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "local-audit-mcp", file: join(MCP, "local-audit-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {

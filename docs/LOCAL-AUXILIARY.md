@@ -1,3 +1,11 @@
+> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+
+caller手工BEGIN/SP中的领域facade拒绝audit_transaction_conflict，caller事务仍在、全表零变；模型applied=false且不发localRef。公开auxTransaction自行开事务并不授领域继承能力，其自己事务可按原owner语义回滚。真实合法私有import组合、顶层dimension_invalid及真实先INSERT后SQL故障另保全部业务回滚/失败receipt；不是只把原错误替换为冲突。quarantine在新事务冲突之前检查，原raw COMMIT_BUSY和未知隔离仍保。业务requestId回放的新技术操作只增加精确no_change审计，固定技术ID重放全表零变。CLI机器信封唯一JSON，显式--operation-id须调用方运行前保存，自动ID仅最终返回，不承诺崩溃前交付。
+
+## 2026-10-24 W2b 审计接线候选
+
+实体创建/更新、分配替换和requirement设置均走同一同步领域审计外层；内部auxTransaction使用受控保存点，caller事务无活能力拒绝。原输入/状态/本机返回shape保留，首次entity不靠不存在的status判断成功。显式CLI仅写命令官方启用audit；entities/entries/ledger/party保持只读、不安装缺失组件、不触碰默认库。写命令可给--operation-id，机器模式在唯一正式JSON信封返回ID；重启同ID无精确原DTO时保committed并返回audit_result_unavailable，不重复写。
+
 # B2b 真实入口候选（2026-10-23）
 
 B2a 已随 PR70 实际验收合并，完整 head / merge / 时间及独立证据见 [交接](handoffs/LOCAL-03b.md)。本轮在该基线接通八个 origin=local 工具和 REST、增量导入附录透传、模型摘要与进程内 localRef；当前为实施自测候选，待管理验收、fresh独审和PR。无HTTP安装、任意库路径或真实税局连接。

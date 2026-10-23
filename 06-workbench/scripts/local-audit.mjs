@@ -39,6 +39,8 @@ import {
   listAuditInstances,
   openAuditDatabase,
   queryAuditEvents,
+  queryOperation,
+  currentAuditInstanceId,
   verifyAuditEvents,
 } from "../server/local-audit-storage.mjs";
 import {
@@ -102,6 +104,8 @@ const VALUE_OPTIONS = new Set([
   "producer",
   "after-started-at",
   "after-operation",
+  "instance",
+  "attempt",
 ]);
 
 function usageError(code, details = null) {
@@ -302,7 +306,9 @@ function runRestoreStats(options) {
   }
 }
 
+function runOperation(options){rejectUnknown(options,['db','operation','instance','attempt']);const db=openAuditDatabase(requirePath(options,'db'),{readOnly:true});try{return queryOperation(db,{databaseInstanceId:options.instance??currentAuditInstanceId(db),operationId:options.operation,attempt:options.attempt===undefined?1:toInt(options.attempt,'attempt')});}finally{db.close();}}
 const COMMANDS = new Map([
+  ['operation',runOperation],
   ["events", runEvents],
   ["schema", runSchema],
   ["instances", runInstances],

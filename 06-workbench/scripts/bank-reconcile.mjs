@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
+import { withRequestMetadata,operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
+import { installAuditSchema,assertAuditSchema } from '../server/local-audit-storage.mjs';
 // bank-reconcile.mjs — LOCAL-04 本机银行流水与余额调节 CLI。
 //
 // 使用前提：
@@ -598,6 +601,7 @@ function withDb(ctx, fn) {
 }
 
 /** 命令执行前统一确保 bank_*；已有库没有备份服务时在这里拿到 migration_backup_unavailable。 */
+let cliOperationId;
 async function runCommand(name, flags) {
   if (name === "init-db") return initDb(flags);
   if (name === "help") return help();
@@ -610,7 +614,9 @@ async function runCommand(name, flags) {
   const ctx = openExplicitDatabase(flagText(flags, "db", { required: true }));
   activeContext = ctx;
   try {
-    await ensureBankReady(ctx, flags);
+    const writable=new Set(['account-register','import','resolve-ambiguity','candidates','confirm','cancel','matches','transactions','reconcile','status']);
+    if(writable.has(name)) {const operationId=flagText(flags,'operation-id',{fallback:randomUUID()});cliOperationId=operationId;if(flags.format==='text')process.stdout.write(`OperationId: ${operationId}\n`);await ensureBankReady(ctx,flags);await installAuditSchema(ctx.db,{dbPath:ctx.dbPath??flagText(flags,'db'),outDir:join(dirname(flagText(flags,'db')),'audit-install-'+randomUUID())});return await withRequestMetadata({operationId,actor:'cli'},()=>spec.run(flags));}
+    STORAGE.assertBankSchemaReady(ctx.db);
     return await spec.run(flags);
   } finally {
     activeContext = null;
@@ -672,7 +678,7 @@ function renderText(command, data) {
     if (list.length > 200) push(`  … 另有 ${list.length - 200} 条（详见 --format json）`);
     return lines.join("\n");
   }
-  return JSON.stringify({ ok: true, command, ...data }, null, 2);
+  return JSON.stringify({ ok: true, command, ...data, ...(cliOperationId?{operationId:cliOperationId}:{}) }, null, 2);
 }
 
 function yuan(cents) {
@@ -707,7 +713,7 @@ try {
   if (format === "text") {
     process.stdout.write(`${renderText(command, data)}\n`);
   } else {
-    process.stdout.write(`${JSON.stringify({ ok: true, command, ...data }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, command, ...data, ...(cliOperationId?{operationId:cliOperationId}:{}) }, null, 2)}\n`);
   }
   process.exitCode = 0;} catch (e) {
   const rawCode = e instanceof CliError ? e.code : (e && typeof e.code === "string" ? e.code : "internal_error");
@@ -718,6 +724,8 @@ try {
   const message = known ? (e?.message || code) : "内部错误：操作未完成（默认不输出 SQL / 堆栈）";
   const payload = {
     ok: false,
+    ...(cliOperationId?{operationId:cliOperationId}:{}),
+    ...(operationErrorEvidence(e)??{}),
     error: {
       code,
       message,

@@ -262,7 +262,7 @@ function disk(fn) {
       assert.equal(child.error, undefined); assert.equal(child.signal, null); assert.equal(child.stderr, ''); assert.match(child.stdout, /^OFFLINE_BOOKKEEPING_(?:WRITTEN candidates=\d+ review=\d+ conflicts=\d+|INPUT_OR_OUTPUT_REJECTED|USAGE_ERROR)\n$/); assert.doesNotMatch(child.stdout, /SENSITIVE|SYNTHETIC|1763|286|450|银行|\.json|[A-Z]:\\/); return child;
     };
     fn({ dir, save, config: c, execute, read: name => JSON.parse(readFileSync(join(dir, name), 'utf8')) });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { if (process.env.KEEP_FIXTURES !== '1' && process.env.WORKBENCH_TEST_KEEP_FIXTURES !== '1') rmSync(dir, { recursive: true, force: true }); }
 }
 test('actual raw CSV/JSON to #78 CLI to bookkeeping CLI generates the three amounts without DB', () => disk(({ dir, execute, read }) => {
   const before = readdirSync(dir); assert.equal(execute().status, 0); const p = read('candidates.json'); assert.equal(p.candidates.length, 3); assert.equal(candidate(p, 'service_sale').entries[0].debit, '1780.63'); assert.equal(candidate(p, 'administrative_service').entries[0].debit, '450.81'); assert.equal(candidate(p, 'service_prepayment').entries[0].debit, '286.47'); assert.deepEqual(readdirSync(dir).filter(n => !before.includes(n)), ['candidates.json']);

@@ -1,3 +1,4 @@
+import { extractOperationMetadata,withRequestMetadata,onBankInvalidation } from './local-audit-coordinator.mjs';
 // finance-model-entry.mjs — 模型入口与本机引用读取的组装层（LOCAL-08 接线）。
 //
 // 职责边界：
@@ -11,7 +12,7 @@
 // adapter 本身不 import agent-tools，避免循环与额外 DB 初始化。
 import { callAgentTool } from "./agent-tools.mjs";
 import { createFinanceModelAdapter } from "./finance-model-adapter.mjs";
-import { FinanceOutputPolicy, OutputPolicyError } from "./finance-output-policy.mjs";
+import { FinanceOutputPolicy, OutputPolicyError, safeErrorProjection } from "./finance-output-policy.mjs";
 
 export const MODEL_ENTRY_VERSION = "finance-model-entry/v1";
 export const LOCAL_CHANNEL_LABEL = "local_ui";
@@ -103,12 +104,14 @@ export function createFinanceModelEntry(options = {}) {
     : new FinanceOutputPolicy(plainRecord(policyOptions) ? policyOptions : {});
 
   // 能力对象只存在于本闭包，不导出、不序列化：任何 HTTP / 模型请求都无法声明它。
+  onBankInvalidation(accountSetId=>policy.invalidateBankReferences(accountSetId));
   const channel = policy.issueChannel(LOCAL_CHANNEL_LABEL);
   const adapter = createFinanceModelAdapter({ executeRaw, policy });
 
   /** 普通财务工具的固定模型入口：永远返回信封，不抛原始异常。 */
   async function callModelTool(name, args = {}) {
-    return adapter.callModelTool(name, args);
+    try {const extracted=extractOperationMetadata(args,{actor:'mcp'});return await withRequestMetadata(extracted.metadata,()=>adapter.callModelTool(name,extracted.payload));}
+    catch(error) {const spec=typeof name==='string'&&Object.hasOwn(adapter.registry,name)?adapter.registry[name]:null;const write=spec?.category==='write'||spec?.category==='create';return {...safeErrorProjection(error,spec?.operation?{operation:spec.operation}:{}),adapter:adapter.version,channel:'model',rawValuesIncluded:false,...(write?{tool:name,operationCategory:spec.category,scope:spec.scope,applied:false,needsLocalReview:true,appliedReason:'rejected_before_execution',projection:{},projectionDropped:0,localRef:null,refPersistence:'none',refUnavailable:'not_executed'}:{})};}
   }
 
   /** 本机读取原文：请求必须显式带 ref / accountSetId / operation。 */

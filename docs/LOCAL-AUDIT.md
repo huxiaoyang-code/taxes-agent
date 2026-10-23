@@ -1,3 +1,31 @@
+> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+
+安全前检先以模块私有、data-descriptor-only临时副本拒绝proxy/accessor/cycle等，再复用原金额/legacy validator；该临时副本仅为保NaN/Infinity的原错误码/validation DTO，绝不进入C、result摘要、pending或授权。真正准入仍严格S_result_v1。aux附录仅对非Proxy、plain/null原型根的自有data descriptor复用原纯parse validator；真实执行完整重验。入口metadata提取在严格检查后保原own undefined/holes/安全__proto__定义，仅剥root operationId；不再用摘要归一化后的.value冒充payload。
+
+本机REST按原业务码/详情/状态返回并附真私有proof；模型先固定安全投影，bank固定错误投影只复制原WeakMap已有证据，不接收任意code/metadata/authority。caller BEGIN/SP/auxTransaction不授能力；helper若自己开启事务则可回滚自己事务。已准入业务错误必须保业务回滚与失败终态，纯静态拒绝仍全表零写。aux/I内部真私有outer中的失败固定队列只在确认整体rollback后消费；任何失败元数据/终态写失败都全回滚留pending/unknown，不增attempt自动重跑。
+
+## 2026-10-24 W2b 实施候选（尚未 root 验收、独审或合并）
+
+本轮最初实施起点为 PR87 merge `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`；当前整合BASE以页头6465为准。真实会计、首次/增量导入、辅助核算、银行写入及有失效刷新副作用的银行查询，统一进入同步 `local-audit-coordinator.mjs`。`db.mjs` 在核心迁移和真实新库连接核验之后 await 官方 audit 安装/升级；安装失败阻止领域模块启用。单用户、同库多企业、一企一套和两种 profile 均保持。
+
+领域先在事务外持久化 pending 并取得私有单用 authorization，再拥有最外层事务。业务保存点仅逐次许可内部自产名称/动作；执行领域函数时许可已关闭。银行结构核验仅走固定只读 metadata 门。caller BEGIN/SAVEPOINT、actor、ALS、operationId、parent 和序列化 receipt 都不授执行能力。批量固定 child 在父执行前准备，只有同 db/file/instance 和真实父 authorization 才可消费；业务、来源/批次完成、父子终态和 checkpoint 同 COMMIT。已确认 rollback 后父子失败终态另事务落库；未知态保 pending 并禁止通过增加 attempt 绕过。
+
+新写 receiptVersion=2；旧1严格只读兼容，不增加 DDL/version。2严格保留1的基础字段并增加 `resultRefs`、`resultDigest`，未知版本或额外字段拒绝。refs 只存固定 typed 正整数内部ID，或 account/import_batch/bank_account 三类自然键的 keyDigest；新终结核归属，历史回执不依赖对象继续存在。删除保存原内部ID，账套删除的顶层 undefined 与 null 摘要不同。
+
+请求采用更窄的 digest-first 投影：未改变的领域请求先做同一安全 `S_result_v1` 快照及SHA256，只有固定 `{domainRequestDigest:<技术摘要>}` 进入原 integer-only C；action/scope/instance仍独立绑定，不持久化金额或原文。精确同请求重放，不按字段名猜金额/费率、不把不同原请求强行量化合并；未声称逐财务字段生成整数分。唯一BigInt例外是原银行API明确允许的两个statement*Cents字段先转规范十进制cents串，其他BigInt拒绝。
+
+`resultDigest` 对 `{version:1,rootKind:'json',value:原DTO快照}`，或无 value 的 undefined 根做 `S_result_v1` 后 SHA256。编码对象键按 UTF-16 码元序（含数字形键）、数组保序；有限数用标准 JSON，-0归0、对象undefined省略、数组undefined为null。先检查 data descriptor，拒 proxy/accessor/cycle/非普通原型/非有限/BigInt/函数，不执行 getter。首次仅真实 COMMIT 后返回原DTO；同ID重放不运行callback。同进程用独立快照，重启只读 refs 重建并比对 digest；缺失/改变/旧1无法精确重建返回 `audit_result_unavailable`，仍保 committed / applied=true，不重执或拿当前变化DTO冒充旧结果。
+
+HTTP 可提供 `X-Workbench-Operation-Id`，raw Agent/MCP可提供operationId元字段，中央校验、冲突拒绝并剥离后进入原业务严格payload。无ID生成UUID；可靠跨响应丢失重试须在首次请求前自行保存稳定UUID，成功后的新动作使用新ID。银行draft在prepare时绑定独立UUID，preview/approve/失效/撤销/账套门保留，执行响应header与真实receipt ID一致；draftRef不进审计绑定。CLI写入口支持 `--operation-id`，机器模式仅在唯一正式结果/错误JSON返回ID；可靠丢响应重试须调用方运行前保存显式ID，自动生成ID不保证崩溃前交付；人类text模式可提前输出文本。`local-audit operation --db <显式文件> --operation <id> [--instance <id>] [--attempt <n>]` 全程只读，不建库、不迁移。
+
+incremental 的静态参数/来源/规范mode与scope预检复用原纯校验，在 audit.prepare 前完成，保持原DTO与全库零写；私有同步 admissionOnly 阶段在任何写入或回放附录副作用前返回，不可由options/JSON启用，不授执行权。实际执行仍在outer中完整重验。既存稳定ID只为同import动作保留原scope的只读重放；跨入口ID确定冲突，prior binding不授新能力。
+
+incremental 和银行导入失败只登记私有固定字段队列；只有确认真实rollback后，固定markBatchFailed（保原failed attempts累计及各自completed/pending_review保护）与全局失败终态同事务提交；batch下真实child栈仅由私有授权核验push/finally pop，已绑定child与父失败终态同COMMIT，create失败不留已回滚accountSetId。任一失败记录写入失败均回滚整层并如实unknown/audit_unavailable。窄银行手工连接恢复只核“准入pending COMMIT_BUSY，authorization尚未发出，随后真实结束事务，同file/instance且精确pending行不存在”的私有记录；持久pending/已提交/执行未知/文件或实例变更均不清隔离、不重执。
+
+本片只完成 W2b 接线候选；W3b 全入口统一账套锁、20企业完整故障核证、W4恢复分叉/重绑、Windows与最终链仍待办。税局真实接入0，原八包仍6/8。详细自测和失败历史见审计交接；root新BASE必要50定点＋4probe已通过，最终fresh尚待；旧9cd完整97实际73通过/24失败，员工未跑 full/npm test。
+
+以下为各阶段历史合同；与本页当前W2b说明冲突时，以本页头部为准。
+
 > **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 # 本机审计（LOCAL06 W2a 候选）

@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
 import {McpStdioClient} from './mcp-stdio-client.mjs';
-import {TOOLS,MODEL_PLAIN_TOOL_NAMES,MODEL_WRITE_TOOL_NAMES} from './tools.mjs';
+import {TOOLS,MODEL_PLAIN_TOOL_NAMES,MODEL_WRITE_TOOL_NAMES,validateArgs} from './tools.mjs';
 import {bankHttpHarness,bankFixture,exerciseBank,noBankLeak,BANK_MARK} from '../../../../06-workbench/test/bank-http.test.mjs';
 const names=['bank_accounts','bank_account_register','bank_import_preview','bank_import','bank_batches','bank_transactions','bank_ambiguities','bank_ambiguity_resolve','bank_candidates','bank_confirm','bank_cancel','bank_matches','bank_reconcile','bank_status','bank_audit'];
 const writes=['bank_account_register','bank_import','bank_ambiguity_resolve','bank_confirm','bank_cancel','bank_reconcile'];
@@ -25,7 +25,7 @@ try{
  await client.initialize('bank-entry-synthetic');const listed=(await client.rpc('tools/list')).result.tools;
  assert.equal(TOOLS.length,91);assert.equal(new Set(TOOLS.map(t=>t.name)).size,91);assert.equal(MODEL_PLAIN_TOOL_NAMES.length,50);assert.equal(MODEL_WRITE_TOOL_NAMES.length,24);assert.equal(new Set(MODEL_WRITE_TOOL_NAMES).size,24);
  assert.deepEqual(MODEL_WRITE_TOOL_NAMES.filter(n=>n.startsWith('bank_')).sort(),writes.sort());
- for(const name of names){assert.ok(listed.some(t=>t.name===name));const t=TOOLS.find(t=>t.name===name);assert.equal(t.inputSchema.additionalProperties,false);assert.deepEqual(Object.keys(t.inputSchema.properties).sort(),['accountSetId','draftRef']);assert.equal(MODEL_PLAIN_TOOL_NAMES.includes(name),true);}
+ for(const name of names){assert.ok(listed.some(t=>t.name===name));const t=TOOLS.find(t=>t.name===name);assert.equal(t.inputSchema.additionalProperties,false);assert.deepEqual(Object.keys(t.inputSchema.properties).sort(),['accountSetId','draftRef','operationId']);assert.equal(t.inputSchema.properties.operationId.type,'string');assert.equal(t.inputSchema.required.includes('operationId'),false);for(const operationId of ['stable-id-1','UUID:01.abc_2'])assert.deepEqual(validateArgs(t.inputSchema,{accountSetId:1,draftRef:'bankdraft_'+'a'.repeat(48),operationId}),[]);for(const operationId of ['',null,3,'bad space','a'.repeat(65)])assert.ok(validateArgs(t.inputSchema,{accountSetId:1,draftRef:'bankdraft_'+'a'.repeat(48),operationId}).includes('audit_operation_invalid'));assert.equal(MODEL_PLAIN_TOOL_NAMES.includes(name),true);}
  for(const name of ['bank_draft_prepare','bank_draft_read','bank_draft_approve','finance_output_read','finance_output_compute'])assert.equal(listed.some(t=>t.name===name),false);
  const call=async(tool,args)=>{const r=await client.call(tool,args);noBankLeak(r);assert.equal(r.isError,false,JSON.stringify(r));assert.equal(r.data.ok,true);assert.equal(r.data.channel,'model');assert.equal(r.data.rawValuesIncluded,false);assert.deepEqual(r.data,r.structured);return r.data;};
  const fixtures=[];

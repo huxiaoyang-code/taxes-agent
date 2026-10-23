@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpStdioClient } from "./mcp-stdio-client.mjs";
-import { MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES, TOOLS } from "./tools.mjs";
+import { MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES, TOOLS, validateArgs } from "./tools.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO = join(here, "..", "..", "..", "..");
@@ -153,7 +153,11 @@ try {
       assert.match(tool.description, /localRef|摘要|投影/, `${name} 应明确摘要 / 本机引用语义`);
     }
     const ctx = tools.find((t) => t.name === "account_context");
-    assert.deepEqual(Object.keys(ctx.inputSchema.properties).sort(), ["accountSetId", "limit", "offset"]);
+    assert.deepEqual(Object.keys(ctx.inputSchema.properties).sort(), ["accountSetId", "limit", "offset", "operationId"]);
+    assert.equal(ctx.inputSchema.properties.operationId.type,"string");
+    assert.equal((ctx.inputSchema.required??[]).includes("operationId"),false);
+    for(const operationId of ['stable-id-1','UUID:01.abc_2'])assert.deepEqual(validateArgs(ctx.inputSchema,{operationId}),[]);
+    for(const operationId of ['',null,3,'bad space','a'.repeat(65)])assert.deepEqual(validateArgs(ctx.inputSchema,{operationId}),['audit_operation_invalid']);
     // 写工具的登记表与 adapter 侧一致（此处只核对本文件可见的固定清单）。
     assert.equal(MODEL_WRITE_TOOL_NAMES.length, 24);
     assert.deepEqual(MODEL_WRITE_TOOL_NAMES.filter(n=>n.startsWith("bank_")).sort(),["bank_account_register","bank_ambiguity_resolve","bank_cancel","bank_confirm","bank_import","bank_reconcile"]);

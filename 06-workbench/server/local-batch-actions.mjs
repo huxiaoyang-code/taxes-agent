@@ -1,3 +1,5 @@
+import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
+import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-batch-storage.mjs';
 // local-batch-actions.mjs — LOCAL-07 固定本地操作的真实领域适配层。
 //
 // 只允许这 7 类操作：import → post → depreciation → carryforward → period-check → close → reports。
@@ -213,7 +215,8 @@ export function executeImportStage(ctx) {
   if (![ "applied", "idempotent_replay" ].includes(result.status)) {
     throw domainError("import_status_unexpected", "增量导入返回了非落库状态", { status: result.status });
   }
-  // commit 之后、checkpoint 之前的崩溃点（测试可注入）。
+  // Historical hook name: still inside the audited outer transaction, before checkpoint/COMMIT.
+  // Use runner.afterStageCommit for an actual durable commit boundary.
   const afterCommit = () => { if (hooks?.afterImportCommit) hooks.afterImportCommit({ stage, item, result }); };
   afterCommit();
 
@@ -951,7 +954,7 @@ function safeParse(text) {
 }
 
 /** 统一执行入口（runner 只按 stageKey 派发，没有任意代码入口）。 */
-export function executeStage(ctx) {
+function executeStageBody(ctx) {
   const key = ctx.stage.stage_key;
   try {
     // 任何阶段（含无 import 的过账 / 计提 / 结转 / 检查 / 结账）开始前统一核实企业↔账套绑定，
@@ -975,3 +978,29 @@ export function executeStage(ctx) {
 }
 
 export { businessDigest as __businessDigest };
+
+function auditChildren(ctx) {
+ const {db,stage,item,spec}=ctx,setId=item.account_set_id,scope={kind:'account_set',value:setId};
+ if(stage.stage_key.startsWith(IMPORT_STAGE_PREFIX)) {
+  const input=getInput(db,{jobId:item.job_id,itemId:item.id,batchId:spec.batchId});if(!input)throw domainError('input_snapshot_missing');
+  const payload=JSON.parse(Buffer.from(input.content).toString('utf8'));
+  const options={batchId:spec.batchId,source:{system:item.source_system,enterpriseKey:item.enterprise_key,enterpriseName:item.enterprise_name||''},mode:spec.mode,payload,confirmNewBinding:spec.confirmNewBinding===true,dryRun:false};
+  if(spec.mode==='append')options.accountSetId=setId;
+  return [{action:spec.mode==='append'?'import.append':'import.create',scope:spec.mode==='append'?scope:{kind:'database',value:null},request:options}];
+ }
+ if(stage.stage_key===STAGE_KEYS.POST)return spec.vouchers.map(ref=>{const v=resolveVoucherRef(db,setId,ref,item.enterprise_key,item.source_system);return {action:'voucher.post',scope,request:[setId,v.id]};});
+ if(stage.stage_key===STAGE_KEYS.DEPRECIATION)return [{action:'asset.depreciate',scope,request:[setId,stage.period]}];
+ if(stage.stage_key===STAGE_KEYS.CARRYFORWARD)return [{action:'profit.carry_forward',scope,request:[setId,stage.period,{yearEnd:spec.yearEnd===true}]}];
+ if(stage.stage_key===STAGE_KEYS.CLOSE){const check=db.prepare('SELECT status FROM local_batch_stages WHERE item_id=? AND period=? AND stage_key=?').get(item.id,stage.period,STAGE_KEYS.PERIOD_CHECK);return check?.status===STAGE_STATUS.SUCCEEDED?[{action:'period.close',scope,request:[setId,stage.period,'closed']}]:[];}
+ return [];
+}
+export function executeStage(ctx) {
+ const binding=resolveItemBinding({db:ctx.db,item:ctx.item,stage:ctx.stage});
+ const scoped={...ctx,item:{...ctx.item,account_set_id:binding.accountSetId}};
+ const children=auditChildren(scoped),scope=binding.accountSetId?{kind:'account_set',value:binding.accountSetId}:{kind:'database',value:null};
+ return runAuditedBatchStage(ctx.db,{action:'batch.stage',operationId:stageAuditOperationId(ctx.stage),scope,request:{jobId:ctx.item.job_id,itemId:ctx.item.id,stageId:ctx.stage.id,attempt:ctx.attempt,spec:ctx.spec},context:{jobId:String(ctx.item.job_id),itemId:String(ctx.item.id),stageId:String(ctx.stage.id),period:ctx.stage.period},refs:v=>v?.accountSetId?[{type:'account_set',id:v.accountSetId}]:[]},children,()=>{
+  assertFence(ctx.db,ctx.lock);assertClaimedStage(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt});const result=executeStageBody(scoped);
+  if(result?.accountSetId&&!ctx.item.account_set_id){const changed=ctx.db.prepare('UPDATE local_batch_items SET account_set_id=? WHERE id=? AND account_set_id IS NULL').run(result.accountSetId,ctx.item.id);if(changed.changes!==1)throw domainError('enterprise_binding_mismatch');}
+  assertFence(ctx.db,ctx.lock);const finalOwner=ctx.db.prepare('SELECT owner_instance,fencing_token,attempt FROM local_batch_stages WHERE id=?').get(ctx.stage.id);if(!finalOwner||finalOwner.owner_instance!==ctx.lock.instance||finalOwner.fencing_token!==ctx.lock.token||finalOwner.attempt!==ctx.attempt)throw domainError('fence_lost');return result;
+ });
+}
