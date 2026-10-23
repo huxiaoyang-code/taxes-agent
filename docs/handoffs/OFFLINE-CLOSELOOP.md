@@ -1,5 +1,29 @@
 # 离线闭环交接
 
+## 2026-10-24 PR95 已合事实与 OFFLINE-05B / #82B 本机反馈版本登记候选
+
+PR95 已实际合并：[PR95](https://github.com/huxiaoyang-code/youshu-fork/pull/95)，base `6465a00e415c47d720d499e59faf233afd36708f`，已审 head `f523a2abefa8395081ff0609272487ad427105c6`，merge/main `35bd8e53c703cdafa5989ba0df8e35fb7924e258`。root/fresh 新 review **15/15 exit0**，旧 VAT **22/22**、XLSX **19/19** 通过；fresh 接受，无确认 P1/P2。root 独立 S499838→14995.14/9996.76/4998.38，fresh 独立 S419714→12591.42/8394.28/4197.14；七表100字段/trace/manifest/sourceSHA、DB/WAL零写及篡改失效通过。交付 #82 issuecomment6374295738 / #76 issuecomment6374296459。下方05A“候选/未PR”等保留历史时点，不覆盖本条已合事实。
+
+本片 OFFLINE-05B 基于该 merge，branch `codex/huxiaoyang-code/offline-05b-feedback`，Refs #76/#82，认领 #82 issuecomment6374328794。唯一继承模型实施 Codex subagent；用户授权覆盖旧执行方式，无再委派、pi/Claude/TokenHub/其它执行器、模型配置或 Git 写操作。精确七文件窗口，root 管理独立验证、全新未实施者审查、Git/PR。#54 最新66路径在途、实施已停止但尚未独立审查/PR/合并；本片不改其核心/DB/import/audit/batch/HTTP/MCP、package/test-all/STATE/NEXT 或旧loader/review/税算/材料。维护入口由root实际执行，仅旧human-pl SHA mismatch，与本包无关，不读改原件。
+
+实际实现为专用本机 scope store、不可变 receipt 摘要链及 wx writer锁。链尾就是CAS journalHead与当前版本的权威指针，不另造业务DB/可变head。register只能fresh原始配置→私有loader→review→自有pending JSON/七表XLSX/最后manifest，不能导入上传的ready/bundle/最终税额。逐版绑定原始inputPath、完整计算元数据、28个参与本链的本地模块实际字节、JSON规范化实际文件inventory和自有artifact实hash；重开全量核所有历史包/manifest/journal。满2000 receipt拒新追加且不生成2001/新artifact，仍允许query及完全同ID重放。未知锁/partial receipt/损坏failclosed，不自动删锁或旧包；未提交产物保留诊断，#83恢复仍未实现。
+
+反馈固定schema与字段白名单，支持原始事实补件、驳回、选定computed服务字段确认；actor姓名/角色仅是本机操作者声明，不认证身份/签名。当前字段确认必须原始来源/真实账/当前规则fresh一致、calculationReady且无税算异常；每次inspect/反馈、提交前和提交后都实际再读。receipt提交窗变更保留反馈为历史，返回stale/effective=false；同ID重放也重新判断，不能把旧确认当当前。新版本显式supersedes/CAS，逐字段状态/金额差异区分null/0/NA，旧包/反馈不修改且不继承确认。reviewState区分待复核/补件/驳回/更正待复核/选定确认/失效；feedbackEffectiveConfirmation明确此次ID是否有效。原草稿一直pending，periodComplete/submittable/authorizesExecution=false，真实性unverified。
+
+合同/CLI/退出码及有限代码清单见 [OFFLINE-REVIEW-FEEDBACK](../OFFLINE-REVIEW-FEEDBACK.md)，任务窗口 [OFFLINE-05B](../tasks/OFFLINE-05B.md)。CLI所有动作必须指定store外NEW结果文件，副作用前canonical parent/精确路径边界核验并wx预留，路径/企业/金额/理由只入该本机文件；stdout固定计数、错误固定码。无网络、消息发送、默认账库或业务写入。代码变化使用保守stale/拒写并要求新进程重算；不做热加载或第三方运行时/依赖认证。
+
+实施自测最终（cwd `06-workbench`）：`node test/accountant-review-feedback.test.mjs` **20/20 exit0**，无skip，合成夹具 `06-workbench/.agent-runs/feedback-synthetic-5TPMLR` 全部保留。实际receipt materialStore整链、child重启同ID、并发writer、历史artifact/manifest/journal损坏、输入/真实账/规则及非税loader字节变、提交窗改源、真实2000合法receipt容量门、内部output/..prefix路径和NEW输出拒覆盖均通过；DB/source finally实际close、child实际close/signal=null，无自有常驻服务。首轮 **15/15 exit0**（`DaEfG2`）、定点后 **17/17 exit0**（`bYKwJO`）、store inventory修后 **18/18 exit0**（`KQNKNB`）是各自历史，不替代最终20项。必要旧 `node test/accountant-review.test.mjs` **15/15 exit0**、DB/source/child实际close；root另已实跑旧review15/VAT22 exit0，不重复full/npm test。产品四文件在最终20项运行期间未再修改；此后仅三文档收尾。全新未实施者接受及PR/合并仍待完成。
+
+root修后已实际完成最终独立验证：同cwd `node test/accountant-review-feedback.test.mjs` **20/20 exit0**，夹具 `06-workbench/.agent-runs/feedback-synthetic-egcsfU`，DB/child实际close；旧review **15/15**、VAT **22/22** exit0。独立 `.agent-runs/manager-feedback-probe.mjs` **PASS exit0**，原始S499838→14995.14/9996.76/4998.38，confirm→request撤销→reconfirm，ordinary→special v2 blocked，恢复v3虽同bundleDigest但version不同不继承确认；旧ID历史、冲突ID、跨企、child重启、旧包及DB/WAL字节不变均通过。验收索引 `.agent-runs/manager-feedback-acceptance.json`。这是root实际独立结果，不预报fresh审查；fresh仍待最终HEAD。此后只在合同/任务/本交接补录root事实及持久撤销说明，产品/测试不变，七授权路径再次冻结停止写。
+
+失败历史保留：首次生成新测试helper的Python命令因PowerShell引号语法失败exit1，未写测试/未触产品，改here-string后成功。root指出private inventory optional originStatus=undefined与manifest JSON省略不一致，实施者用首轮保留case-1真实materialStore实际复现register **exit1/review_artifact_binding_invalid**；`probe-material-store`、`probe-review-store`及未提交artifact保留。修为仅对inventory做JSON规范化后hash，null/0/false保留，并新增真实store注册/确认/child/来源变stale回归。root另实际复现只绑定税模块时改复制loader字节仍effective/current；已将实际依赖28本地模块明确绑定，新增live改loader拒确认/拒登记及重启后旧binding失效。root实际构造2000合法链后第2001先写入再自拒整store（`.agent-runs/review05b-preflight-code/capacity.mjs`/`capacity-store`），已在append最早及register产物前加容量门。root亦实际 `--output <store>/..root-dotdot-output.json` exit0且created/effective1，因startsWith('..')误判；已改相对路径首component精确判断，新增内部..local/..input拒绝及同级..legitimate允许。上述为修前真实失败，不删夹具/历史、不修改旧断言或skip。
+
+本片测试为落盘合成 CSV/JSON（含实际#78B receipt store）及临时账库，自动候选经既有核心测试适配实际过账；独立S433631→13008.93/8672.62/4336.31，分类原事实special错误→reject→用户新tax/input文件→新版本S397531→3975.31及null→computed/0差异→新字段确认，实际同源只有1张凭证。没有手改来源指纹或删除原记录，没有自动改原事实或既存账更正。真实会计审定、生产黄金、试用、正式持续写账/既存账更正、其余税种及#83恢复仍未完成；#76/#82整体保持OPEN，税局真实接入0。本包root实际独立验证见上段，fresh仍待最终HEAD，尚无fresh接受/PR/合并。
+
+精确fresh语义：inspect不写观察日志；尚未登记新版本且没有后续撤销反馈时，完全恢复原文件/账/代码绑定可使当前原版本确认重新有效（新套实际断言）。request/reject通过不可变反馈持久撤销先前确认，重启/恢复绑定也须新confirm才能有效。已显式supersede的旧版本永不继承为新版本确认，即使计算摘要后来恢复相同；不宣称观察到一次变化即永久作废。双方已确认该精确比较语义，不将其列为P2，也不扩充查询写日志。
+
+root暂存七文件后实际 cached diff --check 发现新测试末尾额外空行（当时行293，new blank line at EOF）；此前未暂存的 git diff --check 未检查untracked新文件，不能称七文件完整空白检查通过。root已形成本地未发布 f6141d4e74730f633bddc13ef49da772940b3bab，不作最终接受。此次仅删除新测试EOF多余空白、保留单换行并补任务/交接；断言、测试逻辑及产品代码不变，按root要求不重跑20项。等待root重新cached check/amend及新最终HEAD fresh审查，实施再次冻结。
+
 ## 2026-10-24 PR94 已合事实与 OFFLINE-05A / #82A 当前实施候选
 
 PR94 已实际合并：[PR94](https://github.com/huxiaoyang-code/youshu-fork/pull/94)，base `e564ce3dbcc2a84a4fc558c4a318c88637ced5e1`，已审 head `9c3dcb4049e65f7d32c88f189b0f72896edf459a`，merge/main `6465a00e415c47d720d499e59faf233afd36708f`。root 与 fresh 新 XLSX **19/19**，六旧影响 **36/45/43/32/22/26** 均 exit0；fresh 接受，无确认 P1/P2。root 独立1673.29+16.73=1690.02、640.57+6.41=646.98及原件改1690.03/CAS/重开；fresh 独立2371.49+23.71=2395.20、bank49.37，原hash/store/规划候选通过。交付回执 #78 issuecomment6373834923 / #76 issuecomment6373835425。#78 更广格式/搬迁、会计审定及真实试用未完成。下方01C“未验收/未PR”保留历史时点，不覆盖此条已合事实。
