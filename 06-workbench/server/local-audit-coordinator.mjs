@@ -1,6 +1,7 @@
 // Trusted synchronous domain coordinator. ALS carries correlation only, never authority.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { types as nodeTypes } from 'node:util';
 import { auditError, auditResultDigest, auditResultSnapshot, normalizeAuditResultRefs, isTechId } from './local-audit.mjs';
 import { prepareOperation, executePreparedOperation, executePreparedChild, bindPreparedChildren } from './local-audit-operation.mjs';
 const bankInvalidationListeners=new Set();
@@ -17,8 +18,7 @@ export function extractOperationMetadata(input,{operationId,actor='domain'}={}) 
  auditResultSnapshot(input);
  // Hash serialization intentionally omits undefined object values. Entry payloads
  // keep their original data keys so strict domain allowlists can still reject them.
- const clone=value=>{if(value===null||typeof value!=='object')return value;const descriptors=Object.getOwnPropertyDescriptors(value),out=Array.isArray(value)?new Array(descriptors.length.value):Object.create(null);for(const key of Object.keys(descriptors)){if(Array.isArray(value)&&key==='length')continue;Object.defineProperty(out,key,{value:clone(descriptors[key].value),enumerable:true,writable:true,configurable:true});}return out;};
- const copy=clone(input);
+ const copy=cloneDomainData(input);
  if(!copy||typeof copy!=='object'||Array.isArray(copy))throw auditError('audit_operation_invalid');
  const embedded=copy.operationId;
  if(operationId!==undefined&&embedded!==undefined&&operationId!==embedded)throw auditError('audit_operation_conflict');
@@ -27,6 +27,34 @@ export function extractOperationMetadata(input,{operationId,actor='domain'}={}) 
  const id=operationId??embedded??inherited??randomUUID();if(!isTechId(id))throw auditError('audit_operation_invalid');
  const payload={...copy};delete payload.operationId;
  return {payload,metadata:{operationId:id,actor,explicit:embedded!==undefined||operationId!==undefined||metadata.getStore()?.explicit===true}};
+}
+// Validate original descriptors before reading any domain option. Only the bank's
+// two existing top-level cents projections may differ from strict S_result input.
+// Keep undefined keys and array holes in the execution copy: serialization is not
+// a substitute for the domain's own field validation.
+export function copyDomainRequest(input,{bankStatementCents=false}={}) {
+ if(!input||typeof input!=='object'||nodeTypes.isProxy(input)||Array.isArray(input))throw auditError('audit_result_invalid');
+ const proto=Object.getPrototypeOf(input);
+ if(proto!==Object.prototype&&proto!==null)throw auditError('audit_result_invalid');
+ const descriptors=Object.getOwnPropertyDescriptors(input),projected=Object.create(null);
+ for(const key of Reflect.ownKeys(descriptors)) {
+  const descriptor=descriptors[key];
+  if(typeof key!=='string'||!Object.hasOwn(descriptor,'value'))throw auditError('audit_result_invalid');
+  const value=descriptor.value;
+  Object.defineProperty(projected,key,{value:bankStatementCents&&['statementOpenCents','statementCloseCents'].includes(key)&&typeof value==='bigint'?value.toString():value,enumerable:true});
+ }
+ auditResultSnapshot(projected);
+ return cloneDomainData(input);
+}
+// Caller must validate the full original graph before using this descriptor copy.
+function cloneDomainData(value) {
+  if(value===null||typeof value!=='object')return value;
+  const descriptors=Object.getOwnPropertyDescriptors(value),array=Array.isArray(value),out=array?new Array(descriptors.length.value):Object.create(null);
+  for(const key of Object.keys(descriptors)) {
+   if(array&&key==='length')continue;
+   Object.defineProperty(out,key,{value:cloneDomainData(descriptors[key].value),enumerable:true,writable:true,configurable:true});
+  }
+  return out;
 }
 export function readDomainOperationBinding(db) {
  if(frames.has(db))return null;

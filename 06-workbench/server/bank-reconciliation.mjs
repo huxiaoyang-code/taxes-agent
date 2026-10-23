@@ -1,6 +1,6 @@
 import { assertBankPublicAdmission } from './bank-storage.mjs';
 import { hasActiveAuditExecution,deferBankImportFailure,auditConnectionQuarantined } from './local-audit-storage.mjs';
-import { runDomainOperation,operationErrorEvidence } from './local-audit-coordinator.mjs';
+import { runDomainOperation,operationErrorEvidence,copyDomainRequest } from './local-audit-coordinator.mjs';
 import { auditCanonicalDigest } from './local-audit.mjs';
 // bank-reconciliation.mjs — LOCAL-04 银行流水落库、持久对账、人工匹配与余额调节领域逻辑。
 //
@@ -2020,9 +2020,10 @@ function auditedBankCall(db,action,entry,body,options) {
 }
 function auditedBankCallBody(db,action,entry,body,options) {
  assertBankPublicAdmission(db);
+ options=copyDomainRequest(options,{bankStatementCents:true});
  const setId=positiveInt(options.accountSetId,'account_set_id_invalid','账套 ID');
  assertBankSchemaReady(db);if(!db.prepare('SELECT 1 FROM account_sets WHERE id=?').get(setId))throw bankError('account_set_not_found','账套不存在');
- const request={entry,...options};for(const key of ['statementOpenCents','statementCloseCents'])if(typeof request[key]==='bigint')request[key]=request[key].toString();
+ const request={...options,entry};for(const key of ['statementOpenCents','statementCloseCents'])if(typeof request[key]==='bigint')request[key]=request[key].toString();
  let changed=false;
  return runDomainOperation(db,{action,scope:{kind:'account_set',value:setId},request,classify:()=>changed?'succeeded':'no_change',refs:v=>{
   const refs=options.bankAccountId?[{type:'bank_account_key',keyDigest:auditCanonicalDigest([options.accountSetId,options.bankAccountId])}]:[];
@@ -2033,7 +2034,7 @@ function auditedBankCallBody(db,action,entry,body,options) {
 }
 export function registerBankAccount(db,options={}) {return auditedBankCall(db,'bank.account.register','registerBankAccount',registerBankAccountBody,options);}
 export function importBankBatch(db,options={}) {return auditedBankCall(db,'bank.import','importBankBatch',importBankBatchBody,options);}
-export function refreshMatchStates(db,options={}) {if(options.persist===false)return refreshMatchStatesBody(db,options);return auditedBankCall(db,'bank.refresh','refreshMatchStates',refreshMatchStatesBody,options);}
+export function refreshMatchStates(db,options={}) {options=copyDomainRequest(options,{bankStatementCents:true});if(options.persist===false)return refreshMatchStatesBody(db,options);return auditedBankCall(db,'bank.refresh','refreshMatchStates',refreshMatchStatesBody,options);}
 export function listTransactionsView(db,options={}) {return auditedBankCall(db,'bank.refresh','listTransactionsView',listTransactionsViewBody,options);}
 export function listCandidates(db,options={}) {return auditedBankCall(db,'bank.refresh','listCandidates',listCandidatesBody,options);}
 export function confirmMatch(db,options={}) {return auditedBankCall(db,'bank.match.confirm','confirmMatch',confirmMatchBody,options);}

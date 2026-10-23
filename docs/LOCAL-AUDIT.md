@@ -1,12 +1,14 @@
-> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+> **当前 W2b R4：根影响验收通过，待新候选与全新最终独审（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`；[原66路径窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)保留，[本轮四路径窄修](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374950499)，总计仍65文件。旧候选 `81f404e465d052547d8913b1db1e066520769048` 被最终独审拒绝，不能合并；R4修复后的13原套＋1独立探针实际通过，尚未保存新candidate、重新最终独审、PR或merge。原八任务仍6/8，LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录或进程，税局真实接入0。证据分层及限制见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
+
+R4在读取原options的scope、spread或persist之前，无回调拒Proxy/accessor/非法原型/symbol/cycle/function等，再生成安全数据副本，scope/request/body/refs使用同一数据。严格S_result保持；银行仅既有两个明确顶层statement cents BigInt可投影十进制字符串，业务副本仍保BigInt，其它位置及深层BigInt拒绝。复制保own undefined/holes/nullproto/安全__proto__。extractOperationMetadata仅复用提取的纯私有descriptor clone，先严格snapshot及返回合同不变；固定银行entry最后写入审计请求。
 
 安全前检先以模块私有、data-descriptor-only临时副本拒绝proxy/accessor/cycle等，再复用原金额/legacy validator；该临时副本仅为保NaN/Infinity的原错误码/validation DTO，绝不进入C、result摘要、pending或授权。真正准入仍严格S_result_v1。aux附录仅对非Proxy、plain/null原型根的自有data descriptor复用原纯parse validator；真实执行完整重验。入口metadata提取在严格检查后保原own undefined/holes/安全__proto__定义，仅剥root operationId；不再用摘要归一化后的.value冒充payload。
 
 本机REST按原业务码/详情/状态返回并附真私有proof；模型先固定安全投影，bank固定错误投影只复制原WeakMap已有证据，不接收任意code/metadata/authority。caller BEGIN/SP/auxTransaction不授能力；helper若自己开启事务则可回滚自己事务。已准入业务错误必须保业务回滚与失败终态，纯静态拒绝仍全表零写。aux/I内部真私有outer中的失败固定队列只在确认整体rollback后消费；任何失败元数据/终态写失败都全回滚留pending/unknown，不增attempt自动重跑。
 
-## 2026-10-24 W2b 实施候选（尚未 root 验收、独审或合并）
+## 2026-10-24 W2b 接线合同（R4根影响验收通过，待新最终独审）
 
-本轮最初实施起点为 PR87 merge `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`；当前整合BASE以页头6465为准。真实会计、首次/增量导入、辅助核算、银行写入及有失效刷新副作用的银行查询，统一进入同步 `local-audit-coordinator.mjs`。`db.mjs` 在核心迁移和真实新库连接核验之后 await 官方 audit 安装/升级；安装失败阻止领域模块启用。单用户、同库多企业、一企一套和两种 profile 均保持。
+本轮最初实施起点为 PR87 merge `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`；当前整合BASE以页头35bd为准。真实会计、首次/增量导入、辅助核算、银行写入及有失效刷新副作用的银行查询，统一进入同步 `local-audit-coordinator.mjs`。`db.mjs` 在核心迁移和真实新库连接核验之后 await 官方 audit 安装/升级；安装失败阻止领域模块启用。单用户、同库多企业、一企一套和两种 profile 均保持。
 
 领域先在事务外持久化 pending 并取得私有单用 authorization，再拥有最外层事务。业务保存点仅逐次许可内部自产名称/动作；执行领域函数时许可已关闭。银行结构核验仅走固定只读 metadata 门。caller BEGIN/SAVEPOINT、actor、ALS、operationId、parent 和序列化 receipt 都不授执行能力。批量固定 child 在父执行前准备，只有同 db/file/instance 和真实父 authorization 才可消费；业务、来源/批次完成、父子终态和 checkpoint 同 COMMIT。已确认 rollback 后父子失败终态另事务落库；未知态保 pending 并禁止通过增加 attempt 绕过。
 
@@ -22,7 +24,7 @@ incremental 的静态参数/来源/规范mode与scope预检复用原纯校验，
 
 incremental 和银行导入失败只登记私有固定字段队列；只有确认真实rollback后，固定markBatchFailed（保原failed attempts累计及各自completed/pending_review保护）与全局失败终态同事务提交；batch下真实child栈仅由私有授权核验push/finally pop，已绑定child与父失败终态同COMMIT，create失败不留已回滚accountSetId。任一失败记录写入失败均回滚整层并如实unknown/audit_unavailable。窄银行手工连接恢复只核“准入pending COMMIT_BUSY，authorization尚未发出，随后真实结束事务，同file/instance且精确pending行不存在”的私有记录；持久pending/已提交/执行未知/文件或实例变更均不清隔离、不重执。
 
-本片只完成 W2b 接线候选；W3b 全入口统一账套锁、20企业完整故障核证、W4恢复分叉/重绑、Windows与最终链仍待办。税局真实接入0，原八包仍6/8。详细自测和失败历史见审计交接；root新BASE必要50定点＋4probe已通过，最终fresh尚待；旧9cd完整97实际73通过/24失败，员工未跑 full/npm test。
+本片只完成 W2b 接线候选；W3b 全入口统一账套锁、20企业完整故障核证、W4恢复分叉/重绑、Windows与最终链仍待办。税局真实接入0，原八包仍6/8。详细自测和失败历史见审计交接；前轮50定点＋4probe按未变范围复用；R4根13原套＋1probe通过，新最终fresh尚待；旧9cd完整97实际73通过/24失败，员工未跑 full/npm test。
 
 以下为各阶段历史合同；与本页当前W2b说明冲突时，以本页头部为准。
 

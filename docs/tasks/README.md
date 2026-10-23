@@ -1,10 +1,8 @@
-> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+> **当前 W2b R4：根影响验收通过，待新候选与全新最终独审（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`；[原66路径窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)保留，[本轮四路径窄修](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374950499)，总计仍65文件。旧候选 `81f404e465d052547d8913b1db1e066520769048` 被最终独审拒绝，不能合并；R4修复后的13原套＋1独立探针实际通过，尚未保存新candidate、重新最终独审、PR或merge。原八任务仍6/8，LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录或进程，税局真实接入0。证据分层及限制见[LOCAL06当前交接](../handoffs/LOCAL-06-AUDIT.md)。
 
-root50必要定点＋R3四probe已实际接受；当前只待最终候选保存/fresh审查与PR，不重复实现/测试。精确金额、路径实测与R1夹具被原finally自行清理的限制见LOCAL06当前root验收交接。
+本片负责人huxiaoyang-code，认领仍为原66路径加本轮四路径窄修，最终总65文件。R4根影响验收已完成并关闭；新candidate/全新最终独审/PR待root，不能合并旧81。其它任务认领不因此释放；八任务6/8、W3b/W4/Windows与最终链未完成。
 
-当前唯一实施窗口为页头66路径，员工65文件已自测并停止，root在6465必要验收已通过，等待最终新独审；本轮不新开实现、不重复运行已绿且字节未变的大矩阵。准确版本、自测/失败及原97注册边界见 LOCAL06 当前修复交接。PR87已合事实保留，后续本W2b尚无PR/merge。
-
-## 2026-10-24 当前本片状态
+## 2026-10-24 R4之前本片状态（历史）
 
 LOCAL06 W2b最初以已合PR87 merge882c5b6实施；当前以页头6465/66窗交付（46原窗+两旧fixture与模型真实rollback断言最小修正）。真实领域/入口/receipt2与batch最小原子接线已落地，正在完成root最终验收前交付；尚未PR/合并，06/07与原八包6/8状态不变。W3b/W4/Windows和最终链待办；税局真实0。证据及限制见[LOCAL06交接](../handoffs/LOCAL-06-AUDIT.md)，不覆盖其它离线窗口的任务认领。
 

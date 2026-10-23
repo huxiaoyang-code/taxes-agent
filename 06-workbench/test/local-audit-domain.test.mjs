@@ -96,6 +96,62 @@ try {
  const BS=await import('../server/bank-storage.mjs'),B=await import('../server/bank-reconciliation.mjs'),LB=await import('../server/local-backup.mjs');
  const dbPath=join(process.env.WORKBENCH_DATA_DIR,'workbench.db');await BS.ensureBankSchema(db,{dbPath,dataDir:process.env.WORKBENCH_DATA_DIR,backupService:LB});
  B.registerBankAccount(db,{accountSetId:a.id,bankAccountId:'SYN-BANK',sourceId:'SYN',glAccountCode:'1002'});
+ // All-table snapshots include audit rows and sqlite_sequence, not just bank data.
+ const allTables=()=>Object.fromEntries(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,db.prepare('SELECT * FROM "'+name.replaceAll('"','""')+'"').all().map(row=>JSON.stringify(row)).sort()]));
+ const AS=await import('../server/auxiliary-storage.mjs'),X=await import('../server/auxiliary-accounting.mjs');
+ await AS.ensureAuxiliarySchema(db,{dbPath,outDir:join(root,'aux-install')});
+ let admissionCallbacks=0,rejectedAdmissions=0;
+ const getter=()=>{admissionCallbacks++;return admissionCallbacks===1?a.id:b.id;};
+ const unsafeOptions=()=>{
+  const cycle={};cycle.self=cycle;
+  const inherited=Object.create({get accountSetId(){return getter();}});
+  const hidden=Object.defineProperty({accountSetId:a.id},'displayName',{get:getter});
+  return [
+   {get accountSetId(){return getter();},bankAccountId:'SYN-UNSAFE',sourceId:'SYN',glAccountCode:'1002'},
+   {accountSetId:a.id,get displayName(){admissionCallbacks++;return admissionCallbacks===1?'DIGEST VALUE':'EXECUTED VALUE';}},
+   new Proxy({accountSetId:a.id},{get(){admissionCallbacks++;throw Error('get trap');},getPrototypeOf(){admissionCallbacks++;throw Error('prototype trap');},ownKeys(){admissionCallbacks++;throw Error('keys trap');},getOwnPropertyDescriptor(){admissionCallbacks++;throw Error('descriptor trap');}}),
+   inherited,hidden,{accountSetId:a.id,mapping:{get columns(){return getter();}}},
+   {accountSetId:a.id,get persist(){admissionCallbacks++;return false;}},
+   {accountSetId:a.id,persist:false,get bankAccountId(){return getter();}},
+   {accountSetId:a.id,nested:{statementOpenCents:1n}},
+   {accountSetId:a.id,otherCents:1n},{accountSetId:a.id,[Symbol('unsafe')]:1},
+   {accountSetId:a.id,cycle},{accountSetId:a.id,fn(){}},new Date(),
+  ];
+ };
+ const admissions=[...['registerBankAccount','importBankBatch','refreshMatchStates','listTransactionsView','listCandidates','confirmMatch','listMatchesView','cancelMatch','resolveAmbiguity','reconcileBank','getBankStatus'].map(key=>options=>B[key](db,options)),...['createAuxiliaryEntity','updateAuxiliaryEntity','replaceAuxiliaryAllocations','setAuxiliaryRequirement'].map(key=>options=>X[key](db,options))];
+ for(const call of admissions)for(const bad of unsafeOptions()) {
+  const before=allTables(),changes=db.prepare('SELECT total_changes() n').get().n;
+  assert.throws(()=>call(bad),/audit_result_invalid/);
+  assert.equal(admissionCallbacks,0);assert.equal(db.prepare('SELECT total_changes() n').get().n,changes);assert.deepEqual(allTables(),before);rejectedAdmissions++;
+ }
+ const data=Object.create(null);data.accountSetId=b.id;data.ownUndefined=undefined;data.holes=new Array(3);data.holes[1]=undefined;
+ Object.defineProperty(data,'__proto__',{value:{safe:true},enumerable:true});
+ const copied=C.copyDomainRequest(data);assert.equal(Object.getPrototypeOf(copied),null);assert.equal(Object.hasOwn(copied,'ownUndefined'),true);assert.equal(copied.holes.length,3);assert.equal(Object.hasOwn(copied.holes,0),false);assert.equal(Object.hasOwn(copied.holes,1),true);assert.deepEqual(copied.__proto__.safe,true);assert.equal({}.safe,undefined);
+ const metadataInput={...data,operationId:randomUUID()};const extracted=C.extractOperationMetadata(metadataInput);assert.equal(extracted.metadata.operationId,metadataInput.operationId);assert.equal(Object.hasOwn(extracted.payload,'ownUndefined'),true);assert.equal(Object.hasOwn(extracted.payload.holes,0),false);assert.equal(Object.hasOwn(extracted.payload.holes,1),true);assert.equal(extracted.payload.__proto__.safe,true);
+ assert.throws(()=>C.extractOperationMetadata({accountSetId:a.id,get operationId(){return getter();}}),/audit_result_invalid/);assert.equal(admissionCallbacks,0);
+ assert.throws(()=>C.copyDomainRequest({statementOpenCents:0n}),/audit_result_invalid/);assert.throws(()=>LA.auditResultDigest({statementOpenCents:0n}),/audit_result_invalid/);
+ const normal=Object.assign(Object.create(null),{accountSetId:b.id,bankAccountId:'SYN-BANK-B',sourceId:'SYN',glAccountCode:'1002',displayName:'SAFE VALUE',currency:undefined});
+ Object.defineProperty(normal,'__proto__',{value:undefined,enumerable:true});
+ const normalId=randomUUID(),registered=op(normalId,()=>B.registerBankAccount(db,normal));assert.equal(registered.created,true);assert.equal(registered.account.account_set_id,b.id);assert.equal(registered.account.display_name,'SAFE VALUE');
+ const normalAudit=db.prepare('SELECT * FROM audit_operations WHERE operation_id=?').get(normalId),normalReceipt=JSON.parse(normalAudit.receipt_json);
+ assert.equal(normalAudit.scope_kind,'account_set');assert.equal(JSON.parse(normalAudit.targets_json).accountSetId,b.id);assert.equal(normalReceipt.targets.accountSetId,b.id);assert.equal(normalReceipt.state,'succeeded');assert.equal(db.prepare('SELECT account_set_id FROM bank_accounts WHERE bank_account_id=?').get('SYN-BANK-B').account_set_id,b.id);
+ const expectedRequestDigest=LA.auditCanonicalDigest(['audit-request-v1','bank.account.register',{domainRequestDigest:LA.auditResultDigest({...normal,entry:'registerBankAccount'})}]);assert.equal(normalAudit.request_digest,expectedRequestDigest);
+ const readBefore=allTables(),readChanges=db.prepare('SELECT total_changes() n').get().n;B.refreshMatchStates(db,{accountSetId:b.id,bankAccountId:'SYN-BANK-B',persist:false});assert.deepEqual(allTables(),readBefore);assert.equal(db.prepare('SELECT total_changes() n').get().n,readChanges);
+ const spoofedEntry={accountSetId:b.id,bankAccountId:'SYN-BANK-B',entry:'caller-entry'},entryId=randomUUID();op(entryId,()=>B.getBankStatus(db,spoofedEntry));const entryBefore=allTables(),entryChanges=db.prepare('SELECT total_changes() n').get().n;assert.throws(()=>op(entryId,()=>B.listMatchesView(db,spoofedEntry)),/audit_operation_conflict/);assert.deepEqual(allTables(),entryBefore);assert.equal(db.prepare('SELECT total_changes() n').get().n,entryChanges);
+ const party=X.createAuxiliaryEntity(db,{accountSetId:b.id,kind:'party',code:'R4-PARTY',name:'Synthetic party',requestId:'R4-CREATE'});assert.equal(db.prepare('SELECT account_set_id FROM aux_entities WHERE id=?').get(party.id).account_set_id,b.id);
+ assert.equal(X.updateAuxiliaryEntity(db,{accountSetId:b.id,entityId:party.id,name:'Updated party',reason:'synthetic'}).name,'Updated party');
+ const auxEntry=db.prepare("SELECT e.id FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND e.code='1002' AND e.debit=200").get(b.id).id;
+ const allocated=X.replaceAuxiliaryAllocations(db,{accountSetId:b.id,entryId:auxEntry,allocations:[{partyId:party.id,debit:137.29}],requestId:'R4-ALLOCATE',reason:'synthetic'});assert.equal(allocated.allocations[0].debitCents,13729);assert.equal(db.prepare('SELECT debit_cents FROM aux_allocations WHERE entry_id=?').get(auxEntry).debit_cents,13729);
+ assert.equal(X.setAuxiliaryRequirement(db,{accountSetId:b.id,code:'1002',party:true,reason:'synthetic'}).party,true);
+ for(const begin of ['BEGIN','SAVEPOINT r4_caller']) {
+  const before=allTables();db.exec(begin);
+  try {
+   assert.throws(()=>B.registerBankAccount(db,normal),error=>error.code==='bank_transaction_conflict');assert.equal(db.isTransaction,true);
+   for(const key of ['createAuxiliaryEntity','updateAuxiliaryEntity','replaceAuxiliaryAllocations','setAuxiliaryRequirement']){assert.throws(()=>X[key](db,{accountSetId:b.id}),/audit_transaction_conflict/);assert.equal(db.isTransaction,true);}
+   assert.deepEqual(allTables(),before);
+  }finally{db.exec('ROLLBACK');}
+ }
+ console.log(JSON.stringify({rejectedAdmissions,admissionCallbacks,allTableChanges:0,normalBankAccountSet:b.id,auditAccountSet:normalReceipt.targets.accountSetId,receiptAccountSet:normalReceipt.targets.accountSetId}));groups++;
  const bankOptions={accountSetId:a.id,bankAccountId:'SYN-BANK',sourceId:'SYN',period:'2026-01',mapping:{columns:{date:'date',summary:'summary',amount:'amount',direction:'direction',refId:'ref'},amountMode:'amount_direction',directionLabels:{inflow:['in'],outflow:['out']},currency:'CNY'}};
  const csv=amount=>`date,summary,amount,direction,ref\n2026-01-03,synthetic,${amount},in,SYN-REF\n`;
  B.importBankBatch(db,{...bankOptions,batchId:'SYN-ORIGINAL',csvText:csv(200)});
@@ -114,6 +170,9 @@ try {
  B.confirmMatch(db,{accountSetId:a.id,bankAccountId:'SYN-BANK',transactionId:transaction.id,...target,reason:'synthetic'});
  A.unpostVoucher(a.id,target.voucherId);assert.equal(B.listMatchesView(db,{accountSetId:a.id,bankAccountId:'SYN-BANK'}).invalidations.length,1);assert.equal(B.listMatchesView(db,{accountSetId:a.id,bankAccountId:'SYN-BANK'}).invalidations.length,0);groups++;
  assert.doesNotThrow(()=>B.reconcileBank(db,{accountSetId:a.id,bankAccountId:'SYN-BANK',period:'2026-01',asOf:'2026-01-31',coverageFrom:'2026-01-01',coverageTo:'2026-01-31',statementSource:'synthetic',statementOpenCents:0n,statementCloseCents:20000n}));groups++;
+ B.importBankBatch(db,{...bankOptions,accountSetId:b.id,bankAccountId:'SYN-BANK-B',batchId:'SYN-BIGINT-B',csvText:csv(200)});
+ const bigintReconcile=B.reconcileBank(db,{accountSetId:b.id,bankAccountId:'SYN-BANK-B',period:'2026-01',asOf:'2026-01-31',coverageFrom:'2026-01-01',coverageTo:'2026-01-31',statementSource:'synthetic',statementOpenCents:0n,statementCloseCents:20000n});
+ assert.equal(bigintReconcile.statement.openCents,0);assert.equal(bigintReconcile.statement.closeCents,20000);assert.equal(bigintReconcile.book.closingCents,20000);assert.equal(bigintReconcile.statement.differenceCents,0);console.log('BigInt top-level cents: open 0, close 20000; enterprise book 20000; statement difference 0');groups++;
  const backed=LB.createBackup({dbPath,outDir:join(root,'roundtrip-backup')});assert.equal(backed.ok,true,JSON.stringify(backed));assert.equal(LB.verifyBackup({backupDir:backed.backupDir}).ok,true);
  const restored=join(root,'restored');assert.equal(LB.restoreNew({backupDir:backed.backupDir,targetDir:restored}).ok,true);assert.equal(LB.createBackup({dbPath:join(restored,'workbench.db'),outDir:join(root,'again-backup')}).ok,true);groups++;
  const restart=await runChild(['--input-type=module','-e',`import {db} from './server/db.mjs';import * as A from './server/accounting.mjs';import {withRequestMetadata} from './server/local-audit-coordinator.mjs';try{const out=withRequestMetadata({operationId:${JSON.stringify(deleteId)},actor:'domain'},()=>A.deleteAccountSet(${gone.id}));console.log(out===undefined?'undefined replay':'bad');}finally{db.close();console.log('DB actual close');}`],{env:{...process.env}});assert.equal(restart.code,0,restart.stderr);assert.match(restart.stdout,/undefined replay/);assert.match(restart.stdout,/DB actual close/);groups++;

@@ -1,6 +1,20 @@
-> **当前 W2b：根必要验收已通过，待最终fresh/PR（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，[Issue54精确66路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)，实际65文件。root机械独立核对同65候选及完整WB/MCP源码/依赖，必要定点最终50/50（R1实绿36＋R2原14红短根复验全0），R3四真实独立probe全actual0/close、源前后同；包括最终领域21组及跨企真实渲染区间。未新跑完整97通过：旧97仍73/24/exit1，旧native134原因未知。R1部分原套finally自行删除夹具目录，数量未知，日志/result保留；短根实测输出目录67字符成功verify、224字符snapshot_failed，源全行保持，建议短路径，不推断全局阈值或具体journal原因。候选commit、最终fresh独审、PR/merge均未发生；仅本次docs收口，52非docs字节不改，不重50。原八包6/8、LOCAL06/07、W3b/W4、Windows与最终链继续未完成，税局真实0，同库多企业/每企唯一账套不要求独立目录。下方各旧候选/待验收记录按历史时点阅读。 root50＋4证据实际在6465及相同52份非docs字节上验收；root已快进35bd并核65WIP字节全同、9上游文件无66交叉，35bd独立上游由root按影响补验VAT/XLSX/accountant-review三套。
+> **当前 W2b R4：根影响验收通过，待新候选与全新最终独审（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`；[原66路径窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)保留，[本轮四路径窄修](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374950499)，总计仍65文件。旧候选 `81f404e465d052547d8913b1db1e066520769048` 被最终独审拒绝，不能合并；R4修复后的13原套＋1独立探针实际通过，尚未保存新candidate、重新最终独审、PR或merge。原八任务仍6/8，LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录或进程，税局真实接入0。
 
-## 2026-10-24 root实际必要验收通过（最终fresh尚待）
+## 2026-10-24 W2b R4 当前交接（根影响验收通过，最终独审待重做）
+
+旧完整候选81f404e465d052547d8913b1db1e066520769048最终独审REJECT：银行原accountSetId getter先选择账套1、实际effect写账套2，audit/receipt仍以账套1成功；displayName摘要值与执行值也不同。辅助scope getter只观察到调用1次后拒绝且零写，未观察到aux跨套写。旧拒绝证据保留，旧81不会合并。
+
+本轮只修bank-reconciliation、auxiliary-accounting、local-audit-coordinator和local-audit-domain测试四路径。原options首次读取前检查描述符/Proxy/原型/symbol及完整图，严检后复制；scope/request/body/refs同一安全数据，保own undefined/holes/nullproto/安全__proto__。全局S_result不变，仅银行既有两个明确顶层statement cents BigInt作十进制审计投影，业务仍保BigInt，深层或其它BigInt拒绝。银行11入口、辅助四wrapper与persist读取分支覆盖；persist=false不新增审计。固定entry最后写入，caller不能跨refresh方法冒名重放。extractOperationMetadata只将原descriptor clone提为纯私有复用函数，先严格snapshot及返回合同不变，相关入口已补验。
+
+root对冻结四路径实际运行13原套＋1独立自选probe：domain，bank CLI/HTTP/MCP，aux core/accounting/CLI/HTTP/model/MCP，audit HTTP/CLI/MCP，另1个manager probe。14个运行均通过、actual exit/close 0，完整WB/MCP源码、输入、Node及installed lock前后相同，log SHA已核。不是14原套或新完整97。正常合成DB实际close；嵌套server停止涉及SIGTERM的如实记录signal，不写成所有嵌套child code0。
+
+root domain实际23组/57events；15入口×14类共210恶意输入callbacks=0，每次全部表含audit/sequence及total_changes零变。正常银行实际行/audit/receipt同账套，caller BEGIN/SAVEPOINT保持active全库零写，辅助分配13729分，两个顶层BigInt 0/20000分真实对账。root另自选16恶意输入callbacks=0，全库/schema/total_changes零变；两准则独立金额9273/1981分，bank行/审计/receipt账套一致，两个BigInt真实落reconcile；persist=false全库无写，同ID跨getBankStatus/listMatchesView冲突且零重执。
+
+其余影响入口复验保原金额和链路：bank REST15/raw15、真实stdio15双profile1130/1130.01；aux AR1000→1400→800及倍数、core真实busy/unknown/rollback、model92、HTTP17/MCP28；audit HTTP7/CLI6/MCP4实际关闭。前轮50必要定点、R3四真实probe与新main VAT/XLSX/accountant-review三套证据保留；48份非文档字节未变，按未变化范围复用；本轮4份非文档由此次13＋1补验，不宣称前轮50/4在新hash全部重跑。本次docs收口不运行产品或测试，52份非文档与根验收字节一致。
+
+限制保留：旧完整97为73通过/24失败、exit1，native134原因未知；R1部分夹具被原finally自行清理，数量未知，日志/result保留；短根输出目录67字符backup/verify成功，224字符snapshot_failed，两次源全行保持，不推断全局阈值或journal原因；后续owned目录保留preload为管理辅助，不当产品能力。旧失败不被本轮成功改写。尚无新candidate/最终独审/PR/merge。BASE35bd、原66窗口及本轮四路径claim、总65文件保持。八任务6/8；W3b全入口资源锁/持久代次/20企两月19＋1与运行中备份、W4恢复分叉/路径重绑、Windows W2和最终整链未完。产品为本机单用户、同DB多企业、一企一套，不要求每企目录/进程；税局真实0，无真实数据/浏览器/凭据操作。
+
+## 2026-10-24 R4之前root必要验收记录（历史，旧81随后被拒）
 
 root在同65候选与相同完整WB/MCP源码、依赖上机械核对50个必要定点：R1实际36绿，原14红在R2短合成根实际全部exit＋close0，共50/50；包含7个新main offline定点。R3四真实独立probe的result.independentPassed=true，全部actual0/close、源前后同。这不是新完整97；原完整97的73通过/24失败和原日志仍保留。最终新domain实际21组/49events已到达并exit0；旧case前native134原因仍未知，不能归为已定位。
 

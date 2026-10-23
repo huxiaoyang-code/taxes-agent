@@ -1,4 +1,4 @@
-import { runDomainOperation } from './local-audit-coordinator.mjs';
+import { runDomainOperation,copyDomainRequest } from './local-audit-coordinator.mjs';
 // Auxiliary tuples point to the real GL; no parallel journal or inferred party identities.
 import { getAccountingProfile } from './accounting-profiles.mjs';
 import { assertPeriodMutable } from './period-end-controls.mjs';
@@ -91,10 +91,10 @@ function setAuxiliaryRequirementBody(db,{accountSetId,code,project=false,departm
  return auxTransaction(db,()=>{const set=context(db,accountSetId); mutable(db,accountSetId,set.start_period); reason=text(reason,'aux_reason_required'); for(const value of [project,department,party]) fail(typeof value!=='boolean','aux_requirement_invalid'); fail(!db.prepare('SELECT 1 FROM accounts WHERE account_set_id=? AND code=?').get(accountSetId,code),'account_not_found'); const before=db.prepare('SELECT * FROM aux_requirements WHERE account_set_id=? AND code=?').get(accountSetId,code)??null; db.prepare('INSERT INTO aux_requirements VALUES(?,?,?,?,?) ON CONFLICT(account_set_id,code) DO UPDATE SET project=excluded.project,department=excluded.department,party=excluded.party').run(accountSetId,code,Number(project),Number(department),Number(party)); writeOperation(db,accountSetId,'requirement:'+code,'requirement_set',reason,before,{code,project,department,party}); return {code,project,department,party}; });
 }
 
-export function createAuxiliaryEntity(db,options={}) {return runDomainOperation(db,{action:'aux.entity.create',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:v=>[{type:'aux_entity',id:v.id}]},()=>createAuxiliaryEntityBody(db,options));}
+export function createAuxiliaryEntity(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.entity.create',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:v=>[{type:'aux_entity',id:v.id}]},()=>createAuxiliaryEntityBody(db,options));}
 
-export function updateAuxiliaryEntity(db,options={}) {return runDomainOperation(db,{action:'aux.entity.update',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:v=>[{type:'aux_entity',id:v.id}]},()=>updateAuxiliaryEntityBody(db,options));}
+export function updateAuxiliaryEntity(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.entity.update',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:v=>[{type:'aux_entity',id:v.id}]},()=>updateAuxiliaryEntityBody(db,options));}
 
-export function replaceAuxiliaryAllocations(db,options={}) {return runDomainOperation(db,{action:'aux.allocations.replace',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:()=>options.entryId?[{type:'voucher_entry',id:options.entryId}]:[]},()=>replaceAuxiliaryAllocationsBody(db,options));}
+export function replaceAuxiliaryAllocations(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.allocations.replace',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:()=>options.entryId?[{type:'voucher_entry',id:options.entryId}]:[]},()=>replaceAuxiliaryAllocationsBody(db,options));}
 
-export function setAuxiliaryRequirement(db,options={}) {return runDomainOperation(db,{action:'aux.requirement.set',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:()=>options.entryId?[{type:'voucher_entry',id:options.entryId}]:[]},()=>setAuxiliaryRequirementBody(db,options));}
+export function setAuxiliaryRequirement(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.requirement.set',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:()=>options.entryId?[{type:'voucher_entry',id:options.entryId}]:[]},()=>setAuxiliaryRequirementBody(db,options));}
