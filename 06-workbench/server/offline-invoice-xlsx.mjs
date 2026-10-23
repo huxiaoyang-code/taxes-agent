@@ -102,7 +102,7 @@ const cellPosition = a => {
 const a1 = column => { let s = ''; for (let n = column; n; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
 const simpleString = n => { check(n && n.children.every(c => c.name === 't') && n.children.length === 1); const t = n.children[0]; check(!t.children.length && t.text.length <= 4096, 'xlsx_limit'); check(!/_x[0-9A-Fa-f]{4}_/.test(t.text), 'xlsx_string_escape_unsupported'); return t.text; };
 
-export function readInvoiceXlsx(bytes, mapping) {
+function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false) {
   try {
     const entries = unpack(bytes);
     for (const [name, content] of entries) if (name.endsWith('.rels')) {
@@ -187,9 +187,16 @@ export function readInvoiceXlsx(bytes, mapping) {
     }
     const data = records.filter(r => r.rowNumber > mapping.headerRow).sort((a, b) => a.rowNumber - b.rowNumber); check(data.length > 0, 'xlsx_rows_missing');
     for (const r of data) for (const [key, col] of index) {
-      const type = r.types[col]; if (!type && r.cells[col] === undefined) continue; // Missing values reach existing invoice validation.
+      const type = r.types[col]; if (!type && r.cells[col] === undefined) continue; // Missing values reach the existing material adapter validation.
       check(type, 'xlsx_cell_invalid');
-      if (['net', 'tax', 'gross'].includes(key)) check(type.type !== 'n' || ['0', '1', '2'].includes(type.format), 'xlsx_numeric_format_unsupported');
+      if (numericKeys.includes(key)) {
+        check(type.type !== 'n' || ['0', '1', '2'].includes(type.format), 'xlsx_numeric_format_unsupported');
+        // Bank text-format options must never reinterpret an OOXML numeric cell.
+        if (strictNumericLexical && type.type === 'n') {
+          const raw = r.cells[col];
+          check(raw.trim() === raw && /^-?(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(raw), 'xlsx_cell_invalid');
+        }
+      }
       else check(['s', 'inlineStr'].includes(type.type), 'xlsx_text_required');
     }
     return { headers: header.cells, index, rows: data.map(r => ({ ...r, lineNumber: undefined, location: { sheet: mapping.sheet, row: r.rowNumber, fields: Object.fromEntries([...index].map(([key, col]) => [key, { sheet: mapping.sheet, row: r.rowNumber, column: col + 1, cell: `${a1(col + 1)}${r.rowNumber}`, header: mapping.columns[key] }])) } })) };
@@ -198,3 +205,7 @@ export function readInvoiceXlsx(bytes, mapping) {
     fail('xlsx_zip_or_xml_invalid');
   }
 }
+
+// Numeric permissions belong to these fixed adapters, never to caller-controlled mapping.
+export const readInvoiceXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['net', 'tax', 'gross']);
+export const readBankXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['amount', 'balance'], true);

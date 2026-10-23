@@ -1,5 +1,25 @@
 # 离线闭环交接
 
+## 2026-10-24 PR98 已合事实与 OFFLINE-01D 受限银行 XLSX 实施冻结候选
+
+[PR98](https://github.com/huxiaoyang-code/youshu-fork/pull/98) 已合：base `98e57bdfbe29e2f8716ab0768492583064cd30c1`、已审 head `a331b21abd72b94147742fd7e96fed0849e10cb6`、merge `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`。交付 #77 comment6375751257 / #76 comment6375751712 / #85 comment6375752159 / #80 comment6375752731；三方黄金15及旧候选43/行动规划33/VAT22通过，12组业务/24张凭证/36份月末快照已独立验算。下方00B“候选/待验”等为历史时点。#54 最新 comment6375884790（2026-10-23T22:20:35Z）：R5 两文件窄修已独立接受并提交 `d1d618b5d19f31a877f94407ffcfcf10f518af15`；正进行13份文档收口，上游受影响测试运行中。完整最终候选仍待 fresh/PR/merge，正式写依赖未放行；远端 main 仍 `11e47e6`，不以旧 `87043a` 待审记录作当前接受事实。
+
+本片 OFFLINE-01D / Refs #76/#78，基于上述 merge，认领 #78 comment6375851534，工作区 offline-01d-bank-xlsx。唯一继承当前模型的实施 Codex subagent，用户明确覆盖旧外部执行器限制；无 pi/Claude/TokenHub/外部模型、再委派、全局配置或 Git 写。root 负责独立验收、全新未实施者审查及 Git/PR。精确八文件：四 server（offline-invoice-xlsx/material-adapters/materials/material-completeness）、新 test/offline-bank-xlsx.test.mjs、OFFLINE-XLSX 合同、新 OFFLINE-01D 任务及 own 本交接。未改旧测试、会计/税务规则、DB/store/CLI/package/lock/test-all/STATE/NEXT 与 #54 核心66路径；未加载真实或历史资料。
+
+实现同一私有受限 readMappedXlsx，发票固定 net/tax/gross、银行固定 amount/balance 数值权限，用户 mapping 不能声明任意 numericKeys。bank-xlsx-v1 仅在原银行 amount_direction 显式归属/账户/日期/方向/负号/CNY/可选文本千分位及货币符号上增加 sheet/headerRow。OOXML 数值只 General/0/0.00；日期/流水号/方向/币种/摘要全text。复用 normalizeMapping/normalizeBankRow、经济语义/稳定身份与全部旧 ZIP/XML/关系/part/公式含cache/类型/限额拒绝。bank parsedInput 使用原 sheet/row/逐字段A1/column；CSV 原位置和语义保留，MATERIAL_VERSION 未变。
+
+两 XLSX 都由统一 sourceText/sourceBytes 用 canonical base64 作JSON运输、SHA绑定实际二进制；银行 kind 纳入 missingKinds 银行槽与逐账户覆盖。既有 CLI/store 未改源码，但新套真实读取文件、wx生成报告、原件hash不变、actual receive blob字节等于XLSX、child重启inspect/replay、receipt/origin追溯及CAS更正已实验。原件变化不借旧报告继续准备，历史blob保留。openOfflineActionInput / buildOfflineActionPlanFromFiles 实读银行XLSX→银行覆盖provided_valid→现有未来服务预付候选；完整有效事实不重复索取，缺refund只问相应事实，坏银行/账户矛盾/跨企业/缺文件或变化只阻断相关分支，独立有效销售保留。无本片正式写账、DB、联网或客户联系，所有 authorizesExecution/periodComplete/completed=false。
+
+修前实施自测（cwd06-workbench）：`node test/offline-bank-xlsx.test.mjs` **25/25 exit0**；共享parser必要旧 `node test/offline-xlsx.test.mjs` **19/19 exit0**，`node test/offline-bookkeeping.test.mjs` **43/43 exit0、skip0**。新套首次23/23通过，后追加非法方向/币种/零金额与非连续第12行定位两项为25/25；这25项未覆盖下述独审P2，不能作为修后最终接受。独立合成预付684.23/余额-315.77，销售净914.37+税9.14=923.51，更正预付685.27/余额-316.81；literal期望仅在测试，不作为产品输入。实际ExcelJS bytes、中文sheet/header3/长前导零ref、shared/inline/text/numeric、B4/E4及B12/D12、跨格式单候选/差额conflict、所有格式/归属/范围/安全拒绝、公开report篡改重读、固定stdout/stderr、实际store与action文件模式均有断言。CLI子进程signal=null、stderr空，无自有常驻进程；成功合成夹具默认清理，失败或KEEP_FIXTURES=1保留.agent-runs。
+
+root另报告已完成核心初稿独立实证：自选银行1743.29/余额58256.71/B4→三候选及银行provided_valid、CSV同身份/语义duplicate与差额conflict、actualCLI fixedstdout/wx、actualstore原blob/replay与来源变化stale；旧invoice19/store32（Windows链接实建、skip0）/action33/golden15均exit0，日志在06-workbench/.agent-runs/root-*.log。此处仅按root报告登记，未读取其输入来确定实施预期；最终完整HEAD冻结和fresh独审仍待root，不提前声称接受/PR/合并。其后共享reader发生下述P2修复，必须按修后完整HEAD重新验收。
+
+独审确认P2并暂停发布：`.agent-runs/review-numeric-lexical-01d.mjs` 证明 type=n 的 `<v>￥2,849.63</v>` / `2,849.63` / `2 849.63` 在银行 allowCurrencySymbol/thousandsSeparator 选项下会被当作文本重新解释并接受2849.63；原25套和早期探针通过不覆盖该缺口。实施先追加真实XML amount/balance负例及实际text/CSV正例，在原核心实跑 **26通过/1失败**，日志 `.agent-runs/implementation-bank-p2-before.log` 与合成失败目录 `bank-xlsx-synthetic-FZ1y7x` 保留；独审原probe未改。
+
+修复只在固定 readBankXlsx 包装的私有 reader 路径启用 strictNumericLexical：数值单元格原字符串必须 trim 后完全相等，且是可选负号、规范整数、可选1~2位小数；amount和balance均先拒币号/分组/科学/空白含LF/CRLF/tab/加号/缺整数或小数/前导零，固定错误xlsx_cell_invalid。原readInvoiceXlsx路径不启用新检查，保留旧发票错误和词法语义；不修改通用bank normalization，实际文本的货币符号/逗号/空格分组仍按明确选项接受，与CSV同docId/semanticDigest。新增两测试后 **修后实施 `node test/offline-bank-xlsx.test.mjs` 27/27 exit0**，必要旧 **`node test/offline-xlsx.test.mjs` 19/19 exit0**；未改旧测试或放宽断言。最终完整HEAD root必要重验及fresh复审仍待，不能用修前25或早期独审接受代替。
+
+维护入口已运行 `python tools/flow.py status`（维护仓库内），仍仅旧 rujin-202608-human-pl SHA mismatch/exit1，与本片无关，未读改原件。合同及回退见 [OFFLINE-XLSX](../OFFLINE-XLSX.md) 与 [OFFLINE-01D](../tasks/OFFLINE-01D.md)。#78整包/#76总项、#54正式写账接线、会计生产审定、真实试用及其他闭环仍未完成，税局真实接入0。当前为实施冻结候选，等待root最终验收与全新未实施者独审。
+
 ## 2026-10-24 PR97 已合事实与 #54 当前依赖状态
 
 PR97已实际合并：[PR97](https://github.com/huxiaoyang-code/youshu-fork/pull/97)，base `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`，已审head `8d79547e0c06316f1f94b350fba6454934d71140`，merge/main `98e57bdfbe29e2f8716ab0768492583064cd30c1`。#79 comment6375420406 / #76 comment6375425702交付；实施/root/fresh三方action-plan33及旧plan45/bookkeeping43通过。下方02B“候选/待PR”均保留历史时点，以本段已合事实为准。
