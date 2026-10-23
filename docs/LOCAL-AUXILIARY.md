@@ -1,6 +1,6 @@
-> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b 已合并（2026-10-24）**：[PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)，merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`；[本次13docs交接认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376358168)。交接元数据待提交／复核，LOCAL06/07未整体完成、八任务仍6/8、税局真实0。审定head、独审和后续边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
 
-以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+以下保留合并前阶段说明；最新PR #100已合并事实与后续边界以页头交接为准。
 
 R4辅助四个公开写wrapper在第一次读取accountSetId前严检原options并复制，scope/request/body/refs共享安全数据，getter/Proxy无回调拒绝。旧独审仅观察到aux scope getter调用1次后拒绝且零写，未观察到aux跨账套写。四入口真实成功、13729分分配及caller事务拒绝合同已复验。
 

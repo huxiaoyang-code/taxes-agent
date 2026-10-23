@@ -1,6 +1,16 @@
-> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。
+> **当前 W2b 已合并（2026-10-24）**：[PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)，merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`；[本次13docs交接认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376358168)。交接元数据待提交／复核，LOCAL06/07未整体完成、八任务仍6/8、税局真实0。
 
-## main0e 当前状态：29完整独审接受，新精确head待增量核证（2026-10-24）
+## W2b 已合并与当前交接（2026-10-24）
+
+[业务PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)已实际合并。审定head为214f287503ad6093f405674b15f413942cf74082；主线签名merge为e13cc43d9f95ee78599b288486ff5721b01f00e2，父提交依次为0e89a2d107fd75ff18dc0998e89d96c3217baeb3与该审定head。merge tree 40877463e02c2ef8b69b5ea778cd46bf0cb38e41与候选完全一致，root已实际核签名、父提交和树。当前交接分支codex/huxiaoyang-code/local-06-w2b-handoff从e13建立，交接BASE为e13；本次13docs认领6376358168，交接元数据自身尚待提交和独立复核，不编造该交接PR号。
+
+独立未实施者的完整65审查接受29候选，含13组独立实证，报告SHA256为b283c097dd571cbe9a89fd98b953720e270142d2417e983a2e43e7e0409d8548；随后对新主线/13metadata及精确214候选的补充审查也ACCEPT，报告SHA256为589332b727ca51a797795c9e87f9f3d679ed8456e4afe6f2efe87bbc32631c6c。实际业务合并以214及e13/tree一致性为准，不冒充GitHub第二账号批准。
+
+验收按实际版本分层保留：R4根13原套＋1probe及两准则9273/1981分、R5根domain26组/68events、operation10、fullpersistence40/40和独立75336分/固定计划拒绝与SQL回滚，员工13729分voucher为独立实施自测层；main11四套及main0e五套27/19/32/33/15按各整合阶段实际运行证据解释。完整独审13组与精确head补充ACCEPT另为内容审查证据，不宣称所有旧矩阵在最终214或本次docs上重跑。52份业务/测试等非docs在交接中与e13实际合并候选逐bytes/SHA保持；本次只普通文档/链接/哈希核对，不业务或测试。
+
+旧81 getter错位、旧870固定child计划membership缺口的精确拒绝及其旧审查状态、非法actor/DTO夹具与依赖环境管理失败、旧97的73/24、native134原因未知、R1夹具自行清理数量未知和长备份输出路径限制，均按历史原样保留；后续成功不改写当时失败。W2b已合并不代表LOCAL06或LOCAL07整体完成，原八任务仍6/8。W3b全入口共享资源锁/持久epoch/20企两月与运行中备份、W4恢复执行权/路径重绑、Windows W2及最终整链仍后续。产品本机单用户、同DB多企业、一企一套，不每企目录/进程；真实税局接入0。下一W3b须在本次交接完成后使用全新进程/会话/nonefork实施者，不续用本包实施上下文。
+
+## main0e 发布前记录（合并前阶段历史，2026-10-24）
 
 未参与实施或管理设计的全新nonefork reviewer已完整阅读65差异并独立运行13组合成验证，正式ACCEPT候选29f76f2479425a8f192f13cf1c11dd318ce63138（tree b3d5a54e3d7d5f3086ac0b12b0362755ae0b60f0，BASE11e47），报告SHA256 b283c097dd571cbe9a89fd98b953720e270142d2417e983a2e43e7e0409d8548。该完整65审查与13组证据已实际发生，保留其成果；发布首main核对发现主线已到0e即停止，未写任何远端对象/ref，尚未PR或合并。旧81/870精确候选被拒、旧870完整65审查未完及旧管理/独审夹具失败仍保历史，不能用29的接受覆盖旧失败。
 
