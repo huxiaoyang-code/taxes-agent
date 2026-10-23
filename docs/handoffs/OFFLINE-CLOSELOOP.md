@@ -1,5 +1,31 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-04B / #81B 非零选定 VAT 行实施候选（待 root/fresh 冻结验收）
+
+PR92 实际已合：[PR92](https://github.com/huxiaoyang-code/youshu-fork/pull/92)，base `0c6efe4bba9b7a62d09f434cd3fef071c917d4f8`，已审 head `ff8c30734a3d64ffb022efa2c63f0d3188aa3d5f`，merge/main `e280877ce60d75ec859ad6da2b8514fa98341c46`。#78B store 最终 root 与 fresh **32/32**，独立 root 实际 `547.83+5.48=553.31→553.32`、bank `126.49` 的三 receipt/CAS/原路径失效及独立银行不变验证；fresh 另独立 `324.73→324.74`、bank `73.91` 来源更正/旧版本保留。下方“01B仍待32/未PR”等保留历史时点，不能覆盖本条实际已合事实。#78 XLSX/路径重定位等未完，#78整体未完，资料真实性仍unverified。
+
+本片基于该 merge，worktree `offline-04b-vat`，branch `codex/huxiaoyang-code/offline-04b-vat`，Refs #76/#80/#81，认领 issuecomment6373062873。唯一当前模型实施 Codex subagent，未再委派、未调用 pi/Claude/TokenHub/其他外部执行器，无 Git 提交/推送/合并。精确七文件窗口；#54 的 DB/accounting/import/audit/coordinator/batch/HTTP/MCP、package/test-all、STATE/NEXT-SESSION 及旧材料/规划/候选/store/snapshot实现全部只读。维护入口由root实跑，仍是旧human-pl SHA mismatch，与本片无关，不修历史原件。
+
+实现 `calculateOfflineVat(rawInput, privateSource, privateSnapshot)`：内部从原始 #78 reports/declaration/accountingFacts 重新 `buildOfflineCandidates`（#79准入也重算），再核 #81A 当前实际只读账库。scope、规范企业绑定、持久profile/准则、完整posted凭证和分录顺序/ID/日期/科目/整数分、自动业务key、固定source_system与实际source/check/batch关联逐条匹配；批次必须completed。所有scope posted都须解释，draft/未知业务/结转/缺源/缺月/来源或账证矛盾均不放行。没有生产写账或默认DB导入。
+
+工程范围严格是2026Q1新设首期季度小规模企业、普通境内主营服务、全季度销售达到300000元、逐票净额整元与原票1%及实际初始VAT完全一致；完整季度销购/逐账户银行覆盖、工资资产不适用、首期零期初/无历史、会计资格及逐项业务排除均须依据。taxFacts只接基础/排除与逐票类别事实、确认人/依据/真实来源pointer，不接税额/税基/科目/分录/ready。unknown/缺件、冲突、unsupported有具体classification和原始事实请求；合法空账和低于起征点明确unsupported，未计算字段null。工程期限和官方法律/表式日期分列，#6表式按Q1结束后底稿使用，不误按Jan1筛掉Feb1表式。
+
+真实非零服务列1/2/3/15/16/20/21/22计算，区分已核净额税务基础、账面初始1%、无调整、名义3%、减征2%与最终1%；无账面2%收益。累计仅完整新设首期Q1同本期，21/22累计NA，货物列/其它行/附加及其他税种not_computed/null。每字段节点连原始fileSHA/location/业务事实pointer、真实voucher/entryIDs、source/batch及rule；规则与最终结果递归冻结，caller仍可编辑。contentDigest/inputHash/ruleVersion/ruleDigest/ledgerSnapshotDigest仅本地版本比较，不能认证或复用旧确认。
+
+CLI 每次实际读取显式原始文件配置或 #78B store、重开只读DB/捕获私有snapshot，计算后重比文件字节/store/账库；不接旧JSON自称current。新output用wx，stdout固定状态/计数，错误固定码。calculationReady/reviewReady只对selected_fields；periodComplete=false/submittable=false/onlineCompatibility=unverified/accountantApproval=pending/真实性unverified固定。精确合同 [OFFLINE-VAT](../OFFLINE-VAT.md)，窗口 [OFFLINE-04B](../tasks/OFFLINE-04B.md)。
+
+实施自测最终（cwd `06-workbench`）`node test/offline-vat.test.mjs` **22/22，exit0**。合成CSV/JSON先落盘，自动 #80 candidates 经现有 importIncremental 核心入专属临时库；正例S300123：15=9003.69、16=6002.46、20/22=3001.23、21=0，三销售加行政418.73/预付73.91全部真实凭证核对；S300000边界9000/6000/3000；另独立S412789：12383.67/8255.78/4127.89。覆盖raw重放、伪ready/候选、税资格/完整度/所有排除、合法空账/低额/非整元/专票/跨境、真实draft/金额科目日期行序/来源/指纹、批次failed/unknown、准则错配、未知日期null、假snapshot/DB、跨企业跨期、2025/2027工程门、hash变化/不相关企业不失效、结果冻结不冻结caller、累计NA/行勾稽、真实CLI原路径/store失效/安全stdout/拒覆盖/无默认DB及逻辑表/DB/WAL零写。DB/source finally实际close，所有CLI child status明确/signal=null/stderr空；未使用真实资料/账套/凭据或golden运行输入。
+
+更正限制按实际能力保留：原材料金额300123改300124后旧账底稿stale_previous_new_version且blocked，不能复用旧确认；另独立新账fixture计算9003.72/6002.48/3001.24仅验证新金额算术，不是既存账更正链。本片未手改来源登记或删历史冒充正式更正；#80既存账更正/撤销及#82确认链仍未实现。
+
+root实施期间独立金额probe **PASS exit0**（不是最终冻结验收）：原始事实201319+228898=430217，独立期望15=12906.51、16=8604.34、20/22=4302.17、21=0；他企23.57草稿不使目标snapshot失效；只改实际batch.status为failed后选定字段null/ready=false，恢复completed再ready；caller.scope冻结状态不变，source/db finally close。其合成夹具保留 `.agent-runs/offline-vat-synthetic-dNaiDy`，不以此预报fresh接受。
+
+失败修复如实保留：首两轮0/17是新测试适配分别漏核心append必需account_set元数据、漏confirmNewBinding；依现行核心合同补合成适配后，错误cwd一轮14/17还暴露测试尝试过账后写期初被核心opening_rewrite_after_posting正确拒绝、CLI相对路径找不到；改用过账前独立期初夹具，CLI cwd由测试文件定位。失败夹具全部保留，未删旧断言或改核心。root预审发现来源binding v5无account_set_id、实际批次未查completed、持久标准错配及caller冻结风险均在正例/负例覆盖前修正；随后19/19→21/21→22/22全部exit0。未把旧结果替代最终冻结验收，未skip或mock真实文件/DB。
+
+必要影响自测（同cwd、未改旧测试）`offline-materials` **36/36**、`offline-plan` **45/45**、`offline-bookkeeping` **43/43** 均exit0。TEMP/TMP置repo忽略.agent-runs，税test在core import前再专属隔离WORKBENCH_DATA_DIR/TEMP/TMP；失败自动保留、KEEP_FIXTURES=1可保留成功夹具。未跑full/npm test，没有自有常驻服务。尚待root独立最终验证、全新未实施者最终完整head审查及PR/合并，不关闭#81，不把本片当#54正式写依赖完成；#77生产黄金、#78剩余来源、#79正式执行回执、#80正式连续过账和既存账更正、#82确认均未完成，税局真实接入0。
+
+root最终阅读再明确三处分类：已提供enterprise.form=unknown、establishedOn=null均为unknown；逐票taxFacts零份为missing，多份为conflict。对应现有定点补精确classification断言且选定金额继续null，修后税test仍 **22/22 exit0**、DB/source实际close；旧36/45/43为本次小改前已通过的影响结果，未无谓重复旧套。待root按修后完整内容重新冻结，不沿用修前审查。
+
 ## 2026-10-24 OFFLINE-01B / #78B 实施候选（尚待root/fresh验收）
 
 PR91实际已合：[PR91](https://github.com/huxiaoyang-code/youshu-fork/pull/91)，base `9cd0176bb912c94b519fc40b155159d4ca5b81c7`，已审head `b88bc2e942a50776c706701c3d739ba8bdd1e088`，merge/main `0c6efe4bba9b7a62d09f434cd3fef071c917d4f8`。root/fresh最终快照26项、fresh另38项独立验证通过；Windows持连接目录替换被OS阻止，原身份/字节保持的证据不能当实际替换通过；硬链在获授权实跑中实际建立，nlink=2被产品拒绝，移除后重验current。下方04A待26项/未PR等保留为历史，不覆盖本条已合事实。
