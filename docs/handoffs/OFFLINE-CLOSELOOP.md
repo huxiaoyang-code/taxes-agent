@@ -1,5 +1,27 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-03A候选（尚未root最终验收/PR）
+
+最终冻结后返工事实：root已将前一候选形成**仅本地、未发布未PR**的`717e4fb`，当时实施42/42；root最终定点发现行政服务日期P2：票日2026-03-10、#78业务date及新completionDate均2026-03-20，仍产生date03-10的管理费用/应付450.81候选。fresh实际复现后撤回对该版本的接受；42套通过及旧接受不构成修后验收。现修复行政候选date为实际completionDate，productSupported日期门也按该实际确认日，recognition.dateSource留逐字段pointer/hash；销售同日及预付银行日保持对应来源。新增同月异日正例，保持三候选和金额断言，**修后实施`node test/offline-bookkeeping.test.mjs`43/43，exit0**，`git diff --check`通过。仅本片源/测试/文档/交接必要修改，无Git操作；等待root新完整head及重新独审。下方42/42及更早验收均为修前历史，不作为本次修后接受。
+
+PR89 实际已合：base `a004bd889554c091318e5e017a93ec575581cf5e`，已审head `0f1b0d68f3a9be5cc047ef5a72a1d8e693e0507b`，merge `19e861a580ebffec0b5e14eafb41ca457f9de71e`。root独立规划45/45及Q1补件/银行独立digest/账户冲突通过；fresh规划45+材料36+合同34+银行16通过并接受。下方“02A未提交”均保留历史时点。
+
+OFFLINE-03A / #80A 基于该merge，branch `codex/huxiaoyang-code/offline-03-candidates`，限定8文件窗口。本轮唯一当前模型实施subagent，无再委派/外部执行器，无Git提交/推送/合并。实现纯readiness/规则/候选模块及CLI；显式重验#78快照并重算#79，严格原始业务补充事实有实际字节hash及逐字段JSON pointer。三种实际候选：未结算普通主营服务销售、当月行政服务采购未付、期末未来服务合同预付。完整契约与官方来源见 [OFFLINE-BOOKKEEPING](../OFFLINE-BOOKKEEPING.md)，窗口见 [OFFLINE-03](../tasks/OFFLINE-03.md)。
+
+销售在当前scope开始完成且开票/完成/取得收款权利同日，按2026增值税法28条（一）派生同日trigger，不索取客户计算纳税义务日。小规模身份和申报周期须基础声明中的会计依据；非零票税仅初始应交增值税，不是最终申报或免税收益。预付限期末未履约、单次、无退款、未来12个月内普通服务，借预付/贷银行，不提前费用；独立预付不因VAT身份缺失而停。采购只精确补足旧用途缺口，不覆盖已知资产/个人/受益期矛盾；银行新合同可补未知性质，不能覆盖已明确工资/资产性质。
+
+预付款稳定key锚原始bankAccountId/refId，不含可更正合同/供应商；后两者变更标newVersion。同合同多流水或费用/未履约预付矛盾均阻断；不声称核验既存ledger。本地摘要比较不是认证或执行凭据。官方规则目录递归冻结，产物rule及entry.ruleSources为副本，修改首产物不会污染下一调用。
+
+实施自测最终 `node test/offline-bookkeeping.test.mjs` **42/42，exit0**（cwd `06-workbench`）：真实临时CSV/JSON→#78CLI→本CLI产生三候选，独立销售1763.00+17.63=1780.63、行政采购450.81、预付286.47，借贷合计各2517.91；假设期初bank/capital各1000的3231.44只作工程独立试算，未使用产品余额引擎/黄金运行输入。覆盖具体缺项、税分支隔离、scope/非法金额/红字/复杂结算、重复与关系冲突、hash/BOM/映射重验、版本与规则来源、防派生状态、固定安全stdout及拒覆盖。所有CLI同步子进程signal=null/stderr空，没有常驻进程、真实资料/账套/凭据或DB/网络写。
+
+失败/修复事实：首轮35/36，唯一失败为同sourceId冲突被#79隔离后旧候选误标withdrawn；保持原conflict断言，补已知来源冲突身份传递后36/36。fresh指出预付按合同/供应商key会把更正变新业务；改锚原始银行交易，新增更正sameKey/newVersion回归。原“同合同多付一个key”的初稿期望改为两个原始支付key，仍全部conflict且零预付候选。fresh再指规则浅freeze外溢，递归freeze+输出clone，新增首产物修改不污染后续回归后38/38。未删减旧业务拒绝或金额断言。
+
+后续fresh指出关联票角色/供应商及原业务性质/用途/受益期未核对；补统一一致性质量门、反向/异供应商/货物与三类用途/不同已知受益期负例及合法服务正例后39/39。自查显式月份scope可跨会计年度，补同会计年度条件及回归后40/40。root要求三规则统一候选确认日仅2026，新增productSupportedFrom/Through并与legalSourceEffective分开，2010/2025/2027拒绝、2026首末日三类可用的参数化回归后41/41。必要影响套同cwd `node test/offline-plan.test.mjs` **45/45**、`node test/offline-materials.test.mjs` **36/36**、`node test/offline-contracts.test.mjs` **34/34**、`node test/bank-import.test.mjs` **16/16** 均exit0；随后仅新增本片日期门及回归/文档，未重跑无关全量。`git diff --check`通过。财税入口按要求运行的flow status仅报告历史human-pl SHA mismatch，未读取/修改原件，与本片无关。
+
+root结构审查指出显式invoiceRef/bankRef为null/false/0因truthy检查误入缺项；改为字段存在即严格校验，新增六种非法引用及真正省略的区分回归，最终42/42。未扩窗口或删旧断言。
+
+尚待root独立验证、fresh最终冻结审查及PR/合并，不能用实施自测替代。正式写账、连续过账及恢复依赖#54 coordinator与后续接线，本片只候选，全部authorizesExecution=false，不宣称已过账或整期完成。#77会计审定黄金、#78持久接收、#79正式执行回执、#80正式连续过账均未完成。没有STATE/NEXT-SESSION/package/test-all或核心共享路径修改。
+
 ## 2026-10-24 当前事实（优先于下方历史候选）
 
 OFFLINE-01A 已随 [PR88](https://github.com/huxiaoyang-code/youshu-fork/pull/88) 合并：base `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`，已审 head `02083eb6c89b3f367df8561d008e015c2061d5b1`，merge `a004bd889554c091318e5e017a93ec575581cf5e`。root 独立材料36/36及新base重跑通过，旧合同34/34、银行16/16通过，fresh接受。#78B仍未实现，#77/#78整项均未完成；下方“01A未提交候选”保留为当时历史。
