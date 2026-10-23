@@ -43,7 +43,12 @@ const expectCode = (fn, code) => {
 };
 
 // ---------------------------------------------------------------- 合成原始结果（形状对齐 accounting.mjs）
-const rawBalanceSheet = {
+const MAPPING_RAW = {
+  accountingContext: { profileId: 'small-2011-basic-v1', coaVersion: 'small-2011-coa-basic-v1', reportMappingVersion: 'small-2011-report-basic-v1', legacy: false },
+  reportStatus: { status: 'complete', complete: true, partialValues: false, diagnostics: [] },
+};
+const MAPPING_SUMMARY = { profile: 'small_basic_v1', legacy: false, mappingStatus: 'complete', complete: true, partialValues: false, diagnosticCount: 0, diagnosticCounts: {} };
+const rawBalanceSheet = { ...MAPPING_RAW,
   period: '2026-01',
   assets: [
     { label: '货币资金', value: 1234.5, name: X.accountName, code: X.accountCode },
@@ -89,7 +94,7 @@ const rawCreatedVoucher = {
 await test('query: 模型摘要只含白名单数值/状态，敏感原值全部不出模型通道', () => {
   const policy = new FinanceOutputPolicy();
   const envelope = policy.wrapQuery('finance_query:report.balance_sheet', { accountSetId: 5, value: rawBalanceSheet });
-  assert.deepEqual(envelope.projection, {
+  assert.deepEqual(envelope.projection, { ...MAPPING_SUMMARY,
     period: '2026-01',
     assets: 6534.6, liabilities: 11, equity: 6523.6,
     balanced: true, lineCount: 6,
@@ -112,8 +117,8 @@ await test('query: projection 只出现登记字段（未知字段默认拒绝�
   const encryptedExtras = { ...rawBalanceSheet, enterprise: X.enterprise, extraList: [{ secret: X.note }] };
   const envelope = policy.wrapQuery('finance_query:report.balance_sheet', { accountSetId: 5, value: encryptedExtras });
   assert.deepEqual(Object.keys(envelope.projection).sort(), [
-    'assets', 'balanced', 'cash', 'equity', 'fixedAssetsNet', 'inventory', 'liabilities', 'lineCount', 'period', 'receivables',
-  ]);
+    ...Object.keys(MAPPING_SUMMARY), 'assets', 'balanced', 'cash', 'equity', 'fixedAssetsNet', 'inventory', 'liabilities', 'lineCount', 'period', 'receivables',
+  ].sort());
   assertNoLeak(envelope.projection, 'projection keys');
   policy.dispose();
 });
@@ -163,17 +168,17 @@ await test('query: 账套/科目/期末/试算/利润/现金流/明细账的有�
     periodDebit: 300, periodCredit: 300, closingDebit: 300, closingCredit: 300, balanced: true,
   });
 
-  const income = wrap('finance_query:report.income_statement', {
+  const income = wrap('finance_query:report.income_statement', { ...MAPPING_RAW,
     period: '2026-01',
     current: { 营业收入: 1000, 营业成本: 400, 销售费用: 10, 管理费用: 20, 财务费用: 5, 利润总额: 565, 净利润: 565 },
     ytd: { 营业收入: 1000, 净利润: 565 },
   });
-  assert.deepEqual(income, {
+  assert.deepEqual(income, { ...MAPPING_SUMMARY,
     period: '2026-01', currentRevenue: 1000, currentCost: 400, currentExpenses: 35,
     currentProfitBeforeTax: 565, currentNetProfit: 565, ytdRevenue: 1000, ytdNetProfit: 565,
   });
 
-  const cash = wrap('finance_query:report.cash_flow_statement', {
+  const cash = wrap('finance_query:report.cash_flow_statement', { ...MAPPING_RAW,
     period: '2026-01', method: '直接法（按对方科目分类）',
     operating: [{ code: '2202', name: X.counterparty, value: 120 }, { code: '1122', name: X.accountName, value: -20 }],
     investing: [{ code: '1601', name: X.summary, value: -20 }],
@@ -183,7 +188,7 @@ await test('query: 账套/科目/期末/试算/利润/现金流/明细账的有�
     reconciles: true,
     supplement_indirect: { 净利润: 565 },
   });
-  assert.deepEqual(cash, {
+  assert.deepEqual(cash, { ...MAPPING_SUMMARY,
     period: '2026-01', operating: 100, investing: -20, financing: 0, netIncrease: 80,
     cashBegin: 50, cashEnd: 130, cashChange: 80, reconciles: true, lineCount: 3,
   });
@@ -217,7 +222,7 @@ await test('query: 账套/科目/期末/试算/利润/现金流/明细账的有�
 
 await test('query: 现金流 reconciles 是必需布尔（缺失 / 类型错失败，真实 false 保留）', () => {
   const policy = new FinanceOutputPolicy();
-  const base = {
+  const base = { ...MAPPING_RAW,
     period: '2026-01',
     operating: [], investing: [], financing: [],
     totals: { operating: 0, investing: 0, financing: 0, net_increase: 0 },
@@ -227,7 +232,7 @@ await test('query: 现金流 reconciles 是必需布尔（缺失 / 类型错失�
 
   // 完整合法零值 DTO + 真实 false：false 是业务状态，必须原样保留（不得改成 true / 不得丢）。
   const falseZero = wrap({ ...base, reconciles: false });
-  assert.deepEqual(falseZero, {
+  assert.deepEqual(falseZero, { ...MAPPING_SUMMARY,
     period: '2026-01', operating: 0, investing: 0, financing: 0, netIncrease: 0,
     cashBegin: 0, cashEnd: 0, cashChange: 0, reconciles: false, lineCount: 0,
   });
@@ -1008,6 +1013,7 @@ await test('adapter-prep: 共享引用（DAG）是合法 DTO，不算循环；�
 await test('review3 F2: 投影期间 / 状态按固定值域（自由 ASCII 不当 token），真 0 保留', () => {
   const { summarizeQueryResult } = M;
   const income = (period) => ({
+    ...MAPPING_RAW,
     period,
     current: { 营业收入: 0, 营业成本: 0, 销售费用: 0, 管理费用: 0, 财务费用: 0, 利润总额: 0, 净利润: 0 },
     ytd: { 营业收入: 0, 净利润: 0 },
@@ -1405,6 +1411,43 @@ await test('all write technical IDs survive malformed DTOs; accessor and inherit
   }
   assert.equal(getterCalls, 0);
   policy.dispose();
+});
+
+await test('B2: persistent report profile/status diagnostics are fixed summaries; unknown metadata fails closed', () => {
+  for (const [profileId, coaVersion, reportMappingVersion, profile, legacy] of [
+    ['small-2011-basic-v1', 'small-2011-coa-basic-v1', 'small-2011-report-basic-v1', 'small_basic_v1', false],
+    ['enterprise-2019-general-basic-v1', 'enterprise-2019-general-coa-basic-v1', 'enterprise-2019-general-report-basic-v1', 'enterprise_basic_v1', false],
+    ['legacy-small-coa-v1', 'legacy-small-coa-baseline-v1', 'legacy-small-coa-report-compat-v1', 'legacy_small_v1', true],
+  ]) {
+    const raw = { ...rawBalanceSheet,
+      accountingContext: { profileId, coaVersion, reportMappingVersion, legacy, enterpriseKey: X.taxId, declaredStandard: X.enterprise },
+      reportStatus: { status: legacy ? 'legacy_compatibility' : 'incomplete', complete: false, partialValues: true,
+        diagnostics: [{ code: 'report_account_requires_detail', name: X.accountName, reason: X.note },
+          { code: 'report_account_requires_detail', enterpriseKey: X.taxId }] },
+    };
+    const result = M.summarizeQueryResult('finance_query:report.balance_sheet', raw);
+    assert.equal(result.summaryUnavailable, false);
+    assert.equal(result.projection.profile, profile);
+    assert.equal(result.projection.complete, false);
+    assert.equal(result.projection.partialValues, true);
+    assert.equal(result.projection.diagnosticCount, 2);
+    assert.deepEqual(result.projection.diagnosticCounts, { requiresDetail: 2 });
+    assertNoLeak(result, 'B2 report metadata');
+    for (const broken of [
+      { ...raw, accountingContext: { ...raw.accountingContext, profileId: X.enterprise } },
+      { ...raw, accountingContext: { ...raw.accountingContext, coaVersion: 'unknown_version' } },
+      { ...raw, accountingContext: { ...raw.accountingContext, reportMappingVersion: 'unknown_version' } },
+      { ...raw, accountingContext: { ...raw.accountingContext, legacy: !legacy } },
+      { ...raw, reportStatus: { ...raw.reportStatus, status: X.summary } },
+      { ...raw, reportStatus: { ...raw.reportStatus, diagnostics: [{ code: X.note }] } },
+      { ...raw, reportStatus: { ...raw.reportStatus, complete: true } },
+    ]) {
+      const denied = M.summarizeQueryResult('finance_query:report.balance_sheet', broken);
+      assert.equal(denied.summaryUnavailable, true);
+      assert.deepEqual(denied.projection, {});
+      assertNoLeak(denied, 'B2 rejected metadata');
+    }
+  }
 });
 
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);

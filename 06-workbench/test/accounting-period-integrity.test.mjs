@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-period-integrity-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
+const identityFixtureImport = (A, payload, options = {}) => A.importAccountSet(payload, { enterprise: identityFixture(), ...options });
 /**
  * LOCAL-02 会计金额精度 / 期末完整性 / 连续期间 领域回归（合成临时库，不连真实账套）。
  *
@@ -42,7 +47,7 @@ const rejectsCode = async (fn, code) => {
   return err;
 };
 const e = (code, debit = 0, credit = 0) => ({ code, debit, credit });
-const newSet = (name, start = "2026-01") => A.createAccountSet({ name, start_period: start }).id;
+const newSet = (name, start = "2026-01") => identityFixtureCreate(A, { name, start_period: start }).id;
 const stepOf = (check, id) => check.steps.find((s) => s.id === id);
 const codesOf = (check) => check.blocking.map((b) => b.code);
 const snapshot = () => Object.fromEntries(
@@ -179,7 +184,7 @@ try {
         ],
       }],
     };
-    const out = A.importAccountSet(payload, { dryRun: false });
+    const out = identityFixtureImport(A, payload, { dryRun: false });
     assert.equal(out.validation.ok, true, JSON.stringify(out.validation.errors));
     const s = out.created.id;
     const voucher = A.listVouchers(s, { period: "2026-01" })[0];

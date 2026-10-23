@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-derived-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 /**
  * CORE-B 派生报表 / 结转 / 折旧 一致性回归测试。
  * 独立临时库，直接调用领域函数；退出时关闭数据库并清理自己的临时目录。
@@ -34,7 +38,7 @@ const rejects = async (fn, re) => {
 const entry = (code, debit, credit) => ({ code, debit, credit });
 // r2 可能返回 -0，strictEqual 下 -0 !== 0；统一归一化。
 const z = (v) => (v === 0 ? 0 : v);
-const newSet = (name) => A.createAccountSet({ name, start_period: "2026-01" }).id;
+const newSet = (name) => identityFixtureCreate(A, { name, start_period: "2026-01" }).id;
 const bsLine = (bs, label) => [...bs.assets, ...bs.liabilities].find((l) => l.label === label).value;
 const carryVouchers = (setId, period) =>
   A.listVouchers(setId, { period }).filter((v) => v.kind === "carryforward");
@@ -119,6 +123,8 @@ try {
 
   await test("明细：损益明细科目按顶层编码归类（560201 → 管理费用）", () => {
     const s = newSet("明细汇总-损益归类");
+    // 合法业务 fixture：费用需有资金来源，避免“负货币资金”这一不真实场景被误当成报表规则断言。
+    A.setOpeningBalances(s, [entry("1002", 100, 0), entry("3001", 0, 100)]);
     A.addAccount(s, { code: "560201", name: "办公费", category: "损益", direction: "debit" });
     A.createVoucher(s, {
       period: "2026-01", status: "posted",

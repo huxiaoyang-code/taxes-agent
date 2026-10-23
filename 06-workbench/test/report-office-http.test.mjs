@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-office-http-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // LOCAL-05 wire (Issue #45): real HTTP black-box acceptance for internal CSV / XLSX / PDF downloads.
 // This test starts THIS package's own server as a child process on a random loopback port with a
 // throwaway WORKBENCH_DATA_DIR. It never talks to an old backend, the tax portal or a real account set.
@@ -23,7 +27,7 @@ const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
 
 // --------------------------------------------------------------------------- synthetic books
-const set = A.createAccountSet({ name: "合成接线测试公司", start_period: "2026-01" });
+const set = identityFixtureCreate(A, { name: "合成接线测试公司", start_period: "2026-01" });
 A.setOpeningBalances(set.id, [{ code: "1002", debit: 1000 }, { code: "3001", credit: 1000 }]);
 const posted = (period, summary, entries) => A.createVoucher(set.id, { period, status: "posted", summary, entries });
 posted("2026-01", "一月合成收入", [{ code: "1002", debit: 800 }, { code: "5001", credit: 800 }]);
@@ -36,7 +40,7 @@ posted("2026-02", "二月合成收入", [{ code: "1002", debit: 400 }, { code: "
 posted("2026-02", "二月合成费用", [{ code: "5602", debit: 100 }, { code: "1002", credit: 100 }]);
 // Longer than the Excel single-cell / PDF single-field limit (32767), used for a real failure path.
 const longName = "超长名称".repeat(9000);
-const longSet = A.createAccountSet({ name: longName, start_period: "2026-01" });
+const longSet = identityFixtureCreate(A, { name: longName, start_period: "2026-01" });
 
 // Independent hand calculation from the vouchers above:
 //   2026-01: bank 1000 + 800 - 300 = 1500; revenue 800; expense 300; profit 500; cash change 500.
@@ -110,7 +114,7 @@ after(async () => {
     db.close();
     const resolved = realpathSync(directory);
     assert.equal(dirname(resolved), tempRoot, "refuse to delete anything outside the OS temp root");
-    rmSync(resolved, { recursive: true, force: true });
+    console.log(`Synthetic Office HTTP fixture retained: ${resolved}`);
   }
 });
 

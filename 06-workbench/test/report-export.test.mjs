@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-export-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // RC-B independent acceptance: every expected amount below is hand-calculated.
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -36,8 +40,8 @@ function csvRows(text) {
 try {
   ({ db } = await import('../server/db.mjs'));
   const A = await import('../server/accounting.mjs');
-  const { buildReportExport } = await import('../server/report-export.mjs');
-  const make = (name = '合成验收账套', start_period = '2025-12') => A.createAccountSet({ name, start_period }).id;
+  const { buildReportExport, pairedBalanceRows } = await import('../server/report-export.mjs');
+  const make = (name = '合成验收账套', start_period = '2025-12') => identityFixtureCreate(A, { name, start_period }).id;
   const voucher = (s, period, entries, extra = {}) => A.createVoucher(s, { period, status: 'posted', entries, ...extra });
   const out = (s, kind, period = '2026-01', extra = {}) => buildReportExport(s, { kind, period, ...extra });
   const report = (s, kind, period, extra) => out(s, kind, period, extra).report;
@@ -62,7 +66,7 @@ try {
     const r = report(s, 'balance-sheet');
     assert.equal(r.data.totals.assets, 2890); assert.equal(r.data.totals.equity, 2890);
     assert.equal(value(r.data, '货币资金'), 1490); assert.equal(value(r.data, '存货'), 120);
-    assert.equal(value(r.data, '固定资产原价'), 1380); assert.equal(value(r.data, '减：累计折旧'), 100);
+    assert.equal(value(r.data, '固定资产原价'), 1380); assert.equal(value(r.data, '减：累计折旧'), -100);
     assert.equal(value(r.data, '固定资产账面价值'), 1280); assert.equal(value(r.data, '未分配利润'), 490);
     assert.equal(r.data.opening.totals.assets, 2640); assert.equal(r.data.balanced, true);
   });
@@ -80,7 +84,7 @@ try {
     const income = csvRows(out(s, 'income-statement', '2026-02').body);
     assert.deepEqual(income.find(row => row[0] === '净利润'), ['净利润', '180.00', '430.00']);
     const cash = csvRows(out(s, 'cash-flow-statement', '2026-02').body);
-    assert.deepEqual(cash.find(row => row[0] === '现金净增加额'), ['现金净增加额', '', '', '180.00', '230.00']);
+    assert.deepEqual(cash.find(row => row[0] === '现金净增加额'), ['现金净增加额', '', '', '180.00', '530.00']);
     const trial = csvRows(out(s, 'trial-balance', '2026-02').body);
     assert.deepEqual(trial.find(row => row[0] === '100201').slice(3), ['600.00', '0.00', '200.00', '0.00', '600.00', '0.00', '800.00', '0.00']);
     const ledger = csvRows(out(s, 'ledger', '2026-02', { code: '1002' }).body);
@@ -137,11 +141,15 @@ try {
   });
   await test('cash flow: mixed inventory/equipment purchase and monthly/YTD reconciliation', () => {
     const jan = report(s, 'cash-flow-statement').data, feb = report(s, 'cash-flow-statement', '2026-02').data;
-    assert.deepEqual(jan.totals, { operating: 230, investing: -180, financing: 0, net_increase: 50 });
-    assert.deepEqual(jan.cash, { begin: 1440, end: 1490, change: 50 }); assert.equal(jan.reconciles, true);
+    assert.deepEqual(jan.totals, { operating: 350, investing: 0, financing: 0, net_increase: 350 });
+    assert.deepEqual(jan.cash, { begin: 1440, end: 1490, change: 50 }); assert.equal(jan.reconciles, false);
+    assert.equal(jan.reportStatus.complete, false); assert.equal(jan.reportStatus.partialValues, true);
+    assert.equal(jan.unknown.length, 1);
     assert.equal(feb.totals.operating, 180); assert.equal(feb.totals.net_increase, 180);
-    assert.deepEqual(feb.ytd.totals, { operating: 410, investing: -180, financing: 0, net_increase: 230 });
-    assert.deepEqual(feb.ytd.cash, { begin: 1440, end: 1670, change: 230 }); assert.equal(feb.ytd.reconciles, true);
+    assert.deepEqual(feb.ytd.totals, { operating: 530, investing: 0, financing: 0, net_increase: 530 });
+    assert.deepEqual(feb.ytd.cash, { begin: 1440, end: 1670, change: 230 }); assert.equal(feb.ytd.reconciles, false);
+    assert.equal(feb.reportStatus.complete, true); assert.equal(feb.ytd.reportStatus.complete, false);
+    assert.equal(report(s, "cash-flow-statement", "2026-02").reportStatus.partialValues, true);
   });
   await test('year-end carryforward changes equity location without wiping December profit', () => {
     const d = report(s, 'income-statement', '2025-12').data;
@@ -259,9 +267,38 @@ try {
     assert.equal(r.dataStatus.taxFilingReady, false);
     assert.ok(r.warnings.some(w => /cash|现金|比例/.test(w.code + w.message)));
   });
+  await test('B2 stable IDs pair reordered balance rows independently of labels', () => {
+    assert.deepEqual(pairedBalanceRows([{ id: 'cash', label: '新标签', value: 120 }, { id: 'stock', label: '同名', value: 50 }],
+      [{ id: 'stock', label: '同名', value: 30 }, { id: 'cash', label: '旧标签', value: 100 }]),
+    [{ id: 'cash', label: '新标签', value: 120, opening: 100 }, { id: 'stock', label: '同名', value: 50, opening: 30 }]);
+  });
+  await test('B2 legacy mixed COA preserves real amounts with an explicit compatibility status', () => {
+    const legacy = make('合成迁移旧账企业标签', '2026-01');
+    A.addAccount(legacy, { code: '6602', name: '旧账管理费用', category: '损益', direction: 'debit' });
+    A.setOpeningBalances(legacy, [e('1002', 1000), e('3001', 0, 1000)]);
+    db.prepare("UPDATE account_sets SET accounting_profile_id='legacy-small-coa-v1',accounting_standard='企业会计准则' WHERE id=?").run(legacy);
+    voucher(legacy, '2026-01', [e('1002', 100), e('5001', 0, 100)]);
+    voucher(legacy, '2026-01', [e('6602', 30), e('1002', 0, 30)]);
+    const income = out(legacy, 'income-statement');
+    assert.equal(income.report.data.current['净利润'], 70);
+    assert.equal(income.report.reportStatus.status, 'legacy_compatibility');
+    assert.equal(income.report.reportStatus.complete, false);
+    assert.equal(income.report.accountingContext.profileId, 'legacy-small-coa-v1');
+    assert.ok(csvRows(income.body).some(row => row[0] === '净利润' && row[1] === '70.00'));
+    assert.equal(value(report(legacy, 'balance-sheet').data, '货币资金'), 1070);
+    voucher(legacy, '2026-01', [e('1002', 100), e('1601', 60), e('2001', 0, 160)]);
+    const mixed = report(legacy, 'cash-flow-statement');
+    assert.equal(mixed.data.cash.end, 1170);
+    assert.equal(mixed.data.cash.change, 170);
+    assert.equal(mixed.data.totals.net_increase, 170);
+    assert.equal(mixed.reportStatus.status, 'legacy_compatibility');
+    assert.equal(mixed.reportStatus.complete, false);
+    assert.ok(mixed.warnings.some(w => w.message.includes('比例分摊') && w.message.includes('可能净额抵销')));
+  });
 } finally {
   db?.close();
-  rmSync(dataDir, { recursive: true, force: true });
+  if (results.every(Boolean)) rmSync(dataDir, { recursive: true, force: true });
+  else console.log(`Failed fixture retained: ${dataDir}`);
 }
 console.log(`\nReport export acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some(x => !x)) process.exitCode = 1;

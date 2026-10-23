@@ -23,6 +23,11 @@ export class ToolCallError extends Error {
 
 // ---------------------------------------------------------------- schema 片段
 const ACCOUNT_SET_ID = { type: ["integer", "string"], description: "账套 ID（必填，不猜默认账套）" };
+const ENTERPRISE = { type: "object", properties: {
+  enterpriseKey: { type: ["string", "number"], description: "显式稳定企业身份；一家企业一个账套，名称只作展示" },
+  enterpriseName: { type: "string" },
+}, required: ["enterpriseKey"] };
+const PROFILE_ID = { type: "string", description: "新建 profileId；须与准则一致，旧批回放使用持久 profile" };
 const PERIOD = { type: "string", description: "会计期间，格式 YYYY-MM" };
 const ENTRIES = {
   type: "array",
@@ -88,6 +93,7 @@ const BACKEND_TOOLS = [
   available("legacy_book_import", "导入旧账：账套 + 科目 + 期初 + 历史凭证。默认 dryRun=true 只预检，必须显式 dryRun=false 才落库。",
     obj({
       dryRun: { type: "boolean", description: "缺省 true=仅预检；显式 false=正式导入" },
+      enterprise: ENTERPRISE, profileId: PROFILE_ID,
       payload: { type: "object", description: "{account_set, accounts, opening_balances, vouchers}" },
       texts: { type: "object", description: "CSV 文本：{meta, accounts, openings, vouchers}" },
       paths: { type: "object", description: "本机 CSV 路径：{meta, accounts, openings, vouchers}" },
@@ -100,6 +106,8 @@ const BACKEND_TOOLS = [
     "增量导入：以稳定规范企业身份 + 批次 ID 首次建账或向已有账套追加。产品口径是一家企业只有一个账套：同一 enterpriseKey 即使来自另一个来源也必须追加到已有账套，不得新建第二本；同一账套也不得绑定另一家企业。同批重试幂等、同来源凭证按内容指纹去重、内容修订 / 来源凭证被反过账或被删除 / 身份不符 / 封账期间 / 期初覆盖返回结构化冲突（不静默覆盖）。默认 dryRun=true 只预检，必须显式 dryRun=false 才落库。",
     obj({
       dryRun: { type: "boolean", description: "缺省 true=仅预检（不写任何表）；显式 false=正式导入" },
+      enterprise: ENTERPRISE, profileId: PROFILE_ID,
+      paths: { type: "object", description: "本机四CSV路径，保留企业身份envelope" },
       batchId: { type: "string", description: "调用方稳定批次 ID；同批重试不重复记账，内容变化拒绝" },
       source: obj({
         system: { type: "string", description: "来源系统标识，例如旧账来源名" },
@@ -121,13 +129,14 @@ const BACKEND_TOOLS = [
     obj({ batchId: { type: "string", description: "批次 ID" } }, ["batchId"]), "local"),
 
   // ---- 账套 / 科目 / 期初 / 期间 ----
-  available("account_set_create", "新建账套并自动载入标准科目。",
+  available("account_set_create", "以显式稳定企业身份新建唯一账套，按持久profile载入科目。",
     obj({
+      enterprise: ENTERPRISE, profileId: PROFILE_ID,
       name: { type: "string", description: "账套名称" },
       start_period: PERIOD,
       taxpayer_type: { type: "string", description: "缺省 小规模纳税人" },
       accounting_standard: { type: "string", description: "缺省 小企业会计准则" },
-    }, ["name", "start_period"]), "local"),
+    }, ["name", "start_period", "enterprise"]), "local"),
   available("account_list", "列出账套下的科目。",
     obj({ accountSetId: ACCOUNT_SET_ID }, ["accountSetId"]), "local"),
   available("account_create", "新增明细科目。",
@@ -203,7 +212,7 @@ const BACKEND_TOOLS = [
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD }, ["accountSetId", "period"]), "local"),
   available("depreciation_run", "对全部资产卡片按直线法计提指定期间折旧/摊销，生成一张凭证。同期不重复计提；累计舍入在应有寿命内恰好提足；未入固定资产账的卡片明确拒绝（asset_ledger_pending），全局累计会超出可计提额时明确拒绝（depreciation_global_over_depreciable）并给撤销顺序。旧定义下的已过账计提（寿命 / 原值 / 期间等已变）不会被当成已计提完成或静默补提，而是返回 depreciation_run_stale 并要求反过账 + 删除后重算。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD }, ["accountSetId", "period"]), "local"),
-  available("carry_forward_profit", "结转本期损益到 3103；yearEnd=true 时再结转 3103→3104。普通结转读取截至本期的累计损益余额，因此更晚期间已有已过账结转时，前期写入会被拒绝（later_profit_carryforward_depends_on_period），需按倒序撤销后重做。",
+  available("carry_forward_profit", "按持久 profile 角色结转本期损益（小企3103、企业4103）；yearEnd=true 时结转到未分配利润（小企3104、企业4104）。普通结转读取截至本期的累计损益余额，因此更晚期间已有已过账结转时，前期写入会被拒绝（later_profit_carryforward_depends_on_period），需按倒序撤销后重做。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD, yearEnd: { type: "boolean" } }, ["accountSetId", "period"]), "local"),
 
   // ---- 兼容入口：行为受限，但不谎报 ----

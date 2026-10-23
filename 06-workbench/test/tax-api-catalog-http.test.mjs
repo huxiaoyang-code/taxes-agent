@@ -14,7 +14,7 @@ const directory = mkdtempSync(join(tmpdir(), "wb-tax-api-catalog-"));
 process.env.WORKBENCH_DATA_DIR = directory;
 const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
-const set = A.createAccountSet({ name: "合成目录测试账套", start_period: "2026-01" });
+const set = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-tax-api-catalog-http-1" }, name: "合成目录测试账套", start_period: "2026-01" });
 
 let child, exited, base;
 

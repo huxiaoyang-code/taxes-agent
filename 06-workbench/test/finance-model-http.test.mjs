@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-http-test-mjs-' + (++identityFixtureSequence) });
+
 // finance-model-http acceptance — LOCAL-08 真实 HTTP 模型入口 / 本机引用 / 兼容与错误面。
 //
 // 运行：cd 06-workbench && node test/finance-model-http.test.mjs
@@ -154,10 +158,10 @@ try {
   console.log(`\n模型 HTTP 入口测试 @ ${base}（临时数据目录 ${dataDir}）\n`);
 
   await test("1. 夹具：本机 raw / REST 通道可读原值（模型通道不是唯一出口）", async () => {
-    const a = await raw("account_set_create", { name: X.enterpriseA, start_period: "2026-01" });
+    const a = await raw("account_set_create", { enterprise: identityFixture(), name: X.enterpriseA, start_period: "2026-01" });
     assert.equal(a.status, 200, a.text);
     setA = a.data.id;
-    const b = await raw("account_set_create", { name: X.enterpriseB, start_period: "2026-01" });
+    const b = await raw("account_set_create", { enterprise: identityFixture(), name: X.enterpriseB, start_period: "2026-01" });
     setB = b.data.id;
     const ctx = await raw("account_context", {});
     assert.ok(ctx.data.account_sets.some((s) => s.name === X.enterpriseA));
@@ -210,7 +214,7 @@ try {
   });
 
   await test("3. 模型写：建账 / 科目 / 期初 / 凭证三态流转，金额与手算一致", async () => {
-    const created = await modelWriteOk("account_set_create", {
+    const created = await modelWriteOk("account_set_create", { enterprise: identityFixture(),
       name: X.enterpriseC, taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
     assert.equal(created.operationCategory, "create");
@@ -380,7 +384,7 @@ try {
       vouchers: [],
     };
     const before = await http("GET", "/api/account-sets");
-    const dry = await modelOk("legacy_book_import", { payload: legacyPayload });
+    const dry = await modelOk("legacy_book_import", { enterprise: identityFixture(), payload: legacyPayload });
     assert.equal(dry.applied, false);
     assert.equal(dry.appliedReason, "dry_run");
     assert.equal(dry.accountSetId, null);
@@ -388,7 +392,7 @@ try {
     const afterDry = await http("GET", "/api/account-sets");
     assert.equal(afterDry.data.length, before.data.length, "预检不得新增账套");
 
-    const applied = await modelWriteOk("legacy_book_import", { payload: legacyPayload, dryRun: false });
+    const applied = await modelWriteOk("legacy_book_import", { enterprise: identityFixture(), payload: legacyPayload, dryRun: false });
     assert.equal(applied.accountSetIdSource, "result");
     const afterApplied = await http("GET", "/api/account-sets");
     assert.equal(afterApplied.data.length, before.data.length + 1);
@@ -549,7 +553,7 @@ try {
     assertNoLeak(stderr, "后端 stderr");
   });
   await test("15. same HTTP service concurrent isolated writes and reads", async () => {
-    const sets = await Promise.all([31, 47].map((amount) => modelWriteOk("account_set_create", {
+    const sets = await Promise.all([31, 47].map((amount) => modelWriteOk("account_set_create", { enterprise: identityFixture(),
       name: `synthetic concurrent HTTP ${amount}`, start_period: "2026-01",
     })));
     const writes = await Promise.all(sets.map((set, i) => modelWriteOk("voucher_create", {

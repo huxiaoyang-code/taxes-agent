@@ -23,6 +23,8 @@ import {
   storedCents,
   sumCents,
 } from "./money.mjs";
+import { getAccountingProfile } from "./accounting-profiles.mjs";
+import { resolveAccountingAccountRule } from "./accounting-report-rules.mjs";
 
 export const PERIOD_END_STATUS = {
   OK: "ok",
@@ -30,11 +32,135 @@ export const PERIOD_END_STATUS = {
   NOT_APPLICABLE: "not_applicable",
 };
 
-/** 资产 / 累计折旧摊销的标准科目及允许的卡片科目前缀。 */
+/** 资产 / 累计折旧摊销的标准科目前缀（两个新 profile 与 legacy 的已核实基础均落在这些前缀）。 */
 const ASSET_ACCOUNT_CODES = ["1601", "1701"];
 const ACCUM_ACCOUNT_CODES = ["1602", "1702"];
-const CARRY_PROFIT_ROOT = "3103";       // 本年利润
-const RETAINED_ROOT = "3104";           // 利润分配
+
+/**
+ * 读取账套持久 profile 与角色（本文件不能 import accounting.mjs，避免循环依赖）。
+ * 未知 / 损坏 profile **不 fallback 到新小企**：正常业务得到结构化 accounting_profile_unknown，
+ * 期末检查 / 封账前置 / 前期修改守卫都会在真正写入前失败。
+ */
+export function accountSetProfileForControls(db, setId) {
+  const set = db.prepare(`SELECT * FROM account_sets WHERE id=?`).get(setId);
+  if (!set) throw new Error("account_set_not_found");
+  const profileId = set.accounting_profile_id;
+  let profile;
+  try {
+    profile = getAccountingProfile(profileId);
+  } catch {
+    const error = new Error("accounting_profile_unknown");
+    error.code = "accounting_profile_unknown";
+    // 不回显库内任意原始 profile 字符串（只给固定字段 + 受控 reason）。
+    error.details = {
+      field: "accounting_profile_id",
+      reason: "profile-not-registered",
+    };
+    throw error;
+  }
+  return {
+    set,
+    profile,
+    roles: profile.roles,
+    context: {
+      declaredStandard: set.accounting_standard ?? null,
+      profileId: profile.id,
+      coaVersion: profile.coaVersion,
+      reportMappingVersion: profile.reportMappingVersion,
+      legacy: profile.legacy === true,
+    },
+  };
+}
+
+/**
+ * 用准则映射校验一行科目元数据（类别 / 方向 / 备抵），**不盲信库内元数据**。
+ * 返回：
+ * - `matchedRoot`：命中的 profile 根科目（未映射为 null）
+ * - `effective`：规则解析后的语义（类别 / 方向来自根科目，备抵含声明合并；未映射为 null）
+ * - `reasons`：受控冲突 token（category-conflict / direction-conflict / contra-conflict /
+ *   account-metadata-invalid），空数组表示一致
+ * 未映射的自定义编码本身不算冲突（报表层会单独诊断），但它的方向无法用准则校验。
+ */
+export function accountProfileSemantics(profile, account) {
+  const declared = {
+    code: String(account?.code ?? ""),
+    category: account?.category,
+    direction: account?.direction,
+    contra: account?.contra === true || account?.contra === 1 || account?.contra === "1",
+    name: typeof account?.name === "string" ? account.name : null,
+  };
+  let resolved;
+  try {
+    resolved = resolveAccountingAccountRule(profile.id, declared);
+  } catch {
+    return {
+      declared,
+      matchedRoot: null,
+      effective: null,
+      reasons: ["account-metadata-invalid"],
+    };
+  }
+  if (!resolved.matchedRoot) {
+    return { declared, matchedRoot: null, effective: null, reasons: [] };
+  }
+  const reasons = [];
+  if (resolved.effective.category !== declared.category) reasons.push("category-conflict");
+  if (resolved.effective.direction !== declared.direction) reasons.push("direction-conflict");
+  // effective.contra 已合并声明值，不能再拿它反证声明是否与权威根冲突。
+  // 复用纯规则依据根科目给出的诊断，保留合法备抵根 / 明细的继承语义。
+  if (resolved.diagnostics.some((diagnostic) => diagnostic.code === "account_contra_conflict")) {
+    reasons.push("contra-conflict");
+  }
+  return {
+    declared,
+    matchedRoot: resolved.matchedRoot,
+    effective: resolved.effective,
+    reasons,
+  };
+}
+
+const semanticsConflict = (account, field, reason) => ({
+  field,
+  accountCode: account.declared.code,
+  matchedRoot: account.matchedRoot,
+  reason,
+});
+
+/** 冲突原因 → 受控 field token（category / direction / contra）。 */
+const conflictField = (reason) => (reason === "category-conflict"
+  ? "category"
+  : reason === "direction-conflict" ? "direction" : "contra");
+
+/**
+ * 结转参与科目的语义校验（写入前整体拒绝的依据）。
+ * 参与 = 库内登记为损益，或准则映射属于损益（防止被错误登记成资产 / 负债的收入漏结），
+ * 以及 yearEnd=true 时本年利润角色前缀下的明细。
+ * 只校验期末仍有余额的科目：零余额异常科目不影响结转结果，留给报表诊断。
+ */
+export function carryForwardSemanticsConflicts(db, setId, profile, roles, period, { yearEnd = false } = {}) {
+  const balances = balancesThrough(db, setId, period);
+  const out = [];
+  for (const account of accountRows(db, setId)) {
+    const net = balances.get(account.code)?.net ?? 0n;
+    if (net === 0n) continue;
+    const semantics = accountProfileSemantics(profile, account);
+    const authoritativePl = semantics.effective?.category === "损益";
+    const profitCarry = account.category === "损益" || authoritativePl;
+    const yearEndCarry = yearEnd && underPrefix(account.code, roles.currentYearProfit);
+    if (!profitCarry && !yearEndCarry) continue;
+    if (!semantics.reasons.length) continue;
+    out.push({
+      stage: profitCarry ? "profit-carry" : "year-end",
+      ...semanticsConflict(
+        semantics,
+        conflictField(semantics.reasons[0]),
+        semantics.reasons[0],
+      ),
+      reasons: semantics.reasons,
+    });
+  }
+  return out;
+}
 
 const PERIOD_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 export const isPeriod = (value) => PERIOD_RE.test(String(value ?? ""));
@@ -53,7 +179,7 @@ const underPrefix = (code, prefix) => code === prefix || String(code).startsWith
 // ------------------------------------------------------------------ 基础查询
 function accountRows(db, setId) {
   return db.prepare(
-    `SELECT code, name, category, direction FROM accounts WHERE account_set_id=? ORDER BY code`,
+    `SELECT code, name, category, direction, contra FROM accounts WHERE account_set_id=? ORDER BY code`,
   ).all(setId);
 }
 
@@ -370,11 +496,15 @@ function groupGlByRoot(balances, roots) {
   return out;
 }
 
-function assetReconciliationStep(db, setId, period) {
+function assetReconciliationStep(db, setId, period, roles) {
   const cards = db.prepare(`SELECT * FROM asset_cards WHERE account_set_id=? ORDER BY id`).all(setId);
   const balances = balancesThrough(db, setId, period);
-  const assetRoots = new Set(ASSET_ACCOUNT_CODES);
-  const accumRoots = new Set(ACCUM_ACCOUNT_CODES);
+  const assetRoots = new Set([
+    ...ASSET_ACCOUNT_CODES, roles.fixedAsset, roles.intangibleAsset,
+  ].filter(Boolean));
+  const accumRoots = new Set([
+    ...ACCUM_ACCOUNT_CODES, roles.accumulatedDepreciation, roles.accumulatedAmortization,
+  ].filter(Boolean));
   for (const card of cards) {
     assetRoots.add(String(card.asset_account));
     accumRoots.add(String(card.accum_account));
@@ -601,7 +731,7 @@ function depreciationStep(db, setId, period) {
 }
 
 // ------------------------------------------------------------------ 步骤：损益结转
-function profitCarryStep(db, setId, period) {
+function profitCarryStep(db, setId, period, roles) {
   const accounts = accountRows(db, setId);
   const plAccounts = accounts.filter((a) => a.category === "损益");
   const balances = balancesThrough(db, setId, period);
@@ -622,7 +752,7 @@ function profitCarryStep(db, setId, period) {
   if (movement === 0n && !nonzero.length) {
     return {
       id: "profit_carry_forward",
-      title: "损益结转（结转本期损益到 3103）",
+      title: `损益结转（结转本期损益到 ${roles.currentYearProfit}）`,
       status: PERIOD_END_STATUS.NOT_APPLICABLE,
       reason: "本账套本期没有损益类发生额，也无未结转损益余额",
       details,
@@ -636,7 +766,7 @@ function profitCarryStep(db, setId, period) {
     ).get(setId, period).n;
     return {
       id: "profit_carry_forward",
-      title: "损益结转（结转本期损益到 3103）",
+      title: `损益结转（结转本期损益到 ${roles.currentYearProfit}）`,
       status: PERIOD_END_STATUS.BLOCKED,
       reason: postedCarry
         ? "已存在结转凭证，但之后又有损益分录，导致结转失效（不能按“曾经执行过”放行）"
@@ -655,21 +785,21 @@ function profitCarryStep(db, setId, period) {
   }
   return {
     id: "profit_carry_forward",
-    title: "损益结转（结转本期损益到 3103）",
+    title: `损益结转（结转本期损益到 ${roles.currentYearProfit}）`,
     status: PERIOD_END_STATUS.OK,
-    reason: "本期损益已全部结转到 3103（损益类科目余额为零）",
+    reason: `本期损益已全部结转到 ${roles.currentYearProfit}（损益类科目余额为零）`,
     details,
   };
 }
 
-function yearEndCarryStep(db, setId, period) {
+function yearEndCarryStep(db, setId, period, roles) {
   const balances = balancesThrough(db, setId, period);
-  const carry = sumNaturalByPrefix(balances, [CARRY_PROFIT_ROOT]);
+  const carry = sumNaturalByPrefix(balances, [roles.currentYearProfit]);
   const details = { period, carryBalance: centsToNumber(carry) };
   if (!String(period).endsWith("-12")) {
     return {
       id: "year_end_carry_forward",
-      title: "年末结转（3103 → 3104）",
+      title: `年末结转（${roles.currentYearProfit} → ${roles.profitDistribution}）`,
       status: PERIOD_END_STATUS.NOT_APPLICABLE,
       reason: "非 12 月期间，不做年末利润分配结转",
       details,
@@ -678,12 +808,12 @@ function yearEndCarryStep(db, setId, period) {
   if (carry !== 0n) {
     return {
       id: "year_end_carry_forward",
-      title: "年末结转（3103 → 3104）",
+      title: `年末结转（${roles.currentYearProfit} → ${roles.profitDistribution}）`,
       status: PERIOD_END_STATUS.BLOCKED,
-      reason: `12 月末 3103 仍有余额 ${formatCents(carry)}，必须结转本年利润后才可封账`,
+      reason: `12 月末 ${roles.currentYearProfit} 仍有余额 ${formatCents(carry)}，必须结转本年利润后才可封账`,
       blocking: [{
         code: "year_end_not_carried",
-        message: "请以 yearEnd=true 再执行一次结转本期损益（3103 → 3104）",
+        message: `请以 yearEnd=true 再执行一次结转本期损益（${roles.currentYearProfit} → ${roles.profitDistribution}）`,
         details,
       }],
       details,
@@ -691,9 +821,9 @@ function yearEndCarryStep(db, setId, period) {
   }
   return {
     id: "year_end_carry_forward",
-    title: "年末结转（3103 → 3104）",
+    title: `年末结转（${roles.currentYearProfit} → ${roles.profitDistribution}）`,
     status: PERIOD_END_STATUS.OK,
-    reason: "12 月末 3103 已结转完毕",
+    reason: `12 月末 ${roles.currentYearProfit} 已结转完毕`,
     details,
   };
 }
@@ -879,13 +1009,54 @@ function earlierPeriodsWithDepreciationBusiness(db, setId, period) {
  * 默认包含全部步骤；封账调用可 skip 已单独报错的步骤以避免重复错误码。
  */
 export function buildPeriodEndCheck(db, setId, period, { skip = [] } = {}) {
+  const { profile, roles, context } = accountSetProfileForControls(db, setId);
+  // 必要性角色必须先能落到真实科目上，再谈“检查通过”：缺角色 / 语义冲突不允许静默封账。
+  const existingCodes = new Set(
+    db.prepare(`SELECT code FROM accounts WHERE account_set_id=?`).all(setId).map((row) => row.code),
+  );
+  const roleRows = new Map(
+    db.prepare(`SELECT code, name, category, direction, contra FROM accounts WHERE account_set_id=?`).all(setId)
+      .map((row) => [row.code, row]),
+  );
+  for (const role of ["currentYearProfit", "profitDistribution", "defaultDepreciationExpense"]) {
+    const code = roles[role];
+    if (typeof code !== "string" || !code || !existingCodes.has(code)) {
+      const error = new Error("accounting_role_missing");
+      error.code = "accounting_role_missing";
+      error.details = {
+        field: role,
+        profileId: profile.id,
+        ...(typeof code === "string" && code ? { accountCode: code } : {}),
+        reason: "role-account-missing",
+      };
+      throw error;
+    }
+    // 角色科目也必须与准则映射语义一致（类别 / 方向 / 备抵）：库内元数据被污染时不允许静默封账。
+    const semantics = accountProfileSemantics(profile, roleRows.get(code));
+    if (semantics.reasons.length) {
+      const error = new Error("accounting_role_semantics_conflict");
+      error.code = "accounting_role_semantics_conflict";
+      error.details = { field: role, profileId: profile.id, ...semanticsConflict(semantics, conflictField(semantics.reasons[0]), semantics.reasons[0]) };
+      throw error;
+    }
+  }
+  // 参与结转的科目行语义冲突同样在检查阶段明确拒绝，避免“期末检查说已结转、结转却失败”的不一致。
+  const carryConflicts = carryForwardSemanticsConflicts(db, setId, profile, roles, period, {
+    yearEnd: String(period).endsWith("-12"),
+  });
+  if (carryConflicts.length) {
+    const error = new Error("carryforward_account_semantics_conflict");
+    error.code = "carryforward_account_semantics_conflict";
+    error.details = { source: "period-end-check", period, conflicts: carryConflicts };
+    throw error;
+  }
   const steps = [
     draftStep(db, setId, period),
     trialBalanceStep(db, setId, period),
     depreciationStep(db, setId, period),
-    assetReconciliationStep(db, setId, period),
-    profitCarryStep(db, setId, period),
-    yearEndCarryStep(db, setId, period),
+    assetReconciliationStep(db, setId, period, roles),
+    profitCarryStep(db, setId, period, roles),
+    yearEndCarryStep(db, setId, period, roles),
     periodSequenceStep(db, setId, period),
   ].filter((step) => !skip.includes(step.id));
   const blocking = [];
@@ -894,9 +1065,29 @@ export function buildPeriodEndCheck(db, setId, period, { skip = [] } = {}) {
       blocking.push({ step: step.id, title: step.title, code: item.code, message: item.message, details: item.details ?? null });
     }
   }
+  // 固定诊断码只作提示：legacy 兼容 / 登记准则与持久 profile 不一致不作为自动封账阻塞；
+  // 真正阻止写入的是未知 profile / 缺失或有冲突的必要角色（由 accountSetProfileForControls 与写入入口负责）。
+  const warnings = [];
+  if (profile.legacy) {
+    warnings.push({
+      code: "legacy_profile_compatibility",
+      severity: "warning",
+      reportKind: "period-end-check",
+      reason: "legacy-profile-uses-old-report-path",
+    });
+  } else if (context.declaredStandard !== profile.declaredStandard) {
+    warnings.push({
+      code: "declared_standard_profile_mismatch",
+      severity: "warning",
+      reportKind: "period-end-check",
+      reason: "declared-standard-differs-from-profile",
+    });
+  }
   return {
     accountSetId: setId,
     period,
+    accountingContext: context,
+    warnings,
     ready: blocking.length === 0,
     steps,
     blocking,
@@ -905,7 +1096,10 @@ export function buildPeriodEndCheck(db, setId, period, { skip = [] } = {}) {
       moneyScale: 2,
       rounding: "ROUND_HALF_UP",
       maxAmount: MONEY_MAX_TEXT,
-      note: "所有金额按分（整数分）计算，四舍五入到分；检查与实际计提 / 结转共用同一规则",
+      profitAccount: roles.currentYearProfit,
+      retainedEarningsAccount: roles.profitDistribution,
+      defaultDepreciationExpense: roles.defaultDepreciationExpense,
+      note: "所有金额按分（整数分）计算，四舍五入到分；检查与实际计提 / 结转共用同一规则；结转 / 利润分配科目按账套持久 profile 解析",
     },
   };
 }
@@ -967,6 +1161,7 @@ export function laterDepreciationRuns(db, setId, period, { inclusive = false, ex
  * 这些都是「明确拒绝 + 可执行撤销顺序」，绝不在保留后期错误已过账派生结果的同时放行前期修改。
  */
 export function assertPeriodMutable(db, setId, period, { operation = "modify", touches = null } = {}) {
+  const { roles } = accountSetProfileForControls(db, setId);
   const want = { profit: touches?.profit === true, depreciation: touches?.depreciation === true };
   const periods = periodRows(db, setId);
   const laterClosed = periods.filter((p) => p.period > period && p.status === "closed").map((p) => p.period);
@@ -981,14 +1176,18 @@ export function assertPeriodMutable(db, setId, period, { operation = "modify", t
     };
     throw err;
   }
-  const yearEnd = db.prepare(
+  // 后续已过账年末结转：按 profile 的本年利润 / 利润分配角色识别（企业 4103→4104，小企 / legacy 3103→3104）。
+  const yearEndCandidates = db.prepare(
     `SELECT v.id, v.period, v.word, v.number FROM vouchers v
       WHERE v.account_set_id=? AND v.period>? AND v.status='posted' AND v.kind='carryforward'
-        AND EXISTS (SELECT 1 FROM voucher_entries e WHERE e.voucher_id=v.id AND (e.code LIKE '3103%' OR e.code LIKE '3104%'))
         AND NOT EXISTS (SELECT 1 FROM voucher_entries e JOIN accounts a ON a.account_set_id=v.account_set_id AND a.code=e.code
                          WHERE e.voucher_id=v.id AND a.category='损益')
       ORDER BY v.period`,
   ).all(setId, period);
+  const carryRoots = [roles.currentYearProfit, roles.profitDistribution];
+  const yearEnd = yearEndCandidates.filter((voucher) => db.prepare(
+    `SELECT code FROM voucher_entries WHERE voucher_id=?`,
+  ).all(voucher.id).some((entry) => carryRoots.some((root) => entry.code === root || String(entry.code).startsWith(root))));
   if (yearEnd.length) {
     const err = new Error("later_year_end_carryforward_depends_on_period");
     err.code = "later_year_end_carryforward_depends_on_period";

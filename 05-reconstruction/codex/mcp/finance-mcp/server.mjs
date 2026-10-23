@@ -87,7 +87,7 @@ async function callTool(name, args = {}) {
 
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
   const payload = { ...args };
-  if (name === "legacy_book_import") {
+  if (name === "legacy_book_import" || name === "book_import_incremental") {
     if (args.paths && typeof args.paths === "object") {
       try {
         payload.texts = readPathTexts(args);

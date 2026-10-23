@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { ensureImportSchema } from '../server/import-storage.mjs';
+import { COA } from '../server/coa.mjs';
 /**
  * LOCAL-04 / LOCAL-06 集成回归：真实现库安装银行组件 + 可验证备份 / 恢复到全新目标。
  *
@@ -134,6 +136,27 @@ function okBackup(args) {
 }
 
 /** 造一个已封装的 core v4 库（子进程退出时不 close，刻意留下已提交 WAL），返回 id 与核心摘要。 */
+function createHistoricalCoreDatabase(dir, version) {
+  fs.mkdirSync(dir, { recursive: true });
+  const dbPath = join(dir, 'workbench.db');
+  const conn = new DatabaseSync(dbPath);
+  conn.exec("\nPRAGMA journal_mode = WAL;\nPRAGMA foreign_keys = ON;\nCREATE TABLE account_sets (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  name TEXT NOT NULL,\n  taxpayer_type TEXT NOT NULL DEFAULT '小规模纳税人',\n  accounting_standard TEXT NOT NULL DEFAULT '小企业会计准则',\n  start_period TEXT NOT NULL,\n  created_at TEXT NOT NULL\n);\nCREATE TABLE accounts (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  code TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, direction TEXT NOT NULL,\n  contra INTEGER NOT NULL DEFAULT 0, is_leaf INTEGER NOT NULL DEFAULT 1,\n  UNIQUE (account_set_id, code)\n);\nCREATE TABLE opening_balances (\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  code TEXT NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0,\n  PRIMARY KEY (account_set_id, code)\n);\nCREATE TABLE periods (\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', PRIMARY KEY (account_set_id, period)\n);\nCREATE TABLE vouchers (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  period TEXT NOT NULL, voucher_date TEXT NOT NULL, word TEXT NOT NULL DEFAULT '记',\n  number INTEGER NOT NULL, summary TEXT, status TEXT NOT NULL DEFAULT 'draft', created_at TEXT NOT NULL\n);\nCREATE TABLE voucher_entries (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  voucher_id INTEGER NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,\n  line_no INTEGER NOT NULL, code TEXT NOT NULL, summary TEXT,\n  debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0\n);\nCREATE INDEX idx_vouchers_set_period ON vouchers(account_set_id, period, status);\nCREATE INDEX idx_entries_voucher ON voucher_entries(voucher_id);\nCREATE INDEX idx_entries_code ON voucher_entries(code);\nCREATE TABLE asset_cards (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  kind TEXT NOT NULL DEFAULT 'fixed', name TEXT NOT NULL, original_cost REAL NOT NULL,\n  residual_rate REAL NOT NULL DEFAULT 0.05, useful_life_months INTEGER NOT NULL,\n  start_period TEXT NOT NULL, asset_account TEXT NOT NULL, accum_account TEXT NOT NULL,\n  expense_account TEXT NOT NULL DEFAULT '5602', created_at TEXT NOT NULL\n);\nCREATE TABLE asset_depreciation_runs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  asset_id INTEGER NOT NULL REFERENCES asset_cards(id) ON DELETE CASCADE,\n  period TEXT NOT NULL, amount REAL NOT NULL, voucher_id INTEGER, created_at TEXT NOT NULL,\n  UNIQUE (account_set_id, asset_id, period)\n);\nALTER TABLE vouchers ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal';\n");
+  ensureImportSchema(conn, { dataDir: dir, targetVersion: version });
+  const now = '2026-01-01T00:00:00.000Z';
+  for (const [id,name,cash] of [[1,'合成甲公司',1000],[2,'合成乙公司',500]]) {
+    conn.prepare('INSERT INTO account_sets (id,name,start_period,created_at) VALUES (?,?,?,?)').run(id,name,'2026-01',now);
+    for (const a of COA) conn.prepare('INSERT INTO accounts (account_set_id,code,name,category,direction,contra) VALUES (?,?,?,?,?,?)').run(id,a.code,a.name,a.category,a.direction,a.contra?1:0);
+    conn.prepare("INSERT INTO periods (account_set_id,period) VALUES (?,'2026-01')").run(id);
+    conn.prepare("INSERT INTO opening_balances (account_set_id,code,debit,credit) VALUES (?,'1002',?,0),(?,'3001',0,?)").run(id,cash,id,cash);
+  }
+  for (const [id,setId,amount,opposite,inflow] of [[1,1,200,'1122',true],[2,1,50,'1122',true],[3,1,100,'5602',false],[4,1,30,'5602',false],[5,2,100,'1122',true]]) {
+    conn.prepare("INSERT INTO vouchers (id,account_set_id,period,voucher_date,number,status,created_at) VALUES (?,?,'2026-01','2026-01-05',?,'posted',?)").run(id,setId,id,now);
+    conn.prepare('INSERT INTO voucher_entries (voucher_id,line_no,code,debit,credit) VALUES (?,1,?,?,?),(?,2,?,?,?)').run(id,inflow?'1002':opposite,amount,0,id,inflow?opposite:'1002',0,amount);
+  }
+  conn.close();
+  return { dbPath, wire: { setA:1, setB:2, vouchers:{in200:1,unIn:2,out100:3,unOut:4,b:5} } };
+}
+
 function createCore4Database(dir, name = "workbench.db") {
   fs.mkdirSync(dir, { recursive: true });
   const dbPath = join(dir, name);
@@ -142,7 +165,7 @@ function createCore4Database(dir, name = "workbench.db") {
 import { writeFileSync } from "node:fs";
 const { db } = await import(${JSON.stringify(URLS.db)});
 const A = await import(${JSON.stringify(URLS.accounting)});
-const setA = A.createAccountSet({ name: "合成甲公司", start_period: "2026-01" });
+const setA = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-local-bank-backup-integration-1" }, name: "合成甲公司", start_period: "2026-01" });
 A.setOpeningBalances(setA.id, [
   { code: "1002", debit: 1000, credit: 0 },
   { code: "3001", debit: 0, credit: 1000 },
@@ -155,7 +178,7 @@ const vout = A.createVoucher(setA.id, { period: "2026-01", voucher_date: "2026-0
   entries: [{ code: "5602", debit: 100, credit: 0 }, { code: "1002", debit: 0, credit: 100 }] });
 const vunout = A.createVoucher(setA.id, { period: "2026-01", voucher_date: "2026-01-08", status: "posted",
   entries: [{ code: "5602", debit: 30, credit: 0 }, { code: "1002", debit: 0, credit: 30 }] });
-const setB = A.createAccountSet({ name: "合成乙公司", start_period: "2026-01" });
+const setB = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-local-bank-backup-integration-2" }, name: "合成乙公司", start_period: "2026-01" });
 A.setOpeningBalances(setB.id, [
   { code: "1002", debit: 500, credit: 0 },
   { code: "3001", debit: 0, credit: 500 },
@@ -301,7 +324,7 @@ const writeImportFiles = (dir) => {
 try {
   console.log("LOCAL-04 银行现库安装 / 组件备份恢复集成回归\n");
 
-  await test("core4 + WAL：安装前真实备份可还原原核心；安装后固定手算对账 → backup → verify → restore-new 全保留", () => {
+  await test("core5 + WAL：安装前真实备份可还原原核心；安装后固定手算对账 → backup → verify → restore-new 全保留", () => {
     const { dir, wire } = buildBankScenario();
     const dbPath = join(dir, "workbench.db");
     const backupDirs = listBackupDirs(dir);
@@ -316,7 +339,7 @@ try {
     const preSnapshot = readDbFacts(join(preInstall, LB.SNAPSHOT_FILE));
     assertEqual(preSnapshot.bankTables.length, 0, "安装前备份快照不得有 bank_* 表");
     assertEqual(preSnapshot.vouchers, 5, "安装前备份必须包含 WAL 中已提交的凭证");
-    assertEqual(preSnapshot.schemaVersion, 4, "core4 备份按 v4 契约");
+    assertEqual(preSnapshot.schemaVersion, 5, "core5 备份按 v5 契约");
     const preRestore = LB.restoreNew({ backupDir: preInstall, targetDir: join(ROOT, `pre-restore-${++seq}`) });
     assert(preRestore.ok === true, `安装前备份应可恢复到全新目标：${JSON.stringify(preRestore)}`);
     const preRestored = readDbFacts(join(preRestore.targetDir, LB.TARGET_DATABASE_FILE));
@@ -327,7 +350,7 @@ try {
 
     // 安装后的组件库：结构契约、备份证据、幂等重跑。
     const installed = readDbFacts(dbPath);
-    assertEqual(installed.schemaVersion, 4, "安装不得改变核心 schema 版本");
+    assertEqual(installed.schemaVersion, 5, "安装不得改变核心 schema 版本");
     assertEqual(installed.bankTables.length, S.BANK_TABLES.length, "安装后必须完整 10 张 bank_* 表");
     const stateDb = new DatabaseSync(dbPath, { readOnly: true });
     try {
@@ -522,23 +545,14 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
   });
 
   await test("core3 兼容路径：安装前备份按 v3 验证；安装银行后仍为 v3，backup→verify→restore 后版本不升级", () => {
-    const dir = join(ROOT, `v3-${++seq}`);
-    const core = createCore4Database(dir);
+    for (const version of [3,4]) {
+    const dir = join(ROOT, 'historical-v' + version + '-' + (++seq));
+    const core = createHistoricalCoreDatabase(dir, version);
     const dbPath = core.dbPath;
-    // 从真实 v4 结构派生结构等价的 v3 夹具（删 5 列 + 回退迁移记录 / 备份登记）。
-    const conn = new DatabaseSync(dbPath);
-    try {
-      conn.exec("PRAGMA foreign_keys = OFF");
-      for (const column of ["acquired_period", "opening_accumulated", "ledger_status", "ledger_note", "origin"]) {
-        conn.exec(`ALTER TABLE asset_cards DROP COLUMN ${column}`);
-      }
-      conn.exec("DELETE FROM schema_migrations WHERE version = 4");
-      conn.exec("UPDATE schema_backups SET version = 3 WHERE version = 4");
-    } finally { conn.close(); }
     // 先确认这是被独立 v3 契约接受的库。
     const v3Check = LB.createBackup({ dbPath, outDir: join(ROOT, `v3-check-${++seq}`) });
     assert(v3Check.ok === true, `派生 v3 库应能按 v3 契约备份：${JSON.stringify(v3Check)}`);
-    assertEqual(v3Check.manifest.structure.schemaVersion, 3, "派生库必须是 v3");
+    assertEqual(v3Check.manifest.structure.schemaVersion, version, "派生库必须是 v3");
     const install = okBank([
       "account-register", "--db", dbPath, "--backup-service", BACKUP_SERVICE,
       "--account-set", String(core.wire.setA), "--bank-account", "BANK-A", "--source", "local-statement",
@@ -546,22 +560,23 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     ]);
     assertEqual(install.created, true, "v3 库应可安装银行组件");
     const installed = readDbFacts(dbPath);
-    assertEqual(installed.schemaVersion, 3, "安装银行组件不得升级核心 v3");
+    assertEqual(installed.schemaVersion, version, "安装银行组件不得升级核心 v3");
     assertEqual(installed.bankTables.length, 10, "v3 库安装后应有完整 10 表");
     const out = join(ROOT, `v3-bank-backup-${++seq}`);
     const created = LB.createBackup({ dbPath, outDir: out });
     assert(created.ok === true, `v3 + bank 备份应成功：${JSON.stringify(created)}`);
-    assertEqual(created.manifest.structure.schemaVersion, 3, "v3 + bank 备份仍按 v3 契约");
+    assertEqual(created.manifest.structure.schemaVersion, version, "v3 + bank 备份仍按 v3 契约");
     assertEqual(created.manifest.components[0].version, 1, "组件仍绑定 v1");
     const verified = LB.verifyBackup({ backupDir: out });
     assert(verified.ok === true, `v3 + bank 备份应 verify：${JSON.stringify(verified)}`);
     const restored = LB.restoreNew({ backupDir: out, targetDir: join(ROOT, `v3-restored-${++seq}`) });
     assert(restored.ok === true, `v3 + bank 恢复应成功：${JSON.stringify(restored)}`);
     const facts = readDbFacts(join(restored.targetDir, LB.TARGET_DATABASE_FILE));
-    assertEqual(facts.schemaVersion, 3, "恢复后仍是 v3，不得自动升级");
+    assertEqual(facts.schemaVersion, version, "恢复后仍是 v3，不得自动升级");
     assertEqual(facts.bankTables.length, 10, "恢复后银行组件完整");
     assertEqual(facts.vouchers, 5, "恢复后核心业务保留");
     assertEqual(restored.receipt.components[0].version, 1, "恢复回执组件版本 v1");
+    }
   });
 
   await test("故障：create / verify / DDL 自检失败整体回滚；错 DBPath 不写；安装期间外部写入被排他拒绝", async () => {

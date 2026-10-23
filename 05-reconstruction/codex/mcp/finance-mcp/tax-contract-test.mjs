@@ -1337,6 +1337,7 @@ async function partB() {
       const created = await client.call("account_set_create", {
         name: "合成税务契约账套名称", taxpayer_type: "小规模纳税人",
         accounting_standard: "小企业会计准则", start_period: "2026-01",
+        enterprise: { enterpriseKey: "SYNTHETIC-TAX-CONTRACT-BOOK-001" },
       });
       assert.equal(created.isError, false, created.text);
       assert.equal(created.data.applied, true, "建账应真实落库");

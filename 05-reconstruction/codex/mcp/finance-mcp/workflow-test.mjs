@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-workflow-test-mjs-' + (++identityFixtureSequence) });
+
 /**
  * workflow-test.mjs — MCP → 临时后端「导入旧账 → 日常记账 → 资产折旧 → 结转 → 封账 → 报表」闭环验收
  * （LOCAL-08 模型信封版）
@@ -217,7 +221,7 @@ try {
 
   await test("导入：4 张示例 CSV 经 paths 预检不落库（默认 dryRun=true）", async () => {
     const before = await okCall("account_context", {});
-    const r = await okCall("legacy_book_import", { paths: FIXTURE_PATHS });
+    const r = await okCall("legacy_book_import", { enterprise: identityFixture(), paths: FIXTURE_PATHS });
     assert.equal(r.applied, false);
     assert.equal(r.appliedReason, "dry_run");
     assert.equal(r.accountSetId, null);
@@ -225,7 +229,7 @@ try {
     assert.equal(r.projection.validationOk, true);
     // 业务明细计数走本机 raw 通道核对（模型通道只给固定摘要）；raw 路由不接受 paths，先把本机 CSV 读成 texts。
     const fixtureTexts = Object.fromEntries(Object.entries(FIXTURE_PATHS).map(([key, file]) => [key, readFileSync(file, "utf8")]));
-    const raw = await rawAgent("legacy_book_import", { texts: fixtureTexts });
+    const raw = await rawAgent("legacy_book_import", { enterprise: identityFixture(), texts: fixtureTexts });
     assert.equal(raw.status, 200, JSON.stringify(raw.data));
     assert.equal(raw.data.created, null);
     assert.equal(raw.data.validation.ok, true, JSON.stringify(raw.data.validation.errors));
@@ -238,7 +242,7 @@ try {
   });
 
   await test("导入：显式 dryRun=false 才正式导入示例账套（setId 取真实结果）", async () => {
-    const r = await okCall("legacy_book_import", { paths: FIXTURE_PATHS, dryRun: false });
+    const r = await okCall("legacy_book_import", { enterprise: identityFixture(), paths: FIXTURE_PATHS, dryRun: false });
     assert.equal(r.applied, true);
     assert.equal(r.accountSetIdSource, "result");
     importedSetId = r.projection.createdAccountSetId;
@@ -272,7 +276,7 @@ try {
   });
 
   await test("业务：新建单一临时账套并录入已知期初（借贷平衡）", async () => {
-    const s = await okCall("account_set_create", {
+    const s = await okCall("account_set_create", { enterprise: identityFixture(),
       name: "闭环验收公司", taxpayer_type: "一般纳税人",
       accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
@@ -513,7 +517,7 @@ try {
 
   await test("边界：再次以 paths 导入示例仍默认预检且不落库", async () => {
     const before = await okCall("account_context", {});
-    const r = await okCall("legacy_book_import", { paths: FIXTURE_PATHS });
+    const r = await okCall("legacy_book_import", { enterprise: identityFixture(), paths: FIXTURE_PATHS });
     assert.equal(r.applied, false);
     assert.equal(r.projection.dryRun, true);
     const after = await okCall("account_context", {});

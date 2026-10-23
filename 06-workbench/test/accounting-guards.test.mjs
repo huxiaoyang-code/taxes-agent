@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-guards-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 /**
  * CORE-A 记账守卫回归测试：独立临时库，直接调用领域函数。
  * 覆盖：期初校验与原子性、封账后读写保护、期间创建与校验。
@@ -37,7 +41,7 @@ try {
   // ---------- 1. 期初余额：校验 + 原子性 ----------
   let setId;
   await test("创建账套（启用期间 2026-01）", () => {
-    setId = A.createAccountSet({ name: "守卫测试-期初", start_period: "2026-01" }).id;
+    setId = identityFixtureCreate(A, { name: "守卫测试-期初", start_period: "2026-01" }).id;
     assert.ok(setId > 0);
   });
 
@@ -91,7 +95,7 @@ try {
   });
 
   await test("期初：封账期间后拒绝重写", async () => {
-    const s2 = A.createAccountSet({ name: "守卫测试-封账期初", start_period: "2026-01" }).id;
+    const s2 = identityFixtureCreate(A, { name: "守卫测试-封账期初", start_period: "2026-01" }).id;
     A.setOpeningBalances(s2, [entry("1002", 500, 0), entry("3001", 0, 500)]);
     A.setPeriodStatus(s2, "2026-01", "closed");
     await rejects(() => A.setOpeningBalances(s2, [entry("1002", 600, 0), entry("3001", 0, 600)]),
@@ -101,7 +105,7 @@ try {
   // ---------- 2. 封账后读写保护 / 反结账 ----------
   let setId2, vPosted, vDraft;
   await test("封账：准备账套与凭证", () => {
-    setId2 = A.createAccountSet({ name: "守卫测试-封账", start_period: "2026-01" }).id;
+    setId2 = identityFixtureCreate(A, { name: "守卫测试-封账", start_period: "2026-01" }).id;
     A.setOpeningBalances(setId2, [entry("1002", 1000, 0), entry("3001", 0, 1000)]);
     vPosted = A.createVoucher(setId2, {
       period: "2026-01", status: "posted",
@@ -159,7 +163,7 @@ try {
   // ---------- 3. 期间创建与校验 ----------
   let setId3;
   await test("期间：open 可创建新期间", () => {
-    setId3 = A.createAccountSet({ name: "守卫测试-期间", start_period: "2026-01" }).id;
+    setId3 = identityFixtureCreate(A, { name: "守卫测试-期间", start_period: "2026-01" }).id;
     const r = A.setPeriodStatus(setId3, "2026-02", "open");
     assert.deepEqual(r, { period: "2026-02", status: "open" });
     assert.ok(A.listPeriods(setId3).find((p) => p.period === "2026-02" && p.status === "open"));
@@ -168,7 +172,7 @@ try {
   await test("期间：月份 13 被拒绝（各入口一致）", async () => {
     await rejects(() => A.setPeriodStatus(setId3, "2026-13", "open"), /period_invalid/);
     await rejects(() => A.ensurePeriod(setId3, "2026-13"), /period_invalid/);
-    await rejects(() => A.createAccountSet({ name: "坏账套", start_period: "2026-13" }), /start_period_invalid/);
+    await rejects(() => identityFixtureCreate(A, { name: "坏账套", start_period: "2026-13" }), /start_period_invalid/);
     await rejects(() => A.createVoucher(setId3, {
       period: "2026-13", entries: [entry("1002", 1, 0), entry("1001", 0, 1)],
     }), /period_invalid/);
@@ -188,14 +192,14 @@ try {
   });
 
   await test("期间：结账拒绝不平衡", async () => {
-    const s4 = A.createAccountSet({ name: "守卫测试-不平衡", start_period: "2026-01" }).id;
+    const s4 = identityFixtureCreate(A, { name: "守卫测试-不平衡", start_period: "2026-01" }).id;
     db.prepare(`INSERT INTO opening_balances (account_set_id, code, debit, credit) VALUES (?,?,?,?)`)
       .run(s4, "1002", 800, 0);
     await rejects(() => A.setPeriodStatus(s4, "2026-01", "closed"), /period_unbalanced/);
   });
 
   await test("期间：结账不要求损益结转凭证", () => {
-    const s5 = A.createAccountSet({ name: "守卫测试-无结转", start_period: "2026-01" }).id;
+    const s5 = identityFixtureCreate(A, { name: "守卫测试-无结转", start_period: "2026-01" }).id;
     A.setOpeningBalances(s5, [entry("1002", 1000, 0), entry("3001", 0, 1000)]);
     A.createVoucher(s5, {
       period: "2026-01", status: "posted",

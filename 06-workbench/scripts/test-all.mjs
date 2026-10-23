@@ -80,6 +80,15 @@ const steps = [
   { name: "bank-reconciliation", file: join(WORKBENCH, "test", "bank-reconciliation.test.mjs"), cwd: WORKBENCH },
   { name: "bank-reconcile-cli", file: join(WORKBENCH, "test", "bank-reconcile-cli.test.mjs"), cwd: WORKBENCH },
   { name: "local-bank-backup-integration", file: join(WORKBENCH, "test", "local-bank-backup-integration.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-03 双准则与显式企业身份；仅末尾追加，原 main 65 套逐字原序保留。
+  { name: "accounting-standard-profiles", file: join(WORKBENCH, "test", "accounting-standard-profiles.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-standards", file: join(WORKBENCH, "test", "accounting-standards.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-standards-migration", file: join(WORKBENCH, "test", "accounting-standards-migration.test.mjs"), cwd: WORKBENCH },
+  { name: "enterprise-identity", file: join(WORKBENCH, "test", "enterprise-identity.test.mjs"), cwd: WORKBENCH },
+  { name: "enterprise-identity-http", file: join(WORKBENCH, "test", "enterprise-identity-http.test.mjs"), cwd: WORKBENCH },
+  { name: "enterprise-identity-mcp", file: join(MCP, "enterprise-identity-test.mjs"), cwd: MCP },
+  { name: "accounting-standards-http", file: join(WORKBENCH, "test", "accounting-standards-http.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-standards-mcp", file: join(MCP, "accounting-standards-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {

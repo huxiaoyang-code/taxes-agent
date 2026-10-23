@@ -679,6 +679,38 @@ const batchAuditSummary = (value) => {
   };
 };
 
+const PROFILE_SUMMARIES = dict({
+  "legacy-small-coa-v1": ["legacy_small_v1", "legacy-small-coa-baseline-v1", "legacy-small-coa-report-compat-v1", true],
+  "small-2011-basic-v1": ["small_basic_v1", "small-2011-coa-basic-v1", "small-2011-report-basic-v1", false],
+  "enterprise-2019-general-basic-v1": ["enterprise_basic_v1", "enterprise-2019-general-coa-basic-v1", "enterprise-2019-general-report-basic-v1", false],
+});
+const REPORT_DIAGNOSTICS = dict({
+  report_account_unmapped: "unmapped", report_account_requires_detail: "requiresDetail",
+  report_account_semantics_mismatch: "semanticsMismatch", declared_standard_profile_mismatch: "declaredMismatch",
+  legacy_profile_compatibility: "legacy", cash_flow_classification_incomplete: "cashClassification",
+});
+function reportMappingSummary(value) {
+  const context = requireRecord(value, "accountingContext");
+  const profile = prop(PROFILE_SUMMARIES, requireText(context, "profileId"));
+  if (!profile || requireText(context, "coaVersion") !== profile[1]
+    || requireText(context, "reportMappingVersion") !== profile[2]
+    || requireBoolean(context, "legacy") !== profile[3]) throw invalidSummary("accountingContext");
+  const status = requireRecord(value, "reportStatus");
+  const mappingStatus = requireChoice(status, "status", ["complete", "incomplete", "legacy_compatibility"]);
+  const complete = requireBoolean(status, "complete"), partialValues = requireBoolean(status, "partialValues");
+  if ((mappingStatus === "complete") !== complete || (complete && partialValues)
+    || (mappingStatus === "legacy_compatibility") !== profile[3]) throw invalidSummary("reportStatus");
+  const diagnostics = requireArray(status, "diagnostics"), diagnosticCounts = {};
+  for (let i = 0; i < listLen(diagnostics); i++) {
+    const key = prop(REPORT_DIAGNOSTICS, requireText(at(prop(diagnostics, i)), "code"));
+    if (!key) throw invalidSummary("reportStatus");
+    diagnosticCounts[key] = (diagnosticCounts[key] ?? 0) + 1;
+  }
+  if (complete && listLen(diagnostics)) throw invalidSummary("reportStatus");
+  return { profile: profile[0], legacy: profile[3], mappingStatus, complete, partialValues,
+    diagnosticCount: listLen(diagnostics), diagnosticCounts };
+}
+
 const QUERY_SPECS = dict({
   "finance_query:enterprise_account.account_set": (value) => {
     const set = at(value);
@@ -706,6 +738,7 @@ const QUERY_SPECS = dict({
     const totalLiabilities = requireNum(totals, "liabilities");
     const totalEquity = requireNum(totals, "equity");
     return {
+      ...reportMappingSummary(sheet),
       period: requirePeriod(sheet, "period"),
       assets: money(totalAssets), liabilities: money(totalLiabilities), equity: money(totalEquity),
       balanced: prop(sheet, "balanced") === true
@@ -723,6 +756,7 @@ const QUERY_SPECS = dict({
     const current = requireRecord(statement, "current");
     const ytd = requireRecord(statement, "ytd");
     return {
+      ...reportMappingSummary(statement),
       period: requirePeriod(statement, "period"),
       currentRevenue: money(requireNum(current, "营业收入")),
       currentCost: money(requireNum(current, "营业成本")),
@@ -748,6 +782,7 @@ const QUERY_SPECS = dict({
     const investingRows = requireArray(statement, "investing");
     const financingRows = requireArray(statement, "financing");
     return {
+      ...reportMappingSummary(statement),
       period: requirePeriod(statement, "period"),
       operating: money(operating), investing: money(investing), financing: money(financing),
       netIncrease: money(netIncrease),
@@ -1233,6 +1268,16 @@ const ERROR_CODES = dict({
   accountSetId_invalid: "account_set",
   nodeId_required: "input",
   items_required: "input",
+  enterprise_identity_required: "input",
+  enterprise_identity_invalid: "input",
+  enterprise_identity_mismatch: "input",
+  enterprise_already_bound: "input",
+  account_set_bound_to_other_enterprise: "input",
+  account_set_binding_confirmation_required: "input",
+  accounting_profile_unknown: "input",
+  accounting_standard_invalid: "input",
+  accounting_profile_standard_mismatch: "input",
+  accounting_profile_legacy_not_creatable: "input",
   import_validation_failed: "import",
   import_conflict: "import",
   batch_not_found: "import",

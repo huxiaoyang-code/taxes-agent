@@ -248,6 +248,8 @@ const SCOPES_BY_CATEGORY = Object.freeze({
 
 /** projection 里允许出现的字符串只可能是这些受控状态 / 枚举 token，或期间。 */
 const PROJECTION_TOKENS = new Set([
+  "legacy_small_v1", "small_basic_v1", "enterprise_basic_v1",
+  "complete", "incomplete", "legacy_compatibility",
   "assets", "liabilities", "equity", "cost", "profit_loss",
   "debit", "credit",
   "draft", "posted", "open", "closed",
@@ -313,6 +315,16 @@ const ERROR_CATEGORY_BY_CODE = Object.freeze({
   accountSetId_invalid: "account_set",
   nodeId_required: "input",
   items_required: "input",
+  enterprise_identity_required: "input",
+  enterprise_identity_invalid: "input",
+  enterprise_identity_mismatch: "input",
+  enterprise_already_bound: "input",
+  account_set_bound_to_other_enterprise: "input",
+  account_set_binding_confirmation_required: "input",
+  accounting_profile_unknown: "input",
+  accounting_standard_invalid: "input",
+  accounting_profile_standard_mismatch: "input",
+  accounting_profile_legacy_not_creatable: "input",
   import_validation_failed: "import",
   import_conflict: "import",
   batch_not_found: "import",

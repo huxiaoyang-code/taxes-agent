@@ -95,7 +95,7 @@ test("init-db：在不存在路径上通过真实创建入口建库并初始化 
   const created = okJson(["init-db", "--db", dbPath]);
   assert.equal(created.bankSchema.migrated, true);
   assert.equal(created.bankSchema.creation, "fresh-database");
-  assert.equal(created.importSchema.to, 4, "当前核心已到 schema v4（资产补项）");
+  assert.equal(created.importSchema.to, 5, "当前核心已到 schema v5（profile）");
   assert.ok(existsSync(dbPath));
   expectError(["init-db", "--db", dbPath], "db_already_exists", 2);
   expectError(["init-db", "--db", join(baseDir, "other.db")], "init_db_filename_required", 2);
@@ -106,7 +106,7 @@ test("init-db：在不存在路径上通过真实创建入口建库并初始化 
   bankCoreUserVersion = db.prepare("PRAGMA user_version").get().user_version;
   A = await import("../server/accounting.mjs");
 
-  setA = A.createAccountSet({ name: "合成甲公司", start_period: "2026-01" });
+  setA = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-bank-reconcile-cli-1" }, name: "合成甲公司", start_period: "2026-01" });
   A.setOpeningBalances(setA.id, [
     { code: "1002", debit: 800, credit: 0 },
     { code: "3001", debit: 0, credit: 800 },
@@ -123,7 +123,7 @@ test("init-db：在不存在路径上通过真实创建入口建库并初始化 
     period: "2026-01", voucher_date: "2026-01-12", status: "draft",
     entries: [{ code: "1002", debit: 50, credit: 0 }, { code: "1122", debit: 0, credit: 50 }],
   });
-  setB = A.createAccountSet({ name: "合成乙公司", start_period: "2026-01" });
+  setB = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-bank-reconcile-cli-2" }, name: "合成乙公司", start_period: "2026-01" });
   A.setOpeningBalances(setB.id, [
     { code: "1002", debit: 100, credit: 0 },
     { code: "3001", debit: 0, credit: 100 },
@@ -132,7 +132,7 @@ test("init-db：在不存在路径上通过真实创建入口建库并初始化 
   entryIn = db.prepare(`SELECT id FROM voucher_entries WHERE voucher_id=? AND code='1002'`).get(voucherIn.id).id;
 
   // 第三个账套：余额调节固定手算场景（两边期初 800.00，未达收 300/500，未达付 100/100）。
-  setC = A.createAccountSet({ name: "合成丙公司", start_period: "2026-01" });
+  setC = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-bank-reconcile-cli-3" }, name: "合成丙公司", start_period: "2026-01" });
   A.setOpeningBalances(setC.id, [
     { code: "1002", debit: 800, credit: 0 },
     { code: "3001", debit: 0, credit: 800 },
@@ -455,7 +455,7 @@ test("CLI 每一步都真实持久化：重新打开库能看到批次、流水�
     };
     for (const [name, value] of Object.entries(tables)) assert.ok(value > 0, `${name} 必须持久化`);
     const globalVersion = Number(probe.prepare(`SELECT MAX(version) AS v FROM schema_migrations`).get().v);
-    assert.equal(globalVersion, 4, "银行组件不得改动全局迁移版本");
+    assert.equal(globalVersion, 5, "银行组件不得改动全局迁移版本");
     const userVersion = Number(Object.values(probe.prepare(`PRAGMA user_version`).get())[0]);
     assert.equal(userVersion, bankCoreUserVersion, "后续银行命令不得改写创建nonce");
     assert.equal(readFileSync(dbPath).length > 0, true);
@@ -610,27 +610,18 @@ test("CLI 索引键语义漂移：COLLATE NOCASE / DESC / 表达式在任何命�
 });
 
 
-test("真实 init-db 在 core3/4 旧业务替换与同 inode 填充后于核心 DDL/WAL/迁移前拒绝", () => {
+test("真实 init-db 在 core3/4 旧业务替换与同 inode 填充后于核心 DDL/WAL/迁移前拒绝", async () => {
   for (const version of [3, 4]) {
     const donorDir = fixtureFs.mkdtempSync(join(fixtureRoot, `donor-v${version}-`));
     const donorPath = join(donorDir, "workbench.db");
-    const setup = spawnSync(process.execPath, ["--input-type=module", "-e", `
-      const {db}=await import(${JSON.stringify(new URL("../server/db.mjs", import.meta.url).href)});
-      const A=await import(${JSON.stringify(new URL("../server/accounting.mjs", import.meta.url).href)});
-      const set=A.createAccountSet({name:"fresh guard 合成业务",start_period:"2026-01"});
-      A.createVoucher(set.id,{period:"2026-01",voucher_date:"2026-01-01",status:"posted",
-        entries:[{code:"1002",debit:10,credit:0},{code:"3001",debit:0,credit:10}]});
-      db.close();
-    `], { cwd: WORKBENCH, env: { ...process.env, WORKBENCH_DATA_DIR: donorDir }, encoding: "utf8" });
-    assert.equal(setup.status, 0, setup.stderr);
-    if (version === 3) {
-      const donor = new DatabaseSync(donorPath);
-      donor.exec("PRAGMA foreign_keys=OFF");
-      for (const col of ["acquired_period", "opening_accumulated", "ledger_status", "ledger_note", "origin"])
-        donor.exec(`ALTER TABLE asset_cards DROP COLUMN ${col}`);
-      donor.exec("DELETE FROM schema_migrations WHERE version=4; UPDATE schema_backups SET version=3 WHERE version=4");
-      donor.close();
-    }
+    const donor = new DatabaseSync(donorPath);
+    donor.exec("\nPRAGMA journal_mode = WAL;\nPRAGMA foreign_keys = ON;\nCREATE TABLE account_sets (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  name TEXT NOT NULL,\n  taxpayer_type TEXT NOT NULL DEFAULT '小规模纳税人',\n  accounting_standard TEXT NOT NULL DEFAULT '小企业会计准则',\n  start_period TEXT NOT NULL,\n  created_at TEXT NOT NULL\n);\nCREATE TABLE accounts (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  code TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, direction TEXT NOT NULL,\n  contra INTEGER NOT NULL DEFAULT 0, is_leaf INTEGER NOT NULL DEFAULT 1,\n  UNIQUE (account_set_id, code)\n);\nCREATE TABLE opening_balances (\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  code TEXT NOT NULL, debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0,\n  PRIMARY KEY (account_set_id, code)\n);\nCREATE TABLE periods (\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  period TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', PRIMARY KEY (account_set_id, period)\n);\nCREATE TABLE vouchers (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  period TEXT NOT NULL, voucher_date TEXT NOT NULL, word TEXT NOT NULL DEFAULT '记',\n  number INTEGER NOT NULL, summary TEXT, status TEXT NOT NULL DEFAULT 'draft', created_at TEXT NOT NULL\n);\nCREATE TABLE voucher_entries (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  voucher_id INTEGER NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,\n  line_no INTEGER NOT NULL, code TEXT NOT NULL, summary TEXT,\n  debit REAL NOT NULL DEFAULT 0, credit REAL NOT NULL DEFAULT 0\n);\nCREATE INDEX idx_vouchers_set_period ON vouchers(account_set_id, period, status);\nCREATE INDEX idx_entries_voucher ON voucher_entries(voucher_id);\nCREATE INDEX idx_entries_code ON voucher_entries(code);\nCREATE TABLE asset_cards (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  kind TEXT NOT NULL DEFAULT 'fixed', name TEXT NOT NULL, original_cost REAL NOT NULL,\n  residual_rate REAL NOT NULL DEFAULT 0.05, useful_life_months INTEGER NOT NULL,\n  start_period TEXT NOT NULL, asset_account TEXT NOT NULL, accum_account TEXT NOT NULL,\n  expense_account TEXT NOT NULL DEFAULT '5602', created_at TEXT NOT NULL\n);\nCREATE TABLE asset_depreciation_runs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,\n  asset_id INTEGER NOT NULL REFERENCES asset_cards(id) ON DELETE CASCADE,\n  period TEXT NOT NULL, amount REAL NOT NULL, voucher_id INTEGER, created_at TEXT NOT NULL,\n  UNIQUE (account_set_id, asset_id, period)\n);\nALTER TABLE vouchers ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal';\n");
+    const { ensureImportSchema } = await import('../server/import-storage.mjs');
+    ensureImportSchema(donor, { dataDir: donorDir, targetVersion: version });
+    donor.prepare("INSERT INTO account_sets (id,name,start_period,created_at) VALUES (1,'合成历史业务','2026-01','2026-01-01')").run();
+    donor.prepare("INSERT INTO vouchers (id,account_set_id,period,voucher_date,number,status,created_at) VALUES (1,1,'2026-01','2026-01-01',1,'posted','2026-01-01')").run();
+    donor.prepare("INSERT INTO voucher_entries (voucher_id,line_no,code,debit,credit) VALUES (1,1,'1002',10,0),(1,2,'3001',0,10)").run();
+    donor.close();
     const before = readFileSync(donorPath);
     for (const mode of ["replace", "same-inode"]) {
       const dir = fixtureFs.mkdtempSync(join(fixtureRoot, `attack-v${version}-${mode}-`));

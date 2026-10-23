@@ -8,6 +8,7 @@ import * as A from "./accounting.mjs";
 import { getImportBatch, importIncremental } from "./import-incremental.mjs";
 import { buildOfficeExport } from "./report-office-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
+import { listAccountingProfiles } from "./accounting-profiles.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions } from "./agent-tools.mjs";
 import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
@@ -82,10 +83,17 @@ async function api(req, res, url, m) {
   const p = url.pathname;
   let match;
 
-  if (m === "GET" && p === "/api/meta") return json(res, 200, { standards: STANDARDS, coa: COA });
+  if (m === "GET" && p === "/api/meta") return json(res, 200, { standards: STANDARDS, coa: COA, coaDefaultStandard: "小企业会计准则", profiles: listAccountingProfiles() });
 
   if (m === "GET" && p === "/api/account-sets") return json(res, 200, A.listAccountSets());
   if (m === "POST" && p === "/api/account-sets") return json(res, 201, A.createAccountSet(await readBody(req)));
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/enterprise$/))) {
+    if (m === "GET") return json(res, 200, { accountSetId: +match[1], enterprise: A.getAccountSetEnterpriseIdentity(+match[1]) });
+    if (m === "POST") {
+      const b = await readBody(req);
+      return json(res, 200, A.bindAccountSetEnterprise(+match[1], b.enterprise, { confirmNewBinding: b.confirmNewBinding === true }));
+    }
+  }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)$/))) {
     const id = +match[1];
     if (m === "GET") return json(res, 200, A.getAccountSet(id));
@@ -231,15 +239,17 @@ async function api(req, res, url, m) {
     const b = await readBody(req);
     const texts = b.texts || decodeFiles(b.files, b.encoding);
     const payload = A.parseImportTexts(texts, b.meta || {});
-    return json(res, 200, { payload, validation: A.validateImportPayload(payload) });
+    return json(res, 200, { payload, validation: A.validateImportPayload(payload, { enterprise: b.enterprise, profileId: b.profileId }) });
   }
   if (p === "/api/import/account-set" && m === "POST") {
     const b = await readBody(req);
     // 与 MCP 一致：默认预检，只有显式 dryRun=false 才正式落库。
-    return json(res, 201, A.importAccountSet(b.payload || b, { dryRun: b.dryRun !== false }));
+    return json(res, 201, A.importAccountSet(b.payload || (b.texts ? A.parseImportTexts(b.texts, b.meta || {})
+      : b.files ? A.parseImportTexts(decodeFiles(b.files, b.encoding), b.meta || {}) : b),
+      { dryRun: b.dryRun !== false, enterprise: b.enterprise, profileId: b.profileId }));
   }
   if (p === "/api/import/templates" && m === "GET") {
-    return json(res, 200, TEMPLATES);
+    return json(res, 200, { ...TEMPLATES, accounting_standard: "小企业会计准则", profileId: "small-2011-basic-v1", templateScope: "small_enterprise_only" });
   }
   // 增量导入（LOCAL-01）：稳定来源 / 企业身份 + 批次幂等 + 来源凭证去重 / 冲突。
   // 与旧导入一致：默认 dryRun=true，只有显式 dryRun=false 才落库。
@@ -253,7 +263,7 @@ async function api(req, res, url, m) {
         payload,
         dryRun: b.dryRun !== false,
         batchId: b.batchId ?? b.batch_id,
-        source: b.source,
+        source: b.source, enterprise: b.enterprise, profileId: b.profileId, profile_id: b.profile_id,
         mode: b.mode,
         accountSetId: b.accountSetId ?? b.account_set_id,
         confirmNewBinding: b.confirmNewBinding === true,
@@ -415,7 +425,7 @@ const server = createServer(async (req, res) => {
     }
     const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
     return json(res, guard ? 409 : 400, {
-      error: guard ? e.code : e.message || String(e),
+      error: e.code || e.message || "operation_failed",
       details: e.details || null,
     });
   }

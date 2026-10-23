@@ -1,3 +1,18 @@
+> **2026-10-23 LOCAL03 最终整合候选（已本地保存 / 未推送 / 未 PR / 未合并）**：负责人 `huxiaoyang-code`，历史派工输入 `502640906262d6eefbe81b3460361e74ea0811b5`（不是当前候选 HEAD），当前完整候选已本地保存为 `79a55e7d58e7d6d175997abc96ef6241afa37a14`，基线 main `47b6ec18385ef3f9f1240e12a721e46cd66f218f`；本轮文档提交后的最终 HEAD 由管理者另行锁定，分支 `codex/huxiaoyang-code/local-03a`。双准则持久 profile / core3、4、5 × bank0、1严格备份、五类内部 CSV/XLSX/PDF、固定模型投影、显式一企一套全入口均已实施；原 main65 注册逐字原序保留并末尾追加8套，共73套。实施者实际完整73套为71/73、1907/1909项、exit1；仅两旧税务MCP建账fixture漏enterprise，按Issue56精确扩窗修后定点59/59+2/2均exit0，原完整红例按修前历史保留；P2 修后管理者新完整 73/73 套已全部通过，详见下方证据。JSON/CSV UI 上传/预检经root受支持工具尝试仍因工具超时未受控而结果未知，暂不继续该工具流程；P2 修后管理者完整入口与 fresh 独立复验已完成，最终文档及不可变 HEAD 的独立接受待完成，未推送 / PR / 合并。LOCAL01全入口、LOCAL03辅助Issue64、LOCAL05整体不因本检查点完成；LOCAL06审计/现库恢复/Windows W2及LOCAL07 whole batch仍未完成，税局暂停、真实接入0。详见 LOCAL03a / LOCAL01B 当前任务与交接。
+
+### 2026-10-23 独审 P2 修复后的验证边界
+
+新增明细科目的严格归一化现调用 `addAccount` 同源 `accountProfileSemantics`，按新建选定或目标持久 profile 拒绝 `account_semantics_conflict`；已有标准科目兼容与旧成功批次指纹规则保持。修后实际命令（cwd `06-workbench`）：`node --check server/accounting.mjs` exit 0；`node test/accounting-standards.test.mjs` 38/38、`node test/import-incremental.test.mjs` 57/57、`node test/import-strict.test.mjs` 54/54、`node test/accounting-standards-http.test.mjs` 2/2、`node ../05-reconstruction/codex/mcp/finance-mcp/accounting-standards-test.mjs` 2/2，全部 exit 0，自有直接 child 均已 close。双 profile 的 legacy / incremental create / append 错类别和方向均静态拒绝、业务及批次 / 来源全表零写；合法同根明细独立金额及 completed 批次 ID / 指纹只读重放通过。
+
+此前管理者在修前候选执行完整入口 `node scripts/test-all.mjs`，73/73 套各 exit 0，入口实际 exit 0、child close，候选 76 文件 hash 前后相同。这是修前真实历史；更早实施者 71/73、1907/1909 项及两税务定点 61 项也保持各自历史时点。P2 修后管理者已重新在 cwd `06-workbench` 实跑完整入口 `node scripts/test-all.mjs`，73/73 套全部 exit 0，入口实际 exit 0、`childCloseObserved:true`，全部源码 / 测试 hash 前后相同；本机证据为根 `.agent-runs/local03-manager-final-c1a7f4d853344f66a9614d3cfeb37914/` 的 `full.log`、`full.exit.json`、`code-after.json`，不以修前完整结果替代。
+
+未参与实施且使用全新上下文的 `review_03_final_whole_fresh` 已完成完整差异静态审查，并在全新合成根独立复验 32 分组：双 profile 的 legacy / incremental create / append 错 category / direction 在 dry / apply 均拒绝，业务及批次 / 来源全表零写；合法自选金额 27.61 / 48.37、旧 IDs / fingerprint / attempt / timestamps 保持，探针 exit 0、DB 已关闭，未确认其他 P1 / P2。本机证据为根 `.agent-runs/review03-final-semantics-fixed-9ba01fb5199e49af82b937d9872648b1/`；最终文档与不可变 HEAD 仍待该独立审查者接受，尚未推送 / PR / 合并，不代表整个 LOCAL03（含辅助 Issue #64）或 LOCAL04 / 06 / 07 已完成。
+
+本机 UI 手工新建与确认绑定已有合成实操；一企一套不等于一企一数据目录，同一库允许多企业各有一个账套。UI JSON / CSV 文件导入两次 filechooser 工具超时；用户已授权 CDP 合成输入，但工具明确不支持 raw CDP，实操仍未知，不能记为通过。所有本轮自有 UI 服务均已结束，不再启动浏览器重试；领域 / HTTP / MCP 通过不替代 UI 实操。内部简化报表子集、来源完整性 `unverified`、真实税局接入 0、辅助维度与 LOCAL06 / 07 未完边界保持。
+
+
+下方为各原日期的历史阶段记录；本候选不改写已合 PR 事实，也不把旧测试数当本轮结果。
+
 > **2026-10-23 出版窗口当前事实（优先于下方历史快照）**：负责人 `huxiaoyang-code`。整包完成 **LOCAL02与LOCAL08，共2/8**。LOCAL08 [PR #66](https://github.com/huxiaoyang-code/youshu-fork/pull/66) 于 2026-10-23T04:33:39Z 已合并：已审 head `9f7817f889ff6d2fa985dc343611ef965a4dcd8b`，main merge `2b3639e5ec80468f9e5acb0b886546f22dc5ada6`，tree `0c5bad9ccbdc8e46275252da0f8a2a464ae4d51e` 一致。root 该 head 完整 **61/61 套 exit0**，含 Office21/21 与11 PDF geometry / Poppler；fresh独审全部定向suite及17 probe接受，Issue44已 CLOSED（completed）。后续03新profile输出适配属03后续窗口。
 >
 > LOCAL07 B1 [PR65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 已合（已审head `37bcb286041f76d85c01ff5f6078727497570425`，merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`），W3现库安装 / 共享互斥与W4恢复分叉未完。银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。
