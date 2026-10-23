@@ -3,7 +3,7 @@
 import { open, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fields, requireValue, hash, stable, validateScope } from '../server/offline-material-adapters.mjs';
+import { fields, requireValue, hash, sourceText, stable, validateScope } from '../server/offline-material-adapters.mjs';
 import { preflightMaterials } from '../server/offline-materials.mjs';
 import { readLocalFile, inspectMaterialStore } from '../server/offline-material-store.mjs';
 import { openReadonlyLedgerSource, captureLedgerSnapshot, validateLedgerSnapshot } from '../server/offline-ledger-snapshot.mjs';
@@ -13,8 +13,8 @@ export async function runCli(args) {
   if (args.length !== 4 || args[0] !== '--input' || args[2] !== '--output' || !args[1] || !args[3]) return { exitCode: 2, message: 'OFFLINE_VAT_USAGE_ERROR' };
   let source;
   try {
-    const reads = [], decode = b => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(b);
-    const read = async (path, limit) => { const f = await readLocalFile(path, limit); reads.push({ path: f.canonicalPath, hash: hash(f.bytes) }); return { path: f.canonicalPath, text: decode(f.bytes) }; };
+    const reads = [];
+    const read = async (path, limit, kind) => { const f = await readLocalFile(path, limit); reads.push({ path: f.canonicalPath, hash: hash(f.bytes) }); return { path: f.canonicalPath, text: sourceText(kind, f.bytes), fileSha256: hash(f.bytes) }; };
     const json = async (path, limit) => { const f = await read(path, limit); return { ...f, value: JSON.parse(f.text.replace(/^\uFEFF/, '')) }; };
     const input = await json(resolve(args[1])), c = input.value, base = dirname(input.path);
     fields(c, ['version', 'scope', 'profileId', 'declaration', 'accountingFacts', 'taxFacts', 'db'], ['materialsInput', 'materialStore', 'previousComputation']);
@@ -26,7 +26,7 @@ export async function runCli(args) {
       const sources = [];
       for (const s of m.value.sources) {
         fields(s, ['sourceId', 'kind', 'scope', 'path', 'mapping']); requireValue(typeof s.path === 'string' && s.path.length > 0);
-        const f = await read(resolve(dirname(m.path), s.path)); sources.push({ sourceId: s.sourceId, kind: s.kind, scope: s.scope, mapping: s.mapping, text: f.text, fileSha256: hash(f.text) });
+        const f = await read(resolve(dirname(m.path), s.path), undefined, s.kind); sources.push({ sourceId: s.sourceId, kind: s.kind, scope: s.scope, mapping: s.mapping, text: f.text, fileSha256: f.fileSha256 });
       }
       reports = sources.length ? [preflightMaterials({ scope: c.scope, sources })] : [];
     } else {

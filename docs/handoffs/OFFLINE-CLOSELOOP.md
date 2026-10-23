@@ -1,5 +1,26 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-01C / #78C 受限 XLSX 实施候选（尚待 root/fresh 最终验收）
+
+PR93 已实际合并：[PR93](https://github.com/huxiaoyang-code/youshu-fork/pull/93)，base `e280877ce60d75ec859ad6da2b8514fa98341c46`，已审 head `5a6f321c548ad225a67de8cffc98a9a74661e0cc`，merge/main `e564ce3dbcc2a84a4fc558c4a318c88637ced5e1`。root/fresh 税套最终22/22；fresh 独立S426737得12802.11/8534.74/4267.37，root另430217得12906.51/8604.34/4302.17。只完成受限选定服务VAT字段，非整期/全税种/正式更正/确认/在线申报，#81仍OPEN。下方04B“待验/未PR”保留历史，不覆盖本条已合事实。
+
+本片基于该merge，worktree `offline-01c-xlsx`，branch `codex/huxiaoyang-code/offline-01c-xlsx`，Refs #76/#78。认领 #78 issuecomment6373515907，#54协调6373516373；唯一当前继承模型实施Codex subagent，无再委派、pi/Claude/TokenHub/其它执行器，无Git提交/推送/合并。精确13文件窗口，未改旧测试/assertions、core/db/audit/import/batch、test-all或共享STATE/NEXT-SESSION。维护入口root先前实际human-pl旧SHA mismatch与本片无关，不读改历史原件。#54最新协调6373423200为 `local-06-w2b-repair`、base e280877、58路径（含旧snapshot测试仅fixture窗口），随后6373659077补CLI单JSON兼容；仍未PR/合并，正式写依赖未完成，与本片13文件无重叠。
+
+实际新增纯同步OOXML reader：fflate0.8.3库central枚举后以1024压缩字节块流解压核实际entry集合/完成状态/原始长度/总量；saxes5.0.1严格XML语法加受限父子结构。精确sheet名→workbook关系Id→真实worksheet，显式headerRow/列映射。一行一票，原数值<v>词法不先double；和CSV复用同一invoice归一金额/日期/红字/企业/ID规则，所以同业务docId/semanticDigest一致。原二进制SHA、真实sheet/row/A1逐字段定位；JSON rawContent为canonical base64运输，真实blob仍原二进制。preflight/重放/store重开/CLI材料及税CLI均按kind重新解码原件，不信缓存CSV或派生records。CSV/JSON旧sourceVersion和scripts/exceljs/pdfkit不变，仅把原lock内fflate/saxes升直接固定依赖。
+
+真实工程范围见 [OFFLINE-XLSX](../OFFLINE-XLSX.md)：票号/日期/企业等必须文本；金额普通十进制最多两位、小于原合同限额，数值只General/0/0.00格式；不重建前导零。公式含cached结果、错误/布尔/数值日期/数值票号/亚分/科学计数/格式歧义/合并/未知类型、rich text/多run和_xHHHH_转义、外链/宏/OLE/实际VML/未知part或关系、损坏/缺失part均拒绝。5MiB原文件/100entries/4MiB单entry/16MiB实际总解压、10000行/256列/XML深32/节点100000等硬界；不是全ZIP/OOXML合规或CRC/flags认证，不声称拒绝所有未公开加密/ZIP64标志。默认空slicer/timeline样式及无实际VML的默认声明可保留，其余扩展不支持。只读选定表业务，其它表不纳业务；真实性unverified。整期coverage缺失时period/tax blocked，依赖已满足独立逐票/银行候选保留；不标整期完成。
+
+实施自测最终（cwd `06-workbench`）`node test/offline-xlsx.test.mjs` **19/19 exit0**，无skip。合成ExcelJS文件真实落盘/重读，shared与实际重打包inline变体，长前导零、金额531.79+5.32=537.11、E4/F4/G4、真实binaryhash、两次重放；CSV语义等价/跨格式重复及1分冲突；canonical base64实际5MiB边界；缺字段/非法日/不同企业/类型/格式/公式/外链/树结构/DTD/宏关系/contents/缺part/ZIP声明欺骗和实际流计数/总限额等故障。store真实二进制receipt/child重启inspect/替换原路径后仅隔离销项/独立银行182.49保留、精确CAS更正537.11→537.12/旧blob保留/重试同回执。新完整链实际CLI materials→plan→bookkeeping，候选经既有core仅合成临时库入账，再fresh私有snapshot→VAT；S388927原1%3889.27、总392816.27，独立期望15=11667.81、16=7778.54、22=3889.27，银行预付182.49不提前费用。VAT CLI实际原文件/materialStore两路均一致，原路径换入异企业原票后store路线拒绝，未冒称既存账更正已实现。所有DB/source finally实际close，child实际退出signal=null/stderr空，无常驻服务或真实资料/凭据。
+
+必要旧影响（旧测试未改）`node test/offline-materials.test.mjs` **36/36**、`offline-plan` **45/45**、`offline-bookkeeping` **43/43**、`offline-vat` **22/22** 均exit0。`offline-material-store`首次沙箱29/32和`offline-ledger-snapshot`25/26均exit1，仅合成hardlink/junction创建EPERM；保留故障目录XZgwHH/qx12Ov/NtWCYj/WSAp8P、不skip或改断言。按已有授权require_escalated后实建真实别名，分别 **32/32**、**26/26** exit0/skip0，DB实际close。snapshot持连接目录换入仍OS明确EPERM且原身份字节不变，不能当实际目录替换通过。上述六套为新增最后XLSX专有part缺失检查前已通过的影响结果，之后只改XLSX reader/新测试并新套19/19，不无理由重跑旧套或full/npm test。`git diff --check`通过。
+
+失败历史如实保留：早期probe合法目录entry尾/误拒、ExcelJS默认样式extLst误拒已修；新套首轮11/17，主要fixture反写replayReports参数、coverage id少:all、误以ExcelJS document writer shared=false即inline及旧#80逐票独立候选被测试错误期待全阻断，另fflate数字error.code的catch typeof风险。一次Python修复脚本错cwd导致未生效并11/17重现，所有夹具保留（mDuMwo/0uOz6I）；修后16/17剩bank taskId应prepare:bank。root/fresh预审实际宏Type和ContentType挂无害code.bin仍接受P2，改有限关系/内容类型/part白名单并保真实负例；白名单首轮漏默认无内容VML声明导致3/18，修为仅无实际VML时允许默认声明后18/18。新增缺part/总限额和税coverage后18/19是测试修改declaration未重算taxFact指向该文档SHA，被现有严格tax_reference_digest_mismatch正确拒绝；重算真实修改文档引用后19/19。未删旧断言、伪造通过或以先前结果代替修后验收。
+
+root早期独立未冻结probe实际PASS：1673.29+16.73=1690.02及640.57+6.41=646.98，两票中文sheet/headerRow3/长前导零，XLSX data/docId与CSV一致，保存的PR93旧CSV完整preflight输出逐字段deepEqual，原定位E4/F5正确。夹具 `.agent-runs/manager-xlsx-independent` 为root自有，不作产品输入，不代替最终完整head验证。尚待root独立最终验证、未实施者fresh最终完整head审查及PR/合并。#78更多原始适配/XLSX更广格式和路径搬迁、#77生产黄金、#79真实执行回执、#80正式持续过账与更正、#81其余税表、#82确认版本链、#83恢复仍未完；会计审定/真实业务试用保持未完成，税局真实接入0。
+
+
+root修后已独立实跑新套 **19/19 exit0**。另 `.agent-runs/manager-xlsx-probe.mjs` 独立probe **PASS exit0**：PR93旧CSV完整preflight逐字段与版本不变；中文表头/22位前导零两票1673.29+16.73=1690.02及640.57+6.41=646.98，XLSX与CSV身份/语义一致、E4/F5定位、跨格式4record duplicate；伪零缓存重放忽略。真实store原路径改成1673.30/1690.03后blocked_origin_changed/reports空，无CAS拒绝，精确前版CAS接受并保2历史/2receipt，重复replayed，child新进程CLI重开历史/金额一致。无DB写；这是root最终独立验证事实，尚未fresh完整head接受或PR合并。收到root结果后仅补本文档本段，无生产代码/测试变化，不重复测试。现冻结停止写。
+
 ## 2026-10-24 OFFLINE-04B / #81B 非零选定 VAT 行实施候选（待 root/fresh 冻结验收）
 
 PR92 实际已合：[PR92](https://github.com/huxiaoyang-code/youshu-fork/pull/92)，base `0c6efe4bba9b7a62d09f434cd3fef071c917d4f8`，已审 head `ff8c30734a3d64ffb022efa2c63f0d3188aa3d5f`，merge/main `e280877ce60d75ec859ad6da2b8514fa98341c46`。#78B store 最终 root 与 fresh **32/32**，独立 root 实际 `547.83+5.48=553.31→553.32`、bank `126.49` 的三 receipt/CAS/原路径失效及独立银行不变验证；fresh 另独立 `324.73→324.74`、bank `73.91` 来源更正/旧版本保留。下方“01B仍待32/未PR”等保留历史时点，不能覆盖本条实际已合事实。#78 XLSX/路径重定位等未完，#78整体未完，资料真实性仍unverified。

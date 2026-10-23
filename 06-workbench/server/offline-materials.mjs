@@ -41,7 +41,7 @@ export function preflightMaterials(input) {
       if (matches.some(x => x.duplicateStatus === 'conflict')) { r.duplicateStatus = 'conflict'; r.referenceVerification = 'conflict'; }
     }
     sourceIndex = undefined;
-    const missingKinds = ['invoice_csv', 'bank_csv', 'business_json'].filter(k => !sources.some(s => s.kind === k));
+    const missingKinds = ['invoice_csv', 'bank_csv', 'business_json'].filter(k => !sources.some(s => s.kind === k || k === 'invoice_csv' && s.kind === 'invoice_xlsx'));
     const conflictCount = records.filter(r => r.duplicateStatus === 'conflict').length;
     return { ...base, ok: conflictCount === 0, status: conflictCount ? 'blocked_conflict' : missingKinds.length || unresolvedReferences.length ? 'partial' : 'preflight_only', scope: input.scope,
       batchVersion: hash(stable(sources.map(s => [s.sourceId, s.sourceVersion]).sort())), sources, records, missingKinds, unresolvedReferences,
