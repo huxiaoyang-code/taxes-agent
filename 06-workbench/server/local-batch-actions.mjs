@@ -331,10 +331,11 @@ export function executePostStage(ctx) {
  * 卡片「与当期适用性相关的事实」快照（持久化到阶段证据，resume 时逐项重算比对）。
  * 只用已合入的 LOCAL-02 `assetCardPeriodStatus`（期间口径），不自算应提额；不含资产 / 企业名称等自由文本。
  */
+// expenseAccount 仍保留在快照供追溯，但核心允许仅影响未来的费用科目维护，不能据此废弃历史凭证。
 const DEPRECIATION_CARD_FIELDS = Object.freeze([
   "assetId", "kind", "startPeriod", "acquiredPeriod", "acquiredPeriodRaw", "acquiredPeriodMissing",
   "ledgerStatus", "usefulLifeMonths", "originalCost", "residualRate", "openingAccumulated",
-  "assetAccount", "accumAccount", "expenseAccount",
+  "assetAccount", "accumAccount",
   "periodIndex", "depreciable", "accumulated", "remaining", "status", "dueAmount", "recordedAmount",
   "expectedAmount",
 ]);
@@ -373,7 +374,8 @@ function depreciationCardSnapshot(db, card, period) {
  */
 function depreciationRunSnapshot(db, setId, period) {
   const rows = db.prepare(
-    `SELECT r.id, r.asset_id, r.amount, r.voucher_id, r.period, v.status AS voucher_status
+    `SELECT r.id, r.asset_id, r.amount, r.voucher_id, r.period, v.status AS voucher_status,
+            v.account_set_id AS voucher_set_id, v.period AS voucher_period, v.kind AS voucher_kind
        FROM asset_depreciation_runs r LEFT JOIN vouchers v ON v.id = r.voucher_id
       WHERE r.account_set_id=? AND r.period=? ORDER BY r.asset_id`,
   ).all(setId, period);
@@ -386,8 +388,49 @@ function depreciationRunSnapshot(db, setId, period) {
     return {
       assetId: Number(row.asset_id), amount: r2(Number(row.amount)), voucherId: row.voucher_id ?? null,
       voucherStatus: row.voucher_status ?? null, period: row.period, entriesHash,
+      voucherAccountSetId: row.voucher_set_id ?? null, voucherPeriod: row.voucher_period ?? null,
+      voucherKind: row.voucher_kind ?? null,
     };
   });
+}
+
+/** 每张关联凭证只按其自己的 runs 核验；旧凭证不能借本次新凭证的合法性放行。 */
+function assertDepreciationRuns(db, setId, period, runs, cards, priorIds) {
+  const byVoucher = new Map();
+  for (const run of runs) {
+    const card = cards.find((entry) => Number(entry.id) === run.assetId);
+    if (!card || run.voucherStatus !== "posted" || assetCardPeriodStatus(db, card, period).status !== "posted") {
+      throw domainError("depreciation_run_inconsistent", "计提记录缺少合法卡片 / 已过账凭证");
+    }
+    if (!byVoucher.has(run.voucherId)) byVoucher.set(run.voucherId, []);
+    byVoucher.get(run.voucherId).push({ run, card });
+  }
+  const entryKey = (entry) => canonicalJson({ code: entry.code, debit: r2(Number(entry.debit)), credit: r2(Number(entry.credit)) });
+  for (const [voucherId, group] of byVoucher) {
+    const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(voucherId);
+    const references = db.prepare(`SELECT COUNT(*) AS n FROM asset_depreciation_runs WHERE voucher_id=?`).get(voucherId);
+    if (!voucher || Number(voucher.account_set_id) !== Number(setId) || voucher.period !== period
+      || voucher.kind !== "depreciation" || voucher.status !== "posted" || references.n !== group.length) {
+      throw domainError("depreciation_run_inconsistent", "计提原凭证归属 / 期间 / 类型 / run 集合不一致");
+    }
+    // 核心允许已计提后修改 expense_account（仅影响未来），旧 run 没有历史费用科目字段。
+    // 对旧凭证核原借方金额与科目存在性，不把当前未来费用科目强套到历史；新凭证仍严格按当前卡。
+    // 已记录的旧凭证完整指纹仍用于动作前后不变检查和后续 resume，改旧科目同样会被拒绝。
+    const historical = group.every(({ run }) => priorIds.has(run.assetId));
+    const expected = group.flatMap(({ run, card }) => [
+      { code: historical ? null : card.expense_account, debit: run.amount, credit: 0 },
+      { code: card.accum_account, debit: 0, credit: run.amount },
+    ]).map(entryKey).sort();
+    const entries = db.prepare(`SELECT code, debit, credit FROM voucher_entries WHERE voucher_id=?`).all(voucherId);
+    if (entries.some((entry) => !db.prepare(`SELECT 1 FROM accounts WHERE account_set_id=? AND code=?`).get(setId, entry.code))) {
+      throw domainError("depreciation_run_inconsistent", "计提原凭证含不存在的科目");
+    }
+    const actual = entries.map((entry) => entryKey(historical && Number(entry.debit) > 0 && Number(entry.credit) === 0
+      ? { ...entry, code: null } : entry)).sort();
+    if (canonicalJson(actual) !== canonicalJson(expected)) {
+      throw domainError("depreciation_amount_mismatch", "计提原凭证分录与其卡片 / runs 金额科目不一致");
+    }
+  }
 }
 
 /** 计提 / 摊销：调用统一入口 generateDepreciation；证据必须覆盖卡片事实与当期已有 runs / 凭证。 */
@@ -402,6 +445,7 @@ export function executeDepreciationStage(ctx) {
     // 动作前的卡片状态（用于「是否本期应提却无凭证」的判定，也是随证据保存的「当时结论」）。
     const preCardStates = rawCards.map((card) => depreciationCardSnapshot(db, card, period));
     const dueCards = preCardStates.filter((card) => card.status === "due");
+    const priorRuns = depreciationRunSnapshot(db, setId, period);
     const result = A.generateDepreciation(setId, period);
     let status = STAGE_STATUS.SUCCEEDED;
     let errorCode = null;
@@ -409,23 +453,37 @@ export function executeDepreciationStage(ctx) {
     const cardStates = rawCards.map((card) => depreciationCardSnapshot(db, card, period));
     // 该期间真实存在的全部 runs（含本次生成的），不是「本次新生成」的子集。
     const runs = depreciationRunSnapshot(db, setId, period);
+    const priorIds = new Set(priorRuns.map((run) => run.assetId));
+    assertDepreciationRuns(db, setId, period, runs, rawCards, priorIds);
+    const newRuns = runs.filter((run) => !priorIds.has(run.assetId));
+    for (const prior of priorRuns) {
+      if (canonicalJson(runs.find((run) => run.assetId === prior.assetId)) !== canonicalJson(prior)) {
+        throw domainError("depreciation_run_inconsistent", "本次计提改动了已有计提证据");
+      }
+    }
     let voucherEvidenceValue = null;
     if (result.voucher) {
       if (result.voucher.status !== "posted") throw domainError("depreciation_voucher_unposted", "计提凭证不是已过账状态");
       voucherEvidenceValue = voucherEvidence(result.voucher);
-      if (!runs.length) throw domainError("depreciation_run_inconsistent", "本期计提凭证没有任何计提记录");
-      for (const run of runs) {
-        if (run.voucherId !== result.voucher.id || run.voucherStatus !== "posted") {
+      if (!newRuns.length || newRuns.length !== dueCards.length
+        || dueCards.some((card) => !newRuns.some((run) => run.assetId === card.assetId))
+        || priorRuns.some((run) => run.voucherId === result.voucher.id)) {
+        throw domainError("depreciation_run_inconsistent", "本次计提新增卡片集合与应提集合不一致");
+      }
+      for (const run of newRuns) {
+        if (Number(run.voucherId) !== Number(result.voucher.id) || run.voucherStatus !== "posted") {
           throw domainError("depreciation_run_inconsistent", "计提记录与凭证 / 状态不一致");
         }
       }
-      const amount = r2(runs.reduce((sum, run) => sum + run.amount, 0));
+      const amount = r2(newRuns.reduce((sum, run) => sum + run.amount, 0));
       if (Math.abs(amount - voucherEvidenceValue.totalDebit) > EPS) {
         throw domainError("depreciation_amount_mismatch", "计提合计与凭证借方金额不一致", { runs: amount, voucherDebit: voucherEvidenceValue.totalDebit });
       }
       if (Math.abs(amount - voucherEvidenceValue.totalCredit) > EPS) {
         throw domainError("depreciation_amount_mismatch", "计提合计与凭证贷方金额不一致", { runs: amount, voucherCredit: voucherEvidenceValue.totalCredit });
       }
+    } else if (newRuns.length) {
+      throw domainError("depreciation_run_inconsistent", "无本次凭证却新增计提记录");
     } else if (dueCards.length) {
       // 核心认定本期应提但本次没有任何计提凭证：不能无条件报成功，也不能静默补提。
       status = STAGE_STATUS.NEEDS_REVIEW;
@@ -750,6 +808,10 @@ function verifyDepreciationEvidence(evidence, stage, expectedSetId) {
       return { ok: false, reason: "depreciation_amount_changed", details: { assetId: current.assetId } };
     }
     if ((recorded.entriesHash ?? null) !== (current.entriesHash ?? null)) {
+      return { ok: false, reason: "depreciation_run_voucher_modified", details: { assetId: current.assetId } };
+    }
+    if (Number(current.voucherAccountSetId) !== Number(expectedSetId)
+      || current.voucherPeriod !== period || current.voucherKind !== "depreciation") {
       return { ok: false, reason: "depreciation_run_voucher_modified", details: { assetId: current.assetId } };
     }
   }

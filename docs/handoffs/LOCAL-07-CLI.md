@@ -327,7 +327,7 @@
   `local-07-b1-review2-renders-XBqMOI/` **未删未改**；测试前缀常量改为 `local-07-b1-review3-renders-`，仍为 `mkdtemp` 唯一目录。
 - 时序说明（便于复验）：`cli` 运行后到本轮收尾之间只改了**文档**与 `local-batch-storage.mjs` 的一处
   `releaseFreshClaim` **注释**（无行为变化）；因此又在最终树上重跑了 `persistence`（`persist-2`，37 / 37 exit 0）。
-- 临时根：`TEMP`/`TMP` 均指向管理者新建的本轮专属目录 `D:/有数云fork/.agent-runs/local-07-b1-review3-temp`；
+- 临时根：`TEMP`/`TMP` 均指向管理者新建的本轮专属目录 `.agent-runs/local-07-b1-review3-temp`（相对仓库根）；
   只清理本测试 `mkdtemp` 自己的目录（逐绝对目标 + 祖先链无 junction 校验），未扫描 / 批删任何旧目录。
 - 员工透明记录：本轮一条临时探针少设了 `WORKBENCH_DATA_DIR`，一度在 gitignored 的 `06-workbench/data/`（默认开发库）
   生成了合成库 + `pre-v4` 备份；已核实该目录创建时间 = 探针运行时间（本轮新生成）、仅含这两份文件、祖先链无 junction，
@@ -361,8 +361,56 @@ Agent 共享入口互斥；W4 真实 `createBackup → verifyBackup → restoreN
   **37 / 37**，exit 0（日志 `.agent-runs/local-07-b1-review4-persist-1.log` / `-persist-2.log`）。
   本轮按要求**未**重跑 `cli` / `report-office-export` / 其它核心套件（由管理者独立安排；
   `report-office-export` 现有测试会删固定 `qaDir`，故本窗口不重复）。
-- 临时根：`TEMP`/`TMP` = `D:/有数云fork/.agent-runs/local-07-b1-review4-temp`；只操作本轮自建合成目录，
+- 临时根：`TEMP`/`TMP` = `.agent-runs/local-07-b1-review4-temp`（相对仓库根）；只操作本轮自建合成目录，
   未删 / 未改旧 run 与旧 render，未扫描或批删系统 TEMP，未碰真实账套 / 凭据 / 税局浏览器。
+
+### 3.9 B1 返修 5（2026-10-23，同月新增 subset 与完整恢复证据）
+
+- 基线 `ac3b7725ed64ed56c83ae67aae8a7890fb1684b8`；本次只改 actions、persistence 测试与三份 07 文档。
+  已审 `a5e8083` guard/db 保持不动；未改 storage / runner / test-all / 共享文档。
+- 执行事实：历史 tokenhub 员工记录是历史。本次已获用户对火山 `ark.cn-beijing.volces.com` 的必要源码 /
+  任务 / 合成错误授权，但 pi GLM 实际任务 429 周额度、无工具调用和修改；依用户新增授权由 root 派一个
+  兜底实现 subagent。此处只报实施与自测，不冒充独审，不预报 PR / 合并。
+- 修复：A600/12 已计提 50 后合法新增 B1200/12，本次只生成 B100；新增 runs 由动作前后差集确定，
+  与 due 卡集合 / 本次新凭证逐项核对。全量卡片 / 全量 runs 仍持久化，旧 run 的凭证、金额和分录指纹
+  在动作前后不变；每张原凭证分别核账套 / 期间 / 类型 / posted / 累折科目、借贷金额与科目存在性。
+  恢复还显式核旧凭证账套 / 类型（这两字段不在既有凭证内容 hash 中），不依赖新凭证替旧凭证作证。
+- 新 K3 实跑十种形态：合法新增 + 重启无重复；旧凭证分录 / 不存在科目 / 账套 / 期间 / 类型 / run 金额 / 反过账
+  异常均拒绝且不新增 B 的 run / 凭证；已成功后单改旧分录 / 账套 / 类型亦被新进程 resume 拒绝。
+  K1/K2 的 no_action / due / draft_pending / 卡增删和后续合法期间不失效历史等断言均保留。
+- 本机日志根（相对本机管理仓库根）：`.agent-runs/local07-fallback-r5-ee1c4d97f80c4a03b7ee747fd540fbbf/`，
+  包含本次 OWNER；TEMP/TMP 为其中 `temp/`，兜底 DATA 为 `fallback-data/`，均本次新建，逐层祖先核无 junction。
+  各测试另建独占合成子目录，未用真实账套 / 凭据 / 税局，未删除旧 run / 旧 render，无裸 PID kill。
+
+| 实际命令（06-workbench） | 最终实施者结果 | 日志（上述本机根内，附同名 `.exit`） |
+|---|---|---|
+| `node test/local-batch-persistence.test.mjs` | **39 / 39**，exit 0（追加 K4 后完整重跑） | `expense-final-persistence.log` |
+| `node test/local-batch-cli.test.mjs` | **11 / 11**，exit 0（费用科目修复后完整重跑） | `expense-final-cli.log` |
+| `node test/accounting-period-integrity.test.mjs` | **45 / 45**，exit 0 | `final-accounting-period-integrity.log` |
+| `node test/smoke.test.mjs` | **28 / 28**，exit 0 | `final-smoke-retry.log` |
+| `node test/import-incremental.test.mjs` | **49 / 49**，exit 0 | `final-import-incremental-retry.log` |
+
+- 判别与失败如实保留：原实现 `red-persistence.log` **36 / 38**、exit 1，K3 正向确实
+  `depreciation_run_inconsistent`，另 H7 因受限沙箱 junction `EPERM`；首轮实现后 **37 / 38**，
+  K3 负例自身用了不存在账套而触发 FK，改为真实第二合成账套后 **38 / 38**。
+  最终追加恢复时账套 / 类型负例后再完整跑 **38 / 38**。smoke 初次受限环境 HTTP 全部 fetch failed
+  **0 / 28**、exit 1；获批在允许本机 loopback 的环境重跑 **28 / 28**。junction 套亦在获批环境真实通过，
+  未把环境失败计为通过。
+- CLI 仍真实产出 **840 阶段 / 600 产物**；PDF 全量仅结构 / 页数，文本金额及视觉证据只为
+  两家两月五类代表抽样；本次留 **10 张唯一 PNG / 60 份原件**，最终目录为本 worktree 相对路径
+  `.agent-runs/local-07-b1-review3-renders-QHgiv5/`（追加 K4 后 CLI 重跑）。本次未逐份人工查看，不称 600 份全部人工验算。
+  未重跑会清固定共享 QA 的 Office suite。W3 / W4 / 最终独审 / PR / 合并仍未完成。
+- 管理检查后的正常维护边界返工：K4 两个独立合成 fixture 均先 A5602 计提 50，再真实
+  `updateAssetCard` 改 A 的未来费用科目为 5601，新增 B1200/12。真实核心生成 B100，首版 batch
+  却报 `depreciation_amount_mismatch`（`expense-red-persistence.log` **38 / 39**、exit 1）。
+  原因是用当前卡费用科目重建旧凭证。现仅新凭证严格使用当前卡费用科目；旧凭证核原借方金额、
+  科目存在性与累折贷方科目 / 金额，并保存完整原指纹。合法未来费用科目维护不废弃历史阶段，
+  卡片费用字段仍留在追溯快照；K4 还验证成功后再次合法维护未来费用科目，普通新进程 resume 不重复，
+  直接改旧凭证费用科目则 `depreciation_run_voucher_modified`。K3 新增不存在科目负例。
+  旧 run **没有历史费用科目字段**，首次接管前无法区分原合法费用科目与同金额合法科目替换，
+  因此不声称已证明其最初历史代码；首次捕获后完整指纹仍拒绝任何旧分录改变。金额 / 卡集合 /
+  期间 / 账套 / 凭证类型与失败原子性断言保留。最终完整 persistence **39 / 39**、CLI **11 / 11**，
+  两个调用均实际 exit 0 且进程已返回；45 / 28 / 49 为此正常维护返工前的真实自测时点，未重复扩大测试。
 
 ## 4. 历史事实与限制（不得删除 / 不得用本轮绿色覆盖）
 

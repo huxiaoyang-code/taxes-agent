@@ -3142,6 +3142,138 @@ await test("K2 卡片增删 / 未来卡变当期 due / 金额变化 / 凭证分�
   }
 });
 
+await test("K3 同月先提 A50 后新增 B100：只生成新增子集、全量证据保留、跨进程无重复，旧凭证异常原子拒绝", () => {
+  const card = (cost) => ({
+    kind: "fixed", name: `设备${cost}`, original_cost: cost, residual_rate: 0, useful_life_months: 12,
+    start_period: "2026-01", acquired_period: "2026-01", ledger_status: "booked",
+    asset_account: "1601", accum_account: "1602", expense_account: "5602",
+  });
+  for (const mode of ["valid", "resume-scope", "resume-kind", "old-entries", "old-code", "old-scope", "old-period", "old-kind", "old-amount", "old-draft"]) {
+    const dataDir = join(ROOT, `k3-${mode}-data`);
+    const outDir = join(ROOT, `k3-${mode}-out`);
+    primeDataDir(dataDir);
+    const spec = { itemKey: "added-card", enterpriseKey: `K3-${mode}`, name: `同月新增-${mode}` };
+    const [fixture] = createFixture(dataDir, [spec]);
+    const a = addStateCard(dataDir, { setId: fixture.setId, card: card(600), preDepreciate: true });
+    const b = addStateCard(dataDir, { setId: fixture.setId, card: card(1200) });
+    const oldVoucher = a.generated.voucherId;
+    if (mode === "old-entries") {
+      // 借贷仍平衡、run 金额仍 50，必须按旧凭证本身检查，不可仅核本次新凭证。
+      mutateSql(dataDir, `UPDATE voucher_entries SET debit=CASE WHEN debit>0 THEN 51 ELSE 0 END,
+        credit=CASE WHEN credit>0 THEN 51 ELSE 0 END WHERE voucher_id=?`, oldVoucher);
+    }
+    if (mode === "old-code") mutateSql(dataDir, `UPDATE voucher_entries SET code='NOT_AN_ACCOUNT' WHERE voucher_id=? AND debit>0`, oldVoucher);
+    if (mode === "old-scope") {
+      const [other] = createFixture(dataDir, [{ enterpriseKey: "K3-other-scope", name: "另一合成账套" }]);
+      mutateSql(dataDir, `UPDATE vouchers SET account_set_id=? WHERE id=?`, other.setId, oldVoucher);
+    }
+    if (mode === "old-period") mutateSql(dataDir, `UPDATE vouchers SET period='2026-02' WHERE id=?`, oldVoucher);
+    if (mode === "old-kind") mutateSql(dataDir, `UPDATE vouchers SET kind='normal' WHERE id=?`, oldVoucher);
+    if (mode === "old-amount") mutateSql(dataDir, `UPDATE asset_depreciation_runs SET amount=60 WHERE asset_id=?`, a.cardId);
+    if (mode === "old-draft") setVoucherState(dataDir, fixture.setId, oldVoucher, "unpostVoucher");
+    const before = count(dataDir, `SELECT COUNT(*) FROM vouchers`);
+    const manifestPath = writeManifest(`k3-${mode}`, jobManifest({
+      jobKey: `added-${mode}`, items: [depreciationItem(fixture, spec, ["2026-01"])],
+    }));
+    const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", outDir]);
+    if (mode !== "valid" && !mode.startsWith("resume-")) {
+      assert.equal(started.status, 1, `${mode}: ${started.stderr} ${started.stdout}`);
+      assert.equal(stageRow(dataDir, "depreciation", spec.enterpriseKey).status, "needs_review", mode);
+      assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), before, `${mode}: 新凭证整体回滚`);
+      assert.equal(runCount(dataDir, fixture.setId), 1, `${mode}: 不补提 B`);
+      continue;
+    }
+    assert.equal(started.status, 0, `${started.stderr} ${started.stdout}`);
+    const first = stageRow(dataDir, "depreciation", spec.enterpriseKey);
+    assert.equal(first.status, "succeeded");
+    const evidence = JSON.parse(first.evidence_json);
+    assert.equal(evidence.cards.length, 2);
+    assert.equal(evidence.runs.length, 2, "恢复证据不能只记录本次新增 subset");
+    assert.deepEqual(evidence.dueCards, [b.cardId]);
+    const oldRun = evidence.runs.find((run) => run.assetId === a.cardId);
+    const newRun = evidence.runs.find((run) => run.assetId === b.cardId);
+    assert.equal(oldRun.voucherId, oldVoucher);
+    assert.equal(oldRun.amount, 50);
+    assert.equal(newRun.amount, 100);
+    assert.notEqual(newRun.voucherId, oldVoucher);
+    assert.equal(evidence.voucher.voucherId, newRun.voucherId);
+    assert.equal(evidence.voucher.totalDebit, 100);
+    assert.equal(evidence.voucher.totalCredit, 100);
+    assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), before + 1);
+    const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", `added-${mode}`]);
+    assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+    assert.equal(stageRow(dataDir, "depreciation", spec.enterpriseKey).attempt, first.attempt);
+    assert.equal(depVoucherCount(dataDir, fixture.setId), 2);
+    assert.equal(runCount(dataDir, fixture.setId), 2);
+    // 新凭证未变，只篡改旧凭证分录，恢复仍应拒绝且不重做。
+    if (mode === "resume-scope") {
+      const [other] = createFixture(dataDir, [{ enterpriseKey: "K3-resume-other", name: "恢复时另一合成账套" }]);
+      mutateSql(dataDir, `UPDATE vouchers SET account_set_id=? WHERE id=?`, other.setId, oldVoucher);
+    } else if (mode === "resume-kind") {
+      mutateSql(dataDir, `UPDATE vouchers SET kind='normal' WHERE id=?`, oldVoucher);
+    } else {
+      mutateSql(dataDir, `UPDATE voucher_entries SET code='6602' WHERE voucher_id=? AND debit>0`, oldVoucher);
+    }
+    const broken = runCli(["resume", "--data-dir", dataDir, "--job-key", `added-${mode}`]);
+    assert.equal(broken.status, 1, `${broken.stderr} ${broken.stdout}`);
+    const row = stageRow(dataDir, "depreciation", spec.enterpriseKey);
+    assert.equal(row.status, "needs_review");
+    assert.equal(JSON.parse(row.evidence_json).verificationFailure, "depreciation_run_voucher_modified");
+    assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), before + 1);
+    assert.equal(runCount(dataDir, fixture.setId), 2);
+  }
+});
+
+await test("K4 已计提后合法改未来费用科目：核心与批量同月新增一致，旧凭证不改写且恢复仍拒旧分录篡改", () => {
+  const card = (cost) => ({
+    kind: "fixed", name: `费用科目设备${cost}`, original_cost: cost, residual_rate: 0, useful_life_months: 12,
+    start_period: "2026-01", acquired_period: "2026-01", ledger_status: "booked",
+    asset_account: "1601", accum_account: "1602", expense_account: "5602",
+  });
+  for (const mode of ["core", "batch"]) {
+    const dataDir = join(ROOT, `k4-${mode}-data`);
+    primeDataDir(dataDir);
+    const spec = { itemKey: "expense-change", enterpriseKey: `K4-${mode}`, name: `费用科目维护-${mode}` };
+    const [fixture] = createFixture(dataDir, [spec]);
+    const a = addStateCard(dataDir, { setId: fixture.setId, card: card(600), preDepreciate: true });
+    const oldVoucher = a.generated.voucherId;
+    updateStateCard(dataDir, fixture.setId, a.cardId, { expense_account: "5601" });
+    addStateCard(dataDir, { setId: fixture.setId, card: card(1200) });
+    if (mode === "core") {
+      const generated = runNode(`import * as A from './server/accounting.mjs';
+        const result=A.generateDepreciation(Number(process.env.SET_ID),'2026-01');
+        console.log(JSON.stringify({ amount: result.runs.reduce((sum,run)=>sum+run.amount,0), count:result.runs.length }));`,
+      { env: { WORKBENCH_DATA_DIR: dataDir, SET_ID: String(fixture.setId) } });
+      assert.equal(generated.status, 0, generated.stderr);
+      assert.deepEqual(JSON.parse(generated.stdout.trim().split(/\r?\n/).at(-1)), { amount: 100, count: 1 });
+      console.log("    核心实证：updateAssetCard(5602→5601) 后新增 B100 成功");
+    } else {
+      const manifestPath = writeManifest("k4", jobManifest({ jobKey: "expense-change",
+        items: [depreciationItem(fixture, spec, ["2026-01"])] }));
+      const started = runCli(["start", "--data-dir", dataDir, "--manifest", manifestPath, "--output-dir", join(ROOT, "k4-out")]);
+      assert.equal(started.status, 0, `${started.stderr} ${started.stdout}`);
+      const evidence = JSON.parse(stageRow(dataDir, "depreciation", spec.enterpriseKey).evidence_json);
+      assert.equal(evidence.voucher.totalDebit, 100);
+      assert.equal(evidence.runs.length, 2);
+      assert.equal(count(dataDir, `SELECT code FROM voucher_entries WHERE voucher_id=? AND debit>0`, oldVoucher), "5602",
+        "合法维护未来科目不得重写原凭证");
+      // 完成之后再次合法维护未来费用科目，也不应使历史计提证据失效。
+      updateStateCard(dataDir, fixture.setId, a.cardId, { expense_account: "5602" });
+      const resumed = runCli(["resume", "--data-dir", dataDir, "--job-key", "expense-change"]);
+      assert.equal(resumed.status, 0, `${resumed.stderr} ${resumed.stdout}`);
+      // 旧费用科目仍 5602 是合法历史事实；直接改旧凭证到另一合法费用科目也必须被指纹拒绝。
+      mutateSql(dataDir, `UPDATE voucher_entries SET code='5601' WHERE voucher_id=? AND debit>0`, oldVoucher);
+      const broken = runCli(["resume", "--data-dir", dataDir, "--job-key", "expense-change"]);
+      assert.equal(broken.status, 1, `${broken.stderr} ${broken.stdout}`);
+      assert.equal(JSON.parse(stageRow(dataDir, "depreciation", spec.enterpriseKey).evidence_json).verificationFailure,
+        "depreciation_run_voucher_modified");
+    }
+    assert.equal(count(dataDir, `SELECT code FROM voucher_entries WHERE voucher_id=? AND debit>0`, oldVoucher), mode === "core" ? "5602" : "5601");
+    assert.equal(runCount(dataDir, fixture.setId), 2);
+    assert.equal(depVoucherCount(dataDir, fixture.setId), 2);
+  }
+});
+
 // ---------------------------------------------------------------- 收尾
 console.log("");
 const passed = RESULTS.filter(([ok]) => ok).length;

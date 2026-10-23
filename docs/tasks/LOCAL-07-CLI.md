@@ -55,7 +55,7 @@ report-office-export / server 入口 / Agent / MCP / test-all / package / 锁 / 
 | 条目 | 覆盖位置 |
 |---|---|
 | A 模块 / CLI 无默认 DB 副作用 | `local-batch-cli.test.mjs` A1–A5：help / 非法命令 / status 缺库 / 无 `WORKBENCH_DATA_DIR` 时拒绝 import / status 只读哈希不变 |
-| B 20 家真实动作链 | 同上 B1（20 家 × 2 月 = **840 阶段**，含 40 真实 period-check + 40 真实 close；**600 产物**；独立手算表核对两月 CSV+XLSX+PDF）、B2（create + 次月 append + 幂等 / 异内容拒绝）、B3（年末结转跨年 + 下一年期初 / 累计） |
+| B 20 家真实动作链 | 同上 B1（20 家 × 2 月 = **840 阶段**，含 40 真实 period-check + 40 真实 close；**600 产物**；CSV/XLSX 按独立手算表核对，PDF 此组仅结构 / 页数；PDF 文本金额及视觉仅两家两月五类代表抽样，非 600 份逐份人工验算）、B2（create + 次月 append + 幂等 / 异内容拒绝）、B3（年末结转跨年 + 下一年期初 / 累计） |
 | C 并发证据 | 同上 C1（跨企业渲染区间相交、peak ≤ concurrency、threadId 不同）、C2（`concurrency=1` 串行对照） |
 | D 单家失败隔离 + 去重 | `local-batch-persistence.test.mjs` D1 |
 | E 崩溃真实新进程恢复 | 同上 E1（import commit 后）、E2（计提事务中）、E3（结转事务中）、E4（产物发布后）、E5（close 未提交回滚）、E6（close 已提交后中断） |
@@ -181,7 +181,7 @@ SIGKILL 时序、账务逻辑或断言层面的原因；后续需**另行复现�
 4. 单家缺折旧阻断、补齐后 retry/resume 只做未完成部分；check 成功后新增草稿 → close 由核心拒绝；
 5. close 事务中 / 已提交后进程中断的恢复；
 6. 独占新建回执：零字节既有库、非空目录、别名 / junction、并发占用、探测后替换、伪 fresh / 伪回执全部不能建立结构；
-7. 20 家两月实际 **840 stage / 600 产物**，CSV/XLSX/PDF 金额来自独立手算表；
+7. 20 家两月实际 **840 stage / 600 产物**，CSV/XLSX 按独立手算表核对；PDF 全量只核结构 / 页数，文本金额及视觉仅两家两月五类代表抽样，不是 600 份逐份人工验算；
 8. 完整两套测试 **11 / 11 + 34 / 34**（独审返修后；本轮 B1 管理复核收尾为 **11 / 35**，见 §6.6），
    受影响依赖定向回归全部 exit 0。
 
@@ -279,6 +279,32 @@ B4 本次唯一渲染目录 `.agent-runs/local-07-b1-review3-renders-D4WYev/`（
 旧 `.agent-runs/local-07-b1-review1-renders/` 与 `local-07-b1-review2-renders-XBqMOI/` **未动、未删**。
 仍未完成（不伪造）：W3 现库组件安装 / 备份支持与共享手工入口互斥、W4 `createBackup → verifyBackup →
 restoreNew` 与实例分叉，以及提交 / PR / 合并；**不能写整包完成**。
+
+### 6.8 B1 返修 5（2026-10-23，同月新增卡片）
+
+历史 tokenhub / pi 执行记录保留其原时点。本次用户已授权当前火山 `ark.cn-beijing.volces.com`
+处理必要源码 / 任务 / 合成错误；实际 pi GLM 任务返回周额度 429 且无修改。按用户新增授权由 root
+派单一兜底实现 subagent 完成本子包；未再调用 pi / Claude 或启动其他实现者，独立审查仍另行安排。
+
+真实回归先复现：A600/12 已计提 50 后，同月新增 B1200/12，旧 actions 把全期 runs 当作本次新凭证，
+导致 `depreciation_run_inconsistent`。现按前后新增 runs 与本次 due 卡集合核本次 B100 凭证；保留两张卡、
+全部 runs 与旧凭证的证据，并逐原凭证核账套 / 期间 / 类型 / 过账状态 / 累折科目 / 借贷金额和科目存在性，旧 runs 不得被改写。
+K3 覆盖真实新进程不重复、旧分录 / 金额 / 期间 / 账套 / 类型 / 反过账异常与失败原子性，
+恢复时篡改旧凭证账套 / 类型亦拒绝。旧 K1/K2 与三个 P1 回归保留。
+
+追加 K4 前的实施者自测：`persistence` **38 / 38**、`cli` **11 / 11**、`accounting-period-integrity` **45 / 45**、
+`smoke` **28 / 28**、`import-incremental` **49 / 49**，均真实 exit 0；不等于独立审查 / 管理验收。
+CLI 实产 840 阶段 / 600 产物，PDF 文本及视觉仅两家两月五类代表抽样（10 张 PNG / 60 份原件），
+本次实施者未逐份人工查看 600 产物。详细日志与受限环境失败记录见交接 §3.9。
+未改已审 guard/db、storage、runner、test-all 或共享文档；未重跑会清共享 QA 的 Office 套件。
+W3 / W4 与最终 PR / 合并仍未交付，不预报审查或合并结论。
+
+管理检查后追加 K4 实证：已计提 A 的费用科目从 5602 合法维护为 5601 后，真实核心同月新增 B100 成功，
+而首版严格重建历史费用科目的 batch 误拒。现新凭证仍按当前费用科目严格核验，旧凭证保留历史分录，
+未来费用科目维护也不使已完成历史 resume 失效；捕获后改旧凭证费用科目仍按完整指纹拒绝。
+旧 run 未存历史费用科目，首次接管无法证明该代码的原始历史，只能核金额、累折贷方与科目存在性，
+此边界见实现契约。追加后最终完整 `persistence` **39 / 39**、`cli` **11 / 11**，均实际 exit 0，
+日志见交接 §3.9；45 / 28 / 49 为此前自测时点，未无依据重跑。
 
 ## 7. 完成口径
 

@@ -310,6 +310,16 @@ import(按清单) → post → depreciation → carryforward → period-check �
   `depreciation_card_draft_pending` / `depreciation_card_posted_stale` / `depreciation_card_changed` /
   `depreciation_runs_added` / `depreciation_run_removed` / `depreciation_amount_changed` /
   `depreciation_run_voucher_modified` / `depreciation_voucher_unposted` 等）。
+  同月已计提卡片之外合法新增卡片时，只按动作前后新增的 runs 子集核对本次凭证和应提卡集合；
+  全量 runs / 卡片仍写入恢复证据。每个旧 run 的原凭证分别核对账套、期间、计提类型、过账状态、
+  对应累折科目 / 借贷金额及科目存在性，且旧 run 指纹在动作前后必须不变。任一不一致整体回滚，不以新增子集
+  取代旧记录检查。例如 A600/12 已计提 50 后新增 B1200/12，本次只生成 B100，保留 A 原凭证；
+  新进程 resume 重检两张凭证，不重复计提。
+  核心允许在已计提后合法维护仅影响未来的 `expense_account`：新凭证严格使用当前卡费用科目，
+  旧凭证不能强套这个未来值。旧 run 没有历史费用科目字段，首次接管只能证明原凭证借方金额 / 科目存在性、
+  贷方累折科目与 run 一致，不能证明其借方代码就是最初入账时的代码；合法历史修改与首次捕获前的
+  同金额合法科目替换无法单凭现有数据区分。捕获后保存的完整原凭证指纹仍严格核验，
+  改旧凭证任一费用科目也会使恢复拒绝；单改卡片未来费用科目不会使已完成历史阶段失效。
   未来卡改成当期 `due`、已计提凭证被反过账成 `draft_pending`、增删卡、金额 / 分录被改，都会转
   `needs_review`；**复核不补提、不改凭证、不把 no_action 当成成功绕过**。
   期末检查重新执行真实 `A.periodEndCheck`：若只剩「更晚期间已由本任务合法封账」的 `later_period_closed`
