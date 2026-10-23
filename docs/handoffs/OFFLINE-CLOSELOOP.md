@@ -1,5 +1,37 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-04C late-cache P2 返工：独立 Node worker（当前候选）
+
+下方PR99/04C首稿19项均是返工前历史，不能证明晚加载guard之前的模块缓存边界。fresh实际 `.agent-runs/reviewer-history/late-cache-probe.mjs`：复制树先import原tax，再将磁盘calculateOfflineVat改throw DISK_CODE_SENTINEL，最后首次import history/guard；首稿仍mint并把新磁盘SHA绑定旧4071.91结果。root确认P2后解除冻结并授权8→9文件（新增worker，#81 comment6376375135），未改旧28模块或缩小代码字节承诺。
+
+root已无冲突fast-forward本WT至#54 [PR100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)实际merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`，#54 comment6376358168 / 协调comment6376400477；随后[PR101](https://github.com/huxiaoyang-code/youshu-fork/pull/101)仅13共享docs交接（head642426a）合入，当前实际base `f74460f30699c2740b2163743050b78845979885`，core/test及本9路径未变，未提交范围保留。#54旧待PR/未合记录均为历史，不再作为当前阻塞。本片仍待root最终完整head验收/独审/PR，不能以#54已合推断#81或连续税期完成。
+
+现每次open新启动固定脚本的全新Node进程，父facade只严格schema、31实际bytes和WeakMap私有IPC；loader真实session/readonly DB/前后current/v1税算及内部digest全部在该worker持有。父spawn前实际清单、worker加载/开算清单、父spawn后清单必须一致；消费串行并前后父子复验。父已缓存tax不执行计算，late-cache磁盘throw由新worker实际执行后明确拒绝。新31=原REVIEW_CODE_FILES28+context/guard/worker；未接旧review确认链。NODE_OPTIONS/NODE_PATH/WORKBENCH_DATA_DIR不继承，stdio忽略，只私有固定IPC；不是模型执行器。
+
+close现为async，CLI/tests均await实际退出；失败/退出/30秒timeout永久废原receipt并关闭源、不偷偷重启；父disconnect也使worker关闭退出。关闭有500ms graceful、500ms SIGTERM及必要SIGKILL兜底，await实际exit；spawn error无exit事件时由close事件完成，避免挂起。runtime仍只读，不新增DB/defaultdir/journal写或源路径权限。prior-only/targetBinding not_verified/Q2false/approval pending/执行与提交false/真实性unverified等完整限制保留。
+
+新增9项运行时回归，在原19全部保留基础上为28项：父先cached tax→磁盘throw→cold首次history；spawn窗实际代码变化；parallel消费/在途async close及实际exit；实际worker SIGKILL永久失效；真实不存在Node.exe ENOENT；实际挂起worker的timeout/实际exit；parent disconnect后workerexit+DB可rename；真实fork与worker两类观察ABA后同父再open永久拒绝及新进程恢复对照。代码变化均在复制所需源码的ignored临时树，不改工作区产品文件或复制真实data/config/node_modules。实施timeout仅父测试timer加速；fresh另实际生产30秒30522ms后prior_worker_timeout永久失效、SIGTERM退出、awaitclose后DB实际rename释放，不能把加速测试称生产时长。
+
+新worker初稿保持原19为19/19；新增6项后25/25、实际spawn ENOENT后26/26均exit0，所有child实际close。fresh另确认观察ABA P2（`.agent-runs/reviewer-history/latch.mjs`）：父baseline后spawn→改tax注释→worker ready真实不同manifest→父处理前恢复原bytes；第一次restart_required、第二次同父却mint，违反已观察变化永久失效。现assertBinding mismatch或worker返回prior_code_restart_required均调用guard的只闭锁mark，使父guard永久latch；不以“未观察ABA”限制遮掩实际已观察。新增两种实际变化/恢复回归，最终 **`node test/offline-vat-history-context.test.mjs` 28/28 exit0、skip0，所有child实际close**，`git diff --check`及5个模块/测试语法检查exit0，已停写供root/fresh最终独审。root新audit独立557983→16739.49/11159.66/5579.83、31code/公开篡改/clone/严格extra/getter0/观测stale永久、新open+awaitclose、hiddenextra与pathProxy0、写后publication exit4+failed均已报通过。root另e13新基线旧VAT22/golden15/ledger27均exit0（WB/.agent-runs/root-after-audit.log），f744同core字节，未无理由重跑；旧基线review15通过仍仅旧基线事实。原发布窗/hidden/late-cache/latch失败probe均保留，未预报最终接受。
+
+## 2026-10-24 PR99 已合事实与 OFFLINE-04C 首稿历史候选（已被上方返工替代）
+
+[PR99](https://github.com/huxiaoyang-code/youshu-fork/pull/99) 已合：base `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`、已审 head `ef9ac0e4568fe30176ccf80304ad916646bc6441`、merge `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`。交付 #78 comment6376059950 / #76 comment6376060428 / #54 comment6376060840；三方银行27，旧invoice19/store32/action33/golden15通过，P2数值币号/千分选项绕过已闭合，真实失败26/1保留。下方01D未合等为历史时点。
+
+#54 最新实质 comment6376168302：旧完整65文件候选 `29f76f2479425a8f192f13cf1c11dd318ce63138` 已独审接受；main前移后整合到 `cef967e2d31f289c5e918bbb87a32afc09df0805`，原65文件bytes不变，13docs/5上游套补验中，最终精确head仍待reviewer/PR/合。root #54 comment6376209790 协调本片先基于0e89实施验证，待其实际合后再整合main与必要影响验证；不以旧R5窄修接受或旧完整head接受代替新head正式放行。
+
+OFFLINE-04C / Refs #76/#81，认领 #81 comment6376161802，base为上述PR99 merge，worktree offline-04c-history。本轮唯一当前模型实施 Codex subagent，无再委派、pi/Claude/TokenHub/其它模型、Git写或全局配置；未读真实/历史资料。精确8文件见 [任务单](../tasks/OFFLINE-04C.md)，契约/命令/失败与回退见 [OFFLINE-VAT-HISTORY](../OFFLINE-VAT-HISTORY.md)。所有旧VAT规则/loader/ledger/review/feedback/28清单/core/audit/batch/oldtests/golden/包锁/test-all/STATE/NEXT/#54共享路径均未改。
+
+新API只接严格显式priorInputPath，内部真实openVatInputFiles→前后assertVatInputSessionCurrent→重新calculateOfflineVat；v1可算且current、2026Jan新设/Jan起账的Q1才铸WeakMap私有receipt并保留内部session。consume每次重读文件/store/真实只读DB、重算并比较原摘要，公开副本/clone/跨进程/伪receipt不能授权；观察stale或close后永久失效、关闭source，恢复旧bytes也须新open。代码guard加载时固定原28清单+新2module共30实际bytes，缓存代码变化需新进程，未改旧review确认链。CLI actual request/new wx，write+sync后最后重验request与内部receipt，失败保留明确failed诊断。API无journal/DB/defaultdir写。
+
+prior-only边界始终targetBinding=not_verified、q2CalculationReady=false、accountantApproval=pending、periodComplete/submittable/authorizesExecution=false、sourceAuthenticity=unverified；limitations先列prior_Q1_only/no_target_database_binding/no_Q2_tax_calculation/no_reusable_accountant_confirmation。公开snapshot无fd/fileidentity，未把两个公开摘要当同实际目标库；Q2完整引擎及#82接线仍后续，本片不承诺未接线的Q2确认自动失效。未认证材料/会计真实身份、不检测未观察ABA、不把低门槛/零销项/历史/缺件假零。
+
+实施新套（cwd06-workbench）`node test/offline-vat-history-context.test.mjs` **19/19 exit0**。实际raw合成173211.00+238456.00=411667.00→现有候选/core importer实际过账→只读核15=12350.01/16=8233.34/22=4116.67、SHA/cell/真实voucher-entry/source/rule链。helper在core import前隔离数据/TEMP/TMP，用独立child避免全局DB缓存串例；所有child实际close。strict/getter0/Proxy、伪receipt/clone/crossprocess/close/public篡改、原件缺失/更正/恢复、store origin+真实sourceVersion CAS、false/null/unknown/历史/错scope、核心实际unpost/entry及sourcefingerprint变化、Q2截止外实际voucher、main+warmWAL byte不变、复制源码树codecached变化/新进程、actualCLI/wx/hardlink及写后source/request变化均通过。Windows held DB rename=EPERM实际阻止替换，明确未测到替换检测分支；冷readonly可能零字节WAL，不夸文件零侧效。
+
+失败事实：首轮13/15是测试误把store API当journalHead CAS及沙箱拒symlink；修为实际supersedes/expectedSourceVersion CAS和hardlink后第二轮15/16仅沙箱hardlink EPERM。失败夹具保留，新套经获准创建临时链接的命令真实18/18、skip0。root独立首稿非零557983/16739.49/11159.66/5579.83、来源/30code/opaque/getter0/stale恢复验证已报通过；root另实际发现CLI发布窗P2（写完output、sync前改sales仍exit0旧computed），已加真实最后publication check与source/request两种子进程注入，原root失败probe未改。其后root/fresh实际复现18项覆盖缺口：hidden calculation额外字段仍mint、非法嵌套path/version Proxy递归前触发trap；已先查top isProxy/Reflect.ownKeys/own descriptors并确认恰好两个enumerable data及primitive strings，再运行旧fields/requirePlainJson，新增hidden data/getter/symbol/version+pathProxy计数0第19项。修后新套19/19。自查代码清单改codeBinding防覆盖固定code，拒绝诊断code断言保留。实施自测不代替root原probe修后复验和fresh最终head独审。
+
+必要影响旧VAT22/review15/golden15均exit0，所有DB/source实际close；`git diff --check`通过，未运行无关全量。维护仓库flow status仍仅原human-pl SHA mismatch，未读改历史原件。本片尚未root最终验收、全新独审、PR/合；#81整包/#76/两合法税期仍未完成，税局真实接入0。
+
 ## 2026-10-24 PR98 已合事实与 OFFLINE-01D 受限银行 XLSX 实施冻结候选
 
 [PR98](https://github.com/huxiaoyang-code/youshu-fork/pull/98) 已合：base `98e57bdfbe29e2f8716ab0768492583064cd30c1`、已审 head `a331b21abd72b94147742fd7e96fed0849e10cb6`、merge `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`。交付 #77 comment6375751257 / #76 comment6375751712 / #85 comment6375752159 / #80 comment6375752731；三方黄金15及旧候选43/行动规划33/VAT22通过，12组业务/24张凭证/36份月末快照已独立验算。下方00B“候选/待验”等为历史时点。#54 最新 comment6375884790（2026-10-23T22:20:35Z）：R5 两文件窄修已独立接受并提交 `d1d618b5d19f31a877f94407ffcfcf10f518af15`；正进行13份文档收口，上游受影响测试运行中。完整最终候选仍待 fresh/PR/merge，正式写依赖未放行；远端 main 仍 `11e47e6`，不以旧 `87043a` 待审记录作当前接受事实。
