@@ -1081,6 +1081,35 @@ const WRITE_SPECS = dict({
   },
 });
 
+// A rejected DTO may still contain independently verifiable technical IDs. These
+// bounded paths use own data descriptors only; no business summary or getter runs.
+const WRITE_TECHNICAL_IDS = dict({
+  voucher_create: { voucherId: ["id"] },
+  voucher_post: { voucherId: ["id"] },
+  voucher_unpost: { voucherId: ["id"] },
+  voucher_delete: { deletedVoucherId: ["deleted"] },
+  asset_create: { assetId: ["id"] },
+  asset_update: { assetId: ["id"] },
+  depreciation_run: { voucherId: ["voucher", "id"] },
+  carry_forward_profit: { voucherId: ["voucher", "id"], yearEndVoucherId: ["yearEndVoucher", "id"] },
+  account_set_create: { accountSetId: ["id"] },
+  legacy_book_import: { createdAccountSetId: ["created", "id"] },
+  book_import_incremental: { accountSetId: ["created", "accountSetId"] },
+});
+function technicalWriteIds(operation, value) {
+  const projection = {};
+  const paths = WRITE_TECHNICAL_IDS[operation] || EMPTY;
+  for (const [key, path] of Object.entries(paths)) {
+    try {
+      let parent = value;
+      for (let i = 0; i < path.length - 1; i++) parent = prop(at(parent), path[i]);
+      const id = int(at(parent), path[path.length - 1]);
+      if (id !== undefined) projection[key] = id;
+    } catch { /* A failed descriptor read must not hide other independently safe IDs. */ }
+  }
+  return projection;
+}
+
 /**
  * 无引用摘要出口：供适配器在「没有可信账套绑定」时使用（全局上下文 / 批次未绑定 / create 失败未建账）。
  * 只返回白名单 projection：不创建引用、不返回原值，未知 operation 仍拒绝。
@@ -1470,6 +1499,11 @@ export class FinanceOutputPolicy {
         if (stored.reason === null) stored = { ref: null, expiresAtIso: null, reason: classifyRawFailure(error) };
       }
     }
+    // Malformed committed DTOs cannot supply business detail, but own data IDs remain
+    // independently provable. Never traverse the rejected value or invoke accessors.
+    if (stored.reason === "value_invalid" || stored.reason === "summary_unavailable") {
+      projection = sanitizeProjection(technicalWriteIds(operation, value)).value;
+    }
     return this.#writeEnvelope(operation, accountSetId, evidence, projection, dropped, stored);
   }
 
@@ -1709,7 +1743,7 @@ export class FinanceOutputPolicy {
       operationCategory: "write",
       accountSetId,
       applied: evidence.applied,
-      needsLocalReview: evidence.applied !== true,
+      needsLocalReview: evidence.applied !== true || stored.reason === "value_invalid" || stored.reason === "summary_unavailable",
       projection,
       projectionDropped: dropped,
       localRef: stored.ref,

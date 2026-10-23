@@ -1,3 +1,5 @@
+> **2026-10-23 银行集成出版候选补记**：源候选 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0` 员工定向150/150 exit0（含backup22/22、bank integration5/5与07两套），root银行领域43/43及CLI14/14 exit0；最终65套、fresh独审与PR63合并仍待root，不能视为已合交付。严格合同保持 **core v3/v4 + 可选bank v1**，三入口仍核对全部19条银行索引及键语义；未登记batch / audit / aux、core v5+仍拒绝。下方partial说明已按冻结 `BANK_SCHEMA_CONTRACT` 更正为三条partial UNIQUE，源码合同未改。
+
 # 本机一致性备份 / 验证 / 恢复到全新目标 · LOCAL-BACKUP（LOCAL-06 独立子包契约）
 
 状态：**LOCAL-06 备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 验收合并**（PR head
@@ -544,7 +546,7 @@ node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全�
     额外 / 缺失一样拒绝。`AUTOINCREMENT` 与表的 `WITHOUT ROWID` 以外的存储选项不在本轮校验范围
     （rowid 别名语义本身会被核对）。core 的表达式 / 部分索引目前只作为**拒绝依据**出现
     （真实 v3 / v4 没有它们），契约没有对应的正向条目；bank v1 则有明确的正向条目
-    （两条 partial UNIQUE + 一条 partial 非唯一）。
+    （三条 partial UNIQUE：`idx_bank_txn_ref` 的 `bank_ref_id IS NOT NULL`，以及 `idx_bank_matches_active_txn` / `idx_bank_matches_active_entry` 的 `status = 'confirmed'`；没有 partial 非唯一索引）。
 
 ## 10. 自测
 

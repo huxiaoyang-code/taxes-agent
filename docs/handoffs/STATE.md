@@ -1,3 +1,28 @@
+> **2026-10-23 出版窗口当前事实（优先于下方历史快照）**：负责人 `huxiaoyang-code`。整包完成 **LOCAL02与LOCAL08，共2/8**。LOCAL08 [PR #66](https://github.com/huxiaoyang-code/youshu-fork/pull/66) 于 2026-10-23T04:33:39Z 已合并：已审 head `9f7817f889ff6d2fa985dc343611ef965a4dcd8b`，main merge `2b3639e5ec80468f9e5acb0b886546f22dc5ada6`，tree `0c5bad9ccbdc8e46275252da0f8a2a464ae4d51e` 一致。root 该 head 完整 **61/61 套 exit0**，含 Office21/21 与11 PDF geometry / Poppler；fresh独审全部定向suite及17 probe接受，Issue44已 CLOSED（completed）。后续03新profile输出适配属03后续窗口。
+>
+> LOCAL07 B1 [PR65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 已合（已审head `37bcb286041f76d85c01ff5f6078727497570425`，merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`），W3现库安装 / 共享互斥与W4恢复分叉未完。银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。
+>
+> 未完成项：LOCAL01 Issue61一企一套全入口；LOCAL03 R3窄修已接受，但 `accountRows` 漏 `contra` 的P2 / B2 / v5严格备份 / 全入口未完，辅助Issue64已登记未实施；LOCAL05a Office接线PR62已合、05b双准则 / 复杂现金流及独立金额核验未完；LOCAL06审计B2业务接线 / 现库安装、真实restore和Windows最终交付未完。税局专项暂停、真实接入0，总任务20/13/14等继续开放。
+
+## 2026-10-23 独立产品八包恢复状态（当前入口）
+
+负责人 `huxiaoyang-code`。用户要求完成全部剩余任务；当前**只有 LOCAL-02 整包完成**，其余包已有子包合并不等于整包完成。产品仍为本机单用户、**一家企业一个账套**，多企业批量对应多个账套。下方旧状态按其日期追溯，恢复先按本节与 [当前任务看板](../tasks/README.md) 核实远端。
+
+| 包 | 当前事实与未完成范围 |
+|---|---|
+| LOCAL-01 | 初始增量已合 [PR46](https://github.com/huxiaoyang-code/youshu-fork/pull/46)；[Issue61](https://github.com/huxiaoyang-code/youshu-fork/issues/61) 的手工建账 / 旧导入等全入口规范企业身份、一企一套与成功回放优先仍未完。 |
+| LOCAL-02 | 已验收合并 [PR60](https://github.com/huxiaoyang-code/youshu-fork/pull/60)，是当前唯一整包完成项。 |
+| LOCAL-03 | [Issue56](https://github.com/huxiaoyang-code/youshu-fork/issues/56) 的 R3 窄修 `c3c2b2ba553c36115607b177127db9edad973a56` 已获 fresh 独审接受（159/159、23组含696组合），尚未单独合 main；调用面旧 `accountRows` 漏 `contra` 的 P2、v5严格备份、全入口、辅助核算均未完成。新辅助 [Issue64](https://github.com/huxiaoyang-code/youshu-fork/issues/64) 已登记、未实施，不能把七文件研发当成可安装交付。 |
+| LOCAL-04 | [PR63](https://github.com/huxiaoyang-code/youshu-fork/pull/63) 仍 Draft；fresh审查的调用方 P1 未修，仅复用已审 guard；银行4套须待08实际 main 后另开入口窗口。 |
+| LOCAL-05 | Office 接线已合 [PR62](https://github.com/huxiaoyang-code/youshu-fork/pull/62)；05b 双准则 / 复杂现金流及独立报表金额核验随03补齐，仍未完成。 |
+| LOCAL-06 | 备份 [PR55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)、v3/v4扩展 PR60、审计A [PR58](https://github.com/huxiaoyang-code/youshu-fork/pull/58) 已合；[Issue54](https://github.com/huxiaoyang-code/youshu-fork/issues/54) B2实际业务接线 / 现库安装、真实 restore 集成及 [Issue59](https://github.com/huxiaoyang-code/youshu-fork/issues/59) Windows最终升级 / 保护 / 回退验收未完成。 |
+| LOCAL-07 | B1 [PR65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 已合：已审 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`；CLI11/11、persistence39/39加5 probe属独立证据，root另验39/39。[Issue51](https://github.com/huxiaoyang-code/youshu-fork/issues/51) 的现库安装 / 共享互斥 W3、真实恢复分叉 W4 未完成。 |
+| LOCAL-08 | 策略 / adapter / transport基础已合 PR50/57/60；[Issue44当前31文件窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6357299894) 整合候选起点 `c764278a9e41a3ce502e662ffa56b0dc18ab307a`，已纳入 PR65。先前24文件候选8套131/131 exit0；当前入口原59加07两套静态61，最终全61 / fresh独审 / PR合并待 root，不预报通过。 |
+
+本轮共享文件窗口仅入口登记与交接，不扩大业务所有权；后续按精确 Issue 窗口串行整合，不能覆盖在途成果。税局专项仍暂停、真实接入0；[总接管20](https://github.com/huxiaoyang-code/youshu-fork/issues/20)、[业务13](https://github.com/huxiaoyang-code/youshu-fork/issues/13) / [14](https://github.com/huxiaoyang-code/youshu-fork/issues/14) 等总任务继续开放，不随子包关闭。
+
+本项目2026-10-23火山路由与单一兜底授权、模型限制及自动合并 / fresh独审条件见 [章程新增授权](../PROJECT-CHARTER.md)。pi / Claude优先、额度不足才由root统一一个兜底实施者；root不实施，未参与实现且不继承实施上下文的fresh审查者接受最终head后才自动合并。该例外不改全局Skill、不外推其他项目；真实账套 / 凭据始终禁止外发。
+
 > **2026-10-22 最新权威摘要（本机产品路线；本节优先于下方同日期及更早条目）**。税局现场仍暂停、真实接入 **0**；产品仍是本机单用户、**一企一个账套**、多企业批量 = 多账套批量。下列分清**已合并**与**候选未合并**：未合并一律不写「已完成」，本节**不预报**任何合并 SHA。
 >
 > **已合并（main 实际事实）**

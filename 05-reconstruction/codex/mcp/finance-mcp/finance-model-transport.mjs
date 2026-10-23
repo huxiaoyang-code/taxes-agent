@@ -531,7 +531,12 @@ function validateStatusFields(data) {
   if (applied !== true && applied !== false && applied !== "unknown") return false;
   const needsLocalReview = prop(data, "needsLocalReview");
   if (typeof needsLocalReview !== "boolean") return false;
-  if (needsLocalReview !== (applied !== true)) return false;
+  if (applied !== true && needsLocalReview !== true) return false;
+  if (applied === true && needsLocalReview === true) {
+    const unavailable = prop(data, "refUnavailable");
+    if (prop(data, "localRef") !== null || prop(data, "refPersistence") !== "none"
+      || (unavailable !== "value_invalid" && unavailable !== "summary_unavailable")) return false;
+  }
   const reason = prop(data, "appliedReason");
   if (applied === true) return reason === undefined;
   return typeof reason === "string" && APPLIED_REASONS.has(reason);

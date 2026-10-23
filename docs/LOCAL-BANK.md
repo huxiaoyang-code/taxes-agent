@@ -1,3 +1,7 @@
+> **2026-10-23 最终出版候选补记（优先于下方历史阶段）**：银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。
+>
+> 创建保护：O_EXCL保留创建fd、私有不可变receipt / marker身份与seed，SQLite打开前文件对象预检；真实连接hook在核心DDL / WAL / migration前见证，银行安装拒绝未见证连接。已有库仍须备份并验证；调用方BEGIN拒绝保留回执，确认提交后消费，银行release使用 `preserveDatabase` 保留库文件。通用guard仅复用已审Windows / Node24边界，不承诺绝对抗恶意同进程 / 物理伪造或Linux保护。旧core3 P1替换场景确有核心pre-v4备份；旧95/60绿测不覆盖后来fresh P1，原红与环境失败按下文原文保留。源码9路径冻结，本轮只登记与文档、未重跑财务套件、未自审、无Git写。
+
 # 银行流水与持久对账契约 · LOCAL-BANK（LOCAL-04 交付）
 
 状态：**实施 + 首轮独立审查 5 项阻塞修复 + 结构契约复审收敛修复 + A 窗独审 2 项 P2 回修（索引键语义 / 回滚失败状态）+ 第二轮独审 P2（事务冲突 / 未开始 vs 已确认回滚）已完成，且银行 A 最终 `950b7d6` 的独立复审已被 root 记录接受；随后 B 窗已同步实际 main 并补齐备份侧银行组件索引键语义，自测完成，待 root 冻结 / 独立复审 / Git 收尾**；本轮不声称最终已通过，也不写「已提交 / PR 已建 / 已合 / 最终通过」。B 窗工作区 HEAD 以实际 Git 为准（含 PR #60 merge `dfefae0` 的核心备份契约）；A 窗回修基线 `06d1bd185f68ea4f3c49f20e6cf98f6cdce613a2`、第二轮基线 `c8f490c6b4d4e0f4bdaa9acf378defa900334e80`；上一轮返工基线 `46e0fc0ecb74703cc8482aab9a1cf3f85839f232`；上一轮阻塞审查基线 `e2545216226b87262508d8a94f38426415670d8c`。
