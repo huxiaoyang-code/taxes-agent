@@ -68,6 +68,10 @@ const steps = [
   { name: "finance-model-transport-mcp", file: join(MCP, "finance-model-transport-test.mjs"), cwd: MCP },
   // LOCAL-05 接线（真实 Office HTTP 套件；仅末尾追加，不改上方原有 55 个套件的内容与顺序）
   { name: "report-office-http", file: join(WORKBENCH, "test", "report-office-http.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-08 入口接线（Agent 组装层 / 真实 HTTP / MCP 端到端；仅末尾追加，不改上方原有 56 个套件的内容与顺序）
+  { name: "finance-model-entry", file: join(WORKBENCH, "test", "finance-model-entry.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-model-http", file: join(WORKBENCH, "test", "finance-model-http.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-model-entry-mcp", file: join(MCP, "finance-model-entry-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {

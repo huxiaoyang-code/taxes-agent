@@ -739,10 +739,10 @@ await test('review1: 访问器 / 恶意对象不会在摘要阶段触发 getter�
   assert.equal(calls, 1, '回调确实执行了一次');
   assert.equal(envelope.ok, true, '写已发生，形状非法不能反转为业务失败');
   assert.equal(envelope.applied, true, 'applied 来自自有 data 属性 id + status（正面证据）');
-  assert.equal(envelope.needsLocalReview, false);
+  assert.equal(envelope.needsLocalReview, true);
   assert.equal(envelope.localRef, null);
   assert.equal(envelope.refUnavailable, 'value_invalid');
-  assert.deepEqual(envelope.projection, {});
+  assert.deepEqual(envelope.projection, { voucherId: 9 });
   assert.ok(!JSON.stringify(envelope).includes('synthetic_sensitive_summary'), 'getter 抛出的原文不得进信封');
   assert.ok(!JSON.stringify(envelope).includes('stack'));
   assertNoLeak(envelope, 'accessor write envelope');
@@ -1352,6 +1352,59 @@ await test('LOCAL-02 回修2：期末检查 DTO 全局一致性（缺 / 重复 /
   assert.equal(ok.projection.blockingCount, 3);
   assert.deepEqual(ok.projection.blockedStepIds, ['depreciation', 'period_sequence']);
   assert.equal(ok.projectionDropped, 0);
+});
+
+await test('malformed committed voucher preserves only own technical ID without running getter', () => {
+  const policy = new M.FinanceOutputPolicy();
+  let calls = 0;
+  const value = { id: 197, status: 'posted', get entries() { calls++; throw new Error(X.summary); } };
+  const result = policy.wrapWrite('voucher_create', { accountSetId: 1, value });
+  assert.equal(calls, 0);
+  assert.equal(result.applied, true);
+  assert.equal(result.needsLocalReview, true);
+  assert.equal(result.localRef, null);
+  assert.equal(result.refUnavailable, 'value_invalid');
+  assert.deepEqual(result.projection, { voucherId: 197 });
+  policy.dispose();
+});
+
+await test('all write technical IDs survive malformed DTOs; accessor and inherited IDs never qualify', () => {
+  const policy = new FinanceOutputPolicy();
+  let getterCalls = 0;
+  const cases = [
+    ['asset_create', { id: 71 }, { assetId: 71 }],
+    ['asset_update', { id: 72 }, { assetId: 72 }],
+    ['depreciation_run', { voucher: { id: 73 } }, { voucherId: 73 }],
+    ['carry_forward_profit', { voucher: { id: 74 }, yearEndVoucher: { id: 75 } }, { voucherId: 74, yearEndVoucherId: 75 }],
+    ['voucher_delete', { deleted: 76 }, { deletedVoucherId: 76 }],
+    ['account_set_create', { id: 77 }, { accountSetId: 77 }],
+    ['legacy_book_import', { created: { id: 78 } }, { createdAccountSetId: 78 }],
+    ['book_import_incremental', { status: 'applied', created: { accountSetId: 79 } }, { accountSetId: 79 }],
+  ];
+  for (const [operation, value, projection] of cases) {
+    Object.defineProperty(value, 'sensitive', { enumerable: true, get() { getterCalls++; throw new Error(X.note); } });
+    const result = policy.wrapWrite(operation, { accountSetId: 1, value });
+    assert.equal(result.applied, true, operation);
+    assert.equal(result.needsLocalReview, true, operation);
+    assert.equal(result.localRef, null, operation);
+    assert.equal(result.refUnavailable, 'value_invalid', operation);
+    assert.deepEqual(result.projection, projection, operation);
+    assertNoLeak(result, operation);
+  }
+  const getterId = { get id() { getterCalls++; return 999; } };
+  for (const [operation, value] of [
+    ['asset_create', getterId],
+    ['asset_update', Object.create({ id: 999 })],
+    ['depreciation_run', { voucher: getterId }],
+    ['carry_forward_profit', { voucher: Object.create({ id: 999 }), yearEndVoucher: getterId }],
+  ]) {
+    const result = policy.wrapWrite(operation, { accountSetId: 1, value });
+    assert.equal(result.applied, 'unknown', operation);
+    assert.equal(result.needsLocalReview, true, operation);
+    assert.deepEqual(result.projection, {}, operation);
+  }
+  assert.equal(getterCalls, 0);
+  policy.dispose();
 });
 
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
