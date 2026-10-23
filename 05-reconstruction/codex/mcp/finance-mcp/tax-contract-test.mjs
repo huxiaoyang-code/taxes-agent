@@ -1330,10 +1330,55 @@ async function partB() {
       assert.equal(b.data.error, "invalid_arguments");
     });
 
-    await test("既有工具未受影响：account_context 正常，原站未实现声明仍报 not_implemented", async () => {
+    await test("既有工具未受影响：account_context 模型信封携带真实账套事实，原站未实现声明仍报 not_implemented", async () => {
+      // 普通工具现走固定模型通道：先在临时库建 1 个合成账套，再核对 account_context 的 projection
+      // 是否如实反映该账套的业务事实（ID / 起始期间 / 纳税人类型 / 会计准则 / 名称存在标记），
+      // 而不是旧的 raw account_sets 原文数组。
+      const created = await client.call("account_set_create", {
+        name: "合成税务契约账套名称", taxpayer_type: "小规模纳税人",
+        accounting_standard: "小企业会计准则", start_period: "2026-01",
+      });
+      assert.equal(created.isError, false, created.text);
+      assert.equal(created.data.applied, true, "建账应真实落库");
+      const setId = created.data.accountSetId;
+      assert.ok(Number.isSafeInteger(setId) && setId > 0, "建账应返回真实账套 ID");
+
       const ctx = await client.call("account_context", {});
       assert.equal(ctx.isError, false, ctx.text);
-      assert.ok(Array.isArray(ctx.data.account_sets));
+      // 信封固定字段：模型通道 + 明确 global scope + 无原文 + 上下文不绑定单账套引用。
+      assert.equal(ctx.data.ok, true);
+      assert.equal(ctx.data.channel, "model");
+      assert.equal(ctx.data.tool, "account_context");
+      assert.equal(ctx.data.operation, "account_context");
+      assert.equal(ctx.data.operationCategory, "context");
+      assert.equal(ctx.data.scope, "global");
+      assert.equal(ctx.data.accountSetId, null);
+      assert.equal(ctx.data.rawValuesIncluded, false);
+      assert.equal(ctx.data.localRef, null);
+      assert.equal(ctx.data.refPersistence, "none");
+      assert.equal(ctx.data.refUnavailable, "global_scope");
+      assert.deepEqual(ctx.structured, ctx.data, "structuredContent 必须与 text 信封一致");
+      // 真实账套业务事实：刚建的账套出现在可选列表，且只给受控枚举 / 期间 / 名称存在标记。
+      const p = ctx.data.projection;
+      assert.equal(p.scope, "global");
+      assert.equal(p.accountSetCount, 1, "临时库只有刚建的 1 个账套");
+      assert.equal(p.returnedCount, 1);
+      assert.deepEqual(p.accountSetIds, [setId], "账套 ID 必须是真实结果里的那一个");
+      assert.deepEqual(p.startPeriods, ["2026-01"]);
+      assert.deepEqual(p.taxpayerTypes, ["small_scale"]);
+      assert.deepEqual(p.accountingStandards, ["small_business"]);
+      assert.deepEqual(p.displayNameFlags, [true]);
+      assert.equal(p.pageOffset, 0);
+      assert.equal(p.pageLimit, 10);
+      assert.equal(p.truncated, false);
+      assert.equal(p.hasNextPage, false);
+      assert.equal(p.selectionRequirement, "explicit_account_set_id");
+      assert.equal(p.persisted, false);
+      assert.equal(ctx.data.projectionDropped, 0);
+      // 旧 raw 形状必须消失：不再回 account_sets 原文数组 / 企业名 / 自由文本 note。
+      assert.equal(Object.prototype.hasOwnProperty.call(ctx.data, "account_sets"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(ctx.data, "note"), false);
+      assert.equal(ctx.text.includes("合成税务契约账套名称"), false, "模型通道不得回企业名原文");
       const decl = await client.call("declaration_query", {});
       assert.equal(decl.isError, true);
       assert.equal(decl.data.error, "not_implemented");

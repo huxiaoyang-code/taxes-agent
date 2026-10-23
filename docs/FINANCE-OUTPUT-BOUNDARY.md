@@ -1,4 +1,16 @@
+> **2026-10-23 当前整合候选（优先于下方各阶段快照）**：[Issue #44 精确窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6357299894) 登记整体31文件；本轮只允许其中11文件的入口登记与交接。已冻结24文件源候选 `b3b68db8b8db0af398376ee752646783e0bb4b7b` 无冲突纳入 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 的 main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，整合起点 `c764278a9e41a3ce502e662ffa56b0dc18ab307a`。PR65 已审 head 为 `37bcb286041f76d85c01ff5f6078727497570425`。
+>
+> 统一测试入口原59套完整保留并保持顺序，末尾仅追加 `local-batch-persistence.test.mjs` 与 `local-batch-cli.test.mjs`，当前静态登记 **61套**；银行4套尚未 main，本轮不登记。此前24文件候选的8套 **131/131 exit 0** 是既有受影响验证证据，不代表当前31文件候选已完成全61套验证。**最终61套、fresh独立审查、PR与合并均待 root**；本轮仅入口语法 / 静态计数 / diff检查，无业务或正式测试修改、无财务测试重跑。Issue #44 保持 OPEN。旧55套子进程成功而统一入口整体exit1、后续56/59成功均保留原时点，不覆盖历史。
+
 # 财务输出边界契约 · FINANCE-OUTPUT-BOUNDARY
+
+> **2026-10-23 修复与正式补证候选（最新，未独审 / 未提交 / 未合并）**：范围由 21 增为精确 24 路径（[Issue #44 登记](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6357131464)），新增 transport 源码 / 测试与 adapter 测试，仅联动非法写结果复核语义。保留已提交写的 `applied:true` 与可证技术 ID，非法 DTO 的 getter 不执行、无原文引用并标记 `needsLocalReview:true`；transport 只在无引用且 `refUnavailable` 为 `value_invalid` / `summary_unavailable` 时允许该组合，其余写三态约束保持。正式新增真实单次 19 元写后污染 DTO、17 / 23 元容量对照；真实 MCP → 自有代理 → 生产 HTTP → SQLite 提交后的 drop / timeout / partial body / bad JSON / 非 2xx / 非法信封，每种仅一次转发与一条凭证（借贷分别同额 61–66）；HTTP 两账套并发各 31 / 47 元、同一 stdio MCP 客户端两账套并发各 37 / 53 元，均核对金额 / 引用归属 / 最终各一条凭证。恢复 raw 预检精确来源 `MCP-SRC-0001` 与重开失败精确月份 `2026-02`。资源 / null / method 对象 / 未知 method 仅固定错误；协议缺陷属于既有代码，本包未将其写成新回归。历史接线窗口是 55 套子进程 exit 0、统一入口整体 exit 1；后来的 56/56、59/59 保持各自时点，不代表本次候选已过最终集成。
+
+> **2026-10-22 统一测试入口登记窗口注记（最新；不改写下方历史阶段）**：远端正式授权把 `06-workbench/scripts/test-all.mjs` 的**唯一写归属**改判给 LOCAL-08（[Issue #53 comment 6344168123](https://github.com/huxiaoyang-code/youshu-fork/issues/53#issuecomment-6344168123)、[Issue #44 comment 6344169272](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6344169272)、[PR #63 comment 6344170064](https://github.com/huxiaoyang-code/youshu-fork/pull/63#issuecomment-6344170064)）。精确范围扩为 **19 路径** = 补漏窗口 18 路径 + `06-workbench/scripts/test-all.mjs`。该文件**原 56 套逐字保留**，只在数组末尾追加 `finance-model-entry` / `finance-model-http` / `finance-model-entry-mcp` 三套，实际总数 **59**；银行 4 套**不在本窗口**登记（后续由另一本机 pi 基于 08 实际 main 并集进 PR #63）。本窗口实跑：`node scripts/test-all.mjs`（`06-workbench`，设 `REPORT_OFFICE_PYTHON`）**59/59 套 exit 0**，新三套 **15/15 / 14/14 / 8/8**。历史链条按原文保留：17 路径接线窗口 **55/56**（旧 raw 形状断言失败）→ 18 路径补漏窗口（单一兼容补漏）**56/56** → 本窗口 19 路径 **59/59**。未改任何源码 / 测试文件、未改共享 STATE / tasks README / master；未做 Git 写，Issue #44 保持 OPEN。细节见新增 **§16**。
+
+> **2026-10-22 兼容测试补漏窗口注记（历史阶段；不改写下方历史阶段）**：按 Issue #44 独占增补授权（[comment 6343989046](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6343989046)），精确范围扩为 **18 路径** = 接线窗口 17 路径 + `05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs`。该文件**只改**普通 `account_context` 往返的旧 raw 形状断言：先经同一模型通道在临时库建 1 个合成账套，再断言真实信封与 `projection` 的账套业务事实（真实 ID / 起始期间 / 受控枚举 / 名称存在标记、不回企业名），全部税务 fake adapter / 缺省未配置 / 未实现工具断言保留。本窗口实跑：`tax-contract-test.mjs` **59/59 exit 0**；`node scripts/test-all.mjs` **56/56 套 exit 0**（接线窗口的 **55/56** 记录保留在 §15.6 / §15.7，不覆盖）。未改税务源码 / server / finance 模型代码 / 另外 5 套 MCP 测试 / `scripts/test-all.mjs`；未做 Git 写，Issue #44 保持 OPEN。契约差异见新增 **§15.9**。
+
+> **2026-10-22 接线窗口注记（历史阶段；不改写下方历史阶段）**：本窗口把已合并的 policy / adapter / transport **真正接到**普通财务工具的 Agent / HTTP / MCP 入口，并新增本机引用读取 / 计算接口；细节见新增 **§15**。精确改动 17 个路径 = 源码 6（1 新 + 5 改）、测试 8（3 新 + 5 旧 MCP 迁移）、文档 3；`scripts/test-all.mjs` **未改**（归 Issue #53 先登记银行套件）。三套新套件实测：入口 **15/15**、真实 HTTP **14/14**、MCP 端到端 **8/8**，均 exit 0；受影响旧 MCP 五套全部 exit 0（contract **46/46**、workflow **23/23**、import-incremental **7/7**、accounting-period **5/5**、smoke **28/28**）。完整 `node scripts/test-all.mjs` 在本机候选上为 **55 套子进程 exit 0、1 套失败；统一入口整体 exit 1（55/56）**：唯一失败是 `tax-contract-test.mjs` 仍断言 `account_context` 的 raw `account_sets` 旧形状（当时不在 17 路径内，已作为范围外必需迁移上报 root，**未擅改**；同一业务能力由三套新套件的真实 HTTP / MCP 用例覆盖；**已由上面的补漏窗口修复**）。本窗口未执行 Git 写操作；Issue #44 仍 OPEN。
 
 > **当前状态注记（2026-10-22 最终文档轮）**：输出协议候选源码 `3a8ae7ab0a3ca61ed15ddc6aa112eba6c4837795` 已由独立 `review_output08_final` **接受**（**61** 回修探针 + **47** 旧控制 + **3** 真实临时领域场景，两项 P2 均已关闭）；其中 **37 policy / 21 adapter / 18 transport 为员工自测**，不是 root 计数。该候选已随 LOCAL-02 的 Draft [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60) 提交，**未合并**，尚无 merge SHA；adapter / transport 模块本身已经 [PR #57](https://github.com/huxiaoyang-code/youshu-fork/pull/57) 合入 main（merge `db6020a`）。**共享 HTTP / Agent / MCP / CLI 入口仍未接线**，Issue #44 保持 OPEN。下方四段状态与 §14 各轮的「未提交 / 待审」是各自**阶段快照**，与本节事实不冲突，不改写历史。
 
@@ -206,6 +218,8 @@ policy.dispose();
 
 ## 9. 接线建议清单（后续集成任务，本包不做）
 
+> 本节的 1–8 项已由 **§15** 的接线窗口实现；下方保留为当时的建议清单，实际实现契约以 §15 为准。
+
 **共享入口归属（当前事实）**：`agent-tools.mjs` / `server.mjs` / MCP 注册与传输 / `scripts/test-all.mjs` / `package.json` / `public/*` / 共享索引文档归 **LOCAL-02（Issue #47）**，其共享所有权尚未释放；本轮**未改**其中任何文件。LOCAL-01（#43）已合并。
 
 1. **`06-workbench/server/agent-tools.mjs`**：`finance_query` 改为 `adapter.callModelTool(...)` 或至少 `policy.wrapQuery(...)`，未实现 node 保持自己的 `not_implemented`；operation 必须是**代码里的字符串常量**（适配层已保证）。
@@ -285,6 +299,8 @@ const failure = transportFailure("backend_timeout", { forWrite: true }); // retr
 
 ## 12. 未实现 / 未接线（明示）
 
+> **接线窗口更新（2026-10-22）**：下列“未接线 / 当前真实模型入口仍原样返回原文”已被 **§15** 取代——普通工具的 Agent / HTTP / MCP 入口与本机引用接口已实际接线并通过真实链路测试；本节保留为接线前的阶段快照，不改写历史。仍未做的部分（`scripts/test-all.mjs` 登记、范围外旧测试迁移、引用持久化、审计 / 批量）见 §15.7。
+
 - 纯策略模块：已合并（PR #50 / merge `b42bae9` / 已审 head `f211ace`）；review5 后为 **34/34、exit 0**，LOCAL-02 兼容整合后补新工具 spec 为 **35/35、exit 0**（既有 34 项含义保留）。
 - 适配层：**已实现 + 临时库真实调用验收 20/20、exit 0**（含 review5 与 LOCAL-02 `period_end_check` / `asset_update` 回归）；`06-workbench/server/agent-tools.mjs` 等共享入口**未接线**。
 - transport：**已实现 + 独立测试 17/17、exit 0**（含 review5 与 LOCAL-02 新工具 / 新错误码回归）；MCP `backend.mjs` / `server.mjs` **未接线**，**不是** stdio 挂载验收。
@@ -303,6 +319,7 @@ LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配�
 - 新期间 / 资产校验错误与 `period_end_check_failed` 在 policy 与 transport 两层都有固定 code → category 映射（如 `acquired_period_invalid → asset`、`asset_card_affects_closed_period → asset`、`period_end_check_failed → period_end`、`profit_not_carried_forward → period_end`、`depreciation_run_stale → depreciation`），不再落到 `unknown` 掩盖可指导动作的错误；错误仍只回声已登记 code，不带 `message` / `details` / `stack`。
 - 原有边界未放宽：错误清洗、参数快照、引用绑定 / 过期 / 跨账套失效、4 MiB / 64 MiB / 节点预算、写后降级与并发隔离均保持原语义。
 - **仍未做**：把适配器接到 `agent-tools.mjs` / `server.mjs` / MCP `backend.mjs` / `server.mjs` / CLI；`scripts/test-all.mjs` 登记仍归 LOCAL-02 共享入口协调；真实 HTTP / MCP 端到端与真实账套未验收。
+  - **接线窗口更新**：前两项已在 **§15** 完成（真实 HTTP / MCP 端到端已验收）；`scripts/test-all.mjs` 本包仍**未登记**（§15.7），真实账套仍禁止。
 
 ## 14. 验证记录（本阶段实际发生）
 
@@ -382,7 +399,6 @@ LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配�
 - 未做 / 待 root：真实共享入口接线、真实 HTTP / MCP 端到端、`scripts/test-all.mjs` 登记确认；本轮只证明现有可测试边界与真实 DTO 兼容。
 
 ### 14.7 输出协议独立审查 2 项 P2 回修（本轮，待 root 复审）
-
 独立审查在该 head（`04c38d4`）上复现两个 P2，均已修复并补先红后绿的定向回归；**此前 55/55 绿测试不能代表这两项已通过**。
 
 | 项 | 复核发现 | 修复 / 回归 |
@@ -393,3 +409,153 @@ LOCAL-02 的 `period_end_check` / `asset_update` 已在**现有可测试适配�
 本轮回修后三层实际输出：策略 **37/37**（35 → 37）、适配层 **21/21**（20 → 21）、transport **18/18**（17 → 18），均 exit 0；原 35 / 20 / 17 项含义全部保留，snapshot 引用 / 过期 / 跨账套 / 预算 / 并发隔离未回退。真实正例使用真实 API 建库：`2026-02` 取得、`2026-01` 起提的 1 期寿命卡片 + `2026-03` 真实购入凭证，期末检查返回 `blockingCount:3` / `blockingCodes:['depreciation_life_expired_underprovided','previous_period_depreciation_pending','previous_period_open']` / `projectionDropped:0`。
 
 未改变：共享 HTTP / Agent / MCP / CLI 接线、真实 HTTP 端到端、`scripts/test-all.mjs` 归属、真实账套验收。状态：**回修候选，待 root 独立增量复审**。
+
+## 15. 接线窗口契约（LOCAL-08 Entry，本窗口候选）
+
+本节是本窗口**实际接线**后的生效契约；§9 的 1–8 项建议已被本节实现，历史段落不改写。版本标记：`finance-model-entry/v1` + `finance-model-adapter/v1` + transport v1。未提交 / 未推送 / 未合并，Issue #44 保持 OPEN。
+
+### 15.1 入口与路由（精确行为）
+
+| 入口 | 行为 |
+|---|---|
+| `06-workbench/server/finance-model-entry.mjs`（新） | 进程级组装层：注入 raw `callAgentTool`（默认真实）；复用**一个** `FinanceOutputPolicy` 实例；暴露 `callModelTool` / `readLocalReference` / `computeLocalReference` / `revokeLocalReference` / `stats`。模块底部创建默认单例，HTTP 与直接模型调用共用同一引用池。 |
+| `06-workbench/server/agent-tools.mjs` | 只**新增** `callAgentModelTool`（动态 import 组装层，避免静态循环）；raw `callAgentTool` / `HANDLERS` / `NOT_IMPLEMENTED` 语义与错误不变，不在 raw 内递归适配，也未在 raw 内脱敏。 |
+| `06-workbench/server/server.mjs` | 新增 `POST /agent/model-tools/<name>`：仅 POST + `application/json` + JSON 对象 body；name 只允许 `[A-Za-z0-9_]+`（否则 404 `model_tool_unknown`）；成功 / 业务失败一律 HTTP 200 + 信封（`ok:false` 由 MCP 转 isError）；任何意外异常只回 500 `model_entry_failed`。新增 `POST /api/finance-output/read` 与 `/compute`：同形校验，只回固定 `output_policy_*` 码（未知 500 `finance_output_failed`），不回 message / details / 引用值。既有 `POST /agent/tools/<name>` 与 `/api/*` 完全不变；外层 catch 只对这两类新路径做固定码收敛。 |
+| MCP `backend.mjs` | 普通财务工具**固定** `POST /agent/model-tools/<name>`；税务 / 目录工具仍 `POST /agent/tools/<name>`（专用超时不变）。模型通道任何失败（参数、网络、超时、非 2xx、响应体读取失败、非 JSON、信封不合规）都**绝不回退** raw：只抛 `ModelTransportError`（固定 `failure`，不含片段 / 地址 / 原文）。`backendInfo()` 不再回显 `API_BASE`。 |
+| MCP `server.mjs` | 删除本地 `finance_query_catalog` / `financeQuery` 分支与 `LOCAL_QUERIES` / `queryStatus` 依赖，普通工具统一经后端模型通道；schema 前置拒绝仍保留（只回字段名 / 枚举 / 类型，不回参数值）；`skills_list` / `skills_read` 仍是本机资源读取，失败只回 `skill_not_found`；模型信封结果**再校验一次**后才交给模型，校验失败按写场景保守给 `writeOutcome:unknown`；`envelope.ok === false` → `isError`；税务分支、协议握手、`tools/list`、`isError` 分类未改。 |
+| MCP `tools.mjs` | 新增 `MODEL_PLAIN_TOOL_NAMES`（27）/ `MODEL_WRITE_TOOL_NAMES`（14）并与适配层交叉核对；普通工具描述追加「摘要信封 + 本机引用」语义与 `modelOutput:"summary_envelope"`；`account_context` / `finance_context_resolve` 如实登记 `limit`（1–32，默认 10）/ `offset`（≥0）分页字段；`update_plan` 描述不再声称回显 / 持久化；`finance_query_catalog` 描述改为静态目录。**不登记** `localRead` / `localCompute` / raw / 任意 URL 工具。 |
+
+### 15.2 本机引用与能力对象生命周期
+
+- 能力对象由 `policy.issueChannel("local_ui")` 在**组装层闭包内**签发，每进程一个；不导出、不序列化到 HTTP / 模型 / 日志 / MCP。
+- `/api/finance-output/read|compute` 请求必须显式带 `ref` / `accountSetId` / `operation`；`accountSetId` 只接受正安全整数或纯数字字符串（拒绝布尔 / 隐式转换）；请求体出现 `channel` 或 `local`（无论值）一律 `output_policy_channel_untrusted`；调用方提供的 channel 永远不被解析。
+- `compute` 仅既有 `sum` / `count` / `min` / `max` + 受限 `path`；不新增解释器、不读文件、不新增公网配置。
+- 引用只在本进程内存：换 `accountSetId` / 换或缺 `operation` / 篡改或未知 ref / 伪造 channel / 过期 / 已撤销 / 进程重启后旧 ref 全部拒绝且不回显原值。预算保持默认 15 分钟 TTL、256 refs、单值 200000 节点 / 4 MiB、累计 1000000 节点 / 64 MiB，**未调大**；`localRead` / `localCompute` 不登记为模型或 MCP 工具。
+
+### 15.3 注册表覆盖（按实际 registry 枚举核对）
+
+- 模型通道普通工具 **27** 个，与适配层 `PLAIN_MODEL_TOOLS` **逐名一致、无漂移**；写动作子集 **14** 个（运输失败只给 `writeOutcome:unknown`）。
+- `finance_query`：已实现 node **12**（`enterprise_account.account_set` / `enterprise_account.subject_system.all` / `voucher.generated.list` / `voucher.generated.summary` / `voucher.draft.summary` / `voucher.detail` / `report.balance_sheet` / `report.income_statement` / `report.cash_flow_statement` / `period_end.summary` / `report.trial_balance` / `ledger.general`），明确未实现 **11**；未知 / 未实现 node 固定拒绝且**执行计数为 0**；只把真实 `{nodeId,label,data}` 的 `data` 交给白名单 spec，不二次投影。
+- 税务沿用既有精确注册集合走 raw 通道（7 个税务业务工具 + 目录类），**不按 `tax_` 前缀放行未知名称**；未实现 / 未知税务名在 MCP schema 或 `unknown_tool` 处拒绝，不转发后端。
+- 上下文无 setId 时为 `global` scope（只给 ID / 计数 / 枚举，单列 `refUnavailable:"global_scope"`，不建引用）；`limit`/`offset` 有界分页仍能选到最后一页；指定账套时真实校验归属并按 `account_set` 绑定。
+
+### 15.4 错误面（模型通道固定输出）
+
+- HTTP：无效 JSON / 非对象 body → 400 `request_body_invalid`；错误 method → 405；非 JSON content-type → 415；未知工具名 → 404 `model_tool_unknown`；入口意外异常 → 500 `model_entry_failed`；本机引用错误 → 400 + `output_policy_*`（未知则 500 `finance_output_failed`）。
+- MCP：schema 前置拒绝 `invalid_arguments`（只含字段名 / 枚举 / 类型）；未知工具 `unknown_tool`；未实现 `not_implemented`；领域错误信封 `error.code` + 固定 `messageKey` / `retriable` / `outcome`；运输失败 `backend_unreachable` / `backend_timeout` / `backend_http_error` / 信封校验固定码；`details` 只用于既有工具名 / schema 字段名，绝不携带响应片段、地址、路径、SQL、栈或请求参数值。
+- 调试模式只回 `{configured, timeoutMs, hasToken}`，不回 `API_BASE` / 原始错误 / 路径。
+
+### 15.5 写三态与不重复
+
+- 执行前拒绝：`applied:false` + 固定 `appliedReason`（例如 `dry_run` / 前置校验失败），有证据未执行。
+- 写已发生：`applied:true` + 真实 ID（`account_set_create` / 首次导入的 setId 只取真实结果，不用入参覆盖）。
+- 已发请求但结果不能确认：`applied:"unknown"` + `needsLocalReview:true`，运输层 `retriable:false`，**不得自动重试**。
+- `await` 原始写**仅一次**；未使用 `policy.runWrite` 包 async。已提交后摘要过大 / 引用满 / 投影失败只安全降级（保留能证实的 `applied` 与技术 ID），不报“肯定失败”诱导重复操作。
+- 本包不实现任务级幂等 / 批量锁 / 跨重启恢复；相同账套重复写仍受既有领域约束。
+
+### 15.6 本窗口实跑证据（事实）
+
+| 范围 | 命令 / 工作目录 | 结果 |
+|---|---|---|
+| 新入口 | `node test/finance-model-entry.test.mjs` / `06-workbench` | **15/15**，exit 0 |
+| 新 HTTP | `node test/finance-model-http.test.mjs` / `06-workbench` | **14/14**，exit 0 |
+| 新 MCP 端到端 | `node 05-reconstruction/codex/mcp/finance-mcp/finance-model-entry-test.mjs` / 仓库根 | **8/8**，exit 0 |
+| 旧 MCP 迁移 | contract / workflow / import-incremental / accounting-period / smoke | **46/46**、**23/23**、**7/7**、**5/5**、**28/28**，均 exit 0 |
+| 已合并三套 | policy / adapter / transport | **37/37**、**21/21**、**18/18**，均 exit 0 |
+| 本机回归 | smoke / server-local-boundary / import-incremental-http / accounting-period-http / report-export-http / voucher-amount-guards / report-office-http | **28/28**、**30/30**、**22/22**、**18/18**、**31/31**、**103/103**、**6/6**，均 exit 0 |
+| 统一入口 | `node scripts/test-all.mjs` / `06-workbench`（设 `REPORT_OFFICE_PYTHON`） | 接线窗口当时为 **55 套子进程 exit 0、1 套失败；统一入口整体 exit 1（55/56）**；唯一失败 `tax-contract-test.mjs` 的旧形状断言（见 §15.7）。补漏窗口重跑为 **56/56**，见 §15.9 |
+
+隔离方式：三套新套件先建全新临时 `WORKBENCH_DATA_DIR`，再动态 import；HTTP / MCP 用 `PORT=0` / 空闲 loopback 端口自建后端；故障注入用独立测试后端与进程内代理，不加生产查询参数后门。合成敏感标记覆盖企业名 / 科目名与编码 / 摘要 / 往来 / 人员 / 资产名 / 备注 / 源路径 / 企业身份 / 来源系统 / 批次 ID，并逐值检查 HTTP body/headers、MCP text/structuredContent、stderr/stdout/debug 与捕获错误。
+
+### 15.7 明确未做 / 范围外
+
+- `scripts/test-all.mjs` 未改：本包三套新测试**尚未登记**（按协调先由 #53 登记银行套件，再由 44 追加本包三套）。
+- `05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs` 在接线窗口**不在 17 路径内**，当时失败点是把普通工具 `account_context` 当作仍返回 raw `account_sets`（新契约下是模型信封 `projection.accountSetIds`）；**已在补漏窗口按最小迁移完成**（普通工具往返只断言模型信封 + 真实账套业务事实，保留“既有工具仍可用、未实现仍 not_implemented”核对），见 §15.9。本节保留接线窗口的 **55/56** 事实，不改写成当时已通过。
+- 未触碰：`public/app.js` / `public/index.html`（本机 UI 仍走 `/api/*` 读原文）、`accounting.mjs` / `db.mjs` / `coa.mjs` / `import-storage.mjs`、税务模块与税局进程、审计存储、批量调度、`package.json` / 锁文件、全局 loopback/Host/Origin 策略。
+- 已知限制：不隔离拥有本机代码执行权限的程序；本机 `/api/*` 与 raw `/agent/tools/*` 仍可读原值（本包受控出口是模型工具注册与固定路由）；引用不落盘 / 不跨重启；MCP 普通工具响应由详细 DTO 迁移为信封（业务核对搬到本机 raw + 引用通道），**没有**本机 raw MCP 开关或自动回退；全国真实税局接入仍为 0。
+
+### 15.8 下游合同（03B2 / LOCAL-06 / LOCAL-07）
+
+- **03B2**：`accountingContext` 的 `{declaredStandard,profileId,coaVersion,reportMappingVersion,legacy}`、`reportStatus` 的 `{status,complete,partialValues,diagnostics}`、期末检查 warnings/rules 与 profile 结构化错误，将来必须按已知枚举 / 固定码登记进 policy / adapter / transport；模型不回传原登记字符串 / 科目原值 / 任意 reason 文本；未知形状 fail closed，不把 `incomplete` / `legacy_compatibility` 说成完整报表。
+- **LOCAL-06 审计**：模型错误投影不得吞掉本机审计所需的失败 / 未知结果；业务审计仍由领域层记录稳定 `operationId` / `attempt` / `actor` / 固定 `outcome` / `code`，本包不新增审计 DB、不重复记同一次动作、不记录原 payload / 引用原值 / 金额 / 路径 / 栈 / channel 能力；写已提交但输出失败不得记成业务回滚。
+- **LOCAL-07 批量**：继续复用真实领域动作，模型摘要不是成功提交的唯一证据；`unknown` 进入核对 / 恢复边界，不能自动重跑已发写；batch/job/status 未登记前拒绝；持久队列 / 并发锁 / 重启检查点属 07，本包内存引用不写入批次状态当持久凭证。每个新动作 / 新错误都需同步扩展显式 allowlist 与整合测试。
+
+### 15.9 兼容测试补漏（18 路径，本窗口事实）
+
+- 范围：接线窗口 17 路径 + `05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs`（= **18**）。唯一代码改动在该文件 partB 的普通 `account_context` 往返用例。
+- 旧断言（已删除）：`assert.ok(Array.isArray(ctx.data.account_sets))` —— 新契约下普通工具回模型信封，raw 账套数组不再穿越模型通道。
+- 新断言（契约含义）：
+  1. 临时库经同一模型通道 `account_set_create` 建 1 个合成账套，`applied:true` 且 `accountSetId` 为真实正整数；
+  2. `account_context {}` 的真实信封：`ok:true` / `channel:"model"` / `tool:"account_context"` / `operation:"account_context"` / `operationCategory:"context"` / `scope:"global"` / `accountSetId:null` / `rawValuesIncluded:false` / `localRef:null` / `refPersistence:"none"` / `refUnavailable:"global_scope"`，且 `structuredContent` 与 text 信封一致；
+  3. `projection` 的账套业务事实：`accountSetCount` / `returnedCount` / `accountSetIds`（与真实建账 ID 一致）/ `startPeriods` / `taxpayerTypes`（受控 token）/ `accountingStandards`（受控 token）/ `displayNameFlags`（名称存在标记，非名称）/ `pageOffset` / `pageLimit` / `truncated` / `hasNextPage` / `selectionRequirement:"explicit_account_set_id"` / `persisted:false` / `projectionDropped:0`；
+  4. 旧 raw 形状消失：信封无 `account_sets` / `note`，text 无企业名原文；未实现工具（`declaration_query`）仍 `not_implemented`。
+- 保持：税务 fake adapter / 网关状态机 / 缺省未配置 / 跨区域与跨账套隔离 / 凭据脱敏 / 未实现声明等 **58 条其余断言原样保留，未跳过、未放宽**。
+- 实跑（本窗口，exit 0）：`node tax-contract-test.mjs`（MCP 目录）**59/59 通过**；`node scripts/test-all.mjs`（`06-workbench`，设 `REPORT_OFFICE_PYTHON`，56 套）**56/56 通过**。前次 **55/56** 为接线窗口事实，§15.6 / §15.7 保留不改。
+- 未改：税务源码 / 网关、`06-workbench/server/*` 源码、另外 5 套 MCP 测试、`scripts/test-all.mjs`（归 #53）、`package.json` / lock、全局配置。
+
+## 16. 统一测试入口登记（LOCAL-08 `test-all` 唯一写归属，19 路径）
+
+### 16.1 授权与归属变更（事实）
+
+- 远端正式授权：[Issue #53 comment 6344168123](https://github.com/huxiaoyang-code/youshu-fork/issues/53#issuecomment-6344168123) / [Issue #44 comment 6344169272](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6344169272) / [PR #63 comment 6344170064](https://github.com/huxiaoyang-code/youshu-fork/pull/63#issuecomment-6344170064)：`06-workbench/scripts/test-all.mjs` 由 LOCAL-08 独占写入，用于登记本包三套测试。
+- 精确 **19 路径** = 补漏窗口 **18** 路径 + `06-workbench/scripts/test-all.mjs`。本窗口**只新增这一处入口登记**，其余 18 路径为继承内容，本窗口未再改任何源码 / 测试文件。
+- 银行 4 套**不在本窗口登记**：后续由另一本机 pi 在 08 实际 main 之上并集进 PR #63，本包不代为登记、不代为合并。
+
+### 16.2 入口登记的实际改动
+
+- 原 **56 个套件**的名字 / 文件路径 / 工作目录 / 顺序**逐字保留**，未重排、未删减、未改断言；
+- 仅在数组**末尾追加** 3 条（`cwd` 与前序同名套件保持一致）：
+
+| 套件名 | 文件 | 工作目录 |
+|---|---|---|
+| `finance-model-entry` | `06-workbench/test/finance-model-entry.test.mjs` | `06-workbench` |
+| `finance-model-http` | `06-workbench/test/finance-model-http.test.mjs` | `06-workbench` |
+| `finance-model-entry-mcp` | `05-reconstruction/codex/mcp/finance-mcp/finance-model-entry-test.mjs` | MCP 目录 |
+
+- 汇总语义未改：缺文件即失败、子进程非 0 即失败、任一失败则进程 `exitCode=1`；**未**加过滤 / 跳过 / 白名单 / 只跑子集开关，也未把本包三套设成可选。
+
+### 16.3 实跑证据（本窗口，真实退出）
+
+| 范围 | 命令 / 工作目录 | 结果 |
+|---|---|---|
+| 统一入口（59 套） | `node scripts/test-all.mjs` / `06-workbench`（设 `REPORT_OFFICE_PYTHON`） | **59/59 套通过，exit 0** |
+| 新登记：Agent 组装层 | 同上（`finance-model-entry`） | **15/15** |
+| 新登记：真实 HTTP | 同上（`finance-model-http`） | **14/14** |
+| 新登记：MCP 端到端 | 同上（`finance-model-entry-mcp`） | **8/8** |
+| 输出协议三套 | 同上（`finance-output-policy` / `finance-model-adapter` / `finance-model-transport-mcp`） | **37/37** / **21/21** / **18/18** |
+| Office 真实导出 | 同上（`report-office-export` / `report-office-http`） | **21/21**（含 **11 PDF** 的 pdfplumber 几何校验）/ **6/6** |
+| 税务契约 | 同上（`tax`） | **59/59** |
+
+- 隔离：`node_modules` 按现有 lock 离线安装（未改 lock、未装新依赖）；统一入口内各套件自建临时库与本会话独占临时根（`TEMP` / `TMP` 已指向该根）、`PORT=0` / 空闲 loopback 与 stdio MCP；不连 8787、旧后端、税局浏览器、真实账套 / 凭据；Office 使用获准 python runtime（`REPORT_OFFICE_PYTHON`）。
+- 记录位置：原始日志写入被 Git 忽略的 `.agent-runs/`，**不进版本化源码**；版本化文档只记录脱敏计数。
+
+### 16.4 历史保留（不改写、不预报）
+
+- **17 路径**（接线窗口）：统一入口 **55/56**，唯一失败为范围外 `tax-contract-test.mjs` 的 `account_context` 旧 raw 形状断言（§15.6 / §15.7 保留原文）。
+- **18 路径**（补漏窗口）：**单一兼容补漏**（只改该测试文件的信封 + 真实账套事实断言）后 **56/56**（§15.9 保留原文）。
+- **19 路径**（本窗口）：登记本包三套后 **59/59**。
+- 三份记录按各自时点读取；本窗口不把 55/56 改写成通过，也不把任一旧记录当作本次结果。
+
+### 16.5 明确未做 / 已知限制（不缩小原有限制）
+
+- 入口登记 ≠ 引用持久化 / 审计落库 / 批量恢复完成：模型输出最小化仍只覆盖投影与引用通道，**不得**当作审计留痕或跨重启持久恢复已完成的证据（§12、§15.2、§15.5、§15.7 原限制全部保持）。
+- **Issue #61「全入口一企业一账套」仍另包未完成**，本包不虚报完成。
+- **03B2 / LOCAL-06 / LOCAL-07 后续兼容仍必需**：新动作 / 新枚举 / 新错误须同步扩展 policy / adapter / transport 显式 allowlist 与真实入口整合测试（§15.8 不变）。
+- 银行 4 套（#53）未在本窗口登记；跨窗口并集、最终独立审查与合并由管理者在 PR #63 处理。本文件不构成「已合并」或「已独审」证据；管理者与最终独立审查者不是同一人。
+- 未触碰：`public/*`、`accounting.mjs` / `db.mjs` / `coa.mjs` / `import-storage.mjs`、税务模块与税局进程、审计 / 备份 / 批量模块、`package.json` / lock、系统或全局配置、共享 `STATE` / `tasks README` / master 文档。
+
+
+## 2026-10-23 正式补证修复候选（精确 24 路径窗口）
+
+本轮基于既有 19 路径 WIP 保留实施，先增 policy 源码 / 测试至 21，再经 Issue #44 [comment 6357131464](https://github.com/huxiaoyang-code/youshu-fork/issues/44#issuecomment-6357131464) 明确增加 `finance-model-transport.mjs` / `finance-model-transport-test.mjs` / `finance-model-adapter.test.mjs`，合计 24。实际本轮只必要修改其中 14 路径；其余原 WIP 冻结。统一入口 `test-all.mjs` 原 56 + 3 未再修改。本轮为用户授权额度不足后的单一兜底实施会话；管理者与最终 fresh 独审另行进行，未把实施自测当独审结论。
+
+- 真实 `voucher_create` 单次 19 元提交后装配 enumerable getter 污染 DTO：getter 执行 0 次、数据库凭证数恰增 1、重读借方 19，`applied:true`、真实 `voucherId`、`needsLocalReview:true`、无引用、固定 `value_invalid`。保留原假 ID 边界例并增强精确 ID 断言。容量对照只设测试实例 `maxRefs:1`，真实 17 / 23 元各写一次、数据库恰增 2；第二次 `applied:true` 且真实 ID 保留、`refUnavailable:capacity`，无需把容量不足当结果非法。默认预算未改。
+- 非法 DTO 的技术 ID 白名单复用自有 data 属性读取，涵盖凭证创建 / 过账 / 反过账 / 删除、资产创建 / 更新、折旧的嵌套凭证、结转的凭证与年末凭证、建账 / 导入创建的账套 ID；不遍历被拒 DTO，不执行 getter。纯 policy 正控逐类核对 ID，反控 getter / 继承 ID 不得成为可证 ID。真实写证明仍为上述 19 元场景；其他新增 ID 类型本轮只做纯 policy 控制。
+- transport 窄联动：`applied:true` + `needsLocalReview:true` 只允许在 `localRef:null` / `refPersistence:none` 且 `refUnavailable:value_invalid|summary_unavailable`。正控两种降级原因；负控容量 / 单值预算 / 节点预算 / 未绑定 / 有引用及 unknown 未复核均拒绝；不允许附 `appliedReason`。既有非法 DTO 的空投影 / 无需复核预期按此增强，其他写三态与税务专用语义保持。
+- 正式 MCP 代理套先等待生产 HTTP 的 `applied:true`，才 drop / 延迟到客户端超时 / partial body 断流 / bad JSON / 非 2xx / 非法信封。各模式一条合成凭证，借贷各同额 61 / 62 / 63 / 64 / 65 / 66；分别核对一次转发、同标记仅一条数据库凭证、真实 ID 与金额。请求前 schema 拒绝零转发；故障返回 `writeOutcome:unknown`、`retriable:false`，不重试、不 raw fallback、不泄露合成标记。原独立假后端控制仍保留并准确称“收完请求断连”。
+- 真实 HTTP 两个新账套并发各写一张 31 / 47 元凭证；同一 stdio 客户端两个新账套并发各写一张 37 / 53 元凭证。并发读账簿、核对余额 / 条数、原值引用 ID / 金额 / 操作 / 账套归属、跨账套引用拒绝，最终每账套仅一张凭证。
+- 资源 list/read 失败、JSON null、method 对象与未知 method 固定错误且进程继续 ping；不反射路径 / 栈 / 原始 method。该协议问题是既有代码缺陷。raw 预检恢复精确 `['MCP-SRC-0001']`；raw 重开失败恢复精确 `2026-02`，模型固定错误断言同时保留。
+
+本轮实际自测（均等待真实退出，cwd 仓库根，命令为 `node <相应脚本路径>`）：policy **39/39**、entry **15/15**、adapter **21/21**、transport **18/18**、HTTP **15/15**、MCP 新入口 **11/11**、MCP accounting-period **5/5**、MCP import-incremental **7/7**，均 **exit 0**。最初沙箱内 HTTP fetch 失败，正常申请权限后使用自有 loopback 复验成功；实现中的临时预期不一致 / 窄契约冲突已修正并重跑，不隐去早期失败。本轮未跑统一 59 套，最终精确候选整合验证和 fresh 独审仍由管理者执行。
+
+所有数据均合成；独占 workspace TEMP / TMP / fallback data，创建前核对已存在祖先无 junction；只回收持有句柄的自有子进程，未扫删系统 TEMP、未按裸 PID 杀进程。未访问真实税局 / 账套 / 凭据；无生产测试 hook、无默认预算扩大。尚未覆盖穷尽并发调度、所有容量组合与真实网络设施；本机引用仍为进程内，不代表跨重启持久化。Issue #61 全入口一企业一账套仍属后包。历史 55 套子进程 exit 0、统一入口整体 exit 1 与后续 56 / 59 通过分别保留时点。本候选未提交 / 未发布 / 未合并。

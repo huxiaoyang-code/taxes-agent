@@ -148,6 +148,18 @@ await test('有意义的成功信封能通过（不是“总是拒绝”）：�
   assert.equal(degraded.ok, true);
   assert.equal(degraded.applied, true);
   assert.equal(degraded.localRef, null);
+  assert.equal(degraded.needsLocalReview, true);
+  assert.deepEqual(degraded.projection, { voucherId: 7 });
+  // Only failed projection with no reference permits applied=true + local review.
+  for (const reason of ['value_invalid', 'summary_unavailable']) {
+    assert.equal(validateModelEnvelope({ ...degraded, refUnavailable: reason }, REGISTRY).ok, true);
+  }
+  for (const reason of ['capacity', 'value_limit', 'node_budget', 'unbound_scope']) {
+    assert.equal(validateModelEnvelope({ ...degraded, refUnavailable: reason }, REGISTRY).ok, false);
+  }
+  assert.equal(validateModelEnvelope({ ...write, needsLocalReview: true }, REGISTRY).ok, false);
+  assert.equal(validateModelEnvelope({ ...degraded, needsLocalReview: false, applied: 'unknown' }, REGISTRY).ok, false);
+
   assert.equal(catalog.ok, true);
   assert.equal(context.ok, true);
   assert.equal(plan.ok, true);
