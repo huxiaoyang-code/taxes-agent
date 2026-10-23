@@ -1,4 +1,5 @@
 // Pure material normalization. No filesystem, database, golden expectations or execution.
+import { readInvoiceXlsx } from './offline-invoice-xlsx.mjs';
 import { createHash } from 'node:crypto';
 import { canonicalEnterpriseKey } from './enterprise-identity.mjs';
 import { offlineMoneyToCents } from './offline-contracts.mjs';
@@ -9,7 +10,7 @@ export const hash = value => createHash('sha256').update(value).digest('hex');
 export const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
   : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}` : JSON.stringify(value);
 export const requireValue = (ok, code = 'material_invalid') => { if (!ok) throw Object.assign(new Error(code), { code }); };
-const ERROR_CODES = new Set(['material_invalid', 'fields_invalid', 'identifier_invalid', 'mapping_invalid', 'enterprise_invalid', 'currency_invalid', 'period_invalid', 'date_invalid', 'date_outside_scope', 'amount_invalid', 'offline_amount_invalid', 'csv_invalid_or_empty', 'mapped_column_missing', 'invoice_id_invalid', 'enterprise_mismatch', 'invoice_status_unsupported', 'invoice_total_mismatch', 'correction_reference_required', 'correction_reference_invalid', 'red_sign_invalid', 'blue_sign_invalid', 'bank_owner_or_currency_mismatch', 'bank_mapping_unsupported', 'bank_mapping_invalid', 'bank_row_invalid', 'business_version_invalid', 'scope_mismatch', 'business_facts_empty_or_invalid', 'business_fact_invalid', 'benefit_period_invalid', 'source_digest_invalid', 'material_kind_unsupported', 'sources_invalid', 'source_id_conflict', 'business_invoice_reference_missing']);
+const ERROR_CODES = new Set(['xlsx_string_escape_unsupported', 'xlsx_limit', 'xlsx_zip_invalid', 'xlsx_zip_or_xml_invalid', 'xlsx_xml_invalid', 'xlsx_structure_unsupported', 'xlsx_part_missing', 'xlsx_external_link_unsupported', 'xlsx_cell_invalid', 'xlsx_cell_type_unsupported', 'xlsx_numeric_format_unsupported', 'xlsx_text_required', 'xlsx_sheet_missing', 'xlsx_header_missing', 'xlsx_header_ambiguous', 'xlsx_rows_missing', 'xlsx_formula_unsupported', 'material_invalid', 'fields_invalid', 'identifier_invalid', 'mapping_invalid', 'enterprise_invalid', 'currency_invalid', 'period_invalid', 'date_invalid', 'date_outside_scope', 'amount_invalid', 'offline_amount_invalid', 'csv_invalid_or_empty', 'mapped_column_missing', 'invoice_id_invalid', 'enterprise_mismatch', 'invoice_status_unsupported', 'invoice_total_mismatch', 'correction_reference_required', 'correction_reference_invalid', 'red_sign_invalid', 'blue_sign_invalid', 'bank_owner_or_currency_mismatch', 'bank_mapping_unsupported', 'bank_mapping_invalid', 'bank_row_invalid', 'business_version_invalid', 'scope_mismatch', 'business_facts_empty_or_invalid', 'business_fact_invalid', 'benefit_period_invalid', 'source_digest_invalid', 'material_kind_unsupported', 'sources_invalid', 'source_id_conflict', 'business_invoice_reference_missing']);
 export function safeMaterialError(error, sourceIndex) {
   const result = { code: ERROR_CODES.has(error?.code) ? error.code : 'material_preflight_rejected' };
   if (Number.isSafeInteger(sourceIndex) && sourceIndex >= 0) result.sourceIndex = sourceIndex;
@@ -92,7 +93,7 @@ function csv(text, columns) {
 function location(row, columns, index) {
   return { row: row.rowNumber, line: row.lineNumber, fields: Object.fromEntries(Object.entries(columns).map(([key, header]) => [key, { header, column: index.get(key) + 1 }])) };
 }
-function invoice(text, mapping, scope) {
+function invoice(text, mapping, scope, parsedInput) {
   fields(mapping, ['format', 'role', 'dateFormat', 'columns', 'statusLabels', 'redSign']);
   requireValue(mapping.format === 'invoice-summary-csv-v1' && ['sales', 'purchase'].includes(mapping.role), 'mapping_invalid');
   requireValue(['signed_negative', 'unsigned_positive'].includes(mapping.redSign), 'mapping_invalid');
@@ -103,7 +104,7 @@ function invoice(text, mapping, scope) {
   const labels = [...mapping.statusLabels.blue, ...mapping.statusLabels.red];
   requireValue(new Set(labels).size === labels.length, 'mapping_invalid');
   columnMap(mapping.columns, ['number', 'date', 'sellerKey', 'buyerKey', 'net', 'tax', 'gross', 'status'], ['code', 'originalNumber', 'originalCode', 'originalSourceVersion']);
-  const parsed = csv(text, mapping.columns);
+  const parsed = parsedInput ?? csv(text, mapping.columns);
   return parsed.rows.map(row => located(() => {
     const get = k => row.cells[parsed.index.get(k)] ?? '';
     const number = get('number'), code = get('code');
@@ -129,7 +130,7 @@ function invoice(text, mapping, scope) {
       requireValue(['originalNumber', 'originalCode', 'originalSourceVersion'].every(k => get(k) === ''), 'correction_reference_invalid');
     }
     return { kind: 'invoice', semantic: { role: mapping.role, number, code, date: atField('date', () => date(get('date'), mapping.dateFormat, scope)), sellerKey: get('sellerKey'), buyerKey: get('buyerKey'), net: formatCents(net), tax: formatCents(tax), gross: formatCents(gross), status: isRed ? 'red' : 'blue', correctionOf },
-      identity: stable([get('sellerKey'), code, number]), reliability: 'stable', location: location(row, mapping.columns, parsed.index), raw: row.cells };
+      identity: stable([get('sellerKey'), code, number]), reliability: 'stable', location: row.location ?? location(row, mapping.columns, parsed.index), raw: row.cells };
   }, { row: row.rowNumber, line: row.lineNumber }));
 }
 function bank(text, mapping, scope) {
@@ -175,15 +176,38 @@ function business(text, mapping, scope) {
     return { kind: 'business_fact', semantic: fact, identity: fact.factId, reliability: 'stable', location: { row: i + 1, pointer: `/facts/${i}`, fields: Object.fromEntries(Object.keys(fact).map(k => [k, { pointer: `/facts/${i}/${k}` }])) }, raw: fact };
   }, { row: i + 1 }));
 }
-// fileSha256 must come from the bytes actually read by a trusted local boundary.
-// Equality to UTF-8 content is checked; caller-supplied scope/ownership remain assertions.
+// Binary sources use canonical base64 ONLY as JSON transport. Hash raw bytes, never base64.
+export function sourceBytes(kind, text) {
+  requireValue(typeof text === 'string', 'source_digest_invalid');
+  if (kind !== 'invoice_xlsx') {
+    requireValue(Buffer.byteLength(text, 'utf8') <= 5 * 1024 * 1024, 'source_digest_invalid');
+    return Buffer.from(text, 'utf8');
+  }
+  requireValue(text.length <= 4 * Math.ceil(5 * 1024 * 1024 / 3) && text.length % 4 === 0 && /^[A-Za-z0-9+/=]*$/.test(text), 'source_digest_invalid');
+  const bytes = Buffer.from(text, 'base64');
+  requireValue(bytes.length > 0 && bytes.length <= 5 * 1024 * 1024 && bytes.toString('base64') === text, 'source_digest_invalid');
+  return bytes;
+}
+export function sourceText(kind, bytes) {
+  return kind === 'invoice_xlsx' ? Buffer.from(bytes).toString('base64') : new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+// Every replay reparses the actual original bytes; scope/ownership remain assertions.
 export function normalizeMaterial(input) {
   requirePlainJson(input);
   fields(input, ['kind', 'text', 'mapping', 'scope', 'fileSha256'], ['sourceId']);
   if (Object.hasOwn(input, 'sourceId')) identifier(input.sourceId);
   const { kind, text, mapping, scope, fileSha256 } = input;
   validateScope(scope);
-  requireValue(typeof text === 'string' && Buffer.byteLength(text, 'utf8') <= 5 * 1024 * 1024 && hash(text) === fileSha256, 'source_digest_invalid');
-  requireValue(['invoice_csv', 'bank_csv', 'business_json'].includes(kind), 'material_kind_unsupported');
+  requireValue(['invoice_csv', 'invoice_xlsx', 'bank_csv', 'business_json'].includes(kind), 'material_kind_unsupported');
+  const bytes = sourceBytes(kind, text);
+  requireValue(hash(bytes) === fileSha256, 'source_digest_invalid');
+  if (kind === 'invoice_xlsx') {
+    fields(mapping, ['format', 'sheet', 'headerRow', 'role', 'dateFormat', 'columns', 'statusLabels', 'redSign']);
+    requireValue(mapping.format === 'invoice-summary-xlsx-v1' && typeof mapping.sheet === 'string' && mapping.sheet.length > 0 && mapping.sheet.length <= 31 && Number.isSafeInteger(mapping.headerRow) && mapping.headerRow > 0 && mapping.headerRow < 10000, 'mapping_invalid');
+    columnMap(mapping.columns, ['number', 'date', 'sellerKey', 'buyerKey', 'net', 'tax', 'gross', 'status'], ['code', 'originalNumber', 'originalCode', 'originalSourceVersion']);
+    const parsed = readInvoiceXlsx(bytes, mapping);
+    const { sheet, headerRow, ...csvMapping } = mapping;
+    return invoice('', { ...csvMapping, format: 'invoice-summary-csv-v1' }, scope, parsed);
+  }
   return ({ invoice_csv: invoice, bank_csv: bank, business_json: business })[kind](text, mapping, scope);
 }

@@ -3,7 +3,7 @@ import { open, lstat, realpath, readdir, mkdir, rename, unlink } from 'node:fs/p
 import { resolve, dirname, basename, join, parse, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { preflightMaterials } from './offline-materials.mjs';
-import { MATERIAL_VERSION, hash, stable, fields, validateScope, identifier } from './offline-material-adapters.mjs';
+import { MATERIAL_VERSION, sourceText, hash, stable, fields, validateScope, identifier } from './offline-material-adapters.mjs';
 
 const VERSION = 'offline-material-store/1', LIMIT = 5 * 1024 * 1024;
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -101,7 +101,7 @@ async function loadStore(path) {
       const old = active.get(e.sourceId);
       check(old ? e.supersedes === old.sourceVersion && e.sourceVersion !== old.sourceVersion : e.supersedes === null);
       const blob = await readLocalFile(join(dir, e.blob)); check(hash(blob.bytes) === e.fileSha256, 'blob_corrupt');
-      const source = { sourceId: e.sourceId, kind: e.kind, scope: e.scope, mapping: e.mapping, text: decode(blob.bytes), fileSha256: e.fileSha256 };
+      const source = { sourceId: e.sourceId, kind: e.kind, scope: e.scope, mapping: e.mapping, text: sourceText(e.kind, blob.bytes), fileSha256: e.fileSha256 };
       const report = preflightMaterials({ scope: meta.scope, sources: [source] });
       check(report.status !== 'rejected' && report.sources[0].sourceVersion === e.sourceVersion, 'store_corrupt');
       const entry = { ...e, source, receiptId: match[2], sequence };
@@ -185,7 +185,7 @@ async function readConfig(configPath, storeRoot) {
     const correction = Object.hasOwn(s, 'supersedes') || Object.hasOwn(s, 'expectedSourceVersion');
     check(!correction || DIGEST.test(s.supersedes) && s.expectedSourceVersion === s.supersedes, 'correction_invalid');
     const f = await readLocalFile(resolve(dirname(file.canonicalPath), s.path)); check(!inside(storeRoot, f.canonicalPath), 'path_rejected');
-    sources.push({ sourceId: s.sourceId, kind: s.kind, scope: s.scope, text: decode(f.bytes), fileSha256: hash(f.bytes), mapping: s.mapping });
+    sources.push({ sourceId: s.sourceId, kind: s.kind, scope: s.scope, text: sourceText(s.kind, f.bytes), fileSha256: hash(f.bytes), mapping: s.mapping });
     inputs.push({ bytes: f.bytes, originPath: f.canonicalPath, configPath: file.canonicalPath, correction: correction ? s.supersedes : null });
   }
   const report = preflightMaterials({ scope: config.scope, sources });

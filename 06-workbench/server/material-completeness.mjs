@@ -1,6 +1,6 @@
 // Pure, local planning evidence. No accounting, filesystem, authority or receipts.
 import { preflightMaterials } from './offline-materials.mjs';
-import { MATERIAL_VERSION, fields, requirePlainJson, requireValue, identifier, validateScope, hash, stable } from './offline-material-adapters.mjs';
+import { sourceBytes, MATERIAL_VERSION, fields, requirePlainJson, requireValue, identifier, validateScope, hash, stable } from './offline-material-adapters.mjs';
 
 export const COMPLETENESS_VERSION = 'material-completeness/1';
 const same = (a, b) => stable(a) === stable(b);
@@ -64,8 +64,8 @@ export function replayReports(scope, reports) {
       const s = report.sources[j]; let source;
       try {
         identifier(s.sourceId);
-        requireValue(typeof s.rawContent === 'string' && hash(s.rawContent) === s.fileSha256, 'source_digest_invalid');
-        source = { sourceId: s.sourceId, kind: s.kind, scope: s.scope, text: s.rawContent, fileSha256: hash(s.rawContent), mapping: s.mapping };
+        requireValue(typeof s.rawContent === 'string' && hash(sourceBytes(s.kind, s.rawContent)) === s.fileSha256, 'source_digest_invalid');
+        source = { sourceId: s.sourceId, kind: s.kind, scope: s.scope, text: s.rawContent, fileSha256: s.fileSha256, mapping: s.mapping };
         const result = preflightMaterials({ scope, sources: [source] });
         requireValue(result.status !== 'rejected', result.errors[0]?.code);
         candidates.push(source);
@@ -114,7 +114,7 @@ export function assessCompleteness(input) {
   const knownAccounts = new Set([...(accounts?.accountIds ?? []), ...replay.records.filter(r => r.kind === 'bank_activity').map(r => r.data.bankAccountId)]);
   for (const [kind, accountId] of [['sales', null], ['purchase', null], ...[...knownAccounts].sort().map(id => ['bank', id])]) {
     const c = (d.coverage ?? []).find(c => c.kind === kind && c.accountId === accountId);
-    const relevant = replay.sources.filter(s => kind === 'bank' ? s.kind === 'bank_csv' && s.mapping.bankAccountId === accountId : s.kind === 'invoice_csv' && s.mapping.role === kind);
+    const relevant = replay.sources.filter(s => kind === 'bank' ? s.kind === 'bank_csv' && s.mapping.bankAccountId === accountId : ['invoice_csv', 'invoice_xlsx'].includes(s.kind) && s.mapping.role === kind);
     const scoped = c && c.from === range.from && c.to === range.to;
     const refsValid = c && c.sourceIds.every(id => relevant.some(s => s.sourceId === id)) && relevant.every(s => c.sourceIds.includes(s.sourceId));
     let status = !c ? 'missing' : !supportedEvidence(c) ? 'unknown' : !scoped || !refsValid ? 'provided_invalid' : c.state === 'partial' ? 'missing' : c.state === 'no_activity' && relevant.length ? 'conflict' : c.state === 'complete' && !relevant.length ? 'missing' : 'provided_valid';

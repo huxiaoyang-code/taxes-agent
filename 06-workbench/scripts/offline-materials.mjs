@@ -4,7 +4,7 @@ import { readFile, open, realpath, stat, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { preflightMaterials } from '../server/offline-materials.mjs';
-import { fields, requireValue, hash } from '../server/offline-material-adapters.mjs';
+import { fields, requireValue, sourceText, hash } from '../server/offline-material-adapters.mjs';
 
 const decode = bytes => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 async function readLocal(path) {
@@ -28,7 +28,7 @@ export async function runCli(args) {
       fields(source, ['sourceId', 'kind', 'scope', 'path', 'mapping']);
       requireValue(typeof source.path === 'string' && source.path.length > 0);
       const file = await readLocal(resolve(dirname(configFile.canonicalPath), source.path));
-      sources.push({ sourceId: source.sourceId, kind: source.kind, scope: source.scope, text: decode(file.bytes), fileSha256: hash(file.bytes), mapping: source.mapping });
+      sources.push({ sourceId: source.sourceId, kind: source.kind, scope: source.scope, text: sourceText(source.kind, file.bytes), fileSha256: hash(file.bytes), mapping: source.mapping });
       paths.push({ sourceId: source.sourceId, path: file.canonicalPath });
     }
     const result = preflightMaterials({ scope: config.scope, sources });
