@@ -25,6 +25,16 @@
  *
  * 安全边界：
  *  - 只处理显式路径；不读默认数据目录、不读用户 npm 配置 / 凭据、不按进程名杀进程。
+ *  - `--release` / `--out` / `--scratch-root` 先按**原始完整绝对路径**校验：“绝对”只认盘符绝对
+ *    或**完整 UNC**（`\\server\share`，server 与 share 均非空）；拒绝相对、drive-relative
+ *    `C:foo`、root-relative `\foo`、设备路径（含 `//?/` 斜杠变体）与缺 share 的不完整 UNC。
+ *    再核验根与完整祖先链到卷根（有 symlink / junction 即拒绝）与 realpath；并在**任何扫描 /
+ *    创建 / 复制之前**检查安全关系（out 与 release 互不包含、out 不得等于或包含 scratch base）。
+ *    显式或**实际默认**的 scratch base 同样在这一步审核（根 / 最近既存祖先 / 根类型 / realpath），
+ *    所以无效 scratch 不会出现“out 已写、scratch 后拒”的半截现场。拒绝时只写 stdout 并非零，
+ *    不为了留日志先创建未验证的输出目录。
+ *  - 冷拷贝入口 `copyReleaseWhitelist` 自己重新核验源根 / 选定 workbench / 目标（不信任历史检查）：
+ *    根与祖先无重解析点、目标不存在且不重叠源，失败不创建也不补删除。
  *  - 所有启动强制 HOST=127.0.0.1；验收 PORT=0 并从本次 stdout 解析实际端口。
  *  - 子进程环境为白名单，不 dump env；stdout / stderr 各自上限 1 MiB；每个子进程都有
  *    真实 deadline，杀不掉时按硬截止返回“未回收”而不是无限等 close。
@@ -42,9 +52,11 @@ import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -53,8 +65,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 import {
+  auditAncestorChain,
+  auditExistingAncestorChain,
   createScratchRecord as createGuardedScratchRecord,
   defaultScratchBase,
+  inspectRawAbsolutePath,
   removeScratchRecord as removeGuardedScratchRecord,
   removeTrackedPath,
   trackExistingPath,
@@ -280,6 +295,11 @@ function minimalEnv(extra = {}) {
   for (const name of ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"]) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
+  // All callers must identify their run-owned temporary scope; never inherit OS defaults.
+  if (!extra.TEMP || !extra.TMP || !isAbsolute(extra.TEMP) || !isAbsolute(extra.TMP)) throw new StageError("child_environment_scope_required");
+  const childRoot = dirname(extra.TEMP);
+  env.WORKBENCH_DATA_DIR = join(childRoot, "fallback-data");
+  env.WINDOWS_DELIVERY_SCRATCH_ROOT = join(childRoot, "child-scratch");
   env.NODE_OPTIONS = "";
   for (const [key, value] of Object.entries(extra)) {
     if (value !== undefined && value !== null) env[key] = String(value);
@@ -348,7 +368,7 @@ function spawnCaptured(command, args, options = {}) {
         stderrBytes += chunk.length;
       }
     });
-    child.once("close", (code, signal) => finish({ code: code ?? null, signal: signal ?? null, pid: child.pid ?? null }));
+    child.once("close", (code, signal) => finish({ code: code ?? null, signal: signal ?? null, pid: child.pid ?? null, reclaimed: true }));
 
     // 真实 deadline：到点先礼后兵；强杀后仍不 close 就在 KILL_GRACE_MS 后按「未回收」返回。
     timer = setTimeout(() => {
@@ -371,15 +391,32 @@ function spawnCaptured(command, args, options = {}) {
   });
 }
 
-/** spawnCaptured + 把「未回收 / 未启动」如实记为失败断言，并登记残留进程。 */
+/** Only the owned handle's close event proves reclamation; exit code alone does not. */
+export function childLifecycleFailure(result) {
+  if (result.unreclaimed || result.hardDeadline) return "child_process_unreclaimed";
+  if (result.spawnError) return "child_process_spawn_failed";
+  if (result.reclaimed !== true) return "child_process_reclamation_unknown";
+  if (result.timedOut) return "child_process_timed_out";
+  if (!Number.isInteger(result.code) || result.signal) return "child_process_exit_unknown";
+  return null;
+}
+
+function requireChildCompletion(result) {
+  const code = childLifecycleFailure(result);
+  if (code) throw new StageError(code, { details: { exitCode: result.code ?? null, spawnError: result.spawnError ?? null, timedOut: result.timedOut === true } });
+}
+
+/** Lifecycle failures stop every caller before further work or cleanup in that directory. */
 async function spawnChecked(run, label, command, args, options = {}) {
   const result = await spawnCaptured(command, args, options);
-  if (result.unreclaimed || result.hardDeadline) {
-    run.recordResidual({ kind: "child", label, pid: result.pid ?? null });
-    run.addAssertion(`${label}.child_reclaimed`, "fail", "child_process_unreclaimed", { pid: result.pid ?? null });
-  }
-  if (result.spawnError) {
-    run.addAssertion(`${label}.spawn`, "fail", result.spawnError, { label });
+  const failure = childLifecycleFailure(result);
+  if (failure) {
+    run.log(label, result.stdout, result.stderr);
+    if (result.unreclaimed || result.hardDeadline || (result.reclaimed !== true && result.pid != null)) {
+      run.recordResidual({ kind: "child", label, pid: result.pid ?? null });
+    }
+    run.addAssertion(`${label}.lifecycle`, "fail", failure, { label, spawnError: result.spawnError ?? null });
+    requireChildCompletion(result);
   }
   return result;
 }
@@ -416,6 +453,147 @@ async function fetchJson(url, options = {}) {
   return { status: response.status, headers: response.headers, text, json };
 }
 
+// ------------------------------------------------------------------ 路径守卫（原始绝对路径 / 完整祖先链 / 安全关系）
+
+function lstatOrNull(path) {
+  try { return lstatSync(path); } catch { return null; }
+}
+
+function realpathOrNull(path) {
+  try { return realpathSync(path); } catch { return null; }
+}
+
+/** `a` 是否等于 `b` 或包含 `b`（已解析路径、大小写不敏感）。 */
+function pathCovers(a, b) {
+  const base = pathKey(a);
+  const value = pathKey(b);
+  if (base === value) return true;
+  const prefix = base.endsWith(sep) ? base : `${base}${sep}`;
+  return value.startsWith(prefix);
+}
+
+/**
+ * 将被**扫描 / 复制 / 作为输出目标**的目录根的只读核验：
+ * 原始入参必须是完整绝对路径（拒绝相对 / drive-relative / root-relative / 设备路径，
+ * 见共享的 `inspectRawAbsolutePath`）→ 必须存在 → 不是 symlink / junction → 完整祖先链到
+ * 卷根逐级无重解析点 → realpath 与规范化路径一致。
+ * 只读：不创建、不枚举、不删除；核验不过就不写任何东西。
+ */
+export function auditDirectoryRoot(rawPath, label = "path") {
+  const raw = inspectRawAbsolutePath(rawPath);
+  if (!raw.ok) return { ok: false, code: `${label}_not_absolute`, reason: raw.reason, resolved: null, real: null };
+  const stat = lstatOrNull(raw.resolved);
+  if (!stat) return { ok: false, code: `${label}_missing`, reason: "target_missing", resolved: raw.resolved, real: null };
+  if (stat.isSymbolicLink()) return { ok: false, code: `${label}_is_reparse_point`, reason: "reparse_point_at_path", resolved: raw.resolved, real: null };
+  if (!stat.isDirectory()) return { ok: false, code: `${label}_not_directory`, reason: "target_not_directory", resolved: raw.resolved, real: null };
+  const chain = auditAncestorChain(raw.resolved);
+  if (!chain.ok) return { ok: false, code: `${label}_ancestor_refused`, reason: chain.reason, resolved: raw.resolved, real: null };
+  const real = realpathOrNull(raw.resolved);
+  if (!real) return { ok: false, code: `${label}_realpath_failed`, reason: "realpath_failed", resolved: raw.resolved, real: null };
+  if (pathKey(real) !== pathKey(raw.resolved)) return { ok: false, code: `${label}_realpath_mismatch`, reason: "realpath_mismatch", resolved: raw.resolved, real: null };
+  return { ok: true, code: null, reason: null, resolved: raw.resolved, real };
+}
+
+/**
+ * 专属临时根（scratch base）的**只读**核验，必须在任何 out mkdir / 扫描 / 复制之前执行。
+ * 显式 `--scratch-root` 与**实际默认** `<workbench>/tmp/windows-delivery` 走同一套规则：
+ *  - 原始字符串必须是完整绝对路径（相对 / drive-relative / root-relative / 设备路径 / 不完整 UNC 拒绝）；
+ *  - 不得是文件系统根（不能把整卷当工作区）；
+ *  - 从**最近已存在祖先（包含 base 自身）**逐级核验到卷根；自身或祖先为
+ *    symlink / junction 均固定返回 scratch_root_ancestor_refused /
+ *    reparse_point_in_ancestor_chain（先查整条链，不另分自身 alias 错误码）；
+ *  - 已存在时必须是真实目录，且 realpath 等于规范化路径。
+ * 只读：不 mkdir、不枚举、不删除。base 本身**从不**算作本工具所有——所有权只来自
+ * `createScratchRecord` 在 base 下新建的随机根及其 manifest，不把 base 全部当自己所有。
+ */
+export function auditScratchBase(rawPath) {
+  const raw = inspectRawAbsolutePath(rawPath);
+  if (!raw.ok) return { ok: false, code: "scratch_root_not_absolute", reason: raw.reason, base: null, real: null };
+  if (dirname(raw.resolved) === raw.resolved) {
+    return { ok: false, code: "scratch_root_is_filesystem_root", reason: "filesystem_root", base: raw.resolved, real: null };
+  }
+  const chain = auditExistingAncestorChain(raw.resolved);
+  if (!chain.ok) return { ok: false, code: "scratch_root_ancestor_refused", reason: chain.reason, base: raw.resolved, real: null };
+  const stat = lstatOrNull(raw.resolved);
+  if (!stat) return { ok: true, code: null, reason: null, base: raw.resolved, real: null, exists: false, nearest: chain.nearest };
+  if (stat.isSymbolicLink()) return { ok: false, code: "scratch_root_is_reparse_point", reason: "reparse_point_at_path", base: raw.resolved, real: null };
+  if (!stat.isDirectory()) return { ok: false, code: "scratch_root_not_directory", reason: "target_not_directory", base: raw.resolved, real: null };
+  const real = realpathOrNull(raw.resolved);
+  if (!real || pathKey(real) !== pathKey(raw.resolved)) {
+    return { ok: false, code: "scratch_root_realpath_mismatch", reason: "realpath_mismatch", base: raw.resolved, real: null };
+  }
+  return { ok: true, code: null, reason: null, base: raw.resolved, real, exists: true, nearest: chain.nearest };
+}
+
+/**
+ * 调用级路径关系审计，必须在**任何 mkdir / 扫描 / 复制之前**执行：
+ *  - out / release 先按原始完整绝对路径校验（不做 resolve 后再查）；
+ *  - out 的最近已存在祖先与整条链、release 的完整链都核验到卷根（有 symlink / junction 即拒绝）；
+ *  - **scratch base（显式或实际默认）同样在 out 创建之前核验**：根 / 最近已存在祖先 / 根类型 /
+ *    realpath 不合格就拒绝，因此无效 scratch 不会出现“out 已写、scratch 后拒”的半截现场；
+ *  - release 必须是真实目录且不是重解析点（reviewer 的 source-alias 形态）；out 已存在时必须是真实目录；
+ *  - 关系：out 与 release 互不包含；out 不得等于或包含 scratch base。out 可以放在 base 之内
+ *    （“输出放授权工作区内”的正常形态，仍走同一套祖先链核验）；base 本身永不被本工具删除，
+ *    也不把 base 整体当作本工具所有（只认自己在 base 下新建的随机根 + manifest）。
+ * 拒绝时调用方**只写 stdout 并非零**，不创建未验证的 out（不为记录失败先写目录）。
+ */
+export function auditInvocationPaths({ out = null, release = null, scratchRoot = null } = {}) {
+  if (release === null || release === undefined || String(release) === "") {
+    return { ok: false, code: "release_missing", reason: "release_missing", exitCode: EXIT.usage };
+  }
+  if (out === null || out === undefined || String(out) === "") {
+    return { ok: false, code: "out_missing", reason: "out_missing", exitCode: EXIT.usage };
+  }
+  const releaseAudit = auditDirectoryRoot(release, "release");
+  if (!releaseAudit.ok) {
+    const exitCode = releaseAudit.code === "release_not_absolute" ? EXIT.usage : EXIT.failed;
+    return { ok: false, code: releaseAudit.code, reason: releaseAudit.reason, exitCode, details: { reason: releaseAudit.reason } };
+  }
+  const outRaw = inspectRawAbsolutePath(out);
+  if (!outRaw.ok) return { ok: false, code: "out_not_absolute", reason: outRaw.reason, exitCode: EXIT.usage, details: { reason: outRaw.reason } };
+  const outChain = auditExistingAncestorChain(outRaw.resolved);
+  if (!outChain.ok) return { ok: false, code: "out_path_refused", reason: outChain.reason, exitCode: EXIT.usage, details: { reason: outChain.reason } };
+  const outStat = lstatOrNull(outRaw.resolved);
+  if (outStat) {
+    if (outStat.isSymbolicLink()) return { ok: false, code: "out_is_reparse_point", reason: "reparse_point_at_path", exitCode: EXIT.usage, details: { reason: "reparse_point_at_path" } };
+    if (!outStat.isDirectory()) return { ok: false, code: "out_not_directory", reason: "target_not_directory", exitCode: EXIT.usage, details: { reason: "target_not_directory" } };
+  }
+  if (pathCovers(outRaw.resolved, releaseAudit.resolved)) {
+    return { ok: false, code: "out_contains_release", reason: "release_inside_out", exitCode: EXIT.usage, details: { reason: "release_inside_out" } };
+  }
+  if (pathCovers(releaseAudit.resolved, outRaw.resolved)) {
+    return { ok: false, code: "out_inside_release", reason: "out_inside_release", exitCode: EXIT.usage, details: { reason: "out_inside_release" } };
+  }
+  // scratch base：未提供时校验**实际默认**根（`<workbench>/tmp/windows-delivery`）；
+  // 显式给出（包括空 / 空白）一律按入参校验，不静默退回默认根。两者都在 out mkdir 之前。
+  const scratchExplicit = scratchRoot !== null && scratchRoot !== undefined;
+  const scratchAudit = auditScratchBase(scratchExplicit ? scratchRoot : defaultScratchBase());
+  if (!scratchAudit.ok) {
+    const exitCode = scratchAudit.code === "scratch_root_not_absolute" ? EXIT.usage : EXIT.failed;
+    return {
+      ok: false,
+      code: scratchAudit.code,
+      reason: scratchAudit.reason,
+      exitCode,
+      details: { reason: scratchAudit.reason, explicitScratchRoot: scratchExplicit },
+    };
+  }
+  if (pathCovers(outRaw.resolved, scratchAudit.base)) {
+    return { ok: false, code: "out_contains_scratch_root", reason: "scratch_base_inside_out", exitCode: EXIT.usage, details: { reason: "scratch_base_inside_out" } };
+  }
+  return {
+    ok: true,
+    code: null,
+    reason: null,
+    out: outRaw.resolved,
+    release: releaseAudit.resolved,
+    releaseReal: releaseAudit.real,
+    scratchBase: scratchAudit.base,
+    scratchBaseReal: scratchAudit.real,
+    scratchExplicit,
+  };
+}
+
 // ------------------------------------------------------------------ 发布检查 / 冷拷贝
 
 /**
@@ -426,10 +604,20 @@ async function fetchJson(url, options = {}) {
  * `tmp` / 其它目录仍按 forbidden 拒绝。
  */
 export function inspectRelease(releasePath, options = {}) {
-  const root = resolve(releasePath);
-  if (!existsSync(root) || !statSync(root).isDirectory()) throw new StageError("release_not_directory");
+  // 扫描 / 复制来源之前先核验根：原始绝对路径、非重解析点、完整祖先链到卷根、realpath 一致。
+  const rootAudit = auditDirectoryRoot(releasePath, "release");
+  if (!rootAudit.ok) throw new StageError(rootAudit.code, { details: { reason: rootAudit.reason } });
+  const root = rootAudit.resolved;
   const packageAtRoot = join(root, "package.json");
   const workbenchDir = existsSync(packageAtRoot) ? root : join(root, "06-workbench");
+  // 嵌套的 workbench 目录同样可能是 junction（或经 junction 指向别处）：扫描 / 复制前复核它的链。
+  if (!existsSync(workbenchDir)) throw new StageError("release_required_file_missing", { details: { file: "06-workbench" } });
+  const workbenchChain = auditAncestorChain(workbenchDir);
+  if (!workbenchChain.ok) throw new StageError("release_workbench_refused", { details: { reason: workbenchChain.reason } });
+  const workbenchReal = realpathOrNull(workbenchDir);
+  if (!workbenchReal || pathKey(workbenchReal) !== pathKey(workbenchDir)) {
+    throw new StageError("release_workbench_refused", { details: { reason: "realpath_mismatch" } });
+  }
   const required = ["package.json", "package-lock.json", "server/server.mjs", "public/index.html"];
   for (const item of required) {
     const file = join(workbenchDir, item.split("/").join(sep));
@@ -541,15 +729,66 @@ const OPTIONAL_RELEASE_FILES = [
   "test/windows-delivery.test.mjs",
 ];
 
+/**
+ * 冷拷贝：把**已核验**发布目录的白名单文件复制到 `destRoot`。
+ *
+ * 作为导出的冷拷贝入口，它**不信任调用顺序，也不信任历史校验结果**：
+ *  1) 复制前重新只读核验源根与**选定 workbench**（完整绝对 / 非重解析点 / 完整祖先链到卷根 /
+ *     realpath 一致），并要求 workbench 真在源根内；再重算源摘要，与 `inspected.digest` 不一致
+ *     即拒绝（源在检查后被改过）。
+ *  2) 目标必须是原始完整绝对路径、不存在、最近既存祖先到卷根无 symlink / junction，
+ *    且与源根互不包含（不把目标建到源里，也不让目标包含源）。
+ *  3) 拒绝时**不创建目标、不补删除**；目标创建后仍重验 realpath，不符即停手（已复制内容原样保留）。
+ * 只做根 / 祖先 / 路径关系校验，不试图演绎全部恶意并发 TOCTOU，也不扫描系统目录。
+ */
 export function copyReleaseWhitelist(inspected, destRoot) {
-  if (existsSync(destRoot)) throw new StageError("copy_destination_exists");
-  mkdirSync(destRoot, { recursive: false });
-  const destWorkbench = join(destRoot, "06-workbench");
+  if (!inspected || typeof inspected !== "object" || typeof inspected.root !== "string" || typeof inspected.workbenchDir !== "string") {
+    throw new StageError("copy_source_unverified", { details: { reason: "inspected_unavailable" } });
+  }
+  const sourceRoot = auditDirectoryRoot(inspected.root, "copy_source_root");
+  if (!sourceRoot.ok) throw new StageError(sourceRoot.code, { details: { reason: sourceRoot.reason } });
+  const sourceWorkbench = auditDirectoryRoot(inspected.workbenchDir, "copy_source_workbench");
+  if (!sourceWorkbench.ok) throw new StageError(sourceWorkbench.code, { details: { reason: sourceWorkbench.reason } });
+  if (!pathCovers(sourceRoot.resolved, sourceWorkbench.resolved)) {
+    throw new StageError("copy_source_workbench_outside_root", { details: { reason: "workbench_outside_release_root" } });
+  }
+  const sourceDigest = digestTree(sourceWorkbench.resolved, ["server", "public", "package.json", "package-lock.json"]);
+  if (typeof inspected.digest === "string" && sourceDigest !== inspected.digest) {
+    throw new StageError("copy_source_digest_changed", { details: { reason: "source_changed_since_inspection" } });
+  }
+  const destRaw = inspectRawAbsolutePath(destRoot);
+  if (!destRaw.ok) throw new StageError("copy_destination_not_absolute", { details: { reason: destRaw.reason } });
+  const dest = destRaw.resolved;
+  const destStat = lstatOrNull(dest);
+  if (destStat) {
+    if (destStat.isSymbolicLink()) throw new StageError("copy_destination_is_reparse_point", { details: { reason: "reparse_point_at_path" } });
+    throw new StageError("copy_destination_exists");
+  }
+  const destChain = auditExistingAncestorChain(dest);
+  if (!destChain.ok) throw new StageError("copy_destination_refused", { details: { reason: destChain.reason } });
+  if (pathCovers(sourceRoot.resolved, dest)) {
+    throw new StageError("copy_destination_inside_source", { details: { reason: "destination_inside_source" } });
+  }
+  if (pathCovers(dest, sourceRoot.resolved)) {
+    throw new StageError("copy_destination_contains_source", { details: { reason: "source_inside_destination" } });
+  }
+
+  try {
+    mkdirSync(dest, { recursive: false });
+  } catch (error) {
+    throw new StageError("copy_destination_create_failed", { details: { code: error?.code ?? null } });
+  }
+  // 创建后重验：完整祖先链到卷根 + realpath 等于预期规范化路径。
+  const destVerified = auditDirectoryRoot(dest, "copy_destination");
+  if (!destVerified.ok) throw new StageError(destVerified.code, { details: { reason: destVerified.reason } });
+
+  const destRootVerified = destVerified.resolved;
+  const destWorkbench = join(destRootVerified, "06-workbench");
   mkdirSync(destWorkbench);
   const copied = [];
   const optionalMissing = [];
   const copyFile = (rel) => {
-    const source = join(inspected.workbenchDir, rel.split("/").join(sep));
+    const source = join(sourceWorkbench.resolved, rel.split("/").join(sep));
     const dest = join(destWorkbench, rel.split("/").join(sep));
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(source, dest);
@@ -558,7 +797,7 @@ export function copyReleaseWhitelist(inspected, destRoot) {
   copyFile("package.json");
   copyFile("package-lock.json");
   const copyDir = (rel) => {
-    const source = join(inspected.workbenchDir, rel);
+    const source = join(sourceWorkbench.resolved, rel);
     const walk = (src, prefix) => {
       for (const entry of readdirSync(src, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
         if (isForbiddenName(entry.name) || entry.isSymbolicLink()) continue;
@@ -576,26 +815,57 @@ export function copyReleaseWhitelist(inspected, destRoot) {
   copyDir("server");
   copyDir("public");
   for (const rel of OPTIONAL_RELEASE_FILES) {
-    const source = join(inspected.workbenchDir, rel.split("/").join(sep));
+    const source = join(sourceWorkbench.resolved, rel.split("/").join(sep));
     if (existsSync(source) && statSync(source).isFile()) copyFile(rel);
     else optionalMissing.push(rel);
   }
   const digest = digestTree(destWorkbench, ["server", "public", "package.json", "package-lock.json"]);
   if (digest !== inspected.digest) throw new StageError("cold_copy_digest_mismatch");
-  return { destRoot, workbenchDir: destWorkbench, copied, optionalMissing, digest };
+  return { destRoot: destRootVerified, workbenchDir: destWorkbench, copied, optionalMissing, digest };
 }
 
-function prepareOutDir(outPath) {
-  const out = resolve(outPath);
-  if (existsSync(out)) {
-    if (!statSync(out).isDirectory()) throw new StageError("out_not_directory");
+/**
+ * 输出目录：先做**原始完整绝对路径 + 最近已存在祖先到卷根 + realpath** 核验，再创建。
+ * 只在核验通过的路径下 mkdir；创建后重验完整链与 realpath，不符即拒绝（不再继续写）。
+ * 输出校验失败时调用方只写 stdout 并非零，不为了记录失败先写一个未验证的 out。
+ */
+export function prepareOutDir(outPath) {
+  const raw = inspectRawAbsolutePath(outPath);
+  if (!raw.ok) throw new StageError("out_not_absolute", { details: { reason: raw.reason } });
+  const out = raw.resolved;
+  const preAudit = auditExistingAncestorChain(out);
+  if (!preAudit.ok) throw new StageError("out_path_refused", { details: { reason: preAudit.reason } });
+  const existing = lstatOrNull(out);
+  if (existing) {
+    if (existing.isSymbolicLink()) throw new StageError("out_is_reparse_point", { details: { reason: "reparse_point_at_path" } });
+    if (!existing.isDirectory()) throw new StageError("out_not_directory");
     if (readdirSync(out).length > 0) throw new StageError("out_not_empty");
   } else {
-    mkdirSync(out, { recursive: true });
+    try {
+      mkdirSync(out, { recursive: true });
+    } catch (error) {
+      throw new StageError("out_create_failed", { details: { code: error?.code ?? null } });
+    }
   }
-  mkdirSync(join(out, "logs"), { recursive: true });
-  mkdirSync(join(out, "artifacts"), { recursive: true });
-  return out;
+  // 创建后重验：完整祖先链到卷根 + realpath 必须等于预期规范化路径。
+  const verified = auditDirectoryRoot(out, "out");
+  if (!verified.ok) throw new StageError(verified.code, { details: { reason: verified.reason } });
+  for (const name of ["logs", "artifacts"]) {
+    const dir = join(verified.resolved, name);
+    const stat = lstatOrNull(dir);
+    if (stat) {
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new StageError("out_subdir_refused", { details: { name, reason: "reparse_point_or_not_directory" } });
+      continue;
+    }
+    try {
+      mkdirSync(dir, { recursive: false });
+    } catch (error) {
+      throw new StageError("out_create_failed", { details: { name, code: error?.code ?? null } });
+    }
+    const chain = auditAncestorChain(dir);
+    if (!chain.ok) throw new StageError("out_subdir_refused", { details: { name, reason: chain.reason } });
+  }
+  return verified.resolved;
 }
 
 // ------------------------------------------------------------------ npm
@@ -607,7 +877,7 @@ function resolveNpm(npmPath, nodePath) {
   if (/\.m?js$/i.test(path)) return { command: nodePath, prefix: [path], mode: "node_js_entry" };
   const cli = join(dirname(path), "node_modules", "npm", "bin", "npm-cli.js");
   if (existsSync(cli) && statSync(cli).isFile()) return { command: nodePath, prefix: [cli], mode: "npm_cli_js" };
-  // 未核实的 .cmd / .bat 不再拼 cmd.exe 命令线：句柄回收与引用歧义风险太大，直接拒绕。
+  // 未核实的 .cmd / .bat 不再拼 cmd.exe 命令线：句柄回收与引用歧义风险太大，直接拒绝。
   throw new StageError("npm_cli_not_verified", { details: { required: "node_modules/npm/bin/npm-cli.js", reason: "unknown_npm_entry" } });
 }
 
@@ -650,39 +920,56 @@ async function npmCi(run, label, { npm, nodePath, workbenchDir, cache, tempRoot,
     env: npmEnv({ cache, tempRoot, nodePath }),
     timeoutMs: LIMITS.npmMs,
   });
-  return { ...result, offline, cacheMiss: /ENOTCACHED|only-if-cached|EAI_AGAIN|ENETUNREACH|ECONNREFUSED/i.test(`${result.stdout}\n${result.stderr}`) };
+  return { ...result, offline, cacheMiss: isOfflineCacheMiss(result) };
+}
+
+/** npm's explicit error code is required; connectivity, permissions and usage errors are not cache misses. */
+export function isOfflineCacheMiss(result) {
+  return childLifecycleFailure(result) === null && result.code !== 0
+    && /^\s*npm (?:error|ERR!) code ENOTCACHED\s*$/mi.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+}
+
+/** Install protocol with explicit effects: only a completed ENOTCACHED may start online work. */
+export async function runDependencyInstallSequence({ install, removeModules }) {
+  const first = await install("offline", true);
+  requireChildCompletion(first);
+  if (first.code === 0) return { networkUsed: false, offlineProven: true };
+  if (!isOfflineCacheMiss(first)) throw new StageError("dependency_offline_install_failed", { details: { exitCode: first.code } });
+  const online = await install("online", false);
+  requireChildCompletion(online);
+  if (online.code !== 0) throw new StageError("dependency_install_failed", { details: { exitCode: online.code } });
+  // No remove or reinstall is reachable until both preceding owned children completed.
+  await removeModules();
+  const second = await install("offline-after-online", true);
+  requireChildCompletion(second);
+  if (second.code !== 0) throw new StageError("dependency_offline_reinstall_failed", { details: { exitCode: second.code } });
+  return { networkUsed: true, offlineProven: true };
 }
 
 async function installDependencies(run, { npm, nodePath, copied, cache, tempRoot, stageName, scratch }) {
   const workbenchDir = copied.workbenchDir;
   const lockBefore = sha256File(join(workbenchDir, "package-lock.json"));
-  const offlineFirst = await npmCi(run, `${stageName}-offline`, { npm, nodePath, workbenchDir, cache, tempRoot, offline: true });
-  run.log(`${stageName}-offline`, offlineFirst.stdout, offlineFirst.stderr);
-  let networkUsed = false;
-  let offlineProven = false;
-  if (offlineFirst.code === 0) {
-    offlineProven = true;
-    run.note(`${stageName}.install_mode`, "offline_cache_hit");
-  } else {
-    run.note(`${stageName}.offline_first`, "dependency_cache_missing", { code: offlineFirst.code, cacheMiss: offlineFirst.cacheMiss });
-    const online = await npmCi(run, `${stageName}-online`, { npm, nodePath, workbenchDir, cache, tempRoot, offline: false });
-    run.log(`${stageName}-online`, online.stdout, online.stderr);
-    if (online.code !== 0) throw new StageError("dependency_install_failed", { details: { exitCode: online.code, cacheMiss: offlineFirst.cacheMiss } });
-    networkUsed = true;
-    // 删除 node_modules 后证明同一专属缓存可完全离线重装。删除走唯一守卫：manifest 登记 +
-    // 根内 + 完整祖先链 + realpath + 无重解析点核验；拒绝/失败就是非零阶段失败，不是 best-effort。
-    const modules = join(workbenchDir, "node_modules");
-    if (existsSync(modules)) {
-      const registered = trackExistingPath(scratch, modules, "node_modules_reinstall");
-      const removal = registered ? removeTrackedPath(scratch, modules) : { ok: false, reason: "cleanup_refused:target_not_registered" };
-      run.assert(`${stageName}.node_modules_cleanup`, removal.ok, { code: removal.reason ?? "node_modules_cleanup_refused" });
-    }
-    const offlineSecond = await npmCi(run, `${stageName}-offline-after-online`, { npm, nodePath, workbenchDir, cache, tempRoot, offline: true });
-    run.log(`${stageName}-offline-after-online`, offlineSecond.stdout, offlineSecond.stderr);
-    if (offlineSecond.code !== 0) throw new StageError("dependency_offline_reinstall_failed", { details: { exitCode: offlineSecond.code } });
-    offlineProven = true;
-    run.note(`${stageName}.install_mode`, "online_download_then_offline_reinstall");
-  }
+  const { networkUsed, offlineProven } = await runDependencyInstallSequence({
+    install: async (step, offline) => {
+      const result = await npmCi(run, `${stageName}-${step}`, { npm, nodePath, workbenchDir, cache, tempRoot, offline });
+      run.log(`${stageName}-${step}`, result.stdout, result.stderr);
+      if (step === "offline" && result.code !== 0 && result.cacheMiss) {
+        run.note(`${stageName}.offline_first`, "dependency_cache_missing", { code: result.code, cacheMiss: true });
+      }
+      return result;
+    },
+    removeModules: async () => {
+      // 删除 node_modules 后证明同一专属缓存可完全离线重装。删除走唯一守卫：manifest 登记 +
+      // 根内 + 完整祖先链 + realpath + 无重解析点核验；拒绝/失败就是非零阶段失败，不是 best-effort。
+      const modules = join(workbenchDir, "node_modules");
+      if (existsSync(modules)) {
+        const registered = trackExistingPath(scratch, modules, "node_modules_reinstall");
+        const removal = registered ? removeTrackedPath(scratch, modules) : { ok: false, reason: "cleanup_refused:target_not_registered" };
+        run.assert(`${stageName}.node_modules_cleanup`, removal.ok, { code: removal.reason ?? "node_modules_cleanup_refused" });
+      }
+    },
+  });
+  run.note(`${stageName}.install_mode`, networkUsed ? "online_download_then_offline_reinstall" : "offline_cache_hit");
   const lockAfter = sha256File(join(workbenchDir, "package-lock.json"));
   run.assert(`${stageName}.lock_hash_unchanged`, lockBefore === lockAfter, { code: "lock_hash_changed" });
   const modules = join(workbenchDir, "node_modules");
@@ -1131,25 +1418,55 @@ try {
 process.stdout.write(JSON.stringify(result));
 `;
 
+/** 必需 Office 产物种类：五份报表都必须真的产出 PDF。缺字体时 CSV / XLSX 仍算通过，但不能算整体成功。 */
+export const REQUIRED_OFFICE_KINDS = Object.freeze(["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"]);
+
+/**
+ * 汇总 Office 渲染结果：必需 PDF 缺失时**不能**算通过，也不能被后续成功覆盖。
+ * 缺字体（`pdf_font_unavailable`）只是“PDF 不可用”的原因之一，处理方式一致：
+ * 阶段 blocked、总结果 blocked、非零退出、保留现场；CSV / XLSX 的真实通过断言不受影响。
+ * @param {Map<string, any>} results
+ * @param {readonly string[]} [requiredKinds]
+ * @returns {{required:number, rendered:number, requiredBlocked:{kind:string,code:string}[]}}
+ */
+export function classifyOfficeOutputs(results, requiredKinds = REQUIRED_OFFICE_KINDS) {
+  const kinds = Array.isArray(requiredKinds) ? requiredKinds : [];
+  const requiredBlocked = [];
+  for (const kind of kinds) {
+    const result = typeof results?.get === "function" ? results.get(kind) : undefined;
+    if (!result || !result.pdf) requiredBlocked.push({ kind, code: result?.pdfError ?? "pdf_render_failed" });
+  }
+  return { required: kinds.length, rendered: kinds.length - requiredBlocked.length, requiredBlocked };
+}
+
+/** Cleanup is a success effect, never a finally effect: rejection retains the real evidence. */
+export async function runWithSuccessCleanup(operation, cleanup) {
+  const result = await operation();
+  await cleanup();
+  return result;
+}
+
 async function runOfficeStage(run, { nodePath, workbenchDir, tempRoot, outDir, dto, font, fontFamily, label, scratch }) {
   const artifacts = join(outDir, "artifacts", "office");
+  const failsBefore = run.assertions.filter((item) => item.status === "fail").length;
   mkdirSync(artifacts, { recursive: true });
   const helperPath = join(workbenchDir, ".windows-delivery-office-helper.mjs");
   const writeHelper = () => {
     writeFileSync(helperPath, OFFICE_HELPER, "utf8");
     const real = trackExistingPath(scratch, helperPath, "office_helper");
-    if (!real) run.addAssertion(`${label}.helper_registered`, "fail", "cleanup_refused:helper_not_registered", { file: basename(helperPath) });
+    run.assert(`${label}.helper_registered`, Boolean(real), { code: "cleanup_refused:helper_not_registered", details: { file: basename(helperPath) } });
   };
   // 辅助脚本是本进程写入专属冷拷贝根内的精确文件：删除走同一守卫（manifest + 完整祖先链 + realpath）。
   const removeHelper = () => {
     if (!existsSync(helperPath)) return;
     const removal = removeTrackedPath(scratch, helperPath);
-    if (!removal.ok) run.addAssertion(`${label}.helper_cleanup`, "fail", removal.reason, { file: basename(helperPath) });
-    else if (removal.manifestRefreshed === false) run.addAssertion(`${label}.helper_manifest_refresh`, "fail", "cleanup_failed:manifest_refresh_failed", { file: basename(helperPath) });
+    run.assert(`${label}.helper_cleanup`, removal.ok, { code: removal.reason ?? "helper_cleanup_failed", details: { file: basename(helperPath) } });
+    run.assert(`${label}.helper_manifest_refresh`, removal.manifestRefreshed !== false, { code: "cleanup_failed:manifest_refresh_failed", details: { file: basename(helperPath) } });
   };
   writeHelper();
-  const results = new Map();
-  try {
+  return runWithSuccessCleanup(async () => {
+    const results = new Map();
+    // Keep the exact helper on any failed/blocked path, including a failed owned child.
     for (const [kind, report] of dto.entries()) {
       const dtoPath = join(artifacts, `${kind}.dto.json`);
       jsonWrite(dtoPath, report);
@@ -1165,83 +1482,107 @@ async function runOfficeStage(run, { nodePath, workbenchDir, tempRoot, outDir, d
       if (!parsed) throw new StageError("office_render_output_invalid", { details: { kind } });
       results.set(kind, parsed);
     }
-  } finally {
-    removeHelper();
-  }
 
-  const expectedNumbers = {
-    "trial-balance": [50000, 11300, 61300, 10000],
-    "income-statement": [10000],
-    "balance-sheet": [61300, 50000, 10000],
-    "cash-flow-statement": [11300, 50000, 61300],
-    ledger: [50000, 11300, 61300],
-  };
-  const expectedPdf = {
-    "trial-balance": ["科目余额表", "61,300.00"],
-    "income-statement": ["利润表", "10,000.00"],
-    "balance-sheet": ["资产负债表", "61,300.00"],
-    "cash-flow-statement": ["现金流量表", "11,300.00"],
-    ledger: ["明细账", "61,300.00"],
-  };
+    const expectedNumbers = {
+      "trial-balance": [50000, 11300, 61300, 10000],
+      "income-statement": [10000],
+      "balance-sheet": [61300, 50000, 10000],
+      "cash-flow-statement": [11300, 50000, 61300],
+      ledger: [50000, 11300, 61300],
+    };
+    const expectedPdf = {
+      "trial-balance": ["科目余额表", "61,300.00"],
+      "income-statement": ["利润表", "10,000.00"],
+      "balance-sheet": ["资产负债表", "61,300.00"],
+      "cash-flow-statement": ["现金流量表", "11,300.00"],
+      ledger: ["明细账", "61,300.00"],
+    };
 
-  for (const [kind, result] of results) {
-    run.assert(`office.xlsx.${kind}`, result.xlsx && result.xlsx.bytes > 0 && result.xlsx.sheets >= 1, { code: result.xlsxError ?? "xlsx_render_failed", details: { kind } });
-    const numbers = new Set((result.xlsx?.numbers ?? []).map((value) => Math.round(Number(value) * 100) / 100));
-    const missing = expectedNumbers[kind].filter((value) => !numbers.has(value));
-    run.assert(`office.xlsx.${kind}.amounts`, missing.length === 0, { code: "xlsx_amount_missing", details: { kind, missing } });
-    if (result.pdf) {
-      run.assert(`office.pdf.${kind}`, result.pdf.bytes > 0 && result.pdf.pages >= 1 && result.pdf.magic === "%PDF-", { code: "pdf_render_failed", details: { kind, pages: result.pdf.pages } });
-      run.assert(`office.pdf.${kind}.font_embedded`, Boolean(result.pdf.font?.label), { code: "pdf_font_not_embedded", details: { kind } });
-      const extracted = await extractPdfPages(run, {
-        pdfPath: join(artifacts, `${kind}.pdf`),
-        pngPrefix: join(artifacts, kind),
-        tempRoot,
-        label: `${label}-${kind}-pdf`,
-      });
-      if (extracted.status === "unavailable") {
-        run.note(`office.pdf.${kind}.text`, "pdf_text_extraction_unavailable", { reason: extracted.reason });
-        run.addAssertion(`office.pdf.${kind}.text`, "skipped", "pdf_text_extraction_unavailable");
-        run.addAssertion(`office.pdf.${kind}.pages_rendered`, "skipped", "pdf_visual_render_unavailable");
-        run.addAssertion(`office.pdf.${kind}.visual_inspection`, "skipped", "pdf_visual_render_unavailable");
+    for (const [kind, result] of results) {
+      run.assert(`office.xlsx.${kind}`, result.xlsx && result.xlsx.bytes > 0 && result.xlsx.sheets >= 1, { code: result.xlsxError ?? "xlsx_render_failed", details: { kind } });
+      const numbers = new Set((result.xlsx?.numbers ?? []).map((value) => Math.round(Number(value) * 100) / 100));
+      const missing = expectedNumbers[kind].filter((value) => !numbers.has(value));
+      run.assert(`office.xlsx.${kind}.amounts`, missing.length === 0, { code: "xlsx_amount_missing", details: { kind, missing } });
+      if (result.pdf) {
+        run.assert(`office.pdf.${kind}`, result.pdf.bytes > 0 && result.pdf.pages >= 1 && result.pdf.magic === "%PDF-", { code: "pdf_render_failed", details: { kind, pages: result.pdf.pages } });
+        run.assert(`office.pdf.${kind}.font_embedded`, Boolean(result.pdf.font?.label), { code: "pdf_font_not_embedded", details: { kind } });
+        const extracted = await extractPdfPages(run, {
+          pdfPath: join(artifacts, `${kind}.pdf`),
+          pngPrefix: join(artifacts, kind),
+          tempRoot,
+          label: `${label}-${kind}-pdf`,
+        });
+        if (extracted.status === "unavailable") {
+          run.note(`office.pdf.${kind}.text`, "pdf_text_extraction_unavailable", { reason: extracted.reason });
+          run.addAssertion(`office.pdf.${kind}.text`, "skipped", "pdf_text_extraction_unavailable");
+          run.addAssertion(`office.pdf.${kind}.pages_rendered`, "skipped", "pdf_visual_render_unavailable");
+          run.addAssertion(`office.pdf.${kind}.visual_inspection`, "skipped", "pdf_visual_render_unavailable");
+        } else {
+          run.addAssertion(`office.pdf.${kind}.pages`, extracted.pages >= 1 ? "pass" : "fail", extracted.pages >= 1 ? null : "pdf_page_count_invalid");
+          const text = String(extracted.text ?? "");
+          const [title, amount] = expectedPdf[kind];
+          const textOk = text.includes(title) && text.includes(amount);
+          run.addAssertion(`office.pdf.${kind}.text`, textOk ? "pass" : "fail", textOk ? null : "pdf_text_mismatch");
+          // 声明“全页 PNG”就必须真的逐页输出：页数必须完全相等，否则按失败记。
+          const renderedPages = Array.isArray(extracted.renderedPages) ? extracted.renderedPages : [];
+          const pageFiles = renderedPages.map((page) => `${join(artifacts, kind)}-page-${page}.png`);
+          const allPagesRendered = extracted.pages >= 1
+            && renderedPages.length === extracted.pages
+            && pageFiles.every((file) => existsSync(file) && statSync(file).size > 1000);
+          run.addAssertion(`office.pdf.${kind}.pages_rendered`, allPagesRendered ? "pass" : "fail", allPagesRendered ? null : "pdf_page_render_incomplete", { pages: extracted.pages, rendered: renderedPages.length });
+          run.addAssertion(`office.pdf.${kind}.visual_inspection`, "skipped", "human_visual_inspection_not_performed");
+          if (allPagesRendered) run.note(`office.pdf.${kind}.visual_artifacts`, "rendered_all_pages_png", { pages: extracted.pages, pattern: `artifacts/office/${kind}-page-<n>.png` });
+        }
       } else {
-        run.addAssertion(`office.pdf.${kind}.pages`, extracted.pages >= 1 ? "pass" : "fail", extracted.pages >= 1 ? null : "pdf_page_count_invalid");
-        const text = String(extracted.text ?? "");
-        const [title, amount] = expectedPdf[kind];
-        const textOk = text.includes(title) && text.includes(amount);
-        run.addAssertion(`office.pdf.${kind}.text`, textOk ? "pass" : "fail", textOk ? null : "pdf_text_mismatch");
-        // 声明“全页 PNG”就必须真的逐页输出：页数必须完全相等，否则按失败记。
-        const renderedPages = Array.isArray(extracted.renderedPages) ? extracted.renderedPages : [];
-        const pageFiles = renderedPages.map((page) => `${join(artifacts, kind)}-page-${page}.png`);
-        const allPagesRendered = extracted.pages >= 1
-          && renderedPages.length === extracted.pages
-          && pageFiles.every((file) => existsSync(file) && statSync(file).size > 1000);
-        run.addAssertion(`office.pdf.${kind}.pages_rendered`, allPagesRendered ? "pass" : "fail", allPagesRendered ? null : "pdf_page_render_incomplete", { pages: extracted.pages, rendered: renderedPages.length });
-        run.addAssertion(`office.pdf.${kind}.visual_inspection`, "skipped", "human_visual_inspection_not_performed");
-        if (allPagesRendered) run.note(`office.pdf.${kind}.visual_artifacts`, "rendered_all_pages_png", { pages: extracted.pages, pattern: `artifacts/office/${kind}-page-<n>.png` });
+        run.addAssertion(`office.pdf.${kind}`, "blocked", result.pdfError ?? "pdf_render_failed");
+        run.note("office.pdf_unavailable", result.pdfError ?? "pdf_render_failed", { kind });
       }
-    } else {
-      run.addAssertion(`office.pdf.${kind}`, "blocked", result.pdfError ?? "pdf_render_failed");
-      run.note("office.pdf_unavailable", result.pdfError ?? "pdf_render_failed", { kind });
     }
-  }
 
-  // Missing font must be an explicit, isolated failure; CSV/XLSX stay usable.
-  mkdirSync(join(artifacts, "missing-font"), { recursive: true });
-  writeHelper();
-  try {
-    const probe = await spawnChecked(run, "office-missing-font", nodePath, [helperPath, `dto=${join(artifacts, "trial-balance.dto.json")}`, `outdir=${join(artifacts, "missing-font")}`], {
-      cwd: workbenchDir,
-      env: minimalEnv({ TEMP: join(tempRoot, "tmp"), TMP: join(tempRoot, "tmp"), REPORT_PDF_FONT: join(tempRoot, "no-such-font-file.ttf") }),
-      timeoutMs: LIMITS.officeMs,
+    // Missing font must be an explicit, isolated failure; CSV/XLSX stay usable.
+    mkdirSync(join(artifacts, "missing-font"), { recursive: true });
+    {
+      const probe = await spawnChecked(run, "office-missing-font", nodePath, [helperPath, `dto=${join(artifacts, "trial-balance.dto.json")}`, `outdir=${join(artifacts, "missing-font")}`], {
+        cwd: workbenchDir,
+        env: minimalEnv({ TEMP: join(tempRoot, "tmp"), TMP: join(tempRoot, "tmp"), REPORT_PDF_FONT: join(tempRoot, "no-such-font-file.ttf") }),
+        timeoutMs: LIMITS.officeMs,
+      });
+      run.log("office-missing-font", probe.stdout, probe.stderr);
+      run.assert("failures.missing_font_child", probe.code === 0, { code: "office_missing_font_probe_failed", details: { exitCode: probe.code } });
+      let parsed = null;
+      try { parsed = JSON.parse(probe.stdout.trim()); } catch { parsed = null; }
+      run.assert("failures.missing_font_reported", parsed?.pdfError === "pdf_font_unavailable", { code: "pdf_font_error_not_reported", details: { pdfError: parsed?.pdfError ?? null } });
+      run.assert("failures.missing_font_xlsx_still_usable", parsed?.xlsx?.bytes > 0, { code: "xlsx_blocked_by_font" });
+    }
+
+    // 必需 PDF 产物缺失（例如缺字体）不能算成功：阶段 blocked、总结果 blocked、退出 2，并保留现场。
+    // CSV / XLSX 已真实通过（上面保留），不作为“字体可选”的理由，也不放宽 / 安装字体。
+    const outputs = classifyOfficeOutputs(results);
+    run.note("office.required_outputs", outputs.requiredBlocked.length === 0 ? "all_required_pdf_rendered" : "required_pdf_output_blocked", {
+      required: outputs.required,
+      rendered: outputs.rendered,
+      blocked: outputs.requiredBlocked,
+      csvAndXlsxUnaffected: true,
     });
-    let parsed = null;
-    try { parsed = JSON.parse(probe.stdout.trim()); } catch { parsed = null; }
-    run.assert("failures.missing_font_reported", parsed?.pdfError === "pdf_font_unavailable", { code: "pdf_font_error_not_reported", details: { pdfError: parsed?.pdfError ?? null } });
-    run.assert("failures.missing_font_xlsx_still_usable", parsed?.xlsx?.bytes > 0, { code: "xlsx_blocked_by_font" });
-  } finally {
-    removeHelper();
-  }
-  return results;
+    if (outputs.requiredBlocked.length > 0) {
+      // 已有 fail 断言时按 fail 报：blocked 不得抢在真实失败前面把结论说轻。
+      const failsAdded = run.assertions.filter((item) => item.status === "fail").length - failsBefore;
+      if (failsAdded > 0) {
+        throw new StageError("office_output_incomplete", { details: { blocked: outputs.requiredBlocked, failedAssertions: failsAdded } });
+      }
+      throw new StageError("pdf_output_required_blocked", {
+        blocked: true,
+        details: {
+          blocked: outputs.requiredBlocked,
+          required: outputs.required,
+          rendered: outputs.rendered,
+          note: "必需 PDF 产物缺失（如 pdf_font_unavailable）时不能算成功：阶段 blocked / 总结果 blocked / 退出 2，输出目录与工作根保留；CSV 与 XLSX 的真实通过断言不受影响，也不安装字体。",
+        },
+      });
+    }
+    run.assert(`${label}.outputs_valid`, run.assertions.filter((item) => item.status === "fail").length === failsBefore, { code: "office_output_invalid" });
+    return results;
+  }, removeHelper);
 }
 
 /**
@@ -1276,12 +1617,18 @@ async function extractPdfPages(run, { pdfPath, pngPrefix, tempRoot, label }) {
     }),
     timeoutMs: LIMITS.officeMs,
   });
-  if (result.unreclaimed || result.hardDeadline) {
-    run.recordResidual({ kind: "child", label, pid: result.pid ?? null });
-    run.addAssertion(`${label}.child_reclaimed`, "fail", "child_process_unreclaimed", { pid: result.pid ?? null });
-    return { status: "unavailable", reason: "python_pdf_tool_unreclaimed" };
+  // Only an absent optional executable is harmless without a close event.
+  if (result.spawnError === "ENOENT" && result.pid == null) return { status: "unavailable", reason: "python_pdf_tool_unavailable" };
+  const failure = childLifecycleFailure(result);
+  if (failure) {
+    run.log(label, result.stdout, result.stderr);
+    if (result.unreclaimed || result.hardDeadline || (result.reclaimed !== true && result.pid != null)) {
+      run.recordResidual({ kind: "child", label, pid: result.pid ?? null });
+    }
+    run.addAssertion(`${label}.lifecycle`, "fail", failure);
+    requireChildCompletion(result);
   }
-  if (result.spawnError || result.code !== 0) return { status: "unavailable", reason: "python_pdf_tool_unavailable" };
+  if (result.code !== 0) return { status: "unavailable", reason: "python_pdf_tool_unavailable" };
   try {
     const parsed = JSON.parse(result.stdout.trim().split("\n").at(-1));
     return { status: "ok", ...parsed };
@@ -1821,7 +2168,7 @@ async function installStart(run, options, paths) {
     const lockSources = validateLockSources(join(release.workbenchDir, "package-lock.json"));
     run.assert("preflight.lock_sources", lockSources.ok, { code: "lock_source_not_allowed", details: { checked: lockSources.checked, violations: lockSources.violations } });
     run.note("preflight.lock_sources", "allowed_public_registries_only", { checked: lockSources.checked, allowedHosts: lockSources.allowedHosts });
-    const nodeVersion = await spawnChecked(run, "preflight-node-version", options.node, ["--version"], { env: minimalEnv(), timeoutMs: LIMITS.suiteMs });
+    const nodeVersion = await spawnChecked(run, "preflight-node-version", options.node, ["--version"], { env: minimalEnv({ TEMP: join(paths.tempRoot, "tmp"), TMP: join(paths.tempRoot, "tmp") }), timeoutMs: LIMITS.suiteMs });
     run.assert("preflight.node_binary", nodeVersion.code === 0 && /^v24\.15\.0/.test(nodeVersion.stdout.trim()), { code: "node_binary_unqualified", details: { version: nodeVersion.stdout.trim() || null } });
     if (release.engines !== "24.15.0") {
       run.addAssertion("preflight.engines_declaration", "warn", "engines_declaration_too_wide", { declared: release.engines, testedNode: TESTED_NODE_VERSION, note: "只有 24.15.0 做过资格验证；24.15.x 的其它 patch 未实测。" });
@@ -2012,11 +2359,18 @@ async function main(argv) {
     return EXIT.usage;
   }
   const options = parsed.options;
+  // 路径守卫必须先于**任何 mkdir / 扫描 / 复制**（含 out 自身的创建）：拒绝时只写 stdout 并非零，
+  // 不为了留日志先写一个未验证的 out。
+  const invocation = auditInvocationPaths({ out: options.out, release: options.release, scratchRoot: options.scratchRoot });
+  if (!invocation.ok) {
+    process.stdout.write(`${JSON.stringify({ tool: TOOL, ok: false, status: "rejected", code: invocation.code, details: invocation.details ?? { reason: invocation.reason ?? null } }, null, 2)}\n`);
+    return Number.isInteger(invocation.exitCode) ? invocation.exitCode : EXIT.usage;
+  }
   let outDir;
   try {
     outDir = prepareOutDir(options.out);
   } catch (error) {
-    process.stdout.write(`${JSON.stringify({ tool: TOOL, ok: false, status: "rejected", code: error.code ?? "out_invalid" }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ tool: TOOL, ok: false, status: "rejected", code: error.code ?? "out_invalid", details: error.details ?? null }, null, 2)}\n`);
     return EXIT.usage;
   }
   const run = makeRun(outDir);
@@ -2063,10 +2417,13 @@ async function main(argv) {
       await installStart(run, options, paths);
     }
   } catch (error) {
-    try {
-      const detail = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error);
-      if (outDir) writeFileSync(join(outDir, "logs", "internal-error.log"), detail, "utf8");
-    } catch { /* ignore */ }
+    // 预期的阶段结果（StageError，含 blocked / fail）不写成 internal-error；只留意外异常。
+    if (!(error instanceof StageError)) {
+      try {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error);
+        if (outDir) writeFileSync(join(outDir, "logs", "internal-error.log"), detail, "utf8");
+      } catch { /* ignore */ }
+    }
     failure = error instanceof StageError
       ? error
       : typeof error?.code === "string" && /^scratch_/.test(error.code)
@@ -2103,7 +2460,9 @@ async function main(argv) {
           failure = failure ?? new StageError(cleanupCode, { details: { reason: removal.reason ?? null } });
         }
       } else {
-        const reason = status !== "ok" ? "stage_failed_residual_kept" : options.keep ? "keep_requested" : "cleanup_not_allowed";
+        const reason = status !== "ok"
+          ? (status === "blocked" ? "blocked_residual_kept" : "stage_failed_residual_kept")
+          : options.keep ? "keep_requested" : "cleanup_not_allowed";
         run.cleanup = { attempted: false, completed: false, reason, retained: true, manifestVerified: false, pathEchoed: false };
         run.note("cleanup.retained", "scratch_root_retained", { reason, manifestVerified: false, note: "未核验也未删除：目录保留供诊断，不按名称/前缀事后清理。" });
       }

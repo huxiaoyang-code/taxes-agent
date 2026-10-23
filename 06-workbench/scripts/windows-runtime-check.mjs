@@ -15,8 +15,11 @@
  * 专属临时根（同时是交付验收脚本 / 测试复用的共享守卫，见下方导出）：
  *  - 默认 `<本脚本所属 06-workbench>/tmp/windows-delivery/` 下建随机**新**目录；
  *  - 也可用 `--scratch-root <绝对路径>` 显式传入（发布目录只读时必须这样给）；
- *    显式入参先校验“原始字符串就是绝对路径”（不能 resolve 后再查），且由调用者显式授权、
- *    专用于本次任务；本守卫从不删除 base，也不枚举 base 下的其它目录。
+ *    显式入参先校验“原始字符串就是**完整绝对路径**”（不能 resolve 后再查）：相对、
+ *    drive-relative（`C:foo`）、root-relative（`\foo`）、设备路径（含 `//?/` 等斜杠变体）一律拒绝，
+ *    缺 share 的不完整 UNC（`\\server`）同样拒绝；只有盘符绝对或**完整 UNC**（server + share）才算绝对。
+ *    且由调用者显式授权、专用于本次任务；本守卫从不删除 base，也不枚举 base 下的其它目录。
+ *    显式给出的空 / 纯空白值按无效入参拒绝，不静默退回默认根。
  *  - 任何 mkdir 之前：从最近已存在祖先**逐级到卷根**核验（有 symlink / junction 就拒绝）；
  *    创建后再次核验完整祖先链与 realpath 等于预期规范化路径；删除前重验同一链。
  *  - manifest 记录精确绝对路径 + 运行 token + 任务 + **逐项删除目标与其 realpath**，
@@ -105,6 +108,47 @@ function isInsideRoot(root, target) {
   const value = pathKey(target);
   const prefix = base.endsWith(sep) ? base : `${base}${sep}`;
   return value === base || value.startsWith(prefix);
+}
+
+/**
+ * 原始入参判定：必须是**完整绝对路径**。这里只看字符串本身，不做 resolve / 规范化——
+ * `resolve()` 会把相对路径补成绝对路径，让后续“绝对路径”检查永远通过。
+ *
+ * 「绝对」只认两种形态，且在调用 isAbsolute / resolve 之前就按字符串定性：
+ *  - 盘符绝对：`C:\...` / `C:/...`；
+ *  - **完整 UNC**：`\\server\share[\...]`（server 与 share 都非空）。
+ * 只写 `\\server` / `\\server\` 的不完整 UNC 不是绝对路径：`isAbsolute` / `IsPathRooted`
+ * 会把它们当“看似绝对”再规范化，这里提前拒绝，只做字符串测试、不连接网络。
+ *
+ * 拒绝：空 / 纯空白 / 带首尾空白 / 相对路径 / drive-relative（`C:foo`）/ root-relative（`\foo`、`/foo`）/
+ * 设备路径（`\\?\`、`\\.\` 及 `//?/`、`//./`、正反斜杠混用等变体，含 `\\?\UNC\...`）/ 不完整 UNC。
+ * @returns {{ok:boolean, reason:string|null, resolved:string|null, volumeRoot:string|null}}
+ */
+export function inspectRawAbsolutePath(value) {
+  if (typeof value !== "string" || value.trim() === "") return { ok: false, reason: "path_empty", resolved: null, volumeRoot: null };
+  if (value !== value.trim()) return { ok: false, reason: "path_has_whitespace_edges", resolved: null, volumeRoot: null };
+  // 设备路径命名空间（正反斜杠变体）：在任何绝对判定 / 规范化之前拒绝。
+  if (/^[\\/]{2}[?.][\\/]/.test(value)) return { ok: false, reason: "device_path_not_allowed", resolved: null, volumeRoot: null };
+  if (/^[A-Za-z]:(?![\\/])/.test(value)) return { ok: false, reason: "drive_relative_not_allowed", resolved: null, volumeRoot: null };
+  if (/^[A-Za-z]:[\\/]/.test(value)) return finalizeRawAbsolutePath(value);
+  if (/^[\\/]{2}/.test(value)) {
+    // 完整 UNC 必须同时有 server 与 share；缺 share 的一律 `unc_incomplete`，不交给 isAbsolute 放行。
+    const unc = /^[\\/]{2}([^\\/]+)[\\/]+([^\\/]+)/.exec(value);
+    if (unc && /[<>:"|?*]/.test(unc[1] + unc[2])) return { ok: false, reason: "unc_invalid_name", resolved: null, volumeRoot: null };
+    if (!unc) return { ok: false, reason: "unc_incomplete", resolved: null, volumeRoot: null };
+    return finalizeRawAbsolutePath(value);
+  }
+  if (/^[\\/](?![\\/])/.test(value)) return { ok: false, reason: "root_relative_not_allowed", resolved: null, volumeRoot: null };
+  return { ok: false, reason: "path_not_absolute", resolved: null, volumeRoot: null };
+}
+
+/** 字符串已判定为盘符绝对 / 完整 UNC 之后的规范化与卷根复核（仍不触碰文件系统）。 */
+function finalizeRawAbsolutePath(value) {
+  if (!isAbsolute(value)) return { ok: false, reason: "path_not_absolute", resolved: null, volumeRoot: null };
+  const resolved = resolve(value);
+  const volumeRoot = parse(resolved).root;
+  if (!volumeRoot || !isAbsolute(volumeRoot)) return { ok: false, reason: "volume_root_unknown", resolved: null, volumeRoot: null };
+  return { ok: true, reason: null, resolved, volumeRoot };
 }
 
 function lstatOrNull(path) {
@@ -452,6 +496,23 @@ export function removeScratchRecord(record) {
   return { ok: true, reason: null, manifestVerified: true, targetsRemaining: record.tracked.size };
 }
 
+/** 纯路径预检：空白与卷根拒绝在任何 FS 调用之前，可安全覆盖真实卷根。 */
+export function inspectScratchBasePath(basePath = null) {
+  const explicit = basePath !== null && basePath !== undefined;
+  if (explicit && typeof basePath !== "string") return { ok: false, code: "scratch_root_invalid" };
+  // 原始入参必须先校验“完整绝对路径”：resolve() 会把相对路径补成绝对路径，之后检查永远通过；
+  // drive-relative（`C:foo`）与 root-relative（`\foo`）也不得先规范化再接受。
+  if (explicit) {
+    const rawBase = inspectRawAbsolutePath(basePath);
+    if (!rawBase.ok) return { ok: false, code: "scratch_root_not_absolute", details: { reason: rawBase.reason } };
+  }
+  const base = explicit ? resolve(basePath) : defaultScratchBase();
+  if (!isAbsolute(base)) return { ok: false, code: "scratch_root_not_absolute" };
+  if (dirname(base) === base) return { ok: false, code: "scratch_root_is_filesystem_root" };
+
+  return { ok: true, base };
+}
+
 /**
  * 新建随机专属根并写入所有权 manifest（精确绝对路径 + 真实路径 + 运行 token + 任务 + 逐项目标）。
  * 顺序：显式 base 的**原始入参**先 inAbsolute 检查 → 最近已存在祖先逐级核验到卷根 → 才允许 mkdir
@@ -462,13 +523,11 @@ export function removeScratchRecord(record) {
  */
 export function createScratchRecord({ label = "scratch", basePath = null, tool = TOOL, ownerTask = OWNER_TASK } = {}) {
   if (!SCRATCH_TOOLS.includes(tool)) throw new ScratchGuardError("scratch_tool_not_allowed", { details: { reason: "unknown_tool" } });
-  const explicit = basePath !== null && basePath !== undefined && basePath !== "";
-  if (explicit && typeof basePath !== "string") throw new ScratchGuardError("scratch_root_invalid");
-  // 原始入参必须先校验绝对路径：resolve() 会把相对路径补成绝对路径，之后检查永远通过。
-  if (explicit && !isAbsolute(basePath)) throw new ScratchGuardError("scratch_root_not_absolute");
-  const base = explicit ? resolve(basePath) : defaultScratchBase();
-  if (!isAbsolute(base)) throw new ScratchGuardError("scratch_root_not_absolute");
-  if (dirname(base) === base) throw new ScratchGuardError("scratch_root_is_filesystem_root");
+  // 「未提供」（null / undefined）才走默认根；显式给出（含空 / 纯空白字符串）一律按入参校验，
+  // 不静默退回默认根。
+  const inspectedBase = inspectScratchBasePath(basePath);
+  if (!inspectedBase.ok) throw new ScratchGuardError(inspectedBase.code, { details: inspectedBase.details });
+  const base = inspectedBase.base;
 
   // 任何 mkdir 之前：最近已存在祖先逐级核验到卷根，有 symlink / junction 就拒绝。
   const preAudit = auditExistingAncestorChain(base);
@@ -740,7 +799,7 @@ process.stdout.write(JSON.stringify({ sqlite, fs: probeFs() }));
 function runIsolatedProbe(probeRoot) {
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", PROBE_SCRIPT, probeRoot], {
     cwd: probeRoot,
-    env: { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", WINDIR: process.env.WINDIR ?? "", TEMP: join(probeRoot, "tmp"), TMP: join(probeRoot, "tmp") },
+    env: { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", WINDIR: process.env.WINDIR ?? "", TEMP: join(probeRoot, "tmp"), TMP: join(probeRoot, "tmp"), WORKBENCH_DATA_DIR: join(probeRoot, "fallback-data"), WINDOWS_DELIVERY_SCRATCH_ROOT: join(probeRoot, "scratch") },
     stdio: ["ignore", "pipe", "pipe"],
     timeout: MAX_PROBE_MS,
     killSignal: "SIGKILL",

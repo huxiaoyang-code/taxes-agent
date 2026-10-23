@@ -54,11 +54,18 @@
 
 .PARAMETER ScratchRoot
   Optional, caller-authorized workspace directory dedicated to this run; used as
-  the base of the pre-check probe directory. Must be given as an absolute path
-  (checked as-is, before any normalization) outside the read-only release
-  directory. The base itself is never deleted; only the random probe root this
-  script creates inside it is removed, and only after the full ancestor chain to
-  the volume root, the realpath and the ownership manifest all verify.
+  the base of the pre-check probe directory. Must be given as a full absolute
+  path: drive-qualified like `D:\dir` or a **complete UNC**
+  `\\server\share\dir` (both server and share required). Checked as-is
+  **before any normalization** outside the read-only release directory.
+  Relative, drive-relative (`C:foo`), root-relative (`\foo`), device paths
+  (`\\?\`, `//?/`) and incomplete UNC (`\\server`) values are rejected before
+  anything is created. Supplying the parameter with an empty or whitespace-only
+  value is rejected too, instead of silently falling back to the default base.
+  The base itself is never deleted; only the random probe
+  root this script creates inside it is removed, and only after the full
+  ancestor chain to the volume root, the realpath and the ownership manifest all
+  verify.
 
 .PARAMETER Help
   Print usage and exit 0. Also available as Get-Help .\windows-start.ps1.
@@ -107,6 +114,7 @@ if ($Help) {
   Write-Output "HOST is always 127.0.0.1; PORT=0 lets the OS choose and the server prints the actual port."
   Write-Output "DataDir is required for a real start. No default data directory is used."
   Write-Output "The pre-check probe directory defaults to <workbench>\tmp\windows-delivery; use -ScratchRoot for a read-only release."
+  Write-Output "-ScratchRoot must be a full absolute path (drive absolute like C:\work or a complete UNC \\server\share); relative, drive-relative (C:foo), root-relative (\foo), device paths and incomplete UNC values are rejected."
   Write-Output "The service process id is printed once as windows_start_service_pid=<pid>; stop only that id."
   Write-Output "A probe the pre-check cannot stop is reported as windows_start_residual_precheck_pid=<pid>, never as cleaned."
   exit 0
@@ -135,6 +143,28 @@ function Resolve-FullPath([string]$path, [string]$fallbackCode) {
     Fail $fallbackCode 1
     return ""
   }
+}
+
+# Raw input check: only the string itself, no normalization. Only two shapes
+# count as "absolute" here, decided before isAbsolute / IsPathRooted:
+#   * drive absolute: C:\... or C:/...
+#   * complete UNC: \\server\share[...] (both server and share non-empty)
+# Rejects relative paths, drive-relative (`C:foo`), root-relative (`\foo`, `/foo`),
+# device paths (`\\?\`, `\\.\` and the `//?/`, `//./`, mixed-slash variants,
+# including `\\?\UNC\...`) and incomplete UNC (`\\server`, `\\server\`).
+# IsPathRooted alone would accept the last two and a later GetFullPath would
+# promote them, so they are refused by string test only. No network access here.
+function Test-RawAbsolutePath([string]$path) {
+  if ([string]::IsNullOrWhiteSpace($path)) { return $false }
+  if ($path -ne $path.Trim()) { return $false }
+  if ($path -match '^[\\/]{2}[?.][\\/]') { return $false }
+  if ($path -match '^[A-Za-z]:(?![\\/])') { return $false }
+  if ($path -match '^[A-Za-z]:[\\/]') { return $true }
+  if ($path -match '^[\\/]{2}') {
+    if ($path -notmatch '^[\\/]{2}([^\\/]+)[\\/]+([^\\/]+)') { return $false }
+    return (($Matches[1] + $Matches[2]) -notmatch '[<>:"|?*]')
+  }
+  return $false
 }
 
 # Bounded child: waits at most $timeoutMs, then kills and reaps. Never waits
@@ -219,6 +249,21 @@ if ([string]::IsNullOrWhiteSpace($DataDir)) {
 # Resolve to an absolute path without creating it. Never fall back to a default data dir.
 $fullDataDir = Resolve-FullPath $DataDir "data_dir_invalid"
 
+# -ScratchRoot must already be a **full absolute path before any normalization**:
+# relative / drive-relative (`C:foo`) / root-relative (`\foo`) inputs, device paths
+# and incomplete UNC are rejected here, so no scratch directory and no business DB
+# can be created from them. An explicitly supplied empty / whitespace-only value is
+# also rejected instead of silently falling back to the default scratch root: only
+# "parameter not supplied" means "use the default".
+$scratchRootProvided = $PSBoundParameters.ContainsKey('ScratchRoot')
+$fullScratchRoot = ""
+if ($scratchRootProvided) {
+  if (-not (Test-RawAbsolutePath $ScratchRoot)) {
+    Fail "scratch_root_not_absolute" 1
+  }
+  $fullScratchRoot = Resolve-FullPath $ScratchRoot "scratch_root_invalid"
+}
+
 if ([string]::IsNullOrWhiteSpace($NodePath)) {
   $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
   if ($null -eq $nodeCommand) {
@@ -236,8 +281,7 @@ if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
 $NodePath = [System.IO.Path]::GetFullPath($NodePath)
 
 $checkArguments = @($checkScript, "--json", "--data-dir", $fullDataDir)
-if (-not [string]::IsNullOrWhiteSpace($ScratchRoot)) {
-  $fullScratchRoot = Resolve-FullPath $ScratchRoot "scratch_root_invalid"
+if ($fullScratchRoot -ne "") {
   $checkArguments += @("--scratch-root", $fullScratchRoot)
 }
 

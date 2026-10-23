@@ -11,24 +11,40 @@
  * 每个临时根都有所有权 manifest v2（逐项删除目标 + realpath），删除统一走
  * `windows-runtime-check.mjs` 导出的同一守卫（脚本 / 测试不维护第二套）；任何子进程都有
  * 真实 deadline。Node 运行时要求与交付包一致：24.15.0（本包实际验收版本）。
+ *
+ * 需管理者前置（可选，缺失则明确 skip，不假报通过）的用量型用例：
+ *   WINDOWS_DELIVERY_RELEASE_ROOT   已包含 W1 随包工具的冷拷贝发布根（绝对路径）
+ *   WINDOWS_DELIVERY_NPM_ENTRY      npm-cli.js 或 npm.cmd 的绝对路径（同既授权公共 lock）
+ *   WINDOWS_DELIVERY_NPM_CACHE      本任务专属 npm 缓存绝对路径
+ *   WINDOWS_DELIVERY_NODE_BINARY    可选，默认 process.execPath
  */
 
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join, parse } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import nodeTest, { after } from "node:test";
 
-import { decideRuntimeVersion, TESTED_NODE_VERSION } from "../scripts/windows-runtime-check.mjs";
+import { decideRuntimeVersion, inspectRawAbsolutePath, inspectScratchBasePath, TESTED_NODE_VERSION } from "../scripts/windows-runtime-check.mjs";
 import {
+  auditScratchBase,
+  classifyOfficeOutputs,
+  childLifecycleFailure,
+  isOfflineCacheMiss,
+  runDependencyInstallSequence,
+  runWithSuccessCleanup,
+  copyReleaseWhitelist,
   createScratchRecord,
   defaultScratchBase,
   inspectRelease,
+  prepareOutDir,
   removeScratchRecord,
   removeTrackedPath,
+  REQUIRED_OFFICE_KINDS,
   trackExistingPath,
   validateLockSources,
 } from "../scripts/windows-delivery-check.mjs";
@@ -47,6 +63,60 @@ const cleanupFailures = [];
 const residuals = [];
 /** 故意保留的“预期拒绝”fixture 证据（不进入通用“全清”断言）。 */
 const expectedRefusalFixtures = [];
+const fixtureScope = new AsyncLocalStorage();
+
+// Finally blocks only request cleanup. The complete test (including assertions and
+// process shutdown) must succeed before any requested fixture is removed.
+function cleanupDecision(scope) {
+  const reasons = [...scope.reasons];
+  if (!scope.passed) reasons.push("test_failed_or_assertion_failed");
+  for (const child of scope.children) if (!child.reclaimed) reasons.push(`${child.label}:child_unreclaimed_or_unknown`);
+  return reasons.length ? reasons.join(",") : null;
+}
+
+function test(name, body) {
+  return nodeTest(name, async (t) => {
+    const scope = { passed: false, records: new Set(), requested: new Set(), children: [], reasons: [], checks: [] };
+    return fixtureScope.run(scope, async () => {
+      try {
+        await body(t);
+        scope.passed = true;
+      } finally {
+        let reason = cleanupDecision(scope);
+        // Children before their parent: every registered nested manifest is checked.
+        for (const record of [...scope.records].sort((a, b) => b.root.length - a.root.length)) {
+          const explicit = expectedRefusalFixtures.some((entry) => isInsideDir(record.root, entry.root));
+          if (reason || explicit || !scope.requested.has(record)) {
+            recordExpectedRefusalFixture({ kind: `retained-${name}`, root: record.root,
+              reason: reason ?? (explicit ? "expected_refusal_evidence" : "cleanup_not_requested") });
+            t.diagnostic(`fixture retained: ${record.root}; ${reason ?? "expected_refusal_or_cleanup_not_requested"}`);
+          } else {
+            const removal = removeScratchRecord(record);
+            if (!removal.ok) {
+              cleanupFailures.push({ name, reason: removal.reason });
+              recordExpectedRefusalFixture({ kind: `cleanup-refused-${name}`, root: record.root, reason: removal.reason });
+              // Never let a parent cleanup erase a nested fixture whose own guard refused.
+              reason = `nested_cleanup_refused:${removal.reason}`;
+            }
+          }
+        }
+        if (!reason) for (const check of scope.checks) check();
+      }
+    });
+  });
+}
+
+function trackChild(label) {
+  const state = { label, reclaimed: false };
+  fixtureScope.getStore().children.push(state);
+  return state;
+}
+
+function retainForChild(label, result) {
+  if (result.timedOut || result.unreclaimed || result.spawnError || result.code !== 0) {
+    fixtureScope.getStore().reasons.push(`${label}:${result.timedOut ? "timed_out" : result.unreclaimed ? "unreclaimed" : result.spawnError ? "spawn_failed" : `exit_${result.code}`}`);
+  }
+}
 
 function recordExpectedRefusalFixture(entry) {
   expectedRefusalFixtures.push(entry);
@@ -64,13 +134,64 @@ function safeLabel(label) {
 }
 
 function newScratch(label) {
-  return createScratchRecord({ label: `test-${safeLabel(label)}`, basePath: scratchBase(), tool: "windows-delivery-test" });
+  const record = createScratchRecord({ label: `test-${safeLabel(label)}`, basePath: scratchBase(), tool: "windows-delivery-test" });
+  fixtureScope.getStore().records.add(record);
+  return record;
+}
+
+function pathKeyOf(path) {
+  return resolve(path).toLowerCase();
+}
+
+function isInsideDir(root, target) {
+  const base = pathKeyOf(root);
+  const value = pathKeyOf(target);
+  return value === base || value.startsWith(base.endsWith(sep) ? base : `${base}${sep}`);
+}
+
+/** 目录项名字的有序快照（只用于本用例自有 fixture，不扫描卷根 / 用户目录）。 */
+function snapshotDir(dir) {
+  return readdirSync(dir).sort();
+}
+
+/**
+ * 从**本用例自有绝对目标**派生 relative / drive-relative / root-relative 原始入参，
+ * 并在调用前断言：即使被旧实现按 cwd 规范化，结果也只是本 fixture 内的同一个目标
+ * （绝不会变成卷根 / 用户目录 / 仓库）。
+ *
+ * `cwdDir` 必须显式给出：子进程用例传子进程真实 cwd，进程内用例传 process.cwd()。
+ * 不使用 process.chdir（会串扰并发用例）。
+ */
+function rawPathVariants(target, { fixtureRoot, cwdDir = process.cwd() }) {
+  assert.ok(typeof fixtureRoot === "string" && isInsideDir(fixtureRoot, target), `目标必须在本用例 fixture 内：${target}`);
+  assert.notEqual(pathKeyOf(fixtureRoot), pathKeyOf(target), "目标必须是 fixture 内的子路径，不能就是 fixture 根本身");
+  const volumeRoot = parse(target).root;
+  assert.match(volumeRoot, /^[A-Za-z]:[\\/]$/, `候选目标必须在盘符卷上（便于构造 drive-relative）：${volumeRoot}`);
+  assert.equal(
+    pathKeyOf(parse(cwdDir).root),
+    pathKeyOf(volumeRoot),
+    `cwd 必须与 fixture 同卷，否则相对原入参无法定位到自有目标：${pathKeyOf(parse(cwdDir).root)} ≠ ${pathKeyOf(volumeRoot)}`,
+  );
+  const rel = relative(cwdDir, target);
+  assert.ok(rel !== "" && !isAbsolute(rel), `相对片段必须真的相对：${rel}`);
+  const variants = {
+    relative: rel,
+    "drive-relative": `${volumeRoot.slice(0, 2)}${rel}`,
+    // 从自有绝对目标去盘符产生：单反斜杠起头但保留本任务完整子路径，不是「\ + 裸 tag」。
+    "root-relative": `${sep}${target.slice(volumeRoot.length)}`,
+  };
+  for (const [name, raw] of Object.entries(variants)) {
+    assert.equal(pathKeyOf(resolve(cwdDir, raw)), pathKeyOf(target), `${name} 误规范化结果必须就是本 fixture 目标`);
+    assert.ok(isInsideDir(fixtureRoot, resolve(cwdDir, raw)), `${name} 误规范化结果必须仍在本 fixture 内`);
+  }
+  return variants;
 }
 
 function cleanupScratch(record) {
   if (!record) return;
-  const removal = removeScratchRecord(record);
-  if (!removal.ok) cleanupFailures.push({ name: `test-${safeLabel(record.token)}`, reason: removal.reason });
+  const scope = fixtureScope.getStore();
+  assert.ok(scope.records.has(record), "cleanup must belong to current test");
+  scope.requested.add(record);
 }
 
 after(() => {
@@ -120,6 +241,37 @@ function minimalEnv(extra = {}) {
   return env;
 }
 
+/** All child defaults are created in an independent, owned fixture before spawn. */
+function childEnvironment(root, extra = {}) {
+  const dirs = {
+    TEMP: join(root, "process-temp"), TMP: join(root, "process-temp"),
+    WORKBENCH_DATA_DIR: join(root, "fallback-data"),
+    WINDOWS_DELIVERY_SCRATCH_ROOT: join(root, "child-scratch"),
+  };
+  for (const path of new Set(Object.values(dirs))) mkdirSync(path, { recursive: true });
+  const env = minimalEnv({ ...dirs, ...extra });
+  for (const key of Object.keys(dirs)) {
+    assert.ok(isInsideDir(root, env[key]), `${key} must belong to this child fixture`);
+    mkdirSync(env[key], { recursive: true });
+  }
+  return env;
+}
+
+/** Copy the launcher, runtime and delivery module together: default scratch stays inside fixture. */
+function copyChildTools(root) {
+  const wb = join(root, "isolated-workbench");
+  mkdirSync(join(wb, "scripts"), { recursive: true });
+  mkdirSync(join(wb, "test"));
+  mkdirSync(join(wb, "server"));
+  for (const source of [RUNTIME_CHECK, DELIVERY_CHECK, START_SCRIPT]) {
+    copyFileSync(source, join(wb, "scripts", source.split(/[\\/]/).at(-1)));
+  }
+  copyFileSync(fileURLToPath(import.meta.url), join(wb, "test", "windows-delivery.test.mjs"));
+  // Negative launcher calls must never start a real service if their guards regress.
+  writeFileSync(join(wb, "server", "server.mjs"), 'throw new Error("negative_fixture_service_must_not_start");', "utf8");
+  return wb;
+}
+
 function spawnCapture(command, args, options = {}) {
   return new Promise((resolvePromise) => {
     const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 60000;
@@ -137,12 +289,12 @@ function spawnCapture(command, args, options = {}) {
       if (timer) clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
       if (hangTimer) clearTimeout(hangTimer);
-      resolvePromise({ stdout, stderr, timedOut, pid: child?.pid ?? null, ...payload });
+      resolvePromise({ stdout, stderr, timedOut, reclaimed: false, pid: child?.pid ?? null, ...payload });
     };
     try {
       child = spawn(command, args, {
         cwd: options.cwd ?? WORKBENCH,
-        env: options.env ?? minimalEnv(),
+        env: options.env,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         shell: false,
@@ -154,7 +306,7 @@ function spawnCapture(command, args, options = {}) {
     child.stdout.on("data", (chunk) => { if (stdout.length < STREAM_LIMIT) stdout += chunk.toString("utf8"); });
     child.stderr.on("data", (chunk) => { if (stderr.length < STREAM_LIMIT) stderr += chunk.toString("utf8"); });
     child.once("error", (error) => finish({ code: null, signal: null, spawnError: error?.code ?? "spawn_failed" }));
-    child.once("close", (code, signal) => finish({ code: code ?? null, signal: signal ?? null }));
+    child.once("close", (code, signal) => finish({ code: code ?? null, signal: signal ?? null, reclaimed: true }));
     // 真实 deadline：先礼后兵；强杀后仍不 close 就在 KILL_GRACE_MS 后报“未回收”。
     timer = setTimeout(() => {
       timedOut = true;
@@ -175,9 +327,29 @@ function spawnCapture(command, args, options = {}) {
 }
 
 async function capture(label, command, args, options = {}) {
-  const result = await spawnCapture(command, args, options);
-  if (result.unreclaimed) residuals.push({ label, pid: result.pid ?? null, kind: "child" });
-  return result;
+  const childFixture = newScratch(`child-${safeLabel(label)}`);
+  // Queue only: test-scope finalization waits for all caller assertions as well.
+  cleanupScratch(childFixture);
+  const childState = trackChild(label);
+  const wb = copyChildTools(childFixture.root);
+  const childArgs = args.map((arg) => [RUNTIME_CHECK, DELIVERY_CHECK, START_SCRIPT].includes(arg)
+    ? join(wb, "scripts", arg.split(/[\\/]/).at(-1)) : arg);
+  const suppliedEnv = { ...(options.env ?? {}) };
+  // capture owns all fallback paths; explicit --data-dir / -DataDir arguments still target caller fixture.
+  for (const key of ["TEMP", "TMP", "WINDOWS_DELIVERY_SCRATCH_ROOT"]) delete suppliedEnv[key];
+  const explicitDataDir = suppliedEnv.WORKBENCH_DATA_DIR;
+  delete suppliedEnv.WORKBENCH_DATA_DIR;
+  const env = childEnvironment(childFixture.root, suppliedEnv);
+  if (explicitDataDir !== undefined) {
+    assert.ok(isInsideDir(scratchBase(), explicitDataDir), "explicit server data must stay under suite fixture base");
+    env.WORKBENCH_DATA_DIR = explicitDataDir;
+  }
+  // Caller data directories intentionally belong to its own fixture; TEMP and fallback remain child-owned.
+  const result = await spawnCapture(command, childArgs, { ...options, cwd: options.cwd ?? wb, env });
+  childState.reclaimed = result.reclaimed === true;
+  retainForChild(label, result);
+  if (result.unreclaimed || (!childState.reclaimed && result.pid !== null)) residuals.push({ label, pid: result.pid ?? null, kind: "child" });
+  return { ...result, isolation: { root: childFixture.root, workbench: wb } };
 }
 
 async function fetchJson(base, path, options = {}) {
@@ -194,9 +366,11 @@ async function fetchJson(base, path, options = {}) {
 }
 
 async function startServer(dataDir, scratch) {
+  const childState = trackChild("test-server");
+  let stoppingRequested = false;
   const child = spawn(NODE, [SERVER], {
     cwd: WORKBENCH,
-    env: minimalEnv({
+    env: childEnvironment(scratch.root, {
       TEMP: join(scratch.root, "tmp"),
       TMP: join(scratch.root, "tmp"),
       HOST: "127.0.0.1",
@@ -208,18 +382,25 @@ async function startServer(dataDir, scratch) {
   });
   let stdout = "";
   let stderr = "";
-  const exitPromise = new Promise((resolvePromise) => child.once("exit", (code, signal) => resolvePromise({ code, signal })));
+  const exitPromise = new Promise((resolvePromise) => child.once("close", (code, signal) => {
+    childState.reclaimed = true;
+    if (!stoppingRequested) fixtureScope.getStore().reasons.push(`server_exited_without_stop:${code}:${signal}`);
+    resolvePromise({ code, signal, reclaimed: true });
+  }));
   child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
   // readiness 失败也必须回收本测试自己的服务子进程（有界），不能丢在后台。
   const hardStop = async (label) => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    stoppingRequested = true;
+    if (childState.reclaimed) return { reclaimed: true };
     try { child.kill(); } catch { /* ignore */ }
     let done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
     if (!done) {
+      fixtureScope.getStore().reasons.push(`${label}:stop_deadline_exceeded`);
       try { child.kill("SIGKILL"); } catch { /* ignore */ }
       done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
     }
     if (!done) residuals.push({ label, pid: child.pid ?? null, kind: "server" });
+    return { reclaimed: done?.reclaimed === true, code: done?.code ?? null, signal: done?.signal ?? null };
   };
   let port;
   try {
@@ -234,7 +415,8 @@ async function startServer(dataDir, scratch) {
       });
     });
   } catch (error) {
-    await hardStop("test-server-not-ready");
+    fixtureScope.getStore().reasons.push(`server_readiness_failed:${error.message}`);
+    error.reclamation = await hardStop("test-server-not-ready");
     throw error;
   }
   const base = `http://127.0.0.1:${port}`;
@@ -248,15 +430,18 @@ async function startServer(dataDir, scratch) {
       // 只停止本测试自己创建的句柄；杀不掉就有界报残留，不无限等。
       if (stopping) return stopping;
       stopping = (async () => {
-        if (child.exitCode !== null || child.signalCode !== null) return exitPromise;
+        stoppingRequested = true;
+        if (childState.reclaimed) return exitPromise;
         try { child.kill(); } catch { /* ignore */ }
         let done = await Promise.race([exitPromise, delay(10000).then(() => null)]);
         if (!done) {
+          fixtureScope.getStore().reasons.push("test-server:stop_deadline_exceeded");
           try { child.kill("SIGKILL"); } catch { /* ignore */ }
           done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
         }
         if (!done) residuals.push({ label: "test-server", pid: child.pid ?? null, kind: "server" });
-        return done;
+        if (!done) fixtureScope.getStore().reasons.push("server_stop_unreclaimed");
+        return { reclaimed: done?.reclaimed === true, code: done?.code ?? null, signal: done?.signal ?? null };
       })();
       return stopping;
     },
@@ -287,6 +472,27 @@ const FEB = {
   }],
 };
 
+test("现场保留决策：调用方断言、失败、超时与回收未知阻止清理，成功且回收才允许", () => {
+  const ok = { passed: true, children: [{ label: "owned", reclaimed: true }], reasons: [] };
+  assert.equal(cleanupDecision(ok), null, "successful owned processes allow manifest cleanup");
+  assert.match(cleanupDecision({ ...ok, passed: false }), /test_failed_or_assertion_failed/);
+  assert.match(cleanupDecision({ ...ok, children: [{ label: "server", reclaimed: false }] }), /server:child_unreclaimed_or_unknown/);
+  for (const reason of ["child:exit_2", "child:timed_out", "child:spawn_failed", "server_readiness_failed", "wrapper_aborted_service_reclamation_unknown", "test-server:stop_deadline_exceeded"]) {
+    assert.equal(cleanupDecision({ ...ok, reasons: [reason] }), reason);
+  }
+  assert.match(cleanupDecision({ ...ok, passed: false, reasons: ["child:timed_out"] }), /child:timed_out.*test_failed_or_assertion_failed/);
+  // Exercise capture's actual result-to-retention mapping without starting a child.
+  for (const result of [
+    { code: 0 }, { code: 2 }, { code: 0, timedOut: true },
+    { code: null, unreclaimed: true }, { code: null, spawnError: "ENOENT" },
+  ]) {
+    const scope = { ...ok, reasons: [] };
+    fixtureScope.run(scope, () => retainForChild("capture", result));
+    assert.equal(cleanupDecision(scope) === null, result.code === 0 && !result.timedOut,
+      `only a successful child may allow caller fixture cleanup: ${JSON.stringify(result)}`);
+  }
+});
+
 async function importTwoMonths(server) {
   const dry = await server.post("/api/import/incremental", { batchId: "TEST-2026-01", source: SOURCE, payload: JAN });
   assert.equal(dry.status, 200);
@@ -316,6 +522,104 @@ async function assertAmounts(server, setId) {
   assert.equal(revenue.ytd_credit, 10000);
 }
 
+test("子进程生命周期：回收未知、timeout、spawnError 不得触发 online / 删除 / 重装", async () => {
+  const completed = { code: 0, reclaimed: true, timedOut: false, signal: null, stdout: "", stderr: "" };
+  const cacheMiss = { ...completed, code: 1, stderr: "npm error code ENOTCACHED\n" };
+  const unsafe = [
+    [{ unreclaimed: true }, "child_process_unreclaimed"],
+    [{ hardDeadline: true }, "child_process_unreclaimed"],
+    [{ timedOut: true }, "child_process_timed_out"],
+    [{ spawnError: "ENOENT" }, "child_process_spawn_failed"],
+    [{ reclaimed: undefined }, "child_process_reclamation_unknown"],
+    [{ reclaimed: false }, "child_process_reclamation_unknown"],
+    [{ code: null }, "child_process_exit_unknown"],
+    [{ signal: "SIGTERM" }, "child_process_exit_unknown"],
+  ];
+  for (const [flags, expected] of unsafe) {
+    for (const base of [completed, cacheMiss]) {
+      const bad = { ...base, ...flags };
+      assert.equal(childLifecycleFailure(bad), expected);
+      assert.equal(isOfflineCacheMiss(bad), false);
+      for (const failureStep of [0, 1, 2]) {
+        const calls = [];
+        const values = [cacheMiss, completed, completed];
+        values[failureStep] = bad;
+        await assert.rejects(runDependencyInstallSequence({
+          install: async (step, offline) => {
+            calls.push([step, offline]);
+            return values[["offline", "online", "offline-after-online"].indexOf(step)];
+          },
+          removeModules: async () => { calls.push(["remove"]); },
+        }), { code: expected });
+        assert.deepEqual(calls, [
+          ["offline", true],
+          ...(failureStep >= 1 ? [["online", false]] : []),
+          ...(failureStep >= 2 ? [["remove"], ["offline-after-online", true]] : []),
+        ]);
+      }
+    }
+  }
+});
+
+test("依赖安装决策：只有明确 ENOTCACHED 可回退，非缓存错误保留且成功链有序", async () => {
+  const completed = { code: 0, reclaimed: true, timedOut: false, signal: null, stdout: "", stderr: "" };
+  const cacheMiss = { ...completed, code: 1, stderr: "npm error code ENOTCACHED\n" };
+  assert.equal(isOfflineCacheMiss(cacheMiss), true);
+  assert.equal(isOfflineCacheMiss({ ...cacheMiss, stderr: "npm ERR! code ENOTCACHED\r\n" }), true);
+  assert.equal(isOfflineCacheMiss({ ...completed, stderr: cacheMiss.stderr }), false);
+  for (const error of ["EAI_AGAIN", "ENETUNREACH", "ECONNREFUSED", "EACCES", "EINTEGRITY", "EUSAGE", "only-if-cached", "ENOTCACHED mentioned in a stack"]) {
+    const failed = { ...completed, code: 1, stderr: `npm error code ${error}\n`, cacheMiss: true };
+    const calls = [];
+    assert.equal(isOfflineCacheMiss(failed), false);
+    await assert.rejects(runDependencyInstallSequence({
+      install: async (step) => { calls.push(step); return failed; },
+      removeModules: async () => { calls.push("remove"); },
+    }), { code: "dependency_offline_install_failed" });
+    assert.deepEqual(calls, ["offline"]);
+  }
+  for (const values of [[completed], [cacheMiss, completed, completed]]) {
+    const calls = [];
+    const queue = [...values];
+    const result = await runDependencyInstallSequence({
+      install: async (step, offline) => { calls.push([step, offline]); return queue.shift(); },
+      removeModules: async () => { calls.push(["remove"]); },
+    });
+    assert.deepEqual(result, { networkUsed: values.length > 1, offlineProven: true });
+    assert.deepEqual(calls, values.length === 1 ? [["offline", true]] : [["offline", true], ["online", false], ["remove"], ["offline-after-online", true]]);
+  }
+  for (const failureStep of [1, 2]) {
+    const values = [cacheMiss, completed, completed];
+    values[failureStep] = { ...completed, code: 1 };
+    const calls = [];
+    await assert.rejects(runDependencyInstallSequence({
+      install: async (step) => { calls.push(step); return values.shift(); },
+      removeModules: async () => { calls.push("remove"); },
+    }), { code: failureStep === 1 ? "dependency_install_failed" : "dependency_offline_reinstall_failed" });
+    assert.deepEqual(calls, failureStep === 1 ? ["offline", "online"] : ["offline", "online", "remove", "offline-after-online"]);
+  }
+  const calls = [];
+  const removalError = new Error("manifest refused");
+  await assert.rejects(runDependencyInstallSequence({
+    install: async (step) => { calls.push(step); return step === "offline" ? cacheMiss : completed; },
+    removeModules: async () => { calls.push("remove"); throw removalError; },
+  }), (error) => error === removalError);
+  assert.deepEqual(calls, ["offline", "online", "remove"]);
+});
+
+test("Office helper 生命周期：失败与 blocked 保留，成功后才运行清理", async () => {
+  for (const code of ["child_process_unreclaimed", "child_process_timed_out", "child_process_spawn_failed", "child_process_reclamation_unknown", "office_render_failed", "pdf_output_required_blocked"]) {
+    const failure = Object.assign(new Error(code), { code });
+    let removed = 0;
+    await assert.rejects(runWithSuccessCleanup(async () => { throw failure; }, () => { removed++; }), (error) => error === failure);
+    assert.equal(removed, 0);
+  }
+  const calls = [];
+  assert.equal(await runWithSuccessCleanup(async () => { calls.push("complete"); return "outputs"; }, () => { calls.push("remove"); }), "outputs");
+  assert.deepEqual(calls, ["complete", "remove"]);
+  const cleanupError = new Error("manifest refused");
+  await assert.rejects(runWithSuccessCleanup(async () => "outputs", () => { throw cleanupError; }), (error) => error === cleanupError);
+});
+
 test("版本策略：只放行本包实际验收的 24.15.0，不把更大版本或其它 patch 当已支持", () => {
   assert.equal(TESTED_NODE_VERSION, "24.15.0");
   assert.equal(decideRuntimeVersion("24.15.0").ok, true);
@@ -327,10 +631,21 @@ test("版本策略：只放行本包实际验收的 24.15.0，不把更大版本
   assert.equal(decideRuntimeVersion("garbage").code, "runtime_version_unreadable");
 });
 
-test("专属临时根：默认在 workbench 的 tmp/windows-delivery，manifest 记录所有权，越界删除被拒绝", () => {
+test("专属临时根：默认在 workbench 的 tmp/windows-delivery，manifest 记录所有权，越界删除被拒绝", async () => {
   assert.equal(defaultScratchBase(), join(WORKBENCH, "tmp", "windows-delivery"));
   const scratch = newScratch("ownership");
   try {
+    const copied = copyChildTools(scratch.root);
+    const defaultResult = await capture("ownership-default", NODE, ["--input-type=module", "-e", `
+      import assert from "node:assert/strict";
+      const guard = await import(${JSON.stringify(pathToFileURL(join(copied, "scripts", "windows-runtime-check.mjs")).href)});
+      const record = guard.createScratchRecord({ tool: "windows-delivery-test" });
+      assert.equal(record.base, guard.defaultScratchBase());
+      assert.equal(record.base, ${JSON.stringify(join(copied, "tmp", "windows-delivery"))});
+      assert.equal(guard.removeScratchRecord(record).ok, true);
+    `], { cwd: copied });
+    assert.equal(defaultResult.code, 0, defaultResult.stderr);
+
     const manifestFile = readdirSync(scratch.root).find((name) => name.startsWith(".wb-scratch-") && name.endsWith(".json"));
     assert.ok(manifestFile, "manifest file must exist");
     const manifest = JSON.parse(readFileSync(join(scratch.root, manifestFile), "utf8"));
@@ -348,7 +663,7 @@ test("专属临时根：默认在 workbench 的 tmp/windows-delivery，manifest 
   } finally {
     cleanupScratch(scratch);
   }
-  assert.equal(scratch.tracked.has(scratch.root.toLowerCase()), false, "root must be unregistered after cleanup");
+  fixtureScope.getStore().checks.push(() => assert.equal(scratch.tracked.has(scratch.root.toLowerCase()), false, "root must be unregistered after cleanup"));
 });
 
 test("lock 来源白名单：真实冻结 lock 通过，file/私有域/无完整性被拒绝", () => {
@@ -456,24 +771,48 @@ test("运行时预检：已有数据目录只读检查——不加文件、不�
   }
 });
 
-test("专属临时根：相对 path 原始入参在 mkdir 前被拒绝，卷根不可作为 base，文件不能当 base", () => {
-  const relative = `relative-scratch-${process.pid}`;
-  assert.throws(
-    () => createScratchRecord({ label: "guard-relative", basePath: relative, tool: "windows-delivery-test" }),
-    (error) => error?.code === "scratch_root_not_absolute",
-  );
-  assert.equal(existsSync(join(WORKBENCH, relative)), false, "被拒绝的相对 base 不得被创建");
-
-  const volumeRoot = parse(WORKBENCH).root;
-  assert.ok(volumeRoot.length > 0);
-  assert.throws(
-    () => createScratchRecord({ label: "guard-volume", basePath: volumeRoot, tool: "windows-delivery-test" }),
-    (error) => error?.code === "scratch_root_is_filesystem_root",
-  );
-
-  const scratch = newScratch("guard-file-base");
+test("专属临时根：relative / drive-relative / root-relative 原始 base 只在本用例自有候选目标上被拒绝且不写盘", async () => {
+  const fixture = newScratch("guard-raw-base");
   try {
-    const file = join(scratch.root, "base-file");
+    const cases = [
+      { name: "relative", reason: "path_not_absolute" },
+      { name: "drive-relative", reason: "drive_relative_not_allowed" },
+      { name: "root-relative", reason: "root_relative_not_allowed" },
+    ];
+    for (const item of cases) {
+      // 候选目标只在本用例 scratch 内：即使守卫失效被旧实现规范化，也不会落到卷根 / WORKBENCH / 用户目录。
+      const candidate = join(fixture.root, `candidate-${item.name}`);
+      const raw = rawPathVariants(candidate, { fixtureRoot: fixture.root })[item.name];
+      const before = snapshotDir(fixture.root);
+      assert.throws(
+        () => createScratchRecord({ label: `guard-${item.name}`, basePath: raw, tool: "windows-delivery-test" }),
+        (error) => error?.code === "scratch_root_not_absolute" && error?.details?.reason === item.reason,
+        `${item.name} base 必须在 mkdir 前被拒绝`,
+      );
+      assert.equal(existsSync(candidate), false, `${item.name} 候选目标不得被创建`);
+      assert.deepEqual(snapshotDir(fixture.root), before, `${item.name} 拒绝后父目录快照必须不变`);
+    }
+
+    // Blank is tested against a fixture-local module copy in a fixture-local cwd.
+    const blankWB = copyChildTools(fixture.root);
+    const blankBefore = snapshotDir(fixture.root);
+    const blank = await capture("guard-blank-base", NODE, ["--input-type=module", "-e", `
+      import assert from "node:assert/strict";
+      const { createScratchRecord } = await import(${JSON.stringify(pathToFileURL(join(blankWB, "scripts", "windows-runtime-check.mjs")).href)});
+      assert.throws(() => createScratchRecord({basePath: "   ", tool: "windows-delivery-test"}),
+        error => error.code === "scratch_root_not_absolute" && error.details?.reason === "path_empty");
+    `], { cwd: blankWB });
+    assert.equal(blank.code, 0, blank.stderr);
+    assert.deepEqual(snapshotDir(fixture.root), blankBefore, "空白 base 拒绝后 fixture 不得出现新条目");
+    assert.equal(existsSync(join(blankWB, "tmp")), false, "空白误退默认也只能写 fixture 副本，且应无写入");
+
+    // Real volume root goes through production's shared pure preflight, never createScratchRecord / FS.
+    const volumeRoot = parse(fixture.root).root;
+    assert.ok(volumeRoot.length > 0);
+    assert.deepEqual(inspectScratchBasePath(volumeRoot), { ok: false, code: "scratch_root_is_filesystem_root" });
+
+    // 文件不能当 base，且不得改写文件内容。
+    const file = join(fixture.root, "base-file");
     writeFileSync(file, "not-a-directory", "utf8");
     assert.throws(
       () => createScratchRecord({ label: "guard-file", basePath: file, tool: "windows-delivery-test" }),
@@ -481,7 +820,7 @@ test("专属临时根：相对 path 原始入参在 mkdir 前被拒绝，卷根�
     );
     assert.equal(readFileSync(file, "utf8"), "not-a-directory", "文件 base 不得被改写");
   } finally {
-    cleanupScratch(scratch);
+    cleanupScratch(fixture);
   }
 });
 
@@ -552,7 +891,7 @@ test("专属临时根：manifest v2 逐项登记删除目标并与内存互校�
   } finally {
     cleanupScratch(scratch);
   }
-  assert.equal(existsSync(scratch.root), false, "恢复 manifest 后专属根必须可清理");
+  fixtureScope.getStore().checks.push(() => assert.equal(existsSync(scratch.root), false, "恢复 manifest 后专属根必须可清理"));
 });
 
 /**
@@ -702,13 +1041,14 @@ test("冷拷贝检查：只跳过明确已知的本任务专属 scratch 目录�
     const workbench = buildReleaseWorkbench(dir);
     mkdirSync(join(workbench, "tmp", "windows-delivery", "residual-from-older-run"), { recursive: true });
     const nested = createScratchRecord({ label: "nested-release", basePath: join(workbench, "tmp", "windows-delivery") });
+    fixtureScope.getStore().records.add(nested);
     try {
       const inspected = inspectRelease(dir);
       // 报告的是被跳过的最高一层目录（tmp 里只剩这个明确已知的专属 base）。
       assert.deepEqual(inspected.excludedScratch, ["06-workbench/tmp"]);
     } finally {
-      const removal = removeScratchRecord(nested);
-      assert.equal(removal.ok, true, removal.reason);
+      cleanupScratch(nested);
+      fixtureScope.getStore().checks.push(() => assert.equal(existsSync(nested.root), false, "nested manifest cleanup must succeed"));
     }
   } finally {
     cleanupScratch(scratch);
@@ -739,8 +1079,10 @@ test("启动脚本：Windows PowerShell 5.1 下有界启动、跟踪 service pid
     return;
   }
   const scratch = newScratch("start-script");
+  const wrapperState = trackChild("powershell-wrapper-and-service");
   let child = null;
   let wrapperExited = false;
+  let serviceStopped = false;
   let servicePid = null;
   try {
     const dataDir = join(scratch.root, "数据 目录");
@@ -750,7 +1092,7 @@ test("启动脚本：Windows PowerShell 5.1 下有界启动、跟踪 service pid
       "-ScratchRoot", scratch.root,
     ], {
       cwd: WORKBENCH,
-      env: minimalEnv({ TEMP: join(scratch.root, "tmp"), TMP: join(scratch.root, "tmp") }),
+      env: childEnvironment(scratch.root, { TEMP: join(scratch.root, "tmp"), TMP: join(scratch.root, "tmp") }),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -758,13 +1100,14 @@ test("启动脚本：Windows PowerShell 5.1 下有界启动、跟踪 service pid
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
-    const exitPromise = new Promise((resolvePromise) => child.once("exit", (code, signal) => {
+    const exitPromise = new Promise((resolvePromise) => child.once("close", (code, signal) => {
       wrapperExited = true;
       resolvePromise({ code, signal });
     }));
     const port = await new Promise((resolvePromise, rejectPromise) => {
       const timer = setTimeout(() => rejectPromise(new Error("start_script_timeout")), 20000);
       child.once("exit", (code) => { clearTimeout(timer); rejectPromise(new Error(`start_script_exited:${code}`)); });
+      child.once("error", (error) => { clearTimeout(timer); rejectPromise(new Error(`start_script_spawn_failed:${error?.code ?? "unknown"}`)); });
       child.stdout.on("data", () => {
         const pidMatch = /windows_start_service_pid=(\d+)/.exec(stdout);
         if (pidMatch) servicePid = Number(pidMatch[1]);
@@ -794,17 +1137,21 @@ test("启动脚本：Windows PowerShell 5.1 下有界启动、跟踪 service pid
       await delay(150);
       stopped = await serviceGone();
     }
+    serviceStopped = stopped;
     assert.equal(stopped, true, "包装器自停后该端口不得再响应（测试不按 PID 猜杀）");
   } finally {
     // 异常路径（含外层终止包装器）：只停止本人创建的包装器句柄。
     // 服务 pid 只能如实记录，不用裸 PID 猜杀（PID 可能已被复用，端口可达也不证明身份）；
     // 正式路径下服务由包装器在 -MaxRunSeconds 到期时用自有句柄回收。
     if (child && !wrapperExited) {
+      fixtureScope.getStore().reasons.push("wrapper_aborted_service_reclamation_unknown");
       try { child.kill(); } catch { /* ignore */ }
-      const done = await Promise.race([delay(KILL_GRACE_MS).then(() => null), new Promise((resolveExit) => child.once("exit", resolveExit))]);
+      const done = await Promise.race([delay(KILL_GRACE_MS).then(() => null), new Promise((resolveExit) => child.once("close", () => resolveExit({ reclaimed: true })))]);
       if (!done) residuals.push({ label: "powershell-wrapper", pid: child.pid ?? null, kind: "wrapper" });
       if (servicePid !== null) residuals.push({ label: "powershell-wrapper-service", pid: servicePid, kind: "service", reason: "wrapper_aborted_pid_recorded_not_force_killed" });
     }
+    wrapperState.reclaimed = wrapperExited && serviceStopped;
+    if (!wrapperState.reclaimed) fixtureScope.getStore().reasons.push("wrapper_or_service_not_confirmed_reclaimed");
     cleanupScratch(scratch);
   }
 });
@@ -899,7 +1246,8 @@ test("关键成功链：HTTP 导入两月、重启幂等、金额正确、运行
       db.close();
     }
 
-    await server.stop();
+    const firstStop = await server.stop();
+    assert.equal(firstStop.reclaimed, true, "first server must be reclaimed before restarting");
     server = null;
 
     // Restart on the same data directory: batch identity and amounts survive.
@@ -915,7 +1263,590 @@ test("关键成功链：HTTP 导入两月、重启幂等、金额正确、运行
     assert.equal(batch.json.sourceTrace[0].sourceVoucherId, "TEST-SRC-1");
     await assertAmounts(server, setId);
   } finally {
-    if (server) await server.stop();
+    if (server) {
+      const stopped = await server.stop();
+      if (!stopped.reclaimed) fixtureScope.getStore().reasons.push("success_chain_server_unreclaimed");
+    }
+    cleanupScratch(scratch);
+  }
+});
+
+// ================================================================== 独审返修回归
+
+/** 管理者可选前置：用量型用例缺这些输入就明确 skip，不用任何 mock 冒充成功。 */
+const HEAVY = {
+  release: (process.env.WINDOWS_DELIVERY_RELEASE_ROOT ?? "").trim(),
+  npm: (process.env.WINDOWS_DELIVERY_NPM_ENTRY ?? "").trim(),
+  cache: (process.env.WINDOWS_DELIVERY_NPM_CACHE ?? "").trim(),
+  node: (process.env.WINDOWS_DELIVERY_NODE_BINARY ?? "").trim() || NODE,
+};
+const HEAVY_SKIP = "需要管理者前置：WINDOWS_DELIVERY_RELEASE_ROOT / WINDOWS_DELIVERY_NPM_ENTRY / WINDOWS_DELIVERY_NPM_CACHE（可选 WINDOWS_DELIVERY_NODE_BINARY）";
+const REQUIRED_PDF_ASSERTIONS = REQUIRED_OFFICE_KINDS.map((kind) => `office.pdf.${kind}`);
+
+test("路径字符串边界：只认盘符绝对与完整 UNC，拒绝不完整 UNC / 设备路径（含斜杠变体）/ 相对与 drive-relative", () => {
+  const fixture = newScratch("raw-path-string");
+  try {
+    // 正常绝对路径必须成功（不因新增判定误拒）。
+    const validDrive = inspectRawAbsolutePath(fixture.root);
+    assert.equal(validDrive.ok, true, JSON.stringify(validDrive));
+    assert.equal(pathKeyOf(validDrive.resolved), pathKeyOf(fixture.root));
+    assert.equal(inspectRawAbsolutePath("C:\\work\\release").ok, true);
+    // 完整 UNC（server + share）是字符串级判定：不连接网络、不 lstat。
+    const unc = inspectRawAbsolutePath("\\\\server\\share\\release");
+    assert.equal(unc.ok, true, JSON.stringify(unc));
+    assert.equal(unc.volumeRoot, "\\\\server\\share\\");
+    assert.equal(inspectRawAbsolutePath("//server/share/release").ok, true);
+
+    const rejections = [
+      { name: "empty", raw: "", reason: "path_empty" },
+      { name: "blank", raw: "   ", reason: "path_empty" },
+      { name: "edge-space", raw: ` ${fixture.root} `, reason: "path_has_whitespace_edges" },
+      { name: "relative", raw: `foo\\bar-${process.pid}`, reason: "path_not_absolute" },
+      { name: "drive-relative", raw: `C:foo-bar-${process.pid}`, reason: "drive_relative_not_allowed" },
+      { name: "root-relative", raw: `\\foo-bar-${process.pid}`, reason: "root_relative_not_allowed" },
+      { name: "root-relative-forward", raw: `/foo-bar-${process.pid}`, reason: "root_relative_not_allowed" },
+      { name: "unc-no-share", raw: "\\\\server", reason: "unc_incomplete" },
+      { name: "unc-trailing-sep", raw: "\\\\server\\", reason: "unc_incomplete" },
+      { name: "unc-empty", raw: "\\\\", reason: "unc_incomplete" },
+      { name: "unc-forward-no-share", raw: "//server", reason: "unc_incomplete" },
+      { name: "device-question", raw: "\\\\?\\C:\\work", reason: "device_path_not_allowed" },
+      { name: "device-dot", raw: "\\\\.\\pipe\\x", reason: "device_path_not_allowed" },
+      { name: "device-forward-question", raw: "//?/C:/work", reason: "device_path_not_allowed" },
+      { name: "device-forward-dot", raw: "//./pipe/x", reason: "device_path_not_allowed" },
+      { name: "device-unc-namespace", raw: "\\\\?\\UNC\\server\\share", reason: "device_path_not_allowed" },
+      { name: "device-mixed-slash", raw: "\\/?\\x", reason: "device_path_not_allowed" },
+      { name: "unc-invalid-host", raw: "\\/?.\\x", reason: "unc_invalid_name" },
+    ];
+    for (const item of rejections) {
+      const result = inspectRawAbsolutePath(item.raw);
+      assert.equal(result.ok, false, `${item.name} 必须被拒绝`);
+      assert.equal(result.reason, item.reason, `${item.name}: ${JSON.stringify(result)}`);
+      assert.equal(result.resolved, null, `${item.name} 拒绝时不得给出规范化结果`);
+    }
+  } finally {
+    cleanupScratch(fixture);
+  }
+});
+
+test("路径守卫：out / release 原始入参不是完整绝对路径时只 stdout 非零，不创建任何目录（真实 CLI，自有 cwd 与候选目标）", async () => {
+  const scratch = newScratch("path-raw-absolute");
+  try {
+    // 子进程 cwd 始终显式指定为本用例自有目录（不依赖默认 cwd、不用 process.chdir）。
+    const cliCwd = join(scratch.root, "cli-cwd");
+    mkdirSync(cliCwd);
+    const outCases = [
+      { name: "relative", reason: "path_not_absolute" },
+      { name: "drive-relative", reason: "drive_relative_not_allowed" },
+      { name: "root-relative", reason: "root_relative_not_allowed" },
+    ];
+    for (const item of outCases) {
+      // 候选 out 只在本用例 scratch 内；relative / drive-relative / root-relative 已断言误规范化落点。
+      const candidate = join(scratch.root, `out-candidate-${item.name}`);
+      const raw = rawPathVariants(candidate, { fixtureRoot: scratch.root, cwdDir: cliCwd })[item.name];
+      const before = snapshotDir(scratch.root);
+      const result = await capture(`delivery-raw-out-${item.name}`, NODE, [DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", WORKBENCH, "--out", raw], { cwd: cliCwd, timeoutMs: 60000 });
+      assert.equal(result.code, 1, `${item.name}: ${result.stderr}`);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.ok, false);
+      assert.equal(payload.status, "rejected");
+      assert.equal(payload.code, "out_not_absolute");
+      assert.equal(payload.details.reason, item.reason);
+      // 只写 stdout：不为记录失败先建未验证的 out，也没有结果 JSON 落地。
+      assert.doesNotMatch(result.stdout, /windows-delivery-result\.json/);
+      assert.equal(existsSync(candidate), false, `${item.name} out 候选目标不得被创建`);
+      assert.deepEqual(snapshotDir(cliCwd), [], `${item.name} 拒绝时子进程 cwd 内不得出现任何自建条目`);
+      assert.deepEqual(snapshotDir(scratch.root), before, `${item.name} 拒绝后父目录快照必须不变`);
+    }
+
+    // release 原始入参同样拒绝，而且拒绝发生在 out 创建之前。
+    const releaseCandidate = join(scratch.root, "release-candidate");
+    const rawRelease = rawPathVariants(releaseCandidate, { fixtureRoot: scratch.root, cwdDir: cliCwd }).relative;
+    const out = join(scratch.root, "out-not-created");
+    const releaseCase = await capture("delivery-raw-release", NODE, [DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", rawRelease, "--out", out], { cwd: cliCwd, timeoutMs: 60000 });
+    assert.equal(releaseCase.code, 1, releaseCase.stderr);
+    const releasePayload = JSON.parse(releaseCase.stdout);
+    assert.equal(releasePayload.status, "rejected");
+    assert.equal(releasePayload.code, "release_not_absolute");
+    assert.equal(existsSync(releaseCandidate), false, "release 相对候选目标不得被创建");
+    assert.equal(existsSync(out), false, "release 被拒绝时不得先创建 out");
+  } finally {
+    cleanupScratch(scratch);
+  }
+});
+
+test("路径守卫：out 根 / 祖先 junction 在任何写入前被拒绝（真实 CLI，自有 fixture）", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("junction 语义只在 Windows 上适用");
+    return;
+  }
+  const fixture = newScratch("path-out-alias");
+  const releaseDir = join(fixture.root, "release-real");
+  buildReleaseWorkbench(releaseDir);
+  const outTarget = join(fixture.root, "out-target");
+  const outAncestorTarget = join(fixture.root, "out-ancestor-target");
+  const outRootLink = join(fixture.root, "out-alias");
+  const outAncestorLink = join(fixture.root, "out-ancestor-alias");
+  mkdirSync(outTarget);
+  mkdirSync(outAncestorTarget);
+  // 子进程 cwd 显式指定为用例自有目录（不依赖默认 cwd）。
+  const cliCwd = join(fixture.root, "cli-cwd");
+  mkdirSync(cliCwd);
+  try {
+    // junction 只指向本测试在同一个自有根内创建的目标。
+    symlinkSync(outTarget, outRootLink, "junction");
+    symlinkSync(outAncestorTarget, outAncestorLink, "junction");
+  } catch (error) {
+    recordExpectedRefusalFixture({ kind: "out_junction_fixture_unavailable", root: fixture.root, reason: `junction_unavailable:${error?.code ?? "unknown"}` });
+    t.skip(`本机不允许创建 junction（${error?.code ?? "unknown"}）`);
+    return;
+  }
+  const refusals = [];
+  try {
+    // (1) out 自身是 junction（reviewer 的 out-alias 形态）：不得经链接写入目标。
+    const rootCase = await capture("delivery-out-alias", NODE, [DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", releaseDir, "--out", outRootLink], { cwd: cliCwd, timeoutMs: 60000 });
+    assert.notEqual(rootCase.code, 0, "out 为 junction 时必须非零退出");
+    const rootPayload = JSON.parse(rootCase.stdout);
+    assert.equal(rootPayload.status, "rejected");
+    assert.match(String(rootPayload.code), /^out_/);
+    assert.match(String(rootPayload.details?.reason ?? ""), /reparse_point|realpath/);
+    assert.deepEqual(readdirSync(outTarget), [], "不得通过 out junction 在目标里写任何东西");
+    refusals.push(`${rootPayload.code}:${rootPayload.details?.reason ?? ""}`);
+
+    // (2) out 的更深层经祖先 junction 逃逸（reviewer 的 out-alias/escaped 形态）。
+    const escaped = join(outAncestorLink, "escaped");
+    const ancestorCase = await capture("delivery-out-alias-escaped", NODE, [DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", releaseDir, "--out", escaped], { cwd: cliCwd, timeoutMs: 60000 });
+    assert.notEqual(ancestorCase.code, 0);
+    const ancestorPayload = JSON.parse(ancestorCase.stdout);
+    assert.equal(ancestorPayload.status, "rejected");
+    assert.match(String(ancestorPayload.code), /^out_/);
+    assert.equal(existsSync(join(outAncestorTarget, "escaped")), false, "不得经祖先 junction 新建目录");
+    assert.deepEqual(readdirSync(outAncestorTarget), []);
+    refusals.push(`${ancestorPayload.code}:${ancestorPayload.details?.reason ?? ""}`);
+
+    // (3) 拒绝时不得写“未验证的 out”：两个目标里都没有结果 JSON / logs / artifacts。
+    for (const dir of [outTarget, outAncestorTarget]) {
+      const entries = readdirSync(dir);
+      assert.deepEqual(entries.filter((name) => ["windows-delivery-result.json", "logs", "artifacts"].includes(name)), []);
+    }
+
+    // (4) 同一守卫在库内直接调用也拒绝（不靠 CLI 的调用顺序）。
+    assert.throws(() => prepareOutDir(outRootLink), (error) => /^out_/.test(String(error?.code)));
+  } finally {
+    // 含 junction 的 fixture 按规则保留（不用 unlink / 手工删除修饰结果）。
+    recordExpectedRefusalFixture({ kind: "out_junction_expected_refusal", root: fixture.root, reason: refusals.join(",") || "out_alias_refused" });
+  }
+});
+
+test("路径守卫：release 根 / 祖先 junction 被拒绝且不创建 out（真实 CLI + inspectRelease）", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("junction 语义只在 Windows 上适用");
+    return;
+  }
+  const fixture = newScratch("path-release-alias");
+  const realRelease = join(fixture.root, "release-real");
+  const nestedParent = join(fixture.root, "release-parent");
+  const nestedRelease = join(nestedParent, "release-nested");
+  buildReleaseWorkbench(realRelease);
+  mkdirSync(nestedParent);
+  buildReleaseWorkbench(nestedRelease);
+  const releaseLink = join(fixture.root, "release-alias");
+  const parentLink = join(fixture.root, "release-parent-alias");
+  // 子进程 cwd 显式指定为用例自有目录（不依赖默认 cwd）。
+  const cliCwd = join(fixture.root, "cli-cwd");
+  mkdirSync(cliCwd);
+  try {
+    symlinkSync(realRelease, releaseLink, "junction");
+    symlinkSync(nestedParent, parentLink, "junction");
+  } catch (error) {
+    recordExpectedRefusalFixture({ kind: "release_junction_fixture_unavailable", root: fixture.root, reason: `junction_unavailable:${error?.code ?? "unknown"}` });
+    t.skip(`本机不允许创建 junction（${error?.code ?? "unknown"}）`);
+    return;
+  }
+  const refusals = [];
+  try {
+    // (1) release 自身是 junction（reviewer 的 source-alias 形态）。
+    const outRoot = join(fixture.root, "out-should-not-exist");
+    const rootCase = await capture("delivery-release-alias", NODE, [DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", releaseLink, "--out", outRoot], { cwd: cliCwd, timeoutMs: 60000 });
+    assert.notEqual(rootCase.code, 0);
+    const rootPayload = JSON.parse(rootCase.stdout);
+    assert.equal(rootPayload.status, "rejected");
+    assert.equal(rootPayload.code, "release_is_reparse_point");
+    assert.equal(existsSync(outRoot), false, "拒绝时不得先创建未验证的 out");
+    refusals.push(rootPayload.code);
+
+    // (2) release 的祖先目录是 junction。
+    const outAncestor = join(fixture.root, "out-ancestor-should-not-exist");
+    const ancestorCase = await capture("delivery-release-ancestor-alias", NODE, [DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", join(parentLink, "release-nested"), "--out", outAncestor], { cwd: cliCwd, timeoutMs: 60000 });
+    assert.notEqual(ancestorCase.code, 0);
+    const ancestorPayload = JSON.parse(ancestorCase.stdout);
+    assert.equal(ancestorPayload.status, "rejected");
+    assert.equal(ancestorPayload.code, "release_ancestor_refused");
+    assert.match(String(ancestorPayload.details?.reason ?? ""), /reparse_point|realpath/);
+    assert.equal(existsSync(outAncestor), false);
+    refusals.push(`${ancestorPayload.code}:${ancestorPayload.details?.reason ?? ""}`);
+
+    // (3) 库内直接调用同样拒绝（扫描 / 复制前）。
+    assert.throws(() => inspectRelease(releaseLink), (error) => error?.code === "release_is_reparse_point");
+    assert.throws(() => inspectRelease(join(parentLink, "release-nested")), (error) => error?.code === "release_ancestor_refused");
+  } finally {
+    recordExpectedRefusalFixture({ kind: "release_junction_expected_refusal", root: fixture.root, reason: refusals.join(",") || "release_alias_refused" });
+  }
+});
+
+test("路径守卫：scratch base 根 / 祖先 junction 与显式空白都在 out 创建前被拒绝（真实 CLI，自有 fixture）", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("junction 语义只在 Windows 上适用");
+    return;
+  }
+  const fixture = newScratch("path-scratch-alias");
+  const releaseDir = join(fixture.root, "release-real");
+  buildReleaseWorkbench(releaseDir);
+  const scratchRootTarget = join(fixture.root, "scratch-target");
+  const scratchAncestorTarget = join(fixture.root, "scratch-ancestor-target");
+  mkdirSync(scratchRootTarget);
+  mkdirSync(scratchAncestorTarget);
+  const scratchRootLink = join(fixture.root, "scratch-alias");
+  const scratchAncestorLink = join(fixture.root, "scratch-ancestor-alias");
+  try {
+    // junction 只指向本测试在同一自有根内创建的目标。
+    symlinkSync(scratchRootTarget, scratchRootLink, "junction");
+    symlinkSync(scratchAncestorTarget, scratchAncestorLink, "junction");
+  } catch (error) {
+    recordExpectedRefusalFixture({ kind: "scratch_junction_fixture_unavailable", root: fixture.root, reason: `junction_unavailable:${error?.code ?? "unknown"}` });
+    t.skip(`本机不允许创建 junction（${error?.code ?? "unknown"}）`);
+    return;
+  }
+  const cwd = join(fixture.root, "cli-cwd");
+  mkdirSync(cwd);
+  const refusals = [];
+  try {
+    // (1) scratch base 自身是 junction：必须在 out mkdir 之前拒绝，否则会先写 out 再在
+    // createScratchRecord 才拒绝。
+    const outRoot = join(fixture.root, "out-after-bad-scratch-root");
+    const rootBefore = snapshotDir(fixture.root);
+    const rootCase = await capture("delivery-scratch-root-alias", NODE, [
+      DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", releaseDir, "--out", outRoot, "--scratch-root", scratchRootLink,
+    ], { cwd, timeoutMs: 60000 });
+    assert.notEqual(rootCase.code, 0, "scratch base 为 junction 时必须非零退出");
+    const rootPayload = JSON.parse(rootCase.stdout);
+    assert.equal(rootPayload.status, "rejected");
+    assert.equal(rootPayload.code, "scratch_root_ancestor_refused");
+    assert.equal(rootPayload.details?.reason, "reparse_point_in_ancestor_chain");
+    assert.equal(existsSync(outRoot), false, "无效 scratch 拒绝时 out 不得被创建");
+    assert.deepEqual(snapshotDir(scratchRootTarget), [], "不得经 scratch junction 目标写入任何东西");
+    assert.deepEqual(snapshotDir(fixture.root), rootBefore, "拒绝时 fixture 不得出现新条目");
+    refusals.push(rootPayload.code);
+
+    // (2) scratch base 的祖先目录是 junction。
+    const outAncestor = join(fixture.root, "out-after-bad-scratch-ancestor");
+    const ancestorCase = await capture("delivery-scratch-ancestor-alias", NODE, [
+      DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", releaseDir, "--out", outAncestor, "--scratch-root", join(scratchAncestorLink, "child"),
+    ], { cwd, timeoutMs: 60000 });
+    assert.notEqual(ancestorCase.code, 0);
+    const ancestorPayload = JSON.parse(ancestorCase.stdout);
+    assert.equal(ancestorPayload.status, "rejected");
+    assert.equal(ancestorPayload.code, "scratch_root_ancestor_refused");
+    assert.equal(ancestorPayload.details?.reason, "reparse_point_in_ancestor_chain");
+    assert.equal(existsSync(outAncestor), false, "无效 scratch 拒绝时 out 不得被创建");
+    assert.equal(existsSync(join(scratchAncestorTarget, "child")), false, "不得经祖先 junction 新建目录");
+    assert.deepEqual(snapshotDir(scratchAncestorTarget), []);
+    refusals.push(`${ancestorPayload.code}:${ancestorPayload.details?.reason ?? ""}`);
+
+    // (3) 显式空白 scratch root 同样在 out 创建前被拒绝（不静默退回默认根）。
+    const outBlank = join(fixture.root, "out-after-blank-scratch");
+    const blankBefore = snapshotDir(fixture.root);
+    const blankCase = await capture("delivery-scratch-blank", NODE, [
+      DELIVERY_CHECK, "--phase", "upgrade-rollback", "--release", releaseDir, "--out", outBlank, "--scratch-root", "   ",
+    ], { cwd, timeoutMs: 60000 });
+    assert.equal(blankCase.code, 1, blankCase.stderr);
+    const blankPayload = JSON.parse(blankCase.stdout);
+    assert.equal(blankPayload.status, "rejected");
+    assert.equal(blankPayload.code, "scratch_root_not_absolute");
+    assert.equal(blankPayload.details.reason, "path_empty");
+    assert.equal(blankPayload.details.explicitScratchRoot, true, "显式空白不得被当作未提供");
+    assert.equal(existsSync(outBlank), false, "scratch 被拒绝时不得先创建 out");
+    assert.deepEqual(snapshotDir(fixture.root), blankBefore, "拒绝后 fixture 快照必须不变");
+    refusals.push(`${blankPayload.code}:${blankPayload.details.reason}`);
+
+    // (4) 同一守卫在库内直接调用也拒绝（不依赖 CLI 调用顺序）。
+    assert.equal(auditScratchBase(scratchRootLink).code, "scratch_root_ancestor_refused");
+    assert.equal(auditScratchBase(scratchRootLink).reason, "reparse_point_in_ancestor_chain");
+    assert.equal(auditScratchBase(join(scratchAncestorLink, "child")).code, "scratch_root_ancestor_refused");
+    assert.equal(auditScratchBase(join(scratchAncestorLink, "child")).reason, "reparse_point_in_ancestor_chain");
+    assert.equal(auditScratchBase("   ").code, "scratch_root_not_absolute");
+    // 正常绝对 scratch base 仍通过（不放宽正向路径）。
+    const okBase = join(fixture.root, "ok-base");
+    mkdirSync(okBase);
+    assert.equal(auditScratchBase(okBase).ok, true);
+  } finally {
+    // 含 junction 的 fixture 按规则保留（不用 unlink / 手工删除修饰结果）。
+    recordExpectedRefusalFixture({ kind: "scratch_junction_expected_refusal", root: fixture.root, reason: refusals.join(",") || "scratch_alias_refused" });
+  }
+});
+
+test("冷拷贝入口：源根 / 选定 workbench / 目标 alias 与越界目标被拒绝且不写目标（自有 fixture）", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("junction 语义只在 Windows 上适用");
+    return;
+  }
+  const fixture = newScratch("copy-release-entry");
+  const releaseDir = join(fixture.root, "release-real");
+  buildReleaseWorkbench(releaseDir);
+  // 历史 inspected 对象来自真实 inspectRelease，但入口不信任它。
+  const inspected = inspectRelease(releaseDir);
+  const destTarget = join(fixture.root, "dest-target");
+  const destAncestorTarget = join(fixture.root, "dest-ancestor-target");
+  mkdirSync(destTarget);
+  mkdirSync(destAncestorTarget);
+  const sourceLink = join(fixture.root, "release-alias");
+  const destLink = join(fixture.root, "dest-alias");
+  const destAncestorLink = join(fixture.root, "dest-ancestor-alias");
+  try {
+    symlinkSync(releaseDir, sourceLink, "junction");
+    symlinkSync(destTarget, destLink, "junction");
+    symlinkSync(destAncestorTarget, destAncestorLink, "junction");
+  } catch (error) {
+    recordExpectedRefusalFixture({ kind: "copy_entry_junction_unavailable", root: fixture.root, reason: `junction_unavailable:${error?.code ?? "unknown"}` });
+    t.skip(`本机不允许创建 junction（${error?.code ?? "unknown"}）`);
+    return;
+  }
+  const refusals = [];
+  try {
+    // (1) 源根 alias：入口必须重新核验源根，不信任历史 inspectRelease 结果。
+    const aliasRootDest = join(fixture.root, "copy-from-alias-root");
+    assert.throws(
+      () => copyReleaseWhitelist({ ...inspected, root: sourceLink }, aliasRootDest),
+      (error) => error?.code === "copy_source_root_is_reparse_point",
+      "源根 alias 必须在复制前被拒绝",
+    );
+    assert.equal(existsSync(aliasRootDest), false, "源根被拒绝时不得创建目标");
+    refusals.push("copy_source_root_is_reparse_point");
+
+    // (2) 选定 workbench 经 junction 逃逸。
+    const aliasWorkbenchDest = join(fixture.root, "copy-from-alias-workbench");
+    let workbenchCode = null;
+    try {
+      copyReleaseWhitelist({ ...inspected, workbenchDir: join(sourceLink, "06-workbench") }, aliasWorkbenchDest);
+    } catch (error) {
+      workbenchCode = error?.code ?? null;
+    }
+    assert.match(String(workbenchCode), /^copy_source_workbench_/, "选定 workbench alias 必须被拒绝");
+    refusals.push(String(workbenchCode));
+
+    // (3) 目标自身是 junction：不得经目标 alias 写入。
+    assert.throws(
+      () => copyReleaseWhitelist(inspected, destLink),
+      (error) => error?.code === "copy_destination_is_reparse_point",
+    );
+    assert.deepEqual(snapshotDir(destTarget), [], "不得经目标 junction 写入任何内容");
+    refusals.push("copy_destination_is_reparse_point");
+
+    // (4) 目标的祖先目录是 junction。
+    assert.throws(
+      () => copyReleaseWhitelist(inspected, join(destAncestorLink, "copy")),
+      (error) => error?.code === "copy_destination_refused",
+    );
+    assert.deepEqual(snapshotDir(destAncestorTarget), []);
+    assert.equal(existsSync(join(destAncestorTarget, "copy")), false);
+    refusals.push("copy_destination_refused");
+
+    // (5) 目标在源根内 / 目标已存在。
+    const insideSource = join(releaseDir, "copy-inside-source");
+    assert.throws(
+      () => copyReleaseWhitelist(inspected, insideSource),
+      (error) => error?.code === "copy_destination_inside_source",
+    );
+    assert.equal(existsSync(insideSource), false);
+    refusals.push("copy_destination_inside_source");
+    const existingDest = join(fixture.root, "dest-existing");
+    mkdirSync(existingDest);
+    assert.throws(
+      () => copyReleaseWhitelist(inspected, existingDest),
+      (error) => error?.code === "copy_destination_exists",
+    );
+    assert.deepEqual(snapshotDir(existingDest), [], "目标已存在时不得写入");
+    refusals.push("copy_destination_exists");
+
+    // (6) 正常绝对目标仍成功（不放宽正向路径）。
+    const okDest = join(fixture.root, "dest-ok");
+    const copied = copyReleaseWhitelist(inspected, okDest);
+    assert.equal(copied.destRoot, okDest);
+    assert.equal(copied.digest, inspected.digest);
+    assert.equal(existsSync(join(copied.workbenchDir, "package.json")), true);
+    assert.deepEqual(copied.optionalMissing.sort(), ["scripts/windows-delivery-check.mjs", "scripts/windows-runtime-check.mjs", "scripts/windows-start.ps1", "scripts/local-backup.mjs", "test/windows-delivery.test.mjs"].sort());
+  } finally {
+    // 含 junction 的 fixture 按规则保留。
+    recordExpectedRefusalFixture({ kind: "copy_entry_expected_refusal", root: fixture.root, reason: refusals.join(",") || "copy_entry_guards" });
+  }
+});
+
+test("Office 汇总：必需 PDF 缺失必须归类为 blocked，不得当作通过", () => {
+  const complete = new Map(REQUIRED_OFFICE_KINDS.map((kind) => [kind, { pdf: { bytes: 10, pages: 1, magic: "%PDF-" } }]));
+  assert.deepEqual(classifyOfficeOutputs(complete), { required: 5, rendered: 5, requiredBlocked: [] });
+
+  const partial = new Map(complete);
+  partial.set("trial-balance", { pdf: null, pdfError: "pdf_font_unavailable" });
+  const blocked = classifyOfficeOutputs(partial);
+  assert.equal(blocked.required, 5);
+  assert.equal(blocked.rendered, 4);
+  assert.deepEqual(blocked.requiredBlocked, [{ kind: "trial-balance", code: "pdf_font_unavailable" }]);
+
+  const missingReport = classifyOfficeOutputs(new Map(), ["trial-balance", "ledger"]);
+  assert.deepEqual(missingReport.requiredBlocked, [
+    { kind: "trial-balance", code: "pdf_render_failed" },
+    { kind: "ledger", code: "pdf_render_failed" },
+  ]);
+});
+
+test("缺字体必需 PDF：真实 install-start CLI 退出 2 / blocked，输出与工作根保留（管理者前置）", async (t) => {
+  if (HEAVY.release === "" || HEAVY.npm === "" || HEAVY.cache === "") {
+    t.skip(HEAVY_SKIP);
+    return;
+  }
+  const scratch = newScratch("missing-font-cli");
+  let runStarted = false;
+  let retainedRoot = null;
+  try {
+    const out = join(scratch.root, "out-font");
+    const scratchBaseForRun = join(scratch.root, "cli-scratch");
+    mkdirSync(scratchBaseForRun);
+    const missingFont = join(scratch.root, "deliberately-missing-font.ttf");
+    assert.equal(existsSync(missingFont), false, "缺字体用例必须用真的不存在的字体文件");
+    runStarted = true;
+    const result = await capture("delivery-missing-font", HEAVY.node, [
+      DELIVERY_CHECK, "--phase", "install-start",
+      "--release", HEAVY.release,
+      "--node", HEAVY.node,
+      "--npm", HEAVY.npm,
+      "--cache", HEAVY.cache,
+      "--out", out,
+      "--scratch-root", scratchBaseForRun,
+      "--font", missingFont,
+    ], { timeoutMs: 45 * 60 * 1000 });
+    assert.equal(result.timedOut, false, "真实 CLI 运行不得被测试 deadline 打死");
+    assert.equal(result.code, 2, `缺字体必须 blocked（exit 2）：${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.status, "blocked");
+    assert.equal(payload.code, "pdf_output_required_blocked");
+    assert.equal(payload.error?.blocked, true);
+
+    // 阶段状态：office 必须是 blocked，不能报 pass。
+    const officeStage = payload.stages.find((stage) => stage.name === "office");
+    assert.ok(officeStage, "office 阶段必须出现在结果里");
+    assert.equal(officeStage.status, "blocked");
+    assert.equal(officeStage.code, "pdf_output_required_blocked");
+
+    // 五个必需 PDF 的 blocked 断言保留；缺字体路径不得产生 fail 断言。
+    const blocked = payload.assertions.filter((item) => item.status === "blocked" && /^office\.pdf\./.test(item.id));
+    assert.deepEqual(blocked.map((item) => item.id).sort(), [...REQUIRED_PDF_ASSERTIONS].sort());
+    assert.ok(blocked.every((item) => /pdf_font_unavailable|pdf_render_failed/.test(String(item.code))), JSON.stringify(blocked));
+    const failedIds = payload.assertions.filter((item) => item.status === "fail").map((item) => item.id);
+    assert.deepEqual(failedIds, [], `缺字体路径不得产生 fail 断言：${JSON.stringify(failedIds)}`);
+
+    // CSV / XLSX 的真实通过断言保留（不把缺字体改成可选，也不放宽 skip）。
+    for (const id of ["reports.csv.trial_balance_1002", "reports.csv.balance_cash", "office.xlsx.trial-balance", "office.xlsx.trial-balance.amounts", "failures.missing_font_reported", "failures.missing_font_xlsx_still_usable"]) {
+      const entry = payload.assertions.find((item) => item.id === id);
+      assert.equal(entry?.status, "pass", `${id} 必须在缺字体路径下仍然真实通过`);
+    }
+
+    // 保留策略：不清理、也不假装已清理 / 已验证 manifest。
+    assert.equal(payload.cleanup.retained, true);
+    assert.equal(payload.cleanup.attempted, false);
+    assert.equal(payload.cleanup.completed, false);
+    assert.equal(payload.cleanup.manifestVerified, false);
+    assert.equal(payload.cleanup.reason, "blocked_residual_kept");
+
+    // 输出保留：结果 JSON + XLSX 产物在，缺字体时不得写出 PDF。
+    assert.equal(existsSync(join(out, "windows-delivery-result.json")), true, "结果 JSON 必须保留");
+    const artifactFiles = readdirSync(join(out, "artifacts", "office"));
+    assert.equal(artifactFiles.some((name) => name.endsWith(".pdf")), false, "缺字体时不得写出 PDF");
+    assert.ok(artifactFiles.filter((name) => name.endsWith(".xlsx")).length >= REQUIRED_OFFICE_KINDS.length, `XLSX 产物必须保留：${JSON.stringify(artifactFiles)}`);
+
+    // 工作根保留：本次 CLI 自建的随机根仍在，并带自己的所有权 manifest。
+    const createdRoots = readdirSync(scratchBaseForRun).filter((name) => name.startsWith("delivery-check-"));
+    assert.equal(createdRoots.length, 1, `--scratch-root 下应只有本次 CLI 自建随机根：${JSON.stringify(readdirSync(scratchBaseForRun))}`);
+    retainedRoot = join(scratchBaseForRun, createdRoots[0]);
+    assert.equal(existsSync(retainedRoot), true, "blocked 时工作根必须保留");
+    assert.ok(readdirSync(retainedRoot).some((name) => name.startsWith(".wb-scratch-") && name.endsWith(".json")), "保留的工作根必须仍带所有权 manifest");
+  } finally {
+    if (!runStarted) {
+      cleanupScratch(scratch);
+    } else {
+      // 真实 CLI 的 blocked 现场按协议保留（保留证据不删），不进通用 after 的“全清”断言。
+      recordExpectedRefusalFixture({
+        kind: "missing_font_cli_retained",
+        root: retainedRoot ?? scratch.root,
+        reason: "pdf_output_required_blocked",
+      });
+    }
+  }
+});
+
+test("启动脚本：relative / drive-relative / root-relative / 空白 / 设备路径 -ScratchRoot 在规范化前被拒绝且无副作用", async (t) => {
+  if (!existsSync(PS5)) {
+    t.skip("Windows PowerShell 5.1 unavailable");
+    return;
+  }
+  const scratch = newScratch("start-script-raw-root");
+  try {
+    // 子进程 cwd 始终显式指定为本用例自有目录（不用 process.chdir）。
+    const cwd = join(scratch.root, "launcher-cwd");
+    mkdirSync(cwd);
+    // 普通文件当 DataDir：即使拒绝失效，服务也绝不会真的启动。
+    const dataFile = join(scratch.root, "data-file");
+    writeFileSync(dataFile, "keep-me", "utf8");
+    // Extract only the pure predicate AST; never dot-source or execute the launcher for UNC strings.
+    const pureCheck = join(scratch.root, "pure-path-check.ps1");
+    // Windows PowerShell 5.1 reads BOM-less scripts using the legacy system encoding.
+    // Emit a UTF-8 BOM so embedded Unicode launcher paths survive -File decoding.
+    writeFileSync(pureCheck, `\uFEFF
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile('${START_SCRIPT.replace(/'/g, "''")}', [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw 'launcher_parse_failed' }
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Test-RawAbsolutePath' }, $true)
+if ($null -eq $fn) { throw 'predicate_missing' }
+# The AST extent contains exactly one pure function, without launcher top-level code.
+Invoke-Expression $fn.Extent.Text
+foreach ($raw in @('\\\\server', '\\\\server\\', '\\/?.\\x', '\\/?\\x')) {
+  if (Test-RawAbsolutePath $raw) { throw 'unsafe_string_accepted' }
+}
+`, "utf8");
+    const pureResult = await capture("ps-pure-unc", PS5, ["-NoProfile", "-File", pureCheck], { cwd });
+    assert.equal(pureResult.code, 0, pureResult.stderr);
+    const cases = [
+      // 候选目标只在本用例 scratch 内；误规范化落点已在 rawPathVariants 内断言。
+      { name: "relative", candidate: join(scratch.root, "candidate-relative") },
+      { name: "drive-relative", candidate: join(scratch.root, "candidate-drive-relative") },
+      { name: "root-relative", candidate: join(scratch.root, "candidate-root-relative") },
+      // Blank defaults are contained by capture's fixture-local launcher/runtime copies.
+      { name: "whitespace", raw: "   ", candidate: null },
+      // Device namespace points only at this fixture's candidate if validation regresses.
+      { name: "device-path", raw: `\\\\?\\${join(scratch.root, "candidate-device")}`, candidate: join(scratch.root, "candidate-device") },
+    ];
+    const device = cases.find((item) => item.name === "device-path");
+    assert.equal(pathKeyOf(device.raw.slice(4)), pathKeyOf(device.candidate));
+    assert.ok(isInsideDir(scratch.root, device.raw.slice(4)));
+    for (const item of cases) {
+      const raw = item.raw !== undefined
+        ? item.raw
+        : rawPathVariants(item.candidate, { fixtureRoot: scratch.root, cwdDir: cwd })[item.name];
+      const before = snapshotDir(scratch.root);
+      const result = await capture(`start-script-raw-root-${item.name}`, PS5, [
+        "-NoProfile", "-File", START_SCRIPT,
+        "-NodePath", NODE, "-DataDir", dataFile, "-Port", "0", "-ScratchRoot", raw,
+      ], { cwd, timeoutMs: 120000, env: minimalEnv({ TEMP: join(scratch.root, "tmp"), TMP: join(scratch.root, "tmp") }) });
+      assert.equal(result.code, 1, `${item.name}: ${result.stderr}`);
+      assert.match(result.stderr, /windows_start_error: scratch_root_not_absolute/, item.name);
+      assert.doesNotMatch(result.stdout, /windows_start_service_pid=/, `${item.name} 不得启动服务`);
+      assert.equal(existsSync(join(result.isolation.workbench, "tmp")), false, `${item.name} 拒绝不得写入副本默认 scratch`);
+      assert.equal(existsSync(join(result.isolation.workbench, "   ")), false, `${item.name} 拒绝不得写入副本空白相对目录`);
+      if (item.candidate !== null) assert.equal(existsSync(item.candidate), false, `${item.name} -ScratchRoot 候选目标不得被创建`);
+      assert.deepEqual(snapshotDir(cwd), [], `${item.name} 拒绝时 cwd 内不得出现任何自建目录`);
+      assert.deepEqual(snapshotDir(scratch.root), before, `${item.name} 拒绝后父目录快照必须不变`);
+    }
+    assert.equal(readFileSync(dataFile, "utf8"), "keep-me", "拒绝时不得创建 / 改写数据目录目标");
+  } finally {
     cleanupScratch(scratch);
   }
 });
