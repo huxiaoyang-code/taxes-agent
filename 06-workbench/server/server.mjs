@@ -10,10 +10,11 @@ import { buildOfficeExport } from "./report-office-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { listAccountingProfiles } from "./accounting-profiles.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
-import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions, AUXILIARY_ACTION_TO_TOOL } from "./agent-tools.mjs";
+import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions, AUXILIARY_ACTION_TO_TOOL, prepareBankDraft } from "./agent-tools.mjs";
 import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
+import { BANK_ACTION_TO_TOOL, bankLocalDrafts } from "./bank-local-drafts.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 8787);
@@ -84,6 +85,24 @@ const AUX_IMPORT_CODES = new Set("aux_import_busy aux_import_failed account_set_
 async function api(req, res, url, m) {
   const p = url.pathname;
   let match;
+
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/(bank-drafts(?:\/(approve-import|revoke))?|bank\/([^/]+))$/))) {
+    if(m!=="POST") return json(res,405,{error:"method_not_allowed"});
+    if(!/^application\/json(?:;|$)/i.test(req.headers["content-type"]||"")) return json(res,415,{error:"bank_draft_input_invalid"});
+    try {
+      const b=await readBody(req),id=Number(match[1]);let value;
+      if(match[2]==="bank-drafts") value=await prepareBankDraft(id,b);
+      else if(match[3]==="approve-import") value=bankLocalDrafts.approveImport(id,b);
+      else if(match[3]==="revoke") value=bankLocalDrafts.revoke(id,b);
+      else {
+        const tool=BANK_ACTION_TO_TOOL[match[4]];
+        if(!tool)return json(res,404,{error:"bank_draft_tool_invalid"});
+        if(!b||Array.isArray(b)||Object.keys(b).length!==1||typeof b.draftRef!=="string") throw new ToolError("bank_draft_input_invalid");
+        value=await callAgentTool(tool,{accountSetId:id,draftRef:b.draftRef});
+      }
+      return json(res,200,value);
+    } catch(e) {const c=e?.code;const code=typeof c==="string"&&/^(bank_draft_|bank_local_)[a-z_]+$/.test(c)?c:"bank_local_operation_failed";return json(res,400,{error:code,message:code,details:null});}
+  }
 
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/auxiliary\/([^/]+)$/))) {
     if (m !== "POST") return json(res, 405, { error: "method_not_allowed" });

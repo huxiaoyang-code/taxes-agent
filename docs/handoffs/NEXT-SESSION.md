@@ -1,3 +1,7 @@
+> 2026-10-23 LOCAL04B 实施候选（未提交/未PR/未合并）：15银行业务工具已接本机REST/raw Agent及模型MCP；本机原始输入通过内存draft准备/预检/明确批准，模型只见accountSetId+opaque draftRef。页面file+paste共用文本/映射/预检/导入链，静态合同通过，页面paste/filechooser实操均未验。A已随PR73实际合并；B待root完整88套、独立验收/fresh审查及PR合并，Issue53仍OPEN。真实税局0，01/02/03/05/08=5/8，04/06/07与最终整链/Windows W2未完。准确合同与失败历史见[银行交接](LOCAL-04-BANK.md)。
+
+> 2026-10-23 LOCAL04A 实际已合并：[PR73](https://github.com/huxiaoyang-code/youshu-fork/pull/73) 于 `2026-10-23T12:46:13Z` MERGED；已审 head `c7cc65fc09f956bf7f4f4eec6bcda95148e24d0f`，merge `0eec7913be07dbfd8072976bbd2297d8ef05d687`。root 六正式领域43/CLI15/bankbackup5/auxbank/auxbackup/两安装序全 exit0、DB/child actualclose、15 hash不变；独立两profile 2219.05/2202.05/2223.09，联合恢复后相同并各续7分。全新独审完整 c7 接受，无确认P1/P2；独立6265.81/6259.73/6268.97，两安装序/held写锁/联合恢复各续13分、party状态与entry_unavailable及五严格负例全0/actualclose/hash同。A 未跑完整84（旧83逐字原序末追加1），B最终完整入口由root验收。Issue53仍OPEN；01/02/03/05/08=5/8，04/06/07与最终整链/Windows W2未完；真实税局0，页面filechooser/paste实操未知。A员工已冻结停止，无自有运行服务。
+
 > LOCAL04A本片自测已完成：银行+aux两安装序、仅展示往来DTO、真实CLI独立1130/联合恢复续写及六正式套exit0/hash同；[准确证据与B交接](LOCAL-04-BANK.md)。待root验收/fresh独审/PR，Issue53不关闭；原范围5/8，04/06/07与最终整链/Windows W2未完，税局0、UI file input未知。
 
 > 2026-10-23 当前事实：[PR72](https://github.com/huxiaoyang-code/youshu-fork/pull/72) 已实际合并（head `80246e3fc9fd1e5a53bb19e01bafa1252c3f1dbb`，merge `1621a58620738b3adcc4345425de8df41136da30`，12:18:01Z）；Issue45已CLOSED。root四正式42/26/28/9与独立金额/目视、fresh完整head接受见[LOCAL05真实交接](LOCAL-05-CASHFLOW.md)。原01/02/03/05/08=5/8；04/06/07、最终整链/Windows W2未完，税局0、UI file input未知。04A仅银行+已验辅助组件整合，尚未验收/合并，不关闭Issue53。下方候选状态为历史。

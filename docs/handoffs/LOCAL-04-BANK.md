@@ -1,3 +1,25 @@
+## 2026-10-23 LOCAL04B 候选交付与恢复
+
+本片由负责人huxiaoyang-code下唯一获授权兜底实施员工实现，指定WT为local-04b-bank-entry、基线0eec7913be07dbfd8072976bbd2297d8ef05d687；员工不Git、不自审、不起其它agent/模型。A真实PR73结果紧随本节保留；B尚未提交/PR/合并。root最终决定原04是否关闭，Issue53仍OPEN。原整体仍01/02/03/05/08=5/8，04/06/07及最终整链/Windows W2未完，税局0。
+
+已实现15银行业务工具（9query/6write）的REST/raw Agent/MCP模型入口、银行专用有界内存draft、同一页面file+paste文本/映射/预检/明确导入和人工判重/匹配/四类调节展示。详细API、金额与隐私边界见[LOCAL-BANK](../LOCAL-BANK.md)，模型协议与本机完整DTO见[输出边界](../FINANCE-OUTPUT-BOUNDARY.md)。A的partyAllocation字段本机完整保留，仅展示，模型固定状态计数；不改领域/aux/备份/核心算法。
+
+自测真实证据（完整命令cwd/exit/close记录在根.agent-runs相应results.json，目录均本轮新UUID、祖先realpath/lstat检查、TEMP/TMP/WORKBENCH_DATA_DIR/KEEP_FIXTURES先绑定并传child）：
+
+- 新4套：bank-local-drafts、bank-http、bank-ui-contract、MCP bank。HTTP实际REST15与raw15、MCP实际stdio15×两profile，不能以发现清单替代调用。最后新4证据根local04b-selftest-4c34791a-10fa-4c1f-a92b-111588cc3fa4，均exit0；后端/stdio有actualclose manifest，SQLite finallyclose。后续最终冻结hash与最终目标重验结果以根local04b-delivery-20261023.md为准。
+- 两profile独立常量：书/单1130.00与1130.01；四类未达bookReceived30(count1)、bookPaid100(count2)、bankReceived5(count1)、bankPaid75(count2)，调节两边1060.00/1060.01、差额0、reconciled。声明close另外加1分时statementDifference=+0.01、adjusted difference=-0.01、pending_review。
+- 同批/同ref缓存performed/applied=false；同文件新批true且仅新增批次追踪，稳定ID重叠文件复用4条、只新增0.03；无稳定IDdistinct后另批same显式选旧候选；跨期2026-01-31双0.07候选对应02-01银行流水，requires_manual_choice并人工选行确认；反过账真实读时失效。模型本机引用sum独立28017分。
+- draft不可变/严格scope-tool/伪approved/过期/32项/2MiB/16MiB、并发write、unknown禁止重试、query重读与70次顺序撤销释放预算；16MiB缓存不足首次保留commit、再调固定拒绝且只执行1次。
+- policy42/42、transport20/20（local04b-selftest-c0217c70-d712-4605-9430-225328412b3e），全份金额非整数/NaN/Infinity/正负超界与隐藏汇总字段拒整份query摘要/引用；停用含歧义往来只计数。真实银行写后造summary/ref失败，由adapter确认DB先增1，applied保留、needsLocalReview且无引用；重用ref零重复。
+- adapter22/22、modelHTTP16/16、MCPentry11/11、auxiliary MCP真实28调用，全exit0，证据local04b-selftest-f3573105-78d9-4ce6-ba2c-c99d82e0fafa。旧断言全部保留，只将实际写工具18→24并验证6银行精确集合；最终测试若因新hash定点重验，在根交付注明实际新记录。
+- MCP三运输故障×15均固定失败、写unknown、无raw retry；另真实DB先写后畸形响应→unknown→同ref已完成缓存回放零重复。输入模型仅accountSetId/draftRef，合成私密标记不进成功/错误/日志，原文仍可本机read/compute。
+
+失败历史不删：首次HTTP沙箱EACCES（10872faf）后端及DB已关闭，按原命令审批后通过；MCP长测试路径导致官方migration_backup_failed（e6741d8b），缩短本轮fixture子目录后通过，未改领域/备份；compute合成预期28005误写，按实际独立20000+7000+500+500+1+2+1=28004修正（9324eca5），后追加重叠/同笔/跨期合成材料后最终28017。MCP发现schema仅声明additionalProperties未在运行拒绝approved，代理未捕获断言使测试退出1（47ed336c）：主测试child close已观察，孙后端/stdio的close回传当时未知；随后提升只读精确命令/父链查询结果空，未按PID猜杀或操作其它进程，不把该历史补称observed。修为仅银行schema执行前拒绝多字段，并代理收集错误/finally，后续全部自有child manifest与close齐备。旧adapter新探针发现已提交ref value_limit未提示复核（b5218dda），银行写单独补needsLocalReview及固定运输原因，修后通过。
+
+页面实现/静态合同与同HTTP真链分别成立；正常页面paste与实际filechooser未操作、结果未知，不冒报UI实操通过。原CLI真实文件/映射/去重/人工确认/余额证据沿A PR73已验CLI15及root/fresh独立probe，不把本轮管理追加UI实操要求变原04永久阻塞。没有整跑员工完整88；root对最终冻结候选完整88一次与独立不同金额/stdio复验、fresh完整head审查仍是后续。员工最终29实际paths/sha256/bytes/LF无BOM及所有运行记录见根.agent-runs/local04b-final-files.json与local04b-delivery-20261023.md；冻结后无自有运行服务，不启动下一部分。
+
+> 2026-10-23 LOCAL04A 实际已合并：[PR73](https://github.com/huxiaoyang-code/youshu-fork/pull/73) 于 `2026-10-23T12:46:13Z` MERGED；已审 head `c7cc65fc09f956bf7f4f4eec6bcda95148e24d0f`，merge `0eec7913be07dbfd8072976bbd2297d8ef05d687`。root 六正式领域43/CLI15/bankbackup5/auxbank/auxbackup/两安装序全 exit0、DB/child actualclose、15 hash不变；独立两profile 2219.05/2202.05/2223.09，联合恢复后相同并各续7分。全新独审完整 c7 接受，无确认P1/P2；独立6265.81/6259.73/6268.97，两安装序/held写锁/联合恢复各续13分、party状态与entry_unavailable及五严格负例全0/actualclose/hash同。A 未跑完整84（旧83逐字原序末追加1），B最终完整入口由root验收。Issue53仍OPEN；01/02/03/05/08=5/8，04/06/07与最终整链/Windows W2未完；真实税局0，页面filechooser/paste实操未知。A员工已冻结停止，无自有运行服务。
+
 # LOCAL04A 银行与辅助组件整合候选（2026-10-23）
 
 负责人huxiaoyang-code，基线为PR72实际merge `1621a58620738b3adcc4345425de8df41136da30`，分支 `codex/huxiaoyang-code/local-04a-bank-aux`；[Issue53精确17路径认领](https://github.com/huxiaoyang-code/youshu-fork/issues/53#issuecomment-6364708982)内实际改15路径，两份旧auxiliary整合测试只跑未改。沿章程用户唯一兜底实施授权；本实施者未调用其它agent/模型、未Git、未自审。PR72真实结果已补[LOCAL05交接](LOCAL-05-CASHFLOW.md)。本A只自测完成，待root独立验收、全新未实施者审查及PR；Issue53保持开放，LOCAL04整体尚未完成。下方旧候选状态按原时点保留。

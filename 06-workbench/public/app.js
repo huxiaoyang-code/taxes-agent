@@ -40,6 +40,7 @@ async function loadSets(selectId) {
   await selectSet();
 }
 async function selectSet() {
+  bankClear();
   SET = SET_ID ? await api(`/api/account-sets/${SET_ID}`) : null;
   ACCOUNTS = SET_ID ? await api(`/api/account-sets/${SET_ID}/accounts`) : [];
   $("#setMeta").textContent = SET ? `启用期间 ${SET.start_period} · ${SET.accounting_standard}` : "请先新建账套";
@@ -552,6 +553,80 @@ async function renderPeriods() {
     await renderPeriods(); toast("期间状态已更新");
   });
 }
+
+// LOCAL04B: file and paste share one text -> mapping -> preview -> explicit import chain.
+let BANK_GEN=0, BANK_PREVIEW=null, BANK_REFS=new Map();
+function bankNode(tag,text) {const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);return n;}
+function bankClear() {
+ BANK_GEN++;
+ for(const [ref,set]of BANK_REFS) api('/api/account-sets/'+set+'/bank-drafts/revoke',{method:'POST',body:{draftRef:ref}}).catch(()=>{});
+ BANK_REFS.clear();BANK_PREVIEW=null;
+ if(!$('#bankImport'))return;
+ $('#bankImport').disabled=true;$('#bankAccount').replaceChildren();$('#bankFile').value='';$('#bankCsv').value='';
+ for(const id of ['bankNewId','bankDisplay','bankPeriod','bankBatch','bankAsOf','bankCoverageFrom','bankCoverageTo','bankStatementOpen','bankStatementClose'])$('#'+id).value='';
+ $('#bankSource').value='local-csv';$('#bankStatementSource').value='local-statement';$('#bankTolerance').value='0';$('#bankMapping').value=$('#bankMapping').defaultValue;
+ for(const id of ['bankPreviewOut','bankState','bankTransactions','bankCandidates','bankAmbiguities','bankMatches','bankReconcileOut'])$('#'+id).replaceChildren();
+}
+function bankEdit() {
+ BANK_GEN++;BANK_PREVIEW=null;$('#bankImport').disabled=true;
+ for(const [ref,set]of BANK_REFS)api('/api/account-sets/'+set+'/bank-drafts/revoke',{method:'POST',body:{draftRef:ref}}).catch(()=>{});
+ BANK_REFS.clear();$('#bankPreviewOut').textContent='输入已改变，请重新预检。';for(const id of ['bankCandidates','bankTransactions','bankAmbiguities','bankMatches','bankReconcileOut','bankState'])$('#'+id).replaceChildren();
+}
+const bankContext=()=>{if(!SET_ID)throw new Error('请先选择账套');return {set:SET_ID,gen:BANK_GEN};};
+const bankCurrent=c=>c.set===SET_ID&&c.gen===BANK_GEN;
+async function bankPrepare(tool,payload,confirm=false,c=bankContext()) {
+ const d=await api('/api/account-sets/'+c.set+'/bank-drafts',{method:'POST',body:{tool,payload,...(confirm?{confirm:true}:{})}});
+ if(!bankCurrent(c)){await api('/api/account-sets/'+c.set+'/bank-drafts/revoke',{method:'POST',body:{draftRef:d.draftRef}}).catch(()=>{});throw new Error('账套或输入已改变，请重选');}
+ BANK_REFS.set(d.draftRef,c.set);return d;
+}
+async function bankExecute(tool,ref,c) {
+ const action=tool.replace(/^bank_/,'').replaceAll('_','-');
+ const value=await api('/api/account-sets/'+c.set+'/bank/'+action,{method:'POST',body:{draftRef:ref}});
+ if(!bankCurrent(c))throw new Error('账套或输入已改变，请重选');return value.result;
+}
+async function bankRun(tool,payload,write=false,c=bankContext()) {
+ if(write&&!window.confirm('确认执行本机银行操作？此操作会保存结果。'))return null;
+ const d=await bankPrepare(tool,payload,write,c);
+ try{return await bankExecute(tool,d.draftRef,c);}finally{BANK_REFS.delete(d.draftRef);api('/api/account-sets/'+c.set+'/bank-drafts/revoke',{method:'POST',body:{draftRef:d.draftRef}}).catch(()=>{});}
+}
+function bankScope(){const id=$('#bankAccount').value;if(!id)throw new Error('请先启用并选择银行账户');return {bankAccountId:id};}
+function bankTable(target,headers,rows,cell) {
+ const table=bankNode('table'),head=bankNode('tr');headers.forEach(h=>head.append(bankNode('th',h)));table.append(head);
+ for(const row of rows){const tr=bankNode('tr');for(const value of cell(row)){const td=bankNode('td');td.append(value instanceof Node?value:document.createTextNode(String(value??'')));tr.append(td);}table.append(tr);}$('#'+target).replaceChildren(table);
+}
+function bankButton(label,fn){const b=bankNode('button',label);b.onclick=guard(fn);return b;}
+async function bankLoadAccounts() {
+ const c=bankContext(),r=await bankRun('bank_accounts',{},false,c);if(!bankCurrent(c))return;
+ $('#bankAccount').replaceChildren(...r.items.map(a=>{const o=bankNode('option',a.display_name||a.bank_account_id);o.value=a.bank_account_id;return o;}));
+ $('#bankPeriod').value=SETS.find(item=>item.id===c.set)?.start_period||thisMonth();$('#bankBatch').value='local-'+Date.now();$('#bankState').textContent='银行组件已启用，请选择账户。';
+}
+async function bankRefresh() {
+ const c=bankContext(),s=bankScope();
+ const t=await bankRun('bank_transactions',s,false,c),a=await bankRun('bank_ambiguities',{...s,status:'pending'},false,c),m=await bankRun('bank_matches',s,false,c),st=await bankRun('bank_status',s,false,c),b=await bankRun('bank_batches',s,false,c);
+ if(!bankCurrent(c))return;
+ $('#bankState').textContent='流水 '+st.transactions.total+'；已匹配 '+st.transactions.matched+'；未匹配 '+st.transactions.unmatched+'；待判重 '+st.ambiguities.pending+'；失效 '+st.matches.invalidated+'；批次 '+st.batches.total+(st.batches.itemsTruncated?'（列表截断）':'')+'；当前页批次 '+b.items.length;
+ bankTable('bankTransactions',['日期','收付','金额','摘要','期间','状态','候选'],t.transactions,r=>[r.date,r.direction,r.amountText,r.summary,r.period,r.matchStatus,bankButton('查看候选',()=>bankCandidates(r.transactionId,c))]);
+ bankTable('bankAmbiguities',['日期','金额','摘要','候选ID','人工判重'],a.ambiguities,r=>[r.date,r.amountText,r.summary,r.candidateTransactionIds.join(', '),bankButton('判定同笔/新笔',async()=>{
+  const decision=window.prompt('输入 same（同笔）或 distinct（新笔）');if(!['same','distinct'].includes(decision))return;
+  const transactionId=decision==='same'?Number(window.prompt('选择上列真实候选流水ID')):undefined,reason=window.prompt('人工判重理由');if(!reason)return;
+  if(!bankCurrent(c))throw new Error('选择已失效');const payload={...s,ambiguityId:r.ambiguityId,decision,reason,...(transactionId?{transactionId}:{})};await bankRun('bank_ambiguity_resolve',payload,true,c);await bankRefresh();
+ })]);
+ bankTable('bankMatches',['流水ID','凭证/分录','状态','往来展示','取消'],m.matches,r=>[r.transactionId,r.voucherId+'/'+r.entryId,r.status,JSON.stringify(r.partyAllocation),bankButton('取消匹配',async()=>{const reason=window.prompt('取消理由');if(!reason)return;if(!bankCurrent(c))throw new Error('选择已失效');await bankRun('bank_cancel',{...s,matchId:r.matchId,reason},true,c);await bankRefresh();})]);
+}
+async function bankCandidates(transactionId,c=bankContext()) {
+ const s=bankScope(),dateToleranceDays=Number($('#bankTolerance').value),r=await bankRun('bank_candidates',{...s,transactionId,period:$('#bankPeriod').value,dateToleranceDays},false,c);if(!bankCurrent(c))return;
+ bankTable('bankCandidates',['凭证/分录','日期','金额','往来仅展示','确认'],r.candidates,row=>[row.voucherId+'/'+row.entryId,row.date||row.voucherDate,row.amountText||row.amountCents,JSON.stringify(row.partyAllocation),bankButton('人工确认此行',async()=>{const reason=window.prompt('确认匹配理由');if(!reason)return;if(!bankCurrent(c))throw new Error('选择已失效');await bankRun('bank_confirm',{...s,transactionId,voucherId:row.voucherId,entryId:row.entryId,reason,dateToleranceDays},true,c);await bankRefresh();})]);
+ $('#bankCandidates').prepend(bankNode('p','候选状态 '+r.selection+'；组合匹配 '+JSON.stringify(r.groupMatch)+'。往来未知/歧义/已分配/停用均只展示，不是银行对方证明。'));
+}
+function bankInput(){return {...bankScope(),sourceId:$('#bankSource').value,batchId:$('#bankBatch').value,period:$('#bankPeriod').value,csvText:$('#bankCsv').value,mapping:JSON.parse($('#bankMapping').value)};}
+$('#bankEnable').onclick=guard(bankLoadAccounts);
+$('#bankRegister').onclick=guard(async()=>{const c=bankContext();await bankRun('bank_account_register',{bankAccountId:$('#bankNewId').value,sourceId:$('#bankSource').value,glAccountCode:$('#bankGl').value,displayName:$('#bankDisplay').value,currency:'CNY'},true,c);await bankLoadAccounts();});
+for(const id of ['bankAccount','bankPeriod','bankSource','bankBatch','bankCsv','bankMapping','bankTolerance'])$('#'+id).addEventListener('input',bankEdit);
+$('#bankFile').onchange=guard(async()=>{bankEdit();const c=bankContext(),f=$('#bankFile').files[0];if(!f)return;if(f.size>2*1024*1024)throw new Error('页面CSV上限2MiB');const text=await f.text();if(!bankCurrent(c))return;if(new TextEncoder().encode(text).byteLength>2*1024*1024)throw new Error('页面CSV上限2MiB');$('#bankCsv').value=text;});
+$('#bankPreview').onclick=guard(async()=>{bankEdit();const c=bankContext(),payload=bankInput();if(new TextEncoder().encode(JSON.stringify(payload)).byteLength>2*1024*1024)throw new Error('输入和映射合计上限2MiB');const d=await bankPrepare('bank_import_preview',payload,false,c),r=await bankExecute('bank_import_preview',d.draftRef,c);if(!bankCurrent(c))return;$('#bankPreviewOut').textContent=JSON.stringify(r,null,2);if(r.preview.ok){BANK_PREVIEW={ref:d.draftRef,...c};$('#bankImport').disabled=false;}});
+$('#bankImport').onclick=guard(async()=>{const c=bankContext(),v=BANK_PREVIEW;if(!v||v.set!==c.set||v.gen!==c.gen)throw new Error('请重新预检');if(!window.confirm('确认将本次已预检内容导入当前账套？'))return;$('#bankImport').disabled=true;const d=await api('/api/account-sets/'+c.set+'/bank-drafts/approve-import',{method:'POST',body:{previewRef:v.ref}});if(!bankCurrent(c)){await api('/api/account-sets/'+c.set+'/bank-drafts/revoke',{method:'POST',body:{draftRef:d.draftRef}});return;}BANK_REFS.set(d.draftRef,c.set);const r=await bankExecute('bank_import',d.draftRef,c);$('#bankPreviewOut').textContent=JSON.stringify(r,null,2);BANK_PREVIEW=null;await bankRefresh();});
+$('#bankRefresh').onclick=guard(bankRefresh);
+$('#bankReconcile').onclick=guard(async()=>{const c=bankContext(),r=await bankRun('bank_reconcile',{...bankScope(),period:$('#bankPeriod').value,asOf:$('#bankAsOf').value,coverageFrom:$('#bankCoverageFrom').value,coverageTo:$('#bankCoverageTo').value,statementSource:$('#bankStatementSource').value,statementOpenCents:$('#bankStatementOpen').value,statementCloseCents:$('#bankStatementClose').value,currency:'CNY'},true,c);if(!r||!bankCurrent(c))return;$('#bankReconcileOut').textContent=JSON.stringify({status:r.status,book:r.book,statement:r.statement,outstanding:r.outstanding,adjusted:r.adjusted,issues:r.issues,matches:r.matches},null,2);});
 
 // ------------------------------------------------------------------ 事件
 $$(".tabs button").forEach((b) => b.onclick = () => {

@@ -70,6 +70,21 @@ const unavailable = (name, description, origin = "upstream") =>
 
 /** 后端已实现（含本轮正式注册的 4 个扩展工具与 11 个新增管理工具）。 */
 const BACKEND_TOOLS = [
+  available("bank_accounts", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_import_preview", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_batches", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_transactions", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_ambiguities", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_candidates", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_matches", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_status", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_audit", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_account_register", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_import", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_ambiguity_resolve", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_confirm", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_cancel", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  available("bank_reconcile", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
   available("auxiliary_entities", "辅助实体目录固定计数摘要；本机引用保留维度明细。", auxSchema({kind:AUX_KIND}), "local"),
   available("auxiliary_entries", "查询真实总账分录ID与来源，模型仅行数及借贷合计。", auxSchema({voucherId:AUX_ID,period:PERIOD}), "local"),
   available("auxiliary_ledger", "按三维事实聚合辅助账簿，模型返回期间及固定六金额合计。", auxSchema({period:PERIOD,code:{type:"string"},groupBy:{type:"array",items:AUX_KIND}},["period"]), "local"),
@@ -339,6 +354,7 @@ const LOCAL_TOOLS = [
  * 税务 / 目录工具与 skills 资源工具**不在**此列，仍走既有 `/agent/tools/*` 或本地资源读取。
  */
 export const MODEL_PLAIN_TOOL_NAMES = Object.freeze([
+  "bank_accounts", "bank_import_preview", "bank_batches", "bank_transactions", "bank_ambiguities", "bank_candidates", "bank_matches", "bank_status", "bank_audit", "bank_account_register", "bank_import", "bank_ambiguity_resolve", "bank_confirm", "bank_cancel", "bank_reconcile",
   "auxiliary_entities", "auxiliary_entries", "auxiliary_ledger", "auxiliary_party", "auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set",
   "finance_query_catalog", "update_plan",
   "account_context", "finance_context_resolve", "finance_query",
@@ -352,6 +368,7 @@ export const MODEL_PLAIN_TOOL_NAMES = Object.freeze([
 
 /** 写动作子集：运输失败必须保守给 writeOutcome:unknown（不自动重试）。 */
 export const MODEL_WRITE_TOOL_NAMES = Object.freeze([
+  "bank_account_register", "bank_import", "bank_ambiguity_resolve", "bank_confirm", "bank_cancel", "bank_reconcile",
   "auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set",
   "voucher_create", "voucher_post", "voucher_unpost", "voucher_delete",
   "period_set_status", "opening_balance_set", "account_create",
@@ -444,6 +461,10 @@ export function validateArgs(schema, args) {
   const problems = [];
   if (!schema || schema.type !== "object") return problems;
   if (args === null || typeof args !== "object" || Array.isArray(args)) return ["arguments 必须是 JSON 对象"];
+  // Bank model input is exclusively a local opaque draft and integer scope.
+  if (schema.properties?.draftRef?.pattern === "^bankdraft_[a-f0-9]{48}$") {
+    if (Object.keys(args).some(k=>!["accountSetId","draftRef"].includes(k)) || !Number.isSafeInteger(args.accountSetId) || args.accountSetId<=0 || typeof args.draftRef!=="string" || !/^bankdraft_[a-f0-9]{48}$/.test(args.draftRef)) return ["bank_draft_input_invalid"];
+  }
   for (const key of schema.required || []) {
     const v = args[key];
     if (v === undefined || v === null || v === "") problems.push(`缺少必填参数：${key}`);

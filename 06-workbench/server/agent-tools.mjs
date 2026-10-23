@@ -12,6 +12,11 @@
 // 普通财务工具送模型时必须走下面的 `callAgentModelTool`（投影信封）；两者互不递归适配。
 // raw 入口本身不做脱敏，MCP 普通工具不得再到达 `/agent/tools/*`。
 import * as A from "./accounting.mjs";
+import * as BANK from "./bank-reconciliation.mjs";
+import * as BANK_STORAGE from "./bank-storage.mjs";
+import * as BANK_BACKUP from "./local-backup.mjs";
+import { dirname } from "node:path";
+import { bankLocalDrafts, BANK_TOOLS, BANK_WRITE_TOOLS, BankLocalDrafts, BankDraftError } from "./bank-local-drafts.mjs";
 import * as AUX from "./auxiliary-accounting.mjs";
 import { db } from "./db.mjs";
 import { types } from "node:util";
@@ -97,6 +102,46 @@ function auxiliaryCall(name, raw) {
   if (name === "auxiliary_entities" || name === "auxiliary_entries") return { accountSetId: args.accountSetId, items: value };
   if (name === "auxiliary_ledger" || name === "auxiliary_party") return value;
   return { accountSetId: args.accountSetId, result: value };
+}
+
+// Bank installation is only reached by an explicit local prepare action.
+let bankInstallPromise;
+export async function prepareBankDraft(accountSetId, body) {
+  new BankLocalDrafts().prepare(accountSetId, body);
+  A.getAccountSet(accountSetId);
+  if (!bankInstallPromise) {
+    const dbPath = db.prepare("PRAGMA database_list").all().find(r => r.name === "main")?.file;
+    bankInstallPromise = BANK_STORAGE.ensureBankSchema(db, { dbPath, dataDir: dirname(dbPath), backupService: BANK_BACKUP }).catch(() => { bankInstallPromise = null; throw new BankDraftError("bank_local_install_failed"); });
+  }
+  await bankInstallPromise;
+  return bankLocalDrafts.prepare(accountSetId, body);
+}
+const BANK_FUNCTIONS = {bank_account_register:BANK.registerBankAccount,bank_import_preview:BANK.previewBankImport,bank_import:BANK.importBankBatch,
+  bank_batches:BANK.listBatchesView,bank_transactions:BANK.listTransactionsView,bank_ambiguities:BANK.listAmbiguitiesView,bank_ambiguity_resolve:BANK.resolveAmbiguity,
+  bank_candidates:BANK.listCandidates,bank_confirm:BANK.confirmMatch,bank_cancel:BANK.cancelMatch,bank_matches:BANK.listMatchesView,bank_reconcile:BANK.reconcileBank,bank_status:BANK.getBankStatus,bank_audit:BANK.readBankAudit};
+async function bankCall(name, raw) {
+  try { return await bankLocalDrafts.execute(name, raw, payload => {
+    const write = BANK_WRITE_TOOLS.includes(name);
+    if (write && !BANK_STORAGE.bankConnectionState(db).writable) throw new BankDraftError("bank_local_state_unknown");
+    let result;
+    if (name === "bank_accounts") result = { items: BANK_STORAGE.listBankAccounts(db,payload) };
+    else if(name === "bank_import_preview") {const {batchId,...preview}=payload;result=BANK.previewBankImport(db,preview);}
+    else if(name === "bank_batches") result={items:BANK.listBatchesView(db,payload)};
+    else result=BANK_FUNCTIONS[name](db,payload);
+    if (!write) return {accountSetId:payload.accountSetId,result};
+    if (!BANK_STORAGE.bankConnectionState(db).writable) throw new BankDraftError("bank_local_state_unknown");
+    let performed=name==="bank_account_register"||name==="bank_confirm"?result.created:name==="bank_cancel"?result.cancelled:name==="bank_ambiguity_resolve"?result.resolved:name==="bank_import"?!["same-batch","same-batch-pending"].includes(result.replayKind):false;
+    if(name==="bank_reconcile") {
+      const row=db.prepare("SELECT id FROM bank_reconcile_runs WHERE id=? AND account_set_id=? AND bank_account_id=?").get(result.reconcileRunId,payload.accountSetId,payload.bankAccountId);
+      const audit=db.prepare("SELECT id FROM bank_audit_events WHERE account_set_id=? AND bank_account_id=? AND event_type='reconcile_computed' AND subject_id=?").get(payload.accountSetId,payload.bankAccountId,String(result.reconcileRunId));
+      performed=!!row&&!!audit;
+      if(!performed)throw new BankDraftError("bank_local_state_unknown");
+    }
+    return {accountSetId:payload.accountSetId,result,evidence:{durability:"committed",performed:performed===true,replayed:performed===false}};
+  }); } catch(e) {
+    const code=e instanceof BankDraftError?e.code:"bank_local_operation_failed";
+    throw new ToolError(code,code);
+  }
 }
 
 // 期间格式：仅接受合法月份 01–12（2026-13 / 2026-00 一律拒绝）。
@@ -320,6 +365,7 @@ function rejectExtra(args, allowed) {
 
 // ------------------------------------------------------------------ 已实现工具
 const HANDLERS = dict({
+  ...Object.fromEntries(BANK_TOOLS.map(name=>[name,args=>bankCall(name,args)])),
   auxiliary_entities: args => auxiliaryCall("auxiliary_entities", args),
   auxiliary_entries: args => auxiliaryCall("auxiliary_entries", args),
   auxiliary_ledger: args => auxiliaryCall("auxiliary_ledger", args),

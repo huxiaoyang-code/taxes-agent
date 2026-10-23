@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {BankLocalDrafts,BANK_TOOLS,BANK_WRITE_TOOLS} from '../server/bank-local-drafts.mjs';
+const v=new BankLocalDrafts();let count=0;
+const completePreview=csvText=>({bankAccountId:'A',sourceId:'S',batchId:'test',period:'2026-01',mapping:{columns:{date:'d'},currency:'CNY'},csvText});
+const ref=(tool='bank_accounts',payload={},extra={})=>v.prepare(1,{tool,payload,...extra}).draftRef;
+const input=r=>({accountSetId:1,draftRef:r});
+assert.equal(BANK_TOOLS.length,15);assert.equal(new Set(BANK_TOOLS).size,15);assert.equal(BANK_WRITE_TOOLS.length,6);
+for(const raw of [{tool:'bank_accounts',payload:{path:'x'}},{tool:'bank_accounts',payload:{},approved:true},{tool:'bank_import',payload:{},confirm:true},{tool:'bank_cancel',payload:{}},{tool:'bank_accounts',payload:JSON.parse('{"__proto__":{}}')},{tool:'bank_accounts',payload:Object.create({})}])assert.throws(()=>v.prepare(1,raw));
+const accessor={};Object.defineProperty(accessor,'tool',{get(){throw new Error('getter invoked');}});assert.throws(()=>v.prepare(1,accessor),/bank_draft_input_invalid/);
+let payload={bankAccountId:'A'},r=ref('bank_status',payload);payload.bankAccountId='changed';
+await v.execute('bank_status',input(r),p=>{assert.equal(p.bankAccountId,'A');count++;return {accountSetId:1,result:{count}};});
+await v.execute('bank_status',input(r),()=>{count++;return {count};});assert.equal(count,2);
+await assert.rejects(v.execute('bank_audit',input(r),()=>{}),/scope_mismatch/);await assert.rejects(v.execute('bank_status',{accountSetId:2,draftRef:r},()=>{}),/scope_mismatch/);
+for(const bad of [{...input(r),approved:true},{...input(r),reason:'x'},{...input(r),local:true},{...input(r),channel:'local'},{accountSetId:1,draftRef:'finref_'+'a'.repeat(48)}])await assert.rejects(v.execute('bank_status',bad,()=>{}));
+v.revoke(1,{draftRef:r});await assert.rejects(v.execute('bank_status',input(r),()=>{}),/unavailable|revoked/);
+const w=ref('bank_cancel',{bankAccountId:'A',matchId:1,reason:'x'},{confirm:true});let release;
+const first=v.execute('bank_cancel',input(w),()=>new Promise(resolve=>{release=resolve;}));
+await assert.rejects(v.execute('bank_cancel',input(w),()=>{}),/busy/);release({accountSetId:1,result:{cancelled:true,match:{matchId:1}},evidence:{durability:'committed',performed:true,replayed:false}});await first;
+const replay=await v.execute('bank_cancel',input(w),()=>{throw new Error('must not execute');});assert.deepEqual(replay.evidence,{durability:'committed',performed:false,replayed:true});
+const u=ref('bank_cancel',{bankAccountId:'A',matchId:2,reason:'x'},{confirm:true});await assert.rejects(v.execute('bank_cancel',input(u),()=>{throw new Error('commit unknown');}));await assert.rejects(v.execute('bank_cancel',input(u),()=>{}),/outcome_unknown/);
+const preview=ref('bank_import_preview',{bankAccountId:'A',sourceId:'S',period:'2026-01',batchId:'batch',csvText:'csv',mapping:{columns:{date:'date'},currency:'CNY'}});
+assert.throws(()=>v.approveImport(1,{previewRef:preview}),/preview_required/);
+await v.execute('bank_import_preview',input(preview),()=>({result:{preview:{ok:true}}}));const imported=v.approveImport(1,{previewRef:preview});assert.equal(imported.tool,'bank_import');assert.throws(()=>v.approveImport(1,{previewRef:preview,mapping:{}}),/input_invalid/);
+let clock=0;const ttl=new BankLocalDrafts({clock:()=>clock}),t=ttl.prepare(1,{tool:'bank_accounts',payload:{}});clock=600001;await assert.rejects(ttl.execute('bank_accounts',{accountSetId:1,draftRef:t.draftRef},()=>{}),/unavailable/);
+const cap=new BankLocalDrafts();for(let i=0;i<32;i++)cap.prepare(1,{tool:'bank_accounts',payload:{}});assert.throws(()=>cap.prepare(1,{tool:'bank_accounts',payload:{}}),/capacity/);
+assert.throws(()=>v.prepare(1,{tool:'bank_import_preview',payload:completePreview('x'.repeat(2*1024*1024))}),/payload_too_large/);
+const bytes=new BankLocalDrafts();for(let i=0;i<8;i++)bytes.prepare(1,{tool:'bank_import_preview',payload:completePreview('x'.repeat(2*1024*1024-250))});assert.throws(()=>bytes.prepare(1,{tool:'bank_import_preview',payload:completePreview('x'.repeat(2048))}),/capacity/);
+console.log('bank-local-drafts PASS: immutable exact scope/tool/input/approval/TTL/32+16MiB/2MiB; repeat query, concurrent write, committed replay and unknown blocked');
+
+const sequential=new BankLocalDrafts();for(let i=0;i<70;i++){const d=sequential.prepare(1,{tool:'bank_accounts',payload:{}});await sequential.execute('bank_accounts',{accountSetId:1,draftRef:d.draftRef},()=>({result:{items:[]}}));sequential.revoke(1,{draftRef:d.draftRef});}console.log('70 sequential query/revoke slots released PASS');
+
+const largeCache=new BankLocalDrafts(),lc=largeCache.prepare(1,{tool:'bank_cancel',payload:{bankAccountId:'A',matchId:1,reason:'x'},confirm:true});let once=0;const committed=await largeCache.execute('bank_cancel',{accountSetId:1,draftRef:lc.draftRef},()=>{once++;return {result:{raw:'x'.repeat(16*1024*1024)},evidence:{durability:'committed',performed:true,replayed:false}};});assert.equal(committed.evidence.performed,true);await assert.rejects(largeCache.execute('bank_cancel',{accountSetId:1,draftRef:lc.draftRef},()=>{once++;}),/result_unavailable/);assert.equal(once,1);console.log('total input+cached-result budget failure preserves first commit and forbids reexecution PASS');

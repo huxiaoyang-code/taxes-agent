@@ -1450,5 +1450,25 @@ await test('B2: persistent report profile/status diagnostics are fixed summaries
   }
 });
 
+await test('银行金额全份拒绝越界/非整数，提交证据独立保留且不静默drop', async()=>{
+ const policy=new FinanceOutputPolicy();
+ const base={accountSetId:1,result:{transactions:[],totals:{matched:0,unmatched:0,inflowCents:12345,outflowCents:0},invalidations:[]}};
+ const good=policy.wrapQuery('bank_transactions',{accountSetId:1,value:base});assert.equal(good.projection.inflow,123.45);assert.equal(good.projectionDropped,0);
+ for(const amount of [NaN,Infinity,1.5,Number.MAX_SAFE_INTEGER,100000000000001,-100000000000001]){
+  const bad={...base,result:{...base.result,totals:{...base.result.totals,inflowCents:amount}}};assert.throws(()=>policy.wrapQuery('bank_transactions',{accountSetId:1,value:bad}));
+ }
+ // An unsafe hidden aggregate also rejects the full summary/ref.
+ assert.throws(()=>policy.wrapQuery('bank_transactions',{accountSetId:1,value:{...base,result:{...base.result,other:{closingCents:Number.MAX_SAFE_INTEGER}}}}));
+ const write={accountSetId:1,result:{created:true,match:{matchId:7,entryId:8,accountSetId:1,status:'confirmed'},hidden:{amountCents:Number.MAX_SAFE_INTEGER}},evidence:{durability:'committed',performed:true,replayed:false}};
+ const done=policy.wrapWrite('bank_confirm',{accountSetId:1,value:write});assert.equal(done.applied,true);assert.equal(done.localRef,null);assert.equal(done.needsLocalReview,true);assert.ok(done.refUnavailable);assertNoLeak(done,'bank failed money summary');
+ const noEvidence=policy.wrapWrite('bank_confirm',{accountSetId:1,value:{...write,evidence:{}}});assert.equal(noEvidence.applied,'unknown');
+ policy.dispose();
+});
+
+await test('银行往来只给固定状态计数，停用分配含歧义行也明确计数',async()=>{
+ const rows=[{partyAllocation:{status:'not_installed',installed:false}},{partyAllocation:{status:'unknown',installed:true,partyActive:null,inactivePartyIds:[]}},{partyAllocation:{status:'ambiguous',installed:true,partyActive:null,inactivePartyIds:[9],name:X.enterprise}},{partyAllocation:{status:'confirmed',installed:true,partyActive:false,inactivePartyIds:[8],partyId:8,name:X.note}},{partyAllocation:{status:'entry_unavailable',installed:true}}];
+ const s=M.summarizeQueryResult('bank_matches',{accountSetId:1,result:{matches:rows.map((r,i)=>({...r,status:['confirmed','cancelled','invalidated','confirmed','cancelled'][i]})),invalidations:[]}});assert.equal(s.summaryUnavailable,false);assert.deepEqual(s.projection.partyStates,{notInstalled:1,unknown:1,ambiguous:1,confirmed:1,inactive:2,unavailable:1});assertNoLeak(s,'bank party states');
+});
+
 console.log(`\nFinance output policy acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;

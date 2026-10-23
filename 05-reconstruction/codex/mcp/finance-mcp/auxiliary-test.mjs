@@ -22,7 +22,7 @@ try {
  const listed=await client.rpc('tools/list'),list=listed.result.tools;
  for(const name of names){const t=TOOLS.find(t=>t.name===name);assert.equal(t.status,'available');assert.equal(t.origin,'local');assert.equal(MODEL_PLAIN_TOOL_NAMES.includes(name),true);assert.equal(list.some(t=>t.name===name),true);}
  for(const name of names.slice(4))assert.equal(MODEL_WRITE_TOOL_NAMES.includes(name),true);
- assert.equal(MODEL_WRITE_TOOL_NAMES.length,18);assert.equal(new Set(MODEL_WRITE_TOOL_NAMES).size,18);
+ assert.equal(MODEL_WRITE_TOOL_NAMES.length,24);assert.deepEqual(MODEL_WRITE_TOOL_NAMES.filter(n=>n.startsWith("bank_")).sort(),["bank_account_register","bank_ambiguity_resolve","bank_cancel","bank_confirm","bank_import","bank_reconcile"]);assert.equal(new Set(MODEL_WRITE_TOOL_NAMES).size,24);
  assert.equal(TOOLS.find(t=>t.name==='book_import_incremental').inputSchema.properties.auxiliaryAppendix.additionalProperties,false);
  for(const forbidden of ['localRead','localCompute','finance_output_read','finance_output_compute','raw'])assert.equal(list.some(t=>t.name===forbidden),false);
  let calls=0;

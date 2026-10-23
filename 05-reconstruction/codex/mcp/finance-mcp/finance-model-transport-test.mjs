@@ -850,5 +850,20 @@ await test('最后副本一致性：校验的必须就是返回的（可变反�
   assertNoLeak(plainChecked.envelope, 'plain JSON envelope');
 });
 
+await test('银行固定15操作/6写分类与错误词表，未知状态不通过运输', async()=>{
+ const a=createFinanceModelAdapter({executeRaw:()=>({accountSetId:1,result:{items:[]}})});
+ const args={accountSetId:1,draftRef:'bankdraft_'+'a'.repeat(48)},value=await a.callModelTool('bank_accounts',args);assert.equal(validateModelEnvelope(value,REGISTRY).ok,true);
+ const bad=await a.callModelTool('bank_accounts',{...args,reason:X.summary});assert.equal(bad.ok,false);assert.equal(validateModelEnvelope(bad,REGISTRY).ok,true);assertNoLeak(bad,'bank fixed error');
+ assert.equal(validateModelEnvelope({...value,projection:{status:X.summary}},REGISTRY).ok,false);
+ const p=Object.keys(PLAIN_MODEL_TOOLS).filter(n=>n.startsWith('bank_'));assert.equal(p.length,15);assert.equal(p.filter(n=>PLAIN_MODEL_TOOLS[n].category==='write').length,6);
+ a.policy.dispose();
+});
+
+await test('银行已提交写引用预算失败允许固定复核提示，其他写语义保持',async()=>{
+ const raw={accountSetId:1,result:{created:true,match:{matchId:7,entryId:8,accountSetId:1,status:'confirmed'}},evidence:{durability:'committed',performed:true,replayed:false}};
+ const {FinanceOutputPolicy}=await import('../../../../06-workbench/server/finance-output-policy.mjs');
+ const a=createFinanceModelAdapter({policy:new FinanceOutputPolicy({valueBytes:100}),executeRaw:()=>raw});const out=await a.callModelTool('bank_confirm',{accountSetId:1,draftRef:'bankdraft_'+'a'.repeat(48)});assert.equal(out.applied,true);assert.equal(out.needsLocalReview,true);assert.equal(out.localRef,null);assert.equal(validateModelEnvelope(out,REGISTRY).ok,true);a.policy.dispose();
+});
+
 console.log(`\nFinance model transport test: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;

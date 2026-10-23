@@ -552,6 +552,9 @@ try {
     assertNoLeak(stdout, "后端 stdout");
     assertNoLeak(stderr, "后端 stderr");
   });
+  await test("银行模型输入只收draft，不接受原文或批准覆写",async()=>{
+    for(const args of [{accountSetId:1,draftRef:'bankdraft_'+'a'.repeat(48),approved:true},{accountSetId:1,draftRef:'bankdraft_'+'a'.repeat(48),csvText:'SYNTHETIC-BANK-HTTP-PRIVATE'},{accountSetId:1,draftRef:'finref_'+'a'.repeat(48)}]){const r=await model('bank_accounts',args);assert.equal(r.status,200);assert.equal(r.data.ok,false);assert.equal(r.text.includes('SYNTHETIC-BANK-HTTP-PRIVATE'),false);}
+  });
   await test("15. same HTTP service concurrent isolated writes and reads", async () => {
     const sets = await Promise.all([31, 47].map((amount) => modelWriteOk("account_set_create", { enterprise: identityFixture(),
       name: `synthetic concurrent HTTP ${amount}`, start_period: "2026-01",
@@ -586,7 +589,7 @@ try {
   console.error("模型 HTTP 入口测试初始化失败：", error.stack);
 } finally {
   await stopBackend();
-  try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
 }
 
 const failed = results.filter((ok) => !ok).length;

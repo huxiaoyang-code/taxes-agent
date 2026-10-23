@@ -773,7 +773,59 @@ const auxiliaryWriteSpec = operation => ({ summary: value => auxiliaryWriteSumma
   } catch { return { applied: "unknown", reason: "unverified_result" }; }
 } });
 
+// Bank DTOs stay in finref. Only fixed states, counts and checked money leave here.
+const BANK_EVENTS = ["bank_account_registered","import_completed","import_pending_review","import_file_replay","match_invalidated","match_confirmed","match_cancelled","ambiguity_resolved","reconcile_computed","import_failed"];
+const bankToken=(v,key,allowed)=>{const x=requireText(v,key);if(!allowed.includes(x))throw invalidSummary(key);return x;};
+const bankCount=(v,key)=>{const n=requireNum(v,key);if(!Number.isSafeInteger(n)||n<0||n>PROJECTION_NUMBER_LIMIT)throw invalidSummary(key);return n;};
+const bankId=(v,key)=>{const n=requirePositiveInt(v,key);if(n>PROJECTION_NUMBER_LIMIT)throw invalidSummary(key);return n;};
+function bankMoney(cents) {if(!Number.isSafeInteger(cents))throw invalidSummary("bank_money");const n=cents/100;if(Math.abs(n)>MONEY_LIMIT)throw invalidSummary("bank_money");return n;}
+function bankMoneyCheck(v,depth=0) {if(!v||typeof v!=="object")return;if(depth>16)throw invalidSummary("bank_depth");for(const k of Object.keys(v)){const x=prop(v,k);if(/(?:Cents|_cents)$/.test(k)&&x!==null&&x!==undefined)bankMoney(x);else if(x&&typeof x==="object")bankMoneyCheck(x,depth+1);}}
+function bankBase(v) {bankId(v,"accountSetId");const r=requireRecord(v,"result");bankMoneyCheck(r);return r;}
+const bankStates=(rows,field,allowed)=>{const out={};for(const token of allowed)out[token]=0;for(const r of rows)out[bankToken(r,field,allowed)]++;return out;};
+function bankParty(rows) {const out={notInstalled:0,unknown:0,ambiguous:0,confirmed:0,inactive:0,unavailable:0};for(const row of rows){const a=requireRecord(row,"partyAllocation");const s=bankToken(a,"status",["not_installed","unknown","ambiguous","confirmed","entry_unavailable"]);if(s==="not_installed")out.notInstalled++;else if(s==="entry_unavailable")out.unavailable++;else {out[s]++;if(prop(a,"partyActive")===false||Array.isArray(prop(a,"inactivePartyIds"))&&prop(a,"inactivePartyIds").length>0)out.inactive++;}}return out;}
+function bankSummary(operation,value) {
+ const r=bankBase(value);
+ if(operation==="bank_accounts")return {accountCount:requireArray(r,"items").length};
+ if(operation==="bank_account_register") {const a=requireRecord(r,"account");if(requireText(a,"currency")!=="CNY")throw invalidSummary("currency");return {created:requireBoolean(r,"created"),currency:"cny"};}
+ if(operation==="bank_import_preview") {const v=requireRecord(r,"preview"),stats=requireRecord(v,"stats");return {ok:requireBoolean(v,"ok"),period:requirePeriod(r,"period"),rowCount:bankCount(stats,"dataRows"),validCount:bankCount(stats,"validRows"),errorCount:bankCount(stats,"errorCount")};}
+ if(operation==="bank_import") {const b=requireRecord(r,"batch");return {replay:requireBoolean(r,"replay"),status:bankToken(b,"status",["completed","pending_review"]),period:requirePeriod(b,"period"),imported:bankCount(b,"importedRows"),reused:bankCount(b,"reusedRows"),ambiguous:bankCount(b,"ambiguousRows")};}
+ if(operation==="bank_batches") {const rows=requireArray(r,"items");return {pageCount:rows.length,statusCounts:bankStates(rows,"status",["completed","pending_review","failed","started"])};}
+ if(operation==="bank_transactions") {const rows=requireArray(r,"transactions"),t=requireRecord(r,"totals");return {pageCount:rows.length,matched:bankCount(t,"matched"),unmatched:bankCount(t,"unmatched"),inflow:bankMoney(requireNum(t,"inflowCents")),outflow:bankMoney(requireNum(t,"outflowCents")),invalidated:requireArray(r,"invalidations").length};}
+ if(operation==="bank_ambiguities")return {pageCount:requireArray(r,"ambiguities").length,pending:bankCount(r,"pending")};
+ if(operation==="bank_ambiguity_resolve") {const a=requireRecord(r,"ambiguity");return {resolved:requireBoolean(r,"resolved"),idempotent:requireBoolean(r,"idempotent"),ambiguityId:bankId(a,"ambiguityId"),decision:bankToken(a,"decision",["same","distinct"])};}
+ if(operation==="bank_candidates") {const rows=requireArray(r,"candidates"),g=requireRecord(r,"groupMatch");return {candidateCount:rows.length,selection:bankToken(r,"selection",["already_matched","single","requires_manual_choice","none"]),groupSupported:requireBoolean(g,"supported"),groupPairCount:requireArray(g,"pairs").length,partyStates:bankParty(rows)};}
+ if(operation==="bank_confirm"||operation==="bank_cancel") {const m=requireRecord(r,"match");return { ...(operation==="bank_confirm"?{created:requireBoolean(r,"created")}:{cancelled:requireBoolean(r,"cancelled"),idempotent:requireBoolean(r,"idempotent")}),matchId:bankId(m,"matchId"),entryId:bankId(m,"entryId"),status:bankToken(m,"status",["confirmed","cancelled","invalidated"])};}
+ if(operation==="bank_matches") {const rows=requireArray(r,"matches");return {pageCount:rows.length,statusCounts:bankStates(rows,"status",["confirmed","cancelled","invalidated"]),invalidated:requireArray(r,"invalidations").length,partyStates:bankParty(rows)};}
+ if(operation==="bank_reconcile") {const st=requireRecord(r,"statement"),b=requireRecord(r,"book"),a=requireRecord(r,"adjusted"),o=requireRecord(r,"outstanding"),t=requireRecord(o,"totals");const out={runId:bankId(r,"reconcileRunId"),period:requirePeriod(r,"period"),status:bankToken(r,"status",["reconciled","pending_review","incomplete"]),bookClosing:bankMoney(requireNum(b,"closingCents")),statementClosing:bankMoney(requireNum(st,"closeCents")),statementDifference:bankMoney(requireNum(st,"differenceCents")),adjustedBook:bankMoney(requireNum(a,"bookCents")),adjustedBank:bankMoney(requireNum(a,"bankCents")),difference:bankMoney(requireNum(a,"differenceCents")),issueCount:requireArray(r,"issues").length};for(const [key,short]of [["bookReceivedBankMissing","bookReceived"],["bookPaidBankMissing","bookPaid"],["bankReceivedBookMissing","bankReceived"],["bankPaidBookMissing","bankPaid"]]){out[short]={count:requireArray(o,key).length,total:bankMoney(requireNum(t,key+"Cents"))};}return out;}
+ if(operation==="bank_status") {const b=requireRecord(r,"batches"),t=requireRecord(r,"transactions"),m=requireRecord(r,"matches"),a=requireRecord(r,"ambiguities");const last=prop(r,"lastReconcileStatus");if(last!==null&&!["reconciled","pending_review","incomplete"].includes(last))throw invalidSummary("last_status");return {batches:bankCount(b,"total"),completed:bankCount(b,"completed"),pendingReview:bankCount(b,"pendingReview"),failed:bankCount(b,"failed"),itemsTruncated:requireBoolean(b,"itemsTruncated"),transactions:bankCount(t,"total"),matched:bankCount(t,"matched"),unmatched:bankCount(t,"unmatched"),confirmed:bankCount(m,"confirmed"),cancelled:bankCount(m,"cancelled"),invalidated:bankCount(m,"invalidated"),pending:bankCount(a,"pending"),lastStatus:last??"none"};}
+ if(operation==="bank_audit"){const rows=requireArray(r,"events");return {pageCount:rows.length,eventCounts:bankStates(rows,"eventType",BANK_EVENTS)};}
+ throw invalidSummary("bank_operation");
+}
+function bankWriteEvidence(operation,value) {
+ try {
+  bankId(value,"accountSetId");const r=requireRecord(value,"result"),e=requireRecord(value,"evidence");
+  if(requireText(e,"durability")!=="committed")return UNKNOWN_EVIDENCE;
+  const performed=requireBoolean(e,"performed"),replayed=requireBoolean(e,"replayed");if(performed===replayed)return UNKNOWN_EVIDENCE;
+  if(operation==="bank_account_register") {const a=requireRecord(r,"account");if(requireNum(a,"account_set_id")!==requireNum(value,"accountSetId")||requireText(a,"currency")!=="CNY")return UNKNOWN_EVIDENCE;requireBoolean(r,"created");requireText(a,"bank_account_id");}
+  else if(operation==="bank_import") {const b=requireRecord(r,"batch");if(requireNum(b,"accountSetId")!==requireNum(value,"accountSetId"))return UNKNOWN_EVIDENCE;bankToken(b,"status",["completed","pending_review"]);requirePeriod(b,"period");requireBoolean(r,"replay");}
+  else if(operation==="bank_ambiguity_resolve") {const a=requireRecord(r,"ambiguity");bankId(a,"ambiguityId");bankToken(a,"decision",["same","distinct"]);if(requireNum(a,"accountSetId")!==requireNum(value,"accountSetId"))return UNKNOWN_EVIDENCE;requireBoolean(r,"resolved");}
+  else if(operation==="bank_reconcile") {bankId(r,"reconcileRunId");bankToken(r,"status",["reconciled","pending_review","incomplete"]);if(requireNum(requireRecord(r,"scope"),"accountSetId")!==requireNum(value,"accountSetId"))return UNKNOWN_EVIDENCE;}
+  else {const m=requireRecord(r,"match");bankId(m,"matchId");bankId(m,"entryId");bankToken(m,"status",["confirmed","cancelled","invalidated"]);if(requireNum(m,"accountSetId")!==requireNum(value,"accountSetId"))return UNKNOWN_EVIDENCE;requireBoolean(r,operation==="bank_confirm"?"created":"cancelled");}
+  return performed?{applied:true}:{applied:false,reason:"idempotent_replay"};
+ }catch{return UNKNOWN_EVIDENCE;}
+}
+const bankWriteSpec=operation=>({summary:v=>bankSummary(operation,v),evidence:v=>bankWriteEvidence(operation,v)});
+
 const QUERY_SPECS = dict({
+  bank_accounts: v=>bankSummary("bank_accounts",v),
+  bank_import_preview: v=>bankSummary("bank_import_preview",v),
+  bank_batches: v=>bankSummary("bank_batches",v),
+  bank_transactions: v=>bankSummary("bank_transactions",v),
+  bank_ambiguities: v=>bankSummary("bank_ambiguities",v),
+  bank_candidates: v=>bankSummary("bank_candidates",v),
+  bank_matches: v=>bankSummary("bank_matches",v),
+  bank_status: v=>bankSummary("bank_status",v),
+  bank_audit: v=>bankSummary("bank_audit",v),
   auxiliary_entities: value => {
     const v = at(value), rows = requireArray(v,"items"); requirePositiveInt(v,"accountSetId");
     const out = { entityCount: rows.length, projectCount: 0, departmentCount: 0, partyCount: 0, activeCount: 0, inactiveCount: 0 };
@@ -986,6 +1038,12 @@ const QUERY_SPECS = dict({
 // ---------------------------------------------------------------- 写动作 projection 规格
 // applied 三态：true 必须有正面业务证据；false 必须由域结果显式说明未生效；其余一律 "unknown"。
 const WRITE_SPECS = dict({
+  bank_account_register: bankWriteSpec("bank_account_register"),
+  bank_import: bankWriteSpec("bank_import"),
+  bank_ambiguity_resolve: bankWriteSpec("bank_ambiguity_resolve"),
+  bank_confirm: bankWriteSpec("bank_confirm"),
+  bank_cancel: bankWriteSpec("bank_cancel"),
+  bank_reconcile: bankWriteSpec("bank_reconcile"),
   auxiliary_entity_create: auxiliaryWriteSpec("auxiliary_entity_create"),
   auxiliary_entity_update: auxiliaryWriteSpec("auxiliary_entity_update"),
   auxiliary_allocate: auxiliaryWriteSpec("auxiliary_allocate"),
@@ -1236,6 +1294,7 @@ const WRITE_SPECS = dict({
 // A rejected DTO may still contain independently verifiable technical IDs. These
 // bounded paths use own data descriptors only; no business summary or getter runs.
 const WRITE_TECHNICAL_IDS = dict({
+  bank_confirm:{matchId:["result","match","matchId"]}, bank_cancel:{matchId:["result","match","matchId"]}, bank_reconcile:{runId:["result","reconcileRunId"]}, bank_ambiguity_resolve:{ambiguityId:["result","ambiguity","ambiguityId"]},
   voucher_create: { voucherId: ["id"] },
   voucher_post: { voucherId: ["id"] },
   voucher_unpost: { voucherId: ["id"] },
@@ -1343,6 +1402,23 @@ export const MODEL_OUTPUT_CONTRACT = Object.freeze({
 // 只有固定 allowlist 的 code 能出模型通道；其他一律归为 operation_failed。
 // error.message / error.details / error.stack 从不读取——它们可能带账套名、科目名、金额原文。
 const ERROR_CODES = dict({
+  bank_draft_result_unavailable: "bank",
+  bank_draft_input_invalid: "bank",
+  bank_draft_scope_invalid: "bank",
+  bank_draft_ref_invalid: "bank",
+  bank_draft_unavailable: "bank",
+  bank_draft_scope_mismatch: "bank",
+  bank_draft_revoked: "bank",
+  bank_draft_tool_invalid: "bank",
+  bank_draft_confirmation_required: "bank",
+  bank_draft_payload_too_large: "bank",
+  bank_draft_capacity: "bank",
+  bank_draft_preview_required: "bank",
+  bank_draft_outcome_unknown: "bank",
+  bank_draft_busy: "bank",
+  bank_local_install_failed: "bank",
+  bank_local_state_unknown: "bank",
+  bank_local_operation_failed: "bank",
   aux_account_reallocation_required: "auxiliary",
   aux_active_invalid: "auxiliary",
   aux_allocation_corrupt: "auxiliary",
@@ -1974,7 +2050,7 @@ export class FinanceOutputPolicy {
       operationCategory: "write",
       accountSetId,
       applied: evidence.applied,
-      needsLocalReview: evidence.applied !== true || stored.reason === "value_invalid" || stored.reason === "summary_unavailable",
+      needsLocalReview: evidence.applied !== true || stored.reason === "value_invalid" || stored.reason === "summary_unavailable" || operation.startsWith("bank_") && !stored.ref,
       projection,
       projectionDropped: dropped,
       localRef: stored.ref,

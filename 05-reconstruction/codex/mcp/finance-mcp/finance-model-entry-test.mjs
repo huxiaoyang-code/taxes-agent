@@ -155,7 +155,8 @@ try {
     const ctx = tools.find((t) => t.name === "account_context");
     assert.deepEqual(Object.keys(ctx.inputSchema.properties).sort(), ["accountSetId", "limit", "offset"]);
     // 写工具的登记表与 adapter 侧一致（此处只核对本文件可见的固定清单）。
-    assert.equal(MODEL_WRITE_TOOL_NAMES.length, 18);
+    assert.equal(MODEL_WRITE_TOOL_NAMES.length, 24);
+    assert.deepEqual(MODEL_WRITE_TOOL_NAMES.filter(n=>n.startsWith("bank_")).sort(),["bank_account_register","bank_ambiguity_resolve","bank_cancel","bank_confirm","bank_import","bank_reconcile"]);
   for (const name of ["auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set"]) assert.equal(MODEL_WRITE_TOOL_NAMES.includes(name), true);
   assert.equal(new Set(MODEL_WRITE_TOOL_NAMES).size, MODEL_WRITE_TOOL_NAMES.length);
   });
@@ -535,7 +536,7 @@ try {
   if (debugClient) await debugClient.close();
   if (fault) await new Promise((resolve) => fault.close(resolve));
   await stopBackend();
-  try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
 }
 
 const failed = results.filter((ok) => !ok).length;
