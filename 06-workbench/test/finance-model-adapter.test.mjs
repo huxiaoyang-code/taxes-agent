@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-adapter-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // finance-model-adapter acceptance — 普通财务工具的模型边界适配层。
 //
 // 运行：cd 06-workbench && node test/finance-model-adapter.test.mjs
@@ -128,9 +132,9 @@ const expectCode = (fn, code) => {
 };
 
 // ---------------------------------------------------------------- 基础数据（本机路径建 3 个账套）
-const setA = A.createAccountSet({ name: X.enterpriseA, start_period: "2026-01" });
-const setB = A.createAccountSet({ name: X.enterpriseB, start_period: "2026-01" });
-const setC = A.createAccountSet({ name: X.enterpriseC, start_period: "2026-01" });
+const setA = identityFixtureCreate(A, { name: X.enterpriseA, start_period: "2026-01" });
+const setB = identityFixtureCreate(A, { enterprise: { enterpriseKey: X.enterpriseKeyAppend }, name: X.enterpriseB, start_period: "2026-01" });
+const setC = identityFixtureCreate(A, { name: X.enterpriseC, start_period: "2026-01" });
 const categoryCounts = { assets: 0, liabilities: 0, equity: 0, cost: 0, profit_loss: 0 };
 const CATEGORY_KEY = { 资产: "assets", 负债: "liabilities", 权益: "equity", 成本: "cost", 损益: "profit_loss" };
 for (const account of COA) categoryCounts[CATEGORY_KEY[account.category]]++;
@@ -642,7 +646,7 @@ await test("LOCAL-02 回修1/2：真实 7 步期末检查长阻塞码完整、�
   // 因 2026-02 未封账且不能跳过，2026-03 的期末检查应同时给出三条真实阻塞：
   //   depreciation 步骤：depreciation_life_expired_underprovided（39 字符）
   //   period_sequence 步骤：previous_period_depreciation_pending（36 字符）+ previous_period_open
-  const setE = await writeOk("account_set_create", {
+  const setE = await writeOk("account_set_create", { enterprise: identityFixture(),
     name: X.enterpriseE, start_period: "2026-01", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则",
   });
   const setIdE = setE.projection.accountSetId;
@@ -741,7 +745,7 @@ await test("LOCAL-02 回修1/2：真实 7 步期末检查长阻塞码完整、�
 });
 
 await test("建账类写动作：setId 只能来自真实结果；dry-run / 失败明确未绑定，不造假 ID", async () => {
-  const created = await writeOk("account_set_create", {
+  const created = await writeOk("account_set_create", { enterprise: identityFixture(),
     name: X.enterpriseD, start_period: "2026-01", taxpayer_type: "一般纳税人", accounting_standard: "企业会计准则",
   });
   assert.equal(created.accountSetIdSource, "result");
@@ -767,7 +771,7 @@ await test("建账类写动作：setId 只能来自真实结果；dry-run / 失�
     }],
   };
   const beforeSets = A.listAccountSets().length;
-  const dry = await callExpectExecutions("legacy_book_import", { payload }, 1);
+  const dry = await callExpectExecutions("legacy_book_import", { enterprise: identityFixture(), payload }, 1);
   assert.equal(dry.ok, true);
   assert.equal(dry.applied, false);
   assert.equal(dry.appliedReason, "dry_run");
@@ -779,7 +783,7 @@ await test("建账类写动作：setId 只能来自真实结果；dry-run / 失�
   });
   assert.equal(A.listAccountSets().length, beforeSets, "dry-run 不得建账套");
 
-  const imported = await writeOk("legacy_book_import", { payload, dryRun: false });
+  const imported = await writeOk("legacy_book_import", { enterprise: identityFixture(), payload, dryRun: false });
   assert.equal(imported.accountSetIdSource, "result");
   assert.equal(A.getAccountSet(imported.projection.createdAccountSetId).name, X.importName);
   assert.deepEqual(imported.projection, {
@@ -1192,7 +1196,7 @@ await test("review2 F3: 真实利润表删除 ytd 字段 / 变形结果必须失
 });
 
 await test("review2 F4: 真实 create / 增量 / 缺参错误与未应用写结果都能通过 transport", async () => {
-  const createFailure = await callExpectExecutions("account_set_create", {}, 1);
+  const createFailure = await callExpectExecutions("account_set_create", { enterprise: identityFixture(),}, 1);
   assert.equal(createFailure.ok, false);
   assert.equal(createFailure.error.code, "name_required");
   assert.equal(createFailure.operationCategory, "create");
@@ -1231,7 +1235,7 @@ await test("review2 F4: 真实 create / 增量 / 缺参错误与未应用写结�
   }
 
   // 真实 legacy dry-run：未应用写结果 applied:false / needsLocalReview:true 保留为正例。
-  const dryRun = await callExpectExecutions("legacy_book_import", {
+  const dryRun = await callExpectExecutions("legacy_book_import", { enterprise: identityFixture(),
     payload: {
       account_set: { name: X.importName, start_period: "2026-01" },
       accounts: [], opening_balances: [], vouchers: [],

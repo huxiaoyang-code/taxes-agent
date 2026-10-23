@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-office-export-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // LOCAL-05a (Issue #45) acceptance for real XLSX / PDF internal report exports.
 // All amounts below are hand-calculated synthetic fixtures; no real account set or credential is used.
 import assert from 'node:assert/strict';
@@ -167,7 +171,7 @@ try {
   const A = await import("../server/accounting.mjs");
   const { buildOfficeExport, buildReportDocument } = await import("../server/report-office-export.mjs");
   const { buildReportExport } = await import("../server/report-export.mjs");
-  const make = (name = "合成验收账套", start_period = "2025-12") => A.createAccountSet({ name, start_period }).id;
+  const make = (name = "合成验收账套", start_period = "2025-12") => identityFixtureCreate(A, { name, start_period }).id;
   const voucher = (setId, period, entries, extra = {}) => A.createVoucher(setId, { period, status: "posted", entries, ...extra });
   const office = (setId, kind, period, format, extra = {}) => buildOfficeExport(setId, { kind, period, format, ...extra });
   const dto = (setId, kind, period, extra = {}) => buildReportExport(setId, { kind, period, ...extra }).report;
@@ -267,7 +271,7 @@ const ENTERPRISE_EXPECT = {
       ["small", SMALL, SMALL_OPENINGS, smallMonths, SMALL_EXPECT, "small-2011-basic-v1", 10000, [3000, 1000, 1700], [200, 100, 900], [3000, 4000, 1700], [200, 300, 900]],
       ["enterprise", ENTERPRISE, ENTERPRISE_OPENINGS, enterpriseMonths, ENTERPRISE_EXPECT, "enterprise-2019-general-basic-v1", 20000, [5000, 1600, 2800], [500, 200, 1800], [5000, 6600, 2800], [500, 700, 1800]],
     ]) {
-      const id = A.createAccountSet({ name: `合成B2-${tag}`, accounting_standard: standard, start_period: "2025-11" }).id;
+      const id = identityFixtureCreate(A, { name: `合成B2-${tag}`, accounting_standard: standard, start_period: "2025-11" }).id;
       A.setOpeningBalances(id, openings);
       let priorCash = openingCash;
       for (const [index, period] of Object.keys(months).entries()) {
@@ -341,7 +345,7 @@ const ENTERPRISE_EXPECT = {
   });
   await test("B2: ambiguous construction cash payments and earlier partial months remain partial in all formats", async () => {
     for (const standard of ["小企业会计准则", "企业会计准则"]) {
-      const id = A.createAccountSet({ name: "合成在建用途待核", accounting_standard: standard, start_period: "2026-01" }).id;
+      const id = identityFixtureCreate(A, { name: "合成在建用途待核", accounting_standard: standard, start_period: "2026-01" }).id;
       A.setOpeningBalances(id, [e("1002", 1000), e(standard === "小企业会计准则" ? "3001" : "4001", 0, 1000)]);
       voucher(id, "2026-01", [e("1604", 100), e("1002", 0, 100)]);
       voucher(id, "2026-02", [e("1002", 20), e(standard === "小企业会计准则" ? "5001" : "6001", 0, 20)]);

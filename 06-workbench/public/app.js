@@ -43,6 +43,14 @@ async function selectSet() {
   SET = SET_ID ? await api(`/api/account-sets/${SET_ID}`) : null;
   ACCOUNTS = SET_ID ? await api(`/api/account-sets/${SET_ID}/accounts`) : [];
   $("#setMeta").textContent = SET ? `启用期间 ${SET.start_period} · ${SET.accounting_standard}` : "请先新建账套";
+  if (SET) {
+    const info = $("#setMeta");
+    info.append(document.createTextNode(SET.enterprise ? ' · 企业身份 ' + SET.enterprise.enterpriseKey : ' · 企业身份未关联'));
+    if (!SET.enterprise) {
+      const bind = document.createElement('button'); bind.id = 'btnBindEnterprise'; bind.textContent = '关联企业身份';
+      bind.onclick = bindEnterpriseDialog; info.append(bind);
+    }
+  }
   for (const id of ["#vPeriod", "#rPeriod", "#aPeriod", "#pPeriod"]) { const el = $(id); if (!el.value) el.value = SET?.start_period || thisMonth(); }
   renderAccounts(); renderOpening(); await loadVouchers(); renderPeriods(); await renderAssets();
   fillCodeSelect();
@@ -51,10 +59,29 @@ async function selectSet() {
   $("#reportOut").innerHTML = "";
   $("#reportWarnings").textContent = "";
 }
+function bindEnterpriseDialog() {
+  if (!SET_ID || SET?.enterprise) return;
+  const target = SET_ID;
+  const d = document.createElement('dialog');
+  d.innerHTML = '<h3>关联历史账套企业身份</h3><p>请核实这是本企业账套；确认关联不会改变原账务，也不能强制换绑。</p>'
+    + '<label>稳定企业身份 <input id="bindKey" /></label>'
+    + '<label><input type="checkbox" id="bindConfirm" />我已核实并确认此账套属于该企业</label>'
+    + '<button id="bindCancel">取消</button><button id="bindOk">确认关联</button>';
+  document.body.appendChild(d); d.showModal(); d.addEventListener('close', () => d.remove());
+  $('#bindCancel', d).onclick = () => d.close();
+  $('#bindOk', d).onclick = guard(async () => {
+    await api('/api/account-sets/' + target + '/enterprise', { method: 'POST', body: {
+      enterprise: { enterpriseKey: $('#bindKey', d).value }, confirmNewBinding: $('#bindConfirm', d).checked,
+    } });
+    d.close(); await loadSets(target); toast('企业身份已关联');
+  });
+}
 function newSetDialog() {
   const d = document.createElement("dialog");
   d.innerHTML = `
     <h3>新建账套</h3>
+    <div class="row"><label>稳定企业身份 <input id="nsEnterpriseKey" placeholder="统一社会信用代码或稳定的本机企业编号" required /></label></div>
+    <p class="hint">一家企业一个账套。已有同企业账套请在首页账套列表选择；显示名称不参与身份判断。</p>
     <div class="row"><label>名称 <input id="nsName" placeholder="例：某某贸易有限公司" /></label></div>
     <div class="row"><label>纳税人性质 <select id="nsTax"><option>小规模纳税人</option><option>一般纳税人</option></select></label></div>
     <div class="row"><label>会计准则 <select id="nsStd">${META.standards.map((s) => `<option>${s}</option>`).join("")}</select></label></div>
@@ -68,6 +95,7 @@ function newSetDialog() {
   d.addEventListener("close", () => d.remove());
   $("#nsOk", d).onclick = guard(async () => {
     const set = await api("/api/account-sets", { method: "POST", body: {
+      enterprise: { enterpriseKey: $("#nsEnterpriseKey", d).value },
       name: $("#nsName", d).value.trim(), taxpayer_type: $("#nsTax", d).value,
       accounting_standard: $("#nsStd", d).value, start_period: $("#nsStart", d).value } });
     d.close(); await loadSets(set.id); toast("账套已创建，已载入标准科目表");
@@ -94,6 +122,8 @@ function importSetDialog() {
   d.style.minWidth = "640px";
   d.innerHTML = `
     <h3>导入账套</h3>
+    <div class="row"><label>稳定企业身份 <input id="impEnterpriseKey" required /></label></div>
+    <p class="hint">首次导入会创建企业唯一账套；已有同企业账套时拒绝。已有绑定：${SETS.filter(s => s.enterprise).map(s => esc(s.enterprise.enterpriseKey) + ' → #' + s.id + ' ' + esc(s.name)).join('；') || '暂无'}</p>
     <p class="hint">两种方式：① 一个 JSON 文件（最稳）；② 四张 CSV（账套/科目/期初余额/凭证，Excel 另存为 CSV）。
     导入前先预检，借贷不平、科目不存在会明确报错。</p>
     <div class="row">
@@ -117,6 +147,9 @@ function importSetDialog() {
     </div>`;
   document.body.appendChild(d); d.showModal();
   let payload = null;
+  const enterprise = () => ({ enterpriseKey: $("#impEnterpriseKey", d).value });
+  d.addEventListener("input", () => { $("#impConfirm", d).disabled = true; });
+  d.addEventListener("change", () => { $("#impConfirm", d).disabled = true; });
   d.addEventListener("close", () => d.remove());
   $("#impCancel", d).onclick = () => d.close();
   $("#impTpl", d).onclick = guard(async () => {
@@ -138,7 +171,7 @@ function importSetDialog() {
     const jsonFile = $("#impJson", d).files[0];
     if (jsonFile) {
       payload = JSON.parse(await readFileText(jsonFile, "utf-8"));
-      const r = await api("/api/import/account-set", { method: "POST", body: { payload, dryRun: true } });
+      const r = await api("/api/import/account-set", { method: "POST", body: { payload, enterprise: enterprise(), dryRun: true } });
       showValidation(r.validation); $("#impConfirm", d).disabled = !r.validation.ok; return;
     }
     const files = { meta: $("#impMeta", d).files[0], accounts: $("#impAccounts", d).files[0],
@@ -146,12 +179,13 @@ function importSetDialog() {
     if (!Object.values(files).some(Boolean)) return toast("请选择 JSON 或至少一张 CSV", true);
     const texts = {};
     for (const [k, f] of Object.entries(files)) if (f) texts[k] = await readFileText(f, enc);
-    const r = await api("/api/import/parse", { method: "POST", body: { texts } });
+    const r = await api("/api/import/parse", { method: "POST", body: { texts, enterprise: enterprise() } });
     payload = r.payload; showValidation(r.validation); $("#impConfirm", d).disabled = !r.validation.ok;
     if (r.validation.ok) toast("预检通过，可确认导入"); else toast("预检未通过，见下方错误", true);
   });
   $("#impConfirm", d).onclick = guard(async () => {
-    const r = await api("/api/import/account-set", { method: "POST", body: { payload, dryRun: false } });
+    const r = await api("/api/import/account-set", { method: "POST", body: { payload, enterprise: enterprise(), dryRun: false } });
+    if (!r.created) { showValidation(r.validation); $("#impConfirm", d).disabled = true; return; }
     d.close(); await loadSets(r.created.id);
     toast(`账套已导入：${r.created.name}（凭证 ${r.created.vouchers} 张）`);
   });

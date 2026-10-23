@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-contract-test-mjs-' + (++identityFixtureSequence) });
+
 /**
  * contract-test.mjs — MCP ↔ HTTP 后端 端到端契约测试（LOCAL-08 模型信封版）
  *
@@ -88,10 +92,10 @@ async function test(name, fn) {
 
 const CSV = {
   meta: "键,值\n账套名称,契约测试导入公司\n纳税人性质,一般纳税人\n会计准则,小企业会计准则\n启用期间,2026-01\n",
-  accounts: "科目编码,科目名称,类别,方向\n6602,管理费用,损益,借\n",
+  accounts: "科目编码,科目名称,类别,方向\n5602,管理费用,损益,借\n",
   openings: "科目编码,借方,贷方\n1002,50000,0\n3001,0,50000\n",
   vouchers: "期间,日期,字号,凭证号,摘要,科目编码,借方,贷方\n"
-    + "2026-01,2026-01-15,记,1,报销办公费,6602,300,0\n"
+    + "2026-01,2026-01-15,记,1,报销办公费,5602,300,0\n"
     + "2026-01,2026-01-15,记,1,报销办公费,1002,0,300\n",
 };
 
@@ -167,7 +171,7 @@ try {
   });
 
   await test("account_set_create 新建账套并载入标准科目（applied=true）", async () => {
-    const r = await client.call("account_set_create", {
+    const r = await client.call("account_set_create", { enterprise: identityFixture(),
       name: SENSITIVE, taxpayer_type: "小规模纳税人",
       accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
@@ -182,7 +186,7 @@ try {
   });
 
   await test("account_set_create 非法启用期间被拒绝（固定码）", async () => {
-    const r = await client.call("account_set_create", { name: "坏账套", start_period: "2026/01" });
+    const r = await client.call("account_set_create", { enterprise: identityFixture(), name: "坏账套", start_period: "2026/01" });
     assert.equal(r.isError, true);
     assert.equal(r.data.error.code, "start_period_invalid");
   });
@@ -490,7 +494,7 @@ try {
       assert.equal(q.isError, true, `finance_query period=${period} 应失败`);
       assert.equal(q.data?.error?.code, "period_invalid", `finance_query period=${period} 错误码`);
 
-      const c = await client.call("account_set_create", { name: `坏月份${period}`, start_period: period });
+      const c = await client.call("account_set_create", { enterprise: identityFixture(), name: `坏月份${period}`, start_period: period });
       assert.equal(c.isError, true, `account_set_create start_period=${period} 应失败`);
       assert.equal(c.data?.error?.code, "start_period_invalid", `account_set_create start_period=${period} 错误码`);
     }
@@ -538,14 +542,14 @@ try {
 
   await test("REST /api/import/account-set 省略 dryRun 时默认预检且不落库", async () => {
     const texts = { ...CSV, meta: CSV.meta.replace("契约测试导入公司", "REST预检公司") };
-    const parsed = await httpJson(BASE, "POST", "/api/import/parse", { texts });
+    const parsed = await httpJson(BASE, "POST", "/api/import/parse", { enterprise: identityFixture(), texts });
     assert.equal(parsed.status, 200, parsed.text?.slice(0, 160));
 
     const before = await httpJson(BASE, "GET", "/api/account-sets");
     assert.equal(before.status, 200);
     assert.ok(!before.data.some((s) => s.name === "REST预检公司"), "前置条件：该账套尚不存在");
 
-    const r = await httpJson(BASE, "POST", "/api/import/account-set", { payload: parsed.data.payload });
+    const r = await httpJson(BASE, "POST", "/api/import/account-set", { enterprise: identityFixture(), payload: parsed.data.payload });
     assert.equal(r.status, 201, r.text?.slice(0, 160));
     assert.equal(r.data?.dryRun, true, "省略 dryRun 必须默认预检");
     assert.equal(r.data?.created, null, "预检不得返回 created");
@@ -557,7 +561,7 @@ try {
   });
 
   await test("legacy_book_import 默认 dryRun=true（模型信封 + 本机校验摘要）", async () => {
-    const r = await client.call("legacy_book_import", { texts: CSV });
+    const r = await client.call("legacy_book_import", { enterprise: identityFixture(), texts: CSV });
     assert.equal(r.isError, false, r.text);
     assert.equal(r.data.applied, false);
     assert.equal(r.data.appliedReason, "dry_run");
@@ -566,7 +570,7 @@ try {
     assert.equal(r.data.projection.dryRun, true);
     assert.equal(r.data.projection.validationOk, true);
     // 业务校验摘要（created / 明细计数）走本机 raw 通道核对。
-    const raw = await rawAgent("legacy_book_import", { texts: CSV });
+    const raw = await rawAgent("legacy_book_import", { enterprise: identityFixture(), texts: CSV });
     assert.equal(raw.status, 200, raw.text?.slice(0, 160));
     assert.equal(raw.data.created, null);
     assert.equal(raw.data.validation.ok, true, JSON.stringify(raw.data.validation.errors));
@@ -574,7 +578,7 @@ try {
   });
 
   await test("legacy_book_import dryRun=false 才正式导入（setId 取真实结果）", async () => {
-    const r = await client.call("legacy_book_import", { texts: CSV, dryRun: false });
+    const r = await client.call("legacy_book_import", { enterprise: identityFixture(), texts: CSV, dryRun: false });
     assert.equal(r.isError, false, r.text);
     assert.equal(r.data.applied, true);
     assert.equal(r.data.accountSetIdSource, "result");
@@ -586,7 +590,7 @@ try {
   });
 
   await test("导入后报表勾稽（资产负债表平衡）", async () => {
-    const imp = await client.call("legacy_book_import", { texts: CSV, dryRun: false });
+    const imp = await client.call("legacy_book_import", { enterprise: identityFixture(), texts: CSV, dryRun: false });
     const newId = imp.data.projection.createdAccountSetId;
     const r = await client.call("finance_query", {
       nodeId: "report.balance_sheet", accountSetId: newId, period: "2026-01",

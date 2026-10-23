@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-entry-test-mjs-' + (++identityFixtureSequence) });
+
 // finance-model-entry-test.mjs — LOCAL-08 真实 stdio MCP → HTTP → Agent → SQLite，
 // 外加独立故障后端验证运输边界（非 JSON / 非 2xx / 敏感额外字段 / 收完请求断连）。
 //
@@ -166,7 +170,7 @@ try {
   });
 
   await test("3. 建账 → 期初 → 凭证 → 过账 → 查询：真实链路与手算金额", async () => {
-    const created = await writeOk("account_set_create", {
+    const created = await writeOk("account_set_create", { enterprise: identityFixture(),
       name: "合成MCP企业名称甲", taxpayer_type: "小规模纳税人",
       accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
@@ -210,7 +214,7 @@ try {
     assert.equal(ledger.projection.closingBalance, 300);
 
     // 写三态：dry-run 是成功但未应用；wrapper 必须保留 applied=false + 本机复核。
-    const dry = await okCall("legacy_book_import", {
+    const dry = await okCall("legacy_book_import", { enterprise: identityFixture(),
       payload: {
         account_set: { name: "合成MCP企业名称甲", start_period: "2026-01", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则" },
         opening_balances: [],
@@ -229,7 +233,7 @@ try {
 
     // 本机 paths 读失败不得回显路径。
     const missingPath = join(dataDir, "合成MCP路径-绝不应回显.csv");
-    const pathFailure = await client.call("legacy_book_import", { paths: { meta: missingPath } });
+    const pathFailure = await client.call("legacy_book_import", { enterprise: identityFixture(), paths: { meta: missingPath } });
     assert.equal(pathFailure.isError, true);
     assert.equal(pathFailure.data.error, "path_read_failed");
     assert.equal(pathFailure.text.includes(missingPath), false);
@@ -385,7 +389,7 @@ try {
     assertNoLeak(regions.text, "tax_regions");
   });
   await test("9. real committed write response loss: six proxy modes, exactly once, unknown", async () => {
-    const set = await writeOk("account_set_create", { name: "synthetic fault isolated", start_period: "2026-01" });
+    const set = await writeOk("account_set_create", { enterprise: identityFixture(), name: "synthetic fault isolated", start_period: "2026-01" });
     for (const [index, mode] of ["drop", "timeout", "partial", "badJSON", "non2xx", "invalidEnvelope"].entries()) {
       let forwarded = 0, committed;
       const timers = new Set();
@@ -453,7 +457,7 @@ try {
   });
 
   await test("10. one stdio client concurrent two-account writes, reads, and reference scope", async () => {
-    const sets = await Promise.all([37, 53].map((n) => writeOk("account_set_create", { name: `synthetic stdio ${n}`, start_period: "2026-01" })));
+    const sets = await Promise.all([37, 53].map((n) => writeOk("account_set_create", { enterprise: identityFixture(), name: `synthetic stdio ${n}`, start_period: "2026-01" })));
     const writes = await Promise.all(sets.map((s, i) => writeOk("voucher_create", {
       accountSetId: s.accountSetId, period: "2026-01", status: "posted",
       entries: [{ code: "1001", debit: [37,53][i] }, { code: "5001", credit: [37,53][i] }],

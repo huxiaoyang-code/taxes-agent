@@ -127,13 +127,9 @@ import { insertEnterpriseAccountSet } from "./server/import-storage.mjs";
 const specs = JSON.parse(process.env.FIXTURE_SPECS);
 const out = [];
 for (const spec of specs) {
-  const set = A.createAccountSet({
+  const set = A.createAccountSet({ enterprise: { enterpriseKey: spec.enterpriseKey },
     name: spec.name, taxpayer_type: "小规模纳税人",
     accounting_standard: "小企业会计准则", start_period: "2026-01",
-  });
-  insertEnterpriseAccountSet(db, {
-    enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name,
-    accountSetId: set.id, boundBy: "fixture",
   });
   if (spec.assetCost) {
     A.addAssetCard(set.id, {
@@ -1029,7 +1025,7 @@ await test("H1 既有库缺批量结构：拒绝自动建表（migration_require
   const core = runNode(`
 import { db } from "./server/db.mjs";
 import * as A from "./server/accounting.mjs";
-const set = A.createAccountSet({ name: "既有业务公司", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01" });
+const set = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-local-batch-persistence-2" }, name: "既有业务公司", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01" });
 A.createVoucher(set.id, {
   period: "2026-01", voucher_date: "2026-01-10", word: "记", number: 1, summary: "既有业务", status: "posted",
   entries: [{ code: "1002", debit: 100, credit: 0 }, { code: "5001", debit: 0, credit: 100 }],
@@ -1167,10 +1163,11 @@ import * as A from "./server/accounting.mjs";
 const specs = JSON.parse(process.env.EXTRA_SPECS);
 const out = [];
 for (const spec of specs) {
-  const set = A.createAccountSet({
+  const set = A.createAccountSet({ enterprise: { enterpriseKey: "SYNTHETIC-EXTRA-" + out.length },
     name: spec.name, taxpayer_type: "小规模纳税人",
     accounting_standard: "小企业会计准则", start_period: "2026-01",
   });
+  db.prepare("DELETE FROM import_enterprise_account_sets WHERE account_set_id=?").run(set.id);
   if (spec.reportPeriod) A.ensurePeriod(set.id, spec.reportPeriod);
   const draft = spec.salary ? A.createVoucher(set.id, {
     period: "2026-01", voucher_date: "2026-01-05", word: "记", number: 9,
@@ -1196,11 +1193,10 @@ import { db } from "./server/db.mjs";
 import * as A from "./server/accounting.mjs";
 import { insertEnterpriseAccountSet } from "./server/import-storage.mjs";
 const spec = JSON.parse(process.env.PRIOR_SPEC);
-const set = A.createAccountSet({
+const set = A.createAccountSet({ enterprise: { enterpriseKey: spec.enterpriseKey },
   name: spec.name, taxpayer_type: "小规模纳税人",
   accounting_standard: "小企业会计准则", start_period: "2025-12",
 });
-insertEnterpriseAccountSet(db, { enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name, accountSetId: set.id, boundBy: "fixture" });
 A.setOpeningBalances(set.id, [
   { code: "1002", debit: "50000", credit: "" },
   { code: "3001", debit: "", credit: "50000" },

@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-voucher-amount-guards-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
+const identityFixtureImport = (A, payload, options = {}) => A.importAccountSet(payload, { enterprise: identityFixture(), ...options });
 // Synthetic temporary databases only; domain and actual REST/Agent entry points.
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -67,7 +72,7 @@ async function deadline(promise, ms, label) {
 try {
   ({ db } = await import('../server/db.mjs'));
   const A = await import('../server/accounting.mjs');
-  const setId = A.createAccountSet({ name: 'synthetic voucher guards', start_period: '2026-01' }).id;
+  const setId = identityFixtureCreate(A, { name: 'synthetic voucher guards', start_period: '2026-01' }).id;
   A.setOpeningBalances(setId, [{ code: '1002', debit: 1000 }, { code: '3001', credit: 1000 }]);
   A.createVoucher(setId, { period: '2026-01', status: 'posted', summary: 'existing content sentinel', entries: pair(7) });
   for (const [label, bad] of badAmounts) {
@@ -139,14 +144,14 @@ try {
     });
   }
   await test('internal profit carryforward still posts known 300 expense', () => {
-    const derivedId = A.createAccountSet({ name: 'synthetic carryforward', start_period: '2026-01' }).id;
+    const derivedId = identityFixtureCreate(A, { name: 'synthetic carryforward', start_period: '2026-01' }).id;
     A.createVoucher(derivedId, { period: '2026-01', status: 'posted', entries: [{ code: '5602', debit: 300 }, { code: '1002', credit: 300 }] });
     const out = A.carryForwardProfit(derivedId, '2026-01');
     assert.equal(out.voucher.status, 'posted'); assert.equal(out.voucher.total_debit, 300); assert.equal(out.voucher.total_credit, 300);
   });
   await test('strict import still rejects illegal amount without any writes', () => {
     const before = snapshot(db);
-    const out = A.importAccountSet({ account_set: { name: 'synthetic rejected import', start_period: '2026-01' }, vouchers: [{ period: '2026-01', entries: unusedSide('bad-amount') }] }, { dryRun: false });
+    const out = identityFixtureImport(A, { account_set: { name: 'synthetic rejected import', start_period: '2026-01' }, vouchers: [{ period: '2026-01', entries: unusedSide('bad-amount') }] }, { dryRun: false });
     assert.equal(out.validation.ok, false); assert.equal(out.created, null); assert.deepEqual(snapshot(db), before);
   });
 
@@ -170,7 +175,7 @@ try {
       const response = await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000) });
       return { status: response.status, data: await response.json() };
     };
-    const created = await api('/api/account-sets', { name: 'synthetic HTTP guards', start_period: '2026-01' });
+    const created = await api('/api/account-sets', { enterprise: identityFixture(), name: 'synthetic HTTP guards', start_period: '2026-01' });
     assert.equal(created.status, 201); const httpId = created.data.id;
     const voucherPath = `/api/account-sets/${httpId}/vouchers`;
     const initial = await api(voucherPath, { period: '2026-01', entries: pair(7) });

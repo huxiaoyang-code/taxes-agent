@@ -1,3 +1,7 @@
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-import-incremental-test-mjs-' + (++identityFixtureSequence) });
+
 // LOCAL-01 增量导入 MCP 真实链路：stdio MCP → 生产 HTTP 后端 → Agent 工具 → SQLite。
 // LOCAL-08 起普通工具返回模型投影信封；业务原文 / 逐张来源追踪经本机引用接口读取，
 // 结构化冲突原因经本机 raw 通道核对（模型通道只回固定错误码）。
@@ -296,7 +300,7 @@ test('MCP 一企一账套：跨来源 create 引导到已有账套，反过账�
 
 test('MCP 空账套首次追加期初：同批重试幂等回放（不误报期初覆盖）', async () => {
   await withBackend(async (client, base) => {
-    const set = await ok(client, 'account_set_create', { name: 'MCP 填空公司', start_period: '2026-01' });
+    const set = await ok(client, 'account_set_create', { enterprise: { enterpriseKey: '91350000MCPEMPTY1X' }, name: 'MCP 填空公司', start_period: '2026-01' });
     const setId = set.accountSetId;
     const source = { system: 'local-book', enterpriseKey: '91350000MCPEMPTY1X', enterpriseName: 'MCP 填空公司' };
     const payload = {
@@ -375,12 +379,12 @@ test('MCP 旧 legacy_book_import 入口行为不变（默认预检）', async ()
       account_set: meta({ name: 'MCP 旧接口公司' }),
       opening_balances: [{ code: '1002', debit: 100, credit: 0 }, { code: '3001', debit: 0, credit: 100 }],
     };
-    const dry = await ok(client, 'legacy_book_import', { payload });
+    const dry = await ok(client, 'legacy_book_import', { enterprise: identityFixture(), payload });
     assert.equal(dry.applied, false);
     assert.equal(dry.appliedReason, 'dry_run');
     assert.equal(dry.projection.dryRun, true);
     assert.equal(dry.accountSetId, null);
-    const formal = await ok(client, 'legacy_book_import', { payload, dryRun: false });
+    const formal = await ok(client, 'legacy_book_import', { enterprise: identityFixture(), payload, dryRun: false });
     assert.equal(formal.projection.dryRun, false);
     assert.ok(formal.accountSetId > 0);
     const formalRaw = await localValue(base, formal, 'legacy_book_import');

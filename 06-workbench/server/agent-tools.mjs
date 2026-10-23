@@ -347,7 +347,7 @@ const HANDLERS = dict({
       || (args.files ? A.parseImportTexts(decodeFiles(args.files, args.encoding), args.meta || {}) : null);
     if (!payload) throw new ToolError("payload_or_texts_or_files_required", "需要 payload / texts / files / paths 之一");
     // 与 MCP/HTTP 语料一致：默认预检，只有显式 dryRun=false 才落库。
-    return A.importAccountSet(payload, { dryRun: args.dryRun !== false });
+    return A.importAccountSet(payload, { dryRun: args.dryRun !== false, enterprise: args.enterprise, profileId: args.profileId });
   },
 
   // ---- 增量导入（LOCAL-01）：稳定来源 / 企业身份 + 批次幂等 + 来源凭证去重 / 冲突 ----
@@ -360,7 +360,7 @@ const HANDLERS = dict({
       // 与既有导入一致：默认只预检，只有显式 dryRun=false 才落库。
       dryRun: args.dryRun !== false,
       batchId: args.batchId ?? args.batch_id,
-      source: args.source,
+      source: args.source, enterprise: args.enterprise, profileId: args.profileId, profile_id: args.profile_id,
       mode: args.mode,
       accountSetId: args.accountSetId ?? args.account_set_id,
       confirmNewBinding: args.confirmNewBinding === true || args.confirm_new_binding === true,
@@ -387,7 +387,7 @@ const HANDLERS = dict({
     return A.createAccountSet({
       name,
       taxpayer_type: args.taxpayer_type,
-      accounting_standard: args.accounting_standard,
+      accounting_standard: args.accounting_standard, enterprise: args.enterprise, profileId: args.profileId,
       start_period,
     });
   },

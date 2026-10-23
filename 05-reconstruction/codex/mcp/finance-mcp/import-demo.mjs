@@ -65,10 +65,10 @@ child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initia
 const read = await call("skills_read", { resource: "legacy-book-import/SKILL.md" });
 console.log("\n[1] 读取业务规则 legacy-book-import/SKILL.md:", read.isError ? "ERROR" : "OK");
 
-const pre = await call("legacy_book_import", { paths, dryRun: true });
+const pre = await call("legacy_book_import", { paths, enterprise: { enterpriseKey: "SYNTHETIC-MCP-IMPORT-DEMO-001" }, dryRun: true });
 console.log("\n[2] 预检 dryRun=true ->", JSON.stringify(pre.data?.validation ?? pre.data, null, 2).slice(0, 900));
 
-const done = await call("legacy_book_import", { paths, dryRun: false });
+const done = await call("legacy_book_import", { paths, enterprise: { enterpriseKey: "SYNTHETIC-MCP-IMPORT-DEMO-001" }, dryRun: false });
 console.log("\n[3] 正式导入 dryRun=false -> created =", JSON.stringify(done.data?.created ?? done.data, null, 2).slice(0, 500));
 
 const setId = done.data?.created?.id;

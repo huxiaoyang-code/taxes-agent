@@ -40,6 +40,9 @@ import {
   sumNaturalByPrefix,
 } from "./period-end-controls.mjs";
 
+import { normalizeEnterpriseIdentity, identityError } from "./enterprise-identity.mjs";
+import { getEnterpriseAccountSet, getAccountSetEnterprise, insertEnterpriseAccountSet } from "./import-storage.mjs";
+
 const now = () => new Date().toISOString();
 const EPS = 0.005;
 
@@ -199,7 +202,7 @@ function requireRoleAccounts(setId, profile, roleNames) {
  * 未提供准则默认小企；非法准则 / 显式 legacy 新建 / 错配全部结构化拒绝。
  * 已存在账套的 profile 不可通过普通参数改变（本文件没有更新 profile / 准则的入口）。
  */
-export function createAccountSet({ name, taxpayer_type, accounting_standard, start_period, profileId } = {}) {
+export function createAccountSet({ name, taxpayer_type, accounting_standard, start_period, profileId, enterprise } = {}) {
   if (!name) throw new Error("name_required");
   const startPeriod = requirePeriod(start_period, "start_period_invalid");
   const profile = resolveCreationProfile({ accounting_standard, profileId });
@@ -209,7 +212,9 @@ export function createAccountSet({ name, taxpayer_type, accounting_standard, sta
       field: "profileId", profileId: profile.id, reason: "legacy-not-creatable",
     });
   }
+  const identity = normalizeEnterpriseIdentity(enterprise);
   return withSavepoint(() => {
+    if (getEnterpriseAccountSet(db, identity.enterpriseKey)) throw identityError("enterprise_already_bound");
     const info = run(
       `INSERT INTO account_sets (name, taxpayer_type, accounting_standard, start_period, created_at, accounting_profile_id)
        VALUES (?,?,?,?,?,?)`,
@@ -227,6 +232,7 @@ export function createAccountSet({ name, taxpayer_type, accounting_standard, sta
     );
     for (const a of seedAccounts(profile)) insAcc.run(id, a.code, a.name, a.category, a.direction, a.contra ? 1 : 0);
     ensurePeriod(id, startPeriod);
+    insertEnterpriseAccountSet(db, { ...identity, accountSetId: id, boundBy: "create" });
     return getAccountSet(id);
   });
 }
@@ -234,7 +240,7 @@ export function createAccountSet({ name, taxpayer_type, accounting_standard, sta
 export function listAccountSets() {
   return rows(`SELECT * FROM account_sets ORDER BY id DESC`).map((set) => {
     try {
-      return { ...set, accountingContext: accountSetProfile(set.id).context };
+      return { ...set, enterprise: getAccountSetEnterpriseIdentity(set.id), accountingContext: accountSetProfile(set.id).context };
     } catch (e) {
       // 损坏 / 未知 profile：列表仍可用于只读恢复核对，但明确标记错误，不静默 fallback。
       return {
@@ -250,7 +256,27 @@ export function listAccountSets() {
 }
 export function getAccountSet(id) {
   const { set, context } = accountSetProfile(id);
-  return { ...set, accountingContext: context };
+  return { ...set, enterprise: getAccountSetEnterpriseIdentity(id), accountingContext: context };
+}
+/** Local-only identity read; null marks an existing unbound historical book. */
+export function getAccountSetEnterpriseIdentity(id) {
+  if (!accountSetRow(id)) throw identityError("account_set_not_found");
+  const binding = getAccountSetEnterprise(db, id);
+  return binding ? { enterpriseKey: binding.enterprise_key, enterpriseName: binding.enterprise_name } : null;
+}
+export function bindAccountSetEnterprise(id, enterprise, { confirmNewBinding = false } = {}) {
+  const identity = normalizeEnterpriseIdentity(enterprise);
+  return withSavepoint(() => {
+    if (!accountSetRow(id)) throw identityError("account_set_not_found");
+    const current = getAccountSetEnterprise(db, id);
+    const canonical = getEnterpriseAccountSet(db, identity.enterpriseKey);
+    if (current && current.enterprise_key !== identity.enterpriseKey) throw identityError("account_set_bound_to_other_enterprise");
+    if (canonical && canonical.account_set_id !== id) throw identityError("enterprise_already_bound");
+    if (current) return { status: "no_change", accountSetId: id, enterprise: getAccountSetEnterpriseIdentity(id) };
+    if (confirmNewBinding !== true) throw identityError("account_set_binding_confirmation_required");
+    insertEnterpriseAccountSet(db, { ...identity, accountSetId: id, boundBy: "local_confirm" });
+    return { status: "bound", accountSetId: id, enterprise: getAccountSetEnterpriseIdentity(id) };
+  });
 }
 export function deleteAccountSet(id) {
   accountSetProfile(id);
@@ -2876,11 +2902,19 @@ export function normalizeImportPayload(payload = {}, context = null) {
 }
 
 /** 校验导入 payload，返回错误/警告/统计（向后兼容入口，内部与正式写入共用同一约束）。 */
-export function validateImportPayload(payload = {}) {
-  const r = normalizeImportPayload(payload);
+export function validateImportPayload(payload = {}, options = {}) {
+  return importAccountSet(payload, { ...options, dryRun: true }).validation;
+}
+function importValidation(normalized, enterprise) {
+  let identity = null, identityFailure = null;
+  try {
+    identity = normalizeEnterpriseIdentity(enterprise);
+    if (getEnterpriseAccountSet(db, identity.enterpriseKey)) throw identityError("enterprise_already_bound");
+  } catch (e) { identityFailure = { code: e.code }; }
+  const r = normalized;
   return {
-    ok: r.ok, errors: r.errors, warnings: r.warnings, summary: r.summary,
-    profile: r.profile, profileError: r.profileError,
+    ok: r.ok && !identityFailure, errors: [...r.errors, ...(identityFailure ? [identityFailure.code] : [])], warnings: r.warnings, summary: r.summary,
+    profile: r.profile, profileError: r.profileError, identityError: identityFailure,
   };
 }
 
@@ -2889,23 +2923,27 @@ export function validateImportPayload(payload = {}) {
  * 但新建账套按请求准则选择合法新 profile（同一事务内写账套 / 科目 / 首期间 / profile）。
  * 返回 validation 中可带 profileError，不把非法准则逃逸成泛 500。
  */
-export function importAccountSet(payload = {}, { dryRun = false } = {}) {
-  const normalized = normalizeImportPayload(payload);
-  const validation = {
-    ok: normalized.ok,
-    errors: normalized.errors,
-    warnings: normalized.warnings,
-    summary: normalized.summary,
-    profile: normalized.profile,
-    profileError: normalized.profileError,
-  };
-  if (dryRun || !normalized.ok) return { dryRun: true, validation, created: null };
+export function importAccountSet(payload = {}, { dryRun = false, enterprise, profileId } = {}) {
+  // profileId is an envelope option and never changes historical payload/fingerprint fields.
+  let context = null;
+  if (profileId !== undefined) {
+    try { const profile = resolveCreationProfile({ accounting_standard: payload?.account_set?.accounting_standard, profileId });
+      context = { profileId: profile.id, accounts: profile.coa };
+    } catch (e) {
+      const validation = { ok: false, errors: [e.code], warnings: [], summary: null, profile: null,
+        profileError: { code: e.code }, identityError: null };
+      return { dryRun: true, validation, created: null };
+    }
+  }
+  const normalized = normalizeImportPayload(payload, context);
+  const validation = importValidation(normalized, enterprise);
+  if (dryRun || !validation.ok) return { dryRun: true, validation, created: null };
   const n = normalized.normalized;
   const meta = n.account_set;
   db.exec("BEGIN");
   try {
     const set = createAccountSet({
-      name: meta.name, taxpayer_type: meta.taxpayer_type || "小规模纳税人",
+      enterprise, name: meta.name, taxpayer_type: meta.taxpayer_type || "小规模纳税人",
       accounting_standard: meta.accounting_standard || undefined, start_period: meta.start_period,
       ...(normalized.profile ? { profileId: normalized.profile.id } : {}),
     });

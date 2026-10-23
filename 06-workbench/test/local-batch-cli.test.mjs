@@ -97,13 +97,9 @@ import { insertEnterpriseAccountSet } from "./server/import-storage.mjs";
 const specs = JSON.parse(process.env.FIXTURE_SPECS);
 const out = [];
 for (const spec of specs) {
-  const set = A.createAccountSet({
+  const set = A.createAccountSet({ enterprise: { enterpriseKey: spec.enterpriseKey },
     name: spec.name, taxpayer_type: "小规模纳税人",
     accounting_standard: "小企业会计准则", start_period: "2026-01",
-  });
-  insertEnterpriseAccountSet(db, {
-    enterpriseKey: spec.enterpriseKey, enterpriseName: spec.name,
-    accountSetId: set.id, boundBy: "fixture",
   });
   A.addAssetCard(set.id, {
     kind: "fixed", name: "生产设备", original_cost: spec.assetCost, residual_rate: 0,

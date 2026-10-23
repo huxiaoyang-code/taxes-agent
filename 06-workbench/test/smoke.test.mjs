@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-smoke-test-mjs-' + (++identityFixtureSequence) });
+
 /**
  * 端到端测试：独立临时库 + 随机端口，不触碰 06-workbench/data/。
  * 覆盖：账套/科目、期初、凭证校验与过账、报表、P1（折旧摊销/结转损益/现金流量表）、Agent 工具。
@@ -60,7 +64,7 @@ try {
   let setId, v1;
 
   await test("创建账套并载入标准科目", async () => {
-    const s = await api("POST", "/api/account-sets", {
+    const s = await api("POST", "/api/account-sets", { enterprise: identityFixture(),
       name: "测试贸易有限公司", taxpayer_type: "小规模纳税人",
       accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
@@ -259,7 +263,7 @@ try {
   };
 
   await test("导入：CSV 预检通过并解析出结构", async () => {
-    const r = await api("POST", "/api/import/parse", { texts: csv });
+    const r = await api("POST", "/api/import/parse", { enterprise: identityFixture(), texts: csv });
     assert.equal(r.validation.ok, true, JSON.stringify(r.validation.errors));
     assert.equal(r.validation.summary.account_set, "导入测试公司");
     assert.equal(r.validation.summary.vouchers, 1);
@@ -269,22 +273,22 @@ try {
 
   await test("导入：期初借贷不平应预检失败", async () => {
     const bad = { ...csv, openings: "科目编码,借方,贷方\n1002,50000,0\n3001,0,40000\n" };
-    const r = await api("POST", "/api/import/parse", { texts: bad });
+    const r = await api("POST", "/api/import/parse", { enterprise: identityFixture(), texts: bad });
     assert.equal(r.validation.ok, false);
     assert.ok(r.validation.errors.some((e) => e.includes("期初余额借贷不平")));
   });
 
   await test("导入：科目不存在应预检失败", async () => {
     const bad = { ...csv, vouchers: csv.vouchers.replace("5602,300,0", "9999,300,0") };
-    const r = await api("POST", "/api/import/parse", { texts: bad });
+    const r = await api("POST", "/api/import/parse", { enterprise: identityFixture(), texts: bad });
     assert.equal(r.validation.ok, false);
     assert.ok(r.validation.errors.some((e) => e.includes("科目不存在")));
   });
 
   let importedSetId;
   await test("导入：正式导入并落库（含新增科目/期初/凭证）", async () => {
-    const parsed = await api("POST", "/api/import/parse", { texts: csv });
-    const r = await api("POST", "/api/import/account-set", { payload: parsed.payload, dryRun: false });
+    const parsed = await api("POST", "/api/import/parse", { enterprise: identityFixture(), texts: csv });
+    const r = await api("POST", "/api/import/account-set", { enterprise: identityFixture(), payload: parsed.payload, dryRun: false });
     importedSetId = r.created.id;
     assert.equal(r.created.name, "导入测试公司");
     assert.equal(r.created.vouchers, 1);
@@ -302,7 +306,7 @@ try {
   });
 
   await test("导入：Agent 工具 legacy_book_import 默认仅预检", async () => {
-    const r = await api("POST", "/agent/tools/legacy_book_import", { texts: csv });
+    const r = await api("POST", "/agent/tools/legacy_book_import", { enterprise: identityFixture(), texts: csv });
     assert.equal(r.dryRun, true);
     assert.equal(r.validation.ok, true);
     assert.equal(r.created, null);

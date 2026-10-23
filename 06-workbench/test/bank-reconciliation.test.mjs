@@ -67,7 +67,7 @@ let seq = 0;
 const uniq = (prefix) => `${prefix}-${++seq}`;
 
 function createSet(name, opening = [{ code: "1002", debit: 80000, credit: 0 }, { code: "3001", debit: 0, credit: 80000 }], startPeriod = "2026-01") {
-  const set = A.createAccountSet({ name, start_period: startPeriod });
+  const set = A.createAccountSet({ enterprise: { enterpriseKey: uniq("SYNTHETIC-BANK-ENTERPRISE") }, name, start_period: startPeriod });
   if (opening.length) A.setOpeningBalances(set.id, opening);
   return set;
 }
@@ -138,7 +138,7 @@ test("银行组件使用独立 bank_* 命名空间与组件版本，不改全局
   const userVersion = db.prepare(`PRAGMA user_version`).get();
   assert.equal(Number(Object.values(userVersion)[0]), coreUserVersion, "银行安装不得改写创建守卫留下的 PRAGMA user_version");
   const globalMigrations = db.prepare(`SELECT version, note FROM schema_migrations ORDER BY version`).all();
-  assert.deepEqual(globalMigrations.map((m) => Number(m.version)), [1, 2, 3, 4], "不得写 LOCAL-01 的 schema_migrations");
+  assert.deepEqual(globalMigrations.map((m) => Number(m.version)), [1, 2, 3, 4, 5], "不得写 LOCAL-01 的 schema_migrations");
 
   // 已存在的文件不能被再次声明为新库。
   assert.throws(() => S.claimFreshDatabase({ dbPath }), (e) => e.code === "fresh_database_file_exists");

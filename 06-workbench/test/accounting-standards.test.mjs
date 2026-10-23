@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-standards-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 /**
  * LOCAL-03a B1 真实领域验收：双准则建账 / 导入 / 过账 / 期末检查 / 结转 / 封账 / 报表 / 迁移兼容。
  *
@@ -30,7 +34,7 @@ const rejectsCode = async (fn, code) => {
 };
 const e = (code, debit = 0, credit = 0) => ({ code, debit, credit });
 const create = (name, standard, start = "2026-01") =>
-  A.createAccountSet({ name, accounting_standard: standard, start_period: start }).id;
+  identityFixtureCreate(A, { name, accounting_standard: standard, start_period: start }).id;
 const post = (setId, period, entries, extra = {}) =>
   A.createVoucher(setId, { period, status: "posted", entries, ...extra });
 const line = (report, label) => [...report.assets, ...report.liabilities].find((row) => row.label === label)?.value;
@@ -408,21 +412,21 @@ try {
 
   await test("准则 / profile 错误：非法准则、错配、legacy 新建、同码冲突全部结构化拒绝", async () => {
     assert.equal((await rejectsCode(
-      () => A.createAccountSet({ name: "bad", accounting_standard: "企业会计", start_period: "2026-01" }),
+      () => identityFixtureCreate(A, { name: "bad", accounting_standard: "企业会计", start_period: "2026-01" }),
       "accounting_standard_invalid",
     )).code, "accounting_standard_invalid");
     assert.equal((await rejectsCode(
-      () => A.createAccountSet({ name: "bad", accounting_standard: " 企业会计准则 ", start_period: "2026-01" }),
+      () => identityFixtureCreate(A, { name: "bad", accounting_standard: " 企业会计准则 ", start_period: "2026-01" }),
       "accounting_standard_invalid",
     )).code, "accounting_standard_invalid");
     assert.equal((await rejectsCode(
-      () => A.createAccountSet({
+      () => identityFixtureCreate(A, {
         name: "bad", accounting_standard: SMALL, profileId: "enterprise-2019-general-basic-v1", start_period: "2026-01",
       }),
       "accounting_profile_standard_mismatch",
     )).code, "accounting_profile_standard_mismatch");
     assert.equal((await rejectsCode(
-      () => A.createAccountSet({ name: "bad", profileId: "legacy-small-coa-v1", start_period: "2026-01" }),
+      () => identityFixtureCreate(A, { name: "bad", profileId: "legacy-small-coa-v1", start_period: "2026-01" }),
       "accounting_profile_legacy_not_creatable",
     )).code, "accounting_profile_legacy_not_creatable");
 
@@ -655,7 +659,7 @@ try {
     try {
       let injectedError = null;
       try {
-        A.createAccountSet({ name: "建账失败", accounting_standard: SMALL, start_period: "2026-01" });
+        identityFixtureCreate(A, { name: "建账失败", accounting_standard: SMALL, start_period: "2026-01" });
       } catch (error) { injectedError = error; }
       assert.ok(injectedError, "建账失败必须抛出");
       assert.match(String(injectedError.message), /inject_create_accounts_fail/);

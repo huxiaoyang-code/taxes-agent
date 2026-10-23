@@ -33,6 +33,7 @@ if (force) {
 }
 
 const set = A.createAccountSet({
+  enterprise: { enterpriseKey: "SYNTHETIC-DEMO-TRADE-001" },
   name: "示例贸易有限公司", taxpayer_type: "小规模纳税人",
   accounting_standard: "小企业会计准则", start_period: "2026-01",
 });

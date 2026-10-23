@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-smoke-test-mjs-' + (++identityFixtureSequence) });
+
 /**
  * smoke-test.mjs — MCP 冒烟：握手、工具清单、本地资源、错误路径、真实模型信封。
  *
@@ -117,7 +121,7 @@ try {
   check("finance_query 未实现 nodeId 返回固定码", unimplNode.isError === true && unimplNode.data?.error?.code === "model_node_not_implemented");
 
   // ---- 真实模型链路（本脚本自建临时后端）----
-  const created = await client.call("account_set_create", { name: "冒烟合成公司", start_period: "2026-01" });
+  const created = await client.call("account_set_create", { enterprise: identityFixture(), name: "冒烟合成公司", start_period: "2026-01" });
   check("account_set_create 返回 applied 信封", created.isError === false && created.data?.applied === true && created.data?.accountSetId > 0);
   const setId = created.data?.accountSetId;
   await client.call("opening_balance_set", {
@@ -132,7 +136,7 @@ try {
   check("finance_query 利润表摘要可读（净利润 300）", q.isError === false && q.data?.projection?.currentNetProfit === 300, q.text?.slice(0, 200));
   check("模型信封不含 raw 原文", q.isError === false && q.data?.rawValuesIncluded === false && q.data?.channel === "model");
 
-  const imp = await client.call("legacy_book_import", { payload: { account_set: {}, accounts: [], opening_balances: [], vouchers: [] } });
+  const imp = await client.call("legacy_book_import", { enterprise: identityFixture(), payload: { account_set: {}, accounts: [], opening_balances: [], vouchers: [] } });
   check("legacy_book_import 默认预检（dryRun=true / applied=false）",
     !imp.isError && imp.data?.projection?.dryRun === true && imp.data?.applied === false && imp.data?.appliedReason === "dry_run");
 } catch (e) {

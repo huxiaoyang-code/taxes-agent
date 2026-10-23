@@ -35,6 +35,7 @@
 import { createHash } from "node:crypto";
 import { db } from "./db.mjs";
 import * as A from "./accounting.mjs";
+import { canonicalEnterpriseKey, normalizeEnterpriseIdentity, requireSameEnterpriseIdentity } from "./enterprise-identity.mjs";
 import { resolveNewAccountingProfile } from "./accounting-profiles.mjs";
 import {
   getAccountSetEnterprise, getBatch, getEnterpriseAccountSet, getSourceBinding, getVoucherSource,
@@ -95,12 +96,6 @@ function textField(raw) {
  * 规范企业身份：只做 Unicode NFKC + trim，不做大小写 / 名称猜测。
  * 调用方必须提供稳定规范形式（例如统一社会信用代码大写）；服务端不会把显示名称当成身份。
  */
-function canonicalEnterpriseKey(raw) {
-  const text = textField(raw);
-  if (text === null) return null;
-  return text.normalize("NFKC").trim();
-}
-
 // ---------------------------------------------------------------- 批次内容指纹
 /**
  * 批次内容指纹（导出供迁移 / 兼容回归构造真实旧批次）；不改变指纹字段与排序规则。
@@ -294,7 +289,10 @@ export function importIncremental(options = {}) {
   request.batchId = batchId || "";
 
   const source = parseSource(args.source);
-  argErrors.push(...source.errors);
+  let identityFailure = null;
+  try { requireSameEnterpriseIdentity(normalizeEnterpriseIdentity(args.source), args.enterprise); }
+  catch (e) { identityFailure = e.code; }
+  argErrors.push(...source.errors, ...(identityFailure ? [identityFailure] : []));
   request.source = source.value;
 
   let targetAccountSetId = null;
@@ -373,9 +371,7 @@ export function importIncremental(options = {}) {
       && payload.account_set && typeof payload.account_set === "object" && !Array.isArray(payload.account_set)
       ? payload.account_set : {};
     const rawStandard = rawMeta.accounting_standard;
-    const requestedProfileId = typeof args.profileId === "string"
-      ? args.profileId
-      : (typeof args.profile_id === "string" ? args.profile_id : undefined);
+    const requestedProfileId = args.profileId !== undefined ? args.profileId : args.profile_id;
     try {
       if (rawStandard !== undefined && rawStandard !== null && typeof rawStandard !== "string") {
         throw Object.assign(new Error("accounting_standard_invalid"), { code: "accounting_standard_invalid" });
@@ -383,9 +379,18 @@ export function importIncremental(options = {}) {
       if (typeof rawStandard === "string" && rawStandard !== "" && rawStandard !== rawStandard.trim()) {
         throw Object.assign(new Error("accounting_standard_invalid"), { code: "accounting_standard_invalid" });
       }
+      // Explicit invalid aliases must never be treated as an omitted default.
+      for (const raw of [args.profileId, args.profile_id]) {
+        if (raw !== undefined && (typeof raw !== "string" || raw.trim() === "")) {
+          throw Object.assign(new Error("accounting_profile_unknown"), { code: "accounting_profile_unknown" });
+        }
+      }
+      if (args.profileId !== undefined && args.profile_id !== undefined && args.profileId !== args.profile_id) {
+        throw Object.assign(new Error("accounting_profile_unknown"), { code: "accounting_profile_unknown" });
+      }
       creationProfile = resolveNewAccountingProfile({
         ...(typeof rawStandard === "string" && rawStandard.trim() ? { accounting_standard: rawStandard } : {}),
-        ...(requestedProfileId ? { profileId: requestedProfileId } : {}),
+        ...(requestedProfileId !== undefined ? { profileId: requestedProfileId } : {}),
       });
     } catch (e) {
       const code = e?.code || "accounting_standard_invalid";
@@ -412,6 +417,8 @@ export function importIncremental(options = {}) {
     : { ok: false, errors: [], warnings: [], summary: null, profile: null, profileError: null };
 
   if (argErrors.length || !strict) {
+    validation.ok = false;
+    validation.identityError = identityFailure ? { code: identityFailure } : null;
     return rejected(request, [...argErrors, ...(strict ? strict.errors : [])], { validation });
   }
   const normalized = strict.normalized;
@@ -423,16 +430,6 @@ export function importIncremental(options = {}) {
 
   const identityConflicts = [];
   const notes = [];
-  const targetName = mode === MODE_APPEND ? targetSet.name : meta.name;
-  // 「账套名称不能充当企业身份」：显式拒绝把可改的名称当作稳定身份。
-  if (source.value.enterpriseKey && targetName && normKey(source.value.enterpriseKey) === normKey(targetName)) {
-    identityConflicts.push(conflict(
-      "enterprise_key_is_account_set_name",
-      "企业身份 source.enterpriseKey 与账套名称相同：账套名称可改，不能作为企业身份",
-      { enterpriseKey: source.value.enterpriseKey, accountSetName: targetName },
-    ));
-  }
-
   const enterpriseKey = source.value.enterpriseKey;
   const canonical = getEnterpriseAccountSet(db, enterpriseKey);
   const canonicalForSet = mode === MODE_APPEND ? getAccountSetEnterprise(db, targetAccountSetId) : null;
@@ -742,7 +739,7 @@ export function importIncremental(options = {}) {
         "同一批次 ID 的导入内容已变化：拒绝静默覆盖，请使用新的 batchId",
         { batchId, registeredFingerprint: batchRecord.content_fingerprint, incomingFingerprint: fingerprint }));
     } else if (batchRecord.status === "completed") {
-      if (batchRecord.account_set_id != null && !getAccountSetEnterprise(db, batchRecord.account_set_id)) {
+      if (batchRecord.account_set_id == null || !sourceBinding || getAccountSetEnterprise(db, batchRecord.account_set_id)?.enterprise_key !== enterpriseKey) {
         batchConflicts.push(conflict("batch_replay_state_incomplete",
           "批次已标记完成，但账套的企业身份绑定缺失：库内状态与批次记录不一致，已拒绝写入",
           { batchId, accountSetId: batchRecord.account_set_id, reason: "binding_missing" }));
@@ -751,7 +748,16 @@ export function importIncremental(options = {}) {
           "批次已标记完成，但存在未登记的来源凭证：库内状态与批次记录不一致，已拒绝写入",
           { batchId }));
       } else {
-        replayIntent = true;
+        const links = listBatchVouchers(db, batchId);
+        const expected = new Map(vouchers.map(v => [v.sourceVoucherId, v]));
+        const valid = links.length === expected.size && links.every(l => {
+          const v = expected.get(l.source_voucher_id);
+          return v && l.source_system === source.value.system && l.enterprise_key === enterpriseKey
+            && l.account_set_id === batchRecord.account_set_id && l.voucher_id === v.voucherId
+            && l.content_fingerprint === v.fingerprint;
+        });
+        if (!valid) batchConflicts.push(conflict("batch_replay_state_incomplete", "批次来源关联不完整", { batchId }));
+        else replayIntent = true;
       }
     }
   }
@@ -925,6 +931,7 @@ export function importIncremental(options = {}) {
     let accountSetId = targetAccountSetId;
     if (mode === MODE_CREATE) {
       const set = A.createAccountSet({
+        enterprise: source.value,
         name: meta.name,
         taxpayer_type: meta.taxpayer_type || "小规模纳税人",
         accounting_standard: meta.accounting_standard || undefined,
@@ -934,12 +941,6 @@ export function importIncremental(options = {}) {
       accountSetId = set.id;
       outcome.accountSetId = set.id;
       outcome.accountSetCreated = true;
-      insertEnterpriseAccountSet(db, {
-        enterpriseKey,
-        enterpriseName: source.value.enterpriseName,
-        accountSetId: set.id,
-        boundBy: "import",
-      });
       insertSourceBinding(db, {
         sourceSystem: source.value.system,
         enterpriseKey,

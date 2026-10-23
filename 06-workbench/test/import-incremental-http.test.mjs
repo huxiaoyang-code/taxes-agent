@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-import-incremental-http-test-mjs-' + (++identityFixtureSequence) });
+
 /**
  * LOCAL-01 增量导入 HTTP / Agent 真实入口回归。
  *
@@ -270,7 +274,7 @@ try {
     });
 
     await testAsync("Agent legacy_book_import 旧入口保持默认预检且不写身份记录", async () => {
-      const legacy = await server.api("POST", "/agent/tools/legacy_book_import", {
+      const legacy = await server.api("POST", "/agent/tools/legacy_book_import", { enterprise: identityFixture(),
         payload: {
           account_set: meta({ name: "Agent 旧接口公司" }),
           opening_balances: [{ code: "1002", debit: 10, credit: 0 }, { code: "3001", debit: 0, credit: 10 }],
@@ -280,7 +284,7 @@ try {
       assert.equal(legacy.data.dryRun, true);
       assert.equal(legacy.data.created, null);
 
-      const formal = await server.api("POST", "/agent/tools/legacy_book_import", {
+      const formal = await server.api("POST", "/agent/tools/legacy_book_import", { enterprise: identityFixture(),
         payload: {
           account_set: meta({ name: "Agent 旧接口公司" }),
           opening_balances: [{ code: "1002", debit: 10, credit: 0 }, { code: "3001", debit: 0, credit: 10 }],
@@ -426,13 +430,13 @@ try {
         vouchers: "",
         accounts: "",
       };
-      const parsed = await server.api("POST", "/api/import/parse", { texts });
+      const parsed = await server.api("POST", "/api/import/parse", { enterprise: identityFixture(), texts });
       assert.equal(parsed.data.validation.ok, true, JSON.stringify(parsed.data.validation.errors));
-      const dry = await server.api("POST", "/api/import/account-set", { payload: parsed.data.payload });
+      const dry = await server.api("POST", "/api/import/account-set", { enterprise: identityFixture(), payload: parsed.data.payload });
       assert.equal(dry.status, 201);
       assert.equal(dry.data.dryRun, true);
       assert.equal(dry.data.created, null);
-      const formal = await server.api("POST", "/api/import/account-set", { payload: parsed.data.payload, dryRun: false });
+      const formal = await server.api("POST", "/api/import/account-set", { enterprise: identityFixture(), payload: parsed.data.payload, dryRun: false });
       assert.equal(formal.status, 201);
       assert.equal(formal.data.created.name, "HTTP 旧接口公司");
     });
@@ -451,7 +455,7 @@ try {
       let srv = null;
       try {
         srv = await startServer(dir);
-        const created = await srv.api("POST", "/agent/tools/account_set_create", {
+        const created = await srv.api("POST", "/agent/tools/account_set_create", { enterprise: { enterpriseKey: "91350000HTTPEMPTY1X" },
           name: "HTTP 填空公司", start_period: "2026-01",
         });
         assert.equal(created.status, 200, JSON.stringify(created.data));

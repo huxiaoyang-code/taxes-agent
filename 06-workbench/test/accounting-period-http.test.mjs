@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-period-http-test-mjs-' + (++identityFixtureSequence) });
+
 /**
  * LOCAL-02 期末完整性 HTTP / Agent 真实入口回归（合成临时库 + 随机回环端口，不连旧后端）。
  *
@@ -86,7 +90,7 @@ after(async () => {
 });
 
 test("建账 → 期初 → 购入资产（借 1601 / 贷 1002）→ 资产卡片", async () => {
-  const set = await ok("POST", "/api/account-sets", {
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(),
     name: "LOCAL-02 合成公司", taxpayer_type: "小规模纳税人",
     accounting_standard: "小企业会计准则", start_period: "2026-01",
   });
@@ -273,7 +277,7 @@ test("Agent 工具：period_end_check 与 asset_update 走真实后端入口", a
 });
 
 test("F2：后期普通损益结转依赖前期累计——HTTP / Agent 前期反过账 409，按倒序撤销后可重算", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "F2 依赖公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: { enterpriseKey: "91350000F2HTTP0001X" }, name: "F2 依赖公司", start_period: "2026-01" });
   const id = set.id;
   await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
     { code: "1002", debit: 10000, credit: 0 }, { code: "3001", debit: 0, credit: 10000 },
@@ -321,7 +325,7 @@ test("F2：后期普通损益结转依赖前期累计——HTTP / Agent 前期�
 });
 
 test("F3：前期零凭证但有应计提业务——HTTP 封账 409 + 撤销顺序，按期间完成 33.33/33.33/33.34", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "F3 连续期间公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "F3 连续期间公司", start_period: "2026-01" });
   const id = set.id;
   // 只有期初（无任何凭证）：期初投入资产 100。
   await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
@@ -356,7 +360,7 @@ test("F3：前期零凭证但有应计提业务——HTTP 封账 409 + 撤销顺
 });
 
 test("F4：未入账登记不是原值差异豁免——HTTP 计提 409、封账 409，补真实购入后才可继续", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "F4 待补凭证公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "F4 待补凭证公司", start_period: "2026-01" });
   const id = set.id;
   await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
     { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },
@@ -442,7 +446,7 @@ test("增量导入入口一致：更晚期间已封账时，向更早期追加�
 });
 
 test("P1：旧折旧草稿（改寿命后）经 HTTP 不得重过账，检查不按“已过账”放行，撤销重算 20 后可封账", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "P1 旧草稿公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "P1 旧草稿公司", start_period: "2026-01" });
   const id = set.id;
   await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
     { code: "1601", debit: 100, credit: 0 }, { code: "3001", debit: 0, credit: 100 },
@@ -488,7 +492,7 @@ test("P1：旧折旧草稿（改寿命后）经 HTTP 不得重过账，检查不
 });
 
 test("P2：HTTP 凭证拒绝不足一分的非零数（全库不变），正常边界保留", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "P2 亚分公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "P2 亚分公司", start_period: "2026-01" });
   const id = set.id;
   const before = snapshot();
   const body = await fails("POST", `/api/account-sets/${id}/vouchers`, {
@@ -520,7 +524,7 @@ test("P2：HTTP 凭证拒绝不足一分的非零数（全库不变），正常�
 });
 
 test("P3：未入账登记按取得期间计入（HTTP：1 月不阻塞 / 3、4 月阻塞），缺取得期间仍保守报告", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "P3 未入账期间公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "P3 未入账期间公司", start_period: "2026-01" });
   const id = set.id;
   await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
     { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },
@@ -551,7 +555,7 @@ test("P3：未入账登记按取得期间计入（HTTP：1 月不阻塞 / 3、4 
   assert.equal(fixed.steps.find((s) => s.id === "asset_reconciliation").status, "ok");
 
   // 缺取得期间：仍保守报告，不因缺字段放宽真实未入账旁路。
-  const set2 = await ok("POST", "/api/account-sets", { name: "P3 缺取得期间公司", start_period: "2026-01" });
+  const set2 = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "P3 缺取得期间公司", start_period: "2026-01" });
   await ok("PUT", `/api/account-sets/${set2.id}/opening-balances`, { items: [
     { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },
   ] });
@@ -566,7 +570,7 @@ test("P3：未入账登记按取得期间计入（HTTP：1 月不阻塞 / 3、4 
 });
 
 test("P4：HTTP 资产写入口拒绝 2^32 / 2^32−1 / 非整数 / 超上限时不留半张卡片，1200 边界合法", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "P4 寿命边界公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "P4 寿命边界公司", start_period: "2026-01" });
   const id = set.id;
   const before = snapshot();
   for (const bad of [4294967296, 4294967295, 1201, 0, -1, 1.5]) {
@@ -598,7 +602,7 @@ test("P4：HTTP 资产写入口拒绝 2^32 / 2^32−1 / 非整数 / 超上限时
 });
 
 test("取得期间一致性（review3 P2）：HTTP 取得期间变更后历史期不再生成错误计提（无 stale 循环），正确适用期可计提并封账", async () => {
-  const set = await ok("POST", "/api/account-sets", { name: "取得期间一致性公司", start_period: "2026-01" });
+  const set = await ok("POST", "/api/account-sets", { enterprise: identityFixture(), name: "取得期间一致性公司", start_period: "2026-01" });
   const id = set.id;
   await ok("PUT", `/api/account-sets/${id}/opening-balances`, { items: [
     { code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 },

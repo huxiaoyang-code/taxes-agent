@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-server-local-boundary-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 /**
  * server-local-boundary.test.mjs — 生产 server.mjs「请求地址边界」HTTP 回归（rc-a0 收尾）
  *
@@ -28,9 +32,9 @@ process.env.WORKBENCH_DATA_DIR = directory;
 const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
 // 合成账套：证明子进程用的是本临时库，且服务在畸形请求后仍能正常操作真实存储。
-A.createAccountSet({ name: "合成边界测试公司", start_period: "2026-01" });
+identityFixtureCreate(A, { name: "合成边界测试公司", start_period: "2026-01" });
 // 恶意 Origin 探针账套：证明旧 REST 数据出口无法被跨源读取（管理者实际复现的绕过点）。
-A.createAccountSet({ name: "SYNTHETIC_ORIGIN_PROBE", start_period: "2026-01" });
+identityFixtureCreate(A, { name: "SYNTHETIC_ORIGIN_PROBE", start_period: "2026-01" });
 
 let child, exited, port;
 

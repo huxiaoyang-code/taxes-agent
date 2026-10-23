@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-entry-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // finance-model-entry acceptance — LOCAL-08 真实模型入口组装 / 生命周期 / 并发 / 故障注入。
 //
 // 运行：cd 06-workbench && node test/finance-model-entry.test.mjs
@@ -107,8 +111,8 @@ const expectRefError = (fn, code) => {
 };
 
 // ---------------------------------------------------------------- 真实基础数据（本机 raw 路径建库）
-const setA = A.createAccountSet({ name: X.enterpriseA, start_period: "2026-01" });
-const setB = A.createAccountSet({ name: X.enterpriseB, start_period: "2026-01" });
+const setA = identityFixtureCreate(A, { name: X.enterpriseA, start_period: "2026-01" });
+const setB = identityFixtureCreate(A, { name: X.enterpriseB, start_period: "2026-01" });
 A.setOpeningBalances(setA.id, [
   { code: "1002", debit: 1000, credit: 0 },
   { code: "1601", debit: 1200, credit: 0 },
@@ -345,7 +349,7 @@ await test("6. finance_query 全部 12 个已实现 node：只投影 data，金�
 });
 
 await test("7. 写工具真实落库、applied=true，且无原文外发", async () => {
-  const created = await writeOk("account_set_create", {
+  const created = await writeOk("account_set_create", { enterprise: identityFixture(),
     name: X.enterpriseC, taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01",
   });
   assert.equal(created.operationCategory, "create");
@@ -426,7 +430,7 @@ await test("7. 写工具真实落库、applied=true，且无原文外发", async
 });
 
 await test("8. 建账 / 导入类写：setId 只取真实结果，默认预检不写", async () => {
-  const legacyDry = await callExpectExecutions("legacy_book_import", {
+  const legacyDry = await callExpectExecutions("legacy_book_import", { enterprise: identityFixture(),
     payload: {
       account_set: { name: X.importName, start_period: "2026-01", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则" },
       opening_balances: [{ code: "1002", debit: 100, credit: 0 }, { code: "3001", debit: 0, credit: 100 }],
@@ -442,7 +446,7 @@ await test("8. 建账 / 导入类写：setId 只取真实结果，默认预检�
   assert.equal(legacyDry.projection.dryRun, true);
   assert.equal(legacyDry.projection.createdAccountSetId, undefined);
 
-  const legacyApplied = await writeOk("legacy_book_import", {
+  const legacyApplied = await writeOk("legacy_book_import", { enterprise: identityFixture(),
     dryRun: false,
     payload: {
       account_set: { name: X.importName, start_period: "2026-01", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则" },

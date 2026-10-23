@@ -1,3 +1,7 @@
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-period-test-mjs-' + (++identityFixtureSequence) });
+
 // LOCAL-02 期末完整性 MCP 真实链路：stdio MCP → 生产 HTTP 后端 → Agent 工具 → SQLite。
 // LOCAL-08 起普通工具返回模型投影信封：摘要 / 固定码直接断言 projection，
 // 逐条原因（dueAmount / reason / ledger_note 等）经本机引用接口或本机 raw 通道核对。
@@ -124,7 +128,7 @@ test('MCP 两个月完整链：计提 → 结转 → 期末检查 → 封账；�
       assert.ok(listed.result.tools.some((t) => t.name === name), name);
     }
 
-    const set = await ok(client, 'account_set_create', { name: 'MCP 期末合成公司', start_period: '2026-01' });
+    const set = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP 期末合成公司', start_period: '2026-01' });
     const setId = set.accountSetId;
     await ok(client, 'opening_balance_set', {
       accountSetId: setId,
@@ -241,7 +245,7 @@ test('MCP 两个月完整链：计提 → 结转 → 期末检查 → 封账；�
 test('MCP 负例：未入账登记不得计提 / 封账；后期普通结转依赖前期累计（真实入口）', async () => {
   await withBackend(async (client, base) => {
     // F4：未入账登记不是原值差异豁免。
-    const f4 = await ok(client, 'account_set_create', { name: 'MCP F4 待补凭证公司', start_period: '2026-01' });
+    const f4 = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP F4 待补凭证公司', start_period: '2026-01' });
     await ok(client, 'opening_balance_set', { accountSetId: f4.accountSetId, items: [
       { code: '1002', debit: 1000, credit: 0 }, { code: '3001', debit: 0, credit: 1000 },
     ] });
@@ -258,7 +262,7 @@ test('MCP 负例：未入账登记不得计提 / 封账；后期普通结转依�
       'period_end_check_failed');
 
     // F2：普通后期结转读取累计余额，因此前期反过账被明确拒绝并给撤销顺序。
-    const f2 = await ok(client, 'account_set_create', { name: 'MCP F2 依赖公司', start_period: '2026-01' });
+    const f2 = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP F2 依赖公司', start_period: '2026-01' });
     const f2Id = f2.accountSetId;
     await ok(client, 'opening_balance_set', { accountSetId: f2Id, items: [
       { code: '1002', debit: 1000, credit: 0 }, { code: '3001', debit: 0, credit: 1000 },
@@ -287,7 +291,7 @@ test('MCP 负例：未入账登记不得计提 / 封账；后期普通结转依�
 test('MCP 负例：旧折旧草稿重过账 / 亚分金额 / 大寿命（真实链路）', async () => {
   await withBackend(async (client, base) => {
     // ---- P1：反过账后改寿命，旧草稿不得重过账，必须删除后重算 ----
-    const set = await ok(client, 'account_set_create', { name: 'MCP P1 旧草稿公司', start_period: '2026-01' });
+    const set = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP P1 旧草稿公司', start_period: '2026-01' });
     const setId = set.accountSetId;
     await ok(client, 'opening_balance_set', { accountSetId: setId, items: [
       { code: '1601', debit: 100, credit: 0 }, { code: '3001', debit: 0, credit: 100 },
@@ -320,7 +324,7 @@ test('MCP 负例：旧折旧草稿重过账 / 亚分金额 / 大寿命（真实�
     await ok(client, 'period_set_status', { accountSetId: setId, period: '2026-01', status: 'closed' });
 
     // ---- P2：亚分金额逐字段拒绝（模型固定码 + 本机原因）----
-    const p2 = await ok(client, 'account_set_create', { name: 'MCP P2 亚分公司', start_period: '2026-01' });
+    const p2 = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP P2 亚分公司', start_period: '2026-01' });
     const p2Id = p2.accountSetId;
     const subcentArgs = {
       accountSetId: p2Id, period: '2026-01', status: 'posted',
@@ -349,7 +353,7 @@ test('MCP 负例：旧折旧草稿重过账 / 亚分金额 / 大寿命（真实�
     assert.equal(okVoucher.projection.totalDebit, 0.01);
 
     // ---- P4：大寿命在 MCP 参数层就被拦住；patch 路径由后端边界拒绝，且不留半张卡片 ----
-    const p4 = await ok(client, 'account_set_create', { name: 'MCP P4 寿命边界公司', start_period: '2026-01' });
+    const p4 = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP P4 寿命边界公司', start_period: '2026-01' });
     const p4Id = p4.accountSetId;
     const badLife = await client.call('asset_create', {
       accountSetId: p4Id, kind: 'fixed', name: '寿命非法设备', original_cost: 100, residual_rate: 0,
@@ -375,7 +379,7 @@ test('MCP 负例：旧折旧草稿重过账 / 亚分金额 / 大寿命（真实�
 
 test('MCP 负例：无资产 / 无损益标 not_applicable；缺省 period 与未知账套给出稳定错误', async () => {
   await withBackend(async (client, base) => {
-    const set = await ok(client, 'account_set_create', { name: 'MCP 空账套', start_period: '2026-01' });
+    const set = await ok(client, 'account_set_create', { enterprise: identityFixture(), name: 'MCP 空账套', start_period: '2026-01' });
     const check = await ok(client, 'period_end_check', { accountSetId: set.accountSetId, period: '2026-01' });
     assert.equal(check.projection.ready, true);
     assert.equal(stepStatus(check, 'depreciation'), 'not_applicable');

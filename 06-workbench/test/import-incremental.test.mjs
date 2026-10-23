@@ -1,9 +1,14 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-import-incremental-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
+const identityFixtureImport = (A, payload, options = {}) => A.importAccountSet(payload, { enterprise: identityFixture(), ...options });
 /**
  * LOCAL-01 增量导入回归（领域层）：完全合成临时库，不连接任何既有业务库。
  *
  * 覆盖：
- *  - 旧 `importAccountSet` 无新增参数的用法兼容（返回结构 / dryRun 缺省 / 不产生身份记录）；
+ *  - 旧 `importAccountSet` 无新增参数的用法兼容（返回结构 / dryRun 缺省 / 绑定稳定身份，不产生来源/批次记录）；
  *  - 有来源 / 企业 / 批次的首次建账、指定已有账套追加、连续两个月；
  *  - 一企一账套：以规范 enterpriseKey 为范围（不是同 source.system 内），跨来源同企业引导到已有账套 /
  *    显式确认来源证据后追加到同一账套；同账套不得绑定另一企业；不同企业各自一个账套互不串账；
@@ -373,7 +378,7 @@ try {
   });
 
   // ================================================================ 旧导入兼容
-  await test("旧 importAccountSet 用法兼容：域层 dryRun 缺省不变、正式导入返回原结构、不产生身份记录", () => {
+  await test("旧 importAccountSet 用法兼容：域层 dryRun 缺省不变、正式导入返回原结构、绑定稳定身份，不产生来源/批次记录", () => {
     const legacyPayload = {
       account_set: meta("旧接口合成公司"),
       opening_balances: [{ code: "1002", debit: 1000, credit: 0 }, { code: "3001", debit: 0, credit: 1000 }],
@@ -382,14 +387,14 @@ try {
       ])],
     };
     const before = fullSnapshot();
-    const dry = A.importAccountSet(legacyPayload, { dryRun: true });
+    const dry = identityFixtureImport(A, legacyPayload, { dryRun: true });
     assert.equal(dry.dryRun, true);
     assert.equal(dry.validation.ok, true, JSON.stringify(dry.validation.errors));
     assert.equal(dry.created, null);
     assert.deepEqual(fullSnapshot(), before, "旧接口 dryRun 不得写入（含新增审计表）");
 
     // 域层缺省仍是 dryRun=false（既有行为，不因本包改变）；HTTP / Agent / MCP 入口才默认预检。
-    const formal = A.importAccountSet(legacyPayload);
+    const formal = identityFixtureImport(A, legacyPayload);
     assert.equal(formal.dryRun, false);
     assert.equal(formal.validation.ok, true, JSON.stringify(formal.validation.errors));
     assert.deepEqual(Object.keys(formal).sort(), ["created", "dryRun", "validation"]);
@@ -439,7 +444,7 @@ try {
     const canonical = db.prepare(`SELECT * FROM import_enterprise_account_sets`).get();
     assert.equal(canonical.account_set_id, setId);
     assert.equal(canonical.enterprise_key, SOURCE_A.enterpriseKey);
-    assert.equal(canonical.bound_by, "import");
+    assert.equal(canonical.bound_by, "create");
     const sourceBinding = db.prepare(`SELECT * FROM import_source_bindings WHERE enterprise_key=?`).get(SOURCE_A.enterpriseKey);
     assert.equal(sourceBinding.source_system, "local-book");
     assert.equal(sourceBinding.bound_by, "import");
@@ -498,14 +503,14 @@ try {
     assert.equal(db.prepare(`SELECT COUNT(*) n FROM account_sets WHERE name='合成甲公司'`).get().n, 1);
   });
 
-  await test("账套名称不能充当企业身份：enterpriseKey 与账套名相同直接拒绝", () => {
+  await test("显式稳定ID碰巧等于显示名称仍合法，预检不写入", () => {
     const r = IM.importIncremental({
       payload: payloadCreateA(),
       batchId: "A-name-as-key",
       source: { system: "local-book", enterpriseKey: "合成甲公司" },
     });
-    assert.equal(r.status, IM.STATUS.CONFLICT);
-    assert.ok(r.conflicts.some((c) => c.code === "enterprise_key_is_account_set_name"), JSON.stringify(r.conflicts));
+    assert.equal(r.status, IM.STATUS.PREVIEW);
+    assert.deepEqual(r.conflicts, []);
   });
 
   // ================================================================ 追加已有账套
@@ -1111,9 +1116,11 @@ try {
 
   await test("填空题：account_set_create 新空账套 + append 确认绑定写期初（无凭证）→ applied；同批重试 idempotent_replay 且零写入", () => {
     // 等价于先调 account_set_create：空账套、无期初、无凭证、无企业绑定。
-    const set = A.createAccountSet({
+    const set = identityFixtureCreate(A, {
       name: "填空合成公司", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
+    // Synthetic historical unbound fixture: SQL removes only this test book binding.
+    db.prepare("DELETE FROM import_enterprise_account_sets WHERE account_set_id=?").run(set.id);
     assert.equal(A.getOpeningBalances(set.id).length, 0);
     assert.equal(A.listVouchers(set.id).length, 0);
     assert.equal(db.prepare(`SELECT COUNT(*) n FROM import_enterprise_account_sets WHERE account_set_id=?`).get(set.id).n, 0);
@@ -1142,9 +1149,11 @@ try {
   });
 
   await test("填空题：空账套首调同时写期初 + 凭证，同批重试幂等；真正改期初 / 库内期初被改动仍被拒绝", () => {
-    const set = A.createAccountSet({
+    const set = identityFixtureCreate(A, {
       name: "填空合成公司二", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
+    // Synthetic historical unbound fixture: SQL removes only this test book binding.
+    db.prepare("DELETE FROM import_enterprise_account_sets WHERE account_set_id=?").run(set.id);
     const voucher = journal("2026-01", "2026-01-05", 1, "填空首张凭证", cashEntries(10), "EMPTY2-SRC-1");
     const args = {
       payload: openingPayload("填空合成公司二", [voucher]), batchId: "EMPTY2-open-2026", source: SOURCE_EMPTY2,

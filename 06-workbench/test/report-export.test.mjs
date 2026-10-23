@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-export-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // RC-B independent acceptance: every expected amount below is hand-calculated.
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -37,7 +41,7 @@ try {
   ({ db } = await import('../server/db.mjs'));
   const A = await import('../server/accounting.mjs');
   const { buildReportExport, pairedBalanceRows } = await import('../server/report-export.mjs');
-  const make = (name = '合成验收账套', start_period = '2025-12') => A.createAccountSet({ name, start_period }).id;
+  const make = (name = '合成验收账套', start_period = '2025-12') => identityFixtureCreate(A, { name, start_period }).id;
   const voucher = (s, period, entries, extra = {}) => A.createVoucher(s, { period, status: 'posted', entries, ...extra });
   const out = (s, kind, period = '2026-01', extra = {}) => buildReportExport(s, { kind, period, ...extra });
   const report = (s, kind, period, extra) => out(s, kind, period, extra).report;

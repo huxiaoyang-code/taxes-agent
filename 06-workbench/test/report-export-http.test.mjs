@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Fixed synthetic test identities, independent of display names and production defaults.
+let identityFixtureSequence = 0;
+const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-export-http-test-mjs-' + (++identityFixtureSequence) });
+const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 // Synthetic accounts only. A fresh database and child-assigned port isolate every run.
 import assert from "node:assert/strict";
 import { test, before, after } from "node:test";
@@ -12,8 +16,8 @@ const directory = mkdtempSync(join(tmpdir(), "wb-report-http-"));
 process.env.WORKBENCH_DATA_DIR = directory;
 const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
-const set = A.createAccountSet({ name: '合成中文公司";\r\nX-Fake: yes/\\', start_period: "2026-01" });
-const empty = A.createAccountSet({ name: "合成空账套", start_period: "2026-01" });
+const set = identityFixtureCreate(A, { name: '合成中文公司";\r\nX-Fake: yes/\\', start_period: "2026-01" });
+const empty = identityFixtureCreate(A, { name: "合成空账套", start_period: "2026-01" });
 A.setOpeningBalances(set.id, [{ code: "1002", debit: 1000 }, { code: "3001", credit: 1000 }]);
 A.createVoucher(set.id, { period: "2026-01", status: "posted", summary: "合成收入", entries: [
   { code: "1002", debit: 200 }, { code: "5001", credit: 200 },
