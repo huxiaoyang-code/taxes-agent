@@ -14,7 +14,7 @@
 // 退出码：0 成功；2 用法 / 路径 / 范围参数错误；3 业务拒绝或冲突；
 //         4 内部错误（未输出 SQL/堆栈）；5 依赖未就绪 / 写入被阻断（备份 / 结构门槛 / 回滚未确认）。
 
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, lstatSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -370,17 +370,25 @@ async function initDb(flags) {
     throw new CliError("init_db_filename_required",
       "init-db 要求目标文件名是 workbench.db（与账务库真实创建入口一致）", { dbPath: abs });
   }
+  for (let parent = dirname(abs); ; parent = dirname(parent)) {
+    if (existsSync(parent) && lstatSync(parent).isSymbolicLink()) {
+      throw new CliError("data_dir_alias", "新库目录不能经过别名 / junction");
+    }
+    if (dirname(parent) === parent) break;
+  }
   mkdirSync(dirname(abs), { recursive: true });
   const receipt = STORAGE.claimFreshDatabase({ dbPath: abs });
-  process.env.WORKBENCH_DATA_DIR = dirname(abs);
-  const dbModule = await import(pathToFileURL(join(WORKBENCH, "server", "db.mjs")).href);
-  const schema = await STORAGE.ensureBankSchema(dbModule.db, { dbPath: abs, receipt });
-  return {
-    dbPath: abs,
-    bankSchema: schema,
-    importSchema: dbModule.importSchema ?? null,
-    note: "新库由本命令的真实创建入口创建；bank_* 在同一进程内初始化。",
-  };
+  let dbModule;
+  try {
+    dbModule = await STORAGE.initializeFreshDatabaseCore(receipt);
+    const schema = await STORAGE.ensureBankSchema(dbModule.db, { dbPath: abs, receipt });
+    return {
+      dbPath: abs, bankSchema: schema, importSchema: dbModule.importSchema ?? null,
+      note: "新库由本命令的真实创建入口创建；bank_* 在同一进程内初始化。",
+    };
+  } finally {
+    try { dbModule?.db.close(); } finally { STORAGE.releaseFreshDatabaseClaim(receipt); }
+  }
 }
 
 function accountRegister(flags) {

@@ -26,6 +26,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
+const fixtureParent = new URL("../../.agent-runs/", import.meta.url);
+const fixtureFs = await import("node:fs");
+const fixturePath = await import("node:path");
+const fixtureBase = fixturePath.resolve((await import("node:url")).fileURLToPath(fixtureParent));
+for (let ancestor = fixturePath.dirname(fixtureBase); ; ancestor = fixturePath.dirname(ancestor)) {
+  if (fixtureFs.lstatSync(ancestor).isSymbolicLink()) throw new Error("fixture ancestor is a reparse point");
+  if (fixturePath.dirname(ancestor) === ancestor) break;
+}
+if (fixtureFs.existsSync(fixtureBase) && fixtureFs.lstatSync(fixtureBase).isSymbolicLink()) throw new Error("fixture parent is a reparse point");
+fixtureFs.mkdirSync(fixtureBase, { recursive: true });
+const fixtureRoot = fixtureFs.mkdtempSync(fixturePath.join(fixtureBase, "bank-fresh-"));
+process.env.TEMP = fixtureRoot;
+process.env.TMP = fixtureRoot;
+process.env.WORKBENCH_DATA_DIR = fixturePath.join(fixtureRoot, "fallback");
+
 const ROOT = mkdtempSync(join(tmpdir(), "wb-bank-backup-it-"));
 const CLI_BANK = join(WORKBENCH, "scripts", "bank-reconcile.mjs");
 const CLI_BACKUP = join(WORKBENCH, "scripts", "local-backup.mjs");
@@ -65,7 +80,7 @@ const assertRejected = (result, code, message = "") => {
 
 const cleanEnv = () => {
   const env = { ...process.env };
-  delete env.WORKBENCH_DATA_DIR;
+  env.WORKBENCH_DATA_DIR = join(fixtureRoot, "fallback");
   delete env.NODE_NO_WARNINGS;
   return env;
 };

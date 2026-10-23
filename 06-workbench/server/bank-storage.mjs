@@ -1,8 +1,9 @@
 // bank-storage.mjs — LOCAL-04 银行组件持久层：bank_* 独立命名空间、组件版本与迁移门槛。
 //
 // 设计约束（LOCAL-04 / LOCAL-06 依赖）：
-// 1) 本文件不 import db.mjs / accounting.mjs：所有函数显式接收 DatabaseSync 连接，
+// 1) 本文件加载时不 import db.mjs / accounting.mjs：业务函数显式接收 DatabaseSync 连接，
 //    导入本模块不会打开默认库、不会建表、不会触发全局迁移。
+//    initializeFreshDatabaseCore 仅在显式新建时延迟加载固定核心入口，其 actual-connection hook 在 DDL 前核验。
 // 2) 组件表一律使用 bank_* 前缀，并使用自己的 bank_component_migrations 版本表；
 //    绝不写 schema_migrations / schema_backups / PRAGMA user_version，不抢 LOCAL-02 的全局版本。
 // 3) 已有库首次加入 bank_*（或组件升级）必须先做一次可验证的一致备份：
@@ -17,8 +18,9 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, openSync, closeSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, fstatSync, readSync, readFileSync, writeFileSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import * as freshGuard from "./database-open-guard.mjs";
 
 /** 本文件负责的组件 schema 版本。 */
 export const BANK_SCHEMA_VERSION = 1;
@@ -1149,7 +1151,7 @@ export function inTransaction(db, fn) {
 // ------------------------------------------------------------------ 新库创建事实
 // 进程内回执：只有「本次调用确认文件不存在并亲手创建」才发回执。
 // 回执不落盘、不跨进程，因此其他进程（含 CLI 独立调用）无法把已有库伪装成新库。
-const freshClaims = new Map();
+const freshClaims = new WeakMap();
 
 /**
  * 声明「本次初始化拥有创建事实」：仅当目标文件不存在时创建空文件并返回回执。
@@ -1163,30 +1165,124 @@ export function claimFreshDatabase({ dbPath }) {
   if (existsSync(abs)) {
     throw bankError("fresh_database_file_exists", "目标库文件已存在，不能作为新库初始化", { dbPath: abs });
   }
-  const fd = openSync(abs, "wx");
-  closeSync(fd);
-  const nonce = randomUUID();
-  freshClaims.set(abs, { nonce, claimedAt: nowIso(), sizeAtClaim: statSync(abs).size });
-  return { dbPath: abs, nonce, claimedAt: nowIso(), kind: "fresh-database-claim" };
+  // Every ancestor must be a real directory. In particular, a junction above the
+  // immediate parent must not turn an explicit fresh target into another path.
+  for (let dir = dirname(abs); ; dir = dirname(dir)) {
+    const stat = lstatSync(dir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw bankError("data_dir_alias", "新库目录不能经过别名 / junction");
+    if (dirname(dir) === dir) break;
+  }
+  let fd, markerFd, token;
+  const markerPath = join(dirname(abs), `.local-bank-create-${basename(abs)}`);
+  try {
+    fd = openSync(abs, "wx+");
+    const identity = fstatSync(fd);
+    markerFd = openSync(markerPath, "wx");
+    const nonce = freshGuard.newClaimNonce();
+    const markerContent = JSON.stringify({ kind: "local-bank-create", nonce, pid: process.pid });
+    writeFileSync(markerFd, markerContent, "utf8");
+    const markerIdentity = fstatSync(markerFd);
+    token = freshGuard.createFreshClaimFacts({
+      dataDir: dirname(abs), dbPath: abs, markerPath, fd, identity,
+      markerFd, markerIdentity, markerContent, nonce, pid: process.pid,
+    });
+    freshGuard.stampFreshClaimNonce(token);
+    const receipt = { dbPath: abs, kind: "fresh-database-claim" };
+    const seed = Buffer.alloc(4096);
+    if (readSync(fd, seed, 0, seed.length, 0) !== seed.length) throw bankError("fresh_claim_stamp_failed", "无法读回创建种子");
+    freshClaims.set(receipt, Object.freeze({
+      token, dbPath: abs, fd, markerFd, markerPath, markerContent,
+      identity: Object.freeze({ dev: identity.dev, ino: identity.ino }),
+      markerIdentity: Object.freeze({ dev: markerIdentity.dev, ino: markerIdentity.ino }),
+      seed, connections: new WeakSet(),
+    }));
+    return receipt;
+  } catch (error) {
+    if (token) freshGuard.releaseFreshClaimFacts(token, { preserveDatabase: true });
+    else {
+      // Before registration there is no complete immutable creation fact. Close
+      // only our handles and retain the objects for inspection, never guess ownership.
+      try { if (fd !== undefined) closeSync(fd); } catch { /* preserve */ }
+      try { if (markerFd !== undefined) closeSync(markerFd); } catch { /* preserve */ }
+    }
+    throw error;
+  }
 }
 
-function consumeFreshClaim(receipt, dbPath) {
-  if (!receipt || typeof receipt !== "object") return false;
-  const abs = resolve(String(dbPath ?? ""));
-  const claim = freshClaims.get(abs);
+function requireFreshClaim(receipt, dbPath) {
+  const claim = receipt && typeof receipt === "object" ? freshClaims.get(receipt) : null;
+  const descriptors = receipt && typeof receipt === "object" ? Object.getOwnPropertyDescriptors(receipt) : {};
+  if (!claim || Reflect.ownKeys(receipt).length !== 2
+      || descriptors.dbPath?.value !== claim.dbPath || descriptors.kind?.value !== "fresh-database-claim") {
+    throw bankError("fresh_receipt_invalid", "新库回执无效、被修改或不是本进程签发的对象");
+  }
+  if (resolve(String(dbPath ?? "")) !== claim.dbPath) throw bankError("fresh_claim_target_mismatch", "新库路径与创建事实不一致");
+  return claim;
+}
+
+/** Release only immutable privately registered facts, even if receipt fields changed. */
+export function releaseFreshDatabaseClaim(receipt) {
+  const claim = receipt && typeof receipt === "object" ? freshClaims.get(receipt) : null;
   if (!claim) return false;
-  if (receipt.kind !== "fresh-database-claim" || receipt.nonce !== claim.nonce) return false;
-  if (resolve(String(receipt.dbPath ?? "")) !== abs) return false;
-  freshClaims.delete(abs);
-  return true;
+  freshClaims.delete(receipt);
+  return freshGuard.releaseFreshClaimFacts(claim.token, { preserveDatabase: true }).released === true;
+}
+
+/** Explicit hand-written core initializers must call this before any DDL / WAL. */
+export function verifyFreshDatabaseConnection(receipt, db, dbPath) {
+  const claim = requireFreshClaim(receipt, dbPath);
+  freshGuard.assertFreshClaimConnection(claim.token, db);
+  const result = freshGuard.assertOpenedDatabaseClaimsMatch(db, { dataDir: dirname(claim.dbPath), dbPath: claim.dbPath });
+  claim.connections.add(db);
+  return result;
+}
+
+// Opening even a read-only SQLite connection to an old WAL-mode database can
+// create -wal/-shm. Reject changed creation objects before opening that probe;
+// this supplements, never replaces, the actual-connection pre-DDL guard.
+function assertPristineCreationFiles(claim) {
+  const sameIdentity = (stat, expected) => stat.isFile() && !stat.isSymbolicLink?.()
+    && String(stat.dev) === String(expected.dev) && String(stat.ino) === String(expected.ino);
+  const pathStat = lstatSync(claim.dbPath);
+  const fdStat = fstatSync(claim.fd);
+  if (!sameIdentity(pathStat, claim.identity) || !sameIdentity(fdStat, claim.identity)) {
+    throw bankError("fresh_database_replaced", "新库文件对象在创建后被替换");
+  }
+  const canonical = path => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+  if (canonical(realpathSync(claim.dbPath)) !== canonical(claim.dbPath)) {
+    throw bankError("fresh_database_alias", "新库路径经过别名 / junction");
+  }
+  const page = Buffer.alloc(claim.seed.length);
+  if (pathStat.size !== page.length || fdStat.size !== page.length
+      || readSync(claim.fd, page, 0, page.length, 0) !== page.length || !page.equals(claim.seed)) {
+    throw bankError("fresh_database_foreign_content", "新库创建对象在打开前已被写入其他内容");
+  }
+  if (!sameIdentity(lstatSync(claim.markerPath), claim.markerIdentity)
+      || !sameIdentity(fstatSync(claim.markerFd), claim.markerIdentity)
+      || readFileSync(claim.markerPath, "utf8") !== claim.markerContent) {
+    throw bankError("fresh_receipt_stale", "新库所有权标记对象或内容已被替换");
+  }
+}
+
+/** Fixed real core entry, never an arbitrary callback or a post-DDL trust flag. */
+export async function initializeFreshDatabaseCore(receipt) {
+  const claim = requireFreshClaim(receipt, freshClaims.get(receipt)?.dbPath);
+  assertPristineCreationFiles(claim);
+  const probe = new DatabaseSync(claim.dbPath, { readOnly: true });
+  try { verifyFreshDatabaseConnection(receipt, probe, claim.dbPath); }
+  finally { probe.close(); }
+  process.env.WORKBENCH_DATA_DIR = dirname(claim.dbPath);
+  // The imported core must execute its actual-connection pre-DDL hook. A cached
+  // module cannot bless a new path: the binding assertion below rejects it.
+  const core = await import("./db.mjs");
+  freshGuard.assertFreshClaimConnection(claim.token, core.db);
+  claim.connections.add(core.db);
+  return core;
 }
 
 /** 测试 / 诊断用：回执是否仍然有效（不消费）。 */
 export function hasFreshDatabaseClaim(receipt, dbPath) {
-  if (!receipt || typeof receipt !== "object") return false;
-  const abs = resolve(String(dbPath ?? ""));
-  const claim = freshClaims.get(abs);
-  return !!claim && receipt.kind === "fresh-database-claim" && receipt.nonce === claim.nonce;
+  try { requireFreshClaim(receipt, dbPath); return true; } catch { return false; }
 }
 
 // ------------------------------------------------------------------ schema DDL
@@ -1629,6 +1725,12 @@ export async function ensureBankSchema(db, options = {}) {
   // 回滚未确认的连接可能仍持着未提交的组件 DDL / 版本行：不能在上面继续「安装 / 已初始化」判断。
   assertConnectionUsable(db);
   const abs = resolve(String(dbPath));
+  // A supplied invalid claim must never silently fall back to existing install.
+  const freshClaim = receipt === null ? null : requireFreshClaim(receipt, abs);
+  if (freshClaim) freshGuard.assertFreshClaimConnection(freshClaim.token, db);
+  if (freshClaim && !freshClaim.connections.has(db)) {
+    throw bankError("fresh_database_not_pristine", "该实际连接未在核心 DDL 前通过新库核验");
+  }
   // 连接事实必须先绑定到 dbPath，之后的备份 / DDL 才可能是同一个库。
   assertDatabaseHandleMatchesPath(db, abs);
   const contract = bankSchemaContract(db);
@@ -1654,7 +1756,7 @@ export async function ensureBankSchema(db, options = {}) {
   }
 
   // 只用「仍然有效」的创建事实选路；安装确认提交后才消耗回执，拒绝 / 未开始的调用不烧掉回执。
-  const fresh = hasFreshDatabaseClaim(receipt, abs);
+  const fresh = freshClaim !== null;
   if (fresh) {
     // 新库：创建事实已在进程内验证，不需要也不允许伪造迁移前备份。
     try {
@@ -1663,7 +1765,7 @@ export async function ensureBankSchema(db, options = {}) {
         creation: "fresh-database",
         backup: null,
       }));
-      consumeFreshClaim(receipt, abs);
+      if (!releaseFreshDatabaseClaim(receipt)) throw bankError("fresh_receipt_stale", "新库回执释放失败");
       return result;
     } catch (e) {
       // 事务冲突 / 未开始 / 回滚未确认 / 已确认放弃：原样上抛，不能改写成一个「已回滚」的安装失败。

@@ -16,6 +16,21 @@ import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+const fixtureParent = new URL("../../.agent-runs/", import.meta.url);
+const fixtureFs = await import("node:fs");
+const fixturePath = await import("node:path");
+const fixtureBase = fixturePath.resolve((await import("node:url")).fileURLToPath(fixtureParent));
+for (let ancestor = fixturePath.dirname(fixtureBase); ; ancestor = fixturePath.dirname(ancestor)) {
+  if (fixtureFs.lstatSync(ancestor).isSymbolicLink()) throw new Error("fixture ancestor is a reparse point");
+  if (fixturePath.dirname(ancestor) === ancestor) break;
+}
+if (fixtureFs.existsSync(fixtureBase) && fixtureFs.lstatSync(fixtureBase).isSymbolicLink()) throw new Error("fixture parent is a reparse point");
+fixtureFs.mkdirSync(fixtureBase, { recursive: true });
+const fixtureRoot = fixtureFs.mkdtempSync(fixturePath.join(fixtureBase, "bank-fresh-"));
+process.env.TEMP = fixtureRoot;
+process.env.TMP = fixtureRoot;
+process.env.WORKBENCH_DATA_DIR = fixturePath.join(fixtureRoot, "fallback");
+
 const dataDir = mkdtempSync(join(tmpdir(), "wb-bank-"));
 const dbPath = join(dataDir, "workbench.db");
 process.env.WORKBENCH_DATA_DIR = dataDir;
@@ -23,7 +38,7 @@ process.env.WORKBENCH_DATA_DIR = dataDir;
 const S = await import("../server/bank-storage.mjs");
 const I = await import("../server/bank-import.mjs");
 const receipt = S.claimFreshDatabase({ dbPath });
-const { db } = await import("../server/db.mjs");
+const { db } = await S.initializeFreshDatabaseCore(receipt);
 const A = await import("../server/accounting.mjs");
 const B = await import("../server/bank-reconciliation.mjs");
 
@@ -32,6 +47,7 @@ process.on("exit", () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+const coreUserVersion = db.prepare("PRAGMA user_version").get().user_version;
 const schema = await S.ensureBankSchema(db, { dbPath, receipt });
 assert.equal(schema.migrated, true);
 
@@ -120,7 +136,7 @@ test("银行组件使用独立 bank_* 命名空间与组件版本，不改全局
   assert.equal(state.version, 1);
   assert.deepEqual(state.tables.sort(), BANK_TABLE_LIST.sort());
   const userVersion = db.prepare(`PRAGMA user_version`).get();
-  assert.equal(Number(Object.values(userVersion)[0]), 0, "不得写 PRAGMA user_version");
+  assert.equal(Number(Object.values(userVersion)[0]), coreUserVersion, "银行安装不得改写创建守卫留下的 PRAGMA user_version");
   const globalMigrations = db.prepare(`SELECT version, note FROM schema_migrations ORDER BY version`).all();
   assert.deepEqual(globalMigrations.map((m) => Number(m.version)), [1, 2, 3, 4], "不得写 LOCAL-01 的 schema_migrations");
 
@@ -1992,9 +2008,10 @@ const ioError = (stage) => {
 };
 
 /** 未安装 bank_* 的最简真实库；journal=DELETE 时可用另一连接持 SHARED 读锁制造真实 COMMIT busy。 */
-function legacyOnlyDb(dir, name, journal = null) {
+function legacyOnlyDb(dir, name, journal = null, receipt = null) {
   const file = join(dir, name);
   const conn = new DatabaseSync(file);
+  if (receipt) S.verifyFreshDatabaseConnection(receipt, conn, file);
   if (journal) conn.exec(`PRAGMA journal_mode = ${journal}`);
   createLegacySchema(conn);
   conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
@@ -2099,7 +2116,7 @@ test("新库分支：COMMIT / ROLLBACK 失败都不冒充「原库已回滚 / �
     {
       const file = join(dir, "fresh-unknown.db");
       const receipt = S.claimFreshDatabase({ dbPath: file });
-      const { conn } = legacyOnlyDb(dir, "fresh-unknown.db");
+      const { conn } = legacyOnlyDb(dir, "fresh-unknown.db", null, receipt);
       const realExec = conn.exec.bind(conn);
       conn.exec = (sql) => {
         if (/^(COMMIT|ROLLBACK)/i.test(String(sql))) throw ioError("commit-rollback");
@@ -2125,7 +2142,7 @@ test("新库分支：COMMIT / ROLLBACK 失败都不冒充「原库已回滚 / �
     {
       const file = join(dir, "fresh-confirmed.db");
       const receipt = S.claimFreshDatabase({ dbPath: file });
-      const { conn } = legacyOnlyDb(dir, "fresh-confirmed.db");
+      const { conn } = legacyOnlyDb(dir, "fresh-confirmed.db", null, receipt);
       const realExec = conn.exec.bind(conn);
       conn.exec = (sql) => {
         if (/^COMMIT/i.test(String(sql))) throw ioError("commit");
@@ -2300,6 +2317,7 @@ test("新库 + 创建回执 + 调用方外层事务：拒绝安装但不提交 /
   const file = join(dir, "workbench.db");
   const receipt = S.claimFreshDatabase({ dbPath: file });
   const conn = new DatabaseSync(file);
+  S.verifyFreshDatabaseConnection(receipt, conn, file);
   try {
     createLegacySchema(conn);
     conn.exec(`INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
@@ -2460,4 +2478,78 @@ test("导入失败审计不写进调用方事务：如实标记未留痕，调�
     try { conn.close(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
+});
+
+// Creation ownership regressions: use only this suite's exclusive fixture root.
+test("fresh 回执字段篡改、克隆和跨路径均拒绝，不退化为现库安装", async () => {
+  for (const mutation of ["path", "kind", "extra", "clone", "other-path"]) {
+    const dir = mkdtempSync(join(tmpdir(), "bank-receipt-"));
+    const file = join(dir, "workbench.db");
+    const receipt = S.claimFreshDatabase({ dbPath: file });
+    const conn = new DatabaseSync(file);
+    try {
+      S.verifyFreshDatabaseConnection(receipt, conn, file);
+      createLegacySchema(conn);
+      const before = fixtureFs.readFileSync(file);
+      let supplied = receipt, target = file;
+      if (mutation === "path") receipt.dbPath = join(dir, "else.db");
+      if (mutation === "kind") receipt.kind = "other";
+      if (mutation === "extra") receipt.extra = true;
+      if (mutation === "clone") supplied = { ...receipt };
+      if (mutation === "other-path") target = join(dir, "else.db");
+      await assert.rejects(S.ensureBankSchema(conn, { dbPath: target, receipt: supplied }),
+        e => e.code === (mutation === "other-path" ? "fresh_claim_target_mismatch" : "fresh_receipt_invalid"));
+      assert.deepEqual(fixtureFs.readFileSync(file), before);
+      assert.deepEqual(bankTableNames(conn), []);
+      assert.equal(existsSync(file + "-wal"), false);
+      assert.equal(existsSync(join(dir, "bank-backups")), false);
+    } finally { conn.close(); S.releaseFreshDatabaseClaim(receipt); }
+  }
+});
+
+test("fresh 同 inode 原地填充旧业务内容、相同内容替代 marker 均拒绝并保留外部对象", async () => {
+  for (const mode of ["same-inode", "same-marker", "unwitnessed-connection"]) {
+    const dir = mkdtempSync(join(tmpdir(), "bank-identity-"));
+    const file = join(dir, "workbench.db");
+    const receipt = S.claimFreshDatabase({ dbPath: file });
+    let conn = new DatabaseSync(file);
+    try {
+      if (mode !== "unwitnessed-connection") S.verifyFreshDatabaseConnection(receipt, conn, file);
+      if (mode === "same-inode") {
+        conn.close();
+        const donor = legacyOnlyDb(dir, "donor.db"); donor.conn.close();
+        fixtureFs.writeFileSync(file, fixtureFs.readFileSync(donor.file));
+        conn = new DatabaseSync(file);
+      } else {
+        createLegacySchema(conn);
+        if (mode === "same-marker") {
+          const marker = join(dir, ".local-bank-create-workbench.db");
+          fixtureFs.renameSync(marker, marker + ".owned");
+          fixtureFs.copyFileSync(marker + ".owned", marker);
+        }
+      }
+      const before = fixtureFs.readFileSync(file);
+      await assert.rejects(S.ensureBankSchema(conn, { dbPath: file, receipt }), e =>
+        e.code === ({ "same-inode": "fresh_database_foreign_content", "same-marker": "fresh_receipt_stale",
+          "unwitnessed-connection": "fresh_database_not_pristine" })[mode]);
+      assert.deepEqual(fixtureFs.readFileSync(file), before);
+      assert.deepEqual(bankTableNames(conn), []);
+      assert.equal(existsSync(file + "-wal"), false);
+      assert.equal(existsSync(file + "-shm"), false);
+      conn.close();
+      S.releaseFreshDatabaseClaim(receipt);
+      assert.deepEqual(fixtureFs.readFileSync(file), before);
+      if (mode === "same-marker") assert.ok(existsSync(join(dir, ".local-bank-create-workbench.db")));
+    } finally { try { conn.close(); } catch {} S.releaseFreshDatabaseClaim(receipt); }
+  }
+});
+
+
+test("fresh 目录 ancestor junction / alias 不产生库或所有权标记", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bank-alias-"));
+  const target = join(dir, "target"), alias = join(dir, "alias");
+  fixtureFs.mkdirSync(target);
+  fixtureFs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => S.claimFreshDatabase({ dbPath: join(alias, "workbench.db") }), e => e.code === "data_dir_alias");
+  assert.deepEqual(fixtureFs.readdirSync(target), []);
 });

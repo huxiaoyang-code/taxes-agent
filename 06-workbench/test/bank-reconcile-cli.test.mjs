@@ -15,10 +15,25 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
+const fixtureParent = new URL("../../.agent-runs/", import.meta.url);
+const fixtureFs = await import("node:fs");
+const fixturePath = await import("node:path");
+const fixtureBase = fixturePath.resolve((await import("node:url")).fileURLToPath(fixtureParent));
+for (let ancestor = fixturePath.dirname(fixtureBase); ; ancestor = fixturePath.dirname(ancestor)) {
+  if (fixtureFs.lstatSync(ancestor).isSymbolicLink()) throw new Error("fixture ancestor is a reparse point");
+  if (fixturePath.dirname(ancestor) === ancestor) break;
+}
+if (fixtureFs.existsSync(fixtureBase) && fixtureFs.lstatSync(fixtureBase).isSymbolicLink()) throw new Error("fixture parent is a reparse point");
+fixtureFs.mkdirSync(fixtureBase, { recursive: true });
+const fixtureRoot = fixtureFs.mkdtempSync(fixturePath.join(fixtureBase, "bank-fresh-"));
+process.env.TEMP = fixtureRoot;
+process.env.TMP = fixtureRoot;
+process.env.WORKBENCH_DATA_DIR = fixturePath.join(fixtureRoot, "fallback");
+
 const CLI = join(WORKBENCH, "scripts", "bank-reconcile.mjs");
 const baseDir = mkdtempSync(join(tmpdir(), "wb-bank-cli-"));
 const dbPath = join(baseDir, "workbench.db");
@@ -30,7 +45,7 @@ process.on("exit", () => {
 
 function run(args, { env = {} } = {}) {
   const clean = { ...process.env };
-  delete clean.WORKBENCH_DATA_DIR;
+  clean.WORKBENCH_DATA_DIR = join(fixtureRoot, "fallback");
   const result = spawnSync(process.execPath, [CLI, ...args], {
     cwd: WORKBENCH, env: { ...clean, ...env }, encoding: "utf8", timeout: 120000,
   });
@@ -66,6 +81,7 @@ const money = (text) => text;
 
 // ------------------------------------------------------------------ 新库创建 + 合成账务
 let db;
+let bankCoreUserVersion;
 let A;
 let setA;
 let setB;
@@ -87,6 +103,7 @@ test("init-db：在不存在路径上通过真实创建入口建库并初始化 
   // 用真实会计 API 在同一库建两个企业账套、期初、posted / 草稿凭证。
   process.env.WORKBENCH_DATA_DIR = baseDir;
   ({ db } = await import("../server/db.mjs"));
+  bankCoreUserVersion = db.prepare("PRAGMA user_version").get().user_version;
   A = await import("../server/accounting.mjs");
 
   setA = A.createAccountSet({ name: "合成甲公司", start_period: "2026-01" });
@@ -440,7 +457,7 @@ test("CLI 每一步都真实持久化：重新打开库能看到批次、流水�
     const globalVersion = Number(probe.prepare(`SELECT MAX(version) AS v FROM schema_migrations`).get().v);
     assert.equal(globalVersion, 4, "银行组件不得改动全局迁移版本");
     const userVersion = Number(Object.values(probe.prepare(`PRAGMA user_version`).get())[0]);
-    assert.equal(userVersion, 0);
+    assert.equal(userVersion, bankCoreUserVersion, "后续银行命令不得改写创建nonce");
     assert.equal(readFileSync(dbPath).length > 0, true);
   } finally { probe.close(); }
 });
@@ -589,5 +606,99 @@ test("CLI 索引键语义漂移：COLLATE NOCASE / DESC / 表达式在任何命�
     }
     assert.deepEqual(snapshot(path), before, `${label}: 拒绝时不得写入 / 补建任何 bank_* 表`);
     rmSync(path, { force: true });
+  }
+});
+
+
+test("真实 init-db 在 core3/4 旧业务替换与同 inode 填充后于核心 DDL/WAL/迁移前拒绝", () => {
+  for (const version of [3, 4]) {
+    const donorDir = fixtureFs.mkdtempSync(join(fixtureRoot, `donor-v${version}-`));
+    const donorPath = join(donorDir, "workbench.db");
+    const setup = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      const {db}=await import(${JSON.stringify(new URL("../server/db.mjs", import.meta.url).href)});
+      const A=await import(${JSON.stringify(new URL("../server/accounting.mjs", import.meta.url).href)});
+      const set=A.createAccountSet({name:"fresh guard 合成业务",start_period:"2026-01"});
+      A.createVoucher(set.id,{period:"2026-01",voucher_date:"2026-01-01",status:"posted",
+        entries:[{code:"1002",debit:10,credit:0},{code:"3001",debit:0,credit:10}]});
+      db.close();
+    `], { cwd: WORKBENCH, env: { ...process.env, WORKBENCH_DATA_DIR: donorDir }, encoding: "utf8" });
+    assert.equal(setup.status, 0, setup.stderr);
+    if (version === 3) {
+      const donor = new DatabaseSync(donorPath);
+      donor.exec("PRAGMA foreign_keys=OFF");
+      for (const col of ["acquired_period", "opening_accumulated", "ledger_status", "ledger_note", "origin"])
+        donor.exec(`ALTER TABLE asset_cards DROP COLUMN ${col}`);
+      donor.exec("DELETE FROM schema_migrations WHERE version=4; UPDATE schema_backups SET version=3 WHERE version=4");
+      donor.close();
+    }
+    const before = readFileSync(donorPath);
+    for (const mode of ["replace", "same-inode"]) {
+      const dir = fixtureFs.mkdtempSync(join(fixtureRoot, `attack-v${version}-${mode}-`));
+      const target = join(dir, "workbench.db");
+      const hook = join(dir, "fault-hook.mjs");
+      const injection = mode === "replace"
+        ? `bankFaultFs.renameSync(abs, abs + ".owned"); bankFaultFs.copyFileSync(${JSON.stringify(donorPath)}, abs);`
+        : `bankFaultFs.writeFileSync(abs, bankFaultFs.readFileSync(${JSON.stringify(donorPath)}));`;
+      writeFileSync(hook, `
+        import {registerHooks} from "node:module";
+        registerHooks({load(url,context,nextLoad){
+          const result=nextLoad(url,context);
+          if(url.endsWith("/server/bank-storage.mjs")){
+            const source=String(result.source);
+            if(!source.includes("    return receipt;")) throw new Error("fault hook did not match");
+            return {...result, source:'import * as bankFaultFs from "node:fs";\\n'+
+              source.replace("    return receipt;",${JSON.stringify(injection)}+"    return receipt;")};
+          }
+          return result;
+        }});
+      `);
+      const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, CLI, "init-db", "--db", target], {
+        cwd: WORKBENCH, env: { ...process.env, NODE_NO_WARNINGS: "1" }, encoding: "utf8", timeout: 120000,
+      });
+      assert.equal(result.status, 3, result.stderr);
+      assert.equal(JSON.parse(result.stderr).error.code,
+        mode === "replace" ? "fresh_database_replaced" : "fresh_database_foreign_content");
+      assert.deepEqual(readFileSync(target), before, `v${version} ${mode}: old business bytes unchanged`);
+      assert.equal(existsSync(target + "-wal"), false);
+      assert.equal(existsSync(target + "-shm"), false);
+      assert.deepEqual(fixtureFs.readdirSync(dir).sort(),
+        ["fault-hook.mjs", "workbench.db", ...(mode === "replace" ? ["workbench.db.owned"] : [])].sort(),
+        "no migration or bank backup directory is created");
+      const check = new DatabaseSync(target, { readOnly: true });
+      try {
+        assert.equal(check.prepare("SELECT COUNT(*) n FROM vouchers").get().n, 1);
+        assert.equal(check.prepare("SELECT MAX(version) v FROM schema_migrations").get().v, version);
+        assert.equal(check.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name LIKE 'bank_%'").get().n, 0);
+      } finally { check.close(); }
+    }
+  }
+});
+
+test("真实 init-db 对 marker 同字节新对象、open/fstat 故障拒绝并关闭自己的创建句柄", () => {
+  for (const mode of ["marker-replace", "open-failure", "fstat-failure"]) {
+    const dir = fixtureFs.mkdtempSync(join(fixtureRoot, `fault-${mode}-`));
+    const target = join(dir, "workbench.db"), hook = join(dir, "hook.mjs");
+    const search = mode === "marker-replace" ? "    return receipt;"
+      : mode === "open-failure" ? 'fd = openSync(abs, "wx+");' : "const identity = fstatSync(fd);";
+    const replacement = mode === "marker-replace"
+      ? 'bankFaultFs.renameSync(markerPath, markerPath+".owned"); bankFaultFs.copyFileSync(markerPath+".owned", markerPath); return receipt;'
+      : 'throw Object.assign(new Error("injected create fault"), {code:"EIO"});';
+    writeFileSync(hook, `import {registerHooks} from "node:module";
+      registerHooks({load(url,ctx,next){const r=next(url,ctx);
+        if(!url.endsWith("/server/bank-storage.mjs"))return r;
+        const s=String(r.source);if(!s.includes(${JSON.stringify(search)}))throw new Error("hook mismatch");
+        return {...r,source:'import * as bankFaultFs from "node:fs";\\n'+s.replace(${JSON.stringify(search)},${JSON.stringify(replacement)})};}});`);
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, CLI, "init-db", "--db", target], {
+      cwd: WORKBENCH, env: { ...process.env, NODE_NO_WARNINGS: "1" }, encoding: "utf8", timeout: 120000,
+    });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.equal(existsSync(target + "-wal"), false);
+    assert.equal(existsSync(target + "-shm"), false);
+    if (mode === "marker-replace") {
+      assert.equal(JSON.parse(r.stderr).error.code, "fresh_receipt_stale");
+      assert.ok(existsSync(join(dir, ".local-bank-create-workbench.db")), "replacement marker must survive cleanup");
+    } else if (mode === "fstat-failure") {
+      assert.equal(fixtureFs.statSync(target).size, 0, "unproven file retained on failed fstat");
+    } else assert.equal(existsSync(target), false);
   }
 });

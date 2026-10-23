@@ -392,3 +392,32 @@ node test/local-bank-backup-integration.test.mjs         # 5 / 5（断言更新�
 - 无 UI / 共享模型入口 / HTTP / Agent / MCP 接线；`scripts/test-all.mjs` 四个银行套件登记由 root 后续独立短窗完成。
 - LOCAL-03 双准则 / 辅助维度 / 往来合同未在本窗验收；不声称 LOCAL-04 整体或 03 科目往来已完成。
 - 不宣称已提交 / 已建 PR / 已合 / 最终通过；待 root 冻结、独立复审与 Git 收尾。
+
+
+## 2026-10-23 fresh P1 回修自测交付候选（未合并）
+
+实施身份为 huxiaoyang-code 的本轮用户授权兜底实现会话；基线 `7ca2e319610086f25769fe744256841b21b56c2b`。按 Issue #53 的 8→9 路径窗口，仅修改银行 storage / CLI、三套银行测试、银行三文档与 `database-open-guard.mjs` 的保留数据库 release 窄选项；没有 Git 写操作，没有使用 pi / Claude / 其他模型或子 agent。
+
+修复事实：O_EXCL 保留读写创建 fd，私有不可变创建身份 / marker 身份 / seed 字节与回执对象绑定；打开 SQLite 前检查实际路径对象及创建 fd，真实核心入口仍由通用 actual-connection hook 在任何核心 DDL / WAL / migration 前核验。手工核心夹具在真实连接上先调用 preDDL 核验再建 schema；ensure 拒绝未见证连接。篡改回执与克隆不转入现库安装；安装确认提交后消费，调用方 BEGIN 拒绝保留回执，异常由显式 release 收尾。银行 release 始终 preserveDatabase，保留库文件、不用只读 SQLite 反查是否可删；默认07 release不变。
+
+真实 init-db core3/4 有业务库的替换 / 同 inode 填充矩阵拒绝后，旧业务字节、凭证行、迁移版本不变，WAL / SHM / 核心迁移或银行备份目录不新增。相同内容的新 marker 对象保留；回执字段 / 克隆 / 不同路径 / junction 拒绝；测试 loader 的 open / fstat 单点故障保留现场、关闭自有句柄。没有生产故障绕过开关。旧 core3 P1 的真实证据有核心 pre-v4 备份，不能误写为完全无备份。
+
+工作目录 `06-workbench`，最终命令与实际退出码：
+
+| 命令 | 实际结果 | exit |
+| --- | --- | --- |
+| `node test/bank-import.test.mjs` | 16/16 | 0 |
+| `node test/bank-reconciliation.test.mjs` | 43/43 | 0 |
+| `node test/bank-reconcile-cli.test.mjs` | 14/14 | 0 |
+| `node test/local-bank-backup-integration.test.mjs` | 5/5 | 0 |
+| `node test/local-backup.test.mjs` | 22/22 | 0 |
+| `node test/local-batch-persistence.test.mjs` | 39/39 | 0 |
+| `node test/local-batch-cli.test.mjs` | 11/11 | 0 |
+
+合计定向 150/150；没有跑全量总入口。银行旧 rollback-confirmed / unknown / caller BEGIN / 严格索引断言保留；user_version 的旧“等于0”改为“等于安装前创建守卫已写的nonce”，保留银行组件不改全局版本的语义。
+
+失败如实保留：初轮领域 39/40（原0值断言与新种子nonce冲突）；新增CLI hook初轮两次有 Windows --import 路径及hook换行构造错误，随后修正；CLI第三/五轮真实负测暴露 readonly probe与release探测生成 WAL sidecar；第四轮 seed读回遇到只写fd，改为真实O_EXCL的 `wx+`。没有删弱旧断言。银行junction首轮42/43、默认07 persistence首轮38/39、backup首轮21/22均为沙箱拒绝链接构造，获自动批准的 require_escalated 合成fixture命令后完整套件通过，没有skip。07CLI首轮10/11为未设置 REPORT_OFFICE_PYTHON，设置已验证的内置Python后11/11；环境红日志没有覆盖删除。
+
+所有 fixture 为新建唯一 workspace 专属根，TEMP / TMP / fallback WORKBENCH_DATA_DIR 先设在该根；祖先 reparse 校验，清理只针对当次明确自有目录。PDF回归使用已验证Python，仅合成产物。未触税局、真实账套、全局TEMP、旧fixture、共享配置；只持有本会话子进程句柄。具体日志与 SHA256 记录在 root `.agent-runs/local04-fresh-fallback-delivery.md`。
+
+本条只交付待审核候选，不声明已提交 / 已合并 / LOCAL-04整体完成。下一步由 root 阅读 diff、独立 fresh reviewer 验收新 guard 增量和银行调用方、运行最终影响验证、执行 Git / PR；共享 test-all 银行四套登记与最终出版另开新会话。

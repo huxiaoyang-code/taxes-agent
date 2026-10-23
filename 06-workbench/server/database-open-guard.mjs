@@ -524,8 +524,10 @@ function isPristineClaimDatabase(facts) {
  * 只删除「文件对象仍是创建时 dev/ino 且内容仍是本进程写下的那份」的自己的标记，以及
  * 「身份仍是创建时 dev/ino 且仍只有页 1 种子」的自己创建的库文件；被替换（含同 nonce 的新对象）/ 已有核心表 /
  * 外部零字节文件一律保留现场。重复 release 是无副作用的 no-op。
+ * preserveDatabase=true 完全跳过库文件的 SQLite 探测和删除；用于必须保留现场且不能让
+ * 只读 SQLite 探测为被原地改写的旧 WAL 库创建 sidecar 的调用方。默认清理行为保持不变。
  */
-export function releaseFreshClaimFacts(token) {
+export function releaseFreshClaimFacts(token, { preserveDatabase = false } = {}) {
   const facts = token && typeof token === "object" ? CLAIM_FACTS.get(token) : null;
   if (!facts) return { released: false, markerRemoved: false, databaseRemoved: false };
   CLAIM_FACTS.delete(token);
@@ -542,7 +544,7 @@ export function releaseFreshClaimFacts(token) {
   } catch { /* 标记已被替换 / 删除 / 内容被改写：不碰他人对象 */ }
   try { closeSync(facts.markerFd); } catch { /* 句柄已关闭不影响结论 */ }
   let databaseRemoved = false;
-  try {
+  if (!preserveDatabase) try {
     const stat = lstatSync(facts.dbPath);
     if (!stat.isSymbolicLink() && stat.isFile() && sameIdentity(identityOf(stat), facts.identity)
         && samePath(realpathSync(facts.dbPath), facts.dbPath) && isPristineClaimDatabase(facts)) {

@@ -400,9 +400,11 @@ node scripts/bank-reconcile.mjs <command> --db <库文件> [选项] [--format js
   - 未提供备份服务 → `migration_backup_unavailable`，原库结构 / 数据 / 版本都不动；
   - 备份生成失败 → `migration_backup_failed`；备份校验不通过 → `migration_backup_invalid`；
   - 只有备份校验返回 ok 之后，才在同一事务里建立组件表、记录备份证据与组件版本；DDL 失败整体回滚。
-- 新库：`claimFreshDatabase({ dbPath })` 只在目标文件**不存在**时创建空文件并返回**进程内**创建回执；
-  `ensureBankSchema` 只在回执匹配时允许免备份初始化。回执不落盘、不跨进程，因此 CLI 独立调用
-  **无法**把已有库伪装成新库，也没有 `--force` 之类的旁路布尔参数。
+- 新库：`claimFreshDatabase({ dbPath })` 以 `O_EXCL` 新建并保留创建 fd，通过通用守卫写入并核验 SQLite 空库种子；
+  回执绑定私有不可变事实，不接受字段篡改 / 克隆 / 路径替换。真实核心入口必须经 `initializeFreshDatabaseCore(receipt)`，
+  手工核心初始化须先在实际连接调用 `verifyFreshDatabaseConnection(receipt, db, dbPath)`（在任何 DDL / WAL 前）；
+  `ensureBankSchema` 只接受已见证的实际连接，成功提交后消费回执。失败调用者用 `releaseFreshDatabaseClaim` 关闭自有句柄并保留库现场。
+  创建守卫的页 1 nonce 会留在 `user_version`，nonce 不是秘密；银行组件安装不改写该值，也没有 `--force` 旁路参数。
 - **结构 / 版本契约统一拒绝（同一门槛覆盖 CLI 与领域写入口）**：`ensureBankSchema` / CLI `ensureBankReady` /
   领域 `resolveBankScope` / `registerBankAccount` 都调用同一套 `bankSchemaContract(db)` + `assertBankSchemaReady(db)`：
   - 版本比本程序新（如 v1 库里有一条 `version=2`）→ `bank_schema_future_version`；
@@ -661,3 +663,16 @@ LOCAL-03 双准则 / 辅助维度 / 往来合同未在本窗验收，不声称 L
     保存点时银行一律 `bank_transaction_conflict` 拒绝（本次未开始），且**不提供**「在调用方事务里嵌套安装 / 写银行数据」
     的支持：需调用方先提交或回滚自己的事务再重试。CLI 是单次进程，失败后直接丢弃该连接（进程退出），不把未知态当成成功；
     CLI 无法从子进程制造调用方事务，故本条只有错误码到 exit 5 的映射，无对应子进程用例（不伪造）。
+
+
+## 2026-10-23 fresh P1 回修候选（未合并）
+
+本轮以 `7ca2e319610086f25769fe744256841b21b56c2b` 为实施基线，Issue #53 窗口从银行 8 路径扩到 9 路径，仅额外允许通用守卫的 release 选项。没有修改核心 `db.mjs`、备份实现或共享登记文档。
+
+创建时固定实际 fd / 文件身份 / marker 身份与内容，打开 SQLite 前先比对私有创建种子和当前路径对象；随后仍由真实核心连接的通用 preDDL hook 核验，避免先做核心 DDL / WAL / 迁移再拒绝。回执字段修改、克隆、不同路径、目录 junction、替换旧 core3/4 业务库、同 inode 原地填入旧库、相同字节的新 marker 对象均拒绝。现库正常安装继续要求 backup + verify + 精确 schema + 事务结果门槛。
+
+真实 CLI 负测额外发现：只读 SQLite 打开旧 WAL 库仍可能生成 `-wal` / `-shm`。因此银行 release 使用通用 `releaseFreshClaimFacts(token, { preserveDatabase: true })`，注销私有登记、关闭自有句柄并按创建身份处理 marker，完全跳过数据库探测和删库。默认 release 清理行为保持不变。新库失败后会保留未完成目标供人工核对，重试 `init-db` 不会覆盖它。
+
+旧 P1 的 core3 替换案例在银行守卫之前已触发核心 v4 迁移，**确有核心 pre-v4 备份**；问题是银行绕过自己的安装前备份，不能表述为「从无任何备份」。本轮负测确认 core3/4 业务字节、凭证行、版本行不变，不新增 WAL / SHM / 迁移或银行备份目录。故障注入只在测试生成的 ESM loader 内，没有生产绕过开关。
+
+全部合成 fixture 由本轮新建的专属 workspace 根承载，TEMP / TMP / fallback DATA 先指向该根，创建前核验祖先不是 reparse point；未访问真实账套或税局。回滚确认 / 未知态、调用方 BEGIN 与严格索引验收仍保留。测试结果与环境失败详见本任务和交接的本轮条目；本候选待管理者独审、冻结与 Git 收尾，不代表 LOCAL-04 整体完成。
