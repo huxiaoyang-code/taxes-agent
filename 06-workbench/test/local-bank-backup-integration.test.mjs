@@ -1150,5 +1150,5 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;
-  try { fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
 }

@@ -1505,7 +1505,7 @@ const COMPONENT_DDL = [
  *  - verify 返回的清单要绑定同一个源文件名与当前核心 schema 版本，且迁移前不得已含组件。
  * 备份实现可以是同步或返回 Promise。
  */
-async function runBackupGate({ backupService, dbPath, outDir, version, expectedSchemaVersion }) {
+async function runBackupGate({ db, backupService, dbPath, outDir, version, expectedSchemaVersion }) {
   if (!backupService || typeof backupService.createBackup !== "function" || typeof backupService.verifyBackup !== "function") {
     throw bankError("migration_backup_unavailable", "已有库加入 / 升级 bank_* 之前必须先完成可验证的一致备份；" +
       "当前未提供已审查的 LOCAL-06 备份实现（createBackup / verifyBackup）。", { version });
@@ -1573,8 +1573,11 @@ async function runBackupGate({ backupService, dbPath, outDir, version, expectedS
       detail: { reason: "source_schema", expected: expectedSchemaVersion },
     });
   }
-  if (Array.isArray(manifest.components) && manifest.components.length) {
-    throw bankError("migration_backup_invalid", "迁移前备份已包含组件表，与本次「未安装」状态不符", {
+  const components = manifest.components ?? [];
+  if (!Array.isArray(components) || (components.length !== 0 && !(components.length === 1
+      && components[0]?.name === "auxiliary" && components[0]?.version === 1
+      && expectedSchemaVersion === 5))) {
+    throw bankError("migration_backup_invalid", "迁移前备份组件集合不受支持或已包含银行组件，与本次安装状态不符", {
       detail: { reason: "component_present" },
     });
   }
@@ -1587,6 +1590,23 @@ async function runBackupGate({ backupService, dbPath, outDir, version, expectedS
         detail: { reason: "created_manifest_binding" },
       });
     }
+  }
+  // Always use the fixed official verifier and connection validator. Injected service
+  // responses alone cannot establish a backup or impersonate source-content checks.
+  try {
+    const official = await import("./local-backup.mjs");
+    const checked = official.verifyBackup({ backupDir });
+    if (!checked.ok || checked.status !== "ok"
+        || JSON.stringify(checked.manifest) !== JSON.stringify(manifest)
+        || (created.manifest && JSON.stringify(created.manifest) !== JSON.stringify(manifest))) {
+      throw new Error("official_backup_binding");
+    }
+    official.assertSupportedDatabaseConnection(db);
+    official.assertBackupSourceConnection(db, checked.manifest);
+  } catch {
+    throw bankError("migration_backup_invalid", "官方备份核验或持锁源库内容绑定未通过，原库未改动", {
+      detail: { reason: "source_content_binding" },
+    });
   }
   return {
     backupDir,
@@ -1822,6 +1842,7 @@ export async function ensureBankSchema(db, options = {}) {
     }
     assertBaseSchema(db);
     backup = await runBackupGate({
+      db,
       backupService,
       dbPath: abs,
       outDir,

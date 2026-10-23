@@ -1,3 +1,11 @@
+# LOCAL05 实际合并交接（2026-10-23）
+
+[PR72](https://github.com/huxiaoyang-code/youshu-fork/pull/72) 于2026-10-23T12:18:01Z实际MERGED；已审head `80246e3fc9fd1e5a53bb19e01bafa1252c3f1dbb`，merge `1621a58620738b3adcc4345425de8df41136da30`。Issue45于12:18:03Z实际CLOSED。以下候选/待审叙述保留各自历史时点，不覆盖本条。
+
+root独立四正式领域42/CSV26/Office28/HTTP9全部exit0、实际child close、16路径hash相同；另两profile不同金额的8组跨年/生命周期/部分结算/YTD/只读快照，以及1000明细900000000010和极界CSV四格.90独立通过，DB均关闭。root已目视跨年企业现金流与极界明细PDF可读。全新上下文且未参与实施的审查者接受完整802 head，无确认P1/P2；另26组不同金额的真实三格式/未知/精度/越界全部exit0、DBclose、hash同，独立极界.80准确。
+
+历史完整入口82/83的唯一batchCLI环境父目录补齐后，同版该套11/11；最后CSV最小格式修复只重跑三个受影响门，**未最终重跑完整83**。原01/02/03/05/08准确5/8完成；04/06/07、最终整链与Windows W2仍未完。真实税局接入0；UI file input未知。05实施会话已交付停止，04A使用新实施会话。
+
 # 最终候选冻结（2026-10-23，未独立验收/PR/合并）
 
 最终CSV极界修正后 26/26、Office 28/28、HTTP 9/9全部exit0/close、timeout=false；7源码/测试在本轮前后hash相同。领域42/42及其语法证据沿用上一冻结版本，其accounting、rules与领域测试3文件hash和最终相同。CSV使用已审formatCents(storedCents(value))，保持两位小数/列/引号结构及report_data_invalid错误合同；100现金+100资本合法单笔（每侧首项900719925474.99、另99项900719925474.09）真实期初及汇总为90071992547409.90，CSV/XLSX/PDF分别对独立常量通过，避免Number.toFixed误成.91。没有改公共money/core或Office生产。

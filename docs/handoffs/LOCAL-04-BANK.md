@@ -1,3 +1,36 @@
+# LOCAL04A 银行与辅助组件整合候选（2026-10-23）
+
+负责人huxiaoyang-code，基线为PR72实际merge `1621a58620738b3adcc4345425de8df41136da30`，分支 `codex/huxiaoyang-code/local-04a-bank-aux`；[Issue53精确17路径认领](https://github.com/huxiaoyang-code/youshu-fork/issues/53#issuecomment-6364708982)内实际改15路径，两份旧auxiliary整合测试只跑未改。沿章程用户唯一兜底实施授权；本实施者未调用其它agent/模型、未Git、未自审。PR72真实结果已补[LOCAL05交接](LOCAL-05-CASHFLOW.md)。本A只自测完成，待root独立验收、全新未实施者审查及PR；Issue53保持开放，LOCAL04整体尚未完成。下方旧候选状态按原时点保留。
+
+## 本片结果与B复用字段
+
+银行安装门仍在实际dbPath对应连接的BEGIN IMMEDIATE内按backup→verify→DDL执行，空components支持core3/4/5；非空只接受core5与唯一auxiliary@1。注入的create/verify仍须满足原强返回合同；随后固定调用官方local-backup.verifyBackup，对实际快照摘要/结构/清单/组件重新验证，清单与create/verify返回必须同一份，再用官方assertSupportedDatabaseConnection和assertBackupSourceConnection核持锁源连接registry、content与components。注入服务提供的同名assert、弱true或伪ok不能绕门；错误固定为migration_backup_invalid，未知组件/未来版本/损坏与已含bank的未安装矛盾均拒。没有扩共享backup API，也没有sourceConnection参数。
+
+候选candidates[]与匹配match/matches[]新增`partyAllocation`，按真实accountSetId+entryId消费已审entryPartyAllocation；已安装时`installed:true`并完整保留status(unknown/ambiguous/confirmed)、partyId、partyActive、inactivePartyIds、allocations、unassigned、accountSetId、entryId。未安装固定`{installed:false,status:'not_installed',accountSetId,entryId}`，不自动安装；已装但原分录已删除固定`{installed:true,status:'entry_unavailable',accountSetId,entryId}`，保留原match snapshot与失效原因。已有aux结构/版本未知或损坏给aux_structure_invalid，不catch成未安装。
+
+这些字段仅展示当前账务辅助分配。confirmed且partyActive=false仍如实展示，不能称银行对方已核实；同名不同ID、其它账套不能冒领。分配/改名/停用不进入候选筛选、人工确认依据、银行snapshot版本或失效机制，不自动写或绑定；原反过账等账务变更仍refresh失效一次。CLI JSON直接携带同一DTO，REST/raw Agent、页面和MCP/模型接线留给B，不声称已实现。
+
+## 实际自测与边界
+
+统一冻结六套命令cwd均为`06-workbench`，执行`node test/<下表文件>.mjs`；六入口均exit0、signal=null、自有直接child实际close，9份源/测试/登记before-after SHA256全部相同。所有业务import前设置专属UUID根TEMP/TMP/WORKBENCH_DATA_DIR与两个KEEP开关并传child，祖先逐层realpath/lstat核无alias/reparse，只用合成数据；DB均finally/退出关闭、自有CLI及两场景child等待实际close。未启动服务或税局浏览器，未操作真实库/凭据，未全局扫描清理TEMP。
+
+| 正式套 | 实际结果 |
+|---|---|
+| bank-reconciliation.test | 43/43；原1400、1分差、COMMIT busy、回滚未知态、caller BEGIN、fresh文件保护断言保持 |
+| bank-reconcile-cli.test | 15/15 |
+| local-bank-backup-integration.test | 5/5；实际core3/4/5 × bank0/1、WAL与恢复/索引故障保持 |
+| auxiliary-bank-integration.test | 两profile原1130与scope/辅助分配全过 |
+| auxiliary-backup-integration.test | bank0/1两模式、WAL、真实restore/续写及9种schema篡改和坏snapshot全过 |
+| local-bank-aux-integration.test | aux→bank与bank→aux两序；每序small/enterprise及持久历史legacy各真实CLI流程；12严格安装负例全过 |
+
+新增整合套每个profile通过真实核心posted+银行CLI登记/文件导入/候选/显式确认/取消/对账，独立常量为起1000、共收200付100、企收银未50/企付银未30/银收企未20/银付企未10：账1120、单1110、两侧调整1130、差0。联合backup→verify→restore-new后两正式profile及legacy再次真实CLI得到1130，随后各续导入0.01，查真实bank_transactions三行1分及FK通过。安装第二组件前的官方备份恢复回原组件集合并真实续写；重复安装幂等。legacy是历史持久profile夹具，不作为可新建用户profile。
+
+新套同时核unknown→ambiguous→confirmed→inactive/改名，候选和匹配实际DTO同scope/真实entryId、同名不同ID与跨套负例、读前后全表不变、snapshot不变与无辅助变更失效；反过账只失效一次。未安装aux仍能返回候选且不建aux对象；未知/未来aux视图明确拒绝，DB不变。安装负例为同basename同schema异content、未知源组件、未来aux、缺trigger、清单漏/重/未知/未来组件、陈旧content、假hash、verify失败、同源陈旧但官方仍有效备份；全部原库字节/业务/DDL不变且无活动事务。旧正式测试已有的DDL回滚/未知态等不机械重复。
+
+旧领域shape-only mock已升级为从官方真实core备份复制出的完整fixture，包装realBackupService仍做原故障注入；没有删改旧金额、不变量或故障目的。首轮领域42/43唯一失败是Windows symlink/junction EPERM，原失败日志保留；原命令获批真实重跑43/43，不skip。其余首四旧套及新整合先后均exit0；最后统一六套再次全部exit0/hash同。没有运行完整84入口；test-all仅保留原83逐字原序并末尾追加新整合套为静态84，待B真实接线后最终整入口验收。
+
+本机忽略证据：根`.agent-runs/local04a-self-e22c0a7c-9ad7-420f-965e-b2b068ce27a5/`内run/results、六log、before/after；失败历史与最终实际路径SHA256/bytes/LF无BOM、语法检查、child关闭见根`.agent-runs/local04a-delivery-20261023.md`和`local04a-final-files.json`。没有预猜A的PR/head/merge或提前关闭Issue53。原01/02/03/05/08=5/8，04/06/07、最终整链/Windows W2仍未完，税局0、UI file input未知。
+
 > **2026-10-23 最终出版候选补记（优先于下方历史阶段）**：银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。
 >
 > 创建保护：O_EXCL保留创建fd、私有不可变receipt / marker身份与seed，SQLite打开前文件对象预检；真实连接hook在核心DDL / WAL / migration前见证，银行安装拒绝未见证连接。已有库仍须备份并验证；调用方BEGIN拒绝保留回执，确认提交后消费，银行release使用 `preserveDatabase` 保留库文件。通用guard仅复用已审Windows / Node24边界，不承诺绝对抗恶意同进程 / 物理伪造或Linux保护。旧core3 P1替换场景确有核心pre-v4备份；旧95/60绿测不覆盖后来fresh P1，原红与环境失败按下文原文保留。源码9路径冻结，本轮只登记与文档、未重跑财务套件、未自审、无Git写。

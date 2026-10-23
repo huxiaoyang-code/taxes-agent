@@ -40,7 +40,7 @@ const dbPath = join(baseDir, "workbench.db");
 
 process.on("exit", () => {
   try { if (db) db.close(); } catch { /* ignore */ }
-  try { rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
 });
 
 function run(args, { env = {} } = {}) {
@@ -427,7 +427,7 @@ test("CLI 错误路径：显式 --db、无默认库、业务冲突退出码、�
       assert.equal(Number(bankTables), 0, "备份门槛未过时不得创建任何 bank_* 表");
     } finally { probe.close(); }
   } finally {
-    rmSync(legacyDir, { recursive: true, force: true });
+    if (!process.env.KEEP_FIXTURES) rmSync(legacyDir, { recursive: true, force: true });
   }
 });
 

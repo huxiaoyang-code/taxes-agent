@@ -1,3 +1,7 @@
+> LOCAL04A本片自测已完成：银行+aux两安装序、仅展示往来DTO、真实CLI独立1130/联合恢复续写及六正式套exit0/hash同；[准确证据与B交接](LOCAL-04-BANK.md)。待root验收/fresh独审/PR，Issue53不关闭；原范围5/8，04/06/07与最终整链/Windows W2未完，税局0、UI file input未知。
+
+> 2026-10-23 当前事实：[PR72](https://github.com/huxiaoyang-code/youshu-fork/pull/72) 已实际合并（head `80246e3fc9fd1e5a53bb19e01bafa1252c3f1dbb`，merge `1621a58620738b3adcc4345425de8df41136da30`，12:18:01Z）；Issue45已CLOSED。root四正式42/26/28/9与独立金额/目视、fresh完整head接受见[LOCAL05真实交接](LOCAL-05-CASHFLOW.md)。原01/02/03/05/08=5/8；04/06/07、最终整链/Windows W2未完，税局0、UI file input未知。04A仅银行+已验辅助组件整合，尚未验收/合并，不关闭Issue53。下方候选状态为历史。
+
 > LOCAL05b最终候选已冻结：CSV26/26、Office28/28、HTTP9/9最终exit0/close，领域42/42同文件hash沿用；上一版本完整82/83+同版旧batchCLI11/11环境补齐，最终未再次整跑83。实际证据/失败历史/PNG见[本段交接](LOCAL-05-CASHFLOW.md)；待root独立验收/全新独审/PR合并，01/02/03/08=4/8及其它余项边界保持。
 
 > 2026-10-23 LOCAL05b实施候选：仅两持久profile全额纯单向材料1403/设备1601复合现金流，并修同模块既存分精度聚合P2。当前基线b20bba0，待root独立验收/全新独审/PR；实际自测、失败历史及样张见[本段交接](LOCAL-05-CASHFLOW.md)。本段尚未合并，04/05/06/07及最终整链保持未完。

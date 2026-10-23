@@ -100,6 +100,7 @@ const steps = [
   { name: "auxiliary-http", file: join(WORKBENCH, "test", "auxiliary-http.test.mjs"), cwd: WORKBENCH },
   { name: "auxiliary-model-boundary", file: join(WORKBENCH, "test", "auxiliary-model-boundary.test.mjs"), cwd: WORKBENCH },
   { name: "auxiliary-mcp", file: join(MCP, "auxiliary-test.mjs"), cwd: MCP },
+  { name: "local-bank-aux-integration", file: join(WORKBENCH, "test", "local-bank-aux-integration.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
