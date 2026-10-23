@@ -1,6 +1,6 @@
 # LOCAL-06-WINDOWS 交接
 
-> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。当前输入 HEAD 为 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 加生命周期修复 WIP。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
+> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。本轮文档窄修输入 clean HEAD 为 e7205585c759716db05014806fa901d502ffaa08。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
 >
 > 冷验收固定业务源仍为 e86d248c2a573b12c884f311fb01952f209e2563，叠加当时四代码及三文档共 58 文件；本次三文档收口在冷验收之后。它不证明最终 core5 / 辅助核算 / 审计 / 批量整合版已升级验收。W2 upgrade-rollback 仍 w2_contract_pending / blocked。实际仅 **Node 24.15.0 / Windows x64** 已测，engines >=22.5.0 只是声明，真实税局接入 **0**。
 >
@@ -10,7 +10,7 @@
 
 - 任务 LOCAL-06-WINDOWS；负责人 huxiaoyang-code；分支 codex/huxiaoyang-code/local-06-windows-delivery。
 - [Issue #59](https://github.com/huxiaoyang-code/youshu-fork/issues/59)，Refs #20 / #49，审计 #54、Office #45。未开 PR、未合并。
-- 当前输入 HEAD 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 加生命周期修复 WIP；冷业务源 e86d248c2a573b12c884f311fb01952f209e2563。最终提交 / 合并 SHA 由管理者实际记录。
+- 本轮文档窄修输入 clean HEAD e7205585c759716db05014806fa901d502ffaa08；冷业务源 e86d248c2a573b12c884f311fb01952f209e2563。最终提交 / 合并 SHA 由管理者实际记录。
 - 一台 Windows 11 10.0.26200 x64；Node 24.15.0、npm 11.12.1，其余组合未测。
 - 历史 pi 使用已核实 deepseek-v4.1-flash / tokenhub。事故整改后的新 pi 会话无 shell、只实现与文档；事故前首轮员工确实测试及越界清理，不用后轮事实覆盖。
 - 本次用户授权单一兜底实施者只收口三文档，未运行测试 / npm / 浏览器 / 服务，未启动 child / 模型 / 其它 agent，未清理、未 Git。四代码哈希前后不变；管理者负责运行验收、最终完整 head 独审与 Git / PR / 合并。
@@ -31,7 +31,7 @@
 上述均在仓库 workspace 的 .agent-runs/ ignored 目录。跨电脑只依赖版本化文档、源码与之后实际 PR，不假定这些原始证据已同步。
 ## 3. 依赖契约
 
-- 上游：已合 main 的 schema v3（LOCAL-01）、`scripts/local-backup.mjs` / `server/local-backup.mjs`、`server/report-export.mjs` DTO、`server/report-office-export.mjs` 纯渲染模块、PR #58 审计独立原语；
+- 固定 e86 冷源上游：core schema v3（LOCAL-01）、`scripts/local-backup.mjs` / `server/local-backup.mjs`、`server/report-export.mjs` DTO、`server/report-office-export.mjs` 纯渲染模块、PR #58 审计独立原语。锁定所纳入 main `47b6ec18385ef3f9f1240e12a721e46cd66f218f` 已为 core4，严格备份支持 core3 / core4；本次冷验没有覆盖新版整合或升级链，后续版本须按对应合同验收；
 - 本包输出：
   - `windows-runtime-check.mjs`：白名单 JSON，退出码 0 / 1 / 2 / 3；`--json`、`--data-dir`、`--scratch-root`；
   - `windows-start.ps1`：`-NodePath` / `-DataDir` / `-Port` / `-ScratchRoot`，有界预检后前台启动，传播退出码；`-MaxRunSeconds` 仅验收有界自停（退出 124）；stdout 打印 `windows_start_service_pid=<pid>`；
@@ -68,7 +68,7 @@ W1 七路径见[任务单](../tasks/LOCAL-06-WINDOWS.md) §3。本次只写 docs
 - **工具来源**：`--release` 冷拷贝里有 W1 windows 脚本 / 测试就用那份（`release_cold_copy`）；缺失时显式记录 `external_tooling` / `partial_release_tooling` 作为阶段证据；`--require-packaged-tooling` 让缺失直接 fail（`packaged_tooling_incomplete`），用于最终“随包完整”验收。
 - **依赖 / 网络**：先静态校验 lock `resolved` 只来自 `registry.npmjs.org` / `registry.npmmirror.com` 的 HTTPS 且带 integrity（拒绝 `file:` / `git` / 私有域 / 凭据 URL / 缺 integrity）；不再设置 `npm_config_registry`（它不能约束 lock URL）。`resolveNpm`：`.js` / `.mjs` 入口直接用 `node` 运行；其它入口（本次实际给的是 `npm.cmd`）则检查其同目录 `node_modules/npm/bin/npm-cli.js` 是否为普通文件，存在就用该 JS，找不到才 `npm_cli_not_verified`；从不执行 `.cmd` / `.bat`、不拼 `cmd.exe`（即“优先直接给 JS 路径”）。离线优先 → 缓存不足联网到专属缓存 → 守卫式删除 `node_modules` → 再离线复验；锁哈希前后一致；空 user/global npmrc + 白名单 env + `--ignore-scripts --no-audit --no-fund`。
 - **真实 HTTP 业务链**：`PORT=0` + `HOST=127.0.0.1`，从本次 stdout 解析端口；新 data 空账套 → dryRun → 落库 → 重试幂等 → 次月同账套 → 重启识别批次 / 来源；独立金额与五类 CSV / DTO 断言保留不变。
-- **Office**：HTTP 仍只支持 CSV，断言 `format=xlsx|pdf` 返回 `400 report_format_unsupported`；同一 DTO 调纯 `buildReportXlsx` / `buildReportPdf`，重开 XLSX 查数值，PDF 用可选 PyMuPDF **逐页**渲染 PNG（`<kind>-page-<n>.png`，页数必须完全相等）；工具缺失则诚实 skip，不用首页冒充全页。HTTP / 页面 Office 下载**未接线**。
+- **Office（固定 e86 冷源契约）**：该旧源 HTTP 只支持 CSV，断言 `format=xlsx|pdf` 返回 `400 report_format_unsupported`；同一 DTO 调纯 `buildReportXlsx` / `buildReportPdf`，重开 XLSX 查数值，PDF 用可选 PyMuPDF **逐页**渲染 PNG（`<kind>-page-<n>.png`，页数必须完全相等）；工具缺失则诚实 skip，不用首页冒充全页。锁定 main47 的 `/export` 已支持 CSV / XLSX / PDF 附件，只有 `/export-data` 仍仅 CSV DTO；`public/index.html` 的格式选择 / 下载按钮与 `public/app.js` 下载逻辑已接线。这是先前独立包已有能力，不是本 W1 实现，也不能由旧源冷验推导新版已验。
 - **备份 / 恢复**：运行中 `local-backup backup`（只读 + `VACUUM INTO`，包含 WAL 已提交）→ `verify` → `restore-new` 新目录 → 对应发布启动核对金额 / 批次 / 来源 / 外键 / 幂等；损坏快照、损坏清单、未知 schema、已存在目标均断言拒绝且原数据 / sentinel 不变。
 - **失败路径 / 稳定性**：端口冲突用本包自建 listener（占位服务 0 连接）；文件冒充数据目录在启动前拒绝；10 次顺序启停 + 2 个并行独立 data / 端口，串账 0；不按 `node.exe` 名称杀进程。
 - **升级阶段（W1 边界）**：`--phase upgrade-rollback` 只保留命令形态，在任何临时根 / 业务目录创建之前返回 `w2_contract_pending`（blocked，exit 2），不建业务 DB、不迁移、不安装依赖；任何 `--schema-pair` 都不解除。W1 **未**实现通用升级 / 降级链。
@@ -124,6 +124,8 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 
 验收只用合成数据，不触真实账套、凭据、税局 / 浏览器旧会话；不读取用户字体目录或用户 npm 配置，不 dump env。网络仅固定 lock 已授权公共来源。服务只回环监听、动态端口，不复用旧服务，不按 PID / 名称扩大回收。
 
+产品方向为本机单用户、多企业、每企一套；同一工作台 DB 可容纳多企业各自账套，不要求切换企业时换 dataDir 或重启。main47 所有手工入口尚未统一强制一企一套，入口统一属另项任务。禁止同 dataDir 多实例并发；本次两个独立 dataDir / 端口是隔离验收拓扑，不是一企一目录限制，也不推导多租户。
+
 每次 capture 在自有 fixture 副本运行，cwd / 默认 scratch / TEMP / TMP / fallback data 明确归本轮；负测候选仅落自己 fixture。默认根真实建根与空白拒绝在副本覆盖，真实卷根仅纯路径预检。manifest v2 双向核验、完整祖先链与唯一删除守卫保持。junction、blocked、故障或回收未知现场按协议保留；未知即阻断后续安装 / 业务 / 删除。本次文档实施者没有创建或清理任何验收 fixture。
 
 当前 cold keep 一个精确工作根保留；cleanup 由守卫清除、scratch 实际为空。历史 gate / guard / out-target / reviewer 现场仍保留，不代表全盘无残留。
@@ -135,7 +137,7 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 - W2 真实升级 / 回退仍 pending / blocked。core5 / 辅助核算、LOCAL03、银行、审计 B/C、批量与 LOCAL07 检查点恢复均需精确上游提交和 schema 契约；固定 e86 业务冷源不能覆盖最终整合版。未知组件表继续拒绝备份，禁止过滤表或改版本号伪造兼容。
 - engines >=22.5.0 声明仍偏宽；共享 engines / test-all / README / STATE / 索引未在本任务修改。Windows 套件仍以直接命令运行，不称已挂入 npm test。
 - 其它 Node patch / 旧 Node 二进制 / 架构 / 干净 OS / 正式安装器 / 完整离线 bundle 未测；仅 Node 24.15.0 / Windows x64 已测。22.16 / 24.0 为 API 分析。
-- HTTP / 页面 XLSX / PDF 下载未接线，仍 400 report_format_unsupported；Office 文件来自同 DTO 纯渲染模块。真实税局接入 0，未用真实账套 / 凭据测试。
+- 固定 e86 冷验的 HTTP Office 格式仍返回 400，Office 文件来自同 DTO 纯渲染模块；main47 的 HTTP / 页面下载已接线（见 §5），其整合后 W1 / W2 验收不能由旧源通过推导。真实税局接入 0，未用真实账套 / 凭据测试。
 - 阶段预算为耗时后验，不能中途中断；子进程 / HTTP / 探针有真实 deadline，无总进程 watchdog。原生崩溃根因与事故未知影响继续保留。
 
 本实施会话交付后冻结停止；管理者继续最终完整 head 审查、PR 与合并，不把三文档收口当作 LOCAL-06 全包完成。

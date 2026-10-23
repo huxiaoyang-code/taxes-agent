@@ -2,7 +2,7 @@
 
 本文对应[任务单](tasks/LOCAL-06-WINDOWS.md)与[交接](handoffs/LOCAL-06-WINDOWS.md)，提供源码分发的预检、显式数据目录启动、干净目录验收与备份恢复说明。
 
-> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。当前输入 HEAD 为 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 加生命周期修复 WIP。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
+> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。本轮文档窄修输入 clean HEAD 为 e7205585c759716db05014806fa901d502ffaa08。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
 >
 > 冷验收固定业务源仍为 e86d248c2a573b12c884f311fb01952f209e2563，叠加当时四代码及三文档共 58 文件；本次三文档收口在冷验收之后。它不证明最终 core5 / 辅助核算 / 审计 / 批量整合版已升级验收。W2 upgrade-rollback 仍 w2_contract_pending / blocked。实际仅 **Node 24.15.0 / Windows x64** 已测，engines >=22.5.0 只是声明，真实税局接入 **0**。
 >
@@ -15,14 +15,14 @@
 - Windows 11 x64（本次实机 Windows 11 家庭版中文版，10.0.26200）；
 - Node **24.15.0**、npm 11.12.1（npm 版本只作记录，不单独作为支持承诺）；
 - 从源码目录运行现有 `06-workbench` 服务；
-- 一名本机操作者、多家企业、每家一个账套（多企业批量 = 多个数据目录 / 账套，不是多租户）。
+- 产品方向为一名本机操作者、多家企业、每家一个账套；一个工作台数据库可容纳多企业各自账套，不要求每企独立数据目录。锁定 main 的所有手工入口尚未统一强制一企一套，入口统一属另项任务；本项目不做多租户。
 
 不承诺：
 
 - Node 22 / 23 / 24 其它小版本 / 25+；其它 CPU 架构；全新操作系统；无 Node 的机器；
 - 自带全部依赖的离线安装包（离线能力是**验收方法**，不是随包分发的依赖集合）；
-- HTTP / 页面直接下载 XLSX / PDF（见 §9）；
-- core v4 / v3→v4 迁移、LOCAL03、银行、批量新表、完整审计组件兼容（见 §12）。
+- 固定 e86 冷验未覆盖 HTTP / 页面直接下载 XLSX / PDF；锁定 main 已有该能力，见 §8；
+- 固定 e86 冷验未覆盖 core v4 / v3→v4 迁移、LOCAL03、银行、批量新表、完整审计组件兼容（见 §12）；锁定 main 的 core4 与备份支持范围见 §7。
 
 ## 2. 目录与数据位置
 
@@ -46,7 +46,7 @@
 ```
 
 - 服务只使用显式传入的 `WORKBENCH_DATA_DIR`；没有传时旧代码会回退到 `06-workbench/data`，**交付脚本不会**默认读该目录。
-- 一家企业一个账套。切换企业 = 切换数据目录 / 账套，不是在同一账套里建 `bookKey`。
+- 一家企业一个账套。同一数据目录的工作台数据库可容纳多企业各自账套，切换企业时选择对应账套，不需要更换数据目录或重启服务；不在同一账套里用 `bookKey` 混装多企业。
 - 不要在服务运行时只复制 `workbench.db` 主文件：WAL 中已提交数据会丢。使用 §7 的备份命令。
 
 ### 2.1 临时目录与清理边界
@@ -150,7 +150,8 @@ $env:WORKBENCH_DATA_DIR = "<data>"
 ## 6. 数据位置与切换
 
 - 启动时显式 `-DataDir <data>`（或 `WORKBENCH_DATA_DIR`）。
-- 换一家企业：先停止当前服务，使用另一个**不存在或已有对应账套**的数据目录启动。不要把两家企业指向同一目录。
+- 换一家企业时选择该企业对应账套；同一工作台数据库可保存多企业各自账套。
+- 禁止多个工作台实例同时打开同一数据目录。若选择独立数据目录部署，应先停止使用原目录的实例，再以目标目录启动；本次两个独立 dataDir / 端口仅是两实例隔离验收拓扑，不是一企一目录要求。
 - 不建议手工编辑数据库、删除 `-wal` / `-shm` 或直接改 `schema_migrations`。
 - 发布目录只读；升级时新建发布目录，数据目录保持不变，先备份再切换。
 
@@ -177,13 +178,13 @@ node scripts\local-backup.mjs restore-new --backup <backups>\<新备份目录> -
 
 - `restore-new` 只写**全新目录**；不会就地覆盖现库，也不会删除 WAL。
 - 损坏清单 / 损坏快照 / 未知 schema / 已存在目标都会被拒绝；原数据与目标 sentinel 不变。
-- 当前只支持已合 main 的 schema v3；未知组件表会被安全拒绝。**不要**通过过滤表或改版本号制造「兼容」备份。
+- 本次固定 e86 冷源及 W1 备份 / 恢复验收只覆盖 core schema v3。锁定所纳入 main `47b6ec18385ef3f9f1240e12a721e46cd66f218f` 已为 core4，严格备份契约支持 core3 / core4；该已有能力不等于本次冷验覆盖了新版整合或升级链。未知组件表仍会被安全拒绝，**不要**通过过滤表或改版本号制造「兼容」备份。
 - **回退只能回到备份时点。** 备份之后新增的账务不会自动合并；不暗示能无损降级新 schema。回退前先保护现库 / 停写，恢复后逐项核对金额、批次与来源。
 - 恢复后必须用**对应发布版本**启动并核对；不要把恢复出来的新目录当成已经完成迁移。
 
 ## 8. 报表导出与 Office 文件
 
-- 当前 HTTP 只支持 CSV：
+- 本次固定 e86 冷源的以下 HTTP 路由只支持 CSV；W1 冷验脚本固定验证该旧源契约：
 
 ```text
 GET /api/account-sets/<id>/reports/<kind>/export?period=YYYY-MM[&code=1002]
@@ -192,7 +193,8 @@ GET /api/account-sets/<id>/reports/<kind>/export-data?period=YYYY-MM[&code=1002]
 
 `kind`：`balance-sheet` / `income-statement` / `cash-flow-statement` / `trial-balance` / `ledger`（ledger 必须给 `code`）。
 
-- **XLSX / PDF 目前没有 HTTP 或页面下载接线。** HTTP 传 `format=xlsx|pdf` 会得到 `400 report_format_unsupported`。纯模块 `server/report-office-export.mjs` 可由内部程序用同一报表 DTO 调用，但这不是已接线的用户下载功能，也不能据此宣称页面可下载 Office 文件。
+- 固定 e86 冷源的 HTTP / 页面尚无 XLSX / PDF 下载接线；其 HTTP 传 `format=xlsx|pdf` 返回 `400 report_format_unsupported`。W1 CLI 用同一报表 DTO 调用 `server/report-office-export.mjs` 纯模块生成 Office 文件，该结果不证明新版 HTTP / 页面已完成本次冷验。
+- 锁定 main `47b6ec18385ef3f9f1240e12a721e46cd66f218f` 的 `/export?format=csv|xlsx|pdf` 已生成真实附件；只有 `/export-data` 仍仅接受 CSV / 缺省格式的 JSON DTO。该版本 `public/index.html` 已有 CSV / Excel / PDF 选择与“下载报表”按钮，`public/app.js` 通过 `/export` 下载文件。这是先前独立包的已有能力，不是本 W1 新实现，也未由固定 e86 冷验验证；其它发布版本须按对应源码与合同核实。
 - 中文 PDF 需要可嵌入字体。可用显式环境变量：
 
 ```powershell
@@ -263,7 +265,7 @@ node test\windows-delivery.test.mjs
 - `HOST=127.0.0.1`、`PORT=0`，从本次 stdout 解析端口；新数据目录建库，`/api/account-sets` 为 `[]`，首页 / JS / CSS 可取；
 - 真实 HTTP 增量导入：默认 dryRun 不落库 → 正式落库 → 同批重试幂等 → 次月追加仍同账套 → 重启后仍识别批次 / 来源；
 - 独立金额：1 月银行 50,000、应收 11,300、收入 10,000；2 月银行 61,300、应收 0、收入本期 0 / 累计 10,000；
-- 五类报表 CSV + DTO；`ledger` 明确 `code=1002`；同一 DTO 调纯模块生成 XLSX / PDF，重开 XLSX 查数值；PDF 提取中文 / 金额 / 页数，并在可选 PyMuPDF 可用时**逐页**渲染 PNG（缺工具则诚实 skip，不用首页冒充全页）；HTTP XLSX / PDF 明确未接线；
+- 五类报表 CSV + DTO；`ledger` 明确 `code=1002`；同一 DTO 调纯模块生成 XLSX / PDF，重开 XLSX 查数值；PDF 提取中文 / 金额 / 页数，并在可选 PyMuPDF 可用时**逐页**渲染 PNG（缺工具则诚实 skip，不用首页冒充全页）；HTTP Office 格式的 400 断言仅对应固定 e86 冷源契约，不适用于 §8 所述锁定 main 的 `/export`；
 - 缺字体：独立报告（`pdf_font_unavailable`），且**必需 PDF 产物缺失时 `office` 阶段 blocked / 总结果 blocked / exit 2**，同时保留 CSV / XLSX 的真实通过断言与输出 / 工作根；端口冲突用本包自建 listener，且不误连占位服务；非法数据目录在启动前拒绝；
 - 运行中一致备份 → verify → restore-new 到新目录 → 对应发布启动核对金额 / 批次 / 来源 / 外键 / 幂等；损坏快照 / 清单、未知 schema、已存在目标各自拒绝；
 - 顺序 10 次新进程启停 + 最多 2 个并行进程（各自数据目录 / 端口）串账为 0。并行阶段用 `Promise.allSettled` 收齐两台的结果：**任一台启动失败都先回收已成功启动的另一台自有句柄，再如实报失败**，不把服务留在后台；本阶段自己启动的句柄也在 `finally` 里收尾。
@@ -355,7 +357,7 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 - W2 真实升级 / 回退仍 pending / blocked。core5 / 辅助核算、LOCAL03、银行、审计 B/C、批量与 LOCAL07 检查点恢复均需精确上游提交和 schema 契约；固定 e86 业务冷源不能覆盖最终整合版。未知组件表继续拒绝备份，禁止过滤表或改版本号伪造兼容。
 - engines >=22.5.0 声明仍偏宽；共享 engines / test-all / README / STATE / 索引未在本任务修改。Windows 套件仍以直接命令运行，不称已挂入 npm test。
 - 其它 Node patch / 旧 Node 二进制 / 架构 / 干净 OS / 正式安装器 / 完整离线 bundle 未测；仅 Node 24.15.0 / Windows x64 已测。22.16 / 24.0 为 API 分析。
-- HTTP / 页面 XLSX / PDF 下载未接线，仍 400 report_format_unsupported；Office 文件来自同 DTO 纯渲染模块。真实税局接入 0，未用真实账套 / 凭据测试。
+- 本次固定 e86 冷验的 Office 文件来自同 DTO 纯渲染模块，HTTP Office 格式的 400 仅属该旧源契约；锁定 main 的 HTTP / 页面下载已接线（§8），该版本整合后的 W1 / W2 验收尚不能由旧源通过推导。真实税局接入 0，未用真实账套 / 凭据测试。
 - 阶段预算为耗时后验，不能中途中断；子进程 / HTTP / 探针有真实 deadline，无总进程 watchdog。原生崩溃根因与事故未知影响继续保留。
 
 ## 12. W2：等待版本契约的升级 / 回退

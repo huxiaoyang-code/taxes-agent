@@ -1,6 +1,6 @@
 # 任务单 · LOCAL-06-WINDOWS 干净目录安装、启动与升级交付
 
-> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。当前输入 HEAD 为 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 加生命周期修复 WIP。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
+> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。本轮文档窄修输入 clean HEAD 为 e7205585c759716db05014806fa901d502ffaa08。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
 >
 > 冷验收固定业务源仍为 e86d248c2a573b12c884f311fb01952f209e2563，叠加当时四代码及三文档共 58 文件；本次三文档收口在冷验收之后。它不证明最终 core5 / 辅助核算 / 审计 / 批量整合版已升级验收。W2 upgrade-rollback 仍 w2_contract_pending / blocked。实际仅 **Node 24.15.0 / Windows x64** 已测，engines >=22.5.0 只是声明，真实税局接入 **0**。
 >
@@ -32,14 +32,14 @@
 3. 独立数据目录下真实 HTTP 导入 / 出 CSV；
 4. 基于同一 HTTP report DTO 的真实 Office 文件（纯模块渲染）；PDF 可选工具逐页导出 PNG，缺工具则诚实 skip；
 5. 启动失败、端口冲突、非法目录、重复启停的诊断；包装器与服务子的有界启停与本人进程回收；
-6. 针对当前已合 schema v3 的运行中一致备份与新目录恢复演练；
-7. 用户文档必须标出 **Office 仍无 HTTP / 页面下载接线**；
+6. 针对固定 e86 冷源 core schema v3 的运行中一致备份与新目录恢复演练；锁定所纳入 main `47b6ec18385ef3f9f1240e12a721e46cd66f218f` 已是 core4，严格备份支持 core3 / core4，本次冷验不覆盖新版整合 / 升级链；
+7. 用户文档区分固定 e86 冷源的 CSV HTTP / 纯模块 Office 契约与锁定 main 的既有 Office 下载：main47 `/export` 已支持 CSV / XLSX / PDF 附件，`/export-data` 仍仅 CSV DTO；实际页面已有格式选择与下载按钮。已有下载能力属先前独立包，不冒称本 W1 实现或冷验覆盖；
 8. 所有临时目录改到 workspace 专属根 + 所有权 manifest（v2 逐项目标），任何 mkdir 前逐级核验祖先到卷根，删除前重验完整祖先链 / realpath / manifest，无法证明则保留并非零；删除入口只有一份实现供脚本与测试复用；
 9. `upgrade-rollback` 只保留命令形态并恒为 `w2_contract_pending` blocked，不产生业务副作用。
 
 ### W2（等待版本契约，不在本次冒充完成）
 
-core v4 正式整合后的 v3→v4 迁移 / 恢复；审计组件与备份的完整兼容；LOCAL03、银行、批量引入的新表 / 版本升级。每种待支持组合需上游提交与精确 schema 契约。W1 不实现通用升级 / 降级链：`upgrade-rollback` 只保留命令形态并**恒为** `w2_contract_pending` blocked（exit 2），任何 `--schema-pair` 都不解除，也不产生业务 DB / 迁移 / 依赖安装副作用。
+W2 待验范围包括 v3→v4 真实升级 / 恢复链及后续整合组合；锁定 main47 已有 core4 与严格 core3 / core4 备份支持，不等于本次固定 e86 冷验覆盖了该升级链。审计组件与备份的完整兼容、LOCAL03、银行、批量引入的新表 / 版本升级同样需精确验收。每种待支持组合需上游提交与精确 schema 契约。W1 不实现通用升级 / 降级链：`upgrade-rollback` 只保留命令形态并**恒为** `w2_contract_pending` blocked（exit 2），任何 `--schema-pair` 都不解除，也不产生业务 DB / 迁移 / 依赖安装副作用。
 
 ## 3. 精确文件范围（W1 七路径）
 
@@ -112,7 +112,7 @@ node test\windows-delivery.test.mjs
 - 真实 HTTP 增量导入：默认 dryRun 不落库 → 显式 `dryRun:false` → 同批重试幂等 → 次月同企业同账套 → 重启后仍识别批次 / 来源；
 - 独立金额：1 月银行 50,000 / 应收 11,300 / 收入 10,000；2 月银行 61,300 / 应收 0 / 收入本期 0、累计 10,000；
 - 五类报表 CSV + DTO；ledger `code=1002`；
-- 同 DTO 调纯 `buildReportXlsx` / `buildReportPdf`；重开 XLSX 查数值；PDF 提取中文 / 金额 / 页数并**逐页**渲染 PNG（工具缺失则 skip，不用首页冒充全页）；**HTTP XLSX / PDF 未接线**必须显式断言。
+- 同 DTO 调纯 `buildReportXlsx` / `buildReportPdf`；重开 XLSX 查数值；PDF 提取中文 / 金额 / 页数并**逐页**渲染 PNG（工具缺失则 skip，不用首页冒充全页）；显式保留固定 e86 冷源 HTTP Office 格式返回 400 的断言，不把它套用于 main47 已接线的 `/export`。
 
 ### 5.4 失败路径 / 备份 / 稳定性
 
@@ -226,7 +226,7 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 - W2 真实升级 / 回退仍 pending / blocked。core5 / 辅助核算、LOCAL03、银行、审计 B/C、批量与 LOCAL07 检查点恢复均需精确上游提交和 schema 契约；固定 e86 业务冷源不能覆盖最终整合版。未知组件表继续拒绝备份，禁止过滤表或改版本号伪造兼容。
 - engines >=22.5.0 声明仍偏宽；共享 engines / test-all / README / STATE / 索引未在本任务修改。Windows 套件仍以直接命令运行，不称已挂入 npm test。
 - 其它 Node patch / 旧 Node 二进制 / 架构 / 干净 OS / 正式安装器 / 完整离线 bundle 未测；仅 Node 24.15.0 / Windows x64 已测。22.16 / 24.0 为 API 分析。
-- HTTP / 页面 XLSX / PDF 下载未接线，仍 400 report_format_unsupported；Office 文件来自同 DTO 纯渲染模块。真实税局接入 0，未用真实账套 / 凭据测试。
+- 固定 e86 冷验的 HTTP Office 格式仍返回 400，Office 文件来自同 DTO 纯渲染模块；main47 的 `/export` 与页面已有下载能力，`/export-data` 仍仅 CSV DTO。新版整合后的 W1 / W2 验收不能由旧源通过推导。真实税局接入 0，未用真实账套 / 凭据测试。
 - 阶段预算为耗时后验，不能中途中断；子进程 / HTTP / 探针有真实 deadline，无总进程 watchdog。原生崩溃根因与事故未知影响继续保留。
 
-上游冷源依赖为 schema v3、LOCAL-06-BACKUP CLI、PR #52 Office 纯模块与 PR #58 审计独立原语。W1 / W2 分开验收；先更新交接再结束本实施会话，之后由管理者锁定最终 head。
+上游固定 e86 冷源依赖为 schema v3、LOCAL-06-BACKUP CLI、PR #52 Office 纯模块与 PR #58 审计独立原语；不描述为 main47 的全部现状。产品方向为本机单用户、多企业、每企一套；一个工作台 DB 可存多企业各自账套，main47 所有手工入口尚未统一强制该方向。禁止同 dataDir 多实例并发；两独立 dataDir / 端口只属本次隔离验收，不要求每企一目录。W1 / W2 分开验收；先更新交接再结束本实施会话，之后由管理者锁定最终 head。
