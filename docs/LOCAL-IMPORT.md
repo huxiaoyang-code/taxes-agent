@@ -1,3 +1,11 @@
+> 2026-10-23 更新：双准则/企业身份部分已随 PR68 合并；辅助 A+B1 已随 PR69 合并，真实证据见 [LOCAL03a交接](handoffs/LOCAL-03a.md) 与 [辅助交接](handoffs/LOCAL-03b.md)。下方候选措辞保留作原阶段历史。当前 B2a 在领域层增加同事务辅助附录，已自测、尚待管理验收/独审/PR；真实 HTTP/Agent/MCP 透传与模型投影留 B2b。
+
+## B2a 领域辅助附录
+
+`importIncremental({payload,batchId,source,mode,accountSetId?,dryRun?,auxiliaryAppendix?})` 的可选附录是纯数据 v1。完整形状、实体ref、显式来源分录身份、旧行actualEntryId与历史映射规则见 [LOCAL-AUXILIARY](LOCAL-AUXILIARY.md)。新凭证仅在本事务逐字段核验实际行后建映射；旧凭证无映射必须明确实际ID，不能按行号或金额猜配。metadata 不写入核心 batch/voucher/persisted 指纹；老无附录请求不改变辅助结果。
+
+附录预检零写，aux须预先CLI安装。首次/追加及completed带附录都由同一SQLite连接受控事务处理，核心/维度/分配/映射/操作/成功回执共同提交；已完成批次失败不被覆写。相同附录只读回放，变更冲突，不同请求仅增加尚未分配目标。外层事务未提交时为 staged / pending_outer_commit；未知事务结果隔离连接并返回固定 aux_commit_unknown，不鼓励自动重试。正式入口未透传，不能把领域自测宣称为全入口交付。
+
 # 增量导入契约 · LOCAL-IMPORT（LOCAL-01 交付）
 
 ## 当前候选合同（2026-10-23）

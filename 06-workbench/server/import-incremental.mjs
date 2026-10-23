@@ -34,6 +34,8 @@
 
 import { createHash } from "node:crypto";
 import { db } from "./db.mjs";
+import { parseAuxiliaryAppendix, processAuxiliaryAppendix } from "./auxiliary-import.mjs";
+import { assertAuxiliaryConnection, auxTransaction } from "./auxiliary-storage.mjs";
 import * as A from "./accounting.mjs";
 import { canonicalEnterpriseKey, normalizeEnterpriseIdentity, requireSameEnterpriseIdentity } from "./enterprise-identity.mjs";
 import { resolveNewAccountingProfile } from "./accounting-profiles.mjs";
@@ -269,8 +271,20 @@ function registeredStateConflict(label, sourceVoucherId, row, current) {
  *   confirmNewBinding  append 时为本来源新增「来源证据」绑定（必须与既有企业身份一致）
  *   dryRun       缺省 true
  */
+const AUXILIARY_IMPORT_ERRORS = new Set(["aux_import_busy","aux_import_failed","account_set_not_found","accounting_profile_unknown","aux_allocation_exceeds_entry","aux_allocation_invalid","aux_allocations_invalid","aux_amount_invalid","aux_code_invalid","aux_commit_unknown","aux_connection_quarantined","aux_dimension_invalid","aux_dimension_required","aux_entry_not_found","aux_id_invalid","aux_import_actual_entry_required","aux_import_allocation_exists","aux_import_entity_conflict","aux_import_entry_identity_required","aux_import_explicit_identity_required","aux_import_identity_duplicate","aux_import_invalid","aux_import_mapping_conflict","aux_import_receipt_invalid","aux_import_ref_invalid","aux_import_replay_state_conflict","aux_import_request_conflict","aux_import_source_conflict","aux_import_transaction_required","aux_import_version_invalid","aux_kind_invalid","aux_name_invalid","aux_not_installed","aux_opening_code_required","aux_opening_not_found","aux_period_closed","aux_reason_required","aux_replay_state_conflict","aux_request_conflict","aux_request_id_required","aux_side_invalid","aux_structure_invalid","aux_target_invalid","aux_tuple_duplicate","later_period_closed","later_year_end_carryforward_depends_on_period"]);
+function auxiliaryImportError(error) {
+  const code = AUXILIARY_IMPORT_ERRORS.has(error?.code) ? error.code
+    : error?.errcode === 5 || error?.errcode === 6 ? "aux_import_busy" : "aux_import_failed";
+  return Object.assign(new Error(code), { code });
+}
 export function importIncremental(options = {}) {
+  try { return runIncrementalImport(options); }
+  catch (error) { if (options?.auxiliaryAppendix !== undefined) throw auxiliaryImportError(error); throw error; }
+}
+function runIncrementalImport(options = {}) {
   const args = options ?? {};
+  assertAuxiliaryConnection(db);
+  const appendix = parseAuxiliaryAppendix(args.auxiliaryAppendix);
   const request = {
     dryRun: args.dryRun !== false,
     mode: null,
@@ -850,6 +864,13 @@ export function importIncremental(options = {}) {
     })),
   };
 
+  const appendixContext = (accountSetId, createdVoucherIds = new Set()) => ({
+    accountSetId, source: source.value, batchId, coreFingerprint: fingerprint,
+    payload, normalized, vouchers, createdVoucherIds,
+  });
+  const appendixSetId = mode === MODE_APPEND ? targetAccountSetId : batchRecord?.status === "completed" ? batchRecord.account_set_id : null;
+  if (appendix) processAuxiliaryAppendix(db, appendix, appendixContext(appendixSetId));
+
   // ---------- 10. 幂等回放：已完成批次的重试不写入任何东西 ----------
   if (replayIntent) {
     const stored = safeJson(batchRecord.result_json);
@@ -869,7 +890,7 @@ export function importIncremental(options = {}) {
             { sourceVoucherId: link.source_voucher_id, batchId }),
       ], { validation, notes });
     }
-    return {
+    const replayResult = {
       ...baseResult(request),
       accountSetId: batchRecord.account_set_id,
       status: STATUS.REPLAY,
@@ -890,6 +911,28 @@ export function importIncremental(options = {}) {
       },
       sourceTrace: trace,
     };
+    if (appendix) {
+      if (request.dryRun) return { ...replayResult, auxiliary: processAuxiliaryAppendix(db, appendix, appendixContext(batchRecord.account_set_id)) };
+      const auxiliary = auxTransaction(db, () => {
+        const currentBatch = getBatch(db, batchId);
+        if (!currentBatch || currentBatch.status !== "completed" || currentBatch.content_fingerprint !== fingerprint
+          || currentBatch.account_set_id !== batchRecord.account_set_id
+          || currentBatch.source_system !== source.value.system || currentBatch.enterprise_key !== enterpriseKey) {
+          throw Object.assign(new Error("aux_import_source_conflict"), { code: "aux_import_source_conflict" });
+        }
+        for (const item of vouchers) {
+          const registered = getVoucherSource(db, source.value.system, enterpriseKey, item.sourceVoucherId);
+          if (!registered || registered.content_fingerprint !== item.fingerprint
+            || registered.account_set_id !== batchRecord.account_set_id
+            || registeredVoucherState(registered).state !== VOUCHER_STATE.OK) {
+            throw Object.assign(new Error("aux_import_source_conflict"), { code: "aux_import_source_conflict" });
+          }
+        }
+        return processAuxiliaryAppendix(db, appendix, appendixContext(batchRecord.account_set_id), { apply: true });
+      });
+      return { ...replayResult, ...(auxiliary.durability === "pending_outer_commit" && auxiliary.status === "staged" ? { status: "staged" } : {}), auxiliary: { ...auxiliary, status: auxiliary.status === "staged" && auxiliary.durability === "committed" ? "applied" : auxiliary.status }, durability: auxiliary.durability };
+    }
+    return replayResult;
   }
 
   // ---------- 11. 预检（不写入） ----------
@@ -902,6 +945,7 @@ export function importIncremental(options = {}) {
       validation,
       notes: [...notes, "dryRun 预检：未写入任何表（含企业绑定 / 来源证据 / 批次 / 凭证）"],
       planned,
+      ...(appendix ? { auxiliary: processAuxiliaryAppendix(db, appendix, appendixContext(appendixSetId)) } : {}),
       batch: batchRecord ? batchSummary(batchRecord) : null,
       sourceTrace: vouchers.map((v) => ({
         sourceVoucherId: v.sourceVoucherId,
@@ -926,8 +970,16 @@ export function importIncremental(options = {}) {
     vouchersDeduplicated: vouchers.filter((v) => v.action === "dedupe").length,
     sourceTrace: [],
   };
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  const createdVoucherIds = new Set();
+  const writeCore = () => {
+    // Existing source state is rechecked under the write reservation.
+    if (appendix) processAuxiliaryAppendix(db, appendix, appendixContext(appendixSetId));
+    for (const item of vouchers) if (item.action === "dedupe") {
+      const registered = getVoucherSource(db, source.value.system, enterpriseKey, item.sourceVoucherId);
+      if (!registered || registered.content_fingerprint !== item.fingerprint || registered.account_set_id !== item.voucherAccountSetId || registeredVoucherState(registered).state !== VOUCHER_STATE.OK) {
+        throw Object.assign(new Error("aux_import_source_conflict"), { code: "aux_import_source_conflict" });
+      }
+    }
     let accountSetId = targetAccountSetId;
     if (mode === MODE_CREATE) {
       const set = A.createAccountSet({
@@ -1054,6 +1106,7 @@ export function importIncremental(options = {}) {
         contentFingerprint: item.fingerprint,
         action: "created",
       });
+      createdVoucherIds.add(item.sourceVoucherId);
       outcome.vouchersCreated += 1;
       outcome.sourceTrace.push({
         sourceVoucherId: item.sourceVoucherId,
@@ -1065,6 +1118,8 @@ export function importIncremental(options = {}) {
         state: VOUCHER_STATE.OK,
       });
     }
+
+    if (appendix) outcome.auxiliary = processAuxiliaryAppendix(db, appendix, appendixContext(accountSetId, createdVoucherIds), { apply: true });
 
     markBatchCompleted(db, {
       batchId,
@@ -1081,9 +1136,22 @@ export function importIncremental(options = {}) {
         vouchersDeduplicated: outcome.vouchersDeduplicated,
       },
     });
-    db.exec("COMMIT");
+  };
+  let durability;
+  try {
+    if (appendix) {
+      const result = auxTransaction(db, () => { writeCore(); return { status: "applied" }; });
+      durability = result.durability;
+      outcome.auxiliary = { ...outcome.auxiliary, status: outcome.auxiliary.status === "staged" && durability === "committed" ? "applied" : outcome.auxiliary.status, durability };
+    } else {
+      db.exec("BEGIN IMMEDIATE");
+      try { writeCore(); db.exec("COMMIT"); }
+      catch (e) { try { db.exec("ROLLBACK"); } catch { /* Legacy path preserves its prior behavior. */ } throw e; }
+    }
   } catch (e) {
-    try { db.exec("ROLLBACK"); } catch { /* 原库业务状态以回滚结果为准 */ }
+    // Unknown transactions are quarantined: never append an audit or claim rollback.
+    if (appendix && (e?.code === "aux_commit_unknown" || e?.code === "aux_connection_quarantined" || db.isTransaction)) throw e;
+    if (appendix) e = auxiliaryImportError(e);
     // 已完成的批次永远不能被失败审计覆写；只有未完成的批次才写失败记录。
     const completed = (() => {
       try { return getBatch(db, batchId)?.status === "completed"; } catch { return false; }
@@ -1109,7 +1177,8 @@ export function importIncremental(options = {}) {
   return {
     ...baseResult(request),
     accountSetId: outcome.accountSetId,
-    status: STATUS.APPLIED,
+    status: durability === "pending_outer_commit" ? "staged" : STATUS.APPLIED,
+    ...(appendix ? { durability, auxiliary: outcome.auxiliary } : {}),
     ok: true,
     validation,
     notes,
