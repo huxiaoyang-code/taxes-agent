@@ -114,7 +114,7 @@ export function assessCompleteness(input) {
   const knownAccounts = new Set([...(accounts?.accountIds ?? []), ...replay.records.filter(r => r.kind === 'bank_activity').map(r => r.data.bankAccountId)]);
   for (const [kind, accountId] of [['sales', null], ['purchase', null], ...[...knownAccounts].sort().map(id => ['bank', id])]) {
     const c = (d.coverage ?? []).find(c => c.kind === kind && c.accountId === accountId);
-    const relevant = replay.sources.filter(s => kind === 'bank' ? s.kind === 'bank_csv' && s.mapping.bankAccountId === accountId : ['invoice_csv', 'invoice_xlsx'].includes(s.kind) && s.mapping.role === kind);
+    const relevant = replay.sources.filter(s => kind === 'bank' ? ['bank_csv', 'bank_xlsx'].includes(s.kind) && s.mapping.bankAccountId === accountId : ['invoice_csv', 'invoice_xlsx'].includes(s.kind) && s.mapping.role === kind);
     const scoped = c && c.from === range.from && c.to === range.to;
     const refsValid = c && c.sourceIds.every(id => relevant.some(s => s.sourceId === id)) && relevant.every(s => c.sourceIds.includes(s.sourceId));
     let status = !c ? 'missing' : !supportedEvidence(c) ? 'unknown' : !scoped || !refsValid ? 'provided_invalid' : c.state === 'partial' ? 'missing' : c.state === 'no_activity' && relevant.length ? 'conflict' : c.state === 'complete' && !relevant.length ? 'missing' : 'provided_valid';

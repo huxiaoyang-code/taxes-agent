@@ -1,5 +1,5 @@
 // Pure material normalization. No filesystem, database, golden expectations or execution.
-import { readInvoiceXlsx } from './offline-invoice-xlsx.mjs';
+import { readInvoiceXlsx, readBankXlsx } from './offline-invoice-xlsx.mjs';
 import { createHash } from 'node:crypto';
 import { canonicalEnterpriseKey } from './enterprise-identity.mjs';
 import { offlineMoneyToCents } from './offline-contracts.mjs';
@@ -133,7 +133,7 @@ function invoice(text, mapping, scope, parsedInput) {
       identity: stable([get('sellerKey'), code, number]), reliability: 'stable', location: row.location ?? location(row, mapping.columns, parsed.index), raw: row.cells };
   }, { row: row.rowNumber, line: row.lineNumber }));
 }
-function bank(text, mapping, scope) {
+function bank(text, mapping, scope, parsedInput) {
   fields(mapping, ['format', 'ownerEnterpriseKey', 'bankAccountId', 'columns', 'dateFormat', 'amountMode', 'currency', 'negativeAmount'], ['directionLabels', 'thousandsSeparator', 'allowCurrencySymbol']);
   requireValue(mapping.format === 'bank-csv-v1' && mapping.ownerEnterpriseKey === scope.enterpriseKey && mapping.currency === 'CNY', 'bank_owner_or_currency_mismatch');
   identifier(mapping.bankAccountId);
@@ -143,14 +143,14 @@ function bank(text, mapping, scope) {
   fields(mapping.directionLabels, ['inflow', 'outflow']);
   if (Object.hasOwn(mapping, 'allowCurrencySymbol')) requireValue(typeof mapping.allowCurrencySymbol === 'boolean', 'mapping_invalid');
   const normalized = normalizeMapping(mapping); requireValue(normalized.ok, 'bank_mapping_invalid');
-  const parsed = csv(text, mapping.columns);
+  const parsed = parsedInput ?? csv(text, mapping.columns);
   return parsed.rows.map(row => located(() => {
     const actualDate = date(row.cells[parsed.index.get('date')], mapping.dateFormat, scope);
     const result = normalizeBankRow({ cells: row.cells, headerIndex: parsed.index, mapping: normalized.mapping, period: actualDate.slice(0, 7), rowNumber: row.rowNumber, lineNumber: row.lineNumber });
     requireValue(result.ok, 'bank_row_invalid');
     const r = result.row;
     const semantic = { bankAccountId: mapping.bankAccountId, date: r.date, refId: r.refId, direction: r.direction, amount: formatCents(r.amountCents), balance: r.balanceCents === null ? null : formatCents(r.balanceCents), summary: r.summary, accountingMeaning: 'unclassified_bank_activity' };
-    return { kind: 'bank_activity', semantic, identity: r.refId ? stable([mapping.bankAccountId, r.refId]) : hash(stable(semantic)), reliability: r.refId ? 'stable' : 'suspected_only', location: location(row, mapping.columns, parsed.index), raw: row.cells };
+    return { kind: 'bank_activity', semantic, identity: r.refId ? stable([mapping.bankAccountId, r.refId]) : hash(stable(semantic)), reliability: r.refId ? 'stable' : 'suspected_only', location: row.location ?? location(row, mapping.columns, parsed.index), raw: row.cells };
   }, { row: row.rowNumber, line: row.lineNumber }));
 }
 function business(text, mapping, scope) {
@@ -179,7 +179,7 @@ function business(text, mapping, scope) {
 // Binary sources use canonical base64 ONLY as JSON transport. Hash raw bytes, never base64.
 export function sourceBytes(kind, text) {
   requireValue(typeof text === 'string', 'source_digest_invalid');
-  if (kind !== 'invoice_xlsx') {
+  if (!['invoice_xlsx', 'bank_xlsx'].includes(kind)) {
     requireValue(Buffer.byteLength(text, 'utf8') <= 5 * 1024 * 1024, 'source_digest_invalid');
     return Buffer.from(text, 'utf8');
   }
@@ -189,7 +189,7 @@ export function sourceBytes(kind, text) {
   return bytes;
 }
 export function sourceText(kind, bytes) {
-  return kind === 'invoice_xlsx' ? Buffer.from(bytes).toString('base64') : new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  return ['invoice_xlsx', 'bank_xlsx'].includes(kind) ? Buffer.from(bytes).toString('base64') : new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 // Every replay reparses the actual original bytes; scope/ownership remain assertions.
 export function normalizeMaterial(input) {
@@ -198,7 +198,7 @@ export function normalizeMaterial(input) {
   if (Object.hasOwn(input, 'sourceId')) identifier(input.sourceId);
   const { kind, text, mapping, scope, fileSha256 } = input;
   validateScope(scope);
-  requireValue(['invoice_csv', 'invoice_xlsx', 'bank_csv', 'business_json'].includes(kind), 'material_kind_unsupported');
+  requireValue(['invoice_csv', 'invoice_xlsx', 'bank_csv', 'bank_xlsx', 'business_json'].includes(kind), 'material_kind_unsupported');
   const bytes = sourceBytes(kind, text);
   requireValue(hash(bytes) === fileSha256, 'source_digest_invalid');
   if (kind === 'invoice_xlsx') {
@@ -208,6 +208,13 @@ export function normalizeMaterial(input) {
     const parsed = readInvoiceXlsx(bytes, mapping);
     const { sheet, headerRow, ...csvMapping } = mapping;
     return invoice('', { ...csvMapping, format: 'invoice-summary-csv-v1' }, scope, parsed);
+  }
+  if (kind === 'bank_xlsx') {
+    fields(mapping, ['format', 'sheet', 'headerRow', 'ownerEnterpriseKey', 'bankAccountId', 'columns', 'dateFormat', 'amountMode', 'currency', 'negativeAmount'], ['directionLabels', 'thousandsSeparator', 'allowCurrencySymbol']);
+    requireValue(mapping.format === 'bank-xlsx-v1' && typeof mapping.sheet === 'string' && mapping.sheet.length > 0 && mapping.sheet.length <= 31 && Number.isSafeInteger(mapping.headerRow) && mapping.headerRow > 0 && mapping.headerRow < 10000, 'mapping_invalid');
+    columnMap(mapping.columns, ['date', 'amount', 'direction'], ['summary', 'refId', 'balance', 'currency']);
+    const { sheet, headerRow, ...csvMapping } = mapping;
+    return bank('', { ...csvMapping, format: 'bank-csv-v1' }, scope, readBankXlsx(bytes, mapping));
   }
   return ({ invoice_csv: invoice, bank_csv: bank, business_json: business })[kind](text, mapping, scope);
 }
