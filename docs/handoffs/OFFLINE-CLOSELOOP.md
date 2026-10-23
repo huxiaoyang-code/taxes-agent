@@ -1,5 +1,27 @@
 # 离线闭环交接
 
+## 2026-10-24 PR94 已合事实与 OFFLINE-05A / #82A 当前实施候选
+
+PR94 已实际合并：[PR94](https://github.com/huxiaoyang-code/youshu-fork/pull/94)，base `e564ce3dbcc2a84a4fc558c4a318c88637ced5e1`，已审 head `9c3dcb4049e65f7d32c88f189b0f72896edf459a`，merge/main `6465a00e415c47d720d499e59faf233afd36708f`。root 与 fresh 新 XLSX **19/19**，六旧影响 **36/45/43/32/22/26** 均 exit0；fresh 接受，无确认 P1/P2。root 独立1673.29+16.73=1690.02、640.57+6.41=646.98及原件改1690.03/CAS/重开；fresh 独立2371.49+23.71=2395.20、bank49.37，原hash/store/规划候选通过。交付回执 #78 issuecomment6373834923 / #76 issuecomment6373835425。#78 更广格式/搬迁、会计审定及真实试用未完成。下方01C“未验收/未PR”保留历史时点，不覆盖此条已合事实。
+
+本片 OFFLINE-05A 基于上述 merge，branch `codex/huxiaoyang-code/offline-05a-review`，Refs #76/#82；认领 #82 issuecomment6373859336，#81协调6373859906。唯一当前继承模型实施 Codex subagent，用户授权覆盖旧执行器限制；无再委派、pi/Claude/TokenHub、其它模型或 Git 写操作。root 负责独立验证、未实施者全新审查及 Git。精确九文件窗口，未碰 #54 在途58路径的核心/DB/import/audit/batch/HTTP/MCP/旧测试/test-all/STATE/NEXT。维护入口由root先前实际运行，仅旧human-pl SHA mismatch，与本包无关，不读改历史原件。
+
+本片交付真正重新读取原文件/store/只读账库的 review bundle 与七表 XLSX 草稿，最后发布完整 manifest。接口与本机命令见 [OFFLINE-REVIEW](../OFFLINE-REVIEW.md)，任务窗口见 [OFFLINE-05A](../tasks/OFFLINE-05A.md)。只复用 #81 选定 VAT 字段，不新增规则/舍入。所有 accountantApproval/confirmationStatus=pending，periodComplete/submittable/authorizesExecution=false，未登录税局/未提交缴款/未获会计确认/真实性unverified；#82 完整结构化反馈、驳回、更正再确认链尚未实现，不能关闭 #82 或宣称正式更正完成。
+
+输入 loader 从原 VAT CLI 等价抽取，保持真实二进制 hash/sourceText、wx 输出/退出码和最后原件/store/ledger 再验。review 内部重新 VAT/完整度与真实账，WeakMap 约束 bundle 导出，公开 JSON clone 无身份。文件背书 rawInput 返回前绑定完整摘要，建包前改原文+SHA/声明/taxFacts拒绝，公开 facade/inventory 不能改私有 guard，省略 session 仍由 rawInput 私有关联实际再读。原文件及 store.active 的 sourceId/path/hash/version/receipt 只在本机 manifest 与索引明示，不在 stdout/stderr 输出。
+
+Excel 全部字符串、金额整数分转两位文本、0/null/NA分开、原票sheet/cell/pointer/凭证entry/规则URL可查；无公式/执行超链接，长文或非法XML控制符完整留JSON并显式指针诊断。先渲染，再独占新目录/明细，发布前再验，最后manifest；写/重验失败保留诊断现场，无自己的成功标记，不删除未知路径。纯内存原始字节API明确标内存范围，不能声称文件监测或批准。
+
+实施最终自测（cwd `06-workbench`）`node test/accountant-review.test.mjs` **15/15，exit0**。独立合成净额314159+123456=437615；XLSX读回15=13128.45、16=8752.30、20/22=4376.15、2/21及无调整0.00，所有100申报单元与9计算节点/两销售桥接金额逐分核对；另行政274.83、预付61.29。实际CSV及XLSX原票→自动候选→核心测试适配过账→fresh私有snapshot→JSON/XLSX/manifest；原票中文sheet/E4/原binarySHA、24位前导零、日期/中文/负号/注入字符串、零/null/NA、长40000原文/非法XML控制符保JSON+pointer诊断、ZIP无公式/超链接均实测。clone/伪snapshot/跨企业期、建包前三型raw变更、公开facade/副本篡改、省略session仍监测文件、实际账/原件/store变更拒绝；目录已存在/父目录缺失、真实第二文件故障/manifest打开失败/写后输入变化均不形成自己的完整标记。DB/WAL字节与全逻辑表零写，child signal=null/stderr空，DB/source实际close，无自有常驻服务。
+
+必要旧影响（未改旧测试）`node test/offline-vat.test.mjs` **22/22 exit0**，`node test/offline-xlsx.test.mjs` **19/19 exit0**。后续仅完善私有payload前置/自动关联与本片测试显示，不涉及XLSX reader、税算或旧断言；不无理由跑full/npm test。`git diff --check` exit0（只报既有CRLF归一化warning，无内容错误）。失败合成夹具保留在repo忽略 `.agent-runs/accountant-review-synthetic-VEkkOd`；成功默认清理，KEEP_FIXTURES=1可保留，import核心前隔离TEMP/TMP/WORKBENCH_DATA_DIR。
+
+失败/修复如实保留：首轮11/12 exit1，唯一为测试将25×2×2错写成200单元（期望201行），实际100单元/101行；修正算术断言后12/12。中途编辑辅助脚本有UTF8默认解码及数次cwd错误，未成功改到目标时仍跑旧版本，其12/13通过只记中途历史，不替代最终。root/fresh预审指出私有state外泄、完整度误显示JS类型、文件背书省略session降级、建包前payload未绑定：均补私有闭包/克隆inventory、真实每项目status行、rawSessions自动关联、loader读取时摘要及同步建包前校验，并保真实负例；加来源路径映射、XLSX链、真实manifest故障后最终15/15。未删旧断言、skip或伪造通过。
+
+root 最终验收已实际通过：新套 **15/15 exit0**（root进程23437已actualclose）；独立 `.agent-runs/manager-review-probe.mjs` **PASS exit0**，合成S499838.00→15=14995.14、16=9996.76、20/22=4998.38。七sheet/100字段的JSON-XLSX状态与金额逐项读回，所有已填cell均string、无formula/hyperlink；manifest两文件hash、bundle digest及实际sourceId/路径/hash一致。已有目录拒绝且旧文件hash不变，导出前后DB+WAL字节hash不变。实际原件追加newline，同时把公开session.assertCurrent改空并省略session，仍报input_changed且未创建发布目录；建包前nested source原文修改并重算SHA直接input_payload_changed。finally所有session/source/CLI child实际close，未碰真实资料；合成验收产物索引 `.agent-runs/manager-review-acceptance.json`。本条是root实际最终验证，不代替fresh最终完整head审查。
+
+现已再次冻结停止写，尚未fresh最终完整head接受或PR/合并，不预报完成。#54 仍在途，正式连续记账/既存账更正、会计审定黄金/真实业务试用、#83恢复、税局真实接入均未完成（税局仍0）。
+
 ## 2026-10-24 OFFLINE-01C / #78C 受限 XLSX 实施候选（尚待 root/fresh 最终验收）
 
 PR93 已实际合并：[PR93](https://github.com/huxiaoyang-code/youshu-fork/pull/93)，base `e280877ce60d75ec859ad6da2b8514fa98341c46`，已审 head `5a6f321c548ad225a67de8cffc98a9a74661e0cc`，merge/main `e564ce3dbcc2a84a4fc558c4a318c88637ced5e1`。root/fresh 税套最终22/22；fresh 独立S426737得12802.11/8534.74/4267.37，root另430217得12906.51/8604.34/4302.17。只完成受限选定服务VAT字段，非整期/全税种/正式更正/确认/在线申报，#81仍OPEN。下方04B“待验/未PR”保留历史，不覆盖本条已合事实。
