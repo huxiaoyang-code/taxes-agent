@@ -1,6 +1,6 @@
-> **当前 W2b R4：根影响验收通过，待新候选与全新最终独审（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`；[原66路径窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)保留，[本轮四路径窄修](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374950499)，总计仍65文件。旧候选 `81f404e465d052547d8913b1db1e066520769048` 被最终独审拒绝，不能合并；R4修复后的13原套＋1独立探针实际通过，尚未保存新candidate、重新最终独审、PR或merge。原八任务仍6/8，LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录或进程，税局真实接入0。证据分层及限制见[LOCAL06当前交接](LOCAL-06-AUDIT.md)。
+> **当前 W2b：2414整合后文档收口，最终head待锁定与全新独审/PR（2026-10-24）**：BASE `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375303767)，原66窗口与总65文件不增。R4候选 `a15e6e7b9bb648e04707b30776c7a680bdc9f447` 已提交，与新main实际整合至 `58e0721593e5b85b3e113de414b991f3a59051ff`；最终整合head尚待锁定与全新最终独审/PR，本W2b尚未PR或合main。旧 `81f404e465d052547d8913b1db1e066520769048` 精确候选被拒，不可直接作为最终head合并；修复提交保留历史父链。R4根13原套＋1探针证据按相同源字节保留。八任务6/8、LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录/进程，税局真实0。最新整合与验收状态见[LOCAL06交接](LOCAL-06-AUDIT.md)。
 
-恢复先读章程、STATE与LOCAL06当前交接，核对R4源字节和65文件清单，原81不能合并。唯一获授权fallback已完成本轮四路径修复与docs收口，不重复派出实施者。下一步由root保存新candidate，交全新未参与实施者做最终独审，再按结果执行Git/PR；此刻尚无新candidate/PR/merge。
+恢复先读章程、STATE与LOCAL06当前交接，核对R4源字节和65文件清单，原81不可直接作为最终head合并。唯一获授权fallback已完成本轮四路径修复与docs收口，不重复派出实施者。下一步由root锁定最终整合head，交全新未参与实施者做最终独审，再按结果执行Git/PR；R4中间候选已保存并整合，最终head待锁定，本W2b尚无PR/合main。
 
 ## 2026-10-24 R4之前W2b入口（历史）
 

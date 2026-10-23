@@ -1,6 +1,16 @@
-> **当前 W2b R4：根影响验收通过，待新候选与全新最终独审（2026-10-24）**：BASE `35bd8e53c703cdafa5989ba0df8e35fb7924e258`；[原66路径窗口](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374636679)保留，[本轮四路径窄修](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6374950499)，总计仍65文件。旧候选 `81f404e465d052547d8913b1db1e066520769048` 被最终独审拒绝，不能合并；R4修复后的13原套＋1独立探针实际通过，尚未保存新candidate、重新最终独审、PR或merge。原八任务仍6/8，LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录或进程，税局真实接入0。
+> **当前 W2b：2414整合后文档收口，最终head待锁定与全新独审/PR（2026-10-24）**：BASE `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375303767)，原66窗口与总65文件不增。R4候选 `a15e6e7b9bb648e04707b30776c7a680bdc9f447` 已提交，与新main实际整合至 `58e0721593e5b85b3e113de414b991f3a59051ff`；最终整合head尚待锁定与全新最终独审/PR，本W2b尚未PR或合main。旧 `81f404e465d052547d8913b1db1e066520769048` 精确候选被拒，不可直接作为最终head合并；修复提交保留历史父链。R4根13原套＋1探针证据按相同源字节保留。八任务6/8、LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录/进程，税局真实0。
 
-## 2026-10-24 W2b R4 当前交接（根影响验收通过，最终独审待重做）
+## 2026-10-24 当前2414整合与最终head准备
+
+root已保存R4修复提交a15e6e7b9bb648e04707b30776c7a680bdc9f447，并在clean状态与BASE2414c512e6ec0cd58e94a6d9a6895b2ddbb50944实际merge至58e0721593e5b85b3e113de414b991f3a59051ff（tree72019c2d44a66747bf8be25b0609aa99e2f1449c）。35bd→2414的上游2 commits、1签名merge、17对象逐SHA/签名/祖先核验后CAS tracking，原root main未改。新增7个上游文件均不交原66；整合前后本包65文件bytes/SHA全保持，整合后当时clean，无包/依赖/原注册改动。上游accountant-review-feedback CLI、server/store、原test及三份专属docs只读，不把同事PR96算本包交付或关闭其Issue。
+
+R4既有13原套＋1自选probe、48未变＋4新验、domain23组/57events/210恶意与自选16/两准则9273/1981分等记录保留，不在相同源上无差别重跑。当前最新claim为页头6375303767，总65文件不增；旧35bd/6465及旧81拒绝按各阶段历史保留，不丢弃修复提交的Git父链。
+
+新上游feedback必要整合补验：首轮18/20、actual exit/close1且DBclose，源码前后同；两红来自root将fixture迁出workbench后隔离runtime缺fflate，原20case/test断言未改，不视为已确认业务缺陷。首轮目录/log/result/driver保留。第二轮使用新短UUID受管根，把既有已锁依赖逐文件复制并核SHA，原test source/assertions保持，仅fixture mkdtemp定向并在业务import前检查lstat/realpath。root随后实际完成该原套20/20、0FAIL、actual exit/close0（2026-10-23T21:49:12.962Z），passed=true、error=null、sourceUnchanged=true，DB实际close且child close已观察；两项隔离场景及原2000容量case均真实通过。日志SHA256为22dfacb8da413cc80bebe76b65bedd6028965c32673613159f95f13b243bcbc5。首轮18/20真实失败及测试依赖环境修正记录保留，不把旧红改成当时已绿，也不声称产品源或原断言被修。
+
+本轮仅13docs当前元数据和总交付清单收口，52份非docs保持根验收字节；不Git、不运行产品/测试/新服务、不整合额外上游。最终整合head待root锁定并交全新未实施者独审，之后按实际结果执行PR；当前仍6/8，W3b/W4/Windows/最终链未完成。
+
+## 2026-10-24 W2b R4补修与验收记录（整合前阶段）
 
 旧完整候选81f404e465d052547d8913b1db1e066520769048最终独审REJECT：银行原accountSetId getter先选择账套1、实际effect写账套2，audit/receipt仍以账套1成功；displayName摘要值与执行值也不同。辅助scope getter只观察到调用1次后拒绝且零写，未观察到aux跨套写。旧拒绝证据保留，旧81不会合并。
 
