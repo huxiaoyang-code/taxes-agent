@@ -1,5 +1,29 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-04A / #81A 实施候选（待最终冻结独审与PR）
+
+PR90实际已合：[PR90](https://github.com/huxiaoyang-code/youshu-fork/pull/90)，base `19e861a580ebffec0b5e14eafb41ca457f9de71e`，已审head `85eabbba1a8d92ce0101588919ddbaae33003655`，merge/main `9cd0176bb912c94b519fc40b155159d4ca5b81c7`。行政候选以completionDate确认日修复后的bookkeeping43/43、root验证及fresh接受事实以该已合版本为准；下方03A未验/42套及修前接受等均保留历史，不作为新候选接受。
+
+本片基于PR90，branch `codex/huxiaoyang-code/offline-04-snapshot`，Refs #76/#80/#81。用户明确授权唯一当前模型实施subagent，未再委派、未使用pi/Claude/TokenHub或其他执行模型，无Git提交/推送/合并。只改六文件窗口（新增模块/CLI/测试/合同/任务单及本交接）；DB/accounting/import/bank/aux/audit/coordinator/batch/HTTP/MCP、package/test-all、STATE/NEXT-SESSION均未改。#54审计coordinator仍在另一窗口在途，正式写依赖未合，本片独立提供只读基础。
+
+接口：`openReadonlyLedgerSource(explicitPath)` 返回模块私有品牌source，只公开close；`captureLedgerSnapshot(source,{enterpriseKey,accountSetId,fromPeriod,toPeriod})` 同事务从实际规范企业绑定、持久profile/账户/期初/期间、完整posted/draft凭证及分录、真实import来源/批次和可选audit/batch实例生成深冻结产物；`validateLedgerSnapshot(source,snapshot)` 重新读取scope比较current/stale。所有产物固定calculationReady=false/submittable=false/authorizesExecution=false，完整度/历史/原文件及经济事实真实性独立unverified。公开digest或导出JSON不能恢复WeakMap可信能力；clone、跨source、任意callerDB及关闭后均拒绝。完整合同见 [OFFLINE-LEDGER-SNAPSHOT](../OFFLINE-LEDGER-SNAPSHOT.md)，任务窗口见 [OFFLINE-04A](../tasks/OFFLINE-04A.md)。
+
+CLI为 `node scripts/offline-ledger-snapshot.mjs --db <本机.db> --enterprise-key <key> --account-set-id <id> --from YYYY-MM --to YYYY-MM --output <NEW.json>`（cwd `06-workbench`）。显式readOnly开库、复用withReadSnapshot，不导入默认db、不迁移安装、不联网；output独占新建，只有该本机JSON含明细，stdout固定状态/计数，错误固定白名单，无路径/企业/金额/堆栈。未来税算必须同进程从source新捕获并重验，JSON只是diagnostic。
+
+首版root独立probe已通过实际import439.27+4.39=443.66、posted借贷各44366分、22.87草稿分离、缺3月、clone拒绝、他企81.53不失效、新3月及反过账stale；source/db finally close。第一次probe因root未建忽略.agent-runs父目录ENOENT，未到产品执行；建目录后通过，非产品失败。该probe不是最终冻结验收。
+
+实施自测历史按真实发生保留：首轮 `node test/offline-ledger-snapshot.test.mjs`18/21 exit1，binding-key夹具被现行FK拒绝、系统Temp下官方audit夹具backup_invalid、持连接文件rename EBUSY。保留规范FK约束，改用无来源空账套的合法更正；history故障修改后恢复原summary；将合成root改repo忽略.agent-runs、import前隔离WORKBENCH_DATA_DIR/TEMP/TMP后官方audit/batch安装通过。随后19/22、21/22仍exit1，剩Windows父目录rename EPERM。改为严格win32/errno分支，实查原dev/ino/birthtime及字节不变、原快照仍current，明确输出OS_BLOCKED而不声称实际换入已验。新增held库hardlink后23/24 exit1，沙箱内EPERM；root随后获授权沙箱外实际运行24/24 exit0，真实hardlink建立/nlink=2触发产品拒绝、移除后current、DB实际close。最终保留实际硬链断言，不skip、不把沙箱EPERM降为通过、不使用文件身份mock。
+
+root/fresh预审修复：未知audit结构原先会把活实例压成unverified/null，现保留实际实例raw rows、schema状态和问题入摘要；batch独立实例及component元数据也保留，官方安装及audit absent时batch实例变更失效已验证。逐表读取来源证据，避免四表every导致缺一表时丢弃其他已知事实：原root真实副本DROP import_batch_vouchers后改source fingerprint仍current的问题已修，保留各表presence/缺项与实际来源/批次、缺关联unverified，新增第25项变更必须stale回归。完整来源四表正常路径保留原结果。
+
+root在修来源后已获授权沙箱外实跑25/25 exit0；随后fresh发现非有限SQLite数字的JSON摘要碰撞P2：Infinity/-Infinity会同序列化为null。现于读事务内对全部实际快照数据递归拒绝任何非有限数字（包括非money列），捕获和重验报固定ledger_stored_number_invalid，不构造自定义serializer。第26项真实SQL回归保留±Infinity金额与可空非金额REAL字段/NULL变更，要求捕获/重验明确拒绝及finally恢复后current；负值/非法subcent原诊断未删。25项结果为修前历史，尚待root修后26项及最终head验证。
+
+范围前历史按实际原始凭证保留，账户/期初/期间和profile变更均入重验；非法超过两位的实际存储金额不舍入，minor=null并给stored_money_invalid。entries按Map单遍分组。三个月缺项、空账、无来源、指纹失配均不能当零申报或已证实完整。所有开发/故障夹具均合成，失败自动保留、成功默认清理、KEEP_FIXTURES=1可保留，无真实账套/原件/凭据测试，无自有常驻服务。
+
+必要影响回归（同cwd，未改旧断言）：实施 `node test/offline-bookkeeping.test.mjs`43/43 exit0，`node test/import-incremental.test.mjs`57/57 exit0（后者启动前TEMP/TMP设repo忽略.agent-runs）；未跑无关全量。`git diff --check`exit0。维护入口flow status由root在维护仓库实跑，仍仅旧human-pl SHA mismatch exit1，未读改历史原件，与本片无关。
+
+尚待root最终26项定点验证、全新未实施者按最终完整head独审、PR/合并，不以实施结果或旧24/25项结果代替新冻结验收。#81税算、#80正式连续过账、#77会计审定黄金及#78持久接收/#79正式执行回执等均未完成；税局真实接入仍0。
+
 ## 2026-10-24 OFFLINE-03A候选（尚未root最终验收/PR）
 
 最终冻结后返工事实：root已将前一候选形成**仅本地、未发布未PR**的`717e4fb`，当时实施42/42；root最终定点发现行政服务日期P2：票日2026-03-10、#78业务date及新completionDate均2026-03-20，仍产生date03-10的管理费用/应付450.81候选。fresh实际复现后撤回对该版本的接受；42套通过及旧接受不构成修后验收。现修复行政候选date为实际completionDate，productSupported日期门也按该实际确认日，recognition.dateSource留逐字段pointer/hash；销售同日及预付银行日保持对应来源。新增同月异日正例，保持三候选和金额断言，**修后实施`node test/offline-bookkeeping.test.mjs`43/43，exit0**，`git diff --check`通过。仅本片源/测试/文档/交接必要修改，无Git操作；等待root新完整head及重新独审。下方42/42及更早验收均为修前历史，不作为本次修后接受。
