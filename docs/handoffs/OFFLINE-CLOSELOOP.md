@@ -1,5 +1,27 @@
 # 离线闭环交接
 
+## 2026-10-24 PR97 已合事实与 #54 当前依赖状态
+
+PR97已实际合并：[PR97](https://github.com/huxiaoyang-code/youshu-fork/pull/97)，base `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`，已审head `8d79547e0c06316f1f94b350fba6454934d71140`，merge/main `98e57bdfbe29e2f8716ab0768492583064cd30c1`。#79 comment6375420406 / #76 comment6375425702交付；实施/root/fresh三方action-plan33及旧plan45/bookkeeping43通过。下方02B“候选/待PR”均保留历史时点，以本段已合事实为准。
+
+#54最新已读实质更新为comment6375303767：修复整合`58e072`待独审；只读调查工作区实际HEAD `87043a11b626a048e65e81931543be8dc3df2a3e`，尚未合入main。下方comment6374950499等旧拒绝均为历史事实，不能当最新候选状态。OFFLINE-00B仅使用现有域API测试adapter，仍不代表#54正式写账接线。
+
+## 2026-10-24 OFFLINE-00B 独立业务黄金实施冻结候选（尚未root最终验收/独审/PR）
+
+Refs #76 / #77 / #85，base `98e57bdfbe29e2f8716ab0768492583064cd30c1`，工作区 `offline-00b-business-golden`。本轮唯一当前模型实施subagent，用户明确覆盖外部执行器限制；没有pi/Claude/TokenHub、再委派、Git/PR或全局配置操作。初始窗口仅新raw/expected、新reference/helper测试、业务说明/任务和本own交接；实际黄金发现产品缺陷后root在#77 comment6375643868/#80 comment6375644345窄扩 `06-workbench/server/offline-bookkeeping.mjs` 唯一benefit月份门。未改旧test/旧16fixtures/其余server/package/lock/test-all/STATE/NEXT及#54核心66路径。
+
+交付12组独立合成业务（不是原6+6故障变体），raw为实际CSV/XLSX/businessJSON及原始声明，literal expected先于产品运行冻结：每笔全部分录、业务identity、原件SHA/具体line或cell、会计事实pointer、规则与文字推导、Jan/Feb/Mar逐科目和总额及selected VAT。root已独立按raw及Python Decimal核完12全部分录、36个月快照、所选税字段和来源SHA，无金额差异（不读取实施预算算法）。运行函数只接raw目录，每例新子进程/隔离DB且scope原bytes不改，核心import前设WORKBENCH_DATA_DIR/TEMP/TMP。产品自动候选经现有importIncremental测试专用adapter进入真实账，再用A.trialBalance和私有真实snapshot/calculateOfflineVat验收，无客户预制分录、权限/审计/快照伪造。
+
+trialBalance opening为初始期初、period为从start_period累计；expected明确initialOpening/cumulativeMovements/monthlyMovements/closing，测试通过相邻累计差核当月。全部未结账/未结转，不冒充正式结转或两合法连续税期。G09/11/12按实际历史银行/资本事实显式setOpeningBalances，声明balances_required/prior_required；申报blocked/null，G12即使收入超过30万也不填伪零。G07/08/10低门槛/无销项unsupported/null，初始账载17.63不当最终税申报。accountantStatus一律pending，税局真实接入仍0。
+
+首次实际新套12/14、追加小数净额控制后13/15，均exit1（10/12业务通过）：G04/G06票Jan而完成/全部受益Feb，被产品line91旧r.date月份错误拒绝。先保黄金报告root，获上述唯一窄授权后以completionDate月比较，不改黄金金额/date；保留缺项、跨度、原事实冲突、scope/year及销售同日时点门。新增G04六种边界实拒且独立销售保留；G05真receive并新进程inspect reopen、同票跨格式一候选与每笔真实voucher/entry/raw/rule关联通过。
+
+修后 `node test/offline-business-golden.test.mjs` **15/15、exit0（12/12独立业务）**。相关只读旧套 `node test/offline-bookkeeping.test.mjs` **43/43**、`node test/offline-action-plan.test.mjs` **33/33**、`node test/offline-vat.test.mjs` **22/22**均exit0（cwd06-workbench）。新增控制含原件更正、红票拒、小数净额unsupported、缺件/更正newVersion、反过账stale、clone/跨企/跨期拒绝、expected poison对产品零影响；控制不计12业务数。每子进程session/source/DB finally actualclose，无常驻服务或真实资料。失败合成目录保留.agent-runs，成功默认清理。未跑全量。
+
+尚待root最终冻结自测、全新未实施者独审及Git/PR。#54正式coordinator接线不属于测试adapter，#77会计生产审定、#85试用及OFFLINE整链未完成，不关闭这些总项。详见[业务说明](../OFFLINE-BUSINESS-GOLDEN.md)与[任务](../tasks/OFFLINE-00B.md)。
+
+root随后实际独立验证：新套15/15（KEEP_FIXTURES=1）及旧bookkeeping43/action33/VAT22均exit0、skip0；独立Python Decimal按raw复核12逐笔、36份月末快照、选定税字段及实际SHA全部PASS。额外新输入S469271+行政617.29（Feb完成），真实域API过账后核到税行15=14078.13、16=9385.42、22=4692.71及March未结账trial各侧474581.00，原件SHA实核PASS；证据在ignored `manager-new-amount-acceptance.json`。独立完成月探针确认正确完成月通过，发票月/跨月/出scope/2027拒绝，null由schema拒绝。root早期探针的URL编码/参数投影及同facts文件hash影响销售contentVersion的过严全对象相等均已更正，仅属探针设置错误，不记作产品缺陷。仍待fresh最终独审及root最终head/Git/PR，不作会计生产审定。
+
 ## 2026-10-24 PR96 已合事实与 OFFLINE-02B / #79B 实施冻结候选
 
 PR96已实际合并：[PR96](https://github.com/huxiaoyang-code/youshu-fork/pull/96)，base `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，已审head `dd89fc6fc8c1df18ef0069282094a965e8b6dcb3`，merge/main `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`。实施/root/fresh反馈20/20，root旧review15/VAT22均exit0；fresh接受，无P1/P2。root独立S499838→14995.14/9996.76/4998.38，fresh714760→21442.80/14295.20/7147.60。冷readonly首次可生成0字节WAL，预热后DB/WAL不变，无业务帧写。交付 #82 issuecomment6374939293 / #76 issuecomment6374943801。#82正式账更正、生产审定仍未完成，整项保持OPEN；下方05B“候选/未合”均为历史时点。

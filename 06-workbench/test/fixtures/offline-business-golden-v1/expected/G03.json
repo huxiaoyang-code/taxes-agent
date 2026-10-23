@@ -1,0 +1,697 @@
+{
+  "version": "offline-business-golden/1",
+  "id": "G03",
+  "synthetic": true,
+  "accountantStatus": "pending",
+  "sourceRefs": [
+    {
+      "sourceId": "sales",
+      "path": "sales.csv",
+      "kind": "invoice_csv",
+      "sha256": "22b49e299d370815490bd0a6db4a1caa0a8995c91b8a64ac9ebf4f1bc9b9bcf5",
+      "locator": {
+        "headerLine": 1
+      }
+    },
+    {
+      "sourceId": "sales-xlsx",
+      "path": "sales-xlsx.xlsx",
+      "kind": "invoice_xlsx",
+      "sha256": "46e6b8276f559dfe2fb6d870874c57c9b6e1413e2ca2659f8248a95740dcab5f",
+      "locator": {
+        "sheet": "原票",
+        "headerRow": 1
+      }
+    },
+    {
+      "sourceId": "business",
+      "path": "business.json",
+      "kind": "business_json",
+      "sha256": "ee92f5947e7ed9da30d71ba789203c09a28c99382a97ee4c4fddfedec12d190f",
+      "locator": {
+        "pointer": "/facts"
+      }
+    }
+  ],
+  "vouchers": [
+    {
+      "date": "2026-01-13",
+      "expectedRuleId": "small-service-sale/1",
+      "entries": [
+        {
+          "accountCode": "1122",
+          "debit": "124691.57",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "123457.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "1234.57"
+        }
+      ],
+      "identity": {
+        "sellerKey": "SYNTHETIC-GOLDEN-G03",
+        "code": "",
+        "number": "0000001234567890123401"
+      },
+      "accountingFactRef": {
+        "path": "facts.json",
+        "sha256": "780df0f465520fe69bb9694c23094c46f83b0e04708bae18374a3ed3d81fb43e",
+        "pointer": "/facts/0"
+      },
+      "derivation": "gross=net+票面tax；按开票/完成/取得索款权同日1122借，5001及2221贷；票税为初始账载税而非最终申报",
+      "sourceRefs": [
+        {
+          "sourceId": "sales",
+          "path": "sales.csv",
+          "fileSha256": "22b49e299d370815490bd0a6db4a1caa0a8995c91b8a64ac9ebf4f1bc9b9bcf5",
+          "row": 1,
+          "line": 2,
+          "sheet": null,
+          "fields": {
+            "net": {
+              "column": 5
+            },
+            "tax": {
+              "column": 6
+            },
+            "gross": {
+              "column": 7
+            }
+          }
+        },
+        {
+          "sourceId": "sales-xlsx",
+          "path": "sales-xlsx.xlsx",
+          "fileSha256": "46e6b8276f559dfe2fb6d870874c57c9b6e1413e2ca2659f8248a95740dcab5f",
+          "row": 3,
+          "line": null,
+          "sheet": "原票",
+          "fields": {
+            "net": {
+              "cell": "E3",
+              "column": 5
+            },
+            "tax": {
+              "cell": "F3",
+              "column": 6
+            },
+            "gross": {
+              "cell": "G3",
+              "column": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-02-13",
+      "expectedRuleId": "small-service-sale/1",
+      "entries": [
+        {
+          "accountCode": "1122",
+          "debit": "113355.33",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "112233.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "1122.33"
+        }
+      ],
+      "identity": {
+        "sellerKey": "SYNTHETIC-GOLDEN-G03",
+        "code": "",
+        "number": "0000001234567890123402"
+      },
+      "accountingFactRef": {
+        "path": "facts.json",
+        "sha256": "780df0f465520fe69bb9694c23094c46f83b0e04708bae18374a3ed3d81fb43e",
+        "pointer": "/facts/1"
+      },
+      "derivation": "gross=net+票面tax；按开票/完成/取得索款权同日1122借，5001及2221贷；票税为初始账载税而非最终申报",
+      "sourceRefs": [
+        {
+          "sourceId": "sales-xlsx",
+          "path": "sales-xlsx.xlsx",
+          "fileSha256": "46e6b8276f559dfe2fb6d870874c57c9b6e1413e2ca2659f8248a95740dcab5f",
+          "row": 2,
+          "line": null,
+          "sheet": "原票",
+          "fields": {
+            "net": {
+              "cell": "E2",
+              "column": 5
+            },
+            "tax": {
+              "cell": "F2",
+              "column": 6
+            },
+            "gross": {
+              "cell": "G2",
+              "column": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-03-13",
+      "expectedRuleId": "small-service-sale/1",
+      "entries": [
+        {
+          "accountCode": "1122",
+          "debit": "99752.65",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "98765.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "987.65"
+        }
+      ],
+      "identity": {
+        "sellerKey": "SYNTHETIC-GOLDEN-G03",
+        "code": "",
+        "number": "0000001234567890123403"
+      },
+      "accountingFactRef": {
+        "path": "facts.json",
+        "sha256": "780df0f465520fe69bb9694c23094c46f83b0e04708bae18374a3ed3d81fb43e",
+        "pointer": "/facts/2"
+      },
+      "derivation": "gross=net+票面tax；按开票/完成/取得索款权同日1122借，5001及2221贷；票税为初始账载税而非最终申报",
+      "sourceRefs": [
+        {
+          "sourceId": "sales",
+          "path": "sales.csv",
+          "fileSha256": "22b49e299d370815490bd0a6db4a1caa0a8995c91b8a64ac9ebf4f1bc9b9bcf5",
+          "row": 2,
+          "line": 3,
+          "sheet": null,
+          "fields": {
+            "net": {
+              "column": 5
+            },
+            "tax": {
+              "column": 6
+            },
+            "gross": {
+              "column": 7
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "monthlyUnclosedTrials": [
+    {
+      "month": "2026-01",
+      "lines": [
+        {
+          "code": "1122",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "124691.57",
+            "0.00"
+          ],
+          "monthlyMovements": [
+            "124691.57",
+            "0.00"
+          ],
+          "closing": [
+            "124691.57",
+            "0.00"
+          ]
+        },
+        {
+          "code": "2221",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "0.00",
+            "1234.57"
+          ],
+          "monthlyMovements": [
+            "0.00",
+            "1234.57"
+          ],
+          "closing": [
+            "0.00",
+            "1234.57"
+          ]
+        },
+        {
+          "code": "5001",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "0.00",
+            "123457.00"
+          ],
+          "monthlyMovements": [
+            "0.00",
+            "123457.00"
+          ],
+          "closing": [
+            "0.00",
+            "123457.00"
+          ]
+        }
+      ],
+      "totals": {
+        "initialOpening": [
+          "0.00",
+          "0.00"
+        ],
+        "cumulativeMovements": [
+          "124691.57",
+          "124691.57"
+        ],
+        "monthlyMovements": [
+          "124691.57",
+          "124691.57"
+        ],
+        "closing": [
+          "124691.57",
+          "124691.57"
+        ]
+      }
+    },
+    {
+      "month": "2026-02",
+      "lines": [
+        {
+          "code": "1122",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "238046.90",
+            "0.00"
+          ],
+          "monthlyMovements": [
+            "113355.33",
+            "0.00"
+          ],
+          "closing": [
+            "238046.90",
+            "0.00"
+          ]
+        },
+        {
+          "code": "2221",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "0.00",
+            "2356.90"
+          ],
+          "monthlyMovements": [
+            "0.00",
+            "1122.33"
+          ],
+          "closing": [
+            "0.00",
+            "2356.90"
+          ]
+        },
+        {
+          "code": "5001",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "0.00",
+            "235690.00"
+          ],
+          "monthlyMovements": [
+            "0.00",
+            "112233.00"
+          ],
+          "closing": [
+            "0.00",
+            "235690.00"
+          ]
+        }
+      ],
+      "totals": {
+        "initialOpening": [
+          "0.00",
+          "0.00"
+        ],
+        "cumulativeMovements": [
+          "238046.90",
+          "238046.90"
+        ],
+        "monthlyMovements": [
+          "113355.33",
+          "113355.33"
+        ],
+        "closing": [
+          "238046.90",
+          "238046.90"
+        ]
+      }
+    },
+    {
+      "month": "2026-03",
+      "lines": [
+        {
+          "code": "1122",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "337799.55",
+            "0.00"
+          ],
+          "monthlyMovements": [
+            "99752.65",
+            "0.00"
+          ],
+          "closing": [
+            "337799.55",
+            "0.00"
+          ]
+        },
+        {
+          "code": "2221",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "0.00",
+            "3344.55"
+          ],
+          "monthlyMovements": [
+            "0.00",
+            "987.65"
+          ],
+          "closing": [
+            "0.00",
+            "3344.55"
+          ]
+        },
+        {
+          "code": "5001",
+          "initialOpening": [
+            "0.00",
+            "0.00"
+          ],
+          "cumulativeMovements": [
+            "0.00",
+            "334455.00"
+          ],
+          "monthlyMovements": [
+            "0.00",
+            "98765.00"
+          ],
+          "closing": [
+            "0.00",
+            "334455.00"
+          ]
+        }
+      ],
+      "totals": {
+        "initialOpening": [
+          "0.00",
+          "0.00"
+        ],
+        "cumulativeMovements": [
+          "337799.55",
+          "337799.55"
+        ],
+        "monthlyMovements": [
+          "99752.65",
+          "99752.65"
+        ],
+        "closing": [
+          "337799.55",
+          "337799.55"
+        ]
+      }
+    }
+  ],
+  "vat": {
+    "calculationReady": true,
+    "status": "selected_fields_calculated",
+    "selectedFields": [
+      1,
+      2,
+      3,
+      15,
+      16,
+      20,
+      21,
+      22
+    ],
+    "cells": [
+      {
+        "row": 1,
+        "period": "current",
+        "column": "services",
+        "value": "334455.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "sum(reconciled_taxable_invoice_net)",
+        "sources": [
+          "law",
+          "relief",
+          "instructions"
+        ]
+      },
+      {
+        "row": 2,
+        "period": "current",
+        "column": "services",
+        "value": "0.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "evidenced_no_special_invoices",
+        "sources": [
+          "instructions"
+        ]
+      },
+      {
+        "row": 3,
+        "period": "current",
+        "column": "services",
+        "value": "334455.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "sum(reconciled_ordinary_invoice_net)",
+        "sources": [
+          "instructions"
+        ]
+      },
+      {
+        "row": 15,
+        "period": "current",
+        "column": "services",
+        "value": "10033.65",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row1*3/100",
+        "sources": [
+          "law",
+          "instructions"
+        ]
+      },
+      {
+        "row": 16,
+        "period": "current",
+        "column": "services",
+        "value": "6689.10",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row1*2/100",
+        "sources": [
+          "relief",
+          "instructions"
+        ]
+      },
+      {
+        "row": 20,
+        "period": "current",
+        "column": "services",
+        "value": "3344.55",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row15-row16",
+        "sources": [
+          "blankForm"
+        ]
+      },
+      {
+        "row": 21,
+        "period": "current",
+        "column": "services",
+        "value": "0.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "evidenced_no_prepayments",
+        "sources": [
+          "instructions",
+          "blankForm"
+        ]
+      },
+      {
+        "row": 22,
+        "period": "current",
+        "column": "services",
+        "value": "3344.55",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row20-row21",
+        "sources": [
+          "blankForm"
+        ]
+      },
+      {
+        "row": 1,
+        "period": "yearToDate",
+        "column": "services",
+        "value": "334455.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "sum(reconciled_taxable_invoice_net)",
+        "sources": [
+          "law",
+          "relief",
+          "instructions"
+        ]
+      },
+      {
+        "row": 2,
+        "period": "yearToDate",
+        "column": "services",
+        "value": "0.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "evidenced_no_special_invoices",
+        "sources": [
+          "instructions"
+        ]
+      },
+      {
+        "row": 3,
+        "period": "yearToDate",
+        "column": "services",
+        "value": "334455.00",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "sum(reconciled_ordinary_invoice_net)",
+        "sources": [
+          "instructions"
+        ]
+      },
+      {
+        "row": 15,
+        "period": "yearToDate",
+        "column": "services",
+        "value": "10033.65",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row1*3/100",
+        "sources": [
+          "law",
+          "instructions"
+        ]
+      },
+      {
+        "row": 16,
+        "period": "yearToDate",
+        "column": "services",
+        "value": "6689.10",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row1*2/100",
+        "sources": [
+          "relief",
+          "instructions"
+        ]
+      },
+      {
+        "row": 20,
+        "period": "yearToDate",
+        "column": "services",
+        "value": "3344.55",
+        "status": "computed",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row15-row16",
+        "sources": [
+          "blankForm"
+        ]
+      },
+      {
+        "row": 21,
+        "period": "yearToDate",
+        "column": "services",
+        "value": null,
+        "status": "not_applicable",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "evidenced_no_prepayments",
+        "sources": [
+          "instructions",
+          "blankForm"
+        ]
+      },
+      {
+        "row": 22,
+        "period": "yearToDate",
+        "column": "services",
+        "value": null,
+        "status": "not_applicable",
+        "expectedRuleId": "offline-vat-selected/1",
+        "formula": "row20-row21",
+        "sources": [
+          "blankForm"
+        ]
+      }
+    ],
+    "requiredIssues": [],
+    "allOtherCells": null,
+    "ruleVersion": "offline-vat-selected/1",
+    "ruleSources": {
+      "law": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+      "relief": "https://shanghai.chinatax.gov.cn/zzzb/zcwj/202602/t479283.html",
+      "instructions": "https://shanghai.chinatax.gov.cn/tax/bsfw/xzzx/bgxz/sbzsl/202107/t459066.html",
+      "blankForm": "https://12366.chinatax.gov.cn/bzds/003/003.html"
+    }
+  },
+  "limitations": [
+    "unclosed_as_of_snapshots_not_formal_close",
+    "not_two_legal_filing_periods",
+    "test_domain_adapter_not_formal_54_wiring",
+    "source_authenticity_unverified"
+  ]
+}

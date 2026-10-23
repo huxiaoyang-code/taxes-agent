@@ -1,0 +1,7 @@
+{
+  "id": "G05",
+  "synthetic": true,
+  "accountantStatus": "pending",
+  "description": "durable material receipt reopen",
+  "receiptMode": true
+}

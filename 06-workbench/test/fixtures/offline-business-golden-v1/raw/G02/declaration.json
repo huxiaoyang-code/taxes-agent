@@ -1,0 +1,117 @@
+{
+  "version": "offline-declaration/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G02",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "profile": "small-2011",
+  "businessScope": "service-company",
+  "evidence": [
+    {
+      "evidenceId": "owner",
+      "kind": "customer_declaration",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-GOLDEN-G02",
+        "accountSetId": "1",
+        "period": "2026-Q1",
+        "currency": "CNY",
+        "unit": "yuan"
+      },
+      "confirmedBy": {
+        "name": "SYNTHETIC-DECLARANT",
+        "role": "owner"
+      },
+      "basis": "合成新设登记2026-01-01，首期零期初；小规模季度税种资格；完整Q1合同发票账户和无其他排除事项登记"
+    },
+    {
+      "evidenceId": "accountant",
+      "kind": "customer_declaration",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-GOLDEN-G02",
+        "accountSetId": "1",
+        "period": "2026-Q1",
+        "currency": "CNY",
+        "unit": "yuan"
+      },
+      "confirmedBy": {
+        "name": "SYNTHETIC-DECLARANT",
+        "role": "accountant"
+      },
+      "basis": "合成新设登记2026-01-01，首期零期初；小规模季度税种资格；完整Q1合同发票账户和无其他排除事项登记"
+    }
+  ],
+  "enterpriseEvidenceIds": [
+    "owner"
+  ],
+  "bankAccounts": {
+    "accountIds": [],
+    "evidenceIds": [
+      "owner"
+    ]
+  },
+  "coverage": [
+    {
+      "kind": "sales",
+      "accountId": null,
+      "from": "2026-01",
+      "to": "2026-03",
+      "state": "complete",
+      "sourceIds": [
+        "sales"
+      ],
+      "evidenceIds": [
+        "owner"
+      ]
+    },
+    {
+      "kind": "purchase",
+      "accountId": null,
+      "from": "2026-01",
+      "to": "2026-03",
+      "state": "no_activity",
+      "sourceIds": [],
+      "evidenceIds": [
+        "owner"
+      ]
+    }
+  ],
+  "tax": {
+    "vatStatus": "small_scale",
+    "filingFrequency": "quarterly",
+    "evidenceIds": [
+      "accountant"
+    ]
+  },
+  "applicability": [
+    {
+      "area": "payroll",
+      "present": false,
+      "evidenceIds": [
+        "owner"
+      ]
+    },
+    {
+      "area": "assets",
+      "present": false,
+      "evidenceIds": [
+        "owner"
+      ]
+    }
+  ],
+  "opening": {
+    "state": "new_zero",
+    "evidenceIds": [
+      "accountant"
+    ]
+  },
+  "history": {
+    "state": "first_period",
+    "evidenceIds": [
+      "accountant"
+    ]
+  },
+  "bankFacts": []
+}

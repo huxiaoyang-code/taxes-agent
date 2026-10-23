@@ -1,0 +1,35 @@
+{
+  "version": "offline-accounting-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G09",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "facts": [
+    {
+      "factId": "prepay",
+      "kind": "service_prepayment",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "bankRef": {
+        "bankAccountId": "bank-A",
+        "refId": "PAY-1"
+      },
+      "contractId": "G09-FUTURE",
+      "supplierKey": "FUTURE-SUPPLIER",
+      "serviceStartDate": "2026-04-01",
+      "serviceEndDate": "2026-06-30",
+      "ordinaryService": true,
+      "performanceThroughPeriodEnd": "not_started",
+      "refundThroughPeriodEnd": "none",
+      "paymentCount": 1,
+      "otherRecognitionInProvidedMaterials": "none",
+      "relatedInvoiceRefs": []
+    }
+  ]
+}
