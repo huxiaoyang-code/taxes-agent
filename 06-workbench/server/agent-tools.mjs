@@ -7,6 +7,10 @@
 //   - 成功：返回该工具自己的 JSON 结构（保留既有兼容字段）。
 //   - 未实现：返回 { not_implemented: true, ... }（HTTP 200，由 MCP 层转成 isError）。
 //   - 参数/领域错误：抛 ToolError 或领域异常，由 HTTP 层映射成 4xx 结构化错误。
+//
+// 双通道（LOCAL-08）：本文件的 `callAgentTool` 是**本机兼容 raw 入口**，语义保持不变。
+// 普通财务工具送模型时必须走下面的 `callAgentModelTool`（投影信封）；两者互不递归适配。
+// raw 入口本身不做脱敏，MCP 普通工具不得再到达 `/agent/tools/*`。
 import * as A from "./accounting.mjs";
 import { getImportBatch, importIncremental } from "./import-incremental.mjs";
 import { TaxGateway, TaxError } from "./tax-gateway.mjs";
@@ -446,6 +450,24 @@ const HANDLERS = dict({
   // ---- 资产 / 折旧 / 结转（后端已有实现，本轮正式注册到 MCP）----
   asset_list: (args) => A.listAssetCards(requireAccountSetId(args)),
   asset_create: (args) => A.addAssetCard(requireAccountSetId(args), args),
+  // 资产卡片维护 / 补项：取得期间、期初累计、未入账登记，用于解除卡片与总账差异的封账阻塞。
+  asset_update: (args) => {
+    const setId = requireAccountSetId(args);
+    const rawId = args.assetId ?? args.asset_id;
+    const assetId = Number(rawId);
+    if (rawId === undefined || rawId === null || rawId === "" || !Number.isInteger(assetId) || assetId <= 0) {
+      throw new ToolError("assetId_required", "必须提供正整数 assetId");
+    }
+    const patch = args.patch && typeof args.patch === "object" && !Array.isArray(args.patch)
+      ? args.patch
+      : Object.fromEntries(Object.entries(args).filter(([k]) => !["accountSetId", "account_set_id", "assetId", "asset_id", "patch"].includes(k)));
+    return A.updateAssetCard(setId, assetId, patch);
+  },
+  // 期末检查（只读）：与封账前置同一规则，逐步给适用 / 不适用理由、明确缺项与修复建议。
+  period_end_check: (args) => {
+    const setId = requireAccountSetId(args);
+    return A.periodEndCheck(setId, requirePeriod(args));
+  },
   depreciation_run: (args) => A.generateDepreciation(requireAccountSetId(args), requirePeriod(args)),
   carry_forward_profit: (args) => A.carryForwardProfit(requireAccountSetId(args), requirePeriod(args), { yearEnd: !!args.yearEnd }),
 
@@ -525,6 +547,18 @@ export const AGENT_TOOL_NAMES = [
   ...Object.keys(HANDLERS),
   ...Object.keys(NOT_IMPLEMENTED),
 ].sort();
+
+/**
+ * 明确的模型调用接口：普通财务工具固定走 finance-model-entry 的投影信封。
+ * 与 raw `callAgentTool` 并列，raw 语义不变；本函数不在 raw 实现内递归适配。
+ * 动态 import 只为避免 agent-tools ↔ finance-model-entry 的静态循环（entry 会 import 本文件）。
+ */
+let financeModelEntryPromise = null;
+export async function callAgentModelTool(name, args = {}) {
+  if (!financeModelEntryPromise) financeModelEntryPromise = import("./finance-model-entry.mjs");
+  const entry = await financeModelEntryPromise;
+  return entry.callModelTool(name, args);
+}
 
 /** 执行一次 /agent/tools/<name> 调用。未知工具抛 ToolError('unknown_tool')。 */
 export async function callAgentTool(name, args = {}) {

@@ -179,6 +179,82 @@ const ASSET_KIND_CHOICES = Object.freeze(["fixed", "intangible"]);
 const VOUCHER_STATUS_CHOICES = Object.freeze(["draft", "posted"]);
 const PERIOD_STATUS_CHOICES = Object.freeze(["open", "closed"]);
 const ASSET_KIND_TOKENS = dict({ fixed: "fixed", intangible: "intangible" });
+// LOCAL-02 资产补项字段的受控值域：只投影业务必需的已登记 token。
+const ASSET_LEDGER_STATUS_TOKENS = dict({ booked: "booked", pending_purchase_voucher: "pending_purchase_voucher" });
+const ASSET_ORIGIN_TOKENS = dict({ purchase: "purchase", supplement: "supplement", import: "import" });
+// 期末检查的固定步骤 / 固定阻塞码：未知值一律 fail closed，不把任意文本当 token。
+const PERIOD_END_STATUS_CHOICES = Object.freeze(["ok", "blocked", "not_applicable"]);
+const PERIOD_END_STEP_IDS = Object.freeze([
+  "draft_vouchers", "trial_balance", "depreciation", "asset_reconciliation",
+  "profit_carry_forward", "year_end_carry_forward", "period_sequence",
+]);
+const PERIOD_END_BLOCKING_CODES = Object.freeze([
+  "period_has_draft_vouchers", "period_unbalanced", "depreciation_run_stale",
+  "asset_ledger_pending", "depreciation_missing", "depreciation_draft_exists",
+  "depreciation_life_expired_underprovided", "asset_missing_card", "asset_cost_mismatch",
+  "asset_accumulated_mismatch", "asset_acquired_period_missing", "asset_purchase_voucher_pending",
+  "profit_not_carried_forward", "profit_carry_stale", "year_end_not_carried",
+  "previous_period_open", "previous_period_depreciation_pending",
+  "later_period_closed", "carryforward_stale",
+]);
+const PERIOD_END_STEP_ID_SET = new Set(PERIOD_END_STEP_IDS);
+const PERIOD_END_STATUS_SET = new Set(PERIOD_END_STATUS_CHOICES);
+/**
+ * 已登记固定代码常量的字面量集合。
+ * 这些是**本模块自己的代码常量**（不是用户文本），其中最长的一条
+ * （`depreciation_life_expired_underprovided`，39 字符）超过通用 token 的 32 字符预算。
+ * 通用 token 预算不允许因此放宽（那会把任意自由字母串放进模型通道），所以只按
+ * **精确字面量**给它们开一条窄通道，见 isProjectionStringAllowed。
+ */
+const REGISTERED_CODE_LITERALS = new Set(PERIOD_END_BLOCKING_CODES);
+
+/**
+ * 期末检查 DTO 的**全局一致性**（结构 + 步骤 / 阻塞语义），只读自有 data 属性。
+ * 与 period-end-controls.buildPeriodEndCheck 的真实形状一一对应：
+ *   - `period_end_check` 只读工具不传 `skip`，因此步骤恒为 7 个已登记步骤，**唯一且齐全**；
+ *   - 步骤状态只有 ok / blocked / not_applicable（真实域没有 skipped 之类状态）；
+ *   - 顶层 `blocking` 每条都带产生它的 `step`（buildPeriodEndCheck 逐条附上）；
+ *   - `ready` ⇔ 没有 blocked 步骤且 `blocking` 为空；每个 blocked 步骤至少一条真实阻塞。
+ * 一个步骤可以有**多条**阻塞原因（例如每张资产一条），多个步骤也可以共用同一个码，
+ * 因此只校验「blocked 步骤 ⇔ 至少一条该步骤的阻塞」，不机械比较原因条数与步骤数。
+ * 返回 true / false；调用方决定错误码（策略层抛 output_policy_value_invalid，
+ * 适配层报 model_result_invalid），两者都不创建引用。
+ */
+export function isPeriodEndCheckConsistent(value) {
+  const check = at(value);
+  const ready = prop(check, "ready");
+  if (typeof ready !== "boolean") return false;
+  const steps = prop(check, "steps");
+  if (!Array.isArray(steps) || listLen(steps) !== PERIOD_END_STEP_IDS.length) return false;
+  const statusById = new Map();
+  let blockedSteps = 0;
+  for (let i = 0; i < PERIOD_END_STEP_IDS.length; i++) {
+    const step = at(prop(steps, i));
+    const id = prop(step, "id");
+    const status = prop(step, "status");
+    if (typeof id !== "string" || !PERIOD_END_STEP_ID_SET.has(id)) return false;
+    if (statusById.has(id)) return false; // 重复步骤：投影会给出 8 个 id 却只有 7 个语义步骤
+    if (typeof status !== "string" || !PERIOD_END_STATUS_SET.has(status)) return false;
+    statusById.set(id, status);
+    if (status === "blocked") blockedSteps++;
+  }
+  if (statusById.size !== PERIOD_END_STEP_IDS.length) return false; // 缺步骤（齐全）
+  const blocking = prop(check, "blocking");
+  if (!Array.isArray(blocking)) return false;
+  const blockingCount = listLen(blocking);
+  const blockedWithReason = new Set();
+  for (let i = 0; i < blockingCount; i++) {
+    const item = at(prop(blocking, i));
+    const stepId = prop(item, "step");
+    // 阻塞必须归属到一个**真实 blocked** 的步骤：不认识的步骤 / 未阻塞步骤都是矛盾。
+    if (typeof stepId !== "string" || statusById.get(stepId) !== "blocked") return false;
+    blockedWithReason.add(stepId);
+  }
+  if (ready !== (blockingCount === 0)) return false; // ready 与阻塞计数一致
+  if (ready !== (blockedSteps === 0)) return false; // ready 与步骤状态一致
+  if (blockedWithReason.size !== blockedSteps) return false; // 每个 blocked 步骤都要有真实原因
+  return true;
+}
 // 与 import-incremental.mjs 的 VOUCHER_STATE 一一对应；"inconsistent" 是批次审计里既有的复核标记。
 const TRACE_STATE_TOKENS = dict({
   ok: "ok", inconsistent: "inconsistent", missing: "missing", unposted: "unposted",
@@ -284,6 +360,17 @@ export const enumTokenOf = (name, raw) => {
 
 // ---------------------------------------------------------------- projection 消毒
 /**
+ * projection 允许的字符串：
+ *   ① 通用 token（≤ 32 字符小写）与合法期间——自由文本 / 中文业务名 / 任意 ASCII 串仍按原预算丢弃；
+ *   ② **精确等于**已登记固定代码常量的字面量（不受通用 token 长度限制）。
+ * ② 只对代码常量表生效，不读取任何用户数据，也不放宽通用 token 的 32 字符预算 / 长度上限。
+ * 真实域码（例如 39 字符的 `depreciation_life_expired_underprovided`）因此可以完整表示，
+ * 而不是被通用预算静默丢弃、只剩下 `projectionDropped` 计数。
+ */
+const isProjectionStringAllowed = (value) => REGISTERED_CODE_LITERALS.has(value)
+  || (value.length <= PROJ_MAX_STRING && (PROJ_TOKEN_RE.test(value) || PROJ_PERIOD_RE.test(value)));
+
+/**
  * 白名单形状消毒：只保留有限数值（2 位小数、绝对值上限）、布尔、状态 token、期间，
  * 以及最多 32 个同类标量的数组、最多 3 层 / 96 节点的普通对象。
  * 其他一切（自由文本、中文业务名、Date/Map/类实例、函数、Symbol、BigInt、访问器属性）全部丢弃并计数。
@@ -302,7 +389,7 @@ function sanitizeInto(target, source, state, depth) {
     } else if (typeof value === "boolean") {
       target[key] = value;
     } else if (typeof value === "string") {
-      if (value.length > PROJ_MAX_STRING || !(PROJ_TOKEN_RE.test(value) || PROJ_PERIOD_RE.test(value))) {
+      if (!isProjectionStringAllowed(value)) {
         state.dropped++;
         continue;
       }
@@ -317,8 +404,7 @@ function sanitizeInto(target, source, state, depth) {
         else if (typeof item === "boolean") out.push(item);
         // 数组元素与标量值同一套白名单：状态 token 或期间（期间也是契约声明的允许类型），
         // 自由文本 / 中文业务名 / 任意长字符串仍然丢弃。
-        else if (typeof item === "string" && item.length <= PROJ_MAX_STRING
-          && (PROJ_TOKEN_RE.test(item) || PROJ_PERIOD_RE.test(item))) out.push(item);
+        else if (typeof item === "string" && isProjectionStringAllowed(item)) out.push(item);
         else state.dropped++;
       }
       target[key] = out;
@@ -718,6 +804,50 @@ const QUERY_SPECS = dict({
   ledger_query: ledgerSummary,
   asset_list: assetListSummary,
   book_import_batch: batchAuditSummary,
+  // 期末检查只读：只投影步骤状态 / 计数 / 固定阻塞码，不投影标题、原因、message、details、
+  // 资产名 / 科目名 / 备注等任意用户文本。
+  // 先做**全局一致性**校验（7 个已登记步骤唯一齐全 / ready 与 blocked 及阻塞计数一致 /
+  // 每条阻塞归属于真实 blocked 步骤），再做计数：只校验单字段会把「ready:true + 空步骤」、
+  // 「7 个重复步骤」或「ready:true + 全 blocked」这类矛盾 DTO 投影成一份看起来正常的摘要。
+  period_end_check: (value) => {
+    if (!isPeriodEndCheckConsistent(value)) throw invalidSummary("period_end_check");
+    const check = at(value);
+    const ready = requireBoolean(check, "ready");
+    const steps = requireArray(check, "steps");
+    let ok = 0, blocked = 0, notApplicable = 0;
+    const stepIds = [];
+    const stepStatuses = [];
+    const blockedStepIds = [];
+    for (let i = 0; i < listLen(steps); i++) {
+      const step = at(prop(steps, i));
+      const id = requireChoice(step, "id", PERIOD_END_STEP_IDS);
+      const status = requireChoice(step, "status", PERIOD_END_STATUS_CHOICES);
+      stepIds.push(id);
+      stepStatuses.push(status);
+      if (status === "ok") ok++;
+      else if (status === "blocked") { blocked++; blockedStepIds.push(id); }
+      else notApplicable++;
+    }
+    const blocking = requireArray(check, "blocking");
+    const codes = [];
+    for (let i = 0; i < listLen(blocking); i++) {
+      // 只读固定 code；message / title / details 等自由文本从不进入投影。
+      codes.push(requireChoice(at(prop(blocking, i)), "code", PERIOD_END_BLOCKING_CODES));
+    }
+    return {
+      period: requirePeriod(check, "period"),
+      ready,
+      stepCount: listLen(steps),
+      stepIds,
+      stepStatuses,
+      okStepCount: ok,
+      blockedStepCount: blocked,
+      notApplicableStepCount: notApplicable,
+      blockedStepIds: [...new Set(blockedStepIds)],
+      blockingCount: listLen(blocking),
+      blockingCodes: [...new Set(codes)],
+    };
+  },
 });
 
 // ---------------------------------------------------------------- 写动作 projection 规格
@@ -812,6 +942,32 @@ const WRITE_SPECS = dict({
         startPeriod: periodOf(v, "start_period"),
         usefulLifeMonths: num(v, "useful_life_months"),
         originalCost: money(num(v, "original_cost")),
+      };
+    },
+    evidence: (value) => (int(at(value), "id") !== undefined
+      ? { applied: true }
+      : { applied: "unknown", reason: "unverified_result" }),
+  },
+  // 资产卡片维护（LOCAL-02 新工具）：写动作，结果只投影业务必需的新增字段；
+  // 名称 / ledger_note / 科目编码等自由文本与实现细节不进入模型通道。
+  asset_update: {
+    summary: (value) => {
+      const v = at(value);
+      const acquired = prop(v, "acquired_period");
+      return {
+        assetId: requirePositiveInt(v, "id"),
+        kind: requireChoice(v, "kind", ASSET_KIND_CHOICES),
+        startPeriod: requirePeriod(v, "start_period"),
+        ...(acquired === null || acquired === undefined || acquired === ""
+          ? {}
+          : { acquiredPeriod: requirePeriod(v, "acquired_period") }),
+        originalCost: money(requireNum(v, "original_cost")),
+        usefulLifeMonths: requireNum(v, "useful_life_months"),
+        openingAccumulated: money(requireNum(v, "opening_accumulated")),
+        accumulated: money(requireNum(v, "accumulated")),
+        remaining: money(requireNum(v, "remaining")),
+        ledgerStatus: requireEnumToken(ASSET_LEDGER_STATUS_TOKENS, v, "ledger_status"),
+        origin: requireEnumToken(ASSET_ORIGIN_TOKENS, v, "origin"),
       };
     },
     evidence: (value) => (int(at(value), "id") !== undefined
@@ -924,6 +1080,35 @@ const WRITE_SPECS = dict({
     },
   },
 });
+
+// A rejected DTO may still contain independently verifiable technical IDs. These
+// bounded paths use own data descriptors only; no business summary or getter runs.
+const WRITE_TECHNICAL_IDS = dict({
+  voucher_create: { voucherId: ["id"] },
+  voucher_post: { voucherId: ["id"] },
+  voucher_unpost: { voucherId: ["id"] },
+  voucher_delete: { deletedVoucherId: ["deleted"] },
+  asset_create: { assetId: ["id"] },
+  asset_update: { assetId: ["id"] },
+  depreciation_run: { voucherId: ["voucher", "id"] },
+  carry_forward_profit: { voucherId: ["voucher", "id"], yearEndVoucherId: ["yearEndVoucher", "id"] },
+  account_set_create: { accountSetId: ["id"] },
+  legacy_book_import: { createdAccountSetId: ["created", "id"] },
+  book_import_incremental: { accountSetId: ["created", "accountSetId"] },
+});
+function technicalWriteIds(operation, value) {
+  const projection = {};
+  const paths = WRITE_TECHNICAL_IDS[operation] || EMPTY;
+  for (const [key, path] of Object.entries(paths)) {
+    try {
+      let parent = value;
+      for (let i = 0; i < path.length - 1; i++) parent = prop(at(parent), path[i]);
+      const id = int(at(parent), path[path.length - 1]);
+      if (id !== undefined) projection[key] = id;
+    } catch { /* A failed descriptor read must not hide other independently safe IDs. */ }
+  }
+  return projection;
+}
 
 /**
  * 无引用摘要出口：供适配器在「没有可信账套绑定」时使用（全局上下文 / 批次未绑定 / create 失败未建账）。
@@ -1066,7 +1251,39 @@ const ERROR_CODES = dict({
   opening_amount_invalid: "opening",
   original_cost_invalid: "asset",
   useful_life_months_invalid: "asset",
+  useful_life_months_out_of_range: "asset",
   residual_rate_invalid: "asset",
+  assetId_required: "asset",
+  asset_not_found: "asset",
+  acquired_period_invalid: "asset",
+  opening_accumulated_invalid: "asset",
+  opening_accumulated_exceeds_depreciable: "asset",
+  ledger_status_invalid: "asset",
+  ledger_note_required: "asset",
+  asset_origin_invalid: "asset",
+  asset_card_affects_closed_period: "asset",
+  asset_card_locked_by_posted_runs: "asset",
+  asset_acquired_period_missing: "asset",
+  asset_purchase_voucher_pending: "asset",
+  asset_ledger_pending: "asset",
+  asset_missing_card: "asset",
+  asset_cost_mismatch: "asset",
+  asset_accumulated_mismatch: "asset",
+  period_end_check_failed: "period_end",
+  later_period_closed: "period_end",
+  later_year_end_carryforward_depends_on_period: "period_end",
+  later_profit_carryforward_depends_on_period: "period_end",
+  later_depreciation_depends_on_period: "period_end",
+  carryforward_stale: "period_end",
+  profit_not_carried_forward: "period_end",
+  profit_carry_stale: "period_end",
+  year_end_not_carried: "period_end",
+  previous_period_open: "period_end",
+  previous_period_depreciation_pending: "period_end",
+  depreciation_missing: "depreciation",
+  depreciation_run_stale: "depreciation",
+  depreciation_life_expired_underprovided: "depreciation",
+  depreciation_global_over_depreciable: "depreciation",
   voucher_number_unplanned: "voucher",
   depreciation_exceeds_depreciable: "depreciation",
   unknown_tool: "tool",
@@ -1281,6 +1498,11 @@ export class FinanceOutputPolicy {
         dropped = 0;
         if (stored.reason === null) stored = { ref: null, expiresAtIso: null, reason: classifyRawFailure(error) };
       }
+    }
+    // Malformed committed DTOs cannot supply business detail, but own data IDs remain
+    // independently provable. Never traverse the rejected value or invoke accessors.
+    if (stored.reason === "value_invalid" || stored.reason === "summary_unavailable") {
+      projection = sanitizeProjection(technicalWriteIds(operation, value)).value;
     }
     return this.#writeEnvelope(operation, accountSetId, evidence, projection, dropped, stored);
   }
@@ -1521,7 +1743,7 @@ export class FinanceOutputPolicy {
       operationCategory: "write",
       accountSetId,
       applied: evidence.applied,
-      needsLocalReview: evidence.applied !== true,
+      needsLocalReview: evidence.applied !== true || stored.reason === "value_invalid" || stored.reason === "summary_unavailable",
       projection,
       projectionDropped: dropped,
       localRef: stored.ref,

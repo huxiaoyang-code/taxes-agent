@@ -6,10 +6,11 @@ import { extname, join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as A from "./accounting.mjs";
 import { getImportBatch, importIncremental } from "./import-incremental.mjs";
-import { buildReportExport } from "./report-export.mjs";
+import { buildOfficeExport } from "./report-office-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
-import { callAgentTool, decodeFiles, ToolError, taxBrowserSessions } from "./agent-tools.mjs";
+import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions } from "./agent-tools.mjs";
+import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,36 @@ function attachmentName(filename) {
 const REPORT_INPUT_ERRORS = new Set([
   "report_options_invalid", "period_required", "period_invalid", "period_before_start", "period_not_registered",
   "report_kind_unsupported", "report_format_unsupported", "account_code_required",
+]);
+const REPORT_NOT_FOUND_ERRORS = new Set(["account_set_not_found", "account_not_found"]);
+const REPORT_REJECTED_ERRORS = new Set(["report_data_invalid", "office_text_too_long"]);
+// Fixed product wording for format-level failures; internal font paths / stacks never reach the client.
+const REPORT_FONT_ERRORS = {
+  pdf_font_unavailable: "服务器缺少可嵌入的中文字体，暂时无法生成 PDF；请改用 CSV 或 Excel",
+  pdf_font_glyph_missing: "当前中文字体缺少报表所需字符，无法生成 PDF；请改用 CSV 或 Excel",
+};
+function reportError(e) {
+  const code = e?.code;
+  if (REPORT_FONT_ERRORS[code]) return { status: 500, body: { error: code, message: REPORT_FONT_ERRORS[code], details: null } };
+  if (REPORT_NOT_FOUND_ERRORS.has(code)) return { status: 404, body: { error: code, message: e.message, details: e.details ?? null } };
+  if (code === "office_text_too_long") {
+    // Locate the offending field only: the over-long text itself is never echoed back.
+    const { field = null, length = null, limit = null } = e.details ?? {};
+    return { status: 422, body: { error: code, message: e.message, details: { field, length, limit } } };
+  }
+  if (REPORT_REJECTED_ERRORS.has(code)) return { status: 422, body: { error: code, message: e.message, details: e.details ?? null } };
+  if (REPORT_INPUT_ERRORS.has(code)) return { status: 400, body: { error: code, message: e.message, details: e.details ?? null } };
+  return { status: 500, body: { error: "report_export_failed", message: "报表导出失败，请稍后重试", details: null } };
+}
+
+// 前期可改性守卫 / 封账前置 / 资产卡片维护守卫的结构化错误码：HTTP 入口给 409 + 明细，不降级成 500。
+const PERIOD_GUARD_CODES = new Set([
+  "later_period_closed", "later_year_end_carryforward_depends_on_period",
+  "later_profit_carryforward_depends_on_period", "later_depreciation_depends_on_period",
+  "period_end_check_failed", "carryforward_stale",
+  "asset_card_affects_closed_period", "asset_card_locked_by_posted_runs",
+  "asset_ledger_pending", "depreciation_global_over_depreciable", "depreciation_exceeds_depreciable",
+  "depreciation_run_stale",
 ]);
 
 // ------------------------------------------------------------------ 路由表
@@ -121,26 +152,32 @@ async function api(req, res, url, m) {
       return json(res, 405, { error: "method_not_allowed", message: "Only GET is supported", details: null });
     }
     try {
-      const result = buildReportExport(+match[1], {
+      const preview = match[3] === "export-data";
+      // export-data stays a CSV-shaped JSON DTO and keeps the original strict format contract:
+      // only csv / absent is accepted, so office formats are never silently rewritten to CSV.
+      const requestedFormat = url.searchParams.get("format") ?? "csv";
+      if (preview && requestedFormat !== "csv") {
+        const error = new Error("report_format_unsupported");
+        error.code = "report_format_unsupported";
+        error.details = { supported: ["csv"] };
+        throw error;
+      }
+      // Only /export turns the requested format into a real attachment.
+      const result = await buildOfficeExport(+match[1], {
         kind: match[2], period: url.searchParams.get("period"),
-        format: url.searchParams.get("format") ?? "csv", code: url.searchParams.get("code"),
+        format: preview ? "csv" : requestedFormat, code: url.searchParams.get("code"),
       });
-      if (match[3] === "export-data") return json(res, 200, result.report);
+      if (preview) return json(res, 200, result.report);
       // Complete generation before sending headers: failures must remain JSON, never partial files.
-      const body = Buffer.from(result.body, "utf8");
+      const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, "utf8");
       res.writeHead(200, {
         "content-type": result.contentType, "content-length": body.length,
         "content-disposition": attachmentName(result.filename), "x-content-type-options": "nosniff",
       });
       return res.end(body);
     } catch (e) {
-      const code = e?.code;
-      const status = ["account_set_not_found", "account_not_found"].includes(code) ? 404 : code === "report_data_invalid" ? 422 : REPORT_INPUT_ERRORS.has(code) ? 400 : 500;
-      return json(res, status, {
-        error: status === 500 ? "report_export_failed" : code,
-        message: status === 500 ? "报表导出失败，请稍后重试" : e.message,
-        details: status === 500 ? null : e.details ?? null,
-      });
+      const failure = reportError(e);
+      return json(res, failure.status, failure.body);
     }
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/reports\/(trial-balance|balance-sheet|income-statement|cash-flow-statement)$/))) {
@@ -161,8 +198,27 @@ async function api(req, res, url, m) {
     if (m === "GET") return json(res, 200, A.listAssetCards(id));
     if (m === "POST") return json(res, 201, A.addAssetCard(id, await readBody(req)));
   }
-  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/assets\/(\d+)$/)) && m === "DELETE") {
-    return json(res, 200, A.deleteAssetCard(+match[1], +match[2]));
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/assets\/(\d+)$/))) {
+    const id = +match[1], assetId = +match[2];
+    if (m === "DELETE") return json(res, 200, A.deleteAssetCard(id, assetId));
+    // 资产卡片维护 / 补项（取得期间、期初累计、未入账登记），用于解除卡片与总账差异造成的封账阻塞。
+    if (m === "PATCH") return json(res, 200, A.updateAssetCard(id, assetId, await readBody(req)));
+  }
+  // 期末检查（只读）：与封账前置同一套规则，逐步给适用 / 不适用理由与明确缺项。
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/period-end-check$/)) && m === "GET") {
+    const period = url.searchParams.get("period");
+    if (!period) return json(res, 400, { error: "period_required", message: "必须提供 period（YYYY-MM）" });
+    try {
+      return json(res, 200, A.periodEndCheck(+match[1], period));
+    } catch (e) {
+      const code = e?.message || String(e);
+      const status = ["account_set_not_found", "period_invalid", "period_before_start"].includes(code) ? 400 : 500;
+      return json(res, status, {
+        error: status === 500 ? "period_end_check_failed" : code,
+        message: status === 500 ? "期末检查失败" : code,
+        details: status === 500 ? null : e.details ?? null,
+      });
+    }
   }
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/depreciation$/)) && m === "POST") {
     const b = await readBody(req);
@@ -210,6 +266,10 @@ async function api(req, res, url, m) {
       if (e?.code === "account_set_not_found") {
         return json(res, 404, { error: "account_set_not_found", message: "目标账套不存在", details: null });
       }
+      // 前期可改性 / 封账前置守卫：给结构化 409 + 可执行的依赖处理顺序，不降级成 500。
+      if (e?.code && PERIOD_GUARD_CODES.has(e.code)) {
+        return json(res, 409, { error: e.code, message: e.message, details: e.details ?? null });
+      }
       // 事务已回滚；不把失败写成成功，也不向前端泄漏内部细节。
       return json(res, 500, { error: "import_failed", message: "增量导入失败（事务已回滚）", details: null });
     }
@@ -246,9 +306,58 @@ async function api(req, res, url, m) {
       }
       // 领域层异常（如 voucher_invalid / period_closed）：保留原 message 与 details。
       const msg = e?.message || String(e);
-      return json(res, /not_found$/.test(msg) ? 404 : 400, {
-        error: msg, message: msg, tool: name, details: e?.details ?? null,
+      const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
+      return json(res, guard ? 409 : /not_found$/.test(msg) ? 404 : 400, {
+        error: guard ? e.code : msg, message: msg, tool: name, details: e?.details ?? null,
       });
+    }
+  }
+
+  // -------- 模型输出通道（LOCAL-08）：普通财务工具固定最小信封。
+  // 与下方既有 /agent/tools/<name> 本机兼容入口并列；这里没有 local / raw 参数，也不回退到 raw。
+  if (p.startsWith("/agent/model-tools/")) {
+    if (m !== "POST") {
+      res.setHeader("allow", "POST");
+      return json(res, 405, { error: "method_not_allowed" });
+    }
+    if (!/^application\/json(?:\s*;|$)/i.test(req.headers["content-type"] || "")) {
+      return json(res, 415, { error: "json_content_type_required" });
+    }
+    const name = p.slice("/agent/model-tools/".length);
+    if (!/^[A-Za-z0-9_]+$/.test(name)) return json(res, 404, { error: "model_tool_unknown" });
+    let body;
+    try { body = await readBody(req); } catch { return json(res, 400, { error: "request_body_invalid" }); }
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return json(res, 400, { error: "request_body_invalid" });
+    }
+    try {
+      return json(res, 200, await callAgentModelTool(name, body));
+    } catch {
+      // 投影层之外的意外异常：固定码，绝不把 message / details / stack 带回模型通道。
+      return json(res, 500, { error: "model_entry_failed" });
+    }
+  }
+
+  // -------- 本机受信引用接口（LOCAL-08）：只回环 + Origin 校验，能力对象只在本机进程内。
+  // 请求必须显式带 ref / accountSetId / operation；不接受请求体里的 channel / local。
+  if (p === "/api/finance-output/read" || p === "/api/finance-output/compute") {
+    if (m !== "POST") {
+      res.setHeader("allow", "POST");
+      return json(res, 405, { error: "method_not_allowed" });
+    }
+    if (!/^application\/json(?:\s*;|$)/i.test(req.headers["content-type"] || "")) {
+      return json(res, 415, { error: "json_content_type_required" });
+    }
+    let body;
+    try { body = await readBody(req); } catch { return json(res, 400, { error: "request_body_invalid" }); }
+    try {
+      const result = p.endsWith("/compute") ? computeLocalReference(body) : readLocalReference(body);
+      return json(res, 200, result);
+    } catch (e) {
+      // 只回固定输出策略错误码；不回显 message / details / 引用值。
+      const code = typeof e?.code === "string" && /^output_policy_[a-z0-9_]{1,48}$/.test(e.code)
+        ? e.code : "finance_output_failed";
+      return json(res, code === "finance_output_failed" ? 500 : 400, { error: code });
     }
   }
 
@@ -297,7 +406,18 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/agent/")) return await api(req, res, url, method);
     return await serveStatic(res, url.pathname);
   } catch (e) {
-    return json(res, 400, { error: e.message || String(e), details: e.details || null });
+    // 模型通道 / 本机引用通道只回固定码：外层原始 message / details 不得回传。
+    if (url.pathname.startsWith("/agent/model-tools/")) {
+      return json(res, 500, { error: "model_entry_failed" });
+    }
+    if (url.pathname.startsWith("/api/finance-output/")) {
+      return json(res, 500, { error: "finance_output_failed" });
+    }
+    const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
+    return json(res, guard ? 409 : 400, {
+      error: guard ? e.code : e.message || String(e),
+      details: e.details || null,
+    });
   }
 });
 

@@ -52,9 +52,17 @@ const unavailable = (name, description, origin = "upstream") =>
 /** 后端已实现（含本轮正式注册的 4 个扩展工具与 11 个新增管理工具）。 */
 const BACKEND_TOOLS = [
   available("account_context", "列出账套（可选带出某账套的期间）。本地不保存“当前账套”，不返回选中状态。",
-    obj({ accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" } })),
+    obj({
+      accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
+      limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
+      offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
+    })),
   available("finance_context_resolve", "account_context 的兼容别名：列出账套与可选期间。",
-    obj({ accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" } })),
+    obj({
+      accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
+      limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
+      offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
+    })),
   available("finance_query", "查询财务数据。必须显式提供 accountSetId；期间类能力必须显式提供 period。可用能力见 finance_query_catalog。",
     obj({
       nodeId: { type: "string", description: "查询能力 ID，例如 report.balance_sheet" },
@@ -143,7 +151,7 @@ const BACKEND_TOOLS = [
     }, ["accountSetId", "items"]), "local"),
   available("period_list", "列出账套已登记的期间及状态。",
     obj({ accountSetId: ACCOUNT_SET_ID }, ["accountSetId"]), "local"),
-  available("period_set_status", "结账/反结账：closed 关闭已登记期间；open 重开或登记新期间。期间不得早于账套启用期间。",
+  available("period_set_status", "结账/反结账：closed 会在原有“无草稿 + 试算平衡”之外校验应计提完整、卡片与总账核对、损益/年末结转与连续期间顺序（不适用项明确标 not_applicable）；open 重开或登记新期间；已有更晚期间封账时拒绝重开前期。",
     obj({
       accountSetId: ACCOUNT_SET_ID,
       period: PERIOD,
@@ -164,29 +172,43 @@ const BACKEND_TOOLS = [
       ["accountSetId", "code", "period"]), "local"),
 
   // ---- 后端已有、本轮正式注册（本地扩展，非原站契约工具）----
-  available("asset_list", "列出固定资产/无形资产卡片及已计提金额。",
+  available("asset_list", "列出固定资产/无形资产卡片及已计提金额（含补项期初累计、可计提额、剩余额与未入账登记状态）。",
     obj({ accountSetId: ACCOUNT_SET_ID }, ["accountSetId"]), "local"),
-  available("asset_create", "新增固定资产/无形资产卡片（不自动生成购入凭证）。",
+  available("asset_create", "新增固定资产/无形资产卡片。可显式登记 acquired_period（取得/入账期间，不臆造日期）、opening_accumulated（历史期初累计）、ledger_status=pending_purchase_voucher + ledger_note（本机“尚未入固定资产账”显式登记）。新增卡片会改变受影响期间的核对 / 计提事实：已封账期间、或后续已过账普通损益结转时明确拒绝并给撤销顺序（asset_card_affects_closed_period / later_profit_carryforward_depends_on_period）。pending_purchase_voucher **不是**原值差异豁免：登记后仍要求总账原值一致，且不得计提。",
     obj({
       accountSetId: ACCOUNT_SET_ID,
       kind: { type: "string", enum: ["fixed", "intangible"], description: "缺省 fixed" },
       name: { type: "string" },
-      original_cost: { type: "number", description: "原值" },
-      useful_life_months: { type: "integer" },
+      original_cost: { type: "number", description: "原值（精确到分；超过 999999999999.99 拒绝）" },
+      useful_life_months: { type: "integer", minimum: 1, maximum: 1200, description: "计提期数（1 ~ 1200 期）。这是技术输入边界，不冒充法定会计年限；非整数 / 0 / 超上限一律拒绝" },
       start_period: PERIOD,
       residual_rate: { type: "number", description: "残值率，固定资产缺省 0.05，无形资产缺省 0" },
       asset_account: { type: "string" },
       accum_account: { type: "string" },
       expense_account: { type: "string", description: "折旧/摊销费用科目，缺省 5602" },
+      acquired_period: PERIOD,
+      opening_accumulated: { type: "number", description: "补项期初累计（已入账的历史累计折旧/摊销）" },
+      ledger_status: { type: "string", enum: ["booked", "pending_purchase_voucher"], description: "booked（缺省，参与卡片/总账核对）/ pending_purchase_voucher（显式登记未入固定资产账）" },
+      ledger_note: { type: "string", description: "ledger_status 非 booked 时必须说明原因" },
     }, ["accountSetId", "name", "original_cost", "useful_life_months", "start_period"]), "local"),
-  available("depreciation_run", "对全部资产卡片按直线法计提指定期间折旧/摊销，生成一张凭证。同期不重复计提。",
+  available("asset_update",
+    "资产卡片维护 / 补项：修改名称、费用科目、取得期间、期初累计、未入账登记。按实际影响守卫：受影响期间已封账拒绝（asset_card_affects_closed_period）；已有已过账计提时禁改原值 / 残值率 / 寿命 / 计提开始期间 / 期初累计 / 科目 / 账簿状态（asset_card_locked_by_posted_runs）；会改变折旧金额且后续已有已过账普通结转时拒绝（later_profit_carryforward_depends_on_period）。名称 / 备注等纯显示信息不受影响。",
+    obj({
+      accountSetId: ACCOUNT_SET_ID,
+      assetId: { type: ["integer", "string"] },
+      patch: { type: "object", description: "待修改字段：{name?, expense_account?, acquired_period?, opening_accumulated?, ledger_status?, ledger_note?}" },
+    }, ["accountSetId", "assetId"]), "local"),
+  available("period_end_check",
+    "期末检查（只读）：逐步返回草稿清零、试算平衡、应计提折旧/摊销完整、资产卡片与总账核对、损益结转、年末结转、连续期间顺序的状态与适用/不适用理由，以及阻塞项与明确缺项。连续期间不只按凭证判断：更早期间有应计提而零凭证同样阻塞（previous_period_depreciation_pending）。已过账计提仍按卡片当前定义重算，定义已变的旧计提报 depreciation_run_stale（不按“曾经过账”放行）。与封账前置共用同一规则，不连接税局。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD }, ["accountSetId", "period"]), "local"),
-  available("carry_forward_profit", "结转本期损益到 3103；yearEnd=true 时再结转 3103→3104。",
+  available("depreciation_run", "对全部资产卡片按直线法计提指定期间折旧/摊销，生成一张凭证。同期不重复计提；累计舍入在应有寿命内恰好提足；未入固定资产账的卡片明确拒绝（asset_ledger_pending），全局累计会超出可计提额时明确拒绝（depreciation_global_over_depreciable）并给撤销顺序。旧定义下的已过账计提（寿命 / 原值 / 期间等已变）不会被当成已计提完成或静默补提，而是返回 depreciation_run_stale 并要求反过账 + 删除后重算。",
+    obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD }, ["accountSetId", "period"]), "local"),
+  available("carry_forward_profit", "结转本期损益到 3103；yearEnd=true 时再结转 3103→3104。普通结转读取截至本期的累计损益余额，因此更晚期间已有已过账结转时，前期写入会被拒绝（later_profit_carryforward_depends_on_period），需按倒序撤销后重做。",
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD, yearEnd: { type: "boolean" } }, ["accountSetId", "period"]), "local"),
 
   // ---- 兼容入口：行为受限，但不谎报 ----
-  limited("update_plan", "更新处理计划。本地分支仅回显入参，不持久化（返回 persisted=false）。",
-    obj({ plan: { type: "array", description: "计划步骤数组" } })),
+  limited("update_plan", "更新处理计划。本地分支不持久化，模型通道只回状态与条数（不回显计划文本），返回 persisted=false。",
+    obj({ plan: { type: "array", description: "计划步骤数组（只计条数，不回显内容）" } })),
 ];
 
 /** 原站契约内、本地未实现的工具：保留名称，调用返回 isError。 */
@@ -272,17 +294,50 @@ const CATALOG_TOOLS = [
 
 /** 纯本地工具（不经后端）。 */
 const LOCAL_TOOLS = [
-  available("finance_query_catalog", "列出财务查询能力：items 为原站契约原文，capabilities 标注本地真实支持状态。", obj({}), "local"),
+  available("finance_query_catalog", "列出财务查询能力的安全静态目录：可用 / 未实现 / 本地扩展 nodeId 与计数（代码常量，无业务数据）。", obj({}), "local"),
   available("skills_list", "查找可用财税业务规则(Skill)文件。", obj({}), "local"),
   available("skills_read", "读取业务规则(Skill) Markdown 正文。",
     obj({ resource: { type: "string", description: "Skill 相对路径，例如 bookkeeping/SKILL.md" } }, ["resource"]), "local"),
 ];
 
-export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS];
+/**
+ * LOCAL-08：普通财务工具固定走模型投影通道（`POST /agent/model-tools/<name>`）。
+ * 这里是与 `06-workbench/server/finance-model-adapter.mjs` 交叉核对的 MCP 侧登记表；
+ * 税务 / 目录工具与 skills 资源工具**不在**此列，仍走既有 `/agent/tools/*` 或本地资源读取。
+ */
+export const MODEL_PLAIN_TOOL_NAMES = Object.freeze([
+  "finance_query_catalog", "update_plan",
+  "account_context", "finance_context_resolve", "finance_query",
+  "voucher_check", "account_list", "opening_balance_get", "period_list",
+  "ledger_query", "asset_list", "period_end_check", "book_import_batch",
+  "voucher_create", "voucher_post", "voucher_unpost", "voucher_delete",
+  "period_set_status", "opening_balance_set", "account_create",
+  "asset_create", "asset_update", "depreciation_run", "carry_forward_profit",
+  "account_set_create", "legacy_book_import", "book_import_incremental",
+]);
+
+/** 写动作子集：运输失败必须保守给 writeOutcome:unknown（不自动重试）。 */
+export const MODEL_WRITE_TOOL_NAMES = Object.freeze([
+  "voucher_create", "voucher_post", "voucher_unpost", "voucher_delete",
+  "period_set_status", "opening_balance_set", "account_create",
+  "asset_create", "asset_update", "depreciation_run", "carry_forward_profit",
+  "account_set_create", "legacy_book_import", "book_import_incremental",
+]);
+
+const MODEL_OUTPUT_NOTE = "（模型通道：结果只返回白名单摘要信封 projection + localRef；"
+  + "企业名 / 科目名与编码 / 凭证摘要 / 往来 / 人员 / 资产名 / 路径 / 批次与来源 ID 等原值不在模型输出中，"
+  + "需要原文时走本机引用接口。）";
+const MODEL_PLAIN_TOOL_SET = new Set(MODEL_PLAIN_TOOL_NAMES);
+const withModelNote = (tool) => (MODEL_PLAIN_TOOL_SET.has(tool.name)
+  ? { ...tool, description: `${tool.description}${MODEL_OUTPUT_NOTE}`, modelOutput: "summary_envelope" }
+  : tool);
+
+export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
+  .map(withModelNote);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
-/** 本地自己处理、不转发后端的工具。 */
-export const LOCAL_ONLY = new Set(["finance_query_catalog", "skills_list", "skills_read"]);
+/** 本地自己处理、不转发后端的工具（仅资源类；普通财务工具已固定走模型通道）。 */
+export const LOCAL_ONLY = new Set(["skills_list", "skills_read"]);
 
 /** 目录工具必须走后端（server/agent-tools.mjs 的执行层），这里显式登记以禁止本地伪实现。 */
 export const CATALOG_TOOL_NAMES = CATALOG_TOOLS.map((t) => t.name);
@@ -349,7 +404,7 @@ function typeOk(v, t) {
   return false;
 }
 
-/** 最小运行时校验：必填、类型、枚举。返回问题字符串数组，空数组表示通过。 */
+/** 最小运行时校验：必填、类型、枚举、数值上下限。返回问题字符串数组，空数组表示通过。 */
 export function validateArgs(schema, args) {
   const problems = [];
   if (!schema || schema.type !== "object") return problems;
@@ -366,6 +421,11 @@ export function validateArgs(schema, args) {
       continue;
     }
     if (prop.enum && !prop.enum.includes(v)) problems.push(`参数 ${key} 只能是：${prop.enum.join(" / ")}`);
+    // 数值上下限（目前用于 useful_life_months 这类**技术输入边界**）：越界不交给后端落库后再报错。
+    if (typeof v === "number") {
+      if (typeof prop.minimum === "number" && v < prop.minimum) problems.push(`参数 ${key} 不能小于 ${prop.minimum}`);
+      if (typeof prop.maximum === "number" && v > prop.maximum) problems.push(`参数 ${key} 不能大于 ${prop.maximum}`);
+    }
   }
   return problems;
 }

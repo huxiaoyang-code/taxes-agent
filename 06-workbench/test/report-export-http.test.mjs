@@ -18,6 +18,8 @@ A.setOpeningBalances(set.id, [{ code: "1002", debit: 1000 }, { code: "3001", cre
 A.createVoucher(set.id, { period: "2026-01", status: "posted", summary: "合成收入", entries: [
   { code: "1002", debit: 200 }, { code: "5001", credit: 200 },
 ] });
+// LOCAL-02 封账前置：本期有损益发生，封账前必须先结转本期损益。
+A.carryForwardProfit(set.id, "2026-01");
 A.setPeriodStatus(set.id, "2026-01", "closed");
 A.createVoucher(set.id, { period: "2026-02", status: "posted", summary: "二月合成收入", entries: [
   { code: "1002", debit: 50 }, { code: "5001", credit: 50 },
@@ -108,7 +110,8 @@ test("empty account set exports an internal report without inventing activity", 
 for (const [query, code] of [
   ["", "period_required"], ["period=2026-13", "period_invalid"], ["period=2026-1", "period_invalid"],
   ["period=2025-12", "period_before_start"], ["period=2026-03", "period_not_registered"],
-  ["period=2026-01&format=xlsx", "report_format_unsupported"], ["period=2026-01&format=", "report_format_unsupported"],
+  // xlsx is a supported attachment format now, so the strict rejection case uses a genuinely unsupported one.
+  ["period=2026-01&format=yaml", "report_format_unsupported"], ["period=2026-01&format=", "report_format_unsupported"],
 ]) test(`invalid request: ${code} (${query})`, () => expectError(path("trial-balance", query), code));
 
 test("unknown report kind is a structured client error", () => expectError(path("unknown-kind"), "report_kind_unsupported"));
@@ -172,6 +175,36 @@ test("preview endpoint validates period and HTTP method just like download", asy
   const preview = path("trial-balance", "period=2026-13").replace("/export?", "/export-data?");
   await expectError(preview, "period_invalid");
   await expectError(preview, "method_not_allowed", 405, "POST");
+});
+
+// Route contract: /export-data is a CSV-shaped JSON DTO only. Office formats belong to the download
+// route, so an unsupported format must stay a strict 400 instead of being silently rewritten to CSV.
+test("preview keeps the strict CSV DTO format contract and never becomes an attachment", async () => {
+  const preview = (query) => path("trial-balance", query).replace("/export?", "/export-data?");
+  for (const query of ["period=2026-01", "period=2026-01&format=csv"]) {
+    const response = await request(preview(query));
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^application\/json/);
+    assert.equal(response.headers.get("content-disposition"), null);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.json()).schemaVersion, 1);
+  }
+  for (const format of ["xlsx", "pdf", "yaml", ""])
+    await expectError(preview(`period=2026-01&format=${format}`), "report_format_unsupported");
+});
+
+// The download route does turn the format into a real attachment: XLSX must no longer be a stale 400.
+test("download route serves the office format as a real XLSX attachment", async () => {
+  const response = await request(path("trial-balance", "period=2026-01&format=xlsx"));
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /^application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet$/);
+  const disposition = response.headers.get("content-disposition");
+  assert.match(disposition, /^attachment; filename="[^"]+\.xlsx"; filename\*=UTF-8''/);
+  assert.match(decodeURIComponent(disposition.split("UTF-8''")[1]), /\.xlsx$/);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(+response.headers.get("content-length"), bytes.length);
+  assert.equal(bytes.subarray(0, 2).toString("latin1"), "PK");
+  assert.deepEqual([...bytes.subarray(2, 4)], [3, 4]);
 });
 
 const taxQuery = "period=2026-01&region=CN-FJ&templateId=cn-small-enterprise-2011-balance-sheet&templateVersion=2011-17-original&format=csv";

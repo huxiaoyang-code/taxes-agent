@@ -1,16 +1,21 @@
 # 任务单 · LOCAL-06-BACKUP 本机一致性备份 / 验证 / 恢复到全新目标
 
-- 类型：独立子包（新模块 + CLI + 测试 + 契约文档），**不接线**任何共享文件
-- 状态：**实现与自测完成；已审源码 head `b2dcba3` 已通过管理验收与最终独立审查；PR
-  [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已 OPEN，等待本次文档核对后按已授权流程合并，
-  实际 merge SHA 尚未产生（不标记 MERGED）**
-  （不代表 LOCAL-06 整体完成；`829541a` 冻结候选的 15 / 15 与第一轮 16 / 16 均因漏掉重复声明外键
-  而**未最终通过**，已被当前的外键分组一对一比对取代）
+- 类型：独立子包（模块 + CLI + 测试 + 契约文档），**不接线**任何产品共享业务文件
+- 状态：**PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 已验收合并**（PR head `55dfe44`，
+  merge `98977e04bd24aa293074021802191814f8c2a1d2`，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`
+  独审 16 项）；
+  **合并后兼容整合轮（schema v3 / v4 精确契约）实现 + 自测完成，未提交 / 未建 PR / 未合并，最终独立审查待做**
+  （不预报 head / merge）；**2026-10-22 B 窗又同步已合核心（PR #60 merge `dfefae0`）并登记可选 bank 组件 v1，
+  银行组件全部 19 条索引逐键校验、五套定向 95 / 95，同样未提交 / 未建 PR / 未合并**。
+  （不代表 LOCAL-06 整体完成；`829541a` 冻结候选的 15 / 15 与第一轮 16 / 16 均因漏掉
+  重复声明外键而**未最终通过**，已被当前的外键分组一对一比对取代）
 - 基线：main `94a79ef4a5e1c19e1320aed2e848ba42a7121712`（LOCAL-01 合并后主线，schema **v3**）
 - 分支：`codex/huxiaoyang-code/local-06-backup`
 - 负责人：`huxiaoyang-code`（已核实）
 - PR：[#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55)
-  （base `257f96275031eefa484699dd71bd012e2d221e51`，已审源码 head `b2dcba35e87e9ebb75245dcc874aa41705b31243`）
+  （base `257f96275031eefa484699dd71bd012e2d221e51`，PR head `55dfe44`，已审**源码** head
+  `b2dcba35e87e9ebb75245dcc874aa41705b31243`（独审 16 项），**已 MERGED**，
+  merge `98977e04bd24aa293074021802191814f8c2a1d2`）
 - 远端载体：[Issue #49](https://github.com/huxiaoyang-code/youshu-fork/issues/49)（`Refs #20` / `Refs #13`），
   保持 OPEN 供兼容整合；完整审计留痕在
   [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)
@@ -47,6 +52,7 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 2. **P1 真实结构版本**：初版只校验六张核心表的少数列、`schemaVersion` 仅取 `MAX(schema_migrations.version)`，
    用一个「只建核心表 + 写一条 version=3」的假 v3 库也能备份成功。已改为按当前真实结构（列 / 类型 /
    NOT NULL / 主键 / UNIQUE / 外键）+ 迁移记录连续性 + 迁移前备份记录校验，并明确**只支持 v3**；
+   （合并后的兼容整合轮已把该规范扩为 **v3 + v4 两个独立契约**（含默认值），见 §3.1 / §5。）
 3. **清单类型与真实字段一致**：`appVersion` 缺失 / 类型非法、`pageSize` / `journalMode` / `user_version` /
    `migrations` / `content.tables` 键集合等逐项校验，可重算字段与真实快照比对；
    `appVersion` 保持**信息性**，不伪装成严格的未来应用版本拒绝；
@@ -101,12 +107,13 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 
 - 不实现原位（就地）在线恢复、停写 / 关连接 / 现库保护 / 重新打开的编排；
 - 不实现审计留痕体系、批量编排 / CLI（LOCAL-07）、Windows 干净安装 / 启动 / 升级交付；
-- 不改任何共享文件：`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
+- 不改任何共享业务源码：`server/db.mjs`、`server/import-storage.mjs`、`server/accounting.mjs`、
   `server/server.mjs`、`server/agent-tools.mjs`、MCP 注册（`05-reconstruction/codex/mcp/finance-mcp/*`）、
-  `scripts/test-all.mjs`、`package.json`、`public/*`、`docs/handoffs/STATE.md`、
-  `docs/INDEX.md`、`docs/CHANGELOG.md`、`docs/tasks/README.md` 及其他 docs；只按需**只读**；
-- 不实施 / 不猜 schema v4（LOCAL-02 #47 在另一隔离 worktree 独占金额 / 期末与 v4），
-  只跟随当前 v3 契约，并明确「v4 合并后必须重验」；
+  `package.json`、`public/*` 与其它 docs；只按需**只读**；
+- `scripts/test-all.mjs` **仅允许追加已合入模块的测试登记**（原 50 套顺序 / 内容不变）；
+- 不猜 schema：v3 与 v4 各有**真实 DDL 推导的精确契约**；B 窗按已合 LOCAL-04 银行契约额外登记
+  **可选 bank 组件 v1**（完整 10 表 + 19 条索引逐键语义 + 外键 / 版本行 / 未知对象），
+  batch / audit 等其它组件与未来 v5+ 继续一律拒绝，不为兼容关表 / 只抬版本号；
 - 不接税局、不访问浏览器 / 税局后端 / 真实账套 / 凭据；不做自动测试以外的真实数据动作；
 - 不引入第三方依赖、不写安装器；
 - 不做 Git 提交 / 推送 / 合并。
@@ -124,8 +131,20 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 | `docs/tasks/LOCAL-06-BACKUP.md` | 本任务单 |
 | `docs/handoffs/LOCAL-06-BACKUP.md` | 本包版本化交接 |
 
-**未改任何共享文件**（包括 `scripts/test-all.mjs`，因此本套件**不进入** `npm test` 聚合入口；
-如需纳入，应由拥有该共享文件所有权的任务单独接线）。
+**未改任何共享业务文件**。兼容整合轮按任务单授权**仅追加** `scripts/test-all.mjs` 的三条已合入套件登记
+（`local-backup` / `finance-output-policy` / `report-office-export`），原有 50 套顺序与内容不变；
+本套件因此自本轮起**进入** `npm test` 聚合入口（`06-workbench` 下 `npm test` 为 **53 / 53 套 exit 0**）。
+
+### 3.1 合并后兼容整合轮（v3 / v4 精确契约）
+
+同一任务单新增的必改范围（**只改下面 3 个业务文件 + 1 处仅追加的聚合登记**）：
+
+| 文件 | 改动 |
+|---|---|
+| `06-workbench/server/local-backup.mjs` | 改为**两个独立版本契约**（`STRUCTURE_V3` / `STRUCTURE_V4`）+ 逐列**默认值**校验 + 版本选择 / 高版本 / 旧版本判定 |
+| `06-workbench/scripts/local-backup.mjs` | 无需改动（`--help` 输出的契约已自动带 `supportedSchemaVersions`） |
+| `06-workbench/test/local-backup.test.mjs` | 保留原 16 项（仅 schema 版本断言从 v3 改为 v4）+ 新增 4 项（v4 全链路 / v4 恢复库后续操作 / v3 旧备份语义 / 伪兼容拒绝） |
+| `06-workbench/scripts/test-all.mjs` | **仅追加** 3 条已合入套件登记 |
 
 ## 4. 验收标准
 
@@ -147,10 +166,22 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 2. 模块导入**无副作用**（不在导入时打开数据库 / 创建目录）；
 3. 恢复必须"先验证再发布"，失败与中断不留被当成成功的 `workbench.db`；
 4. CLI 三子命令可真实执行，输出稳定 `code`，不回显账务原文 / 原始 SQL / 堆栈 / 绝对路径；
-5. 三份新文档按事实记录范围、格式、兼容（**只支持当前 v3**）、耐久性边界、测试命令与 exit、限制与后续接入约束；
-   已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）与五种外键变体拒绝事实
-   如实记录，**不伪造** merge SHA、不标记 MERGED；仅改文档的提交不改变源码，不重跑 16 个用例，
-   已审源码 head 保持不变；**不声称** LOCAL-06 整体完成，**不声称**税局或真实财务验证。
+5. 三份新文档按事实记录范围、格式、兼容（**v3 + v4 两个精确结构**）、耐久性边界、测试命令与 exit、限制与后续接入约束；
+   已审源码 head `b2dcba3` 的 16 / 16（管理者 + 独立审查各一次，均 exit 0）、已合并事实（PR #55 / merge `98977e04`）
+   与本轮 **20 / 20** 如实记录，**不伪造** merge SHA、不把本轮候选标为已合并；
+   **不声称** LOCAL-06 整体完成，**不声称**税局或真实财务验证。
+6. **兼容整合轮专有验收**：
+   - v3 与 v4 **各自独立**的结构契约（列 / 类型 / NOT NULL / **默认值** / 主键 / UNIQUE / 外键完整集合与动作 /
+     迁移记录连续性 / 迁移前备份记录），且不把两版本合并成一份「至少包含」的宽松契约；
+   - v3 旧备份只读验证与恢复到全新目录均成功，**备份与源库都不被迁移 / 改写**；恢复的 v3 在显式交给当前
+     产品打开时按既有迁移路径升 v4，并记录实际差异；
+   - v4 用**真实产品合成流程**建库（资产 5 个补项列与期初累计、连续期间计提与总账、导入批次与来源、封账状态），
+     实际 `createBackup` → `verifyBackup` → `restoreNew`，再用真实产品入口读取并在恢复库上继续操作；
+     金额 / 凭证 / 来源 / 状态均为**独立预期**，不只比 hash 或 mock；
+   - 拒绝伪报 v4（只抬版本号 / 缺列 / 错误默认值 / 错误 null / 错误类型）、迁移记录不连续、未知组件表、
+     未来版本、以及「篡改快照后重算清单摘要」的伪兼容；错误过程源库 / 现有目标不变，无可被误认成功的半成品；
+   - 不改原位恢复范围 / 并发发布 / 链接保护，保持在线 WAL 一致性、readonly 源库不变、恢复目标独占、
+     CLI 现有错误语义；保留原 16 项验收与外键重复 / 额外不同动作拒绝。
 
 ## 5. 实现要点（给审查者的对照清单）
 
@@ -165,13 +196,19 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 4. **验证只信自己重算的结果**：不按清单路径取文件（固定文件名）、不执行备份内 SQL、
    不用迁移 / 初始化去"修好"候选库（`readOnly` 打开 + 固定 PRAGMA / SELECT）；
    `pageSize` / `journalMode` / `userVersion` / `tables` / `migrations` / 摘要全部与真实快照比对。
-5. **真实结构校验（唯一支持 v3）**：`TABLE_STRUCTURE` 逐表校验列名 / 声明类型 / NOT NULL / 主键顺序 /
-   UNIQUE 列组 / 外键（目标列组 + `ON DELETE` / `ON UPDATE` / `MATCH` 动作，按外键分组整体比较，
+5. **真实结构校验（v3 / v4 各自契约）**：按库报告的 schema 版本选择 `STRUCTURE_V3` 或 `STRUCTURE_V4`（版本号
+   只用来选契约，不足以为凭），逐表校验列名 / 声明类型 / NOT NULL / **默认值（与 `dflt_value` 逐字比对）** /
+   主键顺序 / UNIQUE 列组 / 外键（目标列组 + `ON DELETE` / `ON UPDATE` / `MATCH` 动作，按外键分组整体比较，
    多列外键不只比单个目标列，实际分组与期望**一对一**匹配，重复分组 `foreign_key_duplicate` 与
    未声明额外分组 `unexpected_foreign_keys` 都不接受），外加 `schema_migrations` 记录从 1 连续且与版本一致、
-   `schema_backups` 存在合法记录；
-   缺表 / 缺列 / 缺约束 / 外键动作不符（`foreign_key_actions`）/ 伪造或矛盾迁移记录 → `structure_invalid`
-   （源库入口为 `source_structure_invalid`）；更高版本 → `schema_unsupported`，更低版本 → `schema_outdated`。
+   `schema_backups` 存在合法记录，且**不出现该版本契约以外的表**；
+   缺表 / 缺列 / 缺约束 / 默认值不符（`column_default`）/ 外键动作不符（`foreign_key_actions`）/
+   伪造或矛盾迁移记录 / 未知组件表 → `structure_invalid`（源库入口为 `source_structure_invalid`）；
+   更高版本 → `schema_unsupported`，更低版本 → `schema_outdated`。
+   v4 的 5 个补项列按真实 `ALTER TABLE` 契约逐列声明（`acquired_period TEXT`、
+   `opening_accumulated REAL NOT NULL DEFAULT 0`、`ledger_status TEXT NOT NULL DEFAULT 'booked'`、
+   `ledger_note TEXT NOT NULL DEFAULT ''`、`origin TEXT NOT NULL DEFAULT 'purchase'`）；
+   拒绝明细里的默认值只回显本模块已知字面值，未知值报 `nonstandard`（不回显任意业务文本）。
 6. **耐久性**：partial 快照 / 清单 / 未完成标记写后 `fsync` 再 `rename`；POSIX 额外尝试 `fsync` 目录，
    Windows 明确不支持并如实汇报（`backupMeta.durability` / `durability`）。
 7. **恢复原子性**：`mkdir` 独占 → 未完成标记（`fsync`）→ partial 复制 → 复制结果重新校验 sha256 →
@@ -182,32 +219,54 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
 ## 6. 依赖与输入
 
 - 只读依赖 `06-workbench/server/import-storage.mjs` 的 `IMPORT_SCHEMA_VERSION` 与 `schemaVersion()`
-  （当前 **3**）；不写该文件、不建表、不迁移。
+  （当前 **4**，v3 仍受支持）；不写该文件、不建表、不迁移。
 - 运行环境：Node 内建 `node:sqlite`（本机实测 Node v24.15.0 / SQLite 3.51.3）与 `node:fs` / `node:crypto` / `node:path`。
 - 测试只用系统临时目录里的合成库 / 合成账套，自行清理自己创建的目录与连接。
 
 ## 7. 风险与后续
 
-- 见 [LOCAL-BACKUP §9](../LOCAL-BACKUP.md)：未接线、严格拒绝的代价、只支持 v3、清单无签名、
-  全表扫描成本、`-shm` 读锁边界、Windows 目录项耐久性边界、未验证真实账套、未验证 Windows 交付路径。
+- 见 [LOCAL-BACKUP §9](../LOCAL-BACKUP.md)：未接线、严格拒绝的代价、只支持 v3 / v4、清单无签名、
+  全表扫描成本、`-shm` 读锁边界、Windows 目录项耐久性边界、未验证真实账套（v3 夹具为结构等价合成库）、
+  未验证 Windows 交付路径。
 - 原位恢复接入契约见 [LOCAL-BACKUP §6.5](../LOCAL-BACKUP.md)，属后续共享维护窗口任务，**本包未实现**。
 - 审计留痕（谁在什么时候备份 / 恢复 / 恢复到哪个目标）属 LOCAL-06 审计部分，**本包未实现**，
   完整审计在 [Issue #54](https://github.com/huxiaoyang-code/youshu-fork/issues/54)。
-- **严格只支持当前 schema v3**：schema v4（LOCAL-02 #47）以及 bank / batch / audit 等组件必须后续
-  **显式**做结构组合（扩 `TABLE_STRUCTURE` / 复核 `formatVersion`）与真实 SQLite 行为与合成临时库验收，
-  不得只靠动态表清单或「旧用例通过」推定已支持。
+- **v5+ 与未登记组件仍严格拒绝**：未来 schema 新版本、bank v2+、batch / audit 等其它组件必须**显式**做结构契约
+  （逐列 / 逐约束 / 逐动作）/ 真实 SQLite 行为与合成临时库验收，并复核 `formatVersion`，
+  不得只靠动态表清单、只抬版本号或「旧用例通过」推定已支持。
 
-## 8. 审查与合并状态（截至本次文档核对）
+## 8. 审查与合并状态（截至兼容整合轮自测完成）
 
 | 项 | 事实 |
 |---|---|
-| 已审源码 head | `b2dcba35e87e9ebb75245dcc874aa41705b31243`（base `257f96275031eefa484699dd71bd012e2d221e51`） |
-| 管理者验收 | `node test/local-backup.test.mjs` **16 / 16、exit 0** |
-| 最终独立审查 | `review_backup06_final`：未参与实现、fork 为 none，同 head 独立 **16 / 16、exit 0** |
+| 已审 / 已合并源码 head | `b2dcba35e87e9ebb75245dcc874aa41705b31243`（base `257f96275031eefa484699dd71bd012e2d221e51`） |
+| 合并 | PR [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) **已 MERGED**，merge `98977e04bd24aa293074021802191814f8c2a1d2`（北京时间 2026-10-22） |
+| 合并前管理者验收 | `node test/local-backup.test.mjs` **16 / 16、exit 0** |
+| 合并前最终独立审查 | `review_backup06_final`：未参与实现、fork 为 none，同 head 独立 **16 / 16、exit 0** |
 | 独立真实探针 | 五种外键变体（`ON DELETE NO ACTION`、`ON UPDATE CASCADE`、`CASCADE + RESTRICT`、逆序重复、两个同 `CASCADE`）在源库与重算 manifest hash 的快照两侧均被拒绝，输出 / 目标不创建；正常结构恢复后真实 `accounting.deleteAccountSet` 成功 |
-| 仓库卫生 | `git diff --check` 通过；源码工作区干净；无剩余已发现阻塞项 |
-| PR | [#55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) OPEN，附当前任务说明，等待本次文档核对后按已授权流程合并 |
-| 合并 | **实际 merge SHA 尚未产生**，不伪造、不标记 MERGED |
+| 兼容整合轮自测 | `node test/local-backup.test.mjs` **20 / 20、exit 0**；`npm test` **53 / 53 套 exit 0**（含真实 Office PDF 几何校验） |
+| 兼容整合轮状态 | 源码 / 测试 / 文档**未提交、未建 PR、未合并**，最终独立审查待做（不预报 head / merge） |
+| 仓库卫生 | `git diff --check` 通过；`git status` 仅有本包授权文件 |
 
-仅改文档的提交会得到新的 PR head，但**已审源码 head 仍是 `b2dcba3`**；本次不改源码 / 测试 / CLI，
-不重跑 16 个用例，由管理者核对源码未变；本次只检查文档链接 / 事实 / 范围与 `git diff --check`。
+后续文档 / 源码的提交由管理者执行；兼容整合轮源码 head 与 merge 由管理者提交时复核与补齐。
+
+## 9. 2026-10-22 B 窗：同步已合核心 + 可选 bank 组件索引键语义
+
+- 边界：本窗按 root 正式开窗与远端 Issue #49 / #53 的 13 路径 claim 工作；只改备份 / 银行契约 / 6 份文档的
+  交集子集，**不改** 核心 / DB / import / HTTP / Agent / MCP / public / `scripts/test-all.mjs` / package；
+  未自行 Git merge / commit，未用真实账套 / 税局。
+- 兼容范围：**core v3 / v4 + 可选 bank 组件 v1**。无 bank 的旧 v3 / v4 备份与旧 bank 内部候选备份
+  继续原样 verify / restore-new，不升级；清单格式 / `formatVersion` / `components[].structureDigest` 口径未改。
+- 银行组件校验：完整 10 表 + 版本行恰好一行 v1 + 列类型 / NOT NULL / 默认值 / 主键列序与 `rowidAlias`、
+  **全部 19 条 PK / UNIQUE / 命名 / 自动索引逐键比对**（`seqno` 顺序 / collation / 方向 / 表达式 / rowid /
+  `origin` / `partial` / 真实谓词）、外键完整集合与动作、无未知 trigger / view。
+  数量 / 额外 / 缺失 / 命名与自动索引互顶一律拒绝；不针对某个索引名特判。
+- 三入口一致：`createBackup`（源库）/ `verifyBackup`（快照）/ `restoreNew`（恢复目标）都拒绝
+  `NOCASE` / `RTRIM` / `DESC` / 表达式 / 错 partial 谓词 / 额外唯一 / 互顶 / `INTEGER PRIMARY KEY DESC`（rowid 别名破坏）；
+  快照同时重算字节数与 sha256（摘要自洽）仍拒绝且不生成恢复目标。
+- 健康恢复：健康 bank 库 `backup → verify → restore-new` 后索引键仍为 `BINARY` 升序普通列，
+  真实 `Ref-A` / `ref-a` 两笔继续导入成功；与真实 DDL 同义重建不被误拒。
+- 实跑：`local-backup` **22 / 22**（数量与含义不变）、银行解析 **16 / 16**、领域 **40 / 40**、CLI **12 / 12**、
+  集成 **5 / 5**，合计 **95 / 95，exit 0**（合成临时库）。**未跑**全量 `npm test`：整合面全量由 root 冻结后执行。
+- 仍未支持：v0 / v1 / v2 旧库、未来 v5+、bank v2+、batch / audit 等未登记组件、原位覆盖 / 版本回退；
+  未接 HTTP / Agent / MCP / UI / 共享模型入口；不声称 LOCAL-06 整体完成，也不声称已提交 / 已建 PR / 已合。

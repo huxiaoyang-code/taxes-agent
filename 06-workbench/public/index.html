@@ -86,11 +86,18 @@
           </select>
         </label>
         <label id="rCodeWrap" class="hidden">科目 <select id="rCode"></select></label>
+        <label>格式
+          <select id="rFormat">
+            <option value="csv">CSV 表格（可导入 / 用 Excel 打开）</option>
+            <option value="xlsx">Excel 工作簿（.xlsx）</option>
+            <option value="pdf">PDF（阅读 / 打印）</option>
+          </select>
+        </label>
         <button id="btnRunReport" class="primary">生成</button>
-        <button id="btnExportReport">下载 CSV</button>
+        <button id="btnExportReport">下载报表</button>
         <button id="btnPrint" class="ghost">打印</button>
       </div>
-      <p class="hint">CSV 为内部报表，按当前账套、期间和科目导出；数据完整性未经确认，不是税局申报文件。</p>
+      <p class="hint">下载格式可选 CSV / Excel / PDF，均为内部报表，按当前账套、期间和科目导出；数据完整性未经确认，不是税局申报文件。预览始终使用报表数据，不会先生成 PDF。</p>
       <p class="hint">税局申报格式：官方上传模板及完整字段映射尚未核实，当前不可导出申报文件。</p>
       <p id="reportExportStatus" role="status" aria-live="polite"></p>
       <div id="reportWarnings" class="hint"></div>

@@ -55,6 +55,31 @@ const steps = [
   { name: "import-incremental", file: join(WORKBENCH, "test", "import-incremental.test.mjs"), cwd: WORKBENCH },
   { name: "import-incremental-http", file: join(WORKBENCH, "test", "import-incremental-http.test.mjs"), cwd: WORKBENCH },
   { name: "import-incremental-mcp", file: join(MCP, "import-incremental-test.mjs"), cwd: MCP },
+  // LOCAL-02 金额精度 / 期末完整性 / 连续期间：领域 + HTTP/Agent + MCP 真实链路（仅追加）
+  { name: "accounting-period-integrity", file: join(WORKBENCH, "test", "accounting-period-integrity.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-period-http", file: join(WORKBENCH, "test", "accounting-period-http.test.mjs"), cwd: WORKBENCH },
+  { name: "accounting-period-mcp", file: join(MCP, "accounting-period-test.mjs"), cwd: MCP },
+  // LOCAL-06 / LOCAL-05 / LOCAL-08 已合入模块的自身套件（仅追加，不改上方原有 50 个套件的内容与顺序）
+  { name: "local-backup", file: join(WORKBENCH, "test", "local-backup.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-output-policy", file: join(WORKBENCH, "test", "finance-output-policy.test.mjs"), cwd: WORKBENCH },
+  { name: "report-office-export", file: join(WORKBENCH, "test", "report-office-export.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-08 PR57 已合入的适配层 / 出站信封校验自身套件（仅追加，不改上方原有 53 个套件的内容与顺序）
+  { name: "finance-model-adapter", file: join(WORKBENCH, "test", "finance-model-adapter.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-model-transport-mcp", file: join(MCP, "finance-model-transport-test.mjs"), cwd: MCP },
+  // LOCAL-05 接线（真实 Office HTTP 套件；仅末尾追加，不改上方原有 55 个套件的内容与顺序）
+  { name: "report-office-http", file: join(WORKBENCH, "test", "report-office-http.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-08 入口接线（Agent 组装层 / 真实 HTTP / MCP 端到端；仅末尾追加，不改上方原有 56 个套件的内容与顺序）
+  { name: "finance-model-entry", file: join(WORKBENCH, "test", "finance-model-entry.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-model-http", file: join(WORKBENCH, "test", "finance-model-http.test.mjs"), cwd: WORKBENCH },
+  { name: "finance-model-entry-mcp", file: join(MCP, "finance-model-entry-test.mjs"), cwd: MCP },
+  // LOCAL-07 B1 已合 PR65 的持久化与 CLI 套件；仅末尾追加，原 59 套完整保留。
+  { name: "local-batch-persistence", file: join(WORKBENCH, "test", "local-batch-persistence.test.mjs"), cwd: WORKBENCH },
+  { name: "local-batch-cli", file: join(WORKBENCH, "test", "local-batch-cli.test.mjs"), cwd: WORKBENCH },
+  // LOCAL-04 银行组件；仅末尾追加，原 main 61 套逐字原序保留。
+  { name: "bank-import", file: join(WORKBENCH, "test", "bank-import.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-reconciliation", file: join(WORKBENCH, "test", "bank-reconciliation.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-reconcile-cli", file: join(WORKBENCH, "test", "bank-reconcile-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "local-bank-backup-integration", file: join(WORKBENCH, "test", "local-bank-backup-integration.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

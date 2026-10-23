@@ -411,55 +411,68 @@ try {
     assert.ok(r.voucher, "回滚后可正常计提");
   });
 
-  await test("折旧：后续期间与尾差提足保持原逻辑", () => {
+  await test("折旧：累计舍入在寿命内恰好提足（1000 元 / 3 期 = 333.33 + 333.33 + 333.34）", () => {
+    // 手算：1000.00 ÷ 3 = 333.333…，按分向下取整得 333.33，
+    // 余额 1000.00 − 333.33 × 2 = 333.34 落在最后一期；3 期合计恰好 1000.00。
     const s = newSet("折旧-尾差");
-    mkCard(s, { original_cost: 1000, residual_rate: 0, useful_life_months: 3 });
-    A.generateDepreciation(s, "2026-01");
-    A.generateDepreciation(s, "2026-02");
-    A.generateDepreciation(s, "2026-03");
+    const card = mkCard(s, { original_cost: 1000, residual_rate: 0, useful_life_months: 3 });
+    assert.equal(card.depreciable, 1000);
+    assert.equal(card.monthly, 333.33, "月额按分向下取整");
+    assert.equal(card.final_month, 333.34, "余额落在最后一期");
+    const amounts = ["2026-01", "2026-02", "2026-03"]
+      .map((p) => A.generateDepreciation(s, p).voucher.total_debit);
+    assert.deepEqual(amounts, [333.33, 333.33, 333.34]);
+    assert.equal(A.listAssetCards(s)[0].accumulated, 1000, "第 3 期累计恰好等于可折旧额");
+    assert.equal(A.accountBalances(s, "2026-03").get("1602").natural, 1000);
+    // 寿命已满：不得再提，也不能把余额推到寿命之外。
     const r4 = A.generateDepreciation(s, "2026-04");
-    assert.ok(r4.voucher, "尾差应在后续期间提足");
-    assert.equal(A.listAssetCards(s)[0].accumulated, 1000);
+    assert.equal(r4.voucher, null, "不得提前多提或延后补差");
+    assert.equal(A.listAssetCards(s)[0].remaining, 0);
     assert.equal(A.accountBalances(s, "2026-04").get("1602").natural, 1000);
-    const r5 = A.generateDepreciation(s, "2026-05");
-    assert.equal(r5.voucher, null, "提足后不再计提");
   });
 
-  await test("折旧：unpost旧期→跨期计提→重过账旧凭证被拒绝（原复现回归）", async () => {
+  await test("折旧：unpost旧期 + 补项期初累计后重过账被拒绝（原复现回归）", async () => {
     const s = newSet("折旧-原复现");
-    mkCard(s, { original_cost: 100, residual_rate: 0, useful_life_months: 1 });
+    const card = mkCard(s, { original_cost: 100, residual_rate: 0, useful_life_months: 3 });
+    // 补项：显式登记历史已入账累计 40 元（导入旧账的累计折旧）。
+    // LOCAL-02：已有已过账计提后不允许再改期初累计（会静默改变已提金额），因此补项在计提前完成。
+    A.updateAssetCard(s, card.id, { opening_accumulated: 40 });
     const jan = A.generateDepreciation(s, "2026-01");
-    assert.equal(jan.voucher.total_debit, 100);
+    assert.equal(jan.voucher.total_debit, 33.33);
     A.unpostVoucher(s, jan.voucher.id);
-    assert.equal(A.listAssetCards(s)[0].accumulated, 0);
+    assert.equal(A.listAssetCards(s)[0].accumulated, 40);
     const feb = A.generateDepreciation(s, "2026-02");
-    assert.ok(feb.voucher, "2月应可计提（已过账累计为 0）");
-    assert.equal(A.listAssetCards(s)[0].accumulated, 100);
+    assert.ok(feb.voucher, "2 月按分期表独立计提，不受一月反过账影响");
+    assert.equal(feb.voucher.total_debit, 33.33);
 
     const err = await rejects(() => A.postVoucher(s, jan.voucher.id), /depreciation_exceeds_depreciable/);
-    assert.equal(err.details.posted, 100);
-    assert.equal(err.details.posting, 100);
+    assert.equal(err.details.posted, 33.33);
+    assert.equal(err.details.posting, 33.33);
     assert.equal(err.details.depreciable, 100);
 
-    const card = A.listAssetCards(s)[0];
-    assert.equal(card.accumulated, 100, "累计不得变成 200");
-    assert.equal(card.depreciable, 100);
-    assert.equal(card.remaining, 0, "remaining 不得为负");
-    assert.equal(z(A.accountBalances(s, "2026-02").get("1602").natural), 100);
+    const after = A.listAssetCards(s)[0];
+    assert.equal(after.accumulated, 73.33, "40 期初 + 33.33 二月");
+    assert.equal(after.depreciable, 100);
+    assert.equal(after.remaining, 26.67);
+    assert.equal(z(A.accountBalances(s, "2026-02").get("1602").natural), 33.33);
     assert.equal(A.getVoucher(s, jan.voucher.id).status, "draft", "一月旧凭证应保持草稿");
     assert.equal(A.getVoucher(s, feb.voucher.id).status, "posted");
   });
 
-  await test("折旧：正常未超额跨期恢复允许重新过账", () => {
+  await test("折旧：正常未超额跨期恢复允许重新过账（按倒序撤销后期计提）", () => {
     const s = newSet("折旧-跨期恢复");
     mkCard(s, { original_cost: 300, residual_rate: 0, useful_life_months: 3 });
     const jan = A.generateDepreciation(s, "2026-01");
-    A.generateDepreciation(s, "2026-02");
+    const feb = A.generateDepreciation(s, "2026-02");
     assert.equal(A.listAssetCards(s)[0].accumulated, 200);
+    // LOCAL-02：后期已有已过账计提时，前期计提已构成后期依赖 → 必须按倒序先撤销后期。
+    assert.throws(() => A.unpostVoucher(s, jan.voucher.id), /later_depreciation_depends_on_period/);
+    A.unpostVoucher(s, feb.voucher.id);
     A.unpostVoucher(s, jan.voucher.id);
-    assert.equal(A.listAssetCards(s)[0].accumulated, 100);
-    // 其他已过账(二月)100 + 一月 100 = 200 <= 可折旧额 300，允许恢复。
+    assert.equal(A.listAssetCards(s)[0].accumulated, 0);
+    // 其他已过账(二月)100 + 一月 100 = 200 <= 可折旧额 300，允许按期间顺序恢复。
     assert.equal(A.postVoucher(s, jan.voucher.id).status, "posted");
+    assert.equal(A.postVoucher(s, feb.voucher.id).status, "posted");
     const card = A.listAssetCards(s)[0];
     assert.equal(card.accumulated, 200);
     assert.equal(card.remaining, 100);
@@ -468,7 +481,9 @@ try {
 
   await test("折旧：重新过账失败后账簿与卡片保持不变（无部分过账）", async () => {
     const s = newSet("折旧-失败不变");
-    mkCard(s, { original_cost: 100, residual_rate: 0, useful_life_months: 1 });
+    const card = mkCard(s, { original_cost: 100, residual_rate: 0, useful_life_months: 3 });
+    // 补项在计提前完成（已有已过账计提后不允许改期初累计）。
+    A.updateAssetCard(s, card.id, { opening_accumulated: 40 });
     const jan = A.generateDepreciation(s, "2026-01");
     A.unpostVoucher(s, jan.voucher.id);
     A.generateDepreciation(s, "2026-02");
@@ -495,15 +510,22 @@ try {
 
   await test("折旧：删除被拒旧草稿后可合法重算，不永久阻塞", async () => {
     const s = newSet("折旧-拒绝后重算");
-    mkCard(s, { original_cost: 100, residual_rate: 0, useful_life_months: 1 });
+    const card = mkCard(s, { original_cost: 100, residual_rate: 0, useful_life_months: 3 });
+    // 补项在计提前完成（已有已过账计提后不允许改期初累计）。
+    A.updateAssetCard(s, card.id, { opening_accumulated: 40 });
     const jan = A.generateDepreciation(s, "2026-01");
     A.unpostVoucher(s, jan.voucher.id);
     A.generateDepreciation(s, "2026-02");
     await rejects(() => A.postVoucher(s, jan.voucher.id), /depreciation_exceeds_depreciable/);
     A.deleteVoucher(s, jan.voucher.id);
     assert.equal(A.listDepreciationRuns(s, { period: "2026-01" }).length, 0, "删除草稿应清理 runs");
+    assert.equal(A.listAssetCards(s)[0].accumulated, 73.33);
+    // 3 月按剩余额提足：100 − 73.33 = 26.67，累计恰好 100（40 期初 + 33.33 + 26.67）。
+    const mar = A.generateDepreciation(s, "2026-03");
+    assert.equal(mar.voucher.total_debit, 26.67);
     assert.equal(A.listAssetCards(s)[0].accumulated, 100);
-    assert.equal(z(A.accountBalances(s, "2026-02").get("1602").natural), 100);
+    assert.equal(A.listAssetCards(s)[0].remaining, 0);
+    assert.equal(z(A.accountBalances(s, "2026-03").get("1602").natural), 60);
   });
 
   // ================================================================ 4. 期初负数舍入前校验

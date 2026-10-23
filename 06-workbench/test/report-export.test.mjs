@@ -50,8 +50,11 @@ try {
   voucher(s, '2026-01', [e('100201', 400), e('5001', 0, 400)]);
   voucher(s, '2026-01', [e('1403', 120), e('1601', 180), e('1002', 0, 300)]);
   voucher(s, '2026-01', [e('5602', 50), e('1002', 0, 50)]);
-  A.addAssetCard(s, { name: '期初设备', original_cost: 1200, residual_rate: 0, useful_life_months: 12, start_period: '2026-01' });
+  // 期初设备在启用月（2025-12）已存在：显式登记取得期间，不靠 start_period 推测取得日。
+  A.addAssetCard(s, { name: '期初设备', original_cost: 1200, residual_rate: 0, useful_life_months: 12, start_period: '2026-01', acquired_period: '2025-12' });
   A.generateDepreciation(s, '2026-01');
+  // 2026-01 购入的设备（1601 借方 180）必须有对应卡片，否则卡片与总账差异会阻止封账。
+  A.addAssetCard(s, { name: '新增设备', original_cost: 180, residual_rate: 0, useful_life_months: 60, start_period: '2026-02', acquired_period: '2026-01' });
   voucher(s, '2026-02', [e('100201', 200), e('5001', 0, 200)]);
   voucher(s, '2026-02', [e('5602', 20), e('1002', 0, 20)]);
 
@@ -186,6 +189,9 @@ try {
     assert.equal(r.dataStatus.taxFilingReady, false); assert.ok(r.warnings.length);
   });
   await test('closed period exports are read only, deterministic and preserve database changes count', () => {
+    // LOCAL-02 封账前置：按期间顺序封账，且封账前必须先结转本期损益（本期有损益发生）。
+    A.setPeriodStatus(s, '2025-12', 'closed');
+    A.carryForwardProfit(s, '2026-01');
     A.setPeriodStatus(s, '2026-01', 'closed');
     const before = db.prepare('SELECT total_changes() AS n').get().n;
     for (const kind of ['balance-sheet', 'income-statement', 'cash-flow-statement', 'trial-balance', 'ledger']) {

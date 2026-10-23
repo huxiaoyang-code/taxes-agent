@@ -174,6 +174,7 @@ const PLAIN_TOOL_OPERATIONS = Object.freeze({
   period_list: "period_list",
   ledger_query: "ledger_query",
   asset_list: "asset_list",
+  period_end_check: "period_end_check",
   book_import_batch: "book_import_batch",
   voucher_create: "voucher_create",
   voucher_post: "voucher_post",
@@ -183,6 +184,7 @@ const PLAIN_TOOL_OPERATIONS = Object.freeze({
   opening_balance_set: "opening_balance_set",
   account_create: "account_create",
   asset_create: "asset_create",
+  asset_update: "asset_update",
   depreciation_run: "depreciation_run",
   carry_forward_profit: "carry_forward_profit",
   account_set_create: "account_set_create",
@@ -210,10 +212,10 @@ const QUERY_OPERATIONS = Object.freeze([
   "finance_query:voucher.draft.summary",
   "finance_query:voucher.generated.list",
   "finance_query:voucher.generated.summary",
-  "ledger_query", "opening_balance_get", "period_list", "voucher_check",
+  "ledger_query", "opening_balance_get", "period_end_check", "period_list", "voucher_check",
 ]);
 const WRITE_OPERATIONS = Object.freeze([
-  "account_create", "account_set_create", "asset_create", "book_import_incremental",
+  "account_create", "account_set_create", "asset_create", "asset_update", "book_import_incremental",
   "carry_forward_profit", "depreciation_run", "legacy_book_import", "opening_balance_set",
   "period_set_status", "voucher_create", "voucher_delete", "voucher_post", "voucher_unpost",
 ]);
@@ -255,6 +257,18 @@ const PROJECTION_TOKENS = new Set([
   "small_scale", "general", "small_business", "enterprise", "unknown",
   "not_persisted", "global", "account_set", "batch", "explicit_account_set_id",
   "fixed", "intangible",
+  "ok", "blocked", "not_applicable",
+  "booked", "pending_purchase_voucher", "purchase", "supplement", "import",
+  // LOCAL-02 期末检查固定步骤 / 固定阻塞码（只允许这些代码常量进入 projection）。
+  "draft_vouchers", "trial_balance", "depreciation", "asset_reconciliation",
+  "profit_carry_forward", "year_end_carry_forward", "period_sequence",
+  "period_has_draft_vouchers", "period_unbalanced", "depreciation_run_stale",
+  "asset_ledger_pending", "depreciation_missing", "depreciation_draft_exists",
+  "depreciation_life_expired_underprovided", "asset_missing_card", "asset_cost_mismatch",
+  "asset_accumulated_mismatch", "asset_acquired_period_missing", "asset_purchase_voucher_pending",
+  "profit_not_carried_forward", "profit_carry_stale", "year_end_not_carried",
+  "previous_period_open", "previous_period_depreciation_pending",
+  "later_period_closed", "carryforward_stale",
 ]);
 
 // 固定错误码 → 固定 category。未登记码一律拒绝（不能靠“看起来像 token”穿过）。
@@ -317,7 +331,39 @@ const ERROR_CATEGORY_BY_CODE = Object.freeze({
   opening_amount_invalid: "opening",
   original_cost_invalid: "asset",
   useful_life_months_invalid: "asset",
+  useful_life_months_out_of_range: "asset",
   residual_rate_invalid: "asset",
+  assetId_required: "asset",
+  asset_not_found: "asset",
+  acquired_period_invalid: "asset",
+  opening_accumulated_invalid: "asset",
+  opening_accumulated_exceeds_depreciable: "asset",
+  ledger_status_invalid: "asset",
+  ledger_note_required: "asset",
+  asset_origin_invalid: "asset",
+  asset_card_affects_closed_period: "asset",
+  asset_card_locked_by_posted_runs: "asset",
+  asset_acquired_period_missing: "asset",
+  asset_purchase_voucher_pending: "asset",
+  asset_ledger_pending: "asset",
+  asset_missing_card: "asset",
+  asset_cost_mismatch: "asset",
+  asset_accumulated_mismatch: "asset",
+  period_end_check_failed: "period_end",
+  later_period_closed: "period_end",
+  later_year_end_carryforward_depends_on_period: "period_end",
+  later_profit_carryforward_depends_on_period: "period_end",
+  later_depreciation_depends_on_period: "period_end",
+  carryforward_stale: "period_end",
+  profit_not_carried_forward: "period_end",
+  profit_carry_stale: "period_end",
+  year_end_not_carried: "period_end",
+  previous_period_open: "period_end",
+  previous_period_depreciation_pending: "period_end",
+  depreciation_missing: "depreciation",
+  depreciation_run_stale: "depreciation",
+  depreciation_life_expired_underprovided: "depreciation",
+  depreciation_global_over_depreciable: "depreciation",
   voucher_number_unplanned: "voucher",
   depreciation_exceeds_depreciable: "depreciation",
   unknown_tool: "tool",
@@ -485,7 +531,12 @@ function validateStatusFields(data) {
   if (applied !== true && applied !== false && applied !== "unknown") return false;
   const needsLocalReview = prop(data, "needsLocalReview");
   if (typeof needsLocalReview !== "boolean") return false;
-  if (needsLocalReview !== (applied !== true)) return false;
+  if (applied !== true && needsLocalReview !== true) return false;
+  if (applied === true && needsLocalReview === true) {
+    const unavailable = prop(data, "refUnavailable");
+    if (prop(data, "localRef") !== null || prop(data, "refPersistence") !== "none"
+      || (unavailable !== "value_invalid" && unavailable !== "summary_unavailable")) return false;
+  }
   const reason = prop(data, "appliedReason");
   if (applied === true) return reason === undefined;
   return typeof reason === "string" && APPLIED_REASONS.has(reason);
