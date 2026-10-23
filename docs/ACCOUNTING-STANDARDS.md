@@ -639,3 +639,33 @@ R2 实跑（cwd=`06-workbench`，合成临时库，TEMP/TMP 为本会话专属�
   配对不可证时如实给 gross + 歧义诊断，而不是新建 schema / 破坏指纹。
 - 未提交、未推送、未合并；R2 仍需独立复审，也不代表 LOCAL-03a 整包完成。
 
+### 12.2 B1 独审返修 R3（2026-10-23，待独立复审）
+
+R2 独审仍发现两准则现金明细 `100201` 资产 / debit 已过账借 100、贷收入 100 后，
+仅将 `contra` 改为 1，现金流仍无诊断并声称完整。原因是 `effective.contra` 已合并声明，
+不能再用它验证声明与权威根科目是否冲突。领域校验现直接采用既有纯规则的
+`account_contra_conflict` 诊断，输出受控 `report_account_semantics_mismatch` /
+`account-contra-conflict`，两项完整性为 false；现金与经营流入仍保留真实 100 元。
+未修改已审纯规则 / profile。同步修正现金流旧 `min` 注释。
+
+新增两准则反例（含仅期初 / 期末有现金余额的情形），及合法现金明细、权威备抵根 / 明细
+（显式标记与继承）、合法收入明细的正向控制；原 28 项断言保留，新增 4 项。
+修复前反例实跑 **30/32、exit 1**，恰两项 contra 失败；修复后：
+
+| 命令（cwd=`06-workbench`） | R3 实际结果 |
+|---|---|
+| `node test/accounting-standards.test.mjs` | 32/32，exit 0 |
+| `node test/accounting-guards.test.mjs` | 23/23，exit 0 |
+| `node test/accounting-derived.test.mjs` | 31/31，exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45/45，exit 0 |
+| `node test/local-audit.test.mjs` | 28/28，exit 0 |
+
+共 **159/159**。全部仅用合成库，本轮 TEMP / TMP / WORKBENCH_DATA_DIR 为工作区专属忽略目录，
+祖先已核无 junction / reparse；未改全局 TEMP，未读取真实账套或税务凭据。
+本轮未重跑迁移、legacy / 纯规则独立套件、导入及 HTTP / 导出 / Office / 全套；
+这些项仅引用 R2 或更早证据，既有 B2 限制未解决。
+
+本轮 pi 实际周额度 429 后，依据用户 2026-10-23 明确授权由单一兜底实现 subagent 完成本包；
+实现者未承担独立审查。仅六文件范围，无 Git 写操作；待管理者独立审查 / Git。
+B1 不单独合 main，B2 的入口接线、v5 备份恢复、Office / 导出适配、测试注册、公共交接
+与 Issue #61 均未在本包完成；不声称整包通过或已合并。

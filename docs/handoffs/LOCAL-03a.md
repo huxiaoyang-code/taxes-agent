@@ -394,3 +394,24 @@ M  docs/handoffs/LOCAL-03a.md
   受限资金 / 期限重分类等业务边界未变。
 - 未提交、未推送、未合并；R2 不等同于独立复审通过，也不代表 LOCAL-03a 整包完成。
 
+## 11. B1 独审返修 R3（2026-10-23，待独立复审）
+
+- R2 仍漏诊断两准则现金明细的 `contra=1` 冲突。本轮领域校验改为采纳既有纯规则
+  `account_contra_conflict`，不再比较已经合并声明的 `effective.contra`；现金 / 经营 100 元保留，
+  `classificationComplete=false`、`reportStatus.complete=false` 且有受控诊断。
+- 仅改六文件：`06-workbench/server/period-end-controls.mjs`、`06-workbench/server/accounting.mjs`
+  （仅旧 min 注释）、`06-workbench/test/accounting-standards.test.mjs`、
+  `docs/ACCOUNTING-STANDARDS.md`、`docs/tasks/LOCAL-03a.md`、本交接。纯规则 / profile 未变；
+  未碰 db、入口、backup、Office / 导出、test-all 或共享文档。修正文档 EOF 多余空行。
+- 新增两准则现金 contra 反例（本期 gross 与仅期初余额），以及合法现金 / 备抵根 / 继承明细 /
+  显式备抵明细 / 收入明细正向控制。修复前 **30/32、exit 1**，恰两个 contra 反例失败。
+- 本轮实跑（cwd=`06-workbench`）：`node test/accounting-standards.test.mjs` **32/32**；
+  `node test/accounting-guards.test.mjs` **23/23**；`node test/accounting-derived.test.mjs` **31/31**；
+  `node test/accounting-period-integrity.test.mjs` **45/45**；`node test/local-audit.test.mjs` **28/28**；
+  共 **159/159**，五套均 **exit 0**。原现金流 gross / 配对歧义、类别 / 方向、年结原子性断言保留通过。
+- 本轮全部合成数据，TEMP / TMP / WORKBENCH_DATA_DIR 均在专属工作区忽略目录，已核祖先无
+  junction / reparse；未碰真实账套 / 税务凭据 / 全局 TEMP，未清理未知路径。
+- 未重跑 migration、legacy / 纯规则独立套件、导入、HTTP / 导出 / Office / 全套；旧证据与 B2
+  未通过项如前。B2 的 v5 备份恢复、入口、Office / 导出、测试注册、公共交接与 Issue #61 未完成。
+- pi 本轮已实际周额度 429、无修改退出；用户明确授权的单一兜底实现 subagent 完成本包，
+  不自审。未执行 Git 写操作、未提交 / 推送 / 合并，待 fresh 独立审查；B1 不单独合 main。

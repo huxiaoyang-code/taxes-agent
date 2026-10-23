@@ -76,7 +76,7 @@ export function accountSetProfileForControls(db, setId) {
  * 用准则映射校验一行科目元数据（类别 / 方向 / 备抵），**不盲信库内元数据**。
  * 返回：
  * - `matchedRoot`：命中的 profile 根科目（未映射为 null）
- * - `effective`：根科目权威语义（未映射为 null）
+ * - `effective`：规则解析后的语义（类别 / 方向来自根科目，备抵含声明合并；未映射为 null）
  * - `reasons`：受控冲突 token（category-conflict / direction-conflict / contra-conflict /
  *   account-metadata-invalid），空数组表示一致
  * 未映射的自定义编码本身不算冲突（报表层会单独诊断），但它的方向无法用准则校验。
@@ -106,7 +106,11 @@ export function accountProfileSemantics(profile, account) {
   const reasons = [];
   if (resolved.effective.category !== declared.category) reasons.push("category-conflict");
   if (resolved.effective.direction !== declared.direction) reasons.push("direction-conflict");
-  if (declared.contra && resolved.effective.contra !== true) reasons.push("contra-conflict");
+  // effective.contra 已合并声明值，不能再拿它反证声明是否与权威根冲突。
+  // 复用纯规则依据根科目给出的诊断，保留合法备抵根 / 明细的继承语义。
+  if (resolved.diagnostics.some((diagnostic) => diagnostic.code === "account_contra_conflict")) {
+    reasons.push("contra-conflict");
+  }
   return {
     declared,
     matchedRoot: resolved.matchedRoot,

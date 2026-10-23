@@ -265,3 +265,19 @@ node test/accounting-standard-profiles.test.mjs
 - R2 **未重跑** R1 已实跑的 HTTP / 导出 / Office / smoke / adapter / backup；
   这些项仍保留既有事实与 B2 归属（v5 backup、Office / export、smoke、adapter 未接线），不声称已修复。
 - 未提交、未推送、未合并；R2 不等同于复审通过，也不代表 LOCAL-03a 整包完成。
+
+### 8.8 B1 独审返修 R3（2026-10-23，待独立复审）
+
+- 两准则现金 `100201` 的 contra 冲突漏诊断：领域校验采纳现成纯规则 `account_contra_conflict`；
+  现金与经营流入 100 元保留、受控诊断并明确不完整，已审纯规则 / profile 不变。
+- 本轮只改登记六文件（领域控制、accounting 旧 min 注释、领域测试、本任务与两份文档）。
+  合法备抵根 / 明细继承及显式声明、合法现金 / 收入明细不误拒；新增 4 项，原 28 项保留。
+- 反例修复前 30/32、exit 1（恰两项 contra 失败）；修复后实跑（cwd=`06-workbench`）：
+  `node test/accounting-standards.test.mjs` 32/32、`node test/accounting-guards.test.mjs` 23/23、
+  `node test/accounting-derived.test.mjs` 31/31、`node test/accounting-period-integrity.test.mjs` 45/45、
+  `node test/local-audit.test.mjs` 28/28，共 159/159，五套 exit 0。详细证据见
+  [ACCOUNTING-STANDARDS §12.2](../ACCOUNTING-STANDARDS.md) 与 [交接 §11](../handoffs/LOCAL-03a.md)。
+- 仅合成数据，TEMP / TMP / WORKBENCH_DATA_DIR 专属工作区忽略目录且祖先无 reparse。
+  migration / legacy / 纯规则独立套件、导入、HTTP / 导出 / Office / 全套未在 R3 重跑，旧结果不冒充新证据。
+- pi 实际周额度 429 后按用户明确授权由单一兜底实现 subagent 完成，本包不自审、无 Git 写；
+  待独立审查。B1 不单独合 main；B2 / v5 备份恢复 / 入口 / Office / Issue #61 等未完成。

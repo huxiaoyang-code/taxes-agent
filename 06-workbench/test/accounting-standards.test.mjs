@@ -942,6 +942,68 @@ try {
     ));
   });
 
+  for (const [standard, revenue, capital] of [[SMALL, "5001", "3001"], [ENTERPRISE, "6001", "4001"]]) {
+    await test(`${standard}：现金细目 contra 冲突保留 100 元并明确不完整（含仅期初余额）`, () => {
+      const setId = create("现金流备抵冲突", standard);
+      A.addAccount(setId, { code: "100201", name: "合成银行明细", category: "资产", direction: "debit" });
+      post(setId, "2026-01", [e("100201", 100), e(revenue, 0, 100)]);
+      const valid = A.cashFlowStatement(setId, "2026-01");
+      assert.equal(valid.reportStatus.complete, true);
+      assert.equal(valid.totals.operating, 100);
+      db.prepare(`UPDATE accounts SET contra=1 WHERE account_set_id=? AND code='100201'`).run(setId);
+      const broken = A.cashFlowStatement(setId, "2026-01");
+      assert.deepEqual(broken.cash, { begin: 0, end: 100, change: 100 });
+      assert.equal(broken.totals.operating, 100);
+      assert.equal(broken.classificationComplete, false);
+      assert.equal(broken.reportStatus.complete, false);
+      assert.ok(broken.reportStatus.diagnostics.some((d) => d.code === "report_account_semantics_mismatch"
+        && d.accountCode === "100201" && d.reason === "account-contra-conflict"));
+
+      // 无本期现金 gross 时，期初 / 期末的损坏标记同样必须诊断。
+      const opening = create("仅期初现金备抵冲突", standard);
+      A.addAccount(opening, { code: "100201", name: "合成银行明细", category: "资产", direction: "debit" });
+      A.setOpeningBalances(opening, [e("100201", 100), e(capital, 0, 100)]);
+      db.prepare(`UPDATE accounts SET contra=1 WHERE account_set_id=? AND code='100201'`).run(opening);
+      const cf = A.cashFlowStatement(opening, "2026-01");
+      assert.deepEqual(cf.cash, { begin: 100, end: 100, change: 0 });
+      assert.equal(cf.reportStatus.complete, false);
+      assert.equal(cf.classificationComplete, false);
+      assert.ok(cf.reportStatus.diagnostics.some((d) => d.accountCode === "100201"
+        && d.code === "report_account_semantics_mismatch" && d.reason === "account-contra-conflict"));
+    });
+
+    await test(`${standard}：权威备抵根与合法备抵明细不误拒，合法收入明细保持完整`, async () => {
+      const setId = create("合法备抵与明细", standard);
+      A.addAccount(setId, { code: "160201", name: "合成累计折旧明细", category: "资产", direction: "credit" });
+      A.addAccount(setId, { code: `${revenue}01`, name: "合成收入明细", category: "损益", direction: "credit" });
+      const { accountProfileSemantics } = await import("../server/period-end-controls.mjs");
+      const { getAccountingProfile } = await import("../server/accounting-profiles.mjs");
+      const profile = getAccountingProfile(A.getAccountSet(setId).accounting_profile_id);
+      // 对领域共用校验本身验证备抵继承，避免只由报表纯规则的通过掩盖误拒。
+      for (const code of ["1602", "160201"]) {
+        for (const contra of [0, 1]) {
+          const semantics = accountProfileSemantics(profile, { code, category: "资产", direction: "credit", contra });
+          assert.deepEqual(semantics.reasons, []);
+          assert.equal(semantics.effective.contra, true);
+        }
+      }
+      // 明细默认 contra=0 可继承权威备抵语义；根 / 明细显式标记也应兼容。
+      A.setOpeningBalances(setId, [e("1601", 100), e("1602", 0, 10), e("160201", 0, 10), e(capital, 0, 80)]);
+      assert.equal(A.balanceSheet(setId, "2026-01").reportStatus.complete, true);
+      db.prepare(`UPDATE accounts SET contra=1 WHERE account_set_id=? AND code IN ('1602', '160201')`).run(setId);
+      post(setId, "2026-01", [e("1002", 100), e(`${revenue}01`, 0, 100)]);
+      const bs = A.balanceSheet(setId, "2026-01");
+      assert.equal(bs.totals.assets, 180);
+      assert.equal(bs.reportStatus.complete, true);
+      assert.equal(A.incomeStatement(setId, "2026-01").current["营业收入"], 100);
+      const cf = A.cashFlowStatement(setId, "2026-01");
+      assert.equal(cf.totals.operating, 100);
+      assert.equal(cf.classificationComplete, true);
+      assert.equal(cf.reportStatus.complete, true);
+      assert.deepEqual(cf.reportStatus.diagnostics, []);
+    });
+  }
+
   await test("现金流：退款按反向独立分类；红字负数金额仍被守卫拒绝", async () => {
     const setId = create("现金流退款冲销", SMALL, "2025-12");
     A.setOpeningBalances(setId, [e("1002", 500), e("3001", 0, 500)]);
