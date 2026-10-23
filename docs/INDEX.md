@@ -1,3 +1,5 @@
+> 2026-10-23：辅助B2a已随PR70合并；B2b八工具真实入口/模型边界已实施、自测83套通过的候选，待管理验收，真实进展与限制见 [辅助交接](handoffs/LOCAL-03b.md)，不以旧候选记录推断已完成。
+
 # 代码管理索引 · CODE INDEX
 
 > **2026-10-22 新增（合并后兼容整合）：[本机备份 / 验证 / 恢复契约](LOCAL-BACKUP.md)** · [任务](tasks/LOCAL-06-BACKUP.md) · [交接](handoffs/LOCAL-06-BACKUP.md)。备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 合入（merge `98977e0`，已审源码 head `b2dcba3`），但它当时**严格只认 schema v3**，而 LOCAL-02 已把产品推到 v4（`asset_cards` 5 列）；本轮把 `06-workbench/server/local-backup.mjs` 改为 **v3 / v4 两份独立精确契约**（列 / 类型 / NOT NULL / **默认值** / 主键 / UNIQUE / 外键完整集合与动作 / 迁移记录连续性 / 迁移前备份记录），逐表校验且**不出现契约外的表**；版本号只用于选契约——只抬高版本号、缺列、错默认值 / NOT NULL / 类型、迁移记录不连续、未来 v5+、未知组件表、以及「篡改快照后重算清单摘要」的伪兼容全部拒绝。v3 旧备份只读验证 / 恢复到全新目录（不迁移备份与源库），只由产品入口显式打开才升 v4；v4 备份用真实产品合成库（资产补项 + 期初累计 + 连续两期计提与总账 + 真实封账 + 导入批次来源）实际 `backup → verify → restore-new` 并再用真实入口读取与继续记账 / 计提。测试：`node test/local-backup.test.mjs` **20 / 20 exit 0**（原 16 项保留 + 4 项新增）；`npm test` **53 / 53 套 exit 0**（本套件与已合入的 `finance-output-policy` / `report-office-export` 仅追加登记，原 50 套顺序 / 内容不变）。状态：**实现与自测完成，未提交 / 未建 PR / 未合并**，最终独审待做；head / merge 由管理者后补。

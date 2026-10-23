@@ -1,3 +1,11 @@
+# LOCAL-03b B2b 真实入口候选
+
+负责人 huxiaoyang-code / Issue64，分支 `codex/huxiaoyang-code/local-03b-b2-entry`，基线PR70 merge `3ada7ab5c9388a2b5e4dea3e06b27f510cab6573`。B2a已实际验收合并；本片实施八工具REST/Agent/MCP、auxiliaryAppendix透传、固定模型投影/同进程localRef、总入口末尾追加10套（73→83候选）。实现仅接现有领域函数，不改B2a/core/auxdomain/DDL/backup/public/package。CLI仅help同步。
+
+管理者独立发现新增辅助分录摘要浮点累加差1分P2；本轮仅改该合计为已审整数分/安全转换，并在新model增加正确金额与超界拒绝反例。修前全83通过保留原时点，不替代修后冻结总入口。
+
+自测和失败历史、具体追加窗口及最终管理验收状态见 [交接](../handoffs/LOCAL-03b.md)，合同见 [LOCAL-AUXILIARY](../LOCAL-AUXILIARY.md)。MCP运输固定登记缺口已由管理者在 [comment6362820202](https://github.com/huxiaoyang-code/youshu-fork/issues/64#issuecomment-6362820202) 扩至22路径，仅增加固定工具分类、token/reason和错误category，未改运输校验算法；尚未宣告本片验收或合并。Issue64及整个八包仍保持未完成边界。以下旧任务状态保留历史。
+
 # LOCAL-03b B2a 当前候选
 
 负责人 huxiaoyang-code / Issue64；分支 `codex/huxiaoyang-code/local-03b-b2`，基线PR69 merge `0e8ed007ff6b783f4954a2126a04a8233c8b2196`。仅限已认领12路径的管理切片1：领域数据附录、稳定来源分录映射、同事务幂等与恢复，aux1结构及核心指纹不变。已实施、自测通过，尚待管理验收、独立审查与PR；不由实施者宣称合并。

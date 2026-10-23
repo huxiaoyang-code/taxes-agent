@@ -12,6 +12,9 @@
 // 普通财务工具送模型时必须走下面的 `callAgentModelTool`（投影信封）；两者互不递归适配。
 // raw 入口本身不做脱敏，MCP 普通工具不得再到达 `/agent/tools/*`。
 import * as A from "./accounting.mjs";
+import * as AUX from "./auxiliary-accounting.mjs";
+import { db } from "./db.mjs";
+import { types } from "node:util";
 import { getImportBatch, importIncremental } from "./import-incremental.mjs";
 import { TaxGateway, TaxError } from "./tax-gateway.mjs";
 import { TaxAcquisition } from "./tax-acquisition.mjs";
@@ -32,6 +35,68 @@ export class ToolError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+// Local auxiliary entry points accept data only; the domain owns all writes/transactions.
+const AUX_FIELDS = Object.freeze({
+  auxiliary_entities: ["kind"], auxiliary_entries: ["voucherId", "period"],
+  auxiliary_ledger: ["period", "code", "groupBy"], auxiliary_party: ["entryId"],
+  auxiliary_entity_create: ["kind", "code", "name", "requestId"],
+  auxiliary_entity_update: ["entityId", "name", "active", "reason"],
+  auxiliary_allocate: ["entryId", "openingCode", "allocations", "requestId", "reason"],
+  auxiliary_requirement_set: ["code", "project", "department", "party", "reason"],
+});
+export const AUXILIARY_ACTION_TO_TOOL = Object.freeze(Object.assign(Object.create(null), {
+  entities: "auxiliary_entities", entries: "auxiliary_entries", ledger: "auxiliary_ledger", party: "auxiliary_party",
+  "entity-create": "auxiliary_entity_create", "entity-update": "auxiliary_entity_update", allocate: "auxiliary_allocate", requirement: "auxiliary_requirement_set",
+}));
+function auxiliaryData(value, depth = 0) {
+  if (value === null || ["string", "boolean"].includes(typeof value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (!value || typeof value !== "object" || types.isProxy(value) || depth > 16) throw new ToolError("aux_input_invalid");
+  const array = Array.isArray(value), proto = Object.getPrototypeOf(value);
+  if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) throw new ToolError("aux_input_invalid");
+  if (Object.getOwnPropertySymbols(value).length) throw new ToolError("aux_input_invalid");
+  const keys = Object.getOwnPropertyNames(value).filter(k => !(array && k === "length"));
+  if (keys.length > 10000 || array && (keys.length !== value.length || value.length > 10000)) throw new ToolError("aux_input_invalid");
+  const out = array ? [] : Object.create(null);
+  for (const key of keys) {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d || !("value" in d) || ["__proto__", "prototype", "constructor"].includes(key) || array && !/^(0|[1-9][0-9]*)$/.test(key)) throw new ToolError("aux_input_invalid");
+    out[key] = auxiliaryData(d.value, depth + 1);
+  }
+  return out;
+}
+function auxiliaryArgs(name, raw) {
+  const args = auxiliaryData(raw);
+  if (Array.isArray(args) || !args || typeof args !== "object") throw new ToolError("aux_input_invalid");
+  const fields = new Set(["accountSetId", "account_set_id", ...AUX_FIELDS[name]]);
+  if (Object.keys(args).some(k => !fields.has(k))) throw new ToolError("aux_input_invalid");
+  const parseId = value => {
+    if (!(typeof value === "number" || typeof value === "string" && value.trim() !== "")) throw new ToolError("account_set_id_invalid");
+    const n = Number(value); if (!Number.isSafeInteger(n) || n <= 0) throw new ToolError("account_set_id_invalid"); return n;
+  };
+  const ids = ["accountSetId", "account_set_id"].filter(k => Object.hasOwn(args, k)).map(k => parseId(args[k]));
+  if (!ids.length) throw new ToolError("account_set_id_required");
+  if (ids.some(id => id !== ids[0])) throw new ToolError("account_set_id_conflict");
+  args.accountSetId = ids[0]; delete args.account_set_id;
+  for (const key of ["entryId", "voucherId", "entityId"]) if (Object.hasOwn(args, key) && (!Number.isSafeInteger(args[key]) || args[key] <= 0)) throw new ToolError("aux_id_invalid");
+  if (Object.hasOwn(args, "period") && (typeof args.period !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(args.period))) throw new ToolError("aux_period_invalid");
+  if (Object.hasOwn(args, "allocations")) {
+    if (!Array.isArray(args.allocations)) throw new ToolError("aux_allocations_invalid");
+    for (const a of args.allocations) if (!a || Array.isArray(a) || typeof a !== "object" || Object.keys(a).some(k => !["projectId", "departmentId", "partyId", "debit", "credit"].includes(k))) throw new ToolError("aux_allocation_invalid");
+  }
+  return args;
+}
+const AUX_FUNCTIONS = { auxiliary_entities: AUX.listAuxiliaryEntities, auxiliary_entries: AUX.listAuxiliaryEntries,
+  auxiliary_ledger: AUX.auxiliaryLedger, auxiliary_party: AUX.entryPartyAllocation,
+  auxiliary_entity_create: AUX.createAuxiliaryEntity, auxiliary_entity_update: AUX.updateAuxiliaryEntity,
+  auxiliary_allocate: AUX.replaceAuxiliaryAllocations, auxiliary_requirement_set: AUX.setAuxiliaryRequirement };
+function auxiliaryCall(name, raw) {
+  const args = auxiliaryArgs(name, raw), value = AUX_FUNCTIONS[name](db, args);
+  if (name === "auxiliary_entities" || name === "auxiliary_entries") return { accountSetId: args.accountSetId, items: value };
+  if (name === "auxiliary_ledger" || name === "auxiliary_party") return value;
+  return { accountSetId: args.accountSetId, result: value };
 }
 
 // 期间格式：仅接受合法月份 01–12（2026-13 / 2026-00 一律拒绝）。
@@ -255,6 +320,14 @@ function rejectExtra(args, allowed) {
 
 // ------------------------------------------------------------------ 已实现工具
 const HANDLERS = dict({
+  auxiliary_entities: args => auxiliaryCall("auxiliary_entities", args),
+  auxiliary_entries: args => auxiliaryCall("auxiliary_entries", args),
+  auxiliary_ledger: args => auxiliaryCall("auxiliary_ledger", args),
+  auxiliary_party: args => auxiliaryCall("auxiliary_party", args),
+  auxiliary_entity_create: args => auxiliaryCall("auxiliary_entity_create", args),
+  auxiliary_entity_update: args => auxiliaryCall("auxiliary_entity_update", args),
+  auxiliary_allocate: args => auxiliaryCall("auxiliary_allocate", args),
+  auxiliary_requirement_set: args => auxiliaryCall("auxiliary_requirement_set", args),
   tax_api_catalog_modules: catalogHandler((args) => {
     rejectExtra(args, ["moduleId"]);
     const stats = catalogStats();
@@ -364,6 +437,7 @@ const HANDLERS = dict({
       mode: args.mode,
       accountSetId: args.accountSetId ?? args.account_set_id,
       confirmNewBinding: args.confirmNewBinding === true || args.confirm_new_binding === true,
+      auxiliaryAppendix: args.auxiliaryAppendix,
     });
     return incrementalOutcome(result);
   },

@@ -10,7 +10,7 @@ import { buildOfficeExport } from "./report-office-export.mjs";
 import { listTaxReportTemplates, assessTaxReportReadiness, buildTaxReportExport } from "./tax-report-format.mjs";
 import { listAccountingProfiles } from "./accounting-profiles.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
-import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions } from "./agent-tools.mjs";
+import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions, AUXILIARY_ACTION_TO_TOOL } from "./agent-tools.mjs";
 import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
@@ -78,10 +78,33 @@ const PERIOD_GUARD_CODES = new Set([
   "depreciation_run_stale",
 ]);
 
+const AUX_IMPORT_CODES = new Set("aux_import_busy aux_import_failed account_set_not_found accounting_profile_unknown aux_allocation_exceeds_entry aux_allocation_invalid aux_allocations_invalid aux_amount_invalid aux_code_invalid aux_commit_unknown aux_connection_quarantined aux_dimension_invalid aux_dimension_required aux_entry_not_found aux_id_invalid aux_import_actual_entry_required aux_import_allocation_exists aux_import_entity_conflict aux_import_entry_identity_required aux_import_explicit_identity_required aux_import_identity_duplicate aux_import_invalid aux_import_mapping_conflict aux_import_receipt_invalid aux_import_ref_invalid aux_import_replay_state_conflict aux_import_request_conflict aux_import_source_conflict aux_import_transaction_required aux_import_version_invalid aux_kind_invalid aux_name_invalid aux_not_installed aux_opening_code_required aux_opening_not_found aux_period_closed aux_reason_required aux_replay_state_conflict aux_request_conflict aux_request_id_required aux_side_invalid aux_structure_invalid aux_target_invalid aux_tuple_duplicate later_period_closed later_year_end_carryforward_depends_on_period".split(" "));
+
 // ------------------------------------------------------------------ 路由表
 async function api(req, res, url, m) {
   const p = url.pathname;
   let match;
+
+  if ((match = p.match(/^\/api\/account-sets\/(\d+)\/auxiliary\/([^/]+)$/))) {
+    if (m !== "POST") return json(res, 405, { error: "method_not_allowed" });
+    const tool = AUXILIARY_ACTION_TO_TOOL[match[2]];
+    if (!tool) return json(res, 404, { error: "aux_action_unknown" });
+    try {
+      const b = await readBody(req), id = Number(match[1]);
+      if (!b || Array.isArray(b) || typeof b !== "object") throw new ToolError("aux_input_invalid");
+      for (const key of ["accountSetId", "account_set_id"]) if (Object.hasOwn(b, key)) {
+        const v = b[key];
+        if (!(typeof v === "number" || typeof v === "string" && v.trim() !== "") || !Number.isSafeInteger(Number(v)) || Number(v) <= 0) throw new ToolError("account_set_id_invalid");
+        if (Number(v) !== id) throw new ToolError("account_set_id_conflict");
+      }
+      return json(res, 200, await callAgentTool(tool, { ...b, accountSetId: id }));
+    } catch (e) {
+      const c = e?.code ?? e?.message;
+      const code = typeof c === "string" && /^(aux_|account_set_|account_not_found$|later_)[a-z_]*$/.test(c) ? c : "aux_operation_failed";
+      return json(res, /not_found$/.test(code) ? 404 : code === "aux_commit_unknown" ? 500 : 400,
+        { error: code, message: code, details: null });
+    }
+  }
 
   if (m === "GET" && p === "/api/meta") return json(res, 200, { standards: STANDARDS, coa: COA, coaDefaultStandard: "小企业会计准则", profiles: listAccountingProfiles() });
 
@@ -267,12 +290,18 @@ async function api(req, res, url, m) {
         mode: b.mode,
         accountSetId: b.accountSetId ?? b.account_set_id,
         confirmNewBinding: b.confirmNewBinding === true,
+        auxiliaryAppendix: b.auxiliaryAppendix,
       });
       const status = result.status === "applied" ? 201
         : result.status === "conflict" ? 409
           : result.status === "rejected" ? 400 : 200;
       return json(res, status, result);
     } catch (e) {
+      if (b.auxiliaryAppendix !== undefined) {
+        const code = AUX_IMPORT_CODES.has(e?.code) ? e.code : "aux_import_failed";
+        return json(res, code === "aux_commit_unknown" || code === "aux_import_failed" ? 500 : 400,
+          { error: code, message: code, details: null });
+      }
       if (e?.code === "account_set_not_found") {
         return json(res, 404, { error: "account_set_not_found", message: "目标账套不存在", details: null });
       }
@@ -280,7 +309,7 @@ async function api(req, res, url, m) {
       if (e?.code && PERIOD_GUARD_CODES.has(e.code)) {
         return json(res, 409, { error: e.code, message: e.message, details: e.details ?? null });
       }
-      // 事务已回滚；不把失败写成成功，也不向前端泄漏内部细节。
+      // 无附录保留原失败合同。
       return json(res, 500, { error: "import_failed", message: "增量导入失败（事务已回滚）", details: null });
     }
   }

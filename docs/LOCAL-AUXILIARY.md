@@ -1,3 +1,19 @@
+# B2b 真实入口候选（2026-10-23）
+
+B2a 已随 PR70 实际验收合并，完整 head / merge / 时间及独立证据见 [交接](handoffs/LOCAL-03b.md)。本轮在该基线接通八个 origin=local 工具和 REST、增量导入附录透传、模型摘要与进程内 localRef；当前为实施自测候选，待管理验收、fresh独审和PR。无HTTP安装、任意库路径或真实税局连接。
+
+REST 仅接受 POST `/api/account-sets/:id/auxiliary/<action>`；action为 `entities`、`entries`、`ledger`、`party`、`entity-create`、`entity-update`、`allocate`、`requirement`。对应Agent/MCP名称为 `auxiliary_entities`、`auxiliary_entries`、`auxiliary_ledger`、`auxiliary_party`、`auxiliary_entity_create`、`auxiliary_entity_update`、`auxiliary_allocate`、`auxiliary_requirement_set`。账套必须显式；正文 accountSetId / account_set_id 若出现必须规范后与路径相同，未知字段/动作拒绝，aux未安装返回aux_not_installed。四写复用同一db领域事务；entities/entries返回 `{accountSetId,items}`，其余查询保留领域DTO，写返回 `{accountSetId,result}`。业务输入与CLI同领域字段，不能以行号/名称/金额替代真实ID。
+
+`POST /api/import/incremental`、Agent/MCP `book_import_incremental` 显式透传顶层 `auxiliaryAppendix`，不在入口二次写辅助。三数组必填、null不等于省略；新凭证raw entries逐行明确sourceEntryId，旧无映射须actualEntryId。无附录的旧aliases、默认dryRun、profile与指纹语义保留。
+
+辅助分录摘要的借贷合计逐行复用整数分转换并用BigInt累加，安全转换及既有模型数值上限任一不满足时整份摘要拒绝，不能以浮点逐行累加或静默丢字段。独立精度P2及返修验证见交接。
+
+模型仅给固定计数、状态、金额及已登记技术ID；不输出维度名码、摘要、来源/企业/批次/请求/理由或自由异常。四查询的真实明细可经同进程localRef读取；ledger可对 `groups.[].closing` 求和，entries可对 `items.[].debit` 求和。引用绑定账套/operation、到期可撤销，拒绝伪channel/local；read/compute不注册MCP工具。导入结果没有proof/实体明细，不承诺从导入ref读取不存在字段。
+
+写入证据读取真实durability。核心idempotent_replay而auxiliary.status=applied、两层committed时确有辅助新写（即使三个Count都为0）；Count不是新增行数。dryRun明确无此次写；辅助replayed且核心回放无新增写；staged/pending_outer_commit及未知结果保守unknown、needsLocalReview。未知附录错误只给固定码，不声称已回滚或自动重试。
+
+以下为A+B1/B2a历史说明；“入口待后续”的旧句按各时点追溯，当前能力以本节和交接为准。
+
 # 本机辅助核算（LOCAL-03b A+B1 / B2a）
 
 A+B1 的真实总账三维分配、领域 API、本机 JSON CLI 与官方备份恢复已随 [PR69](https://github.com/huxiaoyang-code/youshu-fork/pull/69) 验收合并。负责人 huxiaoyang-code，Refs Issue64。当前 B2a 增加领域层同事务导入附录，已自测、待管理验收与全新上下文独审；HTTP / Agent / MCP、模型投影及总测试登记留后续 B2b，不代表整个 LOCAL03 或八包已完成。

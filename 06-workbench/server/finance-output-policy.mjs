@@ -33,6 +33,7 @@
 // 不注册 HTTP / Agent / MCP / CLI 入口——接线由后续集成任务负责。
 import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
+import { storedCents, centsToNumber } from "./money.mjs";
 
 export const OUTPUT_POLICY_VERSION = "finance-output-policy/v1";
 export const REF_PERSISTENCE = "process_memory";
@@ -336,7 +337,7 @@ const STATUS_TOKENS = dict({ draft: "draft", posted: "posted", open: "open", clo
 const MODE_TOKENS = dict({ create: "create", append: "append" });
 const BATCH_STATUS_TOKENS = dict({ completed: "completed", failed: "failed", pending: "pending", started: "started" });
 const IMPORT_STATUS_TOKENS = dict({
-  preview: "preview", applied: "applied", idempotent_replay: "idempotent_replay",
+  preview: "preview", applied: "applied", idempotent_replay: "idempotent_replay", staged: "staged",
 });
 const enumToken = (table, raw) => {
   if (typeof raw !== "string" || !own(table, raw)) return undefined;
@@ -711,7 +712,98 @@ function reportMappingSummary(value) {
     diagnosticCount: listLen(diagnostics), diagnosticCounts };
 }
 
+// Auxiliary DTOs have fixed summaries; display values remain behind localRef.
+const AUX_KINDS = Object.freeze(["project", "department", "party"]);
+const AUX_TOTALS = Object.freeze(["opening", "debit", "credit", "closing", "debitBalance", "creditBalance"]);
+const auxEnum = (obj, key, allowed) => { const v = requireText(obj, key); if (!allowed.includes(v)) throw invalidSummary(key); return v; };
+const auxCount = (obj, key) => { const v = requireNum(obj, key); if (!Number.isSafeInteger(v) || v < 0) throw invalidSummary(key); return v; };
+function auxiliaryImportSummary(v) {
+  const a = requireRecord(v, "auxiliary");
+  if (requireNum(a, "version") !== 1) throw invalidSummary("version");
+  const status = auxEnum(a, "status", ["preview", "applied", "staged", "replayed"]);
+  const result = { version: 1, status, entityCount: auxCount(a, "entityCount"), mappingCount: auxCount(a, "mappingCount"), allocationTargetCount: auxCount(a, "allocationTargetCount") };
+  if (prop(a, "durability") !== undefined) result.durability = auxEnum(a, "durability", ["committed", "pending_outer_commit"]);
+  const dryRun = requireBoolean(v, "dryRun");
+  const coreStatus = auxEnum(v,"status",["preview","applied","idempotent_replay","staged"]);
+  if (requireBoolean(v,"ok") !== true || result.entityCount > 1000 || result.mappingCount > 10000 || result.allocationTargetCount > 11000) throw invalidSummary("auxiliary");
+  if (dryRun && !["preview","idempotent_replay"].includes(coreStatus) || !dryRun && coreStatus === "preview") throw invalidSummary("status");
+  if (coreStatus === "staged" && result.durability !== "pending_outer_commit" || status === "staged" && coreStatus !== "staged") throw invalidSummary("status");
+  if (dryRun && (result.durability !== undefined || !["preview", "replayed"].includes(status))) throw invalidSummary("auxiliary");
+  if (!dryRun && (result.durability === undefined || status === "preview" || status === "staged" && result.durability !== "pending_outer_commit" || status === "applied" && result.durability !== "committed")) throw invalidSummary("auxiliary");
+  if (!dryRun && auxEnum(v, "durability", ["committed", "pending_outer_commit"]) !== result.durability) throw invalidSummary("durability");
+  return result;
+}
+function auxiliaryWriteSummary(operation, value) {
+  const v = at(value), r = requireRecord(v, "result");
+  const accountSetId = requirePositiveInt(v, "accountSetId");
+  const durability = auxEnum(r, "durability", ["committed", "pending_outer_commit"]);
+  const status = prop(r, "status");
+  const allowedStatus = operation === "auxiliary_allocate" ? ["applied","replayed","staged"] : operation === "auxiliary_entity_create" ? ["replayed"] : [];
+  if (status !== undefined && !allowedStatus.includes(status)) throw invalidSummary("status");
+  if (status === "staged" && durability !== "pending_outer_commit") throw invalidSummary("durability");
+  const out = { accountSetId, durability, status: status ?? (durability === "committed" ? "applied" : "staged") };
+  if (operation === "auxiliary_entity_create" || operation === "auxiliary_entity_update") {
+    out.entityId = requirePositiveInt(r, "id"); out.kind = auxEnum(r, "kind", AUX_KINDS);
+    requireText(r, "code"); requireText(r, "name");
+    if (operation === "auxiliary_entity_update") {
+      if (requirePositiveInt(r, "account_set_id") !== accountSetId) throw invalidSummary("account_set_id");
+      const active = requireNum(r, "active"); if (active !== 0 && active !== 1) throw invalidSummary("active"); out.active = active === 1;
+    }
+  } else if (operation === "auxiliary_allocate") {
+    if (requireNum(r, "version") !== 1 || status === undefined) throw invalidSummary("allocation");
+    const target = requireRecord(r, "target");
+    const entry = prop(target, "entryId"), opening = prop(target, "openingCode");
+    if ((entry === undefined) === (opening === undefined)) throw invalidSummary("target");
+    if (entry !== undefined) out.entryId = requirePositiveInt(target, "entryId"); else requireText(target, "openingCode");
+    const rows = requireArray(r, "allocations");
+    for (const row of rows) {
+      for (const key of ["projectId", "departmentId", "partyId"]) if (prop(row,key) !== null) requirePositiveInt(row,key);
+      auxCount(row,"debitCents"); auxCount(row,"creditCents");
+    }
+    out.allocationCount = rows.length;
+  } else {
+    requireText(r, "code"); for (const key of AUX_KINDS) out[key] = requireBoolean(r, key);
+  }
+  return out;
+}
+const auxiliaryWriteSpec = operation => ({ summary: value => auxiliaryWriteSummary(operation,value), evidence: value => {
+  try { const s = auxiliaryWriteSummary(operation,value);
+    if (s.durability !== "committed" || s.status === "staged") return { applied: "unknown", reason: "pending_outer_commit" };
+    return s.status === "replayed" ? { applied: false, reason: "idempotent_replay" } : { applied: true };
+  } catch { return { applied: "unknown", reason: "unverified_result" }; }
+} });
+
 const QUERY_SPECS = dict({
+  auxiliary_entities: value => {
+    const v = at(value), rows = requireArray(v,"items"); requirePositiveInt(v,"accountSetId");
+    const out = { entityCount: rows.length, projectCount: 0, departmentCount: 0, partyCount: 0, activeCount: 0, inactiveCount: 0 };
+    for (const row of rows) { requirePositiveInt(row,"id"); requirePositiveInt(row,"account_set_id"); const kind = auxEnum(row,"kind",AUX_KINDS); requireText(row,"code"); requireText(row,"name");
+      const active = requireNum(row,"active"); if (active !== 0 && active !== 1) throw invalidSummary("active"); out[kind+"Count"]++; out[active === 1 ? "activeCount" : "inactiveCount"]++; }
+    return out;
+  },
+  auxiliary_entries: value => {
+    const v = at(value), rows = requireArray(v,"items"); requirePositiveInt(v,"accountSetId");
+    let debitCents = 0n, creditCents = 0n;
+    for (const row of rows) { for (const key of ["entryId","voucherId","lineNo"]) requirePositiveInt(row,key); requirePeriod(row,"period"); auxEnum(row,"status",["draft","posted"]); requireText(row,"code"); debitCents += storedCents(requireNum(row,"debit")); creditCents += storedCents(requireNum(row,"credit")); }
+    const debit = centsToNumber(debitCents), credit = centsToNumber(creditCents);
+    if (Math.abs(debit) > MONEY_LIMIT || Math.abs(credit) > MONEY_LIMIT) throw invalidSummary("auxiliary_entries_totals");
+    return { entryCount: rows.length, debit, credit };
+  },
+  auxiliary_ledger: value => {
+    const v = at(value); requirePositiveInt(v,"accountSetId"); const groups = requireArray(v,"groups"), totals = requireRecord(v,"totals"), by = requireArray(v,"groupBy");
+    if (by.some(k => !AUX_KINDS.includes(k)) || new Set(by).size !== by.length) throw invalidSummary("groupBy");
+    for (const row of groups) { requireText(row,"code"); for (const key of AUX_TOTALS) requireNum(row,key); requireArray(row,"sources"); for (const dim of by) if (prop(row,dim+"Id") !== null) requirePositiveInt(row,dim+"Id"); }
+    return { period: requirePeriod(v,"period"), groupCount: groups.length, ...Object.fromEntries(AUX_TOTALS.map(k=>[k,money(requireNum(totals,k))])) };
+  },
+  auxiliary_party: value => {
+    const v = at(value); requirePositiveInt(v,"accountSetId"); const entryId = requirePositiveInt(v,"entryId"), status = auxEnum(v,"status",["unknown","ambiguous","confirmed"]), inactive = requireArray(v,"inactivePartyIds");
+    if (inactive.some(id => !Number.isSafeInteger(id) || id <= 0)) throw invalidSummary("inactivePartyIds");
+    const partyId = prop(v,"partyId"), active = prop(v,"partyActive");
+    if (partyId !== null) requirePositiveInt(v,"partyId"); if (active !== null && typeof active !== "boolean") throw invalidSummary("partyActive");
+    if ((status === "confirmed") !== (partyId !== null)) throw invalidSummary("partyId"); requireArray(v,"allocations");
+    return { entryId, status, unique: status === "confirmed", unassigned: money(requireNum(v,"unassigned")), inactiveCount: inactive.length, ...(active !== null ? { partyActive: active } : {}) };
+  },
+
   "finance_query:enterprise_account.account_set": (value) => {
     const set = at(value);
     return {
@@ -888,6 +980,10 @@ const QUERY_SPECS = dict({
 // ---------------------------------------------------------------- 写动作 projection 规格
 // applied 三态：true 必须有正面业务证据；false 必须由域结果显式说明未生效；其余一律 "unknown"。
 const WRITE_SPECS = dict({
+  auxiliary_entity_create: auxiliaryWriteSpec("auxiliary_entity_create"),
+  auxiliary_entity_update: auxiliaryWriteSpec("auxiliary_entity_update"),
+  auxiliary_allocate: auxiliaryWriteSpec("auxiliary_allocate"),
+  auxiliary_requirement_set: auxiliaryWriteSpec("auxiliary_requirement_set"),
   voucher_create: {
     summary: (value) => {
       const v = at(value);
@@ -1083,7 +1179,9 @@ const WRITE_SPECS = dict({
       const created = at(prop(v, "created"));
       const batch = at(prop(v, "batch"));
       const planned = at(prop(v, "planned"));
+      const auxiliary = prop(v,"auxiliary") === undefined ? undefined : auxiliaryImportSummary(v);
       return {
+        ...(auxiliary ? { auxiliary } : {}),
         status: enumToken(IMPORT_STATUS_TOKENS, text(v, "status")),
         accountSetId: int(created, "accountSetId") ?? int(v, "accountSetId"),
         accountSetCreated: prop(created, "accountSetCreated") === true,
@@ -1104,6 +1202,19 @@ const WRITE_SPECS = dict({
     evidence: (value) => {
       const v = at(value);
       const status = text(v, "status");
+      if (prop(v,"auxiliary") !== undefined) {
+        try {
+          const a = auxiliaryImportSummary(v);
+          if (prop(v,"dryRun") === true) return { applied: false, reason: "dry_run" };
+          if (prop(v,"ok") !== true || !["applied","idempotent_replay","staged"].includes(status)) return UNKNOWN_EVIDENCE;
+          if (a.durability !== "committed" || status === "staged") return { applied: "unknown", reason: "pending_outer_commit" };
+          const ids = [prop(v,"accountSetId"), prop(prop(v,"created"),"accountSetId"), prop(prop(v,"batch"),"accountSetId")].filter(id=>id !== undefined && id !== null);
+          if (!ids.length || ids.some(id=>!Number.isSafeInteger(id)||id<=0||id!==ids[0])) return UNKNOWN_EVIDENCE;
+          if (a.status === "applied") return { applied: true };
+          if (a.status === "replayed") return status === "idempotent_replay" ? { applied: false, reason: "idempotent_replay" } : { applied: true };
+          return UNKNOWN_EVIDENCE;
+        } catch { return UNKNOWN_EVIDENCE; }
+      }
       if (status === "applied") {
         return int(at(prop(v, "created")), "accountSetId") !== undefined
           ? { applied: true }
@@ -1226,6 +1337,75 @@ export const MODEL_OUTPUT_CONTRACT = Object.freeze({
 // 只有固定 allowlist 的 code 能出模型通道；其他一律归为 operation_failed。
 // error.message / error.details / error.stack 从不读取——它们可能带账套名、科目名、金额原文。
 const ERROR_CODES = dict({
+  aux_account_reallocation_required: "auxiliary",
+  aux_active_invalid: "auxiliary",
+  aux_allocation_corrupt: "auxiliary",
+  aux_allocation_exceeds_entry: "auxiliary",
+  aux_allocation_invalid: "auxiliary",
+  aux_allocations_invalid: "auxiliary",
+  aux_amount_invalid: "auxiliary",
+  aux_backup_failed: "auxiliary",
+  aux_backup_invalid: "auxiliary",
+  aux_code_invalid: "auxiliary",
+  aux_commit_unknown: "auxiliary",
+  aux_component_unsupported: "auxiliary",
+  aux_connection_quarantined: "auxiliary",
+  aux_core_unsupported: "auxiliary",
+  aux_database_handle_mismatch: "auxiliary",
+  aux_database_replaced: "auxiliary",
+  aux_dimension_invalid: "auxiliary",
+  aux_dimension_required: "auxiliary",
+  aux_entity_identity_immutable: "auxiliary",
+  aux_entity_not_found: "auxiliary",
+  aux_entry_not_found: "auxiliary",
+  aux_entry_owner_mismatch: "auxiliary",
+  aux_entry_reallocation_required: "auxiliary",
+  aux_group_invalid: "auxiliary",
+  aux_history_immutable: "auxiliary",
+  aux_id_invalid: "auxiliary",
+  aux_import_actual_entry_required: "auxiliary",
+  aux_import_allocation_exists: "auxiliary",
+  aux_import_busy: "auxiliary",
+  aux_import_entity_conflict: "auxiliary",
+  aux_import_entry_identity_required: "auxiliary",
+  aux_import_explicit_identity_required: "auxiliary",
+  aux_import_failed: "auxiliary",
+  aux_import_identity_duplicate: "auxiliary",
+  aux_import_invalid: "auxiliary",
+  aux_import_mapping_conflict: "auxiliary",
+  aux_import_receipt_invalid: "auxiliary",
+  aux_import_ref_invalid: "auxiliary",
+  aux_import_replay_state_conflict: "auxiliary",
+  aux_import_request_conflict: "auxiliary",
+  aux_import_source_conflict: "auxiliary",
+  aux_import_transaction_required: "auxiliary",
+  aux_import_version_invalid: "auxiliary",
+  aux_indexes_mismatch: "auxiliary",
+  aux_input_invalid: "auxiliary",
+  aux_install_paths_required: "auxiliary",
+  aux_install_transaction_active: "auxiliary",
+  aux_kind_invalid: "auxiliary",
+  aux_name_invalid: "auxiliary",
+  aux_not_installed: "auxiliary",
+  aux_opening_code_required: "auxiliary",
+  aux_opening_not_found: "auxiliary",
+  aux_opening_reallocation_required: "auxiliary",
+  aux_path_alias: "auxiliary",
+  aux_period_closed: "auxiliary",
+  aux_period_invalid: "auxiliary",
+  aux_period_reallocation_required: "auxiliary",
+  aux_reason_required: "auxiliary",
+  aux_replace_required: "auxiliary",
+  aux_replay_state_conflict: "auxiliary",
+  aux_request_conflict: "auxiliary",
+  aux_request_id_required: "auxiliary",
+  aux_requirement_invalid: "auxiliary",
+  aux_side_invalid: "auxiliary",
+  aux_structure_invalid: "auxiliary",
+  aux_structure_mismatch: "auxiliary",
+  aux_target_invalid: "auxiliary",
+  aux_tuple_duplicate: "auxiliary",
+  aux_version_invalid: "auxiliary",
   account_set_not_found: "account_set",
   account_not_found: "account",
   period_closed: "period",

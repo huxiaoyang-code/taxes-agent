@@ -155,7 +155,9 @@ try {
     const ctx = tools.find((t) => t.name === "account_context");
     assert.deepEqual(Object.keys(ctx.inputSchema.properties).sort(), ["accountSetId", "limit", "offset"]);
     // 写工具的登记表与 adapter 侧一致（此处只核对本文件可见的固定清单）。
-    assert.equal(MODEL_WRITE_TOOL_NAMES.length, 14);
+    assert.equal(MODEL_WRITE_TOOL_NAMES.length, 18);
+  for (const name of ["auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set"]) assert.equal(MODEL_WRITE_TOOL_NAMES.includes(name), true);
+  assert.equal(new Set(MODEL_WRITE_TOOL_NAMES).size, MODEL_WRITE_TOOL_NAMES.length);
   });
 
   await test("2. 静态目录 / 计划：模型只拿固定 nodeId 与计数，不回业务原文", async () => {
