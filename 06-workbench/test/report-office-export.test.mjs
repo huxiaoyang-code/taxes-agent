@@ -336,6 +336,119 @@ const ENTERPRISE_EXPECT = {
     assert.equal(evidence.length, 30);
   });
 
+  await test("05b: two profiles × three months × CSV/XLSX/PDF use independent composite cash constants", async () => {
+    const evidence = [];
+    const officeLabel = label => label.replace(/活动净额$/, "活动产生的现金流量净额");
+    const money = n => new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+    for (const [tag, standard, capital, profile] of [
+      ["small", "小企业会计准则", "3001", "small-2011-basic-v1"],
+      ["enterprise", "企业会计准则", "4001", "enterprise-2019-general-basic-v1"],
+    ]) {
+      const id = identityFixtureCreate(A, { name: "合成全额复合" + tag, accounting_standard: standard, start_period: "2025-11" }).id;
+      A.setOpeningBalances(id, [e("1002", 1000), e(capital, 0, 1000)]);
+      voucher(id, "2025-11", [e("1403", 120), e("1601", 180), e("1002", 0, 300)]);
+      voucher(id, "2025-12", [e("1403", 0, 20), e("1601", 0, 30), e("1002", 50)]);
+      voucher(id, "2026-01", [e("1601", 18.02), e("1002", 0, 30.03), e("1403", 12.01)]);
+      const snapshot = () => JSON.stringify(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name}) => [name, db.prepare('SELECT * FROM "' + name + '" ORDER BY rowid').all()]));
+      const before = snapshot();
+      // Constants are independent of production DTOs and of other formats.
+      for (const [period, checks] of [
+        ["2025-11", [["经营活动净额", -120, -120], ["投资活动净额", -180, -180], ["筹资活动净额", 0, 0], ["现金净增加额", -300, -300], ["现金期初余额", 1000, 1000], ["现金期末余额", 700, 700], ["现金余额变动", -300, -300]]],
+        ["2025-12", [["经营活动净额", 20, -100], ["投资活动净额", 30, -150], ["筹资活动净额", 0, 0], ["现金净增加额", 50, -250], ["现金期初余额", 700, 1000], ["现金期末余额", 750, 750], ["现金余额变动", 50, -250]]],
+        ["2026-01", [["经营活动净额", -12.01, -12.01], ["投资活动净额", -18.02, -18.02], ["筹资活动净额", 0, 0], ["现金净增加额", -30.03, -30.03], ["现金期初余额", 750, 750], ["现金期末余额", 719.97, 719.97], ["现金余额变动", -30.03, -30.03]]],
+      ]) {
+        for (const format of ["csv", "xlsx", "pdf"]) {
+          const file = await office(id, "cash-flow-statement", period, format);
+          assert.equal(file.report.accountingContext.profileId, profile);
+          assert.equal(file.report.dataStatus.completeness, "unverified"); assert.equal(file.report.dataStatus.taxFilingReady, false);
+          assert.equal(file.report.reportStatus.complete, true); assert.equal(file.report.reportStatus.partialValues, false);
+          assert.deepEqual(file.report.data.unknown, []);
+          assert.equal(file.report.data.classificationComplete, true);
+          assert.equal(file.report.data.reconciles, true); assert.equal(file.report.data.ytd.reconciles, true);
+          const path = save("05b-" + tag + "-" + period + "." + format, file.body);
+          if (format === "csv") {
+            const rows = csvRows(file.body);
+            for (const [label, current, ytd] of checks) assert.deepEqual(rows.find(row => row[0] === label).slice(3), [current.toFixed(2), ytd.toFixed(2)], label);
+            assert.ok(rows.some(row => row[0] === "部分金额" && row[1] === "否"));
+          } else if (format === "xlsx") {
+            const sheet = (await loadWorkbook(file.body)).worksheets[0];
+            for (const [label, current, ytd] of checks) {
+              cellNumber(sheet, findRow(sheet, officeLabel(label)), 3, current, label + " 本月"); cellNumber(sheet, findRow(sheet, officeLabel(label)), 4, ytd, label + " 本年");
+            }
+            assert.equal(sheet.getRow(findRow(sheet, "部分金额")).getCell(2).value, "否");
+          } else {
+            const extracted = extractPdf(file.body);
+            assert.equal(extracted.pageCount, file.pageCount); assert.ok(extracted.embeddedFont);
+            for (const [label, current, ytd] of checks) assert.ok(extracted.squash.includes(officeLabel(label) + money(current) + money(ytd)), label + " PDF independent row " + extracted.squash);
+            assert.ok(extracted.squash.includes("部分金额否"));
+            const prefix = "05b-" + tag + "-" + period + "-page";
+            const rendered = spawnSync("pdftoppm", ["-r", "85", "-png", path, join(qaDir, prefix)], { encoding: "utf8", timeout: 60000 });
+            assert.equal(rendered.status, 0, rendered.stderr);
+            const pngs = readdirSync(qaDir).filter(name => name.startsWith(prefix + "-") && name.endsWith(".png"));
+            assert.equal(pngs.length, file.pageCount);
+            evidence.push({ tag, period, profile, path, pageCount: file.pageCount, pngs });
+          }
+        }
+      }
+      assert.equal(snapshot(), before, "三格式实际读取不改任何数据库表");
+    }
+    assert.equal(evidence.length, 6); save("05b-independent-evidence.json", JSON.stringify(evidence, null, 2));
+  });
+
+  await test("P2: real CSV/XLSX/PDF ledger opening totals retain 1000 component cents and reject unsafe totals", async () => {
+    const id = make("合成三格式分精度", "2026-01"); const opening = [];
+    for (let i = 0; i < 1000; i++) {
+      const code = "1002" + String(i + 1).padStart(4, "0");
+      A.addAccount(id, { code, name: "合成精度明细" + i, category: "资产", direction: "debit" });
+      opening.push(e(code, i === 0 ? 900000000000.01 : 0.01));
+    }
+    opening.push(e("3001", 0, 900000000010)); A.setOpeningBalances(id, opening);
+    for (const format of ["csv", "xlsx", "pdf"]) {
+      const file = await office(id, "ledger", "2026-01", format, { code: "1002" });
+      assert.deepEqual(file.report.data.opening, { debit: 900000000010, credit: 0 });
+      assert.deepEqual(file.report.data.closing, { debit: 900000000010, credit: 0 });
+      if (format === "csv") assert.deepEqual(csvRows(file.body).find(row => row[0] === "期末" && row.length === 3), ["期末", "900000000010.00", "0.00"]);
+      else if (format === "xlsx") {
+        const sheet = (await loadWorkbook(file.body)).worksheets[0];
+        cellNumber(sheet, findRow(sheet, "期间期初"), 2, 900000000010, "精确期初");
+        cellNumber(sheet, findRow(sheet, "期末余额"), 2, 900000000010, "精确期末");
+      } else {
+        const pdf = extractPdf(file.body);
+        assert.ok(pdf.squash.includes("900,000,000,010.00")); assert.ok(!pdf.squash.includes("900,000,000,010.01"));
+      }
+      save("05b-precision-ledger." + format, file.body);
+    }
+    for (const [a, b] of [[45035996273704.95, 45035996273704.96], [45035996273704.96, 45035996273704.96]]) {
+      const bad = make("合成Office不可表示", "2026-01");
+      for (const [code, amount] of [["1001", a], ["1002", b]]) db.prepare("INSERT INTO opening_balances(account_set_id,code,debit,credit) VALUES(?,?,?,0)").run(bad, code, amount);
+      for (const format of ["csv", "xlsx", "pdf"]) await assert.rejects(() => office(bad, "trial-balance", "2026-01", format), err => err.code === "report_data_invalid");
+    }
+  });
+
+  await test("P2: all three real formats keep legal extreme aggregate 90071992547409.90", async () => {
+    const id = make("合成合法极界三格式", "2026-01"), opening = [];
+    for (let i = 0; i < 100; i++) {
+      const amount = i === 0 ? 900719925474.99 : 900719925474.09;
+      for (const [prefix, category, direction] of [["1002", "资产", "debit"], ["3001", "权益", "credit"]]) {
+        const code = prefix + String(i + 1).padStart(4, "0");
+        A.addAccount(id, { code, name: "合成合法边界" + code, category, direction }); opening.push({ code, [direction]: amount });
+      }
+    }
+    A.setOpeningBalances(id, opening);
+    for (const format of ["csv", "xlsx", "pdf"]) {
+      const file = await office(id, "ledger", "2026-01", format, { code: "1002" });
+      assert.deepEqual(file.report.data.opening, { debit: 90071992547409.9, credit: 0 });
+      if (format === "csv") assert.deepEqual(csvRows(file.body).find(row => row[0] === "期末" && row.length === 3), ["期末", "90071992547409.90", "0.00"]);
+      else if (format === "xlsx") {
+        const sheet = (await loadWorkbook(file.body)).worksheets[0];
+        cellNumber(sheet, findRow(sheet, "期间期初"), 2, 90071992547409.9, "合法极界期初"); cellNumber(sheet, findRow(sheet, "期末余额"), 2, 90071992547409.9, "合法极界期末");
+      } else {
+        const pdf = extractPdf(file.body); assert.ok(pdf.squash.includes("90,071,992,547,409.90")); assert.ok(!pdf.squash.includes("90,071,992,547,409.91"));
+      }
+      save("05b-extreme-ledger." + format, file.body);
+    }
+  });
+
   await test("B2: stable IDs survive reordered opening rows and renamed display labels", () => {
     const report = structuredClone(dto(s, "balance-sheet", "2026-01"));
     report.data.assets = [{ id: "cash", label: "新名称", value: 120 }, { id: "stock", label: "存货", value: 50 }];
@@ -355,6 +468,7 @@ const ENTERPRISE_EXPECT = {
       assert.equal(current.reportStatus.partialValues, true);
       assert.deepEqual(current.data.ytd.cash, { begin: 1000, end: 920, change: -80 });
       assert.equal(current.data.ytd.totals.net_increase, 20);
+      voucher(id, "2027-01", [e("1403", 12.01), e("1601", 18.02), e("1002", 0, 30.03)]);
       const january = dto(id, "cash-flow-statement", "2026-01");
       assert.equal(january.data.unknown.length, 1);
       assert.equal(january.data.cash.change, -100);
@@ -378,6 +492,24 @@ const ENTERPRISE_EXPECT = {
           save(`b2-partial-${id}.pdf`, file.body);
         }
         if (format !== "pdf") save(`b2-partial-${id}.${format}`, file.body);
+        const next = await office(id, "cash-flow-statement", "2027-01", format);
+        assert.equal(next.report.reportStatus.complete, true); assert.equal(next.report.reportStatus.partialValues, false);
+        assert.deepEqual(next.report.data.ytd.cash, { begin: 920, end: 889.97, change: -30.03 });
+        assert.deepEqual(next.report.data.ytd.totals, { operating: -12.01, investing: -18.02, financing: 0, net_increase: -30.03 });
+        if (format === "csv") {
+          const rows = csvRows(next.body);
+          assert.deepEqual(rows.find(row => row[0] === "现金净增加额").slice(3), ["-30.03", "-30.03"]);
+          assert.ok(rows.some(row => row[0] === "部分金额" && row[1] === "否"));
+        } else if (format === "xlsx") {
+          const sheet = (await loadWorkbook(next.body)).worksheets[0];
+          cellNumber(sheet, findRow(sheet, "现金净增加额"), 4, -30.03, "新年度重置");
+          cellNumber(sheet, findRow(sheet, "现金期末余额"), 4, 889.97, "跨年现金事实");
+          assert.equal(sheet.getRow(findRow(sheet, "部分金额")).getCell(2).value, "否");
+        } else {
+          const pdf = extractPdf(next.body); assert.ok(pdf.squash.includes("现金净增加额-30.03-30.03"));
+          assert.ok(pdf.squash.includes("现金期末余额889.97889.97")); assert.ok(pdf.squash.includes("部分金额否"));
+        }
+        save("05b-reset-" + id + "." + format, next.body);
       }
     }
   });
@@ -415,7 +547,7 @@ const ENTERPRISE_EXPECT = {
     const expectations = [
       ["balance-sheet", "2026-01", "货币资金", 2, 1440, 1490],
       ["income-statement", "2026-02", "净利润", 2, 180, 430],
-      ["cash-flow-statement", "2026-02", "现金净增加额", 3, 180, 530],
+      ["cash-flow-statement", "2026-02", "现金净增加额", 3, 180, 230],
       ["trial-balance", "2026-02", "100201", 4, 600, 0],
       ["ledger", "2026-02", "期间期初", 2, 1490, 0],
     ];
@@ -470,9 +602,9 @@ const ENTERPRISE_EXPECT = {
     const cash = (await loadWorkbook((await office(s, "cash-flow-statement", "2026-02", "xlsx")).body)).worksheets[0];
     const increase = findRow(cash, "现金净增加额");
     cellNumber(cash, increase, 3, 180, "现金流本期净增加额");
-    cellNumber(cash, increase, 4, 530, "现金流已分类本年累计净增加额");
-    cellNumber(cash, findRow(cash, "现金余额变动"), 4, 230, "独立现金余额本年变动，含未分类复合采购支出300");
-    assert.equal(dto(s, "cash-flow-statement", "2026-02").reportStatus.partialValues, true);
+    cellNumber(cash, increase, 4, 230, "现金流已分类本年累计净增加额");
+    cellNumber(cash, findRow(cash, "现金余额变动"), 4, 230, "独立现金余额本年变动，含全额复合采购支出300");
+    assert.equal(dto(s, "cash-flow-statement", "2026-02").reportStatus.partialValues, false);
     const indirect = findRow(cash, "间接法独立勾稽");
     assert.equal(cash.getRow(indirect).getCell(3).value, "否（末行复用直接法经营活动净额）");
     let indirectCheckRow = 0;
@@ -1008,7 +1140,7 @@ const ENTERPRISE_EXPECT = {
   });
 } finally {
   db?.close();
-  if (results.every(Boolean)) rmSync(dataDir, { recursive: true, force: true });
+  if (process.env.KEEP_FIXTURES !== "1" && results.every(Boolean)) rmSync(dataDir, { recursive: true, force: true });
   else console.log(`Failed fixture retained: ${dataDir}`);
 }
 console.log(`\nOffice export acceptance: ${results.filter(Boolean).length}/${results.length} passed`);

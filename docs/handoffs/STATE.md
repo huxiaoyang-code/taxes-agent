@@ -1,3 +1,9 @@
+> LOCAL05b最终候选已冻结：CSV26/26、Office28/28、HTTP9/9最终exit0/close，领域42/42同文件hash沿用；上一版本完整82/83+同版旧batchCLI11/11环境补齐，最终未再次整跑83。实际证据/失败历史/PNG见[本段交接](LOCAL-05-CASHFLOW.md)；待root独立验收/全新独审/PR合并，01/02/03/08=4/8及其它余项边界保持。
+
+> 2026-10-23 LOCAL05b实施候选：仅两持久profile全额纯单向材料1403/设备1601复合现金流，并修同模块既存分精度聚合P2。当前基线b20bba0，待root独立验收/全新独审/PR；实际自测、失败历史及样张见[本段交接](LOCAL-05-CASHFLOW.md)。本段尚未合并，04/05/06/07及最终整链保持未完。
+
+> 2026-10-23 当前真实状态：[PR71](https://github.com/huxiaoyang-code/youshu-fork/pull/71) 已于 `2026-10-23T11:31:28Z` 合并，已审 head `154704863beef6f1a7a13c0b9f6b9b71db6137e3`，merge `b20bba0e969c77b4f91b5e93b278cc5a9140ad54`，Issue64 已 CLOSED；LOCAL01 Issue43亦 CLOSED，01/02/03/08原范围共4/8完成。准确验证与限制见 [LOCAL03b交接](LOCAL-03b.md)。04/05/06/07及最终整链未完；UI文件上传未知不属于原01必须项，不能称已验。以下候选/未合叙述保留原时点历史。
+
 > 2026-10-23 辅助更新：B2a已随PR70实际验收合并；B2b八工具/附录入口/模型投影及localRef候选已自测83/83套通过、exit0/close，尚未管理验收/PR/合并。完整head/merge/时间、失败历史和进程证据只在 [LOCAL03b交接](LOCAL-03b.md) 记录；真实税局仍0、八包其它未完成。
 
 > **2026-10-23 当前状态**：PR68 已合（merge `4146e46383e8826c8a4ee02b93f947c26efec014`），Issue56/61 已关闭；PR67 已合（merge `ef599f86b948e574aa1b796e2da21a31b7685fa6`），Issue59 已关闭。详细head/验证边界见 [LOCAL03a](LOCAL-03a.md) / [Windows](LOCAL-06-WINDOWS.md)。Issue64 的 [辅助A+B1](LOCAL-03b.md) 已随 [PR69](https://github.com/huxiaoyang-code/youshu-fork/pull/69) 验收合并；B2a 同事务导入附录已实施、自测53检查及定向旧回归通过，待管理验收/全新独审/PR；B2b 实际入口与总测试登记待后续独立交付。整包03/05/06/07仍未完成，真实税局0，UI文件上传仍未知。下方候选和未合状态为原日期历史，不代表当前主状态。

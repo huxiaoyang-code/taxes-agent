@@ -1,13 +1,17 @@
 // Internal report downloads. Reading existing books is not a completeness or tax-filing certification.
 import { db } from "./db.mjs";
+import { storedCents, centsToNumber, formatCents } from "./money.mjs";
 import { balanceSheet, incomeStatement, cashFlowStatement, accountSetProfile } from "./accounting.mjs";
 
 const KINDS = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
 const TITLES = { "balance-sheet": "资产负债表", "income-statement": "利润表", "cash-flow-statement": "现金流量表", "trial-balance": "科目余额表", ledger: "明细账" };
 const MONEY_FIELDS = ["opening_debit", "opening_credit", "period_debit", "period_credit", "ytd_debit", "ytd_credit", "closing_debit", "closing_credit"];
-const r2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
-const sum = (values) => r2(values.reduce((total, value) => total + value, 0));
-const split = (net) => ({ debit: Math.max(r2(net), 0), credit: Math.max(r2(-net), 0) });
+// Read every amount before adding/subtracting; SQL SUM and Number arithmetic can lose cents.
+const cents = value => { try { return storedCents(value); } catch { fail("report_data_invalid"); } };
+const number = value => { try { return centsToNumber(value); } catch { fail("report_data_invalid"); } };
+const sum = values => number(values.reduce((total, value) => total + cents(value), 0n));
+const difference = (a, b) => number(cents(a) - cents(b));
+const split = net => ({ debit: number(net > 0n ? net : 0n), credit: number(net < 0n ? -net : 0n) });
 const all = (sql, ...args) => db.prepare(sql).all(...args);
 const one = (sql, ...args) => db.prepare(sql).get(...args);
 
@@ -27,27 +31,31 @@ function previousPeriod(period) {
 // Existing trialBalance.period_debit is inception-to-date, so do not relabel its fields.
 function buildTrial(setId, period, startPeriod, yearStart, accounts) {
   const openings = new Map(all("SELECT code,debit,credit FROM opening_balances WHERE account_set_id=?", setId).map((item) => [item.code, item]));
-  const movements = new Map(all(`
-    SELECT e.code,
-      SUM(CASE WHEN v.period<? THEN e.debit ELSE 0 END) prior_debit,
-      SUM(CASE WHEN v.period<? THEN e.credit ELSE 0 END) prior_credit,
-      SUM(CASE WHEN v.period=? THEN e.debit ELSE 0 END) period_debit,
-      SUM(CASE WHEN v.period=? THEN e.credit ELSE 0 END) period_credit,
-      SUM(CASE WHEN v.period>=? THEN e.debit ELSE 0 END) ytd_debit,
-      SUM(CASE WHEN v.period>=? THEN e.credit ELSE 0 END) ytd_credit
+  const movements = new Map();
+  for (const entry of all(`SELECT e.code,e.debit,e.credit,v.period
     FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id
-    WHERE v.account_set_id=? AND v.status='posted' AND v.period BETWEEN ? AND ?
-    GROUP BY e.code`, period, period, period, period, yearStart, yearStart, setId, startPeriod, period).map((item) => [item.code, item]));
+    WHERE v.account_set_id=? AND v.status='posted' AND v.period BETWEEN ? AND ?`, setId, startPeriod, period)) {
+    if (!movements.has(entry.code)) movements.set(entry.code, {
+      prior_debit: 0n, prior_credit: 0n, period_debit: 0n, period_credit: 0n, ytd_debit: 0n, ytd_credit: 0n,
+    });
+    const movement = movements.get(entry.code);
+    const debit = cents(entry.debit), credit = cents(entry.credit);
+    if (entry.period < period) { movement.prior_debit += debit; movement.prior_credit += credit; }
+    if (entry.period === period) { movement.period_debit += debit; movement.period_credit += credit; }
+    if (entry.period >= yearStart) { movement.ytd_debit += debit; movement.ytd_credit += credit; }
+  }
   const lines = accounts.map((account) => {
     const opening = openings.get(account.code), movement = movements.get(account.code);
-    const beginning = split((opening?.debit || 0) - (opening?.credit || 0) + (movement?.prior_debit || 0) - (movement?.prior_credit || 0));
-    const debit = r2(movement?.period_debit || 0), credit = r2(movement?.period_credit || 0);
-    const closing = split(beginning.debit - beginning.credit + debit - credit);
+    const openingNet = cents(opening?.debit ?? 0) - cents(opening?.credit ?? 0)
+      + (movement?.prior_debit ?? 0n) - (movement?.prior_credit ?? 0n);
+    const beginning = split(openingNet);
+    const debit = movement?.period_debit ?? 0n, credit = movement?.period_credit ?? 0n;
+    const closing = split(openingNet + debit - credit);
     return {
       code: account.code, name: account.name, category: account.category, direction: account.direction,
       opening_debit: beginning.debit, opening_credit: beginning.credit,
-      period_debit: debit, period_credit: credit,
-      ytd_debit: r2(movement?.ytd_debit || 0), ytd_credit: r2(movement?.ytd_credit || 0),
+      period_debit: number(debit), period_credit: number(credit),
+      ytd_debit: number(movement?.ytd_debit ?? 0n), ytd_credit: number(movement?.ytd_credit ?? 0n),
       closing_debit: closing.debit, closing_credit: closing.credit,
     };
   });
@@ -56,7 +64,7 @@ function buildTrial(setId, period, startPeriod, yearStart, accounts) {
 
 function trialChecks(totals) {
   return Object.fromEntries([["opening", "opening"], ["current", "period"], ["ytd", "ytd"], ["closing", "closing"]].map(([name, prefix]) => {
-    const debit = totals[`${prefix}_debit`], credit = totals[`${prefix}_credit`], difference = r2(debit - credit);
+    const debit = totals[`${prefix}_debit`], credit = totals[`${prefix}_credit`], difference = number(cents(debit) - cents(credit));
     return [name, { balanced: Math.abs(difference) < 0.005, debit, credit, difference }];
   }));
 }
@@ -65,10 +73,10 @@ function buildLedger(setId, period, account, trial) {
   const lines = trial.lines.filter((line) => line.code.startsWith(account.code));
   const group = new Set(lines.map((line) => line.code));
   const total = (field) => sum(lines.map((line) => line[field]));
-  const opening = split(total("opening_debit") - total("opening_credit"));
+  const opening = split(cents(total("opening_debit")) - cents(total("opening_credit")));
   const current = { debit: total("period_debit"), credit: total("period_credit") };
   const ytd = { debit: total("ytd_debit"), credit: total("ytd_credit") };
-  let running = r2(opening.debit - opening.credit);
+  let running = cents(opening.debit) - cents(opening.credit);
   const names = new Map(lines.map((line) => [line.code, line.name]));
   const items = all(`SELECT e.id entry_id,v.id voucher_id,v.period,v.voucher_date,v.word,v.number,e.code,
       COALESCE(NULLIF(e.summary,''),v.summary,'') summary,e.debit,e.credit
@@ -76,8 +84,8 @@ function buildLedger(setId, period, account, trial) {
     WHERE v.account_set_id=? AND v.status='posted' AND v.period=?
     ORDER BY v.voucher_date,v.number,v.id,e.line_no,e.id`, setId, period)
     .filter((item) => group.has(item.code)).map((item) => {
-      running = r2(running + item.debit - item.credit);
-      return { ...item, name: names.get(item.code), debit: r2(item.debit), credit: r2(item.credit), balance: running };
+      running += cents(item.debit) - cents(item.credit);
+      return { ...item, name: names.get(item.code), debit: number(cents(item.debit)), credit: number(cents(item.credit)), balance: number(running) };
     });
   return { code: account.code, name: account.name, direction: account.direction, period, opening, current, ytd, closing: split(running), items };
 }
@@ -119,13 +127,13 @@ function yearCashFlow(setId, period, yearStart) {
     const values = new Map();
     for (const month of months) for (const line of month[category]) {
       const previous = values.get(line.code);
-      values.set(line.code, { ...line, value: r2((previous?.value || 0) + line.value) });
+      values.set(line.code, { ...line, value: (previous?.value ?? 0n) + cents(line.value) });
     }
-    result[category] = [...values.values()].filter((line) => line.value !== 0).sort((a, b) => a.code.localeCompare(b.code));
+    result[category] = [...values.values()].filter((line) => line.value !== 0n).map(line => ({ ...line, value: number(line.value) })).sort((a, b) => a.code.localeCompare(b.code));
   }
   result.totals = Object.fromEntries(["operating", "investing", "financing"].map((category) => [category, sum(result[category].map((line) => line.value))]));
   result.totals.net_increase = sum(Object.values(result.totals));
-  result.cash = { begin: months[0].cash.begin, end: months.at(-1).cash.end, change: r2(months.at(-1).cash.end - months[0].cash.begin) };
+  result.cash = { begin: months[0].cash.begin, end: months.at(-1).cash.end, change: difference(months.at(-1).cash.end, months[0].cash.begin) };
   result.reconciles = Math.abs(result.totals.net_increase - result.cash.change) < 0.005;
   result.supplement_indirect = Object.fromEntries(Object.keys(months[0].supplement_indirect).map((key) => [key, sum(months.map((month) => month.supplement_indirect[key]))]));
   return result;
@@ -134,7 +142,7 @@ function yearCashFlow(setId, period, yearStart) {
 // Numeric cells are generated internally. Untrusted text is quoted and formula-neutralized,
 // including leading whitespace, tabs, CR/LF, and BOM before a spreadsheet formula marker.
 function csvCell(value) {
-  if (typeof value === "number") return value.toFixed(2);
+  if (typeof value === "number") return formatCents(cents(value));
   let text = typeof value === "boolean" ? (value ? "是" : "否") : String(value ?? "");
   if (/^[\s\uFEFF]*[=+\-@]/u.test(text) || /^[\t\r\n]/u.test(text)) text = `'${text}`;
   return `"${text.replaceAll('"', '""')}"`;
@@ -255,7 +263,7 @@ export function buildReportExport(setId, options = {}) {
     report.checks.indirectIndependent = false;
     report.warnings.push({ code: "cash_flow_allocation_limited", message: report.accountingContext.legacy
       ? "旧账兼容：现金流按凭证现金净变动及对方科目金额比例分摊；复杂双向混合分录可能净额抵销或分类失真，勾稽不证明分类完整，间接法不是独立勾稽。"
-      : "现金流仅分类可解释的单一对方科目交易；复合或未知分类明确列为部分金额。勾稽不证明分类完整，间接法不是独立勾稽。" });
+      : "现金流分类可解释的单一对方，以及纯单向全额材料1403 / 设备1601复合收付；其它复合或未知分类明确列为部分金额。勾稽不证明分类完整，间接法不是独立勾稽。" });
   }
   if (!["trial-balance", "ledger"].includes(kind)) {
     const windows = [report.data.reportStatus];

@@ -42,6 +42,41 @@ posted("2026-02", "二月合成费用", [{ code: "5602", debit: 100 }, { code: "
 const longName = "超长名称".repeat(9000);
 const longSet = identityFixtureCreate(A, { name: longName, start_period: "2026-01" });
 
+// Separate explicit synthetic enterprise identity for the narrow composite contract.
+const composite = identityFixtureCreate(A, { name: "合成复合附件公司", start_period: "2025-11" });
+A.setOpeningBalances(composite.id, [{ code: "1002", debit: 1000 }, { code: "3001", credit: 1000 }]);
+for (const [period, entries] of [
+  ["2025-11", [{ code: "1403", debit: 120 }, { code: "1601", debit: 180 }, { code: "1002", credit: 300 }]],
+  ["2025-12", [{ code: "1002", debit: 50 }, { code: "1403", credit: 20 }, { code: "1601", credit: 30 }]],
+  ["2026-01", [{ code: "1403", debit: 12.01 }, { code: "1601", debit: 18.02 }, { code: "1002", credit: 30.03 }]],
+  ["2026-02", [{ code: "1604", debit: 10 }, { code: "1002", credit: 10 }]],
+]) A.createVoucher(composite.id, { period, status: "posted", entries });
+
+const precise = identityFixtureCreate(A, { name: "合成HTTP分精度", start_period: "2026-01" });
+const preciseOpenings = [];
+for (let i = 0; i < 1000; i++) {
+  const code = "1002" + String(i + 1).padStart(4, "0");
+  A.addAccount(precise.id, { code, name: "合成分精度" + i, category: "资产", direction: "debit" });
+  preciseOpenings.push({ code, debit: i === 0 ? 900000000000.01 : 0.01 });
+}
+preciseOpenings.push({ code: "3001", credit: 900000000010 }); A.setOpeningBalances(precise.id, preciseOpenings);
+const precisionBad = [];
+for (const [a, b] of [[45035996273704.95, 45035996273704.96], [45035996273704.96, 45035996273704.96]]) {
+  const bad = identityFixtureCreate(A, { name: "合成HTTP不可表示", start_period: "2026-01" }); precisionBad.push(bad.id);
+  for (const [code, amount] of [["1001", a], ["1002", b]]) db.prepare("INSERT INTO opening_balances(account_set_id,code,debit,credit) VALUES(?,?,?,0)").run(bad.id, code, amount);
+}
+
+const extreme = identityFixtureCreate(A, { name: "合成HTTP合法极界", start_period: "2026-01" });
+const extremeOpening = [];
+for (let i = 0; i < 100; i++) {
+  const amount = i === 0 ? 900719925474.99 : 900719925474.09;
+  for (const [prefix, category, direction] of [["1002", "资产", "debit"], ["3001", "权益", "credit"]]) {
+    const code = prefix + String(i + 1).padStart(4, "0");
+    A.addAccount(extreme.id, { code, name: "合成HTTP边界" + code, category, direction }); extremeOpening.push({ code, [direction]: amount });
+  }
+}
+A.setOpeningBalances(extreme.id, extremeOpening);
+
 // Independent hand calculation from the vouchers above:
 //   2026-01: bank 1000 + 800 - 300 = 1500; revenue 800; expense 300; profit 500; cash change 500.
 //   2026-02: bank 1500 + 400 - 100 = 1800; revenue 400 (YTD 1200); expense 100 (YTD 400);
@@ -68,7 +103,7 @@ function startServer(extraEnv = {}) {
     env: { ...process.env, PORT: "0", HOST: "127.0.0.1", WORKBENCH_DATA_DIR: directory, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const exited = new Promise((resolve) => { child.once("exit", resolve); child.once("error", resolve); });
+  const exited = new Promise((resolve) => { child.once("close", resolve); child.once("error", resolve); });
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   const ready = new Promise((resolve, reject) => {
@@ -145,7 +180,7 @@ const previewPath = (kind, period = "2026-02") =>
   `/api/account-sets/${set.id}/reports/${kind}/export-data?${query(period, extraFor(kind))}`;
 const request = (url, options) => fetch(base + url, { signal: AbortSignal.timeout(60000), ...options });
 
-async function readDownload(response, format, kind) {
+async function readDownload(response, format, kind, expectedSetId = set.id) {
   const spec = FORMATS[format];
   assert.equal(response.status, 200, `${format} ${kind} must download`);
   assert.match(response.headers.get("content-type") || "", spec.mime, `${format} ${kind} content-type`);
@@ -157,7 +192,7 @@ async function readDownload(response, format, kind) {
   const asciiName = disposition.match(/filename="([^"]+)"/)[1];
   const utf8Name = decodeURIComponent(disposition.split("UTF-8''")[1]);
   assert.equal(utf8Name, asciiName, "UTF-8 filename and ASCII fallback must name the same file");
-  assert.ok(utf8Name.startsWith(`${kind}-${set.id}-`), `${format} ${kind} filename base: ${utf8Name}`);
+  assert.ok(utf8Name.startsWith(`${kind}-${expectedSetId}-`), `${format} ${kind} filename base: ${utf8Name}`);
   assert.ok(utf8Name.endsWith(spec.extension), `${format} ${kind} filename extension: ${utf8Name}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   assert.equal(+response.headers.get("content-length"), bytes.length, `${format} ${kind} content-length`);
@@ -443,6 +478,67 @@ test("preview stays a JSON DTO and never produces an attachment", async () => {
   // Format is not a preview concern: office / unknown formats stay a strict 400 instead of a silent CSV DTO.
   for (const format of ["xlsx", "pdf", "yaml", ""])
     await expectJsonError(`${previewPath("trial-balance")}&format=${format}`, "report_format_unsupported", 400);
+});
+
+test("05b: real three-format composite and true-unknown attachments retain independent values", async () => {
+  for (const [period, operating, investing, net, ytdNet, end, partial] of [
+    ["2025-12", 20, 30, 50, -250, 750, false],
+    ["2026-01", -12.01, -18.02, -30.03, -30.03, 719.97, false],
+    ["2026-02", 0, 0, 0, -30.03, 709.97, true],
+  ]) {
+    const preview = await (await request('/api/account-sets/' + composite.id + '/reports/cash-flow-statement/export-data?period=' + period)).json();
+    assert.equal(preview.reportStatus.partialValues, partial); assert.equal(preview.reportStatus.complete, !partial);
+    assert.equal(preview.dataStatus.completeness, "unverified"); assert.equal(preview.dataStatus.taxFilingReady, false);
+    for (const format of ["csv", "xlsx", "pdf"]) {
+      const url = '/api/account-sets/' + composite.id + '/reports/cash-flow-statement/export?' + query(period, { format });
+      const {bytes} = await readDownload(await request(url), format, "cash-flow-statement", composite.id);
+      if (format === "csv") {
+        const text = bytes.toString("utf8");
+        for (const [label, current, ytd] of [["现金净增加额", net, ytdNet], ["现金期末余额", end, end]]) assert.ok(text.includes('"' + label + '","","",' + current.toFixed(2) + ',' + ytd.toFixed(2)));
+        assert.ok(text.includes('"部分金额","' + (partial ? '是' : '否') + '"'));
+      } else if (format === "xlsx") {
+        const sheet = (await loadWorkbook(bytes)).worksheets[0];
+        for (const [label, col, amount] of [["经营活动产生的现金流量净额", 3, operating], ["投资活动产生的现金流量净额", 3, investing], ["现金净增加额", 3, net], ["现金净增加额", 4, ytdNet], ["现金期末余额", 4, end]]) cellNumber(sheet, findRow(sheet, label), col, amount, label);
+        assert.equal(sheet.getRow(findRow(sheet, "部分金额")).getCell(2).value, partial ? "是" : "否");
+      } else {
+        const pdf = extractPdf(bytes);
+        assert.ok(pdf.embeddedFont); assert.ok(pdf.squash.includes("现金净增加额" + net.toFixed(2) + ytdNet.toFixed(2)));
+        assert.ok(pdf.squash.includes("现金期末余额" + end.toFixed(2) + end.toFixed(2)));
+        assert.ok(pdf.squash.includes("部分金额" + (partial ? "是" : "否")));
+        writeFileSync(join(pdfDir, "05b-http-" + period + ".pdf"), bytes);
+      }
+    }
+  }
+});
+
+test("P2: real precision attachments preserve independent cents; unrepresentable/range failures have no attachment", async () => {
+  for (const format of ["csv", "xlsx", "pdf"]) {
+    const url = '/api/account-sets/' + precise.id + '/reports/ledger/export?' + query("2026-01", { format, code: "1002" });
+    const {bytes} = await readDownload(await request(url), format, "ledger", precise.id);
+    if (format === "csv") assert.ok(bytes.toString("utf8").includes('"期末",900000000010.00,0.00'));
+    else if (format === "xlsx") {
+      const sheet = (await loadWorkbook(bytes)).worksheets[0];
+      cellNumber(sheet, findRow(sheet, "期间期初"), 2, 900000000010, "HTTP精确期初"); cellNumber(sheet, findRow(sheet, "期末余额"), 2, 900000000010, "HTTP精确期末");
+    } else {
+      const pdf = extractPdf(bytes); assert.ok(pdf.squash.includes("900,000,000,010.00")); assert.ok(!pdf.squash.includes("900,000,000,010.01"));
+      writeFileSync(join(pdfDir, "05b-http-precision.pdf"), bytes);
+    }
+    for (const id of precisionBad) await expectJsonError('/api/account-sets/' + id + '/reports/trial-balance/export?' + query("2026-01", { format }), "report_data_invalid", 422);
+  }
+});
+
+test("P2: legal extreme aggregate has the same exact .90 in real CSV/XLSX/PDF attachments", async () => {
+  for (const format of ["csv", "xlsx", "pdf"]) {
+    const url = '/api/account-sets/' + extreme.id + '/reports/ledger/export?' + query("2026-01", { format, code: "1002" });
+    const {bytes} = await readDownload(await request(url), format, "ledger", extreme.id);
+    if (format === "csv") { assert.ok(bytes.toString("utf8").includes('"期末",90071992547409.90,0.00')); assert.ok(!bytes.toString("utf8").includes('90071992547409.91')); }
+    else if (format === "xlsx") {
+      const sheet = (await loadWorkbook(bytes)).worksheets[0]; cellNumber(sheet, findRow(sheet, "期间期初"), 2, 90071992547409.9, "合法极界HTTP期初"); cellNumber(sheet, findRow(sheet, "期末余额"), 2, 90071992547409.9, "合法极界HTTP期末");
+    } else {
+      const pdf = extractPdf(bytes); assert.ok(pdf.squash.includes("90,071,992,547,409.90")); assert.ok(!pdf.squash.includes("90,071,992,547,409.91"));
+      writeFileSync(join(pdfDir, "05b-http-extreme.pdf"), bytes);
+    }
+  }
 });
 
 // --------------------------------------------------------------------------- input validation unchanged

@@ -2078,10 +2078,10 @@ export function legacyCashFlowStatement(setId, period) {
 }
 
 /**
- * 现金流量表：新 profile 按「该方向唯一非现金对方科目」分类基础现金凭证。
+ * 现金流量表：新 profile 按单一对方及严格全额材料 / 设备复合交易分类。
  * - 现金流入 = 现金科目借方合计、现金流出 = 现金科目贷方合计，同一凭证双向时分别保留 gross；
  * - 内部划转金额的可行区间唯一时才按非现金对方分类；配对不唯一时保留双向 gross 与歧义诊断；
- * - 该方向有多个非现金对方科目时不按比例分摊、不猜现金等价物 / 受限资金，
+ * - 多对方仅放行纯单向、全额且仅材料1403 / 设备1601；其它不按比例分摊、不猜现金等价物 / 受限资金，
  *   给 cash_flow_classification_incomplete 并保留可核对金额（unknown[].value），
  *   不把未分类金额伪装成经营 / 投资 / 筹资，也不用净额 0 消除诊断。
  * 旧账套（legacy）仍走旧兼容计算（完整性由 legacy_profile_compatibility 单独表达）。
@@ -2176,7 +2176,38 @@ export function cashFlowStatement(setId, period) {
     const classify = (signedCents, counterparties, direction) => {
       if (signedCents === 0n || counterparties.size === 0) return;
       if (counterparties.size > 1) {
-        // 不实现复合凭证按比例分摊：不猜分类，也不把金额塞进其他类别。
+        // 仅完整单向现金、全部相反侧的材料 / 设备全额收付可逐项确定金额。
+        // 全凭证验证后才写桶；不用比例、优先级、尾差或虚构银行逐笔配对。
+        const opposite = direction === "outflow" ? creditCounterparties : debitCounterparties;
+        const oneCashDirection = direction === "outflow"
+          ? outflow > 0n && inflow === 0n
+          : inflow > 0n && outflow === 0n;
+        const candidates = [];
+        let exactComposite = oneCashDirection && opposite.size === 0
+          && totalOf(counterparties) === (signedCents < 0n ? -signedCents : signedCents);
+        for (const [code, cents] of counterparties) {
+          const account = byCode.get(code);
+          const classified = account ? classifyAccountingCashCounterpart(profile.id, account) : null;
+          const semantics = account ? accountProfileSemantics(profile, account) : null;
+          if (!classified || !["1403", "1601"].includes(classified.matchedRoot)
+            || !["operating", "investing"].includes(classified.category)
+            || !semantics || semantics.reasons.length || semantics.effective.category !== "资产"
+            || semantics.effective.direction !== "debit" || semantics.effective.contra
+            || cents <= 0n) exactComposite = false;
+          candidates.push({ code, cents, category: classified?.category });
+        }
+        // 现金根/明细也必须具备权威语义，不能把历史损坏的现金当完整成功。
+        for (const entry of entries) {
+          if (!isCash(entry.code) || (storedCents(entry.debit) === 0n && storedCents(entry.credit) === 0n)) continue;
+          const account = byCode.get(entry.code);
+          const semantics = account ? accountProfileSemantics(profile, account) : null;
+          if (!semantics || !semantics.matchedRoot || semantics.reasons.length) exactComposite = false;
+        }
+        if (exactComposite) {
+          for (const item of candidates) addBucket(item.category, item.code, direction === "outflow" ? -item.cents : item.cents);
+          return;
+        }
+        // 其余复合凭证不猜分类，也不把金额塞进其他类别。
         unknown.push({
           direction,
           category: "unknown",
@@ -2330,7 +2361,7 @@ export function cashFlowStatement(setId, period) {
 
   return {
     period,
-    method: "直接法（单一对方科目分类）",
+    method: "直接法（单一对方及全额材料设备复合分类）",
     accountingContext: context,
     reportStatus,
     diagnostics: reportStatus.diagnostics,
