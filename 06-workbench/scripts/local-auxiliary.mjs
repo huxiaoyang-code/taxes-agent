@@ -1,0 +1,23 @@
+#!/usr/bin/env node
+// Explicit local file/JSON interface. It never imports db.mjs or initializes an unknown target.
+import fs from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { assertPlainPath, ensureAuxiliarySchema, assertAuxiliaryReady } from '../server/auxiliary-storage.mjs';
+import * as A from '../server/auxiliary-accounting.mjs';
+const commands={entities:A.listAuxiliaryEntities,'entity-create':A.createAuxiliaryEntity,'entity-update':A.updateAuxiliaryEntity,entries:A.listAuxiliaryEntries,allocate:A.replaceAuxiliaryAllocations,ledger:A.auxiliaryLedger,party:A.entryPartyAllocation,requirement:A.setAuxiliaryRequirement};
+const readOnly=new Set(['entities','entries','ledger','party']);
+let db;
+try {
+ const [command,...rest]=process.argv.slice(2); if(command==='help'||command==='--help') {
+  console.log(JSON.stringify({ok:true,usage:'local-auxiliary.mjs <install|entities|entity-create|entity-update|entries|allocate|ledger|party|requirement> --db <existing-file> [--input <json-file>] [--out <new-backup-directory>]',scope:'core5 + bank0/1 + aux1; install bank before auxiliary; explicit post-import entry-ID binding; HTTP/Agent/MCP pending'}));
+ } else {
+  if(command!=='install'&&!commands[command]) throw new Error('aux_usage');
+  const options={}; for(let i=0;i<rest.length;i+=2) { if(!['--db','--input','--out'].includes(rest[i])||!rest[i+1]||options[rest[i]])throw new Error('aux_usage'); options[rest[i]]=rest[i+1]; }
+  if(!options['--db']||(command==='install'?!options['--out']:!options['--input']))throw new Error('aux_usage');
+  if(command==='install'&&options['--input']||command!=='install'&&options['--out'])throw new Error('aux_usage');
+  const path=assertPlainPath(options['--db']); db=new DatabaseSync(path,{readOnly:readOnly.has(command)}); db.exec('PRAGMA foreign_keys=ON');
+  const result=command==='install'?await ensureAuxiliarySchema(db,{dbPath:path,outDir:options['--out']}):commands[command](db,JSON.parse(fs.readFileSync(options['--input'],'utf8').replace(/^\uFEFF/,'')));
+  console.log(JSON.stringify({ok:true,result}));
+ }
+} catch(error) { const code=error.code??error.message; console.log(JSON.stringify({ok:false,code:/^(aux_|account_set_|accounting_profile_|later_|period_)[a-z_]+$/.test(code)?code:'aux_operation_failed'})); process.exitCode=2; }
+finally { if(db)db.close(); }

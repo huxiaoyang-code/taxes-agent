@@ -1,3 +1,5 @@
+> **2026-10-23 当前兼容合同**：PR68 已合 core3/4/5 × bank0/1 的精确备份支持；本次 Issue64 A+B1 候选增加 **core5 + bank0/1 + auxiliary1**，待管理验收/独审/PR。无aux旧六组合保持；旧core带aux、aux2、audit/batch及未知组合拒绝。backup/verify/restore-new共用aux精确表/索引/FK/触发器与内容校验，安装先真实备份并绑定源连接；银行必须先于aux安装。接口及限制见 [辅助核算](../LOCAL-AUXILIARY.md)。以下此前候选、未来v5和未支持aux表述按原日期作为历史；不能据此推断当前合同。
+
 # 交接 · LOCAL-06-BACKUP 本机一致性备份 / 验证 / 恢复到全新目标
 
 - 任务单：[tasks/LOCAL-06-BACKUP](../tasks/LOCAL-06-BACKUP.md) · 契约：[LOCAL-BACKUP](../LOCAL-BACKUP.md)

@@ -1,0 +1,64 @@
+# 本机辅助核算（LOCAL-03b A+B1）
+
+本包为可安装候选：真实总账上的项目、部门、往来三维分配、领域 API、本机 JSON CLI 与官方备份恢复。负责人 huxiaoyang-code，Refs Issue64。尚待管理者验收与全新上下文独审；HTTP / Agent / MCP、总测试入口登记和含维度的一体导入仍待 B2，不代表整个 LOCAL03 或八包已完成。
+
+## 安装与版本
+
+安装器 `ensureAuxiliarySchema(db, {dbPath, outDir})` 不在模块导入时建表，不接受 fresh 布尔豁免。只支持实际 core5 + bank0/1 + auxiliary1。需要银行时先安装 bank1，再安装辅助组件；当前 bank 安装器不支持在 aux 后加装银行。无 aux 的 core3/4/5 × bank0/1 仍由官方备份按原精确契约验证与恢复。旧 core 带 aux、未知 aux2、audit/batch 与其它未知组合一律拒绝；不会为安装辅助而改 core 版本或清除未知表。
+
+安装核对实际文件路径、祖先无链接与连接路径，持有 `BEGIN IMMEDIATE` 写预留，调用真实 `createBackup → verifyBackup`，并比对源连接的结构、内容和组件摘要。备份通过后才事务创建全部 aux 表、索引与父表保护触发器，记录快照 SHA256 / 字节数。已安装重入也只读验证整个官方结构组合。备份失败或结构不支持时零 aux DDL；备份文件保留。
+
+官方 `local-backup.mjs` 的 backup / verify / restore-new 已共同识别 aux1 精确 DDL：列 / 默认值 / NOT NULL / CHECK / PK rowid / UNIQUE、全部索引名称和键语义、FK 动作、组件及挂在核心父表上的触发器。缺失、多余或替换对象均拒绝；清单中重新计算文件哈希不能授权伪结构。恢复到新目录后仍带原辅助 ID、tuple、来源分录、回执及操作记录，可继续合法记账。
+
+## 账簿规则
+
+- 总账 `voucher_entries.id` 和 `opening_balances(account_set_id, code)` 是唯一金额来源。每条分配事实是一组 `(projectId?, departmentId?, partyId?)` 加借/贷整数分；一次替换整套分配，同 tuple 不重复。名称仅展示，编码和稳定 ID 识别实体，不按名称猜往来。
+- 分录分配的借/贷分别不得超过真实分录。没有分配及部分分配的余量都以维度 ID 为 null 的未分配桶展示。三维存在同一行，不做多值维表笛卡尔连接。
+- 期初各往来可分别有借余额与贷余额。辅助期初净额加明确的未分配净额等于总账期初净额；不错误要求辅助借贷 gross 等于总账净单侧列。例如 1200 借与 200 贷对应总账净借 1000。
+- 账簿只计 posted。查询期间的 opening 是进入该月的余额，debit / credit 仅本月发生，closing 为累计余额；跨年应收和银行余额延续，不用核心累计 `period_debit` 冒充单月发生。每组同时给借余额、贷余额与真实来源 ID。
+- 普通原始负金额与不足一分的非零金额拒绝；合法正数反向分录可冲减，负净余额是合法结果。没有新增负数红字格式。
+
+## 编辑、期间与事务
+
+反过账保留分配，再过账只计一次。有分配的凭证删除、分录金额/科目/归属/行号变更、父凭证账套/期间变化和派生凭证重算均明确拒绝 `aux_entry_reallocation_required`。用户须在开放期间用新 requestId、有理由地把分配替换为空，再走真实核心删除/重建；旧行 ID 不迁到新行。操作历史保留。
+
+核心 `setOpeningBalances` 的同值更新跳过 DELETE+INSERT 保留分配；有分配时改变期初拒绝 `aux_opening_reallocation_required`。多科目更新中途拒绝时，整个核心保存点回滚。
+
+分配、期初及已被引用实体的 name/active 编辑均检查当前封账、后续封账和真实后续年末结转依赖。改名保留 ID；停用不删除历史分配，不能用于新分配。`entryPartyAllocation` 同时给 `inactivePartyIds` / `partyActive`；`confirmed` 仅表示该分录完整分到唯一往来，不表示银行对手方已验证。被引用实体受 FK 限制不能删除。
+
+只有显式 `setAuxiliaryRequirement` 配置的科目/维度会进入期末完整性阻断；历史未配置账套不因未分配而一刀切禁止结账。配置检查未分配余量、缺维度和停用引用。
+
+写入使用同一个实际 SQLite 连接。独立调用成功返回 `durability: committed`；调用方已开事务时使用保存点，返回 `durability: pending_outer_commit`，分配状态为 `staged`，必须由调用方完成最终提交才持久化。相同 requestId 与相同规范内容只读回放；不同内容冲突，已绑定分录或分配状态变化也明确冲突。回执与本地必要操作记录在同事务落库，历史表禁止 update / delete / replace。
+
+COMMIT_BUSY 且可确认回滚时保留原失败，不谎报成功。提交、回滚或保存点结果不明则 `aux_commit_unknown` 并隔离该连接，此连接后续 aux 读/写/安装全部拒绝 `aux_connection_quarantined`。调用方应停止操作、关闭连接，重新只读核对真实持久状态与 requestId；不能按未知结果自动重试。本包未接通用 audit/batch 安装或事务平台。
+
+## 本机 CLI
+
+在 `06-workbench` 目录运行；所有数据库/输入/备份路径由操作者显式给出。CLI 不 import 默认 `db.mjs`，不会先初始化或迁移未知目标。stdout 是本机明细 JSON，不是模型端安全 DTO。
+
+```text
+node scripts/local-auxiliary.mjs install --db <已有workbench.db> --out <全新安装前备份目录>
+node scripts/local-auxiliary.mjs entity-create --db <已有workbench.db> --input <entity.json>
+node scripts/local-auxiliary.mjs entries --db <已有workbench.db> --input <selection.json>
+node scripts/local-auxiliary.mjs allocate --db <已有workbench.db> --input <allocation.json>
+node scripts/local-auxiliary.mjs ledger --db <已有workbench.db> --input <query.json>
+node scripts/local-auxiliary.mjs party --db <已有workbench.db> --input <entry.json>
+```
+
+实体示例：`{"accountSetId":1,"kind":"party","code":"C1","name":"客户一","requestId":"entity-C1"}`。选择示例：`{"accountSetId":1,"voucherId":1}`；必须使用 `entries` 返回的真实 `entryId`，不能自行按行号/摘要猜 ID。
+
+分配示例：`{"accountSetId":1,"entryId":1,"allocations":[{"projectId":2,"departmentId":3,"partyId":1,"debit":400},{"projectId":2,"departmentId":4,"partyId":1,"debit":200}],"requestId":"assign-001","reason":"人工核对来源分录"}`。期初用 `openingCode` 替代 `entryId`。查询示例：`{"accountSetId":1,"period":"2025-12","code":"1122","groupBy":["party"]}`。
+
+另有 `entities`、`entity-update`、`requirement` 命令，字段与同名领域能力一致；`entity-update` 需要 `entityId` 和 reason，`requirement` 需要 code、project/department/party 布尔值和 reason。help 列出能力。成功 exit0、拒绝 exit2，错误不回显原始账务/SQL/路径。
+
+## 导入与银行边界
+
+本段正式交付“导入后显式绑定”：原核心 `importIncremental` 的批次和来源指纹逐字不变，`entries` 返回来源凭证 ID 与真实 entry ID，绑定使用独立 aux1 requestId 回执，旧批次重放不清空分配。此阶段没有把辅助维度附录接入原导入事务，不宣称一体导入已完成；Issue64 保持开放。
+
+银行先按真实日期/金额候选及人工确认匹配，然后用同一个 entryId 调用 `entryPartyAllocation`。无往来为 unknown；多往来或部分往来为 ambiguous；完整唯一为 confirmed，同时明示停用状态。不会从银行摘要/名称/金额推断往来，不改原银行指纹、不生成调整分录。
+
+## 验证
+
+显式执行 `node test/auxiliary-storage.test.mjs`、`auxiliary-accounting.test.mjs`、`auxiliary-cli.test.mjs`、`auxiliary-core-integration.test.mjs`、`auxiliary-backup-integration.test.mjs`、`auxiliary-bank-integration.test.mjs`。每套只用新 UUID workspace 合成根，导入核心前设环境，保留新套件现场，child 等 close。
+
+两准则独立手算：小企业 AR 期初1000、12月1400、次年1月800；银行9000→9400→9900；12月借余额1700/贷余额300，往来C1=1500/C2=-300，1月借发生0/贷发生600。企业准则全部金额双倍。另验草稿/反过账/重过账、三维拆分、核心变更阻断与真实重算回滚、直接SQL跨账套/错类型/父变更、两连接锁、未知事务状态隔离、官方WAL备份恢复与伪结构拒绝，以及银行两准则1130调节闭环。
