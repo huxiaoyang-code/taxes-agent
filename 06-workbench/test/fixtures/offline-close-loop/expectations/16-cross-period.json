@@ -1,0 +1,18 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": false,
+  "expectedEntries": [],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": null,
+  "derivation": "Q2事实日期进入Q3，拒绝错期。",
+  "expectedPreCloseTrialBalances": {},
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

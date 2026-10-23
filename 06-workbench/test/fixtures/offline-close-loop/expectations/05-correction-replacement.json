@@ -1,0 +1,27 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [
+    {
+      "debitAccount": "1002",
+      "creditAccount": "5001",
+      "amount": "999.11"
+    }
+  ],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": null,
+  "derivation": "纠正01的金额1001.23至999.11，差额-2.12；这是完整版本替换预期，非追加999.11；无红字发票处理器承诺。",
+  "expectedPreCloseTrialBalances": {
+    "1002": "999.11",
+    "5001": "-999.11"
+  },
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

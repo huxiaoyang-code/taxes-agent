@@ -1,0 +1,20 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [
+    "sale"
+  ],
+  "syntheticArithmetic": null,
+  "derivation": "两份有效来源互相冲突，应请求业务事实澄清。",
+  "expectedPreCloseTrialBalances": {},
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}

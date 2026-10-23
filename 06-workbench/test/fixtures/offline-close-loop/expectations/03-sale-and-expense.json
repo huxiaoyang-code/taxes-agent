@@ -1,0 +1,39 @@
+{
+  "fixtureOnly": true,
+  "accountantStatus": "pending",
+  "contractValid": true,
+  "expectedEntries": [
+    {
+      "debitAccount": "1002",
+      "creditAccount": "5001",
+      "amount": "2527.39"
+    },
+    {
+      "debitAccount": "5602",
+      "creditAccount": "1002",
+      "amount": "612.08"
+    }
+  ],
+  "expectedTaxFields": {
+    "vat_payable": {
+      "state": "unknown",
+      "amount": null
+    }
+  },
+  "taxStatus": "blocked",
+  "blockingFactIds": [],
+  "syntheticArithmetic": {
+    "testOnly": true,
+    "base": "2527.39",
+    "numerator": "7",
+    "denominator": "100",
+    "roundedAmount": "176.92"
+  },
+  "derivation": "2527.39 - 612.08 = 1915.31；合成乘数计算176.9173半入176.92，非税率。",
+  "expectedPreCloseTrialBalances": {
+    "1002": "1915.31",
+    "5001": "-2527.39",
+    "5602": "612.08"
+  },
+  "accountingInterpretation": "工程假定的未结转试算余额；真实价税拆分、结账及会计确认均未完成，不是可执行记账预期。"
+}
