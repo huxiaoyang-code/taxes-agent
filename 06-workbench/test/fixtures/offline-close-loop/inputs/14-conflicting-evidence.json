@@ -1,0 +1,88 @@
+{
+  "kind": "manifest",
+  "version": "offline-close-loop/1",
+  "id": "manifest-1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-E1",
+    "accountSetId": "synthetic-book-1",
+    "period": "2026-Q2",
+    "currency": "CNY"
+  },
+  "sourceVersion": "v1",
+  "mode": "business_materials",
+  "profileId": "small-2011-basic-v1",
+  "taxpayerStatus": "small_scale_candidate",
+  "region": "CN-FJ-ZZ",
+  "evidence": [
+    {
+      "kind": "evidence",
+      "version": "offline-close-loop/1",
+      "id": "e1",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-E1",
+        "accountSetId": "synthetic-book-1",
+        "period": "2026-Q2",
+        "currency": "CNY"
+      },
+      "sourceVersion": "v1",
+      "category": "business_declaration",
+      "format": "json",
+      "locator": "e1-local",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "documentDate": "2026-04-01",
+      "status": "provided",
+      "sourceLocation": {
+        "sheet": null,
+        "row": null,
+        "field": null
+      },
+      "coveragePeriod": "2026-Q2"
+    },
+    {
+      "kind": "evidence",
+      "version": "offline-close-loop/1",
+      "id": "e2",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-E1",
+        "accountSetId": "synthetic-book-1",
+        "period": "2026-Q2",
+        "currency": "CNY"
+      },
+      "sourceVersion": "v1",
+      "category": "bank_statement",
+      "format": "json",
+      "locator": "e2-local",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "documentDate": "2026-04-01",
+      "status": "provided",
+      "sourceLocation": {
+        "sheet": null,
+        "row": null,
+        "field": null
+      },
+      "coveragePeriod": "2026-Q2"
+    }
+  ],
+  "facts": [
+    {
+      "factId": "sale",
+      "type": "sales",
+      "state": "conflict",
+      "date": null,
+      "amount": null,
+      "evidenceRefs": [
+        {
+          "evidenceId": "e1",
+          "sourceVersion": "v1"
+        },
+        {
+          "evidenceId": "e2",
+          "sourceVersion": "v1"
+        }
+      ],
+      "reasonCode": "invoice_bank_disagree"
+    }
+  ],
+  "history": [],
+  "supersedes": null
+}
