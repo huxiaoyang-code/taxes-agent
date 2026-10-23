@@ -273,7 +273,7 @@ async function dispatch({ command, options }) {
       limits: [
         "period-check / close 调用已合入的 LOCAL-02 A.periodEndCheck / setPeriodStatus；旧 check 成功不代替核心重新校验",
         "既有库新增批量结构依赖 LOCAL-06 createBackup/verifyBackup；未接线时拒绝自动建表 / 升级",
-        "新建目标必须通过本进程独占创建回执；布尔 fresh / 自造回执无效",
+        "新建目标必须通过本进程独占创建回执 + 页 1 nonce（创建 fd 写入）；布尔 fresh / 自造回执无效",
         "本 CLI 只保证批量 runner 之间按账套互斥，未接线手工 HTTP / Agent 入口",
       ],
     });
@@ -380,8 +380,10 @@ try {
   const exitCode = error instanceof CliError ? error.exitCode
     : (["migration_requires_backup", "dependency_unavailable", "database_not_found", "database_unreadable",
       "database_busy", "schema_future_version", "batch_schema_unavailable", "fresh_target_claimed",
-      "fresh_target_not_fresh", "data_dir_alias", "data_dir_not_empty", "data_dir_invalid",
-      "data_dir_unreadable"].includes(code) ? 3 : 2);
+      "fresh_target_not_fresh", "data_dir_not_empty", "data_dir_invalid",
+      "data_dir_unreadable"].includes(code)
+      || String(code).startsWith("fresh_") || String(code).startsWith("data_dir_")
+      ? 3 : 2);
   process.stderr.write(`[local-batch] ${String(code).slice(0, 120)}\n`);
   emit({
     ok: false,

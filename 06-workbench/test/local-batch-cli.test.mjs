@@ -7,7 +7,8 @@
  *     四模块在未设置 WORKBENCH_DATA_DIR 的新子进程中 import 不触碰默认数据目录。
  *  B. 20 家规范企业、每企 1 个账套，连续两月真实导入 → 显式过账（真实 draft→posted）→
  *     实际固定/无形资产计提 → 结转 → 期末检查/结账（LOCAL-02 未合并时如实 blocked_dependency）→
- *     五类内部报表 CSV / XLSX / PDF 全部真实生成；金额、余额、净利按**独立手算表**核对；
+ *     五类内部报表 CSV / XLSX / PDF 全部真实生成；CSV 与 XLSX 金额、余额、净利按**独立手算表**核对，
+ *     PDF 在此只核对结构 / 页数（文本金额与分页渲染归 B4 的代表性验收）；
  *     另测首次 create 建账 + 次月 append 到同一账套 + 同 jobKey 幂等回放。
  *  C. 并发证据：足量真实明细的 XLSX/PDF 渲染区间跨两家企业真实相交，peak>1 且 <= concurrency，
  *     threadId 不同；concurrency=1 的对照 job 渲染区间不重叠。
@@ -18,9 +19,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 
@@ -221,6 +222,155 @@ function assertPdf(buffer) {
   const pages = [...text.matchAll(/\/Type\s*\/Page[^s]/g)].length;
   assert.ok(pages >= 1, "PDF 未包含页面对象");
   return pages;
+}
+
+/**
+ * 代表性 PDF 文本 / 渲染验收工具（需 REPORT_OFFICE_PYTHON 指向已核实的中文 Python 运行时：
+ * pdfplumber + Pillow；渲染使用 PATH 上的 poppler `pdftoppm`）。
+ * 这里不把 PDF 当图片看：先用真实文本层核对金额与中文标题，再用真实 poppler 把代表性页面
+ * 渲染成 PNG 保留下来供人工抽查（管理检查路径见 RENDER_OUT）。
+ */
+const PDF_PYTHON = String(process.env.REPORT_OFFICE_PYTHON || "").trim();
+const RENDER_ROOT = resolve(WB, "..", ".agent-runs");
+const RENDER_RUN_PREFIX = "local-07-b1-review3-renders-";
+/** 本次测试真正新建的唯一渲染目录（由 `prepareRenderOut` 设置；不触碰任何已有目录 / 旧 run）。 */
+let RENDER_OUT = null;
+
+/**
+ * 建立**本次测试独占的唯一**渲染输出目录。
+ * 以前用固定目录名 + 先删后建，等于把「固定文件名」当成所有权——那会删掉上一轮 / 他人留存的
+ * 已核对 PNG。现在一律用 `mkdtemp` 新目录：祖先链先核实（本 worktree 的 `.agent-runs` 必须存在且不是
+ * 符号链接 / junction），新目录内写 OWNER.json 记录所有者与本次临时根；**不删除任何已有对象**，
+ * 保留给管理验收，测试成功后也不自动清理。
+ */
+function prepareRenderOut() {
+  const worktree = resolve(WB, "..");
+  assert.equal(RENDER_ROOT, join(worktree, ".agent-runs"), "渲染根必须是本 worktree 的 .agent-runs");
+  assert.equal(existsSync(RENDER_ROOT), true, `渲染根必须已存在（不替别人创建）：${RENDER_ROOT}`);
+  assert.equal(lstatSync(RENDER_ROOT).isSymbolicLink(), false, "渲染根的祖先链不得含符号链接 / junction");
+  assert.equal(lstatSync(worktree).isSymbolicLink(), false, "worktree 祖先链不得含符号链接 / junction");
+  const created = mkdtempSync(join(RENDER_ROOT, RENDER_RUN_PREFIX));
+  assert.equal(created, resolve(created), "本次渲染目录必须是绝对路径");
+  assert.ok(created.startsWith(RENDER_ROOT + sep), "本次渲染目录必须在本 worktree 的 .agent-runs 下");
+  const stat = lstatSync(created);
+  assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), "本次渲染目录必须是 mkdtemp 新建的真实目录");
+  assert.equal(readdirSync(created).length, 0, "mkdtemp 目录开始时为空");
+  RENDER_OUT = created;
+  writeFileSync(join(created, "OWNER.json"), `${JSON.stringify({
+    owner: "06-workbench/test/local-batch-cli.test.mjs B4",
+    createdAt: new Date().toISOString(),
+    pid: process.pid,
+    tempRoot: ROOT,
+    uniqueRunDir: created,
+    note: "本测试用 mkdtemp 新建的唯一目录；只写本次进程自己生成的合成产物，不删除任何已有目录 / 旧 run。",
+  }, null, 2)}\n`, "utf8");
+}
+
+function requirePdfTooling() {
+  assert.ok(PDF_PYTHON, "必须设置 REPORT_OFFICE_PYTHON（已核实的中文 Python：pdfplumber + Pillow）才能做代表性 PDF 验收");
+  const probe = spawnSync(PDF_PYTHON, ["-c", "import pdfplumber, PIL; print('ok')"], {
+    encoding: "utf8", env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+  });
+  assert.equal(probe.status, 0, `REPORT_OFFICE_PYTHON 不可用：${probe.stderr || probe.stdout}`);
+  const poppler = spawnSync("pdftoppm", ["-v"], { encoding: "utf8" });
+  assert.ok(poppler.status === 0 || /pdftoppm/i.test(`${poppler.stderr}${poppler.stdout}`), "PATH 上找不到 poppler pdftoppm");
+}
+
+/** 用真实 pdfplumber 提取每个 PDF 的逐页文本（按导入顺序返回，不靠字节正则猜内容）。
+ * 注：Windows 下 Python 的 `sys.argv` 会把含中文的路径按 ANSI 代码页重解码，
+ * 因此不在脚本里回传路径作键，而是按 argv 顺序返回列表，由调用方按顺序对应。
+ */
+function pdfTextByPage(paths) {
+  const script = [
+    "import json, sys, pdfplumber",
+    "out = []",
+    "for path in sys.argv[1:]:",
+    "    with pdfplumber.open(path) as pdf:",
+    "        pages = [(page.extract_text() or '') for page in pdf.pages]",
+    "        out.append({'pages': len(pdf.pages), 'texts': pages})",
+    "print(json.dumps(out, ensure_ascii=False))",
+  ].join("\n");
+  const run = spawnSync(PDF_PYTHON, ["-c", script, ...paths], {
+    encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+  });
+  assert.equal(run.status, 0, `PDF 文本提取失败：${run.stderr}`);
+  const parsed = JSON.parse(run.stdout);
+  assert.equal(parsed.length, paths.length, "PDF 文本提取返回数量与请求不一致");
+  return new Map(paths.map((path, index) => [path, parsed[index]]));
+}
+
+const pdfLines = (texts) => texts.join("\n").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+/** 按行首标签定位一行，并取该行的数字列；同标签出现多次（如元数据 + 表格行）时优先取列数匹配的行。 */
+function pdfRowAmounts(lines, label, expectedCount = null) {
+  const wanted = String(label).replace(/\s+/g, "");
+  const collect = (line) => (line.match(/-?\d[\d,]*\.\d{2}/g) || []).map((token) => Number(token.replace(/,/g, "")));
+  const candidates = [];
+  lines.forEach((line, index) => {
+    if (!line.replace(/\s+/g, "").startsWith(wanted)) return;
+    const amounts = collect(line);
+    // 行太长被折行时，金额可能落到下一行；只在本次行为空时才向后看。
+    candidates.push(amounts.length ? amounts : collect(lines[index + 1] || ""));
+  });
+  if (!candidates.length) return null;
+  if (expectedCount !== null) {
+    const exact = candidates.find((amounts) => amounts.length === expectedCount);
+    if (exact) return exact;
+  }
+  return candidates.find((amounts) => amounts.length) || candidates[0];
+}
+function assertPdfRow(lines, label, expected, context) {
+  const amounts = pdfRowAmounts(lines, label, expected.length);
+  assert.ok(amounts, `${context} PDF 文本缺少行：${label}`);
+  assert.equal(amounts.length, expected.length, `${context} 行 ${label} 列数不符（实际 ${JSON.stringify(amounts)}）`);
+  expected.forEach((value, index) => {
+    assert.equal(r2(amounts[index]), r2(value), `${context} 行 ${label} 第 ${index + 1} 列：PDF ${amounts[index]} ≠ 手算 ${value}`);
+  });
+}
+
+/** 真实 poppler 渲染指定页到固定的供检视目录，返回 PNG 路径。 */
+function renderRepresentativePages(pdfPath, prefix, firstPage, lastPage) {
+  const dir = join(RENDER_OUT, prefix);
+  mkdirSync(dir, { recursive: true });
+  const run = spawnSync("pdftoppm", ["-f", String(firstPage), "-l", String(lastPage), "-r", "110", "-png", pdfPath, join(dir, "page")], {
+    encoding: "utf8", timeout: 120000,
+  });
+  assert.equal(run.status, 0, `pdftoppm 渲染失败：${run.stderr}`);
+  const files = readdirSync(dir).filter((name) => name.endsWith(".png"));
+  const wanted = [];
+  for (let page = firstPage; page <= lastPage; page += 1) {
+    const match = files.find((name) => Number(/(\d+)\.png$/.exec(name)?.[1] ?? NaN) === page);
+    assert.ok(match, `${prefix} 缺少第 ${page} 页 PNG`);
+    wanted.push(join(dir, match));
+  }
+  return wanted;
+}
+
+/** 用真实 Pillow 统计非白像素比例（按导入顺序返回）：空白页 / 渲染失败会直接被拒。 */
+function pngInkRatios(paths) {
+  const script = [
+    "import json, sys",
+    "from PIL import Image",
+    "out = []",
+    "for path in sys.argv[1:]:",
+    "    img = Image.open(path).convert('L')",
+    "    w, h = img.size",
+    "    pixels = img.load()",
+    "    ink = 0",
+    "    total = 0",
+    "    for y in range(0, h, 2):",
+    "        for x in range(0, w, 2):",
+    "            total += 1",
+    "            if pixels[x, y] < 200: ink += 1",
+    "    out.append({'width': w, 'height': h, 'inkRatio': ink / max(total, 1)})",
+    "print(json.dumps(out))",
+  ].join("\n");
+  const run = spawnSync(PDF_PYTHON, ["-c", script, ...paths], {
+    encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+  });
+  assert.equal(run.status, 0, `PNG 像素检查失败：${run.stderr}`);
+  const parsed = JSON.parse(run.stdout);
+  assert.equal(parsed.length, paths.length, "PNG 像素检查返回数量与请求不一致");
+  return new Map(paths.map((path, index) => [path, parsed[index]]));
 }
 
 // ---------------------------------------------------------------- 20 家企业手算表
@@ -480,7 +630,7 @@ await test("A5 status 只读：不建表、不升级、不续跑（哈希与表�
   assert.equal(statSync(dbPath).size, bytesBefore, "status 不得写入数据");
 });
 
-await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX/PDF 金额与独立手算表一致", async () => {
+await test("B1 20 家企业两月真实动作链 + 五类 CSV/XLSX 金额与独立手算表一致（PDF 结构 / 页数）", async () => {
   const dataDir = join(ROOT, "b1-data");
   const outDir = join(ROOT, "b1-out");
   rmSync(dataDir, { recursive: true, force: true });
@@ -1081,6 +1231,239 @@ await test("C2 concurrency=1 对照：渲染区间不重叠（peak=1）", () => 
   for (let index = 1; index < intervals.length; index += 1) {
     assert.ok(intervals[index].started >= intervals[index - 1].finished, "串行渲染区间不得重叠");
   }
+});
+
+// ---------------------------------------------------------------- B4 代表性报表三格式 / PDF 文本 + 分页渲染
+await test("B4 代表性报表：企业1五类两月 + 企业2 的 PDF 文本金额、CSV/XLSX 对应值与中文分页渲染", async () => {
+  requirePdfTooling();
+  prepareRenderOut();
+  const ent1 = COMPANIES[0];
+  const ent2 = COMPANIES[1];
+  const periods = ["2026-01", "2026-02"];
+  const kinds = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
+  const folderOf = (c, period) => join(ROOT, "b1-out", "chain-20", `ent-${String(c.i).padStart(2, "0")}`, period);
+  const fileBase = (c, period, kind) => join(folderOf(c, period), kind === "ledger" ? `ledger-1002-${period}` : `${kind}-${period}`);
+  const pdfPaths = [];
+  for (const c of [ent1, ent2]) for (const period of periods) for (const kind of kinds) pdfPaths.push(`${fileBase(c, period, kind)}.pdf`);
+  const extracted = pdfTextByPage(pdfPaths);
+  const checklist = [];
+
+  for (const c of [ent1, ent2]) {
+    for (const period of periods) {
+      const jan = period === "2026-01";
+      const expected = {
+        openingTotalAssets: jan ? c.capital : c.totalAssets1,
+        totalAssets: jan ? c.totalAssets1 : c.totalAssets2,
+        openingFixedNet: jan ? c.assetCost : c.fixedNet1,
+        fixedNet: jan ? c.fixedNet1 : c.fixedNet2,
+        openingAccum: jan ? 0 : c.accum1,
+        accum: jan ? c.accum1 : c.accum2,
+        openingEquity: jan ? c.capital : c.totalEquity1,
+        totalEquity: jan ? c.totalEquity1 : c.totalEquity2,
+        profit: jan ? c.p1 : c.p2,
+        cumulative: jan ? c.p1 : r2(c.p1 + c.p2),
+        revenue: jan ? c.rev1 : c.rev2,
+        cumulativeRevenue: jan ? c.rev1 : r2(c.rev1 + c.rev2),
+        bank: jan ? c.bank1 : c.bank2,
+        openingBank: jan ? c.bank0 : c.bank1,
+        // 本年累计的现金期初 / 期末一律取「本年度区间边界」：期初 = 年初第一天现金，期末 = 报表月份末现金。
+        yearStartBank: c.bank0,
+        periodDebit: jan ? c.rev1 : c.rev2,
+        periodCredit: jan ? c.e1 : c.e2,
+        ytdDebit: jan ? c.rev1 : r2(c.rev1 + c.rev2),
+        ytdCredit: jan ? c.e1 : r2(c.e1 + c.e2),
+        cashNet: jan ? r2(c.rev1 - c.e1) : r2(c.rev2 - c.e2),
+        cashNetYtd: jan ? r2(c.rev1 - c.e1) : r2((c.rev1 - c.e1) + (c.rev2 - c.e2)),
+      };
+      const context = `企业${c.i} ${period}`;
+      const docOf = (kind) => extracted.get(`${fileBase(c, period, kind)}.pdf`);
+      const linesOf = (kind) => docOf(kind).texts.flatMap((text) => text.split(/\r?\n/));
+
+      // ---- 资产负债表（两列：期间期初 / 期末）
+      const bs = docOf("balance-sheet");
+      assert.ok(bs.pages >= 1);
+      const bsText = bs.texts.join("\n");
+      assert.ok(bsText.includes("资产负债表"), `${context} PDF 文本缺失中文标题`);
+      assert.ok(bsText.includes(`第 1 页 / 共 ${bs.pages} 页`), `${context} PDF 中文页码缺失`);
+      assertPdfRow(linesOf("balance-sheet"), "资产总计", [expected.openingTotalAssets, expected.totalAssets], context);
+      assertPdfRow(linesOf("balance-sheet"), "负债合计", [0, 0], context);
+      assertPdfRow(linesOf("balance-sheet"), "所有者权益合计", [expected.openingEquity, expected.totalEquity], context);
+      assertPdfRow(linesOf("balance-sheet"), "固定资产账面价值", [expected.openingFixedNet, expected.fixedNet], context);
+      assertPdfRow(linesOf("balance-sheet"), "减：累计折旧", [expected.openingAccum, expected.accum], context);
+      assert.ok(bsText.replace(/\s+/g, "").includes("期末：资产=负债+所有者权益是"), `${context} PDF 缺少期末平衡结论`);
+      const bsCsv = parseCsv(readFileSync(`${fileBase(c, period, "balance-sheet")}.csv`, "utf8"));
+      assert.equal(r2(csvNumber(bsCsv, "资产总计", 2)), expected.openingTotalAssets, `${context} CSV 资产总计期初`);
+      assert.equal(r2(csvNumber(bsCsv, "资产总计", 3)), expected.totalAssets, `${context} CSV 资产总计期末`);
+      const bsXlsx = await loadXlsx(`${fileBase(c, period, "balance-sheet")}.xlsx`);
+      assert.equal(numeric(xlsxRow(bsXlsx, "资产总计")[1]), expected.openingTotalAssets, `${context} XLSX 资产总计期初`);
+      assert.equal(numeric(xlsxRow(bsXlsx, "资产总计")[2]), expected.totalAssets, `${context} XLSX 资产总计期末`);
+
+      // ---- 利润表（本期 / 本年累计）
+      assertPdfRow(linesOf("income-statement"), "营业收入", [expected.revenue, expected.cumulativeRevenue], context);
+      assertPdfRow(linesOf("income-statement"), "净利润", [expected.profit, expected.cumulative], context);
+      const incomeCsv = parseCsv(readFileSync(`${fileBase(c, period, "income-statement")}.csv`, "utf8"));
+      const incomeRow = incomeCsv.find((row) => firstCell(row) === "净利润");
+      assert.equal(r2(Number(incomeRow[1])), expected.profit, `${context} CSV 净利润本期`);
+      assert.equal(r2(Number(incomeRow[2])), expected.cumulative, `${context} CSV 净利润累计`);
+      const incomeXlsx = await loadXlsx(`${fileBase(c, period, "income-statement")}.xlsx`);
+      assert.equal(numeric(xlsxRow(incomeXlsx, "净利润")[1]), expected.profit, `${context} XLSX 净利润本期`);
+
+      // ---- 现金流量表（本期 / 本年累计）
+      assertPdfRow(linesOf("cash-flow-statement"), "经营活动产生的现金流量净额", [expected.cashNet, expected.cashNetYtd], context);
+      assertPdfRow(linesOf("cash-flow-statement"), "现金期末余额", [expected.bank, expected.bank], context);
+      assert.ok(docOf("cash-flow-statement").texts.join("\n").replace(/\s+/g, "").includes("本期现金流净增加额=现金余额变动是"),
+        `${context} PDF 缺少现金流勾稽结论`);
+      const cashCsv = parseCsv(readFileSync(`${fileBase(c, period, "cash-flow-statement")}.csv`, "utf8"));
+      assert.equal(r2(csvNumber(cashCsv, "现金期初余额", 3)), expected.openingBank, `${context} CSV 现金期初余额本期`);
+      assert.equal(r2(csvNumber(cashCsv, "现金期初余额", 4)), expected.yearStartBank, `${context} CSV 现金期初余额（年初）`);
+      assert.equal(r2(csvNumber(cashCsv, "现金期末余额", 3)), expected.bank, `${context} CSV 现金期末余额`);
+      assert.equal(r2(csvNumber(cashCsv, "现金期末余额", 4)), expected.bank, `${context} CSV 现金期末余额（累计）`);
+      assert.equal(r2(csvNumber(cashCsv, "经营活动净额", 3)), expected.cashNet, `${context} CSV 经营活动净额本期`);
+      assert.equal(r2(csvNumber(cashCsv, "经营活动净额", 4)), expected.cashNetYtd, `${context} CSV 经营活动净额累计`);
+      // XLSX 直接读实际工作表值（不靠 PDF / CSV 互证）：三行 × 本期 / 累计 两列全部按独立手算表断言。
+      const cashXlsx = await loadXlsx(`${fileBase(c, period, "cash-flow-statement")}.xlsx`);
+      const cashNetRow = xlsxRow(cashXlsx, "经营活动产生的现金流量净额");
+      const cashBeginRow = xlsxRow(cashXlsx, "现金期初余额");
+      const cashEndRow = xlsxRow(cashXlsx, "现金期末余额");
+      assert.equal(r2(numeric(cashNetRow[2])), expected.cashNet, `${context} XLSX 经营活动净额本期`);
+      assert.equal(r2(numeric(cashNetRow[3])), expected.cashNetYtd, `${context} XLSX 经营活动净额累计`);
+      assert.equal(r2(numeric(cashBeginRow[2])), expected.openingBank, `${context} XLSX 现金期初余额本期`);
+      assert.equal(r2(numeric(cashBeginRow[3])), expected.yearStartBank, `${context} XLSX 现金期初余额（年初）`);
+      assert.equal(r2(numeric(cashEndRow[2])), expected.bank, `${context} XLSX 现金期末余额本期`);
+      assert.equal(r2(numeric(cashEndRow[3])), expected.bank, `${context} XLSX 现金期末余额累计`);
+
+      // ---- 科目余额表（1002 与合计；8 个金额列）
+      assertPdfRow(linesOf("trial-balance"), "1002", [
+        expected.openingBank, 0, expected.periodDebit, expected.periodCredit,
+        expected.ytdDebit, expected.ytdCredit, expected.bank, 0,
+      ], context);
+      const trialLines = linesOf("trial-balance");
+      const totalAmounts = pdfRowAmounts(trialLines, "合计", 8);
+      assert.ok(totalAmounts, `${context} PDF 缺少科目余额表合计行`);
+      assert.equal(totalAmounts.length, 8, `${context} 科目余额表合计列数`);
+      assert.equal(r2(totalAmounts[6]), r2(totalAmounts[7]), `${context} 科目余额表期末借贷合计平衡`);
+      const trialCsv = parseCsv(readFileSync(`${fileBase(c, period, "trial-balance")}.csv`, "utf8"));
+      const trialTotalRow = trialCsv.find((row) => firstCell(row) === "合计");
+      for (let column = 0; column < 8; column += 1) {
+        assert.equal(r2(totalAmounts[column]), r2(Number(trialTotalRow[3 + column])),
+          `${context} 科目余额表合计第 ${column + 1} 列 PDF / CSV 不一致`);
+      }
+      const trialXlsx = await loadXlsx(`${fileBase(c, period, "trial-balance")}.xlsx`);
+      const xlsxTotal = xlsxRow(trialXlsx, "合计");
+      assert.equal(r2(Number(xlsxTotal[9])), r2(Number(xlsxTotal[10])), `${context} XLSX 余额表借贷合计平衡`);
+
+      // ---- 明细账（期间期初 / 本期发生 / 本年累计 / 期末余额；模型行标签为「期末余额」）
+      assertPdfRow(linesOf("ledger"), "期间期初", [expected.openingBank, 0], context);
+      assertPdfRow(linesOf("ledger"), "本期发生", [expected.periodDebit, expected.periodCredit], context);
+      assertPdfRow(linesOf("ledger"), "本年累计", [expected.ytdDebit, expected.ytdCredit], context);
+      assertPdfRow(linesOf("ledger"), "期末余额", [expected.bank, 0], context);
+      const ledgerCsv = parseCsv(readFileSync(`${fileBase(c, period, "ledger")}.csv`, "utf8"));
+      const ledgerClosing = ledgerCsv.find((row) => firstCell(row) === "期末" && row.length === 3);
+      assert.equal(r2(Number(ledgerClosing[1]) - Number(ledgerClosing[2])), expected.bank, `${context} CSV 明细账期末余额`);
+      const ledgerXlsx = await loadXlsx(`${fileBase(c, period, "ledger")}.xlsx`);
+      const ledgerXlsxClosing = xlsxRow(ledgerXlsx, "期末余额");
+      assert.equal(r2(Number(ledgerXlsxClosing[1]) - Number(ledgerXlsxClosing[2])), expected.bank, `${context} XLSX 明细账期末余额`);
+
+      checklist.push({
+        company: c.i, period,
+        balanceSheet: { pdfText: true, csv: true, xlsx: true, pages: bs.pages },
+        incomeStatement: { pdfText: true, csv: true, xlsx: true },
+        cashFlow: { pdfText: true, csv: true, xlsx: true },
+        trialBalance: { pdfText: true, csv: true, xlsx: true },
+        ledger: { pdfText: true, csv: true, xlsx: true },
+      });
+    }
+  }
+
+  // ---- 中文分页：企业1 2026-01 科目余额表在真实渲染里就是多页，逐页文本必须带页码 / 续页标记。
+  const longDoc = extracted.get(`${fileBase(ent1, "2026-01", "trial-balance")}.pdf`);
+  assert.ok(longDoc.pages >= 2, `科目余额表应有多个真实页，实际 ${longDoc.pages}`);
+  assert.ok(longDoc.texts[0].includes(`第 1 页 / 共 ${longDoc.pages} 页`), "第 1 页中文页码前缀");
+  assert.ok(longDoc.texts[longDoc.pages - 1].includes(`第 ${longDoc.pages} 页 / 共 ${longDoc.pages} 页`), "末页中文页码");
+  assert.ok(longDoc.texts[1].includes("（续）"), "第 2 页必须带中文续页标记");
+  assert.ok(pdfRowAmounts(longDoc.texts.flatMap((text) => text.split(/\r?\n/)), "合计"), "多页 PDF 仍包含中文合计行");
+
+  // ---- 真实 poppler 渲染代表性页面（保留 PNG 供管理 / 人工抽查）。
+  // 每个 (企业, 期间, 报表) 目录只登记**本次实际请求的页**：同一目录先后两次调用（第 1 页、末页）
+  // 也不会把已在目录里的其它 PNG 重复计入 manifest。
+  const renders = [];
+  const render = (c, period, kind, first, last) => {
+    const base = fileBase(c, period, kind);
+    const prefix = `ent-${String(c.i).padStart(2, "0")}-${period}-${kind}`;
+    const files = renderRepresentativePages(`${base}.pdf`, prefix, first, last);
+    for (const file of files) renders.push({ prefix, page: Number(/(\d+)\.png$/.exec(file)?.[1] ?? NaN), file, relative: file.slice(RENDER_OUT.length + 1) });
+    return files;
+  };
+  render(ent1, "2026-01", "balance-sheet", 1, 1);
+  render(ent1, "2026-01", "income-statement", 1, 1);
+  render(ent1, "2026-01", "cash-flow-statement", 1, 1);
+  render(ent1, "2026-01", "trial-balance", 1, 1);
+  render(ent1, "2026-01", "trial-balance", longDoc.pages, longDoc.pages);
+  render(ent1, "2026-02", "balance-sheet", 1, 1);
+  render(ent1, "2026-02", "ledger", 1, 1);
+  render(ent2, "2026-01", "balance-sheet", 1, 1);
+  render(ent2, "2026-01", "income-statement", 1, 1);
+  render(ent2, "2026-02", "trial-balance", 1, 1);
+
+  const ink = pngInkRatios(renders.map((entry) => entry.file));
+  for (const entry of renders) {
+    const info = ink.get(entry.file);
+    assert.ok(info, `PNG 未检查到：${entry.file}`);
+    assert.ok(info.width > 700 && info.height > 900, `${entry.relative} 页面尺寸异常：${info.width}x${info.height}`);
+    assert.ok(info.inkRatio > 0.002, `${entry.relative} 渲染接近空白（inkRatio=${info.inkRatio}）`);
+    assert.ok(info.inkRatio < 0.9, `${entry.relative} 渲染异常覆盖（inkRatio=${info.inkRatio}）`);
+    entry.inkRatio = Number(info.inkRatio.toFixed(4));
+    entry.width = info.width;
+    entry.height = info.height;
+  }
+  // 清单只计实际渲染的页：条数 = 唯一 PNG 数（不把同一页重复记为多条）。
+  const uniqueRenderPaths = new Set(renders.map((entry) => entry.relative));
+  assert.equal(uniqueRenderPaths.size, renders.length, "manifest 不得重复记录同一张 PNG");
+  assert.equal(renders.length, 10, `代表性渲染应为 10 张唯一页，实际 ${renders.length}`);
+  assert.equal(new Set(renders.map((entry) => entry.file)).size, renders.length, "磁盘上每个 PNG 只登记一次");
+
+  // 代表性三格式原件（仅本次测试在临时根生成的合成产物）一并复制到本次唯一渲染目录，便于管理直接打开核对：
+  // 不读取 / 不复制任何其它 run 或工作区已有数据。
+  const artifacts = [];
+  for (const c of [ent1, ent2]) {
+    for (const period of periods) {
+      for (const kind of kinds) {
+        for (const ext of ["pdf", "csv", "xlsx"]) {
+          const source = `${fileBase(c, period, kind)}.${ext}`;
+          const relative = join("artifacts", `ent-${String(c.i).padStart(2, "0")}`, period, `${kind === "ledger" ? `ledger-1002-${period}` : `${kind}-${period}`}.${ext}`);
+          const target = join(RENDER_OUT, relative);
+          mkdirSync(dirname(target), { recursive: true });
+          copyFileSync(source, target);
+          const bytes = readFileSync(target);
+          assert.equal(bytes.length, statSync(source).size, `复制后被检视产物字节数不一致：${relative}`);
+          artifacts.push({ relative, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+        }
+      }
+    }
+  }
+  assert.equal(artifacts.length, 2 * 2 * 5 * 3, "代表性原件应覆盖 2 企业 × 2 月 × 5 类 × 3 格式");
+
+  // 保留清单（供管理 / 人工检查：哪个企业哪期哪张报表、哪一页、渲成了哪个 PNG）。
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    owner: "06-workbench/test/local-batch-cli.test.mjs B4（本次 mkdtemp 唯一目录）",
+    note: "代表性抽样（非 600 份逐份人工验算）：企业1 五类两月 + 企业2 代表；PDF 逐页文本金额由 pdfplumber 核对，CSV / XLSX 直接读实际值并各自与独立手算表比较，PNG 由 poppler 渲染供人工抽查。本目录为本次测试新建的唯一目录，未删除任何已有目录 / 旧 run。",
+    python: PDF_PYTHON,
+    uniqueRenders: uniqueRenderPaths.size,
+    representativeTextChecks: checklist,
+    artifacts,
+    renders,
+  };
+  writeFileSync(join(RENDER_OUT, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  writeFileSync(join(RENDER_OUT, "README.txt"), [
+    "LOCAL-07 B1 代表性 PDF 渲染抽样（poppler pdftoppm @110dpi）",
+    "用途：人工抽查中文分页 / 金额渲染；不是 600 份逐份验算。",
+    "金额与文本断言：见本目录 manifest.json 的 representativeTextChecks（pdfplumber 文本层 + CSV/XLSX 实际值 × 独立手算表）。",
+    `代表性原件（PDF / CSV / XLSX 各 ${artifacts.length / 3} 份，仅本次合成数据）在 artifacts/ 下，清单含 sha256。`,
+    ...renders.map((entry) => `${entry.relative}\t${entry.width}x${entry.height}\tink=${entry.inkRatio}`),
+    "",
+  ].join("\n"), "utf8");
+  console.log(`    代表性 PDF 文本核对 ${checklist.length} 组（企业1/2 五类两月）；渲染 PNG ${uniqueRenderPaths.size} 张唯一页；原件 ${artifacts.length} 份 → ${RENDER_OUT}`);
 });
 
 // ---------------------------------------------------------------- 收尾

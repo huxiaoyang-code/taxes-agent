@@ -233,7 +233,7 @@ const EVIDENCE_CONFLICT_CODES = new Set([
   "import_voucher_unposted", "import_enterprise_binding_mismatch", "evidence_changed",
   "input_changed", "input_missing", "input_snapshot_missing", "input_payload_invalid",
   "account_set_unresolved", "depreciation_run_inconsistent", "depreciation_due_but_no_action",
-  "depreciation_amount_mismatch", "year_end_carry_expected", "close_not_confirmed",
+  "depreciation_amount_mismatch", "depreciation_run_unposted", "year_end_carry_expected", "close_not_confirmed",
   // LOCAL-02 封账前置 / 计提与结转守卫：业务变化后由核心真实拒绝，统一转人工复核。
   "period_end_check_failed", "period_check_blocked", "period_has_draft_vouchers", "period_unbalanced",
   "period_not_found", "period_before_start", "carryforward_stale", "depreciation_run_stale",

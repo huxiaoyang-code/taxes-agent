@@ -5,27 +5,32 @@
 - 分支：`codex/huxiaoyang-code/local-07-cli`
 - 本窗口事实基线：root 已实际合并 LOCAL-02 [PR #60](https://github.com/huxiaoyang-code/youshu-fork/pull/60)，actual main `dfefae0553052474b8a9308105443714bc5d9cfb`；管理者把该 main 合入本分支为 `f7ae456f02fbc3b2c606357801f3b1a4b2ba942a`（保留了已审 batch head `11f1877ff7256065387c4c696c546654c4d1f629`）。
 - 只读冻结参考：batch `11f1877`、core `bd05415fe6de080b41f0dd9f6f56fb1f57d8dae0`、backup `33995009109cb922c86c9a5e9847e95554faaa4b`；组合 `04c38d4` 不是本包实施基线。
-- 状态：**B1 实现 + 自测完成；未提交 / 未 PR / 未合并**（员工不执行 Git）。最终独审由未参与实现 / 本任务规划者承担。
+- 状态：**B1 实现 + 独审返修 1（三个 P1 + 报表验收缺口）实现与自测完成；未提交 / 未 PR / 未合并**
+  （员工不执行 Git）。本轮返修起点为本 worktree HEAD `034404b4`（已合 PR #62 实际 main `f0b41a44`）；
+  保留了上一会话的 WIP（`db.mjs` 初始化钩子 + 新增 `database-open-guard.mjs`），但**重写了其未验证的按路径写标记段**。
+  最终独审由未参与实现 / 本任务规划者承担。
 
-## 1. 本包精确文件（10，未新增 / 未删除 / 未改名）
+## 1. 本包精确文件（11，本轮仅新增 `database-open-guard.mjs`；`db.mjs` 本轮新纳入边界）
 
 代码 / 测试（`06-workbench`）：
 
-1. `server/local-batch-storage.mjs` — manifest / 计划 / `local_batch_*` 结构 / 锁与 fence / 输入快照 / 产物 / 状态；**新增独占新建回执与库身份绑定**。
-2. `server/local-batch-actions.mjs` — 7 类固定操作的真实领域适配；B1 改为按 LOCAL-02 实际 DTO / 核心入口判定。
-3. `server/local-batch-runner.mjs` — 编排 / worker 池 / 受控发布 / 恢复核验；新增核心阻断码转 `needs_review`。
-4. `server/local-batch-report-worker.mjs` — 仅 DTO → XLSX / PDF；本窗口未改。
-5. `scripts/local-batch.mjs` — CLI；`start` 改为独占回执，其余命令加数据目录别名拒绝。
-6. `test/local-batch-cli.test.mjs` — 10 组：CLI 契约 / 20 家两月真实七阶段 / 年末跨年 / 并发证据。
-7. `test/local-batch-persistence.test.mjs` — 31 组：失败隔离 / 前序门禁 / 崩溃 / 互斥 / 证据失效 / 迁移 / 真实期末检查与封账 / 卡片状态 / 新建安全。
+1. `server/db.mjs` — **本轮新纳入边界**（root 已协调 db 独占给 07）：只在 import 时、**任何核心 DDL / WAL / 导入迁移写之前**调用一次库身份初始化钩子；普通业务入口（无创建事实）行为不变。未加 `busy_timeout`（见 §4）。
+2. `server/database-open-guard.mjs` — **本轮新增**：独占创建事实（私有 `WeakMap`）、空库种子 + 页 1 nonce（只用创建 fd 写入）、连接归属校验、标记校验、失败清理。
+3. `server/local-batch-storage.mjs` — manifest / 计划 / `local_batch_*` 结构 / 锁与 fence / 输入快照 / 产物 / 状态；独占新建改为持有 guard token（无任何可变授权字段）。
+4. `server/local-batch-actions.mjs` — 7 类固定操作的真实领域适配；计提证据与 resume 重检本轮补齐。
+5. `server/local-batch-runner.mjs` — 编排 / worker 池 / 受控发布 / 恢复核验；新增核心阻断码转 `needs_review`。
+6. `server/local-batch-report-worker.mjs` — 仅 DTO → XLSX / PDF；本窗口未改。
+7. `scripts/local-batch.mjs` — CLI；`start` 独占回执，`fresh_*` / `data_dir_*` 归一退出码 3。
+8. `test/local-batch-cli.test.mjs` — 11 组（含 B4 代表性三格式 / PDF 文本 + 中文分页渲染）。
+9. `test/local-batch-persistence.test.mjs` — 34 组（含 H5 写目标绑定、K1–K2 折旧证据与 resume 重检）。
 
 文档：
 
-8. `docs/LOCAL-BATCH-CLI.md`
-9. `docs/tasks/LOCAL-07-CLI.md`
-10. `docs/handoffs/LOCAL-07-CLI.md`（本文件）
+10. `docs/LOCAL-BATCH-CLI.md`
+11. `docs/tasks/LOCAL-07-CLI.md`
+12. `docs/handoffs/LOCAL-07-CLI.md`（本文件）
 
-**未修改** shared `db.mjs` / `accounting.mjs` / `period-end-controls.mjs` / `money.mjs` / import-* / report-* / HTTP / Agent / MCP / test-all / package / lock / backup 及其测试。核心只读调用，发现缺口交 root 登记 owner，未以「顺手兼容」扩 scope。
+**未修改** shared `accounting.mjs` / `period-end-controls.mjs` / `money.mjs` / import-* / report-* / HTTP / Agent / MCP / test-all / package / lock / backup 及其测试。核心只读调用，发现缺口交 root 登记 owner，未以「顺手兼容」扩 scope。
 
 ## 2. B1 交付能力（真实可用，非 mock）
 
@@ -59,6 +64,14 @@
   `depreciation_due_but_no_action`；其余真实「不适用」如实 `not_applicable`，证据记录每卡状态与应提 / 已提分金额。
 - 生成凭证时仍核 runs 与凭证借 / 贷金额一致；核心抛出的 `asset_ledger_pending` / `depreciation_run_stale` /
   `depreciation_global_over_depreciable` / `depreciation_draft_exists` 全部转 `needs_review`，不静默补提。
+- **证据完整性（独审 P1 返修）**：`evidence.cards` 记动作**完成后**每张卡的适用性事实（取得 / 起提期间、账簿状态、
+  寿命、原值、残值率、期初累计、三大科目、期间序号、可计提 / 累计 / 剩余、状态、应提 / 已记金额），另存 `preAction`；
+  `evidence.runs` 记该期间**全部**计提记录（含 no_action 时已有的已过账 runs）及关联凭证状态 / 分录指纹；
+  no_action 时 `reason` 区分 `no_asset_cards` / `no_card_due_this_period` / `already_posted_this_period`。
+- **resume 重检（独审 P1 返修）**：重算当前卡片集合与逐卡期间口径状态 + 重查全部 runs / 凭证分录，
+  变化原因写进 `evidence.verificationFailure`；末来卡变 due、凭证反过账 `draft_pending`、
+  `posted_stale`、增删卡、金额 / 分录被改 → `needs_review`，复核**不补提**；正常 no_action 跳进程 resume 不重做；
+  后续期间的合法计提不会让历史期间（期间口径）误报失效。
 - 结转沿用真实已过账凭证 + 余额证据；`carryforward_stale` / `year_end_carry_expected` 不再只靠异常名字。
 - 测试用正式建卡 / 期初 / 凭证入口准备数据，未伪造卡片与总账一致。
 
@@ -67,15 +80,33 @@
 - 旧的「`assertInitializable` 返回 fresh 布尔 → `ensureBatchSchema({freshDatabase: init.fresh})`」已移除；
   **布尔值 / 自造回执不再能建立结构**（无回执一律 `migration_requires_backup`）。
 - 新流程：只允许「数据目录里根本没有 `workbench.db`」的显式新目标；`claimFreshDataDir` 先校验目录真实身份，
-  再以 `O_EXCL` 原子创建 `.local-batch-create` 所有权标记和**零字节 `workbench.db` 本身**，把
-  `dev/ino` 绑定进进程内不可伪造回执（`WeakSet`）。
-- `ensureBatchSchema` 必须收到本进程回执；建表前后都核验：目录 realpath 与显式路径一致、库文件非符号链接、
-  `PRAGMA database_list` 的 main 文件一致、`dev/ino` 未被替换、所有权标记 nonce 仍属于本进程。
+  再以 `O_EXCL` 原子创建 `.local-batch-create` 所有权标记和**库文件本身**，并且**保留库文件的创建 fd**。
+  创建事实（目录 / 库路径 / 标记路径 / `fstat(fd)` 的 `dev`+`ino` / 随机 nonce / 创建句柄）只放在
+  `database-open-guard.mjs` 的模块私有 `WeakMap`；对外回执是一个**空对象 token**，安装 / 校验 / release
+  只信内部不可变记录（改字段 / 嵌套改值 / 复制 / 伪造 / 删字段都不能改向）。
+- **页 1 种子只经创建 fd 写入**：把经真实 SQLite 验证过的空库种子（4096 字节、1 页、无 schema 对象）写入偏移 0，
+  并把本进程随机 nonce 写进页 1 的 `user_version`、`LB07` 魔数写进 `application_id`。写入目标是 `O_EXCL`
+  时得到的对象，**不按路径重开**，所以「claim 后换成外部旧库 / 零字节文件 / ABA 换走再换回」都无法让写入
+  落到外部文件上；写完用**只读** SQLite 连接复核种子。
+- `db.mjs` 初始化钩子在任何核心 DDL / `journal_mode = WAL` / 迁移写**之前**执行：用同一条已打开连接读
+  页 1 nonce / 魔数、要求 `PRAGMA database_list` / `db.location()` 指向目标、连接里还没有 schema 对象、
+  创建 fd 的 `fstat` 身份未变、路径 realpath / 非符号链接。**nonce 是决定性证据**，只靠路径会被「路径相同、
+  文件已换」骗过。普通业务入口（无创建事实）行为与旧实现一致。
+- **跨路径（本轮 review3 必修 A）**：只要本进程仍持有活动创建事实，核心首次打开的目标必须对应其中一次
+  创建事实，否则在任何写之前 `fresh_claim_target_mismatch`（退出码 3）拒绝。按路径查表未命中**不得**
+  退化成普通入口（那正是「claim A → 打开既有库 B」被建表的入口）；别名 / junction 与多个活动 claim 下
+  的第三路径同样拒绝，目标匹配时仍做连接核验；没有任何活动创建事实时旧行为完全不变。
+- **所有权标记归属（本轮 review3 必修 B）**：标记也用 `O_EXCL` 创建 fd 的 `fstat` 抓 `dev`/`ino`，与
+  「本进程写下的期望内容」一起只存私有 facts；删除 / 打开校验都只比对这份身份 + 期望内容，nonce 相同
+  的新文件对象（含字节完全相同）或追加外部字段的标记一律保留，绝不按路径重新认领当前对象。
+- `ensureBatchSchema` 必须收到本进程 token；建表前后都校验标记归属 + 连接页 1 nonce + 创建 fd 身份。
   事务失败整体回滚；成功后才释放标记。
 - 并发抢同一新目标：`O_EXCL` 保证最多一个拥有创建资格；另一个稳定 `fresh_target_claimed`（退出码 3），
   只有能确认完整已初始化结构时才按已有库路径继续，否则拒绝，不「帮忙修半库」。
 - 已有核心库（空业务 / 非空 / **零字节文件** / 缺批量表）继续 `migration_requires_backup`；
-  符号链接 / junction 目标稳定 `data_dir_alias`。故障清理只删除本进程证明创建的标记 / 空库文件。
+  符号链接 / junction 目标稳定 `data_dir_alias`。失败清理只删「身份未变且仍只有页 1 种子」的对象与
+  「文件对象仍是创建时 `dev`/`ino` 且内容是本进程写下那份」的标记（本轮 §3.7 起，不再仅凭 nonce）；
+  被替换对象 / 外部零字节文件 / 已有结构一律保留现场。
 - 已合法安装 batch 的原库继续 `start` / `resume` 正常（不再要求 fresh）。
 
 ## 3. 实测结果（本窗口实际执行）
@@ -84,16 +115,18 @@
 
 | 命令 | 结果 | 退出码 |
 |---|---|---|
-| `node test/local-batch-cli.test.mjs` | **10 / 10** 组通过（A1–A5、B1、B2、B3、C1、C2） | 0 |
-| `node test/local-batch-persistence.test.mjs` | **31 / 31** 组通过（D1、E1–E6、F1–F7、G1–G3、H1–H4、I1–I7、J1–J3） | 0 |
+| `node test/local-batch-cli.test.mjs` | **11 / 11** 组通过（A1–A5、B1、B2、B3、B4 代表性三格式 / PDF 文本 + 分页渲染、C1、C2） | 0 |
+| `node test/local-batch-persistence.test.mjs` | **35 / 35** 组通过（D1、E1–E6、F1–F7、G1–G3、H1–H6、I1–I7、J1–J3、K1–K2） | 0 |
 | `node test/accounting-period-integrity.test.mjs` | 45 / 45 | 0 |
 | `node test/accounting-period-http.test.mjs` | 通过（随机回环服务，不碰既有税局后端） | 0 |
 | `node test/report-office-export.test.mjs` | 21 / 21（含真实 PDF 几何抽查） | 0 |
 | `node test/report-export.test.mjs` | 21 / 21 | 0 |
 | `node test/import-incremental.test.mjs` | 49 / 49 | 0 |
+| `node test/smoke.test.mjs` | 28 / 28（本轮 B1 收尾新增的 db 影响面回归） | 0 |
 
 本包两套测试的完整 stdout + stderr 已整份保存在本 worktree 的 `.agent-runs/`（Git 忽略，不入 Git）。
-历史上的 **9 + 25** 是旧基线事实；B1 新结果是 **10 + 31**，不是删断言保数字。
+历史上的 **9 + 25** 是旧基线事实；B1 新结果是 **10 + 31**，独审返修 1 后为 **11 + 34**，
+本轮 B1 管理复核收尾（新增 H6）后为 **11 + 35**，不是删断言保数字。
 
 ### 3.1 20 企业 × 连续两月真实七阶段
 
@@ -153,8 +186,183 @@
 - C2：`concurrency=1` 对照，渲染区间不重叠、峰值 = **1**。
 - 并发口径如实说明：SQLite 业务写事务始终串行；并发只发生在 **XLSX / PDF 报表渲染 worker 线程**，
   不是账务写并发，也不是队列长度或 mock 延时。
-- H4：同进程 / 跨进程第二个新建占用者均 `fresh_target_claimed`；零字节既有库 / 非空目录 /
-  探测后库文件被替换 / 伪造回执都不能建立批量结构或改动他人文件。
+- H4 / H5：同进程 / 跨进程第二个新建占用者均 `fresh_target_claimed`；零字节既有库 / 非空目录 /
+  探测后库文件被替换 / 伪造回执都不能建立批量结构或改动他人文件；H5 另覆盖「写目标绑定真实对象」的
+  外部零字节 / 外部旧库 / 同对象就地改写 / 目标缺失五种负例（详见 §3.5）。
+
+### 3.5 独审返修 1（三个 P1 + 报表验收缺口）实际结果
+
+本节是本轮新增的真实验证（与上方 B1 旧结果分开读；旧断言均保留、未删改）：
+
+- **H5 写目标绑定真实对象（persistence）**：`claimFreshDataDir` 后先经真实 SQLite 确认页 1 种子（4096 字节、
+  `application_id=LB07`、`user_version=nonce`、`page_count=1`、`sqlite_master=0`）；然后分别在**子进程**里制造：
+  ① 换入外部零字节文件；② 换入真实外部旧库（含 `account_sets` / `vouchers` 与数据）；③ 同路径且同 `dev/ino`
+  被就地改写为外部库（路径与身份检查都会通过）；④ 同路径同 `dev/ino` 被就地改写成非 SQLite 文本；
+  ⑤ 目标文件被完全删除。五种均真实 `import db.mjs`：①⑤ → `fresh_database_replaced`，② → `fresh_database_replaced`，
+  ③④ → `fresh_database_foreign_content`；全部 `opened=false`（没有完成 DDL），外部文件字节 hash / `dev`+`ino` / 表集合 / 行数 / `user_version`
+  均不变，无 `-wal` / `-shm`。正常路径（无替换）钩子通过、核心表建立、页 1 nonce 保留；随后无回执的普通入口照常打开。
+- **回执不可变（H4 / H5）**：对真 token 改 `identity`（含置 `null` / 嵌套改值）/ `dbPath` / `markerPath` / `dataDir` /
+  删字段 / 改 nonce 后，`assertFreshReceipt` 仍按内部事实绑定；`releaseFreshClaim({...token})` / `{}` 均无效；
+  真 token 在库已被换成外部零字节文件后 release：只删本进程标记，**外部零字节文件保留**（仍 0 字节），
+  重复 release 是 no-op。
+- **K1 / K2 折旧证据与 resume 重检（persistence）**：无卡片 → not_applicable；真实建卡后 resume →
+  `depreciation_cards_changed`；未来卡（`not_existed`）真实改成当期取得 → `depreciation_card_became_due`；
+  删除卡片 → `depreciation_cards_changed`；真实反过账计提凭证 → `depreciation_card_draft_pending`；
+  真实 SQL 改 run 金额 → `depreciation_card_posted_stale`；只改凭证分录（run 金额不变，凭证仍平衡）→
+  `depreciation_run_voucher_modified`。以上均 `needs_review` + `evidence_changed`，且**凭证 / run 数量不变**
+  （不默补提）；已计提 no_action 跨进程 resume 不重做（attempt 不变）；真实重新过账 + retry 后可恢复；
+  后续期间合法计提后，历史期间仍 `not_applicable` 并核验通过。
+- **B4 报表代表性验收（cli）**：企业1 五类报表 × 两月 + 企业2 代表，共 4 组；用 `REPORT_OFFICE_PYTHON`
+  （pdfplumber）提取逐页文本，按行核对手算金额（资产负债期初 / 期末、利润本期 / 累计、现金流本期 / 累计 / 期末余额、
+  余额表 1002 行 8 列与合计 8 列、明细账期初 / 发生 / 累计 / 期末），并与同组 CSV / XLSX 值交叉核对；
+  多页余额表逐页断言中文页码与续页标记；Poppler `pdftoppm` 渲染 10 张代表性页 PNG（含非白像素比），
+  当时保留在本工作区 `.agent-runs/local-07-b1-review1-renders/`（`manifest.json` / `README.txt`）；
+  本轮 B1 复核收尾改用每次新建的唯一目录（见 §3.6），旧目录原样保留。
+
+日志（本工作区 `.agent-runs/`，Git 忽略）：最终代码实跑 `local-07-b1-review1-retry-cli-final3.log`（11 / 11，exit 0）
+与 `local-07-b1-review1-retry-persist-final3.log`（34 / 34，exit 0）；受影响依赖（最终代码）：
+`local-07-b1-review1-retry-final-dep-{smoke,import-incremental,accounting-period-integrity,report-office-export}.log`
+（28 / 49 / 45 / 21，全 exit 0；更早的相同套件日志 `...-dep-*.log` 含 `accounting-period-http` / `report-export`）。
+员工自测，不等于管理者复验。
+
+### 3.6 B1 管理复核收尾（本轮，四处针对性修复，新会话）
+
+起点 `034404b4`；上一会话实跑完候选后退出，本轮只修管理指出的四处，不重做已完成逻辑、不删旧断言、
+不新增页数（PNG 维持 10 条 / 10 unique）。
+
+1. **初始化异常清理不得删除身份未知 / 已替换对象**（`local-batch-storage.mjs`）：
+   - `fstat(dbFd)` 失败时不再按「普通文件 + 零字节」删库文件（仍不是所有权证明），也不再无条件删标记；
+     实测改为保留现场 + `fresh_claim_cleanup_required`（`details.status = manual_review_required`，退出码 3）。
+   - 库文件删除前提收敐为：创建 fd 的 `fstat` 身份 == 路径对象 `dev`/`ino` + 非符号链接 + 仍零字节；
+     标记删除前提（当时）：内容仍是本进程 nonce；**本轮 §3.7 已进一步收敐为创建时 `fstat` 身份 +
+     本进程写下的期望内容（nonce 相同的新对象也不再删）**。`open` 失败 / guard 登记失败两个分支均改为这个口径。
+   - `db.mjs` 在 guard 抛错时关闭刚打开的 SQLite 连接（前一会话已加，本轮保留未重复改）。
+2. **测试产物唯一归属**（`local-batch-cli.test.mjs`）：删除固定目录的 `resetRenderOut` 已移除；
+   改为 `mkdtemp` 本次唯一目录（`.agent-runs/local-07-b1-review2-renders-<随机>`）+ `OWNER.json`，
+   祖先链先核无符号链接 / junction；**不删任何已有目录 / 旧 run**，成功也不自动清理。
+   只登记本次实际请求的页（`uniqueRenders = 10` = manifest 条数 = 唯一 PNG 数），
+   并把 60 份代表性 PDF / CSV / XLSX 复制到该目录 `artifacts/`。
+3. **现金流 XLSX 独立预期**：B4 直接读现金流量表 XLSX 实际工作表值（本期 / 累计经营活动净额、
+   现金期初期间初 / 年初、现金期末），与独立手算值核对；CSV 同口径；不只与 PDF 互相相等。
+   `cashFlow` checklist 已补 `xlsx: true`。
+4. **准确说明**：guard 头注释 / 契约不再声称 nonce「从不写磁盘其它位置 / 不外泄 / 32 位不可伪造」；
+   已更正为 31 位本地随机识别标记（标记 JSON / 页 1 `user_version` / `describeFreshClaim` / 测试诊断都能看到），
+   真正授权来自私有 `WeakMap` + 创建 fd + 实际连接 / 路径核验。
+
+本轮新增/新增验证（与 §3.5 旧结果分开读，旧断言均保留）：
+
+- **H6（persistence）真实故障注入**（子进程 + 打补丁 `node:fs` + `syncBuiltinESMExports`，在 import 存储层前完成）：
+  ① `O_EXCL` 创建后、`fstat` 失败前把路径换成外部零字节文件，`fstat` 真实抛 `EIO` → `fresh_claim_cleanup_required`
+  + `manual_review_required`，外部文件仍 0 字节（sha256(空)）、标记保留、无 `-wal`/`-shm`；
+  ② 同窗口换成真实合成旧库 → 外部库 sha256 / 表集合 / 行数 / `user_version` 完全不变；
+  ③ guard 登记时 `fstat` 身份被篡改 + 标记已被换成外部内容 → 自有零字节库释放、外部标记字节原样保留；
+  ④ 同样登记失败但标记仍属自己 → 库文件与标记都被释放（正常清理未被收敐破坏）；
+  ⑤ `open` 抛 `EEXIST` / `EACCES` + 标记已被换 → 外部标记保留；⑥ 同样失败但标记仍属自己 → 标记被释放。
+- **B4（cli）**：新唯一目录下 10 张唯一页 PNG + 60 份原件；现金流 XLSX / CSV 六个数按手算本期 / 累计经营净额、
+  期间初 / 年初现金、期末现金断言；旧 `.agent-runs/local-07-b1-review1-renders/` 运行前后 12 个文件 sha256 一致（未动）。
+
+本轮实跑（员工自测，**不等于**管理者复验 / 最终独审）：`cli` **11 / 11**、`persistence` **35 / 35**（含新 H6），
+`smoke` 28 / 28、`import-incremental` 49 / 49、`accounting-period-integrity` 45 / 45、`report-office-export` 21 / 21，全 exit 0。
+日志：`local-07-b1-review2-cli-1.log`、`local-07-b1-review2-persist-3.log`（早期 `persist-1/2` 为修故障注入脚本的失败记录，
+也保留）、`local-07-b1-review2-dep-{smoke,import-incremental,accounting-period-integrity,report-office-export}.log`。
+新建的唯一渲染目录：`.agent-runs/local-07-b1-review2-renders-XBqMOI/`
+（`OWNER.json` / `manifest.json` / `README.txt` / 10 张 PNG / `artifacts/` 60 份）。
+候选输出已被管理者做过 PNG 视觉抽查（中文 / 分页 / 数字未发现裁切）；**最终独审 / 复验尚未完成**，不预报 PR。
+
+### 3.7 B1 管理复验返修 3（本轮，必修 A / B / C）
+
+起点 `034404b4`；上一会话实际 exit 0 并留下完整报告，但**无人实现**本轮两个必修项，也没覆盖完整 WIP。
+管理层在真实子进程里已复现两个缺陷（只读证据 `local07-crosspath-probe-eaa0e2fee1c442bba72660d6956ed16a/RESULT.json`
+= `not-rejected`，旧 run **未删未改**）：
+
+- **必修 A（跨路径）**：`assertOpenedDatabaseClaimsMatch` 原来按 `ACTIVE_BY_DB_PATH` 查目标路径，查不到就
+  返回 `claimed:false`（当普通入口）——于是「先 `claimFreshDataDir(A)`，再把 `WORKBENCH_DATA_DIR` 指向另建的
+  既有库 B，再 `import db.mjs`」会给 B 建 `account_sets` 等核心表。
+  现在（`server/database-open-guard.mjs`）：**只要本进程还持有活动创建事实**，核心首次打开的目标不对应
+  其中一次创建事实时，一律在**任何核心 DDL / `journal_mode = WAL` / 迁移写之前**以
+  `fresh_claim_target_mismatch`（退出码 3，`details` 只给 `activeClaims` + `basename(target)`）拒绝；
+  按路径查表未命中**不得**退化成普通入口；别名 / junction 路径、多个活动 claim 下的第三路径同样拒绝；
+  目标匹配时仍做完整连接核验（页 1 nonce / 魔数 / 创建 fd 身份 / 无 schema 对象）；**没有任何活动创建事实**
+  时普通业务入口行为与旧实现完全一致。
+- **必修 B（标记归属）**：`local-batch-storage.mjs` + guard 原来对标记只比 nonce 后 `unlink`；nonce 不是秘密，
+  同一 nonce 的新文件对象 / 内容相同的外部标记会被误删。现在标记也在 `O_EXCL` 创建时用**创建 fd 的 `fstat`**
+  抓 `dev`/`ino`，与本进程写下的**期望内容**一起只存 guard 私有 facts（`markerFd` / `markerIdentity` /
+  `markerContent`）；打开校验 / `release` / 未登记失败清理都只比对这份身份 + 期望内容（加 realpath / 非符号
+  链接确认），**删除时不重新认领当前路径对象**；取不到身份则保留现场。`discardOwnMarker` 现在必须收到
+  创建时的身份快照（`null` 一律不删）。
+- **必修 C（收尾）**：契约文档第 370 行行尾空格已修；`git diff --check` 无输出（exit 0）；三份文档同步本轮。
+
+本轮新增 / 修改的验证（旧断言全部保留，未删未削弱）：
+
+- **H7（persistence，新增）**：真实核心 import 子进程。① A claim + `WORKBENCH_DATA_DIR=B`（另建的 DELETE journal
+  合成既有库，含 `sentinel` 2 行）→ `fresh_claim_target_mismatch`，`opened=false`，B 的 SHA / 大小 / `dev`+`ino` /
+  表集合 / 行数 / `user_version` / `application_id` / `journal_mode` 与目录内容全部不变，无 `-wal`/`-shm`；
+  ② junction 别名指向 B → 同样拒绝、B 不变（junction 构造失败会直接失败，不当成通过）；
+  ③ 两个活动 claim、目标 = 其中一次创建事实 → 照常 `opened` 并建 >= 10 张核心表；④ 两个活动 claim、目标为第三目录 →
+  拒绝且零 schema 对象；⑤ 两个 claim 全部释放后打开 B → 普通入口照常建核心结构（`journal_mode` 变 `wal`，
+  `sentinel` 行数不变）——证明无 claim 时旧行为不变。
+- **H8（persistence，新增）**：① 字节完全相同的替换标记对象（同 nonce）→ `assertFreshReceipt` = `fresh_receipt_stale`，
+  `release` 后该对象与其字节完全保留（自己的、仍只有页 1 种子的库文件仍可释放）；② 同 nonce + 外部追加字段 →
+  同样 stale，释放后外部标记原样保留；③ token 上任意赋值（含 `markerIdentity` / `markerContent` / `markerPath` /
+  `markerFd`）不改变内部 facts，自己的标记与空库照常释放；④ H6 登记失败注入 + 同字节替换 / 同 nonce 加字段替换
+  → 标记保留、库文件按创建身份清理；⑤ `open` 失败（`EACCES`）+ 同字节替换 → 标记保留。
+- **H6 故障注入改造**：故障现在**按 fd 定位**（存储层本轮也会对标记创建句柄 `fstat`），不再按全局调用序号，
+  原来的 `fstat` `EIO` 外部零字节 / 合成旧库不删不改写、自有零字节库与自有标记正常释放、`open` `EEXIST` / `EACCES`
+  分支全部保留并通过（含标记替换形态扩为 foreign / same-bytes / same-nonce-extra）。
+
+本轮员工实跑（**不等于**管理者复验 / 最终独审）：
+
+| 命令（在 `06-workbench`） | 结果 | 日志 |
+|---|---|---|
+| `node test/local-batch-persistence.test.mjs` | **37 / 37**，exit 0（新增 H7 / H8） | `.agent-runs/local-07-b1-review3-persist-1.log` |
+| `node test/local-batch-persistence.test.mjs`（最终树重跑） | **37 / 37**，exit 0 | `.agent-runs/local-07-b1-review3-persist-2.log` |
+| `node test/local-batch-cli.test.mjs` | **11 / 11**，exit 0（B4 10 张唯一 PNG + 60 份原件） | `.agent-runs/local-07-b1-review3-cli-1.log` |
+| `node test/smoke.test.mjs` | **28 / 28**，exit 0 | `.agent-runs/local-07-b1-review3-dep-smoke.log` |
+| `node test/import-incremental.test.mjs` | **49 / 49**，exit 0 | `.agent-runs/local-07-b1-review3-dep-import-incremental.log` |
+| `node test/accounting-period-integrity.test.mjs` | **45 / 45**，exit 0 | `.agent-runs/local-07-b1-review3-dep-accounting-period-integrity.log` |
+| `node test/report-office-export.test.mjs` | **21 / 21**，exit 0（11 PDF 几何） | `.agent-runs/local-07-b1-review3-dep-report-office-export.log` |
+
+- 本次唯一渲染目录：`.agent-runs/local-07-b1-review3-renders-D4WYev/`（`OWNER.json` / `manifest.json` /
+  `README.txt` / 10 张唯一 PNG / `artifacts/` 60 份）。`local-07-b1-review1-renders/` 与
+  `local-07-b1-review2-renders-XBqMOI/` **未删未改**；测试前缀常量改为 `local-07-b1-review3-renders-`，仍为 `mkdtemp` 唯一目录。
+- 时序说明（便于复验）：`cli` 运行后到本轮收尾之间只改了**文档**与 `local-batch-storage.mjs` 的一处
+  `releaseFreshClaim` **注释**（无行为变化）；因此又在最终树上重跑了 `persistence`（`persist-2`，37 / 37 exit 0）。
+- 临时根：`TEMP`/`TMP` 均指向管理者新建的本轮专属目录 `D:/有数云fork/.agent-runs/local-07-b1-review3-temp`；
+  只清理本测试 `mkdtemp` 自己的目录（逐绝对目标 + 祖先链无 junction 校验），未扫描 / 批删任何旧目录。
+- 员工透明记录：本轮一条临时探针少设了 `WORKBENCH_DATA_DIR`，一度在 gitignored 的 `06-workbench/data/`（默认开发库）
+  生成了合成库 + `pre-v4` 备份；已核实该目录创建时间 = 探针运行时间（本轮新生成）、仅含这两份文件、祖先链无 junction，
+  逐目标删除；**未涉及任何真实账套 / 凭据 / 税局浏览器**。
+
+仍未完成（不伪造、不写成本包完成）：W3 现库组件安装 / 备份支持（`createBackup → verifyBackup` 接线）与手工 HTTP /
+Agent 共享入口互斥；W4 真实 `createBackup → verifyBackup → restoreNew`、实例分叉、旧锁 / 路径与报表重建；
+共享 `test-all` 接线；提交 / PR / 合并（员工不做 Git）。本任务单**不**预报管理复验 / 最终独审结论。
+
+### 3.8 B1 资源收尾短修 4（本轮，仅标记创建 fd 关闭 + 定向断言）
+
+起点与 review3 相同（`034404b4` + 现有 11 文件 WIP）；review3 的跨路径 guard / 标记身份与 CLI 11 / persistence 37 /
+28 / 49 / 45 / 21 结果**未重做、未回退**。管理者发现一处明确资源遗漏：
+
+- **缺陷**：`local-batch-storage.mjs` 的 `claimFreshDataDir` 在 `markerFd = openSync(markerPath, "wx")` 成功、
+  标记身份已 `fstat` 且内容已写入之后，若 `dbFd = openSync(dbPath, "wx")` 抛 `EEXIST` / `EACCES`，catch 只
+  `discardOwnMarker(markerIdentity)`，**没有关闭 `markerFd`**；该分支尚未把 fd 所有权移交给 guard，句柄会泄漏。
+- **修复**：该分支现在**先无条件 `closeSync(markerFd)`**（与本进程能否删除标记无关），再按「创建时 `fstat` 身份 +
+  本进程写下的期望内容」决定是否删标记；同 nonce 的新对象 / 追加字段的外部标记仍然保留（review3 行为不变）。
+  同函数其它**未移交 fd** 的异常分支已逐个复查：标记 `openSync` 失败（尚无 fd）、标记 `fstat` / 写失败、
+  `fstat(dbFd)` 失败、guard 登记失败拿不到 token 的分支都已关闭各自 fd，无新增业务改动。
+- **测试（H6 / H8 故障注入补资源断言，用例数不变，仍 37）**：子进程在 `openSync` 打补丁时捕获标记 O_EXCL
+  创建 fd（`fds.marker`），claim 失败后再 `fstat` 该 fd 必须抛 `EBADF`（`markerFdAfterFailure === "EBADF"`）；
+  覆盖**自有标记**（`registration-mismatch` 无替换、`open-eacces` 无替换）与**被替换标记**
+  （foreign / same-bytes / same-nonce-extra 下的 `registration-mismatch`、`open-eexist`、`open-eacces`）共 10 个
+  失败场景（H6 六例 + H8 四例）。原有外部零字节 / 合成旧库保留、自有库与自有标记释放等断言全部保留。
+- **判别性自检（如实记录）**：临时去掉该 `closeSync` 后，H6 的 `open-eexist` 场景立即失败
+  （`实际 still-open`，36 / 37、exit 1），随后从本轮临时备份恢复文件并复核 diff；该失败日志保留在
+  `.agent-runs/local-07-b1-review4-persist-mutation.log`，不是最终结果。
+- **本轮员工实跑**（**不等于**管理者复验 / 最终独审）：`node test/local-batch-persistence.test.mjs` →
+  **37 / 37**，exit 0（日志 `.agent-runs/local-07-b1-review4-persist-1.log` / `-persist-2.log`）。
+  本轮按要求**未**重跑 `cli` / `report-office-export` / 其它核心套件（由管理者独立安排；
+  `report-office-export` 现有测试会删固定 `qaDir`，故本窗口不重复）。
+- 临时根：`TEMP`/`TMP` = `D:/有数云fork/.agent-runs/local-07-b1-review4-temp`；只操作本轮自建合成目录，
+  未删 / 未改旧 run 与旧 render，未扫描或批删系统 TEMP，未碰真实账套 / 凭据 / 税局浏览器。
 
 ## 4. 历史事实与限制（不得删除 / 不得用本轮绿色覆盖）
 
@@ -165,15 +373,18 @@
   （50 + 100 + 150），**没有** < 1 秒或其它总时长截止。独立审查曾用 DELETE-journal 库 `BEGIN EXCLUSIVE`
   持锁，实测另一子进程单次 `inspectDataDir` 29812ms（wall 29867ms）后才 fail-closed
   （`readable=false` / `database is locked`）。该数字只描述那一次观察，不承诺固定总时长。
-- 共享 `server/db.mjs` 初始化仍**没有** `busy_timeout`（不在本包 10 文件边界内，未改）；
-  CLI 只能把并发初始化窗口压到最小并归一为 `database_busy`（退出码 3），不声称并发启动已彻底根除。
+- 共享 `server/db.mjs` 初始化本轮**已纳入边界**并加入库身份初始化钩子，但仍**未**加 `busy_timeout`（不是本包目标，
+  没改那个行为）；CLI 只能把并发初始化窗口压到最小并归一为 `database_busy`（退出码 3），不声称并发启动已彻底根除。
 - 本包**未**实现现库安装 backup / component、全产品共享手工入口互斥、`restoreNew` 实例分叉；
   这些仍归 W3 / W4，不能写成 LOCAL-07 整包完成。
+- 新建库失败清理的残余边界：`fstat` 失败（身份未知）时本轮选择**保留**库文件与标记并要求人工核对
+  （`fresh_claim_cleanup_required`），因此该目录在下一次 `start` 会稳定 `fresh_target_claimed`，
+  需要人工按现场处理；这是有意的 fail-closed 取舍，不是自动修复。
 - 报表仍是内部管理报表（`dataStatus.completeness = unverified`、`taxFilingReady = false`），不是税局申报模板；
   PDF 依赖本机中文字体，重新生成字节可能变化（按记录 hash 校验）。
 - 未接税局、未使用真实账套 / 凭据；「20 家企业」为合成数据，真实接入数仍为 0。
 
-## 5. 租约 / PID 分支的事实边界（§3.5 纠正）
+## 5. 租约 / PID 分支的事实边界（§3.3 纠正）
 
 > **租约已过期、PID 确认仍存活时拒绝抢锁；owner 释放后再次 retry 成功。本次独审没有实测 PID 存活无法确认分支。**
 
@@ -192,5 +403,16 @@ F4 用确认死亡 owner 覆盖接管与 fence 递增；本轮**未**新增「PI
 3. 共享 `test-all` / docs 索引由对应 owner 另窗口接线；本包只显式列出所跑命令，
    **不**声称已进入总测试入口或全仓通过。
 4. 若 #53 / #03 / #45→#44 同期有 main 变动，串行整合，不覆盖 owner 成果；基线变化需重验受影响范围并锁完整已审 head 后 PR。
+5. 本轮的报表验收是**代表性抽样**（企业1 五类两月 + 企业2），不是 600 份 PDF 逐份人工验算；B1 只对 600 份做
+   结构 / 页数检查，金额由 CSV / XLSX 的 20 家独立手算表覆盖。人工渲染抽查的 PNG 保留在本工作区
+   `.agent-runs/`：旧目录 `local-07-b1-review1-renders/`（前一轮 10 张，未被本轮删除）
+   与本轮新建的唯一目录 `local-07-b1-review2-renders-XBqMOI/`（10 张唯一页 + 60 份原件），**不随 Git 提交**，
+   但保留供管理检查。
+6. 新建库身份绑定的残余边界：页 1 nonce 会作为 `user_version` 长期留在库里（其它产品逻辑不读），
+   并出现在所有权标记 JSON / `describeFreshClaim` / 测试诊断里（它是 31 位本地识别标记，不是秘密凭据）；
+   `new DatabaseSync` 在目标文件被完全删除时会自己补一个 0 字节文件，钩子会在 DDL / WAL 前拒绝且不写它，
+   但该 0 字节文件会保留现场；本机 Windows 的 SQLite 不共享 delete，「连接已打开在外部对象上、随后把路径
+   换回本进程对象」的直接文件 ABA 在本机不可构造；实际可达的同类负例（外部零字节 / 外部旧库 / 同路径同
+   `dev/ino` 内容被改写成外部库）已由 nonce 真实验证拒绝，**不把这些说成彻底排除所有平台的 ABA**。
 
 完成本包验收 / PR 合并 / 交接后关闭本窗口 pi；下一包使用新进程、新会话，只载入任务所需材料。

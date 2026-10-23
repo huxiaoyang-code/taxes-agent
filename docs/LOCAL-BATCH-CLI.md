@@ -142,7 +142,14 @@ import(按清单) → post → depreciation → carryforward → period-check �
   报表要核产物文件字节 hash。
 - `not_applicable` 必须有真实领域证据（例如无资产卡片 / 取得期间未到 / 未到起提期 / 已提足 / 按分取整为 0 / 本期已计提），
   不能用开关绕过。计提逐卡复用 LOCAL-02 的 `assetCardPeriodStatus`，不自写 `remaining > 0` 规则。
-  证据存 `local_batch_stages.evidence_json`（卡片状态、runs、原因码）。
+  证据存 `local_batch_stages.evidence_json`；计提阶段的证据必须覆盖：
+  - `cards`：动作完成后的卡片集合及**与当期适用性相关的事实**（取得期间、起提期间、账簿状态、寿命、原值、残值率、
+    期初累计、三大科目、期间序号、可计提额、累计 / 剩余、状态、应提 / 已记金额），另存 `preAction`（动作前状态）；
+  - `runs`：该账套**该期间全部**计提记录（含本次之前已存在、以及 no_action 时已有的已过账 runs），
+    每条带 `voucherId` / `voucherStatus` / 关联凭证分录指纹 `entriesHash`；
+  - `voucher`：本次生成凭证的证据（无生成时为 `null`）、`dueCards`、`skipped`、`reason`（如
+    `already_posted_this_period` / `no_asset_cards` / `no_card_due_this_period`）。
+  旧实现只记录「本次新生成的 runs」，no_action 时恒为空、resume 会错误通过；现已改为上述全量证据。
 - 期末检查 / 封账的判定：真实 `A.periodEndCheck` 返回 `{ ready, steps, blocking }`；`ready===true` 且
   `steps` 非空且无 blocking 才 `succeeded`，否则 `needs_review`（证据只留步骤 id / 状态与阻断码，
   不落企业 / 资产自由文本 details）。`close` 真实调用 `A.setPeriodStatus`，核心会重新校验业务前置；
@@ -213,11 +220,60 @@ import(按清单) → post → depreciation → carryforward → period-check �
 ### 结构初始化与备份依赖
 
 - 只允许「数据目录里根本没有 `workbench.db`」的**显式新目标**初始化。`start` 先只读检查目录身份，
-  再调用 `claimFreshDataDir`：以 `O_EXCL` 原子创建所有权标记和零字节库文件本身，把 `dev/ino` 绑定到
-  进程内回执；`ensureBatchSchema` 必须收到本进程回执，建表前后都校验目录 / 库文件 / `PRAGMA database_list` /
-  `dev/ino` 未被替换。**布尔 fresh / 伪造回执无效**。
+  再调用 `claimFreshDataDir`：以 `O_EXCL` 原子创建所有权标记和库文件本身。创建事实（目录 / 库路径 /
+  标记路径 / 创建句柄 `fd` / `fstat(fd)` 的 `dev`+`ino` / 随机 nonce）**只保存在 `database-open-guard.mjs`
+  的模块私有 `WeakMap`**；对外回执是一个**空对象**，调用方改字段 / 嵌套改值 / 复制 / 伪造 / 删字段都不能
+  改变授权目标（安装、校验、release 全部只信内部不可变记录）。
+- **nonce 的准确定位**：31 位随机正整数，是**本地随机识别标记**，不是秘密、也不是认证凭据——它同时出现在
+  所有权标记 JSON、页 1 的 `user_version` 与 `describeFreshClaim` 返回值中，测试诊断也会输出。它证明的是
+  「这条连接里读到的是本进程 claim 时写下、未被覆盖的值」；真正授权来自私有 `WeakMap` 的创建事实 +
+  创建 fd 身份 + 实际连接 / 路径核验。不承诺「不可伪造」或「32 / 64 位强度」。
+- **库文件创建即写页 1 种子，而且只经创建 fd 写入**：claim 阶段把一份经真实 SQLite 验证过的空库种子
+  （4096 字节、1 页、无任何 schema 对象）写入文件名偏移 0，并把本进程随机 nonce 写进页 1 头部的
+  `user_version`、把 `LB07` 魔数写进 `application_id`。写入目标是 `O_EXCL` 时得到的 fd 所绑定的文件对象，
+  **不经路径重新打开**，因此「claim 之后把 `workbench.db` 换成外部旧库 / 零字节文件 / ABA 换走再换回」
+  都不能让这段写入落到外部对象上（外部文件永远不会被写）。写完后用**只读** SQLite 连接校验种子
+  （`application_id` / `user_version` / `page_count` / `sqlite_master=0`），失败即 `fresh_claim_stamp_failed`。
+- `db.mjs` 的初始化钩子（`assertOpenedDatabaseClaimsMatch`）在**任何核心 DDL / `journal_mode = WAL` /
+  迁移写之前**执行：用**同一条已打开的连接**读页 1 的 `application_id` + `user_version`，并要求
+  `PRAGMA database_list` / `db.location()` 指向目标、连接里还没有任何 schema 对象、创建 fd 的 `fstat`
+  身份未变、路径身份（realpath / 非符号链接）未变。**nonce 是决定性证据**：`PRAGMA database_list` 只返回
+  路径字符串，单独用会被「路径相同、文件已换」骗过。
+- **跨路径也必须拒绝（本轮返修）**：只要本进程**还持有活动创建事实**，核心首次打开的目标就必须对应
+  其中一次创建事实（按规范化绝对路径匹配），否则在任何写之前以 `fresh_claim_target_mismatch`（退出码 3）
+  拒绝。按路径查表**未命中不得退化成普通入口**——否则「claim A 之后把 `WORKBENCH_DATA_DIR` 指向另一个
+  既有库 B」就会在 guard 之前给 B 建 `account_sets` 等核心表（管理复验已真实复现的 `not-rejected`）。
+  别名 / junction 路径、多个活动创建事实下的第三路径同样拒绝；目标与某次创建事实对应时仍走 `claimed` 路径
+  （继续做连接核验）；**没有任何活动创建事实**时普通业务入口行为与旧实现完全一致（`claimed:false`）。
+  由测试 H7 用真实核心 import 子进程覆盖：合成既有库 B 的 SHA / 表 / 行 / `user_version` / `application_id` /
+  `journal_mode` 与目录内容全部不变，不产生 `-wal` / `-shm`；释放全部回执后再打开 B 照常建结构（旧行为）。
+- `ensureBatchSchema` 必须收到本进程回执，建表前后都校验标记归属 + 连接页 1 nonce + 创建 fd 身份；
+  **布尔 fresh / 伪造回执无效**。错误码：`fresh_database_replaced` / `fresh_database_foreign_content` /
+  `fresh_database_mismatch` / `fresh_database_alias` / `fresh_receipt_invalid` / `fresh_receipt_stale` /
+  `fresh_claim_stamp_failed` / `fresh_claim_target_mismatch` 等，均为退出码 3（需人工核对现场，且不做
+  「先污染后拒绝」）。
+- **所有权标记的归属只认创建时的不可变身份（本轮返修）**：标记也用 `O_EXCL` 创建句柄的 `fstat` 抓
+  `dev`/`ino`，与「本进程写下的期望内容」一起只保存在私有 facts。nonce 不是秘密（标记 JSON / 页 1 /
+  `describeFreshClaim` / 诊断都有它），因此**内容命中 nonce 不能当归属证据**：同一个 nonce 的新文件对象
+  （哪怕字节完全相同）、加了额外字段的外部标记都保留，绝不在删除时按路径重新认领当前对象；身份取不到时
+  保存现场。由测试 H8 覆盖 open 校验 / release / guard 登记失败三条路径。
 - 并发两个进程抢同一新目标：最多一个取得创建资格；另一个稳定 `fresh_target_claimed`（退出码 3），
   只有能确认完整已初始化结构时才按已有库路径继续，不帮忙修半库。
+- 失败清理只删除「本进程创建、身份未变、除页 1 种子外没有任何结构」的对象与「文件对象仍是创建时
+  `dev`/`ino` 且内容仍是本进程写下的那份」的标记；被替换对象 / 外部零字节文件 / 已有核心表一律**保留现场**。
+  重复 release 是无副作用 no-op。
+- **失败清理不拿猜测当所有权**（本轮返修）：
+  - 库文件 `/ 标记文件` 的删除各有独立前提：库文件必须「本次创建 fd 的 `fstat` 身份 == 路径上对象的
+    `dev`/`ino`、非符号链接、仍零字节」；标记必须「本次创建 fd 的 `fstat` 身份 == 路径上对象的 `dev`/`ino`、
+    非符号链接、realpath 一致、内容等于本进程写下的期望内容」。任一条不成立就保留原对象。
+  - `O_EXCL` 创建后 `fstat` 失败（例如真实 `EIO`）时**没有任何身份证明**：即使路径上只是零字节普通文件
+    也不删，标记也不删，返回 `fresh_claim_cleanup_required`（`details.status = manual_review_required`，
+    退出码 3），提示人工核对现场；不以「本进程曾在该路径创建成功」作为删除依据。
+  - 标记被换成别的内容 / 同 nonce 的新文件对象时（库文件打开失败 / guard 登记失败 / 释放）一律保留这个
+    外部标记，同时仍会释放「已证明属于自己的零字节库文件与自己的标记」，不因收紧而遗留自有垃圾。
+  - 以上由测试 H6（故障注入 `fstat` 抛 `EIO`、打开抛 `EEXIST` / `EACCES`、篡改登记身份、同字节 / 同 nonce
+    加字段的标记替换，故障只落在指定 fd 上）与 H8（open / release 路径）真实覆盖，外部替换对象字节 /
+    存在性不变。
 - 既有库（哪怕只有核心表、空业务、甚至零字节文件）一律 `migration_requires_backup`（退出码 3，
   `details.dependency = LOCAL-06 createBackup/verifyBackup`）。`status` / `cancel` / `retry` 对这类库返回
   `batch_schema_unavailable`。符号链接 / junction 目录一律 `data_dir_alias`。
@@ -247,16 +303,44 @@ import(按清单) → post → depreciation → carryforward → period-check �
 
 - 每次 `resume` 都重新核验已成功阶段的上游证据：凭证被反过账 / 改金额 / 删除、来源状态回退、
   计提 runs 变化、封账被重开、报表业务证据变化 → `needs_review`（`evidence_changed`），停止盲续。
+- 计提阶段的重检**不是**只遍历已记录的 runs：重算该账套当前卡片集合与每张卡在该期间的
+  `assetCardPeriodStatus`（期间口径，后续期间的合法计提不会污染历史期间），逐项对比证据里的卡片事实；
+  并重查该期间**全部** runs 与关联凭证状态 / 分录指纹。证据变化的具体原因写入
+  `evidence.verificationFailure`（`depreciation_cards_changed` / `depreciation_card_became_due` /
+  `depreciation_card_draft_pending` / `depreciation_card_posted_stale` / `depreciation_card_changed` /
+  `depreciation_runs_added` / `depreciation_run_removed` / `depreciation_amount_changed` /
+  `depreciation_run_voucher_modified` / `depreciation_voucher_unposted` 等）。
+  未来卡改成当期 `due`、已计提凭证被反过账成 `draft_pending`、增删卡、金额 / 分录被改，都会转
+  `needs_review`；**复核不补提、不改凭证、不把 no_action 当成成功绕过**。
   期末检查重新执行真实 `A.periodEndCheck`：若只剩「更晚期间已由本任务合法封账」的 `later_period_closed`
   且目标期间仍 `closed`，视为合法后续效果；其它回退 → `period_check_regressed`。
   核验的账套作用域取「阶段证据记录的账套，否则 item 已落库的账套」；两者都没有才视为无法核验（不放行）。
   因此省略 `accountSetId` 的任务一旦把绑定推断出的账套落库，重启后的核验与原执行使用同一账套，
   不会因 `null` 重算摘要而假报 `report_evidence_changed`（真变化仍会报）。
 - `retry` 只重开选定的失败 / 需复核 / 已取消未完成阶段；`succeeded` / `not_applicable` 永不重跑。
-
 ## 8. 报表快照、并发与发布
 
 - 五类报表：资产负债表、利润表、现金流量表、科目余额表、明细账（`ledger` 按科目编码）。
+- 报表验收口径（不得重复表述）：
+  - **20 家 × 两月 = 600 个产物**的材料全部生成；CSV / XLSX 金额逐家按独立手算表核对（不是抽样）；
+    PDF 在该组里只核结构（头 / `%%EOF` / 页对象 / 页面数）。
+  - **代表性三格式与 PDF 文本层**：企业 1 五类报表 × 两月 + 另一个不同金额企业（企业 2）代表；
+    用真实中文 Python（`REPORT_OFFICE_PYTHON`：pdfplumber）提取 PDF 逐页文本，按行核对手算金额
+    （资产负债表期初 / 期末、利润表本期 / 累计、现金流本期 / 累计与期末余额、余额表 1002 行与 8 列合计、
+    明细账期初 / 发生 / 累计 / 期末），并与同组 CSV / XLSX 实际单元格值交叉核对。
+    **现金流量表的 XLSX 是独立预期**：直接读实际工作表的「经营活动产生的现金流量净额 / 现金期初余额 /
+    现金期末余额」×「本期 / 本年累计」六个数，与手算的本期经营净额、累计经营净额、期间初 / 年初现金、
+    期末现金比较（不是「与 PDF 相等」互证）；CSV 的 `经营活动净额 / 现金期初余额 / 现金期末余额`
+    同样按独立手算值断言。
+  - **中文分页渲染**：多页 PDF 逐页断言中文页码（`第 N 页 / 共 M 页`）与续页标记（`（续）`）；用已核 Poppler
+    `pdftoppm` 把代表性页面渲染成 PNG（含非白像素比断言），manifest 只登记**本次实际请求的页**
+    （条数 = 唯一 PNG 数 = 10，同一目录先后渲染第 1 页与末页也不重复记账），另有 60 份代表性
+    PDF / CSV / XLSX 原件（2 企业 × 2 月 × 5 类 × 3 格式，仅本次合成数据）复制到同一目录 `artifacts/`。
+    输出目录每次运行由 `mkdtemp` 新建唯一目录（`.agent-runs/local-07-b1-review2-renders-<随机>`，
+    内含 `OWNER.json` / `manifest.json` / `README.txt`），**不删除**任何已有目录或旧 run；
+    此前已核的 `.agent-runs/local-07-b1-review1-renders/` 10 张 PNG 原样保留。
+  - 这些是**代表性抽样**证据，**不是**「600 份 PDF 逐份人工验算」；也不把 LOCAL-05 的 11 项几何测试当作本包
+    600 份报告的金额验收。
 - 主线程在**一个只读事务**内用现有 `buildReportExport` 生成 DTO / CSV，并计算：
   - `dtoHash`（DTO 规范 JSON 哈希）；
   - `businessHash`（该账套该期间报表**实际依赖**的全部入账数据摘要，见下）；
@@ -294,23 +378,32 @@ import(按清单) → post → depreciation → carryforward → period-check �
 在 `06-workbench` 目录：
 
 ```bash
-node test/local-batch-cli.test.mjs          # 10 组：CLI 契约 / 20 家企业两月真实七阶段 / 年末跨年 / 并发证据
-node test/local-batch-persistence.test.mjs  # 31 组：失败隔离 / 前序失败停住 / 一企一套绑定（含省略 accountSetId 的
+node test/local-batch-cli.test.mjs          # 11 组：CLI 契约 / 20 家企业两月真实七阶段 / 年末跨年 / 并发证据 /
+                                            #        代表性三格式 + PDF 文本金额 + 中文分页渲染
+node test/local-batch-persistence.test.mjs  # 37 组：失败隔离 / 前序失败停住 / 一企一套绑定（含省略 accountSetId 的
                                             #        推断账套落库与重启核验）/ 崩溃恢复（含 close 前后）/ 互斥与 fence /
                                             #        失效证据 / 输入快照选择 / 报表依赖证据 / 迁移回滚 /
-                                            #        真实期末检查与封账 / 卡片状态 / 独占新建安全
+                                            #        真实期末检查与封账 / 卡片状态 / 独占新建安全 /
+                                            #        写目标绑定真实对象 / 新建失败清理（含故障注入）/
+                                            #        跨路径与别名拒绝（H7）/ 标记只认创建时身份（H8）/
+                                            #        折旧证据完整与 resume 真实重检
 ```
 
-B1 实测：`cli` **10 / 10**、`persistence` **31 / 31**，均 exit 0。20 企业主任务实际 **840 个 stage**
+B1 实测：`cli` **11 / 11**、`persistence` **35 / 35**（新增 H6），均 exit 0；此后本轮返修（跨路径 H7 +
+标记身份 H8）的定向重跑为 **37 / 37**（员工自测，不等于管理者复验 / 最终独审）。20 企业主任务实际 **840 个 stage**
 （全部 succeeded，含 40 个真实 period-check + 40 个真实 close）与 **600 个报表产物**；
 不是旧 480 / 300 数字。历史 9 + 25 是旧基线事实，不被覆盖。
+
+代表性 PDF 验收需要：`REPORT_OFFICE_PYTHON` 指向已核实的中文 Python（pdfplumber + Pillow），
+且 PATH 上有已核 Poppler `pdftoppm`；**未设置时该组显式失败**（不静默略过），以免把「结构检查」冒充成
+「PDF 文本金额 / 渲染验收」。
 
 两份测试全部使用**真实 CLI 子进程 + 真实 SQLite + 真实领域接口 + 真实 XLSX/PDF 渲染**，
 合成临时库位于系统临时目录（不访问真实账套 / 凭据 / 税局）；`mock` 只用于故障注入（子进程 `SIGKILL` /
 受控同步点），不替代主验收。
 
-定向回归（本包不修改这些文件，只证明未受影响）：`accounting-period-integrity` 45、`accounting-period-http`、
-`report-office-export` 21、`report-export` 21、`import-incremental` 49，均 exit 0。
+定向回归（本包不修改这些文件，只证明未受影响）：`smoke` 28、`accounting-period-integrity` 45、
+`report-office-export` 21、`import-incremental` 49，均 exit 0（`db.mjs` 初始化钩子影响面）。
 
 ## 11. 明确限制
 
@@ -331,3 +424,15 @@ B1 实测：`cli` **10 / 10**、`persistence` **31 / 31**，均 exit 0。20 企�
    `BEGIN EXCLUSIVE` 长期持锁时实测可长达约 30 秒才 fail-closed。产品未要求 < 1 秒，本包不新增 deadline；
    共享库初始化锁冲突同样未在本包边界内处理。历史两次 22 / 23 完整失败原始输出缺失、原因未定位，
    本轮绿色结果不得用于覆盖。
+9. **新建库身份绑定的边界（如实记录）**：写入页 1 种子只用创建 fd，不按路径重开，因此外部文件不会被写；
+   nonce 是 31 位**本地识别标记**而非秘密：它会以 `user_version` 长期留在本次创建的库里，也出现在所有权标记
+   JSON、`describeFreshClaim` 与测试诊断中（产品其它逻辑不读 `user_version`；LOCAL-06 备份只把它当待比对字段）。
+   `new DatabaseSync` 在「目标文件被完全删除」时自身可能补出一个 0 字节文件，
+   钩子会在任何 DDL / WAL 之前拒绝且不写入它，但该 0 字节文件会保留现场（不当作本进程对象删除）。
+   本机 Windows 上 SQLite 打开文件不共享 delete，因此「连接已打开在外部对象上、随后把路径换回本进程对象」
+   的直接文件 ABA 在本机**不可构造**；实际可达的同类负例（换成外部零字节 / 外部旧库 / **同路径同 `dev/ino`
+   但内容被改写成外部库**）均已真实验证由 nonce 拒绝（见测试 H5），且外部内容字节 / schema 不变。
+   失败清理的身份未知分支（`fstat` 抛错）保留现场并要求人工核对，见 §6。标记的归属同样不靠 nonce：见 §6
+   「所有权标记的归属只认创建时的不可变身份」，同 nonce 字节相同的替换对象也是外部对象（测试 H8）。
+10. **报表验收口径**：见 §8。600 份产物的 PDF 只做结构 / 页数检查，PDF 文本金额与渲染是代表性抽样，
+   不等同于 600 份逐份人工验算；PDF 字节依赖本机中文字体与元数据，重新生成视为新 attempt。

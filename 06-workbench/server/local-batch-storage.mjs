@@ -17,9 +17,10 @@
 //    并递增 fence，旧 token 的任何提交都会被事务内 fence 校验拒绝。
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, parse, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as guard from "./database-open-guard.mjs";
 
 export const LOCAL_BATCH_COMPONENT = "local-batch";
 export const LOCAL_BATCH_SCHEMA_VERSION = 1;
@@ -246,14 +247,17 @@ export function assertInitializable(dataDir) {
 }
 
 // ---------------------------------------------------------------- 新建目标独占事实
-// 进程内不可伪造的回执（WeakSet 成员身份）。CLI 只在自己 claim 成功后把回执传给
-// ensureBatchSchema；传布尔值 / 自己构造的对象一律无效。
-const FRESH_CLAIMS = new WeakSet();
+// 创建事实（目录 / 库路径 / 标记路径 / fstat(fd) 身份 / nonce / 创建句柄）只保存在
+// database-open-guard.mjs 的模块私有 WeakMap 里；本模块对外只持有「空 token」。
+// 因此调用方改 token 字段、改嵌套值、复制 / 伪造 / 删字段都不能改变授权目标。
+// 页 1 种子也由 guard 用**创建时持有的 fd** 写入（不经路径重新打开）：按路径替换 / ABA 换回
+// 都不能让这段写入落到外部文件上。
 
 /**
- * 原子占有「显式新目标」：不存在则创建目录，然后以 O_EXCL 建立所有权标记。
+ * 原子占有「显式新目标」：不存在则创建目录，然后以 O_EXCL 建立所有权标记与库文件。
  * 只有拿到回执的进程才拥有「本次亲手创建」资格；并发的另一个进程会稳定失败，
  * 只有在其能确认完整已初始化批量结构时才允许按已有库路径继续（由调用方判断）。
+ * 返回的 token 不携带任何可变授权字段（内部事实见 database-open-guard.mjs）。
  */
 export function claimFreshDataDir(dataDir, { pid = process.pid } = {}) {
   if (typeof dataDir !== "string" || !String(dataDir).trim()) FAIL("data_dir_required");
@@ -278,93 +282,149 @@ export function claimFreshDataDir(dataDir, { pid = process.pid } = {}) {
     assertDataDirIdentity(resolved);
   }
   const markerPath = join(resolved, FRESH_CLAIM_MARKER);
-  const nonce = randomUUID();
-  let fd;
+  // nonce 是 31 位正整数（写进页 1 的 user_version）。它是**本地随机识别标记**，不是秘密认证凭据：
+  // 所有权标记 JSON、页 1 头部与 describeFreshClaim / 测试诊断都会出现它；真正授权来自
+  // database-open-guard.mjs 的私有 WeakMap + 创建 fd + 实际连接 / 路径核验。
+  const nonce = guard.newClaimNonce();
+  const dbPath = join(resolved, "workbench.db");
+  const markerContent = JSON.stringify({ nonce, pid, at: nowIso() });
+
+  /**
+   * 只删除「O_EXCL 创建时并就被证明属于本进程、且内容仍是本进程写下的那份」的所有权标记。
+   * nonce 会明文出现在标记 JSON / 页 1 / 诊断输出里，**不是秘密**，所以「内容命中 nonce」不能当
+   * 删除依据：同一个 nonce 的新文件对象（哪怕字节完全相同）或加了额外字段的外部标记都必须保留。
+   * 因此本地身份只允许来自**创建时**的 `fstat(markerFd)` 快照（由调用方传入），绝不在这里按路径重新认领当前对象。
+   */
+  function discardOwnMarker(markerIdentity) {
+    if (!markerIdentity) return false;
+    try {
+      const stat = lstatSync(markerPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) return false;
+      if (String(stat.dev) !== String(markerIdentity.dev)) return false;
+      if (String(stat.ino) !== String(markerIdentity.ino)) return false;
+      if (readFileSync(markerPath, "utf8") !== markerContent) return false;
+      unlinkSync(markerPath);
+      return true;
+    } catch {
+      return false; // 标记被替换 / 删除 / 内容被改写：不碰他人对象
+    }
+  }
+
+  /**
+   * 只删除「已由本进程创建 fd 的 fstat 证明身份、且路径上仍是同一对象、仍零字节」的库文件。
+   * 没有任何身份证明（identity 为空）时一律不删：不能拿「本进程曾在该路径 O_EXCL 成功过」当删除依据。
+   */
+  function discardOwnEmptyDatabase(identity) {
+    if (!identity) return false;
+    try {
+      const current = lstatSync(dbPath);
+      if (current.isSymbolicLink() || !current.isFile()) return false;
+      if (String(current.dev) !== String(identity.dev) || String(current.ino) !== String(identity.ino)) return false;
+      if (Number(current.size) !== 0) return false;
+      unlinkSync(dbPath);
+      return true;
+    } catch {
+      return false; // 文件已被替换 / 删除 / 已有内容：保留现场
+    }
+  }
+
+  let markerFd;
   try {
-    fd = openSync(markerPath, "wx");
+    markerFd = openSync(markerPath, "wx");
   } catch (error) {
     if (error?.code === "EEXIST") FAIL("fresh_target_claimed", { dataDir: basename(resolved) });
     throw batchError("fresh_target_claim_failed", { reason: error?.code || String(error) });
   }
+  // 所有权标记同样要绑定**创建时的不可变事实**：O_EXCL 之后立刻用创建 fd `fstat` 抓身份，
+  // 之后把同一个 fd 交给 guard 存进模块私有 facts（删除 / 校验时只比对这份身份 + 期望内容）。
+  // 取不到身份时**不删**任何标记（不能拿「该路径刚被本进程 O_EXCL 建过」当删除依据）。
+  let markerIdentity = null;
   try {
-    writeFileSync(fd, JSON.stringify({ nonce, pid, at: nowIso() }), "utf8");
-  } finally {
-    try { closeSync(fd); } catch { /* 标记已写入，关闭失败不改变所有权 */ }
+    const markerStat = fstatSync(markerFd);
+    if (!markerStat.isFile()) {
+      throw Object.assign(new Error("ownership marker is not a regular file"), { code: "marker_not_file" });
+    }
+    markerIdentity = { dev: String(markerStat.dev), ino: String(markerStat.ino) };
+    writeFileSync(markerFd, markerContent, "utf8");
+  } catch (error) {
+    try { closeSync(markerFd); } catch { /* 句柄关闭失败不影响结论 */ }
+    if (!markerIdentity) {
+      throw batchError("fresh_claim_cleanup_required", {
+        status: "manual_review_required", stage: "marker", reason: error?.code || String(error),
+        dataDir: basename(resolved),
+      }, "独占创建所有权标记后无法读取创建句柄身份：已保留标记现场，请人工核对后再继续");
+    }
+    discardOwnMarker(markerIdentity);
+    throw batchError("fresh_target_claim_failed", {
+      stage: "marker", reason: error?.code || String(error),
+    }, "写入所有权标记失败");
   }
-  // 同时原子创建库文件本身（O_EXCL）：回执随后绑定这个文件的 dev/ino，
-  // 因此「探测后文件被替换」会在 assertFreshReceipt 中稳定被拒。
-  const dbPath = join(resolved, "workbench.db");
+  // 同时原子创建库文件本身（O_EXCL），并**保留这个创建句柄**：guard 用 fstat(fd) 登记身份、
+  // 用同一个 fd 写入页 1 种子，因此「探测后文件被替换 / ABA 换回」既不能通过身份校验，
+  // 也不能把种子写进外部对象。
   let dbFd;
   try {
     dbFd = openSync(dbPath, "wx");
   } catch (error) {
-    try { unlinkSync(markerPath); } catch { /* 只清理本进程刚建的标记 */ }
+    // 此刻标记创建句柄还**没有移交给 guard**（facts 未登记），因此本分支必须自己可靠关闭它，
+    // 且与本进程能否删除标记无关：标记被换成外部对象时也要关闭自己的 fd，不能泄漏到进程结束。
+    try { closeSync(markerFd); } catch { /* 句柄关闭失败不影响结论 */ }
+    // 只清「创建身份 + 期望内容」都对得上的自己的标记；标记被换成别的内容 / 别的对象时保留现场。
+    discardOwnMarker(markerIdentity);
     if (error?.code === "EEXIST") FAIL("fresh_target_claimed", { dataDir: basename(resolved) }, "目标库文件已被其它执行者创建");
     throw batchError("fresh_target_claim_failed", { reason: error?.code || String(error) });
   }
-  try { closeSync(dbFd); } catch { /* 文件已创建，关闭失败不改变所有权 */ }
-  const createdStat = statSync(dbPath);
-  const receipt = {
-    dataDir: resolved, dbPath, markerPath, pid, nonce,
-    identity: { dev: String(createdStat.dev), ino: String(createdStat.ino) }, createdDb: true,
-  };
-  FRESH_CLAIMS.add(receipt);
-  return receipt;
-}
-
-/** 释放本进程所有权标记；只删除 nonce 命中的自己的标记，不碰其它进程文件。 */
-export function releaseFreshClaim(receipt) {
-  if (!receipt || !FRESH_CLAIMS.has(receipt)) return false;
-  FRESH_CLAIMS.delete(receipt);
-  let released = false;
+  let created;
+  try { created = fstatSync(dbFd); } catch (error) {
+    try { closeSync(dbFd); } catch { /* 句柄异常关闭失败不影响结论 */ }
+    try { closeSync(markerFd); } catch { /* 标记句柄关闭不影响保留在现场的文件 */ }
+    // fstat 失败 → 本进程拿不到任何创建身份证明：既不删库文件（可能已被换成外部对象），
+    // 也不删所有权标记，保留现场并明确要求人工核对。不使用「该路径曾被本进程创建过」作为删除依据。
+    throw batchError("fresh_claim_cleanup_required", {
+      status: "manual_review_required", reason: error?.code || String(error), dataDir: basename(resolved),
+    }, "独占创建后无法读取创建句柄身份：已保留库文件与所有权标记现场，请人工核对后再继续");
+  }
+  let token = null;
   try {
-    const current = JSON.parse(readFileSync(receipt.markerPath, "utf8"));
-    if (current?.nonce === receipt.nonce) { unlinkSync(receipt.markerPath); released = true; }
-  } catch { /* 标记已被替换 / 已删除：不碰 */ }
-  // 结构创建失败且库仍为空文件：只删除本进程创建且身份一致的对象，避免留下无法解释的半目标。
-  // 已有任何内容（包括 db.mjs 建出的核心表）一律保留，交管理者 / 操作者判断。
-  try {
-    if (receipt.createdDb && receipt.identity) {
-      const st = lstatSync(receipt.dbPath);
-      const same = !st.isSymbolicLink() && st.isFile()
-        && String(st.dev) === receipt.identity.dev && String(st.ino) === receipt.identity.ino;
-      if (same && statSync(receipt.dbPath).size === 0) unlinkSync(receipt.dbPath);
+    token = guard.createFreshClaimFacts({
+      dataDir: resolved, dbPath, markerPath, pid, nonce,
+      identity: { dev: String(created.dev), ino: String(created.ino) }, fd: dbFd,
+      markerFd, markerIdentity, markerContent,
+    });
+    guard.stampFreshClaimNonce(token);
+    return token;
+  } catch (error) {
+    // 失败只清理「本进程刚创建、身份未变、除页 1 种子外没有任何结构」的对象；
+    // 被替换的外部文件与已被写入他人内容的对象一律保留现场。未经 guard 登记时按创建时的 fstat 身份自行收尾。
+    if (token) {
+      try { guard.releaseFreshClaimFacts(token); } catch { /* 保留现场 */ }
+    } else {
+      try { closeSync(dbFd); } catch { /* 句柄关闭失败不影响结论 */ }
+      discardOwnEmptyDatabase(created);
+      try { closeSync(markerFd); } catch { /* 句柄关闭失败不影响结论 */ }
+      discardOwnMarker(markerIdentity);
     }
-  } catch { /* 库文件已被替换 / 删除：不清理他人对象 */ }
-  return released;
+    throw error;
+  }
 }
 
 /**
- * 绑定「实际打开的库」身份：回执必须是本进程签发，标记仍是自己的，
- * 库文件不是符号链接、realpath 与 PRAGMA database_list 的 main 一致，dev/ino 在窗口内不变。
+ * 释放本进程所有权标记 / 创建句柄（重复 release 是无副作用的 no-op）。
+ * 全部判断只读 guard 的模块私有创建事实；调用方 token 上的字段不参与。
+ * 只删除「路径对象仍是创建时 dev/ino 且内容仍为本进程写下的那份」的标记，以及「身份未变且仍只有页 1 种子」
+ * 的自己创建的库文件；被替换对象（含同 nonce 的新对象）/ 外部零字节文件 / 已有核心结构一律保留现场。
+ */
+export function releaseFreshClaim(receipt) {
+  const result = guard.releaseFreshClaimFacts(receipt);
+  return result.released === true;
+}
+
+/**
+ * 绑定「实际打开的库」身份：回执必须是本进程签发，标记仍是自己的，库文件不是符号链接，
+ * 连接读到的页 1 nonce 属于本进程，dev/ino 在窗口内不变（guard 内部走 fstat(fd) + 路径复核）。
  */
 export function assertFreshReceipt(receipt, db) {
-  if (!receipt || !FRESH_CLAIMS.has(receipt)) {
-    FAIL("fresh_receipt_invalid", {}, "新建批量结构必须持有本进程独占创建回执");
-  }
-  assertDataDirIdentity(receipt.dataDir);
-  let marker;
-  try { marker = JSON.parse(readFileSync(receipt.markerPath, "utf8")); } catch {
-    FAIL("fresh_receipt_stale", {}, "新建所有权标记已丢失 / 被替换：拒绝继续");
-  }
-  if (marker?.nonce !== receipt.nonce) FAIL("fresh_receipt_stale", {}, "新建所有权标记不属于本进程");
-  let fileStat;
-  try { fileStat = lstatSync(receipt.dbPath); } catch { FAIL("fresh_database_missing", {}); }
-  if (fileStat.isSymbolicLink() || !fileStat.isFile()) FAIL("fresh_database_alias", {}, "workbench.db 不是普通文件");
-  let real;
-  try { real = realpathSync(receipt.dbPath); } catch { FAIL("fresh_database_unreadable", {}); }
-  if (!sameCanonicalPath(real, receipt.dbPath)) FAIL("fresh_database_alias", {}, "workbench.db 真实路径与目标不一致");
-  let main;
-  try { main = db.prepare(`PRAGMA database_list`).all().find((row) => row.name === "main"); } catch { main = null; }
-  if (!main?.file || !sameCanonicalPath(main.file, receipt.dbPath)) {
-    FAIL("fresh_database_mismatch", {}, "已打开的库不是本次独占创建的目标文件");
-  }
-  const identity = { dev: String(fileStat.dev), ino: String(fileStat.ino) };
-  if (!receipt.identity) receipt.identity = identity;
-  else if (receipt.identity.dev !== identity.dev || receipt.identity.ino !== identity.ino) {
-    FAIL("fresh_database_replaced", {}, "探测后库文件被替换：拒绝在他人库上建结构");
-  }
-  return identity;
+  return guard.assertFreshClaimConnection(receipt, db);
 }
 
 function readBatchVersion(db) {
@@ -522,9 +582,9 @@ export function ensureBatchSchema(db, { receipt = null } = {}) {
     db.exec("COMMIT");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* 原库结构以回滚结果为准 */ }
-    if (error?.code === "fresh_receipt_invalid" || error?.code === "fresh_receipt_stale"
-      || error?.code === "fresh_database_replaced" || error?.code === "fresh_database_alias"
-      || error?.code === "fresh_database_mismatch") throw error;
+    // 库身份 / 回执类错误必须原样上报（不能降级成 local_batch_schema_failed）：
+    // 它们意味着「本次创建对象已不再可信」，需人工核对现场。
+    if (String(error?.code || "").startsWith("fresh_")) throw error;
     throw batchError("local_batch_schema_failed", { reason: error?.message || String(error) });
   }
   releaseFreshClaim(receipt);
