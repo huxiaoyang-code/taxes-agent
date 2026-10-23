@@ -164,6 +164,21 @@ const FINANCE_QUERY_LOCAL_EXTENSIONS = Object.freeze(["report.trial_balance", "l
 const MODEL_NODE_IDS = new Set([...FINANCE_QUERY_AVAILABLE, ...FINANCE_QUERY_UNIMPLEMENTED]);
 
 const PLAIN_TOOL_OPERATIONS = Object.freeze({
+  bank_accounts: "bank_accounts",
+  bank_import_preview: "bank_import_preview",
+  bank_batches: "bank_batches",
+  bank_transactions: "bank_transactions",
+  bank_ambiguities: "bank_ambiguities",
+  bank_candidates: "bank_candidates",
+  bank_matches: "bank_matches",
+  bank_status: "bank_status",
+  bank_audit: "bank_audit",
+  bank_account_register: "bank_account_register",
+  bank_import: "bank_import",
+  bank_ambiguity_resolve: "bank_ambiguity_resolve",
+  bank_confirm: "bank_confirm",
+  bank_cancel: "bank_cancel",
+  bank_reconcile: "bank_reconcile",
   auxiliary_entities: "auxiliary_entities",
   auxiliary_entries: "auxiliary_entries",
   auxiliary_ledger: "auxiliary_ledger",
@@ -208,6 +223,7 @@ const UNIMPLEMENTED_TOOL_NAMES = Object.freeze([
 const MODEL_TOOL_NAMES = new Set([...Object.keys(PLAIN_TOOL_OPERATIONS), ...UNIMPLEMENTED_TOOL_NAMES]);
 
 const QUERY_OPERATIONS = Object.freeze([
+  "bank_accounts", "bank_import_preview", "bank_batches", "bank_transactions", "bank_ambiguities", "bank_candidates", "bank_matches", "bank_status", "bank_audit",
   "auxiliary_entities", "auxiliary_entries", "auxiliary_ledger", "auxiliary_party",
   "account_list", "asset_list", "book_import_batch",
   "finance_query:enterprise_account.account_set",
@@ -225,6 +241,7 @@ const QUERY_OPERATIONS = Object.freeze([
   "ledger_query", "opening_balance_get", "period_end_check", "period_list", "voucher_check",
 ]);
 const WRITE_OPERATIONS = Object.freeze([
+  "bank_account_register", "bank_import", "bank_ambiguity_resolve", "bank_confirm", "bank_cancel", "bank_reconcile",
   "auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set",
   "account_create", "account_set_create", "asset_create", "asset_update", "book_import_incremental",
   "carry_forward_profit", "depreciation_run", "legacy_book_import", "opening_balance_set",
@@ -259,6 +276,7 @@ const SCOPES_BY_CATEGORY = Object.freeze({
 
 /** projection 里允许出现的字符串只可能是这些受控状态 / 枚举 token，或期间。 */
 const PROJECTION_TOKENS = new Set([
+  "cny","pending_review","reconciled","cancelled","invalidated","same","distinct","already_matched","single","requires_manual_choice","none",
   "project", "department", "party", "confirmed", "ambiguous", "staged", "replayed", "committed", "pending_outer_commit",
   "legacy_small_v1", "small_basic_v1", "enterprise_basic_v1",
   "complete", "incomplete", "legacy_compatibility",
@@ -287,6 +305,23 @@ const PROJECTION_TOKENS = new Set([
 
 // 固定错误码 → 固定 category。未登记码一律拒绝（不能靠“看起来像 token”穿过）。
 const ERROR_CATEGORY_BY_CODE = Object.freeze({
+  bank_draft_result_unavailable: "bank",
+  bank_draft_input_invalid: "bank",
+  bank_draft_scope_invalid: "bank",
+  bank_draft_ref_invalid: "bank",
+  bank_draft_unavailable: "bank",
+  bank_draft_scope_mismatch: "bank",
+  bank_draft_revoked: "bank",
+  bank_draft_tool_invalid: "bank",
+  bank_draft_confirmation_required: "bank",
+  bank_draft_payload_too_large: "bank",
+  bank_draft_capacity: "bank",
+  bank_draft_preview_required: "bank",
+  bank_draft_outcome_unknown: "bank",
+  bank_draft_busy: "bank",
+  bank_local_install_failed: "bank",
+  bank_local_state_unknown: "bank",
+  bank_local_operation_failed: "bank",
   aux_account_reallocation_required: "auxiliary",
   aux_active_invalid: "auxiliary",
   aux_allocation_corrupt: "auxiliary",
@@ -628,7 +663,8 @@ function validateStatusFields(data) {
   if (applied === true && needsLocalReview === true) {
     const unavailable = prop(data, "refUnavailable");
     if (prop(data, "localRef") !== null || prop(data, "refPersistence") !== "none"
-      || (unavailable !== "value_invalid" && unavailable !== "summary_unavailable")) return false;
+      || (unavailable !== "value_invalid" && unavailable !== "summary_unavailable"
+        && !(String(prop(data,"operation")).startsWith("bank_") && WRITE_OPERATIONS.includes(prop(data,"operation")) && ["capacity","node_budget","byte_budget","value_limit"].includes(unavailable)))) return false;
   }
   const reason = prop(data, "appliedReason");
   if (applied === true) return reason === undefined;

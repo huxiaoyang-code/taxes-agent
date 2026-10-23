@@ -1,3 +1,5 @@
+> 2026-10-23 LOCAL04B候选已实施，自测新4套与受影响旧model/policy/transport/entry/auxiliary通过；原84套逐字原序保留，末追加新4为88。完整入口由root在冻结候选上最终实跑，员工没有另跑完整88。15入口/草稿与模型边界见[LOCAL-BANK](../LOCAL-BANK.md)。待root验收/fresh/PR合并，不自行关闭Issue53；页面paste/filechooser实操未知。
+
 > 2026-10-23 LOCAL04A（Issue53 comment6364708982，17路径窗内实际15变更）已完成本片自测：固定官方backup/held源内容门、仅展示的真实分录往来DTO、两安装序及六正式套exit0/hash同。详见[当前交接](../handoffs/LOCAL-04-BANK.md)；本片未独立验收/PR合并，Issue53保持OPEN；B的REST/raw Agent/页面/MCP及最终整84待新会话。原八包5/8，04/06/07及最终整链仍未完。下方为历史任务记录。
 
 > **2026-10-23 最终出版候选补记（优先于下方历史阶段）**：银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。

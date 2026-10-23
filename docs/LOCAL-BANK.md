@@ -1,3 +1,46 @@
+## LOCAL04B 银行入口与受控模型输入（2026-10-23 实施候选）
+
+本机单用户，同一数据库可有多家企业、每家唯一账套；不要求每企一个目录。当前只有本机CSV能力，外部银行与真实税局接入仍为0。A的银行领域/storage/CLI、aux、备份和核心本轮只读，沿PR73已合并DTO。往来分配只展示，不参与匹配依据、snapshot或失效判定。
+
+本机明确启用/首次准备草稿时，先校验输入与账套，再从已打开连接的main库事实取得dbPath与目录，固定调用官方LOCAL06备份门槛及ensureBankSchema。非法tool/字段/缺必需项不会先做组件DDL；模型查询不安装组件。
+
+本机支持接口只收JSON，复用回环/Host/Origin保护：
+
+- POST /api/account-sets/:id/bank-drafts，body为{tool,payload,confirm?}，可选顶层accountSetId须等于路径。写类必须由本机明确确认传confirm:true；正式bank_import不能在此直接准备。
+- POST /api/account-sets/:id/bank-drafts/approve-import，body仅{previewRef}。真实bank_import_preview成功后，用户点确认导入才按同份不可变payload派生bank_import草稿；不能附CSV/mapping或伪approved替换。
+- POST /api/account-sets/:id/bank-drafts/revoke，body仅{draftRef}；非执行中立即释放记录和预算，执行中只撤销可再次调用的权利，不回滚已发出的业务。
+- 业务POST /api/account-sets/:id/bank/:action只收{draftRef}。raw Agent和MCP工具都只收{accountSetId,draftRef}，拒额外字段、别套、别工具、finref冒充与过期引用。
+
+草稿是bankdraft_加48位随机十六进制字符，绑定账套、工具、不可变内容hash和10分钟TTL，仅进程内存；不接受任意路径/URL/模块、local/raw/channel权限声明、访问器或原型键。最多32项，单payload UTF8 JSON为2MiB，总payload加已缓存结果为16MiB，不持久化；已执行写的结果若放不下缓存，首次仍返回真实提交结果，后续固定bank_draft_result_unavailable并禁止重执行。普通query在TTL内每次真实读取；write原子prepared→executing→completed，重复只回放，执行异常置unknown并禁止重试。重启即失效，日志不记录payload/ref/原始异常。
+
+|action|tool|分类|
+|---|---|---|
+|accounts|bank_accounts|query|
+|account-register|bank_account_register|write|
+|import-preview|bank_import_preview|query|
+|import|bank_import|write|
+|batches|bank_batches|query|
+|transactions|bank_transactions|query|
+|ambiguities|bank_ambiguities|query|
+|ambiguity-resolve|bank_ambiguity_resolve|write|
+|candidates|bank_candidates|query|
+|confirm|bank_confirm|write|
+|cancel|bank_cancel|write|
+|matches|bank_matches|query|
+|reconcile|bank_reconcile|write|
+|status|bank_status|query|
+|audit|bank_audit|query|
+
+本机raw/REST返回{accountSetId,result,evidence?}完整DTO，允许操作者看账户/CSV预检/批次/理由/往来等本机原文；这不是模型输出协议。模型走adapter→policy→transport白名单信封：只包含固定状态、期间、计数、必要数值ID和受控金额；不回声CSV、名称、账号、bankAccountId/sourceId/batchId、科目编码、文件名/路径、reason/note、message/details/stack或输入draftRef。结果finref仍绑定账套+operation：模型resolve只取同一摘要，本机read/compute可读完整DTO并做既有有界运算；未扩channel或本机读取权限，也没有新增draft MCP工具或raw fallback。
+
+六写必须结合真实DTO与内部committed/performed/replayed证据。same-batch/same-batch-pending不新写，same-file-new-batch仍新增批次/追踪/审计，不能按replay布尔直接反转。bank_reconcile实际保存run/audit，属于write。transactions/candidates/matches/status查询可能refresh并持久化失效及审计，query是目的分类，不是无写承诺。提交后投影或finref失败保留applied事实并needsLocalReview；运输响应损坏/断连只报unknown且不自动重试。
+
+所有Cents全份检查安全整数和金额上限，再转换元输出；任一越界字段拒绝整份查询摘要/引用，不能静默drop却ok/ref。往来仅给notInstalled/unknown/ambiguous/confirmed/inactive/unavailable固定计数；完整partyAllocation只在本机DTO。
+
+页面银行tab有显式启用/登记、账户/期间、CSV文件/粘贴统一文本、JSON映射→预检→确认导入，人工same/distinct、候选逐行确认/取消、显式日期偏差支持跨期、四类未达及余额差额。动态内容用textContent/DOM节点；编辑、换账户/换套撤销草稿、清旧选择/余额，并以账套+代次拒绝旧异步响应。2MiB是新页面/草稿输入上限，原领域/CLI5MiB边界保持。本轮没有CUA/CDP/filechooser操作，页面paste与实际file选择器均未知；静态合同与同HTTP真链是分开的证据。
+
+下方旧阶段叙述保留历史时点；与本节冲突时以本节及最新交接为准。
+
 > 2026-10-23 LOCAL04A候选：银行候选与匹配新增当前账务`partyAllocation`展示（unknown/ambiguous/confirmed、active信息、完整分配与scope），不作为银行对方证明、不自动匹配、不改变snapshot或辅助变更失效合同。未安装固定not_installed，分录删除固定entry_unavailable；已装损坏/未知辅助组件明确拒绝。现库银行安装允许core5+唯一auxiliary@1，固定官方快照verify与持锁源content/components绑定后才DDL。两安装序、真实CLI两profile/历史legacy独立1130、联合restore续写及六正式套已自测通过；字段、错误、证据与限制以[LOCAL04A交接](handoffs/LOCAL-04-BANK.md)为准。REST/页面/MCP接线留B，本A未独立验收/合并，不代表整04完成。以下旧章节按历史时点追溯。
 
 > **2026-10-23 最终出版候选补记（优先于下方历史阶段）**：银行源修复候选冻结为 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0`，员工定向150/150 exit0（import16 / reconciliation43 / CLI14 / integration5 / backup22 / 07 persistence39 / CLI11），root源修复定向43/43+14/14 exit0。本窗口以实际main原61逐字原序保留，仅末尾追加银行4套，静态登记65；**最终全65、fresh独审与PR63合并仍待root，PR63仍Draft**。只是LOCAL04银行CLI组件候选，profile / 辅助实际入口与UI整合未完。

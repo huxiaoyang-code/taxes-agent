@@ -25,9 +25,29 @@
     <button data-tab="assets">资产</button>
     <button data-tab="reports">报表</button>
     <button data-tab="periods">期间</button>
+    <button data-tab="bank">银行</button>
   </nav>
 
   <main>
+    <section id="tab-bank" class="panel">
+      <h2>本机银行流水与余额调节</h2>
+      <p class="hint">仅导入本机 CSV；外部银行与税局未接入。输入暂存最多 2MiB、10 分钟；编辑或切套须重新预检。候选必须人工确认，往来仅展示。</p>
+      <div class="row"><button id="bankEnable">启用并读取银行账户</button><label>银行账户 <select id="bankAccount"></select></label><label>期间 <input id="bankPeriod" type="month"></label></div>
+      <details><summary>登记银行账户</summary><div class="row"><label>本机账户ID <input id="bankNewId"></label><label>来源ID <input id="bankSource" value="local-csv"></label><label>银行存款科目 <input id="bankGl" value="1002"></label><label>显示名 <input id="bankDisplay"></label><button id="bankRegister">确认登记</button></div></details>
+      <div class="row"><label>批次ID <input id="bankBatch"></label><label>选择 CSV <input id="bankFile" type="file" accept=".csv,text/csv"></label></div>
+      <label>CSV 文本（文件与粘贴共用此输入）<textarea id="bankCsv" rows="6" spellcheck="false"></textarea></label>
+      <label>字段映射 JSON（复用领域预检）<textarea id="bankMapping" rows="4" spellcheck="false">{"columns":{"date":"日期","summary":"摘要","debit":"收入","credit":"支出","refId":"流水号"},"amountMode":"debit_credit","currency":"CNY","dateFormat":"YYYY-MM-DD"}</textarea></label>
+      <div class="row"><button id="bankPreview">预检映射与流水</button><button id="bankImport" disabled>确认导入预检内容</button><button id="bankRefresh">刷新流水、判重、匹配与状态</button></div>
+      <pre id="bankPreviewOut" class="bank-output"></pre><div id="bankState" aria-live="polite"></div>
+      <h3>流水与人工候选</h3><label>允许日期偏差（天，跨期需显式设置）<input id="bankTolerance" type="number" min="0" max="31" value="0"></label><div id="bankTransactions"></div><div id="bankCandidates"></div>
+      <h3>无稳定流水ID的判重待办</h3><div id="bankAmbiguities"></div>
+      <h3>人工匹配记录</h3><div id="bankMatches"></div>
+      <h3>余额调节与四类未达</h3>
+      <div class="row"><label>截止日 <input id="bankAsOf" type="date"></label><label>对账单覆盖起日 <input id="bankCoverageFrom" type="date"></label><label>覆盖止日 <input id="bankCoverageTo" type="date"></label><label>对账单来源 <input id="bankStatementSource" value="local-statement"></label></div>
+      <div class="row"><label>对账单期初（整数分）<input id="bankStatementOpen" inputmode="numeric"></label><label>对账单截止余额（整数分）<input id="bankStatementClose" inputmode="numeric"></label><button id="bankReconcile">确认计算并保存调节结果</button></div>
+      <pre id="bankReconcileOut" class="bank-output"></pre>
+    </section>
+
     <!-- 凭证 -->
     <section id="tab-vouchers" class="panel active">
       <div class="row">

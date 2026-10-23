@@ -34,6 +34,7 @@ import {
   summarizeWriteResult,
 } from "./finance-output-policy.mjs";
 
+import { bankCallArgs } from "./bank-local-drafts.mjs";
 export const MODEL_ADAPTER_VERSION = "finance-model-adapter/v1";
 /** 全局上下文（account_context）分页上限：必须显式有界，避免一次吐出全部账套。 */
 export const MAX_CONTEXT_PAGE_SIZE = 32;
@@ -246,6 +247,21 @@ for (const nodeId of FINANCE_QUERY_AVAILABLE) {
 //   create    —— 可能建新账套的写动作（setId 只能来自真实结果，缺失即未绑定）。
 const tool = (operation, category, scope) => Object.freeze({ operation, category, scope });
 export const PLAIN_MODEL_TOOLS = Object.freeze({
+  bank_accounts: tool("bank_accounts", "query", "account_set"),
+  bank_import_preview: tool("bank_import_preview", "query", "account_set"),
+  bank_batches: tool("bank_batches", "query", "account_set"),
+  bank_transactions: tool("bank_transactions", "query", "account_set"),
+  bank_ambiguities: tool("bank_ambiguities", "query", "account_set"),
+  bank_candidates: tool("bank_candidates", "query", "account_set"),
+  bank_matches: tool("bank_matches", "query", "account_set"),
+  bank_status: tool("bank_status", "query", "account_set"),
+  bank_audit: tool("bank_audit", "query", "account_set"),
+  bank_account_register: tool("bank_account_register", "write", "account_set"),
+  bank_import: tool("bank_import", "write", "account_set"),
+  bank_ambiguity_resolve: tool("bank_ambiguity_resolve", "write", "account_set"),
+  bank_confirm: tool("bank_confirm", "write", "account_set"),
+  bank_cancel: tool("bank_cancel", "write", "account_set"),
+  bank_reconcile: tool("bank_reconcile", "write", "account_set"),
   auxiliary_entities: tool("auxiliary_entities", "query", "account_set"),
   auxiliary_entries: tool("auxiliary_entries", "query", "account_set"),
   auxiliary_ledger: tool("auxiliary_ledger", "query", "account_set"),
@@ -398,6 +414,15 @@ const hasPeriodEndCheckShape = (value) => isRecord(value) && hasText(value, "per
   && isPeriodEndCheckConsistent(value);
 
 const PLAIN_QUERY_SHAPES = Object.freeze({
+  bank_accounts: value => summarizeQueryResult("bank_accounts",value).summaryUnavailable === false,
+  bank_import_preview: value => summarizeQueryResult("bank_import_preview",value).summaryUnavailable === false,
+  bank_batches: value => summarizeQueryResult("bank_batches",value).summaryUnavailable === false,
+  bank_transactions: value => summarizeQueryResult("bank_transactions",value).summaryUnavailable === false,
+  bank_ambiguities: value => summarizeQueryResult("bank_ambiguities",value).summaryUnavailable === false,
+  bank_candidates: value => summarizeQueryResult("bank_candidates",value).summaryUnavailable === false,
+  bank_matches: value => summarizeQueryResult("bank_matches",value).summaryUnavailable === false,
+  bank_status: value => summarizeQueryResult("bank_status",value).summaryUnavailable === false,
+  bank_audit: value => summarizeQueryResult("bank_audit",value).summaryUnavailable === false,
   auxiliary_entities: value => summarizeQueryResult("auxiliary_entities",value).summaryUnavailable === false,
   auxiliary_entries: value => summarizeQueryResult("auxiliary_entries",value).summaryUnavailable === false,
   auxiliary_ledger: value => summarizeQueryResult("auxiliary_ledger",value).summaryUnavailable === false,
@@ -527,7 +552,21 @@ const FINANCE_QUERY_DATA_SCOPE = Object.freeze({
   },
 });
 // 普通只读工具里**同样带可信账套字段**的 DTO（列表行 account_set_id）。
+function bankScopes(value) {
+  const ids=[scopedIdOf(value,"accountSetId")], r=prop(value,"result");
+  const walk=(v,depth=0)=>{if(!v||typeof v!=="object"||depth>12)return;for(const k of Object.keys(v)){if(k==="accountSetId"||k==="account_set_id")ids.push(scopedIdOf(v,k));else if(k!=="snapshot")walk(prop(v,k),depth+1);}};
+  walk(r); return ids;
+}
 const PLAIN_QUERY_DATA_SCOPE = Object.freeze({
+  bank_accounts: bankScopes,
+  bank_import_preview: bankScopes,
+  bank_batches: bankScopes,
+  bank_transactions: bankScopes,
+  bank_ambiguities: bankScopes,
+  bank_candidates: bankScopes,
+  bank_matches: bankScopes,
+  bank_status: bankScopes,
+  bank_audit: bankScopes,
   auxiliary_entities: value => [scopedIdOf(value,"accountSetId"), ...rowScopeIds(prop(value,"items"))],
   auxiliary_entries: value => [scopedIdOf(value,"accountSetId")],
   auxiliary_ledger: value => [scopedIdOf(value,"accountSetId")],
@@ -980,6 +1019,7 @@ export function createFinanceModelAdapter(options = {}) {
       accountSetId = readAccountSetId(args, { required: true });
       executed = true;
       const value = await Promise.resolve().then(() => executeRaw(toolName, args));
+      if (operation.startsWith("bank_") && bankScopes(value).some(id=>id!==accountSetId)) return unboundWriteEnvelope(toolName,operation,summarizeWriteResult(operation,value),"scope_mismatch");
       if (operation.startsWith("auxiliary_")) {
         const id = scopedIdOf(value,"accountSetId");
         const nested = prop(value,"result");
@@ -1067,11 +1107,12 @@ export function createFinanceModelAdapter(options = {}) {
     let snapshot;
     try {
       // 在任何 await / Promise 之前固定参数：预验与 executeRaw 看到同一份规范化值。
-      snapshot = snapshotArguments(args, { strictAccountScope: name.startsWith("auxiliary_") });
+      snapshot = snapshotArguments(args, { strictAccountScope: name.startsWith("auxiliary_") || name.startsWith("bank_") });
     } catch (error) {
       return failureFromError(error, { tool: name, operation: spec.operation, category: spec.category });
     }
     try {
+      if (name.startsWith("bank_")) bankCallArgs(snapshot);
       if (spec.category === "static") {
         return name === "finance_query_catalog" ? buildStaticCatalog(name) : buildPlanSummary(name, snapshot);
       }

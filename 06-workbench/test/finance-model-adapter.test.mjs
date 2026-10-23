@@ -1555,6 +1555,24 @@ await test("review5 F3: 现金流 reconciles 是必需布尔，缺失 / 类型�
   legitFalse.policy.dispose();
 });
 
+await test('银行只接受本机草稿；真实提交后投影/ref失败仍不重写', async()=>{
+ assert.equal(AGENT_TOOL_NAMES.length,89);assert.equal(new Set(AGENT_TOOL_NAMES).size,89);
+ const {prepareBankDraft}=await import('../server/agent-tools.mjs'),{db}=await import('../server/db.mjs');
+ const target=identityFixtureCreate(A,{name:'Synthetic bank adapter',start_period:'2026-01'}).id;
+ let calls=0;const isolated=createFinanceModelAdapter({executeRaw:async(name,args)=>{calls++;return callAgentTool(name,args);}});
+ for(const args of [{accountSetId:target,draftRef:'bankdraft_'+'a'.repeat(48),approved:true},{accountSetId:target,draftRef:'bankdraft_'+'a'.repeat(48),reason:X.summary},{accountSetId:target,draftRef:'finref_'+'a'.repeat(48)}]){const r=await isolated.callModelTool('bank_accounts',args);assert.equal(r.ok,false);assertNoLeak(r,'bank invalid input');}assert.equal(calls,0);
+ const registered=await prepareBankDraft(target,{tool:'bank_account_register',payload:{bankAccountId:'bank-adapter',sourceId:'source-adapter',glAccountCode:'1002',currency:'CNY'},confirm:true});await callAgentTool('bank_account_register',{accountSetId:target,draftRef:registered.draftRef});
+ const payload={bankAccountId:'bank-adapter',period:'2026-01',asOf:'2026-01-31',coverageFrom:'2026-01-01',coverageTo:'2026-01-31',statementSource:X.summary,statementOpenCents:0,statementCloseCents:0};
+ for(const failure of ['summary','ref']){
+  const prepared=await prepareBankDraft(target,{tool:'bank_reconcile',payload,confirm:true}),before=db.prepare('SELECT COUNT(*) n FROM bank_reconcile_runs WHERE account_set_id=?').get(target).n;
+  let first=true;const tiny=failure==='ref'?new FinanceOutputPolicy({valueBytes:100}):new FinanceOutputPolicy();
+  const a=createFinanceModelAdapter({policy:tiny,executeRaw:async(name,args)=>{const raw=await callAgentTool(name,args);assert.equal(db.prepare('SELECT COUNT(*) n FROM bank_reconcile_runs WHERE account_set_id=?').get(target).n,before+1);if(failure==='summary'&&first)raw.result.book.closingCents=Number.MAX_SAFE_INTEGER;first=false;return raw;}});
+  const args={accountSetId:target,draftRef:prepared.draftRef},done=await a.callModelTool('bank_reconcile',args);assert.equal(done.applied,true);assert.equal(done.needsLocalReview,true);assert.equal(done.localRef,null);assert.ok(done.refUnavailable);assertNoLeak(done,'bank committed summary/ref failed');
+  const replay=await a.callModelTool('bank_reconcile',args);assert.equal(replay.applied,false);assert.equal(db.prepare('SELECT COUNT(*) n FROM bank_reconcile_runs WHERE account_set_id=?').get(target).n,before+1);a.policy.dispose();
+ }
+ isolated.policy.dispose();
+});
+
 await test("模型返回 / 错误投影 / 测试日志都不含合成敏感原文", async () => {
   // 通道释放后本机读取必须失效（能力对象是唯一凭据）
   policy.releaseChannel(channel);
@@ -1575,8 +1593,8 @@ await test("模型返回 / 错误投影 / 测试日志都不含合成敏感原�
 
 // ---------------------------------------------------------------- 汇总与清理
 policy.dispose();
-try { (await import("../server/db.mjs")).db.close(); } catch { /* 已关闭或不可用 */ }
-try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 已在退出时释放 */ }
+try { (await import("../server/db.mjs")).db.close(); console.log("model-adapter SQLite actualclose"); } catch { /* 已关闭或不可用 */ }
+try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 已在退出时释放 */ }
 
 console.log(`\nFinance model adapter acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;

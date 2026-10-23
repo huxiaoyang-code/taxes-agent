@@ -101,6 +101,10 @@ const steps = [
   { name: "auxiliary-model-boundary", file: join(WORKBENCH, "test", "auxiliary-model-boundary.test.mjs"), cwd: WORKBENCH },
   { name: "auxiliary-mcp", file: join(MCP, "auxiliary-test.mjs"), cwd: MCP },
   { name: "local-bank-aux-integration", file: join(WORKBENCH, "test", "local-bank-aux-integration.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-local-drafts", file: join(WORKBENCH, "test", "bank-local-drafts.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-http", file: join(WORKBENCH, "test", "bank-http.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-ui-contract", file: join(WORKBENCH, "test", "bank-ui-contract.test.mjs"), cwd: WORKBENCH },
+  { name: "bank-mcp", file: join(MCP, "bank-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {
