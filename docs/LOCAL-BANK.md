@@ -1,6 +1,6 @@
-> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。证据、旧拒绝与未完成边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
 
-以下保留R4阶段说明；最新R5与main11状态以页头交接为准。
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
 
 R4先检查原options描述符/Proxy等，再生成安全副本；11个公开入口及persist分支均在原参数首次读取前严检，scope/request/body/refs同源。仅statementOpenCents/statementCloseCents两个明确顶层BigInt按十进制字符串参与审计、实际业务保BigInt，深层或其它BigInt不放行。固定entry覆盖caller自带entry，相同operationId跨getBankStatus/listMatchesView确定冲突且不重执。persist=false不增加审计写，原事务/金额/私有授权/quarantine合同不变。
 

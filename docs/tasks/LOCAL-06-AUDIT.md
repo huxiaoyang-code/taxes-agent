@@ -1,6 +1,6 @@
-> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。证据、旧拒绝与未完成边界见[LOCAL06当前交接](../handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](../handoffs/LOCAL-06-AUDIT.md)。
 
-以下保留R4阶段说明；最新R5与main11状态以页头交接为准。
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
 
 负责人huxiaoyang-code。R4唯一兜底实施者完成四路径修复后停止，root在冻结字节上通过13原套＋1自选probe并实际关闭；当前只收口13docs与总manifest，不改52份非文档。旧81被最终独审拒绝，下一步锁定最终整合head并安排全新最终独审，尚无本W2b PR/merge。
 

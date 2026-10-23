@@ -1,6 +1,16 @@
-> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。
 
-## W2b R5 与 main11 当前交接（2026-10-24）
+## main0e 当前状态：29完整独审接受，新精确head待增量核证（2026-10-24）
+
+未参与实施或管理设计的全新nonefork reviewer已完整阅读65差异并独立运行13组合成验证，正式ACCEPT候选29f76f2479425a8f192f13cf1c11dd318ce63138（tree b3d5a54e3d7d5f3086ac0b12b0362755ae0b60f0，BASE11e47），报告SHA256 b283c097dd571cbe9a89fd98b953720e270142d2417e983a2e43e7e0409d8548。该完整65审查与13组证据已实际发生，保留其成果；发布首main核对发现主线已到0e即停止，未写任何远端对象/ref，尚未PR或合并。旧81/870精确候选被拒、旧870完整65审查未完及旧管理/独审夹具失败仍保历史，不能用29的接受覆盖旧失败。
+
+主线PR99的8上游路径包含共享parser及银行XLSX纯材料重放/kind真实变化，零交W2b的65/原66；root已实际整合至cef967e2d31f289c5e918bbb87a32afc09df0805，tree e8f66096d2fccf01ac98d294b2f8f794681770d9，BASE0e89a2d107fd75ff18dc0998e89d96c3217baeb3。整合前后本包65 bytes/SHA全同，52份非docs保持29候选字节；最新claim6376168302，65路径不增，上游新文件只读。
+
+root五套影响补验已实际结束并全部通过：bank-xlsx27/27、原xlsx19/19、material-store32/32、action-plan33/33、golden15/15（12个business cases＋3 controls）。两组passed=true、error=null、sourceUnchanged=true，每suite真实spawn/exit0/close0，所有fixtures/log保留，原测试和断言未改。原nested同步child只按返回数字status与DBclose marker核，不虚写async事件。旧main11四套、R5独验及29完整独审13组按原阶段保留，不声称旧全部矩阵在0e重跑，也未跑新完整97。
+
+当前只完成13docs当前元数据和aggregate65清单刷新，不修改52非docs。29已接受；main0e整合后的新精确head尚待root保存并由同一未实施reviewer核新上游8路径、13metadata差异及HEAD/BASE/65/clean/source后增量ACCEPT或REJECT，不能预称新HEAD已接受。随后PR/授权合并/真实交接由root执行，当前仍无本W2b PR/merge。原八任务仍6/8，W3b共享资源锁/持久epoch/20企两月、W4恢复执行权/路径重绑、Windows及最终整链未完。产品本机单用户、同DB多企业、一企一套，不每企目录/进程；真实税局0，无真实账套/凭据/浏览器操作。
+
+## W2b R5 与 main11 交接记录（0e之前阶段历史）
 
 R5最小修复已由root独立验收并保存为d1d618b5d19f31a877f94407ffcfcf10f518af15：executePreparedChild在消费与callback之前检查实际私有permission属于当前live父已绑定固定计划。未绑定、空计划和非空排除均拒绝；原DB/file/instance/父ID/attempt/used检查、authorizer、schema、严格snapshot、事务/未知失败/quarantine及receipt2合同不变，不增加授权能力。只改storage及现有domain test两路径，旧87043a11b626a048e65e81931543be8dc3df2a3e因缺该membership核对被独审REJECT，旧870完整65审查未完成。旧870/旧81精确候选不能直接作为最终head合并，修复保留历史父链；旧证据和失败不覆盖。
 

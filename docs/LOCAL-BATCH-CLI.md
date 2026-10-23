@@ -1,6 +1,6 @@
-> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。证据、旧拒绝与未完成边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
 
-以下保留R4阶段说明；最新R5与main11状态以页头交接为准。
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
 
 R4不扩大batch权限或锁能力，前轮父子审计、checkpoint和真实跨企渲染证据按原版本保留。本轮13原套＋1探针补验四个变化路径的影响，未把前轮50定点与四probe说成在新字节上全部重跑。W3b全入口资源锁/持久代次/20企两月19＋1与运行中备份、W4恢复分叉和路径重绑仍待后续。
 

@@ -1,6 +1,6 @@
-> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。证据、旧拒绝与未完成边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
 
-以下保留R4阶段说明；最新R5与main11状态以页头交接为准。
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
 
 R4在读取原options的scope、spread或persist之前，无回调拒Proxy/accessor/非法原型/symbol/cycle/function等，再生成安全数据副本，scope/request/body/refs使用同一数据。严格S_result保持；银行仅既有两个明确顶层statement cents BigInt可投影十进制字符串，业务副本仍保BigInt，其它位置及深层BigInt拒绝。复制保own undefined/holes/nullproto/安全__proto__。extractOperationMetadata仅复用提取的纯私有descriptor clone，先严格snapshot及返回合同不变；固定银行entry最后写入审计请求。
 
