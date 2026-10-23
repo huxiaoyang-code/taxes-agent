@@ -1,3 +1,5 @@
+> **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
+
 > **2026-10-23 当前交付事实（覆盖下方旧状态，历史验收数字仍按原时点阅读）**：B1 已随 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 合并，已审最终源 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，管理者核对合并树与已审树一致。前一源码候选 `214a0c1e` 与 `37bcb286` 的整个 `06-workbench` 树相同；后者只收窄两份文档的归一化金额 / 指纹边界，且获独立审查接受。独立验证 CLI **11/11**、persistence **39/39** 加 **5 组 probe**；root 管理验证 persistence **39/39**。这些是 PR65 候选的既有证据，本次文档轮没有重跑。
 >
 > **只完成 B1，LOCAL-07 整包未完成**：现库组件安装、共享手工 / 批量互斥（W3），真实备份恢复后的实例分叉、输入 / 输出重绑与核验（W4）仍待实施。[Issue #51](https://github.com/huxiaoyang-code/youshu-fork/issues/51) 继续跟踪；不关闭总任务。已合测试的统一入口登记现纳入 LOCAL-08 候选（原59追加2形成61），最终全入口验证待 root。
@@ -471,3 +473,41 @@ F4 用确认死亡 owner 覆盖接管与 fence 递增；本轮**未**新增「PI
    `dev/ino` 内容被改写成外部库）已由 nonce 真实验证拒绝，**不把这些说成彻底排除所有平台的 ABA**。
 
 完成本包验收 / PR 合并 / 交接后关闭本窗口 pi；下一包使用新进程、新会话，只载入任务所需材料。
+
+## W3a 当前候选：真实自测与交付边界
+
+基线 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`；W3a 尚未管理验收 / 独审 / PR / 合并。新增严格 batch1/2 登记、同步 fresh batch2、自有实例及三表绑定、async 显式保护安装 / CLI install、ready gate；audit 命名空间按对象归属及实际 SQL 表引用识别，普通 audit_instance_id 列和字符串/注释不污染审计事实。后装 bank/aux/audit 保持官方 source 预约核证并核真实 batch 维护准入。
+
+实际命令 cwd 均为 `06-workbench`，解释器 `D:/node.exe`：
+
+| 定点 | 实际结果 |
+|---|---|
+| `test/local-batch-install.test.mjs` | 扩至10组时全0；最后 report 可变快照兼容修正后，仅用 BATCH_TEST_CASE 精确选新增第11组实际 exit0，不把它写为整11组重跑 |
+| `test/local-batch-backup-integration.test.mjs` | 6组 exit0；含48合法版本组合官方 backup→verify→restoreNew→again、四安装顺序、历史关联、WAL/非WAL、namespace与严格DDL/内容攻击 |
+| `test/local-batch-persistence.test.mjs` | 实际39/39，exit0 |
+| `test/local-batch-cli.test.mjs` | 实际11/11，exit0；已核 Python+Poppler 完成中文 PDF 文本/分页/金额及 CSV/XLSX |
+| `test/local-backup.test.mjs` | 实际29/29，exit0 |
+| `test/local-audit-install.test.mjs` | 4组 exit0，含24真实组合、四后装顺序、verify故障/预约、links/错句柄/DDL |
+| `test/local-audit-backup-integration.test.mjs` | 实际 exit0（5组），非最终report兼容改动后重跑 |
+| `test/bank-reconciliation.test.mjs` | 实际43/43，exit0，skip0 |
+| `test/auxiliary-storage.test.mjs` | 实际 exit0，含严格未知组合零DDL |
+
+DB 均 finally 实际关闭；异步 child 等 close 事件，外层逐套也等实际 close。仅新 UUID 合成根，业务 import 前设置 TEMP/TMP/WORKBENCH_DATA_DIR 和 KEEP_FIXTURES / WORKBENCH_TEST_KEEP_FIXTURES=1；不读真实账套/税务凭据/浏览器，不清旧目录或未知进程。
+
+新两套最终全0现场 `w3a-newfinal-42de682e-36bd-4f49-bccb-b54e734e10d6`，对应 batch roots `batch2-test-c0d0d583-4f6e-4aed-9156-416c1a5a22ea` 和 `batch2-test-1f45b7e1-54cd-4b08-8354-57adf2b5dd70`；旧失败定点补齐后全0现场 `w3a-recheck-396961fd-7a38-489c-a670-6fb82f70b903`。这些是本机忽略现场名称，跨机器验收以源码/测试/PR为准。
+
+保留失败历史：初次CLI缺已核Python、Windows link被沙箱EPERM，获准环境复跑原用例全部通过，未skip。新测试夹具的未export符号、audit索引建序与writable_schema防御失败均修正夹具，不放宽产品；所有UUID失败现场保留。G1原坏快照改为严格存储早拒batch_schema_invalid并核主库字节/业务与旧error不变；H2同名view在DDL前严格早拒，原冲突对象/半表零落地/伪回执反例保留。
+
+原八表和序列迁移前后摘要示例 `ed383b5fd939440188d1a4ab025cf109498b8a526a9624176cb08425a826ae18` 完全相同；确定DDL故障回滚原库逻辑摘要 `2380965eee7ac47f505e49a216b167efba473595b5d04569f50a38d7ffa40488` 保持。新fixture保留42.37输入、12.39/0.03 DTO小数、19.37→23.81可变快照中断；合成两账套期初379.23/68.59（总447.82）。升级、备份不改变金额。完整每次根/命令/exit与精确SHA256文件清单由本片忽略交付卡提供 root 冻结。
+
+最后 report 修正依据真实顺序：persistSnapshot 先覆盖可变DTO，再claimStage更新attempt hash；因此 pending/failed/running 历史hash只核摘要形状，有成功checkpoint时精确核evidence.snapshotHash。新增正例保留重试中断并官方备份/1→2，负例拒成功hash与自身checkpoint不一致。此修正后 root 仍须独立复跑受影响项；不能沿用先前自测冒称最终全绿。
+
+原八包6/8，LOCAL06/07仍未完成。W2b业务coordinator、W3b共享写锁与真实20企业/检查点、W4恢复分叉/receipt/重绑、安全续跑、Windows与最终整链不在本片。本片roundtrip只是忠实恢复字节，不授予副本执行权。
+
+### W3a 失败释放的保全取舍
+
+实际新UUID/同inode反例证实：受控子进程WAL提交合成12.39后退出，旧release为判断空库打开SQLite会改变SHM字节。经root接受，本片仅在storage调用已审guard的固定 `{preserveDatabase:true}`，guard源码未改、不加可传清理开关；仍释放自己的marker/创建fd，但保留所有DB/WAL/SHM字节，连本次空种子也保留供诊断。**失败后不能承诺自动清空或同路径可直接fresh重试**，未提供删除命令。
+
+新增真实child提交后actual close回归实际exit0：主库 `26d7467744a8a62c1beb99a28d0512306cdcde8e3836abbb793aee35325d56c7`、WAL `1a8f8c6828e24e30df0b9fb1e20ca9e9b14779bdfa2a7cd350a4fbd1cf227f29`、SHM `3939df1ca6d98b45659196f8a122481d2321f3f866efac2864b32f86285218d2` 前后完全相同，inode/dev不变，自己marker释放、二次release幂等。原H4/H8保留替换/外部对象断言，只更新受此取舍影响的空种子行为。
+
+最终释放增量复验：`D:/node.exe test/local-batch-persistence.test.mjs`，cwd=06-workbench，在新UUID `w3a-release-final-547cec2f-28b0-42df-a674-3d0082142c2e` 实际39/39、exit0、child actual close。首轮保留现场 `w3a-release-persistence-0c3bd687-8c39-4692-b8cc-7d801a55a316` 为38/39，H8另一支旧“种子删除”断言漏同步，已同一保全合同更新为种子存在且hash同，替换marker/外部字节反例全部保留。新增install现为12组：第11可变report历史和第12sameinode释放各以精确BATCH_TEST_CASE单独exit0，不冒称整12组重跑；原10组/backup6组先前全0证据保留。report修正后的v1升级定点另实际exit0，八旧表/序列摘要 `8d39e2e10ff477751877a85c7fc24c5715748ba4b275a421a184f987e82ba2a6` 前后一致，component仅升version，原updated_at/note保持。root最终全影响验收/fresh独审/PR仍待进行。

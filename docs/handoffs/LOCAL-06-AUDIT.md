@@ -153,3 +153,15 @@ unknown → succeeded 是之后显式核验的结果，ledger 与业务库**非�
 3. 需要接口细节读 [LOCAL-AUDIT](../LOCAL-AUDIT.md) §11，不要从其他候选分支猜实现；
 4. 最终 head 增量复核 → PR 由管理者 / 原独立审查者接手；B 包使用新进程 / 新会话，
    只载入任务单、本交接与 `docs/LOCAL-AUDIT.md`。
+
+## W2a 已合事实（W3a 开工核对，2026-10-23）
+
+PR [#75](https://github.com/huxiaoyang-code/youshu-fork/pull/75) 已于 2026-10-23T14:42:07Z 合并；已审完整 head `7220dd10b4e1e3f9bf10c56f5a1cf6638b1ec2a5`，merge/main `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。此处事实由 root 核实提供，覆盖前文尚待 PR 的历史状态。
+
+root 十套影响回归实际 exit 0；两 profile 独立验收 1000→1067.19、确定失败回滚后仍 1067.19、新 attempt 1055.11；双连接、pending 及官方联合恢复实际 exit 0，连接实际关闭，文件哈希一致。全新未参与实施者对完整 head 独审接受，无 P1/P2；其独立合成金额 423.71→441.94→失败仍 441.94→新 attempt 436.25。真实 COMMIT 后异常为 unknown，只读重放返回已提交终态；历史 audit1、反序安装、联合恢复、receipt 非法字段及 actor 不一致拒绝通过，7 个连接实际 close、20 项哈希一致。首次独审夹具因索引建序失败保留，修正夹具后在新根通过，未改产品。
+
+W2a 交付的是原语、严格 audit1/2 保护安装和官方备份登记，尚不代表领域入口已接线。原八包仍 6/8；LOCAL06/07、W2b 业务 coordinator、W3b 共享写锁与真实 20 企业检查点、W4 恢复和最终 Windows 链仍未完成。
+
+## W3a 后继候选（尚未 root 验收 / 独审 / PR / 合并）
+
+在PR75基础上已实施strict batch1/2官方registry、受保护batch2安装与ready门，audit命名空间准确识别及后装当前NULL关联；未改audit1/2历史DDL/摘要/owner-only/pending协议。实际必要定点、先前失败与最后report历史/释放保全增量边界见[LOCAL07交接](LOCAL-07-CLI.md)。W2b领域coordinator仍待后包，原LOCAL06/07不标完成。

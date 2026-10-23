@@ -129,10 +129,32 @@ const tablesFor=v=>v===1?V1_TABLES:AUDIT_TABLES;
 const normalizeSql=s=>String(s??'').replace(/\s+/g,' ').trim().replace(/;$/,'');
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
 /** Complete actual facts, including implicit index collations, order, origin, FK and rowid. */
+/** SQL identifiers only: comments/literals and ordinary column names are not dependencies. */
+export function sqlReferencesNamespace(sql,prefix) {
+ const raw=String(sql??'').match(/--[^\r\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[(?:\]\]|[^\]])*\]|[A-Za-z_][A-Za-z_0-9]*|[(),.;]/g)??[];
+ const tokens=raw.filter(t=>!t.startsWith('--')&&!t.startsWith('/*')).map(t=>{
+  const quoted=['"',"'",'\x60','['].includes(t[0]);
+  return {quoted,value:(quoted?t.slice(1,-1).replaceAll(t[0]==='['?']]':t[0]+t[0],t[0]==='['?']':t[0]):t).toLowerCase()};
+ });
+ let expect=false,from=false;const stack=[];
+ for(let i=0;i<tokens.length;i++) {
+  const {value:t,quoted}=tokens[i];
+  if(!quoted&&t==='('){stack.push(from);from=expect||false;continue;}
+  if(!quoted&&t===')'){from=stack.pop()??false;expect=false;continue;}
+  if(!quoted&&['from','join','update','into','references'].includes(t)){expect=true;if(t==='from')from=true;continue;}
+  if(!quoted&&['select','where','group','order','having','limit','union','except','intersect','set','values','begin','end',';'].includes(t)){from=false;expect=false;continue;}
+  if(!quoted&&t===','&&from){expect=true;continue;}
+  if(expect){if(!quoted&&['only','or','replace','ignore','abort','fail','rollback'].includes(t))continue;
+   const name=tokens[i+1]?.value==='.'?tokens[i+2]?.value:t;
+   if(name?.startsWith(prefix))return true;expect=false;
+  }
+ }
+ return false;
+}
 export function auditSchemaFacts(db,version) {
  const tables=tablesFor(version);
  const objects=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all().filter(r=>
-   tables.includes(r.tbl_name)||r.name.startsWith('audit_')||r.name.startsWith('idx_audit_')||/\baudit_[a-z_]+\b/i.test(r.sql??''))
+   tables.includes(r.tbl_name.toLowerCase())||r.name.toLowerCase().startsWith('audit_')||r.name.toLowerCase().startsWith('idx_audit_')||sqlReferencesNamespace(r.sql,'audit_'))
    .map(r=>({...r,sql:r.sql===null?null:normalizeSql(r.sql)}));
  const facts=tables.map(t=>({table:t,
   columns:db.prepare('SELECT * FROM pragma_table_xinfo(?) ORDER BY cid').all(t),
@@ -211,7 +233,7 @@ export function inspectAuditSchema(db) {
  const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>r.name);
  const present=AUDIT_TABLES.filter(t=>tables.includes(t));
  let version=0, activeInstanceId=null,activeInstanceCount=0,problems=[];
- const any=db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'audit_%' OR name LIKE 'idx_audit_%'").all().length>0;
+ const any=db.prepare("SELECT name FROM sqlite_master WHERE lower(name) GLOB 'audit_*' OR lower(name) GLOB 'idx_audit_*'").all().length>0;
  if(!any)return {tables,present:[],installed:false,version:0,target:2,activeInstanceId:null,activeInstanceCount:0,missingTables:[],missingColumns:{},missingTriggers:[],invalidTriggers:[],problems:[],state:'not_installed',ok:false};
  try {
   version=db.prepare('SELECT version FROM audit_components WHERE component=?').get(AUDIT_COMPONENT)?.version??0;
@@ -260,11 +282,17 @@ export async function installAuditSchema(db,{dbPath,outDir}={}) {
  try {
   if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
   s=inspectAuditSchema(db);if(s.state!=='not_installed')assertInstalledSchema(db);
+  LB.assertSupportedDatabaseConnection(db);
+  const Batch=await import('./local-batch-storage.mjs');Batch.assertBatchMaintenanceReady(db);
   const created=LB.createBackup({dbPath:before.path,outDir});if(!created.ok)throw fail('audit_backup_invalid');
   const verified=LB.verifyBackup({backupDir:created.backupDir});
   if(!verified.ok||verified.status!=='ok'||verified.summary.snapshotBytes!==created.backupMeta.snapshotBytes||verified.summary.snapshotSha256!==created.backupMeta.snapshotSha256||verified.manifest.source.file!==basename(before.path)||canonicalAuditJson(verified.manifest)!==canonicalAuditJson(created.manifest))throw fail('audit_backup_invalid');
+  if(s.state==='not_installed')LB.assertInstallableComponentSet(verified.manifest,AUDIT_COMPONENT);
   try{LB.assertBackupSourceConnection(db,verified.manifest);}catch{throw fail('audit_backup_source_mismatch');}
   if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
+  const batchBefore=Batch.inspectBatchSchema(db);
+  if(batchBefore.state!=='not_installed')Batch.assertBatchSchema(db);
+  const batchActive=batchBefore.version===2?Batch.readBatchInstance(db):null;
   if(s.state==='not_installed') {
    for(const sql of V1_STATEMENTS)db.exec(sql);
    db.prepare('INSERT INTO audit_components VALUES(?,?,?,?)').run(AUDIT_COMPONENT,1,new Date().toISOString(),'LOCAL-06');
@@ -272,6 +300,12 @@ export async function installAuditSchema(db,{dbPath,outDir}={}) {
   }
   for(const sql of V2_STEPS)db.exec(sql);
   db.prepare('UPDATE audit_components SET version=2 WHERE component=?').run(AUDIT_COMPONENT);
+  // The active NULL captured under the verified source reservation is the only writable mapping.
+  if(batchActive?.audit_instance_id===null) {
+   const changed=db.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE instance_id=? AND is_active=1 AND audit_instance_id IS NULL').run(currentAuditInstanceId(db),batchActive.instance_id);
+   if(changed.changes!==1)throw fail('audit_schema_inconsistent');
+  }
+  if(batchBefore.state!=='not_installed')Batch.assertBatchSchema(db);
   assertInstalledSchema(db);if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
   db.exec('COMMIT');return {installed:true,from:s.version,to:2,activeInstanceId:currentAuditInstanceId(db),backupDir:created.backupDir};
  }catch(e){if(!rollback(db)){quarantine.add(db);throw fail('audit_commit_unknown');}throw fail(e?.code?.startsWith('audit_')?e.code:'audit_schema_install_failed');}

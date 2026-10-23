@@ -7,11 +7,10 @@
 //    数据目录」之后才决定是否打开 / 迁移业务库；status 只读命令也只使用本文件。
 // 2) 任务、阶段、锁、输入快照、产物元数据全部落在**同一个** workbench.db（local_batch_ 前缀 +
 //    独立 component 版本表），这样业务状态与 checkpoint 处于同一备份时点。不另建队列 DB。
-// 3) 新增 component 结构前必须先有可恢复的一致备份（LOCAL-06 createBackup / verifyBackup）。
-//    本包尚未接线现库组件安装，因此：只在**显式新目标**（没有任何 workbench.db）上初始化结构，
+// 3) 现库安装 / v1→v2 必须显式 async installBatchSchema 并经官方一致备份保护。
+//    同步 ensure 只校验严格v2，或在**显式新目标**（没有任何 workbench.db）上初始化结构，
 //    且必须持有本进程 claimFreshDataDir 的独占回执（O_EXCL 标记 + 库文件 dev/ino 绑定）；
-//    布尔 fresh / 自造回执无效。既有库（含空业务核心库、零字节文件、缺 batch 表）一律
-//    migration_requires_backup / dependency_unavailable，绝不自动建表 / 升级，也不用 copyFile 主文件冒充备份。
+//    布尔 fresh / 自造回执无效。已有库不自动建表 / 升级；零字节 / 非产品库不能偷当fresh。
 // 4) 同账套跨进程互斥用数据库行锁 + 单调 fencing token + 租约；租约过期不等于旧执行者已死：
 //    PID 仍存活或权限不确定时保守拒绝（owner_active），只有「租约过期且 PID 已确认不存在」才接管
 //    并递增 fence，旧 token 的任何提交都会被事务内 fence 校验拒绝。
@@ -21,14 +20,15 @@ import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readF
 import { basename, dirname, join, parse, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as guard from "./database-open-guard.mjs";
+import { inspectAuditSchema, sqlReferencesNamespace } from "./local-audit-storage.mjs";
 
 export const LOCAL_BATCH_COMPONENT = "local-batch";
-export const LOCAL_BATCH_SCHEMA_VERSION = 1;
+export const LOCAL_BATCH_SCHEMA_VERSION = 2;
 
 /** 新建目标的所有权标记文件：与 workbench.db 同目录，只在「建立批量结构」窗口内存在。 */
 export const FRESH_CLAIM_MARKER = ".local-batch-create";
 
-export const LOCAL_BATCH_TABLES = [
+export const LOCAL_BATCH_V1_TABLES = [
   "local_batch_component",
   "local_batch_jobs",
   "local_batch_items",
@@ -38,6 +38,8 @@ export const LOCAL_BATCH_TABLES = [
   "local_batch_snapshots",
   "local_batch_inputs",
 ];
+
+export const LOCAL_BATCH_TABLES = [...LOCAL_BATCH_V1_TABLES, 'local_batch_database_instances', 'local_batch_job_bindings', 'local_batch_input_bindings'];
 
 export const STAGE_STATUS = Object.freeze({
   PENDING: "pending",
@@ -237,7 +239,7 @@ export function assertInitializable(dataDir) {
         batchVersion: state.batchVersion, coreVersion: state.coreVersion, hasBusinessContent: state.hasBusinessContent,
         bytes: state.bytes,
       },
-      "既有数据库（包括空文件）还没有批量结构：新增 component 结构前必须先用已审 LOCAL-06 一致备份并核验成功",
+      "请先执行 install --data-dir <目录> --out-dir <全新备份目录>：既有库安装需要官方一致备份",
     );
   }
   FAIL("migration_requires_backup", {
@@ -411,11 +413,12 @@ export function claimFreshDataDir(dataDir, { pid = process.pid } = {}) {
 /**
  * 释放本进程所有权标记 / 创建句柄（重复 release 是无副作用的 no-op）。
  * 全部判断只读 guard 的模块私有创建事实；调用方 token 上的字段不参与。
- * 只删除「路径对象仍是创建时 dev/ino 且内容仍为本进程写下的那份」的标记，以及「身份未变且仍只有页 1 种子」
- * 的自己创建的库文件；被替换对象（含同 nonce 的新对象）/ 外部零字节文件 / 已有核心结构一律保留现场。
+ * 仅删除仍属于本进程的标记、关闭创建 fd；固定保留所有 DB / WAL / SHM 字节（包括空种子）。
+ * 不为判断空库而重新打开 SQLite，避免同 inode 外部 WAL 的 SHM 被只读探测改变。
+ * 失败后留下的种子用于诊断，不代表该路径可直接按 fresh 重试。
  */
 export function releaseFreshClaim(receipt) {
-  const result = guard.releaseFreshClaimFacts(receipt);
+  const result = guard.releaseFreshClaimFacts(receipt, { preserveDatabase: true });
   return result.released === true;
 }
 
@@ -551,44 +554,225 @@ const SCHEMA_STATEMENTS = [
    )`,
 ];
 
-/**
- * 建立批量结构。只允许在**显式新建**的数据目录（由 claimFreshDataDir 取得本进程独占回执）上调用；
- * 建表 + component 版本记录在同一事务内，任一步失败整体回滚，不留半套 schema。
- * 不接受 freshDatabase 布尔参数：布尔值不能证明「本次亲手创建」，必须持有进程内回执。
- */
-export function ensureBatchSchema(db, { receipt = null } = {}) {
-  const version = readBatchVersion(db);
-  if (version !== null) {
-    if (version === LOCAL_BATCH_SCHEMA_VERSION) return { created: false, version };
-    if (version > LOCAL_BATCH_SCHEMA_VERSION) FAIL("schema_future_version", { found: version, supported: LOCAL_BATCH_SCHEMA_VERSION });
-    FAIL("migration_requires_backup", {
-      found: version, supported: LOCAL_BATCH_SCHEMA_VERSION, dependency: "LOCAL-06 createBackup/verifyBackup",
-    });
+const V2_STATEMENTS = [
+ `CREATE TABLE local_batch_database_instances (
+ instance_id TEXT PRIMARY KEY,
+ parent_instance_id TEXT REFERENCES local_batch_database_instances(instance_id) ON DELETE RESTRICT,
+ audit_instance_id TEXT UNIQUE,
+ is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+ created_at TEXT NOT NULL,
+ origin TEXT NOT NULL CHECK(origin IN ('initial','restore-new')),
+ write_state TEXT NOT NULL CHECK(write_state IN ('ready','restore_pending')),
+ restore_operation_id TEXT,
+ source_backup_digest TEXT,
+ CHECK(parent_instance_id IS NULL OR parent_instance_id<>instance_id),
+ CHECK((origin='initial' AND parent_instance_id IS NULL AND restore_operation_id IS NULL AND source_backup_digest IS NULL AND write_state='ready') OR
+       (origin='restore-new' AND parent_instance_id IS NOT NULL AND restore_operation_id IS NOT NULL AND source_backup_digest IS NOT NULL))
+ )`,
+ `CREATE UNIQUE INDEX idx_local_batch_instances_active ON local_batch_database_instances(is_active) WHERE is_active=1`,
+ `CREATE TABLE local_batch_job_bindings (
+ database_instance_id TEXT NOT NULL REFERENCES local_batch_database_instances(instance_id) ON DELETE RESTRICT,
+ job_id INTEGER NOT NULL REFERENCES local_batch_jobs(id) ON DELETE CASCADE,
+ output_state TEXT NOT NULL CHECK(output_state IN ('bound','disabled')),
+ output_root TEXT,
+ bound_at TEXT NOT NULL,
+ PRIMARY KEY(database_instance_id,job_id),
+ CHECK((output_state='bound' AND output_root IS NOT NULL) OR (output_state='disabled' AND output_root IS NULL))
+ )`,
+ `CREATE TABLE local_batch_input_bindings (
+ database_instance_id TEXT NOT NULL REFERENCES local_batch_database_instances(instance_id) ON DELETE RESTRICT,
+ input_key TEXT NOT NULL REFERENCES local_batch_inputs(input_key) ON DELETE CASCADE,
+ mode TEXT NOT NULL CHECK(mode IN ('source','inline','saved_snapshot','disabled')),
+ source_path TEXT,
+ bound_at TEXT NOT NULL,
+ PRIMARY KEY(database_instance_id,input_key),
+ CHECK((mode='source' AND source_path IS NOT NULL) OR (mode<>'source' AND source_path IS NULL))
+ )`,
+];
+const batchTables = version => version===1 ? LOCAL_BATCH_V1_TABLES : LOCAL_BATCH_TABLES;
+const normalizeBatchSql = sql => sql===null?null:sql.replace(/\bIF\s+NOT\s+EXISTS\b/gi,'').replace(/\s+/g,' ').trim();
+export function batchSchemaFacts(db, version) {
+ const tables=batchTables(version);
+ const objects=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all()
+  .filter(r=>tables.includes(r.tbl_name.toLowerCase())||r.name.toLowerCase().startsWith('local_batch_')||r.name.toLowerCase().startsWith('idx_local_batch_')||sqlReferencesNamespace(r.sql,'local_batch_'))
+  .map(r=>({...r,sql:normalizeBatchSql(r.sql)}));
+ return {version,objects,tables:tables.map(table=>({table,
+  columns:db.prepare('SELECT * FROM pragma_table_xinfo(?) ORDER BY cid').all(table),
+  attributes:db.prepare("SELECT type,ncol,wr,strict FROM pragma_table_list WHERE schema='main' AND name=?").get(table)??null,
+  indexes:db.prepare('SELECT * FROM pragma_index_list(?) ORDER BY name').all(table).map(i=>({...i,keys:db.prepare('SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno').all(i.name)})),
+  foreignKeys:db.prepare('SELECT * FROM pragma_foreign_key_list(?) ORDER BY id,seq').all(table),
+ }))};
+}
+const batchContracts=new Map();
+export function batchComponentContract(version) {
+ if(version!==1&&version!==2)FAIL('batch_schema_future_version');
+ if(!batchContracts.has(version)) {
+  const ref=new DatabaseSync(':memory:');
+  try {for(const sql of SCHEMA_STATEMENTS)ref.exec(sql);if(version===2)for(const sql of V2_STATEMENTS)ref.exec(sql);
+   batchContracts.set(version,canonicalJson(batchSchemaFacts(ref,version)));
+  }finally{ref.close();}
+ }
+ return {name:LOCAL_BATCH_COMPONENT,version,tables:[...batchTables(version)],facts:JSON.parse(batchContracts.get(version))};
+}
+const batchIso=v=>typeof v==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v)&&!Number.isNaN(Date.parse(v))&&new Date(v).toISOString()===v;
+const batchDigest=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+const batchUuid=v=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(v);
+const batchTech=v=>typeof v==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v);
+const positive=v=>Number.isSafeInteger(v)&&v>0;
+const batchPath=v=>typeof v==='string'&&v.length>0&&!/[\u0000-\u001f\u007f]/.test(v)&&sameCanonicalPath(v,resolve(v))&&/^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(v);
+function readSavedJson(text) {
+ const value=JSON.parse(text);
+ // Batch's existing canonical serializer deliberately supports finite currency decimals.
+ if(canonicalJson(value)!==text)FAIL('batch_content_invalid');return value;
+}
+function batchContentValid(db,version) {
+ const component=db.prepare('SELECT * FROM local_batch_component').all();
+ if(component.length!==1||component[0].component!==LOCAL_BATCH_COMPONENT||component[0].version!==version||!batchIso(component[0].updated_at)||(component[0].note!==null&&typeof component[0].note!=='string'))return false;
+ const jobs=db.prepare('SELECT * FROM local_batch_jobs').all(),items=db.prepare('SELECT * FROM local_batch_items').all();
+ const jobMap=new Map(),itemMap=new Map(items.map(r=>[r.id,r]));
+ for(const j of jobs){const m=readSavedJson(j.manifest_json),validated=validateManifest(m);if(!validated.ok||canonicalJson(validated.manifest)!==j.manifest_json||!positive(j.id)||!batchTech(j.job_key)||!batchDigest(j.manifest_hash)||sha256(j.manifest_json)!==j.manifest_hash||m.jobKey!==j.job_key||m.schemaVersion!==1||!Array.isArray(m.items)||m.concurrency!==j.concurrency||!Number.isInteger(j.concurrency)||j.concurrency<1||j.concurrency>8||!batchPath(j.output_dir)||!Object.values(JOB_STATUS).includes(j.status)||![0,1].includes(j.cancel_requested)||!batchIso(j.created_at)||!batchIso(j.updated_at))return false;jobMap.set(j.id,{...j,manifest:m});}
+ for(const r of items){const j=jobMap.get(r.job_id),m=j?.manifest.items.find(i=>i.itemKey===r.item_key);if(!positive(r.id)||!m||m.source?.enterpriseKey!==r.enterprise_key||m.source?.system!==r.source_system||m.source?.enterpriseName!==r.enterprise_name||!Object.values(ITEM_STATUS).includes(r.status)||!batchIso(r.created_at)||!batchIso(r.updated_at)||(r.account_set_id!==null&&!positive(r.account_set_id)))return false;}
+ for(const j of jobMap.values())if(j.manifest.items.length!==items.filter(i=>i.job_id===j.id).length)return false;
+ const inputs=db.prepare('SELECT * FROM local_batch_inputs').all(),inputMap=new Map(inputs.map(r=>[r.input_key,r]));
+ for(const r of inputs){const item=itemMap.get(r.item_id),j=jobMap.get(r.job_id),m=j?.manifest.items.find(i=>i.itemKey===item?.item_key)?.periods?.find(p=>p.period===r.period)?.imports?.find(i=>i.batchId===r.batch_id);const bytes=Buffer.from(r.content);
+  if(!item||item.job_id!==r.job_id||!m||r.input_key!==r.job_id+':'+r.item_id+':'+r.batch_id||!batchDigest(r.source_hash)||sha256(bytes)!==r.source_hash||r.bytes!==bytes.length||!batchIso(r.created_at))return false;
+  const payload=JSON.parse(bytes.toString('utf8'));if(!isPlainObject(payload))return false;
+  if(r.source_path===null){if(m.payloadFile||!isPlainObject(m.payload)||canonicalJson(m.payload)!==bytes.toString('utf8'))return false;}else if(!batchPath(r.source_path)||!m.payloadFile)return false;
+ }
+ const expectedStages=new Map();
+ for(const j of jobMap.values()) {
+  const copy=JSON.parse(j.manifest_json);
+  for(const mi of copy.items)for(const period of mi.periods)for(const imp of period.imports) {
+   const item=items.find(i=>i.job_id===j.id&&i.item_key===mi.itemKey);
+   const saved=inputMap.get(j.id+':'+item.id+':'+imp.batchId);if(!saved||saved.period!==period.period)return false;
+   imp.payloadFile=null;imp.payload=JSON.parse(Buffer.from(saved.content).toString('utf8'));
   }
-  if (!receipt) {
-    FAIL("migration_requires_backup", {
-      dependency: "LOCAL-06 createBackup/verifyBackup", status: "dependency_unavailable",
-    }, "既有数据库缺少批量结构：必须先取得已审 LOCAL-06 一致备份；布尔 fresh 参数不被接受");
+  for(const plan of buildPlan({manifest:copy,manifestDir:'.'}).plans) {
+   const item=items.find(i=>i.job_id===j.id&&i.item_key===plan.itemKey);
+   for(const stage of plan.stages) {
+    if(stage.stageKey.startsWith('import:'))stage.spec.payloadHash=inputMap.get(j.id+':'+item.id+':'+stage.spec.batchId).source_hash;
+    expectedStages.set(item.id+':'+stage.period+':'+stage.stageKey,{...stage,jobKey:j.job_key,itemKey:item.item_key});
+   }
   }
-  // 事务开始前先绑定「本次实际打开的库」身份。
-  assertFreshReceipt(receipt, db);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    for (const statement of SCHEMA_STATEMENTS) db.exec(statement);
-    db.prepare(`INSERT INTO local_batch_component (component, version, updated_at, note) VALUES (?,?,?,?)`)
-      .run(LOCAL_BATCH_COMPONENT, LOCAL_BATCH_SCHEMA_VERSION, nowIso(), "LOCAL-07 持久批量任务与 CLI");
-    // 提交前再次校验：事务窗口内库文件不得被别名替换。
-    assertFreshReceipt(receipt, db);
-    db.exec("COMMIT");
-  } catch (error) {
-    try { db.exec("ROLLBACK"); } catch { /* 原库结构以回滚结果为准 */ }
-    // 库身份 / 回执类错误必须原样上报（不能降级成 local_batch_schema_failed）：
-    // 它们意味着「本次创建对象已不再可信」，需人工核对现场。
-    if (String(error?.code || "").startsWith("fresh_")) throw error;
-    throw batchError("local_batch_schema_failed", { reason: error?.message || String(error) });
-  }
-  releaseFreshClaim(receipt);
-  return { created: true, version: LOCAL_BATCH_SCHEMA_VERSION };
+ }
+ const actualStages=db.prepare('SELECT * FROM local_batch_stages').all();if(actualStages.length!==expectedStages.size)return false;
+ for(const r of actualStages){const item=itemMap.get(r.item_id),j=jobMap.get(item?.job_id);const spec=readSavedJson(r.spec_json),evidence=readSavedJson(r.evidence_json);
+  if(!positive(r.id)||!j||!/^\d{4}-\d{2}$/.test(r.period)||!expectedStages.has(r.item_id+':'+r.period+':'+r.stage_key)||!positive(r.stage_order)||!Object.values(STAGE_STATUS).includes(r.status)||!Number.isSafeInteger(r.attempt)||r.attempt<0||!batchIso(r.updated_at)||(r.input_hash!==null&&!batchDigest(r.input_hash))||(r.outcome_hash!==null&&!batchDigest(r.outcome_hash)))return false;
+  const expected=expectedStages.get(r.item_id+':'+r.period+':'+r.stage_key);
+  if(r.stage_order!==expected.order||canonicalJson(spec)!==canonicalJson(expected.spec))return false;
+  const h=sha256(canonicalJson({jobKey:j.job_key,itemKey:item.item_key,period:r.period,stageKey:r.stage_key,spec}));
+  if(r.stage_key.startsWith('report:')&&r.attempt>0) {
+   // Snapshots can be overwritten before retry claims a new attempt. Only the
+   // succeeded checkpoint owns immutable evidence for that attempt's input hash.
+   if(!batchDigest(r.input_hash))return false;
+   if(r.status===STAGE_STATUS.SUCCEEDED&&(!batchDigest(evidence.snapshotHash)||r.input_hash!==evidence.snapshotHash))return false;
+  }else if(r.input_hash!==h)return false;
+  if(r.stage_key.startsWith('import:')){const input=inputMap.get(j.id+':'+item.id+':'+spec.batchId);if(!input||input.period!==r.period||spec.payloadHash!==input.source_hash)return false;}
+ }
+ for(const r of db.prepare('SELECT * FROM local_batch_snapshots').all()){const item=itemMap.get(r.item_id);const dto=JSON.parse(r.dto_json);if(!isPlainObject(dto)||JSON.stringify(dto)!==r.dto_json||!item||item.job_id!==r.job_id||r.snapshot_key!==r.job_id+':'+r.item_id+':'+r.period+':'+r.kind||!batchDigest(r.dto_hash)||sha256(r.dto_json)!==r.dto_hash||!batchDigest(r.business_hash)||!batchIso(r.created_at)||(r.csv_text===null?r.csv_hash!==null:sha256(r.csv_text)!==r.csv_hash))return false;}
+ for(const r of db.prepare('SELECT * FROM local_batch_artifacts').all()){const item=itemMap.get(r.item_id);if(!positive(r.id)||!item||item.job_id!==r.job_id||!batchDigest(r.snapshot_hash)||!batchDigest(r.bytes_hash)||!Number.isSafeInteger(r.bytes)||r.bytes<0||!batchIso(r.created_at)||!batchIso(r.updated_at))return false;}
+ for(const r of db.prepare('SELECT * FROM local_batch_locks').all())if(!( /^job:[1-9][0-9]*$/.test(r.resource_key)||/^account-set:[1-9][0-9]*$/.test(r.resource_key)||(r.resource_key.startsWith('book:')&&r.resource_key.length<=133&&!/[\u0000-\u001f\u007f]/.test(r.resource_key)&&r.resource_key.length>5))||!batchTech(r.owner_instance)||!positive(r.fencing_token)||(r.pid!==null&&!positive(r.pid))||!batchIso(r.acquired_at)||!batchIso(r.heartbeat_at)||!batchIso(r.lease_expires_at))return false;
+ if(version===1)return true;
+ const instances=db.prepare('SELECT * FROM local_batch_database_instances').all(),ids=new Map(instances.map(r=>[r.instance_id,r]));
+ const active=instances.filter(r=>r.is_active===1);if(active.length!==1)return false;
+ const audit=inspectAuditSchema(db);if(audit.state!=='not_installed'&&!audit.ok)return false;
+ for(const r of instances){if(!batchUuid(r.instance_id)||!batchIso(r.created_at)||![0,1].includes(r.is_active)||!['initial','restore-new'].includes(r.origin)||!['ready','restore_pending'].includes(r.write_state))return false;
+  if(r.origin==='initial'){if(r.parent_instance_id!==null||r.restore_operation_id!==null||r.source_backup_digest!==null||r.write_state!=='ready')return false;}
+  else if(!ids.has(r.parent_instance_id)||!batchTech(r.restore_operation_id)||!batchDigest(r.source_backup_digest))return false;
+  const seen=new Set();let cur=r;while(cur){if(seen.has(cur.instance_id))return false;seen.add(cur.instance_id);cur=cur.parent_instance_id===null?null:ids.get(cur.parent_instance_id);if(cur===undefined)return false;}
+  if(r.audit_instance_id!==null&&(audit.state==='not_installed'||!db.prepare('SELECT 1 FROM audit_database_instances WHERE instance_id=?').get(r.audit_instance_id)))return false;
+ }
+ if(audit.ok&&active[0].audit_instance_id!==audit.activeInstanceId)FAIL('batch_instance_mismatch');
+ const jb=db.prepare('SELECT * FROM local_batch_job_bindings').all(),ib=db.prepare('SELECT * FROM local_batch_input_bindings').all();
+ for(const r of jb)if(!ids.has(r.database_instance_id)||!jobMap.has(r.job_id)||!batchIso(r.bound_at)||!['bound','disabled'].includes(r.output_state)||(r.output_state==='bound'?!batchPath(r.output_root):r.output_root!==null))return false;
+ for(const r of ib){const input=inputMap.get(r.input_key);if(!ids.has(r.database_instance_id)||!input||!batchIso(r.bound_at)||!['source','inline','saved_snapshot','disabled'].includes(r.mode)||(r.mode==='source'?!batchPath(r.source_path):r.source_path!==null)||(r.mode==='inline'&&input.source_path!==null))return false;}
+ if(jobs.some(j=>!jb.some(r=>r.database_instance_id===active[0].instance_id&&r.job_id===j.id))||inputs.some(i=>!ib.some(r=>r.database_instance_id===active[0].instance_id&&r.input_key===i.input_key)))return false;
+ return true;
+}
+export function inspectBatchSchema(db) {
+ const any=db.prepare("SELECT 1 FROM sqlite_master WHERE lower(name) GLOB 'local_batch_*' OR lower(name) GLOB 'idx_local_batch_*'").get();
+ if(!any)return {state:'not_installed',ok:false,version:0,present:[],tables:[],problems:[]};
+ let version=0;const problems=[];
+ try {version=readBatchVersion(db)??0;if(version!==1&&version!==2)problems.push('version_invalid');
+  else {if(canonicalJson(batchSchemaFacts(db,version))!==canonicalJson(batchComponentContract(version).facts))problems.push('structure_mismatch');
+   if(!problems.length&&!batchContentValid(db,version))problems.push('content_invalid');}
+ }catch(e){if(e.code==='batch_instance_mismatch')problems.push('instance_mismatch');else problems.push('structure_or_content_invalid');}
+ return {state:problems.length?'invalid':'ok',ok:problems.length===0,version,tables:[...batchTables(version)],present:LOCAL_BATCH_TABLES.filter(t=>db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t)),problems};
+}
+export function assertBatchSchema(db) {const s=inspectBatchSchema(db);if(!s.ok)FAIL(s.problems.includes('instance_mismatch')?'batch_instance_mismatch':s.version>2?'batch_schema_future_version':'batch_schema_invalid');return s;}
+export function readBatchInstance(db) {const s=assertBatchSchema(db);if(s.version!==2)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');return db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();}
+export function assertBatchRunnable(db,{jobId}={}) {
+ const instance=readBatchInstance(db);if(instance.write_state!=='ready')FAIL('batch_not_ready');
+ const jb=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=?').all(instance.instance_id),ib=db.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=?').all(instance.instance_id);
+ for(const r of jb.filter(r=>jobId===undefined||r.job_id===jobId))if(r.output_state!=='bound'||r.output_root!==getJob(db,r.job_id).output_dir)FAIL('batch_binding_disabled');
+ for(const r of ib){const input=db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(r.input_key);if(jobId!==undefined&&input.job_id!==jobId)continue;if(!['source','inline'].includes(r.mode)||(r.mode==='source'&&r.source_path!==input.source_path)||(r.mode==='inline'&&input.source_path!==null))FAIL('batch_binding_disabled');}
+ return instance;
+}
+function seedBatchInstance(db) {
+ const audit=inspectAuditSchema(db);if(audit.state!=='not_installed'&&!audit.ok)FAIL('batch_instance_mismatch');
+ const instance=randomUUID(),at=nowIso();
+ db.prepare("INSERT INTO local_batch_database_instances VALUES(?,NULL,?,1,?,'initial','ready',NULL,NULL)").run(instance,audit.ok?audit.activeInstanceId:null,at);
+ bindBatchJobInputs(db,instance,at);
+ return instance;
+}
+function bindBatchJobInputs(db,instance,at,jobId) {
+ const jobs=db.prepare('SELECT * FROM local_batch_jobs'+(jobId===undefined?'':' WHERE id=?')).all(...(jobId===undefined?[]:[jobId]));
+ for(const j of jobs)db.prepare("INSERT INTO local_batch_job_bindings VALUES(?,?,'bound',?,?)").run(instance,j.id,j.output_dir,at);
+ const inputs=db.prepare('SELECT * FROM local_batch_inputs'+(jobId===undefined?'':' WHERE job_id=?')).all(...(jobId===undefined?[]:[jobId]));
+ for(const i of inputs)db.prepare('INSERT INTO local_batch_input_bindings VALUES(?,?,?,?,?)').run(instance,i.input_key,i.source_path===null?'inline':'source',i.source_path,at);
+}
+const batchQuarantine=new WeakSet();
+function assertBatchConnection(db){if(!db||batchQuarantine.has(db))FAIL('batch_unavailable');if(db.isTransaction)FAIL('batch_transaction_conflict');if(db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)FAIL('batch_database_invalid');}
+function batchFileIdentity(db,explicit) {
+ const main=db.prepare('PRAGMA database_list').all().find(r=>r.name==='main');
+ function plain(file){if(typeof file!=='string'||!file)FAIL('batch_database_invalid');const full=resolve(file);try{for(let p=full;;p=dirname(p)){const st=lstatSync(p);if(st.isSymbolicLink()||!sameCanonicalPath(realpathSync.native(p),p))FAIL('batch_database_invalid');if(dirname(p)===p)break;}const st=statSync(full,{bigint:true});if(!st.isFile()||st.nlink!==1n)FAIL('batch_database_invalid');return {path:full,dev:st.dev,ino:st.ino};}catch{FAIL('batch_database_invalid');}}
+ const id=plain(main?.file),other=plain(explicit);if(!sameCanonicalPath(id.path,other.path)||id.dev!==other.dev||id.ino!==other.ino)FAIL('batch_backup_source_mismatch');return id;
+}
+const batchIdentityEqual=(a,b)=>sameCanonicalPath(a.path,b.path)&&a.dev===b.dev&&a.ino===b.ino;
+function assertBatchMaintenance(db,state) {
+ if(state.state==='not_installed')return;
+ const locks=db.prepare('SELECT * FROM local_batch_locks').all();
+ for(const lock of locks)if(!positive(lock.pid)||isProcessAlive(lock.pid)!==false)FAIL('batch_owner_active');
+ for(const stage of db.prepare("SELECT owner_instance FROM local_batch_stages WHERE status='running'").all()){
+  const matching=locks.filter(l=>l.owner_instance===stage.owner_instance);if(!matching.length||matching.some(l=>!positive(l.pid)||isProcessAlive(l.pid)!==false))FAIL('batch_owner_active');
+ }
+}
+export function assertBatchMaintenanceReady(db) {
+ const state=inspectBatchSchema(db);if(state.state!=='not_installed')assertBatchSchema(db);assertBatchMaintenance(db,state);
+}
+/** Explicit existing-database install/upgrade. The official reader snapshots while we reserve writes. */
+export async function installBatchSchema(db,{dbPath,outDir}={}) {
+ assertBatchConnection(db);if(!dbPath||!outDir)FAIL('batch_install_requires_verified_backup');const before=batchFileIdentity(db,dbPath);
+ const LB=await import('./local-backup.mjs');LB.assertSupportedDatabaseConnection(db);
+ let state=inspectBatchSchema(db);if(state.state!=='not_installed')assertBatchSchema(db);
+ if(state.version===2)return {installed:false,from:2,to:2,activeInstanceId:readBatchInstance(db).instance_id};
+ try {db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){batchQuarantine.add(db);FAIL('batch_commit_unknown');}FAIL('batch_admission_busy');}
+ try {
+  if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
+  LB.assertSupportedDatabaseConnection(db);state=inspectBatchSchema(db);if(state.state!=='not_installed')assertBatchSchema(db);assertBatchMaintenance(db,state);
+  const created=LB.createBackup({dbPath:before.path,outDir});if(!created.ok)FAIL('batch_backup_invalid');
+  const verified=LB.verifyBackup({backupDir:created.backupDir});
+  if(!verified.ok||verified.status!=='ok'||verified.summary.snapshotBytes!==created.backupMeta.snapshotBytes||verified.summary.snapshotSha256!==created.backupMeta.snapshotSha256||verified.manifest.source.file!==basename(before.path)||canonicalJson(verified.manifest)!==canonicalJson(created.manifest))FAIL('batch_backup_invalid');
+  if(state.state==='not_installed')LB.assertInstallableComponentSet(verified.manifest,LOCAL_BATCH_COMPONENT);
+  try{LB.assertBackupSourceConnection(db,verified.manifest);}catch{FAIL('batch_backup_source_mismatch');}
+  if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
+  if(state.state==='not_installed'){for(const sql of SCHEMA_STATEMENTS)db.exec(sql);db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,1,nowIso(),'LOCAL-07');}
+  for(const sql of V2_STATEMENTS)db.exec(sql);const activeInstanceId=seedBatchInstance(db);
+  db.prepare('UPDATE local_batch_component SET version=2 WHERE component=?').run(LOCAL_BATCH_COMPONENT);
+  assertBatchSchema(db);if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
+  db.exec('COMMIT');return {installed:true,from:state.version,to:2,activeInstanceId,backupDir:created.backupDir};
+ }catch(e){try{if(!db.isTransaction)throw Error('unknown');db.exec('ROLLBACK');if(db.isTransaction)throw Error('unknown');}catch{batchQuarantine.add(db);FAIL('batch_commit_unknown');}throw batchError(String(e?.code??'').startsWith('batch_')?e.code:'batch_schema_install_failed');}
+}
+/** Synchronous: strict v2 validation, or genuine private fresh ownership only. */
+export function ensureBatchSchema(db,{receipt=null}={}) {
+ if(receipt)assertFreshReceipt(receipt,db);
+ const state=inspectBatchSchema(db);
+ if(state.state!=='not_installed'){assertBatchSchema(db);if(state.version!==2)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');return {created:false,version:2};}
+ if(!receipt)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');
+ if(db.isTransaction)FAIL('batch_transaction_conflict');assertFreshReceipt(receipt,db);db.exec('BEGIN IMMEDIATE');
+ try {for(const sql of [...SCHEMA_STATEMENTS,...V2_STATEMENTS])db.exec(sql);db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,2,nowIso(),'LOCAL-07');seedBatchInstance(db);assertBatchSchema(db);assertFreshReceipt(receipt,db);db.exec('COMMIT');}
+ catch(e){try{if(!db.isTransaction)throw Error('unknown');db.exec('ROLLBACK');}catch{batchQuarantine.add(db);FAIL('batch_commit_unknown');}if(String(e?.code??'').startsWith('fresh_'))throw e;throw batchError('local_batch_schema_failed');}
+ releaseFreshClaim(receipt);return {created:true,version:2};
 }
 
 // ---------------------------------------------------------------- manifest（schemaVersion=1）
@@ -867,6 +1051,7 @@ export function validateManifest(raw) {
  * @param {Array} options.inputs [{ itemKey, period, batchId, sourcePath, sourceHash, bytes(Buffer) }]
  */
 export function createJob(db, { manifest, manifestHash, manifestJson, outputDir, plans, inputs }) {
+  const instance=assertBatchRunnable(db);
   db.exec("BEGIN IMMEDIATE");
   try {
     let job = db.prepare(`SELECT * FROM local_batch_jobs WHERE job_key=?`).get(manifest.jobKey);
@@ -915,6 +1100,8 @@ export function createJob(db, { manifest, manifestHash, manifestJson, outputDir,
             input.sourcePath ?? null, input.sourceHash, input.bytes.length, input.bytes, nowIso());
       }
     }
+    if(created)bindBatchJobInputs(db,instance.instance_id,nowIso(),job.id);
+    assertBatchRunnable(db,{jobId:job.id});
     db.exec("COMMIT");
     return { job, created };
   } catch (error) {
@@ -1432,6 +1619,7 @@ export function newInstanceId(pid = process.pid) {
  * 由持有 job 锁的执行者在阶段边界确认；无执行者时可由本命令直接确认。
  */
 export function requestCancel(db, jobKey, { pid = process.pid, instance = newInstanceId(pid) } = {}) {
+  assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) FAIL("job_not_found", { jobKey });
   db.exec("BEGIN IMMEDIATE");
@@ -1476,6 +1664,7 @@ export function requestCancel(db, jobKey, { pid = process.pid, instance = newIns
  * 同时核验输入指纹（manifest + 原始资料快照），变化则给 input_changed。
  */
 export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null, stageKey = null, allowSnapshotOnly = false }) {
+  assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) FAIL("job_not_found", { jobKey });
   const manifest = safeJson(job.manifest_json);

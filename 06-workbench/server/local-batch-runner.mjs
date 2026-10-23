@@ -336,6 +336,7 @@ export async function executeJob({
   allowSnapshotOnly = false,
 } = {}) {
   if (!job) throw batchError("job_required", {});
+  storage.assertBatchRunnable(db,{jobId:job.id});
   const lock = { resourceKey: `job:${job.id}`, instance };
   let primary;
   try {
@@ -775,6 +776,7 @@ export async function createAndRun({
   manifest, manifestHash, manifestJson, plans, inputs, outputDir, hooks = null, instance = newInstanceId(),
   allowSnapshotOnly = false,
 }) {
+  storage.assertBatchRunnable(db);
   const resolvedOutput = resolve(outputDir);
   ensureDir(resolvedOutput);
   const { job, created } = storage.createJob(db, {
@@ -785,6 +787,7 @@ export async function createAndRun({
 }
 
 export async function resumeJob({ jobKey, hooks = null, instance = newInstanceId(), allowSnapshotOnly = false } = {}) {
+  storage.assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) throw batchError("job_not_found", { jobKey });
   // 即使 job 已 succeeded 也要真正执行一次：恢复必须先重新核验已成功阶段的上游证据。

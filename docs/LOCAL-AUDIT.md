@@ -4,7 +4,7 @@
 
 ## 安装与版本
 
-`installAuditSchema(db, {dbPath, outDir})` 异步安装或升级 `business-audit` 到2。core3/4支持裸库或bank1，core5支持裸库、bank1、auxiliary1及两者组合；batch不在本片备份注册表内。core、bank、aux版本不变。
+`installAuditSchema(db, {dbPath, outDir})` 异步安装或升级 `business-audit` 到2。core3/4支持裸库或bank1，core5支持裸库、bank1、auxiliary1及两者组合；W3a候选将严格batch1/2加入官方注册表，尚待root验收/独审/PR。core、bank、aux版本不变。
 
 安装拒绝caller事务、错路径/句柄、路径别名/多硬链接、未知/半安装结构。实际源连接持 `BEGIN IMMEDIATE`，独立只读reader执行官方 `createBackup({dbPath,outDir})` 的VACUUM INTO，固定官方verify核快照字节/摘要与manifest，再用真实 `assertBackupSourceConnection(db,manifest)` 比较持锁源库，复核文件identity后才执行DDL并提交。失败在能证明ROLLBACK时回滚；提交结果不明则隔离该写连接并返回固定unknown错误，不能宣称原库未变。
 
@@ -63,3 +63,8 @@ audit1/2完整DDL、全列/default/PK/rowid/CHECK、完整自动/显式index键c
 定点套件：local-audit-operation、local-audit-install、local-audit-backup-integration、迁移后的local-audit；旧backup/bank/aux按影响复验。原88测试逐字原序末追加3为91；本片不跑完整入口。实际命令、失败历史、close和hash证据见 [本片交接](handoffs/LOCAL-06-AUDIT.md)。
 
 后续依赖由root确认：W3a batch1/2严格registry与保护升级 → W2b可信业务coordinator → W3b统一锁与真实批量链 → W4恢复分叉/Windows/最终整链。上述均未由W2a实现。
+## W3a 同库 batch 关联及后装保护（候选）
+
+batch持独立UUID；没有audit时当前关联为NULL。audit先装时batch安装在同一受保护事务记录真实audit active；batch先装时audit安装在写预约和官方source核证后，捕获已严格核验的batch当前active，仅给该行原NULL填当前audit active。历史NULL、已有非NULL、两方原实例ID/父链/历史事件均不改；公共validator无可传布尔放宽门。active错配、未知对象/引用、任一父链循环拒绝。
+
+审计schema facts只收对象自身audit_/idx_audit_命名、所属审计表或SQL真实表引用。普通audit_instance_id列、字符串/注释不算依赖；任意名view/trigger真实引用审计表、附着audit表的未知index/trigger、大小写等价的额外命名对象仍严格拒绝。未改audit1/2既有DDL/历史摘要/owner-only receipt/pending协议。W2b尚未接线，不能把旧batch事务冒充业务coordinator。

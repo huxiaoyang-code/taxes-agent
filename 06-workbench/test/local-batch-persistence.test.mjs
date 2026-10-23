@@ -68,7 +68,7 @@ function spawnNode(code, { env = {} } = {}) {
   child.stdout.on("data", (chunk) => { stdout += chunk; });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   const done = new Promise((resolvePromise) => {
-    child.on("exit", (status, signal) => resolvePromise({ status, signal, stdout, stderr }));
+    child.on("close", (status, signal) => resolvePromise({ status, signal, stdout, stderr }));
   });
   return { child, done };
 }
@@ -898,9 +898,13 @@ await test("G1 原始资料被改 / 缺失 / 快照 hash 被改：retry 稳定�
   db.prepare(`UPDATE local_batch_inputs SET source_hash=?`).run("0".repeat(64));
   db.prepare(`UPDATE local_batch_stages SET status='pending' WHERE stage_key LIKE 'import:%'`).run();
   db.close();
+  const tamperedHash = storage.sha256(readFileSync(join(dataDir,'workbench.db')));
+  const previousError = count(dataDir, `SELECT error_code FROM local_batch_stages WHERE stage_key LIKE 'import:%'`);
   const tampered = runCli(["resume", "--data-dir", dataDir, "--job-key", "input-changed"]);
-  assert.equal(tampered.status, 1);
-  assert.equal(count(dataDir, `SELECT error_code FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), "input_changed");
+  assert.equal(tampered.status, 2);
+  assert.equal(cliJson(tampered).error.code, 'batch_schema_invalid', '严格保存内容校验早于runner源文件读取');
+  assert.equal(storage.sha256(readFileSync(join(dataDir,'workbench.db'))),tamperedHash,'篡改后的原库逐字节不变');
+  assert.equal(count(dataDir, `SELECT error_code FROM local_batch_stages WHERE stage_key LIKE 'import:%'`), previousError);
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 0);
 });
 
@@ -1074,8 +1078,8 @@ await test("H2 批量结构迁移中断整体回滚：不留下半套 schema", (
     db.exec(`CREATE VIEW local_batch_artifacts AS SELECT 1 AS blocker`);
     assert.throws(
       () => storage.ensureBatchSchema(db, { receipt }),
-      (error) => error.code === "local_batch_schema_failed",
-      "迁移必须失败而不是绕过",
+      (error) => error.code === "batch_schema_invalid",
+      "冲突对象必须在严格预检早拒，不得绕过",
     );
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all().map((row) => row.name);
     assert.ok(!tables.includes("local_batch_component"), "不得留下 component 记录");
@@ -1086,8 +1090,8 @@ await test("H2 批量结构迁移中断整体回滚：不留下半套 schema", (
     // 布尔 fresh / 无回执一律不能建立结构。
     assert.throws(
       () => storage.ensureBatchSchema(db, { freshDatabase: true }),
-      (error) => error.code === "migration_requires_backup",
-      "布尔 fresh 不能证明本次亲手创建",
+      (error) => error.code === "batch_schema_invalid",
+      "布尔 fresh 不能豁免已存在冲突对象的严格校验",
     );
     assert.throws(
       () => storage.ensureBatchSchema(db, { receipt: { dataDir } }),
@@ -2123,8 +2127,10 @@ catch (error) { console.log("REJECTED", error.code); }
   storage.releaseFreshClaim(receipt);
 
   // 探测后库文件被替换成非本进程创建的文件：绑定身份必须失败，且不得删改外部文件。
-  const receipt2 = storage.claimFreshDataDir(target);
-  const dbPath = join(target, "workbench.db");
+  assert.equal(existsSync(claimedDb),true,"释放回执保留空种子供诊断，不自动清空");
+  const replacementTarget=join(ROOT,"h4-replacement-target");
+  const receipt2 = storage.claimFreshDataDir(replacementTarget);
+  const dbPath = join(replacementTarget, "workbench.db");
   unlinkSync(dbPath);
   const foreignText = "not-a-sqlite-database";
   writeFileSync(dbPath, foreignText);
@@ -2736,10 +2742,12 @@ await test("H8 所有权标记只认创建时身份：同 nonce 替换对象在 
       "同字节的替换对象不是本进程创建的标记",
     );
   } finally { sameBytesConn.close(); }
+  const sameSeedHash=storage.sha256(readFileSync(sameBytesDb));
   assert.equal(storage.releaseFreshClaim(sameBytesToken), true);
   assert.equal(existsSync(sameBytesMarker), true, "同字节替换的标记对象必须保留");
   assert.deepEqual(readFileSync(sameBytesMarker), originalBytes, "替换对象字节一个都不能改");
-  assert.equal(existsSync(sameBytesDb), false, "本进程创建、仍只有页 1 种子的库文件可释放（身份由创建 fd 证明）");
+  assert.equal(existsSync(sameBytesDb), true, "本次空种子同样保留供诊断");
+  assert.equal(storage.sha256(readFileSync(sameBytesDb)),sameSeedHash,"替换marker时DB种子也逐字节保留");
 
   // 2) 同一 nonce + 外部追加字段：同样不是我的（内容不是本进程写下的那份）。
   const extraDir = join(ROOT, "h8-same-nonce-extra");
@@ -2759,7 +2767,7 @@ await test("H8 所有权标记只认创建时身份：同 nonce 替换对象在 
   assert.equal(storage.releaseFreshClaim(extraToken), true);
   assert.equal(readFileSync(extraMarker, "utf8"), extraContent, "追加字段的外部标记必须原样保留");
 
-  // 3) 回执 token 上的任意赋值（含标记相关字段）不改变内部事实；自己的标记 / 空库仍被正常释放。
+  // 3) 回执 token 上的任意赋值（含标记相关字段）不改变内部事实；自己的标记 / 创建fd被释放，空种子逐字节保留。
   const ownDir = join(ROOT, "h8-own");
   const ownToken = storage.claimFreshDataDir(ownDir);
   const ownMarker = join(ownDir, ".local-batch-create");
@@ -2774,9 +2782,12 @@ await test("H8 所有权标记只认创建时身份：同 nonce 替换对象在 
     assert.equal(String(bound.dev), String(ownFacts.identity.dev), "绑定仍指向内部不可变事实");
     assert.equal(String(bound.ino), String(ownFacts.identity.ino));
   } finally { ownConn.close(); }
+  const ownSeedHash=storage.sha256(readFileSync(join(ownDir,"workbench.db")));
   assert.equal(storage.releaseFreshClaim(ownToken), true);
   assert.equal(existsSync(ownMarker), false, "自己的标记仍被正常释放");
-  assert.equal(existsSync(join(ownDir, "workbench.db")), false, "自己的空库仍被正常释放");
+  assert.equal(existsSync(join(ownDir, "workbench.db")), true, "自己的空种子保留供诊断");
+  assert.equal(storage.sha256(readFileSync(join(ownDir,"workbench.db"))),ownSeedHash,"空种子字节不变");
+  assert.equal(storage.releaseFreshClaim(ownToken),false,"再次释放幂等无写");
 
   // 4) 登记失败路径（H6 注入）下的同 nonce 替换：标记必须保留，库文件按创建身份清理。
   const registerDir = join(ROOT, "h8-register-same-bytes");
