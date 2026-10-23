@@ -169,7 +169,7 @@ export function buildReportDocument(report) {
     ["税局申报文件", "否（本文件不是税局申报模板）"],
   ];
   if (kind === "cash-flow-statement") {
-    meta.push(["现金流编制方法", `${data.method}（按对方科目金额比例分摊）`]);
+    meta.push(["现金流编制方法", report.accountingContext?.legacy ? `${data.method}（旧账兼容，按对方科目金额比例分摊）` : data.method]);
     meta.push(["间接法独立勾稽", "否（末行复用直接法经营活动净额）"]);
   }
   if (kind === "ledger") {
@@ -178,6 +178,25 @@ export function buildReportDocument(report) {
     meta.push(["明细范围", "本科目及编码前缀下级；仅所选期间的已过账逐笔分录"]);
   }
 
+  if (report.accountingContext) {
+    const context = report.accountingContext;
+    meta.push(["持久profile", context.profileId], ["科目版本", context.coaVersion], ["映射版本", context.reportMappingVersion], ["旧账兼容", yesNo(context.legacy)]);
+  }
+  if (report.reportStatus) {
+    meta.push(["报表映射状态", report.reportStatus.status], ["映射完整", yesNo(report.reportStatus.complete)], ["部分金额", yesNo(report.reportStatus.partialValues)]);
+    for (const diagnostic of report.reportStatus.diagnostics) meta.push(["映射诊断", diagnostic.code]);
+  }
+  const paired = (current, opening) => {
+    const key = line => line.id ?? line.label;
+    const a = new Map(current.map(line => [key(line), line]));
+    const b = new Map(opening.map(line => [key(line), line]));
+    return [...new Set([...a.keys(), ...b.keys()])].map(id => ({ ...(a.get(id) ?? b.get(id)),
+      opening: b.get(id)?.value ?? "", value: a.get(id)?.value ?? "" }));
+  };
+  const incomeRows = data.rows?.current?.length
+    ? data.rows.current.map(row => ({ label: row.label, current: row.valueMinor / 100,
+      ytd: data.rows.ytd.find(other => other.id === row.id)?.valueMinor / 100 }))
+    : Object.keys(data.current ?? {}).map(label => ({ label: INCOME_ROW_LABELS[label] || label, current: data.current[label], ytd: data.ytd[label] }));
   const notes = [];
   const sections = [];
   if (kind === "balance-sheet") {
@@ -186,16 +205,16 @@ export function buildReportDocument(report) {
       title: "资产",
       columns,
       freeze: true,
-      rows: data.assets.map((line, index) => ({
-        cells: [line.label, data.opening.assets[index]?.value ?? "", line.value],
+      rows: paired(data.assets, data.opening.assets).map((line) => ({
+        cells: [line.label, line.opening, line.value],
         strong: line.strong === true,
       })),
     });
     sections.push({
       title: "负债和所有者权益",
       columns,
-      rows: data.liabilities.map((line, index) => ({
-        cells: [line.label, data.opening.liabilities[index]?.value ?? "", line.value],
+      rows: paired(data.liabilities, data.opening.liabilities).map((line) => ({
+        cells: [line.label, line.opening, line.value],
         strong: line.strong === true,
       })),
     });
@@ -220,12 +239,14 @@ export function buildReportDocument(report) {
       title: "利润表",
       columns,
       freeze: true,
-      rows: Object.keys(data.current).map((label) => ({
-        cells: [INCOME_ROW_LABELS[label] || label, data.current[label], data.ytd[label]],
-        strong: INCOME_STRONG.has(label),
+      rows: incomeRows.map((line) => ({
+        cells: [line.label, line.current, line.ytd],
+        strong: INCOME_STRONG.has(line.label),
       })),
     });
-    notes.push("其他收入已按现有算法并入营业收入，其他费用已并入营业成本；损益结转凭证不重复计入收入费用。");
+    notes.push(report.accountingContext?.legacy === false
+      ? "收入、费用按持久profile的已核实项目列示；损益结转凭证不重复计入收入费用。"
+      : "旧账兼容：其他收入已并入营业收入、其他费用已并入营业成本；损益结转凭证不重复计入收入费用。");
   } else if (kind === "cash-flow-statement") {
     const columns = [
       { header: "项目", minPt: 130, flex: 32, width: 34, kind: "text" },

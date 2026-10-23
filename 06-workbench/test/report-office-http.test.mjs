@@ -110,7 +110,7 @@ after(async () => {
     db.close();
     const resolved = realpathSync(directory);
     assert.equal(dirname(resolved), tempRoot, "refuse to delete anything outside the OS temp root");
-    rmSync(resolved, { recursive: true, force: true });
+    console.log(`Synthetic Office HTTP fixture retained: ${resolved}`);
   }
 });
 

@@ -251,10 +251,10 @@ try {
   // ---------------- 导入账套 ----------------
   const csv = {
     meta: "键,值\n账套名称,导入测试公司\n纳税人性质,一般纳税人\n会计准则,小企业会计准则\n启用期间,2026-01\n",
-    accounts: "科目编码,科目名称,类别,方向\n6602,管理费用,损益,借\n",
+    accounts: "科目编码,科目名称,类别,方向\n5602,管理费用,损益,借\n",
     openings: "科目编码,借方,贷方\n1002,50000,0\n3001,0,50000\n",
     vouchers: "期间,日期,字号,凭证号,摘要,科目编码,借方,贷方\n"
-      + "2026-01,2026-01-15,记,1,报销办公费,6602,300,0\n"
+      + "2026-01,2026-01-15,记,1,报销办公费,5602,300,0\n"
       + "2026-01,2026-01-15,记,1,报销办公费,1002,0,300\n",
   };
 
@@ -264,7 +264,7 @@ try {
     assert.equal(r.validation.summary.account_set, "导入测试公司");
     assert.equal(r.validation.summary.vouchers, 1);
     assert.equal(r.validation.summary.entries, 2);
-    assert.equal(r.payload.accounts[0].code, "6602");
+    assert.equal(r.payload.accounts[0].code, "5602");
   });
 
   await test("导入：期初借贷不平应预检失败", async () => {
@@ -275,7 +275,7 @@ try {
   });
 
   await test("导入：科目不存在应预检失败", async () => {
-    const bad = { ...csv, vouchers: csv.vouchers.replace("6602,300,0", "9999,300,0") };
+    const bad = { ...csv, vouchers: csv.vouchers.replace("5602,300,0", "9999,300,0") };
     const r = await api("POST", "/api/import/parse", { texts: bad });
     assert.equal(r.validation.ok, false);
     assert.ok(r.validation.errors.some((e) => e.includes("科目不存在")));
@@ -290,7 +290,7 @@ try {
     assert.equal(r.created.vouchers, 1);
     assert.equal(r.created.opening_balances, 2);
     const accs = await api("GET", `/api/account-sets/${importedSetId}/accounts`);
-    assert.ok(accs.find((a) => a.code === "6602"), "新增科目 6602 应存在");
+    assert.ok(accs.find((a) => a.code === "5602"), "小企费用科目 5602 应存在");
   });
 
   await test("导入：导入后报表正确（平衡 / 净利 -300）", async () => {
@@ -318,5 +318,7 @@ try {
   child.kill();
   // 等子进程真正退出后再删临时目录，避免端口/文件残留或连到旧进程。
   await childExit;
-  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  if (!process.exitCode) {
+    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  } else console.log(`Failed fixture retained: ${dataDir}`);
 }

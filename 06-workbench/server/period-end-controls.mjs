@@ -179,7 +179,7 @@ const underPrefix = (code, prefix) => code === prefix || String(code).startsWith
 // ------------------------------------------------------------------ 基础查询
 function accountRows(db, setId) {
   return db.prepare(
-    `SELECT code, name, category, direction FROM accounts WHERE account_set_id=? ORDER BY code`,
+    `SELECT code, name, category, direction, contra FROM accounts WHERE account_set_id=? ORDER BY code`,
   ).all(setId);
 }
 

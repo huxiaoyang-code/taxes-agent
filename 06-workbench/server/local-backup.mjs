@@ -10,8 +10,8 @@
 //    禁止直接复制主库文件、忽略 `-wal`，或用可写连接打开源库。
 //    与 import-storage.mjs 的迁移前备份契约一致（同样是 VACUUM INTO + 独立只读连接验完整性），
 //    但**不复用**「文件大小非 0 就当可用快照」的判定：这里始终重新生成并重新验证。
-// 3) 结构版本只支持**两个精确的真实结构**：v3（LOCAL-01 迁移后结构）与 v4（LOCAL-02 资产卡片补项）。
-//    每个版本有**独立**的结构契约（`STRUCTURE_V3` / `STRUCTURE_V4`），逐表校验列名 / 声明类型 /
+// 3) 结构版本只支持**三个精确的真实结构**：v3（LOCAL-01）、v4（LOCAL-02 资产卡片补项）、v5（持久 profile 列）。
+//    每个版本有**独立**的结构契约（`STRUCTURE_V3` / `STRUCTURE_V4` / `STRUCTURE_V5`），逐表校验列名 / 声明类型 /
 //    NOT NULL / **默认值**、主键列顺序与 **rowid 别名语义**、唯一性键的**完整比较语义**
 //    （键列顺序 / 排序规则 `BINARY` / `NOCASE` / `RTRIM` / 升降序 / 表达式 / 部分索引），以及
 //    外键，并校验 `schema_migrations` 记录
@@ -74,23 +74,26 @@ export const RESTORE_INCOMPLETE_MARKER = ".restore-incomplete";
 export const PARTIAL_PREFIX = ".partial-";
 
 /**
- * 本模块**已按真实结构逐项验证**的 schema 版本集合（当前真实产品最多到 v4）。
+ * 本模块**已按真实结构逐项验证**的 schema 版本集合（当前真实产品到 v5）。
  *
  * - v3：LOCAL-01 迁移后的结构（核心会计表 + 导入表 + 迁移 / 备份记录表，无资产补项列）；
  * - v4：LOCAL-02 在 v3 基础上只给 `asset_cards` 增加 5 列（取得期间 / 期初累计 / 未入账登记 /
  *   补项原因 / 来源），表集合不变。
  *
- * 两个版本各自有独立结构契约（列 / 类型 / NOT NULL / 默认值 / 主键 / 唯一性键比较语义 /
+ * - v5：v4 + account_sets.accounting_profile_id TEXT NOT NULL DEFAULT legacy-small-coa-v1；
+ *   不新增表 / FK / 索引 / 触发器。
+ *
+ * 三个版本各自有独立结构契约（列 / 类型 / NOT NULL / 默认值 / 主键 / 唯一性键比较语义 /
  * 外键动作 /
  * 迁移记录连续性 / 迁移前备份记录）。**不在集合内的版本一律拒绝**：更旧 → `schema_outdated`，
- * 更新（未来 v5+）→ `schema_unsupported`。
+ * 更新（未来 v6+）→ `schema_unsupported`。
  *
  * 未来再新增版本必须：按真实 DDL 新增独立结构契约、补真实 SQLite 行为与合成临时库验收、
  * 再把它加入本集合。**不允许**仅因为表清单是动态计算的、或只把版本号抬高，就把新版本当成已支持。
  */
-export const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([3, 4]);
+export const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([3, 4, 5]);
 /** 当前支持的最高 schema 版本（`backupContract().supportedSchemaVersion`）。 */
-export const SUPPORTED_SCHEMA_VERSION = 4;
+export const SUPPORTED_SCHEMA_VERSION = 5;
 
 /** 核心会计表（本产品业务数据；缺任何一个都不是本产品库）。 */
 const CORE_ACCOUNTING_TABLES = Object.freeze([
@@ -445,7 +448,17 @@ const STRUCTURE_V4 = Object.freeze({
 });
 
 /** 版本 -> 独立结构契约。不在本表里的版本一律拒绝（更旧 outdated / 更新 unsupported）。 */
-const STRUCTURES_BY_VERSION = Object.freeze({ 3: STRUCTURE_V3, 4: STRUCTURE_V4 });
+const STRUCTURE_V5 = Object.freeze({
+  ...STRUCTURE_V4,
+  account_sets: {
+    ...TABLE_STRUCTURE_COMMON.account_sets,
+    columns: {
+      ...TABLE_STRUCTURE_COMMON.account_sets.columns,
+      accounting_profile_id: "TEXT NOT NULL DEFAULT 'legacy-small-coa-v1'",
+    },
+  },
+});
+const STRUCTURES_BY_VERSION = Object.freeze({ 3: STRUCTURE_V3, 4: STRUCTURE_V4, 5: STRUCTURE_V5 });
 
 /**
  * 本模块契约里出现过的全部默认值文本。拒绝明细里只回显**这些**值（或 `nonstandard`），
@@ -1524,7 +1537,7 @@ function backupRecordProblems(conn, version) {
 }
 
 /**
- * 只读校验一个库是否为本产品**已独立声明契约的版本**（v3 / v4）的真实结构。
+ * 只读校验一个库是否为本产品**已独立声明契约的版本**（v3 / v4 / v5）的真实结构。
  * 顺序：必需表 → 版本（未来 / 旧版 / 未支持）→ 该版本自己的列 / 约束 / 默认值 → 迁移与备份记录。
  * **版本号只用于选契约**，不足以为凭：写成 4 但结构还是 v3 会被 `missing_columns` 拦住。
  * `notProductCode` 供调用方按入口语义命名（源库 / 快照）。

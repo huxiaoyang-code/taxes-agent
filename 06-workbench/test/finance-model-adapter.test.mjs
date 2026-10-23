@@ -243,18 +243,21 @@ await test("finance_query：12 个真实 node 逐个投影，金额等于手算�
 
   const balance = await queryOk("finance_query", { accountSetId: setA.id, nodeId: "report.balance_sheet", period: "2026-01" });
   assert.deepEqual(balance.projection, {
-    period: "2026-01", assets: 1700, liabilities: 0, equity: 1700, balanced: true, lineCount: 28,
+    profile: "small_basic_v1", legacy: false, mappingStatus: "complete", complete: true, partialValues: false, diagnosticCount: 0, diagnosticCounts: {},
+    period: "2026-01", assets: 1700, liabilities: 0, equity: 1700, balanced: true, lineCount: A.balanceSheet(setA.id, "2026-01").rows.length,
     cash: 1700, receivables: 0, inventory: 0, fixedAssetsNet: 0,
   });
 
   const income = await queryOk("finance_query", { accountSetId: setA.id, nodeId: "report.income_statement", period: "2026-01" });
   assert.deepEqual(income.projection, {
+    profile: "small_basic_v1", legacy: false, mappingStatus: "complete", complete: true, partialValues: false, diagnosticCount: 0, diagnosticCounts: {},
     period: "2026-01", currentRevenue: 1000, currentCost: 0, currentExpenses: 300,
     currentProfitBeforeTax: 700, currentNetProfit: 700, ytdRevenue: 1000, ytdNetProfit: 700,
   });
 
   const cashFlow = await queryOk("finance_query", { accountSetId: setA.id, nodeId: "report.cash_flow_statement", period: "2026-01" });
   assert.deepEqual(cashFlow.projection, {
+    profile: "small_basic_v1", legacy: false, mappingStatus: "complete", complete: true, partialValues: false, diagnosticCount: 0, diagnosticCounts: {},
     period: "2026-01", operating: 700, investing: 0, financing: 0, netIncrease: 700,
     cashBegin: 1000, cashEnd: 1700, cashChange: 700, reconciles: true, lineCount: 2,
   });
@@ -984,6 +987,8 @@ await test("async 写语义：真实拒绝 / 同步抛错 / 写后投影失败�
       nodeId: "report.balance_sheet",
       label: "x",
       data: {
+        accountingContext: A.balanceSheet(setA.id, "2026-01").accountingContext,
+        reportStatus: { status: "complete", complete: true, partialValues: false, diagnostics: [] },
         period: "2026-01",
         assets: [
           { label: "货币资金", value: 1, huge: "y".repeat(4 * 1024 * 1024 + 1) },

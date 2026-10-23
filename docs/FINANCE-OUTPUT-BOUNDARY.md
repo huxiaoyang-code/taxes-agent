@@ -1,4 +1,39 @@
 > **2026-10-23 已验收合并补记（优先于下方历史阶段）**：[PR #66](https://github.com/huxiaoyang-code/youshu-fork/pull/66) 于 2026-10-23T04:33:39Z 已合并：已审 head `9f7817f889ff6d2fa985dc343611ef965a4dcd8b`，main merge `2b3639e5ec80468f9e5acb0b886546f22dc5ada6`，tree `0c5bad9ccbdc8e46275252da0f8a2a464ae4d51e` 一致。root 该 head 完整 **61/61 套 exit0**，含 Office21/21 与11 PDF geometry / Poppler；fresh独审全部定向suite及17 probe接受，Issue44已 CLOSED（completed）。后续03新profile输出适配属03后续窗口。
+
+> **2026-10-23 B2 出口续作检查点（实施者自测，尚未独立验收 / 提交 / 合并）**：本轮只接续 LOCAL-03a 第一段出口与模型消费，已完成五类内部 CSV / XLSX / PDF 的持久 profile、映射状态与稳定行 ID 适配。此前文中“出口 WIP 未测试”“Office / 08 未适配”是对应历史冻结点，不能作为本检查点的现状；此前 PR / main / 测试数量亦仅描述当时版本。本轮不证明 LOCAL-03 / LOCAL-05 整体完成。身份全入口、统一测试注册、公共交接与最终 fresh 独审仍待后续。全国电子税务局真实接入数仍为 0，所有样张仍是内部报表，来源完整性仍为 `unverified`。
+
+### B2 本轮模型消费合同
+
+三张映射报表的模型摘要新增固定 `profile`（`small_basic_v1/enterprise_basic_v1/legacy_small_v1`）、`legacy/mappingStatus/complete/partialValues/diagnosticCount/diagnosticCounts`。计数键只来自已登记诊断码，绝不返回科目明细、企业 key / 名称、自由 reason 或原始错误。未知 profile、科目 / 映射版本、状态或诊断码均 fail closed；MCP transport 只追加三个 profile 与三个映射状态固定 token，未放宽通用 token 或敏感值规则。
+
+08 的写结果 `applied/needsLocalReview`、真实技术 ID、未知结果禁止误导重试、引用 / 账套隔离与投影预算保持。资产负债表行数根据真实行数组计数，未换成另一硬编码常量；原金额与安全断言保留。
+
+### B2 本轮实际验证与剩余工作
+
+全部为新建独占工作区合成 fixture，运行前核完整祖先无 reparse，先隔离 TEMP / TMP / fallback 数据目录再导入模块。未读取真实库 / 税务凭据；未扫描清理全局 TEMP；失败日志 / fixture 保留；HTTP 子进程只按自有 child handle 结束并等待退出。
+
+| 本轮实际命令（cwd 为 `06-workbench`） | 结果 |
+|---|---|
+| `node test/report-export.test.mjs` | 23/23，exit 0 |
+| `node test/report-office-export.test.mjs`（显式 REPORT_OFFICE_PYTHON） | 25/25，exit 0；45 PDF 逐页几何文字重叠 / 越界均 0 |
+| `node test/finance-output-policy.test.mjs` | 40/40，exit 0 |
+| `node test/finance-model-adapter.test.mjs` | 21/21，exit 0 |
+| `node ../05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 18/18，exit 0 |
+| `node test/report-export-http.test.mjs` | 31/31，exit 0 |
+| `node test/report-office-http.test.mjs` | 6/6，exit 0 |
+| `node test/smoke.test.mjs` | 28/28，exit 0；合法小企费用 5602，净利 -300 保留 |
+| `node test/accounting-guards.test.mjs` | 23/23，exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45/45，exit 0 |
+
+HTTP 三套首次在沙箱内因自有随机 loopback 的 `connect EACCES` 失败，获批以相同合成测试重跑后上述通过；不是删除断言或连接既有服务。Office 首次因依赖缺失不能启动，管理者按锁文件离线恢复依赖，package / lock 哈希未变。保留中间失败，不将失败说成通过。
+
+新增独立手算样张共 2 profile × 3 月 × 5 类 × 3 格式 = 90 文件。小企 2025-11 / 12 / 次年1月净利 1600 / 800 / 600、现金 12800 / 13700 / 14500；企业净利 2500 / 1300 / 700、现金 24500 / 25900 / 26900。对所有样张核 CSV 金额、XLSX 数值单元格、PDF 中文可提取 / 页数 / 每页渲染；45 PDF 几何覆盖新增样张及既有长中文 / 巨大摘要 / 分页 / 字体等回归。代表 PNG 已打开目视检查，未声称逐页全部像素目视。样张与独立金额明细保存在本轮忽略 QA 目录，定位 / SHA256 / 失败记录见本机 `.agent-runs/local03-slice1-export-delivery-20261023.md`（非跨机器交付依赖）。
+
+本段未重跑 / 改动备份与 contra 四个冻结文件，不拿其前轮 29/29、34/34 当本轮结果。身份 / server / tools / MCP server / UI / seed / import / test-all / 公共四文档仍属后续；未跑最终全套、未做整个候选独立验收、未建中间 PR、未提交 / 推送 / 合并。本检查点不可单独作为完整03/05合并。
+
+---
+
+以下保留历史阶段记录；当前本段状态以上述 2026-10-23 检查点为准。
 >
 > 银行出版窗口基于该实际main追加4套为静态65；最终65与银行fresh独审 / PR63合并待root，不能混作本包61套已通过的证据。下方候选 / OPEN / 未合并与失败条目按各自历史时点保留。
 

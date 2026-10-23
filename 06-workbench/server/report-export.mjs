@@ -1,6 +1,6 @@
 // Internal report downloads. Reading existing books is not a completeness or tax-filing certification.
 import { db } from "./db.mjs";
-import { balanceSheet, incomeStatement, cashFlowStatement } from "./accounting.mjs";
+import { balanceSheet, incomeStatement, cashFlowStatement, accountSetProfile } from "./accounting.mjs";
 
 const KINDS = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
 const TITLES = { "balance-sheet": "资产负债表", "income-statement": "利润表", "cash-flow-statement": "现金流量表", "trial-balance": "科目余额表", ledger: "明细账" };
@@ -82,13 +82,39 @@ function buildLedger(setId, period, account, trial) {
   return { code: account.code, name: account.name, direction: account.direction, period, opening, current, ytd, closing: split(running), items };
 }
 
+// Combine every included window; arithmetic reconciliation never certifies mapping completeness.
+function aggregateStatus(statuses) {
+  if (!statuses.length || statuses.some(s => !s || !["complete", "incomplete", "legacy_compatibility"].includes(s.status)
+    || typeof s.complete !== "boolean" || typeof s.partialValues !== "boolean" || !Array.isArray(s.diagnostics))) fail("report_data_invalid");
+  const diagnostics = [...new Map(statuses.flatMap(s => s.diagnostics).map(d => [JSON.stringify(d), d])).values()];
+  const complete = statuses.every(s => s.complete);
+  return { status: complete ? "complete" : statuses.some(s => s.status === "legacy_compatibility") ? "legacy_compatibility" : "incomplete",
+    complete, partialValues: statuses.some(s => s.partialValues), diagnostics };
+}
+const rowKey = line => line.id ?? line.label;
+export function pairedBalanceRows(current, opening) {
+  const a = new Map(current.map(line => [rowKey(line), line]));
+  const b = new Map(opening.map(line => [rowKey(line), line]));
+  return [...new Set([...a.keys(), ...b.keys()])].map(id => ({
+    ...(a.get(id) ?? b.get(id)), opening: b.get(id)?.value ?? null, value: a.get(id)?.value ?? null,
+  }));
+}
+export function incomeExportRows(data) {
+  if (data.rows?.current?.length) {
+    const ytd = new Map(data.rows.ytd.map(row => [row.id, row]));
+    return data.rows.current.map(row => ({ id: row.id, label: row.label,
+      current: row.valueMinor / 100, ytd: ytd.has(row.id) ? ytd.get(row.id).valueMinor / 100 : null }));
+  }
+  return Object.keys(data.current).map(label => ({ id: label, label, current: data.current[label], ytd: data.ytd[label] }));
+}
+
 // Cash flow is a flow measure: sum each month's existing classifications, never sum cash balances.
 function yearCashFlow(setId, period, yearStart) {
   const months = [];
   for (let month = Number(yearStart.slice(5)); month <= Number(period.slice(5)); month++) {
     months.push(cashFlowStatement(setId, `${period.slice(0, 4)}-${String(month).padStart(2, "0")}`));
   }
-  const result = { period, method: months[0].method };
+  const result = { period, method: months[0].method, accountingContext: months[0].accountingContext, reportStatus: aggregateStatus(months.map(month => month.reportStatus)) };
   for (const category of ["operating", "investing", "financing"]) {
     const values = new Map();
     for (const month of months) for (const line of month[category]) {
@@ -125,9 +151,12 @@ function toCsv(report) {
   const rows = [
     ["报表", TITLES[report.kind]], ["账套", report.accountSet.name], ["账套ID", String(report.accountSet.id)],
     ["期间", report.period], ["期间状态", report.scope.periodStatus], ["会计准则（账套登记值）", report.accountSet.accountingStandard],
+    ["持久profile", report.accountingContext.profileId], ["科目版本", report.accountingContext.coaVersion], ["映射版本", report.accountingContext.reportMappingVersion], ["旧账兼容", report.accountingContext.legacy],
+    ["报表映射状态", report.reportStatus.status], ["映射完整", report.reportStatus.complete], ["部分金额", report.reportStatus.partialValues],
     ["数据范围", "仅已过账凭证及建账期初"], ["本年累计起点", report.scope.yearStart],
     ["无期初金额且无已过账记录", report.dataStatus.empty], ["数据完整性", "未核实"], ["可申报文件", false],
   ];
+  for (const diagnostic of report.reportStatus.diagnostics) rows.push(["映射诊断", diagnostic.code, diagnostic.reportKind]);
   for (const warning of report.warnings) rows.push(["限制", warning.code, warning.message]);
   rows.push([], ["试算口径", "借方", "贷方", "差额", "平衡"]);
   for (const [key, label] of [["opening", "期间期初"], ["current", "本期发生"], ["ytd", "本年累计"], ["closing", "期末"]]) {
@@ -147,11 +176,11 @@ function toCsv(report) {
   } else if (report.kind === "balance-sheet") {
     rows.push([], ["资产负债表平衡", data.balanced], ["期间期初资产负债表平衡", data.opening.balanced], ["分类", "项目", "期间期初", "期末"]);
     for (const [section, label] of [["assets", "资产"], ["liabilities", "负债及权益"]]) {
-      for (let index = 0; index < data[section].length; index++) rows.push([label, data[section][index].label, data.opening[section][index].value, data[section][index].value]);
+      for (const line of pairedBalanceRows(data[section], data.opening[section])) rows.push([label, line.label, line.opening, line.value]);
     }
   } else if (report.kind === "income-statement") {
     rows.push([], ["项目", "本期发生", "本年累计"]);
-    for (const key of Object.keys(data.current)) rows.push([key, data.current[key], data.ytd[key]]);
+    for (const line of incomeExportRows(data)) rows.push([line.label, line.current, line.ytd]);
   } else {
     rows.push([], ["现金流勾稽（本期）", data.reconciles], ["现金流勾稽（本年）", data.ytd.reconciles], ["间接法是否独立勾稽", false], ["分类", "科目编码", "科目名称", "本期发生", "本年累计"]);
     for (const [section, label] of [["operating", "经营活动"], ["investing", "投资活动"], ["financing", "筹资活动"]]) {
@@ -196,13 +225,15 @@ export function buildReportExport(setId, options = {}) {
   const openingCount = one("SELECT COUNT(*) count FROM opening_balances WHERE account_set_id=? AND (debit<>0 OR credit<>0)", id).count;
   const report = {
     schemaVersion: 1, kind, period,
+    accountingContext: accountSetProfile(id).context,
+    reportStatus: { status: "not_applicable", complete: false, partialValues: false, diagnostics: [] },
     accountSet: { id, name: accountSet.name, startPeriod: accountSet.start_period, accountingStandard: accountSet.accounting_standard },
     scope: { status: "posted", periodStart: `${period}-01`, yearStart: `${yearStart}-01`, periodStatus: registered.status },
     dataStatus: { empty: postedCount === 0 && openingCount === 0, completeness: "unverified", taxFilingReady: false },
     warnings: [
       { code: "completeness_unverified", message: "仅导出现有账簿；数据来源、期间连续性及完整性未核实，零金额不证明来源完整。" },
       { code: "internal_report_only", message: "内部报表，不是税局申报模板；会计准则登记值不证明科目及报表口径符合该准则。" },
-      { code: "accounting_mapping_unverified", message: "三表复用现有本地科目映射及算法，官方行次、编码归集与资产卡片总账一致性未核实。" },
+
     ],
     checks: { trialBalance: trialChecks(trial.totals) },
     data: null,
@@ -222,7 +253,19 @@ export function buildReportExport(setId, options = {}) {
     report.checks.cashFlow = report.data.reconciles;
     report.checks.cashFlowYtd = report.data.ytd.reconciles;
     report.checks.indirectIndependent = false;
-    report.warnings.push({ code: "cash_flow_allocation_limited", message: "现金流按凭证现金净变动及对方科目金额比例分摊；复杂双向混合分录可能净额抵销或分类失真，勾稽通过也不证明分类正确。间接法末行复用直接法经营净额，不是独立勾稽。" });
+    report.warnings.push({ code: "cash_flow_allocation_limited", message: report.accountingContext.legacy
+      ? "旧账兼容：现金流按凭证现金净变动及对方科目金额比例分摊；复杂双向混合分录可能净额抵销或分类失真，勾稽不证明分类完整，间接法不是独立勾稽。"
+      : "现金流仅分类可解释的单一对方科目交易；复合或未知分类明确列为部分金额。勾稽不证明分类完整，间接法不是独立勾稽。" });
+  }
+  if (!["trial-balance", "ledger"].includes(kind)) {
+    const windows = [report.data.reportStatus];
+    if (report.data.opening) windows.push(report.data.opening.reportStatus);
+    if (report.data.ytd?.reportStatus) windows.push(report.data.ytd.reportStatus);
+    report.reportStatus = aggregateStatus(windows);
+    report.warnings.push({ code: "accounting_mapping_scope", message: report.accountingContext.legacy
+      ? "旧账兼容路径；映射完整性未核实，请核对原账。"
+      : "仅已核实的准则基础业务子集；映射状态与来源完整性分别列示，不代表法定完整财务报表。" });
+    if (report.reportStatus.partialValues) report.warnings.push({ code: "report_partial_values", message: "本报表含部分金额；未分类或缺明细金额未计入相关合计，请查看映射诊断。" });
   }
   // JSON would silently turn Infinity/NaN into null; reject corrupt amounts before emitting any file.
   requireFiniteNumbers(report);

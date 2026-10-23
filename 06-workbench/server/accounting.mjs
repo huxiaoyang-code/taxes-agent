@@ -1124,10 +1124,10 @@ export function balanceSheet(setId, period) {
   const valueOf = (row) => centsToNumber(BigInt(row.valueMinor));
   const assets = evaluation.rows
     .filter((row) => BS_ASSET_ROW_IDS.has(row.id))
-    .map((row) => ({ label: row.label, value: valueOf(row) }));
+    .map((row) => ({ id: row.id, label: row.label, value: valueOf(row) }));
   const liabilities = evaluation.rows
     .filter((row) => !BS_ASSET_ROW_IDS.has(row.id))
-    .map((row) => ({ label: row.label, value: valueOf(row) }));
+    .map((row) => ({ id: row.id, label: row.label, value: valueOf(row) }));
   const totals = {
     assets: centsToNumber(BigInt(evaluation.totals.assets)),
     liabilities: centsToNumber(BigInt(evaluation.totals.liabilities)),

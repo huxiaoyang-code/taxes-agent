@@ -58,6 +58,8 @@ const fakeExecutor = async (name, args) => {
     return {
       nodeId: 'report.balance_sheet', label: 'x',
       data: {
+        accountingContext: { profileId: 'small-2011-basic-v1', coaVersion: 'small-2011-coa-basic-v1', reportMappingVersion: 'small-2011-report-basic-v1', legacy: false },
+        reportStatus: { status: 'complete', complete: true, partialValues: false, diagnostics: [] },
         period: '2026-01',
         assets: [
           { label: '货币资金', value: 1700 },

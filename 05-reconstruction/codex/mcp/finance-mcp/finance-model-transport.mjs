@@ -248,6 +248,8 @@ const SCOPES_BY_CATEGORY = Object.freeze({
 
 /** projection 里允许出现的字符串只可能是这些受控状态 / 枚举 token，或期间。 */
 const PROJECTION_TOKENS = new Set([
+  "legacy_small_v1", "small_basic_v1", "enterprise_basic_v1",
+  "complete", "incomplete", "legacy_compatibility",
   "assets", "liabilities", "equity", "cost", "profit_loss",
   "debit", "credit",
   "draft", "posted", "open", "closed",

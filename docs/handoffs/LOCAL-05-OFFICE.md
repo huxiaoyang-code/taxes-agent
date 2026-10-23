@@ -1,5 +1,48 @@
 # LOCAL-05a / Issue #45 交接：内部报表 XLSX / PDF（模块已合并 + 接线 Draft PR #62 待最终审查）
 
+> **2026-10-23 B2 出口续作检查点（实施者自测，尚未独立验收 / 提交 / 合并）**：本轮只接续 LOCAL-03a 第一段出口与模型消费，已完成五类内部 CSV / XLSX / PDF 的持久 profile、映射状态与稳定行 ID 适配。此前文中“出口 WIP 未测试”“Office / 08 未适配”是对应历史冻结点，不能作为本检查点的现状；此前 PR / main / 测试数量亦仅描述当时版本。本轮不证明 LOCAL-03 / LOCAL-05 整体完成。身份全入口、统一测试注册、公共交接与最终 fresh 独审仍待后续。全国电子税务局真实接入数仍为 0，所有样张仍是内部报表，来源完整性仍为 `unverified`。
+
+### B2 本轮出口合同
+
+五类 CSV DTO 与 XLSX / PDF 元数据均携带实际持久 `accountingContext`（`profileId/coaVersion/reportMappingVersion/legacy`）和 `reportStatus`（`status/complete/partialValues/diagnostics`）。三张映射报表明确区分 `complete/incomplete/legacy_compatibility`；余额表和明细账原始账簿导出使用 `not_applicable` 表示不做三表映射认证。状态不是来源完整性或申报认证。
+
+资产负债表按稳定行 ID 配对期初 / 期末，不再靠数组位置；没有 ID 的 legacy 行按原标签兼容。启用月的上期末列保留真实建账期初。利润表按实际行 ID / 标签 / 分金额消费新 profile，legacy 继续标注其他收入 / 费用的旧折叠口径。
+
+现金流累计合并每一个月的映射状态和诊断，末月完整不能抹掉前月未分类。新 profile 复合 / 用途未明的现金流明确为部分金额，未分类金额不补到三类净额；legacy 继续比例分摊，并保留旧口径限制。既有合成例中已分类累计净额 530、实际现金余额变动 230（差额 300 为未分类复合采购）分别保留，不能将其中一个改为另一个；在建用途未明的期初现金 1000、支出 100、次月收入 20，累计现金变动 -80、已分类累计 20，仍为 incomplete。
+
+### B2 本轮模型消费合同
+
+三张映射报表的模型摘要新增固定 `profile`（`small_basic_v1/enterprise_basic_v1/legacy_small_v1`）、`legacy/mappingStatus/complete/partialValues/diagnosticCount/diagnosticCounts`。计数键只来自已登记诊断码，绝不返回科目明细、企业 key / 名称、自由 reason 或原始错误。未知 profile、科目 / 映射版本、状态或诊断码均 fail closed；MCP transport 只追加三个 profile 与三个映射状态固定 token，未放宽通用 token 或敏感值规则。
+
+08 的写结果 `applied/needsLocalReview`、真实技术 ID、未知结果禁止误导重试、引用 / 账套隔离与投影预算保持。资产负债表行数根据真实行数组计数，未换成另一硬编码常量；原金额与安全断言保留。
+
+### B2 本轮实际验证与剩余工作
+
+全部为新建独占工作区合成 fixture，运行前核完整祖先无 reparse，先隔离 TEMP / TMP / fallback 数据目录再导入模块。未读取真实库 / 税务凭据；未扫描清理全局 TEMP；失败日志 / fixture 保留；HTTP 子进程只按自有 child handle 结束并等待退出。
+
+| 本轮实际命令（cwd 为 `06-workbench`） | 结果 |
+|---|---|
+| `node test/report-export.test.mjs` | 23/23，exit 0 |
+| `node test/report-office-export.test.mjs`（显式 REPORT_OFFICE_PYTHON） | 25/25，exit 0；45 PDF 逐页几何文字重叠 / 越界均 0 |
+| `node test/finance-output-policy.test.mjs` | 40/40，exit 0 |
+| `node test/finance-model-adapter.test.mjs` | 21/21，exit 0 |
+| `node ../05-reconstruction/codex/mcp/finance-mcp/finance-model-transport-test.mjs` | 18/18，exit 0 |
+| `node test/report-export-http.test.mjs` | 31/31，exit 0 |
+| `node test/report-office-http.test.mjs` | 6/6，exit 0 |
+| `node test/smoke.test.mjs` | 28/28，exit 0；合法小企费用 5602，净利 -300 保留 |
+| `node test/accounting-guards.test.mjs` | 23/23，exit 0 |
+| `node test/accounting-period-integrity.test.mjs` | 45/45，exit 0 |
+
+HTTP 三套首次在沙箱内因自有随机 loopback 的 `connect EACCES` 失败，获批以相同合成测试重跑后上述通过；不是删除断言或连接既有服务。Office 首次因依赖缺失不能启动，管理者按锁文件离线恢复依赖，package / lock 哈希未变。保留中间失败，不将失败说成通过。
+
+新增独立手算样张共 2 profile × 3 月 × 5 类 × 3 格式 = 90 文件。小企 2025-11 / 12 / 次年1月净利 1600 / 800 / 600、现金 12800 / 13700 / 14500；企业净利 2500 / 1300 / 700、现金 24500 / 25900 / 26900。对所有样张核 CSV 金额、XLSX 数值单元格、PDF 中文可提取 / 页数 / 每页渲染；45 PDF 几何覆盖新增样张及既有长中文 / 巨大摘要 / 分页 / 字体等回归。代表 PNG 已打开目视检查，未声称逐页全部像素目视。样张与独立金额明细保存在本轮忽略 QA 目录，定位 / SHA256 / 失败记录见本机 `.agent-runs/local03-slice1-export-delivery-20261023.md`（非跨机器交付依赖）。
+
+本段未重跑 / 改动备份与 contra 四个冻结文件，不拿其前轮 29/29、34/34 当本轮结果。身份 / server / tools / MCP server / UI / seed / import / test-all / 公共四文档仍属后续；未跑最终全套、未做整个候选独立验收、未建中间 PR、未提交 / 推送 / 合并。本检查点不可单独作为完整03/05合并。
+
+---
+
+以下保留历史阶段记录；当前本段状态以上述 2026-10-23 检查点为准。
+
 ## 状态
 
 - 任务：五类内部报表真实 XLSX / PDF 导出（LOCAL-05a，Issue #45）；LOCAL-05 整体仍未完成。

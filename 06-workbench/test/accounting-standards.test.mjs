@@ -1072,6 +1072,22 @@ try {
     );
   });
 
+  for (const [standard, revenue] of [[SMALL, "5001"], [ENTERPRISE, "6001"]]) {
+    await test(`${standard}：收入 contra 污染整体拒绝结转且保留原金额`, async () => {
+      const setId = create("合成收入备抵污染", standard);
+      post(setId, "2026-01", [e("1002", 100), e(revenue, 0, 100)]);
+      db.prepare("UPDATE accounts SET contra=1 WHERE account_set_id=? AND code=?").run(setId, revenue);
+      const before = JSON.stringify(db.prepare("SELECT * FROM vouchers WHERE account_set_id=?").all(setId));
+      await rejectsCode(() => A.carryForwardProfit(setId, "2026-01"), "carryforward_account_semantics_conflict");
+      await rejectsCode(() => A.periodEndCheck(setId, "2026-01"), "carryforward_account_semantics_conflict");
+      assert.equal(JSON.stringify(db.prepare("SELECT * FROM vouchers WHERE account_set_id=?").all(setId)), before);
+      assert.equal(A.cashFlowStatement(setId, "2026-01").cash.end, 100);
+      db.prepare("UPDATE accounts SET contra=0 WHERE account_set_id=? AND code=?").run(setId, revenue);
+      A.carryForwardProfit(setId, "2026-01");
+      assert.equal(A.incomeStatement(setId, "2026-01").current["净利润"], 100);
+    });
+  }
+
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;
@@ -1080,5 +1096,5 @@ try {
   process.exitCode = 1;
 } finally {
   try { db?.close(); } catch { /* ignore */ }
-  try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { if (!results.some(([ok]) => !ok) && process.env.WORKBENCH_TEST_KEEP_FIXTURES !== "1") rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); else console.log(`保留合成夹具：${dataDir}`); } catch { /* ignore */ }
 }

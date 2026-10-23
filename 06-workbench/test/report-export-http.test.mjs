@@ -60,7 +60,7 @@ after(async () => {
     assert.deepEqual(snapshot(), beforeReads, "All successful/failed downloads must leave every database row unchanged");
   } finally {
     db.close();
-    rmSync(directory, { recursive: true, force: true });
+    console.log(`Synthetic HTTP fixture retained: ${directory}`);
   }
 });
 
