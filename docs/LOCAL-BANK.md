@@ -1,4 +1,6 @@
-> **当前 W2b：2414整合后文档收口，最终head待锁定与全新独审/PR（2026-10-24）**：BASE `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375303767)，原66窗口与总65文件不增。R4候选 `a15e6e7b9bb648e04707b30776c7a680bdc9f447` 已提交，与新main实际整合至 `58e0721593e5b85b3e113de414b991f3a59051ff`；最终整合head尚待锁定与全新最终独审/PR，本W2b尚未PR或合main。旧 `81f404e465d052547d8913b1db1e066520769048` 精确候选被拒，不可直接作为最终head合并；修复提交保留历史父链。R4根13原套＋1探针证据按相同源字节保留。八任务6/8、LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录/进程，税局真实0。最新整合与验收状态见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。证据、旧拒绝与未完成边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新R5与main11状态以页头交接为准。
 
 R4先检查原options描述符/Proxy等，再生成安全副本；11个公开入口及persist分支均在原参数首次读取前严检，scope/request/body/refs同源。仅statementOpenCents/statementCloseCents两个明确顶层BigInt按十进制字符串参与审计、实际业务保BigInt，深层或其它BigInt不放行。固定entry覆盖caller自带entry，相同operationId跨getBankStatus/listMatchesView确定冲突且不重执。persist=false不增加审计写，原事务/金额/私有授权/quarantine合同不变。
 

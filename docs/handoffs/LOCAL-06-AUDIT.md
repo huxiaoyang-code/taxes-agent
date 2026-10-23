@@ -1,6 +1,20 @@
-> **当前 W2b：2414整合后文档收口，最终head待锁定与全新独审/PR（2026-10-24）**：BASE `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375303767)，原66窗口与总65文件不增。R4候选 `a15e6e7b9bb648e04707b30776c7a680bdc9f447` 已提交，与新main实际整合至 `58e0721593e5b85b3e113de414b991f3a59051ff`；最终整合head尚待锁定与全新最终独审/PR，本W2b尚未PR或合main。旧 `81f404e465d052547d8913b1db1e066520769048` 精确候选被拒，不可直接作为最终head合并；修复提交保留历史父链。R4根13原套＋1探针证据按相同源字节保留。八任务6/8、LOCAL06/07未完；本机单用户、同DB多企业、一企一套，不要求每企目录/进程，税局真实0。
+> **当前 W2b R5：main11整合，最终head待锁定／全新独审／PR（2026-10-24）**：BASE `11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6375884790)，原66窗口／总65文件不增。R5根独立影响验收与四套上游补验已完成；尚待最终完整head独审，本W2b未PR／合main。八任务仍6/8，税局真实0。
 
-## 2026-10-24 当前2414整合与最终head准备
+## W2b R5 与 main11 当前交接（2026-10-24）
+
+R5最小修复已由root独立验收并保存为d1d618b5d19f31a877f94407ffcfcf10f518af15：executePreparedChild在消费与callback之前检查实际私有permission属于当前live父已绑定固定计划。未绑定、空计划和非空排除均拒绝；原DB/file/instance/父ID/attempt/used检查、authorizer、schema、严格snapshot、事务/未知失败/quarantine及receipt2合同不变，不增加授权能力。只改storage及现有domain test两路径，旧87043a11b626a048e65e81931543be8dc3df2a3e因缺该membership核对被独审REJECT，旧870完整65审查未完成。旧870/旧81精确候选不能直接作为最终head合并，修复保留历史父链；旧证据和失败不覆盖。
+
+root独立实跑domain26组/68events、operation10、完整persistence40/40及独立固定计划probe，均实际退出/关闭0，源码前后同。三类unbound/empty/excluded callback0，尝试即时全表含sequence及total_changes零变，被排除child保持pending；合法bound只一次，跨父/handle/used拒绝。独立真实银行与资本各75336分，child真实SQL故障后两period零写、父子failed、原75336分保持，双DB实际close。员工原13729分固定voucher及父成功终态RAISE后业务/父子失败原子回滚是另一层实施自测证据，不混同root的75336分独立预期。
+
+root首个独立probe曾使用非法actor，在admission被挡，未到目标场景；原失败/probe/driver/frozen保留。新v2仅把actor改为合法domain、产品和原测试断言未改后实际通过，不将原probe记为全绿。root accepted record仅证明R5最小修复影响验收，不能代替最终完整候选独审。原R4的13原套＋1probe、48未变＋4新验及原金额/210与16恶意证据继续按对应字节范围阅读，不声称本轮无差别重跑。
+
+新上游main98（PR97，7路径）与main11（PR98，124路径）均零交本包65路径；root实际整合至58151666c4e4538fb7c5854f40b3ba02294996be，tree d12a1e22e23ce7424104b205f117c5d0836ba868，BASE11e47e6ce6e1fff724a3e158f9c98b48fcb8f6d3，本包65 bytes/SHA全同。最新claim6375884790，原66窗口/最终65不增。全部上游新文件只读，不将其它PR交付记为本包完成。main11修改offline-bookkeeping完成月一行行为，因此root补四套实际上游影响验证，不为此改本包源或原断言。
+
+四套最终实际结果：golden15/15（12个真实business cases＋3 controls）、bookkeeping43/43、action-plan33/33、VAT22/22。两组passed=true、error=null、sourceUnchanged=true，每suite实际spawn/exit0/close0，四日志和fixtures全保。golden原spawnSync按返回数字status与DBclose marker核，不冒称该nested同步子进程存在async close事件。两组均已实际结束，没有将运行中状态预填为通过。旧2414 feedback20/20及其首轮18/20缺隔离依赖管理失败仍为旧阶段历史；本轮未重跑feedback2000或完整97。
+
+本次仅13docs当前头/中央交接及aggregate交付/65manifest普通读写，52份非docs与d1d618中间候选冻结逐字节相同；所有旧输入/报告/helper/冻结及历史交付只读。最终整合head尚待root锁定、全新未参与实施者nonefork完整65审查和PR；本W2b尚未PR/合main。原八任务仍6/8；W3b持久epoch/全入口资源锁/20企两月及运行中备份、W4恢复执行权/路径重绑、Windows W2和最终整链未完成。产品本机单用户、同DB多企业、一企一套，不要求每企目录/进程；真实税局接入0，无真实数据/凭据/浏览器操作。
+
+## 2026-10-24 2414整合记录（R5之前阶段历史）
 
 root已保存R4修复提交a15e6e7b9bb648e04707b30776c7a680bdc9f447，并在clean状态与BASE2414c512e6ec0cd58e94a6d9a6895b2ddbb50944实际merge至58e0721593e5b85b3e113de414b991f3a59051ff（tree72019c2d44a66747bf8be25b0609aa99e2f1449c）。35bd→2414的上游2 commits、1签名merge、17对象逐SHA/签名/祖先核验后CAS tracking，原root main未改。新增7个上游文件均不交原66；整合前后本包65文件bytes/SHA全保持，整合后当时clean，无包/依赖/原注册改动。上游accountant-review-feedback CLI、server/store、原test及三份专属docs只读，不把同事PR96算本包交付或关闭其Issue。
 
