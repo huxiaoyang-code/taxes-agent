@@ -436,7 +436,7 @@ export function bindPreparedChildren(db,parentAuthorization,children) {
 }
 export function executePreparedChild(db,authorization,fn) {
  const live=activeOperations.get(db),p=permissions.get(authorization);
- if(!live||!p||p.db!==db||p.used||!sameIdentity(p.file,live.p.file)||!sameIdentity(p.file,identityFromLive(db,live))||p.r.parent_operation_id!==live.p.r.operation_id||p.r.parent_attempt!==live.p.r.attempt||p.r.database_instance_id!==live.p.r.database_instance_id)throw fail('audit_authorization_invalid');
+ if(!live||!p||p.db!==db||p.used||!live.p.children?.includes(p)||!sameIdentity(p.file,live.p.file)||!sameIdentity(p.file,identityFromLive(db,live))||p.r.parent_operation_id!==live.p.r.operation_id||p.r.parent_attempt!==live.p.r.attempt||p.r.database_instance_id!==live.p.r.database_instance_id)throw fail('audit_authorization_invalid');
  const saved=selectOperation(db,p.r);if(!saved||saved.state!=='pending'||saved.binding_digest!==p.r.binding_digest)throw fail('audit_authorization_invalid');
  p.used=true;const claims=referenceClaims(db,saved);let out,spec,businessError;const previousCurrent=live.current;live.current=p;
  try{try{out=withAuditSavepoint(db,fn);spec=resultSpec(out,saved,claims);}catch(error){businessError=error;const mapped=classifyFailure(error);spec={state:mapped.outcome,resultCode:mapped.resultCode,reasonCode:mapped.reasonCode,targets:targetsOfRow(saved)};if(!['failed','rejected'].includes(spec.state))spec={state:'failed',resultCode:'internal_error',reasonCode:'internal_error',targets:targetsOfRow(saved)};}

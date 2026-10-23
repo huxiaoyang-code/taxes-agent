@@ -176,5 +176,53 @@ try {
  const backed=LB.createBackup({dbPath,outDir:join(root,'roundtrip-backup')});assert.equal(backed.ok,true,JSON.stringify(backed));assert.equal(LB.verifyBackup({backupDir:backed.backupDir}).ok,true);
  const restored=join(root,'restored');assert.equal(LB.restoreNew({backupDir:backed.backupDir,targetDir:restored}).ok,true);assert.equal(LB.createBackup({dbPath:join(restored,'workbench.db'),outDir:join(root,'again-backup')}).ok,true);groups++;
  const restart=await runChild(['--input-type=module','-e',`import {db} from './server/db.mjs';import * as A from './server/accounting.mjs';import {withRequestMetadata} from './server/local-audit-coordinator.mjs';try{const out=withRequestMetadata({operationId:${JSON.stringify(deleteId)},actor:'domain'},()=>A.deleteAccountSet(${gone.id}));console.log(out===undefined?'undefined replay':'bad');}finally{db.close();console.log('DB actual close');}`],{env:{...process.env}});assert.equal(restart.code,0,restart.stderr);assert.match(restart.stdout,/undefined replay/);assert.match(restart.stdout,/DB actual close/);groups++;
+ // Private parent IDs alone do not make a child part of the bound fixed plan.
+ const planSet=A.createAccountSet({name:'R5 fixed plan synthetic',start_period:'2026-01',enterprise:{enterpriseKey:'SYN-R5-PLAN'}});
+ const preparePlan=(action,parentOperationId)=>{
+  const operationId=randomUUID(),prepared=LS.prepareOperation(db,{context:{operationId,actor:'domain',action,attempt:1,accountSetId:planSet.id,...(parentOperationId?{parentOperationId,parentAttempt:1}:{})},scope:{kind:'account_set',value:planSet.id},request:{}});
+  assert.equal(prepared.code,'prepared');return {operationId,...prepared};
+ };
+ const planBusiness=()=>Object.fromEntries(Object.entries(allTables()).filter(([name])=>!name.startsWith('audit_')).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(row=>!JSON.parse(row).name.startsWith('audit_')):rows]));
+ let unplannedCalls=0;
+ for(const [mode,period] of [['unbound','2026-09'],['empty','2026-10'],['excluded','2026-11']]) {
+  const parent=preparePlan('batch.stage'),child=preparePlan('period.ensure',parent.operationId);
+  if(mode==='empty')LS.bindPreparedChildren(db,parent.authorization,[]);
+  let included;if(mode==='excluded'){included=preparePlan('period.ensure',parent.operationId);LS.bindPreparedChildren(db,parent.authorization,[included.authorization]);}
+  const before=planBusiness();
+  const terminal=LS.executePreparedOperation(db,parent.authorization,()=>{
+   const allBefore=allTables(),changes=db.prepare('SELECT total_changes() n').get().n;
+   for(let attempt=0;attempt<2;attempt++)assert.throws(()=>LS.executePreparedChild(db,child.authorization,()=>{unplannedCalls++;db.prepare('INSERT INTO periods(account_set_id,period) VALUES(?,?)').run(planSet.id,period);return {state:'succeeded'};}),/audit_authorization_invalid/);
+   assert.equal(unplannedCalls,0);assert.equal(db.prepare('SELECT total_changes() n').get().n,changes);assert.deepEqual(allTables(),allBefore);return {state:'no_change'};
+  });
+  assert.equal(terminal.state,'no_change');assert.deepEqual(planBusiness(),before);assert.equal(db.prepare('SELECT COUNT(*) n FROM periods WHERE account_set_id=? AND period=?').get(planSet.id,period).n,0);
+  const saved=db.prepare('SELECT state,receipt_json,terminal_event_id FROM audit_operations WHERE operation_id=?').get(child.operationId);assert.equal(saved.state,'pending');assert.equal(saved.receipt_json,null);assert.equal(saved.terminal_event_id,null);
+  if(included)assert.equal(db.prepare('SELECT state FROM audit_operations WHERE operation_id=?').get(included.operationId).state,'pending');
+  console.log(JSON.stringify({planRejection:mode,callbackCalls:0,childState:saved.state,businessChanges:0}));
+ }groups++;
+ const parent=preparePlan('batch.stage'),foreignParent=preparePlan('batch.stage'),bound=preparePlan('period.ensure',parent.operationId);LS.bindPreparedChildren(db,parent.authorization,[bound.authorization]);LS.bindPreparedChildren(db,foreignParent.authorization,[]);
+ let boundCalls=0;
+ const boundEffect=()=>{boundCalls++;db.prepare('INSERT INTO periods(account_set_id,period) VALUES(?,?)').run(planSet.id,'2026-08');return {state:'succeeded'};};
+ assert.equal(LS.executePreparedOperation(db,foreignParent.authorization,()=>{const before=allTables();assert.throws(()=>LS.executePreparedChild(db,bound.authorization,boundEffect),/audit_authorization_invalid/);assert.deepEqual(allTables(),before);assert.equal(boundCalls,0);return {state:'no_change'};}).state,'no_change');
+ const {DatabaseSync}=await import('node:sqlite'),otherHandle=new DatabaseSync(dbPath);
+ try {
+  assert.equal(LS.executePreparedOperation(db,parent.authorization,()=>{
+   const before=allTables();assert.throws(()=>LS.executePreparedChild(otherHandle,bound.authorization,boundEffect),/audit_authorization_invalid/);assert.deepEqual(allTables(),before);assert.equal(boundCalls,0);
+   const childResult=LS.executePreparedChild(db,bound.authorization,boundEffect);assert.equal(childResult.state,'succeeded');assert.equal(boundCalls,1);
+   const usedBefore=allTables();assert.throws(()=>LS.executePreparedChild(db,bound.authorization,boundEffect),/audit_authorization_invalid/);assert.equal(boundCalls,1);assert.deepEqual(allTables(),usedBefore);return {state:'succeeded'};
+  }).state,'succeeded');
+ }finally{otherHandle.close();console.log('R5 other handle DB actual close');}
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM periods WHERE account_set_id=? AND period=?').get(planSet.id,'2026-08').n,1);
+ for(const operationId of [parent.operationId,bound.operationId]){const saved=db.prepare('SELECT state,receipt_json FROM audit_operations WHERE operation_id=?').get(operationId);assert.equal(saved.state,'succeeded');assert.equal(JSON.parse(saved.receipt_json).targets.accountSetId,planSet.id);}
+ assert.equal(boundCalls,1);groups++;
+ const planVoucher={period:'2026-01',voucher_date:'2026-01-05',status:'posted',entries:[{code:'1002',debit:137.29},{code:'5001',credit:137.29}]};
+ const runVoucherPlan=operationId=>C.runAuditedBatchStage(db,{operationId,action:'batch.stage',scope:{kind:'account_set',value:planSet.id},request:{stage:'synthetic-fixed-voucher'}},[{action:'voucher.create_posted',scope:{kind:'account_set',value:planSet.id},request:[planSet.id,planVoucher]}],()=>A.createVoucher(planSet.id,planVoucher));
+ const voucherPlanId=randomUUID(),plannedVoucher=runVoucherPlan(voucherPlanId);assert.equal(plannedVoucher.status,'posted');assert.equal(A.trialBalance(planSet.id,'2026-01').lines.find(row=>row.code==='1002').closing_debit,137.29);assert.equal(db.prepare('SELECT debit FROM voucher_entries WHERE voucher_id=? AND code=?').get(plannedVoucher.id,'1002').debit,137.29);
+ const voucherReceipts=db.prepare('SELECT state,receipt_json FROM audit_operations WHERE operation_id=? OR parent_operation_id=?').all(voucherPlanId,voucherPlanId);assert.equal(voucherReceipts.length,2);for(const row of voucherReceipts){assert.equal(row.state,'succeeded');assert.equal(JSON.parse(row.receipt_json).receiptVersion,2);}
+ const failedPlanId=randomUUID(),vouchersBefore=db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(planSet.id).n;
+ db.exec("CREATE TEMP TRIGGER fault_r5_parent_terminal BEFORE INSERT ON audit_events WHEN NEW.action='batch.stage' AND NEW.outcome='succeeded' BEGIN SELECT RAISE(ABORT,'synthetic'); END");
+ try{assert.throws(()=>runVoucherPlan(failedPlanId));}finally{db.exec('DROP TRIGGER fault_r5_parent_terminal');}
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(planSet.id).n,vouchersBefore);assert.equal(A.trialBalance(planSet.id,'2026-01').lines.find(row=>row.code==='1002').closing_debit,137.29);
+ const failedPlanRows=db.prepare('SELECT state,receipt_json FROM audit_operations WHERE operation_id=? OR parent_operation_id=?').all(failedPlanId,failedPlanId);assert.equal(failedPlanRows.length,2);assert.ok(failedPlanRows.every(row=>row.state==='failed'&&JSON.parse(row.receipt_json).state==='failed'));
+ console.log(JSON.stringify({unplannedCalls,boundCalls,boundPeriod:'2026-08',boundVoucherAmountCents:13729,failedPlanBusinessRollback:true,failedParentAndChild:2}));groups++;
  console.log(JSON.stringify({groups,root,amounts:[200,200],events:db.prepare('SELECT COUNT(*) n FROM audit_events').get().n}));
 }finally {if(db.isTransaction)db.exec('ROLLBACK');db.close();console.log('DB actual close');}
