@@ -1,6 +1,6 @@
-> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](../handoffs/LOCAL-06-AUDIT.md)。
+> **当前 W2b 已合并（2026-10-24）**：[PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)，merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`；[本次13docs交接认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376358168)。交接元数据待提交／复核，LOCAL06/07未整体完成、八任务仍6/8、税局真实0。审定head、独审和后续边界见[LOCAL06当前交接](../handoffs/LOCAL-06-AUDIT.md)。
 
-以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+以下保留合并前阶段说明；最新PR #100已合并事实与后续边界以页头交接为准。
 
 原八任务仍6/8，R4不关闭LOCAL06/07。银行/辅助原options无回调准入窄修与根影响验收已完成，最终整合head尚待锁定与全新最终独审/PR。W3b全入口资源锁/持久代次/20企两月19＋1与运行中备份、W4恢复分叉/路径重绑、Windows W2和最终整链仍未完成。
 
