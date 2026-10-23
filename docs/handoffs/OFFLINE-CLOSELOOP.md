@@ -1,5 +1,23 @@
 # 离线闭环交接
 
+## 2026-10-24 OFFLINE-01B / #78B 实施候选（尚待root/fresh验收）
+
+PR91实际已合：[PR91](https://github.com/huxiaoyang-code/youshu-fork/pull/91)，base `9cd0176bb912c94b519fc40b155159d4ca5b81c7`，已审head `b88bc2e942a50776c706701c3d739ba8bdd1e088`，merge/main `0c6efe4bba9b7a62d09f434cd3fef071c917d4f8`。root/fresh最终快照26项、fresh另38项独立验证通过；Windows持连接目录替换被OS阻止，原身份/字节保持的证据不能当实际替换通过；硬链在获授权实跑中实际建立，nlink=2被产品拒绝，移除后重验current。下方04A待26项/未PR等保留为历史，不覆盖本条已合事实。
+
+本片基于上述merge，branch `codex/huxiaoyang-code/offline-01b-receipts`，Refs #76/#78/#79；唯一当前模型实施subagent，无再委派、pi/Claude/TokenHub/其他执行器，无Git提交/推送/合并。严格六文件窗口；旧模块、核心DB/import/audit/coordinator/batch/HTTP/MCP、package/test-all、STATE/NEXT-SESSION只读。维护入口flow status由root实跑，仅旧human-pl SHA mismatch，与本片无关，不修历史原件。
+
+实现显式专属store初始化/receive/inspect/recover-lock，原字节blob+manifest摘要链构成本机durable receipt；新目录rename是整批active提交点，排他wx锁与更正CAS，旧版本原字节保留。重开实际核验全部历史blob/manifest，不信保存status/records。active原路径逐源stale隔离，有效独立来源仍进入新reports；已核receipt/history始终可查；内部历史损坏整体failclosed。正常receive自身锁释放成功后writerBlocked=false。原路径stale期间补收独立源仍真实提交，返回blocked_origin_changed+receiveStatus及receiptIds，不能以CLI非零推断未接收。
+
+最小恢复guard排他并协调普通writer，只有本store锁且OS PID明确不存在才显式解锁；未知/活/不确定锁保留，guard自身崩溃保守blocked。不是#83通用恢复，不承诺Windows断电保障。相同sourceVersion同origin重试重放同receipt；同版本搬迁暂报source_origin_conflict，显式origin重定位留后续，不能通过无意义mapping更改规避。
+
+首轮实施实际 `node test/offline-material-store.test.mjs` **4/27，exit1**：主要沙箱将真实pending目录rename至commit一律EPERM，实际hardlink/junction也EPERM，失败合成Temp夹具全部保留。未skip/降格或伪造成功，已报root需授权实跑。随后补root指出的恢复并发P2与自身writerBlocked错误，以及逐源stale局部保留、receipt查询、独立补件，新增真实IPC恢复/活writer竞争测试。root获授权沙箱外实际 **31/32，exit1**，唯一失败是新测试把无code列表头税额列误写7（应6），失败fixture `Temp/offline-receipt-synthetic-dOeSQc`保留；其余实际IPC/前后提交child终止/硬链junction/局部规划均通过。已改独立期望6并反查实际header该列确为tax，不改产品或旧断言；待root重跑最终32项，不把31/32当通过。
+
+合同 [OFFLINE-MATERIAL-STORE](../OFFLINE-MATERIAL-STORE.md)，任务 [OFFLINE-01B](../tasks/OFFLINE-01B.md)。接收回执authorizesExecution=false、completeness=not_assessed、authenticity=unverified，#79实际声明/完整度继续判断。#77会计审定黄金、#78 XLSX/其他来源/路径重定位、#79正式执行回执、#80正式写账/连续核算仍未完成，#54 coordinator另一窗口在途，税局真实接入0。尚待root最终定点、fresh完整head独审、PR/合并。
+
+必要影响实施自测（cwd本worktree `06-workbench`）：`node test/offline-materials.test.mjs` **36/36 exit0**、`node test/offline-plan.test.mjs` **45/45 exit0**；旧断言未改，未跑full/npm test。`git diff --check`exit0；精确六文件变更，没有自有常驻进程。仅32项税列夹具期望和文档收尾后冻结，等待root实际32项新结果与独审。
+
+root修后独立合成probe **PASS exit0**（`.agent-runs/root-store-GLyrwc`保留）：实际547.83+5.48=553.31初收，bank126.49追加receipt2；原invoice替换553.32后inspect局部blocked、receipt2仍可查、仅bank有效且#79银行inputDigest/unchanged不变；无CAS更正拒绝无新receipt，精确旧版本更正receipt3并保留两份sales历史；再次重试replayed仍3；新child CLI inspect exit0/signal=null/stderr空且原文重算report一致。该独立probe不代替最终32项与完整head独审。
+
 ## 2026-10-24 OFFLINE-04A / #81A 实施候选（待最终冻结独审与PR）
 
 PR90实际已合：[PR90](https://github.com/huxiaoyang-code/youshu-fork/pull/90)，base `19e861a580ebffec0b5e14eafb41ca457f9de71e`，已审head `85eabbba1a8d92ce0101588919ddbaae33003655`，merge/main `9cd0176bb912c94b519fc40b155159d4ca5b81c7`。行政候选以completionDate确认日修复后的bookkeeping43/43、root验证及fresh接受事实以该已合版本为准；下方03A未验/42套及修前接受等均保留历史，不作为新候选接受。
