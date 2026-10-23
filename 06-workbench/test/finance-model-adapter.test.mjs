@@ -67,6 +67,8 @@ async function test(name, fn) {
 const dataDir = mkdtempSync(join(tmpdir(), "wb-adapter-"));
 process.env.WORKBENCH_DATA_DIR = dataDir;
 const A = await import("../server/accounting.mjs");
+const { db: auditDb } = await import("../server/db.mjs");
+const { operationErrorEvidence } = await import("../server/local-audit-coordinator.mjs");
 const { callAgentTool, AGENT_TOOL_NAMES } = await import("../server/agent-tools.mjs");
 const { COA } = await import("../server/coa.mjs");
 const ADAPTER = await import("../server/finance-model-adapter.mjs");
@@ -76,10 +78,36 @@ const { createFinanceModelAdapter, FINANCE_QUERY_AVAILABLE, FINANCE_QUERY_UNIMPL
 
 // ---------------------------------------------------------------- 执行计数 + 真实适配器
 const executed = [];
+let lastRealFailure;
+function businessSnapshot() {
+  const tables = auditDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'audit_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+  const rows = tables.map(({name}) => [name, auditDb.prepare('SELECT * FROM "'+name.replaceAll('"','""')+'" ORDER BY rowid').all()]);
+  rows.push(['business_sequences',auditDb.prepare("SELECT * FROM sqlite_sequence WHERE name NOT LIKE 'audit_%' ORDER BY name").all()]);
+  return JSON.stringify(rows);
+}
 const executeRaw = async (name, args) => {
   executed.push(name);
-  return callAgentTool(name, args);
+  const before = businessSnapshot();
+  lastRealFailure = null;
+  try { return await callAgentTool(name, args); }
+  catch (error) {
+    lastRealFailure = { proof: operationErrorEvidence(error), before, after: businessSnapshot() };
+    throw error;
+  }
 };
+function assertPrivateRollback(envelope) {
+  assert.equal(envelope.applied, false);
+  assert.ok(lastRealFailure?.proof, '真实 coordinator 私有提交证据必须存在');
+  const {proof,before,after} = lastRealFailure;
+  assert.equal(proof.applied,false);
+  assert.equal(proof.durability,'committed');
+  assert.equal(before,after,'真实 rollback 后业务/来源/批次/序列全部零变');
+  assert.ok(['failed','rejected'].includes(proof.receipt.state));
+  const saved = auditDb.prepare('SELECT receipt_json FROM audit_operations WHERE operation_id=? AND database_instance_id=? AND attempt=?').get(proof.operationId,proof.receipt.databaseInstanceId,proof.receipt.attempt);
+  assert.deepEqual(JSON.parse(saved.receipt_json),proof.receipt,'失败 receipt 已真实持久化');
+  const event = auditDb.prepare('SELECT outcome FROM audit_events WHERE event_id=?').get(proof.receipt.eventId);
+  assert.equal(event.outcome,proof.receipt.state);
+}
 const adapter = createFinanceModelAdapter({ executeRaw });
 const policy = adapter.policy;
 const TRANSPORT_REGISTRY = {
@@ -450,11 +478,11 @@ await test("未知 / 税务 / 未实现 / 未知 node：默认拒绝且从不执
   assert.equal(noPeriod.error.code, "period_required");
   assertNoLeak(noPeriod, "period_required");
 
-  // 写动作的真实业务失败：结果未知（不能无依据标 applied:false）
+  // 真实业务失败由 coordinator 证明已回滚，失败 receipt 与业务零变共同核证。
   const missingVoucher = await callExpectExecutions("voucher_post", { accountSetId: setA.id, voucherId: 987654 }, 1);
   assert.equal(missingVoucher.ok, false);
   assert.equal(missingVoucher.error.code, "voucher_not_found");
-  assert.equal(missingVoucher.applied, "unknown");
+  assertPrivateRollback(missingVoucher);
   assert.equal(missingVoucher.needsLocalReview, true);
   assert.equal(missingVoucher.localRef, null);
   assert.equal(missingVoucher.refUnavailable, "outcome_unknown");
@@ -466,11 +494,11 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   const repost = await writeOk("voucher_post", { accountSetId: setA.id, voucherId: globalThis.__v1Id });
   assert.equal(repost.projection.status, "posted");
 
-  // 已过账凭证直接删除：域层拒绝，结果未知（不伪造成 applied:false）
+  // 已过账凭证直接删除：域层真实回滚并持久化失败 receipt。
   const blockedDelete = await callExpectExecutions("voucher_delete", { accountSetId: setA.id, voucherId: globalThis.__v2Id }, 1);
   assert.equal(blockedDelete.ok, false);
   assert.equal(blockedDelete.error.code, "posted_voucher_requires_unpost");
-  assert.equal(blockedDelete.applied, "unknown");
+  assertPrivateRollback(blockedDelete);
   assert.equal(A.listVouchers(setA.id, { period: "2026-01" }).length, 2);
 
   await writeOk("voucher_unpost", { accountSetId: setA.id, voucherId: globalThis.__v2Id });
@@ -490,7 +518,7 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   const again = await callExpectExecutions("carry_forward_profit", { accountSetId: setA.id, period: "2026-01" }, 1);
   assert.equal(again.ok, false);
   assert.equal(again.error.code, "already_carried_forward");
-  assert.equal(again.applied, "unknown");
+  assertPrivateRollback(again);
 
   // 真实完整资产登记：2026-02 用借贷平衡的购入凭证入账 1200（1601 / 1002），
   // 卡片取得 / 起提期间同为 2026-02，后续封账前置可真实通过。
@@ -527,7 +555,7 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   }, 1);
   assert.equal(closedCreate.ok, false);
   assert.equal(closedCreate.error.code, "period_closed");
-  assert.equal(closedCreate.applied, "unknown");
+  assertPrivateRollback(closedCreate);
   assert.equal(closedCreate.needsLocalReview, true);
   const reopened = await writeOk("period_set_status", { accountSetId: setA.id, period: "2026-01", status: "open" });
   assert.deepEqual(reopened.projection, { period: "2026-01", status: "open" });
@@ -535,14 +563,14 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   const badStatus = await callExpectExecutions("period_set_status", { accountSetId: setA.id, period: "2026-01", status: "bogus" }, 1);
   assert.equal(badStatus.ok, false);
   assert.equal(badStatus.error.code, "status_invalid");
-  assert.equal(badStatus.applied, "unknown");
+  assertPrivateRollback(badStatus);
 
   // 折旧残留草稿 → 再次计提被拒；重过账恢复后不影响已计提金额
   await writeOk("voucher_unpost", { accountSetId: setA.id, voucherId: depreciation.projection.voucherId });
   const draftBlocked = await callExpectExecutions("depreciation_run", { accountSetId: setA.id, period: "2026-02" }, 1);
   assert.equal(draftBlocked.ok, false);
   assert.equal(draftBlocked.error.code, "depreciation_draft_exists");
-  assert.equal(draftBlocked.applied, "unknown");
+  assertPrivateRollback(draftBlocked);
   const repostedDepreciation = await writeOk("voucher_post", { accountSetId: setA.id, voucherId: depreciation.projection.voucherId });
   assert.equal(repostedDepreciation.projection.status, "posted");
 
@@ -552,13 +580,13 @@ await test("写生命周期：反过账 / 过账 / 删除 / 结转 / 折旧 / �
   }, 1);
   assert.equal(openingAfterPosting.ok, false);
   assert.equal(openingAfterPosting.error.code, "opening_rewrite_after_posting");
-  assert.equal(openingAfterPosting.applied, "unknown");
+  assertPrivateRollback(openingAfterPosting);
   const badAccount = await callExpectExecutions("account_create", {
     accountSetId: setA.id, code: "190103", name: "", category: "资产", direction: "debit",
   }, 1);
   assert.equal(badAccount.ok, false);
   assert.equal(badAccount.error.code, "code_and_name_required");
-  assert.equal(badAccount.applied, "unknown");
+  assertPrivateRollback(badAccount);
 });
 
 await test("LOCAL-02 兼容：period_end_check 只读固定投影 / asset_update 写 / 封账成功与前置拒绝", async () => {
@@ -582,7 +610,7 @@ await test("LOCAL-02 兼容：period_end_check 只读固定投影 / asset_update
   assert.equal(badUpdate.ok, false);
   assert.equal(badUpdate.error.code, "acquired_period_invalid");
   assert.equal(badUpdate.error.category, "asset");
-  assert.equal(badUpdate.applied, "unknown");
+  assertPrivateRollback(badUpdate);
   assert.equal(TRANSPORT.validateModelEnvelope(badUpdate, TRANSPORT_REGISTRY).ok, true);
 
   const jan = await queryOk("period_end_check", { accountSetId: setA.id, period: "2026-01" });
@@ -631,7 +659,7 @@ await test("LOCAL-02 兼容：period_end_check 只读固定投影 / asset_update
   assert.equal(blockedClose.ok, false);
   assert.equal(blockedClose.error.code, "period_end_check_failed");
   assert.equal(blockedClose.error.category, "period_end");
-  assert.equal(blockedClose.applied, "unknown");
+  assertPrivateRollback(blockedClose);
   assert.equal(TRANSPORT.validateModelEnvelope(blockedClose, TRANSPORT_REGISTRY).ok, true);
 
   // 真正封账成功路径：1 月草稿 / 试算 / 计提 / 卡片核对 / 损益结转 / 期间顺序均满足。

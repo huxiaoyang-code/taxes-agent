@@ -255,7 +255,7 @@ function createLegacySchema(conn) {
         const cols=Object.keys(row); conn.prepare('INSERT INTO "'+table.name+'" ('+cols.map(c=>'"'+c+'"').join(',')+') VALUES ('+cols.map(()=>'?').join(',')+')').run(...Object.values(row));
       }
     }
-    for (const row of seed.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index','trigger','view') AND sql IS NOT NULL ORDER BY type,name").all()) conn.exec(row.sql);
+    for (const row of seed.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index','trigger','view') AND sql IS NOT NULL ORDER BY rowid").all()) conn.exec(row.sql);
     conn.exec("PRAGMA foreign_keys=ON");
     conn.prepare("INSERT INTO account_sets (name,start_period,created_at) VALUES ('合成旧库公司','2025-12','2025-12-01T00:00:00.000Z')").run();
   } finally { seed.close(); }

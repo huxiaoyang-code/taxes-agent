@@ -1,3 +1,13 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](../handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+原八任务仍6/8，R4不关闭LOCAL06/07。银行/辅助原options无回调准入窄修与根影响验收已完成，最终整合head尚待锁定与全新最终独审/PR。W3b全入口资源锁/持久代次/20企两月19＋1与运行中备份、W4恢复分叉/路径重绑、Windows W2和最终整链仍未完成。
+
+## 2026-10-24 最初W2b范围记录（历史）
+
+已合依赖W2a PR75→W3a PR87；本片W2b接真实同步领域、HTTP/raw/model/MCP/CLI、receipt2和batch最小业务+审计+checkpoint外层，待root冻结/完整97/全新独审/PR合并。此片未实现W3b全入口统一锁/20企业完整故障矩阵、W4恢复分叉/重绑、Windows与最终整链；原八包仍6/8，LOCAL06/07未关闭，全国税局真实接入0。下方旧候选状态仅历史。
+
 > **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](../handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 候选 / W2a 已合事实更新**：PR [#75](https://github.com/huxiaoyang-code/youshu-fork/pull/75) 于2026-10-23T14:42:07Z已合；已审head `7220dd10b4e1e3f9bf10c56f5a1cf6638b1ec2a5`，merge/main `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。root影响回归/独立两profile与全新未实施者独审接受事实见[LOCAL06交接](../handoffs/LOCAL-06-AUDIT.md)。本W3a基于该merge实施严格batch1/2官方备份、batch2三表/持久UUID/显式保护install及ready门，必要合成定点见[LOCAL07交接](../handoffs/LOCAL-07-CLI.md)，**尚未root验收/独审/PR/合并**。原91仅末尾追加两套成93，未跑full93/npm test。后续W2b→W3b→W4→Windows/最终链；原八包6/8、LOCAL06/07未完成、税局真实接入0。下方W2a未PR等均保留历史时点。

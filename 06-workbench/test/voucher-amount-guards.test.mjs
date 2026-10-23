@@ -29,6 +29,30 @@ function snapshot(connection) {
     return [name, rows];
   }));
 }
+
+// Only these audited dynamic operations may append terminal audit rows.
+// Original snapshot() remains full for all static invalid-input assertions.
+function assertAuditAppend(after,before,actions,message,state='failure') {
+ const row=v=>typeof v==='string'?JSON.parse(v):v;
+ const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
+ assert.deepEqual(business(after),business(before),message);
+ for(const table of ['audit_events','audit_operations'])for(const original of before[table]??[])assert.ok((after[table]??[]).some(v=>JSON.stringify(v)===JSON.stringify(original)),table+' history must remain exact');
+ const added=table=>(after[table]??[]).filter(v=>!(before[table]??[]).some(old=>JSON.stringify(old)===JSON.stringify(v))).map(row);
+ const events=added('audit_events').sort((a,b)=>a.seq-b.seq),ops=added('audit_operations');
+ assert.deepEqual(events.map(e=>e.action),actions);assert.equal(ops.length,actions.length);
+ for(const event of events){
+  const operation=ops.find(o=>o.operation_id===event.operation_id&&o.attempt===event.attempt&&o.database_instance_id===event.database_instance_id);assert.ok(operation);
+  if(state==='failure')assert.ok(['failed','rejected'].includes(operation.state));else assert.equal(operation.state,state);
+  assert.equal(event.outcome,operation.state);assert.equal(event.action,operation.action);assert.ok(operation.receipt_json);
+  const receipt=JSON.parse(operation.receipt_json);
+  assert.deepEqual(Object.keys(receipt).sort(),['receiptVersion','databaseInstanceId','operationId','attempt','state','resultCode','reasonCode','eventId','eventSeq','targets','resultRefs','resultDigest'].sort());
+  assert.equal(receipt.receiptVersion,2);assert.equal(receipt.operationId,operation.operation_id);assert.equal(receipt.databaseInstanceId,operation.database_instance_id);assert.equal(receipt.attempt,operation.attempt);assert.equal(receipt.state,operation.state);assert.equal(receipt.eventId,event.event_id);assert.equal(receipt.eventSeq,event.seq);assert.equal(receipt.resultCode,event.result_code);assert.equal(receipt.reasonCode,event.reason_code);assert.match(receipt.resultDigest,/^[a-f0-9]{64}$/);
+  assert.deepEqual(receipt.targets,{accountSetId:event.account_set_id,voucherId:event.voucher_id,period:event.period,jobId:event.job_id,itemId:event.item_id,stageId:event.stage_id,correlation:event.correlation});
+ }
+ const seq=value=>(value.sqlite_sequence??[]).map(row).find(r=>r.name==='audit_events')?.seq??0;
+ assert.equal(seq(after)-seq(before),actions.length);
+}
+
 const pair = (amount = 100) => [{ code: '1002', debit: amount, credit: 0 }, { code: '1001', debit: 0, credit: amount }];
 // Invalid values on the unused side expose silent coercion even when both rows remain nonzero and balanced.
 const unusedSide = (bad) => [{ code: '1002', debit: 100, credit: bad }, { code: '1001', debit: 0, credit: 100 }];
@@ -139,7 +163,7 @@ try {
       db.prepare('UPDATE voucher_entries SET credit=? WHERE voucher_id=? AND line_no=1').run(bad, voucher.id);
       const before = snapshot(db);
       try { assert.throws(() => A.postVoucher(setId, voucher.id), /voucher_invalid/); }
-      finally { assert.deepEqual(snapshot(db), before, 'post failure must preserve every table'); }
+      finally { assertAuditAppend(snapshot(db),before,['voucher.post'],'post failure must preserve every business table'); }
       assert.equal(A.getVoucher(setId, voucher.id).status, 'draft');
     });
   }

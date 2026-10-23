@@ -385,7 +385,7 @@ const withModelNote = (tool) => (MODEL_PLAIN_TOOL_SET.has(tool.name)
   : tool);
 
 export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
-  .map(withModelNote);
+  .map(withModelNote).map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema?.properties,operationId:{type:'string',description:'Stable local operation ID; preserve before a write and reuse only for the identical request.'}}}}):t);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 /** 本地自己处理、不转发后端的工具（仅资源类；普通财务工具已固定走模型通道）。 */
@@ -459,6 +459,7 @@ function typeOk(v, t) {
 /** 最小运行时校验：必填、类型、枚举、数值上下限。返回问题字符串数组，空数组表示通过。 */
 export function validateArgs(schema, args) {
   const problems = [];
+  if(args?.operationId!==undefined){if(typeof args.operationId!=='string'||! /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(args.operationId))return ['audit_operation_invalid']; args={...args};delete args.operationId;}
   if (!schema || schema.type !== "object") return problems;
   if (args === null || typeof args !== "object" || Array.isArray(args)) return ["arguments 必须是 JSON 对象"];
   // Bank model input is exclusively a local opaque draft and integer scope.

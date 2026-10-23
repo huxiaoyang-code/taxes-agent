@@ -1,3 +1,15 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+R4共用descriptor复制保own undefined/holes/安全__proto__，extractOperationMetadata仍先严格snapshot、仅剥root operationId，未改变返回合同或导入纯前检。银行/辅助入口首次读取前严检已补验，原导入金额、企业身份、三指纹和原子失败队列合同不变；前轮未变化范围按原证据复用。
+
+原legacy/金融纯validator在安全data-only预检后保NaN/Infinity及有限非法输入的原validation DTO/错误优先级；静态拒绝全表零写。aux附录复用原纯data validator保getter0与原aux错误码。真正写时重验且使用原payload/金额/企业身份/三指纹。业务批次/requestId回放若是新技术operation，记精确no_change观察；固定技术ID的同binding终态重放全表/序列零变，不执行callback，改请求确定冲突。aux执行中实体/第二mapping/allocation/request-receipt八真实故障现保failed batch/attempt/source和失败receipt同提交；失败元数据/审计RAISE则零部分写、pending保留。prepare BEGIN/COMMIT与业务controlledSP/outerROLLBACK未知按真实层分别核证，仍未知不自动重试。
+
+## 2026-10-24 W2b 审计接线候选
+
+首次旧导入和incremental create/append通过同步可信coordinator拥有外层事务，内部会计/辅助组合不重复伪造post事件。原payload、两profile、企业身份及导入三指纹算法未改。 静态参数/来源/规范mode/scope由原纯校验在prepare前核验，原REJECTED/throw与dryRun flags保持、全部表零写；私有admission阶段不产生附录回放副作用，outer执行完整重验。真实执行中失败在确认rollback后，由固定字段队列把原失败批次/attempt/source trace及全局失败终态同COMMIT；batch child与父失败同COMMIT，任一写失败全rollback留pending待核，create失败accountSetId为null。preview/validation失败不记执行成功，旧无审计批次的当前replay只记no_change观察，不回填历史。真实batch import效果/来源完成/审计/checkpoint现同COMMIT，消除原import先提交再checkpoint的窗口；旧afterImportCommit测试钩子名保留，但在本片外层提交之前调用。稳定operationId的重放只读核digest；不能精确还原旧DTO时返回applied=true待核，不能调用导入函数重建结果。
+
  > 2026-10-23 B2b 当前候选：B2a 已随 PR70 实际合并；HTTP `/api/import/incremental` 与 Agent/MCP `book_import_incremental` 已显式透传顶层数据 `auxiliaryAppendix`，保留无附录旧行为与指纹。模型按真实双层状态/committed判断写入，核心回放仍可能新增辅助写；pending/unknown不假称持久成功，导入ref不臆造proof/实体明细。候选仍待管理验收/fresh独审/PR，实际证据统一见 [辅助交接](handoffs/LOCAL-03b.md)。下方旧候选状态保留追溯。
 
 > 2026-10-23 更新：双准则/企业身份部分已随 PR68 合并；辅助 A+B1 已随 PR69 合并，真实证据见 [LOCAL03a交接](handoffs/LOCAL-03a.md) 与 [辅助交接](handoffs/LOCAL-03b.md)。下方候选措辞保留作原阶段历史。当前 B2a 在领域层增加同事务辅助附录，已自测、尚待管理验收/独审/PR；真实 HTTP/Agent/MCP 透传与模型投影留 B2b。

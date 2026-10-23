@@ -1,3 +1,17 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+R4先检查原options描述符/Proxy等，再生成安全副本；11个公开入口及persist分支均在原参数首次读取前严检，scope/request/body/refs同源。仅statementOpenCents/statementCloseCents两个明确顶层BigInt按十进制字符串参与审计、实际业务保BigInt，深层或其它BigInt不放行。固定entry覆盖caller自带entry，相同operationId跨getBankStatus/listMatchesView确定冲突且不重执。persist=false不增加审计写，原事务/金额/私有授权/quarantine合同不变。
+
+本机REST/raw的普通银行错误维持固定安全码；bank_local_operation_failed投影仅转移原Error身份已有的WeakMap真实证据，不能伪造authority/applied，不回显银行原文。真实audit_*协议码保持。CLI成功/错误机器输出各为唯一JSON，均携operationId与真proof；可靠丢响应重试须预存显式--operation-id，text可早显示文本。MCP元数据精确可选operationId，不扩draftRef/审批/TTL/scope输入权限。当前修复实际通过原银行HTTP、MCP与CLI，不以这些冒称页面paste/filechooser实操或外部银行接入。
+
+## 2026-10-24 W2b 审计接线候选
+
+register/import/resolve/confirm/cancel/reconcile和transactions/candidates/matches/status的真实refresh统一拥有审计outer；内部组合保原银行rollback/quarantine。无真实写的查询记no_change，same-file-new-batch因真实追踪写入记实际变化，不因truthy replayKind笼统记no_change。刷新真正失效后通知输出策略撤销该套银行引用。原失败批次/attempt累计保留：确认外层rollback后，固定失败字段与全局失败终态同COMMIT；未知rollback不写，不覆写completed/pending_review。
+
+本机prepare银行draft时生成稳定技术operationId；原preview→明确approve→执行与TTL/撤销/账套门保留。无显式HTTP ID时响应header等于draft/真实receipt ID；显式ID冲突拒绝（包含已完成缓存重放），draftRef不持久化。CLI写命令及refresh查询启动时官方启用audit，支持--operation-id，机器模式仅在唯一结果或错误JSON中返回ID；真正只读命令不安装缺失组件。仅statementOpenCents/statementCloseCents两个已允许BigInt请求字段规范投影十进制cents串，原金额算法/DTO不变，任意其他BigInt仍拒。
+
 ## LOCAL04B 银行入口与受控模型输入（2026-10-23 实施候选）
 
 本机单用户，同一数据库可有多家企业、每家唯一账套；不要求每企一个目录。当前只有本机CSV能力，外部银行与真实税局接入仍为0。A的银行领域/storage/CLI、aux、备份和核心本轮只读，沿PR73已合并DTO。往来分配只展示，不参与匹配依据、snapshot或失效判定。

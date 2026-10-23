@@ -1,3 +1,17 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+当前只完成同W2b的R4补修和根影响验收，最终独审尚须重新执行，原81拒绝不能由前轮验收覆盖。batch未新增能力，W3b全入口共享资源锁/持久代次/20企两月19＋1与运行中备份、W4恢复分叉/路径重绑及Windows最终链继续待办。
+
+## 2026-10-24 R4之前基线与W2b交接（历史）
+
+W3a 已合 [PR87](https://github.com/huxiaoyang-code/youshu-fork/pull/87)：已审head `f11e92dfad79e975fbdaa6bab68c41ee44a59b5a`，实际merge `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`（2026-10-23T16:56:21Z）；root十一影响套及fresh最终完整head接受事实见文末已合记录。本W2b最初以该merge实施，当前已由root整合到页头6465；真实batch两企业200/200、父子审计/来源完成/checkpoint同提交、fence失效零业务效果、child失败原子性、pending旧attempt不绕过的必要定点已自测，仍待新BASE的root冻结验收/独审/PR；旧完整97失败按页头保留。W3b/W4与整包07未完，详见[LOCAL06当前交接](LOCAL-06-AUDIT.md)。下方候选和旧SHA均为历史时点。
+
+## 2026-10-24 W2b batch 接线候选
+
+W3a已合PR87事实见下方。当前W2b在该基线完成可信外层与固定child审计接线，import业务/来源完成/父子终态/checkpoint同提交；报告仅已核metadata短事务，文件异步边界保留。旧stage attempt关联pending须先needs_review，恢复/重绑仍W4；W3b统一全入口锁、真实20企业与完整故障矩阵仍待办。新domain两企业各200、真实import/depreciation/carryforward/period-check/close/CSV与fence失配原子反例为合成必要定点，不冒充20家或恢复续跑。W2b未root最终验收/PR/合并，LOCAL06/07未关闭。
+
 > **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
@@ -551,3 +565,4 @@ root后续仍须重新冻结21路径、十一影响套、独立probe与新的完
 同轮必要fixture同步：v1 keeps…将无artifact伪成功改合法needs_review/attempt1，全部金额/旧行/锁/序列断言保留；mutable report…用真实runner成功artifact/evidence，再覆盖snapshot19.37→23.81，保成功自身input_hash漂移拒绝。两者各精确BATCH_TEST_CASE定点exit0/实际close，未重跑完整13/39或其它旧绿。mutable首次漏j变量、第二次误取stage.job_id先后exit1，finally/child均关闭，两个失败根保留；随后使用realReports返回job.id修正，单独exit0。
 
 本次report-p2和v1日志根w3a-reverse-ef4994d7-72b2-4f51-82c0-e452717e446f（对应install测试中间hash，产品/backup hash与最终同）；mutable最终根w3a-reverse-mutable-54b0147c-4b62-42cc-93a3-00f52523f938。每次新UUID、import前TEMP/TMP/DATA/两KEEP及祖先realpath/lstat，所有新成功/失败现场保留，source-before/after相同。最终产品SHA256 0143a5715e98a9351886502ab4b0a37655a469afe1f941db6c2677b0a4bf26a5；先前b1e360、13/8/39等仅历史阶段，不冒称最终全验。root仍须统一十一套与新完整head独审；未PR/合并、八包6/8与06/07及后包未完。
+> **2026-10-24 W3a 已合事实**：[PR #87](https://github.com/huxiaoyang-code/youshu-fork/pull/87) 已于 `2026-10-23T16:56:21Z` 合并；最终已审 head `f11e92dfad79e975fbdaa6bab68c41ee44a59b5a`，merge/main `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`。root 十一影响套实际 exit 0，两组独立验收及全新未实施者最终完整 head 独审接受，无确认 P1/P2；合并签名、tree 与父链接收 exit 0。原 e470 / 605 拒绝与下方候选记录保留为历史。原八包仍 6/8，LOCAL06/07、W2b/W3b/W4、Windows 与最终链未完，税局真实接入 0。

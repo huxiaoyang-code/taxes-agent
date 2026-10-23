@@ -1,8 +1,12 @@
+import { types as nodeTypes } from "node:util";
 // accounting.mjs — 复式记账领域逻辑 + 报表
 //
 // 金额规则（LOCAL-02）：所有金额以「整数分」计算（money.mjs），落库 / 出参统一两位小数；
 // 舍入唯一 ROUND_HALF_UP；合计在分上累加后再转换，禁止把两位小数用浮点求和。
 import { db } from "./db.mjs";
+import { runDomainOperation, readDomainOperationBinding } from "./local-audit-coordinator.mjs";
+import { withAuditSavepoint } from "./local-audit-storage.mjs";
+import { auditCanonicalDigest, auditError } from "./local-audit.mjs";
 import {
   getAccountingProfile,
   resolveNewAccountingProfile,
@@ -66,19 +70,7 @@ function requirePeriod(period, code = "period_invalid") {
 }
 
 // 嵌套安全的事务保存点：可在外层 BEGIN 内使用，失败时回滚到保存点。
-let savepointSeq = 0;
-function withSavepoint(fn) {
-  const sp = `sp_${++savepointSeq}`;
-  db.exec(`SAVEPOINT ${sp}`);
-  try {
-    const out = fn();
-    db.exec(`RELEASE ${sp}`);
-    return out;
-  } catch (e) {
-    try { db.exec(`ROLLBACK TO ${sp}`); db.exec(`RELEASE ${sp}`); } catch { /* ignore */ }
-    throw e;
-  }
-}
+function withSavepoint(fn) { return withAuditSavepoint(db,fn); }
 
 // ---------------------------------------------------------------- 会计 profile
 /**
@@ -202,7 +194,7 @@ function requireRoleAccounts(setId, profile, roleNames) {
  * 未提供准则默认小企；非法准则 / 显式 legacy 新建 / 错配全部结构化拒绝。
  * 已存在账套的 profile 不可通过普通参数改变（本文件没有更新 profile / 准则的入口）。
  */
-export function createAccountSet({ name, taxpayer_type, accounting_standard, start_period, profileId, enterprise } = {}) {
+function createAccountSetBody({ name, taxpayer_type, accounting_standard, start_period, profileId, enterprise } = {}) {
   if (!name) throw new Error("name_required");
   const startPeriod = requirePeriod(start_period, "start_period_invalid");
   const profile = resolveCreationProfile({ accounting_standard, profileId });
@@ -231,7 +223,7 @@ export function createAccountSet({ name, taxpayer_type, accounting_standard, sta
        VALUES (?,?,?,?,?,?,1)`
     );
     for (const a of seedAccounts(profile)) insAcc.run(id, a.code, a.name, a.category, a.direction, a.contra ? 1 : 0);
-    ensurePeriod(id, startPeriod);
+    ensurePeriodBody(id, startPeriod);
     insertEnterpriseAccountSet(db, { ...identity, accountSetId: id, boundBy: "create" });
     return getAccountSet(id);
   });
@@ -264,7 +256,7 @@ export function getAccountSetEnterpriseIdentity(id) {
   const binding = getAccountSetEnterprise(db, id);
   return binding ? { enterpriseKey: binding.enterprise_key, enterpriseName: binding.enterprise_name } : null;
 }
-export function bindAccountSetEnterprise(id, enterprise, { confirmNewBinding = false } = {}) {
+function bindAccountSetEnterpriseBody(id, enterprise, { confirmNewBinding = false } = {}) {
   const identity = normalizeEnterpriseIdentity(enterprise);
   return withSavepoint(() => {
     if (!accountSetRow(id)) throw identityError("account_set_not_found");
@@ -278,7 +270,7 @@ export function bindAccountSetEnterprise(id, enterprise, { confirmNewBinding = f
     return { status: "bound", accountSetId: id, enterprise: getAccountSetEnterpriseIdentity(id) };
   });
 }
-export function deleteAccountSet(id) {
+function deleteAccountSetBody(id) {
   accountSetProfile(id);
   run(`DELETE FROM account_sets WHERE id=?`, id);
 }
@@ -288,7 +280,7 @@ export function listAccounts(setId) {
   getAccountSet(setId);
   return rows(`SELECT * FROM accounts WHERE account_set_id=? ORDER BY code`, setId);
 }
-export function addAccount(setId, { code, name, category, direction, parent_code = null }) {
+function addAccountBody(setId, { code, name, category, direction, parent_code = null }) {
   const { profile } = accountSetProfile(setId);
   if (!code || !name) throw new Error("code_and_name_required");
   if (!["debit", "credit"].includes(direction)) throw new Error("direction_invalid");
@@ -313,8 +305,35 @@ export function addAccount(setId, { code, name, category, direction, parent_code
   return listAccounts(setId);
 }
 
+// Admission-only data clone: never serialized, persisted or used as an authorization.
+const pureInputErrors=new WeakSet();
+function admissionInput(value) {
+ const active=new Set();let nonfinite=false;
+ const copy=v=>{
+  if(v===null||v===undefined||['string','boolean'].includes(typeof v))return v;
+  if(typeof v==='number'){if(!Number.isFinite(v))nonfinite=true;return v;}
+  if(typeof v!=='object'||nodeTypes.isProxy(v)||active.has(v))throw auditError('audit_result_invalid');
+  const array=Array.isArray(v),proto=Object.getPrototypeOf(v);
+  if(array?proto!==Array.prototype:proto!==Object.prototype&&proto!==null)throw auditError('audit_result_invalid');
+  const desc=Object.getOwnPropertyDescriptors(v);
+  if(Reflect.ownKeys(desc).some(k=>typeof k!=='string'||!Object.hasOwn(desc[k],'value')))throw auditError('audit_result_invalid');
+  if(array&&Object.keys(desc).some(k=>k!=='length'&&(!/^(0|[1-9][0-9]*)$/.test(k)||Number(k)>=desc.length.value)))throw auditError('audit_result_invalid');
+  active.add(v);const out=array?new Array(desc.length.value):Object.create(proto);
+  for(const key of Object.keys(desc)){if(array&&key==='length')continue;Object.defineProperty(out,key,{value:copy(desc[key].value),enumerable:desc[key].enumerable});}
+  active.delete(v);return Object.freeze(out);
+ };
+ const copied=copy(value);return {value:copied,nonfinite};
+}
+function admissionBinding(action) {
+ const prior=readDomainOperationBinding(db);
+ if(prior&&prior.action!==action)throw auditError('audit_operation_conflict');return prior;
+}
+function preflightInput(input,fn) {
+ try {fn(...input.value);}catch(error){if(pureInputErrors.has(error)||input.nonfinite)throw error;}
+}
+
 // ---------------------------------------------------------------- 期初
-export function setOpeningBalances(setId, items = []) {
+function validateOpeningInput(setId, items = []) {
   getAccountSet(setId);
   if (!Array.isArray(items)) throw new Error("opening_items_invalid");
 
@@ -325,6 +344,7 @@ export function setOpeningBalances(setId, items = []) {
   if (closed > 0) throw new Error("opening_rewrite_period_closed");
 
   // 先全量预校验，再动数据库；避免部分写入。
+  try {
   const resolved = [];
   for (const it of items) {
     const code = String(it?.code ?? "");
@@ -356,6 +376,11 @@ export function setOpeningBalances(setId, items = []) {
     throw err;
   }
 
+  return resolved;
+  } catch(error) {pureInputErrors.add(error);throw error;}
+}
+function setOpeningBalancesBody(setId,items=[]) {
+  const resolved=validateOpeningInput(setId,items);
   return withSavepoint(() => {
     const del = db.prepare(`DELETE FROM opening_balances WHERE account_set_id=? AND code=?`);
     const ins = db.prepare(
@@ -381,14 +406,14 @@ export function listPeriods(setId) {
   getAccountSet(setId);
   return rows(`SELECT period, status FROM periods WHERE account_set_id=? ORDER BY period`, setId);
 }
-export function ensurePeriod(setId, period) {
+function ensurePeriodBody(setId, period) {
   const s = getAccountSet(setId);
   const p = requirePeriod(period);
   if (p < s.start_period) throw new Error("period_before_start");
   run(`INSERT OR IGNORE INTO periods (account_set_id, period, status) VALUES (?,?,'open')`, setId, p);
   return row(`SELECT period, status FROM periods WHERE account_set_id=? AND period=?`, setId, p);
 }
-export function setPeriodStatus(setId, period, status) {
+function setPeriodStatusBody(setId, period, status) {
   if (!["open", "closed"].includes(status)) throw new Error("status_invalid");
   const s = getAccountSet(setId);
   const p = requirePeriod(period);
@@ -399,7 +424,7 @@ export function setPeriodStatus(setId, period, status) {
     // 反结账：已有更晚期间封账时不能直接重开前期（否则后期已依赖的数据会被静默污染）。
     if (existing?.status === "closed") assertPeriodMutable(db, setId, p, { operation: "reopen_period" });
     // 已登记则置 open；未登记则新建期间。
-    if (!existing) ensurePeriod(setId, p);
+    if (!existing) ensurePeriodBody(setId, p);
     else if (existing.status !== "open")
       run(`UPDATE periods SET status='open' WHERE account_set_id=? AND period=?`, setId, p);
     return { period: p, status: "open" };
@@ -526,7 +551,7 @@ function storedVoucherTouches(setId, voucher) {
   return voucherTouches(setId, { entries: codes, kind: voucher.kind });
 }
 
-export function createVoucher(setId, v = {}, { touches = null } = {}) {
+function validateVoucherCreation(setId, v = {}, { touches = null } = {}) {
   const s = getAccountSet(setId);
   // 先校验，后落库：校验失败不产生期间/凭证等副作用。
   const period = requirePeriod(v.period);
@@ -542,10 +567,15 @@ export function createVoucher(setId, v = {}, { touches = null } = {}) {
   if (!chk.ok) {
     const err = new Error("voucher_invalid");
     err.details = chk;
+    pureInputErrors.add(err);
     throw err;
   }
+  return {period,entries};
+}
+function createVoucherBody(setId,v={},options={}) {
+ const {period,entries}=validateVoucherCreation(setId,v,options);
   return withSavepoint(() => {
-    ensurePeriod(setId, period);
+    ensurePeriodBody(setId, period);
     const status = v.status === "posted" ? "posted" : "draft";
     const kind = v.kind || "normal";
     const word = v.word || "记";
@@ -747,7 +777,7 @@ function assertDepreciationRunsCurrent(setId, v) {
   throw err;
 }
 
-export function postVoucher(setId, id) {
+function postVoucherBody(setId, id) {
   // 先读原始行 + 分录做校验，再看 hydrate 合计：即使库里金额已被损坏，也必须先给 voucher_invalid。
   const raw = row(`SELECT * FROM vouchers WHERE account_set_id=? AND id=?`, setId, id);
   if (!raw) throw new Error("voucher_not_found");
@@ -771,7 +801,7 @@ export function postVoucher(setId, id) {
     return getVoucher(setId, id);
   });
 }
-export function unpostVoucher(setId, id) {
+function unpostVoucherBody(setId, id) {
   const v = getVoucher(setId, id);
   if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   assertPeriodMutable(db, setId, v.period, {
@@ -781,7 +811,7 @@ export function unpostVoucher(setId, id) {
   run(`UPDATE vouchers SET status='draft' WHERE id=?`, id);
   return getVoucher(setId, id);
 }
-export function deleteVoucher(setId, id) {
+function deleteVoucherBody(setId, id) {
   const v = getVoucher(setId, id);
   if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   if (v.status === "posted") throw new Error("posted_voucher_requires_unpost");
@@ -1467,7 +1497,7 @@ function prevPeriod(period) {
  * - 年末结转与资产负债表口径一致：3103 及其下级明细逐个转出到 3104，不遗漏明细；
  * - 期间登记（ensurePeriod）在保存点内执行，失败不留下新建的空期间。
  */
-export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
+function carryForwardProfitBody(setId, period, { yearEnd = false } = {}) {
   const { profile, roles } = accountSetProfile(setId);
   const p = requirePeriod(period);
   if (periodStatus(setId, p) === "closed") throw new Error("period_closed");
@@ -1518,7 +1548,7 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
 
   return withSavepoint(() => {
     // 期间登记纳入同一保存点：后续任一步失败都不留下新建的空期间。
-    ensurePeriod(setId, p);
+    ensurePeriodBody(setId, p);
     // 先清掉可能残留的草稿结转凭证（含被反过账的），避免其日后过账造成重复入账。
     for (const v of [...plCarries, ...yearEndCarries]) {
       if (v.status !== "posted") deleteVoucherRow(setId, v.id);
@@ -1557,7 +1587,7 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
         // 利润为 0 时不加本年利润零金额行（借贷已自然平衡）。
         if (profitCents > 0n) entries.push({ code: profitRoot, summary: "结转本期损益", debit: 0, credit: centsToNumber(profitCents) });
         else if (profitCents < 0n) entries.push({ code: profitRoot, summary: "结转本期损益", debit: centsToNumber(-profitCents), credit: 0 });
-        voucher = createVoucher(setId, {
+        voucher = createVoucherBody(setId, {
           period: p, voucher_date: lastDay(p), summary: "结转本期损益",
           kind: "carryforward", status: "posted", entries,
         });
@@ -1590,7 +1620,7 @@ export function carryForwardProfit(setId, period, { yearEnd = false } = {}) {
         // 明细互抵后净额为零时，不需要利润分配对账行，分录本身已平衡。
         if (total > 0n) es.push({ code: retainedRoot, debit: 0, credit: centsToNumber(total), summary: "结转本年利润" });
         else if (total < 0n) es.push({ code: retainedRoot, debit: centsToNumber(-total), credit: 0, summary: "结转本年利润" });
-        yearEndVoucher = createVoucher(setId, {
+        yearEndVoucher = createVoucherBody(setId, {
           period: p, voucher_date: lastDay(p), summary: "结转本年利润",
           kind: "carryforward", status: "posted", entries: es,
         });
@@ -1700,8 +1730,9 @@ function requireUsefulLifeMonths(raw) {
   return value;
 }
 
-export function addAssetCard(setId, c = {}) {
+function validateAssetCreation(setId, c = {}) {
   const { profile, roles } = accountSetProfile(setId);
+  try {
   const kind = c.kind === "intangible" ? "intangible" : "fixed";
   const name = String(c.name || "").trim();
   const cost = parseMoney(c.original_cost, { label: "资产原值" });
@@ -1732,6 +1763,11 @@ export function addAssetCard(setId, c = {}) {
     opening_accumulated: centsToNumber(supplement.openingCents),
     ledger_status: supplement.ledgerStatus, ledger_note: supplement.ledgerNote, origin: supplement.origin,
   };
+  return {kind,name,cost,life,start_period,residual,asset_account,accum_account,expense_account,supplement,nextCard};
+  }catch(error){pureInputErrors.add(error);throw error;}
+}
+function addAssetCardBody(setId,c={}) {
+ const {kind,name,cost,life,start_period,residual,asset_account,accum_account,expense_account,supplement,nextCard}=validateAssetCreation(setId,c);
   // 新增卡片会改变受影响期间的资产核对 / 计提事实：已封账 / 已过账派生凭证先拒绝并给撤销顺序。
   assertAssetCardWriteAllowed(db, setId, { operation: "add_asset_card", previous: null, next: nextCard });
   // 落库与 DTO 构造在同一保存点内：任何后续计算（分期 / 累计 / 核对）失败都必须完整回滚，
@@ -1759,7 +1795,7 @@ export function addAssetCard(setId, c = {}) {
  * 已有已过账计提时的金额字段（`asset_card_locked_by_posted_runs`）、
  * 后续已过账普通损益结转（`later_profit_carryforward_depends_on_period`）。
  */
-export function updateAssetCard(setId, id, patch = {}) {
+function updateAssetCardBody(setId, id, patch = {}) {
   getAccountSet(setId);
   const card = row(`SELECT * FROM asset_cards WHERE account_set_id=? AND id=?`, setId, id);
   if (!card) throw new Error("asset_not_found");
@@ -1829,7 +1865,7 @@ export function updateAssetCard(setId, id, patch = {}) {
   });
 }
 
-export function deleteAssetCard(setId, id) {
+function deleteAssetCardBody(setId, id) {
   getAccountSet(setId);
   const card = row(`SELECT * FROM asset_cards WHERE account_set_id=? AND id=?`, setId, id);
   if (!card) throw new Error("asset_not_found");
@@ -1857,7 +1893,7 @@ export function listDepreciationRuns(setId, { period } = {}) {
  *   要求先删除或恢复该草稿，绝不与残留草稿双重入账；
  * - 凭证 + runs 在一个保存点内原子写入，失败全回滚。
  */
-export function generateDepreciation(setId, period) {
+function generateDepreciationBody(setId, period) {
   getAccountSet(setId);
   const p = requirePeriod(period);
   if (periodStatus(setId, p) === "closed") throw new Error("period_closed");
@@ -1869,7 +1905,7 @@ export function generateDepreciation(setId, period) {
     operation: "generate_depreciation", touches: { profit: true },
   });
   return withSavepoint(() => {
-    ensurePeriod(setId, p);
+    ensurePeriodBody(setId, p);
     // 同期存在未过账的 run 时明确拒绝，避免与残留草稿双重入账。
     const residual = row(
       `SELECT COUNT(*) n FROM asset_depreciation_runs r
@@ -1969,7 +2005,7 @@ export function generateDepreciation(setId, period) {
     if (!entries.length) {
       return { voucher: null, runs: [], skipped, note: "本期无需计提（卡片尚未取得 / 未到计提期 / 已提足或按分取整为 0）" };
     }
-    const voucher = createVoucher(setId, {
+    const voucher = createVoucherBody(setId, {
       period: p, voucher_date: lastDay(p), summary: "计提折旧与摊销",
       kind: "depreciation", status: "posted", entries,
     }, { touches: { profit: true } });
@@ -2954,7 +2990,7 @@ export function normalizeImportPayload(payload = {}, context = null) {
 
 /** 校验导入 payload，返回错误/警告/统计（向后兼容入口，内部与正式写入共用同一约束）。 */
 export function validateImportPayload(payload = {}, options = {}) {
-  return importAccountSet(payload, { ...options, dryRun: true }).validation;
+  return importAccountSetBody(payload, { ...options, dryRun: true }).validation;
 }
 function importValidation(normalized, enterprise) {
   let identity = null, identityFailure = null;
@@ -2974,7 +3010,7 @@ function importValidation(normalized, enterprise) {
  * 但新建账套按请求准则选择合法新 profile（同一事务内写账套 / 科目 / 首期间 / profile）。
  * 返回 validation 中可带 profileError，不把非法准则逃逸成泛 500。
  */
-export function importAccountSet(payload = {}, { dryRun = false, enterprise, profileId } = {}) {
+function importAccountSetBody(payload = {}, { dryRun = false, enterprise, profileId } = {}) {
   // profileId is an envelope option and never changes historical payload/fingerprint fields.
   let context = null;
   if (profileId !== undefined) {
@@ -2991,9 +3027,8 @@ export function importAccountSet(payload = {}, { dryRun = false, enterprise, pro
   if (dryRun || !validation.ok) return { dryRun: true, validation, created: null };
   const n = normalized.normalized;
   const meta = n.account_set;
-  db.exec("BEGIN");
-  try {
-    const set = createAccountSet({
+  return withSavepoint(() => {
+    const set = createAccountSetBody({
       enterprise, name: meta.name, taxpayer_type: meta.taxpayer_type || "小规模纳税人",
       accounting_standard: meta.accounting_standard || undefined, start_period: meta.start_period,
       ...(normalized.profile ? { profileId: normalized.profile.id } : {}),
@@ -3001,19 +3036,18 @@ export function importAccountSet(payload = {}, { dryRun = false, enterprise, pro
     const have = new Set(listAccounts(set.id).map((a) => a.code));
     for (const a of n.accounts) {
       if (have.has(String(a.code))) continue;
-      addAccount(set.id, { code: a.code, name: a.name, category: a.category, direction: a.direction });
+      addAccountBody(set.id, { code: a.code, name: a.name, category: a.category, direction: a.direction });
       have.add(String(a.code));
     }
-    if (n.opening_balances.length) setOpeningBalances(set.id, n.opening_balances);
+    if (n.opening_balances.length) setOpeningBalancesBody(set.id, n.opening_balances);
     let vcount = 0;
     for (const v of n.vouchers) {
-      createVoucher(set.id, {
+      createVoucherBody(set.id, {
         period: v.period, voucher_date: v.date || `${v.period}-01`, word: v.word,
         number: v.number, summary: v.summary, kind: "normal", status: "posted", entries: v.entries,
       });
       vcount++;
     }
-    db.exec("COMMIT");
     return {
       dryRun: false, validation,
       created: {
@@ -3021,8 +3055,29 @@ export function importAccountSet(payload = {}, { dryRun = false, enterprise, pro
         accounts: listAccounts(set.id).length, opening_balances: getOpeningBalances(set.id).length, vouchers: vcount,
       },
     };
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
+  });
 }
+
+// Public synchronous write admissions. Internal combinations call the private bodies above.
+const setScope=id=>({kind:'account_set',value:id});
+const resultId=(type,id)=>Number.isSafeInteger(id)&&id>0?[{type,id}]:[];
+function accountingWrite(action,args,body,{scope=setScope(args[0]),refs=()=>[],rebuild,classify,targets}={}) {
+ return runDomainOperation(db,{action,scope,request:args,refs,rebuild,classify,targets},()=>body(...args));
+}
+export function createAccountSet(...args) {return accountingWrite('account_set.create',args,createAccountSetBody,{scope:{kind:'database',value:null},refs:v=>resultId('account_set',v.id),targets:v=>({accountSetId:v.id}),rebuild:r=>getAccountSet(r.resultRefs.find(x=>x.type==='account_set').id)});}
+export function bindAccountSetEnterprise(...args) {return accountingWrite('account_set.bind',args,bindAccountSetEnterpriseBody,{refs:()=>resultId('account_set',args[0])});}
+export function deleteAccountSet(...args) {return accountingWrite('account_set.delete',args,deleteAccountSetBody,{refs:()=>resultId('account_set',args[0]),rebuild:()=>undefined});}
+export function addAccount(...args) {return accountingWrite('account.create',args,addAccountBody,{refs:()=>[{type:'account_key',keyDigest:auditCanonicalDigest([args[0],String(args[1]?.code)])}],rebuild:()=>listAccounts(args[0])});}
+export function setOpeningBalances(...args) {const input=admissionInput(args);if(!admissionBinding('opening.replace'))preflightInput(input,validateOpeningInput);return accountingWrite('opening.replace',args,setOpeningBalancesBody,{refs:()=>resultId('account_set',args[0]),rebuild:()=>getOpeningBalances(args[0])});}
+export function ensurePeriod(...args) {return accountingWrite('period.ensure',args,ensurePeriodBody,{rebuild:()=>row('SELECT period,status FROM periods WHERE account_set_id=? AND period=?',...args)});}
+export function setPeriodStatus(...args) {return accountingWrite(args[2]==='closed'?'period.close':'period.reopen',args,setPeriodStatusBody,{rebuild:()=>row('SELECT period,status FROM periods WHERE account_set_id=? AND period=?',args[0],args[1])});}
+export function createVoucher(...args) {const input=admissionInput(args);const action=input.value[1]?.status==='posted'?'voucher.create_posted':'voucher.create';if(!admissionBinding(action))preflightInput(input,validateVoucherCreation);return accountingWrite(args[1]?.status==='posted'?'voucher.create_posted':'voucher.create',args,createVoucherBody,{refs:v=>resultId('voucher',v.id),targets:v=>({voucherId:v.id,period:v.period}),rebuild:r=>getVoucher(args[0],r.resultRefs.find(x=>x.type==='voucher').id)});}
+export function postVoucher(...args) {let unchanged=false;return accountingWrite('voucher.post',args,(...a)=>{unchanged=row('SELECT status FROM vouchers WHERE account_set_id=? AND id=?',...a)?.status==='posted';return postVoucherBody(...a);},{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),classify:()=>unchanged?'no_change':'succeeded',rebuild:()=>getVoucher(...args)});}
+export function unpostVoucher(...args) {return accountingWrite('voucher.unpost',args,unpostVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>getVoucher(...args)});}
+export function deleteVoucher(...args) {return accountingWrite('voucher.delete',args,deleteVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>({deleted:args[1]})});}
+export function carryForwardProfit(...args) {return accountingWrite('profit.carry_forward',args,carryForwardProfitBody,{refs:v=>[...resultId('voucher',v?.voucher?.id),...resultId('year_end_voucher',v?.yearEndVoucher?.id)]});}
+export function addAssetCard(...args) {const input=admissionInput(args);if(!admissionBinding('asset.create'))preflightInput(input,validateAssetCreation);return accountingWrite('asset.create',args,addAssetCardBody,{refs:v=>resultId('asset_card',v.id),rebuild:r=>listAssetCards(args[0]).find(v=>v.id===r.resultRefs.find(x=>x.type==='asset_card').id)});}
+export function updateAssetCard(...args) {return accountingWrite('asset.update',args,updateAssetCardBody,{refs:()=>resultId('asset_card',args[1]),rebuild:()=>listAssetCards(args[0]).find(v=>v.id===args[1])});}
+export function deleteAssetCard(...args) {return accountingWrite('asset.delete',args,deleteAssetCardBody,{refs:()=>resultId('asset_card',args[1]),rebuild:()=>({deleted:args[1]})});}
+export function generateDepreciation(...args) {let changed=false;return accountingWrite('asset.depreciate',args,(...input)=>{const before=row('SELECT total_changes() n').n;const value=generateDepreciationBody(...input);changed=row('SELECT total_changes() n').n!==before;return value;},{classify:()=>changed?'succeeded':'no_change',refs:v=>resultId('voucher',v?.voucher?.id)});}
+export function importAccountSet(...args) {const input=admissionInput(args);if(input.value[1]?.dryRun)return importAccountSetBody(...input.value);if(!admissionBinding('import.legacy')){const validation=validateImportPayload(...input.value);if(!validation.ok)return {dryRun:true,validation,created:null};}return accountingWrite('import.legacy',args,importAccountSetBody,{scope:{kind:'database',value:null},refs:v=>resultId('account_set',v?.created?.id),targets:v=>v?.created?.id?{accountSetId:v.created.id}:{}});}

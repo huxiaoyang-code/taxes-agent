@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
 // local-batch.mjs — LOCAL-07 本机持久批量 CLI（可直接运行，无 HTTP / 无 Agent 入口）。
 //
 // 命令：help | start | status | resume | cancel | retry
@@ -403,6 +404,7 @@ try {
   emit({
     ok: false,
     command: parsed?.command ?? null,
+    ...(operationErrorEvidence(error)??{}),
     error: {
       code,
       message: error instanceof CliError ? error.message

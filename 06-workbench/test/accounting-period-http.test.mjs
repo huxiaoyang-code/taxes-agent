@@ -59,6 +59,30 @@ const snapshot = () => {
   } finally { conn.close(); }
 };
 
+
+// Only these audited dynamic operations may append terminal audit rows.
+// Original snapshot() remains full for all static invalid-input assertions.
+function assertAuditAppend(after,before,actions,message,state='failure') {
+ const row=v=>typeof v==='string'?JSON.parse(v):v;
+ const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
+ assert.deepEqual(business(after),business(before),message);
+ for(const table of ['audit_events','audit_operations'])for(const original of before[table]??[])assert.ok((after[table]??[]).some(v=>JSON.stringify(v)===JSON.stringify(original)),table+' history must remain exact');
+ const added=table=>(after[table]??[]).filter(v=>!(before[table]??[]).some(old=>JSON.stringify(old)===JSON.stringify(v))).map(row);
+ const events=added('audit_events').sort((a,b)=>a.seq-b.seq),ops=added('audit_operations');
+ assert.deepEqual(events.map(e=>e.action),actions);assert.equal(ops.length,actions.length);
+ for(const event of events){
+  const operation=ops.find(o=>o.operation_id===event.operation_id&&o.attempt===event.attempt&&o.database_instance_id===event.database_instance_id);assert.ok(operation);
+  if(state==='failure')assert.ok(['failed','rejected'].includes(operation.state));else assert.equal(operation.state,state);
+  assert.equal(event.outcome,operation.state);assert.equal(event.action,operation.action);assert.ok(operation.receipt_json);
+  const receipt=JSON.parse(operation.receipt_json);
+  assert.deepEqual(Object.keys(receipt).sort(),['receiptVersion','databaseInstanceId','operationId','attempt','state','resultCode','reasonCode','eventId','eventSeq','targets','resultRefs','resultDigest'].sort());
+  assert.equal(receipt.receiptVersion,2);assert.equal(receipt.operationId,operation.operation_id);assert.equal(receipt.databaseInstanceId,operation.database_instance_id);assert.equal(receipt.attempt,operation.attempt);assert.equal(receipt.state,operation.state);assert.equal(receipt.eventId,event.event_id);assert.equal(receipt.eventSeq,event.seq);assert.equal(receipt.resultCode,event.result_code);assert.equal(receipt.reasonCode,event.reason_code);assert.match(receipt.resultDigest,/^[a-f0-9]{64}$/);
+  assert.deepEqual(receipt.targets,{accountSetId:event.account_set_id,voucherId:event.voucher_id,period:event.period,jobId:event.job_id,itemId:event.item_id,stageId:event.stage_id,correlation:event.correlation});
+ }
+ const seq=value=>(value.sqlite_sequence??[]).map(row).find(r=>r.name==='audit_events')?.seq??0;
+ assert.equal(seq(after)-seq(before),actions.length);
+}
+
 before(async () => {
   child = spawn(process.execPath, [join(here, "../server/server.mjs")], {
     env: { ...process.env, PORT: "0", WORKBENCH_DATA_DIR: directory },
@@ -131,7 +155,7 @@ test("期末检查：缺计提明确阻止，无损益时结转标 not_applicabl
   const err = await fails("POST", `/api/account-sets/${setId}/periods`, { period: "2026-01", status: "closed" }, 409,
     /period_end_check_failed/);
   assert.ok(err.details.blocking.some((b) => b.code === "depreciation_missing"));
-  assert.deepEqual(snapshot(), before, "封账被拒不得改动任何业务表");
+  assertAuditAppend(snapshot(),before,["period.close"],"封账被拒不得改动任何业务表");
   const periods = await ok("GET", `/api/account-sets/${setId}/periods`);
   assert.equal(periods.find((p) => p.period === "2026-01").status, "open");
 });
@@ -164,7 +188,7 @@ test("一月链：计提 950 → 收入 10000 → 缺结转阻止 → 结转 905
     entries: [{ code: "1002", debit: 1, credit: 0 }, { code: "3001", debit: 0, credit: 1 }],
   }, 400, /period_closed/);
   await fails("POST", `/api/account-sets/${setId}/depreciation`, { period: "2026-01" }, 400, /period_closed/);
-  assert.deepEqual(snapshot(), before);
+  assertAuditAppend(snapshot(),before,['voucher.create','asset.depreciate']);
 });
 
 test("二月链：计提 950 → 收入 20000 → 结转 19050 → 报表与封账（跨月累计手算）", async () => {
@@ -224,7 +248,7 @@ test("F1：已封账期间卡片事实维护经 HTTP / Agent 一致拒绝，纯�
     accountSetId: setId, assetId: card.id, patch: { original_cost: 61000 },
   }, 409, /asset_card_affects_closed_period/);
   assert.ok(Array.isArray(agentDenied.details.closedPeriods));
-  assert.deepEqual(snapshot(), before, "拒绝的卡片维护不得写入任何内容");
+  assertAuditAppend(snapshot(),before,["asset.update", "asset.update", "asset.update", "asset.update", "asset.update", "asset.update", "asset.delete", "asset.create", "asset.update"],"拒绝的卡片维护不得写入任何内容");
   // 纯显示信息可正常维护。
   const renamed = await ok("PATCH", `/api/account-sets/${setId}/assets/${card.id}`, { name: "改名设备", ledger_note: "显示备注" });
   assert.equal(renamed.name, "改名设备");
@@ -317,7 +341,7 @@ test("F2：后期普通损益结转依赖前期累计——HTTP / Agent 前期�
     },
   }, 409, /later_profit_carryforward_depends_on_period/);
   assert.match(importDenied.details.guidance, /反过账/);
-  assert.deepEqual(snapshot(), before, "拒绝的前期写入不得留下任何内容（含导入批次 / 来源绑定）");
+  assertAuditAppend(snapshot(),before,["voucher.unpost", "voucher.unpost", "voucher.create_posted", "import.append"],"拒绝的前期写入不得留下任何内容（含导入批次 / 来源绑定）");
   // 正确顺序：反过账后期结转 → 撤销前期 → 重新结转。
   await ok("POST", `/api/account-sets/${id}/vouchers/${carry.voucher.id}/unpost`);
   await ok("POST", `/api/account-sets/${id}/vouchers/${jan.id}/unpost`);
@@ -345,7 +369,7 @@ test("F3：前期零凭证但有应计提业务——HTTP 封账 409 + 撤销顺
   const denied = await fails("POST", `/api/account-sets/${id}/periods`, { period: "2026-02", status: "closed" }, 409,
     /period_end_check_failed/);
   assert.ok(denied.details.blocking.some((b) => b.code === "previous_period_depreciation_pending"));
-  assert.deepEqual(snapshot(), before, "拒绝封账不得改变数据");
+  assertAuditAppend(snapshot(),before,["period.close"],"拒绝封账不得改变数据");
   // 正确顺序：一月计提 33.33 → 结转 → 封账；二月结转 → 封账；三月 33.34 → 结转 → 封账。
   assert.equal((await ok("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-01" })).voucher.total_debit, 33.33);
   await ok("POST", `/api/account-sets/${id}/carry-forward`, { period: "2026-01" });
@@ -377,7 +401,7 @@ test("F4：未入账登记不是原值差异豁免——HTTP 计提 409、封账
   await fails("POST", `/api/account-sets/${id}/depreciation`, { period: "2026-01" }, 409, /asset_ledger_pending/);
   await fails("POST", "/agent/tools/depreciation_run", { accountSetId: id, period: "2026-01" }, 409, /asset_ledger_pending/);
   await fails("POST", `/api/account-sets/${id}/periods`, { period: "2026-01", status: "closed" }, 409, /period_end_check_failed/);
-  assert.deepEqual(snapshot(), before, "未入账卡片不得生成折旧 / 封账");
+  assertAuditAppend(snapshot(),before,["asset.depreciate", "asset.depreciate", "period.close"],"未入账卡片不得生成折旧 / 封账");
   // 真实补录购入入账 → 改为 booked → 才能计提 10（600 ÷ 60）→ 结转 → 封账。
   await ok("POST", `/api/account-sets/${id}/vouchers`, {
     period: "2026-01", status: "posted",
@@ -426,7 +450,7 @@ test("增量导入入口一致：更晚期间已封账时，向更早期追加�
   }, 409, /later_period_closed/);
   assert.deepEqual(err.details.laterClosedPeriods, ["2026-02"]);
   assert.match(err.details.guidance, /倒序/);
-  assert.deepEqual(snapshot(), before, "被拒绝的导入不得留下任何业务写入");
+  assertAuditAppend(snapshot(),before,['import.append'],'被拒绝的导入不得留下任何业务写入');
 
   // 按正确顺序反结账后可正常追加。
   await ok("POST", `/api/account-sets/${importSetId}/periods`, { period: "2026-02", status: "open" });
@@ -468,7 +492,7 @@ test("P1：旧折旧草稿（改寿命后）经 HTTP 不得重过账，检查不
   assert.equal(denied.details.stale[0].recordedAmount, 10);
   assert.equal(denied.details.stale[0].expectedAmount, 20);
   assert.match(denied.details.guidance, /删除|重新计提/);
-  assert.deepEqual(snapshot(), before, "拒绝重过账不得写入任何内容");
+  assertAuditAppend(snapshot(),before,["voucher.post"],"拒绝重过账不得写入任何内容");
   // Agent 入口同样拒绝旧草稿重过账。
   await fails("POST", "/agent/tools/voucher_post", { accountSetId: id, voucherId: dep.voucher.id }, 409,
     /depreciation_run_stale/);
@@ -628,7 +652,7 @@ test("取得期间一致性（review3 P2）：HTTP 取得期间变更后历史�
   assert.equal(rerun.voucher, null, "取得期间之前不生成计提凭证");
   assert.deepEqual(rerun.runs, []);
   assert.equal(rerun.skipped[0].status, "not_existed");
-  assert.deepEqual(snapshot(), before, "不得写入任何凭证 / run");
+  assertAuditAppend(snapshot(),before,['asset.depreciate'],'不得写入任何凭证 / run','no_change');
   const janDep = (await ok("GET", `/api/account-sets/${id}/period-end-check?period=2026-01`))
     .steps.find((s) => s.id === "depreciation");
   assert.equal(janDep.status, "ok", JSON.stringify(janDep.blocking));

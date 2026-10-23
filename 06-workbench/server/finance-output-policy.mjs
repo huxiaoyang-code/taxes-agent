@@ -1402,6 +1402,26 @@ export const MODEL_OUTPUT_CONTRACT = Object.freeze({
 // 只有固定 allowlist 的 code 能出模型通道；其他一律归为 operation_failed。
 // error.message / error.details / error.stack 从不读取——它们可能带账套名、科目名、金额原文。
 const ERROR_CODES = dict({
+  audit_operation_invalid: "audit",
+  audit_result_invalid: "audit",
+  audit_result_unavailable: "audit",
+  audit_operation_conflict: "audit",
+  audit_operation_pending: "audit",
+  audit_authorization_invalid: "audit",
+  audit_transaction_conflict: "audit",
+  audit_operation_protocol_required: "audit",
+  audit_admission_busy: "audit",
+  audit_backup_invalid: "audit",
+  audit_backup_source_mismatch: "audit",
+  audit_database_missing: "audit",
+  audit_database_invalid: "audit",
+  audit_unavailable: "audit",
+  audit_write_failed: "audit",
+  audit_commit_unknown: "audit",
+  audit_schema_inconsistent: "audit",
+  audit_schema_newer: "audit",
+  audit_install_requires_verified_backup: "audit",
+
   bank_draft_result_unavailable: "bank",
   bank_draft_input_invalid: "bank",
   bank_draft_scope_invalid: "bank",
@@ -1945,6 +1965,10 @@ export class FinanceOutputPolicy {
     this.#take(ref, this.#ctxOf(context));
     this.#drop(ref);
     return { revoked: true, ref };
+  }
+
+  invalidateBankReferences(accountSetId) {
+    for(const [ref,record] of this.#refs)if(record.accountSetId===accountSetId&&String(record.operation).startsWith('bank_'))this.#drop(ref);
   }
 
   /** 安全错误投影（实例便捷入口，供入口层在 catch 里调用）。 */

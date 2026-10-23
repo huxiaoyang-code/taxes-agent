@@ -1,3 +1,15 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](../handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+负责人huxiaoyang-code。R4唯一兜底实施者完成四路径修复后停止，root在冻结字节上通过13原套＋1自选probe并实际关闭；当前只收口13docs与总manifest，不改52份非文档。旧81被最终独审拒绝，下一步锁定最终整合head并安排全新最终独审，尚无本W2b PR/merge。
+
+## 2026-10-24 最初882/49窗口实施记录（历史）
+
+基线PR87 merge `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`；Issue54本片最初46路径，加两处真实旧fixture与模型真实rollback断言的最小扩窗共49（bank-reconciliation.test.mjs仅索引建序；local-audit-install.test.mjs仅新仅core夹具、不改原断言；finance-model-adapter.test.mjs仅真实私有rollback案例并加强失败receipt/业务零变）。范围是真实领域/HTTP/rawAgent/model/MCP/CLI、receipt2可信结果重放、受控保存点/metadata/固定child以及batch最小效果+审计+checkpoint接线。已实施并必要自测，尚未root最终验收/全新独审/PR/合并；不关闭06/07、不标八包完成。接口与限制见[LOCAL-AUDIT](../LOCAL-AUDIT.md)。
+
+历史49窗口 [Issue54 49路径认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6372348975)：原46，加银行/core-only两处夹具与模型真实rollback断言的最小窗口；其余旧测试只读。
+
 > 2026-10-23 W2a 当前任务：基线PR74 merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`；[Issue54精确21路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6366469014)，负责人huxiaoyang-code。唯一经用户明确授权的fallback实施者完成本片实现与自测后冻结，root独立验收、全新未实施者独审与Git/PR；本任务不直接关闭Issue54。范围仅audit2基础、strict官方备份、owner-only/durable pending/私有单用授权/receipt-only与audit先装后bank/aux兼容。实际业务接线/统一锁/批量/恢复分叉/Windows不在本片。下一片先W3a batch1/2严格备份与保护升级，再W2b可信coordinator，随后W3b/W4/Windows/最终整链；不得预放行batch。原八包01/02/03/04/05/08为6/8，06/07未完、税局0。实际验收证据见[审计交接](../handoffs/LOCAL-06-AUDIT.md)，不预报PR/合并。
 # 任务单 · LOCAL-06 AUDIT（A 包：审计组件与恢复 ledger 原语）
 

@@ -33,7 +33,11 @@
 // 持久化见 import-storage.mjs（表 / 迁移 / 备份）；完整审计见后续 LOCAL06。
 
 import { createHash } from "node:crypto";
+import { types as nodeTypes } from "node:util";
 import { db } from "./db.mjs";
+import { runDomainOperation,readDomainOperationBinding } from "./local-audit-coordinator.mjs";
+import { withAuditSavepoint,hasActiveAuditExecution,deferIncrementalImportFailure } from "./local-audit-storage.mjs";
+import { auditCanonicalDigest,auditResultSnapshot,auditError } from "./local-audit.mjs";
 import { parseAuxiliaryAppendix, processAuxiliaryAppendix } from "./auxiliary-import.mjs";
 import { assertAuxiliaryConnection, auxTransaction } from "./auxiliary-storage.mjs";
 import * as A from "./accounting.mjs";
@@ -277,11 +281,12 @@ function auxiliaryImportError(error) {
     : error?.errcode === 5 || error?.errcode === 6 ? "aux_import_busy" : "aux_import_failed";
   return Object.assign(new Error(code), { code });
 }
-export function importIncremental(options = {}) {
+function importIncrementalBody(options = {}) {
   try { return runIncrementalImport(options); }
   catch (error) { if (options?.auxiliaryAppendix !== undefined) throw auxiliaryImportError(error); throw error; }
 }
-function runIncrementalImport(options = {}) {
+const ADMITTED=Symbol('import-admitted');
+function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
   const args = options ?? {};
   assertAuxiliaryConnection(db);
   const appendix = parseAuxiliaryAppendix(args.auxiliaryAppendix);
@@ -911,6 +916,7 @@ function runIncrementalImport(options = {}) {
       },
       sourceTrace: trace,
     };
+    if(admissionOnly)return {marker:ADMITTED,mode,targetAccountSetId};
     if (appendix) {
       if (request.dryRun) return { ...replayResult, auxiliary: processAuxiliaryAppendix(db, appendix, appendixContext(batchRecord.account_set_id)) };
       const auxiliary = auxTransaction(db, () => {
@@ -934,6 +940,8 @@ function runIncrementalImport(options = {}) {
     }
     return replayResult;
   }
+
+  if(admissionOnly)return {marker:ADMITTED,mode,targetAccountSetId};
 
   // ---------- 11. 预检（不写入） ----------
   if (request.dryRun) {
@@ -1144,19 +1152,19 @@ function runIncrementalImport(options = {}) {
       durability = result.durability;
       outcome.auxiliary = { ...outcome.auxiliary, status: outcome.auxiliary.status === "staged" && durability === "committed" ? "applied" : outcome.auxiliary.status, durability };
     } else {
-      db.exec("BEGIN IMMEDIATE");
-      try { writeCore(); db.exec("COMMIT"); }
-      catch (e) { try { db.exec("ROLLBACK"); } catch { /* Legacy path preserves its prior behavior. */ } throw e; }
+      withAuditSavepoint(db,writeCore);
     }
   } catch (e) {
-    // Unknown transactions are quarantined: never append an audit or claim rollback.
-    if (appendix && (e?.code === "aux_commit_unknown" || e?.code === "aux_connection_quarantined" || db.isTransaction)) throw e;
+    // Caller/aux unknown transactions never authorize failure metadata. A live private
+    // audit outer owns final rollback; its fixed queue is consumed only after proof.
+    if (appendix && (e?.code === "aux_commit_unknown" || e?.code === "aux_connection_quarantined" || (db.isTransaction&&!hasActiveAuditExecution(db)))) throw e;
     if (appendix) e = auxiliaryImportError(e);
     // 已完成的批次永远不能被失败审计覆写；只有未完成的批次才写失败记录。
     const completed = (() => {
       try { return getBatch(db, batchId)?.status === "completed"; } catch { return false; }
     })();
-    if (!completed) {
+    if(!completed&&hasActiveAuditExecution(db))deferIncrementalImportFailure(db,e,{batchId,sourceSystem:source.value.system,enterpriseKey,mode,accountSetId:mode===MODE_APPEND?targetAccountSetId:null,contentFingerprint:fingerprint,errorCode:e?.code||e?.message||'import_failed',errorMessage:e?.message||String(e)});
+    if (!completed && !hasActiveAuditExecution(db)) {
       try {
         // 失败批次只写审计（不含业务状态），随后仍然抛出原始错误，绝不吞错当成功。
         markBatchFailed(db, {
@@ -1269,4 +1277,19 @@ export function importBatchState() {
       .prepare(`SELECT source_system, enterprise_key, bound_by FROM import_source_bindings ORDER BY id`)
       .all(),
   };
+}
+
+export function importIncremental(options={}) {
+ if(options&&typeof options==='object'&&!nodeTypes.isProxy(options)&&!Array.isArray(options)&&[Object.prototype,null].includes(Object.getPrototypeOf(options))){const appendix=Object.getOwnPropertyDescriptor(options,'auxiliaryAppendix');if(appendix&&Object.hasOwn(appendix,'value')&&appendix.value!==undefined)parseAuxiliaryAppendix(appendix.value);}
+ auditResultSnapshot(options);
+ if(options.dryRun!==false)return importIncrementalBody(options);
+ const prior=readDomainOperationBinding(db);
+ if(prior&&!['import.create','import.append'].includes(prior.action))throw auditError('audit_operation_conflict');
+ let admitted;try{admitted=prior?{marker:ADMITTED,mode:prior.action==='import.append'?'append':'create',targetAccountSetId:prior.scope.value}:runIncrementalImport(options,{admissionOnly:true});}catch(error){if(options?.auxiliaryAppendix!==undefined)throw auxiliaryImportError(error);throw error;}
+ if(admitted?.marker!==ADMITTED)return admitted;
+ const {mode,targetAccountSetId}=admitted;
+ const scope=prior?.scope??(mode==='append'?{kind:'account_set',value:targetAccountSetId}:{kind:'database',value:null});
+ return runDomainOperation(db,{action:prior?.action??(mode==='append'?'import.append':'import.create'),scope,request:options,
+ refs:v=>[...(v?.created?.accountSetId?[{type:'account_set',id:v.created.accountSetId}]:[]),...(typeof options.batchId==='string'?[{type:'import_batch_key',keyDigest:auditCanonicalDigest([options.batchId])}]:[])],
+ targets:v=>v?.created?.accountSetId?{accountSetId:v.created.accountSetId}:{}},()=>importIncrementalBody(options));
 }

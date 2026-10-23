@@ -1,3 +1,4 @@
+import { hasActiveAuditExecution, withAuditSavepoint } from './local-audit-storage.mjs';
 // Optional aux1 component. Importing this module never opens or initializes a database.
 import fs from 'node:fs';
 import { storedCents } from './money.mjs';
@@ -117,7 +118,10 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
  }
 }
 export function auxTransaction(db,fn) {
- assertAuxiliaryConnection(db); const nested=db.isTransaction, name=`aux_${randomUUID().replaceAll('-','')}`;
+ assertAuxiliaryConnection(db);
+ if(hasActiveAuditExecution(db)) {const result=withAuditSavepoint(db,fn);return result&&typeof result==='object'?{...result,durability:'committed'}:result;}
+ if(db.isTransaction)throw auxError('audit_transaction_conflict');
+ const nested=db.isTransaction, name=`aux_${randomUUID().replaceAll('-','')}`;
  try { db.exec(nested?`SAVEPOINT ${name}`:'BEGIN IMMEDIATE'); } catch(error) { if(nested||db.isTransaction)throw unknown(db); throw error; }
  try { const result=fn(); db.exec(nested?`RELEASE ${name}`:'COMMIT'); return result && typeof result==='object' ? {...result, ...(nested && result.status==='applied'?{status:'staged'}:{}), durability:nested?'pending_outer_commit':'committed'} : result; }
  catch(error) { try { if(nested) db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`); else if(db.isTransaction) db.exec('ROLLBACK'); else throw unknown(db); } catch { throw unknown(db); } throw error; }

@@ -1,3 +1,15 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+R4辅助四个公开写wrapper在第一次读取accountSetId前严检原options并复制，scope/request/body/refs共享安全数据，getter/Proxy无回调拒绝。旧独审仅观察到aux scope getter调用1次后拒绝且零写，未观察到aux跨账套写。四入口真实成功、13729分分配及caller事务拒绝合同已复验。
+
+caller手工BEGIN/SP中的领域facade拒绝audit_transaction_conflict，caller事务仍在、全表零变；模型applied=false且不发localRef。公开auxTransaction自行开事务并不授领域继承能力，其自己事务可按原owner语义回滚。真实合法私有import组合、顶层dimension_invalid及真实先INSERT后SQL故障另保全部业务回滚/失败receipt；不是只把原错误替换为冲突。quarantine在新事务冲突之前检查，原raw COMMIT_BUSY和未知隔离仍保。业务requestId回放的新技术操作只增加精确no_change审计，固定技术ID重放全表零变。CLI机器信封唯一JSON，显式--operation-id须调用方运行前保存，自动ID仅最终返回，不承诺崩溃前交付。
+
+## 2026-10-24 W2b 审计接线候选
+
+实体创建/更新、分配替换和requirement设置均走同一同步领域审计外层；内部auxTransaction使用受控保存点，caller事务无活能力拒绝。原输入/状态/本机返回shape保留，首次entity不靠不存在的status判断成功。显式CLI仅写命令官方启用audit；entities/entries/ledger/party保持只读、不安装缺失组件、不触碰默认库。写命令可给--operation-id，机器模式在唯一正式JSON信封返回ID；重启同ID无精确原DTO时保committed并返回audit_result_unavailable，不重复写。
+
 # B2b 真实入口候选（2026-10-23）
 
 B2a 已随 PR70 实际验收合并，完整 head / merge / 时间及独立证据见 [交接](handoffs/LOCAL-03b.md)。本轮在该基线接通八个 origin=local 工具和 REST、增量导入附录透传、模型摘要与进程内 localRef；当前为实施自测候选，待管理验收、fresh独审和PR。无HTTP安装、任意库路径或真实税局连接。

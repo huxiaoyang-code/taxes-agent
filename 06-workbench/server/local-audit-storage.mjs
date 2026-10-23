@@ -1,3 +1,5 @@
+import { markBatchFailed as persistIncrementalImportFailure } from './import-storage.mjs';
+import { markBatchFailed as persistBankImportFailure } from './bank-storage.mjs';
 // Explicit-handle audit1/2 storage. No default database or import-time connection.
 import { DatabaseSync, constants as SQL } from 'node:sqlite';
 import fs from 'node:fs';
@@ -6,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { AUDIT_ACTIONS,AUDIT_ACTORS,AUDIT_COMPONENT,AUDIT_OUTCOMES,AUDIT_RESULT_CODES,AUDIT_SCHEMA_VERSION,
  auditError as fail, auditEventDigest,auditEventDedupeKey,auditV2EventDigest,auditV2DedupeKey,
  normalizeAuditEvent,createOperationContext,serverEventFields,classifyFailure,isTechId,isAuditPeriod,isTechnicalRowId,
- canonicalAuditJson,auditCanonicalDigest,auditTargets,AUDIT_TARGET_FIELDS } from './local-audit.mjs';
+ canonicalAuditJson,auditCanonicalDigest,auditTargets,AUDIT_TARGET_FIELDS,normalizeAuditResultRefs,auditResultDigest } from './local-audit.mjs';
 const V1_TABLES=Object.freeze(['audit_components','audit_database_instances','audit_events']);
 export const AUDIT_TABLES=Object.freeze([...V1_TABLES,'audit_operations']);
 export const AUDIT_INSTANCE_NOTES = Object.freeze(["initial", "restore-new"]);
@@ -157,10 +159,10 @@ export function auditSchemaFacts(db,version) {
    tables.includes(r.tbl_name.toLowerCase())||r.name.toLowerCase().startsWith('audit_')||r.name.toLowerCase().startsWith('idx_audit_')||sqlReferencesNamespace(r.sql,'audit_'))
    .map(r=>({...r,sql:r.sql===null?null:normalizeSql(r.sql)}));
  const facts=tables.map(t=>({table:t,
-  columns:db.prepare('SELECT * FROM pragma_table_xinfo(?) ORDER BY cid').all(t),
-  attributes:db.prepare('SELECT type,ncol,wr,strict FROM pragma_table_list WHERE schema=\'main\' AND name=?').get(t)??null,
-  indexes:db.prepare('SELECT * FROM pragma_index_list(?) ORDER BY name').all(t).map(i=>({...i,keys:db.prepare('SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno').all(i.name)})),
-  foreignKeys:db.prepare('SELECT * FROM pragma_foreign_key_list(?) ORDER BY id,seq').all(t),
+  columns:readAuditMetadata(db,'table_xinfo',t).sort((a,b)=>a.cid-b.cid),
+  attributes:readAuditMetadata(db,'table_list',t)[0]??null,
+  indexes:readAuditMetadata(db,'index_list',t).sort((a,b)=>a.name.localeCompare(b.name)).map(i=>({...i,keys:readAuditMetadata(db,'index_xinfo',i.name).sort((a,b)=>a.seqno-b.seqno)})),
+  foreignKeys:readAuditMetadata(db,'foreign_key_list',t).sort((a,b)=>a.id-b.id||a.seq-b.seq),
  }));
  return {version,objects,tables:facts};
 }
@@ -196,7 +198,7 @@ const bindingOf=r=>auditCanonicalDigest([1,r.action,r.scope_kind,r.scope_token,t
 const opKey=r=>canonicalAuditJson([r.database_instance_id,r.operation_id,r.attempt]);
 const successCodes=new Set(['ok','import_create_succeeded','import_append_succeeded','import_legacy_succeeded','voucher_post_succeeded','voucher_unpost_succeeded','period_close_succeeded','period_reopen_succeeded','batch_stage_succeeded','batch_job_succeeded','restore_new_succeeded']);
 const terminalCodesValid=(state,code)=>state==='succeeded'?successCodes.has(code):state==='no_change'?code==='no_change':['failed','rejected'].includes(state)&&!successCodes.has(code)&&!['no_change','replayed','unknown','interrupted'].includes(code);
-const receiptFor=(r,e,targets)=>({receiptVersion:1,databaseInstanceId:r.database_instance_id,operationId:r.operation_id,attempt:r.attempt,state:r.state,resultCode:e.result_code,reasonCode:e.reason_code,eventId:e.event_id,eventSeq:e.seq,targets});
+const receiptFor=(r,e,targets,extra=null)=>({receiptVersion:extra?2:1,databaseInstanceId:r.database_instance_id,operationId:r.operation_id,attempt:r.attempt,state:r.state,resultCode:e.result_code,reasonCode:e.reason_code,eventId:e.event_id,eventSeq:e.seq,targets,...(extra?{resultRefs:extra.resultRefs,resultDigest:extra.resultDigest}:{})});
 function contentValid(db,version) {
  const components=db.prepare('SELECT * FROM audit_components').all();
  if(components.length!==1||components[0].component!==AUDIT_COMPONENT||components[0].version!==version||!iso(components[0].installed_at)||!(components[0].note===null||typeof components[0].note==='string'))return false;
@@ -211,20 +213,24 @@ function contentValid(db,version) {
  if(events.some(r=>!ids.has(r.database_instance_id)||!validEvent(r)))return false;
  if(version===1)return true;
  const ops=db.prepare('SELECT * FROM audit_operations ORDER BY database_instance_id,operation_id,attempt').all(), terminals=new Map();
+ const eventById=new Map(events.map(e=>[e.event_id,e])),operationByKey=new Map(ops.map(r=>[opKey(r),r]));
+ if(eventById.size!==events.length||operationByKey.size!==ops.length)return false;
  for(const r of ops) {
   if(!ids.has(r.database_instance_id)||!isTechId(r.operation_id)||r.binding_version!==1||!AUDIT_ACTIONS.includes(r.action)||!AUDIT_ACTORS.includes(r.actor)||!Number.isSafeInteger(r.attempt)||r.attempt<1||r.attempt>1000000||!['database','enterprise','account_set'].includes(r.scope_kind)||!digest(r.scope_token)||!digest(r.request_digest)||!digest(r.binding_digest)||!iso(r.prepared_at))return false;
   const targets=targetsOfRow(r);
   if(canonicalAuditJson(targets)!==canonicalAuditJson(auditTargets(targets))||r.binding_digest!==bindingOf(r))return false;
   if((r.parent_operation_id===null)!==(r.parent_attempt===null)||r.parent_operation_id!==null&&(!isTechId(r.parent_operation_id)||r.parent_operation_id===r.operation_id||!Number.isSafeInteger(r.parent_attempt)||r.parent_attempt<1||r.parent_attempt>1000000))return false;
-  const prior=ops.find(p=>p.database_instance_id===r.database_instance_id&&p.operation_id===r.operation_id&&p.attempt===r.attempt-1);
+  const prior=operationByKey.get(canonicalAuditJson([r.database_instance_id,r.operation_id,r.attempt-1]));
   if(r.attempt>1&&(!prior||!['failed','rejected'].includes(prior.state)||prior.binding_digest!==r.binding_digest))return false;
   if(r.state==='pending') {if(r.terminal_event_id!==null||r.receipt_json!==null||r.finished_at!==null)return false;continue;}
   if(!['succeeded','no_change','failed','rejected'].includes(r.state)||!iso(r.finished_at))return false;
-  const e=events.find(e=>e.event_id===r.terminal_event_id);
+  const e=eventById.get(r.terminal_event_id);
   if(!e||!terminalCodesValid(r.state,e.result_code)||e.event_format_version!==2||e.database_instance_id!==r.database_instance_id||e.operation_id!==r.operation_id||e.attempt!==r.attempt||e.action!==r.action||e.actor!==r.actor||e.parent_operation_id!==r.parent_operation_id||e.outcome!==r.state||e.occurred_at!==r.finished_at)return false;
   const finalTargets=auditTargets(eventFromRow(e));
   if(AUDIT_TARGET_FIELDS.some(k=>targets[k]!==null&&targets[k]!==finalTargets[k]))return false;
-  if(canonicalAuditJson(receiptFor(r,e,finalTargets))!==r.receipt_json)return false;
+  const actual=parseCanonical(r.receipt_json);
+  let extra=null; if(actual.receiptVersion===2) {try{extra={resultRefs:normalizeAuditResultRefs(actual.resultRefs),resultDigest:actual.resultDigest};if(!digest(extra.resultDigest))return false;}catch{return false;}}else if(actual.receiptVersion!==1)return false;
+  if(canonicalAuditJson(receiptFor(r,e,finalTargets,extra))!==r.receipt_json)return false;
   parseCanonical(r.receipt_json);if(terminals.has(e.event_id))return false;terminals.set(e.event_id,opKey(r));
  }
  return events.every(e=>e.event_format_version!==2||terminals.has(e.event_id));
@@ -268,7 +274,14 @@ function identity(db,explicit) {
  const id=plainFile(main.file);if(explicit&&!samePath(id.path,plainFile(explicit).path))throw fail('audit_backup_source_mismatch');return id;
 }
 const sameIdentity=(a,b)=>samePath(a.path,b.path)&&a.dev===b.dev&&a.ino===b.ino;
-const quarantine=new WeakSet();
+const quarantine=new WeakSet(),admissionUnknowns=new WeakMap();
+export function auditConnectionQuarantined(db){return quarantine.has(db);}
+export function recoverBankAuditAdmission(db){
+ const record=admissionUnknowns.get(db);if(!quarantine.has(db))return false;
+ if(!record||record.phase!=='pending_commit_busy'||record.authorizationIssued!==false||db.isTransaction||!sameIdentity(record.file,identity(db)))throw fail('audit_unavailable');
+ const state=assertInstalledSchema(db);if(state.version!==2||state.activeInstanceId!==record.r.database_instance_id||selectOperation(db,record.r))throw fail('audit_unavailable');
+ admissionUnknowns.delete(db);quarantine.delete(db);return true;
+}
 function connection(db){if(!db||typeof db.exec!=='function'||quarantine.has(db))throw fail('audit_unavailable');if(db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)throw fail('audit_database_invalid');}
 function owner(db){connection(db);if(db.isTransaction)throw fail('audit_transaction_conflict');}
 const busy=e=>e?.errcode===5||e?.errcode===6||e?.code==='SQLITE_BUSY'||e?.code==='SQLITE_LOCKED';
@@ -321,7 +334,7 @@ function envelope(code,{state='rejected',replayed=false,durability='not_started'
 function unknown(code='audit_commit_unknown'){return envelope(code,{state:'unknown',durability:'unknown',needsReview:true});}
 function terminalEnvelope(r,replayed){const receipt=parseCanonical(r.receipt_json);return envelope(r.state==='succeeded'?'ok':r.state==='no_change'?'no_change':receipt.resultCode,{state:r.state,replayed,durability:'committed',receipt});}
 function requireV2(db){const s=assertInstalledSchema(db);if(s.version!==2)throw fail('audit_operation_protocol_required');return s;}
-function normalizeBinding(db,input) {
+function normalizeBinding(db,input,{requireScope=true}={}) {
  input=JSON.parse(canonicalAuditJson(input));
  if(!input||typeof input!=='object'||Object.keys(input).sort().join(',')!=='context,request,scope')throw fail('audit_operation_invalid');
  const context=createOperationContext(input.context),scope=input.scope;
@@ -329,58 +342,111 @@ function normalizeBinding(db,input) {
  let value=scope.value;
  if(scope.kind==='database'){if(value!==null||context.accountSetId!==undefined)throw fail('audit_operation_invalid');}
  else if(scope.kind==='account_set') {
-  if(!isTechnicalRowId(value)||context.accountSetId!==value||!db.prepare('SELECT 1 FROM account_sets WHERE id=?').get(value))throw fail('audit_operation_invalid');
+  if(!isTechnicalRowId(value)||context.accountSetId!==value||(requireScope&&!db.prepare('SELECT 1 FROM account_sets WHERE id=?').get(value)))throw fail('audit_operation_invalid');
  }else if(scope.kind==='enterprise') {
   if(typeof value!=='string'||!value||value.length>128||/[\u0000-\u001f\u007f]/.test(value))throw fail('audit_operation_invalid');
   value=value.normalize('NFKC').trim();if(!value)throw fail('audit_operation_invalid');
   const binding=db.prepare('SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?').get(value);
-  if(context.accountSetId!==undefined&&binding?.account_set_id!==context.accountSetId)throw fail('audit_operation_invalid');
+  if(requireScope&&context.accountSetId!==undefined&&binding?.account_set_id!==context.accountSetId)throw fail('audit_operation_invalid');
  }else throw fail('audit_operation_invalid');
  const r={database_instance_id:requireV2(db).activeInstanceId,operation_id:context.operationId,attempt:context.attempt,binding_version:1,action:context.action,actor:context.actor,scope_kind:scope.kind,scope_token:auditCanonicalDigest(['audit-scope-v1',scope.kind,value]),targets_json:canonicalAuditJson(auditTargets(context)),parent_operation_id:context.parentOperationId??null,parent_attempt:context.parentAttempt??null,request_digest:auditCanonicalDigest(['audit-request-v1',context.action,input.request])};
  r.binding_digest=bindingOf(r);return r;
 }
 /** A receipt is a private, one-use object issued only after durable pending COMMIT. */
 export function prepareOperation(db,input) {
- owner(db);const file=identity(db),r=normalizeBinding(db,input);
+ owner(db);const file=identity(db),r=normalizeBinding(db,input,{requireScope:false});
  try{db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){quarantine.add(db);return unknown();}return envelope(busy(e)?'audit_admission_busy':'audit_unavailable',{retryable:busy(e)});}
- let saved;
+ let saved,phase='admission';
  try {
   if(!sameIdentity(file,identity(db))||requireV2(db).activeInstanceId!==r.database_instance_id)throw fail('audit_authorization_invalid');
-  if(normalizeBinding(db,input).binding_digest!==r.binding_digest)throw fail('audit_operation_conflict');
+  if(normalizeBinding(db,input,{requireScope:false}).binding_digest!==r.binding_digest)throw fail('audit_operation_conflict');
   saved=selectOperation(db,r);
   if(saved){db.exec('ROLLBACK');if(saved.binding_digest!==r.binding_digest)return envelope('audit_operation_conflict');return saved.state==='pending'?unknown('audit_operation_pending'):terminalEnvelope(saved,true);}
+  normalizeBinding(db,input);
   const prior=db.prepare('SELECT * FROM audit_operations WHERE database_instance_id=? AND operation_id=? ORDER BY attempt DESC LIMIT 1').get(r.database_instance_id,r.operation_id);
   if((!prior&&r.attempt!==1)||(prior&&(prior.attempt+1!==r.attempt||!['failed','rejected'].includes(prior.state)||prior.binding_digest!==r.binding_digest))){db.exec('ROLLBACK');return envelope('audit_operation_conflict');}
   r.prepared_at=new Date().toISOString();
   const columns=[...IMMUTABLE_OPERATION_COLUMNS,'state'];
   db.prepare(`INSERT INTO audit_operations (${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`).run(...IMMUTABLE_OPERATION_COLUMNS.map(k=>r[k]),'pending');
-  db.exec('COMMIT');
- }catch(e){if(!rollback(db)){quarantine.add(db);return unknown();}throw fail(e?.code?.startsWith('audit_')?e.code:'audit_unavailable');}
+  phase='pending_commit';db.exec('COMMIT');
+ }catch(e){const pendingBusy=phase==='pending_commit'&&busy(e)&&db.isTransaction;if(!rollback(db)){if(pendingBusy)admissionUnknowns.set(db,{phase:'pending_commit_busy',authorizationIssued:false,file,r});quarantine.add(db);return unknown();}throw fail(e?.code?.startsWith('audit_')?e.code:'audit_unavailable');}
  const authorization=Object.freeze(Object.create(null));permissions.set(authorization,{db,file,r,used:false});
  return {...envelope('prepared',{state:'pending',durability:'committed'}),authorization};
 }
-function resultSpec(value,r) {
+function resultSpec(value,r,claims=new Map()) {
  try {value=JSON.parse(canonicalAuditJson(value));}catch{throw fail('audit_result_invalid');}
  if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.then==='function')throw fail('audit_result_invalid');
- const keys=Object.keys(value);if(keys.some(k=>!['state','resultCode','reasonCode','targets'].includes(k))||!['succeeded','no_change','failed','rejected'].includes(value.state))throw fail('audit_result_invalid');
+ const keys=Object.keys(value);if(keys.some(k=>!['state','resultCode','reasonCode','targets','resultRefs','resultDigest'].includes(k))||!['succeeded','no_change','failed','rejected'].includes(value.state))throw fail('audit_result_invalid');
  const resultCode=value.resultCode??(value.state==='succeeded'?'ok':value.state),reasonCode=value.reasonCode??'none';
  const inputTargets=targetsOfRow(r),extra=value.targets??{};
  if(!extra||typeof extra!=='object'||Array.isArray(extra)||Object.keys(extra).some(k=>!AUDIT_TARGET_FIELDS.includes(k)))throw fail('audit_result_invalid');
  const targets=auditTargets({...inputTargets,...extra});if(AUDIT_TARGET_FIELDS.some(k=>inputTargets[k]!==null&&inputTargets[k]!==targets[k]))throw fail('audit_result_invalid');
  normalizeAuditEvent({...targets,outcome:value.state,resultCode,reasonCode,action:r.action,actor:r.actor,operationId:r.operation_id,parentOperationId:r.parent_operation_id,attempt:r.attempt});
  if(!terminalCodesValid(value.state,resultCode))throw fail('audit_result_invalid');
- return {state:value.state,resultCode,reasonCode,targets};
+ const hasResult=Object.hasOwn(value,'resultRefs')||Object.hasOwn(value,'resultDigest');
+ if(hasResult&&(!Object.hasOwn(value,'resultRefs')||!digest(value.resultDigest)))throw fail('audit_result_invalid');
+ const resultRefs=hasResult?normalizeAuditResultRefs(value.resultRefs):[];
+ for(const ref of resultRefs){if(ref.keyDigest)continue;const owner=referenceOwner(dbForResult.get(r),ref)??claims.get(`${ref.type}:${ref.id}`);if(!owner||(targets.accountSetId!==null&&owner!==targets.accountSetId))throw fail('audit_result_invalid');}
+ return {state:value.state,resultCode,reasonCode,targets,...(hasResult?{resultRefs,resultDigest:value.resultDigest}:{})};
 }
+const dbForResult=new WeakMap();
+const REF_SQL=Object.freeze({account_set:'SELECT id owner FROM account_sets WHERE id=?',voucher:'SELECT account_set_id owner FROM vouchers WHERE id=?',year_end_voucher:'SELECT account_set_id owner FROM vouchers WHERE id=?',asset_card:'SELECT account_set_id owner FROM asset_cards WHERE id=?',aux_entity:'SELECT account_set_id owner FROM aux_entities WHERE id=?',voucher_entry:'SELECT v.account_set_id owner FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.id=?',bank_transaction:'SELECT account_set_id owner FROM bank_transactions WHERE id=?',bank_match:'SELECT account_set_id owner FROM bank_matches WHERE id=?',bank_ambiguity:'SELECT account_set_id owner FROM bank_ambiguities WHERE id=?',bank_reconcile_run:'SELECT account_set_id owner FROM bank_reconcile_runs WHERE id=?'});
+function referenceOwner(db,ref){if(!db)return null;try{return db.prepare(REF_SQL[ref.type]).get(ref.id)?.owner??null;}catch{return null;}}
+function referenceClaims(db,r){const claims=new Map(),set=targetsOfRow(r).accountSetId;dbForResult.set(r,db);if(!set)return claims;
+ for(const [type,sql] of Object.entries(REF_SQL)){if(!r.action.endsWith('.delete'))continue;try {const table=type==='account_set'?'account_sets':type==='asset_card'?'asset_cards':type==='voucher'?'vouchers':null;if(table){const rows=db.prepare(type==='account_set'?'SELECT id FROM account_sets WHERE id=?':`SELECT id FROM ${table} WHERE account_set_id=?`).all(set);for(const row of rows)claims.set(`${type}:${row.id}`,set);}}catch{}}
+ return claims;}
 function finish(db,r,spec) {
  const e=normalizeAuditEvent({...spec.targets,action:r.action,actor:r.actor,operationId:r.operation_id,parentOperationId:r.parent_operation_id,attempt:r.attempt,outcome:spec.state,resultCode:spec.resultCode,reasonCode:spec.reasonCode},null,serverEventFields(r.database_instance_id));
  const columns=['event_id','dedupe_key','database_instance_id','occurred_at','action','outcome','result_code','reason_code','actor','operation_id','parent_operation_id','attempt','account_set_id','voucher_id','period','job_id','item_id','stage_id','correlation','content_digest','event_format_version'];
  db.prepare(`INSERT INTO audit_events(${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`).run(e.eventId,auditV2DedupeKey(e),e.databaseInstanceId,e.occurredAt,e.action,e.outcome,e.resultCode,e.reasonCode,e.actor,e.operationId,e.parentOperationId,e.attempt,...AUDIT_TARGET_FIELDS.map(k=>e[k]??null),auditV2EventDigest(e),2);
  const event=db.prepare('SELECT * FROM audit_events WHERE event_id=?').get(e.eventId);
- const updated={...r,state:spec.state};const receipt=receiptFor(updated,event,spec.targets);
+ const updated={...r,state:spec.state};const receipt=receiptFor(updated,event,spec.targets,Object.hasOwn(spec,'resultDigest')?spec:{resultRefs:[],resultDigest:auditResultDigest(undefined)});
  const changed=db.prepare("UPDATE audit_operations SET state=?,terminal_event_id=?,receipt_json=?,finished_at=? WHERE database_instance_id=? AND operation_id=? AND attempt=? AND state='pending'").run(spec.state,e.eventId,canonicalAuditJson(receipt),e.occurredAt,r.database_instance_id,r.operation_id,r.attempt);
  if(changed.changes!==1)throw fail('audit_operation_conflict');return {...updated,receipt_json:canonicalAuditJson(receipt)};
 }
 const CALLBACK_DENIED=new Set([SQL.SQLITE_TRANSACTION,SQL.SQLITE_SAVEPOINT,SQL.SQLITE_PRAGMA,SQL.SQLITE_ATTACH,SQL.SQLITE_DETACH,SQL.SQLITE_ALTER_TABLE,SQL.SQLITE_CREATE_TABLE,SQL.SQLITE_CREATE_INDEX,SQL.SQLITE_CREATE_TRIGGER,SQL.SQLITE_CREATE_VIEW,SQL.SQLITE_DROP_TABLE,SQL.SQLITE_DROP_INDEX,SQL.SQLITE_DROP_TRIGGER,SQL.SQLITE_DROP_VIEW,SQL.SQLITE_CREATE_TEMP_TABLE,SQL.SQLITE_CREATE_TEMP_TRIGGER,SQL.SQLITE_CREATE_TEMP_VIEW,SQL.SQLITE_CREATE_VTABLE,SQL.SQLITE_DROP_VTABLE]);
+const activeOperations=new WeakMap();
+export function hasActiveAuditExecution(db) { return activeOperations.has(db); }
+function permittedSql(db,predicate,run) {
+ const live=activeOperations.get(db); if(!live)return run();
+ if(live.permit)throw fail('audit_authorization_invalid');
+ live.permit=predicate;try{return run();}finally{live.permit=null;}
+}
+let savepointSequence=0;
+export function withAuditSavepoint(db,fn) {
+ const live=activeOperations.get(db);
+ if(!live&&db.isTransaction)throw fail('audit_transaction_conflict');
+ const name=`audit_body_${++savepointSequence}`;
+ const command=(action,sql)=>permittedSql(db,(a,b,c)=>a===SQL.SQLITE_SAVEPOINT&&b===action&&c===name,()=>db.exec(sql));
+ command('BEGIN',`SAVEPOINT ${name}`);
+ try {const out=fn();if(out&&typeof out.then==='function')throw fail('audit_result_invalid');command('RELEASE',`RELEASE ${name}`);return out;}
+ catch(error) {try{command('ROLLBACK',`ROLLBACK TO ${name}`);command('RELEASE',`RELEASE ${name}`);}catch{if(live)live.poisoned=true;throw fail('audit_commit_unknown');}throw error;}
+}
+const METADATA_TABLES=new Set(['account_sets','accounts','opening_balances','periods','vouchers','voucher_entries','asset_cards','depreciation_runs','schema_migrations','schema_backups','import_batches','import_voucher_sources','import_enterprise_account_sets','audit_components','audit_database_instances','audit_events','audit_operations','bank_component_migrations','bank_component_backups','bank_accounts','bank_batches','bank_transactions','bank_batch_rows','bank_ambiguities','bank_matches','bank_audit_events','bank_reconcile_runs']);
+export function readAuditMetadata(db,kind,target) {
+ if(!['table_info','table_xinfo','index_list','index_xinfo','foreign_key_list','table_list'].includes(kind))throw fail('audit_authorization_invalid');
+ if(kind==='index_xinfo') {const row=db.prepare("SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?").get(target);if(!row||!METADATA_TABLES.has(row.tbl_name))throw fail('audit_authorization_invalid');}
+ else if(!METADATA_TABLES.has(target))throw fail('audit_authorization_invalid');
+ return permittedSql(db,(a,b,c)=>a===SQL.SQLITE_PRAGMA&&b===kind&&(c===target||c===null),()=>kind==='table_list'?db.prepare("SELECT type,ncol,wr,strict FROM pragma_table_list WHERE schema='main' AND name=?").all(target):db.prepare(`SELECT * FROM pragma_${kind}(?)`).all(target));
+}
+export function bindPreparedChildren(db,parentAuthorization,children) {
+ owner(db);const parent=permissions.get(parentAuthorization);
+ if(!parent||parent.db!==db||parent.used||parent.children||!Array.isArray(children))throw fail('audit_authorization_invalid');
+ const seen=new Set();parent.children=children.map(auth=>{const child=permissions.get(auth);if(!child||child.db!==db||child.used||!sameIdentity(child.file,parent.file)||child.r.database_instance_id!==parent.r.database_instance_id||child.r.parent_operation_id!==parent.r.operation_id||child.r.parent_attempt!==parent.r.attempt||seen.has(auth))throw fail('audit_authorization_invalid');seen.add(auth);return child;});
+}
+export function executePreparedChild(db,authorization,fn) {
+ const live=activeOperations.get(db),p=permissions.get(authorization);
+ if(!live||!p||p.db!==db||p.used||!live.p.children?.includes(p)||!sameIdentity(p.file,live.p.file)||!sameIdentity(p.file,identityFromLive(db,live))||p.r.parent_operation_id!==live.p.r.operation_id||p.r.parent_attempt!==live.p.r.attempt||p.r.database_instance_id!==live.p.r.database_instance_id)throw fail('audit_authorization_invalid');
+ const saved=selectOperation(db,p.r);if(!saved||saved.state!=='pending'||saved.binding_digest!==p.r.binding_digest)throw fail('audit_authorization_invalid');
+ p.used=true;const claims=referenceClaims(db,saved);let out,spec,businessError;const previousCurrent=live.current;live.current=p;
+ try{try{out=withAuditSavepoint(db,fn);spec=resultSpec(out,saved,claims);}catch(error){businessError=error;const mapped=classifyFailure(error);spec={state:mapped.outcome,resultCode:mapped.resultCode,reasonCode:mapped.reasonCode,targets:targetsOfRow(saved)};if(!['failed','rejected'].includes(spec.state))spec={state:'failed',resultCode:'internal_error',reasonCode:'internal_error',targets:targetsOfRow(saved)};}
+ }finally{live.current=previousCurrent;}
+ if(!businessError&&!['succeeded','no_change'].includes(spec.state))throw fail('audit_result_invalid');
+ // Only the storage's fixed terminal writes are privileged, never the child callback.
+ const result=permittedSql(db,(a,b)=>[SQL.SQLITE_INSERT,SQL.SQLITE_UPDATE].includes(a)&&['audit_events','audit_operations'].includes(b),()=>finish(db,saved,spec));
+ if(businessError)throw businessError;return terminalEnvelope(result,false);
+}
+function identityFromLive(db,live){return permittedSql(db,(a,b)=>a===SQL.SQLITE_PRAGMA&&b==='database_list',()=>identity(db));}
 export function executePreparedOperation(db,authorization,fn) {
  owner(db);const p=authorization&&typeof authorization==='object'?permissions.get(authorization):null;
  if(!p||p.db!==db||p.used||typeof fn!=='function')throw fail('audit_authorization_invalid');
@@ -390,30 +456,49 @@ export function executePreparedOperation(db,authorization,fn) {
  try {
   if(!sameIdentity(p.file,identity(db)))throw fail('audit_authorization_invalid');
   saved=selectOperation(db,p.r);if(!saved||saved.state!=='pending'||saved.binding_digest!==p.r.binding_digest)throw fail('audit_authorization_invalid');
+  const claims=referenceClaims(db,saved);p.refClaims=claims;
   p.used=true;
-  db.setAuthorizer((action,a)=>CALLBACK_DENIED.has(action)||[SQL.SQLITE_INSERT,SQL.SQLITE_UPDATE,SQL.SQLITE_DELETE].includes(action)&&String(a).startsWith('audit_')?SQL.SQLITE_DENY:SQL.SQLITE_OK);
+  const live={authorization,p,permit:null,poisoned:false};activeOperations.set(db,live);
+  db.setAuthorizer((action,a,b)=>{const permit=live.permit;if(permit&&permit(action,a,b))return SQL.SQLITE_OK;return CALLBACK_DENIED.has(action)||[SQL.SQLITE_INSERT,SQL.SQLITE_UPDATE,SQL.SQLITE_DELETE].includes(action)&&String(a).startsWith('audit_')?SQL.SQLITE_DENY:SQL.SQLITE_OK;});
   let result;
-  try{result=fn();}finally{db.setAuthorizer(null);}
+  try{result=fn();if(live.poisoned)throw fail('audit_commit_unknown');}finally{activeOperations.delete(db);db.setAuthorizer(null);}
   if(!db.isTransaction)throw fail('audit_commit_unknown');
-  spec=resultSpec(result,saved);
+  spec=resultSpec(result,saved,p.refClaims);
   if(spec.state==='failed'||spec.state==='rejected'){controlledFailure=spec;throw fail('audit_result_invalid');}
   saved=finish(db,saved,spec);
  }catch(e){
-  try{db.setAuthorizer(null);}catch{}
-  if(!rollback(db)){quarantine.add(db);return unknown();}
+  activeOperations.delete(db);try{db.setAuthorizer(null);}catch{}
+  if(!rollback(db)){p.bankFailure=null;p.incrementalFailure=null;for(const child of p.children??[]){child.bankFailure=null;child.incrementalFailure=null;}quarantine.add(db);return unknown();}
   if(!p.used)throw fail(e?.code?.startsWith('audit_')?e.code:'audit_unavailable');
   const mapped=controlledFailure??(e?.code==='audit_result_invalid'?{state:'rejected',resultCode:'rejected_validation',reasonCode:'audit_result_invalid',targets:targetsOfRow(p.r)}:{...classifyFailure(e),targets:targetsOfRow(p.r)});
   spec={...mapped,state:mapped.state??mapped.outcome};if(!['failed','rejected'].includes(spec.state))spec={state:'failed',resultCode:'internal_error',reasonCode:'internal_error',targets:targetsOfRow(p.r)};
-  return persistFailure(db,p.r,spec);
+  const deferred=p.bankFailure,incremental=p.incrementalFailure;p.bankFailure=null;p.incrementalFailure=null;return persistFailure(db,p.r,spec,deferred,p.children??[],incremental);
  }
  try{db.exec('COMMIT');return terminalEnvelope(saved,false);}catch(e){
   if(busy(e)&&db.isTransaction&&rollback(db))return persistFailure(db,p.r,{state:'failed',resultCode:'audit_unavailable',reasonCode:'audit_write_failed',targets:targetsOfRow(p.r)});
   try{rollback(db);}catch{}quarantine.add(db);return unknown();
  }
 }
-function persistFailure(db,r,spec) {
+export function deferIncrementalImportFailure(db,error,failure) {
+ const live=activeOperations.get(db),owner=live?.current??live?.p;
+ if(!owner||!['import.create','import.append'].includes(owner.r.action)||owner.incrementalFailure||(owner.r.action==='import.append'&&failure.accountSetId!==targetsOfRow(owner.r).accountSetId)||(owner.r.action==='import.create'&&failure.accountSetId!==null))throw fail('audit_authorization_invalid');
+ const keys=['batchId','sourceSystem','enterpriseKey','mode','accountSetId','contentFingerprint','errorCode','errorMessage'];if(!failure||Object.keys(failure).some(k=>!keys.includes(k)))throw fail('audit_result_invalid');
+ owner.incrementalFailure={db,file:owner.file,instance:owner.r.database_instance_id,data:{...failure}};
+}
+function writeIncrementalFailure(db,r,record){if(!record)return;if(record.db!==db||record.instance!==r.database_instance_id||!sameIdentity(record.file,identity(db))||!['import.create','import.append'].includes(r.action)||(r.action==='import.append'&&record.data.accountSetId!==targetsOfRow(r).accountSetId))throw fail('audit_authorization_invalid');persistIncrementalImportFailure(db,record.data);}
+export function deferBankImportFailure(db,error,failure) {
+ const live=activeOperations.get(db);
+ if(!live||live.p.r.action!=='bank.import'||failure.accountSetId!==targetsOfRow(live.p.r).accountSetId||live.p.bankFailure)throw fail('audit_authorization_invalid');
+ const keys=['accountSetId','bankAccountId','batchId','sourceId','currency','period','contentSha256','mappingFingerprint','normalizationVersion','errorCode','errorMessage'];
+ if(!failure||Object.keys(failure).some(k=>!keys.includes(k)))throw fail('audit_result_invalid');
+ live.p.bankFailure={db,file:live.p.file,data:{...failure},error};
+}
+function persistFailure(db,r,spec,bankFailure=null,children=[],incrementalFailure=null) {
  try{db.exec('BEGIN IMMEDIATE');const current=selectOperation(db,r);if(!current||current.state!=='pending') {db.exec('ROLLBACK');return current?.receipt_json?terminalEnvelope(current,true):unknown();}
-  const saved=finish(db,current,spec);db.exec('COMMIT');return terminalEnvelope(saved,false);
+  if(bankFailure){if(bankFailure.db!==db||!sameIdentity(bankFailure.file,identity(db))||r.action!=='bank.import'||bankFailure.data.accountSetId!==targetsOfRow(r).accountSetId||db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get()?.instance_id!==r.database_instance_id)throw fail('audit_authorization_invalid');persistBankImportFailure(db,bankFailure.data);}
+  writeIncrementalFailure(db,r,incrementalFailure);
+  for(const child of children){child.used=true;writeIncrementalFailure(db,child.r,child.incrementalFailure);child.incrementalFailure=null;const row=selectOperation(db,child.r);if(!row||row.state!=='pending'||row.binding_digest!==child.r.binding_digest)throw fail('audit_authorization_invalid');finish(db,row,{state:'failed',resultCode:'failed',reasonCode:'internal_error',targets:targetsOfRow(row)});}
+  const saved=finish(db,current,spec);db.exec('COMMIT');if(bankFailure)bankFailure.error.auditRecorded=true;return terminalEnvelope(saved,false);
  }catch{if(!rollback(db)){quarantine.add(db);return unknown();}return unknown('audit_unavailable');}
 }
 export function queryOperation(db,{databaseInstanceId,operationId,attempt=1}={}) {

@@ -4,6 +4,30 @@ process.env.WORKBENCH_TEST_KEEP_FIXTURES = '1';
 const h = await harness({ install: false });
 const { db, dbPath, root, A, X, S, LB } = h;
 const IM = await import('../server/import-incremental.mjs');
+const C = await import('../server/local-audit-coordinator.mjs');
+function assertAuditAppend(after,before,actions,message,state='failure') {
+ const row=v=>typeof v==='string'?JSON.parse(v):v;
+ const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
+ assert.deepEqual(business(after),business(before),message);
+ for(const table of ['audit_events','audit_operations'])for(const original of before[table]??[])assert.ok((after[table]??[]).some(v=>JSON.stringify(v)===JSON.stringify(original)),table+' history must remain exact');
+ const added=table=>(after[table]??[]).filter(v=>!(before[table]??[]).some(old=>JSON.stringify(old)===JSON.stringify(v))).map(row);
+ const events=added('audit_events').sort((a,b)=>a.seq-b.seq),ops=added('audit_operations');
+ assert.deepEqual(events.map(e=>e.action),actions);assert.equal(ops.length,actions.length);
+ for(const event of events){
+  const operation=ops.find(o=>o.operation_id===event.operation_id&&o.attempt===event.attempt&&o.database_instance_id===event.database_instance_id);assert.ok(operation);
+  if(state==='failure')assert.ok(['failed','rejected'].includes(operation.state));else assert.equal(operation.state,state);
+  assert.equal(event.outcome,operation.state);assert.equal(event.action,operation.action);assert.ok(operation.receipt_json);
+  const receipt=JSON.parse(operation.receipt_json);
+  assert.deepEqual(Object.keys(receipt).sort(),['receiptVersion','databaseInstanceId','operationId','attempt','state','resultCode','reasonCode','eventId','eventSeq','targets','resultRefs','resultDigest'].sort());
+  assert.equal(receipt.receiptVersion,2);assert.equal(receipt.operationId,operation.operation_id);assert.equal(receipt.databaseInstanceId,operation.database_instance_id);assert.equal(receipt.attempt,operation.attempt);assert.equal(receipt.state,operation.state);assert.equal(receipt.eventId,event.event_id);assert.equal(receipt.eventSeq,event.seq);assert.equal(receipt.resultCode,event.result_code);assert.equal(receipt.reasonCode,event.reason_code);assert.match(receipt.resultDigest,/^[a-f0-9]{64}$/);
+  assert.deepEqual(receipt.targets,{accountSetId:event.account_set_id,voucherId:event.voucher_id,period:event.period,jobId:event.job_id,itemId:event.item_id,stageId:event.stage_id,correlation:event.correlation});
+ }
+ const seq=value=>(value.sqlite_sequence??[]).map(row).find(r=>r.name==='audit_events')?.seq??0;
+ assert.equal(seq(after)-seq(before),actions.length);
+}
+
+const auditSnapshot=()=>Object.fromEntries(JSON.parse(snapshot()));
+function observedReplay(fn,action='import.create'){const before=auditSnapshot(),out=fn();assertAuditAppend(auditSnapshot(),before,[action],'business replay only appends one no_change receipt','no_change');return out;}
 let count = 0;
 function check(name, fn) { fn(); count++; console.log('ok ' + count + ' ' + name); }
 function snapshot({ audit = true } = {}) {
@@ -41,11 +65,15 @@ function fixture(label, multiplier = 1, profileId = 'small-2011-basic-v1') {
 function existingEntities(setId) {
   return entities().map(e => ({ ...e, existingId: X.listAuxiliaryEntities(db, { accountSetId: setId }).find(r => r.kind === e.kind && r.code === e.code).id }));
 }
-function assertRolledBack(input, pattern) {
-  const before = snapshot({ audit: false });
-  assert.throws(() => IM.importIncremental(input), pattern);
-  assert.equal(snapshot({ audit: false }), before);
+function assertRolledBack(input, pattern, executing=false) {
+ const before=auditSnapshot();assert.throws(()=>IM.importIncremental(input),pattern);
+ if(!executing){assert.deepEqual(auditSnapshot(),before);return;}
+ const after=auditSnapshot(),oldBatch=before.import_batches.find(b=>b.batch_id===input.batchId),failed=after.import_batches.find(b=>b.batch_id===input.batchId);
+ assert.equal(failed.status,'failed');assert.equal(failed.attempts,(oldBatch?.attempts??0)+1);assert.equal(failed.account_set_id,input.mode==='append'?input.accountSetId:null);assert.equal(failed.source_system,input.source.system);assert.equal(failed.enterprise_key,input.source.enterpriseKey);
+ assert.deepEqual(after.import_batches.filter(b=>b.batch_id!==input.batchId),before.import_batches.filter(b=>b.batch_id!==input.batchId));
+ const compare={...after,import_batches:before.import_batches};assertAuditAppend(compare,before,[input.mode==='append'?'import.append':'import.create'],'failure metadata and terminal together; business rows unchanged');
 }
+
 try {
   check('aux missing is rejected without writes', () => { const before = snapshot(); assert.throws(() => IM.importIncremental(fixture('missing')), /aux_not_installed/); assert.equal(snapshot(), before); });
   const cli = await runChild([fileURLToPath(new URL('../scripts/local-auxiliary.mjs', import.meta.url)), 'install', '--db', dbPath, '--out', join(root, 'cli-before-install')]);
@@ -65,7 +93,7 @@ try {
       assert.equal(party.groups.find(g => g.partyId === ids.get('C1')).closing, 1500 * m);
       assert.equal(party.groups.find(g => g.partyId === ids.get('C2')).closing, -300 * m);
     });
-    check('same appendix replay writes zero tables profile ' + m, () => { const before = snapshot(); const replay = IM.importIncremental(input); assert.equal(replay.status, 'idempotent_replay'); assert.equal(replay.auxiliary.status, 'replayed'); assert.equal(snapshot(), before); });
+    check('same appendix business replay appends exact no_change audit profile ' + m, () => { const before = snapshot(); const replay = observedReplay(()=>IM.importIncremental(input)); assert.equal(replay.status, 'idempotent_replay'); assert.equal(replay.auxiliary.status, 'replayed');  });
     const next = { dryRun: false, mode: 'append', accountSetId: result.accountSetId, batchId: input.batchId + '-jan', source: input.source,
       payload: { account_set: clone(input.payload.account_set), vouchers: [voucher('jan-receipt', '2026-01', '1002', '1122', 500 * m, 1), voucher('reversal', '2026-01', m === 1 ? '5001' : '6001', '1122', 100 * m, 2)] },
       auxiliaryAppendix: { ...appendix('jan-' + m), entities: existingEntities(result.accountSetId), entries: [
@@ -80,9 +108,10 @@ try {
       assert.deepEqual(report.groups.map(g => g.closing).sort((a, b) => a - b), [-300 * m, 0, 200 * m, 900 * m]);
     });
   }
+  check('stable technical ID replays exact original DTO and changed request conflicts without any table writes',()=>{const input=fixture('stable-tech'),operationId='aux-import-stable-tech';const first=C.withRequestMetadata({operationId},()=>IM.importIncremental(input));assert.equal(first.ok,true);const before=snapshot();assert.deepEqual(C.withRequestMetadata({operationId},()=>IM.importIncremental(input)),first);assert.equal(snapshot(),before);const changed=clone(input);changed.auxiliaryAppendix.reason+=' changed';assert.throws(()=>C.withRequestMetadata({operationId},()=>IM.importIncremental(changed)),e=>e.code==='audit_operation_conflict');assert.equal(snapshot(),before);});
   check('same entity codes are isolated between real profiles', () => { const a = X.listAuxiliaryEntities(db, { accountSetId: sets[0] }), b = X.listAuxiliaryEntities(db, { accountSetId: sets[1] }); assert.equal(a.some(x => b.some(y => y.id === x.id)), false); });
   check('changed same request conflicts and completed audit remains intact', () => { const changed = clone(inputs[0]); changed.auxiliaryAppendix.reason = 'Changed'; assertRolledBack(changed, /request_conflict/); assert.equal(IM.getImportBatch(inputs[0].batchId).batch.status, 'completed'); });
-  check('legacy no appendix replay preserves core fingerprints and all auxiliary rows', () => { const old = clone(inputs[0]); delete old.auxiliaryAppendix; const before = snapshot(); assert.equal(IM.importIncremental(old).ok, true); assert.equal(snapshot(), before); });
+  check('legacy no appendix replay preserves core fingerprints and all auxiliary rows', () => { const old = clone(inputs[0]); delete old.auxiliaryAppendix; const before = snapshot(); assert.equal(observedReplay(()=>IM.importIncremental(old)).ok, true); });
   check('metadata does not change core content fingerprint', () => { const original = db.prepare('SELECT content_fingerprint,voucher_fingerprint FROM import_voucher_sources WHERE account_set_id=? ORDER BY source_voucher_id').all(sets[0]); const old = clone(inputs[0]); delete old.auxiliaryAppendix; old.payload.vouchers.forEach(v => v.entries.forEach(e => { delete e.sourceEntryId; })); assert.equal(IM.importIncremental(old).ok, true); assert.deepEqual(db.prepare('SELECT content_fingerprint,voucher_fingerprint FROM import_voucher_sources WHERE account_set_id=? ORDER BY source_voucher_id').all(sets[0]), original); });
   for (const [label, mutate, pattern] of [
     ['unknown shape', x => { x.auxiliaryAppendix.path = 'forbidden'; }, /aux_import_invalid/],
@@ -114,7 +143,7 @@ try {
   check('entity name and active edits cause old appendix replay conflict', () => {
     const entity = X.listAuxiliaryEntities(db, { accountSetId: sets[0], kind: 'party' })[0];
     for (const change of [{ name: 'Edited synthetic name' }, { active: false }]) {
-      db.exec('BEGIN'); try { X.updateAuxiliaryEntity(db, { accountSetId: sets[0], entityId: entity.id, reason: 'synthetic state test', ...change }); assert.throws(() => IM.importIncremental(inputs[0]), /replay_state_conflict/); } finally { db.exec('ROLLBACK'); }
+      try { X.updateAuxiliaryEntity(db, { accountSetId: sets[0], entityId: entity.id, reason: 'synthetic state test', ...change }); assert.throws(() => IM.importIncremental(inputs[0]), /replay_state_conflict/); } finally { X.updateAuxiliaryEntity(db,{accountSetId:sets[0],entityId:entity.id,name:entity.name,active:!!entity.active,reason:'restore synthetic state'}); }
     }
   });
   // Inject only named write boundaries, retaining the real SQLite transaction and all real business calls.
@@ -140,10 +169,17 @@ try {
       } };
       return statement;
     };
-    try { assertRolledBack(input, /aux_import_failed/); assert.equal(fired, true); }
+    try { assertRolledBack(input, /aux_import_failed/,true); assert.equal(fired, true); }
     finally { db.prepare = prepare; }
     assert.equal(IM.getImportBatch(input.batchId).batch.status, 'failed');
     assert.equal(IM.importIncremental(input).ok, true);
+  });
+  for(const boundary of ['failed-metadata','audit-terminal'])check('aux execution '+boundary+' fault preserves pending and zero partial failure records',()=>{
+   const input=fixture('atomic-'+boundary),operationId='aux-atomic-'+boundary,prepare=db.prepare.bind(db);let bodyFault=false,terminalFault=0;
+   db.function('aux_failure_marker',()=>{terminalFault++;return 0;});
+   db.exec(boundary==='failed-metadata'?"CREATE TEMP TRIGGER fault_aux_i BEFORE INSERT ON import_batches WHEN NEW.status='failed' BEGIN SELECT aux_failure_marker();SELECT RAISE(ABORT,'synthetic');END":"CREATE TEMP TRIGGER fault_aux_i BEFORE INSERT ON audit_events WHEN NEW.action='import.create' BEGIN SELECT aux_failure_marker();SELECT RAISE(ABORT,'synthetic');END");
+   const before=auditSnapshot();db.prepare=sql=>/INSERT INTO aux_entities/.test(sql)?{run(){bodyFault=true;throw Error('synthetic aux body failure');}}:prepare(sql);
+   try{assert.throws(()=>C.withRequestMetadata({operationId},()=>IM.importIncremental(input)),e=>e.code==='audit_unavailable'&&C.operationErrorEvidence(e)?.applied==='unknown');assert.equal(bodyFault,true);assert.equal(terminalFault,1);const after=auditSnapshot(),ops=after.audit_operations.filter(o=>o.operation_id===operationId);assert.equal(ops.length,1);assert.equal(ops[0].state,'pending');assert.deepEqual({...after,audit_operations:after.audit_operations.filter(o=>o.operation_id!==operationId)},before);const frozen=snapshot();assert.throws(()=>C.withRequestMetadata({operationId},()=>IM.importIncremental(input)),e=>e.code==='audit_operation_pending');assert.equal(snapshot(),frozen);}finally{db.prepare=prepare;db.exec('DROP TRIGGER fault_aux_i');}
   });
   const legacy = fixture('legacy-late'); delete legacy.auxiliaryAppendix;
   legacy.payload.vouchers = [{ sourceVoucherId: 'twins', period: '2025-12', date: '2025-12-01', number: 1,
@@ -156,7 +192,7 @@ try {
   late.auxiliaryAppendix.entries[0].actualEntryId = twins[1].entryId;
   late.auxiliaryAppendix.entries.push({ sourceVoucherId: 'twins', sourceEntryId: 'unallocated-credit', actualEntryId: X.listAuxiliaryEntries(db, { accountSetId: legacySet }).find(e => e.code === '5001').entryId, allocations: [] });
   assert.equal(IM.importIncremental(late).auxiliary.status, 'applied');
-  check('explicit second equal row bound; first remains unallocated; replay unchanged', () => { assert.equal(X.entryPartyAllocation(db, { accountSetId: legacySet, entryId: twins[0].entryId }).status, 'unknown'); assert.equal(X.entryPartyAllocation(db, { accountSetId: legacySet, entryId: twins[1].entryId }).status, 'confirmed'); const before = snapshot(); assert.equal(IM.importIncremental(late).auxiliary.status, 'replayed'); assert.equal(snapshot(), before); });
+  check('explicit second equal row bound; first remains unallocated; replay unchanged', () => { assert.equal(X.entryPartyAllocation(db, { accountSetId: legacySet, entryId: twins[0].entryId }).status, 'unknown'); assert.equal(X.entryPartyAllocation(db, { accountSetId: legacySet, entryId: twins[1].entryId }).status, 'confirmed'); const before = snapshot(); assert.equal(observedReplay(()=>IM.importIncremental(late)).auxiliary.status, 'replayed'); });
   check('new request cannot overwrite existing/manual allocation', () => { const x = clone(late); x.auxiliaryAppendix.requestId = 'overwrite'; x.auxiliaryAppendix.entities[0].existingId = X.listAuxiliaryEntities(db, { accountSetId: legacySet })[0].id; assertRolledBack(x, /allocation_exists/); });
   const extra = clone(late); extra.auxiliaryAppendix.requestId = 'extra'; extra.auxiliaryAppendix.entities[0].existingId = X.listAuxiliaryEntities(db, { accountSetId: legacySet })[0].id;
   extra.auxiliaryAppendix.entries[0].sourceEntryId = 'explicit-first-twin'; extra.auxiliaryAppendix.entries[0].actualEntryId = twins[0].entryId;
@@ -178,11 +214,11 @@ try {
   });
   check('source unposting refuses replay and re-post restores same identity', () => { const vid = twins[0].voucherId; A.unpostVoucher(legacySet, vid); assert.equal(IM.importIncremental(late).ok, false); A.postVoucher(legacySet, vid); assert.equal(IM.importIncremental(late).ok, true); });
   check('closed source and later period reject appendix', () => { const vid = twins[0].voucherId; A.carryForwardProfit(legacySet, '2025-12', { yearEnd: true }); A.setPeriodStatus(legacySet, '2025-12', 'closed'); assert.throws(() => IM.importIncremental(late), /aux_period_closed/); A.setPeriodStatus(legacySet, '2025-12', 'open'); A.ensurePeriod(legacySet, '2026-01'); db.prepare("UPDATE periods SET status='closed' WHERE account_set_id=? AND period='2026-01'").run(legacySet); assert.throws(() => IM.importIncremental(late), /later_period_closed/); db.prepare("UPDATE periods SET status='open' WHERE account_set_id=? AND period='2026-01'").run(legacySet); assert.equal(db.prepare('SELECT status FROM vouchers WHERE id=?').get(vid).status, 'posted'); });
-  check('two connections contention performs no partial writes', () => { const other = new DatabaseSync(dbPath); const before = snapshot(); try { other.exec('BEGIN IMMEDIATE'); assert.throws(() => IM.importIncremental(fixture('lock')), /aux_import_busy/); } finally { other.exec('ROLLBACK'); other.close(); } assert.equal(snapshot({ audit: false }), JSON.stringify(JSON.parse(before).filter(([name]) => name !== 'import_batches'))); });
-  check('caller-owned transaction returns staged; rollback removes core and appendix', () => { const input = fixture('nested'), before = snapshot(); db.exec('BEGIN'); try { const result = IM.importIncremental(input); assert.equal(result.status, 'staged'); assert.equal(result.durability, 'pending_outer_commit'); assert.equal(result.auxiliary.status, 'staged'); } finally { db.exec('ROLLBACK'); } assert.equal(snapshot(), before); });
-  check('completed core with new appendix respects caller savepoint durability', () => {
+  check('two connections contention performs no partial writes', () => { const other = new DatabaseSync(dbPath); const before = snapshot(); try { other.exec('BEGIN IMMEDIATE'); assert.throws(() => IM.importIncremental(fixture('lock')), e=>e.code==='audit_admission_busy'); } finally { other.exec('ROLLBACK'); other.close(); } assert.equal(snapshot({ audit: false }), JSON.stringify(JSON.parse(before).filter(([name]) => name !== 'import_batches'))); });
+  check('caller-owned transaction cannot authorize import and remains unchanged', () => { const input = fixture('nested'), before = snapshot(); db.exec('BEGIN'); try { assert.throws(()=>IM.importIncremental(input),e=>e.code==='audit_transaction_conflict');assert.equal(db.isTransaction,true);assert.equal(snapshot(),before); } finally { db.exec('ROLLBACK'); } assert.equal(snapshot(), before); });
+  check('completed core new appendix cannot inherit caller transaction authority', () => {
     const x = clone(extra); x.auxiliaryAppendix.requestId = 'late-nested'; x.auxiliaryAppendix.entries = [];
-    const before = snapshot(); db.exec('BEGIN'); try { const result = IM.importIncremental(x); assert.equal(result.status, 'staged'); assert.equal(result.durability, 'pending_outer_commit'); assert.equal(result.auxiliary.status, 'staged'); } finally { db.exec('ROLLBACK'); } assert.equal(snapshot(), before);
+    const before = snapshot(); db.exec('BEGIN'); try { assert.throws(()=>IM.importIncremental(x),e=>e.code==='audit_transaction_conflict');assert.equal(db.isTransaction,true);assert.equal(snapshot(),before); } finally { db.exec('ROLLBACK'); } assert.equal(snapshot(), before);
   });
   check('saved mapping detects ID deletion/rebuild after explicit allocation removal', () => {
     const entry = twins[1], allocations = X.entryPartyAllocation(db, { accountSetId: legacySet, entryId: entry.entryId }); assert.equal(allocations.status, 'confirmed');
@@ -203,7 +239,7 @@ try {
   assert.equal(continued.code, 0, continued.stderr); assert.equal(continued.closed, true); console.log(continued.stdout.trim());
   for (const boundary of ['begin-after', 'commit-after', 'rollback-before', 'release-after']) {
     const target = await LB.restoreNew({ backupDir: backup.backupDir, targetDir: join(root, 'unknown-' + boundary) }); assert.equal(target.ok, true);
-    const child = await runChild(['--input-type=module', '-e', `import assert from 'node:assert/strict';const {db}=await import(${JSON.stringify(dbUrl)});const I=await import(${JSON.stringify(moduleUrl)});const exec=db.exec.bind(db);let injected=false;const mode=${JSON.stringify(boundary)};if(mode==='release-after')exec('BEGIN');db.exec=function(sql){const hit=mode==='begin-after'?sql==='BEGIN IMMEDIATE':mode==='commit-after'?sql==='COMMIT':mode==='rollback-before'?sql==='ROLLBACK':sql.startsWith('RELEASE aux_');if(!injected&&hit){injected=true;if(mode!=='rollback-before')exec(sql);throw Error('synthetic unknown boundary');}return exec(sql);};if(mode==='rollback-before'){const prepare=db.prepare.bind(db);db.prepare=sql=>/INSERT INTO aux_entities/.test(sql)?{run(){throw Error('synthetic body failure');}}:prepare(sql);}try{assert.throws(()=>I.importIncremental(${JSON.stringify(fixture('unknown-' + boundary))}),/aux_commit_unknown/);assert.equal(injected,true);assert.throws(()=>I.importIncremental(${JSON.stringify(inputs[0])}),/aux_connection_quarantined/);console.log(mode+' quarantined no automatic retry');}finally{if(db.isTransaction)exec('ROLLBACK');db.close();}`], { env: { WORKBENCH_DATA_DIR: target.targetDir } });
+    const child = await runChild(['--input-type=module', '-e', `import assert from 'node:assert/strict';const {db}=await import(${JSON.stringify(dbUrl)});const I=await import(${JSON.stringify(moduleUrl)});const C=await import(${JSON.stringify(new URL('../server/local-audit-coordinator.mjs',import.meta.url).href)});const mode=${JSON.stringify(boundary)},input=${JSON.stringify(fixture('unknown-' + boundary))},exec=db.exec.bind(db);let injected=false,rollbackLost=false;const all=()=>Object.fromEntries(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,db.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()]));const before=all();db.exec=function(sql){if(mode==='release-after'&&injected&&sql==='ROLLBACK'){rollbackLost=true;throw Error('synthetic unknown outer rollback');}const hit=mode==='begin-after'?sql==='BEGIN IMMEDIATE':mode==='commit-after'?sql==='COMMIT':mode==='rollback-before'?sql==='ROLLBACK':sql.startsWith('RELEASE audit_body_');if(!injected&&hit){injected=true;if(mode!=='rollback-before')exec(sql);throw Error('synthetic unknown boundary');}return exec(sql);};if(mode==='rollback-before'){const prepare=db.prepare.bind(db);db.prepare=sql=>/INSERT INTO aux_entities/.test(sql)?{run(){throw Error('synthetic body failure');}}:prepare(sql);}try{let error;try{C.withRequestMetadata({operationId:'aux-unknown-'+mode},()=>I.importIncremental(input));}catch(e){error=e;}assert.equal(error?.code,'audit_commit_unknown');assert.equal(injected,true);if(mode==='release-after')assert.equal(rollbackLost,true);const proof=C.operationErrorEvidence(error);assert.equal(proof.applied,'unknown');assert.equal(proof.needsLocalReview,true);const after=all();for(const [name,rows] of Object.entries(before)){if(['audit_operations','audit_events'].includes(name))continue;assert.deepEqual(after[name],rows,name+' no partial business/failed metadata');}assert.deepEqual(after.audit_events,before.audit_events);const added=after.audit_operations.filter(o=>!before.audit_operations.some(old=>old.operation_id===o.operation_id&&old.database_instance_id===o.database_instance_id&&old.attempt===o.attempt));assert.equal(added.length,mode==='begin-after'?0:1);assert.deepEqual(after.audit_operations.filter(o=>!added.includes(o)),before.audit_operations);for(const op of added){assert.equal(op.state,'pending');assert.equal(op.operation_id,'aux-unknown-'+mode);assert.equal(op.attempt,1);assert.equal(op.database_instance_id,proof.receipt?.databaseInstanceId??before.audit_database_instances.find(i=>i.is_active===1).instance_id);}const frozen=JSON.stringify(all());assert.throws(()=>C.withRequestMetadata({operationId:'aux-unknown-'+mode},()=>I.importIncremental(input)),e=>e.code==='audit_unavailable');assert.equal(JSON.stringify(all()),frozen);console.log(mode+' exact audit unknown, pending retained, no automatic retry');}finally{if(db.isTransaction)exec('ROLLBACK');db.close();}`], { env: { WORKBENCH_DATA_DIR: target.targetDir } });
     assert.equal(child.code, 0, child.stderr); assert.equal(child.closed, true); console.log(child.stdout.trim());
   }
   console.log('auxiliary-import PASS ' + count + ' checks; actual CLI/restore/unknown children closed; fixtures retained');

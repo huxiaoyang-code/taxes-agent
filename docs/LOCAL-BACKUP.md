@@ -1,3 +1,15 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+R4不改备份产品，前轮备份与restore-new证据按原版本保留；本轮未重跑完整备份矩阵。短输出路径成功、长输出路径snapshot_failed限制仍按历史实证保留；restore-new不等于W4恢复分叉或路径重绑。
+
+现代默认库真实含business-audit2；bank/aux联合官方备份精确核组件name/version/独立表集与结构/内容摘要，恢复保audit四表/实例/原终态及金融来源关联。历史裸core3仍保其无audit的真实合同，不复制全库再删audit造历史。batch/snapshot的历史夹具按官方requiredTables的15张core/import真实SQL、行、序列和索引rowid顺序复制到全新目标，源只读；再显式安装audit0/1/2与batch1/2。379.23/68.59、837.19/1297.43及74.29、历史版本路径和故障矩阵均保留。restore-new仍不是W4恢复分叉/可续跑授权。
+
+## 2026-10-24 W2b 内容合同补充（候选）
+
+审计结构仍audit2，无DDL迁移。官方备份/verify/restoreNew/再次backup复用严格审计内容检查：旧receipt1按原精确字段只读，新receipt2仅增加typed resultRefs与resultDigest，未知版本、额外字段、错误digest格式/refs版型拒绝。历史对象删除不会抹掉committed事实；备份不授执行authorization，也不替代W4实例分叉与路径重绑。本轮新领域定点包含receipt2、pending、batch关联的官方roundtrip，原源不变；旧audit1/2攻击矩阵仍保留。
+
 > **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 候选组件合同（尚未管理验收 / PR / 合并）**：在已合 PR75 audit1/2 基础上，官方 registry 精确登记 local-batch1/2。core3/4 裸或bank1、core5裸/bank1/aux1/两者，各乘audit absent/1/2、batch absent/1/2；未知、漏报、半装或漂移拒绝。新增两套的48带batch组合和四安装顺序实际官方roundtrip通过。保护安装/只读v1/新实例绑定及限制见[批量合同](LOCAL-BATCH-CLI.md)和[交接](handoffs/LOCAL-07-CLI.md)。format仍1；manifest组件、table集、structureDigest/contentDigest/rows均从真实快照重算。历史支持不代表旧core可执行新业务，roundtrip不代表恢复副本安全续跑。下方尚未支持batch/audit或W2a待PR是历史时点，W2a实际PR75已合。

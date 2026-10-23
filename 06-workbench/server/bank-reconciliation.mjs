@@ -1,3 +1,7 @@
+import { assertBankPublicAdmission } from './bank-storage.mjs';
+import { hasActiveAuditExecution,deferBankImportFailure,auditConnectionQuarantined } from './local-audit-storage.mjs';
+import { runDomainOperation,operationErrorEvidence,copyDomainRequest } from './local-audit-coordinator.mjs';
+import { auditCanonicalDigest } from './local-audit.mjs';
 // bank-reconciliation.mjs — LOCAL-04 银行流水落库、持久对账、人工匹配与余额调节领域逻辑。
 //
 // 关键边界：
@@ -248,7 +252,7 @@ export function resolveBankScope(db, { accountSetId, bankAccountId, currency = n
  * 登记银行账户：显式 accountSetId + bankAccountId + sourceId + 银行存款叶子科目。
  * 同一账套同一叶子科目只允许绑定一个银行账户；同一 bankAccountId 的绑定不允许静默改写。
  */
-export function registerBankAccount(db, options = {}) {
+function registerBankAccountBody(db, options = {}) {
   const {
     accountSetId, bankAccountId, sourceId, glAccountCode,
     currency = "CNY", displayName = "", bankAccountNo = "", actor = "local-operator",
@@ -355,7 +359,7 @@ function scopeSummary(scope) {
  *  - 无稳定 ID：只按行指纹作为疑似重复信号；与既有流水同特征的行保存为待人工判定的歧义记录，
  *    不进入已确认流水；同一文件内的相同记录按来源行证据各自保留。
  */
-export function importBankBatch(db, options = {}) {
+function importBankBatchBody(db, options = {}) {
   const {
     accountSetId, bankAccountId, sourceId, batchId, period, csvText, mapping,
   } = options;
@@ -597,6 +601,10 @@ export function importBankBatch(db, options = {}) {
     // 只有「银行可自行开事务并确认回滚」的连接才能继续在独立事务里写失败审计：
     // 回滚未确认 / 状态未知时不得假称「失败已留痕」；调用方事务仍在进行时也不能把审计写进去
     //（那会跟调用方事务一起被提交 / 回滚，属于「误写 + 虚称已记录」），且不在那层事务里再开事务。
+    if(hasActiveAuditExecution(db)) {
+      deferBankImportFailure(db,e,{accountSetId:setId,bankAccountId:scope.account.bank_account_id,batchId:batch,sourceId:source,currency:'CNY',period,contentSha256:fileDigest,mappingFingerprint,normalizationVersion,errorCode:e.code??'import_failed',errorMessage:e.message});
+      e.auditRecorded=false;throw e;
+    }
     const connection = bankConnectionState(db);
     if (!connection.writable) {
       e.auditRecorded = false;
@@ -782,9 +790,9 @@ function txnView(txn, match = null) {
 /**
  * 流水查询：先核验该范围内已确认匹配的当前有效性（失效则保存事件并降级），再返回视图。
  */
-export function listTransactionsView(db, options = {}) {
+function listTransactionsViewBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
-  const refresh = refreshMatchStates(db, {
+  const refresh = refreshMatchStatesBody(db, {
     accountSetId: scope.setId,
     bankAccountId: scope.account.bank_account_id,
     persist: options.persistInvalidations !== false,
@@ -920,7 +928,7 @@ export function evaluateMatch(db, match) {
  * 重新核验范围内所有已确认匹配的当前有效性。
  * 失效时事务性保存匹配状态与审计事件（只写一次，不重复刷审计），并把旧的对账运行记录标记 stale。
  */
-export function refreshMatchStates(db, { accountSetId, bankAccountId, persist = true } = {}) {
+function refreshMatchStatesBody(db, { accountSetId, bankAccountId, persist = true } = {}) {
   const scope = resolveBankScope(db, { accountSetId, bankAccountId });
   // 内部完整判定：必须核验**全部**有效匹配，展示分页（默认 500）不得截断核验范围。
   const confirmed = listAllMatches(db, {
@@ -973,10 +981,10 @@ const MAX_TOLERANCE_DAYS = 31;
  * 列出某条银行流水的候选账务分录（只读；候选不是已匹配）。
  * 候选来自同一库内当前 posted 凭证的银行科目分录，日期窗口显式且有限（默认同日）。
  */
-export function listCandidates(db, options = {}) {
+function listCandidatesBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
   const transactionId = positiveInt(options.transactionId, "transaction_id_invalid", "流水 ID");
-  refreshMatchStates(db, { accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id });
+  refreshMatchStatesBody(db, { accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id });
   const txn = getTransaction(db, {
     accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id, transactionId,
   });
@@ -1157,14 +1165,14 @@ function loadEntryForConfirm(db, accountSetId, voucherId, entryId) {
  * 在事务内用最新账务快照复核：账套 / posted / 科目 / 方向 / 金额 / 日期窗口 / 期间一致，
  * 并靠数据库部分唯一索引保证同一流水、同一分录同时只被占用一次。
  */
-export function confirmMatch(db, options = {}) {
+function confirmMatchBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
   const transactionId = positiveInt(options.transactionId, "transaction_id_invalid", "流水 ID");
   const voucherId = positiveInt(options.voucherId, "voucher_id_invalid", "凭证 ID");
   const entryId = positiveInt(options.entryId, "entry_id_invalid", "分录 ID");
   const reason = requireReason(options.reason);
   const tolerance = boundedInt(options.dateToleranceDays ?? 0, 0, MAX_TOLERANCE_DAYS, "date_tolerance_invalid");
-  refreshMatchStates(db, {
+  refreshMatchStatesBody(db, {
     accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id,
   });
 
@@ -1319,9 +1327,9 @@ function matchView(db, match) {
   };
 }
 
-export function listMatchesView(db, options = {}) {
+function listMatchesViewBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
-  const refresh = refreshMatchStates(db, {
+  const refresh = refreshMatchStatesBody(db, {
     accountSetId: scope.setId, bankAccountId: scope.account.bank_account_id,
   });
   const statuses = options.status
@@ -1344,7 +1352,7 @@ export function listMatchesView(db, options = {}) {
  * 取消匹配：必须给理由；释放占用但保留原匹配、成员、确认与取消事件。
  * 重复取消幂等（不新增审计事件）。
  */
-export function cancelMatch(db, options = {}) {
+function cancelMatchBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
   const matchId = positiveInt(options.matchId, "match_id_invalid", "匹配 ID");
   const reason = requireReason(options.reason, "cancel_reason_required");
@@ -1401,7 +1409,7 @@ export function cancelMatch(db, options = {}) {
  *  - decision=distinct：确认「不同一笔」，新增流水并保留来源行证据。
  * 需理由；已判定的同一决定幂等返回，不同决定拒绝。
  */
-export function resolveAmbiguity(db, options = {}) {
+function resolveAmbiguityBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
   const ambiguityId = positiveInt(options.ambiguityId, "ambiguity_id_invalid", "歧义记录 ID");
   const decision = String(options.decision ?? "").trim();
@@ -1567,7 +1575,7 @@ export function listAmbiguitiesView(db, options = {}) {
  * 银行截止余额由操作者显式声明的对账单期初 / 期末 + 覆盖证据支持。
  * 输出四类未达项、两边调节后余额与差额；不生成或修改任何凭证。
  */
-export function reconcileBank(db, options = {}) {
+function reconcileBankBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
   const setId = scope.setId;
   const accountId = scope.account.bank_account_id;
@@ -1601,7 +1609,7 @@ export function reconcileBank(db, options = {}) {
     toInputCents(options.statementCloseCents, "statement_close_invalid"), "statementCloseCents",
   );
 
-  const refresh = refreshMatchStates(db, { accountSetId: setId, bankAccountId: accountId });
+  const refresh = refreshMatchStatesBody(db, { accountSetId: setId, bankAccountId: accountId });
 
   // ---- 账面：期初 + 截止日（含）全部历史 posted 银行分录 ----
   const openingRow = db.prepare(`SELECT debit, credit FROM opening_balances
@@ -1936,11 +1944,11 @@ function noteField(note) {
 }
 
 // ------------------------------------------------------------------ 状态
-export function getBankStatus(db, options = {}) {
+function getBankStatusBody(db, options = {}) {
   const scope = resolveBankScope(db, options);
   const setId = scope.setId;
   const accountId = scope.account.bank_account_id;
-  const refresh = refreshMatchStates(db, { accountSetId: setId, bankAccountId: accountId });
+  const refresh = refreshMatchStatesBody(db, { accountSetId: setId, bankAccountId: accountId });
   // 状态计数一律用 SQL 聚合（真实数量）；items 仍可保留展示分页边界（默认 200）。
   const batchCounts = countBatchesByStatus(db, { accountSetId: setId, bankAccountId: accountId });
   const batches = listBatches(db, {
@@ -2000,3 +2008,38 @@ export function readBankAudit(db, options = {}) {
   }));
   return { scope: scopeSummary(scope), events };
 }
+
+// Fixed public admissions include the real refresh side effects of query-shaped entries.
+function auditedBankCall(db,action,entry,body,options) {
+ try{return auditedBankCallBody(db,action,entry,body,options);}catch(error){
+  const fact=operationErrorEvidence(error);
+  if(fact?.applied==='unknown'&&auditConnectionQuarantined(db)) {error.code='bank_transaction_rollback_failed';error.message='事务回滚未确认，失败审计未写入；须核对本机现场';error.auditRecorded=false;error.auditFailure='事务回滚未确认，失败审计未写入';}
+  else if(error?.code==='bank_transaction_conflict'){error.auditRecorded=false;error.auditFailure='调用方事务仍在进行，本次失败审计未写入';}
+  throw error;
+ }
+}
+function auditedBankCallBody(db,action,entry,body,options) {
+ assertBankPublicAdmission(db);
+ options=copyDomainRequest(options,{bankStatementCents:true});
+ const setId=positiveInt(options.accountSetId,'account_set_id_invalid','账套 ID');
+ assertBankSchemaReady(db);if(!db.prepare('SELECT 1 FROM account_sets WHERE id=?').get(setId))throw bankError('account_set_not_found','账套不存在');
+ const request={...options,entry};for(const key of ['statementOpenCents','statementCloseCents'])if(typeof request[key]==='bigint')request[key]=request[key].toString();
+ let changed=false;
+ return runDomainOperation(db,{action,scope:{kind:'account_set',value:setId},request,classify:()=>changed?'succeeded':'no_change',refs:v=>{
+  const refs=options.bankAccountId?[{type:'bank_account_key',keyDigest:auditCanonicalDigest([options.accountSetId,options.bankAccountId])}]:[];
+  for(const [type,id] of [['bank_match',v?.match?.matchId],['bank_ambiguity',v?.ambiguity?.ambiguityId],['bank_reconcile_run',v?.reconcileRunId]])if(Number.isSafeInteger(id)&&id>0)refs.push({type,id});
+  for(const id of new Set(v?.transactionIds??[]))refs.push({type:'bank_transaction',id});
+  return refs;
+ }},()=>{const before=db.prepare('SELECT total_changes() n').get().n;const out=body(db,options);changed=db.prepare('SELECT total_changes() n').get().n!==before;return out;});
+}
+export function registerBankAccount(db,options={}) {return auditedBankCall(db,'bank.account.register','registerBankAccount',registerBankAccountBody,options);}
+export function importBankBatch(db,options={}) {return auditedBankCall(db,'bank.import','importBankBatch',importBankBatchBody,options);}
+export function refreshMatchStates(db,options={}) {options=copyDomainRequest(options,{bankStatementCents:true});if(options.persist===false)return refreshMatchStatesBody(db,options);return auditedBankCall(db,'bank.refresh','refreshMatchStates',refreshMatchStatesBody,options);}
+export function listTransactionsView(db,options={}) {return auditedBankCall(db,'bank.refresh','listTransactionsView',listTransactionsViewBody,options);}
+export function listCandidates(db,options={}) {return auditedBankCall(db,'bank.refresh','listCandidates',listCandidatesBody,options);}
+export function confirmMatch(db,options={}) {return auditedBankCall(db,'bank.match.confirm','confirmMatch',confirmMatchBody,options);}
+export function listMatchesView(db,options={}) {return auditedBankCall(db,'bank.refresh','listMatchesView',listMatchesViewBody,options);}
+export function cancelMatch(db,options={}) {return auditedBankCall(db,'bank.match.cancel','cancelMatch',cancelMatchBody,options);}
+export function resolveAmbiguity(db,options={}) {return auditedBankCall(db,'bank.ambiguity.resolve','resolveAmbiguity',resolveAmbiguityBody,options);}
+export function reconcileBank(db,options={}) {return auditedBankCall(db,'bank.reconcile','reconcileBank',reconcileBankBody,options);}
+export function getBankStatus(db,options={}) {return auditedBankCall(db,'bank.refresh','getBankStatus',getBankStatusBody,options);}

@@ -134,3 +134,10 @@ if (!voucherCols.includes("kind")) {
 // 先产生一致备份，再把新增结构放进迁移事务（见 import-storage.mjs）；
 // 每次真正升级都重新备份，启动时版本已达目标则不备份；迁移失败整体回滚并抛 migration_failed。
 export const importSchema = ensureImportSchema(db, { dataDir: DATA_DIR });
+
+// Module readiness is awaited once; all accounting/import exports remain synchronous.
+try {
+  const { installAuditSchema } = await import('./local-audit-storage.mjs');
+  const { randomUUID } = await import('node:crypto');
+  await installAuditSchema(db,{dbPath:DB_FILE,outDir:join(DATA_DIR,`audit-install-${randomUUID()}`)});
+} catch(error) { try { db.close(); } catch {} throw error; }

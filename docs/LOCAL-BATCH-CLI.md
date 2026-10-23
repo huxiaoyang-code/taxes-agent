@@ -1,3 +1,19 @@
+> **当前 W2b：29完整65独审接受，main0e新head待增量核证／PR（2026-10-24）**：BASE `0e89a2d107fd75ff18dc0998e89d96c3217baeb3`，[最新精确认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376168302)，原66／总65文件不增。五套上游补验已通过，尚未PR／合并；八任务6/8、税局真实0。当前证据与后续动作见[LOCAL06交接](handoffs/LOCAL-06-AUDIT.md)。
+
+以下保留R4阶段说明；最新main0e与已接受的29独审状态以页头交接为准。
+
+R4不扩大batch权限或锁能力，前轮父子审计、checkpoint和真实跨企渲染证据按原版本保留。本轮13原套＋1探针补验四个变化路径的影响，未把前轮50定点与四probe说成在新字节上全部重跑。W3b全入口资源锁/持久代次/20企两月19＋1与运行中备份、W4恢复分叉和路径重绑仍待后续。
+
+渲染待办按item公平轮转，保每item内原阶段顺序与原mapLimit、claim/fence/publish/计数合同；第一波可包含不同企业独立任务，不加等待/假时间/数据膨胀、不放松审计。该最小调度修复不等于已验20企业跨企并发，原C1/C2两企业实际区间已由root独立probe核证（parallel peak3跨企/thread交叠，serial peak1），W3b继续。
+
+E1/F2用真实afterStageCommit钩子核持久提交；事务内中断的E1b/E2/E3/E5保原业务/来源回滚、旧pending/op/attempt关联、resume/retry callback0和needs_review。快照仅允许job/items/stages/locks四张明确状态表变化，全部其它表/schema、sqlite_sequence、旧audit及未知表保持；不通过换attempt逃避未知。restore_pending夹具用真实合法audit子实例与batch新active绑定，父历史/绑定保留，不放宽产品instance predicate。H7显式只读拒未知库全零与默认导入可能初始化核心的事实分开记录，不承诺默认unknown整体零写。
+
+## 2026-10-24 W2b 最小原子接线候选
+
+在W3a严格batch2/ready/output/input绑定门之后，真实业务stage事务外先准备父及固定child pending；执行内核job/stage真实fence，业务、来源完成、父子审计及checkpoint同COMMIT，提交前再核owner/token/attempt。活能力下withFencedTransaction使用受控保存点。固定post名单在写锁内重新核对象绑定，动态未准备child拒绝。report worker与文件发布保事务外异步，仅已核元数据的publishing/published/recover步骤做短同步审计，不承诺SQLite与文件跨介质原子。
+
+stage/attempt与audit operation技术ID作真实关联，没有新增operation_id列。recover/reset/retry/claim增加attempt前先查旧attempt父/child/report pending，未知须needs_review，不能换ID重跑。已确认整体rollback后父子失败终态在固定失败事务中一起落库。此片两企业真实阶段/CSV与fence反例不代替W3b统一全入口锁/20企业故障矩阵，也不代替W4恢复分叉/ledger发布/路径重绑。
+
 > **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。

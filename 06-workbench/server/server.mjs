@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { withRequestMetadata,operationErrorEvidence } from './local-audit-coordinator.mjs';
 // server.mjs — 记账 + 报表 工作台 HTTP 服务（REST + Codex Agent 工具 + 静态网页）
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -14,7 +16,7 @@ import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSe
 import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
-import { BANK_ACTION_TO_TOOL, bankLocalDrafts } from "./bank-local-drafts.mjs";
+import { BANK_ACTION_TO_TOOL, bankLocalDrafts, BankDraftError } from "./bank-local-drafts.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 8787);
@@ -98,10 +100,11 @@ async function api(req, res, url, m) {
         const tool=BANK_ACTION_TO_TOOL[match[4]];
         if(!tool)return json(res,404,{error:"bank_draft_tool_invalid"});
         if(!b||Array.isArray(b)||Object.keys(b).length!==1||typeof b.draftRef!=="string") throw new ToolError("bank_draft_input_invalid");
+        res.setHeader('X-Workbench-Operation-Id',bankLocalDrafts.operationIdFor(id,b.draftRef,tool));
         value=await callAgentTool(tool,{accountSetId:id,draftRef:b.draftRef});
       }
       return json(res,200,value);
-    } catch(e) {const c=e?.code;const code=typeof c==="string"&&/^(bank_draft_|bank_local_)[a-z_]+$/.test(c)?c:"bank_local_operation_failed";return json(res,400,{error:code,message:code,details:null});}
+    } catch(e) {const audit=operationErrorEvidence(e);if(String(e?.code??'').startsWith('audit_'))return json(res,409,{error:e.code,...(audit??{applied:false,needsLocalReview:false})});const c=e?.code;const code=typeof c==="string"&&/^(bank_draft_|bank_local_)[a-z_]+$/.test(c)?c:"bank_local_operation_failed";return json(res,400,{error:code,message:code,details:null,...(audit??{})});}
   }
 
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/auxiliary\/([^/]+)$/))) {
@@ -118,10 +121,11 @@ async function api(req, res, url, m) {
       }
       return json(res, 200, await callAgentTool(tool, { ...b, accountSetId: id }));
     } catch (e) {
+      const audit=operationErrorEvidence(e);if(String(e?.code??'').startsWith('audit_'))return json(res,409,{error:e.code,...(audit??{applied:false,needsLocalReview:false})});
       const c = e?.code ?? e?.message;
       const code = typeof c === "string" && /^(aux_|account_set_|account_not_found$|later_)[a-z_]*$/.test(c) ? c : "aux_operation_failed";
       return json(res, /not_found$/.test(code) ? 404 : code === "aux_commit_unknown" ? 500 : 400,
-        { error: code, message: code, details: null });
+        { error: code, message: code, details: null,...(audit??{}) });
     }
   }
 
@@ -355,7 +359,8 @@ async function api(req, res, url, m) {
   if (m === "POST" && (match = p.match(/^\/agent\/tools\/([A-Za-z0-9_]+)$/))) {
     const name = match[1];
     try {
-      return json(res, 200, await callAgentTool(name, await readBody(req)));
+      const body=await readBody(req);if(name.startsWith('bank_')&&body?.draftRef)res.setHeader('X-Workbench-Operation-Id',bankLocalDrafts.operationIdFor(body.accountSetId,body.draftRef,name));
+      return json(res, 200, await callAgentTool(name,body));
     } catch (e) {
       if (e instanceof ToolError) {
         return json(res, e.code === "unknown_tool" ? 404 : 400, {
@@ -366,7 +371,7 @@ async function api(req, res, url, m) {
       const msg = e?.message || String(e);
       const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
       return json(res, guard ? 409 : /not_found$/.test(msg) ? 404 : 400, {
-        error: guard ? e.code : msg, message: msg, tool: name, details: e?.details ?? null,
+        error: guard ? e.code : msg, message: msg, tool: name, details: e?.details ?? null,...(operationErrorEvidence(e)??{}),
       });
     }
   }
@@ -389,6 +394,7 @@ async function api(req, res, url, m) {
       return json(res, 400, { error: "request_body_invalid" });
     }
     try {
+      if(name.startsWith('bank_')&&body?.draftRef){try{res.setHeader('X-Workbench-Operation-Id',bankLocalDrafts.operationIdFor(body.accountSetId,body.draftRef,name));}catch(error){if(!(error instanceof BankDraftError))throw error;}}
       return json(res, 200, await callAgentModelTool(name, body));
     } catch {
       // 投影层之外的意外异常：固定码，绝不把 message / details / stack 带回模型通道。
@@ -461,7 +467,9 @@ const server = createServer(async (req, res) => {
     return json(res, 415, { error: "json_content_type_required", message: "工具调用必须使用 application/json" });
   }
   try {
-    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/agent/")) return await api(req, res, url, method);
+    const operationId=req.headers['x-workbench-operation-id']??randomUUID();
+    res.setHeader('X-Workbench-Operation-Id',operationId);
+    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/agent/")) return await withRequestMetadata({operationId,actor:'http',explicit:req.headers['x-workbench-operation-id']!==undefined},()=>api(req,res,url,method));
     return await serveStatic(res, url.pathname);
   } catch (e) {
     // 模型通道 / 本机引用通道只回固定码：外层原始 message / details 不得回传。
@@ -471,9 +479,12 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/finance-output/")) {
       return json(res, 500, { error: "finance_output_failed" });
     }
+    const audit=operationErrorEvidence(e);
+    if(String(e?.code??'').startsWith('audit_'))return json(res,409,{error:e.code,...(audit??{applied:false,needsLocalReview:false})});
     const guard = typeof e?.code === "string" && PERIOD_GUARD_CODES.has(e.code);
     return json(res, guard ? 409 : 400, {
       error: e.code || e.message || "operation_failed",
+      ...(operationErrorEvidence(e)??{}),
       details: e.details || null,
     });
   }

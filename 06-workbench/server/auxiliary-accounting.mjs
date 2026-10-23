@@ -1,3 +1,4 @@
+import { runDomainOperation,copyDomainRequest } from './local-audit-coordinator.mjs';
 // Auxiliary tuples point to the real GL; no parallel journal or inferred party identities.
 import { getAccountingProfile } from './accounting-profiles.mjs';
 import { assertPeriodMutable } from './period-end-controls.mjs';
@@ -20,14 +21,14 @@ function allocationRows(db,setId,target) { return target.entryId!==undefined ? d
 const tuple = row=>({projectId:row.project_id??null,departmentId:row.department_id??null,partyId:row.party_id??null,debitCents:row.debit_cents,creditCents:row.credit_cents});
 const normalizedRows = rows=>rows.map(tuple).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
 function writeOperation(db,setId,requestId,action,reason,before,after) { db.prepare('INSERT INTO aux_operations(account_set_id,request_id,action,reason,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)').run(setId,requestId,action,reason,JSON.stringify(before),JSON.stringify(after),new Date().toISOString()); }
-export function createAuxiliaryEntity(db,{accountSetId,kind,code,name,requestId}={}) {
+function createAuxiliaryEntityBody(db,{accountSetId,kind,code,name,requestId}={}) {
  return auxTransaction(db,()=>{context(db,accountSetId); fail(!dims.includes(kind),'aux_kind_invalid'); code=text(code,'aux_code_invalid'); name=text(name,'aux_name_invalid'); requestId=text(requestId,'aux_request_id_required');
  const data={kind,code,name}, fingerprint=auxFingerprint(data); const old=db.prepare('SELECT * FROM aux_receipts WHERE account_set_id=? AND request_id=?').get(accountSetId,requestId);
  if(old) { fail(old.fingerprint!==fingerprint,'aux_request_conflict'); const result=JSON.parse(old.result_json); const actual=db.prepare('SELECT * FROM aux_entities WHERE id=?').get(result.id); fail(!actual||actual.kind!==kind||actual.code!==code||actual.name!==name||actual.account_set_id!==accountSetId,'aux_replay_state_conflict'); return {...result,status:'replayed'}; }
  const result={id:Number(db.prepare('INSERT INTO aux_entities(account_set_id,kind,code,name) VALUES(?,?,?,?)').run(accountSetId,kind,code,name).lastInsertRowid),...data};
  db.prepare('INSERT INTO aux_receipts VALUES(?,?,1,?,?,?,?)').run(accountSetId,requestId,fingerprint,JSON.stringify({entityId:result.id}),JSON.stringify(result),new Date().toISOString()); writeOperation(db,accountSetId,requestId,'entity_create','create',null,result); return result;});
 }
-export function updateAuxiliaryEntity(db,{accountSetId,entityId,name,active,reason}={}) {
+function updateAuxiliaryEntityBody(db,{accountSetId,entityId,name,active,reason}={}) {
  return auxTransaction(db,()=>{context(db,accountSetId); const before=db.prepare('SELECT * FROM aux_entities WHERE id=? AND account_set_id=?').get(id(entityId),accountSetId); fail(!before,'aux_entity_not_found'); reason=text(reason,'aux_reason_required');
  const periods=db.prepare('SELECT DISTINCT COALESCE(v.period,s.start_period) period FROM aux_allocations a JOIN account_sets s ON s.id=a.account_set_id LEFT JOIN voucher_entries e ON e.id=a.entry_id LEFT JOIN vouchers v ON v.id=e.voucher_id WHERE a.account_set_id=? AND (a.project_id=? OR a.department_id=? OR a.party_id=?)').all(accountSetId,entityId,entityId,entityId);
  for(const ref of periods)mutable(db,accountSetId,ref.period);
@@ -40,7 +41,7 @@ export function listAuxiliaryEntries(db,{accountSetId,voucherId,period}={}) {
  s.source_system AS sourceSystem,s.enterprise_key AS enterpriseKey,s.source_voucher_id AS sourceVoucherId FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id LEFT JOIN import_voucher_sources s ON s.voucher_id=v.id
  WHERE v.account_set_id=? AND (? IS NULL OR v.id=?) AND (? IS NULL OR v.period=?) ORDER BY v.id,e.line_no,e.id`).all(accountSetId,voucherId??null,voucherId??null,period??null,period??null);
 }
-export function replaceAuxiliaryAllocations(db,{accountSetId,entryId,openingCode,allocations,requestId,reason}={}) {
+function replaceAuxiliaryAllocationsBody(db,{accountSetId,entryId,openingCode,allocations,requestId,reason}={}) {
  return auxTransaction(db,()=>{ const set=context(db,accountSetId); fail((entryId===undefined)===(openingCode===undefined),'aux_target_invalid');
  requestId=text(requestId,'aux_request_id_required'); reason=text(reason,'aux_reason_required'); fail(!Array.isArray(allocations)||allocations.length>1000,'aux_allocations_invalid');
  const target=entryId===undefined?{openingCode:text(openingCode,'aux_opening_code_required')}:{entryId:id(entryId)}; const row=targetRow(db,accountSetId,target);
@@ -86,6 +87,14 @@ export function auxiliaryLedger(db,{accountSetId,period,code,groupBy=dims}={}) {
  const sums=Object.fromEntries(['opening','debit','credit','closing','debitBalance','creditBalance'].map(k=>[k,centsToNumber(groups.reduce((s,g)=>s+storedCents(g[k]),0n))]));
  return {accountSetId,period,groupBy,groups,totals:sums};
 }
-export function setAuxiliaryRequirement(db,{accountSetId,code,project=false,department=false,party=false,reason}={}) {
+function setAuxiliaryRequirementBody(db,{accountSetId,code,project=false,department=false,party=false,reason}={}) {
  return auxTransaction(db,()=>{const set=context(db,accountSetId); mutable(db,accountSetId,set.start_period); reason=text(reason,'aux_reason_required'); for(const value of [project,department,party]) fail(typeof value!=='boolean','aux_requirement_invalid'); fail(!db.prepare('SELECT 1 FROM accounts WHERE account_set_id=? AND code=?').get(accountSetId,code),'account_not_found'); const before=db.prepare('SELECT * FROM aux_requirements WHERE account_set_id=? AND code=?').get(accountSetId,code)??null; db.prepare('INSERT INTO aux_requirements VALUES(?,?,?,?,?) ON CONFLICT(account_set_id,code) DO UPDATE SET project=excluded.project,department=excluded.department,party=excluded.party').run(accountSetId,code,Number(project),Number(department),Number(party)); writeOperation(db,accountSetId,'requirement:'+code,'requirement_set',reason,before,{code,project,department,party}); return {code,project,department,party}; });
 }
+
+export function createAuxiliaryEntity(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.entity.create',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:v=>[{type:'aux_entity',id:v.id}]},()=>createAuxiliaryEntityBody(db,options));}
+
+export function updateAuxiliaryEntity(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.entity.update',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:v=>[{type:'aux_entity',id:v.id}]},()=>updateAuxiliaryEntityBody(db,options));}
+
+export function replaceAuxiliaryAllocations(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.allocations.replace',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:()=>options.entryId?[{type:'voucher_entry',id:options.entryId}]:[]},()=>replaceAuxiliaryAllocationsBody(db,options));}
+
+export function setAuxiliaryRequirement(db,options={}) {options=copyDomainRequest(options);return runDomainOperation(db,{action:'aux.requirement.set',scope:{kind:'account_set',value:options.accountSetId},request:options,refs:()=>options.entryId?[{type:'voucher_entry',id:options.entryId}]:[]},()=>setAuxiliaryRequirementBody(db,options));}

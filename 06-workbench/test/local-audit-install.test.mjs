@@ -19,7 +19,7 @@ export async function fresh({version=5,audit=2,bank=false,aux=false,journal='del
   for(const [suffix,amount] of [['one',9.79],['two',28.63]]){const id=A.createAccountSet({name:'Synthetic '+suffix,start_period:'2026-01',profileId:'small-2011-basic-v1',enterprise:{enterpriseKey:'AUDIT-SYNTH-'+suffix,enterpriseName:'Synthetic '+suffix}}).id;A.setOpeningBalances(id,[{code:'1002',debit:amount},{code:'3001',credit:amount}]);}
   return db.prepare('SELECT path FROM schema_backups ORDER BY id LIMIT 1').get().path;}finally{db.close();}})();
  const initial=await init,dir=join(ROOT,randomUUID());fs.mkdirSync(dir);plain(dir);const file=join(dir,'workbench.db');
- if(version===5)fs.copyFileSync(join(ROOT,'seed','workbench.db'),file);else {fs.copyFileSync(initial,file);const S=await import('../server/import-storage.mjs'),d=new DatabaseSync(file);try{S.ensureImportSchema(d,{dataDir:dir,targetVersion:version});}finally{d.close();}}
+ if(version===5)cloneSyntheticCore(join(ROOT,'seed','workbench.db'),file);else {fs.copyFileSync(initial,file);const S=await import('../server/import-storage.mjs'),d=new DatabaseSync(file);try{S.ensureImportSchema(d,{dataDir:dir,targetVersion:version});}finally{d.close();}}
  const db=new DatabaseSync(file);db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0');db.exec('PRAGMA journal_mode='+journal);
  const h={db,file,dir,closed:false,close(){if(!this.closed){db.close();this.closed=true;console.log('DB actualclose '+file);}}};
  try {
@@ -28,6 +28,23 @@ export async function fresh({version=5,audit=2,bank=false,aux=false,journal='del
   if(audit===1)legacy(db);else if(audit===2)await LS.installAuditSchema(db,{dbPath:file,outDir:join(dir,'before-audit')});
   return h;
  }catch(e){h.close();throw e;}
+}
+// A new historical core fixture has no audit component. The original audited seed
+// remains read-only; financial rows/IDs/sequences and actual index creation order survive.
+function cloneSyntheticCore(source,file) {
+ const seed=new DatabaseSync(source,{readOnly:true}),target=new DatabaseSync(file);
+ try {
+  const before=seed.prepare("SELECT account_set_id,code,debit,credit FROM opening_balances ORDER BY account_set_id,code").all();
+  target.exec('PRAGMA foreign_keys=OFF');
+  const tables=seed.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB 'audit_*' ORDER BY rowid").all();
+  for(const table of tables)target.exec(table.sql);
+  for(const table of tables)for(const row of seed.prepare('SELECT * FROM "'+table.name+'" ORDER BY rowid').all()) {const keys=Object.keys(row);target.prepare('INSERT INTO "'+table.name+'" ('+keys.map(k=>'"'+k+'"').join(',')+') VALUES ('+keys.map(()=>'?').join(',')+')').run(...Object.values(row));}
+  for(const row of seed.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index','trigger','view') AND sql IS NOT NULL AND tbl_name NOT GLOB 'audit_*' AND name NOT GLOB 'idx_audit_*' ORDER BY rowid").all())target.exec(row.sql);
+  target.exec('DELETE FROM sqlite_sequence');for(const row of seed.prepare("SELECT name,seq FROM sqlite_sequence WHERE name NOT GLOB 'audit_*' ORDER BY rowid").all())target.prepare('INSERT INTO sqlite_sequence VALUES(?,?)').run(row.name,row.seq);
+  target.exec('PRAGMA foreign_keys=ON');
+  assert.deepEqual(target.prepare("SELECT account_set_id,code,debit,credit FROM opening_balances ORDER BY account_set_id,code").all(),before);
+  assert.equal(LS.inspectAuditSchema(target).state,'not_installed');
+ }finally{target.close();seed.close();console.log('core fixture source/target DB actualclose');}
 }
 export const input=(operationId='op-1',over={})=>({context:{operationId,actor:'domain',action:'voucher.post',attempt:1,...over},scope:{kind:'database',value:null},request:{amountCents:137}});
 export function historyEvent(db,{operationId='historic-1',...over}={}) {

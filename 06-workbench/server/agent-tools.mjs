@@ -1,3 +1,4 @@
+import { extractOperationMetadata,withRequestMetadata,operationErrorEvidence,bankOperationFailure } from './local-audit-coordinator.mjs';
 // agent-tools.mjs — `/agent/tools/<name>` 的工具注册表（MCP 的后端执行层）。
 //
 // 职责边界：只做「参数校验 + 编排既有领域函数 + 统一错误结构」，
@@ -139,6 +140,8 @@ async function bankCall(name, raw) {
     }
     return {accountSetId:payload.accountSetId,result,evidence:{durability:"committed",performed:performed===true,replayed:performed===false}};
   }); } catch(e) {
+    if(String(e?.code??'').startsWith('audit_'))throw e;
+    if(operationErrorEvidence(e))throw bankOperationFailure(e);
     const code=e instanceof BankDraftError?e.code:"bank_local_operation_failed";
     throw new ToolError(code,code);
   }
@@ -681,7 +684,7 @@ export async function callAgentModelTool(name, args = {}) {
 }
 
 /** 执行一次 /agent/tools/<name> 调用。未知工具抛 ToolError('unknown_tool')。 */
-export async function callAgentTool(name, args = {}) {
+async function callAgentToolBody(name, args = {}) {
   if (!name) throw new ToolError("tool_required", "缺少工具名");
   if (own(NOT_IMPLEMENTED, name)) {
     return { not_implemented: true, tool: name, hint: NOT_IMPLEMENTED[name] };
@@ -690,3 +693,5 @@ export async function callAgentTool(name, args = {}) {
   if (typeof handler !== "function") throw new ToolError("unknown_tool", `未知工具：${name}`);
   return handler(args && typeof args === "object" ? args : {});
 }
+
+export async function callAgentTool(name,args={}) {const extracted=extractOperationMetadata(args,{actor:'agent'});return withRequestMetadata(extracted.metadata,()=>callAgentToolBody(name,extracted.payload));}
