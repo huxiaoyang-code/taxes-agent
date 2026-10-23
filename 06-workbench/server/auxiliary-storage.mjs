@@ -99,6 +99,8 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
  if(state.present) { fail(state.problems.length,'aux_structure_invalid'); LB.assertSupportedDatabaseConnection(db); return {status:'already_installed',version:1}; }
  try { db.exec('BEGIN IMMEDIATE'); } catch(error) { if(db.isTransaction)throw unknown(db); throw error; }
  try {
+  try{LB.assertSupportedDatabaseConnection(db);}catch{fail(true,'aux_backup_failed');}
+  (await import('./local-batch-storage.mjs')).assertBatchMaintenanceReady(db);
   // The write reservation prevents committed source changes between the verified backup and DDL.
   const backup=await LB.createBackup({dbPath:path,outDir}); fail(!backup.ok,'aux_backup_failed');
   const verified=await LB.verifyBackup({backupDir:backup.backupDir});

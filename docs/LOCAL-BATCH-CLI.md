@@ -1,3 +1,7 @@
+> **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
+
+> **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
+
 > **2026-10-23 当前交付事实（覆盖下方旧状态，历史验收数字仍按原时点阅读）**：B1 已随 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 合并，已审最终源 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，管理者核对合并树与已审树一致。前一源码候选 `214a0c1e` 与 `37bcb286` 的整个 `06-workbench` 树相同；后者只收窄两份文档的归一化金额 / 指纹边界，且获独立审查接受。独立验证 CLI **11/11**、persistence **39/39** 加 **5 组 probe**；root 管理验证 persistence **39/39**。这些是 PR65 候选的既有证据，本次文档轮没有重跑。
 >
 > **只完成 B1，LOCAL-07 整包未完成**：现库组件安装、共享手工 / 批量互斥（W3），真实备份恢复后的实例分叉、输入 / 输出重绑与核验（W4）仍待实施。[Issue #51](https://github.com/huxiaoyang-code/youshu-fork/issues/51) 继续跟踪；不关闭总任务。已合测试的统一入口登记现纳入 LOCAL-08 候选（原59追加2形成61），最终全入口验证待 root。
@@ -452,3 +456,29 @@ B1 实测：`cli` **11 / 11**、`persistence` **35 / 35**（新增 H6），均 e
    「所有权标记的归属只认创建时的不可变身份」，同 nonce 字节相同的替换对象也是外部对象（测试 H8）。
 10. **报表验收口径**：见 §8。600 份产物的 PDF 只做结构 / 页数检查，PDF 文本金额与渲染是代表性抽样，
    不等同于 600 份逐份人工验算；PDF 字节依赖本机中文字体与元数据，重新生成视为新 attempt。
+
+## W3a：batch2 存储与显式安装合同
+
+在 `06-workbench` 执行 `node scripts/local-batch.mjs install --data-dir <已有数据目录> --out-dir <全新备份目录>`。此命令直接打开指定连接，await `installBatchSchema(db,{dbPath,outDir})`；安装前不 import 会迁移核心库的 db/runner。缺库、零字节与非产品库拒绝；outDir 必须本次全新，不能复用旧备份。start/resume 要求严格 batch2，v1 明确提示 install，零迁移写；v1 status/inspect/官方 backup 严格只读。
+
+`ensureBatchSchema` 仍同步：只校验已安装2，或持 guard 私有 fresh 回执一次原子新装2。原八表列、ID、字节和自增序列保留；只新增 database_instances、job_bindings、input_bindings 三张 local_batch_ 表及唯一 active partial 索引。batch UUID 独立持久；无 audit 时关联为 NULL，有 audit 时当前 active 映射必须一致，两边父链均严格核验。audit 后装只在受保护事务中填当前 batch active 的 NULL，不改历史 NULL/非NULL或 UUID。
+
+保护安装拒绝 caller BEGIN/SAVEPOINT且保留 caller 事务；校验 main/显式路径/全部祖先和普通单硬链接文件身份，持 BEGIN IMMEDIATE 写预约后再次严格核结构及维护事实，官方 create→verify→快照 bytes/hash/manifest 绑定→真实 held-source 核验后才 DDL/实例/绑定/版本→自检→COMMIT。活 PID、不确定 PID、running owner 无可核 PID 均拒绝；确认死亡仅允许迁移，原锁、阶段、fence 不推进。未知提交 / 回滚隔离连接，不假报确定回滚。
+
+createJob 在既有事务内同时写全部新 job/input 绑定；当前实例必须覆盖全部现有 job/input，历史实例无需补后来的任务。storage create/cancel/retry、CLI 写入口与 runner 入口先核 ready/完整且可用绑定，早于读源、创建输出目录或清 cancel 标志。restore_pending、disabled 及尚未支持的 saved_snapshot 写路径均拒绝，绝不回退历史路径。输入保存字节、manifest canonical JSON 与 DTO 原 JSON.stringify 摘要分别按原合同校验，合法货币小数保留；只读 validator 不访问源/输出外部文件。report 首次计划 hash 精确核验，已成功 attempt 绑定该次 evidence.snapshotHash；可变最新 DTO 不否定重试中断窗中的历史 attempt，业务/产物新鲜度仍由原 runner 验证。
+
+本片只证明 storage/gate 和备份忠实。restoreNew 仍复制实例/owner/路径；不代表副本可安全 resume。后续依次 W2b 业务 coordinator、W3b 共享全写锁/真实20企业/检查点、W4 receipt/分叉/重绑，再做 Windows/最终整链。
+
+### W3a 失败释放的保全取舍
+
+实际新UUID/同inode反例证实：受控子进程WAL提交合成12.39后退出，旧release为判断空库打开SQLite会改变SHM字节。经root接受，本片仅在storage调用已审guard的固定 `{preserveDatabase:true}`，guard源码未改、不加可传清理开关；仍释放自己的marker/创建fd，但保留所有DB/WAL/SHM字节，连本次空种子也保留供诊断。**失败后不能承诺自动清空或同路径可直接fresh重试**，未提供删除命令。
+
+新增真实child提交后actual close回归实际exit0：主库 `26d7467744a8a62c1beb99a28d0512306cdcde8e3836abbb793aee35325d56c7`、WAL `1a8f8c6828e24e30df0b9fb1e20ca9e9b14779bdfa2a7cd350a4fbd1cf227f29`、SHM `3939df1ca6d98b45659196f8a122481d2321f3f866efac2864b32f86285218d2` 前后完全相同，inode/dev不变，自己marker释放、二次release幂等。原H4/H8保留替换/外部对象断言，只更新受此取舍影响的空种子行为。
+
+### W3a 独审返工：报表行与失败收尾
+
+严格validator只读取DB保存事实：snapshot的job/item/period/kind/key须对应manifest中的实际report阶段，DTO/CSV按原保存字节核摘要；DTO自身声明的kind/period须与行一致。artifact须对应真实report stage、kind/format/code、确定artifactKey和受控安全相对路径，检查publishing/published/invalid枚举、正整数attempt不超过该stage attempt、MIME、字节数、线程/渲染时间形状。当前attempt的snapshot_hash必须等stage.input_hash，成功checkpoint还精确绑定自身evidence与outcome/bytes摘要。按真实persistSnapshot→claimStage顺序，report attempt>0必须保留自己的job/item/period/kind snapshot；成功阶段还必须保留自己的artifact，不能删除后改指别item来逃过。未claim pending0允许无两者；已claim running有snapshot但尚无artifact合法。
+
+最新snapshot可以覆盖；旧artifact可属于旧attempt、可为invalid重渲染中断或发布后checkpoint前的publishing。reportInputHash不含CSV摘要，因此历史/成功artifact按自己的checkpoint字节证据检查，不能强制等最新可变CSV；只有同attempt、running且publishing的当前发布窗核当前CSV bytes/hash。validator不读输入源或输出路径；产物/业务新鲜度仍由原runner检查。
+
+claim内部stamp失败也固定preserveDatabase，未登记分支也不删除本次零字节DB；不打开SQLite判空，不增加force/cleanup。实际fsync成功后注入EIO已证实4096字节种子及dev/ino不变、marker/db两个自有fd均EBADF、ownmarker释放；此内部catch只实测种子，不夸大为在该故障窗实测了WAL改写。

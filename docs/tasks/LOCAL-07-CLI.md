@@ -1,3 +1,7 @@
+> **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](../handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
+
+> **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
+
 > **2026-10-23 当前交付事实（覆盖下方旧状态，历史验收数字仍按原时点阅读）**：B1 已随 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 合并，已审最终源 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，管理者核对合并树与已审树一致。前一源码候选 `214a0c1e` 与 `37bcb286` 的整个 `06-workbench` 树相同；后者只收窄两份文档的归一化金额 / 指纹边界，且获独立审查接受。独立验证 CLI **11/11**、persistence **39/39** 加 **5 组 probe**；root 管理验证 persistence **39/39**。这些是 PR65 候选的既有证据，本次文档轮没有重跑。
 >
 > **只完成 B1，LOCAL-07 整包未完成**：现库组件安装、共享手工 / 批量互斥（W3），真实备份恢复后的实例分叉、输入 / 输出重绑与核验（W4）仍待实施。[Issue #51](https://github.com/huxiaoyang-code/youshu-fork/issues/51) 继续跟踪；不关闭总任务。已合测试的统一入口登记现纳入 LOCAL-08 候选（原59追加2形成61），最终全入口验证待 root。
@@ -317,3 +321,13 @@ W3 / W4 与最终 PR / 合并仍未交付，不预报审查或合并结论。
 - 现库组件安装 / 备份支持 / 共享手工入口互斥（W3）与 `createBackup → verifyBackup → restoreNew` /
   实例分叉 / 旧锁路径 / 报表重建（W4）仍未完成，不能把 B1 成功写成整包完成。
 - 最终整体验收需在 W3 / W4 完成后重跑旧结构迁移、恢复后新进程续跑，再由独立审查通过后合并。
+
+## W3a 实施候选与待验收
+
+Issue51 当前 claim 对应独立分支 `codex/huxiaoyang-code/local-07-w3a-batch2`，实际基线 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。本片为已获用户明确授权的唯一 fallback 执行者实现、自测；无员工 Git/外派/模型启动。源码范围为 batch storage/backup/CLI 与 runner readiness、bank/aux 后装 gate、audit 精确命名空间及受保护当前 NULL 关联；不改七阶段算法、actions、core、guard 或 package/lock。
+
+待 root 独立验证、全新未实施者审查精确冻结 head、PR/合并。当前只登记真实自测结果，见[交接](../handoffs/LOCAL-07-CLI.md)。原91注册项逐字原序保留，末尾仅追加两新套成93；本片未跑 full93/npm test。总 Issue 不关闭，LOCAL07 整包不标完成。
+
+W3a固定保留失败DB/WAL/SHM（含空种子），仅释放自有marker/fd；不承诺失败路径可直接fresh重试。实际sameinode回归与限制见交接，guard原件未改。
+
+独审返工验收项：snapshot/artifact实际manifest与阶段/路径/枚举/attempt/可证摘要关联；内部已登记/未登记claim失败均保全DB及种子，actual fsync后EIO和fd关闭。两P2初修新13/8/旧39全0，最后CSV历史增量仅新backup2组+原E4/G3/H6/H8四例0；待root最终十一套与完整新head复审，不合并e470。

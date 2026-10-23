@@ -25,6 +25,7 @@ const USAGE = `本机持久批量 CLI（LOCAL-07）
 
 用法：
   node scripts/local-batch.mjs help
+  node scripts/local-batch.mjs install --data-dir <目录> --out-dir <全新备份目录>
   node scripts/local-batch.mjs start  --data-dir <目录> --manifest <manifest.json> --output-dir <目录> [--job-key <键>]
   node scripts/local-batch.mjs status --data-dir <目录> --job-key <键>
   node scripts/local-batch.mjs resume --data-dir <目录> --job-key <键> [--use-saved-inputs]
@@ -39,9 +40,9 @@ const USAGE = `本机持久批量 CLI（LOCAL-07）
   - 输出文件只写入 --output-dir 之内（受控相对路径），从不覆盖已有无关文件。
 `;
 
-const COMMANDS = new Set(["help", "start", "status", "resume", "cancel", "retry"]);
+const COMMANDS = new Set(["help", "install", "start", "status", "resume", "cancel", "retry"]);
 const FLAGS = new Set([
-  "--data-dir", "--manifest", "--output-dir", "--job-key", "--item", "--period", "--stage",
+  "--out-dir", "--data-dir", "--manifest", "--output-dir", "--job-key", "--item", "--period", "--stage",
 ]);
 
 class CliError extends Error {
@@ -98,6 +99,7 @@ function requireJobKey(options) {
 
 function openDirect(dbPath, { readOnly }) {
   const db = new DatabaseSync(dbPath, { readOnly });
+  if(!readOnly)db.exec("PRAGMA foreign_keys=ON");
   try { db.exec("PRAGMA busy_timeout = 10000"); } catch { /* 只读连接可能不允许，忽略 */ }
   return db;
 }
@@ -134,14 +136,16 @@ function withBatchDatabase(dataDir, { readOnly }, fn) {
   const state = storage.inspectDataDir(dataDir);
   if (!state.exists) throw fail("database_not_found", 3, "数据目录中没有 workbench.db（不会被当成新库）");
   if (!state.readable) throw fail("database_unreadable", 3, "workbench.db 无法打开");
-  if (state.batchVersion !== storage.LOCAL_BATCH_SCHEMA_VERSION) {
-    throw fail("batch_schema_unavailable", 3, "数据库缺少本包批量结构（或结构版本不匹配）", {
+  if (!(readOnly && state.batchVersion===1) && state.batchVersion !== storage.LOCAL_BATCH_SCHEMA_VERSION) {
+    throw fail("batch_schema_unavailable", 3, "请先执行 install --data-dir <目录> --out-dir <全新备份目录>", {
       batchVersion: state.batchVersion, supported: storage.LOCAL_BATCH_SCHEMA_VERSION,
       dependency: "LOCAL-06 createBackup/verifyBackup",
     });
   }
   const db = openDirect(resolve(dataDir, DB_FILE), { readOnly });
   try {
+    storage.assertBatchSchema(db);
+    if(!readOnly)storage.assertBatchRunnable(db);
     return fn(db);
   } finally {
     try { db.close(); } catch { /* 连接关闭失败不影响结果 */ }
@@ -195,6 +199,15 @@ async function dispatch({ command, options }) {
     return 0;
   }
   const dataDir = requireDataDir(options);
+  if(command==='install') {
+    if(!options.outDir)throw fail('batch_install_requires_verified_backup',2,'install 必须显式提供 --out-dir 全新备份目录');
+    storage.assertDataDirIdentity(dataDir);const state=storage.inspectDataDir(dataDir);
+    if(!state.exists)throw fail('database_not_found',3,'数据目录中没有 workbench.db');
+    if(!state.readable||state.bytes===0)throw fail('batch_database_invalid',3,'现库不是有效工作台');
+    const db=openDirect(resolve(dataDir,DB_FILE),{readOnly:false});
+    try{const result=await storage.installBatchSchema(db,{dbPath:resolve(dataDir,DB_FILE),outDir:resolve(options.outDir)});emit({ok:true,command:'install',...result});return 0;}
+    finally{db.close();}
+  }
   if (command === "start") {
     if (!options.manifest) throw fail("manifest_required", 2, "start 必须显式提供 --manifest");
     const outputDir = options.outputDir ? resolve(options.outputDir) : null;
@@ -208,6 +221,8 @@ async function dispatch({ command, options }) {
     if (options.jobKey && options.jobKey !== validated.manifest.jobKey) {
       throw fail("job_key_mismatch", 2, "--job-key 与 manifest.jobKey 不一致");
     }
+    const init = storage.assertInitializable(dataDir);
+    if(!init.fresh)withBatchDatabase(dataDir,{readOnly:true},db=>storage.assertBatchRunnable(db));
     // 2) 展开阶段计划 + 一次读取全部输入快照（仍在数据库之外）。
     const { plans, inputs } = storage.buildPlan({
       manifest: validated.manifest, manifestDir: dirname(resolve(options.manifest)),
@@ -215,7 +230,6 @@ async function dispatch({ command, options }) {
     const manifestJson = storage.canonicalJson(validated.manifest);
     const manifestHash = storage.sha256(manifestJson);
     // 3) 数据目录只读检查：只有「显式新目录」或「已有目标批量结构」才允许继续。
-    const init = storage.assertInitializable(dataDir);
     // 新建目标必须取得本进程独占创建回执：布尔 fresh / 自造回执都不能证明本次亲手创建。
     let receipt = null;
     if (init.fresh) {
@@ -238,7 +252,7 @@ async function dispatch({ command, options }) {
         return loaded;
       });
     } finally {
-      // 无论成功与否都只清理本进程的标记；结构失败时允许稍后重试。
+      // 释放本进程标记与创建fd；固定保留DB/WAL/SHM。失败种子留供诊断，不保证同路径可直接fresh重试。
       if (receipt) storage.releaseFreshClaim(receipt);
     }
     const result = await runner.createAndRun({
@@ -272,7 +286,7 @@ async function dispatch({ command, options }) {
       results: result.results ?? [],
       limits: [
         "period-check / close 调用已合入的 LOCAL-02 A.periodEndCheck / setPeriodStatus；旧 check 成功不代替核心重新校验",
-        "既有库新增批量结构依赖 LOCAL-06 createBackup/verifyBackup；未接线时拒绝自动建表 / 升级",
+        "既有库须先显式 install，以官方一致备份保护 batch2 安装 / 升级",
         "新建目标必须通过本进程独占创建回执 + 页 1 nonce（创建 fd 写入）；布尔 fresh / 自造回执无效",
         "本 CLI 只保证批量 runner 之间按账套互斥，未接线手工 HTTP / Agent 入口",
       ],
@@ -318,10 +332,11 @@ async function dispatch({ command, options }) {
   const state = storage.inspectDataDir(dataDir);
   if (!state.exists) throw fail("database_not_found", 3, "数据目录中没有 workbench.db");
   if (state.batchVersion !== storage.LOCAL_BATCH_SCHEMA_VERSION) {
-    throw fail("batch_schema_unavailable", 3, "数据库缺少本包批量结构（或结构版本不匹配）", {
+    throw fail("migration_requires_backup", 3, "请先执行 install --data-dir <目录> --out-dir <全新备份目录>", {
       batchVersion: state.batchVersion, supported: storage.LOCAL_BATCH_SCHEMA_VERSION,
     });
   }
+  withBatchDatabase(dataDir,{readOnly:true},db=>storage.assertBatchRunnable(db));
   process.env.WORKBENCH_DATA_DIR = dataDir;
   const runner = await withStartupDatabase(dataDir, async () => {
     const loaded = await import("../server/local-batch-runner.mjs");

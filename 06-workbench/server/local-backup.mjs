@@ -42,6 +42,7 @@
 
 import { inspectAuditSchema, auditComponentContract, auditSchemaFacts, AUDIT_TABLES } from './local-audit-storage.mjs';
 import { AUDIT_COMPONENT } from './local-audit.mjs';
+import { LOCAL_BATCH_COMPONENT, LOCAL_BATCH_TABLES, inspectBatchSchema, batchComponentContract, batchSchemaFacts } from './local-batch-storage.mjs';
 import { AUX_TABLES, AUX_COMPONENT_STRUCTURE, inspectAuxiliarySchema } from './auxiliary-storage.mjs';
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
@@ -823,6 +824,7 @@ function describeContent(conn, tables) {
  * 注册表里的 v1 契约才被当成受支持组件。
  */
 const COMPONENT_REGISTRY = Object.freeze({
+  [LOCAL_BATCH_COMPONENT]: Object.freeze({name:LOCAL_BATCH_COMPONENT,version:2,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2]}}),
   [AUDIT_COMPONENT]: Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}}),
   auxiliary: Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}),
   bank: Object.freeze({
@@ -1571,14 +1573,16 @@ function inspectStructure(conn, { notProductCode }) {
   const component = inspectComponent(conn, tables);
   const auxiliary = inspectAuxiliarySchema(conn, version);
   const audit=inspectAuditSchema(conn);
+  const batch=inspectBatchSchema(conn);
   const effectiveStructure = component.present
     ? { ...structure, ...COMPONENT_REGISTRY.bank.structure.tables }
     : structure;
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !audit.present.includes(table)), effectiveStructure),
+    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !audit.present.includes(table) && !batch.present.includes(table)), effectiveStructure),
     ...auxiliary.problems,
     ...(audit.state==='not_installed'||audit.ok?[]:[{kind:'audit_structure_or_content_invalid'}]),
+    ...(batch.state==='not_installed'||batch.ok?[]:[{kind:'batch_structure_or_content_invalid'}]),
     ...component.problems,
     ...migrations.problems,
     ...backupRecordProblems(conn, version),
@@ -1590,7 +1594,7 @@ function inspectStructure(conn, { notProductCode }) {
       problems: problems.slice(0, MAX_DETAIL_ITEMS),
     });
   }
-  return { version, tables, migrations: migrations.versions, component, auxiliary, audit };
+  return { version, tables, migrations: migrations.versions, component, auxiliary, audit, batch };
 }
 
 /**
@@ -1632,6 +1636,13 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
     const audit=structure.audit, tables=auditComponentContract(audit.version).tables;
     components.push({name:AUDIT_COMPONENT,version:audit.version,tables,
       structureDigest:sha256Text(JSON.stringify(auditSchemaFacts(conn,audit.version))),
+      contentDigest:componentContentDigest({tables},content),
+      rows:tables.reduce((sum,t)=>sum+content.tables[t].rows,0)});
+  }
+  if(structure.batch.ok) {
+    const batch=structure.batch,tables=batchComponentContract(batch.version).tables;
+    components.push({name:LOCAL_BATCH_COMPONENT,version:batch.version,tables,
+      structureDigest:sha256Text(JSON.stringify(batchSchemaFacts(conn,batch.version))),
       contentDigest:componentContentDigest({tables},content),
       rows:tables.reduce((sum,t)=>sum+content.tables[t].rows,0)});
   }
@@ -1778,7 +1789,7 @@ function validateManifest(manifest) {
     for (const entry of manifest.components) {
       if (!isPlainObject(entry)) return { code: "manifest_invalid", details: { field: "components" } };
       if (!isNonEmptyString(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
-      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : COMPONENT_REGISTRY[entry.name];
+      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : entry.name===LOCAL_BATCH_COMPONENT && (entry.version===1||entry.version===2) ? batchComponentContract(entry.version) : COMPONENT_REGISTRY[entry.name];
       if (!contract) return { code: "component_unsupported", details: { component: entry.name } };
       if (seen.has(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
       seen.add(entry.name);
@@ -2348,7 +2359,7 @@ export function assertInstallableComponentSet(manifest,target) {
  if(!Array.isArray(entries)||entries.some(e=>e.name===target||!COMPONENT_REGISTRY[e.name]))throw expected('component_unsupported');
  const seen=new Set();
  for(const e of entries){if(seen.has(e.name))throw expected('component_unsupported');seen.add(e.name);
-  const contract=e.name===AUDIT_COMPONENT?auditComponentContract(e.version):COMPONENT_REGISTRY[e.name];
+  const contract=e.name===AUDIT_COMPONENT?auditComponentContract(e.version):e.name===LOCAL_BATCH_COMPONENT?batchComponentContract(e.version):COMPONENT_REGISTRY[e.name];
   if(e.version!==contract.version||JSON.stringify(e.tables)!==JSON.stringify(contract.tables))throw expected('component_unsupported');
  }
  if(entries.some(e=>e.name==='auxiliary')&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');

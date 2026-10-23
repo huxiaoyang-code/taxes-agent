@@ -1651,6 +1651,19 @@ function assertDatabaseHandleMatchesPath(db, absPath) {
   }
 }
 
+function bankInstallIdentity(db,file) {
+ assertDatabaseHandleMatchesPath(db,file);
+ for(let p=resolve(file);;p=dirname(p)) {
+  const st=lstatSync(p);if(st.isSymbolicLink()||!sameFilePath(realpathSync.native(p),p))throw bankError('database_handle_alias','安装库路径存在别名');
+  if(dirname(p)===p)break;
+ }
+ const st=statSync(file,{bigint:true});if(!st.isFile()||st.nlink!==1n)throw bankError('database_handle_alias','安装库不是独立普通文件');
+ return {dev:st.dev,ino:st.ino};
+}
+function assertBankInstallIdentity(db,file,before) {
+ const current=bankInstallIdentity(db,file);if(current.dev!==before.dev||current.ino!==before.ino)throw bankError('database_handle_replaced','安装库文件身份改变');
+}
+
 /** 当前库已登记的核心 schema 版本（迁移记录缺失时返回 null，不做推断）。 */
 function coreSchemaVersionOf(db) {
   if (!tableExists(db, "schema_migrations")) return null;
@@ -1797,6 +1810,7 @@ export async function ensureBankSchema(db, options = {}) {
   }
 
   // 已有库：备份 + DDL 必须在同一个排他写事务内。
+  const installIdentity=bankInstallIdentity(db,abs);
   const creation = from === 0 ? "existing-database" : "component-upgrade";
   const expectedSchemaVersion = coreSchemaVersionOf(db);
   const outDir = allocateBackupOutDir({ absPath: abs, dataDir });
@@ -1817,6 +1831,7 @@ export async function ensureBankSchema(db, options = {}) {
     });
   }
   try {
+    assertBankInstallIdentity(db,abs,installIdentity);
     // 取得写锁后重新核对连接与结构；其他连接在这段时间内无法提交新的业务写入。
     assertDatabaseHandleMatchesPath(db, abs);
     const current = bankSchemaContract(db);
@@ -1836,6 +1851,7 @@ export async function ensureBankSchema(db, options = {}) {
       });
     }
     assertBaseSchema(db);
+    (await import('./local-batch-storage.mjs')).assertBatchMaintenanceReady(db);
     backup = await runBackupGate({
       db,
       backupService,
@@ -1844,6 +1860,7 @@ export async function ensureBankSchema(db, options = {}) {
       version: BANK_SCHEMA_VERSION,
       expectedSchemaVersion,
     });
+    assertBankInstallIdentity(db,abs,installIdentity);
     const result = runComponentDdl(db, { from, creation, backup });
     db.exec("COMMIT");
     return result;

@@ -1,3 +1,7 @@
+> **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
+
+> **2026-10-23 W3a 候选组件合同（尚未管理验收 / PR / 合并）**：在已合 PR75 audit1/2 基础上，官方 registry 精确登记 local-batch1/2。core3/4 裸或bank1、core5裸/bank1/aux1/两者，各乘audit absent/1/2、batch absent/1/2；未知、漏报、半装或漂移拒绝。新增两套的48带batch组合和四安装顺序实际官方roundtrip通过。保护安装/只读v1/新实例绑定及限制见[批量合同](LOCAL-BATCH-CLI.md)和[交接](handoffs/LOCAL-07-CLI.md)。format仍1；manifest组件、table集、structureDigest/contentDigest/rows均从真实快照重算。历史支持不代表旧core可执行新业务，roundtrip不代表恢复副本安全续跑。下方尚未支持batch/audit或W2a待PR是历史时点，W2a实际PR75已合。
+
 > 2026-10-23 LOCAL06 W2a 实施候选（尚未管理验收/PR/合并）：官方备份format仍1，新增严格business-audit1/2注册，core3/4裸或bank1、core5裸/bank1/auxiliary1/两者组合均按实际结构/内容检查；batch仍拒。合法audit1历史digest/dedupe/实例保留，audit2含pending与技术receipt可忠实备份、verify、restoreNew及再次备份。restoreNew仅字节恢复，不分叉实例、不发布业务状态、不恢复执行权；pending副本只有needsReview。bank/aux后装复用官方registry资格门并保留原held-source核证。保护安装与协议见[审计合同](LOCAL-AUDIT.md)，实际定点/失败历史见[交接](handoffs/LOCAL-06-AUDIT.md)。LOCAL06/07、Windows W2与最终整链未完成，税局真实接入0。
 > **2026-10-23 当前兼容合同**：PR68 已合 core3/4/5 × bank0/1 的精确备份支持；本次 Issue64 A+B1 候选增加 **core5 + bank0/1 + auxiliary1**，待管理验收/独审/PR。无aux旧六组合保持；旧core带aux、aux2、audit/batch及未知组合拒绝。backup/verify/restore-new共用aux精确表/索引/FK/触发器与内容校验，安装先真实备份并绑定源连接；银行必须先于aux安装。接口及限制见 [辅助核算](LOCAL-AUXILIARY.md)。以下此前候选、未来v5和未支持aux表述按原日期作为历史；不能据此推断当前合同。
 
@@ -655,3 +659,5 @@ sha256（摘要自洽）仍拒绝且不生成恢复目标；健康库 `backup �
 6. **后续仍未实现**：原位（就地）恢复与回退编排、Windows 干净安装 / 启动 / 升级交付、
    审计接线、定时 / 批量入口；这些完成后本子包才能计入 LOCAL-06 整体交付，
    本文件**不声称** LOCAL-06 整体完成。
+
+W3a独审返工补充：snapshot/artifact合法性按实际manifest和保存阶段协议校验；report已claim必有own snapshot，成功必有own artifact/snapshot，删除自身记录及错指别item拒绝。未claim无记录和已claim尚无artifact合法。2026-10-24最后report-p2两组实际exit0，46个独立攻击×batch1/2共92例，inspect/source create/verify/restore/保护安装拒绝且逻辑/物理摘要不变、目标不创建、外部input/output读取0。保合法真实CSV/XLSX、发布前后checkpoint窗口、invalid旧attempt及最新DTO/CSV历史；不把严格备份当作产物文件或恢复执行权认证。旧42/84结果属于此前605源码。
