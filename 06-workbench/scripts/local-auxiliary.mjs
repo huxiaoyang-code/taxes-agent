@@ -9,7 +9,7 @@ const readOnly=new Set(['entities','entries','ledger','party']);
 let db;
 try {
  const [command,...rest]=process.argv.slice(2); if(command==='help'||command==='--help') {
-  console.log(JSON.stringify({ok:true,usage:'local-auxiliary.mjs <install|entities|entity-create|entity-update|entries|allocate|ledger|party|requirement> --db <existing-file> [--input <json-file>] [--out <new-backup-directory>]',scope:'core5 + bank0/1 + aux1; install bank before auxiliary; explicit post-import entry-ID binding; HTTP/Agent/MCP pending'}));
+  console.log(JSON.stringify({ok:true,usage:'local-auxiliary.mjs <install|entities|entity-create|entity-update|entries|allocate|ledger|party|requirement> --db <existing-file> [--input <json-file>] [--out <new-backup-directory>]',scope:'core5 + bank0/1 + aux1; install bank before auxiliary; explicit entry-ID binding and transactional auxiliaryAppendix v1; eight local HTTP/Agent/MCP tools; model summaries with localRef; install remains local CLI only'}));
  } else {
   if(command!=='install'&&!commands[command]) throw new Error('aux_usage');
   const options={}; for(let i=0;i<rest.length;i+=2) { if(!['--db','--input','--out'].includes(rest[i])||!rest[i+1]||options[rest[i]])throw new Error('aux_usage'); options[rest[i]]=rest[i+1]; }

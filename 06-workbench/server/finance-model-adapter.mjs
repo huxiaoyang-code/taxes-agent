@@ -19,6 +19,7 @@
 // 「先做所有可预验校验 → await 真实写一次 → 再做投影/引用」的顺序，包装阶段失败只降级，
 // 绝不把已发生的写报成失败，也绝不重复执行写。
 import { Buffer } from "node:buffer";
+import { types } from "node:util";
 import {
   FinanceOutputPolicy,
   OUTPUT_POLICY_VERSION,
@@ -106,7 +107,7 @@ function normalizeAccountSetIdValue(raw) {
   return id;
 }
 
-function snapshotArguments(args) {
+function snapshotArguments(args, { strictAccountScope = false } = {}) {
   let nodes = 0;
   let bytes = 0;
   const ancestors = new Set();
@@ -126,8 +127,8 @@ function snapshotArguments(args) {
       return value;
     }
     if (type === "boolean") return value;
-    if (type === "undefined") return undefined;
-    if (type !== "object") throw policyError("model_arguments_invalid");
+    if (type === "undefined") { if (strictAccountScope) throw policyError("model_arguments_invalid"); return undefined; }
+    if (type !== "object" || strictAccountScope && types.isProxy(value)) throw policyError("model_arguments_invalid");
     if (depth > MAX_ARG_DEPTH || ancestors.has(value)) throw policyError("model_arguments_invalid");
     ancestors.add(value);
     try {
@@ -170,6 +171,7 @@ function snapshotArguments(args) {
   // 两个别名只能有一个规范化值：冲突直接拒绝，避免预验与真实工具各读一个。
   const camel = prop(snapshot, "accountSetId");
   const snake = prop(snapshot, "account_set_id");
+  if (strictAccountScope && ["accountSetId", "account_set_id"].some(k => own(snapshot,k) && (prop(snapshot,k) === null || prop(snapshot,k) === ""))) throw policyError("account_set_id_invalid");
   const camelPresent = camel !== undefined && camel !== null && camel !== "";
   const snakePresent = snake !== undefined && snake !== null && snake !== "";
   delete snapshot.account_set_id;
@@ -244,6 +246,14 @@ for (const nodeId of FINANCE_QUERY_AVAILABLE) {
 //   create    —— 可能建新账套的写动作（setId 只能来自真实结果，缺失即未绑定）。
 const tool = (operation, category, scope) => Object.freeze({ operation, category, scope });
 export const PLAIN_MODEL_TOOLS = Object.freeze({
+  auxiliary_entities: tool("auxiliary_entities", "query", "account_set"),
+  auxiliary_entries: tool("auxiliary_entries", "query", "account_set"),
+  auxiliary_ledger: tool("auxiliary_ledger", "query", "account_set"),
+  auxiliary_party: tool("auxiliary_party", "query", "account_set"),
+  auxiliary_entity_create: tool("auxiliary_entity_create", "write", "account_set"),
+  auxiliary_entity_update: tool("auxiliary_entity_update", "write", "account_set"),
+  auxiliary_allocate: tool("auxiliary_allocate", "write", "account_set"),
+  auxiliary_requirement_set: tool("auxiliary_requirement_set", "write", "account_set"),
   finance_query_catalog: tool("finance_query_catalog", "static", "global"),
   update_plan: tool("update_plan", "static", "global"),
   account_context: tool("account_context", "context", "context"),
@@ -388,6 +398,10 @@ const hasPeriodEndCheckShape = (value) => isRecord(value) && hasText(value, "per
   && isPeriodEndCheckConsistent(value);
 
 const PLAIN_QUERY_SHAPES = Object.freeze({
+  auxiliary_entities: value => summarizeQueryResult("auxiliary_entities",value).summaryUnavailable === false,
+  auxiliary_entries: value => summarizeQueryResult("auxiliary_entries",value).summaryUnavailable === false,
+  auxiliary_ledger: value => summarizeQueryResult("auxiliary_ledger",value).summaryUnavailable === false,
+  auxiliary_party: value => summarizeQueryResult("auxiliary_party",value).summaryUnavailable === false,
   voucher_check: (value) => typeof prop(value, "ok") === "boolean"
     && hasNumber(value, "total_debit") && hasNumber(value, "total_credit") && Array.isArray(prop(value, "errors")),
   account_list: (value) => Array.isArray(prop(value, "items")),
@@ -451,6 +465,10 @@ function resolveCreateAccountSetId(operation, value) {
   if (operation === "account_set_create") return intOf(value, "id") ?? null;
   if (operation === "legacy_book_import") return intOf(created, "id") ?? null;
   if (operation === "book_import_incremental") {
+    const ids = [[created,"accountSetId"],[value,"accountSetId"],[prop(value,"batch"),"accountSetId"]]
+      .filter(([obj,key]) => prop(obj,key) !== undefined && prop(obj,key) !== null)
+      .map(([obj,key]) => { const id = intOf(obj,key); if (id === undefined) throw policyError("model_result_invalid"); return id; });
+    if (ids.some(id => id !== ids[0])) throw policyError("model_scope_mismatch");
     return intOf(created, "accountSetId")
       ?? intOf(value, "accountSetId")
       ?? intOf(prop(value, "batch"), "accountSetId")
@@ -510,6 +528,10 @@ const FINANCE_QUERY_DATA_SCOPE = Object.freeze({
 });
 // 普通只读工具里**同样带可信账套字段**的 DTO（列表行 account_set_id）。
 const PLAIN_QUERY_DATA_SCOPE = Object.freeze({
+  auxiliary_entities: value => [scopedIdOf(value,"accountSetId"), ...rowScopeIds(prop(value,"items"))],
+  auxiliary_entries: value => [scopedIdOf(value,"accountSetId")],
+  auxiliary_ledger: value => [scopedIdOf(value,"accountSetId")],
+  auxiliary_party: value => [scopedIdOf(value,"accountSetId")],
   account_list: (value) => rowScopeIds(prop(value, "items")),
   asset_list: (value) => rowScopeIds(value),
 });
@@ -958,6 +980,12 @@ export function createFinanceModelAdapter(options = {}) {
       accountSetId = readAccountSetId(args, { required: true });
       executed = true;
       const value = await Promise.resolve().then(() => executeRaw(toolName, args));
+      if (operation.startsWith("auxiliary_")) {
+        const id = scopedIdOf(value,"accountSetId");
+        const nested = prop(value,"result");
+        const nestedId = isRecord(nested) ? scopedIdOf(nested,"account_set_id") : undefined;
+        if (id !== accountSetId || nestedId !== undefined && nestedId !== accountSetId) return unboundWriteEnvelope(toolName,operation,summarizeWriteResult(operation,value),"scope_mismatch");
+      }
       const echoed = resolveEchoedAccountSetId(value);
       if (echoed !== null && echoed !== accountSetId) {
         // 写已经发生：如实报 applied，但不把引用绑到不一致的账套。
@@ -1039,7 +1067,7 @@ export function createFinanceModelAdapter(options = {}) {
     let snapshot;
     try {
       // 在任何 await / Promise 之前固定参数：预验与 executeRaw 看到同一份规范化值。
-      snapshot = snapshotArguments(args);
+      snapshot = snapshotArguments(args, { strictAccountScope: name.startsWith("auxiliary_") });
     } catch (error) {
       return failureFromError(error, { tool: name, operation: spec.operation, category: spec.category });
     }

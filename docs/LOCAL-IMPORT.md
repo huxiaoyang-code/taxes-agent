@@ -1,3 +1,5 @@
+ > 2026-10-23 B2b 当前候选：B2a 已随 PR70 实际合并；HTTP `/api/import/incremental` 与 Agent/MCP `book_import_incremental` 已显式透传顶层数据 `auxiliaryAppendix`，保留无附录旧行为与指纹。模型按真实双层状态/committed判断写入，核心回放仍可能新增辅助写；pending/unknown不假称持久成功，导入ref不臆造proof/实体明细。候选仍待管理验收/fresh独审/PR，实际证据统一见 [辅助交接](handoffs/LOCAL-03b.md)。下方旧候选状态保留追溯。
+
 > 2026-10-23 更新：双准则/企业身份部分已随 PR68 合并；辅助 A+B1 已随 PR69 合并，真实证据见 [LOCAL03a交接](handoffs/LOCAL-03a.md) 与 [辅助交接](handoffs/LOCAL-03b.md)。下方候选措辞保留作原阶段历史。当前 B2a 在领域层增加同事务辅助附录，已自测、尚待管理验收/独审/PR；真实 HTTP/Agent/MCP 透传与模型投影留 B2b。
 
 ## B2a 领域辅助附录

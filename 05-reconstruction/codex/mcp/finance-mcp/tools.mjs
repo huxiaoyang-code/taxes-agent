@@ -46,6 +46,20 @@ const ENTRIES = {
 
 const obj = (properties, required = []) => ({ type: "object", properties, required });
 
+// Strict appendix v1 data only; detailed business validation remains in B2a.
+const auxObject = (properties, required = []) => ({ ...obj(properties, required), additionalProperties: false });
+const AUX_ID = { type: "integer", minimum: 1 };
+const AUX_KIND = { type: "string", enum: ["project", "department", "party"] };
+const AUX_MONEY = { type: ["number", "string"] };
+const AUX_PARTS = { type: "array", maxItems: 1000, items: auxObject({ projectRef: {type:"string"}, departmentRef: {type:"string"}, partyRef: {type:"string"}, debit: AUX_MONEY, credit: AUX_MONEY }) };
+const AUX_APPENDIX = auxObject({ version: { type:"integer", enum:[1] }, requestId:{type:"string"}, reason:{type:"string"},
+  entities: {type:"array",maxItems:1000,items:auxObject({ref:{type:"string"},kind:AUX_KIND,code:{type:"string"},name:{type:"string"},existingId:AUX_ID},["ref","kind","code","name"])},
+  entries: {type:"array",maxItems:10000,items:auxObject({sourceVoucherId:{type:"string"},sourceEntryId:{type:"string"},actualEntryId:AUX_ID,allocations:AUX_PARTS},["sourceVoucherId","sourceEntryId","allocations"])},
+  openings: {type:"array",maxItems:1000,items:auxObject({openingCode:{type:"string"},allocations:AUX_PARTS},["openingCode","allocations"])},
+},["version","requestId","reason","entities","entries","openings"]);
+const auxSchema = (properties, required=[]) => auxObject({accountSetId:ACCOUNT_SET_ID,...properties},["accountSetId",...required]);
+const AUX_ALLOCATIONS = {type:"array",maxItems:1000,items:auxObject({projectId:AUX_ID,departmentId:AUX_ID,partyId:AUX_ID,debit:AUX_MONEY,credit:AUX_MONEY})};
+
 // ---------------------------------------------------------------- 工具清单
 const available = (name, description, inputSchema, origin = "upstream") =>
   ({ name, description, inputSchema, status: "available", origin });
@@ -56,6 +70,15 @@ const unavailable = (name, description, origin = "upstream") =>
 
 /** 后端已实现（含本轮正式注册的 4 个扩展工具与 11 个新增管理工具）。 */
 const BACKEND_TOOLS = [
+  available("auxiliary_entities", "辅助实体目录固定计数摘要；本机引用保留维度明细。", auxSchema({kind:AUX_KIND}), "local"),
+  available("auxiliary_entries", "查询真实总账分录ID与来源，模型仅行数及借贷合计。", auxSchema({voucherId:AUX_ID,period:PERIOD}), "local"),
+  available("auxiliary_ledger", "按三维事实聚合辅助账簿，模型返回期间及固定六金额合计。", auxSchema({period:PERIOD,code:{type:"string"},groupBy:{type:"array",items:AUX_KIND}},["period"]), "local"),
+  available("auxiliary_party", "核对真实分录往来分配，confirmed不代表银行对方已验证。", auxSchema({entryId:AUX_ID},["entryId"]), "local"),
+  available("auxiliary_entity_create", "显式创建辅助维度实体；仅committed证明持久写入。", auxSchema({kind:AUX_KIND,code:{type:"string"},name:{type:"string"},requestId:{type:"string"}},["kind","code","name","requestId"]), "local"),
+  available("auxiliary_entity_update", "有理由地编辑名称或启用状态，历史ID保持。", auxSchema({entityId:AUX_ID,name:{type:"string"},active:{type:"boolean"},reason:{type:"string"}},["entityId","reason"]), "local"),
+  available("auxiliary_allocate", "显式替换真实分录或期初完整分配；必须使用真实ID。", auxSchema({entryId:AUX_ID,openingCode:{type:"string"},allocations:AUX_ALLOCATIONS,requestId:{type:"string"},reason:{type:"string"}},["allocations","requestId","reason"]), "local"),
+  available("auxiliary_requirement_set", "显式设置科目辅助完整性要求，复用期间守卫。", auxSchema({code:{type:"string"},project:{type:"boolean"},department:{type:"boolean"},party:{type:"boolean"},reason:{type:"string"}},["code","reason"]), "local"),
+
   available("account_context", "列出账套（可选带出某账套的期间）。本地不保存“当前账套”，不返回选中状态。",
     obj({
       accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
@@ -105,6 +128,7 @@ const BACKEND_TOOLS = [
   available("book_import_incremental",
     "增量导入：以稳定规范企业身份 + 批次 ID 首次建账或向已有账套追加。产品口径是一家企业只有一个账套：同一 enterpriseKey 即使来自另一个来源也必须追加到已有账套，不得新建第二本；同一账套也不得绑定另一家企业。同批重试幂等、同来源凭证按内容指纹去重、内容修订 / 来源凭证被反过账或被删除 / 身份不符 / 封账期间 / 期初覆盖返回结构化冲突（不静默覆盖）。默认 dryRun=true 只预检，必须显式 dryRun=false 才落库。",
     obj({
+      auxiliaryAppendix: AUX_APPENDIX,
       dryRun: { type: "boolean", description: "缺省 true=仅预检（不写任何表）；显式 false=正式导入" },
       enterprise: ENTERPRISE, profileId: PROFILE_ID,
       paths: { type: "object", description: "本机四CSV路径，保留企业身份envelope" },
@@ -315,6 +339,7 @@ const LOCAL_TOOLS = [
  * 税务 / 目录工具与 skills 资源工具**不在**此列，仍走既有 `/agent/tools/*` 或本地资源读取。
  */
 export const MODEL_PLAIN_TOOL_NAMES = Object.freeze([
+  "auxiliary_entities", "auxiliary_entries", "auxiliary_ledger", "auxiliary_party", "auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set",
   "finance_query_catalog", "update_plan",
   "account_context", "finance_context_resolve", "finance_query",
   "voucher_check", "account_list", "opening_balance_get", "period_list",
@@ -327,6 +352,7 @@ export const MODEL_PLAIN_TOOL_NAMES = Object.freeze([
 
 /** 写动作子集：运输失败必须保守给 writeOutcome:unknown（不自动重试）。 */
 export const MODEL_WRITE_TOOL_NAMES = Object.freeze([
+  "auxiliary_entity_create", "auxiliary_entity_update", "auxiliary_allocate", "auxiliary_requirement_set",
   "voucher_create", "voucher_post", "voucher_unpost", "voucher_delete",
   "period_set_status", "opening_balance_set", "account_create",
   "asset_create", "asset_update", "depreciation_run", "carry_forward_profit",

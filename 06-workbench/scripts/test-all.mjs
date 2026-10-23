@@ -89,6 +89,17 @@ const steps = [
   { name: "enterprise-identity-mcp", file: join(MCP, "enterprise-identity-test.mjs"), cwd: MCP },
   { name: "accounting-standards-http", file: join(WORKBENCH, "test", "accounting-standards-http.test.mjs"), cwd: WORKBENCH },
   { name: "accounting-standards-mcp", file: join(MCP, "accounting-standards-test.mjs"), cwd: MCP },
+  // LOCAL-03b: append only; original 73 suites retain their exact order.
+  { name: "auxiliary-storage", file: join(WORKBENCH, "test", "auxiliary-storage.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-accounting", file: join(WORKBENCH, "test", "auxiliary-accounting.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-cli", file: join(WORKBENCH, "test", "auxiliary-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-core-integration", file: join(WORKBENCH, "test", "auxiliary-core-integration.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-backup-integration", file: join(WORKBENCH, "test", "auxiliary-backup-integration.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-bank-integration", file: join(WORKBENCH, "test", "auxiliary-bank-integration.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-import", file: join(WORKBENCH, "test", "auxiliary-import.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-http", file: join(WORKBENCH, "test", "auxiliary-http.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-model-boundary", file: join(WORKBENCH, "test", "auxiliary-model-boundary.test.mjs"), cwd: WORKBENCH },
+  { name: "auxiliary-mcp", file: join(MCP, "auxiliary-test.mjs"), cwd: MCP },
 ];
 const results = [];
 for (const step of steps) {
