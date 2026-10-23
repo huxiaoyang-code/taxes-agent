@@ -103,7 +103,7 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
   const backup=await LB.createBackup({dbPath:path,outDir}); fail(!backup.ok,'aux_backup_failed');
   const verified=await LB.verifyBackup({backupDir:backup.backupDir});
   fail(!verified.ok || verified.status!=='ok' || verified.summary.snapshotSha256!==backup.backupMeta.snapshotSha256 || verified.manifest.source.file!==basename(path) || verified.manifest.structure.schemaVersion!==5,'aux_backup_invalid');
-  fail((verified.manifest.components??[]).some(c=>c.name!=='bank'||c.version!==1),'aux_component_unsupported');
+  try {LB.assertInstallableComponentSet(verified.manifest,'auxiliary');} catch {fail(true,'aux_component_unsupported');}
   LB.assertBackupSourceConnection(db,verified.manifest);
   const after=fs.statSync(assertPlainPath(path),{bigint:true}); fail(before.dev!==after.dev||before.ino!==after.ino,'aux_database_replaced');
   for(const sql of AUX_DDL) db.exec(sql);

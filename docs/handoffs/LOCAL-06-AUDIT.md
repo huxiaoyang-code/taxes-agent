@@ -1,3 +1,26 @@
+## 2026-10-23 W2a 实施自测交接（未管理验收、未PR、未合并）
+
+基线为PR74实际merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`，Issue54仍OPEN。本片严格限定21路径窗口，实际改20文件；旧local-backup测试未改，bank/aux旧测试只运行未改。唯一授权fallback没有Git、没有自行派agent，也没有启动后端或税局服务。
+
+已实现：business-audit2保护安装/升级、完整audit1/2结构与内容检查、官方create/verify/restoreNew/again备份、audit先装后bank/aux四顺序、持久pending与私有单用授权、owner-only同步execute与技术receipt、失败真实ROLLBACK后留痕、unknown不自动重跑。格式1历史事件/实例/digest/dedupe保持，旧无路径安装和append/run/deferred/fork写旁路关闭。详细API见[当前审计合同](../LOCAL-AUDIT.md)。
+
+实际自测 cwd `06-workbench`，均用已核node执行：
+
+- `node test/local-audit-install.test.mjs`：24个core/组件/audit组合、四audit先装顺序、真实官方verify损坏与held写锁、错路径/句柄/私密missing路径、真实硬链接/junction拒绝、DDL回滚、BUSY及陈旧源绑定，最终exit0/actualclose。Windows对打开中的源文件实际rename EBUSY，记录系统阻止替换；不冒称产品已看见该换件。
+- `node test/local-audit-operation.test.mjs`：真实双连接/双子进程同key竞争callback总1；合成9.79加1.37后11.16、另一账套28.63不变且借贷平衡；单次/伪造/跨句柄/跨实例/关闭授权、outer事务零写且仍在、确定失败attempt、getter0/Proxy/Promise/thenable/伪error属性、真实COMMIT BUSY+ROLLBACK、审计RAISE及失败留痕也失败、callback事务丢失unknown、pending/业务中/提交前/提交后响应丢失四真实kill窗，exit0，所有自有child实际close。
+- `node test/local-audit-backup-integration.test.mjs`：WAL与非WAL、v1历史保全/pending忠实恢复而不授执行权、18项结构/内容攻击与CHECK/FK/rowid/UNIQUE四SQL重建攻击，源create/重算snapshot摘要后的verify/restoreNew均拒；漏报组件manifest及audit1/2只读CLI/缺库不创建均通过，最终exit0/actualclose。
+- `node test/local-audit.test.mjs`：原A覆盖迁为私有冻结DDL历史fixture的只读/摘要/分页/过滤/隐私/append-only与协议旁路拒绝，纯事务utility单独保留；补真实CLI stats/instances、非法命令/参数/缺db/init禁止、缺库不创建、坏version/column/trigger/instance所有只读命令拒绝且不repair，共8分组，最终单套exit0/actualclose。
+- 旧 `node test/local-backup.test.mjs` 29/29、`node test/bank-reconciliation.test.mjs` 43/43、`node test/auxiliary-storage.test.mjs` PASS，均exit0/主child实际close。前两套在同一授权审批环境补验真实links后通过，没有改旧断言。最后仅实例内容validator与新fixture扩充，按root要求未重复已绿旧套。
+
+必要审计4套各次运行前后13源/测试hash一致；最终install/integration追加断言各自前后hash也一致。新增模块与3测试末尾仅单LF、无BOM/尾随空白；11文件syntax check通过，package/lock仍与clean WT依赖安装manifest完全一致，没有npm/加依赖。原88登记逐字原序，仅末尾追加3至静态91，未跑full入口/npm test。
+
+失败历史保留：初次历史行比较因SQLite null-prototype与object spread测试差异失败；首次links沙箱EPERM、旧backup28/29与bank42/43失败，审批同命令真links补验通过；writable_schema攻击被默认defensive拒绝，改测试私有重建DDL而未关闭防护；新增合成小数使测试快照误用安全整数canonical失败，改测试快照JSON；后续WITHOUT ROWID攻击使快照工具ORDER BY rowid失败，移除测试快照对rowid的假设后该套通过。均非删除断言/伪造成功，失败夹具全保留。
+
+本机可核验日志run键：最终operation为 `1dbb5dec-d4d8-48e3-b723-337a5ac3855e`，最终旧audit为 `2c359514-b60e-4176-a3f6-570c5674f69b`；最终install含verify损坏为 `095e6477-797a-4268-8aac-67d5f226778f`；最终backup-integration为 `8682cda5-8d0c-4ec6-8623-831b73ad1d92`；旧backup/bank审批通过为 `951c17b4-ce94-4a1e-a8a4-d354164ebe06`；旧aux为 `1c674ce1-0c77-4b24-a1f6-6ef185418397`。本机忽略目录证据供root核验，不作为另一电脑恢复前提；最终文件SHA清单交管理者保存。
+
+未完：本片只是W2a候选。下一片先W3a batch1/2严格registry与保护升级，再W2b可信业务coordinator，随后W3b统一锁/真实批量链、W4恢复分叉、Windows W2与最终整链。restoreNew仍仅字节恢复，不fork实例/发布/续跑。LOCAL06/07仍未完成，原八包01/02/03/04/05/08为6/8，真实税局0；页面paste/filechooser仍未实操。等待root独立验收与全新未实施者独审，不写未发生的PR/merge。
+
+> 2026-10-23 LOCAL06 W2a 实施候选：基线PR74 merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`，尚未管理验收/独审/PR/合并。audit2保护安装、严格audit1/2官方备份、私有单次授权与技术回执及audit先装bank/aux顺序见[当前合同](../LOCAL-AUDIT.md)。本片不完成LOCAL06，业务coordinator/W3a batch registry/W3b统一锁与批量/W4恢复分叉/Windows与最终整链仍未完。原八包6/8、税局0。下方原A包为历史验收，不能代替本片定点。
 # 交接 · LOCAL-06 AUDIT（A 包）
 
 - 日期：2026-10-22（本机时间）

@@ -1,3 +1,5 @@
+> 2026-10-23 PR74 实际已合并：[PR74](https://github.com/huxiaoyang-code/youshu-fork/pull/74) 于 `2026-10-23T13:48:23Z` MERGED；已审 head `b3761706e9e4cf0d7e427ad6e1368e30998c3758`，merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`。Issue53 于13:48:24Z CLOSED。root 在父 cf284a0 完整88套全部 exit0、child实际close、29 hash同；最终只删除银行测试末尾一个LF，28文件hash同及diffcheck0，未重跑88。root独立两profile book2219.05/statement2202.05/adjusted2223.09、四类各1及真1分差/compute45435；fresh完整 b3761706 接受，无确认P1/P2，独立639.31/629.73/644.49及四类26.59/11.83/9.37/4.19、真1分差/compute17916、隔离/ref/query/反过账失效、提交后坏响应unknown同ref零重复、写后summary/ref失效保留applied/runId待核通过，DB/child实际close。01/02/03/04/05/08原范围 **6/8**；06/07、Windows W2及最终整链仍未完，税局真实接入0。页面paste/filechooser仍未实操，CLI真实文件及HTTP/MCP不能替代页面证据。LOCAL06 W2a正在实施，尚无新PR/验收。
+
 ## 2026-10-23 LOCAL04B 候选交付与恢复
 
 本片由负责人huxiaoyang-code下唯一获授权兜底实施员工实现，指定WT为local-04b-bank-entry、基线0eec7913be07dbfd8072976bbd2297d8ef05d687；员工不Git、不自审、不起其它agent/模型。A真实PR73结果紧随本节保留；B尚未提交/PR/合并。root最终决定原04是否关闭，Issue53仍OPEN。原整体仍01/02/03/05/08=5/8，04/06/07及最终整链/Windows W2未完，税局0。

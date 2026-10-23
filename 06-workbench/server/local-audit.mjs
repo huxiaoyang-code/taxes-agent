@@ -16,11 +16,12 @@
 // 接口清单见 docs/LOCAL-AUDIT.md §4；B / C 接线只允许用该清单，不猜内部实现。
 
 import { createHash, randomUUID } from "node:crypto";
+import { types as nodeTypes } from "node:util";
 
 /** 业务库内审计组件名（与 LOCAL-02 的全局 schema 版本相互独立）。 */
 export const AUDIT_COMPONENT = "business-audit";
 /** 审计组件自身结构版本；新增列 / 表必须新增迁移并递增版本。 */
-export const AUDIT_SCHEMA_VERSION = 1;
+export const AUDIT_SCHEMA_VERSION = 2;
 
 // ------------------------------------------------------------------ 固定词表
 /** 固定 action 词表（领域入口统一记账的粒度）。 */
@@ -137,6 +138,15 @@ export const AUDIT_REASON_CODES = Object.freeze([
   "audit_schema_newer",
   "audit_schema_install_failed",
   "audit_install_requires_verified_backup",
+  "audit_result_invalid",
+  "audit_operation_conflict",
+  "audit_operation_pending",
+  "audit_authorization_invalid",
+  "audit_transaction_conflict",
+  "audit_operation_protocol_required",
+  "audit_admission_busy",
+  "audit_backup_invalid",
+  "audit_backup_source_mismatch",
   "audit_database_missing",
   "audit_database_invalid",
   // 兜底（固定值，不是异常原文）
@@ -260,6 +270,7 @@ const CONTEXT_TARGET_FIELDS = Object.freeze([
 const CONTEXT_FIELDS = Object.freeze([
   "operationId",
   "parentOperationId",
+  "parentAttempt",
   "actor",
   "action",
   "attempt",
@@ -320,6 +331,14 @@ export function createOperationContext(raw = {}) {
     }
     out.parentOperationId = raw.parentOperationId;
   }
+  if (out.parentOperationId !== undefined) {
+    if (!Number.isSafeInteger(raw.parentAttempt) || raw.parentAttempt < 1 || raw.parentAttempt > 1_000_000) {
+      throw fail("audit_operation_invalid", { field: "parentAttempt" });
+    }
+    out.parentAttempt = raw.parentAttempt;
+  } else if (raw.parentAttempt !== undefined && raw.parentAttempt !== null) {
+    throw fail("audit_operation_invalid", { field: "parentAttempt" });
+  }
   if (!ACTORS.has(raw.actor)) throw fail("audit_operation_invalid", { field: "actor" });
   out.actor = raw.actor;
   if (!ACTIONS.has(raw.action)) throw fail("audit_operation_invalid", { field: "action" });
@@ -345,6 +364,7 @@ export function createChildOperation(context, { operationId, actor = context.act
     ...context,
     operationId,
     parentOperationId: context.operationId,
+    parentAttempt: context.attempt,
     actor,
     action,
     attempt,
@@ -647,3 +667,42 @@ export function runInTransaction(db, fn) {
     throw e;
   }
 }
+
+/** Canonical JSON for trusted, already validated requests. No coercion or Unicode rewriting. */
+export function canonicalAuditJson(value) {
+  const active = new Set();
+  const encode = (v) => {
+    if (v === null || typeof v === 'boolean' || typeof v === 'string') return JSON.stringify(v);
+    if (typeof v === 'number' && Number.isSafeInteger(v)) return JSON.stringify(v);
+    if (!v || typeof v !== 'object' || nodeTypes.isProxy(v) || active.has(v)) throw fail('audit_operation_invalid');
+    const proto = Object.getPrototypeOf(v);
+    if (!Array.isArray(v) && proto !== Object.prototype && proto !== null) throw fail('audit_operation_invalid');
+    if (Reflect.ownKeys(v).some(k => typeof k !== 'string' || (k!=='length' || !Array.isArray(v)) && !Object.getOwnPropertyDescriptor(v,k).enumerable)) throw fail('audit_operation_invalid');
+    active.add(v);
+    let result;
+    if (Array.isArray(v)) {
+      if (Object.keys(v).length !== v.length) throw fail('audit_operation_invalid');
+      result = '[' + Array.from({length:v.length}, (_,i) => {const d=Object.getOwnPropertyDescriptor(v,String(i));if(!d||!('value' in d))throw fail('audit_operation_invalid');return encode(d.value);}).join(',') + ']';
+    } else {
+      result = '{' + Object.keys(v).sort().map(k => {
+        const d = Object.getOwnPropertyDescriptor(v, k);
+        if (!('value' in d)) throw fail('audit_operation_invalid');
+        return JSON.stringify(k) + ':' + encode(d.value);
+      }).join(',') + '}';
+    }
+    active.delete(v);
+    return result;
+  };
+  return encode(value);
+}
+export const auditCanonicalDigest = value => sha256(canonicalAuditJson(value));
+export const AUDIT_TARGET_FIELDS = Object.freeze(['accountSetId','voucherId','period','jobId','itemId','stageId','correlation']);
+export function auditTargets(raw = {}) {
+  const checked = {};
+  checkTargets(raw, checked);
+  return Object.fromEntries(AUDIT_TARGET_FIELDS.map(k => [k, checked[k] ?? null]));
+}
+export function auditV2EventDigest(e) {
+  return auditCanonicalDigest(['audit-event-v2', [e.databaseInstanceId ?? '',e.occurredAt,e.action,e.outcome,e.resultCode,e.reasonCode,e.actor,e.operationId,e.parentOperationId ?? null,e.attempt,...AUDIT_TARGET_FIELDS.map(k => e[k] ?? null)]]);
+}
+export const auditV2DedupeKey = e => auditCanonicalDigest(['audit-terminal-v2',e.databaseInstanceId,e.operationId,e.attempt]);

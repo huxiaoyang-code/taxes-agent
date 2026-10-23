@@ -105,6 +105,10 @@ const steps = [
   { name: "bank-http", file: join(WORKBENCH, "test", "bank-http.test.mjs"), cwd: WORKBENCH },
   { name: "bank-ui-contract", file: join(WORKBENCH, "test", "bank-ui-contract.test.mjs"), cwd: WORKBENCH },
   { name: "bank-mcp", file: join(MCP, "bank-test.mjs"), cwd: MCP },
+  // LOCAL06 W2a: original 88 entries remain verbatim and in order.
+  { name: "local-audit-operation", file: join(WORKBENCH, "test", "local-audit-operation.test.mjs"), cwd: WORKBENCH },
+  { name: "local-audit-install", file: join(WORKBENCH, "test", "local-audit-install.test.mjs"), cwd: WORKBENCH },
+  { name: "local-audit-backup-integration", file: join(WORKBENCH, "test", "local-audit-backup-integration.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
