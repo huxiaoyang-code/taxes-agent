@@ -1,0 +1,98 @@
+{
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G11",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "sources": [
+    {
+      "sourceId": "purchase",
+      "kind": "invoice_csv",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-GOLDEN-G11",
+        "accountSetId": "1",
+        "period": "2026-Q1",
+        "currency": "CNY",
+        "unit": "yuan"
+      },
+      "path": "purchase.csv",
+      "mapping": {
+        "format": "invoice-summary-csv-v1",
+        "role": "purchase",
+        "dateFormat": "YYYY-MM-DD",
+        "redSign": "signed_negative",
+        "statusLabels": {
+          "blue": [
+            "blue"
+          ],
+          "red": [
+            "red"
+          ]
+        },
+        "columns": {
+          "number": "number",
+          "date": "date",
+          "sellerKey": "seller",
+          "buyerKey": "buyer",
+          "net": "net",
+          "tax": "tax",
+          "gross": "gross",
+          "status": "status"
+        }
+      }
+    },
+    {
+      "sourceId": "bank",
+      "kind": "bank_csv",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-GOLDEN-G11",
+        "accountSetId": "1",
+        "period": "2026-Q1",
+        "currency": "CNY",
+        "unit": "yuan"
+      },
+      "path": "bank.csv",
+      "mapping": {
+        "format": "bank-csv-v1",
+        "ownerEnterpriseKey": "SYNTHETIC-GOLDEN-G11",
+        "bankAccountId": "bank-A",
+        "dateFormat": "YYYY-MM-DD",
+        "amountMode": "amount_direction",
+        "currency": "CNY",
+        "negativeAmount": "reject",
+        "directionLabels": {
+          "inflow": [
+            "in"
+          ],
+          "outflow": [
+            "out"
+          ]
+        },
+        "columns": {
+          "date": "date",
+          "amount": "amount",
+          "direction": "direction",
+          "refId": "ref",
+          "summary": "summary"
+        }
+      }
+    },
+    {
+      "sourceId": "business",
+      "kind": "business_json",
+      "scope": {
+        "enterpriseKey": "SYNTHETIC-GOLDEN-G11",
+        "accountSetId": "1",
+        "period": "2026-Q1",
+        "currency": "CNY",
+        "unit": "yuan"
+      },
+      "path": "business.json",
+      "mapping": {
+        "format": "business-facts-json-v1"
+      }
+    }
+  ]
+}

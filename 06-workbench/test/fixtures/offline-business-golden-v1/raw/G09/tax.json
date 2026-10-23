@@ -1,0 +1,283 @@
+{
+  "version": "offline-tax-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G09",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "enterprise": {
+    "form": "enterprise",
+    "establishedOn": "2025-12-01",
+    "confirmedBy": {
+      "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+      "role": "accountant"
+    },
+    "basis": "合成登记事实，角色标记仅供工程测试",
+    "sourceRefs": [
+      {
+        "kind": "declaration",
+        "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+        "pointer": "/evidence/1/basis"
+      }
+    ]
+  },
+  "period": {
+    "confirmedBy": {
+      "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+      "role": "accountant"
+    },
+    "basis": "已核对合成Q1全部事项，无各排除业务",
+    "sourceRefs": [
+      {
+        "kind": "declaration",
+        "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+        "pointer": "/evidence/1/basis"
+      }
+    ],
+    "exclusions": [
+      {
+        "area": "otherSales",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无otherSales",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "realEstateSalesAndLeasing",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无realEstateSalesAndLeasing",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "landUseRights",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无landUseRights",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "constructionPrepayments",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无constructionPrepayments",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "differentialTaxation",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无differentialTaxation",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "crossBorder",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无crossBorder",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "deemedSales",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无deemedSales",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "exemptions",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无exemptions",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "otherReliefsAndCredits",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无otherReliefsAndCredits",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "waivedReduction",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无waivedReduction",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "prepayments",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无prepayments",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "priorAdjustments",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无priorAdjustments",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "nonMonetaryOrAbnormalPricing",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无nonMonetaryOrAbnormalPricing",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "mixedTransactions",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无mixedTransactions",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      },
+      {
+        "area": "withholdingOrImports",
+        "state": "none",
+        "confirmedBy": {
+          "name": "SYNTHETIC-ACCOUNTANT-ROLE",
+          "role": "accountant"
+        },
+        "basis": "合成完整登记：无withholdingOrImports",
+        "sourceRefs": [
+          {
+            "kind": "declaration",
+            "fileSha256": "a5004a323dd4c639249d51b94781deefa73ecc3053a434898d1b7a5fe8c6bb0d",
+            "pointer": "/evidence/1/basis"
+          }
+        ]
+      }
+    ]
+  },
+  "invoices": []
+}

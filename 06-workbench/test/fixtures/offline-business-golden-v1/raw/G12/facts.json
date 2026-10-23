@@ -1,0 +1,77 @@
+{
+  "version": "offline-accounting-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-GOLDEN-G12",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "facts": [
+    {
+      "factId": "sale-0",
+      "kind": "service_sale",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-GOLDEN-G12",
+        "code": "",
+        "number": "0000001234567890123401"
+      },
+      "contractId": "G12-SALE-0",
+      "serviceStartDate": "2026-02-13",
+      "completionDate": "2026-02-13",
+      "collectionRightDate": "2026-02-13",
+      "mainService": true,
+      "ordinaryService": true
+    },
+    {
+      "factId": "admin-0",
+      "kind": "administrative_service",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "invoiceRef": {
+        "sellerKey": "ADMIN-SUPPLIER-0",
+        "code": "",
+        "number": "80000"
+      },
+      "contractId": "G12-ADMIN-0",
+      "completionDate": "2026-03-20",
+      "purpose": "organizational_administration",
+      "nonAsset": true,
+      "nonProjectCost": true,
+      "benefitFrom": "2026-03-01",
+      "benefitTo": "2026-03-31",
+      "benefitBasis": "当月组织行政服务全部完成且全部在本月受益"
+    },
+    {
+      "factId": "prepay",
+      "kind": "service_prepayment",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "bankRef": {
+        "bankAccountId": "bank-A",
+        "refId": "PAY-1"
+      },
+      "contractId": "G12-FUTURE",
+      "supplierKey": "FUTURE-SUPPLIER",
+      "serviceStartDate": "2026-04-01",
+      "serviceEndDate": "2026-06-30",
+      "ordinaryService": true,
+      "performanceThroughPeriodEnd": "not_started",
+      "refundThroughPeriodEnd": "none",
+      "paymentCount": 1,
+      "otherRecognitionInProvidedMaterials": "none",
+      "relatedInvoiceRefs": []
+    }
+  ]
+}
