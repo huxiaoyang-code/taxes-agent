@@ -54,4 +54,3 @@ try{
  if(proxy)await new Promise(resolve=>proxy.close(resolve));
  await h.close();
 }
-
