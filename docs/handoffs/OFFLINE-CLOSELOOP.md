@@ -1,5 +1,25 @@
 # 离线闭环交接
 
+## 2026-10-24 PR96 已合事实与 OFFLINE-02B / #79B 实施冻结候选
+
+PR96已实际合并：[PR96](https://github.com/huxiaoyang-code/youshu-fork/pull/96)，base `35bd8e53c703cdafa5989ba0df8e35fb7924e258`，已审head `dd89fc6fc8c1df18ef0069282094a965e8b6dcb3`，merge/main `2414c512e6ec0cd58e94a6d9a6895b2ddbb50944`。实施/root/fresh反馈20/20，root旧review15/VAT22均exit0；fresh接受，无P1/P2。root独立S499838→14995.14/9996.76/4998.38，fresh714760→21442.80/14295.20/7147.60。冷readonly首次可生成0字节WAL，预热后DB/WAL不变，无业务帧写。交付 #82 issuecomment6374939293 / #76 issuecomment6374943801。#82正式账更正、生产审定仍未完成，整项保持OPEN；下方05B“候选/未合”均为历史时点。
+
+最新正式写依赖：#54 issuecomment6374950499（2026-10-23T21:19:34Z），head `81f404e465d052547d8913b1db1e066520769048` 因独审getter跨scope P2暂停发布/合并；在原66路径权限内仅bank-reconciliation、auxiliary-accounting、local-audit-coordinator、test/local-audit-domain四路径窄修。main仍2414，无新PR；root不接其实现，正式写仍blocked。以下旧6374636679协调记录保留为历史，不覆盖本条最新状态。
+
+本片OFFLINE-02B基于PR96 merge，branch `codex/huxiaoyang-code/offline-02b-action-plan`，Refs #76/#79，认领#79 issuecomment6374952382。唯一继承模型实施subagent，用户授权覆盖旧本地执行方式；无再委派、pi/Claude/TokenHub/其它执行器、Git写或全局配置。精确7文件：新增06-workbench/server/offline-action-input.mjs、server/offline-action-plan.mjs、scripts/offline-action-plan.mjs、test/offline-action-plan.test.mjs，新增docs/OFFLINE-ACTION-PLAN.md、docs/tasks/OFFLINE-02B.md，仅修改本交接。旧planner/readiness/candidates/store/VAT/review及旧测试、核心/DB/accounting/import/audit/batch/HTTP/MCP/package/test-all/STATE/NEXT均未改。#54另一窗口66路径仍未合（协调6374636679、base35bd8e5，root50点修复后fresh/PR仍待），本片不正式写账或绕过审计。
+
+实现与DTO/API见[OFFLINE-ACTION-PLAN](../OFFLINE-ACTION-PLAN.md)，窗口见[OFFLINE-02B](../tasks/OFFLINE-02B.md)。逐源实际readLocalFile/sourceText/preflight，原件清单与receipt store二选一，无DB/默认库/网络；纯façade复用assessCompleteness/planOffline/buildOfflineCandidates，不重复会计/税额规则。材料矩阵完整trace与原评估保留；只有全gate当前通过的特定用途/性质unknown才收敛为已提供。未来采购关联票只作预付证据，采用该支付的当前具体缺项，不索取行政完成日。每业务语义dependencyDigest显式选择实际记录、同factId/合同竞争/多付/反向关联、局部来源故障、账户/无业务及实际引用声明依据，不拿整文件candidate.contentVersion当局部键。完整出处含原件路径/hash、配置/声明/事实读入定位及receipt，文件模式从私有WeakMap取clone，不消费公开inventory；纯字节模式明确不代表磁盘当前。
+
+所有任务authorizesExecution/periodComplete/completed=false，ready仅candidate_preparation_ready；post/close链待正式接线。compute_tax/review是本准备façade尚未集成/缺账务依赖（implementationScope=this_preparation_facade_only），既有#81窄VAT与#82底稿/反馈API能力保留，不宣称全产品均未实现。客户补件按业务字段覆盖与企业共享门合并，保全部原因/引用/影响任务；未知问真实情况，已知false/general等明确unsupported，不诱导更改实际事实。锁只操作者诊断，不能把技术依赖当客户补件。
+
+最终实施自测（cwd `06-workbench`）`node test/offline-action-plan.test.mjs` **33/33 exit0**；必要旧 `node test/offline-plan.test.mjs` **45/45 exit0**、`node test/offline-bookkeeping.test.mjs` **43/43 exit0**，未改旧断言/未跑full/npm test。独立三金额净2917.00+税29.17=2946.17、行政590.19、预付337.83；真实CSV/JSON/XLSX二进制与sheet/cell、receipt store stale/锁/损坏、逐源坏映射/跨企/缺文件、同CSV改单票/重排、facts改单笔/反序、任务增删、税/期初/覆盖隔离、同factId/合同多付/反向关联/工资资产、共享补件count及DAG ready无阻塞父、wx/固定stdout/stderr均实际断言。夹具全部保留在06-workbench/.agent-runs/action-plan-synthetic-*，实际CLI child signal=null/stderr空，无自己的常驻进程、真实资料/凭据或DB/网络测试。
+
+原始失败/修复如实保留：root原沙箱npm ci exit1/Exit handler never called，随后同WT获授权离线缓存 `npm ci --offline --ignore-scripts --no-audit --no-fund` 212packages/exit0；实施未重复安装。首轮新套20/20通过不覆盖独立预审发现：root缺文件出现旧session仍通过；fresh替换公开rawInput及交替getter可让FromFiles消费伪scope；root原始nature unknown误分missing、同一benefitBasis/共享tax重复请求、profile缺失时ready带blocked父；fresh同源坏采购可被relatedReady清问题、关联未履约票误索行政完成事实。修为负面读取状态+重读/store失败重inspect、WeakMap私有payload且descriptor拒getter、真实原始/补充字段分型、语义补件合并、独立上下文节点去不必要父、关联自身/支付门不可吞坏源。后续25/26/28/29/31/32均为各次历史通过，最终修后33新增真实回归并保旧断言，没有删除失败事实或skip。
+
+root动态独立 `.agent-runs/manager-action-probe.mjs` 已PASS（索引manager-action-acceptance.json）：独立8319.37/739.61/193.27、零过时请求、缺benefitBasis只1/补回0、共享tax只1预付保留、反序业务digest稳、同合同矛盾、getter reads0、缺文件出现拒旧session、实际CLI拒覆盖/原件hash不变且未创建WORKBENCH_DATA_DIR。该动态probe不是最终冻结接受；本片仍待root最终33项/定点、全新未实施者按最终完整HEAD独审及PR/合并，不自称PR完成，不关闭#79/#76。#77会计审定黄金、正式连续过账/既存账更正、生产试用及#83恢复等仍未完成，税局真实接入仍0。
+
+root冻结后最终验收已实际通过：cwd06-workbench，新 `node test/offline-action-plan.test.mjs` **33/33 exit0**（session46817实际结束）；旧plan **45/45**、bookkeeping **43/43** 均exit0，日志在06-workbench/.agent-runs/root-*-regression.log。综合manager-action-probe.mjs冻结后PASS exit0（manager-action-acceptance.json）；manager-same-source-probe.mjs冻结后PASS exit0（manager-same-source-acceptance.json）：同CSV两销售共4候选，第一8319.37→8329.47仅其task语义摘要变，第二1134.23、行政和预付不变，完整来源SHA刷新；private inventory的实际path/hash一致，公开inventory改空不影响，纯字节/文件模式明确。这是root最终冻结实证，不替代完整HEAD fresh独审；fresh、PR及合并仍待。本次仅合同/任务/本交接补事实，产品与测试未再改。此前git diff --check只覆盖tracked差异；另有全部7文件逐文件空白检查，未声称untracked已经cached check。
+
 ## 2026-10-24 PR95 已合事实与 OFFLINE-05B / #82B 本机反馈版本登记候选
 
 PR95 已实际合并：[PR95](https://github.com/huxiaoyang-code/youshu-fork/pull/95)，base `6465a00e415c47d720d499e59faf233afd36708f`，已审 head `f523a2abefa8395081ff0609272487ad427105c6`，merge/main `35bd8e53c703cdafa5989ba0df8e35fb7924e258`。root/fresh 新 review **15/15 exit0**，旧 VAT **22/22**、XLSX **19/19** 通过；fresh 接受，无确认 P1/P2。root 独立 S499838→14995.14/9996.76/4998.38，fresh 独立 S419714→12591.42/8394.28/4197.14；七表100字段/trace/manifest/sourceSHA、DB/WAL零写及篡改失效通过。交付 #82 issuecomment6374295738 / #76 issuecomment6374296459。下方05A“候选/未PR”等保留历史时点，不覆盖本条已合事实。
