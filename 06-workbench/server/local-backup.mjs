@@ -40,6 +40,7 @@
 // 7) 错误一律返回稳定 code，不回显账务原文、原始 SQL、堆栈或绝对路径；明细只含字段名、计数、
 //    表名 / 列名、版本号与固定的 reason 标记。
 
+import { AUX_TABLES, AUX_COMPONENT_STRUCTURE, inspectAuxiliarySchema } from './auxiliary-storage.mjs';
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -813,13 +814,14 @@ function describeContent(conn, tables) {
   return { digest, tables: tableMap };
 }
 
-// ------------------------------------------------------------------ 可选组件（当前仅 bank v1）
+// ------------------------------------------------------------------ 可选组件（bank v1 / core5 auxiliary v1）
 /**
  * 已审查的组件注册表：名字 / 版本 / 表集合 / 完整结构契约。
  * 这里**不**按 `bank_*` 前缀或动态表名白名单放行：只有完整表集 + 版本内容 + 完整结构都符合
  * 注册表里的 v1 契约才被当成受支持组件。
  */
 const COMPONENT_REGISTRY = Object.freeze({
+  auxiliary: Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}),
   bank: Object.freeze({
     name: BANK_COMPONENT_STRUCTURE.name,
     version: BANK_COMPONENT_STRUCTURE.version,
@@ -1564,12 +1566,14 @@ function inspectStructure(conn, { notProductCode }) {
   }
   // 可选组件：任何 `bank_*` 表出现就按已登记 v1 契约完整校验；旧的无组件库不受影响。
   const component = inspectComponent(conn, tables);
+  const auxiliary = inspectAuxiliarySchema(conn, version);
   const effectiveStructure = component.present
     ? { ...structure, ...COMPONENT_REGISTRY.bank.structure.tables }
     : structure;
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables, effectiveStructure),
+    ...structureProblems(conn, tables.filter(table => !auxiliary.present || !AUX_TABLES.includes(table)), effectiveStructure),
+    ...auxiliary.problems,
     ...component.problems,
     ...migrations.problems,
     ...backupRecordProblems(conn, version),
@@ -1581,7 +1585,7 @@ function inspectStructure(conn, { notProductCode }) {
       problems: problems.slice(0, MAX_DETAIL_ITEMS),
     });
   }
-  return { version, tables, migrations: migrations.versions, component };
+  return { version, tables, migrations: migrations.versions, component, auxiliary };
 }
 
 /**
@@ -1611,6 +1615,13 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
       contentDigest: componentContentDigest(structure.component, content),
       rows: structure.component.tables.reduce((sum, table) => sum + content.tables[table].rows, 0),
     });
+  }
+  if (structure.auxiliary.present) {
+    const auxiliary = structure.auxiliary;
+    components.push({ name: 'auxiliary', version: 1, tables: [...AUX_TABLES],
+      structureDigest: sha256Text(JSON.stringify(auxiliary.objects)),
+      contentDigest: componentContentDigest(auxiliary, content),
+      rows: AUX_TABLES.reduce((sum, table) => sum + content.tables[table].rows, 0) });
   }
   return {
     structure: {
@@ -2306,3 +2317,15 @@ export function backupContract() {
     })),
   };
 }
+
+/** Bind a migration backup to the actual reserved source connection, not just a basename. */
+export function assertBackupSourceConnection(conn, manifest) {
+  const facts = inspectDatabase(conn);
+  if (facts.content.digest !== manifest.content.digest || facts.structure.schemaVersion !== manifest.structure.schemaVersion
+      || JSON.stringify(facts.components) !== JSON.stringify(manifest.components ?? [])) {
+    const error = new Error('aux_backup_connection_mismatch'); error.code = 'aux_backup_connection_mismatch'; throw error;
+  }
+}
+
+/** Read-only full registry validation for an already installed optional component. */
+export function assertSupportedDatabaseConnection(conn) { inspectDatabase(conn); }

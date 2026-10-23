@@ -1,3 +1,5 @@
+> **2026-10-23 当前状态**：PR68 已合（merge `4146e46383e8826c8a4ee02b93f947c26efec014`），Issue56/61 已关闭；PR67 已合（merge `ef599f86b948e574aa1b796e2da21a31b7685fa6`），Issue59 已关闭。详细head/验证边界见 [LOCAL03a](LOCAL-03a.md) / [Windows](LOCAL-06-WINDOWS.md)。Issue64 的 [辅助A+B1](LOCAL-03b.md) 已实施、待管理验收/独审/PR；B2实际入口和一体维度导入未完。整包03/05/06/07仍未完成，真实税局0，UI文件上传仍未知。下方候选和未合状态为原日期历史，不代表当前主状态。
+
 # LOCAL-05a 交接：内部报表 XLSX / PDF 与双准则候选
 
 ## 当前候选合同（2026-10-23）

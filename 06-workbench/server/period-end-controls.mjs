@@ -1,3 +1,4 @@
+import { auxiliaryCompletenessStep } from './auxiliary-storage.mjs';
 // period-end-controls.mjs — 期末检查 / 封账前置 / 前期可改性守卫（LOCAL-02）
 //
 // 设计约束：
@@ -1059,6 +1060,8 @@ export function buildPeriodEndCheck(db, setId, period, { skip = [] } = {}) {
     yearEndCarryStep(db, setId, period, roles),
     periodSequenceStep(db, setId, period),
   ].filter((step) => !skip.includes(step.id));
+  const auxiliary = auxiliaryCompletenessStep(db, setId, period);
+  if (auxiliary) steps.push(auxiliary);
   const blocking = [];
   for (const step of steps) {
     for (const item of step.blocking || []) {

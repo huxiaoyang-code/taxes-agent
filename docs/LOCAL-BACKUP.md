@@ -1,3 +1,5 @@
+> **2026-10-23 当前兼容合同**：PR68 已合 core3/4/5 × bank0/1 的精确备份支持；本次 Issue64 A+B1 候选增加 **core5 + bank0/1 + auxiliary1**，待管理验收/独审/PR。无aux旧六组合保持；旧core带aux、aux2、audit/batch及未知组合拒绝。backup/verify/restore-new共用aux精确表/索引/FK/触发器与内容校验，安装先真实备份并绑定源连接；银行必须先于aux安装。接口及限制见 [辅助核算](LOCAL-AUXILIARY.md)。以下此前候选、未来v5和未支持aux表述按原日期作为历史；不能据此推断当前合同。
+
 > **2026-10-23 银行集成出版候选补记**：源候选 `a38b2815d353c1f5749c5c3081ec6bdbd180ace0` 员工定向150/150 exit0（含backup22/22、bank integration5/5与07两套），root银行领域43/43及CLI14/14 exit0；最终65套、fresh独审与PR63合并仍待root，不能视为已合交付。严格合同保持 **core v3/v4 + 可选bank v1**，三入口仍核对全部19条银行索引及键语义；未登记batch / audit / aux、core v5+仍拒绝。下方partial说明已按冻结 `BANK_SCHEMA_CONTRACT` 更正为三条partial UNIQUE，源码合同未改。
 
 # 本机一致性备份 / 验证 / 恢复到全新目标 · LOCAL-BACKUP（LOCAL-06 独立子包契约）

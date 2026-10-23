@@ -1,3 +1,4 @@
+> **2026-10-23 已合并事实与当前工作（优先于下方历史候选）**：PR [#68](https://github.com/huxiaoyang-code/youshu-fork/pull/68) 已于 2026-10-23T08:27:59Z 合并，已审 head `d1e1ebf20b69e49959d98fd94db6c9d74f477758`，merge `4146e46383e8826c8a4ee02b93f947c26efec014`，树一致；Issue56/61 已关闭。修后管理者完整 73/73 套 exit 0、child close、63 源码测试 hash 一致；全新上下文独审 32 组通过并接受最终完整 head；纳入 PR67 后 Windows service 5/5、skip 0、exit 0。UI 手工创建/绑定已成功；文件上传工具受限仍未知。LOCAL03 辅助 Issue64 由 huxiaoyang-code 在独立分支进行 A+B1（真实总账辅助维度、CLI、官方严格备份恢复），HTTP/Agent/MCP 与总入口登记为下一段 B2；尚未验收、未 PR。PR68 不代表整个 LOCAL03/05/06/07 或全部八包完成，真实税局接入仍为 0。下方未推送/未 PR/候选表述是此前日期的历史。
 # 交接 · LOCAL-03a 阶段 A（纯 profile / 报表规则）→ 阶段 B1（持久 profile + 真实领域 / 迁移）
 
 ## 当前候选合同（2026-10-23）

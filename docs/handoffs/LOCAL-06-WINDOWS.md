@@ -1,3 +1,4 @@
+> **2026-10-23 已合并事实（优先于下方历史候选）**：PR [#67](https://github.com/huxiaoyang-code/youshu-fork/pull/67) 已合，已审 head `8ec01c4c6855fb088278f23003d1738ccc399ac4`，merge `ef599f86b948e574aa1b796e2da21a31b7685fa6`；Issue59 已关闭。pure 11、fault 2、full 39 均 exit 0；两个固定 e86 冷源各 162 pass / 1 warn / 9 skip。14 PNG 与先前目视 7 页逐 SHA 相同，不能冒充新目视或 W2 最终升级。后续 PR68 已合 core5 整合，Windows 实际 service 5/5、skip 0、exit 0。W2 最终升级、LOCAL06 整包仍未完成；旧删除事故与未知根因结论原样保留。下方未 PR/未合表述为当时历史。
 # LOCAL-06-WINDOWS 交接
 
 > **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。本轮文档窄修输入 clean HEAD 为 e7205585c759716db05014806fa901d502ffaa08。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**

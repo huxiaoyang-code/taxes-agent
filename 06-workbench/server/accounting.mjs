@@ -362,6 +362,9 @@ export function setOpeningBalances(setId, items = []) {
       `INSERT INTO opening_balances (account_set_id, code, debit, credit) VALUES (?,?,?,?)`
     );
     for (const it of resolved) {
+      // Preserve auxiliary references for the core DELETE+INSERT no-op path.
+      const prior = row(`SELECT debit, credit FROM opening_balances WHERE account_set_id=? AND code=?`, setId, it.code);
+      if (prior && storedCents(prior.debit) === it.debitCents && storedCents(prior.credit) === it.creditCents) continue;
       del.run(setId, it.code);
       ins.run(setId, it.code, centsToNumber(it.debitCents), centsToNumber(it.creditCents));
     }
