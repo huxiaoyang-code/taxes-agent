@@ -1,4 +1,4 @@
-> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+> **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 候选组件合同（尚未管理验收 / PR / 合并）**：在已合 PR75 audit1/2 基础上，官方 registry 精确登记 local-batch1/2。core3/4 裸或bank1、core5裸/bank1/aux1/两者，各乘audit absent/1/2、batch absent/1/2；未知、漏报、半装或漂移拒绝。新增两套的48带batch组合和四安装顺序实际官方roundtrip通过。保护安装/只读v1/新实例绑定及限制见[批量合同](LOCAL-BATCH-CLI.md)和[交接](handoffs/LOCAL-07-CLI.md)。format仍1；manifest组件、table集、structureDigest/contentDigest/rows均从真实快照重算。历史支持不代表旧core可执行新业务，roundtrip不代表恢复副本安全续跑。下方尚未支持batch/audit或W2a待PR是历史时点，W2a实际PR75已合。
 
@@ -660,4 +660,4 @@ sha256（摘要自洽）仍拒绝且不生成恢复目标；健康库 `backup �
    审计接线、定时 / 批量入口；这些完成后本子包才能计入 LOCAL-06 整体交付，
    本文件**不声称** LOCAL-06 整体完成。
 
-W3a独审返工补充：snapshot/artifact合法性按实际manifest和保存阶段协议校验，非法行在source create、snapshot verify/restore及受保护batch1升级前拒绝。最后42个字段各自独立攻击、batch1/2共84例实际通过且源逻辑/物理摘要不变、目标不创建，外部input/output路径读取计数0。合法真实CSV/XLSX、发布前/后checkpoint窗口、invalid旧attempt及最新DTO/CSV覆盖的历史均保留；不把严格备份当作产物文件或恢复执行权认证。
+W3a独审返工补充：snapshot/artifact合法性按实际manifest和保存阶段协议校验；report已claim必有own snapshot，成功必有own artifact/snapshot，删除自身记录及错指别item拒绝。未claim无记录和已claim尚无artifact合法。2026-10-24最后report-p2两组实际exit0，46个独立攻击×batch1/2共92例，inspect/source create/verify/restore/保护安装拒绝且逻辑/物理摘要不变、目标不创建、外部input/output读取0。保合法真实CSV/XLSX、发布前后checkpoint窗口、invalid旧attempt及最新DTO/CSV历史；不把严格备份当作产物文件或恢复执行权认证。旧42/84结果属于此前605源码。

@@ -1,4 +1,4 @@
-> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+> **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
 
@@ -514,7 +514,7 @@ DB 均 finally 实际关闭；异步 child 等 close 事件，外层逐套也等
 
 最终释放增量复验：`D:/node.exe test/local-batch-persistence.test.mjs`，cwd=06-workbench，在新UUID `w3a-release-final-547cec2f-28b0-42df-a674-3d0082142c2e` 实际39/39、exit0、child actual close。首轮保留现场 `w3a-release-persistence-0c3bd687-8c39-4692-b8cc-7d801a55a316` 为38/39，H8另一支旧“种子删除”断言漏同步，已同一保全合同更新为种子存在且hash同，替换marker/外部字节反例全部保留。新增install现为12组：第11可变report历史和第12sameinode释放各以精确BATCH_TEST_CASE单独exit0，不冒称整12组重跑；原10组/backup6组先前全0证据保留。report修正后的v1升级定点另实际exit0，八旧表/序列摘要 `8d39e2e10ff477751877a85c7fc24c5715748ba4b275a421a184f987e82ba2a6` 前后一致，component仅升version，原updated_at/note保持。root最终全影响验收/fresh独审/PR仍待进行。
 
-## W3a e470 独审两项P2返工（尚未复审 / PR / 合并）
+## W3a e470 / 605 同轮独审返工（当前候选未验收 / PR / 合并）
 
 root已copy-exclusive保留旧frozen/candidate/files/delivery/task与fresh报告，本执行者未修改其备份；本返工不进入后包，不Git、不子agent、不重复npm。原基线仍 `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`，被拒父候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 不得合并。
 
@@ -539,3 +539,15 @@ fsync后EIO最终初修全套中种子SHA256 `48f8417b1a048057d8376e621a12589364
 root后续仍须重新冻结21路径、十一影响套、独立probe与新的完整head fresh复审后方可PR；本交接不填写未来验收或合并。八包6/8、06/07/W2b/W3b/W4/Windows最终链未完，税局0。
 
 返工最后仅测试harness增量：旧persistence在测试通过时不识别两KEEP，已按root允许仅让 `KEEP_FIXTURES=1` 或 `WORKBENCH_TEST_KEEP_FIXTURES=1` 任一成立保留本次已知ROOT；默认未设KEEP仍原清理行为，不改断言或执行。随后仅 `BATCH_PERSIST_TEST_CASES=H6,H8` 实际2/2、exit0/child close，确认现场 `w3a-p2-keep-541fc127-3900-40fd-9575-3e2fafb7fdb5/lb-persist-LdjPmX` 存在，保留已登记/未登记、外部marker替换及零字节DB证明。此前通过的旧persistence可能已由其当时的cleanup移除自身fixture，日志/结果仍留；不声称那些通过的故障fixture仍在，也未清理任何旧未知现场。最终产品source仍 `b1e360d0dc3b46398c495f8c1cc87b6efd2a47cf716cc9c5fc45e97a8b9dac35`，harness增量后未重跑全39/13/8；root最终十一套统一复验仍待进行。
+
+### 605复审反向引用P2收口（2026-10-24）
+
+完整605复审确认一项P2：只遍历现存artifact，删除成功阶段自己的artifact/snapshot后可跳过检查；改evidence指另一item或已claim running缺snapshot也能漏过。原内部种子P2已被独审以真实fsync后EIO/4096字节同/两个创建fd EBADF闭合；本次未改或重测guard/cleanup。root另存605全部证据为pre-reverse-repair，未触碰。
+
+本次仅补stage反查：report attempt>0须有先persist的own snapshot tuple；succeeded须有own artifact及snapshot，再由原正向完整checkpoint绑定核归属。未claim pending0无两者、running有snapshot未登记artifact合法。无schema/runner算法/外部路径访问变更，保旧attempt复用、invalid、最新可变DTO/CSV历史。
+
+实际命令cwd为本WT/06-workbench，D:/node.exe：BATCH_BACKUP_TEST_CASE=report-p2执行newbackup两组，exit0，46独立坏例×v1/2=92次全部inspect/source/verify/restore/保护安装拒且零变，外部读取0。真实runner基线另生成另一item artifact，四个新增反例分别删成功own artifact、删两者、删artifact改指另一item、claimed running删两者；正例pending0无记录和真实beforeArtifactPublish前受控child退出均完成官方backup→verify→restore→保护1→2→again，旧行不变。日志200条DB actualclose、10条child actualclose（计日志标记，不冒称总内部连接数）。
+
+同轮必要fixture同步：v1 keeps…将无artifact伪成功改合法needs_review/attempt1，全部金额/旧行/锁/序列断言保留；mutable report…用真实runner成功artifact/evidence，再覆盖snapshot19.37→23.81，保成功自身input_hash漂移拒绝。两者各精确BATCH_TEST_CASE定点exit0/实际close，未重跑完整13/39或其它旧绿。mutable首次漏j变量、第二次误取stage.job_id先后exit1，finally/child均关闭，两个失败根保留；随后使用realReports返回job.id修正，单独exit0。
+
+本次report-p2和v1日志根w3a-reverse-ef4994d7-72b2-4f51-82c0-e452717e446f（对应install测试中间hash，产品/backup hash与最终同）；mutable最终根w3a-reverse-mutable-54b0147c-4b62-42cc-93a3-00f52523f938。每次新UUID、import前TEMP/TMP/DATA/两KEEP及祖先realpath/lstat，所有新成功/失败现场保留，source-before/after相同。最终产品SHA256 0143a5715e98a9351886502ab4b0a37655a469afe1f941db6c2677b0a4bf26a5；先前b1e360、13/8/39等仅历史阶段，不冒称最终全验。root仍须统一十一套与新完整head独审；未PR/合并、八包6/8与06/07及后包未完。

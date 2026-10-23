@@ -1,4 +1,4 @@
-> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+> **2026-10-24 W3a 同轮返工候选**：完整 `605e057794850a19d0f533ce273323b4ae1c7f4d` 复审仍拒一项P2：已claim/成功report缺必需snapshot/artifact反向存在性；原内部种子失败保全P2已由独审实际闭合。现补own tuple存在与归属，保未claim无记录、已claim未发布、旧attempt及最新可变DTO/CSV窗口。实际report-p2两组/92拒绝和两安装夹具定点、失败历史见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。尚待root新冻结十一影响套及新完整head独审，未PR/合并；原八包6/8、LOCAL06/07未完、税局真实接入0。
 
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
 
@@ -477,7 +477,7 @@ createJob 在既有事务内同时写全部新 job/input 绑定；当前实例�
 
 ### W3a 独审返工：报表行与失败收尾
 
-严格validator只读取DB保存事实：snapshot的job/item/period/kind/key须对应manifest中的实际report阶段，DTO/CSV按原保存字节核摘要；DTO自身声明的kind/period须与行一致。artifact须对应真实report stage、kind/format/code、确定artifactKey和受控安全相对路径，检查publishing/published/invalid枚举、正整数attempt不超过该stage attempt、MIME、字节数、线程/渲染时间形状。当前attempt的snapshot_hash必须等stage.input_hash，成功checkpoint还精确绑定自身evidence与outcome/bytes摘要。
+严格validator只读取DB保存事实：snapshot的job/item/period/kind/key须对应manifest中的实际report阶段，DTO/CSV按原保存字节核摘要；DTO自身声明的kind/period须与行一致。artifact须对应真实report stage、kind/format/code、确定artifactKey和受控安全相对路径，检查publishing/published/invalid枚举、正整数attempt不超过该stage attempt、MIME、字节数、线程/渲染时间形状。当前attempt的snapshot_hash必须等stage.input_hash，成功checkpoint还精确绑定自身evidence与outcome/bytes摘要。按真实persistSnapshot→claimStage顺序，report attempt>0必须保留自己的job/item/period/kind snapshot；成功阶段还必须保留自己的artifact，不能删除后改指别item来逃过。未claim pending0允许无两者；已claim running有snapshot但尚无artifact合法。
 
 最新snapshot可以覆盖；旧artifact可属于旧attempt、可为invalid重渲染中断或发布后checkpoint前的publishing。reportInputHash不含CSV摘要，因此历史/成功artifact按自己的checkpoint字节证据检查，不能强制等最新可变CSV；只有同attempt、running且publishing的当前发布窗核当前CSV bytes/hash。validator不读输入源或输出路径；产物/业务新鲜度仍由原runner检查。
 

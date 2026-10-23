@@ -637,8 +637,10 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
   if(r.csv_text===null?r.csv_hash!==null:typeof r.csv_text!=='string'||!batchDigest(r.csv_hash)||sha256(r.csv_text)!==r.csv_hash)return false;
   snapshots.set(r.snapshot_key,r);
  }
+ const artifacts=new Map();
  const mimes={csv:'text/csv; charset=utf-8',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',pdf:'application/pdf'};
  for(const r of db.prepare('SELECT * FROM local_batch_artifacts').all()) {
+  artifacts.set(r.item_id+':'+r.period+':'+r.stage_key,r);
   const item=itemMap.get(r.item_id),job=jobMap.get(r.job_id);
   const stage=stages.get(r.item_id+':'+r.period+':'+r.stage_key);
   if(!positive(r.id)||!item||item.job_id!==r.job_id||!job||!stage||!stage.stage_key.startsWith('report:'))return false;
@@ -670,6 +672,15 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
   if(r.format==='csv'&&r.attempt===stage.attempt&&stage.status===STAGE_STATUS.RUNNING
     &&r.status==='publishing'&&r.snapshot_hash===latestHash
     &&(snapshot.csv_text===null||r.bytes_hash!==snapshot.csv_hash||r.bytes!==Buffer.byteLength(snapshot.csv_text,'utf8')))return false;
+ }
+ // persistSnapshot precedes claimStage; artifact registration follows rendering.
+ // Successful checkpoints must retain their own tuple, even if evidence names another item.
+ for(const stage of actualStages)if(stage.stage_key.startsWith('report:')) {
+  const key=stage.item_id+':'+stage.period+':'+stage.stage_key;
+  const spec=expectedStages.get(key).spec,item=itemMap.get(stage.item_id);
+  const snapshot=snapshots.get(item.job_id+':'+item.id+':'+stage.period+':'+spec.kind);
+  if(stage.attempt>0&&!snapshot)return false;
+  if(stage.status===STAGE_STATUS.SUCCEEDED&&(!snapshot||!artifacts.has(key)))return false;
  }
  return true;
 }
