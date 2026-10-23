@@ -1,3 +1,13 @@
+# LOCAL-03b B2a 当前候选
+
+负责人 huxiaoyang-code / Issue64；分支 `codex/huxiaoyang-code/local-03b-b2`，基线PR69 merge `0e8ed007ff6b783f4954a2126a04a8233c8b2196`。仅限已认领12路径的管理切片1：领域数据附录、稳定来源分录映射、同事务幂等与恢复，aux1结构及核心指纹不变。已实施、自测通过，尚待管理验收、独立审查与PR；不由实施者宣称合并。
+
+实际53检查及旧5门定向结果、失败历史与生命周期见 [交接](../handoffs/LOCAL-03b.md)；合同见 [LOCAL-AUXILIARY](../LOCAL-AUXILIARY.md)。HTTP/Agent/MCP/model及test-all留B2b新会话，不占其入口文件、不把本段称为整个Issue64完成。
+
+## A+B1 历史任务
+
+> 当前执行 B2a 同事务导入附录；A+B1 的 PR69 真实合并、管理15套与独审接受见 [交接](../handoffs/LOCAL-03b.md)。下方候选为历史；B2b入口/总测试仍待后续。
+
 # LOCAL-03b A+B1 任务
 
 负责人 huxiaoyang-code；[Issue64](https://github.com/huxiaoyang-code/youshu-fork/issues/64)；分支 `codex/huxiaoyang-code/local-03b`。基线 main `4146e46383e8826c8a4ee02b93f947c26efec014`（PR68，已含PR67）。本段真实辅助账簿、CLI 与官方严格备份恢复已实施并提交本地验收；尚未 PR / 合并，不能关闭整个 Issue64。

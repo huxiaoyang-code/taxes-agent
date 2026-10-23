@@ -1,6 +1,6 @@
-# 本机辅助核算（LOCAL-03b A+B1）
+# 本机辅助核算（LOCAL-03b A+B1 / B2a）
 
-本包为可安装候选：真实总账上的项目、部门、往来三维分配、领域 API、本机 JSON CLI 与官方备份恢复。负责人 huxiaoyang-code，Refs Issue64。尚待管理者验收与全新上下文独审；HTTP / Agent / MCP、总测试入口登记和含维度的一体导入仍待 B2，不代表整个 LOCAL03 或八包已完成。
+A+B1 的真实总账三维分配、领域 API、本机 JSON CLI 与官方备份恢复已随 [PR69](https://github.com/huxiaoyang-code/youshu-fork/pull/69) 验收合并。负责人 huxiaoyang-code，Refs Issue64。当前 B2a 增加领域层同事务导入附录，已自测、待管理验收与全新上下文独审；HTTP / Agent / MCP、模型投影及总测试登记留后续 B2b，不代表整个 LOCAL03 或八包已完成。
 
 ## 安装与版本
 
@@ -53,12 +53,22 @@ node scripts/local-auxiliary.mjs party --db <已有workbench.db> --input <entry.
 
 ## 导入与银行边界
 
-本段正式交付“导入后显式绑定”：原核心 `importIncremental` 的批次和来源指纹逐字不变，`entries` 返回来源凭证 ID 与真实 entry ID，绑定使用独立 aux1 requestId 回执，旧批次重放不清空分配。此阶段没有把辅助维度附录接入原导入事务，不宣称一体导入已完成；Issue64 保持开放。
+A+B1 的导入后显式绑定继续可用；B2a 在领域函数 `importIncremental` 增加可选数据参数 `auxiliaryAppendix`。未提供附录保持旧行为，原核心批次/来源/落库指纹算法不变，重放不清空分配。该参数尚未在 HTTP / Agent / MCP 透传，Issue64 保持开放。
+
+附录严格形状为 `{version:1,requestId,reason,entities:[],entries:[],openings:[]}`；所有集合必填，未知键、重复身份、原型键、访问器、Proxy、函数及稀疏数组拒绝。实体为 `{ref,kind,code,name,existingId?}`，kind 为 project/department/party，引用已有编码时必须显式 existingId 并核同账套/种类/编码/名称/启用状态。分录为 `{sourceVoucherId,sourceEntryId,actualEntryId?,allocations:[]}`，期初为 `{openingCode,allocations:[]}`；分配元素仅含 projectRef/departmentRef/partyRef 与 debit/credit，refs 必须指本附录同类型实体。金额复用整数分、净期初与显式未分配规则。
+
+本事务刚创建的凭证必须在 raw entries 逐行提供唯一 sourceEntryId；核实真实新凭证行数、连续行号、科目、摘要和借贷后才按本次插入顺序建立实际 entry ID 映射。旧已有/跨批去重/旧 completed 没有映射时必须显式 actualEntryId，不按行号、摘要或同金额猜配；已有映射每次核原 ID、来源登记、posted 状态与完整凭证行证据，删除重建不迁移。历史映射存在 aux1 不可变 JSON 回执中，真实分配仍依赖 SQLite FK；未改表、版本或核心 fingerprint。
+
+aux 必须先通过真实 CLI 安装。附录预检全程零写；正式执行复用同一连接的受控事务/保存点，核心、实体、分配、映射、操作与成功回执一起提交。completed 有附录也进入事务重核来源与映射。相同键/内容/现态只读重放，内容或现态变化冲突；不同请求只允许增加尚未分配目标，不能覆盖人工分配。内部请求使用确定性命名空间并核完整原键，人工回执碰撞明确冲突。
+
+只有最终 COMMIT 确认后才返回 committed；调用方已有事务返回 staged / pending_outer_commit，不能当成已持久化。未知 BEGIN/COMMIT/ROLLBACK/RELEASE 结果返回 aux_commit_unknown，隔离连接且不自动重试、不追加 failed 审计；调用方关闭连接后核查持久回执。可确认回滚才允许保留原合法 failed 审计，已 completed 永不覆写。附录异常使用固定错误码，未知执行错误为 aux_import_failed，锁竞争为 aux_import_busy。
 
 银行先按真实日期/金额候选及人工确认匹配，然后用同一个 entryId 调用 `entryPartyAllocation`。无往来为 unknown；多往来或部分往来为 ambiguous；完整唯一为 confirmed，同时明示停用状态。不会从银行摘要/名称/金额推断往来，不改原银行指纹、不生成调整分录。
 
 ## 验证
 
 显式执行 `node test/auxiliary-storage.test.mjs`、`auxiliary-accounting.test.mjs`、`auxiliary-cli.test.mjs`、`auxiliary-core-integration.test.mjs`、`auxiliary-backup-integration.test.mjs`、`auxiliary-bank-integration.test.mjs`。每套只用新 UUID workspace 合成根，导入核心前设环境，保留新套件现场，child 等 close。
+
+B2a 定向命令另加 `node test/auxiliary-import.test.mjs`，53个检查及6个真实child均通过，含CLI安装、官方backup/verify/restore后映射回放及续写、四类未知事务隔离；定向旧回归与权限失败历史见 [交接](handoffs/LOCAL-03b.md)。未运行本段完整总入口。
 
 两准则独立手算：小企业 AR 期初1000、12月1400、次年1月800；银行9000→9400→9900；12月借余额1700/贷余额300，往来C1=1500/C2=-300，1月借发生0/贷发生600。企业准则全部金额双倍。另验草稿/反过账/重过账、三维拆分、核心变更阻断与真实重算回滚、直接SQL跨账套/错类型/父变更、两连接锁、未知事务状态隔离、官方WAL备份恢复与伪结构拒绝，以及银行两准则1130调节闭环。
