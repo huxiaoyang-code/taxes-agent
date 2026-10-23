@@ -22,6 +22,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
@@ -31,6 +32,9 @@ import nodeTest, { after } from "node:test";
 
 import { decideRuntimeVersion, inspectRawAbsolutePath, inspectScratchBasePath, TESTED_NODE_VERSION } from "../scripts/windows-runtime-check.mjs";
 import {
+  observeOwnedChild,
+  startServer as productionStartServer,
+  startScriptProbe as productionStartScriptProbe,
   auditScratchBase,
   classifyOfficeOutputs,
   childLifecycleFailure,
@@ -1849,4 +1853,147 @@ foreach ($raw in @('\\\\server', '\\\\server\\', '\\/?.\\x', '\\/?\\x')) {
   } finally {
     cleanupScratch(scratch);
   }
+});
+
+
+// Direct production entry points, with state-only ops for unknown close. No real
+// orphan is created to model a process that cannot be reclaimed.
+function lifecycleRun() {
+  return {
+    residual: [], logs: [], assertions: [],
+    recordResidual(value) { this.residual.push(value); },
+    addAssertion(...value) { this.assertions.push(value); },
+    note() {}, log(...value) { this.logs.push(value); },
+    assert(id, condition, options) { if (!condition) throw new Error(options?.code ?? id); },
+  };
+}
+function controlledChild({ closeOnKill = true, output = "127.0.0.1:12345/", spawnError = false } = {}) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  child.kill = () => {
+    child.emit("exit", 0, null);
+    if (closeOnKill) child.emit("close", 0, null);
+    return true;
+  };
+  setImmediate(() => {
+    if (spawnError) { child.emit("error", new Error("controlled_spawn_failure")); child.emit("close", -1, null); }
+    else child.stdout.emit("data", Buffer.from(output));
+  });
+  return child;
+}
+const pureServiceOptions = () => ({ nodePath: NODE, workbenchDir: WORKBENCH, dataDir: WORKBENCH, tempRoot: WORKBENCH, label: "pure-production" });
+const pureWrapperOptions = () => ({ nodePath: NODE, startScript: START_SCRIPT, tempRoot: WORKBENCH, scratchRoot: WORKBENCH });
+
+test("生产生命周期纯：exit 先于 close 时 stop 不提前成功", async () => {
+  const child = controlledChild({ closeOnKill: false });
+  const state = observeOwnedChild(child, { termMs: 1000, killMs: 1000 });
+  let completed = false;
+  const stopping = state.stop().then(() => { completed = true; });
+  await Promise.resolve();
+  assert.equal(state.exited, true); assert.equal(state.closed, false); assert.equal(completed, false);
+  child.emit("close", 0, null);
+  await stopping;
+  assert.equal(state.closed, true); assert.equal(completed, true);
+});
+
+test("生产生命周期纯：stop 未知阻断同目录下一次 start", async () => {
+  const run = lifecycleRun(); let starts = 0;
+  const start = () => { starts += 1; return productionStartServer(run, pureServiceOptions(), {
+    spawn: () => controlledChild({ closeOnKill: false }),
+    fetchJson: async () => ({ status: 200 }), lifecycle: { wait: async () => null },
+  }); };
+  const server = await start();
+  await assert.rejects(async () => { await server.stop(); await start(); }, /owned_child_close_unknown/);
+  assert.equal(starts, 1); assert.equal(run.residual.length, 1);
+});
+
+test("生产生命周期纯：HTTP 成功时服务已 exit 不能返回 ready", async () => {
+  const run = lifecycleRun(); let child;
+  await assert.rejects(productionStartServer(run, pureServiceOptions(), {
+    spawn: () => { child = controlledChild(); return child; },
+    fetchJson: async () => { child.emit("exit", 0, null); return { status: 200 }; },
+  }), /server_exited_before_ready/);
+  assert.equal(run.logs.length, 1);
+});
+
+test("生产生命周期纯：wrapper HTTP 拒绝和错误响应都进入 finally 等 close", async () => {
+  for (const mode of ["reject", "status"]) {
+    const run = lifecycleRun(); let child; let closes = 0;
+    await assert.rejects(productionStartScriptProbe(run, pureWrapperOptions(), {
+      existsSync: () => true,
+      spawn: () => { child = controlledChild({ output: "windows_start_service_pid=12345\n127.0.0.1:12345/" }); child.once("close", () => { closes += 1; }); return child; },
+      isProcessAlive: () => false,
+      lifecycle: { wait: async () => { child.emit("exit", 124, null); child.emit("close", 124, null); return { code: 124, signal: null }; } },
+      fetchJson: async () => { if (mode === "reject") throw new Error("http_refused"); return { status: 503, json: [] }; },
+    }), /http_refused|start_script_http_failed/);
+    assert.equal(closes, 1); assert.equal(run.logs.length, 1); assert.equal(run.residual.length, 0);
+  }
+});
+
+test("生产生命周期纯：wrapper spawn error 非124与close未知均失败并收尾", async () => {
+  for (const mode of ["spawn", "non124", "unknown"]) {
+    const run = lifecycleRun(); let child;
+    await assert.rejects(productionStartScriptProbe(run, pureWrapperOptions(), {
+      existsSync: () => true,
+      spawn: () => { child = controlledChild({ spawnError: mode === "spawn", closeOnKill: false, output: "windows_start_service_pid=12345\n127.0.0.1:12345/" }); return child; },
+      isProcessAlive: () => false,
+      lifecycle: { wait: async () => {
+        if (mode === "unknown") return null;
+        child.emit("exit", 1, null); child.emit("close", 1, null); return { code: 1, signal: null };
+      } },
+      fetchJson: async () => ({ status: 200, json: [] }),
+    }), /start_script_spawn_failed|start_script_exit_not_bounded|owned_child_close_unknown/);
+    assert.equal(run.logs.length, 1);
+    assert.equal(run.residual.some((item) => item.kind === "powershell_wrapper"), mode === "unknown");
+  }
+});
+
+// Manager static gate required before these two cases run. Each process has an
+// independent 1.5s self-exit bound, and the production finally must still observe
+// its real close. Expected failure preserves the entire caller manifest fixture.
+test("生产生命周期真实故障：HTTP 503 与拒绝均回收 owned child 并保留完整根", async () => {
+  for (const mode of ["status", "refused"]) {
+    const record = newScratch(`production-http-${mode}`);
+    const state = trackChild(`production-http-${mode}`);
+    const helper = join(record.root, "bounded-http.mjs");
+    writeFileSync(helper, `import {createServer} from 'node:http';
+setTimeout(()=>process.exit(124),1500);
+const s=createServer((q,r)=>{r.writeHead(503);r.end('[]')});
+s.listen(0,'127.0.0.1',()=>{const p=s.address().port;
+console.log('windows_start_service_pid='+process.pid);
+if(${JSON.stringify(mode)}==='refused')s.close(()=>console.log('http://127.0.0.1:'+p+'/'));
+else console.log('http://127.0.0.1:'+p+'/');});`, "utf8");
+    const run = lifecycleRun(); let child;
+    try {
+      await assert.rejects(productionStartScriptProbe(run, { nodePath: NODE, startScript: START_SCRIPT, tempRoot: record.root, scratchRoot: record.root }, {
+        existsSync: () => true,
+        spawn: () => {
+          child = spawn(NODE, [helper], { cwd: record.root, env: childEnvironment(record.root), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+          child.once("close", () => { state.reclaimed = true; });
+          return child;
+        }, wrapperMs: 5000,
+      }), /start_script_http_failed|fetch failed/);
+      assert.equal(state.reclaimed, true); assert.equal(run.residual.length, 0); assert.equal(run.logs.length, 1);
+    } finally {
+      // Test harness also owns this handle: bounded safety on unexpected assertions.
+      if (child && !state.reclaimed) await observeOwnedChild(child, { termMs: 2000, killMs: 2000 }).stop();
+      recordExpectedRefusalFixture({ kind: "production-http-fault", root: record.root, reason: "expected_http_failure_full_fixture_retained" });
+    }
+    assert.equal(existsSync(helper), true);
+  }
+});
+
+test("生产生命周期真实故障：wrapper spawn error 观察真实 close 且保留根", async () => {
+  const record = newScratch("production-spawn-error");
+  const state = trackChild("production-spawn-error");
+  const run = lifecycleRun();
+  await assert.rejects(productionStartScriptProbe(run, { nodePath: NODE, startScript: START_SCRIPT, tempRoot: record.root, scratchRoot: record.root }, {
+    existsSync: () => true,
+    spawn: () => {
+      const child = spawn(join(record.root, "absent-owned-command.exe"), [], { cwd: record.root, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      child.once("close", () => { state.reclaimed = true; }); return child;
+    }, wrapperMs: 2000,
+  }), /start_script_spawn_failed/);
+  assert.equal(state.reclaimed, true); assert.equal(run.logs.length, 1); assert.equal(run.residual.length, 0);
+  recordExpectedRefusalFixture({ kind: "production-spawn-error", root: record.root, reason: "expected_spawn_failure_full_fixture_retained" });
 });

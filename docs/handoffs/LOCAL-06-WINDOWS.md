@@ -1,33 +1,34 @@
 # LOCAL-06-WINDOWS 交接
 
-> **2026-10-23 当前 W1 PS5 辅助脚本编码窄修（待管理者实跑）**：第二轮 fresh 静态门后，管理者新 gate3 已实际执行纯状态 / 路径字符串 / Office 汇总 **3/3 exit 0**；原最窄 FS 批次 **6/7 通过、1 失败，exit 1、0 skip**。唯一失败发生在 `pure-path-check.ps1` 的 `launcher_parse_failed`，早于真实 PS 路径负测；同一正式 launcher 由管理者真实 PS5 Parser 直接解析为零错误。测试把中文仓库绝对路径写入 Node 默认无 BOM UTF-8 临时 `.ps1`，PS5 的旧编码读取破坏路径；本轮为该辅助脚本显式添加 UTF-8 BOM，保持只提取纯函数 AST、不 dot-source 整个 launcher。已检查三份脚本 / 测试的生成点：仅此一处动态生成 `.ps1`，其它 helper 为 Node 脚本或复制正式 launcher。本轮仅静态检查与 Node `--check`，未执行修后 pure / FS / 真实 PS / HTTP / full / heavy / cold 或任何清理；前述 3/3、6/7 均为修前冻结源码事实，不能复用于新 hash。原 29 案例、全部断言、现场保留及唯一 manifest 清理守卫不变，两个 P2 与完整产品验收仍待管理者新 gate 实跑；未 PR、未合并。旧候选 5fc2342 的 19 用例 / 两次冷验收 / PDF 目视仅历史，旧删除事故 8 目标 / 4 已证归属 / 4 未证、reviewer 误 cwd 现场保留，native 3221226505 根因未知，W2 pending。
+> **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。当前输入 HEAD 为 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 加生命周期修复 WIP。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
+>
+> 冷验收固定业务源仍为 e86d248c2a573b12c884f311fb01952f209e2563，叠加当时四代码及三文档共 58 文件；本次三文档收口在冷验收之后。它不证明最终 core5 / 辅助核算 / 审计 / 批量整合版已升级验收。W2 upgrade-rollback 仍 w2_contract_pending / blocked。实际仅 **Node 24.15.0 / Windows x64** 已测，engines >=22.5.0 只是声明，真实税局接入 **0**。
+>
+> 旧删除事故 **8 目标 / 4 已证归属 / 4 未证归属与影响**、reviewer 意外目录保留、原生异常 **3221226505 根因未知**继续有效，不能据当前通过声称零影响。旧候选及旧 gate 结果见历史章节。
 
+## 1. 基本信息与恢复边界
 
-## 1. 基本信息
+- 任务 LOCAL-06-WINDOWS；负责人 huxiaoyang-code；分支 codex/huxiaoyang-code/local-06-windows-delivery。
+- [Issue #59](https://github.com/huxiaoyang-code/youshu-fork/issues/59)，Refs #20 / #49，审计 #54、Office #45。未开 PR、未合并。
+- 当前输入 HEAD 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 加生命周期修复 WIP；冷业务源 e86d248c2a573b12c884f311fb01952f209e2563。最终提交 / 合并 SHA 由管理者实际记录。
+- 一台 Windows 11 10.0.26200 x64；Node 24.15.0、npm 11.12.1，其余组合未测。
+- 历史 pi 使用已核实 deepseek-v4.1-flash / tokenhub。事故整改后的新 pi 会话无 shell、只实现与文档；事故前首轮员工确实测试及越界清理，不用后轮事实覆盖。
+- 本次用户授权单一兜底实施者只收口三文档，未运行测试 / npm / 浏览器 / 服务，未启动 child / 模型 / 其它 agent，未清理、未 Git。四代码哈希前后不变；管理者负责运行验收、最终完整 head 独审与 Git / PR / 合并。
 
-- 任务 ID / 状态：`LOCAL-06-WINDOWS` / **PS5 辅助脚本 BOM 窄修完成，待修后新 gate；修前 pure 3/3、FS 6/7 exit 1；两个 P2 与 full / heavy / cold 仍待验收，未 PR、未合并**。
-- 本轮冻结 head：`5fc23424176e4d582c4d5ec213f754caefbfe0c0`（被拒候选）；冷业务基线：`e86d248c2a573b12c884f311fb01952f209e2563`
-- 负责人：`huxiaoyang-code`（已核实）
-- 历史执行员工（下述为前轮事实，本轮为用户授权单一兜底实现会话，仅纯语法检查，无模型 / 子 agent / Git 写入）：本机 pi（新进程、无持久会话）；模型 `deepseek-v4.1-flash`（provider `tokenhub`），主 / 回退同锁；未使用子 agent；未执行 Git 写操作；**事故整改后的新会话**工具集不含 shell，未执行任何命令 / 测试 / 进程 / 清理；**验收由管理者实际执行**，员工只做实现与文档。事故前首轮员工确实执行过测试与清理（含越界删除，见 §8），两者不可混用
-- 本机管理者：成员自己的 Codex（负责差异审查、独立复跑、Git 提交 / PR / 合并）
-- 分支：`codex/huxiaoyang-code/local-06-windows-delivery`
-- 关联 Issue：[#59](https://github.com/huxiaoyang-code/youshu-fork/issues/59)（`Refs #20` / `Refs #49`；审计兼容 #54，Office #45）
-- 目标：源码分发方式的 Windows W1 交付（预检 / 启动 / 干净目录验收 / 备份恢复说明）
-- 不做：MSI / 服务 / 自动更新器 / 机器 PATH / 注册表 / 执行策略 / 防火墙 / 全新 OS 验收 / W2 迁移
+## 2. 冷源与证据恢复
 
-## 2. 基线与证据分层
+冷副本共 58 文件：e86 白名单归档 51 文件，加当时四代码 / 三文档七路径。原基线逐项 Git blob 与 ls-tree 比对的历史确权保留；源 / 目标祖先及条目核验，不带 config / DB / node_modules。随包工具为 release_cold_copy、optionalMissing=[]，不用开发 worktree 工具冒充。三文档是冷验后收口，不冒称新版文档再次冷验。
 
-- 基线（冷业务源）：`e86d248c2a573b12c884f311fb01952f209e2563`（PR #58 已合 main）
-- 已审核 head / 合并 SHA：本包**未 PR、未合并**；冻结候选 `5fc2342…` 已被独立独审**拒绝**（`changes requested`，3 项 P2），两轮管理静态返修在其上继续；实际交付 HEAD 以管理者记录为准（本文件不预测 SHA）
-- 冷业务源：root 固定的 `e86d248…` 白名单归档（只含 `package.json` / `package-lock.json` / `server/` / `public/` / `local-backup` CLI）；51 个基线文件在复制前逐项用 Git blob 哈希与其 `ls-tree` 比对一致，源 / 目标祖先与全部条目无 junction，未带入 config / DB / `node_modules`
-- 叠加层：本任务 4 个新 scripts / test 与 3 份文档共 7 个文件进入冷副本；随包工具来源 `release_cold_copy`（`optionalMissing=[]`），不用开发 worktree 脚本冒充
-- 证据分层：
-  - **历史（只覆盖被拒旧候选 `5fc2342`）**：管理者实跑 `node --check` 3/3；基础安全 pattern 7/7；完整测试 19/19、0 skip；`install-start --require-packaged-tooling` 两次独立运行（run-a `--keep`、run-b 默认守卫清理）均 11 阶段 pass / 158 pass / 9 skip / 1 engine warning，依赖完全离线；W2 真实 `exit 2 / w2_contract_pending`；PDF 5 份 7 页逐页目视。这些结果**不得**当作本轮修复后的回归；
-  - **两轮管理静态返修（实现 + 文档）**：员工只改实现与文档，**未执行任何命令 / 测试 / 进程 / 清理**；当轮返修后新增 / 变动的用例（见 §6）静态计数曾为 28 个；当前窄修新增一个纯状态用例后为 29 个，除管理 gate2 字符串一项失败外，其余新用例**未实跑**；
-  - **员工自述（限事故整改后的新会话）**：本地 pi 新会话工具集不含 shell，未执行任何命令 / 测试 / 进程 / 清理，只做实现与文档修改。**不得把 §6 结果写成员工自测**；事故前首轮员工确实执行过测试与清理（含越界删除，见 §8），该限定只适用于整改后的新会话；
-  - **旧代码运行目录**（`run6` / `run7` / `run8` 等，前一位员工在旧版本上留下）只对当时那版文件有效，**已作废**，不作当前结果；
-  - 本次形态是受控源文件冷拷贝 + 精确哈希核实，**不是**正式安装器发行包，也不是新 OS 实测；本机只有一台 Node 24.15.0 / win32 / x64 主机，22.16 / 24.0 仅为 API 分析。
+本地 ignored 管理证据相对标识如下，不要求其它电脑存在：
 
+- windows-w1-gate4-34ce244e344148d49aaf5efa2b5ada02：pure 11 / 退出 JSON。
+- windows-w1-gate4-c93e06e454544fb7a2a5d73c19736a59：真实故障 2 / 保留 fixture。
+- windows-w1-gate4-9582108241a74566bd5d3e6d676d7e14：full 39 / full.exit.json / 代码前后哈希。
+- windows-w1-cold-prep-ca00015f7812466188a30de71a5fbfcc：sourceHead / 58 文件清单 / 专属缓存。
+- windows-w1-manager-cold-4e9258d0c62e44a68dd24bccb8acbbe8：keep / cleanup 的原始结果、退出 JSON、manager-summary 与 manager-png-comparison.json。
+- windows-w1-service-lifecycle-fresh-review-20261023.md：源码窄审无 P1 / P2，不代替最终全 PR / 三文档接受。
+
+上述均在仓库 workspace 的 .agent-runs/ ignored 目录。跨电脑只依赖版本化文档、源码与之后实际 PR，不假定这些原始证据已同步。
 ## 3. 依赖契约
 
 - 上游：已合 main 的 schema v3（LOCAL-01）、`scripts/local-backup.mjs` / `server/local-backup.mjs`、`server/report-export.mjs` DTO、`server/report-office-export.mjs` 纯渲染模块、PR #58 审计独立原语；
@@ -38,24 +39,11 @@
   - `windows-delivery.test.mjs`：独立 `node:test` 用例，不依赖 npm test 挂载；
 - 契约变更：无现有 DTO / 业务接口变更；只新增独立脚本与测试。
 
-## 4. 实际修改文件与所有权
+## 4. 文件所有权
 
-仅这 7 个文件（既有未跟踪 WIP，本轮原地修改）：
+W1 七路径见[任务单](../tasks/LOCAL-06-WINDOWS.md) §3。本次只写 docs/WINDOWS-DELIVERY.md、docs/tasks/LOCAL-06-WINDOWS.md、docs/handoffs/LOCAL-06-WINDOWS.md；四代码冻结不变。
 
-1. `06-workbench/scripts/windows-runtime-check.mjs`
-2. `06-workbench/scripts/windows-start.ps1`
-3. `06-workbench/scripts/windows-delivery-check.mjs`
-4. `06-workbench/test/windows-delivery.test.mjs`
-5. `docs/WINDOWS-DELIVERY.md`
-6. `docs/tasks/LOCAL-06-WINDOWS.md`
-7. `docs/handoffs/LOCAL-06-WINDOWS.md`
-
-本轮代码返修实际改动了 **4 个代码文件 + 3 份文档**（第 1–4 项代码、5–7 项文档）；上一轮“只改 3 份文档、代码 SHA 不变”的记载**不再适用**，代码 SHA 已变，由管理者重新记录。versioned 文档只用仓库相对路径与 `<release>/<data>` 占位符。
-
-未修改：`server/*`、现有测试、`public/*`、MCP、银行 / 审计 / 备份 / 批量模块、`package.json`、`package-lock.json`、`scripts/test-all.mjs`、`06-workbench/README.md`、共享 `STATE` / 索引。
-
-共享文件窗口（engines / `test-all` / README / 索引）**未获授权、未改动**；需 root 在现 owner 释放后另行登记。
-
+未改实现、LOCAL03、银行 / 审计 / 备份 / 批量、package.json / lock、test-all、README、共享 STATE / 索引。版本文档仅相对路径及发布 / 数据占位符，精确本机证据只存 ignored 管理交付。
 ## 5. 实现摘要与关键取舍
 
 - **预检在 DB import 前**：只使用 `node:sqlite` + `node:fs` + `node:child_process`，不 import `db.mjs` / 业务模块。版本 / 平台 / 架构不合格时**先拒绝，不建任何目录写探针**。
@@ -85,148 +73,69 @@
 - **失败路径 / 稳定性**：端口冲突用本包自建 listener（占位服务 0 连接）；文件冒充数据目录在启动前拒绝；10 次顺序启停 + 2 个并行独立 data / 端口，串账 0；不按 `node.exe` 名称杀进程。
 - **升级阶段（W1 边界）**：`--phase upgrade-rollback` 只保留命令形态，在任何临时根 / 业务目录创建之前返回 `w2_contract_pending`（blocked，exit 2），不建业务 DB、不迁移、不安装依赖；任何 `--schema-pair` 都不解除。W1 **未**实现通用升级 / 降级链。
 
-## 6. 验证记录（管理者实跑）
+## 6. 当前管理验收
 
-## 6. 验证记录（旧候选历史 + 管理局部验证与本轮未跑范围）
+### 当前冻结源码与管理者实际验证
 
-> **本节前半只覆盖已被独审拒绝的旧候选 `5fc2342`，不是本轮修复后的结果。** 本轮（独审返修）新增 / 改动的代码与用例**未实跑**，待管理者先审 cleanup / 路径 / 进程 diff 再在全新自有根验收。
+独立源码窄审确认：服务与包装器共用 owned-child close 观察，exit 仅供诊断；stop 未知抛错阻断同目录 restart / sequential；真实 HTTP 成功且 owned 服务仍有效才返回 ready；包装器端口、HTTP、断言、spawn error 与退出均进入统一有界 finally。服务由 PowerShell 保留的自有 .NET 句柄回收，管理器不按裸 PID / 名称猜杀。
 
-环境：Windows 11 家庭版中文版 10.0.26200 x64（一台主机）；Node `v24.15.0`；npm `11.12.1`；冷业务源基线 `e86d248…`。以下命令与结果由**本机管理者**执行；**事故整改后的新 pi 会话**无执行权限（工具集限定 read/edit/write/grep/find/ls）。事故前首轮员工确实执行过测试与清理（含越界删除，见 §8），不能据本节反推「员工从未执行」。
-
-- 语法：`node --check` 3 个脚本全部 exit 0；
-- 基础安全 pattern：按批准命令实际选中 7 个纯守卫用例（此前误计 6），7/7 通过；其余 12 个用例不在该 pattern 内，不能写成 6/6 也不是 13 skip；
-- 完整测试（19 用例）：初次 18 pass / 1 fail，唯一失败是 W2 用例的临时目录期望断言（首轮循环提前预期了第二次 `out` 目录）；只定点修该断言（补精确初始 manifest / tmp 基线与逐轮累计 `out`，未放松业务副作用检查），在全新 test scratch 复跑 **19/19 pass、0 skip**；初次 stdout / stderr / 退出码保留；
-- `install-start --require-packaged-tooling`：
-  - run-a（`--keep`）：11 阶段全 pass、158 通过断言 / 9 明确 skip / 1 engine warning；`preflight.tooling_source=release_cold_copy`、`optionalMissing=[]`；精确根保留，未额外清理；
-  - run-b（默认守卫清理，全新 out / scratch）：同样 11 pass / 158 / 9 / 1；`cleanup.attempted=true / completed=true / manifestVerified=true / retained=false / reason=null`；管理者独立只读确认该精确根不存在；
-  - 两次依赖安装完全离线（`networkUsed=false`、`offlineProven=true`），这不等于发布包自带全部依赖；
-- PDF：本次运行的 `artifacts/office/` 下 5 份共 7 页（资产负债 1 / 利润 1 / 现金流 1 / 明细账 1 / 科目余额 3），管理者用 Poppler 计页后 `pdftoppm -r85 -png` 逐页渲染并实际查看 7 页：中文 / 金额 / 表格 / 跨页续表表头 / 页脚均可读，无截断 / 重叠 / 方块字；银行期末 61,300、利润当期 0 / 累计 10,000、余额表借贷 61,300（合成样本）。该次运行留有 PDF 哈希与 7 张 PNG 清单；脚本 JSON 中的 manual visual skip 由这份独立视觉证据补充，**未改写历史 JSON**；
-- W2 负验收：`--phase upgrade-rollback` 真实 CLI `exit 2 / blocked / w2_contract_pending`，`stages=[]`，`businessDbTouched` / `dependenciesInstalled` / `migrationsRun` 均为 false，`cleanup` 为 `no_scratch_created`；输出目录只有 `artifacts/`、`logs/` 两个空目录和结果 JSON（`prepareOutDir` 对任何阶段都先建这两个子目录），无业务 scratch / DB / 迁移；带 `--schema-pair` 不解除，完整测试也验证了这一点；
-- 残留与 fixture：两次完整测试与基础守卫各留 1 个本次自建 junction fixture（`guard-scratch` / `test-scratch` / `test-scratch-r1`），各有自己的 manifest，属预期拒绝证据，保留不删；run-a 精确根保留，run-b 根已由守卫清理；管理运行均已退出，完整测试 `residuals=[]` 断言通过（不据此声明所有系统未知进程均已核查）。
-
-可复跑命令（默认 scratch 仍是 `06-workbench/tmp/windows-delivery`；不指向系统 TEMP。本次管理验收用的是 root 明确授权的仓库 workspace 专属忽略目录，相对 `.agent-runs/local-06-windows-gate1`）：
-
-```powershell
-cd 06-workbench
-node scripts\windows-runtime-check.mjs --json
-node test\windows-delivery.test.mjs
-node scripts\windows-delivery-check.mjs --phase install-start `
-  --release <冷拷贝根> --node <node.exe> --npm <npm-cli.js> `
-  --cache <本任务专属 npm 缓存> --out <新的输出目录> `
-  [--scratch-root <显式授权的绝对路径>] [--require-packaged-tooling]
-node scripts\windows-delivery-check.mjs --phase upgrade-rollback `
-  --release <发布根> --out <新的输出目录>
-```
-
-以上结果不覆盖：正式安装器发行包 / 其它架构 / 干净 OS / 旧 Node 二进制 / 完整离线 bundle，以及 HTTP / 页面 Office 下载。
-
-### 6.1 两轮管理静态返修新增 / 变动的用例（均未实跑）
-
-当前窄修测试文件静态计数：**29 个 `test(...)` 用例**（含本轮新增纯状态保留决策回归，未执行）（含需管理者前置、缺前置明确 skip 的缺字体真实 CLI 用例）。下列只是新增 / 变动的子集：
-
-| 用例 | 需要的输入 |
+| 冻结文件 | SHA256 |
 |---|---|
-| `专属临时根：relative / drive-relative / root-relative 原始 base 只在本用例自有候选目标上被拒绝且不写盘` | 无（三种 raw 入参均从本用例 fixture 内绝对目标派生，误规范化落点已先断言） |
-| `路径字符串边界：只认盘符绝对与完整 UNC，拒绝不完整 UNC / 设备路径（含斜杠变体）/ 相对与 drive-relative` | 无（纯字符串；不连网、不碰设备） |
-| `路径守卫：out / release 原始入参不是完整绝对路径时只 stdout 非零，不创建任何目录（真实 CLI，自有 cwd 与候选目标）` | 无（真 CLI + `upgrade-rollback` 无副作用阶段；子进程 cwd 显式指定） |
-| `路径守卫：out 根 / 祖先 junction 在任何写入前被拒绝（真实 CLI，自有 fixture）` | 系统允许建 junction（否则明确 skip） |
-| `路径守卫：release 根 / 祖先 junction 被拒绝且不创建 out（真实 CLI + inspectRelease）` | 同上 |
-| `路径守卫：scratch base 根 / 祖先 junction 与显式空白都在 out 创建前被拒绝（真实 CLI，自有 fixture）` | 同上；验证无效 scratch 时 out 不被创建 |
-| `冷拷贝入口：源根 / 选定 workbench / 目标 alias 与越界目标被拒绝且不写目标（自有 fixture）` | 同上；验证 `copyReleaseWhitelist` 自己复核，不写目标 |
-| `Office 汇总：必需 PDF 缺失必须归类为 blocked，不得当作通过` | 无（纯函数） |
-| `缺字体必需 PDF：真实 install-start CLI 退出 2 / blocked，输出与工作根保留（管理者前置）` | `WINDOWS_DELIVERY_RELEASE_ROOT` / `WINDOWS_DELIVERY_NPM_ENTRY` / `WINDOWS_DELIVERY_NPM_CACHE`（可选 `WINDOWS_DELIVERY_NODE_BINARY`）；不得以 skip 充抵验收 |
-| `启动脚本：relative / drive-relative / root-relative / 空白 / 设备路径 -ScratchRoot 在规范化前被拒绝且无副作用` | WinPS 5.1（否则 skip） |
+| 06-workbench/scripts/windows-delivery-check.mjs | 0672edf7801397a21570f39fa207f933c4e686c2a0cb04eb6cc3d78bdf75eb5e |
+| 06-workbench/test/windows-delivery.test.mjs | 7b486e8cabd81224dfa0c996d5956faf5b94974215647f04e12e7381397305ce |
+| 06-workbench/scripts/windows-runtime-check.mjs | 41b4064a5c32d09d5d8ffd2d0cf48c66edcb4e8cf554b45e176bb3ff7998e517 |
+| 06-workbench/scripts/windows-start.ps1 | d85689ead811d33e26bc106f6caf18d8deac0785ebf9bb93b1e950d28e3f01f1 |
 
-可复跑命令（所有临时根仍从 `WINDOWS_DELIVERY_SCRATCH_ROOT` 或默认 `<workbench>/tmp/windows-delivery` 派生）：
+npm / Office 生命周期保护继续有效：只有自有 child 实际 close 才标 reclaimed；timeout（即使 code 0）、spawn error、未知回收立即失败并保留，不能继续同目录安装 / 业务 / 删除。npm 只在已回收且明确 ENOTCACHED 时从离线回退在线，在线成功并回收后才守卫删除本轮 node_modules 再离线重装；其它网络 / 权限 / 完整性 / 参数错误停止。Office helper 留到渲染、探针、断言及必需 PDF 全部成功才守卫删除，blocked / fail / timeout 保留 helper、模块、输出与工作根。
 
-```powershell
-cd 06-workbench
-node test\windows-delivery.test.mjs
-# 带管理者前置时，缺字体真实 CLI 用例才会执行，否则明确 skip
-$env:WINDOWS_DELIVERY_RELEASE_ROOT = '<包含 W1 随包工具的冷拷贝根>'
-$env:WINDOWS_DELIVERY_NPM_ENTRY = '<npm-cli.js 绝对路径>'
-$env:WINDOWS_DELIVERY_NPM_CACHE = '<同既授权公共 lock 的专属缓存>'
-node test\windows-delivery.test.mjs
-node --check scripts\windows-runtime-check.mjs
-node --check scripts\windows-delivery-check.mjs
-```
+管理者在全新 UUID 专属根实跑，四代码哈希前后不变：
 
-本轮（返修 2）改动要点（待管理者复核 diff）：
+| 验证 | 实际结果 | 范围 |
+|---|---|---|
+| 纯状态 / 决策 / 编排 | 11/11，0 skip，exit 0 | 生产所用入口，含 exit 不能代替 close、未知回收阻断后续 |
+| 生产入口真实故障 | 2/2，0 skip，exit 0 | HTTP 503 / 拒绝、真实 spawn error；实际 close，完整 caller fixture / manifest 预期保留 |
+| 完整正式套件 | 39/39，0 skip，exit 0，44.228 秒 | 原 32 项与断言保留，加 7 项；真实 PowerShell 正常链及带前置 HEAVY 缺字体真实 CLI 均执行 |
+| 新随包 cold：keep | 11 阶段 pass，162 pass / 1 warn / 9 skip，exit 0 | attempted=false / completed=false / retained=true / reason=keep_requested / manifestVerified=false；实际一个根与 schema 2 manifest 保留 |
+| 新随包 cold：cleanup | 11 阶段 pass，162 pass / 1 warn / 9 skip，exit 0 | attempted=true / completed=true / retained=false / manifestVerified=true；管理者只读确认 scratch 为空，无手动补删 |
 
-1. 负测不再指向卷根 / WORKBENCH：所有 relative / drive-relative / root-relative raw 入参从本用例**自有绝对候选目标**派生（root-relative = 自有目标去盘符、保留完整子路径），并在调用前断言“即使被旧实现按 cwd 规范化，也只落在本 fixture 内”；不再有 `forbidden:null`；纯函数 `createScratchRecord` 负测同样使用自有 fixture；子进程 cwd 一律显式指定为测试自有目录，不用 `process.chdir`；拒绝后只核对准确候选目标与父目录快照，不扫描卷根 / 用户目录；
-2. `auditInvocationPaths` 新增并复用 `auditScratchBase`：在任何 `out` mkdir 之前验证显式或实际默认 scratch 的根 / 最近既存祖先 / 根类型 / realpath；无效 scratch 时 `out` 不创建；
-3. `inspectRawAbsolutePath` / `Test-RawAbsolutePath` 改为字符串级先定性“盘符绝对或完整 UNC”，拒绝不完整 UNC / 设备路径（含斜杠变体）/ 显式空白（PS 用 `$PSBoundParameters` 区分未提供）；
-4. `copyReleaseWhitelist` 自行重验源根 / 选定 workbench（含摘要重算）/ 目标完整绝对与祖先 / 目标不存在且不重叠源；拒绝不写目标；
-5. 文档记录未实跑、`5fc234` 被独审拒绝的记录、旧事故 / 限制与缺字体前置不可 skip 充抵。
+真实故障用短时自有 Node HTTP 替身验证生产 startScriptProbe 控制与 finally；**不称为真实 PowerShell 故障注入**。真实 PowerShell 正常链由完整套件覆盖。两次 cold 外层记录均 reclaimed=true / timedOut=false / spawnError=null。
 
-## 7. 真实数据 / 安全边界
+全新专属缓存先由完整套件 HEAVY 缺字体链实际覆盖缓存不足后的在线安装、守卫删除本轮依赖与离线重装；随后两次正常 cold 均缓存命中、networkUsed=false / offlineProven=true。网络只走固定 lock 已授权公共来源，离线复验不等于发行包自带全部依赖。
 
-- 未触碰真实账套、真实凭据、真实税局 / 浏览器 / 旧会话；未读取用户字体目录 / 用户 npm 配置；
-- 全部合成数据（Windows 交付合成公司，2026-01 / 2026-02，金额 50,000 / 11,300 / 10,000 / 1,300）；
-- 网络仅用于锁文件声明的公共 registry 与官方文档；无私有 registry；lock 来源已加静态白名单校验；
-- 所有服务 `127.0.0.1`，`PORT=0`；旧 8787 未探测 / 未复用；
-- 子进程环境为白名单，未 dump env；日志只保留必要输出，不含凭据；
-- 未修改业务模块、未自动安装审计组件、未添表、未关闭未知表校验。
+每次 cold 均检查五类 CSV / DTO 与 XLSX 金额，生成 5 PDF / 7 张逐页 PNG。两次新图全部与管理者此前实际目视的 7 页逐项 SHA256 相同（共 21 个摘要全部相等）：**新渲染与已目视样张像素文件一致**，没有声称管理者重新逐页目视新图。旧目视覆盖资产负债 / 利润 / 现金流 / 明细账各 1 页与余额表 3 页，中文分页正常，银行 61,300、利润累计 10,000。
 
-## 8. 进程 / 清理事实
+每次 9 skip 包含 5 个机器目视标记和旧 Node / 其它架构 / 干净 OS / 完整离线 bundle 四项未测；相同 PNG 的已目视证据作补充，**不改 JSON 的 skip**。1 warn 为 engines 声明偏宽。结果仅覆盖固定 e86 冷业务源和当时随包工具；文档收口没有被冒称为再次冷验。
 
-**员工侧（限事故整改后的新会话）**：历史返修 pi 会话未执行任何命令、进程或删除操作，只改文件与文档；无新增临时目录、无新增残留进程。事故前首轮员工确实执行过测试与清理，见下面「首轮员工越界」。
+## 7. 历史追溯
 
-**管理验收产生的目录**：均在 root 明确授权的**仓库 workspace 专属忽略目录**内（相对路径 `.agent-runs/local-06-windows-gate1`，位于仓库 workspace 的 ignored 根，**不是**独立 worktree 内的子目录；版本化文档不写其绝对路径），先核验祖先链再新建，各自带 manifest；脚本自身默认根仍是 `<workbench>/tmp/windows-delivery`，本轮未用该默认根做管理验收。run-a 按 `--keep` 保留其精确根；run-b 精确根由唯一删除守卫清理并核验（`completed=true / manifestVerified=true`，管理者独立只读确认已不存在）；`guard-scratch` / `test-scratch` / `test-scratch-r1` 为本次自建的 junction fixture（预期拒绝证据），保留不删。没有按前缀 / 通配 / TEMP 的删除，也不为“美观”清理早期残留。
+### 历史失败、返修与旧结果
 
-**首轮员工越界（已停止，事实保留）**：该员工曾按 `$env:TEMP` 下 `wb-local06-*` 通配匹配递归删除，并递归统计过同前缀目录，删除前未逐项核验 manifest 所有权 / 绝对路径 / 重解析点；匹配到 8 个目标，其中 4 个可由 ignored 运行目录的结果 JSON（`destRoot` / `workbenchDir`）精确对应到其 run1–run4 失败临时根，另 4 个归属**未能核实**（0.00 MB 只是两位小数统计，不能推断为空 / 安全 / 自有）。因此可证明 4 个属于本人、4 个归属未知：既不能断言误删他人目录，也无法声称零影响。其进程随后被管理者按核实身份停止（非正常完成退出），7 个新增文件 WIP 原地保留、HEAD 仍为 `e86d248…`，未提交 / 推送 / PR / 合并。另有带通配符的 `wb-probe-*` 删除与若干手动清理，同样不满足“删除前精确目标核实”，已统一禁止。完整管理审计见仓库忽略的 `.agent-runs/local-06-windows-cleanup-audit.md`。
+以下按发生顺序保留；“当时未跑”描述历史快照，当前验证以上表为准。
 
-**代码 / 文档限制（已落地；旧候选验收覆盖，返修后的代码仅管理三语法通过与一字符串失败，其余未实跑）**：临时写入只在 workspace 专属根（默认 `<workbench>/tmp/windows-delivery`，或显式 `--scratch-root` / `-ScratchRoot` 的授权绝对路径）；每根一份 manifest v2（逐项删除目标 + realpath）；mkdir 前与删除前核验完整祖先链 + realpath；禁止通配 / 前缀删除、禁止枚举或清理系统 TEMP、禁止用目录大小或名称推断归属；无法证明归属就保留并非零报告。旧候选的 19 用例与两次冷验收实际执行过这些守卫（含 junction 拒绝回归）；两轮静态返修新增 / 变动的用例（自有候选目标上的 relative / drive-relative / root-relative 拒绝、路径字符串边界（不完整 UNC / 设备路径变体）、out / release / **scratch base** 根与祖先 junction、冷拷贝入口源 / 目标 alias、缺字体 blocked 保留、`-ScratchRoot` 原始路径与空白拒绝）除管理 gate2 字符串一项失败外，其余**未实跑**。
+1. 首轮员工按系统 TEMP 下 wb-local06-* 通配递归删除并统计，未逐项确权或核验重解析点。匹配 8 目标：4 个由 run1–run4 结果 JSON 精确对应本人，另 4 个归属与实际影响未证；0.00 MB 不能推断为空 / 安全。另有 wb-probe-* 通配删除及手动清理，同样不合规。管理者按核实身份停止其进程，非正常完成；当时 7 文件 WIP 保留。不能断言误删他人，也不能声称零影响。run6 / run7 / run8 等旧结果不作现版依据。完整本地事故审计保存在 .agent-runs/local-06-windows-cleanup-audit.md（ignored）。
+2. 旧候选 5fc23424176e4d582c4d5ec213f754caefbfe0c0：语法 3/3、基础守卫 7/7；完整初次 18/19（W2 目录期望断言失败），定点修正后新根 19/19、0 skip。两次旧 cold 各 11 阶段 / 158 pass / 1 warn / 9 skip，全离线，一 keep、一守卫清理。5 PDF / 7 页曾实际目视；W2 真实 exit 2 / w2_contract_pending，无 DB / 迁移 / 安装副作用。这些正常路径结果随后仍被独审拒绝。
+3. 5fc2342 独审三项 P2：缺字体必需 PDF 缺失仍 exit 0；out / release 根与祖先 junction 漏审；PowerShell 先规范化相对 ScratchRoot 后误接受。两轮静态返修先补失败阻断与路径守卫，再修负测候选越界、scratch base 在 out 前审核、完整 UNC / 设备路径判定、冷拷贝入口复核。返修 1 员工 exit 0 但未放行运行；当时管理仅三语法通过、一字符串失败，28→29 项登记不等于已跑。后续 fixture 副本隔离、默认 cwd / scratch、PS5 BOM 与路径判定继续修正；历史未跑范围已由当前完整实跑补验。
+4. 历史默认 sandbox 红、PowerShell PSAuthorization 拒绝、gate2 字符串失败、gate3 纯 3/3 / FS 6/7 均保留，不能倒写为当时通过。合 main 后曾因缺 exceljs 为 29/32 红；按固定 lock / 专属缓存离线恢复后旧 7946 对应源码 32/32、两次旧 cold 各 11 阶段 / 163 pass / 1 warn / 9 skip。163 只属于旧代码，当前 cold 使用 162。
+5. 7946cd7ed071fdb4d108f0abda7f3a7bce53cdb9 最终 fresh 独审再发现两 P2：服务 stop 未知仍继续同目录启动、exit 被当作 close；launcher HTTP / 断言异常绕过统一收尾。窄修最初仅 5 项纯验证与语法检查，之后新增真实故障回归；独立源码窄审确认两条因果链已消除、无 P1 / P2。管理者已补当前 11 / 2 / 39 与两次新 cold；旧正常路径不能替代修后故障证据。
+6. reviewer 自己的误 cwd harness 在仓库根建出 guard/independent-3486ff9d4580c625（自有 manifest）与空 out-target；junction 因 EPERM 未创建，无下游写入，两目录保留。review 根 .agent-runs/local-06-review-5fc234-9f62b17c 的两次缺字体 scratch 与篡改 manifest guard fixture，以及旧 gate junction / blocked fixture 均保留，不补清理；harness 已改为 import.meta 锚定。
+7. Issue #49 原生异常 3221226505 根因仍未定位。已知越界删除行为、4 个目标未知归属 / 影响、未知崩溃根因是不同事实；当前通过不关闭任何一项，也不证明所有系统进程 / 历史残留已核查。
 
-**本轮新增测试的保留行为**：out / release / scratch / 冷拷贝入口的 junction 用例的 fixture（junction 只指向测试自己在同一自有根内建的目标）按预期拒绝后**保留不删**，不进通用 after 的“全清”断言；缺字体真实 CLI 用例在 blocked 时会保留 `out` 与 CLI 自建工作根（含 manifest）作为证据，同样保留不补清理；纯字符串 / 裸路径拒绝用例不建任何目录，其自有 fixture 仍走共享守卫正常清理。
+## 8. 数据、进程与清理边界
 
-**独立独审（reviewer）现场与它自己的事故（事实保留，不由本次员工处理）**：reviewer 在观察到的 review 根（相对仓库 workspace：`.agent-runs/local-06-review-5fc234-9f62b17c`）下留下了两次缺字体运行的 scratch 根、一个故意篡改 manifest 的 guard fixture，均保留未删。
+验收只用合成数据，不触真实账套、凭据、税局 / 浏览器旧会话；不读取用户字体目录或用户 npm 配置，不 dump env。网络仅固定 lock 已授权公共来源。服务只回环监听、动态端口，不复用旧服务，不按 PID / 名称扩大回收。
 
-reviewer 另有一次**自己的工具事故**：首个 boundary harness 错用 `process.cwd()` 并从仓库根启动，在仓库 workspace 根下建出了 `guard/independent-3486ff9d4580c625`（含自己的 manifest）与一个空 `out-target`；随后 junction 创建因 EPERM 失败，未产生链接或下游写入。两个目录**保留未删**（未做任何手工清理），harness 已改为 `import.meta` 锚定。因此本轮**不得**声称“全部无意外目录 / 已彻底清理”；这里只记事实与相对路径，不写本机绝对路径。
+每次 capture 在自有 fixture 副本运行，cwd / 默认 scratch / TEMP / TMP / fallback data 明确归本轮；负测候选仅落自己 fixture。默认根真实建根与空白拒绝在副本覆盖，真实卷根仅纯路径预检。manifest v2 双向核验、完整祖先链与唯一删除守卫保持。junction、blocked、故障或回收未知现场按协议保留；未知即阻断后续安装 / 业务 / 删除。本次文档实施者没有创建或清理任何验收 fixture。
 
-**两类未知要分开**：该越界行为本身是**已知**的（未确权即按通配递归删除）；但其 4 个目标的**归属与是否已造成实际影响仍未知 / 未证实**；而 Issue #49 的一次原生异常（`3221226505`）的**崩溃根因才是未定位**。三者不因本次测试全绿而消除；如需复盘由 root 另行安排，不在本交接扩写。
+当前 cold keep 一个精确工作根保留；cleanup 由守卫清除、scratch 实际为空。历史 gate / guard / out-target / reviewer 现场仍保留，不代表全盘无残留。
+## 9. 未完成与交接动作
 
-## 9. 未完成 / 未验证
+### 未完成与下一步
 
-已完成（**旧候选 `5fc2342`，已被独审拒绝；不得当成本轮结果**，管理者实跑，见 §6）：语法检查；基础守卫 pattern 7/7；完整 19 用例；两次独立 `install-start --require-packaged-tooling` 冷验收；PDF 5 份 7 页逐页目视；W2 负验收。
+- 管理者仍须锁定最终完整 head，对全 PR 和三份收口文档独立审查，再处理 PR / 自动合并与交接；源码窄审不代替最终接受。当前未开 PR、未合并，不关闭 LOCAL-06 总包。
+- W2 真实升级 / 回退仍 pending / blocked。core5 / 辅助核算、LOCAL03、银行、审计 B/C、批量与 LOCAL07 检查点恢复均需精确上游提交和 schema 契约；固定 e86 业务冷源不能覆盖最终整合版。未知组件表继续拒绝备份，禁止过滤表或改版本号伪造兼容。
+- engines >=22.5.0 声明仍偏宽；共享 engines / test-all / README / STATE / 索引未在本任务修改。Windows 套件仍以直接命令运行，不称已挂入 npm test。
+- 其它 Node patch / 旧 Node 二进制 / 架构 / 干净 OS / 正式安装器 / 完整离线 bundle 未测；仅 Node 24.15.0 / Windows x64 已测。22.16 / 24.0 为 API 分析。
+- HTTP / 页面 XLSX / PDF 下载未接线，仍 400 report_format_unsupported；Office 文件来自同 DTO 纯渲染模块。真实税局接入 0，未用真实账套 / 凭据测试。
+- 阶段预算为耗时后验，不能中途中断；子进程 / HTTP / 探针有真实 deadline，无总进程 watchdog。原生崩溃根因与事故未知影响继续保留。
 
-仍未完成：
-
-1. **两轮静态返修的全部验证**：返修 1 的 3 项 P2 与返修 2 的 5 项静态门槛均已写入代码，历史员工未执行测试；管理已有三语法通过与一字符串失败，尚需管理者先审 diff（重点：新增路径守卫 / scratch base 前置 / 冷拷贝入口 / 负测 fixture 落点），再在**全新 UUID gate 自有根（不得复用 gate2）**跑批准验证（含静态计数 28 用例、`node --check` 3/3、缺字体真实 CLI 的 exit 2 + 保留现场、完整随包冷验收、两月 HTTP / 5 报表 / 备份恢复 / 重复启动），之后才能重新冻结 7 文件候选；本包未 PR、未合并；
-2. 正式安装器 / 完整离线发行 bundle、干净 OS、其它架构、旧 Node 二进制（本轮无旧二进制，`skipped.old_node_binary`）；22.16 / 24.0 只是 API 分析，不是实测支持；
-3. `package.json` engines 声明（仍 `>=22.5.0`）与 `test-all` 挂载、README / STATE / 索引更新，需共享 owner 窗口授权；
-4. HTTP / 页面 XLSX / PDF 接线（仍 `400 report_format_unsupported`）；脚本自身无读图能力，人眼结论始终由人做；
-5. W2：core v4 的 v3→v4 迁移 / 恢复、02 冻结 backup 新版本、03、银行、审计 B–C、批量最终契约集成；每种组合需上游提交与精确 schema 契约，**真实升级尚未完成**；
-6. 阶段预算是**耗时后验**，不是中途硬总时限（无总进程 watchdog）；该局限保留，是否加强由管理者 / root 评估；
-7. Issue #49 原生异常（`3221226505`）原因仍未知；本次受控运行未见同码，不声明已修复 / 无关；
-8. 旧候选曾记录“本轮不要求机械重复第三次全套验收”，但该结论**只对那版代码成立**；本轮（独审返修）改了 4 个代码文件 / 1 个测试，**必须**由管理者在全新自有根重跑完整验证后才能重新冻结候选（见上条 1），不能沿用旧结论。
-9. 保留的未知边界：原生 `3221226505` 未定位；非新 OS，仅 24.15.0 / win32 / x64；W2 真实升级仍 blocked；旧事故 8 个目标中 4 个归属未证；reviewer 事故的 `guard/independent-xxxx` 与空 `out-target` 保留未删。
-
-## 10. 下一步
-
-1. 管理者先审本轮 diff（重点：`auditScratchBase` / `copyReleaseWhitelist` / 原始路径判定 / 测试 fixture 落点），必要时退回继续修；不接受“未实跑就先冻结候选”；
-2. 通过静态审核后，在**全新 UUID gate 自有根（不得复用 gate2）**重跑批准验证：`node --check` 3 个脚本；完整测试（静态计数 28 用例）；带完整前置的缺字体真实 CLI（预期 exit 2 / blocked / 保留输出与工作根，不得跳过）；完整 `install-start --require-packaged-tooling` 随包冷验收（两月 HTTP / 5 报表 / 备份恢复 / 重复启动）；W2 仍 `w2_contract_pending`；
-3. 真实结果另行返回文档（不得预先写成已通过），再冻结候选 / PR / 自动合并（Refs #20 / #49，不误关总任务）；
-4. W2 与共享窗口（engines / `test-all` / README / 索引）另行登记；
-5. 先更新本交接再关闭本员工会话；下一包使用新进程、新会话。
-
-本次安全隔离实现：每次 capture 自建独立所有权 fixture，复制 launcher / runtime / delivery 及需要的工具文件，默认 cwd 与默认 scratch 均归副本；所有 child 显式配置自有 TEMP / TMP / fallback data / scratch，业务数据参数只允许 suite 自有 fixture。非零、超时或未回收 child 的 fixture 保留并记录原因；无按 PID / name 扩大回收。默认根真实建根覆盖与显式空白 base 均在副本独立 child，真实卷根只经过与建根函数共用的纯预检，不触 FS。mixed-device 使用“两分隔符 + ? + 分隔符”；原 `?.` 名称另按非法 UNC host 拒绝。未增加删除入口：manifest v2 双向核对和唯一 rmSync 保持。缺字体 exit 2 / CSV-XLSX 可用、入口祖先 mkdir 前审核与 copy 再核验的原修复保持，尚待新门后的真实验收。
-
-本次兜底实际只运行三项 `node --check`（均 exit 0）与 PowerShell Parser 静态解析（0 errors），未 dot-source / 执行 launcher，未跑字符串测试、Windows FS 负测、full、heavy 或冷验收，未清理任何目录。
-
-
-## 2026-10-23 npm / Office 生命周期 P2 窄修（待独立验收）
-
-本次按 Issue #59 已认领的窄范围，只改交付检查脚本、正式测试与本任务三份文档；runtime / PowerShell launcher 冻结只读，业务代码、依赖及 lock、共享 test-all 未改。主线仍为本机单用户多账套；冷业务源 e86 的边界不因本次修改改变，W2 真实升级仍 `w2_contract_pending`，未 PR / 未合并。
-
-修前管理门对应旧七 SHA：pure 3、FS 7、runtime 7、service 5、remaining 6，共 28 个非 HEAVY 用例，均 exit 0 / skipped 0；这些是修前结果，不能充当当前新哈希通过。此前字符串 / PowerShell / junction 失败与旧候选被拒记录均保留，不被本段覆盖。
-
-本次控制流：只有自有 child 的 `close` 才标记 `reclaimed=true`；未启动、timeout（即使 code 0 且已 close）、hard deadline、未回收或回收未知均立即终止，先留日志和失败事实，再抛阶段错误，不继续同目录安装 / 写业务产物 / 删除。npm 只在明确已回收且以 `npm error code ENOTCACHED`（兼容 `npm ERR!`）报告的离线缓存缺失时回退在线；网络 / 权限 / 完整性 / 参数错误均停止并保留。在线安装成功且确认回收后才允许 manifest 守卫删除本轮 node_modules，再离线重装；每一步异常都停止，后续成功不能覆盖前序失败。
-
-Office helper 只写一次，留到全部渲染、探针、断言及必需 PDF 产物检查成功后，才经原 manifest 守卫删除；失败、timeout、未知回收及缺字体 blocked 均保留 helper / 模块 / 工作根 / 输出 / manifest。可选 Python 不存在（ENOENT 且无 pid）仍诚实 unavailable；其它生命周期异常立即失败，不能转为可选 skip。
-
-本次实际验证（实施者执行）：`D:/node.exe --check scripts/windows-delivery-check.mjs` 与 `--check test/windows-delivery.test.mjs` 均 exit 0；定向 pattern `^(子进程生命周期：|依赖安装决策：|Office helper 生命周期：)` 实际 3/3、exit 0、skipped 0。三个纯用例驱动生产所用安装编排与成功清理门，覆盖各步骤 code 0 + 异常 flags、正常缓存缺失 / 命中、非缓存错误、清理拒绝，以及 online / remove / reinstall 的实际回调次数与顺序；未启动真实 npm 或服务，不创建或清理 fixture。原 29 项业务用例及其断言保留，现静态登记共 32 项；原用例本轮未重跑。
-
-未测：真实超时回收 / spawnError 故障注入、Windows FS / 服务链、HEAVY 缺字体、full、npm 在线 / 离线冷验收、PDF 逐页视觉检查、干净 OS / 其它架构及 W2。须管理者在新哈希独立门与全新自有根验收后再决定后续，不以纯决策通过冒充完整交付。未触旧 fixture、系统 TEMP、真实账套或凭据；未按 PID / name 回收，未启动模型 / 子 agent。
-
-旧事故事实继续有效：曾按通配删除 8 个目标，4 个可证本人、4 个归属与实际影响未知，不能据本次结果宣称零影响；原生异常 `3221226505` 根因仍未知；reviewer 自己的意外目录仍保留。上述事实不因当前纯测试通过而关闭。
+本实施会话交付后冻结停止；管理者继续最终完整 head 审查、PR 与合并，不把三文档收口当作 LOCAL-06 全包完成。

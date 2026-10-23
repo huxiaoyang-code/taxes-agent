@@ -1008,7 +1008,52 @@ async function installDependencies(run, { npm, nodePath, copied, cache, tempRoot
 
 // ------------------------------------------------------------------ 服务器进程
 
-async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, port = 0, font, fontFamily, label }) {
+/** Production-owned child observer: exit is diagnostic; only close proves reclamation. */
+export function observeOwnedChild(child, { wait = waitBounded, termMs = 10000, killMs = KILL_GRACE_MS } = {}) {
+  let closed = false;
+  let exited = false;
+  let info = null;
+  let spawnError = null;
+  let stopping = null;
+  const completion = new Promise((done) => {
+    child.once("error", (error) => { spawnError = error; });
+    child.once("exit", () => { exited = true; });
+    child.once("close", (code, signal) => { closed = true; info = { code, signal }; done(info); });
+  });
+  return {
+    get closed() { return closed; }, get exited() { return exited; },
+    get spawnError() { return spawnError; }, get info() { return info; },
+    wait: (ms) => closed ? Promise.resolve(info) : wait(completion, ms),
+    stop() {
+      if (!stopping) stopping = (async () => {
+        if (closed) return info;
+        try { child.kill(); } catch { /* owned handle only */ }
+        let result = await wait(completion, termMs);
+        if (!result) {
+          try { child.kill("SIGKILL"); } catch { /* owned handle only */ }
+          result = await wait(completion, killMs);
+        }
+        if (!closed || !result) {
+          // Do not let unknown owned handles keep the manager event loop alive.
+          // This changes no reclamation fact; callers must record unknown and retain.
+          child.stdout?.unref?.(); child.stderr?.unref?.(); child.unref?.();
+          throw new StageError("owned_child_close_unknown");
+        }
+        return result;
+      })();
+      return stopping;
+    },
+  };
+}
+
+function waitBounded(promise, ms) {
+  return new Promise((done) => {
+    const timer = setTimeout(() => done(null), ms);
+    promise.then((value) => { clearTimeout(timer); done(value); });
+  });
+}
+
+export async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, port = 0, font, fontFamily, label }, ops = {}) {
   if (existsSync(dataDir) && !statSync(dataDir).isDirectory()) throw new StageError("data_dir_not_directory");
   const env = minimalEnv({
     TEMP: join(tempRoot, "tmp"),
@@ -1020,7 +1065,7 @@ async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, por
     REPORT_PDF_FONT_FAMILY: fontFamily ?? undefined,
   });
   const started = Date.now();
-  const child = spawn(nodePath, [join(workbenchDir, "server", "server.mjs")], {
+  const child = (ops.spawn ?? spawn)(nodePath, [join(workbenchDir, "server", "server.mjs")], {
     cwd: workbenchDir,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -1029,39 +1074,19 @@ async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, por
   let stdout = "";
   let stderr = "";
   let ready = false;
-  let exited = false;
-  let exitInfo = null;
-  let terminatePromise = null;
-  const exitPromise = new Promise((resolvePromise) => {
-    child.once("exit", (code, signal) => {
-      exited = true;
-      exitInfo = { code, signal };
-      resolvePromise(exitInfo);
-    });
-  });
-  /** 有界停止：先 SIGTERM，超时再 SIGKILL；仍不退出就登记残留并如实报失败。 */
-  const terminate = (reason) => {
-    if (terminatePromise) return terminatePromise;
-    terminatePromise = (async () => {
-      if (exited) return { exited: true, info: exitInfo, unreclaimed: false };
-      try { child.kill(); } catch { /* ignore */ }
-      let finished = await Promise.race([exitPromise, new Promise((resolveDelay) => setTimeout(() => resolveDelay(null), 10000))]);
-      if (!finished) {
-        try { child.kill("SIGKILL"); } catch { /* ignore */ }
-        finished = await Promise.race([exitPromise, new Promise((resolveDelay) => setTimeout(() => resolveDelay(null), KILL_GRACE_MS))]);
-      }
-      if (!finished) {
-        run.recordResidual({ kind: "server", label, pid: child.pid ?? null, reason });
-        run.addAssertion(`${label}.service_reclaimed`, "fail", "service_not_reclaimed", { pid: child.pid ?? null, reason });
-        // 不把杀不掉的孩子留给父进程事件循环：断开管道并 unref，只保留如实残留记录。
-        try { child.stdout?.destroy(); } catch { /* ignore */ }
-        try { child.stderr?.destroy(); } catch { /* ignore */ }
-        try { child.unref?.(); } catch { /* ignore */ }
-        return { exited: false, info: exitInfo, unreclaimed: true };
-      }
-      return { exited: true, info: finished, unreclaimed: false };
-    })();
-    return terminatePromise;
+  const lifecycle = observeOwnedChild(child, ops.lifecycle);
+  const terminate = async (reason) => {
+    try {
+      const info = await lifecycle.stop();
+      run.note(`${label}.service_close`, "reclaimed", { ...info, reason });
+      return info;
+    }
+    catch (error) {
+      run.recordResidual({ kind: "server", label, pid: child.pid ?? null, reason, exited: lifecycle.exited, closed: lifecycle.closed, spawnError: lifecycle.spawnError?.code ?? null });
+      run.addAssertion(`${label}.service_reclaimed`, "fail", "service_not_reclaimed", { reason });
+      // Unknown close blocks callers, including restart and sequential same-directory starts.
+      throw error;
+    }
   };
   const portPromise = new Promise((resolvePromise, rejectPromise) => {
     const timer = setTimeout(() => rejectPromise(new StageError("server_not_ready_timeout")), LIMITS.readinessMs);
@@ -1070,7 +1095,7 @@ async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, por
     child.stdout.on("data", (chunk) => {
       if (stdout.length < MAX_STREAM_BYTES) stdout += chunk.toString("utf8");
       const match = /127\.0\.0\.1:(\d+)\//.exec(stdout);
-      if (match) { ready = true; clearTimeout(timer); resolvePromise(Number(match[1])); }
+      if (match) { clearTimeout(timer); resolvePromise(Number(match[1])); }
     });
     child.stderr.on("data", (chunk) => {
       if (stderr.length < MAX_STREAM_BYTES) stderr += chunk.toString("utf8");
@@ -1080,33 +1105,33 @@ async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, por
   try {
     actualPort = await portPromise;
   } catch (error) {
-    await terminate("readiness_failed");
-    run.log(`${label}-start-failure`, stdout, stderr);
+    try { await terminate("readiness_failed"); }
+    finally { run.log(`${label}-start-failure`, stdout, stderr); }
     throw error;
   }
   const base = `http://127.0.0.1:${actualPort}`;
   const requested = [];
   const request = async (method, path, body) => {
     requested.push(path.split("?")[0]);
-    return fetchJson(`${base}${path}`, { method, body });
+    return (ops.fetchJson ?? fetchJson)(`${base}${path}`, { method, body });
   };
-  // Confirm readiness with bounded HTTP; a printed port alone is not readiness.
-  let lastError = null;
-  const readyDeadline = Date.now() + LIMITS.readinessMs;
-  while (Date.now() < readyDeadline) {
-    try {
-      const probe = await request("GET", "/api/account-sets");
-      if (probe.status === 200) break;
-      lastError = new StageError("server_not_ready_http", { details: { status: probe.status } });
-    } catch (error) {
-      lastError = new StageError("server_not_ready_http");
+  // Port output is only a candidate. HTTP success and a live owned child are both required.
+  try {
+    const readyDeadline = Date.now() + (ops.readinessMs ?? LIMITS.readinessMs);
+    while (Date.now() < readyDeadline) {
+      if (lifecycle.exited || lifecycle.closed || lifecycle.spawnError) throw new StageError("server_exited_before_ready");
+      try {
+        const probe = await request("GET", "/api/account-sets");
+        if (probe.status === 200 && !lifecycle.exited && !lifecycle.closed && !lifecycle.spawnError) { ready = true; break; }
+      } catch { /* bounded HTTP retry, never return an unready handle */ }
+      if (lifecycle.exited || lifecycle.closed || lifecycle.spawnError) throw new StageError("server_exited_before_ready");
+      await delay(100);
     }
-    if (exited) { lastError = new StageError("server_exited_before_ready", { details: { exitCode: exitInfo?.code ?? null } }); break; }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  if (!exited && lastError && Date.now() >= readyDeadline) {
-    await terminate("http_readiness_failed");
-    throw lastError;
+    if (!ready) throw new StageError("server_not_ready_http");
+  } catch (error) {
+    try { await terminate("http_readiness_failed"); }
+    finally { run.log(`${label}-start-failure`, stdout, stderr); }
+    throw error;
   }
   const handle = {
     child,
@@ -1117,8 +1142,7 @@ async function startServer(run, { nodePath, workbenchDir, dataDir, tempRoot, por
     get: (path) => request("GET", path),
     post: (path, body) => request("POST", path, body),
     async stop() {
-      const result = await terminate("stop");
-      return result.info;
+      return terminate("stop");
     },
     stdout: () => stdout,
     stderr: () => stderr,
@@ -1802,18 +1826,18 @@ async function illegalDirectoryProbe(run, { nodePath, workbenchDir, tempRoot, ru
   run.assert("failures.illegal_data_dir_untouched", sha256File(filePath) === before, { code: "illegal_data_dir_mutated" });
 }
 
-async function startScriptProbe(run, { tempRoot, nodePath, startScript, scratchRoot }) {
-  if (!existsSync(startScript)) {
+export async function startScriptProbe(run, { tempRoot, nodePath, startScript, scratchRoot }, ops = {}) {
+  if (!(ops.existsSync ?? existsSync)(startScript)) {
     run.addAssertion("start_script.available", "blocked", "windows_start_script_missing");
     return;
   }
   const powershell = join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  if (!existsSync(powershell)) {
+  if (!(ops.existsSync ?? existsSync)(powershell)) {
     run.addAssertion("start_script.windows_powershell_5_1", "blocked", "windows_powershell_5_1_unavailable");
     return;
   }
   const dataDir = join(tempRoot, "data-start-script");
-  const child = spawn(powershell, [
+  const child = (ops.spawn ?? spawn)(powershell, [
     "-NoProfile", "-File", startScript,
     "-NodePath", nodePath, "-DataDir", dataDir, "-Port", "0", "-MaxRunSeconds", "4",
     "-ScratchRoot", scratchRoot,
@@ -1826,96 +1850,77 @@ async function startScriptProbe(run, { tempRoot, nodePath, startScript, scratchR
   let stdout = "";
   let stderr = "";
   let servicePid = null;
-  let port = null;
-  let exited = false;
-  const exitPromise = new Promise((resolvePromise) => child.once("exit", (code, signal) => { exited = true; resolvePromise({ code, signal }); }));
+  let finished = null;
+  let failed = false;
+  const lifecycle = observeOwnedChild(child, ops.lifecycle);
+  const alive = ops.isProcessAlive ?? isProcessAlive;
+  const wrapperDeadline = Date.now() + (ops.wrapperMs ?? LIMITS.startScriptMs);
+  const waitWrapper = () => lifecycle.wait(Math.max(0, wrapperDeadline - Date.now()));
   const trackPid = () => {
     const match = /windows_start_service_pid=(\d+)/.exec(stdout);
-    if (match && servicePid === null) servicePid = Number(match[1]);
+    if (match) servicePid = Number(match[1]);
   };
-  child.stdout.on("data", (chunk) => {
-    if (stdout.length < MAX_STREAM_BYTES) stdout += chunk.toString("utf8").slice(0, MAX_STREAM_BYTES);
+  child.stdout?.on("data", (chunk) => {
+    if (stdout.length < MAX_STREAM_BYTES) stdout += chunk.toString("utf8").slice(0, MAX_STREAM_BYTES - stdout.length);
     trackPid();
   });
-  child.stderr.on("data", (chunk) => { if (stderr.length < MAX_STREAM_BYTES) stderr += chunk.toString("utf8").slice(0, MAX_STREAM_BYTES); });
-
-  /**
-   * 只回收**本进程自己创建**的包装器句柄（有界）。
-   * 服务子进程一律由包装器用自己保留的 Process 句柄停止；管理器**不做裸 `process.kill(servicePid)`
-   * 兜底**：PID 可能已被复用，而 `/api/account-sets` 能返回 JSON 也不能证明「这个 PID 就是该端口 /
-   * 该创建实例」，因此那不能称为 PID 身份验证。
-   */
-  const reclaimWrapper = async (reason) => {
-    if (exited) return { exited: true };
-    try { child.kill(); } catch { /* ignore */ }
-    let done = await Promise.race([exitPromise, delay(5000).then(() => null)]);
-    if (!done) {
-      try { child.kill("SIGKILL"); } catch { /* ignore */ }
-      done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
-    }
-    if (!done) {
-      run.recordResidual({ kind: "powershell_wrapper", label: "start-script", pid: child.pid ?? null, reason });
-      run.addAssertion("start_script.wrapper_reclaimed", "fail", "wrapper_not_reclaimed", { pid: child.pid ?? null, reason });
-      return { exited: false };
-    }
-    return { exited: true };
-  };
-
-  /**
-   * 服务子进程没被包装器回收时的**如实报告**：只做存活探测（不构成身份证明）、不终止任何进程，
-   * 记 fail 断言并保留目录，留给管理者定点核验。有界等待（最多约 2 秒）只是为了避免把
-   * “刚收到退出、还没来得及回收”误报成残留。
-   */
-  const reportUnresolvedService = async (reason) => {
-    trackPid();
-    if (servicePid === null) return;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (!isProcessAlive(servicePid)) {
-        run.note("start_script.service_stop", "not_alive_at_check", { reason });
-        return;
-      }
-      await delay(100);
-    }
-    run.recordResidual({ kind: "service", label: "start-script", pid: servicePid, reason: `identity_unverified:${reason}` });
-    run.addAssertion("start_script.service_identity_unverified", "fail", "service_identity_unverified", { pid: servicePid, reason });
-  };
-
+  child.stderr?.on("data", (chunk) => {
+    if (stderr.length < MAX_STREAM_BYTES) stderr += chunk.toString("utf8").slice(0, MAX_STREAM_BYTES - stderr.length);
+  });
   try {
-    port = await new Promise((resolvePromise, rejectPromise) => {
-      const timer = setTimeout(() => rejectPromise(new StageError("start_script_not_ready")), LIMITS.readinessMs);
-      child.once("exit", () => { clearTimeout(timer); rejectPromise(new StageError("start_script_exited_before_ready")); });
-      child.stdout.on("data", () => {
+    const port = await new Promise((done, reject) => {
+      const timer = setTimeout(() => reject(new StageError("start_script_not_ready")), ops.readinessMs ?? LIMITS.readinessMs);
+      const fail = (code) => { clearTimeout(timer); reject(new StageError(code)); };
+      child.once("error", () => fail("start_script_spawn_failed"));
+      child.once("exit", () => fail("start_script_exited_before_ready"));
+      child.stdout?.on("data", () => {
         const match = /127\.0\.0\.1:(\d+)\//.exec(stdout);
-        if (match) { clearTimeout(timer); resolvePromise(Number(match[1])); }
+        if (match) { clearTimeout(timer); done(Number(match[1])); }
       });
     });
+    const probe = await (ops.fetchJson ?? fetchJson)(`http://127.0.0.1:${port}/api/account-sets`);
+    run.assert("start_script.http_empty", probe.status === 200 && Array.isArray(probe.json) && probe.json.length === 0 && !lifecycle.exited && !lifecycle.closed, { code: "start_script_http_failed", details: { status: probe.status } });
+    finished = await waitWrapper();
+    run.assert("start_script.bounded_exit", finished?.code === 124, { code: "start_script_exit_not_bounded", details: { exitCode: finished?.code ?? null } });
+    run.assert("start_script.service_pid_tracked", servicePid !== null, { code: "service_pid_missing" });
+    run.assert("start_script.data_created", (ops.existsSync ?? existsSync)(join(dataDir, "workbench.db")), { code: "start_script_data_missing" });
   } catch (error) {
-    await reclaimWrapper("not_ready");
-    await reportUnresolvedService("not_ready");
-    run.log("start-script", stdout, stderr);
+    failed = true;
     throw error;
+  } finally {
+    // First allow the launcher its bounded natural shutdown so its .NET owned service
+    // handle can run finally. Never guess-kill the service by its printed PID.
+    let cleanupError = null;
+    try {
+      if (!lifecycle.closed) await waitWrapper();
+      if (!lifecycle.closed) await lifecycle.stop();
+    } catch (error) {
+      cleanupError = error;
+      run.recordResidual({ kind: "powershell_wrapper", label: "start-script", pid: child.pid ?? null, reason: "close_unknown", exited: lifecycle.exited, closed: lifecycle.closed, spawnError: lifecycle.spawnError?.code ?? null });
+      run.addAssertion("start_script.wrapper_reclaimed", "fail", "wrapper_not_reclaimed");
+    }
+    run.note("start_script.wrapper_close", lifecycle.closed ? "reclaimed" : "unknown", {
+      exited: lifecycle.exited, closed: lifecycle.closed, exitCode: lifecycle.info?.code ?? null,
+      signal: lifecycle.info?.signal ?? null, spawnError: lifecycle.spawnError?.code ?? null,
+    });
+    trackPid();
+    // ESRCH is absence only, never PID identity. Missing PID after a launched wrapper
+    // is unknown; spawn failure before execution is the sole no-service case.
+    let serviceUnknown = servicePid === null && !lifecycle.spawnError;
+    if (servicePid !== null) {
+      for (let attempt = 0; attempt < 20 && alive(servicePid); attempt += 1) await (ops.delay ?? delay)(100);
+      serviceUnknown = alive(servicePid);
+    }
+    if (serviceUnknown) {
+      run.recordResidual({ kind: "service", label: "start-script", pid: servicePid, reason: "identity_unverified" });
+      run.addAssertion("start_script.service_identity_unverified", "fail", "service_identity_unverified");
+      cleanupError ??= new StageError("service_identity_unverified");
+    }
+    run.note("start_script.service_stop", serviceUnknown ? "unknown" : (servicePid === null ? "spawn_failed_no_service" : "not_alive_at_check"));
+    run.log("start-script", stdout, stderr);
+    if (cleanupError) throw cleanupError;
+    if (!failed && (!lifecycle.closed || lifecycle.info?.code !== 124)) throw new StageError("start_script_exit_not_bounded");
   }
-
-  const probe = await fetchJson(`http://127.0.0.1:${port}/api/account-sets`);
-  run.assert("start_script.http_empty", probe.status === 200 && Array.isArray(probe.json) && probe.json.length === 0, { code: "start_script_http_failed", details: { status: probe.status } });
-  const finished = await Promise.race([exitPromise, delay(LIMITS.startScriptMs).then(() => null)]);
-  // 包装器应在 -MaxRunSeconds 到点后用自己的保留句柄停服务并退出 124；管理器只等这个结果。
-  if (!finished) {
-    // 超过有界宽限：只回收自有包装器句柄，服务状态如实记为未核实残留并 fail，目录保留。
-    await reclaimWrapper("wrapper_deadline_exceeded");
-    await reportUnresolvedService("wrapper_deadline_exceeded");
-  } else if (finished.code !== 124) {
-    // 非 124 退出（异常路径 / 自停失败）：服务是否已回收未核实，不猜测、也不裸杀。
-    await reportUnresolvedService(`wrapper_exit_${finished.code}`);
-  } else {
-    // 包装器声称有界退出，但服务仍存活 → 事实与声明不符，如实记残留并 fail。
-    await reportUnresolvedService("bounded_exit_but_service_alive");
-  }
-  run.log("start-script", stdout, stderr);
-  run.assert("start_script.service_pid_tracked", servicePid !== null, { code: "service_pid_missing" });
-  run.assert("start_script.bounded_exit", finished?.code === 124, { code: "start_script_exit_not_bounded", details: { exitCode: finished?.code ?? null, signal: finished?.signal ?? null } });
-  run.assert("start_script.service_released", servicePid === null || !isProcessAlive(servicePid), { code: "service_still_running", details: { tracked: servicePid !== null } });
-  run.assert("start_script.data_created", existsSync(join(dataDir, "workbench.db")), { code: "start_script_data_missing" });
 }
 
 async function stabilitySequential(run, { nodePath, workbenchDir, dataDir, tempRoot, setId }) {
@@ -1961,6 +1966,7 @@ async function stabilityParallel(run, { nodePath, workbenchDir, tempRoot }) {
     for (const item of stops) {
       if (item.status === "rejected") run.addAssertion("stability.parallel_stop", "fail", "service_stop_failed");
     }
+    if (stops.some((item) => item.status === "rejected")) throw new StageError("service_stop_failed");
   };
   if (startFailures.length > 0) {
     // 先回收已启动的自有句柄，再如实抛首个启动失败。
