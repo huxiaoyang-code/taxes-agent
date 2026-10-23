@@ -45,6 +45,18 @@ export function job(h,{file=false,long=false,report=false}={}) {
 }
 export function downgrade(h){h.db.exec('DROP TABLE local_batch_input_bindings; DROP TABLE local_batch_job_bindings; DROP TABLE local_batch_database_instances; UPDATE local_batch_component SET version=1');assert.equal(S.assertBatchSchema(h.db).version,1);}
 export function originalRows(db){return JSON.stringify(S.LOCAL_BATCH_V1_TABLES.filter(t=>t!=='local_batch_component').map(t=>[t,db.prepare('SELECT * FROM '+t+' ORDER BY rowid').all()]).concat([['sequence',db.prepare("SELECT * FROM sqlite_sequence WHERE name GLOB 'local_batch_*' ORDER BY name").all()]]));}
+export async function realReports(h,{window=null,formats=['csv','xlsx'],jobKey='report-'+randomUUID()}={}) {
+ const account=h.db.prepare('SELECT account_set_id,enterprise_key FROM import_enterprise_account_sets ORDER BY account_set_id LIMIT 1').get();
+ assert.ok(account);const manifest=S.validateManifest({schemaVersion:1,jobKey,concurrency:1,items:[{itemKey:'actual',source:{system:'synthetic',enterpriseKey:account.enterprise_key,enterpriseName:'Synthetic'},accountSetId:account.account_set_id,periods:[{period:'2026-01',reports:[{kind:'balance-sheet',formats}]}]}]}).manifest;
+ assert.ok(manifest);const outputDir=join(h.dir,'reports-'+jobKey);
+ const pause="console.log('W3A_WINDOW');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,30000);";
+ const setup=window==='before-rename'?"import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const rename=fs.renameSync;fs.renameSync=function(a,b,...rest){if(String(b).endsWith('.csv')){"+pause+"}return rename(a,b,...rest);};syncBuiltinESMExports();":"";
+ const hook=window==='after-publish'?"{afterArtifactPublish(){"+pause+"}}":'null';
+ const code=setup+"const R=await import('./server/local-batch-runner.mjs');const S=await import('./server/local-batch-storage.mjs');const manifest="+JSON.stringify(manifest)+";try{const manifestJson=S.canonicalJson(manifest);const result=await R.createAndRun({manifest,manifestJson,manifestHash:S.sha256(manifestJson),...S.buildPlan({manifest,manifestDir:"+JSON.stringify(h.dir)+"}),outputDir:"+JSON.stringify(outputDir)+",hooks:"+hook+"});console.log(JSON.stringify({status:result.finalStatus??result.status}));}finally{R.database.close();console.log('DB actualclose');}";
+ const result=await child(['--input-type=module','-e',code],{env:{WORKBENCH_DATA_DIR:h.dir},onOutput:window?(text,p)=>{if(text.includes('W3A_WINDOW'))p.kill();}:undefined});
+ if(window){assert.equal(result.closed,true);assert.match(result.out,/W3A_WINDOW/);}else {assert.equal(result.code,0,result.err+result.out);assert.match(result.out,/"status":"succeeded"/);}
+ const saved=S.getJobByKey(h.db,jobKey);assert.ok(saved);return {job:saved,manifest,outputDir,result};
+}
 async function main(){
  await suite('sync ensure is strict and genuine fresh receipt builds one atomic v2 instance',async()=>{
   const dir=join(ROOT,randomUUID()),receipt=S.claimFreshDataDir(dir),db=new DatabaseSync(join(dir,'workbench.db'));db.exec('PRAGMA foreign_keys=ON');try{const r=S.ensureBatchSchema(db,{receipt});assert.equal(r.version,2);assert.equal(r.created,true);assert.equal(typeof r.then,'undefined');const id=S.readBatchInstance(db).instance_id;assert.equal(S.ensureBatchSchema(db).created,false);assert.equal(S.readBatchInstance(db).instance_id,id);assert.equal(S.inspectBatchSchema(db).ok,true);}finally{db.close();S.releaseFreshClaim(receipt);}
@@ -115,7 +127,16 @@ async function main(){
   assert.equal(S.releaseFreshClaim(receipt),true);assert.equal(S.releaseFreshClaim(receipt),false);assert.equal(fs.existsSync(join(dir,S.FRESH_CLAIM_MARKER)),false);
   const after=Object.fromEntries(['','-wal','-shm'].map(x=>[x,hash(file+x)]));assert.deepEqual(after,before);assert.equal(fs.statSync(file,{bigint:true}).ino,identity.ino);assert.equal(fs.statSync(file,{bigint:true}).dev,identity.dev);console.log('same-inode sidecars before/after '+JSON.stringify({before,after}));
  });
+ await suite('claim fsync-after-write EIO keeps seed bytes and closes both creation fds',async()=>{
+  const target=join(ROOT,randomUUID()),code=
+   "import fs from 'node:fs';import {createHash} from 'node:crypto';import {syncBuiltinESMExports} from 'node:module';"+
+   "const target="+JSON.stringify(target)+";const path=target+'/workbench.db';const realOpen=fs.openSync,realSync=fs.fsyncSync,realStat=fs.fstatSync;const fds={};let seed=null;"+
+   "fs.openSync=(p,flags,...a)=>{const fd=realOpen(p,flags,...a);if(flags==='wx'){if(String(p).endsWith('workbench.db'))fds.db=fd;else if(String(p).endsWith('.local-batch-create'))fds.marker=fd;}return fd;};"+
+   "fs.fsyncSync=(fd,...a)=>{realSync(fd,...a);if(fd===fds.db){const st=realStat(fd);seed={sha256:createHash('sha256').update(fs.readFileSync(path)).digest('hex'),bytes:st.size,ino:String(st.ino),dev:String(st.dev)};throw Object.assign(new Error('after actual fsync'),{code:'EIO'});}};syncBuiltinESMExports();"+
+   "const S=await import('./server/local-batch-storage.mjs');let error=null;try{S.claimFreshDataDir(target);}catch(e){error=e.code;}const closed={};for(const [name,fd] of Object.entries(fds)){try{realStat(fd);closed[name]='open';}catch(e){closed[name]=e.code;}}const st=fs.statSync(path);const after={sha256:createHash('sha256').update(fs.readFileSync(path)).digest('hex'),bytes:st.size,ino:String(st.ino),dev:String(st.dev)};console.log(JSON.stringify({error,seed,after,closed,marker:fs.existsSync(target+'/.local-batch-create'),wal:fs.existsSync(path+'-wal'),shm:fs.existsSync(path+'-shm')}));";
+  const r=await child(['--input-type=module','-e',code]);assert.equal(r.code,0,r.err+r.out);const proof=JSON.parse(r.out.trim().split(/\r?\n/).at(-1));assert.equal(proof.error,'EIO');assert.equal(proof.seed.bytes,4096);assert.deepEqual(proof.after,proof.seed);assert.deepEqual(proof.closed,{marker:'EBADF',db:'EBADF'});assert.equal(proof.marker,false);assert.equal(proof.wal,false);assert.equal(proof.shm,false);console.log('fsync EIO preserved '+JSON.stringify(proof));
+ });
  if(CASE_FILTER)assert.equal(selectedSuites,1,'selected test name must match exactly one case');
- console.log((CASE_FILTER?'selected case':'12 local-batch-install suites')+' passed; retained '+ROOT);
+ console.log((CASE_FILTER?'selected case':'13 local-batch-install suites')+' passed; retained '+ROOT);
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)await main();

@@ -1,3 +1,5 @@
+> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+
 ## 2026-10-23 W2a 实施自测交接（未管理验收、未PR、未合并）
 
 基线为PR74实际merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`，Issue54仍OPEN。本片严格限定21路径窗口，实际改20文件；旧local-backup测试未改，bank/aux旧测试只运行未改。唯一授权fallback没有Git、没有自行派agent，也没有启动后端或税局服务。

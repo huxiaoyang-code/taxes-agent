@@ -312,24 +312,6 @@ export function claimFreshDataDir(dataDir, { pid = process.pid } = {}) {
     }
   }
 
-  /**
-   * 只删除「已由本进程创建 fd 的 fstat 证明身份、且路径上仍是同一对象、仍零字节」的库文件。
-   * 没有任何身份证明（identity 为空）时一律不删：不能拿「本进程曾在该路径 O_EXCL 成功过」当删除依据。
-   */
-  function discardOwnEmptyDatabase(identity) {
-    if (!identity) return false;
-    try {
-      const current = lstatSync(dbPath);
-      if (current.isSymbolicLink() || !current.isFile()) return false;
-      if (String(current.dev) !== String(identity.dev) || String(current.ino) !== String(identity.ino)) return false;
-      if (Number(current.size) !== 0) return false;
-      unlinkSync(dbPath);
-      return true;
-    } catch {
-      return false; // 文件已被替换 / 删除 / 已有内容：保留现场
-    }
-  }
-
   let markerFd;
   try {
     markerFd = openSync(markerPath, "wx");
@@ -396,13 +378,12 @@ export function claimFreshDataDir(dataDir, { pid = process.pid } = {}) {
     guard.stampFreshClaimNonce(token);
     return token;
   } catch (error) {
-    // 失败只清理「本进程刚创建、身份未变、除页 1 种子外没有任何结构」的对象；
-    // 被替换的外部文件与已被写入他人内容的对象一律保留现场。未经 guard 登记时按创建时的 fstat 身份自行收尾。
+    // 所有失败固定保留DB/WAL/SHM（含空文件/已写种子），不探测SQLite或删除库。
+    // 只关闭本次创建fd、释放仍由创建身份和期望字节证明属于自己的marker。
     if (token) {
-      try { guard.releaseFreshClaimFacts(token); } catch { /* 保留现场 */ }
+      try { guard.releaseFreshClaimFacts(token, { preserveDatabase: true }); } catch { /* 保留现场 */ }
     } else {
       try { closeSync(dbFd); } catch { /* 句柄关闭失败不影响结论 */ }
-      discardOwnEmptyDatabase(created);
       try { closeSync(markerFd); } catch { /* 句柄关闭失败不影响结论 */ }
       discardOwnMarker(markerIdentity);
     }
@@ -625,6 +606,73 @@ function readSavedJson(text) {
  // Batch's existing canonical serializer deliberately supports finite currency decimals.
  if(canonicalJson(value)!==text)FAIL('batch_content_invalid');return value;
 }
+/** Pure saved-row protocol checks. Never read historical source or output paths. */
+function batchArtifactPath(jobKey,itemKey,period,spec) {
+ const segment=(value,max)=>{
+  const text=String(value??'');
+  const cleaned=text.replace(/[^A-Za-z0-9._-]/g,'_').replace(/^\.+/,'_').slice(0,max)||'x';
+  return /^[A-Za-z0-9._-]+$/.test(text)&&text.length<=max?cleaned:cleaned+'-'+sha256(text).slice(0,8);
+ };
+ const filename=spec.kind+(spec.code?'-'+segment(spec.code,32):'')+'-'+period+'.'+spec.format;
+ return segment(jobKey,60)+'/'+segment(itemKey,60)+'/'+period+'/'+filename;
+}
+function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
+ const stages=new Map(actualStages.map(r=>[r.item_id+':'+r.period+':'+r.stage_key,r]));
+ const reportPlans=new Map();
+ for(const stage of actualStages)if(stage.stage_key.startsWith('report:')) {
+  const spec=expectedStages.get(stage.item_id+':'+stage.period+':'+stage.stage_key).spec;
+  reportPlans.set(stage.item_id+':'+stage.period+':'+spec.kind,true);
+ }
+ const snapshots=new Map();
+ for(const r of db.prepare('SELECT * FROM local_batch_snapshots').all()) {
+  const item=itemMap.get(r.item_id);
+  if(!item||item.job_id!==r.job_id||!REPORT_KINDS.includes(r.kind)||!PERIOD_RE.test(r.period)
+    ||!reportPlans.has(r.item_id+':'+r.period+':'+r.kind)
+    ||r.snapshot_key!==r.job_id+':'+r.item_id+':'+r.period+':'+r.kind
+    ||typeof r.dto_json!=='string'||!batchDigest(r.dto_hash)||sha256(r.dto_json)!==r.dto_hash
+    ||!batchDigest(r.business_hash)||!batchIso(r.created_at))return false;
+  const dto=JSON.parse(r.dto_json);
+  if(!isPlainObject(dto)||JSON.stringify(dto)!==r.dto_json)return false;
+  if((dto.kind!==undefined&&dto.kind!==r.kind)||(dto.period!==undefined&&dto.period!==r.period))return false;
+  if(r.csv_text===null?r.csv_hash!==null:typeof r.csv_text!=='string'||!batchDigest(r.csv_hash)||sha256(r.csv_text)!==r.csv_hash)return false;
+  snapshots.set(r.snapshot_key,r);
+ }
+ const mimes={csv:'text/csv; charset=utf-8',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',pdf:'application/pdf'};
+ for(const r of db.prepare('SELECT * FROM local_batch_artifacts').all()) {
+  const item=itemMap.get(r.item_id),job=jobMap.get(r.job_id);
+  const stage=stages.get(r.item_id+':'+r.period+':'+r.stage_key);
+  if(!positive(r.id)||!item||item.job_id!==r.job_id||!job||!stage||!stage.stage_key.startsWith('report:'))return false;
+  const spec=expectedStages.get(r.item_id+':'+r.period+':'+r.stage_key).spec;
+  const snapshot=snapshots.get(r.job_id+':'+r.item_id+':'+r.period+':'+r.kind);
+  if(!snapshot||!REPORT_KINDS.includes(r.kind)||!REPORT_FORMATS.includes(r.format)||r.kind!==spec.kind||r.format!==spec.format
+    ||r.account_code!==(spec.code??null)||r.artifact_key!==job.job_key+'#'+item.item_key+'#'+r.period+'#'+r.stage_key
+    ||!['publishing','published','invalid'].includes(r.status)||r.mime!==mimes[r.format]
+    ||typeof r.relative_path!=='string'||r.relative_path!==batchArtifactPath(job.job_key,item.item_key,r.period,spec)
+    ||!batchDigest(r.snapshot_hash)||!batchDigest(r.bytes_hash)||!positive(r.bytes)
+    ||!positive(r.attempt)||r.attempt>stage.attempt||!batchIso(r.created_at)||!batchIso(r.updated_at))return false;
+  const time=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
+  if(!time(r.render_started))return false;
+  if(r.format==='csv') {if(r.worker_thread_id!==null||r.render_finished!==null)return false;}
+  else if(!positive(r.worker_thread_id)||!time(r.render_finished)||r.render_finished<r.render_started)return false;
+  // An artifact of the current claim is bound to that claim, even before file publication/checkpoint.
+  // Older attempts may outlive a replaced mutable snapshot or a newer failed/running claim.
+  if(r.attempt===stage.attempt&&r.snapshot_hash!==stage.input_hash)return false;
+  if(stage.status===STAGE_STATUS.SUCCEEDED) {
+   const e=readSavedJson(stage.evidence_json);
+   if(r.status!=='published'||r.snapshot_hash!==stage.input_hash||r.snapshot_hash!==e.snapshotHash
+     ||r.bytes_hash!==stage.outcome_hash||r.bytes_hash!==e.bytesHash||r.bytes!==e.bytes
+     ||r.artifact_key!==e.artifactKey||r.relative_path!==e.relativePath
+     ||r.kind!==e.kind||r.format!==e.format||r.account_code!==(e.code??null))return false;
+  }
+  const latestHash=sha256(canonicalJson({dtoHash:snapshot.dto_hash,businessHash:snapshot.business_hash,format:r.format,code:r.account_code}));
+  // CSV bytes are absent from reportInputHash. Compare mutable CSV only for the
+  // current running publication; old/checkpointed artifacts retain their own byte evidence.
+  if(r.format==='csv'&&r.attempt===stage.attempt&&stage.status===STAGE_STATUS.RUNNING
+    &&r.status==='publishing'&&r.snapshot_hash===latestHash
+    &&(snapshot.csv_text===null||r.bytes_hash!==snapshot.csv_hash||r.bytes!==Buffer.byteLength(snapshot.csv_text,'utf8')))return false;
+ }
+ return true;
+}
 function batchContentValid(db,version) {
  const component=db.prepare('SELECT * FROM local_batch_component').all();
  if(component.length!==1||component[0].component!==LOCAL_BATCH_COMPONENT||component[0].version!==version||!batchIso(component[0].updated_at)||(component[0].note!==null&&typeof component[0].note!=='string'))return false;
@@ -669,8 +717,7 @@ function batchContentValid(db,version) {
   }else if(r.input_hash!==h)return false;
   if(r.stage_key.startsWith('import:')){const input=inputMap.get(j.id+':'+item.id+':'+spec.batchId);if(!input||input.period!==r.period||spec.payloadHash!==input.source_hash)return false;}
  }
- for(const r of db.prepare('SELECT * FROM local_batch_snapshots').all()){const item=itemMap.get(r.item_id);const dto=JSON.parse(r.dto_json);if(!isPlainObject(dto)||JSON.stringify(dto)!==r.dto_json||!item||item.job_id!==r.job_id||r.snapshot_key!==r.job_id+':'+r.item_id+':'+r.period+':'+r.kind||!batchDigest(r.dto_hash)||sha256(r.dto_json)!==r.dto_hash||!batchDigest(r.business_hash)||!batchIso(r.created_at)||(r.csv_text===null?r.csv_hash!==null:sha256(r.csv_text)!==r.csv_hash))return false;}
- for(const r of db.prepare('SELECT * FROM local_batch_artifacts').all()){const item=itemMap.get(r.item_id);if(!positive(r.id)||!item||item.job_id!==r.job_id||!batchDigest(r.snapshot_hash)||!batchDigest(r.bytes_hash)||!Number.isSafeInteger(r.bytes)||r.bytes<0||!batchIso(r.created_at)||!batchIso(r.updated_at))return false;}
+ if(!batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}))return false;
  for(const r of db.prepare('SELECT * FROM local_batch_locks').all())if(!( /^job:[1-9][0-9]*$/.test(r.resource_key)||/^account-set:[1-9][0-9]*$/.test(r.resource_key)||(r.resource_key.startsWith('book:')&&r.resource_key.length<=133&&!/[\u0000-\u001f\u007f]/.test(r.resource_key)&&r.resource_key.length>5))||!batchTech(r.owner_instance)||!positive(r.fencing_token)||(r.pid!==null&&!positive(r.pid))||!batchIso(r.acquired_at)||!batchIso(r.heartbeat_at)||!batchIso(r.lease_expires_at))return false;
  if(version===1)return true;
  const instances=db.prepare('SELECT * FROM local_batch_database_instances').all(),ids=new Map(instances.map(r=>[r.instance_id,r]));

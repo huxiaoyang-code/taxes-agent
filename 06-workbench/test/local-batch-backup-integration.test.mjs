@@ -1,4 +1,6 @@
-import {assert,fs,join,DatabaseSync,randomUUID,ROOT,S,LB,AS,fresh,job,logical,digest,hash,suite} from './local-batch-install.test.mjs';
+import {assert,fs,join,DatabaseSync,randomUUID,ROOT,S,LB,AS,fresh,job,logical,digest,hash,suite as baseSuite,realReports,child,originalRows,downgrade} from './local-batch-install.test.mjs';
+const REPORT_ONLY=process.env.BATCH_BACKUP_TEST_CASE==='report-p2';if(process.env.BATCH_BACKUP_TEST_CASE&&!REPORT_ONLY)throw Error('unknown backup test selection');let executed=0;
+async function suite(name,fn){if(REPORT_ONLY&&!name.startsWith('real report publication')&&!name.startsWith('each malformed snapshot/artifact'))return;await baseSuite(name,fn);executed++;}
 await suite('48 core3/4/5 x bank/aux x audit0/1/2 x batch1/2 official roundtrips',async()=>{
  let count=0;
  for(const version of [3,4,5])for(const bank of [false,true])for(const aux of version===5?[false,true]:[false])for(const audit of [0,1,2])for(const batch of [1,2]){
@@ -63,4 +65,85 @@ await suite('strict source/snapshot drift and component omission reject without 
  const h=await fresh({batch:2});try{const b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'omitted')}),m=b.manifest;assert.equal(b.ok,true);m.components=m.components.filter(c=>c.name!=='local-batch');fs.writeFileSync(join(b.backupDir,LB.MANIFEST_FILE),JSON.stringify(m));assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,false);}finally{h.close();}
 });
 function rewriteSnapshotDigest(b){const snapshot=join(b.backupDir,LB.SNAPSHOT_FILE),m=JSON.parse(fs.readFileSync(join(b.backupDir,LB.MANIFEST_FILE),'utf8'));m.snapshot.sha256=hash(snapshot);m.snapshot.bytes=fs.statSync(snapshot).size;fs.writeFileSync(join(b.backupDir,LB.MANIFEST_FILE),JSON.stringify(m));}
-console.log('6 local-batch-backup-integration suites passed; retained '+ROOT);
+
+await suite('real report publication windows and mutable history keep only saved-row authority',async()=>{
+ const roundtrip=async(h,name)=>{
+  assert.equal(S.inspectBatchSchema(h.db).ok,true,JSON.stringify(S.inspectBatchSchema(h.db)));const before=logical(h.db),b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,name+'-backup')});assert.equal(b.ok,true,JSON.stringify(b));assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,true);const target=join(h.dir,name+'-restore');assert.equal(LB.restoreNew({backupDir:b.backupDir,targetDir:target}).ok,true);const file=join(target,LB.TARGET_DATABASE_FILE),d=new DatabaseSync(file);d.exec('PRAGMA foreign_keys=ON');try{assert.equal(logical(d),before);assert.equal(S.inspectBatchSchema(d).ok,true);d.exec('DROP TABLE local_batch_input_bindings;DROP TABLE local_batch_job_bindings;DROP TABLE local_batch_database_instances;UPDATE local_batch_component SET version=1');const old=originalRows(d);await S.installBatchSchema(d,{dbPath:file,outDir:join(h.dir,name+'-upgrade')});assert.equal(originalRows(d),old);assert.equal(S.inspectBatchSchema(d).ok,true);}finally{d.close();console.log('restored/upgraded DB actualclose '+name);}assert.equal(logical(h.db),before);assert.equal(LB.createBackup({dbPath:file,outDir:join(h.dir,name+'-again')}).ok,true);console.log('legal actual '+name+' logical SHA256 '+digest(before));
+ };
+ for(const window of ['before-rename','after-publish']){const h=await fresh({batch:2});try{await realReports(h,{window,formats:['csv']});assert.equal(h.db.prepare('SELECT status FROM local_batch_artifacts').get().status,'publishing');assert.equal(h.db.prepare('SELECT status FROM local_batch_stages').get().status,'running');
+  const artifact=h.db.prepare('SELECT * FROM local_batch_artifacts').get();
+  for(const [field,bad] of [['bytes_hash','e'.repeat(64)],['bytes',artifact.bytes+1],['snapshot_hash','e'.repeat(64)]]) {
+   h.db.prepare('UPDATE local_batch_artifacts SET '+field+'=? WHERE id=?').run(bad,artifact.id);const badState=logical(h.db);assert.equal(S.inspectBatchSchema(h.db).ok,false,'current publishing '+field);assert.equal(LB.createBackup({dbPath:h.file,outDir:join(h.dir,'refuse-current-'+field)}).ok,false);assert.equal(logical(h.db),badState);h.db.prepare('UPDATE local_batch_artifacts SET '+field+'=? WHERE id=?').run(artifact[field],artifact.id);assert.equal(S.inspectBatchSchema(h.db).ok,true);
+  }
+  await roundtrip(h,window);}finally{h.close();}}
+ const invalid=await fresh({batch:2});try{const saved=await realReports(invalid,{formats:['csv']}),artifact=invalid.db.prepare('SELECT * FROM local_batch_artifacts').get(),stage=invalid.db.prepare('SELECT * FROM local_batch_stages').get();fs.writeFileSync(join(saved.outputDir,artifact.relative_path),'synthetic changed bytes');S.resetStage(invalid.db,{stageId:stage.id,status:S.STAGE_STATUS.NEEDS_REVIEW,errorCode:'evidence_changed'});S.resetStagesForRetry(invalid.db,{jobKey:saved.job.job_key});
+  const code="const R=await import('./server/local-batch-runner.mjs');try{await R.resumeJob({jobKey:"+JSON.stringify(saved.job.job_key)+",hooks:{beforeArtifactPublish(){console.log('W3A_INVALID_WINDOW');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,30000);}}});}finally{R.database.close();}";const c=await child(['--input-type=module','-e',code],{env:{WORKBENCH_DATA_DIR:invalid.dir},onOutput(text,p){if(text.includes('W3A_INVALID_WINDOW'))p.kill();}});assert.equal(c.closed,true);assert.match(c.out,/W3A_INVALID_WINDOW/);const old=invalid.db.prepare('SELECT * FROM local_batch_artifacts').get(),current=invalid.db.prepare('SELECT * FROM local_batch_stages').get();assert.equal(old.status,'invalid');assert.equal(old.attempt<current.attempt,true);await roundtrip(invalid,'invalid-old-attempt');
+ }finally{invalid.close();}
+ const h=await fresh({batch:2});try{const saved=await realReports(h),stage=h.db.prepare("SELECT * FROM local_batch_stages WHERE stage_key='report:balance-sheet:csv'").get(),old=h.db.prepare("SELECT * FROM local_batch_artifacts WHERE format='csv'").get();
+  const priorSnapshot=h.db.prepare('SELECT * FROM local_batch_snapshots').get(),changedCsv=priorSnapshot.csv_text+'\n';S.saveSnapshot(h.db,{jobId:priorSnapshot.job_id,itemId:priorSnapshot.item_id,period:priorSnapshot.period,kind:priorSnapshot.kind,dtoHash:priorSnapshot.dto_hash,businessHash:priorSnapshot.business_hash,dtoJson:priorSnapshot.dto_json,csvText:changedCsv,csvHash:S.sha256(changedCsv)});assert.notEqual(old.bytes_hash,S.sha256(changedCsv));await roundtrip(h,'checkpointed-csv-representation-history');
+  S.resetStage(h.db,{stageId:stage.id,status:S.STAGE_STATUS.NEEDS_REVIEW,errorCode:'evidence_changed'});S.resetStagesForRetry(h.db,{jobKey:saved.job.job_key,stageKey:stage.stage_key});
+  const code="const {db}=await import('./server/db.mjs');try{const A=await import('./server/accounting.mjs');const B=await import('./server/local-batch-actions.mjs');const S=await import('./server/local-batch-storage.mjs');A.setOpeningBalances(1,[{code:'1002',debit:402.41},{code:'3001',credit:402.41}]);const snapshots=B.buildReportSnapshots({item:S.getItem(db,"+stage.item_id+"),period:'2026-01',reports:[{kind:'balance-sheet',code:null}]});for(const snapshot of snapshots.reports)B.persistSnapshot({jobId:"+saved.job.id+",itemId:"+stage.item_id+",snapshot});console.log('actual business 379.23 -> 402.41; new DTO persisted');}finally{db.close();console.log('DB actualclose');}";const c=await child(['--input-type=module','-e',code],{env:{WORKBENCH_DATA_DIR:h.dir}});assert.equal(c.code,0,c.err+c.out);const snap=h.db.prepare('SELECT * FROM local_batch_snapshots').get(),nextHash=S.sha256(S.canonicalJson({dtoHash:snap.dto_hash,businessHash:snap.business_hash,format:'csv',code:null}));assert.notEqual(nextHash,old.snapshot_hash);assert.equal(S.inspectBatchSchema(h.db).ok,true);const claimCode="import {DatabaseSync} from 'node:sqlite';const S=await import('./server/local-batch-storage.mjs');const db=new DatabaseSync("+JSON.stringify(h.file)+");db.exec('PRAGMA foreign_keys=ON');try{const lock=S.acquireLock(db,{resourceKey:'job:"+saved.job.id+"',instance:'synthetic-next-claim',pid:process.pid});S.claimStage(db,{stageId:"+stage.id+",instance:'synthetic-next-claim',token:lock.token,inputHash:"+JSON.stringify(nextHash)+"});console.log(process.pid);}finally{db.close();console.log('DB actualclose');}";const claimed=await child(['--input-type=module','-e',claimCode]);assert.equal(claimed.code,0,claimed.err+claimed.out);assert.equal(old.attempt<h.db.prepare('SELECT attempt FROM local_batch_stages WHERE id=?').get(stage.id).attempt,true);await roundtrip(h,'mutable-latest-history');
+ }finally{h.close();}
+});
+await suite('each malformed snapshot/artifact field rejects inspect source verify restore and protected v1 upgrade',async()=>{
+ const h=await fresh({batch:2});let v1;
+ try{
+  const actual=await realReports(h);job(h,{file:true});const initial=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'template-v2')});assert.equal(initial.ok,true);
+  const v1dir=join(ROOT,randomUUID());fs.mkdirSync(v1dir);const v1file=join(v1dir,'workbench.db');fs.copyFileSync(join(initial.backupDir,LB.SNAPSHOT_FILE),v1file);const d=new DatabaseSync(v1file);d.exec('PRAGMA foreign_keys=ON');try{downgrade({db:d});v1=LB.createBackup({dbPath:v1file,outDir:join(v1dir,'template-v1')});assert.equal(v1.ok,true);}finally{d.close();console.log('v1 template DB actualclose');}
+  const csv=" WHERE format='csv'",snap=" WHERE kind='balance-sheet'";
+  const attacks=[
+   ['snapshot-key',d=>d.exec("UPDATE local_batch_snapshots SET snapshot_key='wrong'"+snap)],
+   ['snapshot-period-invalid',d=>d.exec("UPDATE local_batch_snapshots SET period='2099-99',snapshot_key=job_id||':'||item_id||':2099-99:'||kind"+snap)],
+   ['snapshot-period-unrequested',d=>d.exec("UPDATE local_batch_snapshots SET period='2026-02',snapshot_key=job_id||':'||item_id||':2026-02:'||kind"+snap)],
+   ['snapshot-kind-invalid',d=>d.exec("UPDATE local_batch_snapshots SET kind='not-a-report',snapshot_key=job_id||':'||item_id||':'||period||':not-a-report'"+snap)],
+   ['snapshot-kind-unrequested',d=>d.exec("UPDATE local_batch_snapshots SET kind='income-statement',snapshot_key=job_id||':'||item_id||':'||period||':income-statement'"+snap)],
+   ['snapshot-job',d=>d.exec('UPDATE local_batch_snapshots SET job_id=(SELECT MAX(id) FROM local_batch_jobs)'+snap)],
+   ['snapshot-item',d=>d.exec('UPDATE local_batch_snapshots SET item_id=(SELECT MAX(id) FROM local_batch_items)'+snap)],
+   ['snapshot-dto-kind',d=>{const r=d.prepare('SELECT * FROM local_batch_snapshots'+snap).get(),dto=JSON.parse(r.dto_json);dto.kind='income-statement';const json=JSON.stringify(dto);d.prepare('UPDATE local_batch_snapshots SET dto_json=?,dto_hash=?'+snap).run(json,S.sha256(json));}],
+   ['snapshot-dto-period',d=>{const r=d.prepare('SELECT * FROM local_batch_snapshots'+snap).get(),dto=JSON.parse(r.dto_json);dto.period='2026-02';const json=JSON.stringify(dto);d.prepare('UPDATE local_batch_snapshots SET dto_json=?,dto_hash=?'+snap).run(json,S.sha256(json));}],
+   ['snapshot-dto-hash',d=>d.exec("UPDATE local_batch_snapshots SET dto_hash='"+'e'.repeat(64)+"'"+snap)],
+   ['snapshot-csv-hash',d=>d.exec("UPDATE local_batch_snapshots SET csv_hash='"+'e'.repeat(64)+"'"+snap)],
+   ['snapshot-csv-content',d=>d.exec("UPDATE local_batch_snapshots SET csv_text=csv_text||'changed'"+snap)],
+   ['snapshot-missing',d=>d.exec('DELETE FROM local_batch_snapshots'+snap)],
+   ['artifact-key',d=>d.exec("UPDATE local_batch_artifacts SET artifact_key='wrong'"+csv)],
+   ['artifact-stage',d=>d.exec("UPDATE local_batch_artifacts SET stage_key='report:no-such-stage'"+csv)],
+   ['artifact-period',d=>d.exec("UPDATE local_batch_artifacts SET period='2026-02'"+csv)],
+   ['artifact-kind-invalid',d=>d.exec("UPDATE local_batch_artifacts SET kind='not-a-report'"+csv)],
+   ['artifact-kind-unrequested',d=>d.exec("UPDATE local_batch_artifacts SET kind='income-statement'"+csv)],
+   ['artifact-format-invalid',d=>d.exec("UPDATE local_batch_artifacts SET format='txt'"+csv)],
+   ['artifact-format-mismatch',d=>d.exec("UPDATE local_batch_artifacts SET format='pdf'"+csv)],
+   ['artifact-account-code',d=>d.exec("UPDATE local_batch_artifacts SET account_code='1002'"+csv)],
+   ['artifact-job',d=>d.exec('UPDATE local_batch_artifacts SET job_id=(SELECT MAX(id) FROM local_batch_jobs)'+csv)],
+   ['artifact-item',d=>d.exec('UPDATE local_batch_artifacts SET item_id=(SELECT MAX(id) FROM local_batch_items)'+csv)],
+   ['artifact-status',d=>d.exec("UPDATE local_batch_artifacts SET status='not-a-status'"+csv)],
+   ['artifact-path-traversal',d=>d.exec("UPDATE local_batch_artifacts SET relative_path='../../outside.csv'"+csv)],
+   ['artifact-path-absolute',d=>d.exec("UPDATE local_batch_artifacts SET relative_path='C:/outside.csv'"+csv)],
+   ['artifact-path-backslash',d=>d.prepare('UPDATE local_batch_artifacts SET relative_path=?'+csv).run('..\\outside.csv')],
+   ['artifact-path-unrelated-safe',d=>d.exec("UPDATE local_batch_artifacts SET relative_path='elsewhere/report.csv'"+csv)],
+   ['artifact-attempt-negative',d=>d.exec('UPDATE local_batch_artifacts SET attempt=-4'+csv)],
+   ['artifact-attempt-zero',d=>d.exec('UPDATE local_batch_artifacts SET attempt=0'+csv)],
+   ['artifact-attempt-future',d=>d.exec('UPDATE local_batch_artifacts SET attempt=attempt+1'+csv)],
+   ['artifact-snapshot-hash',d=>d.exec("UPDATE local_batch_artifacts SET snapshot_hash='"+'e'.repeat(64)+"'"+csv)],
+   ['artifact-bytes-hash',d=>d.exec("UPDATE local_batch_artifacts SET bytes_hash='"+'e'.repeat(64)+"'"+csv)],
+   ['artifact-bytes',d=>d.exec('UPDATE local_batch_artifacts SET bytes=bytes+1'+csv)],
+   ['artifact-empty-bytes',d=>d.exec('UPDATE local_batch_artifacts SET bytes=0'+csv)],
+   ['artifact-mime',d=>d.exec("UPDATE local_batch_artifacts SET mime='application/pdf'"+csv)],
+   ['artifact-csv-worker',d=>d.exec('UPDATE local_batch_artifacts SET worker_thread_id=1'+csv)],
+   ['artifact-render-start',d=>d.exec('UPDATE local_batch_artifacts SET render_started=-1'+csv)],
+   ['artifact-csv-render-finish',d=>d.exec('UPDATE local_batch_artifacts SET render_finished=render_started+1'+csv)],
+   ['artifact-xlsx-worker',d=>d.exec("UPDATE local_batch_artifacts SET worker_thread_id=0 WHERE format='xlsx'")],
+   ['artifact-xlsx-render-order',d=>d.exec("UPDATE local_batch_artifacts SET render_finished=render_started-1 WHERE format='xlsx'")],
+   ['artifact-xlsx-render-missing',d=>d.exec("UPDATE local_batch_artifacts SET render_finished=NULL WHERE format='xlsx'")],
+  ];
+  const watched=[actual.outputDir,join(h.dir,'input.json')].map(p=>p.toLowerCase().replaceAll('\\','/'));const external=[];const methods=['readFileSync','openSync','statSync','lstatSync','existsSync','realpathSync'],originals=new Map(methods.map(k=>[k,fs[k]]));
+  const {syncBuiltinESMExports}=await import('node:module');for(const method of methods){const real=fs[method];fs[method]=function(file,...args){const full=typeof file==='string'?file.toLowerCase().replaceAll('\\','/'):'';if(watched.some(p=>full===p||full.startsWith(p+'/'))){external.push({method,file});throw Error('validator tried external path');}return real.call(fs,file,...args);};if(method==='realpathSync')fs[method].native=originals.get(method).native;}syncBuiltinESMExports();
+  let rejected=0;try{
+   assert.equal(S.inspectBatchSchema(h.db).ok,true);assert.equal(LB.createBackup({dbPath:h.file,outDir:join(h.dir,'no-external-read')}).ok,true);
+   for(const template of [v1,initial])for(const [name,attack] of attacks){const dir=join(ROOT,randomUUID());fs.mkdirSync(dir);const file=join(dir,'workbench.db');fs.copyFileSync(join(template.backupDir,LB.SNAPSHOT_FILE),file);const db=new DatabaseSync(file);db.exec('PRAGMA foreign_keys=ON');try{assert.equal(S.inspectBatchSchema(db).ok,true);attack(db);const before=logical(db),sourceHash=hash(file);assert.equal(S.inspectBatchSchema(db).ok,false,name);assert.equal(LB.createBackup({dbPath:file,outDir:join(dir,'bad-source')}).ok,false,name);await assert.rejects(S.installBatchSchema(db,{dbPath:file,outDir:join(dir,'bad-upgrade')}));assert.equal(logical(db),before,name);assert.equal(hash(file),sourceHash,name);assert.equal(fs.existsSync(join(dir,'bad-source')),false);assert.equal(fs.existsSync(join(dir,'bad-upgrade')),false);console.log('bad field v'+template.manifest.components.find(c=>c.name==='local-batch').version+' '+name+' source zero-change '+digest(before));}finally{db.close();console.log('malformed source DB actualclose '+name);}
+    const backupDir=join(dir,'tampered');fs.mkdirSync(backupDir);const snapshot=join(backupDir,LB.SNAPSHOT_FILE);fs.copyFileSync(join(template.backupDir,LB.SNAPSHOT_FILE),snapshot);const copy=new DatabaseSync(snapshot);copy.exec('PRAGMA foreign_keys=ON');try{attack(copy);}finally{copy.close();console.log('tampered snapshot DB actualclose '+name);}const manifest=JSON.parse(JSON.stringify(template.manifest));manifest.snapshot.sha256=hash(snapshot);manifest.snapshot.bytes=fs.statSync(snapshot).size;fs.writeFileSync(join(backupDir,LB.MANIFEST_FILE),JSON.stringify(manifest));const before=hash(snapshot);assert.equal(LB.verifyBackup({backupDir}).ok,false,name);assert.equal(LB.restoreNew({backupDir,targetDir:join(dir,'refused-target')}).ok,false,name);assert.equal(fs.existsSync(join(dir,'refused-target')),false);assert.equal(hash(snapshot),before);rejected++;
+   }
+   assert.equal(external.length,0,JSON.stringify(external));assert.equal(rejected,attacks.length*2);console.log('independent bad fields '+attacks.length+' x versions1/2 = '+rejected+'; external input/output reads '+external.length);
+  }finally{for(const [method,real] of originals)fs[method]=real;syncBuiltinESMExports();}
+ }finally{h.close();}
+});
+assert.equal(executed,REPORT_ONLY?2:8);console.log(executed+' local-batch-backup-integration suites passed; retained '+ROOT);

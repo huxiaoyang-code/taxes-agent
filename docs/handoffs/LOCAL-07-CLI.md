@@ -1,3 +1,5 @@
+> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
 
 > **2026-10-23 当前交付事实（覆盖下方旧状态，历史验收数字仍按原时点阅读）**：B1 已随 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 合并，已审最终源 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，管理者核对合并树与已审树一致。前一源码候选 `214a0c1e` 与 `37bcb286` 的整个 `06-workbench` 树相同；后者只收窄两份文档的归一化金额 / 指纹边界，且获独立审查接受。独立验证 CLI **11/11**、persistence **39/39** 加 **5 组 probe**；root 管理验证 persistence **39/39**。这些是 PR65 候选的既有证据，本次文档轮没有重跑。
@@ -511,3 +513,29 @@ DB 均 finally 实际关闭；异步 child 等 close 事件，外层逐套也等
 新增真实child提交后actual close回归实际exit0：主库 `26d7467744a8a62c1beb99a28d0512306cdcde8e3836abbb793aee35325d56c7`、WAL `1a8f8c6828e24e30df0b9fb1e20ca9e9b14779bdfa2a7cd350a4fbd1cf227f29`、SHM `3939df1ca6d98b45659196f8a122481d2321f3f866efac2864b32f86285218d2` 前后完全相同，inode/dev不变，自己marker释放、二次release幂等。原H4/H8保留替换/外部对象断言，只更新受此取舍影响的空种子行为。
 
 最终释放增量复验：`D:/node.exe test/local-batch-persistence.test.mjs`，cwd=06-workbench，在新UUID `w3a-release-final-547cec2f-28b0-42df-a674-3d0082142c2e` 实际39/39、exit0、child actual close。首轮保留现场 `w3a-release-persistence-0c3bd687-8c39-4692-b8cc-7d801a55a316` 为38/39，H8另一支旧“种子删除”断言漏同步，已同一保全合同更新为种子存在且hash同，替换marker/外部字节反例全部保留。新增install现为12组：第11可变report历史和第12sameinode释放各以精确BATCH_TEST_CASE单独exit0，不冒称整12组重跑；原10组/backup6组先前全0证据保留。report修正后的v1升级定点另实际exit0，八旧表/序列摘要 `8d39e2e10ff477751877a85c7fc24c5715748ba4b275a421a184f987e82ba2a6` 前后一致，component仅升version，原updated_at/note保持。root最终全影响验收/fresh独审/PR仍待进行。
+
+## W3a e470 独审两项P2返工（尚未复审 / PR / 合并）
+
+root已copy-exclusive保留旧frozen/candidate/files/delivery/task与fresh报告，本执行者未修改其备份；本返工不进入后包，不Git、不子agent、不重复npm。原基线仍 `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`，被拒父候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 不得合并。
+
+P2-1已按保存行的实际协议补齐：snapshot tuple须为manifest实际report计划；artifact校验真实stage/format/kind/code/key、确定安全相对路径、三态枚举、MIME、正attempt上界、渲染字段和可证摘要。保publishing及invalid旧attempt、恢复复用旧artifact到新attempt、最新snapshot覆盖窗口，不要求历史artifact=最新snapshot。成功checkpoint绑定自身evidence/bytes/outcome；CSV不在reportInputHash中，历史表示依自己的checkpoint保留，仅同attempt running publishing核当前CSV。全部为DB读取，不访问外部input/output。
+
+P2-2已统一本次所有内部失败：已登记token的stamp catch固定preserveDatabase；未登记分支不再discardOwnEmptyDatabase。零字节/种子/DB/WAL/SHM固定保留，关闭自有fd并只清仍能证明自有的marker，guard源码不改。H6/H8原“未登记零字节自动删除”按同保全取舍更新为存在/size0/空摘要，保留所有外部替换断言。
+
+本轮实际命令cwd均06-workbench、D:/node.exe，新UUID/import前两KEEP/env/祖先lstat与realpath、DB finally/child实际close；无真实数据或浏览器，无full93/npm。
+
+| 阶段 | 命令与实际结果 |
+|---|---|
+| 两P2初修（最后CSV历史收窄之前的源） | 新install13组、newbackup8组、原persistence39/39均exit0/actualclose；现场 `w3a-p2-repair-7813b3a1-4b92-4dab-8914-c313850ffd12`。不冒称这三全套对应最后源码hash |
+| 最后CSV历史收窄之后 | `BATCH_BACKUP_TEST_CASE=report-p2 node test/local-batch-backup-integration.test.mjs` 两组实际exit0/actualclose；含真实发布窗、CSV表示历史和42字段×v1/2的84拒绝例、外部路径读0 |
+| 同最后源码 | `BATCH_PERSIST_TEST_CASES=E4,G3,H6,H8 node test/local-batch-persistence.test.mjs` 四个原用例实际4/4、exit0/actualclose。未删用例；默认未设过滤仍完整39 |
+
+最后两条现场 `w3a-p2-final-42c701b4-293e-4139-bfcb-72c858c7197b`（忽略目录），新backup实体根 `batch2-test-9abc1482-1bb3-4e1c-9a14-95522b95727c`。合法正例为真实runner CSV/XLSX成功、rename前publishing和文件发布后checkpoint前受控child死亡、invalid旧artifact重渲染前死亡；恢复到新目录后真实保护1→2保全部旧行。真实业务379.23→402.41生成新DTO；旧artifact与新snapshot/claim同库仍合法，另验证同DTO/businessHash但CSV表示变更保原checkpoint。
+
+fsync后EIO最终初修全套中种子SHA256 `48f8417b1a048057d8376e621a125893642a1b90aee7566b7f345700b2ca9c52` 前后同、4096bytes、dev/ino同；db/marker创建fd各实际EBADF，ownmarker释放，WAL/SHM均未创建。内部catch故障仅证明种子保全，不声称在该窗实测WAL损坏。单独首次定点也实际0、SHA256 `6119ad0426ae89b2524993a4aecccfe9fc5c2aa87de738f6328a04a1ed439365` 前后同，现场 `batch2-test-911f3cb7-8563-47ce-9f05-fcff24e51627`。
+
+本轮一处编辑脚本对const路径变量重新赋值失败：只完成此前install测试文件写入，persistence文件尚未修改；随后单独正确修改并真实原39/最终4例通过，未将该脚本失败冒称产品测试。其余本轮新13/8/39及最后2/4定点均实际0，原e470失败与所有早期现场继续保留。
+
+root后续仍须重新冻结21路径、十一影响套、独立probe与新的完整head fresh复审后方可PR；本交接不填写未来验收或合并。八包6/8、06/07/W2b/W3b/W4/Windows最终链未完，税局0。
+
+返工最后仅测试harness增量：旧persistence在测试通过时不识别两KEEP，已按root允许仅让 `KEEP_FIXTURES=1` 或 `WORKBENCH_TEST_KEEP_FIXTURES=1` 任一成立保留本次已知ROOT；默认未设KEEP仍原清理行为，不改断言或执行。随后仅 `BATCH_PERSIST_TEST_CASES=H6,H8` 实际2/2、exit0/child close，确认现场 `w3a-p2-keep-541fc127-3900-40fd-9575-3e2fafb7fdb5/lb-persist-LdjPmX` 存在，保留已登记/未登记、外部marker替换及零字节DB证明。此前通过的旧persistence可能已由其当时的cleanup移除自身fixture，日志/结果仍留；不声称那些通过的故障fixture仍在，也未清理任何旧未知现场。最终产品source仍 `b1e360d0dc3b46398c495f8c1cc87b6efd2a47cf716cc9c5fc45e97a8b9dac35`，harness增量后未重跑全39/13/8；root最终十一套统一复验仍待进行。

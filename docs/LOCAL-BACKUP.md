@@ -1,3 +1,5 @@
+> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+
 > **2026-10-23 W3a 候选组件合同（尚未管理验收 / PR / 合并）**：在已合 PR75 audit1/2 基础上，官方 registry 精确登记 local-batch1/2。core3/4 裸或bank1、core5裸/bank1/aux1/两者，各乘audit absent/1/2、batch absent/1/2；未知、漏报、半装或漂移拒绝。新增两套的48带batch组合和四安装顺序实际官方roundtrip通过。保护安装/只读v1/新实例绑定及限制见[批量合同](LOCAL-BATCH-CLI.md)和[交接](handoffs/LOCAL-07-CLI.md)。format仍1；manifest组件、table集、structureDigest/contentDigest/rows均从真实快照重算。历史支持不代表旧core可执行新业务，roundtrip不代表恢复副本安全续跑。下方尚未支持batch/audit或W2a待PR是历史时点，W2a实际PR75已合。
 
 > 2026-10-23 LOCAL06 W2a 实施候选（尚未管理验收/PR/合并）：官方备份format仍1，新增严格business-audit1/2注册，core3/4裸或bank1、core5裸/bank1/auxiliary1/两者组合均按实际结构/内容检查；batch仍拒。合法audit1历史digest/dedupe/实例保留，audit2含pending与技术receipt可忠实备份、verify、restoreNew及再次备份。restoreNew仅字节恢复，不分叉实例、不发布业务状态、不恢复执行权；pending副本只有needsReview。bank/aux后装复用官方registry资格门并保留原held-source核证。保护安装与协议见[审计合同](LOCAL-AUDIT.md)，实际定点/失败历史见[交接](handoffs/LOCAL-06-AUDIT.md)。LOCAL06/07、Windows W2与最终整链未完成，税局真实接入0。
@@ -657,3 +659,5 @@ sha256（摘要自洽）仍拒绝且不生成恢复目标；健康库 `backup �
 6. **后续仍未实现**：原位（就地）恢复与回退编排、Windows 干净安装 / 启动 / 升级交付、
    审计接线、定时 / 批量入口；这些完成后本子包才能计入 LOCAL-06 整体交付，
    本文件**不声称** LOCAL-06 整体完成。
+
+W3a独审返工补充：snapshot/artifact合法性按实际manifest和保存阶段协议校验，非法行在source create、snapshot verify/restore及受保护batch1升级前拒绝。最后42个字段各自独立攻击、batch1/2共84例实际通过且源逻辑/物理摘要不变、目标不创建，外部input/output路径读取计数0。合法真实CSV/XLSX、发布前/后checkpoint窗口、invalid旧attempt及最新DTO/CSV覆盖的历史均保留；不把严格备份当作产物文件或恢复执行权认证。

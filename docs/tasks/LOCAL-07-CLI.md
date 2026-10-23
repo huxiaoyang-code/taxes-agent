@@ -1,3 +1,5 @@
+> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](../handoffs/LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
 
 > **2026-10-23 当前交付事实（覆盖下方旧状态，历史验收数字仍按原时点阅读）**：B1 已随 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 合并，已审最终源 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，管理者核对合并树与已审树一致。前一源码候选 `214a0c1e` 与 `37bcb286` 的整个 `06-workbench` 树相同；后者只收窄两份文档的归一化金额 / 指纹边界，且获独立审查接受。独立验证 CLI **11/11**、persistence **39/39** 加 **5 组 probe**；root 管理验证 persistence **39/39**。这些是 PR65 候选的既有证据，本次文档轮没有重跑。
@@ -327,3 +329,5 @@ Issue51 当前 claim 对应独立分支 `codex/huxiaoyang-code/local-07-w3a-batc
 待 root 独立验证、全新未实施者审查精确冻结 head、PR/合并。当前只登记真实自测结果，见[交接](../handoffs/LOCAL-07-CLI.md)。原91注册项逐字原序保留，末尾仅追加两新套成93；本片未跑 full93/npm test。总 Issue 不关闭，LOCAL07 整包不标完成。
 
 W3a固定保留失败DB/WAL/SHM（含空种子），仅释放自有marker/fd；不承诺失败路径可直接fresh重试。实际sameinode回归与限制见交接，guard原件未改。
+
+独审返工验收项：snapshot/artifact实际manifest与阶段/路径/枚举/attempt/可证摘要关联；内部已登记/未登记claim失败均保全DB及种子，actual fsync后EIO和fd关闭。两P2初修新13/8/旧39全0，最后CSV历史增量仅新backup2组+原E4/G3/H6/H8四例0；待root最终十一套与完整新head复审，不合并e470。

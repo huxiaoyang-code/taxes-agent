@@ -1,3 +1,5 @@
+> **2026-10-23 W3a 独审返工候选**：完整旧候选 `e470ec02b3e228080ec6ef0da841cd1fefa0c02b` 被全新独审确认两项P2而拒绝，未PR/合并。仍在同一原27路径包返工：补 snapshot/artifact 对实际manifest/阶段/枚举/路径/attempt/可证摘要的关联检查；claim内部所有失败固定保留DB/WAL/SHM含零字节/种子。原候选与证据由root另存保留。返工实际定点及最终增量边界见[LOCAL07交接](handoffs/LOCAL-07-CLI.md)。当前返工尚待root新冻结十一影响套与全新完整head复审；原八包6/8、LOCAL06/07未完、真实税局0。
+
 > **2026-10-23 W3a 当前候选（尚未 root 验收 / fresh 独审 / PR / 合并）**：基线为 PR75 merge `4223ccb3ad2c1b71178f2a510ed1f196ff963f03`。严格 batch1/2 官方备份、batch2 实例与绑定、显式保护安装、readiness 门已实施并完成必要合成定点。下方旧 B1 的「现库安装未接线」仅保留历史；本候选不开放恢复分叉 / 重绑或共享全写锁。LOCAL06/07、Windows W2 和最终整链仍未完成，原八包仍 6/8，税局真实接入 0。
 
 > **2026-10-23 当前交付事实（覆盖下方旧状态，历史验收数字仍按原时点阅读）**：B1 已随 [PR #65](https://github.com/huxiaoyang-code/youshu-fork/pull/65) 合并，已审最终源 head `37bcb286041f76d85c01ff5f6078727497570425`，main merge `97384868ca1cb7a3f07bf561fedac666c7674eb3`，管理者核对合并树与已审树一致。前一源码候选 `214a0c1e` 与 `37bcb286` 的整个 `06-workbench` 树相同；后者只收窄两份文档的归一化金额 / 指纹边界，且获独立审查接受。独立验证 CLI **11/11**、persistence **39/39** 加 **5 组 probe**；root 管理验证 persistence **39/39**。这些是 PR65 候选的既有证据，本次文档轮没有重跑。
@@ -472,3 +474,11 @@ createJob 在既有事务内同时写全部新 job/input 绑定；当前实例�
 实际新UUID/同inode反例证实：受控子进程WAL提交合成12.39后退出，旧release为判断空库打开SQLite会改变SHM字节。经root接受，本片仅在storage调用已审guard的固定 `{preserveDatabase:true}`，guard源码未改、不加可传清理开关；仍释放自己的marker/创建fd，但保留所有DB/WAL/SHM字节，连本次空种子也保留供诊断。**失败后不能承诺自动清空或同路径可直接fresh重试**，未提供删除命令。
 
 新增真实child提交后actual close回归实际exit0：主库 `26d7467744a8a62c1beb99a28d0512306cdcde8e3836abbb793aee35325d56c7`、WAL `1a8f8c6828e24e30df0b9fb1e20ca9e9b14779bdfa2a7cd350a4fbd1cf227f29`、SHM `3939df1ca6d98b45659196f8a122481d2321f3f866efac2864b32f86285218d2` 前后完全相同，inode/dev不变，自己marker释放、二次release幂等。原H4/H8保留替换/外部对象断言，只更新受此取舍影响的空种子行为。
+
+### W3a 独审返工：报表行与失败收尾
+
+严格validator只读取DB保存事实：snapshot的job/item/period/kind/key须对应manifest中的实际report阶段，DTO/CSV按原保存字节核摘要；DTO自身声明的kind/period须与行一致。artifact须对应真实report stage、kind/format/code、确定artifactKey和受控安全相对路径，检查publishing/published/invalid枚举、正整数attempt不超过该stage attempt、MIME、字节数、线程/渲染时间形状。当前attempt的snapshot_hash必须等stage.input_hash，成功checkpoint还精确绑定自身evidence与outcome/bytes摘要。
+
+最新snapshot可以覆盖；旧artifact可属于旧attempt、可为invalid重渲染中断或发布后checkpoint前的publishing。reportInputHash不含CSV摘要，因此历史/成功artifact按自己的checkpoint字节证据检查，不能强制等最新可变CSV；只有同attempt、running且publishing的当前发布窗核当前CSV bytes/hash。validator不读输入源或输出路径；产物/业务新鲜度仍由原runner检查。
+
+claim内部stamp失败也固定preserveDatabase，未登记分支也不删除本次零字节DB；不打开SQLite判空，不增加force/cleanup。实际fsync成功后注入EIO已证实4096字节种子及dev/ino不变、marker/db两个自有fd均EBADF、ownmarker释放；此内部catch只实测种子，不夸大为在该故障窗实测了WAL改写。

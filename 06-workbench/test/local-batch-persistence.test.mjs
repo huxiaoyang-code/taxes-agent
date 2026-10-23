@@ -38,6 +38,7 @@ const RESULTS = [];
 let failures = 0;
 /** 只清理本次 mkdtemp 创建、位于系统临时根下且不是符号链接 / junction 的明确目录。 */
 function cleanupRoot() {
+  if(process.env.KEEP_FIXTURES === "1" || process.env.WORKBENCH_TEST_KEEP_FIXTURES === "1") { console.log(`保留本次合成夹具：${ROOT}`); return; }
   const root = resolve(ROOT);
   const base = resolve(tmpdir());
   if (root === base || !root.startsWith(base + sep)) throw new Error(`拒绝清理范围外目录：${root}`);
@@ -46,7 +47,9 @@ function cleanupRoot() {
   rmSync(root, { recursive: true, force: true });
 }
 
+const SELECT_CASES=process.env.BATCH_PERSIST_TEST_CASES?new Set(process.env.BATCH_PERSIST_TEST_CASES.split(',')):null;
 async function test(name, fn) {
+  if(SELECT_CASES&&!SELECT_CASES.has(name.split(' ')[0]))return;
   try {
     await fn();
     RESULTS.push([true, name]);
@@ -2545,11 +2548,13 @@ await test("H6 独占新建失败清理只认不可变事实：fstat 失败 / �
   assert.equal(foreignRun.shm, false);
 
   // 3) guard 登记失败（fstat 身份被篡改）+ 所有权标记已被换成外部内容：
-  //    本进程自己的零字节库文件可清（身份由 fstat 证明），但外部标记必须原样保留。
+  //    本次零字节库文件也必须保留，外部标记必须原样保留。
   const mismatchDir = join(ROOT, "h6-registration-foreign-marker");
   const mismatch = runClaimFailure(mismatchDir, "registration-mismatch", { replaceMarker: true });
   assert.equal(mismatch.errorCode, "fresh_receipt_invalid", JSON.stringify(mismatch));
-  assert.equal(mismatch.db.exists, false, "已证明是本进程创建的零字节库文件可释放");
+  assert.equal(mismatch.db.exists, true, "登记失败也固定保留本次零字节库");
+  assert.equal(mismatch.db.size,0);
+  assert.equal(mismatch.db.hash,createHash("sha256").update(Buffer.alloc(0)).digest("hex"));
   assert.equal(mismatch.marker.exists, true, "标记内容已被替换时不得删除");
   assert.equal(mismatch.marker.text, JSON.stringify({ nonce: 987654321, pid: 1, at: "外部替换的标记内容", note: "not-ours" }),
     "外部标记内容一个字节都不能改");
@@ -2558,7 +2563,9 @@ await test("H6 独占新建失败清理只认不可变事实：fstat 失败 / �
   const cleanDir = join(ROOT, "h6-registration-own-marker");
   const cleaned = runClaimFailure(cleanDir, "registration-mismatch");
   assert.equal(cleaned.errorCode, "fresh_receipt_invalid", JSON.stringify(cleaned));
-  assert.equal(cleaned.db.exists, false, "自有零字节库文件被释放");
+  assert.equal(cleaned.db.exists, true, "自有零字节库也保留供诊断");
+  assert.equal(cleaned.db.size,0);
+  assert.equal(cleaned.db.hash,createHash("sha256").update(Buffer.alloc(0)).digest("hex"));
   assert.equal(cleaned.marker.exists, false, "自有标记被释放（nonce 命中且未被替换）");
 
   // 5) 库文件 O_EXCL 打开失败（EEXIST）+ 标记已被换成外部内容：不得删外部标记。
@@ -2789,11 +2796,13 @@ await test("H8 所有权标记只认创建时身份：同 nonce 替换对象在 
   assert.equal(storage.sha256(readFileSync(join(ownDir,"workbench.db"))),ownSeedHash,"空种子字节不变");
   assert.equal(storage.releaseFreshClaim(ownToken),false,"再次释放幂等无写");
 
-  // 4) 登记失败路径（H6 注入）下的同 nonce 替换：标记必须保留，库文件按创建身份清理。
+  // 4) 登记失败路径（H6 注入）下的同 nonce 替换：外部标记与本次零字节DB均保留。
   const registerDir = join(ROOT, "h8-register-same-bytes");
   const registerSame = runClaimFailure(registerDir, "registration-mismatch", { replaceMarker: "same-bytes" });
   assert.equal(registerSame.errorCode, "fresh_receipt_invalid", JSON.stringify(registerSame));
-  assert.equal(registerSame.db.exists, false, "已证明是本进程创建的零字节库文件可释放");
+  assert.equal(registerSame.db.exists, true, "未登记失败保留本次零字节库");
+  assert.equal(registerSame.db.size,0);
+  assert.equal(registerSame.db.hash,createHash("sha256").update(Buffer.alloc(0)).digest("hex"));
   assert.equal(registerSame.marker.exists, true, "同字节替换的标记不得被删除");
   assert.match(String(registerSame.marker.text), /"nonce":\d+/, "保留的仍是同 nonce 的替换对象");
   assert.ok(!/"note"/.test(String(registerSame.marker.text)), "标记字节未被改写（没写入额外字段）");
@@ -3282,6 +3291,7 @@ await test("K4 已计提后合法改未来费用科目：核心与批量同月�
 });
 
 // ---------------------------------------------------------------- 收尾
+if(SELECT_CASES)assert.deepEqual(new Set(RESULTS.map(([,name])=>name.split(' ')[0])),SELECT_CASES,'选中的原用例必须实际执行，不接受空过滤');
 console.log("");
 const passed = RESULTS.filter(([ok]) => ok).length;
 console.log(`结果：${passed} / ${RESULTS.length} 通过`);
