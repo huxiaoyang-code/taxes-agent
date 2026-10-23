@@ -1,58 +1,14 @@
-// local-audit-storage.mjs — LOCAL-06 业务库审计组件（A 包，仅原语 / 只读查询，不含任何领域接线）。
-//
-// 结构：
-//   audit_components         组件名 → 结构版本（与 LOCAL-02 全局 schema 版本相互独立）
-//   audit_database_instances 数据库实例（恢复分叉时新实例记录父实例，旧历史事件不改写）
-//   audit_events             append-only 事件（无外键，业务对象删除后留痕仍在）
-//
-// 设计约束：
-//   1) 所有函数显式接收 `DatabaseSync` 句柄；本文件不 import `db.mjs`、不打开默认库、不创建目录。
-//   2) 事件只存白名单字段（技术 ID / 固定词表 / 服务端哈希令牌），不存金额、原始凭证、摘要、姓名、
-//      企业身份、路径、payload、SQL、堆栈、异常 message 或任意 metadata JSON。
-//   3) 成功事件必须写进**外层业务事务**再提交；本模块的 append 不开独立事务。
-//      失败 / 拒绝事件在业务回滚**之后**由 `runAuditedOperation` 用短事务补写。
-//      写不进审计时抛 `audit_unavailable`，绝不把业务结果报成完整成功。
-//   4) 已有业务库的组件安装：A 包**明确拒绝**（缺已审 backup 支持），见
-//      `audit_install_requires_verified_backup`；B 包在已审 backup 支持到位后接安装流程。
-//      「新库」判定来自对库内实际对象的观察（无任何非审计表），不接受调用方布尔值。
-//   5) 跨库（业务库 ↔ 恢复 ledger）不假装原子；恢复 ledger 见 `local-restore-audit.mjs`。
-
-import { DatabaseSync } from "node:sqlite";
-import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import {
-  AUDIT_ACTIONS,
-  AUDIT_ACTORS,
-  AUDIT_COMPONENT,
-  AUDIT_OUTCOMES,
-  AUDIT_RESULT_CODES,
-  AUDIT_SCHEMA_VERSION,
-  AUDIT_EVENT_OVERRIDABLE_FIELDS,
-  AuditError,
-  AuditUnavailableError,
-  auditError as fail,
-  auditEventDedupeKey,
-  auditEventDigest,
-  classifyFailure,
-  contextTargets,
-  createOperationContext,
-  inTransaction,
-  isAuditPeriod,
-  isTechId,
-  isTechnicalRowId,
-  normalizeAuditEvent,
-  runInTransaction,
-  serverEventFields,
-} from "./local-audit.mjs";
-
-/** 本组件创建的持久对象（供自检 / 只读检查 / 结构拒绝使用）。 */
-export const AUDIT_TABLES = Object.freeze([
-  "audit_components",
-  "audit_database_instances",
-  "audit_events",
-]);
-
-/** 实例登记允许的固定技术枚举（不接受任何外部自由文本 / 路径 / 用户标识）。 */
+// Explicit-handle audit1/2 storage. No default database or import-time connection.
+import { DatabaseSync, constants as SQL } from 'node:sqlite';
+import fs from 'node:fs';
+import { resolve, dirname, basename } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { AUDIT_ACTIONS,AUDIT_ACTORS,AUDIT_COMPONENT,AUDIT_OUTCOMES,AUDIT_RESULT_CODES,AUDIT_SCHEMA_VERSION,
+ auditError as fail, auditEventDigest,auditEventDedupeKey,auditV2EventDigest,auditV2DedupeKey,
+ normalizeAuditEvent,createOperationContext,serverEventFields,classifyFailure,isTechId,isAuditPeriod,isTechnicalRowId,
+ canonicalAuditJson,auditCanonicalDigest,auditTargets,AUDIT_TARGET_FIELDS } from './local-audit.mjs';
+const V1_TABLES=Object.freeze(['audit_components','audit_database_instances','audit_events']);
+export const AUDIT_TABLES=Object.freeze([...V1_TABLES,'audit_operations']);
 export const AUDIT_INSTANCE_NOTES = Object.freeze(["initial", "restore-new"]);
 
 /**
@@ -140,234 +96,297 @@ const V1_STATEMENTS = Object.freeze([
   ...Object.values(AUDIT_TRIGGER_SQL),
 ]);
 
-const MIGRATIONS = Object.freeze([
-  { version: 1, note: "LOCAL-06 业务审计组件：实例 / append-only 事件 / 组件版本", steps: V1_STATEMENTS },
+const OPERATION_SQL = `CREATE TABLE audit_operations (
+ database_instance_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+ attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 1000000),
+ binding_version INTEGER NOT NULL CHECK(binding_version=1), action TEXT NOT NULL, actor TEXT NOT NULL,
+ scope_kind TEXT NOT NULL CHECK(scope_kind IN ('database','enterprise','account_set')),
+ scope_token TEXT NOT NULL CHECK(length(scope_token)=64 AND scope_token NOT GLOB '*[^a-f0-9]*'),
+ targets_json TEXT NOT NULL, parent_operation_id TEXT, parent_attempt INTEGER CHECK(parent_attempt BETWEEN 1 AND 1000000),
+ request_digest TEXT NOT NULL CHECK(length(request_digest)=64 AND request_digest NOT GLOB '*[^a-f0-9]*'),
+ binding_digest TEXT NOT NULL CHECK(length(binding_digest)=64 AND binding_digest NOT GLOB '*[^a-f0-9]*'),
+ state TEXT NOT NULL CHECK(state IN ('pending','succeeded','no_change','failed','rejected')),
+ terminal_event_id TEXT UNIQUE, receipt_json TEXT, prepared_at TEXT NOT NULL, finished_at TEXT,
+ PRIMARY KEY(database_instance_id,operation_id,attempt),
+ FOREIGN KEY(database_instance_id) REFERENCES audit_database_instances(instance_id) ON DELETE RESTRICT,
+ FOREIGN KEY(terminal_event_id) REFERENCES audit_events(event_id) ON DELETE RESTRICT,
+ CHECK((parent_operation_id IS NULL)=(parent_attempt IS NULL)),
+ CHECK(parent_operation_id IS NULL OR parent_operation_id<>operation_id),
+ CHECK((state='pending' AND terminal_event_id IS NULL AND receipt_json IS NULL AND finished_at IS NULL)
+ OR (state<>'pending' AND terminal_event_id IS NOT NULL AND receipt_json IS NOT NULL AND finished_at IS NOT NULL))
+)`;
+const IMMUTABLE_OPERATION_COLUMNS = ['database_instance_id','operation_id','attempt','binding_version','action','actor','scope_kind','scope_token','targets_json','parent_operation_id','parent_attempt','request_digest','binding_digest','prepared_at'];
+export const AUDIT_OPERATION_TRIGGER_SQL=Object.freeze({
+ audit_operations_no_delete:`CREATE TRIGGER audit_operations_no_delete BEFORE DELETE ON audit_operations BEGIN SELECT RAISE(ABORT,'audit_operation_immutable'); END`,
+ audit_operations_no_replace:`CREATE TRIGGER audit_operations_no_replace BEFORE INSERT ON audit_operations WHEN NEW.state<>'pending' OR EXISTS(SELECT 1 FROM audit_operations WHERE (database_instance_id=NEW.database_instance_id AND operation_id=NEW.operation_id AND attempt=NEW.attempt) OR (NEW.terminal_event_id IS NOT NULL AND terminal_event_id=NEW.terminal_event_id)) BEGIN SELECT RAISE(ABORT,'audit_operation_immutable'); END`,
+ audit_operations_guard_update:`CREATE TRIGGER audit_operations_guard_update BEFORE UPDATE ON audit_operations WHEN OLD.state<>'pending' OR NEW.state NOT IN ('succeeded','no_change','failed','rejected') OR ${IMMUTABLE_OPERATION_COLUMNS.map(k=>`NEW.${k} IS NOT OLD.${k}`).join(' OR ')} BEGIN SELECT RAISE(ABORT,'audit_operation_immutable'); END`,
+});
+const V2_STEPS=Object.freeze([
+ `ALTER TABLE audit_events ADD COLUMN event_format_version INTEGER NOT NULL DEFAULT 1 CHECK(event_format_version IN (1,2))`,
+ OPERATION_SQL,...Object.values(AUDIT_OPERATION_TRIGGER_SQL),
 ]);
-
-// ------------------------------------------------------------------ 只读结构检查
-const listTables = (db) =>
-  db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-    .all()
-    .map((r) => r.name);
-
-const listTriggers = (db, names) =>
-  db.prepare(`SELECT name, tbl_name, sql FROM sqlite_master WHERE type='trigger' AND name IN (${names.map(() => "?").join(",")})`)
-    .all(...names);
-
-const normalizeSql = (text) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-
-const columnsOf = (db, name) => db.prepare(`PRAGMA table_info(${name})`).all().map((r) => r.name);
-
-/**
- * 只读检查审计组件状态。**不创建任何对象、不写库**。
- *
- * 结构检查先于任何列查询：缺表 / 缺列 / 未知或更高版本 / 触发器缺失或同名但定义不符 /
- * 活动实例不是恰好一个，都会得到固定 `state`，不会把原始 SQLite 报错当结论。
- *
- * @returns {{tables:string[], present:string[], installed:boolean, version:number, target:number,
- *   activeInstanceId:string|null, activeInstanceCount:number, problems:string[],
- *   state:"ok"|"not_installed"|"invalid"|"unsupported", ok:boolean}}
- */
+const tablesFor=v=>v===1?V1_TABLES:AUDIT_TABLES;
+const normalizeSql=s=>String(s??'').replace(/\s+/g,' ').trim().replace(/;$/,'');
+const quote=s=>'"'+s.replaceAll('"','""')+'"';
+/** Complete actual facts, including implicit index collations, order, origin, FK and rowid. */
+export function auditSchemaFacts(db,version) {
+ const tables=tablesFor(version);
+ const objects=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all().filter(r=>
+   tables.includes(r.tbl_name)||r.name.startsWith('audit_')||r.name.startsWith('idx_audit_')||/\baudit_[a-z_]+\b/i.test(r.sql??''))
+   .map(r=>({...r,sql:r.sql===null?null:normalizeSql(r.sql)}));
+ const facts=tables.map(t=>({table:t,
+  columns:db.prepare('SELECT * FROM pragma_table_xinfo(?) ORDER BY cid').all(t),
+  attributes:db.prepare('SELECT type,ncol,wr,strict FROM pragma_table_list WHERE schema=\'main\' AND name=?').get(t)??null,
+  indexes:db.prepare('SELECT * FROM pragma_index_list(?) ORDER BY name').all(t).map(i=>({...i,keys:db.prepare('SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno').all(i.name)})),
+  foreignKeys:db.prepare('SELECT * FROM pragma_foreign_key_list(?) ORDER BY id,seq').all(t),
+ }));
+ return {version,objects,tables:facts};
+}
+const contracts=new Map();
+export function auditComponentContract(version) {
+ if(version!==1&&version!==2)throw fail('audit_schema_newer');
+ if(!contracts.has(version)) {
+  const ref=new DatabaseSync(':memory:');
+  try {for(const sql of V1_STATEMENTS)ref.exec(sql);if(version===2)for(const sql of V2_STEPS)ref.exec(sql);
+   contracts.set(version,canonicalAuditJson(auditSchemaFacts(ref,version)));
+  }finally{ref.close();}
+ }
+ return {name:AUDIT_COMPONENT,version,tables:[...tablesFor(version)],facts:JSON.parse(contracts.get(version))};
+}
+const iso=v=>typeof v==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v)&&!Number.isNaN(Date.parse(v))&&new Date(v).toISOString()===v;
+const digest=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+function eventFromRow(r) {
+ return {databaseInstanceId:r.database_instance_id,occurredAt:r.occurred_at,action:r.action,outcome:r.outcome,resultCode:r.result_code,reasonCode:r.reason_code,actor:r.actor,operationId:r.operation_id,parentOperationId:r.parent_operation_id,attempt:r.attempt,
+  accountSetId:r.account_set_id,voucherId:r.voucher_id,period:r.period,jobId:r.job_id,itemId:r.item_id,stageId:r.stage_id,correlation:r.correlation};
+}
+function validEvent(r) {
+ try {
+  const e=eventFromRow(r), raw=Object.fromEntries(Object.entries(e).filter(([k])=>!['databaseInstanceId','occurredAt'].includes(k)));
+  normalizeAuditEvent(raw,null,{eventId:r.event_id,databaseInstanceId:r.database_instance_id,occurredAt:r.occurred_at});
+  if(!isTechId(r.event_id)||!isTechId(r.database_instance_id)||!iso(r.occurred_at)||!Number.isSafeInteger(r.seq)||r.seq<1)return false;
+  const v=r.event_format_version??1;
+  return (v===1||v===2)&&r.content_digest===(v===1?auditEventDigest(e):auditV2EventDigest(e))&&r.dedupe_key===(v===1?auditEventDedupeKey(e):auditV2DedupeKey(e));
+ }catch{return false;}
+}
+function parseCanonical(text) {const obj=JSON.parse(text);if(canonicalAuditJson(obj)!==text)throw fail('audit_schema_inconsistent');return obj;}
+function targetsOfRow(r){return parseCanonical(r.targets_json);}
+const bindingOf=r=>auditCanonicalDigest([1,r.action,r.scope_kind,r.scope_token,targetsOfRow(r),r.parent_operation_id,r.parent_attempt,r.request_digest]);
+const opKey=r=>canonicalAuditJson([r.database_instance_id,r.operation_id,r.attempt]);
+const successCodes=new Set(['ok','import_create_succeeded','import_append_succeeded','import_legacy_succeeded','voucher_post_succeeded','voucher_unpost_succeeded','period_close_succeeded','period_reopen_succeeded','batch_stage_succeeded','batch_job_succeeded','restore_new_succeeded']);
+const terminalCodesValid=(state,code)=>state==='succeeded'?successCodes.has(code):state==='no_change'?code==='no_change':['failed','rejected'].includes(state)&&!successCodes.has(code)&&!['no_change','replayed','unknown','interrupted'].includes(code);
+const receiptFor=(r,e,targets)=>({receiptVersion:1,databaseInstanceId:r.database_instance_id,operationId:r.operation_id,attempt:r.attempt,state:r.state,resultCode:e.result_code,reasonCode:e.reason_code,eventId:e.event_id,eventSeq:e.seq,targets});
+function contentValid(db,version) {
+ const components=db.prepare('SELECT * FROM audit_components').all();
+ if(components.length!==1||components[0].component!==AUDIT_COMPONENT||components[0].version!==version||!iso(components[0].installed_at)||!(components[0].note===null||typeof components[0].note==='string'))return false;
+ const instances=db.prepare('SELECT * FROM audit_database_instances').all(), ids=new Set(instances.map(r=>r.instance_id));
+ if(instances.filter(r=>r.is_active===1).length!==1||instances.some(r=>!isTechId(r.instance_id)||!iso(r.created_at)||![0,1].includes(r.is_active)||!AUDIT_INSTANCE_NOTES.includes(r.note_code)||(r.parent_instance_id!==null&&(!ids.has(r.parent_instance_id)||r.parent_instance_id===r.instance_id))))return false;
+ for(const instance of instances) {
+  if((instance.note_code==='initial')!==(instance.parent_instance_id===null))return false;
+  const seen=new Set();let cursor=instance;
+  while(cursor){if(seen.has(cursor.instance_id))return false;seen.add(cursor.instance_id);cursor=cursor.parent_instance_id===null?null:instances.find(r=>r.instance_id===cursor.parent_instance_id);}
+ }
+ const events=db.prepare('SELECT * FROM audit_events ORDER BY seq').all();
+ if(events.some(r=>!ids.has(r.database_instance_id)||!validEvent(r)))return false;
+ if(version===1)return true;
+ const ops=db.prepare('SELECT * FROM audit_operations ORDER BY database_instance_id,operation_id,attempt').all(), terminals=new Map();
+ for(const r of ops) {
+  if(!ids.has(r.database_instance_id)||!isTechId(r.operation_id)||r.binding_version!==1||!AUDIT_ACTIONS.includes(r.action)||!AUDIT_ACTORS.includes(r.actor)||!Number.isSafeInteger(r.attempt)||r.attempt<1||r.attempt>1000000||!['database','enterprise','account_set'].includes(r.scope_kind)||!digest(r.scope_token)||!digest(r.request_digest)||!digest(r.binding_digest)||!iso(r.prepared_at))return false;
+  const targets=targetsOfRow(r);
+  if(canonicalAuditJson(targets)!==canonicalAuditJson(auditTargets(targets))||r.binding_digest!==bindingOf(r))return false;
+  if((r.parent_operation_id===null)!==(r.parent_attempt===null)||r.parent_operation_id!==null&&(!isTechId(r.parent_operation_id)||r.parent_operation_id===r.operation_id||!Number.isSafeInteger(r.parent_attempt)||r.parent_attempt<1||r.parent_attempt>1000000))return false;
+  const prior=ops.find(p=>p.database_instance_id===r.database_instance_id&&p.operation_id===r.operation_id&&p.attempt===r.attempt-1);
+  if(r.attempt>1&&(!prior||!['failed','rejected'].includes(prior.state)||prior.binding_digest!==r.binding_digest))return false;
+  if(r.state==='pending') {if(r.terminal_event_id!==null||r.receipt_json!==null||r.finished_at!==null)return false;continue;}
+  if(!['succeeded','no_change','failed','rejected'].includes(r.state)||!iso(r.finished_at))return false;
+  const e=events.find(e=>e.event_id===r.terminal_event_id);
+  if(!e||!terminalCodesValid(r.state,e.result_code)||e.event_format_version!==2||e.database_instance_id!==r.database_instance_id||e.operation_id!==r.operation_id||e.attempt!==r.attempt||e.action!==r.action||e.actor!==r.actor||e.parent_operation_id!==r.parent_operation_id||e.outcome!==r.state||e.occurred_at!==r.finished_at)return false;
+  const finalTargets=auditTargets(eventFromRow(e));
+  if(AUDIT_TARGET_FIELDS.some(k=>targets[k]!==null&&targets[k]!==finalTargets[k]))return false;
+  if(canonicalAuditJson(receiptFor(r,e,finalTargets))!==r.receipt_json)return false;
+  parseCanonical(r.receipt_json);if(terminals.has(e.event_id))return false;terminals.set(e.event_id,opKey(r));
+ }
+ return events.every(e=>e.event_format_version!==2||terminals.has(e.event_id));
+}
 export function inspectAuditSchema(db) {
-  const tables = listTables(db);
-  const present = AUDIT_TABLES.filter((name) => tables.includes(name));
-  const missingTables = AUDIT_TABLES.filter((name) => !tables.includes(name));
-
-  const missingColumns = {};
-  for (const name of present) {
-    const columns = columnsOf(db, name);
-    const missing = AUDIT_REQUIRED_COLUMNS[name].filter((column) => !columns.includes(column));
-    if (missing.length) missingColumns[name] = missing;
+ const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>r.name);
+ const present=AUDIT_TABLES.filter(t=>tables.includes(t));
+ let version=0, activeInstanceId=null,activeInstanceCount=0,problems=[];
+ const any=db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'audit_%' OR name LIKE 'idx_audit_%'").all().length>0;
+ if(!any)return {tables,present:[],installed:false,version:0,target:2,activeInstanceId:null,activeInstanceCount:0,missingTables:[],missingColumns:{},missingTriggers:[],invalidTriggers:[],problems:[],state:'not_installed',ok:false};
+ try {
+  version=db.prepare('SELECT version FROM audit_components WHERE component=?').get(AUDIT_COMPONENT)?.version??0;
+  if(version!==1&&version!==2)problems.push(version>2?'version_newer':'version_unknown');
+  else {
+   if(canonicalAuditJson(auditSchemaFacts(db,version))!==canonicalAuditJson(auditComponentContract(version).facts))problems.push('structure_mismatch');
+   if(!problems.length&&!contentValid(db,version))problems.push('content_invalid');
   }
-  const columnsReady = missingTables.length === 0 && Object.keys(missingColumns).length === 0;
-
-  let version = 0;
-  if (columnsReady) {
-    const row = db.prepare(`SELECT version FROM audit_components WHERE component=?`).get(AUDIT_COMPONENT);
-    if (row && Number.isSafeInteger(Number(row.version))) version = Number(row.version);
-  }
-
-  let activeInstanceId = null;
-  let activeInstanceCount = 0;
-  if (columnsReady) {
-    const rows = db.prepare(`SELECT instance_id FROM audit_database_instances WHERE is_active=1`).all();
-    activeInstanceCount = rows.length;
-    if (rows.length === 1) activeInstanceId = String(rows[0].instance_id);
-  }
-
-  const triggerRows = listTriggers(db, AUDIT_TRIGGERS);
-  const triggerMap = new Map(triggerRows.map((row) => [row.name, row]));
-  const missingTriggers = AUDIT_TRIGGERS.filter((name) => !triggerMap.has(name));
-  const invalidTriggers = AUDIT_TRIGGERS.filter((name) => {
-    const row = triggerMap.get(name);
-    return !!row && normalizeSql(row.sql) !== normalizeSql(AUDIT_TRIGGER_SQL[name]);
-  });
-
-  const problems = [];
-  if (missingTables.length) problems.push("missing_tables");
-  if (Object.keys(missingColumns).length) problems.push("missing_columns");
-  if (columnsReady && version > AUDIT_SCHEMA_VERSION) {
-    problems.push("version_newer");
-  } else if (columnsReady && version !== AUDIT_SCHEMA_VERSION) {
-    problems.push("version_unknown");
-  }
-  if (present.length) {
-    if (missingTriggers.length) problems.push("missing_triggers");
-    if (invalidTriggers.length) problems.push("invalid_triggers");
-  }
-  if (columnsReady && activeInstanceCount === 0) problems.push("no_active_instance");
-  if (columnsReady && activeInstanceCount > 1) problems.push("multiple_active_instances");
-
-  let state;
-  if (!present.length) state = "not_installed";
-  else if (missingTables.length || Object.keys(missingColumns).length) state = "invalid";
-  else if (version > AUDIT_SCHEMA_VERSION) state = "unsupported";
-  else if (version !== AUDIT_SCHEMA_VERSION) state = "invalid";
-  else if (missingTriggers.length || invalidTriggers.length) state = "invalid";
-  else if (activeInstanceCount !== 1) state = "invalid";
-  else state = "ok";
-
-  return {
-    tables,
-    present,
-    missingTables,
-    missingColumns,
-    installed: missingTables.length === 0,
-    version,
-    target: AUDIT_SCHEMA_VERSION,
-    activeInstanceId,
-    activeInstanceCount,
-    missingTriggers,
-    invalidTriggers,
-    problems,
-    state,
-    ok: state === "ok",
-  };
+  const active=db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').all();activeInstanceCount=active.length;if(active.length===1)activeInstanceId=active[0].instance_id;
+ }catch{problems.push('structure_or_content_invalid');}
+ const missingTables=tablesFor(version===1?1:2).filter(t=>!tables.includes(t));
+ return {tables,present,installed:missingTables.length===0,version,target:2,activeInstanceId,activeInstanceCount,missingTables,missingColumns:{},missingTriggers:[],invalidTriggers:[],problems,state:version>2?'unsupported':problems.length?'invalid':'ok',ok:problems.length===0};
 }
-
-/** 当前活动数据库实例 ID（恢复分叉后指向分叉实例）。 */
-export function currentAuditInstanceId(db) {
-  const row = db.prepare(`SELECT instance_id FROM audit_database_instances WHERE is_active=1`).get();
-  if (!row) throw fail("audit_schema_inconsistent", { reason: "no_active_instance" });
-  return String(row.instance_id);
+function assertInstalledSchema(db){const s=inspectAuditSchema(db);if(!s.ok)throw fail(s.version>2?'audit_schema_newer':'audit_schema_inconsistent');return s;}
+export const assertAuditSchema=assertInstalledSchema;
+export function currentAuditInstanceId(db){return assertInstalledSchema(db).activeInstanceId;}
+export function ensureAuditSchema(db) {
+ const s=inspectAuditSchema(db);if(s.state==='not_installed')throw fail('audit_install_requires_verified_backup');
+ assertInstalledSchema(db);return {installed:false,from:s.version,to:s.version,activeInstanceId:s.activeInstanceId};
 }
-
-function assertInstalledSchema(db) {
-  const state = inspectAuditSchema(db);
-  if (state.missingTables.length) {
-    throw fail("audit_schema_inconsistent", { reason: "missing_tables", tableCount: state.present.length });
-  }
-  if (Object.keys(state.missingColumns).length) {
-    throw fail("audit_schema_inconsistent", {
-      reason: "missing_columns", tableCount: Object.keys(state.missingColumns).length,
-    });
-  }
-  if (state.version > AUDIT_SCHEMA_VERSION) {
-    throw fail("audit_schema_newer", {
-      reason: "version", version: state.version, target: AUDIT_SCHEMA_VERSION,
-    });
-  }
-  if (state.version !== AUDIT_SCHEMA_VERSION) {
-    throw fail("audit_schema_inconsistent", {
-      reason: "version", version: state.version, target: AUDIT_SCHEMA_VERSION,
-    });
-  }
-  if (state.activeInstanceCount === 0) throw fail("audit_schema_inconsistent", { reason: "no_active_instance" });
-  if (state.activeInstanceCount > 1) throw fail("audit_schema_inconsistent", { reason: "multiple_active_instances" });
-  if (state.missingTriggers.length) throw fail("audit_schema_inconsistent", { reason: "missing_triggers" });
-  if (state.invalidTriggers.length) throw fail("audit_schema_inconsistent", { reason: "invalid_triggers" });
-  return state;
+const samePath=(a,b)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
+function plainFile(file) {
+ try {
+ if(typeof file!=='string'||!file)throw fail('audit_database_invalid');const full=resolve(file);
+ for(let p=full;;p=dirname(p)){const stat=fs.lstatSync(p);if(stat.isSymbolicLink()||!samePath(fs.realpathSync.native(p),resolve(p)))throw fail('audit_database_invalid');if(dirname(p)===p)break;}
+ const stat=fs.statSync(full,{bigint:true});if(!stat.isFile()||stat.nlink!==1n)throw fail('audit_database_invalid');
+ return {path:full,dev:stat.dev,ino:stat.ino};
+ }catch{throw fail('audit_database_invalid');}
 }
-
-/** 只读断言：审计组件已安装且版本 / 触发器 / 活动实例一致（不建表、不写库）。 */
-export function assertAuditSchema(db) {
-  return assertInstalledSchema(db);
+function identity(db,explicit) {
+ const main=db.prepare('PRAGMA database_list').all().find(r=>r.name==='main');if(!main?.file)throw fail('audit_database_invalid');
+ const id=plainFile(main.file);if(explicit&&!samePath(id.path,plainFile(explicit).path))throw fail('audit_backup_source_mismatch');return id;
 }
-
-/**
- * 受保护的组件初始化。
- *
- * - 空库（无任何非审计表）→ 在单事务内建立结构，并在事务内自检；失败整体回滚，不留半截对象。
- * - 已装且版本一致 → `{ installed: false, ... }`，不重复建表、不重复写版本。
- * - 已装但缺表 / 缺版本 / 版本更高 → 固定错误码拒绝（不静默「修复」）。
- * - **含其他业务表的既有库 → A 包拒绝安装**（`audit_install_requires_verified_backup`）。
- *   该判定只看库内实际对象，调用方无法用布尔值绕过；B 包接入已审 backup 后再放开。
- *
- * @param {import('node:sqlite').DatabaseSync} db
- * @param {{ faultInjection?: (db:object) => void }} [options] faultInjection 仅供测试注入故障
- */
-export function ensureAuditSchema(db, options = {}) {
-  if (!db || typeof db.exec !== "function") throw fail("audit_operation_invalid", { field: "db" });
-  const state = inspectAuditSchema(db);
-  if (state.present.length) {
-    if (state.present.length !== AUDIT_TABLES.length) {
-      throw fail("audit_schema_inconsistent", { reason: "partial_tables", tableCount: state.present.length });
-    }
-    assertInstalledSchema(db);
-    return { installed: false, from: state.version, to: state.version, activeInstanceId: state.activeInstanceId };
+const sameIdentity=(a,b)=>samePath(a.path,b.path)&&a.dev===b.dev&&a.ino===b.ino;
+const quarantine=new WeakSet();
+function connection(db){if(!db||typeof db.exec!=='function'||quarantine.has(db))throw fail('audit_unavailable');if(db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)throw fail('audit_database_invalid');}
+function owner(db){connection(db);if(db.isTransaction)throw fail('audit_transaction_conflict');}
+const busy=e=>e?.errcode===5||e?.errcode===6||e?.code==='SQLITE_BUSY'||e?.code==='SQLITE_LOCKED';
+function rollback(db){try{if(!db.isTransaction)return false;db.exec('ROLLBACK');return !db.isTransaction;}catch{return false;}}
+export async function installAuditSchema(db,{dbPath,outDir}={}) {
+ owner(db);if(!dbPath||!outDir)throw fail('audit_install_requires_verified_backup');const before=identity(db,dbPath);
+ let s=inspectAuditSchema(db);if(s.state!=='not_installed')assertInstalledSchema(db);
+ const LB=await import('./local-backup.mjs');LB.assertSupportedDatabaseConnection(db);
+ if(s.version===2)return {installed:false,from:2,to:2,activeInstanceId:s.activeInstanceId};
+ try{db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){quarantine.add(db);throw fail('audit_commit_unknown');}throw fail(busy(e)?'audit_admission_busy':'audit_unavailable');}
+ try {
+  if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
+  s=inspectAuditSchema(db);if(s.state!=='not_installed')assertInstalledSchema(db);
+  const created=LB.createBackup({dbPath:before.path,outDir});if(!created.ok)throw fail('audit_backup_invalid');
+  const verified=LB.verifyBackup({backupDir:created.backupDir});
+  if(!verified.ok||verified.status!=='ok'||verified.summary.snapshotBytes!==created.backupMeta.snapshotBytes||verified.summary.snapshotSha256!==created.backupMeta.snapshotSha256||verified.manifest.source.file!==basename(before.path)||canonicalAuditJson(verified.manifest)!==canonicalAuditJson(created.manifest))throw fail('audit_backup_invalid');
+  try{LB.assertBackupSourceConnection(db,verified.manifest);}catch{throw fail('audit_backup_source_mismatch');}
+  if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
+  if(s.state==='not_installed') {
+   for(const sql of V1_STATEMENTS)db.exec(sql);
+   db.prepare('INSERT INTO audit_components VALUES(?,?,?,?)').run(AUDIT_COMPONENT,1,new Date().toISOString(),'LOCAL-06');
+   db.prepare('INSERT INTO audit_database_instances VALUES(?,?,?,?,?)').run(randomUUID(),new Date().toISOString(),null,1,'initial');
   }
-
-  const foreignTables = state.tables.filter((name) => !AUDIT_TABLES.includes(name));
-  if (foreignTables.length) {
-    // A 包没有已审 backup 支持：对既有业务库**明确拒绝**，不声称已完成现库升级。
-    throw fail("audit_install_requires_verified_backup", {
-      reason: "existing_database",
-      foreignTableCount: foreignTables.length,
-      foreignTables,
-    });
-  }
-
-  const from = 0;
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    for (const migration of MIGRATIONS) {
-      for (const step of migration.steps) db.exec(step);
-      db.prepare(`INSERT INTO audit_components (component, version, installed_at, note) VALUES (?,?,?,?)`)
-        .run(AUDIT_COMPONENT, migration.version, new Date().toISOString(), migration.note);
-    }
-    db.prepare(`INSERT INTO audit_database_instances (instance_id, created_at, parent_instance_id, is_active, note_code)
-                VALUES (?,?,?,?,?)`)
-      .run(randomUUID(), new Date().toISOString(), null, 1, "initial");
-
-    // 事务内自检：结构、版本、活动实例都必须成立，否则整体回滚。
-    const check = inspectAuditSchema(db);
-    if (check.present.length !== AUDIT_TABLES.length || check.version !== AUDIT_SCHEMA_VERSION) {
-      throw fail("audit_schema_install_failed", { reason: "self_check" });
-    }
-    if (typeof options.faultInjection === "function") options.faultInjection(db);
-    db.exec("COMMIT");
-    return { installed: true, from, to: AUDIT_SCHEMA_VERSION, activeInstanceId: currentAuditInstanceId(db) };
-  } catch (e) {
-    try { db.exec("ROLLBACK"); } catch { /* 保留原始异常 */ }
-    if (e instanceof AuditError && e.code === "audit_schema_install_failed") throw e;
-    throw fail("audit_schema_install_failed", { reason: "rollback", from, to: AUDIT_SCHEMA_VERSION });
-  }
+  for(const sql of V2_STEPS)db.exec(sql);
+  db.prepare('UPDATE audit_components SET version=2 WHERE component=?').run(AUDIT_COMPONENT);
+  assertInstalledSchema(db);if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
+  db.exec('COMMIT');return {installed:true,from:s.version,to:2,activeInstanceId:currentAuditInstanceId(db),backupDir:created.backupDir};
+ }catch(e){if(!rollback(db)){quarantine.add(db);throw fail('audit_commit_unknown');}throw fail(e?.code?.startsWith('audit_')?e.code:'audit_schema_install_failed');}
 }
-
-/**
- * 显式路径打开业务库（**没有**默认路径 / 默认数据目录）。
- * readOnly=true 时缺文件不创建、直接给 `audit_database_missing`。
- */
-export function openAuditDatabase(path, { readOnly = true } = {}) {
-  if (typeof path !== "string" || !path.trim()) throw fail("audit_operation_invalid", { field: "path" });
-  if (readOnly && !existsSync(path)) throw fail("audit_database_missing", { readOnly: true });
-  let db;
-  try {
-    db = new DatabaseSync(path, { readOnly: readOnly === true });
-    // 打开是惰性的；先做一次只读探测，把「不是数据库 / 已损坏」与「未安装」分开。
-    db.prepare(`SELECT name FROM sqlite_master LIMIT 1`).all();
-  } catch (e) {
-    try { db?.close(); } catch { /* ignore */ }
-    throw fail("audit_database_invalid", { reason: "not_a_database" });
-  }
-  return db;
+export function openAuditDatabase(file,{readOnly=true}={}) {
+ if(typeof file!=='string'||!file)throw fail('audit_operation_invalid');if(readOnly&&!fs.existsSync(file))throw fail('audit_database_missing');
+ let db;try{db=new DatabaseSync(file,{readOnly});db.prepare('SELECT name FROM sqlite_master LIMIT 1').all();return db;}catch{try{db?.close();}catch{}throw fail('audit_database_invalid');}
 }
-
-// ------------------------------------------------------------------ 事件写入
-const EVENT_COLUMNS = `seq, event_id, database_instance_id, occurred_at, action, outcome, result_code,
-  reason_code, actor, operation_id, parent_operation_id, attempt, account_set_id, voucher_id, period,
-  job_id, item_id, stage_id, correlation, content_digest`;
-
+const EVENT_COLUMNS='*';
+const permissions=new WeakMap();
+const selectOperation=(db,r)=>db.prepare('SELECT * FROM audit_operations WHERE database_instance_id=? AND operation_id=? AND attempt=?').get(r.database_instance_id,r.operation_id,r.attempt);
+function envelope(code,{state='rejected',replayed=false,durability='not_started',retryable=false,needsReview=false,receipt=null}={}){return {ok:state==='succeeded'||state==='no_change',code,state,replayed,durability,retryable,needsReview,receipt};}
+function unknown(code='audit_commit_unknown'){return envelope(code,{state:'unknown',durability:'unknown',needsReview:true});}
+function terminalEnvelope(r,replayed){const receipt=parseCanonical(r.receipt_json);return envelope(r.state==='succeeded'?'ok':r.state==='no_change'?'no_change':receipt.resultCode,{state:r.state,replayed,durability:'committed',receipt});}
+function requireV2(db){const s=assertInstalledSchema(db);if(s.version!==2)throw fail('audit_operation_protocol_required');return s;}
+function normalizeBinding(db,input) {
+ input=JSON.parse(canonicalAuditJson(input));
+ if(!input||typeof input!=='object'||Object.keys(input).sort().join(',')!=='context,request,scope')throw fail('audit_operation_invalid');
+ const context=createOperationContext(input.context),scope=input.scope;
+ if(!scope||typeof scope!=='object'||Object.keys(scope).sort().join(',')!=='kind,value')throw fail('audit_operation_invalid');
+ let value=scope.value;
+ if(scope.kind==='database'){if(value!==null||context.accountSetId!==undefined)throw fail('audit_operation_invalid');}
+ else if(scope.kind==='account_set') {
+  if(!isTechnicalRowId(value)||context.accountSetId!==value||!db.prepare('SELECT 1 FROM account_sets WHERE id=?').get(value))throw fail('audit_operation_invalid');
+ }else if(scope.kind==='enterprise') {
+  if(typeof value!=='string'||!value||value.length>128||/[\u0000-\u001f\u007f]/.test(value))throw fail('audit_operation_invalid');
+  value=value.normalize('NFKC').trim();if(!value)throw fail('audit_operation_invalid');
+  const binding=db.prepare('SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?').get(value);
+  if(context.accountSetId!==undefined&&binding?.account_set_id!==context.accountSetId)throw fail('audit_operation_invalid');
+ }else throw fail('audit_operation_invalid');
+ const r={database_instance_id:requireV2(db).activeInstanceId,operation_id:context.operationId,attempt:context.attempt,binding_version:1,action:context.action,actor:context.actor,scope_kind:scope.kind,scope_token:auditCanonicalDigest(['audit-scope-v1',scope.kind,value]),targets_json:canonicalAuditJson(auditTargets(context)),parent_operation_id:context.parentOperationId??null,parent_attempt:context.parentAttempt??null,request_digest:auditCanonicalDigest(['audit-request-v1',context.action,input.request])};
+ r.binding_digest=bindingOf(r);return r;
+}
+/** A receipt is a private, one-use object issued only after durable pending COMMIT. */
+export function prepareOperation(db,input) {
+ owner(db);const file=identity(db),r=normalizeBinding(db,input);
+ try{db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){quarantine.add(db);return unknown();}return envelope(busy(e)?'audit_admission_busy':'audit_unavailable',{retryable:busy(e)});}
+ let saved;
+ try {
+  if(!sameIdentity(file,identity(db))||requireV2(db).activeInstanceId!==r.database_instance_id)throw fail('audit_authorization_invalid');
+  if(normalizeBinding(db,input).binding_digest!==r.binding_digest)throw fail('audit_operation_conflict');
+  saved=selectOperation(db,r);
+  if(saved){db.exec('ROLLBACK');if(saved.binding_digest!==r.binding_digest)return envelope('audit_operation_conflict');return saved.state==='pending'?unknown('audit_operation_pending'):terminalEnvelope(saved,true);}
+  const prior=db.prepare('SELECT * FROM audit_operations WHERE database_instance_id=? AND operation_id=? ORDER BY attempt DESC LIMIT 1').get(r.database_instance_id,r.operation_id);
+  if((!prior&&r.attempt!==1)||(prior&&(prior.attempt+1!==r.attempt||!['failed','rejected'].includes(prior.state)||prior.binding_digest!==r.binding_digest))){db.exec('ROLLBACK');return envelope('audit_operation_conflict');}
+  r.prepared_at=new Date().toISOString();
+  const columns=[...IMMUTABLE_OPERATION_COLUMNS,'state'];
+  db.prepare(`INSERT INTO audit_operations (${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`).run(...IMMUTABLE_OPERATION_COLUMNS.map(k=>r[k]),'pending');
+  db.exec('COMMIT');
+ }catch(e){if(!rollback(db)){quarantine.add(db);return unknown();}throw fail(e?.code?.startsWith('audit_')?e.code:'audit_unavailable');}
+ const authorization=Object.freeze(Object.create(null));permissions.set(authorization,{db,file,r,used:false});
+ return {...envelope('prepared',{state:'pending',durability:'committed'}),authorization};
+}
+function resultSpec(value,r) {
+ try {value=JSON.parse(canonicalAuditJson(value));}catch{throw fail('audit_result_invalid');}
+ if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.then==='function')throw fail('audit_result_invalid');
+ const keys=Object.keys(value);if(keys.some(k=>!['state','resultCode','reasonCode','targets'].includes(k))||!['succeeded','no_change','failed','rejected'].includes(value.state))throw fail('audit_result_invalid');
+ const resultCode=value.resultCode??(value.state==='succeeded'?'ok':value.state),reasonCode=value.reasonCode??'none';
+ const inputTargets=targetsOfRow(r),extra=value.targets??{};
+ if(!extra||typeof extra!=='object'||Array.isArray(extra)||Object.keys(extra).some(k=>!AUDIT_TARGET_FIELDS.includes(k)))throw fail('audit_result_invalid');
+ const targets=auditTargets({...inputTargets,...extra});if(AUDIT_TARGET_FIELDS.some(k=>inputTargets[k]!==null&&inputTargets[k]!==targets[k]))throw fail('audit_result_invalid');
+ normalizeAuditEvent({...targets,outcome:value.state,resultCode,reasonCode,action:r.action,actor:r.actor,operationId:r.operation_id,parentOperationId:r.parent_operation_id,attempt:r.attempt});
+ if(!terminalCodesValid(value.state,resultCode))throw fail('audit_result_invalid');
+ return {state:value.state,resultCode,reasonCode,targets};
+}
+function finish(db,r,spec) {
+ const e=normalizeAuditEvent({...spec.targets,action:r.action,actor:r.actor,operationId:r.operation_id,parentOperationId:r.parent_operation_id,attempt:r.attempt,outcome:spec.state,resultCode:spec.resultCode,reasonCode:spec.reasonCode},null,serverEventFields(r.database_instance_id));
+ const columns=['event_id','dedupe_key','database_instance_id','occurred_at','action','outcome','result_code','reason_code','actor','operation_id','parent_operation_id','attempt','account_set_id','voucher_id','period','job_id','item_id','stage_id','correlation','content_digest','event_format_version'];
+ db.prepare(`INSERT INTO audit_events(${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`).run(e.eventId,auditV2DedupeKey(e),e.databaseInstanceId,e.occurredAt,e.action,e.outcome,e.resultCode,e.reasonCode,e.actor,e.operationId,e.parentOperationId,e.attempt,...AUDIT_TARGET_FIELDS.map(k=>e[k]??null),auditV2EventDigest(e),2);
+ const event=db.prepare('SELECT * FROM audit_events WHERE event_id=?').get(e.eventId);
+ const updated={...r,state:spec.state};const receipt=receiptFor(updated,event,spec.targets);
+ const changed=db.prepare("UPDATE audit_operations SET state=?,terminal_event_id=?,receipt_json=?,finished_at=? WHERE database_instance_id=? AND operation_id=? AND attempt=? AND state='pending'").run(spec.state,e.eventId,canonicalAuditJson(receipt),e.occurredAt,r.database_instance_id,r.operation_id,r.attempt);
+ if(changed.changes!==1)throw fail('audit_operation_conflict');return {...updated,receipt_json:canonicalAuditJson(receipt)};
+}
+const CALLBACK_DENIED=new Set([SQL.SQLITE_TRANSACTION,SQL.SQLITE_SAVEPOINT,SQL.SQLITE_PRAGMA,SQL.SQLITE_ATTACH,SQL.SQLITE_DETACH,SQL.SQLITE_ALTER_TABLE,SQL.SQLITE_CREATE_TABLE,SQL.SQLITE_CREATE_INDEX,SQL.SQLITE_CREATE_TRIGGER,SQL.SQLITE_CREATE_VIEW,SQL.SQLITE_DROP_TABLE,SQL.SQLITE_DROP_INDEX,SQL.SQLITE_DROP_TRIGGER,SQL.SQLITE_DROP_VIEW,SQL.SQLITE_CREATE_TEMP_TABLE,SQL.SQLITE_CREATE_TEMP_TRIGGER,SQL.SQLITE_CREATE_TEMP_VIEW,SQL.SQLITE_CREATE_VTABLE,SQL.SQLITE_DROP_VTABLE]);
+export function executePreparedOperation(db,authorization,fn) {
+ owner(db);const p=authorization&&typeof authorization==='object'?permissions.get(authorization):null;
+ if(!p||p.db!==db||p.used||typeof fn!=='function')throw fail('audit_authorization_invalid');
+ if(!sameIdentity(p.file,identity(db))||requireV2(db).activeInstanceId!==p.r.database_instance_id)throw fail('audit_authorization_invalid');
+ try{db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){p.used=true;quarantine.add(db);return unknown();}return envelope(busy(e)?'audit_admission_busy':'audit_unavailable',{retryable:busy(e)});}
+ let spec, saved, controlledFailure=null;
+ try {
+  if(!sameIdentity(p.file,identity(db)))throw fail('audit_authorization_invalid');
+  saved=selectOperation(db,p.r);if(!saved||saved.state!=='pending'||saved.binding_digest!==p.r.binding_digest)throw fail('audit_authorization_invalid');
+  p.used=true;
+  db.setAuthorizer((action,a)=>CALLBACK_DENIED.has(action)||[SQL.SQLITE_INSERT,SQL.SQLITE_UPDATE,SQL.SQLITE_DELETE].includes(action)&&String(a).startsWith('audit_')?SQL.SQLITE_DENY:SQL.SQLITE_OK);
+  let result;
+  try{result=fn();}finally{db.setAuthorizer(null);}
+  if(!db.isTransaction)throw fail('audit_commit_unknown');
+  spec=resultSpec(result,saved);
+  if(spec.state==='failed'||spec.state==='rejected'){controlledFailure=spec;throw fail('audit_result_invalid');}
+  saved=finish(db,saved,spec);
+ }catch(e){
+  try{db.setAuthorizer(null);}catch{}
+  if(!rollback(db)){quarantine.add(db);return unknown();}
+  if(!p.used)throw fail(e?.code?.startsWith('audit_')?e.code:'audit_unavailable');
+  const mapped=controlledFailure??(e?.code==='audit_result_invalid'?{state:'rejected',resultCode:'rejected_validation',reasonCode:'audit_result_invalid',targets:targetsOfRow(p.r)}:{...classifyFailure(e),targets:targetsOfRow(p.r)});
+  spec={...mapped,state:mapped.state??mapped.outcome};if(!['failed','rejected'].includes(spec.state))spec={state:'failed',resultCode:'internal_error',reasonCode:'internal_error',targets:targetsOfRow(p.r)};
+  return persistFailure(db,p.r,spec);
+ }
+ try{db.exec('COMMIT');return terminalEnvelope(saved,false);}catch(e){
+  if(busy(e)&&db.isTransaction&&rollback(db))return persistFailure(db,p.r,{state:'failed',resultCode:'audit_unavailable',reasonCode:'audit_write_failed',targets:targetsOfRow(p.r)});
+  try{rollback(db);}catch{}quarantine.add(db);return unknown();
+ }
+}
+function persistFailure(db,r,spec) {
+ try{db.exec('BEGIN IMMEDIATE');const current=selectOperation(db,r);if(!current||current.state!=='pending') {db.exec('ROLLBACK');return current?.receipt_json?terminalEnvelope(current,true):unknown();}
+  const saved=finish(db,current,spec);db.exec('COMMIT');return terminalEnvelope(saved,false);
+ }catch{if(!rollback(db)){quarantine.add(db);return unknown();}return unknown('audit_unavailable');}
+}
+export function queryOperation(db,{databaseInstanceId,operationId,attempt=1}={}) {
+ requireV2(db);if(!isTechId(databaseInstanceId)||!isTechId(operationId)||!Number.isSafeInteger(attempt)||attempt<1||attempt>1000000)throw fail('audit_operation_invalid');
+ const r=selectOperation(db,{database_instance_id:databaseInstanceId,operation_id:operationId,attempt});
+ if(!r)return envelope('not_found');return r.state==='pending'?unknown('audit_operation_pending'):terminalEnvelope(r,true);
+}
 const toEventDto = (row) => ({
   seq: Number(row.seq),
   eventId: row.event_id,
@@ -391,70 +410,7 @@ const toEventDto = (row) => ({
   contentDigest: row.content_digest,
 });
 
-const comparableOfRow = (row) => JSON.stringify([
-  row.outcome, row.result_code, row.reason_code, row.parent_operation_id ?? null,
-]);
-const comparableOfEvent = (event) => JSON.stringify([
-  event.outcome, event.resultCode, event.reasonCode, event.parentOperationId ?? null,
-]);
 
-/**
- * 在**调用方事务内**追加一条事件（本函数不开事务、不提交）。
- *
- * 去重语义：同一 operation / attempt / action / 范围目标 / 关联令牌 的相同事件只保留一条，
- * 重复调用返回 `{ appended: false, event }`；键相同而 outcome / resultCode / reasonCode /
- * 父操作不同 → `audit_event_conflict`，绝不用 INSERT OR IGNORE 掩盖不一致。
- *
- * 写不进去（IO / 锁 / 触发器 RAISE 等）→ `AuditUnavailableError('audit_unavailable')`。
- */
-export function appendAuditEvent(db, raw, { context = null } = {}) {
-  if (!db || typeof db.prepare !== "function") throw fail("audit_operation_invalid", { field: "db" });
-  // 成功事件必须写进调用方的外层业务事务：独立自动提交会破坏「业务与审计同一事务」语义。
-  if (!inTransaction(db)) throw fail("audit_transaction_required", { reason: "append_outside_transaction" });
-  if (context !== null) createOperationContext(context); // 上下文格式错误时提前失败
-  const instanceId = currentAuditInstanceId(db);
-  const event = normalizeAuditEvent(raw, context, serverEventFields(instanceId));
-  const dedupeKey = auditEventDedupeKey(event);
-  const digest = auditEventDigest(event);
-
-  const findExisting = db.prepare(`SELECT ${EVENT_COLUMNS} FROM audit_events WHERE dedupe_key=?`);
-  const existing = findExisting.get(dedupeKey);
-  if (existing) {
-    if (comparableOfRow(existing) !== comparableOfEvent(event)) {
-      throw fail("audit_event_conflict", { reason: "dedupe_key_reused_with_different_data" });
-    }
-    return { appended: false, event: toEventDto(existing) };
-  }
-
-  try {
-    db.prepare(`INSERT INTO audit_events
-                  (event_id, dedupe_key, database_instance_id, occurred_at, action, outcome, result_code,
-                   reason_code, actor, operation_id, parent_operation_id, attempt, account_set_id, voucher_id,
-                   period, job_id, item_id, stage_id, correlation, content_digest)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(
-        event.eventId, dedupeKey, event.databaseInstanceId, event.occurredAt, event.action, event.outcome,
-        event.resultCode, event.reasonCode, event.actor, event.operationId, event.parentOperationId ?? null,
-        event.attempt, event.accountSetId ?? null, event.voucherId ?? null, event.period ?? null,
-        event.jobId ?? null, event.itemId ?? null, event.stageId ?? null, event.correlation ?? null, digest,
-      );
-  } catch (e) {
-    // 并发写入同一去重键：唯一约束失败后重读判断是「同一事件」还是「同键不同数据」。
-    const raced = findExisting.get(dedupeKey);
-    if (raced) {
-      if (comparableOfRow(raced) !== comparableOfEvent(event)) {
-        throw fail("audit_event_conflict", { reason: "dedupe_key_reused_with_different_data" });
-      }
-      return { appended: false, event: toEventDto(raced) };
-    }
-    throw new AuditUnavailableError("audit_unavailable", { cause: e });
-  }
-
-  const saved = findExisting.get(dedupeKey);
-  return { appended: true, event: toEventDto(saved) };
-}
-
-// ------------------------------------------------------------------ 只读查询
 const FILTER_KEYS = Object.freeze([
   "action",
   "outcome",
@@ -604,248 +560,13 @@ export function auditEventStats(db) {
   return { total, byAction, byOutcome };
 }
 
-/** 只读完整性自检：重算 content_digest，返回不匹配的 seq（空数组 = 全部一致）。 */
+
 export function verifyAuditEvents(db) {
-  assertInstalledSchema(db);
-  const rows = db.prepare(`SELECT ${EVENT_COLUMNS} FROM audit_events ORDER BY seq`).all();
-  const mismatched = [];
-  for (const row of rows) {
-    const dto = toEventDto(row);
-    if (auditEventDigest({
-      databaseInstanceId: dto.databaseInstanceId,
-      occurredAt: dto.occurredAt,
-      action: dto.action,
-      outcome: dto.outcome,
-      resultCode: dto.resultCode,
-      reasonCode: dto.reasonCode,
-      actor: dto.actor,
-      operationId: dto.operationId,
-      parentOperationId: dto.parentOperationId,
-      attempt: dto.attempt,
-      accountSetId: dto.accountSetId,
-      voucherId: dto.voucherId,
-      period: dto.period,
-      jobId: dto.jobId,
-      itemId: dto.itemId,
-      stageId: dto.stageId,
-      correlation: dto.correlation,
-    }) !== dto.contentDigest) mismatched.push(dto.seq);
-  }
-  return { checked: rows.length, mismatched };
+ assertInstalledSchema(db);const rows=db.prepare('SELECT * FROM audit_events ORDER BY seq').all();
+ return {checked:rows.length,mismatched:rows.filter(r=>!validEvent(r)).map(r=>Number(r.seq))};
 }
-
-// ------------------------------------------------------------------ 恢复分叉实例
-/**
- * 恢复出「同一快照的另一个副本」时登记新实例：旧实例历史事件原样保留（不改写），
- * 新副本的**未来**事件使用新 instance ID，并记录父实例关系。
- * 同一父实例重复调用是幂等的（崩溃重试不会产生两个分叉实例）。
- */
-export function markAuditInstanceFork(db, { parentInstanceId, note = "restore-new" } = {}) {
-  if (!isTechId(parentInstanceId)) throw fail("audit_operation_invalid", { field: "parentInstanceId" });
-  // note 是固定技术枚举，不是自由文本：外部路径 / 用户标识 / 摘要一律不接受，
-  // 数据库列还有 CHECK 约束兜底，错误信息只给字段名不回显原值。
-  if (typeof note !== "string" || !AUDIT_INSTANCE_NOTES.includes(note)) {
-    throw fail("audit_operation_invalid", { field: "note" });
-  }
-  assertInstalledSchema(db);
-  return runInTransaction(db, () => {
-    const active = currentAuditInstanceId(db);
-    if (active !== parentInstanceId) {
-      const child = db.prepare(`SELECT instance_id FROM audit_database_instances
-                                 WHERE parent_instance_id=? AND is_active=1`).get(parentInstanceId);
-      if (child && String(child.instance_id) === active) {
-        return { instanceId: active, parentInstanceId, created: false };
-      }
-      throw fail("audit_instance_conflict", { reason: "active_instance_mismatch" });
-    }
-    const instanceId = randomUUID();
-    db.prepare(`UPDATE audit_database_instances SET is_active=0 WHERE instance_id=?`).run(parentInstanceId);
-    db.prepare(`INSERT INTO audit_database_instances (instance_id, created_at, parent_instance_id, is_active, note_code)
-                VALUES (?,?,?,?,?)`)
-      .run(instanceId, new Date().toISOString(), parentInstanceId, 1, note);
-    return { instanceId, parentInstanceId, created: true };
-  }).result;
-}
-
-/** 只读实例列表（分叉链；不返回任何业务内容）。 */
-export function listAuditInstances(db) {
-  assertInstalledSchema(db);
-  return db.prepare(`SELECT instance_id, created_at, parent_instance_id, is_active FROM audit_database_instances
-                     ORDER BY created_at, instance_id`).all().map((r) => ({
-    instanceId: r.instance_id,
-    createdAt: r.created_at,
-    parentInstanceId: r.parent_instance_id ?? null,
-    isActive: Number(r.is_active) === 1,
-  }));
-}
-
-// ------------------------------------------------------------------ 受控执行（事务 + 失败兜底）
-const TERMINAL_KEYS = Object.freeze([
-  "outcome",
-  "resultCode",
-  "reasonCode",
-  ...AUDIT_EVENT_OVERRIDABLE_FIELDS,
-]);
-
-/** 失败事件规格：固定映射，不含原始异常文本。 */
-function failureSpec(context, error) {
-  const mapped = classifyFailure(error);
-  return { ...contextTargets(context), ...mapped };
-}
-
-/**
- * 在**最外层业务事务**内受控执行一次领域动作并落审计。
- *
- * 成功路径：`fn(audit)` 完成业务写入 → 写终态事件（仍在同一事务内）→ 提交（嵌套时 RELEASE SAVEPOINT）。
- * 失败路径：先回滚本层（最外层 = ROLLBACK；嵌套 = ROLLBACK TO SAVEPOINT，**不**在尚未回滚的外层里
- * 写「持久失败」），最外层再用短事务补写固定失败事件；补写失败抛 `audit_unavailable`。
- * 嵌套失败把待写失败事件挂在 `error.auditFailurePending` 上，由最外层执行者回滚后调用
- * `appendDeferredFailure(db, error)` 落库。
- *
- * 提交结果不明确（COMMIT / RELEASE 抛错）：抛 `AuditUnavailableError('audit_commit_unknown')`，
- * **不伪造** succeeded，也不把失败事件写成「业务已回滚」。
- *
- * @param {object} db 显式 DatabaseSync 句柄
- * @param {{context:object, terminal:object}} operation context=createOperationContext(...)；
- *        terminal={outcome,resultCode,reasonCode?,...范围覆盖}
- * @param {(audit:{append:Function, context:object}) => any} fn
- * @param {{testHooks?:{beforeCommit?:Function, commit?:Function}}} [options] testHooks 仅供测试注入提交故障
- */
-export function runAuditedOperation(db, operation, fn, options = {}) {
-  if (!db || typeof db.exec !== "function") throw fail("audit_operation_invalid", { field: "db" });
-  if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
-    throw fail("audit_operation_invalid", { field: "operation" });
-  }
-  const context = createOperationContext(operation.context);
-  const terminal = operation.terminal;
-  if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) {
-    throw fail("audit_event_invalid", { reason: "terminal_required" });
-  }
-  let unknown = 0;
-  for (const key of Object.keys(terminal)) if (!TERMINAL_KEYS.includes(key)) unknown += 1;
-  if (unknown) throw fail("audit_event_invalid", { reason: "unknown_field", unknownFieldCount: unknown });
-  if (typeof fn !== "function") throw fail("audit_operation_invalid", { field: "fn" });
-
-  const append = (fields = {}) => {
-    for (const key of Object.keys(fields)) {
-      if (key === "outcome" || key === "resultCode" || key === "reasonCode") continue;
-      if (!AUDIT_EVENT_OVERRIDABLE_FIELDS.includes(key)) {
-        throw fail("audit_event_field_not_overridable", { field: "other" });
-      }
-    }
-    return appendAuditEvent(db, { ...contextTargets(context), ...fields }, { context });
-  };
-
-  const owner = !inTransaction(db);
-  const savepoint = owner ? null : `audit_op_sp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  if (owner) db.exec("BEGIN IMMEDIATE");
-  else db.exec(`SAVEPOINT ${savepoint}`);
-
-  const rollbackOwnLevel = () => {
-    if (owner) {
-      db.exec("ROLLBACK");
-      return true;
-    }
-    db.exec(`ROLLBACK TO ${savepoint}`);
-    db.exec(`RELEASE ${savepoint}`);
-    return true;
-  };
-
-  const handleBusinessFailure = (businessError, spec) => {
-    let rolledBack = false;
-    try { rolledBack = rollbackOwnLevel(); } catch { rolledBack = false; }
-    if (!rolledBack) {
-      // 回滚本身失败：业务结果未知，不能写「已回滚」的失败事件，也不能报成功。
-      throw new AuditUnavailableError("audit_commit_unknown", { cause: businessError });
-    }
-    if (!owner) {
-      // 嵌套：外层事务尚未回滚，不能在里面写「持久失败」；交给最外层执行者。
-      try {
-        Object.defineProperty(businessError, "auditFailurePending", {
-          value: { context, spec }, enumerable: false, configurable: true, writable: true,
-        });
-      } catch { /* 冻结的异常对象仍会原样抛出 */ }
-      throw businessError;
-    }
-    return writeFailureOrThrow(db, context, spec, businessError);
-  };
-
-  let result;
-  let appended;
-  try {
-    result = fn({ append, context });
-  } catch (businessError) {
-    return handleBusinessFailure(businessError, failureSpec(context, businessError));
-  }
-  try {
-    appended = append(terminal);
-  } catch (eventError) {
-    // 终态事件写不进：业务必须回滚，绝不能先提交业务再补写成功。
-    const auditFailure = new AuditUnavailableError("audit_write_failed", {
-      cause: eventError, businessError: eventError,
-    });
-    auditFailure.businessRolledBack = true;
-    auditFailure.successEventPersisted = false;
-    return handleBusinessFailure(auditFailure, failureSpec(context, auditFailure));
-  }
-
-  const commit = () => {
-    if (typeof options.testHooks?.commit === "function") options.testHooks.commit(db);
-    else if (owner) db.exec("COMMIT");
-    else db.exec(`RELEASE ${savepoint}`);
-  };
-  try {
-    if (typeof options.testHooks?.beforeCommit === "function") options.testHooks.beforeCommit(db);
-    commit();
-  } catch (commitError) {
-    // 提交结果不明确：不能声称已回滚，也不能伪造 succeeded。
-    try { rollbackOwnLevel(); } catch { /* 结果仍不明确 */ }
-    throw new AuditUnavailableError("audit_commit_unknown", { cause: commitError });
-  }
-
-  return { result, event: appended.event, appended: appended.appended };
-}
-
-function writeFailureOrThrow(db, context, spec, businessError) {
-  let written;
-  try {
-    written = runInTransaction(db, () => appendAuditEvent(db, spec, { context })).result;
-  } catch (writeError) {
-    if (writeError && writeError.code === "audit_event_conflict") {
-      // 同一 operation/attempt 的去重键已被不同数据占用：这是生产者错误，必须可见，不能报成功。
-      const conflict = fail("audit_event_conflict", { reason: "failure_event_key_reused" });
-      conflict.businessError = businessError;
-      throw conflict;
-    }
-    const unavailable = new AuditUnavailableError("audit_unavailable", { cause: writeError, businessError });
-    if (businessError && businessError.businessRolledBack === true) unavailable.businessRolledBack = true;
-    throw unavailable;
-  }
-  try {
-    Object.defineProperty(businessError, "auditEvent", {
-      value: written.event, enumerable: false, configurable: true, writable: true,
-    });
-    Object.defineProperty(businessError, "auditPersisted", {
-      value: true, enumerable: false, configurable: true, writable: true,
-    });
-  } catch { /* 忽略不可写异常对象 */ }
-  throw businessError;
-}
-
-/**
- * 最外层执行者在**自己回滚之后**补写嵌套调用遗留的失败事件。
- * 没有待写事件时返回 null；补写失败抛 `audit_unavailable`。
- */
-export function appendDeferredFailure(db, error) {
-  const pending = error && typeof error === "object" ? error.auditFailurePending : null;
-  if (!pending) return null;
-  try {
-    const written = runInTransaction(db, () => appendAuditEvent(db, pending.spec, { context: pending.context })).result;
-    try {
-      Object.defineProperty(error, "auditPersisted", { value: true, enumerable: false, configurable: true, writable: true });
-    } catch { /* ignore */ }
-    return written.event;
-  } catch (writeError) {
-    throw new AuditUnavailableError("audit_unavailable", { cause: writeError, businessError: error });
-  }
-}
+export function listAuditInstances(db) {assertInstalledSchema(db);return db.prepare('SELECT * FROM audit_database_instances ORDER BY created_at,instance_id').all().map(r=>({instanceId:r.instance_id,createdAt:r.created_at,parentInstanceId:r.parent_instance_id,isActive:r.is_active===1}));}
+export function appendAuditEvent(){throw fail('audit_operation_protocol_required');}
+export function appendDeferredFailure(){throw fail('audit_operation_protocol_required');}
+export function runAuditedOperation(){throw fail('audit_operation_protocol_required');}
+export function markAuditInstanceFork(){throw fail('audit_operation_protocol_required');}

@@ -1574,13 +1574,8 @@ async function runBackupGate({ db, backupService, dbPath, outDir, version, expec
     });
   }
   const components = manifest.components ?? [];
-  if (!Array.isArray(components) || (components.length !== 0 && !(components.length === 1
-      && components[0]?.name === "auxiliary" && components[0]?.version === 1
-      && expectedSchemaVersion === 5))) {
-    throw bankError("migration_backup_invalid", "迁移前备份组件集合不受支持或已包含银行组件，与本次安装状态不符", {
-      detail: { reason: "component_present" },
-    });
-  }
+  try { const official=await import('./local-backup.mjs');official.assertInstallableComponentSet(manifest,'bank'); }
+  catch {throw bankError('migration_backup_invalid','迁移前备份组件集合不受支持', {detail:{reason:'component_present'}});}
   if (created.manifest) {
     if (!created.manifest.snapshot
       || Number(created.manifest.snapshot.bytes) !== snapshotBytes

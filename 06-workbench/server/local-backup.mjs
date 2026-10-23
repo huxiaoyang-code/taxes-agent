@@ -40,6 +40,8 @@
 // 7) 错误一律返回稳定 code，不回显账务原文、原始 SQL、堆栈或绝对路径；明细只含字段名、计数、
 //    表名 / 列名、版本号与固定的 reason 标记。
 
+import { inspectAuditSchema, auditComponentContract, auditSchemaFacts, AUDIT_TABLES } from './local-audit-storage.mjs';
+import { AUDIT_COMPONENT } from './local-audit.mjs';
 import { AUX_TABLES, AUX_COMPONENT_STRUCTURE, inspectAuxiliarySchema } from './auxiliary-storage.mjs';
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
@@ -821,6 +823,7 @@ function describeContent(conn, tables) {
  * 注册表里的 v1 契约才被当成受支持组件。
  */
 const COMPONENT_REGISTRY = Object.freeze({
+  [AUDIT_COMPONENT]: Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}}),
   auxiliary: Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}),
   bank: Object.freeze({
     name: BANK_COMPONENT_STRUCTURE.name,
@@ -1567,13 +1570,15 @@ function inspectStructure(conn, { notProductCode }) {
   // 可选组件：任何 `bank_*` 表出现就按已登记 v1 契约完整校验；旧的无组件库不受影响。
   const component = inspectComponent(conn, tables);
   const auxiliary = inspectAuxiliarySchema(conn, version);
+  const audit=inspectAuditSchema(conn);
   const effectiveStructure = component.present
     ? { ...structure, ...COMPONENT_REGISTRY.bank.structure.tables }
     : structure;
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables.filter(table => !auxiliary.present || !AUX_TABLES.includes(table)), effectiveStructure),
+    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !audit.present.includes(table)), effectiveStructure),
     ...auxiliary.problems,
+    ...(audit.state==='not_installed'||audit.ok?[]:[{kind:'audit_structure_or_content_invalid'}]),
     ...component.problems,
     ...migrations.problems,
     ...backupRecordProblems(conn, version),
@@ -1585,7 +1590,7 @@ function inspectStructure(conn, { notProductCode }) {
       problems: problems.slice(0, MAX_DETAIL_ITEMS),
     });
   }
-  return { version, tables, migrations: migrations.versions, component, auxiliary };
+  return { version, tables, migrations: migrations.versions, component, auxiliary, audit };
 }
 
 /**
@@ -1622,6 +1627,13 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
       structureDigest: sha256Text(JSON.stringify(auxiliary.objects)),
       contentDigest: componentContentDigest(auxiliary, content),
       rows: AUX_TABLES.reduce((sum, table) => sum + content.tables[table].rows, 0) });
+  }
+  if (structure.audit.ok) {
+    const audit=structure.audit, tables=auditComponentContract(audit.version).tables;
+    components.push({name:AUDIT_COMPONENT,version:audit.version,tables,
+      structureDigest:sha256Text(JSON.stringify(auditSchemaFacts(conn,audit.version))),
+      contentDigest:componentContentDigest({tables},content),
+      rows:tables.reduce((sum,t)=>sum+content.tables[t].rows,0)});
   }
   return {
     structure: {
@@ -1766,7 +1778,7 @@ function validateManifest(manifest) {
     for (const entry of manifest.components) {
       if (!isPlainObject(entry)) return { code: "manifest_invalid", details: { field: "components" } };
       if (!isNonEmptyString(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
-      const contract = COMPONENT_REGISTRY[entry.name];
+      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : COMPONENT_REGISTRY[entry.name];
       if (!contract) return { code: "component_unsupported", details: { component: entry.name } };
       if (seen.has(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
       seen.add(entry.name);
@@ -2329,3 +2341,16 @@ export function assertBackupSourceConnection(conn, manifest) {
 
 /** Read-only full registry validation for an already installed optional component. */
 export function assertSupportedDatabaseConnection(conn) { inspectDatabase(conn); }
+
+/** Qualification only after fixed official verification; target must be absent. */
+export function assertInstallableComponentSet(manifest,target) {
+ const entries=manifest?.components??[];
+ if(!Array.isArray(entries)||entries.some(e=>e.name===target||!COMPONENT_REGISTRY[e.name]))throw expected('component_unsupported');
+ const seen=new Set();
+ for(const e of entries){if(seen.has(e.name))throw expected('component_unsupported');seen.add(e.name);
+  const contract=e.name===AUDIT_COMPONENT?auditComponentContract(e.version):COMPONENT_REGISTRY[e.name];
+  if(e.version!==contract.version||JSON.stringify(e.tables)!==JSON.stringify(contract.tables))throw expected('component_unsupported');
+ }
+ if(entries.some(e=>e.name==='auxiliary')&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');
+ return true;
+}

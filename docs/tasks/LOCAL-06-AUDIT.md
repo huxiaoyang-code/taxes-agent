@@ -1,3 +1,4 @@
+> 2026-10-23 W2a 当前任务：基线PR74 merge `c4ae3674988ebefdc80baf12a2a20b06ff623147`；[Issue54精确21路径](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6366469014)，负责人huxiaoyang-code。唯一经用户明确授权的fallback实施者完成本片实现与自测后冻结，root独立验收、全新未实施者独审与Git/PR；本任务不直接关闭Issue54。范围仅audit2基础、strict官方备份、owner-only/durable pending/私有单用授权/receipt-only与audit先装后bank/aux兼容。实际业务接线/统一锁/批量/恢复分叉/Windows不在本片。下一片先W3a batch1/2严格备份与保护升级，再W2b可信coordinator，随后W3b/W4/Windows/最终整链；不得预放行batch。原八包01/02/03/04/05/08为6/8，06/07未完、税局0。实际验收证据见[审计交接](../handoffs/LOCAL-06-AUDIT.md)，不预报PR/合并。
 # 任务单 · LOCAL-06 AUDIT（A 包：审计组件与恢复 ledger 原语）
 
 - 类型：后端存储 / 契约 / 只读 CLI / 恢复 ledger 原语 + 测试 + 文档
