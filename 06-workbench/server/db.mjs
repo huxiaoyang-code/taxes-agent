@@ -4,12 +4,30 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 import { ensureImportSchema } from "./import-storage.mjs";
+import { assertOpenedDatabaseClaimsMatch } from "./database-open-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WORKBENCH_DATA_DIR || join(__dirname, "..", "data");
 mkdirSync(DATA_DIR, { recursive: true });
 
-export const db = new DatabaseSync(join(DATA_DIR, "workbench.db"));
+const DB_FILE = join(DATA_DIR, "workbench.db");
+export const db = new DatabaseSync(DB_FILE);
+
+// 初始化钩子（**必须**在任何核心 DDL、`journal_mode = WAL` 与导入结构迁移写之前）：
+// 若本进程刚用独占创建回执创建了这个 workbench.db（页 1 种子由创建 fd 写入），则必须证明
+// 「这条实际打开的连接」挂载的就是那个对象（连接页 1 的随机 nonce + 魔数 + 创建 fd 身份 + 无别名），
+// 否则立即关闭连接并拒绝——外部旧库 / 零字节文件被换入 / 同路径同 dev-ino 但内容被改写时
+// 到这里就停下，不会先建表 / 设 WAL 污染再报错。
+// 反之，若本进程**持有活动独占创建回执**而这次要打开的是另一个库（别的数据目录 / 别名 / junction /
+// 未指定目录），同样在任何写之前以 `fresh_claim_target_mismatch` 拒绝：不能因为按路径查不到创建事实
+// 就退化成普通入口，否则「claim A、再把 WORKBENCH_DATA_DIR 指向既有库 B」会把核心结构写进 B。
+// 普通业务入口（本进程没有任何活动创建事实）行为与旧实现完全一致。
+try {
+  assertOpenedDatabaseClaimsMatch(db, { dataDir: DATA_DIR, dbPath: DB_FILE });
+} catch (error) {
+  try { db.close(); } catch { /* 拒绝后关闭失败不改变结论 */ }
+  throw error;
+}
 
 db.exec(`
 PRAGMA journal_mode = WAL;

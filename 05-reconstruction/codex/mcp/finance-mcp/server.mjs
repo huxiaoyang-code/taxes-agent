@@ -12,8 +12,9 @@ import { createInterface } from "node:readline";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { callBackend, backendInfo, BackendError } from "./backend.mjs";
-import { TOOLS, TOOL_BY_NAME, LOCAL_QUERIES, validateArgs, queryStatus, ToolCallError } from "./tools.mjs";
+import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
+import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
+import { TOOLS, TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
@@ -24,15 +25,20 @@ const SERVER = { name: "finance-mcp", version: "0.2.0" };
 const PROTOCOL = "2025-06-18";
 
 // ------------------------------------------------------------------ resources
-function listSkillFiles(dir = SKILLS_DIR, base = SKILLS_DIR) {
+function listSkillFilesUnsafe(dir = SKILLS_DIR, base = SKILLS_DIR) {
   if (!existsSync(dir)) return [];
   const out = [];
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, ent.name);
-    if (ent.isDirectory()) out.push(...listSkillFiles(p, base));
+    if (ent.isDirectory()) out.push(...listSkillFilesUnsafe(p, base));
     else if (ent.name.endsWith(".md")) out.push(relative(base, p).replaceAll("\\", "/"));
   }
   return out;
+}
+
+function listSkillFiles() {
+  try { return listSkillFilesUnsafe(); }
+  catch { throw new ToolCallError("skill_not_found", "skill_not_found"); }
 }
 
 function readSkill(resource) {
@@ -40,46 +46,13 @@ function readSkill(resource) {
   const root = resolve(SKILLS_DIR);
   const full = resolve(root, normalized);
   // Windows 下环境变量常用正斜杠，join 会输出反斜杠，直接用 startsWith 会误判；用 resolve + 分隔符比较。
+  // 失败信息只回固定常量：不四显请求路径，也不带原始异常。
   if (full !== root && !full.startsWith(root + sep)) {
-    throw new ToolCallError("skill_not_found", `skill_not_found: ${normalized}`);
+    throw new ToolCallError("skill_not_found", "skill_not_found");
   }
-  if (!existsSync(full)) throw new ToolCallError("skill_not_found", `skill_not_found: ${normalized}`);
-  return readFileSync(full, "utf8");
-}
-
-// ------------------------------------------------------------------ 查询目录
-/**
- * items 逐字保留原站契约（兼容字段）；
- * capabilities 逐项标注本地真实状态；本地扩展单列，不混入原站证据。
- */
-function queryCatalog() {
-  const items = CATALOG.finance_query_catalog || {};
-  const capabilities = [];
-  for (const [nodeId, label] of Object.entries(items)) {
-    const st = queryStatus(nodeId) || { status: "unavailable", origin: "upstream", note: "本地未实现" };
-    capabilities.push({
-      nodeId, label, origin: "upstream", status: st.status,
-      requiresPeriod: !!st.requiresPeriod,
-      ...(st.requiresVoucherId ? { requiresVoucherId: true } : {}),
-      ...(st.requiresCode ? { requiresCode: true } : {}),
-      ...(st.note ? { note: st.note } : {}),
-    });
-  }
-  for (const [nodeId, def] of Object.entries(LOCAL_QUERIES)) {
-    capabilities.push({
-      nodeId, label: def.label, origin: "local", status: "available",
-      requiresPeriod: !!def.requiresPeriod,
-      ...(def.requiresCode ? { requiresCode: true } : {}),
-    });
-  }
-  return {
-    items, // 原站契约原文（兼容字段）
-    capabilities,
-    unavailable: capabilities.filter((c) => c.status !== "available").map((c) => c.nodeId),
-    local_extensions: Object.keys(LOCAL_QUERIES),
-    subagents: CATALOG.subagents,
-    note: "items 为原站契约原文；本地扩展在 capabilities 中以 origin=local 单列，不冒充原站证据。",
-  };
+  if (!existsSync(full)) throw new ToolCallError("skill_not_found", "skill_not_found");
+  try { return readFileSync(full, "utf8"); }
+  catch { throw new ToolCallError("skill_not_found", "skill_not_found"); }
 }
 
 // ------------------------------------------------------------------ 工具实现
@@ -95,52 +68,22 @@ function readPathTexts(args) {
   return texts;
 }
 
-/** finance_query 的显式前置校验：不猜账套、不猜期间、未知能力报错。 */
-async function financeQuery(args) {
-  const nodeId = String(args.nodeId || "").trim();
-  if (!nodeId) throw new ToolCallError("nodeId_required", "必须提供 nodeId；先用 finance_query_catalog 查看可用能力");
-  const st = queryStatus(nodeId);
-  if (!st) {
-    throw new ToolCallError("unknown_node_id", `未知查询能力：${nodeId}；先用 finance_query_catalog 查看`, { nodeId });
-  }
-  if (st.status !== "available") {
-    throw new ToolCallError("not_implemented", `查询能力 ${nodeId} 本地未实现：${st.note || "数据源未接入"}`, { nodeId });
-  }
-  const sid = args.accountSetId ?? args.account_set_id;
-  if (sid === undefined || sid === null || sid === "") {
-    throw new ToolCallError("accountSetId_required", "finance_query 必须显式提供 accountSetId（不猜选默认账套）", { nodeId });
-  }
-  if (st.requiresPeriod && !args.period) {
-    throw new ToolCallError("period_required", `查询 ${nodeId} 必须提供 period（YYYY-MM）`, { nodeId });
-  }
-  if (st.requiresVoucherId && !(args.params?.voucherId ?? args.voucherId)) {
-    throw new ToolCallError("voucherId_required", `查询 ${nodeId} 必须提供 params.voucherId`, { nodeId });
-  }
-  if (st.requiresCode && !(args.params?.code ?? args.code)) {
-    throw new ToolCallError("code_required", `查询 ${nodeId} 必须提供 params.code`, { nodeId });
-  }
-  return callBackend("finance_query", args, CATALOG);
-}
-
 async function callTool(name, args = {}) {
   const spec = TOOL_BY_NAME.get(name);
-  if (!spec) throw new ToolCallError("unknown_tool", `未知工具：${name}`);
+  if (!spec) throw new ToolCallError("unknown_tool", "unknown_tool");
 
+  // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
   if (problems.length) {
-    throw new ToolCallError("invalid_arguments", `参数校验失败：${problems.join("；")}`, { tool: name, problems });
+    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems });
   }
   if (spec.status === "unavailable") {
-    throw new ToolCallError("not_implemented", `${name} 本地未实现：${spec.description}`, { tool: name });
+    throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
 
-  // ---- 纯本地工具 ----
-  if (name === "finance_query_catalog") return queryCatalog();
+  // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
   if (name === "skills_list") return { files: listSkillFiles(), labels: CATALOG.skill_files };
   if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
-
-  // ---- finance_query ----
-  if (name === "finance_query") return financeQuery(args);
 
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
   const payload = { ...args };
@@ -148,18 +91,20 @@ async function callTool(name, args = {}) {
     if (args.paths && typeof args.paths === "object") {
       try {
         payload.texts = readPathTexts(args);
-      } catch (e) {
-        throw new ToolCallError("path_read_failed", `读取本机 CSV 失败：${e.message}`, { paths: args.paths });
+      } catch {
+        // 不回显路径、文件名或原始异常。
+        throw new ToolCallError("path_read_failed", "path_read_failed");
       }
     }
     // 默认预检；只有显式 dryRun=false 才落库。
     payload.dryRun = args.dryRun === false ? false : true;
   }
 
+  // 普通财务工具 → 固定模型通道（返回已校验信封）；税务 / 目录 → 既有原始通道。
   const result = await callBackend(name, payload, CATALOG);
   // 后端明确回报未实现时，同样升级为工具错误，避免“成功返回 not_implemented”。
   if (result && typeof result === "object" && result.not_implemented === true) {
-    throw new ToolCallError("not_implemented", result.hint || `${name} 后端未实现`, { tool: name });
+    throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
   return result;
 }
@@ -172,10 +117,33 @@ const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, mes
 
 /** 失败统一返回结构化内容 + isError: true。 */
 function errorResult(e) {
-  const payload = { error: e?.code || "tool_error", message: String(e?.message || e) };
+  const payload = { error: e?.code || "tool_error", message: typeof e?.message === "string" && e.message ? e.message : "tool_error" };
   if (e?.tool) payload.tool = e.tool;
   if (e?.details !== undefined && e?.details !== null) payload.details = e.details;
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
+}
+
+/** 模型通道运输失败：只回固定常量，不带响应片段 / 地址 / 原始异常。 */
+function transportFailureResult(failure) {
+  const payload = {
+    error: failure.error.code,
+    messageKey: failure.error.messageKey,
+    retriable: failure.retriable,
+    outcome: failure.outcome,
+  };
+  if (failure.writeOutcome) payload.writeOutcome = failure.writeOutcome;
+  if (failure.retryBlockedBy) payload.retryBlockedBy = failure.retryBlockedBy;
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
+}
+
+/** 模型信封结果：text 与 structuredContent 都只包含已校验的信封；ok=false → isError。 */
+function envelopeResult(envelope) {
+  const result = {
+    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+    structuredContent: envelope,
+  };
+  if (envelope.ok === false) result.isError = true;
+  return result;
 }
 
 rl.on("line", async (line) => {
@@ -183,6 +151,10 @@ rl.on("line", async (line) => {
   if (!text) return;
   let msg;
   try { msg = JSON.parse(text); } catch { return; }
+  if (!msg || typeof msg !== "object" || Array.isArray(msg) || typeof msg.method !== "string") {
+    return err(msg && typeof msg === "object" && ["string", "number"].includes(typeof msg.id) ? msg.id : null,
+      -32600, "invalid_request");
+  }
   const { id, method, params } = msg;
 
   if (method === "initialize") {
@@ -198,26 +170,41 @@ rl.on("line", async (line) => {
   if (method === "tools/call") {
     try {
       const result = await callTool(params?.name, params?.arguments || {});
+      if (isModelEnvelope(result)) {
+        // 防御性重校：只把不过的固定失败码交给模型，绝不透传未校验对象。
+        const checked = validateModelEnvelope(result);
+        if (!checked.ok) {
+          const failure = checked.failure;
+          // 信封校验失败本身无法证明写未发生：按写场景保守处理。
+          const conservative = transportFailureResult({
+            ...failure, retriable: false, writeOutcome: "unknown", retryBlockedBy: "write_outcome_unknown",
+          });
+          return ok(id, conservative);
+        }
+        return ok(id, envelopeResult(checked.envelope));
+      }
       return ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
     } catch (e) {
-      if (e instanceof BackendError || e instanceof ToolCallError || e?.code) return ok(id, errorResult(e));
-      return ok(id, errorResult(new ToolCallError("tool_error", String(e?.message || e))));
+      if (e instanceof ModelTransportError) return ok(id, transportFailureResult(e.failure));
+      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, errorResult(e));
+      return ok(id, errorResult(new ToolCallError("tool_error", "tool_error")));
     }
   }
   if (method === "resources/list") {
-    return ok(id, {
-      resources: listSkillFiles().map((uri) => ({
+    try {
+      return ok(id, { resources: listSkillFiles().map((uri) => ({
         uri: `skill://${uri}`, name: uri, mimeType: "text/markdown"
-      }))
-    });
+      })) });
+    } catch { return err(id, -32002, "skill_not_found"); }
   }
   if (method === "resources/read") {
     const uri = String(params?.uri || "").replace(/^skill:\/\//, "");
-    try { return ok(id, { contents: [{ uri: params.uri, mimeType: "text/markdown", text: readSkill(uri) }] }); }
-    catch (e) { return err(id, -32002, String(e?.message || e)); }
+    // 失败只回固定文案：不四显请求路径或原始异常。
+    try { return ok(id, { contents: [{ uri: params?.uri, mimeType: "text/markdown", text: readSkill(uri) }] }); }
+    catch { return err(id, -32002, "skill_not_found"); }
   }
   if (method === "prompts/list") return ok(id, { prompts: [] });
-  if (id !== undefined) return err(id, -32601, `method not found: ${method}`);
+  if (id !== undefined) return err(id, -32601, "method_not_found");
 });
 
 if (process.env.FINANCE_MCP_DEBUG) {

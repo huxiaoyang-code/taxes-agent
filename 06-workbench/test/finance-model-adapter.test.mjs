@@ -959,10 +959,10 @@ await test("async 写语义：真实拒绝 / 同步抛错 / 写后投影失败�
   assert.equal(getterCalls, 0, "摘要阶段不得触发 getter");
   assert.equal(degraded.ok, true);
   assert.equal(degraded.applied, true);
-  assert.equal(degraded.needsLocalReview, false);
+  assert.equal(degraded.needsLocalReview, true);
   assert.equal(degraded.localRef, null);
   assert.equal(degraded.refUnavailable, "value_invalid");
-  assert.deepEqual(degraded.projection, {});
+  assert.deepEqual(degraded.projection, { voucherId: 4321 });
   assertNoLeak(degraded, "post-write degradation");
 
   // 写后超预算（单值 4 MiB 上限未被调大）：仍保留 applied，丢弃引用

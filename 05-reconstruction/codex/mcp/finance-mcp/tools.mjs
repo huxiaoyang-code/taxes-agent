@@ -52,9 +52,17 @@ const unavailable = (name, description, origin = "upstream") =>
 /** 后端已实现（含本轮正式注册的 4 个扩展工具与 11 个新增管理工具）。 */
 const BACKEND_TOOLS = [
   available("account_context", "列出账套（可选带出某账套的期间）。本地不保存“当前账套”，不返回选中状态。",
-    obj({ accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" } })),
+    obj({
+      accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
+      limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
+      offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
+    })),
   available("finance_context_resolve", "account_context 的兼容别名：列出账套与可选期间。",
-    obj({ accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" } })),
+    obj({
+      accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
+      limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
+      offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
+    })),
   available("finance_query", "查询财务数据。必须显式提供 accountSetId；期间类能力必须显式提供 period。可用能力见 finance_query_catalog。",
     obj({
       nodeId: { type: "string", description: "查询能力 ID，例如 report.balance_sheet" },
@@ -199,8 +207,8 @@ const BACKEND_TOOLS = [
     obj({ accountSetId: ACCOUNT_SET_ID, period: PERIOD, yearEnd: { type: "boolean" } }, ["accountSetId", "period"]), "local"),
 
   // ---- 兼容入口：行为受限，但不谎报 ----
-  limited("update_plan", "更新处理计划。本地分支仅回显入参，不持久化（返回 persisted=false）。",
-    obj({ plan: { type: "array", description: "计划步骤数组" } })),
+  limited("update_plan", "更新处理计划。本地分支不持久化，模型通道只回状态与条数（不回显计划文本），返回 persisted=false。",
+    obj({ plan: { type: "array", description: "计划步骤数组（只计条数，不回显内容）" } })),
 ];
 
 /** 原站契约内、本地未实现的工具：保留名称，调用返回 isError。 */
@@ -286,17 +294,50 @@ const CATALOG_TOOLS = [
 
 /** 纯本地工具（不经后端）。 */
 const LOCAL_TOOLS = [
-  available("finance_query_catalog", "列出财务查询能力：items 为原站契约原文，capabilities 标注本地真实支持状态。", obj({}), "local"),
+  available("finance_query_catalog", "列出财务查询能力的安全静态目录：可用 / 未实现 / 本地扩展 nodeId 与计数（代码常量，无业务数据）。", obj({}), "local"),
   available("skills_list", "查找可用财税业务规则(Skill)文件。", obj({}), "local"),
   available("skills_read", "读取业务规则(Skill) Markdown 正文。",
     obj({ resource: { type: "string", description: "Skill 相对路径，例如 bookkeeping/SKILL.md" } }, ["resource"]), "local"),
 ];
 
-export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS];
+/**
+ * LOCAL-08：普通财务工具固定走模型投影通道（`POST /agent/model-tools/<name>`）。
+ * 这里是与 `06-workbench/server/finance-model-adapter.mjs` 交叉核对的 MCP 侧登记表；
+ * 税务 / 目录工具与 skills 资源工具**不在**此列，仍走既有 `/agent/tools/*` 或本地资源读取。
+ */
+export const MODEL_PLAIN_TOOL_NAMES = Object.freeze([
+  "finance_query_catalog", "update_plan",
+  "account_context", "finance_context_resolve", "finance_query",
+  "voucher_check", "account_list", "opening_balance_get", "period_list",
+  "ledger_query", "asset_list", "period_end_check", "book_import_batch",
+  "voucher_create", "voucher_post", "voucher_unpost", "voucher_delete",
+  "period_set_status", "opening_balance_set", "account_create",
+  "asset_create", "asset_update", "depreciation_run", "carry_forward_profit",
+  "account_set_create", "legacy_book_import", "book_import_incremental",
+]);
+
+/** 写动作子集：运输失败必须保守给 writeOutcome:unknown（不自动重试）。 */
+export const MODEL_WRITE_TOOL_NAMES = Object.freeze([
+  "voucher_create", "voucher_post", "voucher_unpost", "voucher_delete",
+  "period_set_status", "opening_balance_set", "account_create",
+  "asset_create", "asset_update", "depreciation_run", "carry_forward_profit",
+  "account_set_create", "legacy_book_import", "book_import_incremental",
+]);
+
+const MODEL_OUTPUT_NOTE = "（模型通道：结果只返回白名单摘要信封 projection + localRef；"
+  + "企业名 / 科目名与编码 / 凭证摘要 / 往来 / 人员 / 资产名 / 路径 / 批次与来源 ID 等原值不在模型输出中，"
+  + "需要原文时走本机引用接口。）";
+const MODEL_PLAIN_TOOL_SET = new Set(MODEL_PLAIN_TOOL_NAMES);
+const withModelNote = (tool) => (MODEL_PLAIN_TOOL_SET.has(tool.name)
+  ? { ...tool, description: `${tool.description}${MODEL_OUTPUT_NOTE}`, modelOutput: "summary_envelope" }
+  : tool);
+
+export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
+  .map(withModelNote);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
-/** 本地自己处理、不转发后端的工具。 */
-export const LOCAL_ONLY = new Set(["finance_query_catalog", "skills_list", "skills_read"]);
+/** 本地自己处理、不转发后端的工具（仅资源类；普通财务工具已固定走模型通道）。 */
+export const LOCAL_ONLY = new Set(["skills_list", "skills_read"]);
 
 /** 目录工具必须走后端（server/agent-tools.mjs 的执行层），这里显式登记以禁止本地伪实现。 */
 export const CATALOG_TOOL_NAMES = CATALOG_TOOLS.map((t) => t.name);
