@@ -11,6 +11,31 @@ const logs=[], originals={};for(const k of ['log','warn','error']){originals[k]=
 let checks=0;const ok=async(name,args,applied)=>{const r=await E.callModelTool(name,args);noLeak(r);assert.equal(r.ok,true,JSON.stringify(r));if(applied!==undefined)assert.equal(r.applied,applied);checks++;return r;};
 const mustReject=async(name,args)=>{const r=await E.callModelTool(name,args);assert.equal(r.ok,false);noLeak(r);checks++;return r;};
 try {
+ // Real GL totals can exceed the model bound while the local ledger remains legal and exact.
+ for(const negative of [false,true]) {
+  const set=h.makeSet('model-ledger-limit-'+(negative?'negative':'positive'));
+  h.A.setOpeningBalances(set,[{code:'1122',...(negative?{credit:700000000000.07}:{debit:700000000000.07})},{code:'3001',...(negative?{debit:700000000000.07}:{credit:700000000000.07})}]);
+  const first=h.voucher(set,'2025-12',negative?[{code:'5001',debit:400000000000.11},{code:'1122',credit:400000000000.11}]:[{code:'1122',debit:400000000000.11},{code:'5001',credit:400000000000.11}]);h.A.postVoucher(set,first.id);
+  const second=h.voucher(set,'2025-12',negative?[{code:'1122',debit:0.03},{code:'1002',credit:0.03}]:[{code:'1002',debit:0.03},{code:'1122',credit:0.03}]);h.A.postVoucher(set,second.id);
+  const raw=h.X.auxiliaryLedger(h.db,{accountSetId:set,period:'2025-12',code:'1122'});
+  assert.equal(raw.totals.closing,negative?-1100000000000.15:1100000000000.15);
+  const summary=summarizeQueryResult('auxiliary_ledger',raw);assert.equal(summary.summaryUnavailable,true);assert.deepEqual(summary.projection,{});
+  const rejected=await mustReject('auxiliary_ledger',{accountSetId:set,period:'2025-12',code:'1122'});assert.equal(rejected.localRef,undefined);
+ }
+ const ledgerTotalKeys=['opening','debit','credit','closing','debitBalance','creditBalance'];
+ const ledgerDTO=totals=>({accountSetId:1,period:'2026-01',groupBy:[],groups:[],totals});
+ const ledgerZeros=Object.fromEntries(ledgerTotalKeys.map(k=>[k,0]));
+ for(const key of ledgerTotalKeys) {
+  for(const bound of [1000000000000,-1000000000000]) {
+   const totals={...ledgerZeros,[key]:bound},value=ledgerDTO(totals),summary=summarizeQueryResult('auxiliary_ledger',value);
+   assert.equal(summary.summaryUnavailable,false);assert.equal(summary.projectionDropped,0);for(const name of ledgerTotalKeys)assert.equal(summary.projection[name],totals[name]);
+   const adapter=createFinanceModelAdapter({executeRaw:()=>value}),result=await adapter.callModelTool('auxiliary_ledger',{accountSetId:1});assert.equal(result.ok,true);assert.ok(result.localRef);for(const name of ledgerTotalKeys)assert.equal(result.projection[name],totals[name]);noLeak(result);checks++;
+  }
+  for(const excessive of [1000000000000.01,-1000000000000.01,Infinity,NaN,90071992547409.91]) {
+   const value=ledgerDTO({...ledgerZeros,[key]:excessive}),summary=summarizeQueryResult('auxiliary_ledger',value);assert.equal(summary.summaryUnavailable,true);assert.deepEqual(summary.projection,{});
+   const adapter=createFinanceModelAdapter({executeRaw:()=>value}),result=await adapter.callModelTool('auxiliary_ledger',{accountSetId:1});assert.equal(result.ok,false);assert.equal(result.localRef,undefined);noLeak(result);checks++;
+  }
+ }
  // Independent decimal expectation: 900000000000.01 + 999 * 0.01 = 900000000010.00.
  const precisionRows=Array.from({length:1000},(_,i)=>({entryId:i+1,voucherId:1,lineNo:i+1,period:'2026-01',status:'posted',code:'1002',debit:i===0?900000000000.01:0.01,credit:0}));
  precisionRows.push({entryId:1001,voucherId:1,lineNo:1001,period:'2026-01',status:'posted',code:'3001',debit:0,credit:900000000010});

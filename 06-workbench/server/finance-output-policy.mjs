@@ -793,7 +793,13 @@ const QUERY_SPECS = dict({
     const v = at(value); requirePositiveInt(v,"accountSetId"); const groups = requireArray(v,"groups"), totals = requireRecord(v,"totals"), by = requireArray(v,"groupBy");
     if (by.some(k => !AUX_KINDS.includes(k)) || new Set(by).size !== by.length) throw invalidSummary("groupBy");
     for (const row of groups) { requireText(row,"code"); for (const key of AUX_TOTALS) requireNum(row,key); requireArray(row,"sources"); for (const dim of by) if (prop(row,dim+"Id") !== null) requirePositiveInt(row,dim+"Id"); }
-    return { period: requirePeriod(v,"period"), groupCount: groups.length, ...Object.fromEntries(AUX_TOTALS.map(k=>[k,money(requireNum(totals,k))])) };
+    const normalizedTotals = Object.create(null);
+    for (const key of AUX_TOTALS) {
+      const amount = centsToNumber(storedCents(requireNum(totals,key)));
+      if (Math.abs(amount) > MONEY_LIMIT) throw invalidSummary("auxiliary_ledger_totals");
+      normalizedTotals[key] = amount;
+    }
+    return { period: requirePeriod(v,"period"), groupCount: groups.length, ...normalizedTotals };
   },
   auxiliary_party: value => {
     const v = at(value); requirePositiveInt(v,"accountSetId"); const entryId = requirePositiveInt(v,"entryId"), status = auxEnum(v,"status",["unknown","ambiguous","confirmed"]), inactive = requireArray(v,"inactivePartyIds");

@@ -4,6 +4,8 @@
 
 管理者独立发现新增辅助分录摘要浮点累加差1分P2；本轮仅改该合计为已审整数分/安全转换，并在新model增加正确金额与超界拒绝反例。修前全83通过保留原时点，不替代修后冻结总入口。
 
+Fresh独审另确认辅助ledger六合计超模型上限时静默丢字段成功的P2；本次只补该六字段完整金额守卫及新model真实/逐字段边界反例。按管理者要求本次仅必要五门，不重跑完整83，修前完整结果保留历史。
+
 自测和失败历史、具体追加窗口及最终管理验收状态见 [交接](../handoffs/LOCAL-03b.md)，合同见 [LOCAL-AUXILIARY](../LOCAL-AUXILIARY.md)。MCP运输固定登记缺口已由管理者在 [comment6362820202](https://github.com/huxiaoyang-code/youshu-fork/issues/64#issuecomment-6362820202) 扩至22路径，仅增加固定工具分类、token/reason和错误category，未改运输校验算法；尚未宣告本片验收或合并。Issue64及整个八包仍保持未完成边界。以下旧任务状态保留历史。
 
 # LOCAL-03b B2a 当前候选

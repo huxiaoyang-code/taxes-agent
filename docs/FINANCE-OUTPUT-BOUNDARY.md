@@ -2,6 +2,8 @@
 
 辅助分录摘要合计使用已审storedCents/centsToNumber进行整数分累加与安全转换，并显式核既有模型数值上限；超界整份摘要失败、adapter不给引用。管理者发现的浮点累加差1分P2与修前/修后证据统一见辅助交接。
 
+辅助账簿六totals也逐一经已审金额转换与既有模型上限检查；任一不满足则整份摘要失败、无ref，不允许丢关键金额后仍成功。第二P2修前完整head与本次仅必要五门的证据见交接；未重跑修后完整83。
+
 八个local辅助工具使用现有模型入口单例、adapter与policy；四查询仅固定计数/六金额/期间/往来状态，四写仅技术ID、固定结果及durability。原文留进程内localRef，绑定账套/operation，支持本机read及受控compute；不增加MCP raw/read/compute工具。completed核心回放 + 新aux applied + 两层committed判applied=true；三个Count含重放与空分配，不等于新增行数。dryRun=false仍须持久证据，staged/pending/unknown保守unknown。无附录旧规则保持。具体真实入口、自测、限制与PR70历史统一见 [辅助交接](handoffs/LOCAL-03b.md)。本轮尚待管理独立验收及PR；下方历史证据不代替本轮结果。
 
 # 财务输出边界契约 · FINANCE-OUTPUT-BOUNDARY

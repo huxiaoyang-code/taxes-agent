@@ -8,6 +8,8 @@ REST 仅接受 POST `/api/account-sets/:id/auxiliary/<action>`；action为 `enti
 
 辅助分录摘要的借贷合计逐行复用整数分转换并用BigInt累加，安全转换及既有模型数值上限任一不满足时整份摘要拒绝，不能以浮点逐行累加或静默丢字段。独立精度P2及返修验证见交接。
 
+辅助账簿六个totals逐一规范为安全金额并检查既有模型绝对值上限；任一不满足即整份摘要和引用拒绝，不允许sanitize静默丢closing等关键金额后成功。正负大余额及逐字段同边界/超界证据见交接。
+
 模型仅给固定计数、状态、金额及已登记技术ID；不输出维度名码、摘要、来源/企业/批次/请求/理由或自由异常。四查询的真实明细可经同进程localRef读取；ledger可对 `groups.[].closing` 求和，entries可对 `items.[].debit` 求和。引用绑定账套/operation、到期可撤销，拒绝伪channel/local；read/compute不注册MCP工具。导入结果没有proof/实体明细，不承诺从导入ref读取不存在字段。
 
 写入证据读取真实durability。核心idempotent_replay而auxiliary.status=applied、两层committed时确有辅助新写（即使三个Count都为0）；Count不是新增行数。dryRun明确无此次写；辅助replayed且核心回放无新增写；staged/pending_outer_commit及未知结果保守unknown、needsLocalReview。未知附录错误只给固定码，不声称已回滚或自动重试。

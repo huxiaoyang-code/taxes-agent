@@ -1,3 +1,13 @@
+# B2b 第二P2：辅助账簿六金额完整投影守卫（2026-10-23，候选）
+
+Root保存的修前完整head为 `a6e19b074e27a51ff62ae04ac4fd0cae225875d5`（未push/PR）；全新未参与实施的审查者确认新增辅助账簿摘要P2：真实期初700000000000.07 + 借400000000000.11 - 贷0.03，raw closing正确1100000000000.15，但原摘要未核六合计的模型上限，sanitizeProjection丢closing/debitBalance后仍ok=true并签发localRef。该完整候选暂不接受；此前员工完整83、root修前83及分精度修后必要五门均只保留各自真实时点，不能证明本P2不存在。
+
+同一实施者仅修新增auxiliary_ledger六个totals：opening/debit/credit/closing/debitBalance/creditBalance逐一requireNum、复用已审storedCents/centsToNumber规范读取/安全转换，再核既有绝对值模型上限；任一失败拒绝整份摘要及引用，不能静默丢关键字段成功。没有改公共money/旧摘要/原compute/业务域/备份或旧断言，没有扩工具注册。
+
+新model反例先实际红：真实新库正向期初/凭证raw closing准确，summaryUnavailable却false。修后真实正/负两账套closing分别±1100000000000.15都拒摘要/无ref；静态逐六字段验证±现有模型同边界合法值，六字段全部保留、projectionDropped=0且引用可用；逐六字段的正负超界、NaN、Infinity及大数值拒绝摘要/无ref。新model现92命名调用检查及既有额外反例通过/DB关闭。
+
+本轮按管理者要求只跑原policy、新model、原adapter、原MCPtransport、新MCP必要五门，全部exit0/close、timeout=false；12源码/测试前后冻结SHA256一致，全部自有直接child及DB已关闭，无仍运行本片进程。之后仅同步文档/交付，源码/测试冻结停止；不重复其它78无变化旧门，不重跑完整83，也不能把任何修前83写成第二P2修后完整验收。自测仍待root独立5门/金额probe、完整diff及原fresh审查者审新完整head。以下保留第一P2及更早候选的真实历史。
+
 # B2b P2 分精度最小返修（2026-10-23，候选）
 
 管理者独立验收发现：新增 `auxiliary_entries` 先用Number逐行累加再舍入，合法1001行（首借900000000000.01、后999行各借0.01、末行贷900000000010）的摘要借方错误为900000000010.01，且未报告摘要失败；独立纯模块probe实际exit1、无DB/child。管理者修前完整83/83、exit0/close也不能证明此精度问题不存在；下方实施者修前83套记录保留原时点，不作为本次修后验收。
