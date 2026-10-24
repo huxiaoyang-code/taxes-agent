@@ -2,6 +2,8 @@
 
 中断后先 status：实读原始源、解析代码、验证、业务代码和真实账务证明。观察变更后持久失效，改回原字节不会复活旧确认，须重新登记复核。写意图先落日志；unknown 用 run phase=query 核对原 operationId、真实业务回执和凭证，不能新造 ID 盲重试。
 
+创建草稿的证明绑定创建事实、凭证期间和分录，允许随后正常过账；实际状态仍如实返回。post/unpost 或直接创建 posted 凭证的状态变化仍失效。旧版本已记录的失效不删除：修复或代码升级后，先对 create、再对其 post 等依赖任务显式 `run phase=query`。只有原 request 一致、来源及父依赖当前可核验、原操作没有历史会计拒绝，才以原 operationId 追加当前代码/依赖版本的新查询回执，返回 currentBinding=true；不再执行业务写，旧回执和旧确认保留历史，新回执待复核。currentBinding=false 或 harness_query_historical_only 表示仅完成历史核查，不能据此声称当前任务已恢复；历史拒绝必须走更正，不能靠改依赖或 query 清除。
+
 recover_lock 只回收已证明原进程不存在的本 Store 锁；活进程、PID 复用或权限不明均不抢锁。恢复数据库的 instance/path 变化须停旧写，按现有 local-batch restore-check/restore-activate 和官方备份恢复契约处理，不把文件复制称为恢复。
 
 解析失败或关键证据不足保留未识别内容、阻塞事实与具体处理路径。补件 request_materials 的 request={taskIds,text} 仅生成本机可转发文本，不发送。补齐只登记与重跑受影响分支。

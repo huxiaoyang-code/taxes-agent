@@ -70,6 +70,13 @@ export async function appendHarness(s, kind, data) {
 }
 export const withHarness = locked;
 
+// A dependency/code change must not hide an accountant rejection of the same
+// native operation. Read the retained receipt events, not only its latest view.
+export function operationWasRejected(s, operationId) {
+  const versions=new Set(s.events.filter(e=>['result','reconcile'].includes(e.kind)&&e.data.receipt.operationId===operationId).map(e=>e.data.receipt.targetVersion));
+  return s.feedbacks.some(f=>f.decision==='reject'&&versions.has(f.targetVersion));
+}
+
 export async function recoverHarnessLock(path) {
   const info=await rootInfo(path),guard=join(info.root,'recovery.guard'),guardBytes=stable({version:VERSION,pid:process.pid,token:randomUUID()});
   try{await writeNew(guard,guardBytes);}catch(e){if(e.code==='EEXIST')requireValue(false,'harness_recovery_blocked');throw e;}
@@ -168,7 +175,9 @@ export async function harnessView(s, capabilities, externalByTask = new Map()) {
     const sameRequest=s.attempts.filter(a=>a.capabilityId===t.capabilityId&&stable(a.request)===stable(facts[0]?.value));
     const unresolved = [...attempts,...sameRequest].find(a => a.effect === 'write' && (!a.result || a.result.executionState === 'unknown'));
     if (unresolved) blockers.push({ state: 'unknown', reason: 'write_outcome_unknown', intentDigest: unresolved.intentDigest,originalTaskId:unresolved.taskId });
-    if(sameRequest.some(a=>a.effect==='write'&&a.result?.executionState==='executed'&&(s.invalidatedResults.has(a.result.targetVersion)||a.codeDigest!==cap.codeDigest||a.ruleVersion!==cap.ruleVersion)))blockers.push({state:'conflict',reason:'existing_write_requires_review_before_new_execution'});
+    const latestWrite=sameRequest.filter(a=>a.effect==='write').at(-1);
+    if(latestWrite?.result?.executionState==='executed'&&(s.invalidatedResults.has(latestWrite.result.targetVersion)||latestWrite.codeDigest!==cap.codeDigest||latestWrite.ruleVersion!==cap.ruleVersion))blockers.push({state:'conflict',reason:'existing_write_requires_review_before_new_execution'});
+    if(sameRequest.some(a=>operationWasRejected(s,a.operationId)))blockers.push({state:'correction_required',reason:'native_operation_previously_rejected'});
     if (reviewState === 'rejected') blockers.push({ state: 'correction_required', reason: 'accountant_rejected_execution' });
     const v = { ...t, dependencyDigest, executionState, reviewState, ruleState: feedbacks.some(f => f.decision === 'propose_public_rule') ? 'public_candidate' : feedbacks.some(f => f.decision === 'retain_enterprise_exception') ? 'enterprise_exception' : receipt?.ruleState ?? 'uncovered', receipt, blockers, unresolvedIntent: unresolved?.intentDigest ?? null };
     if(external.length)v.externalDependencyStates=external;

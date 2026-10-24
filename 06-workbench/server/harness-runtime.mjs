@@ -1,5 +1,5 @@
 import { harnessCapabilities, callHarnessAdapter } from './harness-adapters.mjs';
-import { withHarness, appendHarness, harnessView, hash, stable, requireValue, initHarness, registerHarnessSource, registerHarnessFacts, saveHarnessPlan, recordHarnessFeedback, requestHarnessMaterials, registerHarnessTreatment, recoverHarnessLock } from './harness-store.mjs';
+import { withHarness, appendHarness, harnessView, hash, stable, requireValue, operationWasRejected, initHarness, registerHarnessSource, registerHarnessFacts, saveHarnessPlan, recordHarnessFeedback, requestHarnessMaterials, registerHarnessTreatment, recoverHarnessLock } from './harness-store.mjs';
 import { validateExecutionReceipt } from './harness-contract.mjs';
 import { discoverHarnessTarget } from './harness-target.mjs';
 import { readLocalFile, checkedPath } from './offline-material-store.mjs';
@@ -14,7 +14,8 @@ async function refreshBusinessProofs(s) {
     try {
       const current=await callHarnessAdapter({...a,phase:a.effect==='write'?'query':'execute',scope:s.meta.scope,priorResult:a.result.actualImpact});
       const prior=a.result.actualImpact;
-      const valid=a.effect==='read'?stable(current)===stable(prior):current.applied===true&&(a.capabilityId.startsWith('voucher.')?stable(current.current)===stable(prior.current):a.capabilityId==='offline.posting'?current.dependencyDigest===prior.dependencyDigest&&current.policyDigest===prior.policyDigest&&current.status==='recovered':current.proofDigest===prior.proofDigest);
+      const nativeProof=value=>{if(a.capabilityId!=='voucher.create'||a.request.voucher.status==='posted')return value;const {status,...creation}=value??{};return creation;};
+      const valid=a.effect==='read'?stable(current)===stable(prior):current.applied===true&&(a.capabilityId.startsWith('voucher.')?stable(nativeProof(current.current))===stable(nativeProof(prior.current)):a.capabilityId==='offline.posting'?current.dependencyDigest===prior.dependencyDigest&&current.policyDigest===prior.policyDigest&&current.status==='recovered':current.proofDigest===prior.proofDigest);
       if(!valid)await appendHarness(s,'invalidate_result',{taskId:a.taskId,targetVersion:a.result.targetVersion,reason:'actual_business_proof_changed_or_unavailable'});
     }catch{await appendHarness(s,'invalidate_result',{taskId:a.taskId,targetVersion:a.result.targetVersion,reason:'actual_business_proof_unavailable'});}
   }
@@ -61,7 +62,7 @@ export const inspectHarness = path => inspectCurrent(path);
 
 function receiptFor(intent,result,executionState) {
   const r={taskId:intent.taskId,operationId:intent.operationId,dependencyDigest:intent.dependencyDigest,capabilityId:intent.capabilityId,ruleVersion:intent.ruleVersion,codeDigest:intent.codeDigest,executionState,reviewState:executionState==='stale'?'stale':'pending',ruleState:'uncovered',resultRefs:[],actualImpact:result};
-  r.targetVersion=hash(r); r.resultRefs=[`harness-result:${r.targetVersion}`];
+  r.targetVersion=hash(intent.phase==='query'?{receipt:r,queryIntentDigest:intent.intentDigest}:r); r.resultRefs=[`harness-result:${r.targetVersion}`,...(intent.phase==='query'?[`harness-query-intent:${intent.intentDigest}`]:[])];
   if(executionState==='unknown')r.recovery={queryEntrypoint:intent.capabilityId+'.query',identity:{operationId:intent.operationId,intentDigest:intent.intentDigest??null}};
   if(['failed','unknown'].includes(executionState)) {
     const code=typeof result?.code==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(result.code)?result.code:'business_result_not_executable';
@@ -72,8 +73,8 @@ function receiptFor(intent,result,executionState) {
 }
 const stateFor = (cap,result,phase) => result?.applied==='unknown'||result?.status==='unknown'?'unknown':phase==='prepare'?(result?.applied===false&&result.status!=='prepared'?'failed':'prepared'):cap.effect==='write'?(result?.applied===true?'executed':'failed'):['blocked','needs_local_review','restart_required'].includes(result?.status)?'failed':'executed';
 
-async function recordQueryAlias(s,task,attempt,result,cap) {
-  const intent={...attempt,taskId:task.taskId,dependencyDigest:task.dependencyDigest,phase:'query'};
+async function recordQueryObservation(s,task,attempt,result,cap) {
+  const intent={...attempt,taskId:task.taskId,dependencyDigest:task.dependencyDigest,phase:'query',codeDigest:cap.codeDigest,ruleVersion:cap.ruleVersion,reconcilesIntentDigest:attempt.intentDigest};
   delete intent.intentDigest;delete intent.result;
   const event=await appendHarness(s,'intent',intent);
   const receipt=receiptFor({...intent,intentDigest:event.digest},result,stateFor(cap,result,'execute'));
@@ -93,11 +94,13 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
     if(phase==='query') {
       const attempt=sameRequest.find(a=>!a.result||a.result.executionState==='unknown')??s.attempts.filter(a=>a.taskId===taskId&&a.effect==='write').at(-1)??sameRequest.at(-1);requireValue(attempt,'harness_attempt_missing');
       const result=await callHarnessAdapter({...attempt,phase:'query',scope:s.meta.scope,priorResult:attempt.result?.actualImpact}),state=stateFor(cap,result,'execute'),receipt=receiptFor(attempt,result,state);
-      // Recovery keeps the original dependency/version identity, even when fresh
-      // facts or policies now make the historical execution stale.
-      await appendHarness(s,'reconcile',{intentDigest:attempt.intentDigest,receipt});
-      const linked=attempt.taskId===taskId?receipt:await recordQueryAlias(s,task,attempt,result,cap);
-      return {status:'queried',receipt:linked,currentDependencyDigest:task.dependencyDigest};
+      // Resolve an interrupted original intent without replacing completed
+      // historical receipts. A current observation is an explicit new query,
+      // never another business execution or a copy of an old confirmation.
+      if(!attempt.result||attempt.result.executionState==='unknown')await appendHarness(s,'reconcile',{intentDigest:attempt.intentDigest,receipt});
+      const currentBinding=state==='executed'&&stable(attempt.request)===stable(requestValue)&&!operationWasRejected(s,attempt.operationId)&&!task.blockers.some(b=>!['write_outcome_unknown','existing_write_requires_review_before_new_execution'].includes(b.reason));
+      const linked=currentBinding?await recordQueryObservation(s,task,attempt,result,cap):receipt;
+      return {status:'queried',receipt:linked,currentBinding,...(!currentBinding?{code:'harness_query_historical_only'}:{}),currentDependencyDigest:task.dependencyDigest};
     }
     requireValue(!task.blockers.length,'harness_task_blocked');
     requireValue(!dependencyDigest||dependencyDigest===task.dependencyDigest,'harness_dependency_stale');
@@ -109,7 +112,7 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
     const existing=sameRequest.filter(a=>a.result?.executionState==='executed').at(-1);
     if(existing&&existing.taskId!==taskId){
       const result=await callHarnessAdapter({...existing,phase:'query',scope:s.meta.scope,priorResult:existing.result.actualImpact});
-      const receipt=await recordQueryAlias(s,task,existing,result,cap);
+      const receipt=await recordQueryObservation(s,task,existing,result,cap);
       return {status:receipt.executionState==='executed'?'replayed':receipt.executionState,receipt,originalTaskId:existing.taskId};
     }
     const boundTreatment=request.treatmentId?s.treatments.find(t=>t.treatmentId===request.treatmentId):null;

@@ -36,7 +36,8 @@ try {
       const row=db.prepare('SELECT * FROM vouchers WHERE account_set_id=? AND id=?').get(r.scope.accountSetId,id);
       check(row,'harness_result_missing');
       const entries=db.prepare('SELECT * FROM voucher_entries WHERE voucher_id=? ORDER BY line_no').all(id);
-      check(row.status===(r.action==='voucher.unpost'?'draft':r.action==='voucher.post'?'posted':r.request.voucher.status==='posted'?'posted':'draft'),'harness_result_changed');
+      const draftCreation=r.action==='voucher.create'&&r.request.voucher.status!=='posted';
+      check(draftCreation?['draft','posted'].includes(row.status):row.status===(r.action==='voucher.unpost'?'draft':'posted'),'harness_result_changed');
       if(r.action==='voucher.create') {
         check(row.period===r.request.voucher.period&&entries.length===r.request.voucher.entries.length,'harness_result_changed');
         r.request.voucher.entries.forEach((e,i)=>check(entries[i].code===String(e.code)&&Number(entries[i].debit)===Number(e.debit??0)&&Number(entries[i].credit)===Number(e.credit??0),'harness_result_changed'));
