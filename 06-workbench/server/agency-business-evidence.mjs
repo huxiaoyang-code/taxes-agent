@@ -99,7 +99,7 @@ export function agencyTargetSnapshot(db, scope) {
   const binding = db.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(scope.accountSetId);
   check(instance?.instance_id === scope.databaseInstanceId && binding?.enterprise_key === scope.enterpriseKey, 'agency_target_identity_mismatch');
   const set = db.prepare('SELECT * FROM account_sets WHERE id=?').get(scope.accountSetId); check(set, 'agency_target_missing');
-  const tables = ['accounts', 'opening_balances', 'periods', 'vouchers'];
+  const tables = ['accounts', 'opening_balances', 'periods', 'vouchers','asset_cards','asset_depreciation_runs'];
   const snapshot = { set, instance: instance.instance_id, binding: binding.enterprise_key };
   for (const table of tables) snapshot[table] = db.prepare(`SELECT * FROM ${table} WHERE account_set_id=? ORDER BY rowid`).all(scope.accountSetId);
   snapshot.entries = db.prepare('SELECT e.* FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? ORDER BY e.id').all(scope.accountSetId);

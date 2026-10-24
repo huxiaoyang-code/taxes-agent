@@ -29,6 +29,20 @@ export const TAX_SOURCES = Object.freeze({
   vesselTonnage: {url:'https://zhejiang.chinatax.gov.cn/art/2018/10/26/art_25716_82710.html',title:'中华人民共和国船舶吨税法',locator:'境外港口进入境内港口船舶、海关征收',from:'2018-07-01'},
   vatElection: {url:'https://zhejiang.chinatax.gov.cn/art/2026/2/2/art_8409_84409.html',title:'国家税务总局公告2026年第4号',locator:'四：小规模可对部分应税交易放弃减税；2023年第1号已废止',from:'2026-01-01'},
   prepaymentSurcharge: {url:'https://www.mof.gov.cn/gp/xxgkml/szs/201609/t20160906_2510615.htm',title:'财税〔2016〕74号',locator:'一、二：预缴地就预缴税款、机构所在地就扣除预缴后实际缴税计附加',from:'2016-05-01'},
+  sixTaxExamples:{url:'https://www.chinatax.gov.cn/chinatax/n810341/n810760/c5173292/content.html',title:'2022年第3号总局官方解读',locator:'例2/6/8/9：普通税费属期窗口、新设首次、逾期与更正原窗口',from:'2022-01-01'},
+  businessAdvance:{url:'https://12366.chinatax.gov.cn/bzds/072/072.html',title:'经营所得A表及填报说明',locator:'投资者预缴费用按实际经营月份；年度扣除与预缴区别',from:'2019-01-01'},
+  rentFreeProperty:{url:'https://fgk.chinatax.gov.cn/zcfgk/c102416/c5203544/content.html',title:'财税〔2010〕121号',locator:'二免租期按房产原值、三原值包括地价',from:'2010-12-29'},
+  vehiclePurchase:{url:'https://fgk.chinatax.gov.cn/zcfgk/c100009/c5193038/content.html',title:'中华人民共和国车辆购置税法',locator:'第1至6、9、12条：自用、一次征收、不含VAT计价、10%',from:'2019-07-01'},
+  electricVehicle:{url:'https://www.miit.gov.cn/zwgk/zcwj/wjfb/gg/art/2023/art_4a6f9849758d4d47b0ffa6592958447d.html',title:'2023年第10号新能源汽车车购税优惠',locator:'2026—2027减半，新能源乘用车减税每辆不超过15000',from:'2026-01-01',through:'2027-12-31'},
+  electricVehicle2026:{url:'https://shanghai.chinatax.gov.cn/bsfw/nszx/hdfk/202602/t479413.html',title:'2026—2027新能源汽车目录与技术要求官方答复',locator:'2025年第24号技术要求及2026有效减免目录，不自动沿用2025旧车型',from:'2026-01-01',through:'2027-12-31'},
+  cultural:{url:'https://tianjin.chinatax.gov.cn/11200000000/0300/030004/03000418/20260813155010984.shtml',title:'财税〔2016〕25号',locator:'一/三/七/九：实际广告服务主体、含税计费扣合法实付发布费、3%、小规模2万/6万、预算归属',from:'2016-05-01'},
+  culturalEntertainment:{url:'https://fgk.chinatax.gov.cn/zcfgk/c102416/c5194648/content.html',title:'财税〔2016〕60号',locator:'娱乐含税全额3%，未达增值税起征点免征；不沿用疫情已到期免征',from:'2016-05-01'},
+  culturalRelief:{url:'https://szs.mof.gov.cn/zt/mlqd_8464/2013yljfcs/202502/t20250212_3958361.htm',title:'财税〔2025〕7号',locator:'中央收入减50%，地方减征幅度另核',from:'2025-01-01',through:'2027-12-31'},
+  union:{url:'https://www.mohrss.gov.cn/xxgk2020/fdzdgknr/zcfg/fl/202011/t20201102_394624.html?jump=true',title:'中华人民共和国工会法（2021修正）',locator:'第43条：已建会单位月全部职工工资总额2%；非地区税务代收比例',from:'2022-01-01'},
+  wageTotal:{url:'https://www.stats.gov.cn/gk/tjfg/xzfg/202302/P020230206361243611824.pdf',title:'关于工资总额组成的规定',locator:'第3、4、11条：直接支付、六类工资及排除项，包含个人代扣部分',from:'1990-01-01'},
+  landAppreciation:{url:'https://fgk.chinatax.gov.cn/zcfgk/c102416/c5193703/content.html',title:'土地增值税暂行条例实施细则',locator:'第7/8/10条：旧房确认评估、土地及相关税金、项目分别计算、四档速扣',from:'1995-01-27'},
+  landAppreciation2026:{url:'https://fgk.chinatax.gov.cn/zcfgk/c100012/c5246543/content.html',title:'国家税务总局公告2026年第3号',locator:'原受理适用边界、预征及清算所属期、印花/地方教育可扣、尾盘；不取代地方预征率',from:'2026-01-01'},
+  localEducation:{url:'https://sx.mof.gov.cn/bszn/zhengcefagui/201011/t20101123_355143.htm',title:'财综〔2010〕98号',locator:'二：地方教育附加全国统一实际VAT/消费税2%；不沿用营业税，特殊经批准减免另核',from:'2011-01-01'},
 });
 export const cents = (v, label = 'amount') => { const p = parseMoney(v, { allowEmpty: false, allowNegative: true, label }); requireValue(p.ok && !p.subCent, 'agency_amount_invalid'); return p.cents; };
 export const money = formatCents;
@@ -95,20 +109,28 @@ export function determineAgencySixTaxRelief({scope,entity,records}) {
   if(entity.vatStatus==='small'||entity.kind==='individual_business')return {eligible:true,basis:'2023年第12号：小规模或个体身份',sourceRefs:[]};
   if(entity.kind!=='company')return {eligible:false,basis:'一般纳税人非企业所得税小型微利企业且非个体',sourceRefs:[]};
   const context=records.find(r=>r.type==='filing_context'&&r.assessmentPeriod===scope.period),declaredOn=context?.declaredOn;
-  if(!/^20\d\d-\d\d-\d\d$/.test(declaredOn??''))return {eligible:null,reason:'一般纳税人六税两费适用窗口按申报日判断，缺原申报计划/实际申报日期，不能拿税期或当期CIT猜资格'};
+  if(!/^20\d\d-\d\d-\d\d$/.test(declaredOn??''))return {eligible:null,reason:'六税两费须核税费所属期及原申报日期；普通汇算按所属期窗口，新设首次前另核申报期快照'};
   const facts=records.filter(r=>r.type==='six_tax_relief_qualification'&&r.date<=declaredOn),normal=facts.filter(q=>q.basis==='annual_filed_return'&&q.filedOn<=declaredOn&&q.returnReceiptNumber);
+  const priorFirstFiling=context.originalReturnReceiptNumber&&/^20\d\d-\d\d-\d\d$/.test(context.originalDeclaredOn??'')&&normal.some(q=>q.firstFinal&&context.originalDeclaredOn<(q.originalFiledOn??(q.filedOn>`${Number(q.returnYear)+1}-05-31`?`${Number(q.returnYear)+1}-05-31`:q.filedOn)));
   for(const q of normal.sort((a,b)=>b.filedOn.localeCompare(a.filedOn))){
-    const from=q.firstFinal===true?new Date(Date.UTC(Number(q.filedOn.slice(0,4)),Number(q.filedOn.slice(5,7)),1)).toISOString().slice(0,10):`${q.filedOn.slice(0,4)}-07-01`,through=`${Number(q.filedOn.slice(0,4))+1}-06-30`;
-    if(!(declaredOn>=from&&declaredOn<=through||q.firstFinal===true&&declaredOn>=q.filedOn&&scope.period<=q.filedOn.slice(0,7)))continue;
+    if(priorFirstFiling)continue;
+    if(!/^20\d\d$/.test(q.returnYear??'')||typeof q.firstFinal!=='boolean')return {eligible:null,reason:'汇算原件须所属年度及是否首次，不能按更正/逾期提交年份移动减免窗口'};
+    const original=q.correctsReceiptNumber?normal.find(old=>old.returnReceiptNumber===q.correctsReceiptNumber&&old.returnYear===q.returnYear):q;
+    if(!original)return {eligible:null,reason:'更正汇算须原申报回执/所属年及首次办理历史，缺原链不能重开减免窗口'};
+    const statutoryDeadline=`${Number(q.returnYear)+1}-05-31`,originalFiledOn=original.originalFiledOn??original.filedOn,effectiveFirst=originalFiledOn>statutoryDeadline?statutoryDeadline:originalFiledOn;
+    const from=q.firstFinal?new Date(Date.UTC(Number(effectiveFirst.slice(0,4)),Number(effectiveFirst.slice(5,7)),1)).toISOString().slice(0,10):`${Number(q.returnYear)+1}-07-01`,through=`${Number(q.returnYear)+2}-06-30`,taxDate=`${scope.period}-01`;
+    const alreadyFiledBeforeFirst=q.firstFinal&&context.originalReturnReceiptNumber&&context.originalDeclaredOn&&context.originalDeclaredOn<effectiveFirst;
+    if(alreadyFiledBeforeFirst)continue;
+    if(!(taxDate>=from&&taxDate<=through||q.firstFinal&&declaredOn>=effectiveFirst&&scope.period<=effectiveFirst.slice(0,7)&&scope.period>=entity.businessStartDate.slice(0,7)))continue;
     if(typeof q.restrictedIndustry!=='boolean'||q.taxableIncomeReported===undefined||q.staffAverageReported===undefined||q.assetsAverageReported===undefined)return {eligible:null,reason:'原汇算回执及表内应纳税所得额/平均人数/资产/行业不完整'};
     const eligible=!q.restrictedIndustry&&cents(q.taxableIncomeReported)<=300000000n&&quantity(q.staffAverageReported)<=300000000n&&cents(q.assetsAverageReported)<=5000000000n;
-    return {eligible,basis:'原年度汇算结果确定六税两费窗口；不以本次预缴CIT替代',from,through,returnReceiptNumber:q.returnReceiptNumber,returnYear:q.returnYear,correctionImpact:q.correctsReceiptNumber?{previousReceipt:q.correctsReceiptNumber,affectedFrom:from,affectedThrough:through,reviewRequired:true}:null,sourceRefs:[...context.sourceRefs,...q.sourceRefs]};
+    return {eligible,basis:'普通按税费所属期及原汇算年度窗口；首次按原办理/法定截止，逾期更正不移动原窗口',from,through,taxPeriod:scope.period,returnReceiptNumber:q.returnReceiptNumber,returnYear:q.returnYear,correctionImpact:q.correctsReceiptNumber||q.filedOn>statutoryDeadline?{previousReceipt:q.correctsReceiptNumber??null,affectedFrom:from,affectedThrough:through,reviewRequired:true}:null,sourceRefs:[...context.sourceRefs,...q.sourceRefs,...(original!==q?original.sourceRefs:[])]};
   }
   const q=facts.find(q=>q.basis==='new_enterprise_before_first_final'&&q.noFirstFinalYet===true);
-  if(q&&!normal.some(n=>n.filedOn<=declaredOn)){
-    const establishmentMonth=entity.businessStartDate.slice(0,7),snapshot=declaredOn.slice(0,7)===establishmentMonth?entity.businessStartDate:new Date(Date.UTC(Number(declaredOn.slice(0,4)),Number(declaredOn.slice(5,7))-1,0)).toISOString().slice(0,10);
+  if(q&&(priorFirstFiling||!normal.some(n=>n.filedOn<=declaredOn))){
+    const snapshotDeclaredOn=priorFirstFiling?context.originalDeclaredOn:declaredOn,establishmentMonth=entity.businessStartDate.slice(0,7),snapshot=snapshotDeclaredOn.slice(0,7)===establishmentMonth?entity.businessStartDate:new Date(Date.UTC(Number(snapshotDeclaredOn.slice(0,4)),Number(snapshotDeclaredOn.slice(5,7))-1,0)).toISOString().slice(0,10);
     if(q.snapshotAsOf!==snapshot||!Number.isSafeInteger(q.staffCount)||q.staffCount<0||q.assetsOriginalAmount===undefined||typeof q.restrictedIndustry!=='boolean')return {eligible:null,reason:'新设首次汇算前须核申报期上月末人数/资产，设立当月按设立时；缺项不能默认满足'};
-    return {eligible:!q.restrictedIndustry&&q.staffCount<=300&&cents(q.assetsOriginalAmount)<=5000000000n,basis:'新设一般纳税人首次汇算前，按原上月末/设立时人数和资产核资格',snapshotAsOf:snapshot,sourceRefs:[...context.sourceRefs,...q.sourceRefs]};
+    return {eligible:!q.restrictedIndustry&&q.staffCount<=300&&cents(q.assetsOriginalAmount)<=5000000000n,basis:priorFirstFiling?'首次汇算前已按规定申报不追溯改变；保留当时申报期快照':'新设一般纳税人首次汇算前，按原上月末/设立时人数和资产核资格',snapshotAsOf:snapshot,sourceRefs:[...context.sourceRefs,...q.sourceRefs]};
   }
   return {eligible:null,reason:'一般纳税人小型微利六税两费资格缺对应有效汇算窗口/首次汇算事实；逾期或更正资料未核不得猜定'};
 }
@@ -304,6 +326,85 @@ function regional(ruleId, entity, period) {
   return rule ?? null;
 }
 
+/** Original vehicle invoice and qualified model evidence; never a caller-prepared tax. */
+export function calculateAgencyVehicleAcquisition({entity,record:r,records=[]}){
+  requireValue(r.type==='vehicle_acquisition'&&r.selfUse===true&&r.ownershipVerified===true&&r.businessUseConfirmed===true&&r.acquisitionMethod==='purchase'&&['car','tram','trailer','motorcycle'].includes(r.vehicleKind)&&typeof r.alreadyTaxed==='boolean'&&r.specialExemption==='none','agency_vehicle_acquisition_facts_missing');
+  requireValue(typeof r.vin==='string'&&r.vin.length===17&&r.invoiceOriginalVerified===true&&r.invoiceNumber&&r.invoiceIssuedOn===r.date&&['paid','unpaid'].includes(r.settlement)&&['deductible','non_deductible'].includes(r.inputVatTreatment),'agency_vehicle_invoice_missing');
+  const gross=cents(r.invoiceGross),vat=cents(r.invoiceVat),base=gross-vat;requireValue(base>0n&&vat>=0n,'agency_vehicle_invoice_invalid');
+  let normal=rateAmount(base,1000),relief=0n,reason='境内购买自用应税车辆按原发票不含VAT金额×10%';
+  if(r.vehicleKind==='motorcycle')requireValue(Number.isSafeInteger(r.engineCapacityMl),'agency_vehicle_engine_capacity_missing');
+  if(r.alreadyTaxed||r.vehicleKind==='motorcycle'&&r.engineCapacityMl<=150){normal=0n;reason=r.alreadyTaxed?'原已征车购税凭证及车辆身份已核，一次性征收不重复征':'排量不超过150毫升摩托车不属车购税应税车辆';}
+  else{requireValue(typeof r.newEnergy==='boolean','agency_vehicle_energy_type_missing');if(r.newEnergy){const catalogue=records.find(c=>c.type==='vehicle_catalogue_entry'&&c.model===r.vehicleModel&&c.edition==='2026-2027'&&c.issuedBy==='MIIT'&&c.publicationNumber&&c.validFrom<=r.date&&c.validThrough>=r.date&&c.technicalRequirements2025No24Met===true);requireValue(catalogue&&r.vehicleCertificateModel===r.vehicleModel&&typeof r.passengerVehicle==='boolean','agency_vehicle_current_catalogue_missing');relief=roundRatio(normal,2n);if(r.passengerVehicle&&relief>1500000n)relief=1500000n;reason='2026—2027有效目录车型及合格证匹配，法定车购税减半，新能源乘用车减税上限每辆15000';}}
+  if(r.alreadyTaxed)requireValue(r.priorTaxReceiptNumber&&r.priorTaxReceiptVerified===true,'agency_vehicle_prior_tax_receipt_missing');
+  const due=normal-relief,deductible=entity.vatStatus==='general'&&r.inputVatTreatment==='deductible',assetCost=base+(deductible?0n:vat)+due;
+  return {factId:r.id,vin:r.vin,base:money(base),invoiceGross:money(gross),invoiceVat:money(vat),normalTax:money(normal),relief:money(relief),due:money(due),deductibleInputVat:money(deductible?vat:0n),assetCost:money(assetCost),reason,sourceRefs:r.sourceRefs,sources:src(['vehiclePurchase','electricVehicle','electricVehicle2026'])};
+}
+
+/** Already established unions: statutory allocation is distinct from tax-office collection. */
+export function calculateAgencyUnionFees({scope,records}){
+  const organizations=records.filter(r=>r.type==='union'&&r.date.slice(0,7)<=scope.period),calculations=[],issues=[];
+  if(!organizations.length)return {calculations,issues,due:'0.00',payments:[]};
+  if(organizations.length!==1||organizations[0].established!==true||!organizations[0].organizationNumber){issues.push(issue('union_establishment_or_regional_preparation_missing','原建会批准/组织编号未核；未建会筹备金及税务代收、留成、返还须分别核，不能全国套2%'));return {calculations,issues,due:null,payments:[]};}
+  const organization=organizations[0];
+  for(const r of records.filter(r=>r.type==='payroll'&&r.paid===true&&(r.paymentDate??r.date).slice(0,7)===scope.period)){
+    if((r.paymentDate??r.date).slice(0,7)!==r.date.slice(0,7)&&r.use==='production'){issues.push(issue('union_production_benefit_allocation_missing','补发对应工会经费需原岗位/完工存货受益分配，不能倒灌前期已完工成本',r.id));continue;}
+    if(!r.components.every(c=>['included','excluded'].includes(c.unionWageTreatment)&& (c.unionWageTreatment==='included'||c.exclusionReason))){issues.push(issue('union_wage_components_missing','按原工资组成核统计工资总额纳入/排除性质；个人税社公代扣不扣出基数，不能使用净薪或客户预制工资总额',r.id));continue;}
+    const wage=r.components.filter(c=>c.unionWageTreatment==='included').reduce((n,c)=>n+cents(c.amount),0n);calculations.push({factId:r.id,employeeId:r.employeeId,use:r.use,jobId:r.jobId??null,organizationNumber:organization.organizationNumber,wages:money(wage),due:money(rateAmount(wage,200)),sourceRefs:[...r.sourceRefs,...organization.sourceRefs]});
+  }
+  // One aggregate statutory base; deterministic cumulative differences distribute cents.
+  calculations.sort((a,b)=>String(a.employeeId).localeCompare(String(b.employeeId))||a.factId.localeCompare(b.factId));
+  let running=0n,allocated=0n;for(const c of calculations){running+=cents(c.wages);const target=rateAmount(running,200);c.due=money(target-allocated);allocated=target;}
+  const payments=records.filter(r=>r.type==='union_payment'&&r.date.slice(0,7)===scope.period);
+  for(const p of payments)if(p.organizationNumber!==organization.organizationNumber||!p.paymentReference||!p.bankAccountId||!/^20\d\d-\d\d$/.test(p.assessmentPeriod??'')||cents(p.amount)<0n)issues.push(issue('union_payment_evidence_missing','实拨须工会组织、所属期、银行流水及合法工会收入收据/税务代收凭证；返还不自动冲企业费用',p.id));
+  return {calculations,issues,due:issues.length?null:money(allocated),knownCalculatedSubtotal:money(allocated),payments,organizationNumber:organization.organizationNumber};
+}
+
+export function calculateAgencyOldPropertyAppreciation({record:r}){
+  requireValue(r.type==='property_disposal'&&r.disposalKind==='old_commercial_property'&&r.transferIsPaid===true&&r.assetOwnershipVerified===true&&r.domesticStateOwnedLand===true&&r.specialRelief==='none'&&r.finalTaxMethod==='assessed_appraisal','agency_land_appreciation_method_missing');
+  requireValue(r.saleInvoiceOriginalVerified===true&&r.saleInvoiceNumber&&r.appraisal?.assessmentConfirmationNumber&&r.appraisal?.issuerApproved===true&&r.appraisal?.confirmedByTaxAuthority===true&&Array.isArray(r.landPayments)&&r.landPayments.length>0&&r.landPayments.every(p=>p.originalDocumentNumber&&p.actuallyPaid===true)&&Array.isArray(r.relatedTaxReceipts),'agency_land_appreciation_originals_missing');
+  requireValue(new Set(r.landPayments.map(p=>p.originalDocumentNumber)).size===r.landPayments.length&&r.landPayments.every(p=>cents(p.amount)>=0n)&&new Set(r.relatedTaxReceipts.map(p=>p.receiptNumber)).size===r.relatedTaxReceipts.length,'agency_land_appreciation_original_duplicate_or_negative');
+  const income=cents(r.saleGross)-cents(r.saleInvoiceVat),condition=quantity(r.appraisal.conditionRatio),replacement=cents(r.appraisal.replacementCost);requireValue(income>=0n&&condition<=1000000n&&replacement>=0n,'agency_land_appreciation_amount_invalid');
+  const land=r.landPayments.reduce((n,p)=>n+cents(p.amount),0n),appraisal=roundRatio(replacement*condition,1000000n);let taxes=0n;
+  for(const p of r.relatedTaxReceipts){requireValue(['urban_maintenance','education_surcharge','local_education','stamp'].includes(p.obligationId)&&p.receiptNumber&&p.actuallyPaid===true&&p.relatedToThisProperty===true&&cents(p.amount)>=0n,'agency_land_appreciation_tax_receipt_invalid');taxes+=cents(p.amount);}
+  const deduction=land+appraisal+taxes,increment=income-deduction;requireValue(deduction>0n&&land>=0n,'agency_land_appreciation_deduction_invalid');let rate=3000,quick=0;
+  if(increment>deduction*2n){rate=6000;quick=3500;}else if(increment>deduction){rate=5000;quick=1500;}else if(increment*2n>deduction){rate=4000;quick=500;}
+  const due=increment<=0n?0n:roundRatio(increment*BigInt(rate)-deduction*BigInt(quick),10000n);
+  return {factId:r.id,propertyId:r.propertyId,projectId:r.projectId,income:money(income),landPaid:money(land),confirmedAppraisal:money(appraisal),relatedActuallyPaidTaxes:money(taxes),deduction:money(deduction),increment:money(increment),rateBasisPoints:rate,quickDeductionBasisPoints:quick,due:money(due),rounding:'法定速扣式合并后仅在最终税额舍入到分',sourceRefs:r.sourceRefs,sources:src(['landAppreciation','landAppreciation2026'])};
+}
+
+export function calculateAgencyCulturalFee({scope,entity,accounting,records}){
+  const from=entity.vatPeriod==='quarterly'?`${scope.period.slice(0,4)}-${String(Math.floor((Number(scope.period.slice(5))-1)/3)*3+1).padStart(2,'0')}`:scope.period,activities=records.filter(r=>['advertising','entertainment'].includes(r.type)&&r.date.slice(0,7)>=from&&r.date.slice(0,7)<=scope.period),calculations=[],issues=[],usedRevenue=new Set(),usedPublicationPayments=new Set(),taxpayerSales=accounting.vatTransactions.filter(t=>t.date.slice(0,7)>=from&&t.date.slice(0,7)<=scope.period).reduce((n,t)=>n+cents(t.net),0n);
+  for(const r of activities){
+    if(r.direction==='purchased'){calculations.push({factId:r.id,status:'not_applicable',reason:'本企业仅采购广告/娱乐服务，不因自身支付费用成为提供方文建缴费人',due:'0.00',sourceRefs:r.sourceRefs});continue;}
+    if(r.type==='advertising'&&entity.kind==='individual_business'){calculations.push({factId:r.id,status:'not_applicable',reason:'个体提供广告服务不属财税2016第25号广告媒介单位范围；与娱乐服务单位和个人范围区别',due:'0.00',sourceRefs:r.sourceRefs});continue;}
+    if(r.direction!=='provided'||r.type==='advertising'&&!(r.contractServiceClassificationVerified===true&&['media','outdoor','advertising_agency'].includes(r.advertisingServiceKind))){issues.push(issue('cultural_service_scope_missing','根据原合同确认媒介/户外/广告代理；第12条包含广告代理单位，纯设计不能凭名称推定，采购与提供分开',r.id));continue;}
+    requireValue(Array.isArray(r.revenueFactIds)&&r.revenueFactIds.length>0&&new Set(r.revenueFactIds).size===r.revenueFactIds.length,'agency_cultural_revenue_link_invalid');
+    if(r.revenueFactIds.some(id=>usedRevenue.has(id))){issues.push(issue('cultural_revenue_already_consumed','同一原收入不能挂到不同activity重复计费',r.id));continue;}r.revenueFactIds.forEach(id=>usedRevenue.add(id));
+    const transactions=accounting.vatTransactions.filter(t=>r.revenueFactIds.includes(t.factId));
+    if(transactions.length!==r.revenueFactIds.length){issues.push(issue('cultural_revenue_original_missing','文建收入应与本企业原合同/验收/含税价及已核VAT原事实逐项关联，不接受调用方直接给计费销售总额',r.id));continue;}
+    const gross=transactions.reduce((n,t)=>n+cents(t.net)+cents(t.tax),0n),sales=transactions.reduce((n,t)=>n+cents(t.net),0n),publication=(r.publicationPayments??[]);let deducted=0n;
+    if(r.type==='advertising')for(const p of publication){
+      const expense=records.find(e=>e.id===p.expenseFactId&&e.type==='expense');if(!(p.legalPublicationInvoiceVerified===true&&p.invoiceNumber&&p.publisherIdentity&&expense))continue;
+      const bankRows=expense.settlement==='paid'?[{...expense,amount:expense.gross,bankReference:expense.bankReference??expense.businessIdentity?.documentNumber}]:records.filter(e=>e.type==='supplier_payment'&&e.relatedFactId===p.expenseFactId),selected=bankRows.filter(b=>b.date.slice(0,7)<=scope.period&&(!p.paymentReferences||p.paymentReferences.includes(b.bankReference)));
+      if(p.paymentReferences&&(!Array.isArray(p.paymentReferences)||new Set(p.paymentReferences).size!==p.paymentReferences.length||p.paymentReferences.some(ref=>!selected.some(b=>b.bankReference===ref)))){issues.push(issue('cultural_publication_payment_reference_missing','按原银行流水选实际分期支付，不能自报可扣总额',r.id));continue;}
+      for(const bank of selected){const identity=stable([bank.bankAccountId??expense.businessIdentity?.issuerKey,bank.bankReference]);const priorUse=records.some(a=>a.type==='advertising'&&a.date.slice(0,7)<from&&bank.date.slice(0,7)<from&&(a.publicationPayments??[]).some(prior=>prior.expenseFactId===p.expenseFactId&&(!prior.paymentReferences||prior.paymentReferences.includes(bank.bankReference))));if(usedPublicationPayments.has(identity)||priorUse){issues.push(issue('cultural_publication_payment_reused','同一实际支付不能跨activity/期间再次扣除，分期按各原银行流水唯一分配',r.id));continue;}usedPublicationPayments.add(identity);deducted+=cents(bank.amount);}
+      requireValue(selected.reduce((n,b)=>n+cents(b.amount),0n)<=cents(expense.gross),'agency_cultural_publication_paid_excess');
+    }
+    requireValue(deducted<=gross&&new Set(publication.map(p=>p.expenseFactId)).size===publication.length,'agency_cultural_deduction_duplicate_or_excess');
+    const base=gross-deducted,normal=rateAmount(base,300),smallExempt=entity.vatStatus==='small'&&(r.type==='advertising'?taxpayerSales<=(entity.vatPeriod==='quarterly'?6000000n:2000000n):taxpayerSales<(entity.vatPeriod==='quarterly'?30000000n:10000000n));
+    if(smallExempt){calculations.push({factId:r.id,status:'calculated',base:money(base),normalFee:money(normal),due:'0.00',reason:r.type==='advertising'?'广告小规模单位月销售额≤2万/季≤6万免征':'No60未达VAT起征点，结合2026No10月10万/季30万严格未达；不是疫情优惠',sourceRefs:[...r.sourceRefs,...transactions.flatMap(t=>t.sourceRefs)]});continue;}
+    if(r.budgetAttribution!=='central'||r.budgetAttributionBasis!=='official_budget_classification_notice'||!r.budgetNoticeNumber){issues.push(issue('cultural_budget_or_local_relief_missing','法定3%初始计费额已算；预算归属须原认定，娱乐不得仅按企业中央属性猜中央收入；地方减征幅度另核，不假定减半/无减免',r.id));calculations.push({factId:r.id,status:'trial_only',base:money(base),normalFee:money(normal),due:null,sourceRefs:r.sourceRefs});continue;}
+    calculations.push({factId:r.id,status:'calculated',base:money(base),gross:money(gross),publicationDeduction:money(deducted),normalFee:money(normal),due:null,budgetAttribution:'central',budgetNoticeNumber:r.budgetNoticeNumber,reason:'原预算归属为中央收入，2025—2027按全国规定减征50%；不将中央股东身份单独充作预算认定',sourceRefs:[...r.sourceRefs,...transactions.flatMap(t=>t.sourceRefs),...publication.flatMap(p=>records.find(e=>e.id===p.expenseFactId)?.sourceRefs??[])]});
+  }
+  // Taxpayer-period and budget bucket are the assessment unit, not each Agent activity.
+  // Allocate rounded aggregate cents by deterministic cumulative differences.
+  const central=calculations.filter(c=>c.status==='calculated'&&c.budgetAttribution==='central').sort((a,b)=>a.factId.localeCompare(b.factId));
+  let aggregateBase=0n,allocatedNormal=0n,allocatedDue=0n;
+  for(const c of central){aggregateBase+=cents(c.base);const normal=rateAmount(aggregateBase,300),due=roundRatio(normal,2n);c.normalFee=money(normal-allocatedNormal);c.due=money(due-allocatedDue);c.rounding='纳税人同税期同预算收入先汇总3%计费、再减半，按稳定事实顺序累计差分分配到分';allocatedNormal=normal;allocatedDue=due;}
+  const knownCalculatedSubtotal=money(calculations.filter(c=>c.due!==null).reduce((n,c)=>n+cents(c.due),0n));
+  return {calculations,issues,due:issues.length?null:knownCalculatedSubtotal,knownCalculatedSubtotal,allNotApplicable:calculations.length>0&&calculations.every(c=>c.status==='not_applicable'),pendingPeriodEnd:entity.vatPeriod==='quarterly'&&Number(scope.period.slice(5))%3!==0&&activities.some(r=>r.direction==='provided')};
+}
+
 /** accounting is produced by evaluateAgencyAccounting, not customer taxable income. */
 export function calculateAgencyObligations({ scope, entity, accounting, records, annual = false }) {
   const obligations = [], issues = [], payroll = [], entries = [];
@@ -327,7 +428,8 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
   const output = vatOutput;
   const totalNet = output.reduce((n, t) => n + cents(t.net), 0n), outputTax = output.reduce((n, t) => n + cents(t.tax), 0n);
   let vatDue = null,vatLiabilityReplay=[];
-  const vatScopeUnknown = accounting.issues.some(i => i.code === 'agency_vat_transaction_scope_unverified') || current.some(r => r.type === 'import_export' || r.crossBorder === true || r.specialVatTreatment && r.specialVatTreatment !== 'ordinary');
+  const outputKinds=new Set(['sale','sale_return','platform_settlement','service_complete','transport_complete','property_service_complete','construction_billing','rental','property_disposal']);
+  const vatScopeUnknown = accounting.issues.some(i => i.code === 'agency_vat_transaction_scope_unverified'||outputKinds.has(records.find(r=>r.id===i.factId)?.type)) || current.some(r => r.type === 'import_export' || r.crossBorder === true || r.specialVatTreatment && r.specialVatTreatment !== 'ordinary');
   if (vatScopeUnknown) add('vat', 'missing', '原件存在跨境/进出口/零税率/免税/差额/特殊简易标记或境内发生事实未核，不能套普通税率；关联附加与所得税影响待核', {}, ['vat']);
   else if (!absent('vat', output.length > 0 || ['small', 'general'].includes(entity.vatStatus), '补齐销售、未开票、红字、视同销售、进口和适用免税交易资料')) {
     if (!['monthly', 'quarterly'].includes(entity.vatPeriod)) add('vat', 'missing', '提供主管税务机关核定月/季计税期间，不由行业猜定', { sourceRefs: refs(output) }, ['vat']);
@@ -341,9 +443,11 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
       settlement('vat', vatDue, ['vat', 'vatRelief'], '2026月10万元/季30万元未达到起征点免征；达到全额计算，专票不随普通免税默认免征', { taxableSales: money(totalNet), initialOutput: money(outputTax), exemption: money(outputTax - vatDue), sourceRefs: refs(output), vatPeriodFrom: vatFrom, vatPeriodThrough: scope.period });
     } else if (entity.vatStatus === 'general') {
       const inputs = records.filter(r => ['purchase', 'expense', 'input_vat_adjustment'].includes(r.type) && r.date.slice(0, 7) <= scope.period);
+      for(const lease of records.filter(r=>r.type==='lease_lessee'&&r.inputVatTreatment==='deductible'))for(const [index,s] of (lease.paymentSchedule??[]).entries())if(s.invoiceCertified===true&&(s.certifiedDate??s.dueDate).slice(0,7)<=scope.period)inputs.push({id:`${lease.id}/invoice/${index}`,type:'lease_invoice',date:s.dueDate,inputVatTreatment:'deductible',certifiedDate:s.certifiedDate,invoiceTax:s.invoiceTax,sourceRefs:lease.sourceRefs});
+      for(const r of records.filter(r=>r.type==='vehicle_acquisition'&&r.inputVatTreatment==='deductible'&&r.date.slice(0,7)<=scope.period))inputs.push({id:r.id,type:'vehicle_invoice',date:r.date,inputVatTreatment:'deductible',certifiedDate:r.certifiedDate,invoiceTax:r.invoiceVat,sourceRefs:r.sourceRefs});
       const creditFrom=accounting.replayFrom > `${scope.period.slice(0,4)}-01` ? accounting.replayFrom : `${scope.period.slice(0,4)}-01`;
       const openings = records.filter(r => r.type === 'opening_vat' && r.asOfPeriod === creditFrom);
-      if (inputs.some(r => !['deductible', 'non_deductible', 'transfer_out'].includes(r.inputVatTreatment) || r.inputVatTreatment === 'deductible' && !/^20\d\d-\d\d-\d\d$/.test(r.certifiedDate ?? '')) || openings.length !== 1 || openings[0].declarationVerified !== true) add('vat', 'missing', '一般纳税人需要逐票抵扣资格/用途/认证日期，以及留抵重放起点的已核期初申报资料；按认证期完整滚算，不重复使用开账额', {}, ['vat']);
+      if (inputs.some(r => r.invoiceTax===undefined||!['deductible', 'non_deductible', 'transfer_out'].includes(r.inputVatTreatment) || r.inputVatTreatment === 'deductible' && !/^20\d\d-\d\d-\d\d$/.test(r.certifiedDate ?? '')) || openings.length !== 1 || openings[0].declarationVerified !== true) add('vat', 'missing', '一般纳税人需要逐票抵扣资格/用途/认证日期，以及留抵重放起点的已核期初申报资料；按认证期完整滚算，不重复使用开账额', {}, ['vat']);
       else {
         let carry = cents(openings[0].amount); requireValue(carry >= 0n, 'agency_opening_vat_negative'); const replay = [];
         const step = entity.vatPeriod === 'quarterly' ? 3 : 1;
@@ -391,7 +495,8 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
     if(!educationExempt&&half===null&&(vatDue>0n||sum(sitePaid,'amount')>0n))add('education_surcharge','missing',sixTaxRelief.reason,{eligibility:sixTaxRelief});
     else settlement('education_surcharge', educationExempt ? 0n : roundRatio((vatDue+sum(sitePaid,'amount')) * 300n, half ? 20000n : 10000n), ['educationRelief', 'smallRelief','prepaymentSurcharge'], educationExempt ? '财税2016第12号月销售额不超过10万元/季不超过30万元免征；边界含等号，区别于2026VAT起征点' : '预缴地实际税额与总部抵减后税额分开，教育附加3%及已核身份减半计算', { sourceRefs: [...refs(output),...refs(sitePaid)] });
     if (educationExempt) settlement('local_education', 0n, ['educationRelief'], '月销售额不超过10万元/季不超过30万元，全国免征条件明确，不需猜地区费率', { sourceRefs: refs(output) });
-    else add('local_education', 'unknown', '地方教育附加比例和现行适用/减免规则按地区逐项核实，不能全国默认2%');
+    else if(half===null&&(vatDue>0n||sum(sitePaid,'amount')>0n))add('local_education','missing',sixTaxRelief.reason,{eligibility:sixTaxRelief});
+    else settlement('local_education',roundRatio((vatDue+sum(sitePaid,'amount'))*200n,half?20000n:10000n),['localEducation','smallRelief','prepaymentSurcharge'],'通常地方教育附加全国统一2%，按已核六税两费减征；预缴地及机构所在地仅各自实际税额，不混用尚未生效征求意见',{sourceRefs:[...refs(output),...refs(sitePaid)]});
   } else for (const id of ['urban_maintenance', 'education_surcharge', 'local_education']) add(id, 'unknown', 'VAT或消费税基础未完成，关联附加待核');
 
   const staff = current.filter(r => r.type === 'payroll');
@@ -468,6 +573,7 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
       if (asset.use === 'self_use') { propertyIssues.push(issue('property_regional_deduction_unverified', '从价全国1.2%已核，原值扣除比例须按地区核定，不能全国默认30%', asset.id)); continue; }
       const leases = records.filter(r => r.type === 'rental' && r.propertyId === asset.propertyId && r.role === 'lessor');
       if (asset.use !== 'rented' || !leases.length || typeof asset.housing !== 'boolean') { propertyIssues.push(issue('property_rental_facts_missing', '补租赁合同、住房用途、承租人身份及租金时段', asset.id)); continue; }
+      if(leases.some(r=>r.rentFreeDays>0&&r.startDate.slice(0,7)<=scope.period&&r.endDate.slice(0,7)>=scope.period)){propertyIssues.push(issue('property_rent_free_original_value_required','合同有免租期：需原免租起止、含地价房产原值及当地原值扣除/征期；免租期间须从价，不能用会计直线摊租计从租税',asset.id));continue;}
       const ids = new Set(leases.map(r => r.id)), revenueCode = getAccountingRoles(accounting.profileId).mainRevenue;
       let base = accounting.vouchers.filter(v => ids.has(v.factId)).reduce((n, v) => n + v.entries.filter(e => [revenueCode,accounting.profileId==='enterprise-2019-general-basic-v1'?'6117':'5301'].includes(e.code)).reduce((sum, e) => sum + cents(e.credit) - cents(e.debit), 0n), 0n);
       if (obligations.find(o => o.obligationId === 'vat')?.exemption && totalNet < (entity.vatPeriod === 'quarterly' ? 30000000n : 10000000n)) base += output.filter(t => ids.has(t.factId) && t.invoiceKind === 'ordinary').reduce((n, t) => n + cents(t.tax), 0n);
@@ -483,10 +589,16 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
     if (!employees || !Array.isArray(employees.months) || employees.months.length !== 12 || new Set(employees.months.map(m => m.month)).size !== 12) add('disability_fund', 'missing', '残保金需上年完整12个月在职人数、工资总额、残疾人数认定；当月人数不能冒充年度平均');
     else { const head12 = employees.months.reduce((n, m) => n + quantity(m.employees), 0n); if (entity.kind !== 'individual_business' && head12 <= 360000000n) settlement('disability_fund', 0n, ['disability'], '完整上年平均在职人数≤30人的企业免征；个体不按企业免征条款猜定', { sourceRefs: employees.sourceRefs }); else { const parameters = records.find(r => r.type === 'disability_parameters' && r.region === entity.region && r.assessmentYear === scope.period.slice(0, 4)); let arithmeticTrial = null; if (parameters) arithmeticTrial = calculateAgencyDisabilityArithmetic({ months: employees.months, disabledEmploymentMonths: employees.disabledEmploymentMonths, socialAverageAnnualWage: parameters.socialAverageAnnualWage, requiredRatio: parameters.requiredRatio }); add('disability_fund', 'unknown', '全国两倍社会年平均工资上限与50%/90%分档公式已实现；所在地安置比例、上年工资及残疾人数认定须核，参数试算不授权缴费', { arithmeticTrial }, ['disability']); } }
   }
-  const triggers = { urban_land: ['land_asset'], vehicle_vessel: ['vehicle'], consumption: ['excise_product'], resource: ['extraction'], water_resource: ['water_extraction'], environment: ['pollutant_discharge'], deed: ['property_acquisition'], land_appreciation: ['property_disposal'], farmland_occupation: ['farmland_use'], vehicle_purchase: ['vehicle_acquisition'], customs: ['import_export'], cultural_construction: ['advertising', 'entertainment'], union_funds: ['union'], tobacco: ['tobacco_leaf_purchase'], vessel_tonnage: ['foreign_port_vessel_entry'] };
-  for (const [id, types] of Object.entries(triggers)) if (!absent(id, periodRows.some(r => types.includes(r.type)))) add(id, 'uncovered', `${id}存在原始应税事实；需逐项核适用主体/标的/计税基础/地区标准及减免，不能将预留能力说成计算完成`);
+  if(!absent('vehicle_purchase',current.some(r=>r.type==='vehicle_acquisition'))){const calculations=[],missing=[];for(const r of current.filter(r=>r.type==='vehicle_acquisition'))try{calculations.push({...calculateAgencyVehicleAcquisition({entity,record:r,records}),period:r.date.slice(0,7)});}catch(error){if(!error.code)throw error;missing.push(issue(error.code,'核车辆自用/应税范围、原发票、已征/减免及2026有效车型目录，未知不能默认零',r.id));}if(missing.length)add('vehicle_purchase','missing','车辆购置原件或适用条件未核',{calculations,issues:missing},['vehiclePurchase','electricVehicle','electricVehicle2026']);else settlement('vehicle_purchase',calculations.filter(c=>c.period===scope.period).reduce((n,c)=>n+cents(c.due),0n),['vehiclePurchase','electricVehicle','electricVehicle2026'],'原车价及依法计算购税资本化，按车辆一次征收/已征不重复，核实际税票所属期',{calculations,sourceRefs:refs(current.filter(r=>r.type==='vehicle_acquisition'))});}
+  if(!absent('cultural_construction',current.some(r=>['advertising','entertainment'].includes(r.type)))){const result=calculateAgencyCulturalFee({scope,entity,accounting,records});if(result.issues.length)add('cultural_construction','missing','原实际广告/娱乐服务、计费/预算与减免尚未全核',{...result},['cultural','culturalEntertainment','culturalRelief']);else if(result.allNotApplicable)add('cultural_construction','not_applicable','原资料明确仅采购/非广告征收主体',{calculations:result.calculations,sourceRefs:refs(current.filter(r=>['advertising','entertainment'].includes(r.type)))});else if(result.pendingPeriodEnd)add('cultural_construction','pending_period_end','文建按VAT同一税期归集，按季资料未到季末',{calculations:result.calculations},['cultural']);else settlement('cultural_construction',cents(result.due),['cultural','culturalEntertainment','culturalRelief'],'依原实际服务、含税价、合法实付发布费和已核预算归属计算文建，不以公司中央属性猜预算',{calculations:result.calculations,sourceRefs:refs(current.filter(r=>['advertising','entertainment'].includes(r.type)))});}
+  if(!absent('union_funds',current.some(r=>r.type==='union'||r.type==='union_payment'))){const result=calculateAgencyUnionFees({scope,records}),paid=result.payments.filter(p=>p.assessmentPeriod===scope.period).reduce((n,p)=>n+cents(p.amount),0n);if(result.issues.length)add('union_funds','missing','建会/工资组成/实际拨付资料未核，地区筹备及代收不按全国2%猜定',result,['union','wageTotal']);else{add('union_funds','calculated','已建会单位按原统计工资组成2%计拨，地区代收/返还另核；计提按岗位入薪酬成本，不重复费用',{...result,paid:money(paid),difference:money(cents(result.due)-paid),sourceRefs:result.calculations.flatMap(c=>c.sourceRefs)},['union','wageTotal']);for(const p of result.payments)if(cents(p.amount))entries.push({obligationId:'union_funds',period:scope.period,kind:'union_payment',paymentId:hash(stable([p.bankAccountId,p.paymentReference])),cumulative:false,reason:'按原工会收入收据/代收凭证及银行实拨核销应付职工薪酬，不把返还假作免缴',sourceRefs:p.sourceRefs,entries:[{code:'2211',debit:p.amount,credit:'0.00'},{code:'1002',debit:'0.00',credit:p.amount}]});}}
+  if(!absent('land_appreciation',current.some(r=>r.type==='property_disposal'))){const calculations=[],missing=[];for(const r of current.filter(r=>r.type==='property_disposal'))try{calculations.push({...calculateAgencyOldPropertyAppreciation({record:r}),period:r.date.slice(0,7)});}catch(error){if(!error.code)throw error;missing.push(issue(error.code,'本轮旧商房按原土地支付/确认评估及税票派生；开发/旧票加计/普通住宅/地方预征/尾盘须相应原件规则',r.id));}if(missing.length)add('land_appreciation','missing','土地增值税项目/方法/扣除依据未全核',{calculations,issues:missing},['landAppreciation','landAppreciation2026']);else{const currentCalculations=calculations.filter(c=>c.period===scope.period),projects=new Set(currentCalculations.map(c=>c.projectId)),paid=current.filter(r=>r.type==='tax_payment'&&r.obligationId==='land_appreciation'&&projects.has(r.projectId)&&r.assessmentYear===scope.period.slice(0,4)).reduce((n,r)=>n+cents(r.amount),0n),due=currentCalculations.reduce((n,c)=>n+cents(c.due),0n);add('land_appreciation','calculated','按旧商房原项目收入和法定扣除计算最终四档速扣税额，合并式最终舍入；只减本项目原税票预缴',{due:money(due),paid:money(paid),difference:money(due-paid),calculations:currentCalculations,sourceRefs:currentCalculations.flatMap(c=>c.sourceRefs)},['landAppreciation','landAppreciation2026']);}}
+  const triggers = { urban_land: ['land_asset'], vehicle_vessel: ['vehicle'], consumption: ['excise_product'], resource: ['extraction'], water_resource: ['water_extraction'], environment: ['pollutant_discharge'], deed: ['property_acquisition'], farmland_occupation: ['farmland_use'], customs: ['import_export'], tobacco: ['tobacco_leaf_purchase'], vessel_tonnage: ['foreign_port_vessel_entry'] };
+  for (const [id, types] of Object.entries(triggers)) if (!absent(id, current.some(r => types.includes(r.type)))) add(id, 'uncovered', `${id}本年存在尚未解决的原始应税事实；以后无新增不等于历史义务完成，需逐项核适用主体/标的/计税基础/地区标准及减免`);
   const expenses = current.filter(r => r.type === 'expense');
   const taxAdjustments = [];
+  const unionAccrued=[...accounting.historicalVouchers,...accounting.vouchers].filter(v=>v.period.startsWith(scope.period.slice(0,4))&&v.summary.startsWith('已建会按原工资')).reduce((n,v)=>n+cents(v.entries[0].debit),0n),unionPaid=current.filter(r=>r.type==='union_payment'&&r.legalIncomeReceiptNumber&&r.deductionVoucherValid===true).reduce((n,r)=>n+cents(r.amount),0n);
+  if(unionAccrued||unionPaid)taxAdjustments.push({factId:'union_funds_year',amount:money(unionAccrued-(unionPaid<unionAccrued?unionPaid:unionAccrued)),reason:'工会经费年度按合规实际拨缴且不超过工资薪金2%扣除；计提未拨/缺合法凭证不能默认扣除，预缴实际利润不在此纳调',accrued:money(unionAccrued),eligibleActuallyPaid:money(unionPaid),sourceRefs:refs(current.filter(r=>r.type==='union_payment'||r.type==='union'))});
   const entertainment = expenses.filter(e => e.taxNature === 'entertainment'), entertainmentTotal = entertainment.reduce((n, e) => n + cents(e.gross), 0n), entertainmentCap = rateAmount(cents(accounting.yearRevenue), 50), entertainmentDeduction = rateAmount(entertainmentTotal, 6000) < entertainmentCap ? rateAmount(entertainmentTotal, 6000) : entertainmentCap;
   let entertainmentRunning = 0n;
   for (const e of expenses) {
@@ -517,7 +629,7 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
     lossWorkpaper.push({ lossYear: loss.lossYear, remainingBefore: money(remaining), expired, used: money(used), carryForward: money(expired ? 0n : remaining - used), sourceRefs: loss.sourceRefs });
   }
   const incomeFacts = records.find(r => r.type === 'income_evidence');
-  const incomeDependencies = obligations.filter(o => ['vat','social_insurance', 'housing_fund', 'property', 'stamp', 'disability_fund', 'urban_maintenance', 'education_surcharge', 'local_education', 'consumption', 'resource', 'water_resource', 'environment', 'union_funds', 'tobacco', 'vessel_tonnage'].includes(o.obligationId) && ['missing', 'unknown', 'uncovered'].includes(o.status));
+  const incomeDependencies = [...(accounting.unresolvedTaxDependencies??[]),...obligations.filter(o => ['vat','social_insurance', 'housing_fund', 'property', 'stamp', 'disability_fund', 'urban_maintenance', 'education_surcharge', 'local_education', 'consumption', 'resource', 'water_resource', 'environment', 'union_funds','cultural_construction','land_appreciation', 'tobacco', 'vessel_tonnage'].includes(o.obligationId) && ['missing', 'unknown', 'uncovered'].includes(o.status))];
   const incomeReady = incomeDependencies.length === 0 && accounting.yearCoverageVerified && accounting.issues.length === 0 && incomeFacts?.lossCarryforwardVerified === true && (lossRecords.length > 0 || incomeFacts?.noPriorLosses === true) && incomeFacts?.otherAdjustmentsComplete === true && !issues.some(i => ['income_expense_nature_missing', 'income_lease_tax_classification_missing', 'income_lease_cost_allocation_missing'].includes(i.code));
   if (entity.kind === 'company') {
     add('business_income', 'not_applicable', '公司属于企业所得税纳税人，经营所得不套用于公司');
@@ -536,7 +648,8 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
     else if (!incomeReady || !owners.length || new Set(owners.map(o=>o.ownerId)).size!==owners.length || owners.some(o => !o.ownerId || o.personType !== 'natural' || o.otherBusinesses !== false || typeof o.hasComprehensiveIncome !== 'boolean')) add('business_income', 'missing', '需累计完整收入成本、自然人投资人/分配协议、其他经营主体、综合所得与费用扣除情况，法人合伙人不得套个税表', { adjustments: taxAdjustments }, ['income', 'owners']);
     else {
       const shares = owners.map(o => quantity(o.share)); requireValue(shares.reduce((a, b) => a + b, 0n) === 1000000n, 'agency_owner_shares_invalid');
-      let allocatedShares=0n; const calculations = owners.map((o, index) => { const before=allocatedShares;allocatedShares+=shares[index];const allocated = roundRatio(incomeBase * allocatedShares, 1000000n)-roundRatio(incomeBase * before, 1000000n); const deduction = o.hasComprehensiveIncome ? 0n : 500000n * BigInt(Number(scope.period.slice(5))); const base = positive(allocated - deduction), gross = progressive(base, businessBrackets); const relief = entity.kind === 'individual_business' ? roundRatio(progressive(base < 200000000n ? base : 200000000n, businessBrackets), 2n) : 0n; return { ownerId: o.ownerId, allocationRounding: '按ownerId稳定排序，以累计份额差额分配分尾，合计严格等于利润', allocatedProfit: money(allocated), expenseDeduction: money(deduction), taxableBaseDerived: money(base), grossTax: money(gross), relief: money(relief), due: money(gross - relief), sourceRefs: o.sourceRefs }; });
+      const operatingMonths=annual?12:Number(scope.period.slice(5))-(entity.businessStartDate.slice(0,4)===scope.period.slice(0,4)?Number(entity.businessStartDate.slice(5,7)):1)+1;
+      let allocatedShares=0n; const calculations = owners.map((o, index) => { const before=allocatedShares;allocatedShares+=shares[index];const allocated = roundRatio(incomeBase * allocatedShares, 1000000n)-roundRatio(incomeBase * before, 1000000n); const deduction = o.hasComprehensiveIncome ? 0n : 500000n * BigInt(operatingMonths); const base = positive(allocated - deduction), gross = progressive(base, businessBrackets); const relief = entity.kind === 'individual_business' ? roundRatio(progressive(base < 200000000n ? base : 200000000n, businessBrackets), 2n) : 0n; return { ownerId: o.ownerId, allocationRounding: '按ownerId稳定排序，以累计份额差额分配分尾，合计严格等于利润', allocatedProfit: money(allocated), expenseDeduction: money(deduction),expenseDeductionMonths:operatingMonths,taxableBaseDerived: money(base), grossTax: money(gross), relief: money(relief), due: money(gross - relief), sourceRefs: o.sourceRefs }; });
       settlement('business_income', calculations.reduce((n, c) => n + cents(c.due), 0n), ['income', 'owners', 'smallRelief'], '查账经营所得由业务利润/税会差异派生，按自然人分配后计算；个体200万元内部分减半不推广到个人独资合伙', { calculations, adjustments: taxAdjustments, cumulative: true });
     }
   } else { add('corporate_income', 'unknown', '核实登记主体形式和纳税身份'); add('business_income', 'unknown', '核实登记主体形式和投资人身份'); }
@@ -544,9 +657,11 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
   for (const id of OBLIGATION_IDS) requireValue(obligations.filter(o => o.obligationId === id).length === 1, 'agency_obligation_inventory_incomplete');
   const roles = getAccountingRoles(accounting.profileId), isEnterprise = accounting.profileId === 'enterprise-2019-general-basic-v1';
   const entry = (code, debit, credit) => ({ code, debit: money(debit), credit: money(credit) });
-  const addAccrual = (row, debitCode, amount, kind = 'expense', cumulative = false) => { if (amount <= 0n) return; entries.push({ obligationId: row.obligationId, period: scope.period, kind, cumulative, reason: row.reason, sourceRefs: row.sourceRefs.length ? row.sourceRefs : records.flatMap(r => r.sourceRefs ?? []), entries: [entry(debitCode, amount, 0n), entry('2221', 0n, amount)] }); };
+  const disposalOnly=accounting.pendingAssetDisposals?.filter(d=>d.period===scope.period).length===1&&output.length>0&&output.every(t=>t.factId===accounting.pendingAssetDisposals.find(d=>d.period===scope.period).factId)?accounting.pendingAssetDisposals.find(d=>d.period===scope.period):null;
+  const addAccrual = (row, debitCode, amount, kind = 'expense', cumulative = false) => { if (amount <= 0n) return; entries.push({ obligationId: row.obligationId, period: scope.period, kind, cumulative,...(row.assetFactId?{assetFactId:row.assetFactId}:{}),...(row.paymentId?{paymentId:row.paymentId}:{}),reason: row.reason, sourceRefs: row.sourceRefs.length ? row.sourceRefs : records.flatMap(r => r.sourceRefs ?? []), entries: [entry(debitCode, amount, 0n), entry('2221', 0n, amount)] }); };
   for (const row of obligations.filter(o => o.status === 'calculated')) {
-    if (['urban_maintenance', 'education_surcharge', 'local_education', 'stamp', 'property'].includes(row.obligationId)) addAccrual(row, isEnterprise ? '6403' : '5403', cents(row.due));
+    if (['urban_maintenance', 'education_surcharge', 'local_education', 'stamp', 'property','cultural_construction'].includes(row.obligationId)) {const asset=disposalOnly&&['urban_maintenance','education_surcharge','local_education'].includes(row.obligationId);addAccrual(asset?{...row,assetFactId:disposalOnly.factId}:row,asset?'1606':isEnterprise?'6403':'5403',cents(row.due));}
+    else if(row.obligationId==='land_appreciation')for(const calculation of row.calculations)addAccrual({...row,assetFactId:calculation.factId,paymentId:hash(stable(records.find(r=>r.id===calculation.factId).businessIdentity)),sourceRefs:calculation.sourceRefs},'1606',cents(calculation.due),'asset_disposal_tax');
     else if (row.obligationId === 'corporate_income') addAccrual(row, isEnterprise ? '6801' : '5801', cents(row.due), 'income_tax', true);
     else if (row.obligationId === 'business_income' && entity.kind === 'individual_business') addAccrual(row, roles.profitDistribution, cents(row.due), 'owner_income_tax', true);
     else if (row.obligationId === 'disability_fund') addAccrual(row, roles.adminExpense, cents(row.due), 'expense');

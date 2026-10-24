@@ -5,10 +5,10 @@ import { resolve, dirname } from 'node:path';
 import { loadAgencyMaterials, buildAgencyWorkpaper, prepareAgencyPosting, executeAgencyPosting, queryAgencyPosting } from '../server/agency-business.mjs';
 
 const [command, ...args] = process.argv.slice(2);
-const usage = 'node scripts/agency-business.mjs workpaper <manifest> | prepare <manifest> <workbench.db> <batchId> <evidenceDir> [posting-options.json] | execute <manifest> <workbench.db> <batchId> <evidenceDir> <accountant-feedback.json> [posting-options.json] | query <identity.json>';
+const usage = 'node scripts/agency-business.mjs workpaper <manifest> [workbench.db] | prepare <manifest> <workbench.db> <batchId> <evidenceDir> [posting-options.json] | execute <manifest> <workbench.db> <batchId> <evidenceDir> <accountant-feedback.json> [posting-options.json] | query <identity.json>';
 try {
   let result;
-  if (command === 'workpaper' && args.length === 1) result = buildAgencyWorkpaper(loadAgencyMaterials(resolve(args[0])));
+  if (command === 'workpaper' && [1,2].includes(args.length)) result = buildAgencyWorkpaper(loadAgencyMaterials(resolve(args[0])),args[1]?{dbPath:resolve(args[1])}:{});
   else if (['prepare', 'execute'].includes(command) && [command==='prepare'?4:5,command==='prepare'?5:6].includes(args.length)) {
     const session = loadAgencyMaterials(resolve(args[0])), dbPath = resolve(args[1]); process.env.WORKBENCH_DATA_DIR = dirname(dbPath);
     const optionsPath=args[command==='prepare'?4:5],options=optionsPath?JSON.parse(readFileSync(resolve(optionsPath),'utf8')):{};

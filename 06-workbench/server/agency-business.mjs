@@ -1,9 +1,9 @@
-// Fixed business entrypoints. Loading/calculation never opens a database.
+// Fixed business entrypoints. Only explicit dbPath requests open a read-only context.
 import { resolve, dirname, basename, isAbsolute, relative } from 'node:path';
 import { lstatSync, realpathSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { evaluateAgencyAccounting, replayAgencyFinancials, buildAgencyBookkeeping, AGENCY_ACCOUNTING_RULE_VERSION, AGENCY_INDUSTRIES } from './agency-business-rules.mjs';
-import { calculateAgencyObligations, calculateAgencyAnnualAdjustments, AGENCY_TAX_RULE_VERSION, cents, money } from './agency-tax-rules.mjs';
+import { calculateAgencyObligations, calculateAgencyAnnualAdjustments, AGENCY_TAX_RULE_VERSION, cents, money,calculateAgencyVehicleAcquisition } from './agency-tax-rules.mjs';
 import { loadAgencyEvidence, readAgencySession, assertAgencyEvidenceCurrent, captureAgencyCode, agencyTargetSnapshot, withAgencyEvidence, agencyEvidenceArchiveRecords, assertAgencyLoadedCode, bindAgencyArchive } from './agency-business-evidence.mjs';
 import { archiveMaterialEvidence, readArchivedMaterialEvidence } from './offline-material-store.mjs';
 import { inspectAuditSchema, queryOperation } from './local-audit-storage.mjs';
@@ -11,6 +11,7 @@ import { auditCanonicalDigest, auditResultDigest } from './local-audit.mjs';
 import { getBatch, listBatchVouchers, getVoucherSource, voucherFingerprint, persistedVoucherFingerprint } from './import-storage.mjs';
 import { hash, stable, requireValue } from './offline-material-adapters.mjs';
 import { getAccountingRoles } from './accounting-profiles.mjs';
+import {cardMoney,assetCardPeriodStatus} from './period-end-controls.mjs';
 
 export const AGENCY_BUSINESS_VERSION = 'agency-business-workpaper/1';
 export const AGENCY_RULE_VERSION = `${AGENCY_ACCOUNTING_RULE_VERSION}+${AGENCY_TAX_RULE_VERSION}`;
@@ -22,12 +23,12 @@ const freeze = value => { if (value && typeof value === 'object') { Object.value
 const businessRevision = voucher => hash(stable({ period: voucher.period, date: voucher.date, summary: voucher.summary, entries: voucher.entries })).slice(0, 40);
 const identity = (scope, batchId, dbPath) => ({ dbPath, databaseInstanceId: scope.databaseInstanceId, accountSetId: scope.accountSetId, enterpriseKey: scope.enterpriseKey, period: scope.period, batchId, operationId: `agency-${batchId}` });
 
-export function buildAgencyWorkpaper(session, { previous } = {}) {
-  const document = readAgencySession(session), { accounting, tax, periodCalculations } = replayAgencyFinancials(document);
+export function buildAgencyWorkpaper(session, { previous,dbPath } = {}) {
+  const original = readAgencySession(session),document=dbPath?{...original,nativeAssetContext:readNativeAssetContext(dbPath,original)}:original, { accounting, tax, periodCalculations } = replayAgencyFinancials(document);
   const sourceRefs = copy(session.sourceRefs);
   const result = { version: AGENCY_BUSINESS_VERSION, scope: copy(document.scope), industry: document.entity.industry, profileId: document.entity.profileId, bookkeeping: buildAgencyBookkeeping(document,accounting), accounting, periodCalculations, obligations: tax.obligations, payroll: tax.payroll, taxWorkpaper: tax.taxableProfitWorkpaper,
     annualCalculations: { status: 'raw_year_replay_required', entrypoint: 'calculateAgencyAnnualAdjustments', required: 'twelve current raw material sessions, same enterprise/account/database/year' },
-    sourceRefs, ruleVersion: AGENCY_RULE_VERSION, codeDigest: session.codeDigest, dependencyDigest: session.dependencyDigest,
+    sourceRefs,nativeAssetContext:document.nativeAssetContext??null, ruleVersion: AGENCY_RULE_VERSION, codeDigest: session.codeDigest, dependencyDigest: session.dependencyDigest,
     issues: [...accounting.issues, ...tax.issues], impact: [], coverageVerified: accounting.accountingCoverageVerified, taxYearCoverageVerified:accounting.yearCoverageVerified,
     confirmationStatus: 'pending', accountantApproval: 'pending', authorizesExecution: false, submittable: false, periodComplete: false };
   if (previous) {
@@ -39,7 +40,7 @@ export function buildAgencyWorkpaper(session, { previous } = {}) {
   result.contentDigest = hash(stable(result)); return result;
 }
 
-export async function buildAgencyAnnualWorkpaper(materialSessions) {
+export async function buildAgencyAnnualWorkpaper(materialSessions,{dbPath}={}) {
   requireValue(Array.isArray(materialSessions) && materialSessions.length > 0 && materialSessions.length <= 12, 'agency_annual_sessions_invalid');
   const documents = materialSessions.map(readAgencySession), first = documents[0], year = first.scope.period.slice(0, 4), startMonth = Number(first.entity.businessStartDate.slice(0, 4)) < Number(year) ? 1 : Number(first.entity.businessStartDate.slice(5, 7));
   const expected = Array.from({ length: 13 - startMonth }, (_, i) => `${year}-${String(i + startMonth).padStart(2, '0')}`);
@@ -47,10 +48,11 @@ export async function buildAgencyAnnualWorkpaper(materialSessions) {
   requireValue(documents.every(d => ['enterpriseKey', 'accountSetId', 'databaseInstanceId', 'currency'].every(k => d.scope[k] === first.scope[k]) && d.scope.period.startsWith(year) && stable(d.entity) === stable(first.entity)), 'agency_annual_scope_conflict');
   const byId = new Map();
   for (const document of documents) for (const record of document.records) { const old = byId.get(record.id); requireValue(!old || stable(old) === stable(record), 'agency_annual_fact_version_conflict'); byId.set(record.id, record); }
-  const document = { scope: { ...first.scope, period: `${year}-12` }, entity: first.entity, records: [...byId.values()] };
+  const document = { scope: { ...first.scope, period: `${year}-12` }, entity: first.entity, records: [...byId.values()] };if(dbPath)document.nativeAssetContext=readNativeAssetContext(dbPath,document);
   const result = await calculateAgencyAnnualAdjustments({ document });
   materialSessions.forEach(assertAgencyEvidenceCurrent);
   result.entrypoint = 'buildAgencyAnnualWorkpaper'; result.ruleVersion = AGENCY_RULE_VERSION; result.dependencies = materialSessions.map(s => ({ period: s.scope.period, dependencyDigest: s.dependencyDigest, codeDigest: s.codeDigest, sourceRefs: s.sourceRefs }));
+  if(document.nativeAssetContext){const current=readNativeAssetContext(dbPath,document);requireValue(current.targetDigest===document.nativeAssetContext.targetDigest&&current.digest===document.nativeAssetContext.digest,'agency_annual_native_asset_context_changed');result.nativeAssetContext=document.nativeAssetContext;result.dependencies.push({kind:'native_asset_context',period:document.scope.period,scope:copy(document.scope),dbPath,targetDigest:current.targetDigest,dependencyDigest:current.digest,context:copy(current)});}
   result.dependencyDigest = hash(stable(result.dependencies)); result.contentDigest = hash(stable(result)); return result;
 }
 
@@ -68,6 +70,32 @@ function checkedDatabasePath(path) {
   requireValue(typeof path === 'string' && isAbsolute(path) && resolve(path) === path && basename(path) === 'workbench.db', 'agency_db_path_invalid');
   for (let p = path;; p = dirname(p)) { const s = lstatSync(p); requireValue(!s.isSymbolicLink() && realpathSync.native(p).toLowerCase() === p.toLowerCase(), 'agency_db_alias'); if (dirname(p) === p) break; }
   const s = lstatSync(path); requireValue(s.isFile() && s.nlink === 1 && s.size >= 4096, 'agency_db_file_invalid'); return path;
+}
+/** Explicit, fixed read-only native asset context; JSON receipts cannot mint it. */
+function readNativeAssetContext(dbPath,document){
+  checkedDatabasePath(dbPath);const db=new DatabaseSync(dbPath,{readOnly:true}),scope=document.scope,issues=[],cards=[],vouchers=[],knownCards=new Set(),voucherIds=new Set();
+  const missing=(code,reason,factId,period)=>issues.push({code,state:'missing',request:reason,factId,period:period??scope.period});
+  try{
+    db.exec('BEGIN');const schema=inspectAuditSchema(db);requireValue(schema.ok&&schema.version===2&&schema.activeInstanceId===scope.databaseInstanceId,'agency_native_asset_scope_mismatch');const targetDigest=agencyTargetSnapshot(db,scope);
+    const operations=db.prepare("SELECT * FROM audit_operations WHERE database_instance_id=? AND action IN ('asset.create','asset.update','asset.depreciate') AND state IN ('succeeded','no_change') ORDER BY prepared_at").all(scope.databaseInstanceId),operationFor=(type,id,action)=>{for(const op of [...operations].reverse()){if(action&&op.action!==action)continue;const receipt=JSON.parse(op.receipt_json);if(receipt.targets?.accountSetId!==scope.accountSetId||!receipt.resultRefs?.some(r=>r.type===type&&r.id===id))continue;const proof=queryOperation(db,{databaseInstanceId:scope.databaseInstanceId,operationId:op.operation_id,attempt:op.attempt});if(proof.ok&&proof.durability==='committed')return {operationId:op.operation_id,attempt:op.attempt,action:op.action,receipt:proof.receipt};}return null;};
+    for(const r of document.records.filter(r=>r.type==='vehicle_acquisition'&&r.date.slice(0,7)<=scope.period)){
+      let expected;try{expected=calculateAgencyVehicleAcquisition({entity:document.entity,record:r,records:document.records});}catch{continue;}
+      const start=new Date(Date.UTC(Number(r.date.slice(0,4)),Number(r.date.slice(5,7)),1)).toISOString().slice(0,7),expense=r.use==='transport'?getAccountingRoles(document.entity.profileId).mainCost:r.use==='production'?getAccountingRoles(document.entity.profileId).productionCost:getAccountingRoles(document.entity.profileId).adminExpense;
+      const matches=db.prepare('SELECT * FROM asset_cards WHERE account_set_id=?').all(scope.accountSetId).filter(c=>c.ledger_note?.includes(r.vin)&&c.ledger_note?.includes(r.invoiceNumber)&&cents(c.original_cost)===cents(expected.assetCost)&&c.acquired_period===r.date.slice(0,7)&&c.start_period===start&&c.useful_life_months===r.usefulLifeMonths&&c.residual_rate===r.residualRate&&c.asset_account==='1601'&&c.accum_account==='1602'&&c.expense_account===expense&&c.ledger_status==='booked');
+      if(matches.length!==1){if(scope.period>=start)missing('agency_core_asset_card_reconciliation_required','原VIN/发票/取得期间/资本化成本/寿命残值用途未与唯一现库core卡片逐项对齐，不能把未来折旧当零',r.id,start);continue;}
+      const card=matches[0],operation=operationFor('asset_card',card.id);if(!operation){missing('agency_core_asset_card_operation_missing','现库卡片缺同账套已提交固定操作证据，不信整理JSON posted',r.id,start);continue;}knownCards.add(card.id);cards.push({factId:r.id,vin:r.vin,card:{...card},operation,sourceRefs:r.sourceRefs});
+      const startIndex=Number(start.slice(0,4))*12+Number(start.slice(5))-1,endIndex=Number(scope.period.slice(0,4))*12+Number(scope.period.slice(5))-1;
+      for(let i=startIndex;i<=endIndex;i++){const period=`${Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`,status=assetCardPeriodStatus(db,card,period,cardMoney(card));if(status.status==='posted'){const run=db.prepare('SELECT * FROM asset_depreciation_runs WHERE asset_id=? AND period=? AND account_set_id=?').get(card.id,period,scope.accountSetId);voucherIds.add(run.voucher_id);}else if(!['fully_depreciated','life_expired','no_amount_due','not_existed','not_started'].includes(status.status))missing('agency_core_asset_depreciation_pending',`core卡片${card.id} ${period}状态${status.status}，须现固定计提操作及实际posted/run核验，不另由AGENCY计提`,r.id,period);}
+    }
+    for(const id of voucherIds){
+      const v=db.prepare('SELECT * FROM vouchers WHERE id=? AND account_set_id=?').get(id,scope.accountSetId),runs=db.prepare('SELECT r.*,c.expense_account,c.accum_account FROM asset_depreciation_runs r JOIN asset_cards c ON c.id=r.asset_id WHERE r.voucher_id=?').all(id),actual=v&&db.prepare('SELECT * FROM voucher_entries WHERE voucher_id=? ORDER BY line_no').all(id),operation=operationFor('voucher',id,'asset.depreciate');
+      if(!v||v.status!=='posted'||v.kind!=='depreciation'||!operation||runs.some(r=>!knownCards.has(r.asset_id)||r.account_set_id!==scope.accountSetId||r.period!==v.period)){missing('agency_core_asset_posted_evidence_missing','计提凭证/run含未由原件覆盖的资产或缺同scope实际审计操作，不忽略其他已记成本',null);continue;}
+      const expected=new Map(),actualTotals=new Map(),put=(m,k,n)=>m.set(k,(m.get(k)??0n)+n);for(const r of runs){put(expected,r.expense_account,cents(r.amount));put(expected,r.accum_account,-cents(r.amount));}for(const e of actual)put(actualTotals,e.code,cents(e.debit)-cents(e.credit));
+      if([...new Set([...expected.keys(),...actualTotals.keys()])].some(k=>(expected.get(k)??0n)!==(actualTotals.get(k)??0n))){missing('agency_core_asset_voucher_amount_mismatch','真实计提凭证逐科目金额与core当前卡片规则/run不符',null);continue;}
+      vouchers.push({voucherId:id,period:v.period,date:v.voucher_date,summary:v.summary,fingerprint:persistedVoucherFingerprint(v,actual),entries:actual.map(e=>({code:e.code,debit:money(cents(e.debit)),credit:money(cents(e.credit))})),runs:runs.map(r=>({cardId:r.asset_id,amount:money(cents(r.amount))})),cardIds:runs.map(r=>r.asset_id),operation,sourceRefs:cards.filter(c=>runs.some(r=>r.asset_id===c.card.id)).flatMap(c=>c.sourceRefs)});
+    }
+    const result={version:'agency-native-assets/1',scope:copy(scope),dbPath,targetDigest,cards,vouchers,issues};result.digest=hash(stable(result));return result;
+  }finally{try{db.exec('ROLLBACK');}finally{db.close();}}
 }
 async function application(dbPath) {
   checkedDatabasePath(dbPath);
@@ -104,6 +132,7 @@ function reconcileLedger(app, document, workpaper, input) {
     const entries = lines(voucher.id), source = actualSources.find(s=>s.voucher_id===voucher.id), fingerprint = persistedVoucherFingerprint(voucher,entries);
     if (voucher.period < from) { proof.push({voucherId:voucher.id,period:voucher.period,fingerprint,kind:'verified_opening_checkpoint',source:source??null});continue; }
     if (source?.source_system === AGENCY_SOURCE_SYSTEM) {proof.push({voucherId:voucher.id,period:voucher.period,fingerprint,kind:'verified_agency_source'});continue;}
+    const native=wanted.find(v=>v.coreProof?.voucherId===voucher.id);if(native){requireValue(native.coreProof.fingerprint===fingerprint&&normalized(native.entries)===normalized(entries),'agency_native_asset_changed');reused.add(native.sourceVoucherId);proof.push({voucherId:voucher.id,period:voucher.period,fingerprint,kind:'verified_core_asset_depreciation',agencySourceVoucherId:native.sourceVoucherId,operation:native.coreProof.operation,sourceRefs:native.sourceRefs});continue;}
     let verifiedCarry = false;
     if (voucher.kind === 'carryforward' && voucher.period < scope.period) {
       const aggregated = group(entries);
@@ -173,9 +202,9 @@ function postingPlan(app, scope, workpaper, correction, reconciliation) {
 
 export async function prepareAgencyPosting(session, { batchId, dbPath, evidenceDir, correction, ledgerReconciliation } = {}) {
   requireValue(typeof batchId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(batchId), 'agency_batch_id_invalid');
-  const workpaper = buildAgencyWorkpaper(session), app = await application(dbPath); assertAgencyEvidenceCurrent(session);
+  const app=await application(dbPath),workpaper = buildAgencyWorkpaper(session,{dbPath}); assertAgencyEvidenceCurrent(session);
   requireValue(workpaper.accounting.issues.length === 0, 'agency_accounting_incomplete');
-  const targetDigest = agencyTargetSnapshot(app.db, session.scope), set = app.db.prepare('SELECT * FROM account_sets WHERE id=?').get(session.scope.accountSetId);
+  const targetDigest = agencyTargetSnapshot(app.db, session.scope), set = app.db.prepare('SELECT * FROM account_sets WHERE id=?').get(session.scope.accountSetId);requireValue(workpaper.nativeAssetContext.targetDigest===targetDigest,'agency_target_changed');
   requireValue(set.accounting_profile_id === workpaper.profileId, 'agency_target_profile_mismatch');
   if (correction) {
     requireValue(typeof correction.reason === 'string' && correction.reason.trim().length > 0 && Array.isArray(correction.previousEvidence) && correction.previousEvidence.length > 0 && Array.isArray(correction.previousSourceIds), 'agency_correction_invalid');
@@ -214,7 +243,7 @@ export async function executeAgencyPosting(session, confirmation) {
   const prior = await queryAgencyPosting(proposal.identity);
   if (prior.status !== 'not_started') return { ...prior, replayed: true };
   const app = await application(cap.dbPath); assertAgencyEvidenceCurrent(session);
-  requireValue(buildAgencyWorkpaper(session).contentDigest === proposal.targetVersion && hash(stable({options:cap.options,reconciliationProof:cap.reconciliationProof})) === proposal.planDigest, 'agency_prepared_result_changed');
+  requireValue(buildAgencyWorkpaper(session,{dbPath:cap.dbPath}).contentDigest === proposal.targetVersion && hash(stable({options:cap.options,reconciliationProof:cap.reconciliationProof})) === proposal.planDigest, 'agency_prepared_result_changed');
   if (proposal.status === 'no_change') { requireValue(agencyTargetSnapshot(app.db, session.scope) === proposal.targetDigest, 'agency_target_changed'); return { status: 'no_change', applied: false, periodComplete: false, submittable: false }; }
   const reviewArchive = await archiveMaterialEvidence(cap.archiveRoot, { scope: session.scope, records: [{ name: 'confirmation.json', bytes: Buffer.from(stable({ decision: confirmation.decision, reviewer: confirmation.reviewer, targetVersion: confirmation.targetVersion, dependencyDigest: confirmation.dependencyDigest, planDigest: confirmation.planDigest })) }], metadata: { kind: 'agency_accountant_confirmation', identity: proposal.identity, preparationArchiveId: proposal.archive.archiveId } });
   bindAgencyArchive(session, reviewArchive);

@@ -2,7 +2,7 @@
 import { getAccountingProfile, getAccountingRoles } from './accounting-profiles.mjs';
 import { evaluateAccountingStatement } from './accounting-report-rules.mjs';
 import { hash, stable, requireValue, requirePlainJson } from './offline-material-adapters.mjs';
-import { cents, money, quantity, roundRatio, calculateAgencyOutputVat, splitAgencyOriginalPrice, calculateAgencyObligations, calculateAgencyContributionNotices, calculateAgencyOfficialPayroll, calculateAgencyRentalPrice } from './agency-tax-rules.mjs';
+import { cents, money, quantity, roundRatio, calculateAgencyOutputVat, splitAgencyOriginalPrice, calculateAgencyObligations, calculateAgencyContributionNotices, calculateAgencyOfficialPayroll, calculateAgencyRentalPrice,calculateAgencyVehicleAcquisition,calculateAgencyUnionFees,calculateAgencyOldPropertyAppreciation } from './agency-tax-rules.mjs';
 
 export const AGENCY_ACCOUNTING_RULE_VERSION = 'agency-business-accounting/1';
 export const AGENCY_INDUSTRIES = Object.freeze(['service', 'trade', 'ecommerce', 'catering', 'manufacturing', 'construction', 'transport', 'rental_property']);
@@ -30,10 +30,11 @@ export function evaluateAgencyAccounting(document) {
   requireValue(Array.isArray(records) && records.length <= 20000, 'agency_records_invalid');
   const profile = getAccountingProfile(entity.profileId), roles = getAccountingRoles(entity.profileId);
   requireValue(profile.creationAllowed, 'agency_profile_unsupported');
-  const issues = [], vouchers = [], vatTransactions = [], sales = new Map(), lots = new Map(), jobs = new Map(), contracts = new Map(), receivables = new Map(), payables = new Map(), cashIdentities = new Set();
+  const issues = [], vouchers = [], vatTransactions = [],assetCardDrafts=[],pendingAssetDisposals=[],sales = new Map(), lots = new Map(), jobs = new Map(), contracts = new Map(), receivables = new Map(), payables = new Map(), cashIdentities = new Set();
   const officialContributions=calculateAgencyContributionNotices({scope,entity,records});
   issues.push(...officialContributions.issues);
   const officialPayroll=calculateAgencyOfficialPayroll({scope,entity,records,official:officialContributions});issues.push(...officialPayroll.issues);
+  const unionByFact=new Map();for(const period of [...new Set(records.filter(r=>r.type==='payroll'&&r.paid===true).map(r=>(r.paymentDate??r.date).slice(0,7)).filter(p=>p>=replayFrom&&p<=scope.period))]){const union=calculateAgencyUnionFees({scope:{...scope,period},records});issues.push(...union.issues);for(const c of union.calculations)unionByFact.set(c.factId,c);}
   const enterprise = entity.profileId === 'enterprise-2019-general-basic-v1', individual = entity.profileId === 'individual-bookkeeping-semantic-v1';
   const accountCode = { bank: '1002', receivable: '1122', prepayment: individual ? '2202' : '1123', payable: '2202', advance: individual ? '1122' : '2203', wages: '2211', tax: '2221', otherPayable: '2241', raw: '1403', inventory: '1405', ...roles, salesExpense: enterprise ? '6601' : '5601', taxesExpense: enterprise ? '6403' : '5403' };
   const balances = new Map(), yearFlows = new Map();
@@ -63,17 +64,50 @@ export function evaluateAgencyAccounting(document) {
   const job = (id, kind = 'production') => { requireValue(typeof id === 'string' && id.length > 0, 'agency_job_missing'); if (!jobs.has(id)) jobs.set(id, { id, kind, cost: 0n, futureCost: 0n, elements: { material: 0n, labor: 0n, overhead: 0n }, sourceRefs: [] }); requireValue(jobs.get(id).kind === kind, 'agency_job_kind_conflict'); return jobs.get(id); };
   const carryJob = (r, amount, kind, element) => { const j = job(r.jobId, kind); requireValue(Object.hasOwn(j.elements, element), 'agency_cost_element_missing'); j.cost += amount; j.elements[element] += amount; if (kind === 'contract') { requireValue(r.recoverable === true && typeof r.resourceConsumed === 'boolean', 'agency_contract_resource_consumption_or_recovery_missing'); if (!r.resourceConsumed) j.futureCost += amount; } j.sourceRefs.push(...r.sourceRefs); };
   const currentRows = records.filter(r => r.date <= dayInMonth(scope.period) && (r.date.slice(0,7) >= replayFrom || r.type.startsWith('opening_') || ['entity','owner','prior_loss','income_evidence','obligation_inventory','tax_location'].includes(r.type))).sort((a, b) => a.date.localeCompare(b.date) || (a.sequence ?? 0) - (b.sequence ?? 0) || a.id.localeCompare(b.id));
-  const identities = new Set(), originalIdentities = new Set(),derivedLeaseEvents=new WeakSet(),workQueue=[...currentRows];
+  const identities = new Set(), originalIdentities = new Set(),derivedLeaseEvents=new WeakSet(),trustedNativeEvents=new WeakSet(),workQueue=[...currentRows];
+  if(document.nativeAssetContext){
+    const context=document.nativeAssetContext;requireValue(['enterpriseKey','accountSetId','databaseInstanceId','currency'].every(k=>context.scope[k]===scope[k])&&context.scope.period>=scope.period,'agency_native_asset_scope_mismatch');issues.push(...context.issues.filter(i=>i.period<=scope.period));
+    for(const v of context.vouchers.filter(v=>v.period>=replayFrom&&v.period<=scope.period)){
+      const event={id:`native-core:${v.voucherId}`,type:'agency_native_asset_depreciation',date:v.date,enterpriseKey:scope.enterpriseKey,businessIdentity:{issuerKey:'LOCAL-CORE',documentNumber:String(v.voucherId),event:v.fingerprint},sourceRefs:v.sourceRefs,nativeVoucher:v};trustedNativeEvents.add(event);workQueue.push(event);
+      for(const run of v.runs){const card=context.cards.find(c=>c.card.id===run.cardId),raw=records.find(r=>r.id===card.factId);if(raw.use!=='production')continue;const allocations=(raw.productionAllocations??[]).filter(a=>a.period===v.period);if(raw.productionAllocationEvidenceVerified!==true||!allocations.length){issue(raw,'agency_native_asset_production_allocation_missing','core实际生产折旧仍需原机时/任务归集，未分配不能当产品成本已完整');continue;}const weights=allocations.map(a=>quantity(a.machineHours)),total=weights.reduce((n,x)=>n+x,0n);requireValue(total>0n,'agency_native_asset_production_driver_invalid');let cumulative=0n,allocated=0n;for(const [i,a] of allocations.entries()){validateDate(a.allocationDate);requireValue(a.jobId&&a.allocationDate.slice(0,7)===v.period&&a.allocationDate<=v.date,'agency_native_asset_production_driver_invalid');cumulative+=weights[i];const target=roundRatio(cents(run.amount)*cumulative,total),cost=target-allocated;allocated=target;if(cost){const c={...event,id:`${event.id}/cost/${run.cardId}/${i}`,type:'agency_native_asset_cost',date:a.allocationDate,sequence:a.sequence??-1,jobId:a.jobId,cost:money(cost)};trustedNativeEvents.add(c);workQueue.push(c);}}}
+    }
+    workQueue.sort((a,b)=>a.date.localeCompare(b.date)||(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
+  }
   for (let cursor=0;cursor<workQueue.length;cursor++) {
     const r=workQueue[cursor];
     validateDate(r.date); requireValue(typeof r.id === 'string' && r.id.length && !identities.has(r.id), 'agency_fact_identity_conflict'); identities.add(r.id);
     requireValue(r.enterpriseKey === scope.enterpriseKey && Array.isArray(r.sourceRefs) && r.sourceRefs.length > 0 && r.sourceRefs.every(ref => ref.kind === 'source' && typeof ref.locator === 'string' && /^[a-f0-9]{64}$/.test(ref.digest)), 'agency_fact_evidence_invalid');
-    const snapshot = { lots: clone([...lots]), jobs: clone([...jobs]), sales: clone([...sales]), contracts: clone([...contracts]), receivables: clone([...receivables]), payables: clone([...payables]), cashIdentities: [...cashIdentities], balances: clone([...balances]), yearFlows: clone([...yearFlows]), count: vouchers.length, vat: vatTransactions.length };
+    const snapshot = { lots: clone([...lots]), jobs: clone([...jobs]), sales: clone([...sales]), contracts: clone([...contracts]), receivables: clone([...receivables]), payables: clone([...payables]), cashIdentities: [...cashIdentities], balances: clone([...balances]), yearFlows: clone([...yearFlows]), count: vouchers.length, vat: vatTransactions.length,assetCards:assetCardDrafts.length,disposals:pendingAssetDisposals.length };
     try {
-      if (r.businessIdentity&&!derivedLeaseEvents.has(r)) { const key = stable(r.businessIdentity); requireValue(!originalIdentities.has(key), 'agency_original_business_duplicate'); originalIdentities.add(key); }
+      if (r.businessIdentity&&!derivedLeaseEvents.has(r)&&!trustedNativeEvents.has(r)) { const key = stable(r.businessIdentity); requireValue(!originalIdentities.has(key), 'agency_original_business_duplicate'); originalIdentities.add(key); }
       if (['sale', 'sale_return', 'service_complete', 'transport_complete', 'property_service_complete', 'construction_billing', 'rental', 'lease_lessee'].includes(r.type)) requireValue(r.taxJurisdiction === 'domestic' && r.specialVatTreatment === 'ordinary' && r.crossBorder !== true, 'agency_vat_transaction_scope_unverified');
       switch (r.type) {
-        case 'entity': case 'period_coverage': case 'obligation_inventory': case 'income_evidence': case 'prior_loss': case 'quarter_profile': case 'tax_location': case 'owner': case 'annual_employment': case 'contract': case 'opening_vat_prepayment': case 'opening_vat': case 'tax_payment': case 'property_asset': case 'land_asset': case 'vehicle': case 'excise_product': case 'extraction': case 'water_extraction': case 'pollutant_discharge': case 'property_acquisition': case 'property_disposal': case 'farmland_use': case 'vehicle_acquisition': case 'import_export': case 'advertising': case 'entertainment': case 'union': case 'personal_payment': case 'construction_cash': case 'construction_tax_trigger': case 'subcontract_payment': case 'contribution_parameters': case 'contribution_wage_history': case 'filing_context': case 'six_tax_relief_qualification': case 'contribution_notice': case 'contribution_payment': case 'disability_parameters': case 'tobacco_leaf_purchase': case 'foreign_port_vessel_entry': case 'rental_repair': case 'personal_rental_tax': break;
+        case 'entity': case 'period_coverage': case 'obligation_inventory': case 'income_evidence': case 'prior_loss': case 'quarter_profile': case 'tax_location': case 'owner': case 'annual_employment': case 'contract': case 'opening_vat_prepayment': case 'opening_vat': case 'tax_payment': case 'property_asset': case 'land_asset': case 'vehicle': case 'vehicle_catalogue_entry': case 'excise_product': case 'extraction': case 'water_extraction': case 'pollutant_discharge': case 'property_acquisition': case 'farmland_use': case 'import_export': case 'advertising': case 'entertainment': case 'union': case 'union_payment': case 'personal_payment': case 'construction_cash': case 'construction_tax_trigger': case 'subcontract_payment': case 'contribution_parameters': case 'contribution_wage_history': case 'filing_context': case 'six_tax_relief_qualification': case 'contribution_notice': case 'contribution_payment': case 'disability_parameters': case 'tobacco_leaf_purchase': case 'foreign_port_vessel_entry': case 'rental_repair': case 'personal_rental_tax': break;
+        case 'vehicle_acquisition':{
+          requireValue(['admin','transport','production'].includes(r.use),'agency_vehicle_benefit_use_missing');
+          const v=calculateAgencyVehicleAcquisition({entity,record:r,records}),gross=cents(v.invoiceGross),input=cents(v.deductibleInputVat),purchaseCost=gross-input,tax=cents(v.due);
+          journal(r,'vehicle_purchase',[line('1601',purchaseCost,0n),...(input?[line('tax',input,0n)]:[]),line(r.settlement==='paid'?'bank':'payable',0n,gross)],'原自用车辆发票购入，按已核抵扣用途分别资本化原价及不可抵扣VAT');if(tax)journal(r,'vehicle_purchase_tax',[line('1601',tax,0n),line('tax',0n,tax)],'程序依法计算车辆购置税计入固定资产成本，不作当期税金费用');
+          const startPeriod=new Date(Date.UTC(Number(r.date.slice(0,4)),Number(r.date.slice(5,7)),1)).toISOString().slice(0,7);
+          const native=document.nativeAssetContext?.cards.find(c=>c.factId===r.id);
+          assetCardDrafts.push({factId:r.id,vin:r.vin,originalBusinessIdentity:r.businessIdentity,coreEntrypoint:'accounting.addAssetCard',depreciationEntrypoint:'accounting.generateDepreciation',accountSetId:scope.accountSetId,card:{name:r.assetName??r.vin,kind:'fixed',original_cost:v.assetCost,acquired_period:r.date.slice(0,7),start_period:startPeriod,useful_life_months:r.usefulLifeMonths??null,residual_rate:r.residualRate??null,asset_account:'1601',accum_account:'1602',expense_account:r.use==='transport'?roles.mainCost:r.use==='production'?roles.productionCost:roles.adminExpense,ledger_status:'booked',ledger_note:`原车辆VIN ${r.vin}，发票${r.invoiceNumber}及AGENCY购入/购税资本化凭证核对`,origin:'purchase'},status:native?'core_card_reconciled':'core_card_and_depreciation_operation_required',...(native?{nativeCardId:native.card.id,operation:native.operation}:{}),reason:native?'原件已与现库唯一卡片/真实审计操作勾稽；逐期计提状态另列nativeAssetContext，不信JSON posted':'卡片创建及次月计提由现固定core能力分别人审执行并保留各operation证据；AGENCY不再生成第二套折旧，缺寿命/残值/受益用途需核',sourceRefs:r.sourceRefs});break;
+        }
+        case 'agency_native_asset_depreciation':{
+          requireValue(trustedNativeEvents.has(r),'agency_native_asset_event_untrusted');journal(r,'native_core_depreciation',r.nativeVoucher.entries,'复用本机core已过账资产计提/run与实际审计证据，AGENCY不再产生第二次折旧');vouchers.at(-1).coreProof={voucherId:r.nativeVoucher.voucherId,fingerprint:r.nativeVoucher.fingerprint,operation:r.nativeVoucher.operation};break;
+        }
+        case 'agency_native_asset_cost':{requireValue(trustedNativeEvents.has(r),'agency_native_asset_event_untrusted');carryJob(r,cents(r.cost),'production','overhead');break;}
+        case 'property_disposal':{
+          requireValue(entity.profileId==='small-2011-basic-v1'&&r.taxJurisdiction==='domestic'&&r.specialVatTreatment==='ordinary'&&r.crossRegion===false&&r.disposalAssetLedgerVerified===true&&r.assetOriginalInvoiceNumber&&['paid','unpaid'].includes(r.settlement),'agency_property_disposal_accounting_facts_missing');
+          const land=calculateAgencyOldPropertyAppreciation({record:r}),cost=cents(r.originalAssetCost),depreciation=cents(r.accumulatedAssetDepreciation),gross=cents(r.saleGross),vat=cents(r.saleInvoiceVat),net=gross-vat;requireValue(cost>=depreciation&&depreciation>=0n,'agency_property_disposal_book_value_invalid');
+          requireValue((balances.get('1601')??0n)>=cost&&-(balances.get('1602')??0n)>=depreciation,'agency_property_disposal_original_ledger_missing');
+          requireValue(entity.vatStatus==='general'&&r.vatAssessmentMethod==='general'&&r.simplifiedElection===false,'agency_property_disposal_vat_method_or_differential_evidence_missing');
+          for(const receipt of r.relatedTaxReceipts){validateDate(receipt.paidOn);if(receipt.paidOn.slice(0,7)>=replayFrom)requireValue(records.some(p=>p.type==='tax_payment'&&p.obligationId===receipt.obligationId&&p.propertyId===r.propertyId&&p.taxReceiptNumber===receipt.receiptNumber&&p.date===receipt.paidOn&&cents(p.amount)===cents(receipt.amount)&&p.paymentReference),'agency_property_disposal_tax_payment_reconciliation_missing');}
+          // Ordinary general-method sale is 9%; small/old-property simplified choices
+          // need their original-price differential vouchers and are not inferred here.
+          const output=calculateAgencyOutputVat({entity,category:'real_estate_lease',net:money(net),date:r.date,invoiceKind:r.invoiceKind});requireValue(cents(output.tax)===vat,'agency_property_disposal_vat_unverified');
+          journal(r,'asset_disposal_remove',[line('1606',cost-depreciation,0n),...(depreciation?[line('1602',depreciation,0n)]:[]),line('1601',0n,cost)],'按原资产取得发票/累计折旧及原账核对转入固定资产清理，税务评估价值不代替账面净值');
+          journal(r,'asset_disposal_sale',[line(r.settlement==='paid'?'bank':'receivable',gross,0n),line('1606',0n,net),...(vat?[line('tax',0n,vat)]:[])],'旧商业房原有偿转让价款，账面清理和土地增值税扣除基础分开');
+          vatTransactions.push({factId:r.id,date:r.date,net:money(net),tax:money(vat),category:'real_estate_sale',invoiceKind:r.invoiceKind,sourceRefs:r.sourceRefs});pendingAssetDisposals.push({factId:r.id,propertyId:r.propertyId,projectId:r.projectId,period:r.date.slice(0,7),date:r.date,originalBusinessIdentity:r.businessIdentity,netProceeds:money(net),bookNet:money(cost-depreciation),landTax:land.due,sourceRefs:r.sourceRefs});break;
+        }
         case 'opening_inventory': {
           requireValue(r.date < `${replayFrom}-01` && (entity.businessStartDate.slice(0,7) === replayFrom || r.asOfPeriod === replayFrom) && r.stocktakeVerified === true, 'agency_opening_inventory_unverified');
           receive(r, quantity(r.quantity), cents(r.documentCost), r.inventoryType, r.sourceRefs);
@@ -286,6 +320,7 @@ export function evaluateAgencyAccounting(document) {
           if (gross) journal(r, 'salary_accrual', [line(role, gross, 0n), line('wages', 0n, gross)], '按考勤/工资原始组成计提人工，生产/工程按工时任务归集'); if (['production', 'contract'].includes(r.use)) carryJob(r, gross, r.use, 'labor');
           const noticeRows=officialContributions.calculations.filter(c=>c.employeeId===r.employeeId&&c.assessmentPeriod===r.date.slice(0,7)),employer=noticeRows.reduce((n,c)=>n+cents(c.employer),0n);
           if(employer){journal({...r,sourceRefs:[...r.sourceRefs,...noticeRows.flatMap(n=>n.sourceRefs)]},'official_employer_contribution',[line(role,employer,0n),line('wages',0n,employer)],'按官方核定通知逐人逐险种汇总单位负担，按实际受益岗位计入费用/产品/工程成本；不伪称地方费率已核');if(['production','contract'].includes(r.use))carryJob(r,employer,r.use,'labor');}
+          const union=unionByFact.get(r.id),unionAmount=union?cents(union.due):0n;if(unionAmount){journal({...r,sourceRefs:union.sourceRefs},'union_accrual',[line(role,unionAmount,0n),line('wages',0n,unionAmount)],'已建会按原工资组成/实际支付统计工资总额2%计拨，按受益岗位归集；不是全国统一向税局缴费比例');if(['production','contract'].includes(r.use))carryJob(r,unionAmount,r.use,'overhead');}
           if (r.paid === true && !noticeRows.length) { const social = cents(r.employeeSocial), housing = cents(r.employeeHousing), tax = cents(r.taxWithheld), paid = cents(r.netPaid); requireValue(gross - social - housing - tax === paid && paid >= 0n, 'agency_salary_payment_mismatch'); journal(r, 'salary_paid', [line('wages', gross, 0n), ...(paid ? [line('bank', 0n, paid)] : []), ...(social + housing ? [line('otherPayable', 0n, social + housing, '代扣个人社保/公积金')] : []), ...(tax ? [line('tax', 0n, tax, '代扣个人所得税')] : [])], '按工资支付、个税和个人社保公积金代扣原始记录拆分；扣款不证明法定义务计算已完成'); }
           break;
         }
@@ -296,11 +331,12 @@ export function evaluateAgencyAccounting(document) {
       if (!error.code) throw error;
       // A single invalid business fact cannot leak a partial entry or consumed layer.
       const restore = (target, values) => { target.clear(); for (const [key, value] of values) target.set(key, value); };
-      restore(lots, snapshot.lots); restore(jobs, snapshot.jobs); restore(sales, snapshot.sales); restore(contracts, snapshot.contracts); restore(receivables, snapshot.receivables); restore(payables, snapshot.payables); cashIdentities.clear(); snapshot.cashIdentities.forEach(x => cashIdentities.add(x)); restore(balances, snapshot.balances); restore(yearFlows, snapshot.yearFlows); vouchers.length = snapshot.count; vatTransactions.length = snapshot.vat;
+      restore(lots, snapshot.lots); restore(jobs, snapshot.jobs); restore(sales, snapshot.sales); restore(contracts, snapshot.contracts); restore(receivables, snapshot.receivables); restore(payables, snapshot.payables); cashIdentities.clear(); snapshot.cashIdentities.forEach(x => cashIdentities.add(x)); restore(balances, snapshot.balances); restore(yearFlows, snapshot.yearFlows); vouchers.length = snapshot.count; vatTransactions.length = snapshot.vat;assetCardDrafts.length=snapshot.assetCards;pendingAssetDisposals.length=snapshot.disposals;
       issue(r, error.code ?? 'agency_business_rule_failure', '补充或核对该原始业务事实及规则适用条件，当前分支未生成分录');
     }
   }
   for(const row of officialContributions.calculations.filter(c=>c.assessmentPeriod>=replayFrom&&c.assessmentPeriod<=scope.period))if(!currentRows.some(r=>r.type==='payroll'&&r.employeeId===row.employeeId&&r.date.slice(0,7)===row.assessmentPeriod))issue(null,'contribution_beneficiary_missing','官方单位缴费需对应原劳动/工资岗位及受益对象归集，缺失不能忽略该成本或默认管理费');
+  if(!document.nativeAssetContext)for(const draft of assetCardDrafts)if(draft.card.start_period<=scope.period)issue(null,'agency_core_asset_context_required','需显式只读目标库核core资产卡片及已过账计提；纯原件不把缺折旧当零，不信JSON posted');
   const profileAccounts = profile.coa.map(a => ({ ...a }));
   const amounts = [...balances].map(([code, v]) => { requireValue(v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= BigInt(Number.MIN_SAFE_INTEGER), 'agency_report_amount_overflow'); return { code, netMinor: Number(v) }; });
   const flows = [...yearFlows].filter(([code]) => profile.coa.some(a => a.code === code && a.category === '损益')).map(([code, v]) => { requireValue(v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= BigInt(Number.MIN_SAFE_INTEGER), 'agency_report_amount_overflow'); return { code, netMinor: Number(v) }; });
@@ -313,7 +349,7 @@ export function evaluateAgencyAccounting(document) {
   const taxMonths = Array.from({length:Number(scope.period.slice(5))},(_,i)=>`${scope.period.slice(0,4)}-${String(i+1).padStart(2,'0')}`).filter(m=>m>=taxYearFrom);
   const yearCoverageVerified = replayFrom <= taxYearFrom && taxMonths.every(m=>coverage.filter(r=>r.period===m&&r.complete===true&&r.accountsCovered===true&&r.unbilledSalesCovered===true&&r.bankCovered===true).length===1);
   const openingVat = records.find(r => r.type === 'opening_vat');
-  return { version: AGENCY_ACCOUNTING_RULE_VERSION, scope, profileId: profile.id, status: issues.length ? 'incomplete' : 'draft', vouchers: vouchers.filter(v => v.period === scope.period), historicalVouchers: vouchers.filter(v => v.period < scope.period), vatTransactions, issues,
+  return { version: AGENCY_ACCOUNTING_RULE_VERSION, scope, profileId: profile.id, status: issues.length ? 'incomplete' : 'draft', vouchers: vouchers.filter(v => v.period === scope.period), historicalVouchers: vouchers.filter(v => v.period < scope.period), vatTransactions,assetCardDrafts,pendingAssetDisposals,issues,
     inventory: [...lots.values()].map(s => ({ itemId: s.itemId, inventoryType: s.inventoryType, quantityUnits: s.layers.reduce((n, l) => n + l.quantity, 0n).toString(), cost: money(s.layers.reduce((n, l) => n + l.cost, 0n)), layers: s.layers.map(l => ({ quantityUnits: l.quantity.toString(), cost: money(l.cost), sourceRefs: l.sourceRefs })) })),
     contractState: [...contracts].map(([id, c]) => ({ contractId: id, revenue: money(c.revenue), billed: money(c.billed), sourceRefs: c.sourceRefs })),
     workInProgress: [...jobs.values()].map(j => ({ jobId: j.id, kind: j.kind, cost: money(j.cost), sourceRefs: j.sourceRefs })),
@@ -383,20 +419,25 @@ export function replayAgencyFinancials(document, { annual = false } = {}) {
   const replayStart = document.entity.accountingReplayFrom ?? (document.entity.businessStartDate.slice(0,7) < '2026-01' ? '2026-01' : document.entity.businessStartDate.slice(0,7));
   const year = document.scope.period.slice(0, 4), earliest = document.records.filter(r => r.date.slice(0,7) >= replayStart && r.date.slice(0, 7) <= document.scope.period && /^202[67]-/.test(r.date)).map(r => r.date.slice(0, 7)).sort()[0] ?? document.scope.period;
   const startIndex = Number(earliest.slice(0, 4)) * 12 + Number(earliest.slice(5)) - 1, endIndex = Number(year) * 12 + Number(document.scope.period.slice(5)) - 1;
-  const journals = [], cumulative = new Map(), periodCalculations = []; let accounting, tax;
+  const journals = [], cumulative = new Map(), unresolvedTaxes=new Map(),periodCalculations = []; let accounting, tax;
   const journalFrom = (row, month, entries = row.entries) => {
     const key = [document.scope.enterpriseKey, document.scope.accountSetId, 'derived-national-tax', row.obligationId, row.kind, month, row.paymentId ?? 'accrual'];
-    const result = { sourceVoucherId: `agency:${hash(stable(key))}`, factId: `tax:${row.obligationId}:${row.paymentId ?? month}`, period: month, date: dayInMonth(month), summary: row.reason, entries, sourceRefs: clone(row.sourceRefs), ruleVersion: AGENCY_ACCOUNTING_RULE_VERSION, derived: { obligationId: row.obligationId, kind: row.kind, cumulative: row.cumulative } };
+    const result = { sourceVoucherId: `agency:${hash(stable(key))}`, factId: `tax:${row.obligationId}:${row.paymentId ?? month}`, period: month, date: dayInMonth(month), summary: row.reason, entries, sourceRefs: clone(row.sourceRefs), ruleVersion: AGENCY_ACCOUNTING_RULE_VERSION, derived: { obligationId: row.obligationId, kind: row.kind, cumulative: row.cumulative,...(row.assetFactId?{assetFactId:row.assetFactId}:{}) } };
     result.contentDigest = hash(stable(result)); return result;
   };
   for (let index = startIndex; index <= endIndex; index++) {
-    const month = `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`; if (month.endsWith('-01')) cumulative.clear();
+    const month = `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`; if (month.endsWith('-01')) {cumulative.clear();unresolvedTaxes.clear();}
     const scope = { ...document.scope, period: month }, raw = evaluateAgencyAccounting({ ...document, scope });
-    let withPrior = applyAgencyDerivedJournals(raw, journals);
+    let withPrior = applyAgencyDerivedJournals(raw, journals);withPrior.unresolvedTaxDependencies=[...unresolvedTaxes.values()];
     const preliminary = calculateAgencyObligations({ scope, entity: document.entity, accounting: withPrior, records: document.records });
     const nonIncome = preliminary.entries.filter(e => !e.cumulative).map(e => journalFrom(e, month));
-    const beforeIncome = applyAgencyDerivedJournals(withPrior, nonIncome);
+    for(const d of raw.pendingAssetDisposals.filter(d=>d.period===month)){
+      const charges=nonIncome.filter(v=>v.derived.assetFactId===d.factId).reduce((n,v)=>n+v.entries.filter(e=>e.code==='1606').reduce((sum,e)=>sum+cents(e.debit)-cents(e.credit),0n),0n),gain=cents(d.netProceeds)-cents(d.bookNet)-charges;
+      if(gain)nonIncome.push(journalFrom({obligationId:'asset_disposal_result',kind:'asset_disposal_result',paymentId:hash(stable(d.originalBusinessIdentity)),assetFactId:d.factId,cumulative:false,reason:'小企业原固定资产清理扣除账面净值及本次相关已核税费后，净收益/损失转营业外收支；不将税务评估扣除当账面成本',sourceRefs:d.sourceRefs,entries:gain>0n?[{code:'1606',debit:money(gain),credit:'0.00'},{code:'5301',debit:'0.00',credit:money(gain)}]:[{code:'5711',debit:money(-gain),credit:'0.00'},{code:'1606',debit:'0.00',credit:money(-gain)}]},month));
+    }
+    const beforeIncome = applyAgencyDerivedJournals(withPrior, nonIncome);beforeIncome.unresolvedTaxDependencies=withPrior.unresolvedTaxDependencies;
     tax = calculateAgencyObligations({ scope, entity: document.entity, accounting: beforeIncome, records: document.records });
+    for(const o of tax.obligations)if(['vat','social_insurance','housing_fund','property','stamp','disability_fund','urban_maintenance','education_surcharge','local_education','consumption','resource','water_resource','environment','union_funds','cultural_construction','land_appreciation','tobacco','vessel_tonnage'].includes(o.obligationId)&&['missing','unknown','uncovered'].includes(o.status))unresolvedTaxes.set(`${month}:${o.obligationId}`,{period:month,obligationId:o.obligationId,status:o.status,reason:o.reason,sourceRefs:o.sourceRefs});
     const income = [];
     for (const row of tax.entries.filter(e => e.cumulative)) {
       const desired = cents(row.entries[0].debit), previous = cumulative.get(row.obligationId) ?? 0n, delta = desired - previous; cumulative.set(row.obligationId, desired);
@@ -412,7 +453,7 @@ export function replayAgencyFinancials(document, { annual = false } = {}) {
         if (prior) income.push(journalFrom({ obligationId: id, kind: prior.derived.kind, cumulative: true, reason: row.reason, sourceRefs: prior.sourceRefs }, month, [{ code: prior.entries[0].code, debit: '0.00', credit: money(amount) }, { code: '2221', debit: money(amount), credit: '0.00' }])); cumulative.set(id, 0n);
       }
     }
-    journals.push(...nonIncome, ...income); accounting = applyAgencyDerivedJournals(raw, journals);
+    journals.push(...nonIncome, ...income); accounting = applyAgencyDerivedJournals(raw, journals);accounting.unresolvedTaxDependencies=[...unresolvedTaxes.values()];
     accounting.issues.push(...tax.issues.filter(i=>['agency_personal_payment_actual_mismatch','contribution_personal_clearing_missing'].includes(i.code)));
     periodCalculations.push({ period: month, obligations: tax.obligations, taxableProfitWorkpaper: tax.taxableProfitWorkpaper, issues: tax.issues });
   }
