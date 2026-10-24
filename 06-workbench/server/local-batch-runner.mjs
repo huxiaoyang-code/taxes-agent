@@ -352,6 +352,7 @@ export async function executeJob({
       try {itemLocks=acquireItemLocks({item,instance,pid,parent:jobResources});}
       catch(error){itemReport.lockBlocked=error?.code??'lock_error';blockPendingStages({stages,errorCode:itemReport.lockBlocked});continue;}
       let bindingItem=item;
+      const verifyCompleted=()=>withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>verifySucceededStages(bindingItem,stages,job.output_dir,{allowSnapshotOnly})));
       try {
         try {
           withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>{
@@ -362,13 +363,13 @@ export async function executeJob({
           const code=String(error?.code??'enterprise_binding_error').slice(0,120);itemReport.bindingBlocked=code;
           // A binding failure cannot bypass verification of completed effects.
           // Keep their evidence, mark drift for review, and never replay finance.
-          itemReport.verified=withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>verifySucceededStages(item,stages,job.output_dir)));
+          itemReport.verified=verifyCompleted();
           itemReport.blockedStages=blockPendingStages({stages,errorCode:code});continue;
         }
         const hasWork=stages.some(s=>s.status===STAGE_STATUS.PENDING);
-        if(!hasWork){itemReport.verified=verifySucceededStages(bindingItem,stages,job.output_dir);continue;}
+        if(!hasWork){itemReport.verified=verifyCompleted();continue;}
         renewWriteResources(db,jobResources);
-        const verified = verifySucceededStages(bindingItem, stages, job.output_dir);
+        const verified = verifyCompleted();
         itemReport.verified = verified;
         if (verified.blocked) {
           for (const stage of stages.filter((entry) => entry.status === STAGE_STATUS.PENDING)) {
@@ -607,11 +608,11 @@ async function mapLimit(items, limit, fn) {
 }
 
 // 已成功阶段的上游证据核验：任何被反过账 / 改动 / 删除都停下并转 needs_review。
-function verifySucceededStages(item, stages, outputDir) {
+function verifySucceededStages(item, stages, outputDir, {allowSnapshotOnly=false}={}) {
   const problems = [];
   for (const stage of stages) {
     if (![STAGE_STATUS.SUCCEEDED, STAGE_STATUS.NOT_APPLICABLE].includes(stage.status)) continue;
-    const check = actions.verifyStageEvidence({ stage, item, outputDir });
+    const check = actions.verifyStageEvidence({ stage, item, outputDir, allowSnapshotOnly });
     if (!check.ok) problems.push({ stageKey: stage.stage_key, period: stage.period, reason: check.reason });
   }
   if (!problems.length) return { ok: true };
@@ -646,9 +647,7 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
     const saved=getSnapshot(db,{itemId:item.id,period:stage.period,kind:spec.kind});
     if(!saved||['dto_hash','dto_json','business_hash','csv_hash','csv_text'].some(k=>saved[k]!==snapshot[k]))throw batchError('report_snapshot_changed');
     const source=actions.verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)throw batchError('report_evidence_changed',{reason:source.reason});
-    // Earlier jobs' saved input belongs to the same report dependency too.
-    const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(accountSetId,stage.period);
-    if(inputs.some(input=>!storage.checkInputEvidence(input,{allowSnapshotOnly:task.allowSnapshotOnly}).ok))throw batchError('input_changed');
+    const input=actions.verifyReportInputEvidence({item,period:stage.period,allowSnapshotOnly:task.allowSnapshotOnly});if(!input.ok)throw batchError(input.reason);
   };
   const publishLocked=fn=>{
     const resources=acquireItemLocks({item,instance,pid,parent:jobResources});

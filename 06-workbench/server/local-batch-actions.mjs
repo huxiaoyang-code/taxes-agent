@@ -18,7 +18,7 @@ import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-ba
 
 import {
   STAGE_KEYS, STAGE_STATUS, canonicalJson, getInput, getSnapshot, saveSnapshot, sha256,
-  withFencedTransaction, withReadSnapshot, writeStageResult,
+  withFencedTransaction, withReadSnapshot, writeStageResult, checkInputEvidence,
 } from "./local-batch-storage.mjs";
 import { assetCardPeriodStatus } from "./period-end-controls.mjs";
 import { centsToNumber } from "./money.mjs";
@@ -861,6 +861,13 @@ function verifyDepreciationEvidence(evidence, stage, expectedSetId) {
  * Scope by actual account set and voucher period; later periods/other books do
  * not invalidate this report. Reuse the import service's live source verifier.
  */
+/** The same scoped saved/external input contract for publish and completed resume. */
+export function verifyReportInputEvidence({item,period,allowSnapshotOnly=false}){
+ const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(item.account_set_id,period);
+ for(const input of inputs){const check=checkInputEvidence(input,{allowSnapshotOnly});if(!check.ok)return {ok:false,reason:check.problem??'input_changed'};}
+ return {ok:true};
+}
+
 export function verifyReportSourceEvidence({item,period}) {
  const setId=item.account_set_id;
  const links=db.prepare(`SELECT l.* FROM import_batch_vouchers l LEFT JOIN vouchers v ON v.id=l.voucher_id WHERE l.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY l.id`).all(setId,period);
@@ -876,7 +883,7 @@ export function verifyReportSourceEvidence({item,period}) {
  return {ok:true};
 }
 
-export function verifyStageEvidence({ stage, item, outputDir = null }) {
+export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapshotOnly = false }) {
   const evidence = safeParse(stage.evidence_json);
   const key = stage.stage_key;
   try {
@@ -964,6 +971,7 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
       return { ok: true };
     }
     if (key.startsWith(`${STAGE_KEYS.REPORT}:`)) {
+      const input=verifyReportInputEvidence({item:{...item,account_set_id:expectedSetId},period:stage.period,allowSnapshotOnly});if(!input.ok)return input;
       const snapshot = getSnapshot(db, { itemId: item.id, period: stage.period, kind: evidence.kind });
       if (!snapshot) return { ok: false, reason: "report_snapshot_missing" };
       if (snapshot.business_hash !== evidence.businessHash) return { ok: false, reason: "report_evidence_changed" };

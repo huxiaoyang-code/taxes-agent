@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync,lstatSync,realpathSync,writeFileSync,readFileSync } from 'node:fs';
+import { mkdirSync,lstatSync,realpathSync,writeFileSync,readFileSync,unlinkSync } from 'node:fs';
 import { dirname,resolve,join,basename } from 'node:path';
 import { spawn } from 'node:child_process';
 const root=resolve('../../../.agent-runs','s-'+randomUUID());mkdirSync(root,{recursive:true});
@@ -16,7 +16,7 @@ let db;
 try {
  const A=await import('../server/accounting.mjs');({db}=await import('../server/db.mjs'));
  const R=await import('../server/local-batch-runner.mjs'),S=await import('../server/local-batch-storage.mjs');
- if(!['boundaries','source-evidence','source-case','auxiliary-evidence','auxiliary-case'].includes(process.env.W3B_CASE)){
+ if(!['boundaries','source-evidence','source-case','auxiliary-evidence','auxiliary-case','resume-input-evidence','resume-input-case'].includes(process.env.W3B_CASE)){
  const count=process.env.W3B_SMOKE==='1'?1:20;
  const companies=[];
  const kinds=['balance-sheet','income-statement','cash-flow-statement','trial-balance','ledger'];
@@ -93,20 +93,27 @@ try {
  }
  console.log('local-batch-domain: chain passed '+count);
  }
- if(process.env.W3B_CASE==='auxiliary-case')await reportAuxiliaryBoundary(A,S,R,db,process.env.R2_CASE);
+ if(process.env.W3B_CASE==='resume-input-case')await reportResumeInputBoundary(A,S,R,db,process.env.R3_CASE);
+ else if(process.env.W3B_CASE==='auxiliary-case')await reportAuxiliaryBoundary(A,S,R,db,process.env.R2_CASE);
  else if(process.env.W3B_CASE==='source-case')await reportSourceBoundary(A,S,R,db,process.env.R1_CASE);
  else {
-  if(!['source-evidence','auxiliary-evidence'].includes(process.env.W3B_CASE))await boundaries(A,S,R,db);
-  if(process.env.W3B_CASE!=='auxiliary-evidence'){
+  if(!['source-evidence','auxiliary-evidence','resume-input-evidence'].includes(process.env.W3B_CASE))await boundaries(A,S,R,db);
+  if(!['auxiliary-evidence','resume-input-evidence'].includes(process.env.W3B_CASE)){
   for(const mode of ['positive','source-before','inline-before','inline-type-before','source-after','inline-after','source-recover','inline-recover','report-only','report-only-delete']){
    const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'source-case',R1_CASE:mode}}).done;writeFileSync(join(root,'r1-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
   }
   console.log('R1 report source evidence: ten real isolated cases passed');
   }
+  if(process.env.W3B_CASE!=='resume-input-evidence'){
   for(const mode of ['future-draft-xlsx','future-posted-pdf','foreign-xlsx','opening-xlsx','opening-pdf','current-xlsx','prior-pdf','entity-pdf','requirement-xlsx']){
    const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'auxiliary-case',R2_CASE:mode}}).done;writeFileSync(join(root,'r2-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
   }
   console.log('R2 report auxiliary scope: nine real isolated cases passed');
+  }
+  for(const mode of ['import-changed','import-missing','report-only-changed','report-only-missing','report-pending-changed','saved-bytes','unrelated']){
+   const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'resume-input-case',R3_CASE:mode}}).done;writeFileSync(join(root,'r3-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
+  }
+  console.log('R3 completed report external input: seven real isolated cases passed');
  }
 }finally {if(db){db.close();console.log('DB_CLOSED');}}
 
@@ -235,4 +242,41 @@ async function reportAuxiliaryBoundary(A,S,R,db,mode){
  const artifacts=db.prepare('SELECT * FROM local_batch_artifacts WHERE item_id=?').all(report.item_id);if(positive){assert.equal(artifacts.length,1);assert.equal(artifacts[0].status,'published');assert.ok(artifacts[0].worker_thread_id>0);assert.ok(artifacts[0].render_finished>=artifacts[0].render_started);}else assert.equal(artifacts.length,0);
  if(mode.startsWith('entity'))assert.equal(AS.auxiliaryCompletenessStep(db,set.id,period).status,'blocked');
  writeFileSync(join(root,'r2-result.json'),JSON.stringify({mode,result,report,artifacts,digests,seedStages:oldStages,finance:JSON.parse(oldFinance),allocations:db.prepare('SELECT * FROM aux_allocations ORDER BY id').all()},null,2));console.log('PASS R2 '+mode+' actual '+format+' worker assets1032.34 / scoped auxiliary evidence');
+}
+
+async function reportResumeInputBoundary(A,S,R,db,mode){
+ const B=await import('../server/local-batch-actions.mjs'),key='R3-'+mode,period='2026-01',set=A.createAccountSet({name:key,start_period:period,enterprise:{enterpriseKey:key}}),inputFile=join(root,'payload.json');
+ const payload=(name,p,amount)=>({account_set:{name,start_period:period},vouchers:[{sourceVoucherId:name+'-'+p,period:p,date:p+'-03',number:1,entries:[{code:'1002',debit:amount},{code:'5001',credit:amount}]}]});
+ writeFileSync(inputFile,JSON.stringify(payload(key,period,12.34)));const originalInput=readFileSync(inputFile);
+ async function run(jobKey,target,periods,sourceKey=key){const v=S.validateManifest({schemaVersion:1,jobKey,concurrency:1,items:[{itemKey:sourceKey,source:{system:'r3',enterpriseKey:sourceKey},accountSetId:target.id,periods}]});assert.equal(v.ok,true);const json=S.canonicalJson(v.manifest);return R.createAndRun({manifest:v.manifest,manifestJson:json,manifestHash:S.sha256(json),...S.buildPlan({manifest:v.manifest,manifestDir:root}),outputDir:join(root,'r3-out')});}
+ const importJob=key+'-import';assert.equal((await run(importJob,set,[{period,imports:[{batchId:importJob,mode:'append',confirmNewBinding:true,payloadFile:'payload.json'}],post:{vouchers:[{sourceVoucherId:key+'-'+period}]},reports:[{kind:'balance-sheet',formats:['csv']}]}])).status,'succeeded');
+ let futureFile,foreignFile;
+ if(mode==='unrelated'){
+  futureFile=join(root,'future.json');writeFileSync(futureFile,JSON.stringify(payload(key,'2026-02',10)));assert.equal((await run(key+'-future',set,[{period:'2026-02',imports:[{batchId:key+'-future',mode:'append',confirmNewBinding:true,payloadFile:'future.json'}]}])).status,'succeeded');
+  const foreignKey=key+'-FOREIGN',foreign=A.createAccountSet({name:foreignKey,start_period:period,enterprise:{enterpriseKey:foreignKey}});foreignFile=join(root,'foreign.json');writeFileSync(foreignFile,JSON.stringify(payload(foreignKey,period,10)));assert.equal((await run(key+'-foreign',foreign,[{period,imports:[{batchId:key+'-foreign',mode:'append',confirmNewBinding:true,payloadFile:'foreign.json'}]}],foreignKey)).status,'succeeded');
+ }
+ const reportJob=key+'-only',formats=mode==='report-pending-changed'?['csv','xlsx']:['xlsx'];assert.equal((await run(reportJob,set,[{period,reports:[{kind:'balance-sheet',formats}]}])).status,'succeeded');
+ const target=mode.startsWith('import')?importJob:reportJob;
+ const importTuple=()=>db.prepare("SELECT s.id,s.attempt,s.status,s.input_hash,s.outcome_hash FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key NOT LIKE 'report:%' ORDER BY s.id").all(set.id);
+ const finance=()=>JSON.stringify({vouchers:db.prepare('SELECT * FROM vouchers WHERE account_set_id=? ORDER BY id').all(set.id),entries:db.prepare('SELECT e.* FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? ORDER BY e.id').all(set.id),sources:db.prepare('SELECT * FROM import_voucher_sources WHERE account_set_id=? ORDER BY id').all(set.id),batches:db.prepare('SELECT * FROM import_batches WHERE account_set_id=? ORDER BY batch_id').all(set.id)});
+ const oldTuple=importTuple(),oldFinance=finance(),artifacts=db.prepare('SELECT a.* FROM local_batch_artifacts a JOIN local_batch_items i ON i.id=a.item_id WHERE i.account_set_id=? ORDER BY a.id').all(set.id),artifactBytes=artifacts.map(a=>({id:a.id,file:join(root,'r3-out',a.relative_path),hash:S.sha256(readFileSync(join(root,'r3-out',a.relative_path)))}));
+ assert.equal(A.balanceSheet(set.id,period).totals.assets,12.34);assert.equal((await R.resumeJob({jobKey:target})).status,'succeeded','normal unchanged source remains verified');
+ let result,snapshotResult,cliResult,savedCheck;
+ if(mode==='unrelated'){writeFileSync(futureFile,'future changed');unlinkSync(foreignFile);result=await R.resumeJob({jobKey:target});assert.equal(result.status,'succeeded','later period and foreign source do not affect current report');}
+ else if(mode==='saved-bytes'){
+  const prepare=db.prepare;let injected=false;
+  db.prepare=function(sql){const stmt=prepare.call(db,sql);if(!String(sql).startsWith('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id'))return stmt;return new Proxy(stmt,{get(object,property){if(property==='all')return (...args)=>{if(!injected){injected=true;prepare.call(db,'UPDATE local_batch_inputs SET content=? WHERE batch_id=?').run(Buffer.from('bad saved bytes'),importJob);}return object.all(...args);};const value=Reflect.get(object,property,object);return typeof value==='function'?value.bind(object):value;}});};
+  try{result=await R.resumeJob({jobKey:target,allowSnapshotOnly:true});}finally{db.prepare=prepare;}assert.equal(injected,true);savedCheck=S.checkInputEvidence(db.prepare('SELECT * FROM local_batch_inputs WHERE batch_id=?').get(importJob),{allowSnapshotOnly:true});assert.equal(savedCheck.ok,false);assert.equal(savedCheck.savedValid,false);assert.equal(result.status,'needs_review','explicit snapshot mode never exempts saved bytes');
+ }else{
+  if(mode==='report-pending-changed'){const report=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE '%:xlsx'").get(target);S.resetStage(db,{stageId:report.id,status:S.STAGE_STATUS.NEEDS_REVIEW,errorCode:'r3-controlled-pending'});S.resetStagesForRetry(db,{jobKey:target});}
+  if(mode.endsWith('missing'))unlinkSync(inputFile);else writeFileSync(inputFile,'changed external bytes');
+  if(mode!=='report-pending-changed'){snapshotResult=await R.resumeJob({jobKey:target,allowSnapshotOnly:true});assert.equal(snapshotResult.status,'succeeded','explicit snapshot verifies already successful reports without financial replay');}
+  if(mode==='import-changed'){
+   const cli=await owned(['scripts/local-batch.mjs','resume','--data-dir',process.env.WORKBENCH_DATA_DIR,'--job-key',target]).done;assert.equal(cli.code,1,cli.stdout+cli.stderr);cliResult=JSON.parse(cli.stdout.trim());assert.equal(cliResult.ok,false);assert.equal(cliResult.status,'needs_review');result=cliResult;
+  }else result=await R.resumeJob({jobKey:target});
+  assert.equal(result.status,'needs_review','ordinary resume must refuse completed report external drift');
+ }
+ const reportStages=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE 'report:%' ORDER BY s.id").all(target);assert.ok(reportStages.every(s=>s.status===(mode==='unrelated'?'succeeded':'needs_review')));
+ assert.deepEqual(importTuple(),oldTuple,'succeeded import/post stages never negated or replayed');assert.equal(finance(),oldFinance,'real posted money, batch and sourceTrace storage stay exact');for(const artifact of artifactBytes)assert.equal(S.sha256(readFileSync(artifact.file)),artifact.hash,'published file bytes retained');assert.deepEqual(db.prepare('SELECT a.* FROM local_batch_artifacts a JOIN local_batch_items i ON i.id=a.item_id WHERE i.account_set_id=? ORDER BY a.id').all(set.id),artifacts,'artifact registration is not republished');
+ writeFileSync(join(root,'r3-result.json'),JSON.stringify({mode,result,snapshotResult,cliResult,savedCheck,reportStages,originalImportTuple:oldTuple,artifacts:artifactBytes,finance:JSON.parse(oldFinance)},null,2));console.log('PASS R3 '+mode+' completed report input / posted12.34 preserved');
 }
