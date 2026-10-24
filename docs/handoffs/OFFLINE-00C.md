@@ -1,3 +1,5 @@
+> PR109已实际合并：base `f0b6d00bf3beaa3f5d03faf4eea49f3244e5c082`，head `4d6ea10d9f9814463cf3eee7a8a05de156ffe514`，merge `63bd8b9ba9c8d42900a21e99e56b29f35eda40f1`；实际交付记录：[77](https://github.com/huxiaoyang-code/youshu-fork/issues/77#issuecomment-6378807940)、[76](https://github.com/huxiaoyang-code/youshu-fork/issues/76#issuecomment-6378808225)。下方保留候选阶段历史。
+
 # OFFLINE-00C 实施交接
 
 ## 候选范围与冻结
