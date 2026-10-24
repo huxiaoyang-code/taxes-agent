@@ -1,9 +1,9 @@
 // Explicit input loader shared by VAT and accountant review; never imports the default DB.
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, isAbsolute } from 'node:path';
 import { fields, requireValue, hash, sourceText, stable, validateScope } from './offline-material-adapters.mjs';
 import { preflightMaterials } from './offline-materials.mjs';
 import { readLocalFile, inspectMaterialStore } from './offline-material-store.mjs';
-import { openReadonlyLedgerSource, captureLedgerSnapshot, validateLedgerSnapshot } from './offline-ledger-snapshot.mjs';
+import { openReadonlyLedgerSource, captureLedgerSnapshot, validateLedgerSnapshot, captureLedgerSnapshotPair, validateLedgerSnapshotPair, assertLedgerSourcePath } from './offline-ledger-snapshot.mjs';
 
 const sessions = new WeakMap(), rawSessions = new WeakMap();
 export function assertVatInputPayload(rawInput, source, snapshot) {
@@ -29,7 +29,8 @@ export async function assertVatInputCurrent(rawInput, source, snapshot, session)
   return structuredClone(state.inventory);
 }
 
-export async function openVatInputFiles(inputPath) {
+export async function openVatInputFiles(inputPath) { return openInputFiles(inputPath); }
+async function openInputFiles(inputPath, shared) {
   let source;
   try {
     const reads = [], origins = [];
@@ -59,9 +60,14 @@ export async function openVatInputFiles(inputPath) {
     const declaration = (await json(resolve(base, c.declaration))).value;
     const accounting = await read(resolve(base, c.accountingFacts)), tax = await read(resolve(base, c.taxFacts));
     const previous = c.previousComputation ? (await json(resolve(base, c.previousComputation))).value : undefined;
-    source = openReadonlyLedgerSource(resolve(base, c.db));
+    source = shared?.source ?? openReadonlyLedgerSource(resolve(base, c.db));
+    if (shared) {
+      requireValue(!('previousComputation' in c), 'pair_previous_computation_forbidden');
+      assertLedgerSourcePath(source, resolve(base, c.db));
+      requireValue(stable(c.scope) === stable(shared.scope), 'pair_scope_mismatch');
+    }
     const range = validateScope(c.scope);
-    const snapshot = captureLedgerSnapshot(source, { enterpriseKey: c.scope.enterpriseKey, accountSetId: Number(c.scope.accountSetId), fromPeriod: range.from, toPeriod: range.to });
+    const snapshot = shared?.snapshot ?? captureLedgerSnapshot(source, { enterpriseKey: c.scope.enterpriseKey, accountSetId: Number(c.scope.accountSetId), fromPeriod: range.from, toPeriod: range.to });
     const rawInput = { scope: c.scope, reports, declaration, profileId: c.profileId, accountingFacts: { text: accounting.text, fileSha256: hash(accounting.text) }, taxFacts: { text: tax.text, fileSha256: hash(tax.text) }, ...(previous === undefined ? {} : { previousComputation: previous }) };
     const rawDigest = hash(stable(rawInput));
     let closed = false;
@@ -75,10 +81,57 @@ export async function openVatInputFiles(inputPath) {
       if (storeDigest) requireValue(hash(stable(await inspectMaterialStore(resolve(base, c.materialStore)))) === storeDigest, 'material_store_changed');
       requireValue(validateLedgerSnapshot(source, snapshot).status === 'current', 'ledger_changed');
     };
-    const close = () => { if (!closed) { closed = true; source.close(); } };
+    const close = () => { if (!closed) { closed = true; if (!shared) source.close(); } };
     const session = { rawInput, source, snapshot, assertCurrent, close };
     const state = { rawInput, source, snapshot, inventory: [...reads, ...origins].map(f => ({ ...f })), assertCurrent, assertPayload };
     sessions.set(session, state); rawSessions.set(rawInput, state);
     return session;
-  } catch (e) { source?.close(); throw e; }
+  } catch (e) { if (!shared) source?.close(); throw e; }
+}
+
+const pairSessions = new WeakMap();
+export async function openVatInputPairFiles(request) {
+  let source, prior, target;
+  try {
+    const paths = [request.priorInputPath, request.targetInputPath];
+    const configs = [];
+    for (const path of paths) {
+      requireValue(typeof path === 'string' && isAbsolute(path), 'pair_request_invalid');
+      const file = await readLocalFile(path);
+      const config = JSON.parse(sourceText(undefined, file.bytes).replace(/^\uFEFF/, ''));
+      const range = validateScope(config.scope);
+      requireValue(/^[1-9]\d*$/.test(config.scope.accountSetId) && Number.isSafeInteger(Number(config.scope.accountSetId)), 'pair_account_set_invalid');
+      requireValue(config.scope.enterpriseKey === request.target.enterpriseKey && Number(config.scope.accountSetId) === request.target.accountSetId, 'pair_scope_mismatch');
+      configs.push({ config, range, path: file.canonicalPath, hash: hash(file.bytes) });
+    }
+    requireValue(configs[0].config.scope.period === '2026-Q1' && configs[1].config.scope.period === '2026-Q2', 'pair_quarter_mismatch');
+    source = openReadonlyLedgerSource(request.target.dbPath);
+    for (const c of configs) { requireValue(typeof c.config.db === 'string', 'pair_target_mismatch'); assertLedgerSourcePath(source, resolve(dirname(c.path), c.config.db)); }
+    const scopes = configs.map(c => ({ enterpriseKey: request.target.enterpriseKey, accountSetId: request.target.accountSetId, fromPeriod: c.range.from, toPeriod: c.range.to }));
+    const snapshots = captureLedgerSnapshotPair(source, ...scopes, request.version === 'offline-vat-q2-request/1' ? 'q2-target-batch-inventory/1' : undefined);
+    for (const snapshot of [snapshots.prior, snapshots.target]) {
+      requireValue(snapshot.instance.status === 'verified_local_audit_instance' && snapshot.instance.instanceId === request.target.databaseInstanceId, 'pair_instance_mismatch');
+      requireValue(snapshot.profile.status === 'registered' && snapshot.accountSet.accounting_profile_id === configs[0].config.profileId && snapshot.accountSet.accounting_profile_id === configs[1].config.profileId, 'pair_profile_mismatch');
+    }
+    prior = await openInputFiles(paths[0], { source, snapshot: snapshots.prior, scope: configs[0].config.scope });
+    target = await openInputFiles(paths[1], { source, snapshot: snapshots.target, scope: configs[1].config.scope });
+    let closed = false, retired = false;
+    const assertCurrent = async () => {
+      requireValue(!closed && !retired, 'pair_input_retired');
+      try {
+        for (const c of configs) requireValue(hash((await readLocalFile(c.path)).bytes) === c.hash, 'input_changed');
+        const proof = validateLedgerSnapshotPair(source, snapshots);
+        const inputFiles = { prior: await assertVatInputSessionCurrent(prior, prior.rawInput, source, snapshots.prior), target: await assertVatInputSessionCurrent(target, target.rawInput, source, snapshots.target) };
+        validateLedgerSnapshotPair(source, snapshots);
+        return { proof, inputFiles };
+      } catch (e) { retired = true; throw e; }
+    };
+    const close = () => { if (!closed) { closed = true; try { prior.close(); target.close(); } finally { source.close(); } } };
+    const session = { prior, target, source, snapshots, close };
+    pairSessions.set(session, { assertCurrent });
+    await assertCurrent(); return session;
+  } catch (e) { try { prior?.close(); target?.close(); } finally { source?.close(); } throw e; }
+}
+export async function assertVatInputPairCurrent(session) {
+  const state = pairSessions.get(session); requireValue(state, 'pair_input_untrusted'); return state.assertCurrent();
 }

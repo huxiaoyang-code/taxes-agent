@@ -8,7 +8,7 @@ import { getAccountingProfile } from './accounting-profiles.mjs';
 import { persistedVoucherFingerprint } from './import-storage.mjs';
 import { canonicalEnterpriseKey } from './enterprise-identity.mjs';
 
-const sources = new WeakMap(), products = new WeakMap();
+const sources = new WeakMap(), products = new WeakMap(), pairs = new WeakMap();
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const freeze = value => {
   if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); }
@@ -36,9 +36,10 @@ function fileIdentity(file) {
 function sourceState(source) {
   const state = sources.get(source);
   if (!state || state.closed) fail('ledger_source_unavailable');
+  if (state.retired) fail('ledger_pair_retired');
   try {
     if (fileIdentity(state.file) !== state.identity || identity(fstatSync(state.fd, { bigint: true })) !== state.identity) fail('ledger_source_replaced');
-  } catch { fail('ledger_source_replaced'); }
+  } catch { if (state.pairOwned) state.retired = true; fail('ledger_source_replaced'); }
   return state;
 }
 export function openReadonlyLedgerSource(file) {
@@ -85,7 +86,56 @@ function minorUnits(value) {
   const cents = BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0'));
   return cents <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(cents) : null;
 }
-function readScope(db, scope) {
+const Q2_BATCH_POLICY = 'q2-target-batch-inventory/1';
+function validVoucherPeriodDate(v) {
+  if (typeof v.period !== 'string' || !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(v.period) || typeof v.voucher_date !== 'string' || !/^[1-9]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(v.voucher_date) || v.voucher_date.slice(0, 7) !== v.period) return false;
+  const time = Date.parse(v.voucher_date + 'T00:00:00Z');
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === v.voucher_date;
+}
+function batchResult(text) {
+  try {
+    const value = JSON.parse(text), keys = ['accountSetCreated', 'accountsAdded', 'openingBalancesApplied', 'vouchersCreated', 'vouchersDeduplicated'];
+    if (!value || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some(k => !Object.hasOwn(value, k)) || typeof value.accountSetCreated !== 'boolean' || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)) return null;
+    return value;
+  } catch { return null; }
+}
+function readTargetBatchInventory(db, scope, presence) {
+  const all = (sql, ...params) => db.prepare(sql).all(...params).map(row => ({ ...row }));
+  const { enterpriseKey: key, accountSetId: id, toPeriod: to } = scope;
+  const baseHeaders = presence.import_batches ? all('SELECT * FROM import_batches WHERE account_set_id=? OR enterprise_key=? ORDER BY batch_id', id, key) : [];
+  const scopedRelations = name => presence[name] ? all(`SELECT * FROM ${name} WHERE account_set_id=? OR enterprise_key=? OR voucher_id IN (SELECT id FROM vouchers WHERE account_set_id=?) ORDER BY id`, id, key, id) : [];
+  const baseLinks = scopedRelations('import_batch_vouchers'), baseSources = scopedRelations('import_voucher_sources');
+  const headerIds = [...new Set([...baseHeaders, ...baseLinks, ...baseSources].map(r => r.batch_id))].sort();
+  const relevantHeaders = presence.import_batches ? headerIds.flatMap(batch => all('SELECT * FROM import_batches WHERE batch_id=?', batch)) : [];
+  const relations = (name, base) => {
+    const rows = presence[name] ? [...base, ...headerIds.flatMap(batch => all(`SELECT * FROM ${name} WHERE batch_id=?`, batch))] : [];
+    return [...new Map(rows.map(r => [r.id, r])).values()].sort((a, b) => a.id - b.id);
+  };
+  const relevantLinks = relations('import_batch_vouchers', baseLinks), relevantSources = relations('import_voucher_sources', baseSources);
+  const referenceIds = [...new Set([...relevantLinks, ...relevantSources].map(r => r.voucher_id))].sort((a, b) => a - b);
+  const vouchers = referenceIds.flatMap(voucher => all('SELECT * FROM vouchers WHERE id=?', voucher));
+  const entries = referenceIds.flatMap(voucher => all('SELECT * FROM voucher_entries WHERE voucher_id=? ORDER BY line_no,id', voucher));
+  const future = new Set();
+  // Exclude only a fully explained, posted future batch. Neither timestamps nor
+  // an absent voucher/ambiguous result are evidence of a future business period.
+  for (const h of relevantHeaders) {
+    const result = batchResult(h.result_json), bs = relevantLinks.filter(r => r.batch_id === h.batch_id), ss = relevantSources.filter(r => r.batch_id === h.batch_id);
+    const identity = r => r.account_set_id === id && r.enterprise_key === key && r.source_system === h.source_system;
+    if (!Object.values(presence).every(Boolean) || !identity(h) || h.mode !== 'append' || h.status !== 'completed' || h.error_code !== null || h.error_message !== null || !Number.isSafeInteger(h.attempts) || h.attempts < 1 || !/^[a-f0-9]{64}$/.test(h.content_fingerprint) || !result || result.accountSetCreated || result.accountsAdded || result.openingBalancesApplied || !bs.length || result.vouchersCreated !== bs.filter(r => r.action === 'created').length || result.vouchersDeduplicated !== bs.filter(r => r.action === 'deduplicated').length) continue;
+    const coherent = bs.every(r => {
+      const v = vouchers.find(v => v.id === r.voucher_id), es = entries.filter(e => e.voucher_id === r.voucher_id);
+      const matching = relevantSources.filter(s => ['source_system', 'enterprise_key', 'source_voucher_id', 'account_set_id', 'voucher_id', 'content_fingerprint'].every(k => s[k] === r[k]));
+      return identity(r) && ['created', 'deduplicated'].includes(r.action) && v?.account_set_id === id && v.status === 'posted' && v.kind === 'normal' && validVoucherPeriodDate(v) && v.period > to && es.length > 0 && es.every(e => minorUnits(e.debit) !== null && minorUnits(e.credit) !== null) && matching.length === 1 && (r.action !== 'created' || matching[0].batch_id === h.batch_id) && matching[0].voucher_fingerprint === persistedVoucherFingerprint(v, es);
+    });
+    if (coherent && ss.every(s => bs.some(r => r.voucher_id === s.voucher_id && r.source_voucher_id === s.source_voucher_id && identity(s)))) future.add(h.batch_id);
+  }
+  const keptHeaders = relevantHeaders.filter(h => !future.has(h.batch_id));
+  const keptLinks = relevantLinks.filter(r => !future.has(r.batch_id));
+  const keptSources = relevantSources.filter(r => !future.has(r.batch_id));
+  const voucherIds = new Set([...keptLinks, ...keptSources].map(r => r.voucher_id));
+  return { version: Q2_BATCH_POLICY, coverage: 'all_target_related_batches_except_fully_explained_posted_future_batches', headers: keptHeaders, batchVouchers: keptLinks, voucherSources: keptSources, vouchers: vouchers.filter(v => voucherIds.has(v.id)), entries: entries.filter(e => voucherIds.has(e.voucher_id)) };
+}
+function readScope(db, scope, policy) {
   const { enterpriseKey: key, accountSetId: id, fromPeriod: from, toPeriod: to } = scope;
   const all = (sql, ...params) => db.prepare(sql).all(...params).map(row => ({ ...row }));
   const table = name => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
@@ -163,15 +213,15 @@ function readScope(db, scope) {
     version: 'offline-ledger-snapshot/1', scope, binding: bindingRows[0], instance, batchInstance, accountSet,
     profile: { status: profile ? 'registered' : 'unknown', definition: profile }, accounts,
     openingBalances: monetaryOpenings, periods, vouchers: voucherData,
-    sources: { schemaStatus: sourceSchemaPresent ? 'present' : 'unknown', tablePresence, missingTables: sourceTables.filter(name => !tablePresence[name]), sourceBindings, voucherSources, batchVouchers, batches, checks: sourceChecks },
+    sources: { schemaStatus: sourceSchemaPresent ? 'present' : 'unknown', tablePresence, missingTables: sourceTables.filter(name => !tablePresence[name]), sourceBindings, voucherSources, batchVouchers, batches, checks: sourceChecks, ...(policy === Q2_BATCH_POLICY ? { targetBatchInventory: readTargetBatchInventory(db, scope, tablePresence) } : {}) },
     completeness: { requestedPeriods: scope.requestedPeriods, missingPeriods, coverage: 'unverified', openingCompleteness: 'unverified', priorHistoryCompleteness: 'unverified', realWorldAuthenticity: 'unverified', originalFiles: 'unverified', zeroDeclaration: 'not_assessed', moneyIssues, unknownStatuses, vouchersWithoutRegisteredSource: vouchers.filter(v => !voucherSources.some(s => s.voucher_id === v.id)).map(v => v.id) },
     counts: { posted: posted.length, draft: drafts.length, otherStatus: requested.length - posted.length - drafts.length, postedEntries: posted.reduce((n, v) => n + entryMap.get(v.id).length, 0), priorVouchers: vouchers.length - requested.length },
     calculationReady: false, submittable: false, authorizesExecution: false,
   };
 }
-function captureData(state, scope) {
+function captureData(state, scope, policy) {
   try {
-    const value = withReadSnapshot(state.db, () => { const data = readScope(state.db, scope); assertFiniteNumbers(data); return data; });
+    const value = withReadSnapshot(state.db, () => { const data = readScope(state.db, scope, policy); assertFiniteNumbers(data); return data; });
     // Check identity after all reads as well; a removed old connection is never current at its path.
     if (fileIdentity(state.file) !== state.identity) fail('ledger_source_replaced');
     return value;
@@ -191,10 +241,49 @@ export function validateLedgerSnapshot(source, snapshot) {
   const state = sourceState(source), product = products.get(snapshot);
   if (!product || product.source !== source) fail('ledger_snapshot_untrusted');
   try {
-    const current = captureData(state, product.scope);
+    const current = captureData(state, product.scope, product.policy);
     return freeze({ status: digest(current) === product.contentDigest ? 'current' : 'stale', calculationReady: false, submittable: false });
   } catch (error) {
     if (['ledger_binding_mismatch', 'ledger_scope_missing'].includes(error.code)) return freeze({ status: 'stale', calculationReady: false, submittable: false });
     throw error;
   }
+}
+
+// Two products from one SQLite read transaction and one physically held source.
+// The public digests are diagnostics; membership and capture identity stay private.
+export function captureLedgerSnapshotPair(source, priorScope, targetScope, targetPolicy) {
+  if (targetPolicy !== undefined && targetPolicy !== Q2_BATCH_POLICY) fail('ledger_pair_policy_invalid');
+  const state = sourceState(source), scopes = [normalizeScope(priorScope), normalizeScope(targetScope)];
+  const policies = [undefined, targetPolicy];
+  state.pairOwned = true;
+  let data;
+  try {
+    data = withReadSnapshot(state.db, () => scopes.map((scope, i) => {
+      const value = readScope(state.db, scope, policies[i]); assertFiniteNumbers(value); return value;
+    }));
+    sourceState(source);
+  } catch (e) { state.retired = true; throw e; }
+  const snapshots = data.map((value, i) => {
+    const contentDigest = digest(value), snapshot = freeze({ ...value, contentDigest, exportTrust: 'diagnostic_only_not_restorable' });
+    products.set(snapshot, { source, scope: scopes[i], contentDigest, policy: policies[i] }); return snapshot;
+  });
+  const pair = Object.freeze({ prior: snapshots[0], target: snapshots[1] });
+  pairs.set(pair, { source, scopes, policies, digests: snapshots.map(s => s.contentDigest) });
+  return pair;
+}
+export function assertLedgerSourcePath(source, path) {
+  const state = sourceState(source);
+  if (typeof path !== 'string' || !samePath(resolve(path), state.file) || fileIdentity(resolve(path)) !== state.identity) fail('ledger_target_file_mismatch');
+}
+export function validateLedgerSnapshotPair(source, pair) {
+  const state = sourceState(source), record = pairs.get(pair);
+  if (!record || record.source !== source || products.get(pair.prior)?.source !== source || products.get(pair.target)?.source !== source) fail('ledger_pair_untrusted');
+  try {
+    const current = withReadSnapshot(state.db, () => record.scopes.map((scope, i) => {
+      const value = readScope(state.db, scope, record.policies[i]); assertFiniteNumbers(value); return digest(value);
+    }));
+    sourceState(source);
+    if (current.some((d, i) => d !== record.digests[i])) { state.retired = true; fail('ledger_pair_changed'); }
+    return freeze({ status: 'current', relationship: 'same_held_readonly_source_same_capture', priorDigest: record.digests[0], targetDigest: record.digests[1], proofDigest: digest({ scopes: record.scopes, digests: record.digests, identity: state.identity }), authorizesExecution: false });
+  } catch (e) { state.retired = true; throw e; }
 }
