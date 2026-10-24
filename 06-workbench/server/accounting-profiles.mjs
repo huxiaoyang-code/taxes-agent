@@ -222,7 +222,7 @@ const LEGACY_ROLES = {
 const MAPPED = { status: "mapped" };
 const scope = (status, reason) => (reason ? { status, reason } : { status });
 // 每个预置科目记录来源 sourceId；legacy 快照必须保持与基线逐项一致，不加字段。
-const stampSource = (items, sourceId) => items.map((item) => ({ ...item, sourceId }));
+const stampSource = (items, sourceId) => items.map((item) => ({ ...item, sourceId: item.sourceId ?? sourceId }));
 
 const SMALL_COA = [
   { code: "1001", name: "库存现金", category: "资产", direction: "debit", scope: MAPPED },
@@ -335,6 +335,11 @@ const SMALL_COA = [
 ];
 
 const ENTERPRISE_COA = [
+  { code: "1151", name: "合同资产", category: "资产", direction: "debit", scope: MAPPED, sourceId: "mof-2017-22" },
+  { code: "1621", name: "使用权资产", category: "资产", direction: "debit", scope: MAPPED, sourceId: "mof-2018-35" },
+  { code: "1622", name: "使用权资产累计折旧", category: "资产", direction: "credit", contra: true, scope: MAPPED, sourceId: "mof-2018-35" },
+  { code: "2801", name: "租赁负债（非流动）", category: "负债", direction: "credit", scope: MAPPED, sourceId: "mof-2018-35" },
+  { code: "2802", name: "一年内到期的租赁负债", category: "负债", direction: "credit", scope: MAPPED, sourceId: "mof-2018-35" },
   { code: "1001", name: "库存现金", category: "资产", direction: "debit", scope: MAPPED },
   { code: "1002", name: "银行存款", category: "资产", direction: "debit", scope: MAPPED },
   { code: "1012", name: "其他货币资金", category: "资产", direction: "debit", scope: MAPPED },
@@ -454,6 +459,7 @@ const ENTERPRISE_COA = [
   { code: "6001", name: "主营业务收入", category: "损益", direction: "credit", scope: MAPPED },
   { code: "6051", name: "其他业务收入", category: "损益", direction: "credit", scope: MAPPED },
   { code: "6111", name: "投资收益", category: "损益", direction: "credit", scope: MAPPED },
+  { code: "6117", name: "其他收益", category: "损益", direction: "credit", scope: MAPPED, sourceId: "enterprise-vat-relief-2020" },
   { code: "6301", name: "营业外收入", category: "损益", direction: "credit", scope: MAPPED },
   { code: "6401", name: "主营业务成本", category: "损益", direction: "debit", scope: MAPPED },
   { code: "6402", name: "其他业务成本", category: "损益", direction: "debit", scope: MAPPED },
@@ -599,8 +605,8 @@ defineProfile({
   declaredStandard: "企业会计准则",
   creationAllowed: true,
   legacy: false,
-  coaVersion: "enterprise-2019-general-coa-basic-v1",
-  reportMappingVersion: "enterprise-2019-general-report-basic-v1",
+  coaVersion: "enterprise-2019-general-coa-business-v2",
+  reportMappingVersion: "enterprise-2019-general-report-business-v2",
   scope: {
     supported: Object.freeze([
       "现金 / 银行 / 其他货币资金",
@@ -613,8 +619,8 @@ defineProfile({
     ]),
     unsupported: Object.freeze([
       "交易性金融资产等金融工具分类计量（含解释第20号相关衔接）、长期股权投资",
-      "存货跌价准备等减值、租赁、递延所得税、外币、合并报表",
-      "新收入准则下的复杂合同资产负债、履约成本、退货等业务",
+      "存货跌价准备等减值、租赁变更/可变租金/减值等复杂情形、递延所得税、外币、合并报表",
+      "agency业务模块已核范围以外的新收入准则复杂合同、履约成本归属与退货条件",
       "自动算税、税局申报文件与任何税局上传格式",
     ]),
     notes: Object.freeze([
@@ -629,17 +635,36 @@ defineProfile({
   sources: [
     SOURCE_ENTERPRISE_APPENDIX,
     SOURCE_CAS_SUBSEQUENT_GUIDES,
+    { sourceId: "enterprise-vat-relief-2020", title: "财政部企业会计准则实施问答：直接减免增值税计入其他收益", url: "https://kjs.mof.gov.cn/zt/kjzzss/sswd/qtwd/202012/t20201211_3634038.htm", applicableScope: "按CAS确认其他收益；6117为本工作台工程参考编号，不宣称法定统一编号", checkedAt: "2026-10-25" },
     SOURCE_REPORT_2019,
     SOURCE_REVENUE_2017,
     SOURCE_INTERPRETATION_20,
+    { sourceId: "mof-2018-35", title: "企业会计准则第21号——租赁（2018修订）", url: "https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/201910/t20191028_3411190.htm", applicableScope: "承租人使用权资产/租赁负债及当期/非流动列示；新增编号为工程参考编号", checkedAt: "2026-10-25" },
   ],
   coa: stampSource(ENTERPRISE_COA, "mof-2006-18-appendix"),
   roles: ENTERPRISE_ROLES,
 });
 
+// Independent semantic chart. Numbers are engineering references, not a claim
+// that the complete 1997 appendix or its original official numbering was found.
+defineProfile({
+  id: "individual-bookkeeping-semantic-v1", declaredStandard: "个体工商户会计制度", creationAllowed: true, legacy: false,
+  coaVersion: "individual-semantic-coa-v1", reportMappingVersion: "individual-official-form-workpaper-v1",
+  scope: { supported: ["个体复式语义账簿、存货成本及官方表式已核项目内部会计核对底稿", "收支与权责发生差异分别保留，经营所得税不作营业费用"], unsupported: ["1997完整科目附件未经官方原件全量核实", "法定完整财务报表与税局上传格式", "复杂金融/融资租赁/合并/外币业务"], notes: ["科目编号为本程序工程参考编号，不冒充官方1997编号或小企业会计准则。", "个人所得税依现行35号令与2018个税法计算，不沿用1997旧税率/费用限额。"] },
+  sources: [
+    { sourceId: "individual-bookkeeping-order-17", title: "个体工商户建账管理暂行办法（2018修订）", url: "https://fgk.chinatax.gov.cn/zcfgk/c100011/c5195238/content.html", applicableScope: "第9条复式/简易账簿区分", checkedAt: "2026-10-25" },
+    { sourceId: "individual-form-A06534", title: "资产负债表（适用执行个体工商户会计制度的单位）及说明", url: "https://xinjiang.chinatax.gov.cn/nsfw/xzzx/biaodan/3/202411/P020241102467717457590.pdf", applicableScope: "官方表式与填表说明已列科目语义；不证明1997完整附录已核", checkedAt: "2026-10-25" },
+    { sourceId: "individual-income-order-35", title: "个体工商户个人所得税计税办法（2018修订）", url: "https://fgk.chinatax.gov.cn/zcfgk/c100011/c5196330/content.html", applicableScope: "第5至7、15至29条权责发生及税会差异", checkedAt: "2026-10-25" },
+    { sourceId: "individual-owner-guide-2022", title: "山西示范区税务局个体业务课件", url: "https://shanxi.chinatax.gov.cn/upload/file/20221108/1667877825082028731.pdf", applicableScope: "仅第33页业主投入/提款/个人支出列业主投资、第34/37页税后留存利润语义；不沿用课件旧税率，不证明1997全附件", checkedAt: "2026-10-25" },
+  ],
+  coa: SMALL_COA.filter(a => ["1001", "1002", "1122", "1123", "1221", "1403", "1405", "1601", "1602", "1604", "1606", "1701", "1801", "1901", "2001", "2202", "2203", "2211", "2221", "2241", "3001", "3103", "3104", "4001", "5001", "5051", "5301", "5401", "5402", "5403", "5601", "5602", "5603", "5711"].includes(a.code)).map(a => ({ ...a, name: ({ "1001": "现金", "1122": "应收款项", "1123": "应付款项—预付明细", "1403": "存货—材料", "1405": "存货—商品", "2001": "借入款项", "2202": "应付款项", "2203": "应收款项—预收明细", "2211": "应付工资", "2221": "应交税金", "2241": "应付款项—其他明细", "3001": "业主投资", "3103": "本年经营所得", "3104": "留存利润", "4001": "存货—生产成本", "5001": "营业收入", "5602": "营业费用" })[a.code] ?? a.name, sourceId: "individual-form-A06534", category: a.code === "1123" ? "负债" : a.code === "2203" ? "资产" : a.category, direction: a.code === "1123" ? "credit" : a.code === "2203" ? "debit" : a.direction, scope: ["1606", "1901"].includes(a.code) ? scope("requires_detail", "individual-disposition-evidence-required") : MAPPED })),
+  roles: { ...SMALL_ROLES, cashRoots: ["1001", "1002"], capitalReserve: null, surplusReserve: null, accumulatedAmortization: null },
+});
+
 const STANDARD_TO_PROFILE = deepFreeze({
   小企业会计准则: "small-2011-basic-v1",
   企业会计准则: "enterprise-2019-general-basic-v1",
+  个体工商户会计制度: "individual-bookkeeping-semantic-v1",
 });
 
 const PROFILE_LIST = deepFreeze(

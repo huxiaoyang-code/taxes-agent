@@ -232,5 +232,42 @@ export async function receiveMaterials(path, configPath) {
   } finally { await release(); }
 }
 
+// Immutable content-addressed evidence bundle, separate from the material
+// store's active-source journal. No executable content is loaded from a bundle.
+export async function archiveMaterialEvidence(path, { scope, records, metadata }) {
+  const info = await rootInfo(path);
+  check(Array.isArray(records) && records.length > 0 && records.length <= 1000 && metadata && typeof metadata === 'object', 'archive_input_invalid');
+  const blobs = records.map((r, index) => {
+    check(r && typeof r.name === 'string' && r.name.length > 0 && r.name.length <= 32768 && Buffer.isBuffer(r.bytes) && r.bytes.length <= LIMIT, 'archive_input_invalid');
+    return { name: r.name, blob: `${index}.blob`, sha256: hash(r.bytes), size: r.bytes.length };
+  });
+  const manifest = { version: 'material-evidence-archive/1', scope, entries: blobs, metadata };
+  const bytes = Buffer.from(stable(manifest) + '\n'), archiveId = hash(bytes), target = join(info.root, archiveId);
+  const verify = async () => {
+    await checkedPath(target, true); const held = await readLocalFile(join(target, 'archive.json'));
+    check(held.bytes.equals(bytes), 'archive_content_conflict');
+    const names = (await readdir(target)).sort(); check(same(names, ['archive.json', ...blobs.map(b => b.blob)].sort()), 'archive_content_conflict');
+    for (let i = 0; i < blobs.length; i++) check((await readLocalFile(join(target, blobs[i].blob))).bytes.equals(records[i].bytes), 'archive_content_conflict');
+    await rootStill(info);
+    return { version: 'material-evidence-archive/1', archiveId, path: target, manifestDigest: archiveId, status: 'archived' };
+  };
+  try { await lstat(target); return await verify(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const staging = join(info.root, `pending-evidence-${randomUUID()}`); await mkdir(staging, { mode: 0o700 });
+  for (let i = 0; i < records.length; i++) await writeNew(join(staging, blobs[i].blob), records[i].bytes);
+  await writeNew(join(staging, 'archive.json'), bytes); await rootStill(info);
+  try { await rename(staging, target); } catch (e) { try { await lstat(target); } catch { throw e; } }
+  return await verify();
+}
+export async function readArchivedMaterialEvidence(path, expectedArchiveId) {
+  check(DIGEST.test(expectedArchiveId), 'archive_identity_invalid');
+  const root = await checkedPath(path, true), file = await readLocalFile(join(root, 'archive.json'));
+  check(hash(file.bytes) === expectedArchiveId, 'archive_content_conflict');
+  const manifest = json(file.bytes); check(manifest.version === 'material-evidence-archive/1' && Array.isArray(manifest.entries) && manifest.entries.length > 0 && manifest.entries.length <= 1000, 'archive_input_invalid');
+  const records = [];
+  for (let i = 0; i < manifest.entries.length; i++) { const entry = manifest.entries[i]; check(entry.blob === `${i}.blob` && DIGEST.test(entry.sha256), 'archive_input_invalid'); const content = await readLocalFile(join(root, entry.blob)); check(hash(content.bytes) === entry.sha256 && content.bytes.length === entry.size, 'archive_content_conflict'); records.push({ name: entry.name, bytes: content.bytes }); }
+  check(same((await readdir(root)).sort(), ['archive.json', ...manifest.entries.map(e => e.blob)].sort()), 'archive_content_conflict');
+  return { manifest, records };
+}
+
 const SAFE = new Set(['store_corrupt', 'blob_corrupt', 'origin_changed', 'store_locked', 'recovery_blocked', 'store_changed', 'store_limit', 'path_rejected', 'path_changed', 'file_too_large', 'lock_changed', 'lock_unknown', 'lock_live_or_uncertain', 'material_rejected', 'material_conflict', 'sources_invalid', 'scope_mismatch', 'correction_invalid', 'correction_cas_conflict', 'source_version_conflict', 'source_origin_conflict']);
 export const safeStoreError = error => SAFE.has(error?.code) ? error.code : 'io_or_config_rejected';
