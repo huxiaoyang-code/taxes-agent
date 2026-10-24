@@ -18,7 +18,7 @@ import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-ba
 
 import {
   STAGE_KEYS, STAGE_STATUS, canonicalJson, getInput, getSnapshot, saveSnapshot, sha256,
-  withFencedTransaction, withReadSnapshot, writeStageResult, checkInputEvidence,
+  withFencedTransaction, withReadSnapshot, writeStageResult, checkInputEvidence, verifyCurrentReportRows, getJob,
 } from "./local-batch-storage.mjs";
 import { assetCardPeriodStatus } from "./period-end-controls.mjs";
 import { centsToNumber } from "./money.mjs";
@@ -972,25 +972,23 @@ export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapsh
     }
     if (key.startsWith(`${STAGE_KEYS.REPORT}:`)) {
       const input=verifyReportInputEvidence({item:{...item,account_set_id:expectedSetId},period:stage.period,allowSnapshotOnly});if(!input.ok)return input;
-      const snapshot = getSnapshot(db, { itemId: item.id, period: stage.period, kind: evidence.kind });
-      if (!snapshot) return { ok: false, reason: "report_snapshot_missing" };
-      if (snapshot.business_hash !== evidence.businessHash) return { ok: false, reason: "report_evidence_changed" };
-      if (reportBusinessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) {
-        return { ok: false, reason: "report_evidence_changed" };
-      }
-      // 产物文件核验：丢失 / 被改必须标失效（只重做报表，不重做会计）。
-      const artifact = db.prepare(
-        `SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=? ORDER BY id DESC LIMIT 1`,
-      ).get(item.id, stage.period, stage.stage_key);
-      if (!artifact) return { ok: false, reason: "artifact_missing" };
-      if (artifact.status !== "published") return { ok: false, reason: "artifact_not_published" };
-      if (artifact.bytes_hash !== evidence.bytesHash) return { ok: false, reason: "artifact_record_changed" };
-      if (!outputDir) return { ok: true };
+      const rows=verifyCurrentReportRows(db,{job:getJob(db,item.job_id),item,stage});
+      if(!rows.ok)return rows;
+      const {snapshot,artifact}=rows;
+      if (snapshot.business_hash !== evidence.businessHash||evidence.accountSetId!==expectedSetId) return { ok: false, reason: "report_evidence_changed" };
+      if (reportBusinessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) return { ok: false, reason: "report_evidence_changed" };
+      const source=verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)return source;
+      const verifyRows=()=>verifyCurrentReportRows(db,{job:rows.job,item:rows.item,stage:rows.stage,snapshot,artifact});
+      if (!outputDir) {const final=verifyRows();return final.ok?{ok:true}:final;}
       const absolute = resolve(outputDir, artifact.relative_path);
       const root = resolve(outputDir);
       if (absolute !== root && !absolute.startsWith(root + sep)) return { ok: false, reason: "artifact_path_escape" };
       if (!existsSync(absolute)) return { ok: false, reason: "artifact_file_missing" };
-      if (sha256(readFileSync(absolute)) !== artifact.bytes_hash) return { ok: false, reason: "artifact_file_corrupted" };
+      const bytes=readFileSync(absolute);
+      if (bytes.length!==artifact.bytes||sha256(bytes) !== artifact.bytes_hash) return { ok: false, reason: "artifact_file_corrupted" };
+      const final=verifyRows();if(!final.ok)return final;
+      const finalBytes=readFileSync(absolute);
+      if(finalBytes.length!==artifact.bytes||sha256(finalBytes)!==artifact.bytes_hash)return {ok:false,reason:'artifact_file_corrupted'};
       return { ok: true };
     }
     return { ok: true };

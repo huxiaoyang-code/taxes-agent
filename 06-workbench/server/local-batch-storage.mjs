@@ -628,7 +628,7 @@ function batchArtifactPath(jobKey,itemKey,period,spec) {
  const filename=spec.kind+(spec.code?'-'+segment(spec.code,32):'')+'-'+period+'.'+spec.format;
  return segment(jobKey,60)+'/'+segment(itemKey,60)+'/'+period+'/'+filename;
 }
-function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
+function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages,snapshotRows,artifactRows}) {
  const stages=new Map(actualStages.map(r=>[r.item_id+':'+r.period+':'+r.stage_key,r]));
  const reportPlans=new Map();
  for(const stage of actualStages)if(stage.stage_key.startsWith('report:')) {
@@ -636,7 +636,7 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
   reportPlans.set(stage.item_id+':'+stage.period+':'+spec.kind,true);
  }
  const snapshots=new Map();
- for(const r of db.prepare('SELECT * FROM local_batch_snapshots').all()) {
+ for(const r of snapshotRows??db.prepare('SELECT * FROM local_batch_snapshots').all()) {
   const item=itemMap.get(r.item_id);
   if(!item||item.job_id!==r.job_id||!REPORT_KINDS.includes(r.kind)||!PERIOD_RE.test(r.period)
     ||!reportPlans.has(r.item_id+':'+r.period+':'+r.kind)
@@ -651,7 +651,7 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
  }
  const artifacts=new Map();
  const mimes={csv:'text/csv; charset=utf-8',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',pdf:'application/pdf'};
- for(const r of db.prepare('SELECT * FROM local_batch_artifacts').all()) {
+ for(const r of artifactRows??db.prepare('SELECT * FROM local_batch_artifacts').all()) {
   artifacts.set(r.item_id+':'+r.period+':'+r.stage_key,r);
   const item=itemMap.get(r.item_id),job=jobMap.get(r.job_id);
   const stage=stages.get(r.item_id+':'+r.period+':'+r.stage_key);
@@ -695,6 +695,33 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
   if(stage.status===STAGE_STATUS.SUCCEEDED&&(!snapshot||!artifacts.has(key)))return false;
  }
  return true;
+}
+/** Targeted read-only publication/checkpoint contract, shared with strict schema reads.
+ * Read the persisted owners and tuple again; supplied snapshots/artifacts only pin
+ * expected bytes and identities and never authorize a write or relax row validity.
+ */
+export function verifyCurrentReportRows(db,{job,item,stage,snapshot=null,artifact=null}) {
+ try {
+  const currentJob=getJob(db,job.id),currentItem=getItem(db,item.id),currentStage=getStage(db,stage.id);
+  const same=(actual,expected,keys)=>actual&&keys.every(k=>actual[k]===expected[k]);
+  if(!same(currentJob,job,['id','job_key','manifest_json','manifest_hash','output_dir'])
+    ||!same(currentItem,item,['id','job_id','item_key','enterprise_key','source_system','account_set_id'])
+    ||!same(currentStage,stage,['id','item_id','period','stage_key','spec_json','attempt','input_hash']))return {ok:false,reason:'report_evidence_changed'};
+  for(const k of ['status','outcome_hash','evidence_json'])if(stage[k]!==undefined&&currentStage[k]!==stage[k])return {ok:false,reason:'report_evidence_changed'};
+  const spec=readSavedJson(currentStage.spec_json),key=item.id+':'+stage.period+':'+stage.stage_key;
+  const snapshots=db.prepare('SELECT * FROM local_batch_snapshots WHERE item_id=? AND period=? AND kind=?').all(item.id,stage.period,spec.kind);
+  const artifactKey=job.job_key+'#'+item.item_key+'#'+stage.period+'#'+stage.stage_key;
+  const artifacts=db.prepare('SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=? OR artifact_key=?').all(item.id,stage.period,stage.stage_key,artifactKey);
+  if(snapshots.length!==1||artifacts.length>1)return {ok:false,reason:'report_evidence_changed'};
+  if(!batchReportRowsValid(db,{jobMap:new Map([[job.id,currentJob]]),itemMap:new Map([[item.id,currentItem]]),actualStages:[currentStage],expectedStages:new Map([[key,{spec}]]),snapshotRows:snapshots,artifactRows:artifacts}))return {ok:false,reason:'report_evidence_changed'};
+  const inputHash=sha256(canonicalJson({dtoHash:snapshots[0].dto_hash,businessHash:snapshots[0].business_hash,format:spec.format,code:spec.code??null}));
+  if(currentStage.status===STAGE_STATUS.SUCCEEDED&&inputHash!==currentStage.input_hash)return {ok:false,reason:'report_snapshot_changed'};
+  if(currentStage.status===STAGE_STATUS.SUCCEEDED){const evidence=readSavedJson(currentStage.evidence_json);if(evidence.businessHash!==snapshots[0].business_hash||evidence.accountSetId!==currentItem.account_set_id)return {ok:false,reason:'report_evidence_changed'};for(const [column,key] of [['worker_thread_id','workerThreadId'],['render_started','renderStarted'],['render_finished','renderFinished']])if(evidence[key]!==undefined&&artifacts[0][column]!==evidence[key])return {ok:false,reason:'report_evidence_changed'};}
+  if(snapshot&&!same(snapshots[0],snapshot,Object.keys(snapshot)))return {ok:false,reason:'report_snapshot_changed'};
+  if(artifact&&!same(artifacts[0],artifact,Object.keys(artifact).filter(k=>!['status','updated_at'].includes(k))))return {ok:false,reason:'report_evidence_changed'};
+  if(artifact&&artifacts[0].status!==artifact.status&&!(artifact.status==='publishing'&&currentStage.status===STAGE_STATUS.SUCCEEDED&&artifacts[0].status==='published'))return {ok:false,reason:'report_evidence_changed'};
+  return {ok:true,job:currentJob,item:currentItem,stage:currentStage,snapshot:snapshots[0],artifact:artifacts[0]??null};
+ }catch{return {ok:false,reason:'report_evidence_changed'};}
 }
 function batchContentValid(db,version) {
  const component=db.prepare('SELECT * FROM local_batch_component').all();

@@ -641,18 +641,23 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
   const existing = getArtifactByStage(db, { itemId: item.id, period: stage.period, stageKey: stage.stage_key });
   const finalPath = resolve(outputDir, relativePath);
 
-  const assertCurrentEvidence=()=>{
+  const claimedStage={...stage,attempt,input_hash:snapshotHash,status:undefined,outcome_hash:undefined,evidence_json:undefined};
+  const assertCurrentEvidence=(artifact=existing,terminal=false)=>{
+    const rows=storage.verifyCurrentReportRows(db,{job,item,stage:terminal?{...claimedStage,status:STAGE_STATUS.SUCCEEDED}:claimedStage,snapshot,artifact});
+    if(!rows.ok)throw batchError(rows.reason);
     const binding=actions.resolveItemBinding({db,item});
     if(binding.accountSetId!==accountSetId||actions.reportBusinessDigest(db,accountSetId,stage.period)!==snapshot.business_hash)throw batchError('report_evidence_changed');
-    const saved=getSnapshot(db,{itemId:item.id,period:stage.period,kind:spec.kind});
-    if(!saved||['dto_hash','dto_json','business_hash','csv_hash','csv_text'].some(k=>saved[k]!==snapshot[k]))throw batchError('report_snapshot_changed');
     const source=actions.verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)throw batchError('report_evidence_changed',{reason:source.reason});
     const input=actions.verifyReportInputEvidence({item,period:stage.period,allowSnapshotOnly:task.allowSnapshotOnly});if(!input.ok)throw batchError(input.reason);
+  };
+  const assertArtifactFile=artifact=>{
+    let bytes;try{bytes=readFileSync(finalPath);}catch{throw batchError('artifact_hash_mismatch');}
+    if(bytes.length!==artifact.bytes||sha256(bytes)!==artifact.bytes_hash)throw batchError('artifact_hash_mismatch');
   };
   const publishLocked=fn=>{
     const resources=acquireItemLocks({item,instance,pid,parent:jobResources});
     try{return withWriteResources(db,resources,()=>{
-      storage.withReadSnapshot(db,assertCurrentEvidence);
+      storage.withReadSnapshot(db,()=>assertCurrentEvidence());
       return withWriteStageFence(db,{stageId:stage.id,instance:lock.instance,token:lock.token,attempt},fn);
     });}finally{releaseItemLocks(resources);}
   };
@@ -660,9 +665,11 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
   if (existing && ["published", "publishing"].includes(existing.status) && existing.snapshot_hash === snapshotHash
       && existsSync(finalPath) && hashFile(finalPath) === existing.bytes_hash) {
     return publishLocked(()=>{auditedReportStep({db,job,item,stage,lock,attempt,phase:'recover'},()=>{
-      assertCurrentEvidence();
-      db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=?`)
-        .run("published", storage.nowIso(), existing.id);
+      assertCurrentEvidence(existing);
+      const updated=db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
+        .run("published", storage.nowIso(), existing.id,job.id,item.id,stage.period,stage.stage_key);
+      if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
+      assertArtifactFile(existing);
       const ok = storage.writeStageResult(db, {
         stageId: stage.id, instance, token: lock.token, attempt,
         status: STAGE_STATUS.SUCCEEDED, outcomeHash: existing.bytes_hash,
@@ -676,14 +683,18 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
         },
       });
       if (!ok) throw batchError("stage_result_rejected", {});
-      assertCurrentEvidence();
+      assertCurrentEvidence(existing,true);
+      assertArtifactFile(existing);
     });
     return { status: STAGE_STATUS.SUCCEEDED, recovered: true, artifactKey: existing.artifact_key };});
   }
   if (existing && existsSync(finalPath) && hashFile(finalPath) !== existing.bytes_hash) {
     // 文件被改 / 损坏：标失效，只重做该报表。
-    db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=?`)
-      .run("invalid", storage.nowIso(), existing.id);
+    assertCurrentEvidence(existing);
+    const updated=db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
+      .run("invalid", storage.nowIso(), existing.id,job.id,item.id,stage.period,stage.stage_key);
+    if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
+    existing.status='invalid';
   }
   const artifactKey = `${job.job_key}#${item.item_key}#${stage.period}#${stage.stage_key}`;
   let bytes;
@@ -717,12 +728,13 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
     assertCurrentEvidence();
     const row = db.prepare(`SELECT id FROM local_batch_artifacts WHERE artifact_key=?`).get(artifactKey);
     if (row) {
-      db.prepare(`UPDATE local_batch_artifacts
+      const updated=db.prepare(`UPDATE local_batch_artifacts
           SET snapshot_hash=?, bytes_hash=?, bytes=?, mime=?, relative_path=?, status=?, attempt=?,
               worker_thread_id=?, render_started=?, render_finished=?, updated_at=?
-          WHERE id=?`)
+          WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
         .run(snapshotHash, bytesHash, bytes.length, contentType, relativePath, "publishing", attempt,
-          workerThreadId, renderStarted, renderFinished, storage.nowIso(), row.id);
+          workerThreadId, renderStarted, renderFinished, storage.nowIso(), row.id,job.id,item.id,stage.period,stage.stage_key);
+      if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
     } else {
       db.prepare(`INSERT INTO local_batch_artifacts
           (artifact_key, job_id, item_id, period, stage_key, kind, format, account_code, snapshot_hash,
@@ -734,13 +746,16 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
           attempt, workerThreadId, renderStarted, renderFinished, storage.nowIso(), storage.nowIso());
     }
   });
+  const registered=getArtifactByStage(db,{itemId:item.id,period:stage.period,stageKey:stage.stage_key});
+  if(!registered)throw batchError('report_evidence_changed');
   const published = publishFile({ bytes, bytesHash, relativePath, outputDir });
   if (hooks?.afterArtifactPublish) hooks.afterArtifactPublish({ stage, item, relativePath, published });
   auditedReportStep({db,job,item,stage,lock,attempt,phase:'published'},()=>{
-    if(!existsSync(finalPath)||hashFile(finalPath)!==bytesHash)throw batchError('artifact_hash_mismatch');
-    assertCurrentEvidence();
-    db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE artifact_key=?`)
-      .run("published", storage.nowIso(), artifactKey);
+    assertCurrentEvidence(registered);
+    assertArtifactFile(registered);
+    const updated=db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
+      .run("published", storage.nowIso(), registered.id,job.id,item.id,stage.period,stage.stage_key);
+    if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
     const ok = storage.writeStageResult(db, {
       stageId: stage.id, instance, token: lock.token, attempt,
       status: STAGE_STATUS.SUCCEEDED, outcomeHash: bytesHash,
@@ -753,7 +768,8 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
       },
     });
     if (!ok) throw batchError("stage_result_rejected", {});
-    assertCurrentEvidence();
+    assertCurrentEvidence(registered,true);
+    assertArtifactFile(registered);
   });
   return { status: STAGE_STATUS.SUCCEEDED, artifactKey, bytesHash, bytes: bytes.length, workerThreadId, renderStarted, renderFinished };
   });

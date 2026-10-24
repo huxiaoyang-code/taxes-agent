@@ -16,7 +16,7 @@ let db;
 try {
  const A=await import('../server/accounting.mjs');({db}=await import('../server/db.mjs'));
  const R=await import('../server/local-batch-runner.mjs'),S=await import('../server/local-batch-storage.mjs');
- if(!['boundaries','source-evidence','source-case','auxiliary-evidence','auxiliary-case','resume-input-evidence','resume-input-case'].includes(process.env.W3B_CASE)){
+ if(!['boundaries','source-evidence','source-case','auxiliary-evidence','auxiliary-case','resume-input-evidence','resume-input-case','publication-evidence','publication-case'].includes(process.env.W3B_CASE)){
  const count=process.env.W3B_SMOKE==='1'?1:20;
  const companies=[];
  const kinds=['balance-sheet','income-statement','cash-flow-statement','trial-balance','ledger'];
@@ -93,27 +93,34 @@ try {
  }
  console.log('local-batch-domain: chain passed '+count);
  }
- if(process.env.W3B_CASE==='resume-input-case')await reportResumeInputBoundary(A,S,R,db,process.env.R3_CASE);
+ if(process.env.W3B_CASE==='publication-case')await reportPublicationBoundary(A,S,R,db,process.env.R4_CASE);
+ else if(process.env.W3B_CASE==='resume-input-case')await reportResumeInputBoundary(A,S,R,db,process.env.R3_CASE);
  else if(process.env.W3B_CASE==='auxiliary-case')await reportAuxiliaryBoundary(A,S,R,db,process.env.R2_CASE);
  else if(process.env.W3B_CASE==='source-case')await reportSourceBoundary(A,S,R,db,process.env.R1_CASE);
  else {
-  if(!['source-evidence','auxiliary-evidence','resume-input-evidence'].includes(process.env.W3B_CASE))await boundaries(A,S,R,db);
-  if(!['auxiliary-evidence','resume-input-evidence'].includes(process.env.W3B_CASE)){
+  if(!['source-evidence','auxiliary-evidence','resume-input-evidence','publication-evidence'].includes(process.env.W3B_CASE))await boundaries(A,S,R,db);
+  if(!['auxiliary-evidence','resume-input-evidence','publication-evidence'].includes(process.env.W3B_CASE)){
   for(const mode of ['positive','source-before','inline-before','inline-type-before','source-after','inline-after','source-recover','inline-recover','report-only','report-only-delete']){
    const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'source-case',R1_CASE:mode}}).done;writeFileSync(join(root,'r1-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
   }
   console.log('R1 report source evidence: ten real isolated cases passed');
   }
-  if(process.env.W3B_CASE!=='resume-input-evidence'){
+  if(!['resume-input-evidence','publication-evidence'].includes(process.env.W3B_CASE)){
   for(const mode of ['future-draft-xlsx','future-posted-pdf','foreign-xlsx','opening-xlsx','opening-pdf','current-xlsx','prior-pdf','entity-pdf','requirement-xlsx']){
    const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'auxiliary-case',R2_CASE:mode}}).done;writeFileSync(join(root,'r2-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
   }
   console.log('R2 report auxiliary scope: nine real isolated cases passed');
   }
+  if(process.env.W3B_CASE!=='publication-evidence'){
   for(const mode of ['import-changed','import-missing','report-only-changed','report-only-missing','report-pending-changed','saved-bytes','unrelated']){
    const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'resume-input-case',R3_CASE:mode}}).done;writeFileSync(join(root,'r3-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
   }
   console.log('R3 completed report external input: seven real isolated cases passed');
+  }
+  for(const mode of ['positive-csv','positive-xlsx','new-job','new-kind','new-path','new-bytes','new-hash','new-snapshot-hash','new-snapshot-body','new-attempt','new-delete','new-status','new-snapshot-owner','terminal-owner','terminal-business','terminal-status','recover-job','recover-path','recover-file','recover-status','rerender-moved','rerender-delete','rerender-valid','old-published','old-publishing','old-csv-snapshot','completed-job','completed-kind','completed-path','completed-bytes','completed-hash','completed-snapshot-hash','completed-snapshot-body','completed-attempt','completed-delete','completed-snapshot-owner','completed-render','completed-file','completed-status','completed-cache-job','completed-late-file']){
+   const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'publication-case',R4_CASE:mode}}).done;writeFileSync(join(root,'r4-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
+  }
+  console.log('R4 current publication rows and file: forty-one real isolated cases passed');
  }
 }finally {if(db){db.close();console.log('DB_CLOSED');}}
 
@@ -279,4 +286,54 @@ async function reportResumeInputBoundary(A,S,R,db,mode){
  const reportStages=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE 'report:%' ORDER BY s.id").all(target);assert.ok(reportStages.every(s=>s.status===(mode==='unrelated'?'succeeded':'needs_review')));
  assert.deepEqual(importTuple(),oldTuple,'succeeded import/post stages never negated or replayed');assert.equal(finance(),oldFinance,'real posted money, batch and sourceTrace storage stay exact');for(const artifact of artifactBytes)assert.equal(S.sha256(readFileSync(artifact.file)),artifact.hash,'published file bytes retained');assert.deepEqual(db.prepare('SELECT a.* FROM local_batch_artifacts a JOIN local_batch_items i ON i.id=a.item_id WHERE i.account_set_id=? ORDER BY a.id').all(set.id),artifacts,'artifact registration is not republished');
  writeFileSync(join(root,'r3-result.json'),JSON.stringify({mode,result,snapshotResult,cliResult,savedCheck,reportStages,originalImportTuple:oldTuple,artifacts:artifactBytes,finance:JSON.parse(oldFinance)},null,2));console.log('PASS R3 '+mode+' completed report input / posted12.34 preserved');
+}
+
+async function reportPublicationBoundary(A,S,R,db,mode){
+ const B=await import('../server/local-batch-actions.mjs'),key='R4-'+mode,period='2026-01',format=mode==='positive-xlsx'||mode==='old-publishing'?'xlsx':'csv';
+ const set=A.createAccountSet({name:key,start_period:period,enterprise:{enterpriseKey:key}}),out=join(root,'r4-out');
+ async function run(jobKey,periods,hooks={}){const v=S.validateManifest({schemaVersion:1,jobKey,concurrency:1,items:[{itemKey:key,source:{system:'r4',enterpriseKey:key},accountSetId:set.id,periods}]});assert.equal(v.ok,true);const json=S.canonicalJson(v.manifest);return R.createAndRun({manifest:v.manifest,manifestJson:json,manifestHash:S.sha256(json),...S.buildPlan({manifest:v.manifest,manifestDir:root}),outputDir:out,hooks});}
+ const seed=key+'-seed',payload={account_set:{name:key,start_period:period},vouchers:[{sourceVoucherId:key,period,date:period+'-03',number:1,entries:[{code:'1002',debit:12.34},{code:'5001',credit:12.34}]}]};
+ assert.equal((await run(seed,[{period,imports:[{batchId:seed,mode:'append',confirmNewBinding:true,payload}],post:{vouchers:[{sourceVoucherId:key}]}}])).status,'succeeded');
+ const seedJob=S.getJobByKey(db,seed),financial=()=>JSON.stringify({vouchers:db.prepare('SELECT * FROM vouchers ORDER BY id').all(),entries:db.prepare('SELECT * FROM voucher_entries ORDER BY id').all(),sources:db.prepare('SELECT * FROM import_voucher_sources ORDER BY id').all(),batches:db.prepare('SELECT * FROM import_batches ORDER BY batch_id').all(),links:db.prepare('SELECT * FROM import_batch_vouchers ORDER BY id').all()}),tuples=()=>db.prepare("SELECT s.id,s.attempt,s.status,s.input_hash,s.outcome_hash FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.job_id=? ORDER BY s.id").all(seedJob.id);
+ const oldFinance=financial(),oldTuples=tuples();let injected=false,file,originalBytes;
+ const report=()=>db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE 'report:%'").get(key);
+ const artifact=()=>S.getArtifactByStage(db,{itemId:report().item_id,period,stageKey:report().stage_key});
+ function mutate(){assert.equal(injected,false);injected=true;const a=artifact(),field=mode.replace(/^(new|recover|completed|rerender)-/,'').replace(/^(cache|late)-/,'');assert.ok(a);file=join(out,a.relative_path);originalBytes??=readFileSync(file);
+  if(field==='delete')db.prepare('DELETE FROM local_batch_artifacts WHERE id=?').run(a.id);
+  else if(field==='snapshot-owner')db.prepare('UPDATE local_batch_snapshots SET job_id=? WHERE item_id=?').run(seedJob.id,a.item_id);
+  else if(field==='snapshot-body'){const snap=S.getSnapshot(db,{itemId:a.item_id,period,kind:a.kind}),json=JSON.stringify({...JSON.parse(snap.dto_json),r4Changed:true});db.prepare('UPDATE local_batch_snapshots SET dto_json=?,dto_hash=? WHERE snapshot_key=?').run(json,S.sha256(json),snap.snapshot_key);}
+  else if(field==='file')writeFileSync(file,Buffer.from('real changed bytes after initial recovery file check'));
+  else {const changes={job:['job_id',seedJob.id],kind:['kind','income-statement'],path:['relative_path','changed/retained.csv'],bytes:['bytes',a.bytes+1],hash:['bytes_hash','f'.repeat(64)],'snapshot-hash':['snapshot_hash','e'.repeat(64)],attempt:['attempt',a.attempt+1],render:['render_started',a.render_started+1],status:['status','invalid'],moved:['item_id',S.listItems(db,seedJob.id)[0].id]};const [column,value]=changes[field];db.prepare('UPDATE local_batch_artifacts SET '+column+'=? WHERE id=?').run(value,a.id);}
+ }
+ const terminal=mode.startsWith('terminal-'),initialPrepare=db.prepare;
+ if(terminal)db.prepare=function(sql){const stmt=initialPrepare.call(db,sql);if(!/^UPDATE local_batch_stages\s+SET status=\?, outcome_hash=\?, evidence_json=\?/.test(String(sql)))return stmt;return new Proxy(stmt,{get(object,property){if(property==='run')return (...args)=>{const info=object.run(...args);if(!injected&&args[0]==='succeeded'&&args[7]===report().id){injected=true;const a=artifact();file=join(out,a.relative_path);originalBytes=readFileSync(file);if(mode==='terminal-status')initialPrepare.call(db,"UPDATE local_batch_stages SET status='needs_review' WHERE id=?").run(args[7]);else{const evidence=JSON.parse(args[2]);if(mode==='terminal-owner')evidence.accountSetId=set.id+1000;else evidence.businessHash='f'.repeat(64);initialPrepare.call(db,'UPDATE local_batch_stages SET evidence_json=? WHERE id=?').run(S.canonicalJson(evidence),args[7]);}}return info;};const value=Reflect.get(object,property,object);return typeof value==='function'?value.bind(object):value;}});};
+ let result;try{result=await run(key,[{period,reports:[{kind:'balance-sheet',formats:[format]}]}],mode.startsWith('new-')?{afterArtifactPublish:mutate}:{});}finally{db.prepare=initialPrepare;}
+ if(mode.startsWith('new-')||terminal){assert.equal(injected,true);assert.equal(result.status,'needs_review',JSON.stringify(result));assert.notEqual(report().status,'succeeded');}
+ else {
+  assert.equal(result.status,'succeeded',JSON.stringify(result));const oldArtifact=artifact(),oldReport=report();file=join(out,oldArtifact.relative_path);originalBytes=readFileSync(file);S.assertBatchSchema(db);
+  if(format==='xlsx'){const {default:ExcelJS}=await import('exceljs'),workbook=new ExcelJS.Workbook();await workbook.xlsx.readFile(file);let found=false;workbook.eachSheet(sheet=>sheet.eachRow(row=>row.eachCell(cell=>{if(cell.value===12.34)found=true;})));assert.equal(found,true,'real XLSX contains posted12.34');assert.ok(oldArtifact.worker_thread_id>0);}
+  if(mode.startsWith('recover-')||mode.startsWith('old-')||mode.startsWith('rerender-')){
+   S.resetStage(db,{stageId:oldReport.id,status:S.STAGE_STATUS.NEEDS_REVIEW,errorCode:'r4-controlled-retry'});S.resetStagesForRetry(db,{jobKey:key});
+   if(mode==='old-publishing')db.prepare("UPDATE local_batch_artifacts SET status='publishing' WHERE id=?").run(oldArtifact.id);
+   if(mode.startsWith('rerender-'))db.prepare("UPDATE local_batch_artifacts SET status='invalid' WHERE id=?").run(oldArtifact.id);
+   if(mode==='old-csv-snapshot'){const csv='new mutable CSV from later snapshot';db.prepare('UPDATE local_batch_snapshots SET csv_text=?,csv_hash=? WHERE item_id=?').run(csv,S.sha256(csv),oldReport.item_id);}
+   // This targeted .all snapshot read occurs inside publishLocked, after the
+   // cached artifact and initial exists/hash check. Mutate real rows/files here.
+   const prepare=db.prepare;
+   db.prepare=function(sql){const stmt=prepare.call(db,sql);if(!String(sql).startsWith('SELECT * FROM local_batch_snapshots WHERE item_id=? AND period=? AND kind=?'))return stmt;return new Proxy(stmt,{get(object,property){if(property==='all')return (...args)=>{if(!injected&&mode.startsWith('recover-'))mutate();return object.all(...args);};const value=Reflect.get(object,property,object);return typeof value==='function'?value.bind(object):value;}});};
+   try{result=await R.resumeJob({jobKey:key,hooks:{beforeArtifactPublish(){if(mode==='rerender-valid')injected=true;else if(mode.startsWith('rerender-'))mutate();else assert.fail('recovery must not rerender or republish');}}});}finally{db.prepare=prepare;}
+   if(mode.startsWith('old-')){assert.equal(result.status,'succeeded',JSON.stringify(result));assert.equal(result.results[0].recovered,true);assert.ok(report().attempt>oldArtifact.attempt,'newer claim recovers old artifact');const current=artifact();for(const field of Object.keys(oldArtifact).filter(f=>!['status','updated_at'].includes(f)))assert.equal(current[field],oldArtifact[field],field);S.assertBatchSchema(db);assert.equal(B.verifyStageEvidence({stage:report(),item:S.getItem(db,report().item_id),outputDir:out}).ok,true);}
+   else if(mode==='rerender-valid'){assert.equal(injected,true);assert.equal(result.status,'succeeded',JSON.stringify(result));assert.equal(artifact().attempt,report().attempt);assert.ok(artifact().attempt>oldArtifact.attempt);S.assertBatchSchema(db);}
+   else {assert.equal(injected,true);assert.equal(result.status,'needs_review',JSON.stringify(result));assert.notEqual(report().status,'succeeded');if(mode==='recover-file')S.assertBatchSchema(db);if(mode==='rerender-delete')assert.equal(db.prepare('SELECT * FROM local_batch_artifacts WHERE id=?').get(oldArtifact.id),undefined);if(mode==='rerender-moved')assert.equal(db.prepare('SELECT * FROM local_batch_artifacts WHERE id=?').get(oldArtifact.id).item_id,S.listItems(db,seedJob.id)[0].id);}
+  }else if(mode.startsWith('completed-')){
+   const prepare=db.prepare;let snapshotReads=0;
+   if(mode.startsWith('completed-cache-')||mode.startsWith('completed-late-'))db.prepare=function(sql){const stmt=prepare.call(db,sql);const target=mode.startsWith('completed-cache-')?'SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=?':'SELECT * FROM local_batch_snapshots WHERE item_id=? AND period=? AND kind=?';if(!String(sql).startsWith(target))return stmt;return new Proxy(stmt,{get(object,property){if(property==='all')return (...args)=>{const rows=object.all(...args);snapshotReads++;if(!injected&&(mode.startsWith('completed-cache-')||snapshotReads===2))mutate();return rows;};const value=Reflect.get(object,property,object);return typeof value==='function'?value.bind(object):value;}});};
+   else mutate();
+   let check;try{check=B.verifyStageEvidence({stage:oldReport,item:S.getItem(db,oldReport.item_id),outputDir:out});}finally{db.prepare=prepare;}assert.equal(injected,true);assert.equal(check.ok,false,mode+JSON.stringify(check));result=check;
+  }
+  else {assert.equal(B.verifyStageEvidence({stage:oldReport,item:S.getItem(db,oldReport.item_id),outputDir:out}).ok,true);assert.equal((await R.resumeJob({jobKey:key})).status,'succeeded');}
+ }
+ assert.equal(financial(),oldFinance,'posted money and persistent sourceTrace never replay');assert.deepEqual(tuples(),oldTuples,'original financial stage tuples retained');assert.equal(A.balanceSheet(set.id,period).totals.assets,12.34);
+ if(!mode.endsWith('-file'))assert.deepEqual(readFileSync(file),originalBytes,'original actual published bytes retained');else assert.notDeepEqual(readFileSync(file),originalBytes,'intentional real file mutation retained');
+ writeFileSync(join(root,'r4-result.json'),JSON.stringify({mode,result,injected,report:report(),artifact:artifact(),file,originalHash:S.sha256(originalBytes),actualHash:S.sha256(readFileSync(file)),originalFinancialTuples:oldTuples,finance:JSON.parse(oldFinance)},null,2));console.log('PASS R4 '+mode+' '+format+' persistent owners / final bytes / posted12.34');
 }
