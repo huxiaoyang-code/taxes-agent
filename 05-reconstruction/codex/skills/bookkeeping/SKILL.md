@@ -33,7 +33,7 @@ description: 根据已核实数据登记凭证、查账核对、处理固定资�
 - 查账：`ledger_query`
 - 资产/折旧/结转：`asset_list`、`asset_create`、`depreciation_run`、`carry_forward_profit`
 - 旧账导入：`legacy_book_import`（见 `legacy-book-import` 技能）
-- 兼容入口（行为受限）：`update_plan`（仅回显，`persisted=false`）
+- 兼容入口（行为受限）：`update_plan`（仅回显，`persisted=false`）；持久生命周期使用 `harness/SKILL.md` 与 `harness_*`
 
 **不可用（占位，调用必返回 isError，列为可用会误导用户）**：
 `invoice_collect`、`invoice_file`、`invoice_issue`、`invoice_issue_result`、`invoice_precheck`、
@@ -63,17 +63,15 @@ description: 根据已核实数据登记凭证、查账核对、处理固定资�
 
 - **账套与期间必须显式**：所有变更与查询都要明确 `accountSetId` 与 `period`（`YYYY-MM`，月份 01–12）。
   `account_context` 不保存"当前账套"（`current_account_set_id` 恒为 null），不要假设上下文持久。
-- **金额**：人民币元，保留两位小数；比较金额用容差，禁止直接浮点相等。
+- **金额**：人民币元，精度、分转换、平衡与边界以业务模块校验为准，不用任意容差掩盖不平。
 - **凭证形态**：`entries` 每项 `{ code, debit, credit, summary? }`，至少两行；借贷合计必须相等；
   单行不能同时有借方和贷方；金额不得为负；`code` 必须是该账套已存在的科目（否则 `voucher_check` 报错）。
 - **默认草稿**：`voucher_create` 缺省 `status='draft'`；只有显式 `status='posted'` 或调用 `voucher_post`
   才过账。技能应遵循 `voucher_check` → `voucher_create`（草稿）→ 在当前授权范围内 `voucher_post`，
   只有授权缺失时才向用户确认。
 - **审批**：用户已授权的凭证/过账等操作不要重复索取审批；只有权限或授权范围不明确时才询问。
-- **不猜数据**：原始单据缺少税率、税额、科目、期间、价税分离依据等关键信息时，先向用户确认，
-  不得自行估税或选科目录账。
-- **只基于已核实的结构化数据记账**：发票、银行流水、工资等领域本地没有采集/计算能力，
-  只能依据用户提供的已核实数据手工登记分录（见对应 reference）。
+- **调查原始资料**：用户提供目标与原始资料，Agent 解析、核验，按事实与可核验规则形成草稿，不要求客户固定模板、预制分录或已算好的税额。缺失冲突留下具体补件，不臆造数据。
+- **依据实际能力执行**：发现 `harness_discover` 的实现和支持条件，复用资料、核算与税务模块；规则未覆盖时按 Harness 核算指引保存判断、代码、验证及影响，交会计复核。
 
 ## 工作流
 

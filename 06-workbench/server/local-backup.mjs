@@ -831,7 +831,7 @@ const COMPONENT_REGISTRY = Object.freeze({
  'restore-control':Object.freeze({name:'restore-control',version:1,tables:RESTORE_CONTROL_TABLES,structure:RESTORE_CONTROL_SQL}),
   get 'local-batch'(){return Object.freeze({name:LOCAL_BATCH_COMPONENT,version:3,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2,3]}})},
   get 'business-audit'(){return Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}})},
-  auxiliary: Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}),
+  get auxiliary() { return Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}); },
   bank: Object.freeze({
     name: BANK_COMPONENT_STRUCTURE.name,
     version: BANK_COMPONENT_STRUCTURE.version,

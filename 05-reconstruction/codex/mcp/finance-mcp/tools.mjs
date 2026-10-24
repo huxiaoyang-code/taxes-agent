@@ -11,6 +11,25 @@
  *   - unavailable ：本地未实现，调用必须返回 isError，绝不伪装成功。
  */
 import { TAX_TOOLS } from "./tax-tools.mjs";
+const harnessText={type:'string'},object={type:'object'},array={type:'array'};
+const harnessSpec=(name,description,properties,required=[],readOnly=false)=>({name,description,inputSchema:{type:'object',properties,required,additionalProperties:false},status:'available',origin:'local',annotations:{readOnlyHint:readOnly,destructiveHint:name==='harness_run',openWorldHint:false,idempotentHint:name!=='harness_run'}});
+const harnessLocal=(name,description,properties,required=[])=>harnessSpec(name,description,{storePath:{type:'string',description:'Explicit absolute local metadata store path; no default company or database'},...properties},['storePath',...required]);
+export const HARNESS_TOOLS=[
+ harnessSpec('harness_scope_discover','Read actual companies/account sets, periods and database instance from an explicit existing dbPath or launch-configured FINANCE_DATABASE_PATH. No default selection, migration or database creation. New companies use existing account_set_create then rediscover.',{dbPath:{type:'string'}},[],true),
+ harnessSpec('harness_discover','Discover actual limited business capabilities, necessary facts, support conditions, fixed entrypoints, code/rule versions and query recovery contracts. Declarations do not prove applicability.',{},[],true),
+ harnessLocal('harness_init','Create a new company/account-set/database-instance/month-or-quarter/currency scoped local metadata journal. Refuse existing directories.',{scope:object},['scope']),
+ harnessLocal('harness_source_register','Register any source file/layout plus precise locator, host-authored parser codePaths, validationPaths and unrecognized items. parsed=true requires saved code and validation evidence; no extension whitelist or generic code execution.',{source:object},['source']),
+ harnessLocal('harness_facts_register','Register evidence-linked facts: provided/missing/conflict/unknown/unsupported/not_applicable, explicit reason. provided requires value and sourceRefs. First task fact value holds the fixed business function request prepared by Agent from originals.',{facts:array},['facts']),
+ harnessLocal('harness_plan','Persist an Agent-adjustable DAG: taskId, capabilityId, factIds, dependsOn, goal. Validate cycles and references; local digests bind scope, facts, evidence, rule/code and dependencies.',{tasks:array},['tasks']),
+ harnessLocal('harness_status','Fresh-read original files, parser code, validations and business code; persist observed invalidation so restoring bytes never revives an old confirmation. Return independent branch blockers/history and original unknown write intents.',{}),
+ harnessLocal('harness_run','Call a fixed business adapter: prepare/execute/query. Write execute needs current dependencyDigest from status; unknown outcome must query original identity. No supplied executable path, algorithm or SQL. Receipts come only from actual business results.',{taskId:harnessText,phase:{type:'string',enum:['prepare','execute','query']},dependencyDigest:harnessText,treatmentId:harnessText},['taskId']),
+ harnessLocal('harness_feedback','Record accountant feedback tied to task targetVersion and dependencyDigest. Decisions accept/reject/retain_enterprise_exception/propose_public_rule; reject retains history and requires correction. No automatic public promotion.',{feedback:object},['feedback']),
+ harnessLocal('harness_request_materials','Save specific local supplement text with taskIds. Returns forwardable text; never sends a message.',{request:object},['request']),
+ harnessLocal('harness_treatment_register','Register uncovered-business reasoning, policy/source/code/validation traceReferences, draftSourceId and explicit applicability. Business execution and accountant review remain separate; no public rule promotion.',{treatment:object},['treatment']),
+ harnessLocal('harness_recover_lock','Recover only a valid own-store writer lock whose OS process is proven absent. Never age-expire a lock; pending writes still require query.',{}),
+];
+export const HARNESS_TOOL_NAMES=new Set(HARNESS_TOOLS.map(t=>t.name));
+
 
 export class ToolCallError extends Error {
   constructor(code, message, details = null) {
@@ -384,7 +403,7 @@ const withModelNote = (tool) => (MODEL_PLAIN_TOOL_SET.has(tool.name)
   ? { ...tool, description: `${tool.description}${MODEL_OUTPUT_NOTE}`, modelOutput: "summary_envelope" }
   : tool);
 
-export const TOOLS = [...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
+export const TOOLS = [...HARNESS_TOOLS, ...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
   .map(withModelNote).map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema?.properties,operationId:{type:'string',description:'Stable local operation ID; preserve before a write and reuse only for the identical request.'}}}}):t);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

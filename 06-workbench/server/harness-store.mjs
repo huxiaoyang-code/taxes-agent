@@ -1,0 +1,193 @@
+// Durable local orchestration metadata, never a ledger. Business writes belong
+// exclusively to fixed adapters and their existing audited domain operations.
+import { mkdir, open, readdir, rename, unlink, lstat } from 'node:fs/promises';
+import { resolve, dirname, join, isAbsolute } from 'node:path';
+import { randomUUID, createHash } from 'node:crypto';
+import { checkedPath, readLocalFile } from './offline-material-store.mjs';
+import { validateHarnessScope, validateFact, validatePlanGraph, validateFeedback, idPattern } from './harness-contract.mjs';
+
+export const VERSION = 'finance-harness-store/1';
+export const stable = v => Array.isArray(v) ? `[${v.map(stable).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v);
+export const hash = v => createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : stable(v)).digest('hex');
+export const requireValue = (v, code = 'harness_input_invalid') => { if (!v) throw Object.assign(new Error(code), { code }); };
+const jsonFile = async p => JSON.parse((await readLocalFile(p, 16 * 1024 * 1024)).bytes.toString('utf8'));
+const identity = s => `${s.dev}:${s.ino}:${s.birthtimeMs}`;
+async function writeNew(path, bytes) { const f = await open(path, 'wx', 0o600); try { await f.writeFile(bytes); await f.sync(); } finally { await f.close(); } }
+async function rootInfo(path) { const root = await checkedPath(path, true); return { root, identity: identity(await lstat(root)) }; }
+const assertRoot = async info => requireValue((await rootInfo(info.root)).identity === info.identity, 'harness_path_changed');
+
+export async function initHarness(path, scope) {
+  validateHarnessScope(scope); requireValue(isAbsolute(path), 'harness_path_invalid');
+  const root = resolve(path); await checkedPath(dirname(root), true);
+  await mkdir(root, { mode: 0o700 }); await mkdir(join(root, 'events'), { mode: 0o700 });
+  await writeNew(join(root, 'store.json'), stable({ version: VERSION, storeId: randomUUID(), scope }) + '\n');
+  return { version: VERSION, status: 'initialized', scope };
+}
+export async function loadHarness(path) {
+  const info = await rootInfo(path), meta = await jsonFile(join(info.root, 'store.json'));
+  requireValue(meta.version === VERSION && typeof meta.storeId === 'string', 'harness_store_invalid'); validateHarnessScope(meta.scope);
+  const state = { info, meta, head: hash(meta), events: [], sources: new Map(), invalidatedSources:new Set(), invalidatedResults:new Set(), capabilityEpochs:new Map(), factEpochs:new Map(), facts: new Map(), tasks: [], attempts: [], feedbacks: [], requests: [], treatments: [] };
+  const files = (await readdir(join(info.root, 'events'))).sort(); requireValue(files.length <= 10000, 'harness_store_limit');
+  for (const name of files) {
+    // Uncommitted temporary files have no authority; retain them for diagnosis.
+    if (/^pending-[a-f0-9-]+\.json$/.test(name)) continue;
+    requireValue(/^\d{8}\.json$/.test(name), 'harness_journal_invalid');
+    const e = await jsonFile(join(info.root, 'events', name)), { digest, ...body } = e;
+    requireValue(e.sequence === state.events.length + 1 && name === `${String(e.sequence).padStart(8, '0')}.json` && e.previous === state.head && digest === hash(body), 'harness_journal_invalid');
+    state.events.push(e); state.head = digest; apply(state, e);
+  }
+  await assertRoot(info); return state;
+}
+function apply(s, e) {
+  const d = e.data;
+  if (e.kind === 'source') {s.sources.set(d.sourceId, d);s.invalidatedSources.delete(d.sourceId);}
+  else if (e.kind === 'invalidate_source') s.invalidatedSources.add(d.sourceId);
+  else if (e.kind === 'invalidate_result') s.invalidatedResults.add(d.targetVersion);
+  else if (e.kind === 'capabilities') d.forEach(c=>s.capabilityEpochs.set(c.capabilityId,{codeDigest:c.codeDigest,epoch:e.digest}));
+  else if (e.kind === 'facts') d.forEach(f => {s.facts.set(f.factId, f);s.factEpochs.set(f.factId,e.digest);});
+  else if (e.kind === 'plan') s.tasks = d;
+  else if (e.kind === 'intent') s.attempts.push({ ...d, intentDigest: e.digest, result: null });
+  else if (e.kind === 'result' || e.kind === 'reconcile') { const a = s.attempts.find(a => a.intentDigest === d.intentDigest); requireValue(a && (e.kind==='reconcile'||!a.result), 'harness_journal_invalid'); a.result = d.receipt; }
+  else if (e.kind === 'feedback') s.feedbacks.push(d);
+  else if (e.kind === 'request') s.requests.push(d);
+  else if (e.kind === 'treatment') s.treatments.push(d);
+  else requireValue(false, 'harness_journal_invalid');
+}
+async function locked(path, fn) {
+  const info = await rootInfo(path), file = join(info.root, 'writer.lock'), lock = stable({ version: VERSION, pid: process.pid, token: randomUUID() });
+  const noRecovery=async()=>{try{await lstat(join(info.root,'recovery.guard'));requireValue(false,'harness_recovery_blocked');}catch(e){if(e.code!=='ENOENT')throw e;}};
+  await noRecovery();
+  try { await writeNew(file, lock); } catch (e) { if (e.code === 'EEXIST') requireValue(false, 'harness_locked'); throw e; }
+  try {await noRecovery(); const s = await loadHarness(info.root); await assertRoot(info); return await fn(s); }
+  finally { await assertRoot(info); requireValue((await readLocalFile(file)).bytes.toString() === lock, 'harness_lock_changed'); await unlink(file); }
+}
+export async function appendHarness(s, kind, data) {
+  await assertRoot(s.info); const current = await loadHarness(s.info.root); requireValue(current.head === s.head, 'harness_cas_mismatch');
+  const body = { sequence: s.events.length + 1, previous: s.head, kind, data, recordedAt: new Date().toISOString() }, e = { ...body, digest: hash(body) };
+  const file = join(s.info.root, 'events', `${String(e.sequence).padStart(8, '0')}.json`), pending = join(s.info.root, 'events', `pending-${randomUUID()}.json`);
+  await writeNew(pending, stable(e) + '\n'); await assertRoot(s.info); await rename(pending, file);
+  s.events.push(e); s.head = e.digest; apply(s, e); return e;
+}
+export const withHarness = locked;
+
+export async function recoverHarnessLock(path) {
+  const info=await rootInfo(path),guard=join(info.root,'recovery.guard'),guardBytes=stable({version:VERSION,pid:process.pid,token:randomUUID()});
+  try{await writeNew(guard,guardBytes);}catch(e){if(e.code==='EEXIST')requireValue(false,'harness_recovery_blocked');throw e;}
+  try{
+  const s = await loadHarness(path), file = join(s.info.root, 'writer.lock'), bytes = (await readLocalFile(file)).bytes, lock = JSON.parse(bytes.toString());
+  requireValue(lock.version === VERSION && Number.isSafeInteger(lock.pid) && lock.pid > 0 && typeof lock.token === 'string', 'harness_recovery_blocked');
+  let absent = false; try { process.kill(lock.pid, 0); } catch (e) { absent = e.code === 'ESRCH'; }
+  requireValue(absent, 'harness_recovery_blocked'); await assertRoot(s.info);
+  requireValue((await readLocalFile(file)).bytes.equals(bytes), 'harness_lock_changed'); await unlink(file);
+  return { status: 'lock_recovered', outcome: 'query_pending_writes_before_execute' };
+  }finally{await assertRoot(info);requireValue((await readLocalFile(guard)).bytes.toString()===guardBytes,'harness_lock_changed');await unlink(guard);}
+}
+const checkedFiles = async paths => {
+  requireValue(Array.isArray(paths) && paths.length <= 1000, 'harness_evidence_invalid');
+  const out = []; for (const path of paths) { requireValue(isAbsolute(path), 'harness_evidence_invalid'); const f = await readLocalFile(path, 64 * 1024 * 1024); out.push({ path: f.canonicalPath, digest: hash(f.bytes) }); } return out;
+};
+export async function registerHarnessSource(path, source) {
+  requireValue(source && idPattern.test(source.sourceId) && typeof source.locator === 'string' && source.locator.length > 0 && Array.isArray(source.unrecognized) && typeof source.classification === 'string', 'harness_source_invalid');
+  // Any file extension/layout is accepted. The host investigates and produces
+  // parser code and validation artifacts; this module does not execute that code.
+  const originals = await checkedFiles([source.path]), code = await checkedFiles(source.codePaths ?? []), validation = await checkedFiles(source.validationPaths ?? []);
+  requireValue(!source.parsed || code.length > 0 && validation.length > 0, 'harness_parser_proof_required');
+  const data = { sourceId: source.sourceId, locator: source.locator, originals, code, validation, parsed: source.parsed === true, unrecognized: source.unrecognized, classification: source.classification };
+  data.contentDigest = hash(data);
+  return locked(path, async s => { const old = s.sources.get(data.sourceId),same=old?.contentDigest===data.contentDigest&&!s.invalidatedSources.has(data.sourceId);data.revision=(old?.revision??0)+(same?0:1);data.sourceVersion=hash(data);if(!same)await appendHarness(s,'source',data);return {status:same?'replayed':'registered',sourceVersion:same?old.sourceVersion:data.sourceVersion}; });
+}
+export async function registerHarnessFacts(path, facts) {
+  requireValue(Array.isArray(facts) && facts.length > 0 && facts.length <= 10000, 'harness_facts_invalid'); facts.forEach(validateFact);
+  requireValue(new Set(facts.map(f => f.factId)).size === facts.length, 'harness_facts_invalid');
+  return locked(path, async s => {
+    for (const f of facts) requireValue(f.sourceRefs.every(ref => s.sources.has(ref)), 'harness_source_missing');
+    const changed = facts.filter(f => stable(f) !== stable(s.facts.get(f.factId)));
+    if (changed.length) await appendHarness(s, 'facts', changed); return { status: changed.length ? 'registered' : 'replayed', changedFactIds: changed.map(f => f.factId) };
+  });
+}
+export async function saveHarnessPlan(path, tasks, capabilities) {
+  validatePlanGraph(tasks);
+  return locked(path, async s => {
+    for (const t of tasks) requireValue(capabilities.has(t.capabilityId) && t.factIds.every(f => s.facts.has(f)), 'harness_plan_reference_invalid');
+    if (stable(tasks) !== stable(s.tasks)) await appendHarness(s, 'plan', tasks);
+    return { status: 'saved', taskIds: tasks.map(t => t.taskId), journalHead: s.head };
+  });
+}
+export async function sourceFreshness(s) {
+  const out = new Map();
+  for (const source of s.sources.values()) {
+    let fresh = true;
+    for (const file of [...source.originals, ...source.code, ...source.validation]) {
+      try { if (hash((await readLocalFile(file.path, 64 * 1024 * 1024)).bytes) !== file.digest) fresh = false; } catch { fresh = false; }
+    }
+    out.set(source.sourceId, fresh);
+  }
+  return out;
+}
+export async function harnessView(s, capabilities) {
+  const fresh = await sourceFreshness(s), byId = new Map(s.tasks.map(t => [t.taskId, t])), views = new Map();
+  for(const [sourceId,current] of fresh)if(!current&&!s.invalidatedSources.has(sourceId))await appendHarness(s,'invalidate_source',{sourceId});
+  const changedCaps=[...capabilities.values()].filter(c=>s.capabilityEpochs.get(c.capabilityId)?.codeDigest!==c.codeDigest).map(c=>({capabilityId:c.capabilityId,codeDigest:c.codeDigest}));
+  if(changedCaps.length)await appendHarness(s,'capabilities',changedCaps);
+  const treatmentCurrent=new Map();
+  for(const treatment of s.treatments)treatmentCurrent.set(treatment.treatmentId,s.sources.get(treatment.draftSourceId)?.sourceVersion===treatment.draftSourceVersion&&fresh.get(treatment.draftSourceId)&&!s.invalidatedSources.has(treatment.draftSourceId));
+  const visit = t => {
+    if (views.has(t.taskId)) return views.get(t.taskId);
+    const cap = capabilities.get(t.capabilityId), parents = t.dependsOn.map(id => visit(byId.get(id))), facts = t.factIds.map(id => s.facts.get(id));
+    const treatmentId=facts[0]?.value?.treatmentId,treatment=treatmentId?s.treatments.find(x=>x.treatmentId===treatmentId):null;
+    const sourceIds = [...new Set([...facts.flatMap(f => f.sourceRefs),...(treatment?[treatment.draftSourceId]:[])])];
+    const dependencyDigest = hash({ scope: s.meta.scope, task: t, capability: cap, capabilityEpoch:s.capabilityEpochs.get(t.capabilityId)?.epoch,facts:facts.map(f=>[f,s.factEpochs.get(f.factId)]),treatment:treatment?[treatment,treatmentCurrent.get(treatmentId)]:null,sources: sourceIds.map(id => [id, s.sources.get(id)?.sourceVersion, fresh.get(id),s.invalidatedSources.has(id)]), parents: parents.map(p => [p.taskId, p.dependencyDigest, p.receipt?.targetVersion ?? null, p.executionState, p.reviewState]) });
+    const attempts = s.attempts.filter(a => a.taskId === t.taskId), last = attempts.at(-1), matching = attempts.filter(a => a.dependencyDigest === dependencyDigest).at(-1);
+    const receipt = matching?.result ?? null;
+    const feedbacks = receipt ? s.feedbacks.filter(f => f.taskId === t.taskId && f.targetVersion === receipt.targetVersion && f.dependencyDigest === dependencyDigest) : [];
+    const reviewed = feedbacks.filter(f => ['accept', 'reject'].includes(f.decision)).at(-1);
+    let executionState = matching ? receipt?.executionState ?? 'unknown' : last ? 'stale' : 'not_started';
+    if(receipt&&s.invalidatedResults.has(receipt.targetVersion))executionState='stale';
+    let reviewState = executionState === 'stale' ? 'stale' : reviewed ? reviewed.decision === 'accept' ? 'accepted' : 'rejected' : receipt?.reviewState ?? 'pending';
+    const blockers = facts.filter(f => !['provided', 'not_applicable'].includes(f.state)).map(f => ({ factId: f.factId, state: f.state, reason: f.reason }));
+    if(treatmentId&&(!treatment||!treatmentCurrent.get(treatmentId)))blockers.push({state:'conflict',reason:treatment?'treatment_policy_code_draft_or_validation_changed':'treatment_missing',treatmentId});
+    sourceIds.filter(id => !fresh.get(id)||s.invalidatedSources.has(id)).forEach(id => blockers.push({ sourceId: id, state: 'conflict', reason: 'source_code_or_validation_changed' }));
+    sourceIds.filter(id=>['unknown','missing','conflict','unsupported'].includes(s.sources.get(id)?.classification)).forEach(id=>blockers.push({sourceId:id,state:s.sources.get(id).classification,reason:'source_investigation_unresolved',layer:'parser',reproductionRefs:s.sources.get(id).validation.map(f=>f.path),handlingPath:'Investigate saved parser/validation report, retain unrecognized items, supplement evidence and register a resolved source version'}));
+    const correction=facts[0]?.value?.correctionOf;
+    parents.filter(p => !(correction?.taskId===p.taskId&&correction.targetVersion===p.receipt?.targetVersion&&s.attempts.some(a=>a.taskId===p.taskId&&a.result?.targetVersion===correction.targetVersion&&a.result.executionState==='executed'))&&(p.executionState !== 'executed' || p.reviewState === 'rejected' || p.blockers.length)).forEach(p => blockers.push({ taskId: p.taskId, state: 'dependency_blocked', reason: p.executionState }));
+    if (cap.availability === 'unavailable') blockers.push({ state: 'unsupported', reason: 'capability_unavailable' });
+    // An older interrupted write remains unresolved even if facts or rules changed.
+    const unresolved = attempts.find(a => a.effect === 'write' && (!a.result || a.result.executionState === 'unknown'));
+    if (unresolved) blockers.push({ state: 'unknown', reason: 'write_outcome_unknown', intentDigest: unresolved.intentDigest });
+    if (reviewState === 'rejected') blockers.push({ state: 'correction_required', reason: 'accountant_rejected_execution' });
+    const v = { ...t, dependencyDigest, executionState, reviewState, ruleState: feedbacks.some(f => f.decision === 'propose_public_rule') ? 'public_candidate' : feedbacks.some(f => f.decision === 'retain_enterprise_exception') ? 'enterprise_exception' : receipt?.ruleState ?? 'uncovered', receipt, blockers, unresolvedIntent: unresolved?.intentDigest ?? null };
+    views.set(t.taskId, v); return v;
+  };
+  s.tasks.forEach(visit);
+  return { version: VERSION, scope: s.meta.scope, journalHead: s.head, sources: [...s.sources.values()].map(x => ({ ...x, current: fresh.get(x.sourceId) })), facts: [...s.facts.values()], tasks: s.tasks.map(t => views.get(t.taskId)), feedbacks: s.feedbacks, requests: s.requests, treatments: s.treatments, history: s.attempts, periodComplete: false, submittable: false };
+}
+export async function recordHarnessFeedback(path, feedback, capabilities, refreshBusinessProofs = async()=>{}) {
+  validateFeedback(feedback);
+  return locked(path, async s => {
+    await refreshBusinessProofs(s);
+    const view = await harnessView(s, capabilities), task = view.tasks.find(t => t.taskId === feedback.taskId);
+    requireValue(task?.receipt && task.receipt.targetVersion === feedback.targetVersion && task.dependencyDigest === feedback.dependencyDigest && !task.blockers.some(b => b.reason !== 'accountant_rejected_execution') && task.executionState === 'executed', 'harness_feedback_stale');
+    if (!s.feedbacks.some(f => stable(f) === stable(feedback))) await appendHarness(s, 'feedback', feedback);
+    return { status: 'recorded', decision: feedback.decision, correctWithExistingBusinessTools: feedback.decision === 'reject', publicRulePromoted: false };
+  });
+}
+export async function requestHarnessMaterials(path, request) {
+  requireValue(request && typeof request.text === 'string' && request.text.trim().length > 0 && Array.isArray(request.taskIds), 'harness_request_invalid');
+  return locked(path, async s => { requireValue(request.taskIds.every(id => s.tasks.some(t => t.taskId === id)), 'harness_request_invalid'); const data = { ...request, scope: s.meta.scope, requestId: hash(request) }; if (!s.requests.some(r => r.requestId === data.requestId)) await appendHarness(s, 'request', data); return { status: 'local_text_only', text: data.text, requestId: data.requestId, sent: false }; });
+}
+export async function registerHarnessTreatment(path, treatment) {
+  requireValue(treatment && idPattern.test(treatment.treatmentId) && Array.isArray(treatment.traceReferences) && treatment.traceReferences.length > 0 && typeof treatment.reason === 'string' && treatment.reason.trim() && typeof treatment.draftSourceId === 'string' && Array.isArray(treatment.applicability) && treatment.applicability.length > 0, 'harness_treatment_invalid');
+  const { validateTraceReference } = await import('./harness-contract.mjs'); treatment.traceReferences.forEach(validateTraceReference);
+  const kinds=new Set(treatment.traceReferences.map(r=>r.kind));requireValue((kinds.has('policy')||kinds.has('rule'))&&kinds.has('code')&&kinds.has('validation'),'harness_treatment_evidence_required');
+  return locked(path, async s => {
+    const source=s.sources.get(treatment.draftSourceId);requireValue(source?.parsed&&source.code.length>0&&source.validation.length>0,'harness_treatment_draft_proof_required');
+    requireValue((await sourceFreshness(s)).get(treatment.draftSourceId)&&!s.invalidatedSources.has(treatment.draftSourceId),'harness_treatment_evidence_changed');
+    // Reuse the registered local evidence inventory. This checks binding and
+    // freshness only; it is not a policy interpretation or validation engine.
+    const inventory=[...source.originals,...source.code,...source.validation];
+    requireValue(treatment.traceReferences.every(ref=>inventory.some(f=>f.path===ref.locator&&f.digest===ref.digest)),'harness_treatment_unregistered_evidence');
+    const data={...treatment,draftSourceVersion:source.sourceVersion,scope:s.meta.scope,publicRuleState:'uncovered'};data.treatmentVersion=hash(data);
+    const old=s.treatments.find(t=>t.treatmentId===data.treatmentId);requireValue(!old||old.treatmentVersion===data.treatmentVersion,'harness_treatment_id_conflict');
+    if(!old)await appendHarness(s,'treatment',data);return {status:old?'replayed':'recorded',treatmentId:data.treatmentId,treatmentVersion:data.treatmentVersion,publicRulePromoted:false};
+  });
+}

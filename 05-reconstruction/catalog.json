@@ -1,7 +1,7 @@
 {
   "source_bundle": "02-scripts/work/index-yoSd2Nx7.js",
   "source_bundle_sha256": "098e3f59318305abace7f8f600fac22986f7102438af73c652266b716fe0265e",
-  "runtime": "OpenAI Codex app-server (WebSocket subprotocol codex-runtime-ticket.<ticket>)",
+  "runtime": "Local finance-mcp stdio; Pi native MCP extension or other MCP hosts",
   "runtime_protocol": {
     "ticket_endpoint": "POST /api/agent/runtime-ticket  (override: window.__WEB_CHAT_CONFIG__.runtimeTicketUrl)",
     "transport": "WebSocket, subprotocol `codex-runtime-ticket.${ticket}`",
@@ -39,33 +39,40 @@
     "subagent_spawn_kind": "subAgentThreadSpawn (parent_thread_id / thread_spawn)",
     "approval_kind": "codex_approval_kind=mcp_tool_call; elicitation mode openai/form with requestedSchema",
     "model_api": "OpenAI Responses API (/v1/responses, api.openai.com)",
-    "sentry_release": "codex2-verified-release-20261011 / service codex2-web"
+    "sentry_release": "codex2-verified-release-20261011 / service codex2-web",
+    "source_metadata_only": true,
+    "note": "Historical upstream source metadata; not a declaration of local connections or supported tools"
   },
   "subagents": [
     {
       "runtimeName": "legacy-book-import",
       "displayName": "导入旧账",
-      "description": "导入 Excel 旧账、历史凭证、科目余额和期初余额，并支持账套初始化。"
+      "description": "导入 Excel 旧账、历史凭证、科目余额和期初余额，并支持账套初始化。",
+      "availability": "limited"
     },
     {
       "runtimeName": "tax-filing",
-      "displayName": "全税种申报",
-      "description": "处理增值税、附加税、企业所得税、印花税、年度申报及申报状态。"
+      "displayName": "离线税务与支持范围",
+      "description": "现有离线VAT部分字段及复核；全税种、年度与在线申报未实现",
+      "availability": "reference_only"
     },
     {
       "runtimeName": "individual-income-tax-filing",
-      "displayName": "个税申报",
-      "description": "完成人员报送、工资薪金个税计算、申报、缴款及申报状态查询。"
+      "displayName": "个税未接入",
+      "description": "历史模板保留；人员报送、个税算法、申报和缴款未实现",
+      "availability": "reference_only"
     },
     {
       "runtimeName": "bookkeeping",
       "displayName": "智能核算",
-      "description": "处理原始单据入账、凭证、工资与固定资产核算，以及期末结转和结账。"
+      "description": "处理原始单据入账、凭证、工资与固定资产核算，以及期末结转和结账。",
+      "availability": "limited"
     },
     {
       "runtimeName": "invoice-issuing",
-      "displayName": "智能开票",
-      "description": "提取并校验开票信息，选择税收分类编码，并按确认后的完整参数正式开票。"
+      "displayName": "开票未接入",
+      "description": "历史模板保留；正式开票、红冲和赋码未接入",
+      "availability": "reference_only"
     }
   ],
   "dynamic_tools": {
@@ -124,19 +131,26 @@
     "bookkeeping/references/fixed-asset-bookkeeping.md": "读取固定资产入账规则",
     "bookkeeping/references/other-business-bookkeeping.md": "读取其他业务入账规则",
     "bookkeeping/references/period-end-bookkeeping.md": "读取期末做账规则",
-    "invoice-issuing/SKILL.md": "读取开票总则",
-    "invoice-issuing/references/native-tool-map.md": "读取开票工具规则",
-    "invoice-issuing/references/tax-code-filtering.md": "读取本地赋码规则",
-    "individual-income-tax-filing/SKILL.md": "读取个税申报总则",
-    "individual-income-tax-filing/references/native-tool-map.md": "读取个税工具规则",
-    "individual-income-tax-filing/references/workflow-state.md": "读取个税续办规则",
-    "tax-filing/SKILL.md": "读取报税总则",
-    "tax-filing/references/enterprise-tax.md": "读取企业税申报规则",
-    "tax-filing/references/individual-income-tax.md": "读取个税申报路由",
-    "tax-filing/references/declaration-data-query.md": "读取申报数据查询规则",
-    "tax-filing/references/correction-cancel.md": "读取申报更正与作废规则",
-    "tax-filing/references/annual-tax.md": "读取年度申报规则",
-    "legacy-book-import/SKILL.md": "读取旧账导入规则"
+    "invoice-issuing/SKILL.md": "读取实际范围说明（原历史入口）",
+    "invoice-issuing/references/native-tool-map.md": "历史模板参考（非可执行规则）",
+    "invoice-issuing/references/tax-code-filtering.md": "历史模板参考（非可执行规则）",
+    "individual-income-tax-filing/SKILL.md": "读取实际范围说明（原历史入口）",
+    "individual-income-tax-filing/references/native-tool-map.md": "历史模板参考（非可执行规则）",
+    "individual-income-tax-filing/references/workflow-state.md": "历史模板参考（非可执行规则）",
+    "tax-filing/SKILL.md": "读取实际范围说明（原历史入口）",
+    "tax-filing/references/enterprise-tax.md": "历史模板参考（非可执行规则）",
+    "tax-filing/references/individual-income-tax.md": "历史模板参考（非可执行规则）",
+    "tax-filing/references/declaration-data-query.md": "历史模板参考（非可执行规则）",
+    "tax-filing/references/correction-cancel.md": "历史模板参考（非可执行规则）",
+    "tax-filing/references/annual-tax.md": "历史模板参考（非可执行规则）",
+    "legacy-book-import/SKILL.md": "读取旧账导入规则",
+    "harness/SKILL.md": "读取本机财税Harness渐进入口",
+    "harness/references/materials.md": "按需读取Harness materials 指引",
+    "harness/references/accounting.md": "按需读取Harness accounting 指引",
+    "harness/references/tax.md": "按需读取Harness tax 指引",
+    "harness/references/review.md": "按需读取Harness review 指引",
+    "harness/references/recovery.md": "按需读取Harness recovery 指引",
+    "harness/references/adapters.md": "按需读取Harness adapters 指引"
   },
   "activity_labels": {
     "commandExecution": "运行检查",
