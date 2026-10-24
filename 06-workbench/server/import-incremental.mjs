@@ -1151,6 +1151,9 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
         openingBalancesApplied: outcome.openingBalancesApplied,
         vouchersCreated: outcome.vouchersCreated,
         vouchersDeduplicated: outcome.vouchersDeduplicated,
+        contentFingerprint: fingerprint, mode, accountSetId,
+        source: { system: source.value.system, enterpriseKey },
+        sourceTrace: outcome.sourceTrace.map(t => ({ ...t, period: vouchers.find(v => v.sourceVoucherId === t.sourceVoucherId).voucher.period })),
       },
     });
   };
@@ -1273,6 +1276,122 @@ export function getImportBatch(batchId) {
     sourceTrace: links.map((link) => linkTraceItem(link)),
     voucherCount: links.length,
   };
+}
+
+/** Read-only expected identities from saved bytes; never rerun import admission/writes. */
+export function expectedImportSources(payload, accountSetId, record) {
+  const set = A.getAccountSet(accountSetId);
+  // A create request originally normalized against the pinned profile seed plus
+  // its own supplied accounts, never today's mutable COA or opening balances.
+  const context = { profileId: set.accounting_profile_id,
+    ...(record.mode === MODE_CREATE ? {} : { accounts: A.listAccounts(accountSetId) }) };
+  const strict = A.normalizeImportPayload(payload, context);
+  if (!strict.ok) throw Object.assign(new Error("import_saved_input_invalid"), { code: "import_saved_input_invalid" });
+  const normalized = strict.normalized, raw = payload.vouchers ?? [];
+  const sources = normalized.vouchers.map((v, i) => ({
+    sourceVoucherId: textField(raw[i]?.sourceVoucherId ?? raw[i]?.source_voucher_id) || `${DERIVED_PREFIX}${v.period}/${v.word}/${v.number}`,
+    contentFingerprint: voucherFingerprint(v), period: v.period, voucher: v,
+  }));
+  return { sources, contentFingerprint: batchFingerprint({mode:record.mode,targetAccountSetId:accountSetId,
+    source:{system:record.source_system,enterpriseKey:record.enterprise_key},meta:normalized.account_set,normalized,
+    vouchers:sources.map(t=>({sourceVoucherId:t.sourceVoucherId,fingerprint:t.contentFingerprint}))}) };
+}
+
+/** Compare a complete independently persisted expectation with live associations.
+ * New batches retain their original outcome tuples. Older batches need saved
+ * input or an established checkpoint; a residual row count never replaces IDs.
+ * Deduplicated links intentionally keep the source's original owning batch.
+ */
+export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey, sourceSystem, expectedSources, checkpointTrace, period } = {}) {
+  const fail = () => ({ ok: false, reason: "import_source_trace_changed" });
+  const record = getBatch(db, batchId);
+  if (!record || record.status !== "completed" || record.account_set_id !== accountSetId
+      || record.enterprise_key !== enterpriseKey || (sourceSystem !== undefined && record.source_system !== sourceSystem)) return fail();
+  const result = safeJson(record.result_json);
+  if ((result.contentFingerprint !== undefined && result.contentFingerprint !== record.content_fingerprint)
+      || (result.mode !== undefined && result.mode !== record.mode)
+      || (result.accountSetId !== undefined && result.accountSetId !== accountSetId)
+      || (result.source !== undefined && (result.source?.system !== record.source_system || result.source?.enterpriseKey !== enterpriseKey))) return fail();
+  const stored = Array.isArray(result.sourceTrace) ? result.sourceTrace : null;
+  let expected = stored ?? checkpointTrace;
+  // With original saved input, an old counts-only batch can establish its first
+  // local checkpoint. Derive IDs from that full input, not surviving link rows;
+  // verify each actual posted voucher against both the input and source proof.
+  if (!expected && Array.isArray(expectedSources)) {
+    expected = expectedSources.map(input => {
+      const source=getVoucherSource(db,record.source_system,enterpriseKey,input.sourceVoucherId);
+      const voucher=source&&db.prepare('SELECT * FROM vouchers WHERE id=?').get(source.voucher_id);
+      if (!source || !voucher || !input.voucher) return null;
+      const planned={...input.voucher,number:input.voucher.number??voucher.number};
+      // createVoucher defaults each blank entry summary to the voucher summary.
+      planned.entries=planned.entries.map(e=>({...e,summary:e.summary||planned.summary||''}));
+      if (voucherFingerprint(planned)!==source.voucher_fingerprint) return null;
+      return {...input,accountSetId,voucherId:source.voucher_id,action:source.batch_id===batchId?'created':'deduplicated'};
+    });
+    if (expected.some(t=>!t)) return fail();
+  }
+  if (!Array.isArray(expected)) {
+    // A legacy empty batch is provable from its completed result alone.
+    if (result.vouchersCreated !== 0 || result.vouchersDeduplicated !== 0 || (expectedSources && expectedSources.length)) return fail();
+  }
+  const tuples = expected ?? [];
+  const unique = rows => new Set(rows.map(r => r.sourceVoucherId)).size === rows.length;
+  if (!unique(tuples) || (expectedSources && (!unique(expectedSources) || expectedSources.length !== tuples.length))) return fail();
+  const inputs = expectedSources && new Map(expectedSources.map(r => [r.sourceVoucherId, r]));
+  const checkpoints = checkpointTrace && new Map(checkpointTrace.map(r => [r.sourceVoucherId, r]));
+  if (checkpointTrace && (!unique(checkpointTrace) || checkpointTrace.length !== tuples.length)) return fail();
+  const full = [];
+  for (const t of tuples) {
+    const input = inputs?.get(t.sourceVoucherId), checkpoint = checkpoints?.get(t.sourceVoucherId);
+    if ((inputs && (!input || (t.contentFingerprint !== undefined && t.contentFingerprint !== input.contentFingerprint)))
+        || (checkpoints && (!checkpoint || checkpoint.voucherId !== t.voucherId || checkpoint.action !== t.action))) return fail();
+    const fingerprint = t.contentFingerprint ?? input?.contentFingerprint;
+    const voucher = db.prepare('SELECT * FROM vouchers WHERE id=?').get(t.voucherId);
+    const tuplePeriod = t.period ?? input?.period ?? voucher?.period;
+    if (!fingerprint || !tuplePeriod || (input && input.period !== tuplePeriod)
+        || !['created','deduplicated'].includes(t.action) || !Number.isInteger(t.voucherId)
+        || (t.accountSetId !== undefined && t.accountSetId !== accountSetId)) return fail();
+    full.push({ ...t, contentFingerprint: fingerprint, period: tuplePeriod });
+  }
+  if (result.vouchersCreated !== full.filter(t => t.action === 'created').length
+      || result.vouchersDeduplicated !== full.filter(t => t.action === 'deduplicated').length) return fail();
+  const relevant = t => !period || t.period <= period;
+  const wanted = full.filter(relevant), expectedIds = new Set(wanted.map(t => t.sourceVoucherId));
+  const links = listBatchVouchers(db, batchId);
+  // Scope from the independent tuple period, including unknown extra links.
+  const scopedLinks = links.filter(l => {
+    const t = full.find(t => t.sourceVoucherId === l.source_voucher_id);
+    if (t) return relevant(t);
+    const v = db.prepare('SELECT period FROM vouchers WHERE id=?').get(l.voucher_id);
+    return !period || !v || v.period <= period;
+  });
+  if (scopedLinks.length !== wanted.length || new Set(scopedLinks.map(l => l.source_voucher_id)).size !== scopedLinks.length) return fail();
+  const same = (row, t) => row && row.source_system === record.source_system && row.enterprise_key === enterpriseKey
+    && row.source_voucher_id === t.sourceVoucherId && row.account_set_id === accountSetId
+    && row.voucher_id === t.voucherId && row.content_fingerprint === t.contentFingerprint;
+  for (const t of wanted) {
+    const link = scopedLinks.find(l => l.source_voucher_id === t.sourceVoucherId);
+    const source = getVoucherSource(db, record.source_system, enterpriseKey, t.sourceVoucherId);
+    const voucher = db.prepare('SELECT * FROM vouchers WHERE id=?').get(t.voucherId);
+    if (!same(link,t) || link.action !== t.action || !same(source,t) || (t.action === 'created' && source.batch_id !== batchId)
+        || !voucher || voucher.account_set_id !== accountSetId || voucher.period !== t.period
+        || registeredVoucherState(source).state !== VOUCHER_STATE.OK) return fail();
+    // Source ownership itself must have the original created link and outcome.
+    const owner = getBatch(db, source.batch_id), ownerResult = owner && safeJson(owner.result_json);
+    const ownerLink = listBatchVouchers(db, source.batch_id).find(l => l.source_voucher_id === t.sourceVoucherId);
+    if (!owner || owner.status !== 'completed' || owner.source_system !== record.source_system || owner.enterprise_key !== enterpriseKey
+        || owner.account_set_id !== accountSetId || !same(ownerLink,t) || ownerLink.action !== 'created'
+        || (Array.isArray(ownerResult.sourceTrace) && !ownerResult.sourceTrace.some(o => o.sourceVoucherId === t.sourceVoucherId && o.voucherId === t.voucherId && o.contentFingerprint === t.contentFingerprint && o.action === 'created'))) return fail();
+  }
+  const ownedSources = db.prepare('SELECT * FROM import_voucher_sources WHERE batch_id=?').all(batchId).filter(s => {
+    const t = full.find(t => t.sourceVoucherId === s.source_voucher_id);
+    if (t) return relevant(t);
+    const v = db.prepare('SELECT period FROM vouchers WHERE id=?').get(s.voucher_id);
+    return !period || !v || v.period <= period;
+  });
+  if (ownedSources.some(s => !expectedIds.has(s.source_voucher_id) || !same(s, wanted.find(t => t.sourceVoucherId === s.source_voucher_id))
+      || wanted.find(t => t.sourceVoucherId === s.source_voucher_id).action !== 'created')) return fail();
+  return { ok: true };
 }
 
 /** 只读：批次 / 企业绑定 / 来源证据的当前状态（来源追踪用）。 */

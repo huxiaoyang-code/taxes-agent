@@ -42,7 +42,7 @@ const [A, { db }, importStorage, importIncrementalModule, reportExportModule] = 
 const {
   getAccountSetEnterprise, getEnterpriseAccountSet, getVoucherSource, persistedVoucherFingerprint,
 } = importStorage;
-const { getImportBatch, importIncremental } = importIncrementalModule;
+const { getImportBatch, importIncremental, expectedImportSources, verifyImportBatchSources } = importIncrementalModule;
 const { buildReportExport } = reportExportModule;
 
 const r2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
@@ -169,6 +169,15 @@ export function resolveItemBinding({ db, item, stage = null, allowUnboundSet = f
       declaredAccountSetId: resolved,
     });
   }
+  // Resume/retry preflight runs before claiming a fresh attempt. A successful
+  // financial checkpoint whose source proof broke must never enter import again.
+  if (!stage && item.id && resolved !== null) {
+    const prior=db.prepare("SELECT evidence_json,outcome_hash FROM local_batch_stages WHERE item_id=? AND stage_key LIKE 'import:%'").all(item.id);
+    for(const row of prior){const evidence=safeParse(row.evidence_json);if(!row.outcome_hash||!evidence.batchId||!Array.isArray(evidence.sourceTrace))continue;
+      const check=verifyBatchSourceEvidence(evidence.batchId,{...item,account_set_id:resolved},{checkpoint:evidence});
+      if(!check.ok)throw domainError(check.reason,"已成功导入的来源证据不完整，禁止重新执行金融动作");
+    }
+  }
   return { accountSetId: resolved, binding, bound: boundSetId !== null };
 }
 
@@ -247,6 +256,8 @@ export function executeImportStage(ctx) {
   if (!batch?.batch || batch.batch.status !== "completed") {
     throw domainError("import_batch_not_completed", "批次未标记完成", { status: batch?.batch?.status ?? null });
   }
+  const completeness = verifyBatchSourceEvidence(spec.batchId, { ...item, account_set_id: batch.batch.accountSetId });
+  if (!completeness.ok) throw domainError(completeness.reason, "导入来源关联与独立预期不一致");
   const trace = Array.isArray(batch.sourceTrace) ? batch.sourceTrace : [];
   const bad = trace.filter((entry) => entry.state !== "ok");
   if (bad.length) {
@@ -868,18 +879,49 @@ export function verifyReportInputEvidence({item,period,allowSnapshotOnly=false})
  return {ok:true};
 }
 
+/** Saved bytes and successful checkpoint tuples remain independent of live links. */
+function verifyBatchSourceEvidence(batchId, item, {period, checkpoint} = {}) {
+ try {
+  const inputs = db.prepare(`SELECT n.*,i.source_system,i.enterprise_key FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.batch_id=? ORDER BY n.input_key`).all(item.account_set_id,batchId);
+  const checkpoints = db.prepare(`SELECT s.evidence_json FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'import:%' ORDER BY s.id`).all(item.account_set_id)
+    .map(s=>safeParse(s.evidence_json)).filter(e=>e.batchId===batchId && Array.isArray(e.sourceTrace));
+  if(checkpoint)checkpoints.push(checkpoint);
+  const base={accountSetId:item.account_set_id,enterpriseKey:item.enterprise_key,period};
+  const record=importStorage.getBatch(db,batchId),result=record?safeParse(record.result_json):{};
+  const independent=Array.isArray(result.sourceTrace)?result.sourceTrace:checkpoints[0]?.vouchers;
+  if(period&&record?.enterprise_key===item.enterprise_key&&Array.isArray(independent)&&independent.length&&independent.every(t=>typeof t.period==='string'&&t.period>period)){
+   const current=[...db.prepare('SELECT voucher_id FROM import_batch_vouchers WHERE batch_id=?').all(batchId),...db.prepare('SELECT voucher_id FROM import_voucher_sources WHERE batch_id=?').all(batchId)];
+   if(current.every(t=>{const v=db.prepare('SELECT account_set_id,period FROM vouchers WHERE id=?').get(t.voucher_id);return v&&v.account_set_id===item.account_set_id&&v.period>period;}))return {ok:true};
+  }
+  const saved = inputs.map(input=>{
+   const registered=importStorage.getBatch(db,batchId);
+   if(!registered||registered.source_system!==input.source_system||registered.enterprise_key!==input.enterprise_key)throw domainError('import_source_trace_changed');
+   const bytes=Buffer.from(input.content);
+   if(sha256(bytes)!==input.source_hash)throw domainError('input_changed');
+   const expected=expectedImportSources(JSON.parse(bytes.toString('utf8')),item.account_set_id,registered);
+   if(!Array.isArray(result.sourceTrace)&&!checkpoints.length&&expected.contentFingerprint!==registered.content_fingerprint)throw domainError('import_source_trace_changed');
+   return expected.sources;
+  });
+  // Saved original identities can establish the first legacy local checkpoint.
+  if(!Array.isArray(result.sourceTrace) && (result.vouchersCreated||result.vouchersDeduplicated) && !saved.length)return {ok:false,reason:'import_source_trace_changed'};
+  const expectations=saved.length?saved:[undefined],traces=checkpoints.length?checkpoints:[undefined];
+  for(const expectedSources of expectations)for(const evidence of traces){
+   if(evidence&&(evidence.contentFingerprint!==record?.content_fingerprint||evidence.mode!==record?.mode||evidence.accountSetId!==item.account_set_id))return {ok:false,reason:'import_source_trace_changed'};
+   const trace=evidence?.sourceTrace.map(t=>({...t,period:evidence.vouchers?.find(v=>v.sourceVoucherId===t.sourceVoucherId)?.period}));
+   const check=verifyImportBatchSources(batchId,{...base,expectedSources,checkpointTrace:trace});if(!check.ok)return check;
+  }
+  return {ok:true};
+ }catch{return {ok:false,reason:'import_source_trace_changed'};}
+}
+
 export function verifyReportSourceEvidence({item,period}) {
  const setId=item.account_set_id;
- const links=db.prepare(`SELECT l.* FROM import_batch_vouchers l LEFT JOIN vouchers v ON v.id=l.voucher_id WHERE l.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY l.id`).all(setId,period);
- const sources=db.prepare(`SELECT s.* FROM import_voucher_sources s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
- const batchIds=new Set([...links,...sources].map(r=>r.batch_id));
- for(const batchId of batchIds){
-  const record=importStorage.getBatch(db,batchId),batch=getImportBatch(batchId);
-  if(!record||record.status!=='completed'||record.account_set_id!==setId||record.enterprise_key!==item.enterprise_key)return {ok:false,reason:'import_batch_state_changed'};
-  const relevant=[...links,...sources].filter(r=>r.batch_id===batchId),ids=new Set(relevant.map(r=>r.voucher_id)),trace=(batch.sourceTrace??[]).filter(r=>ids.has(r.voucherId));
-  if(!trace.length||relevant.some(row=>!trace.some(t=>t.sourceVoucherId===row.source_voucher_id&&t.voucherId===row.voucher_id&&t.accountSetId===setId))||trace.some(t=>t.state!=='ok'))return {ok:false,reason:'import_source_trace_changed'};
- }
- for(const link of links){const source=getVoucherSource(db,link.source_system,link.enterprise_key,link.source_voucher_id);if(!source||source.account_set_id!==setId||source.voucher_id!==link.voucher_id||source.content_fingerprint!==link.content_fingerprint)return {ok:false,reason:'import_source_trace_changed'};}
+ const scoped=table=>db.prepare(`SELECT s.* FROM ${table} s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
+ const links=scoped('import_batch_vouchers'),sources=scoped('import_voucher_sources');
+ // Registered outcomes discover even batches whose two association sides vanished.
+ const batches=db.prepare("SELECT batch_id FROM import_batches WHERE account_set_id=? AND status='completed'").all(setId);
+ const batchIds=new Set([...batches,...links,...sources].map(r=>r.batch_id));
+ for(const batchId of batchIds){const check=verifyBatchSourceEvidence(batchId,item,{period});if(!check.ok)return check;}
  return {ok:true};
 }
 
@@ -910,6 +952,9 @@ export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapsh
     if (key.startsWith(IMPORT_STAGE_PREFIX)) {
       const batch = getImportBatch(evidence.batchId);
       if (!batch?.batch || batch.batch.status !== "completed") return { ok: false, reason: "import_batch_state_changed" };
+      if (batch.source.system !== item.source_system || batch.source.enterpriseKey !== item.enterprise_key) return {ok:false,reason:"import_source_trace_changed"};
+      const completeness = verifyBatchSourceEvidence(evidence.batchId, {...item,account_set_id:expectedSetId}, {checkpoint:evidence});
+      if (!completeness.ok) return completeness;
       const bad = (batch.sourceTrace || []).filter((entry) => entry.state !== "ok");
       if (bad.length) return { ok: false, reason: "import_source_trace_changed", details: { count: bad.length } };
       for (const entry of evidence.vouchers || []) {
