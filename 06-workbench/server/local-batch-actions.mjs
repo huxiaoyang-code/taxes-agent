@@ -77,7 +77,7 @@ function sanitizeError(error) {
  * 只按 `period=?` 取本期凭证会漏掉以前期间被反过账 / 改金额 / 删除（报表内容已变、旧产物却仍被当成功）。
  * 本期之后的数据不在此报表依赖范围内，不进入摘要（避免无意义的失效告警）。
  */
-export function businessDigest(db, setId, period) {
+export function businessDigest(db, setId, period, {reportAuxiliary=false}={}) {
   const accountSet = db.prepare(
     `SELECT id, name, start_period, accounting_standard, accounting_profile_id FROM account_sets WHERE id=?`,
   ).get(setId) || null;
@@ -111,7 +111,15 @@ export function businessDigest(db, setId, period) {
   }));
   const identity=db.prepare('SELECT * FROM import_enterprise_account_sets WHERE account_set_id=?').get(setId)??null;
   const auxiliary={};
-  for(const table of ['aux_entities','aux_allocations','aux_requirements'])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))auxiliary[table]=db.prepare(`SELECT * FROM ${table} WHERE account_set_id=? ORDER BY rowid`).all(setId);
+  // Report readiness reads openings and posted movements through its period.
+  // Preserve the original full auxiliary digest for financial stage evidence.
+  const allocated=reportAuxiliary&&db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='aux_allocations'").get()
+    ? db.prepare(`SELECT a.* FROM aux_allocations a LEFT JOIN voucher_entries e ON e.id=a.entry_id LEFT JOIN vouchers v ON v.id=e.voucher_id WHERE a.account_set_id=? AND ((a.entry_id IS NULL AND a.opening_code IS NOT NULL) OR (v.account_set_id=a.account_set_id AND v.status='posted' AND v.period<=?)) ORDER BY a.id`).all(setId,period):[];
+  const entityIds=new Set(allocated.flatMap(row=>['project_id','department_id','party_id'].map(key=>row[key]).filter(id=>id!==null)));
+  for(const table of ['aux_entities','aux_allocations','aux_requirements'])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)){
+    if(reportAuxiliary&&table==='aux_allocations')auxiliary[table]=allocated;
+    else {const rows=db.prepare(`SELECT * FROM ${table} WHERE account_set_id=? ORDER BY rowid`).all(setId);auxiliary[table]=reportAuxiliary&&table==='aux_entities'?rows.filter(row=>entityIds.has(row.id)):rows;}
+  }
   return sha256(canonicalJson({setId,period,accountSet,identity,auxiliary,accounts,openings,periods:periodRows,vouchers}));
 }
 
@@ -124,7 +132,7 @@ export function reportBusinessDigest(db,setId,period){
  const sources=sourceRows('import_voucher_sources'),links=sourceRows('import_batch_vouchers'),ids=[...new Set([...sources,...links].map(r=>r.batch_id))].sort();
  const batches=ids.map(id=>importStorage.getBatch(db,id)??null);
  const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(setId,period).map(({content,...row})=>({...row,savedContentHash:content instanceof Uint8Array?sha256(Buffer.from(content)):null}));
- return sha256(canonicalJson({business:businessDigest(db,setId,period),sources,links,batches,inputs}));
+ return sha256(canonicalJson({business:businessDigest(db,setId,period,{reportAuxiliary:true}),sources,links,batches,inputs}));
 }
 
 /**

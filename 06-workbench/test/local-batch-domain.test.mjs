@@ -16,7 +16,7 @@ let db;
 try {
  const A=await import('../server/accounting.mjs');({db}=await import('../server/db.mjs'));
  const R=await import('../server/local-batch-runner.mjs'),S=await import('../server/local-batch-storage.mjs');
- if(!['boundaries','source-evidence','source-case'].includes(process.env.W3B_CASE)){
+ if(!['boundaries','source-evidence','source-case','auxiliary-evidence','auxiliary-case'].includes(process.env.W3B_CASE)){
  const count=process.env.W3B_SMOKE==='1'?1:20;
  const companies=[];
  const kinds=['balance-sheet','income-statement','cash-flow-statement','trial-balance','ledger'];
@@ -93,13 +93,20 @@ try {
  }
  console.log('local-batch-domain: chain passed '+count);
  }
- if(process.env.W3B_CASE==='source-case')await reportSourceBoundary(A,S,R,db,process.env.R1_CASE);
+ if(process.env.W3B_CASE==='auxiliary-case')await reportAuxiliaryBoundary(A,S,R,db,process.env.R2_CASE);
+ else if(process.env.W3B_CASE==='source-case')await reportSourceBoundary(A,S,R,db,process.env.R1_CASE);
  else {
-  if(process.env.W3B_CASE!=='source-evidence')await boundaries(A,S,R,db);
+  if(!['source-evidence','auxiliary-evidence'].includes(process.env.W3B_CASE))await boundaries(A,S,R,db);
+  if(process.env.W3B_CASE!=='auxiliary-evidence'){
   for(const mode of ['positive','source-before','inline-before','inline-type-before','source-after','inline-after','source-recover','inline-recover','report-only','report-only-delete']){
    const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'source-case',R1_CASE:mode}}).done;writeFileSync(join(root,'r1-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
   }
   console.log('R1 report source evidence: ten real isolated cases passed');
+  }
+  for(const mode of ['future-draft-xlsx','future-posted-pdf','foreign-xlsx','opening-xlsx','opening-pdf','current-xlsx','prior-pdf','entity-pdf','requirement-xlsx']){
+   const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'auxiliary-case',R2_CASE:mode}}).done;writeFileSync(join(root,'r2-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
+  }
+  console.log('R2 report auxiliary scope: nine real isolated cases passed');
  }
 }finally {if(db){db.close();console.log('DB_CLOSED');}}
 
@@ -190,4 +197,42 @@ async function reportSourceBoundary(A,S,R,db,mode){
  if(mode==='positive'){assert.equal(result.status,'succeeded',JSON.stringify(result));assert.ok(reportStages.every(s=>s.status==='succeeded'));assert.equal(A.incomeStatement(set.id,period).current['净利润'],20);}
  else {assert.equal(result.status,'needs_review',JSON.stringify(result));assert.ok(reportStages.every(s=>s.status==='needs_review'));if(mode==='report-only-delete'){const after=JSON.parse(facts()),original=JSON.parse(before);assert.deepEqual(after.links,[]);delete after.links;delete original.links;assert.deepEqual(after,original,'only the explicitly deleted source associations change; 12.34 finance never replayed');}else assert.equal(facts(),before,'completed finance and source-batch associations never replay');if(stageBefore){const old=S.getStage(db,stageBefore.id);assert.deepEqual({id:old.id,attempt:old.attempt,input_hash:old.input_hash,outcome_hash:old.outcome_hash},stageBefore);assert.equal(old.status,'succeeded');}if(mode.endsWith('-before')||mode.startsWith('report-only'))assert.equal(db.prepare('SELECT COUNT(*) n FROM local_batch_artifacts').get().n,0,'before publish drift leaves no successful artifact');if(file)assert.ok(readFileSync(file).length>0,'published drift retains actual file');}
  writeFileSync(join(root,'r1-result.json'),JSON.stringify({mode,result,stages,artifacts:db.prepare('SELECT * FROM local_batch_artifacts ORDER BY id').all(),sourceTrace:I.getImportBatch(key).sourceTrace,finance:JSON.parse(facts())},null,2));console.log('PASS R1 '+mode+' actual '+format+' worker / persisted source evidence');
+}
+
+async function reportAuxiliaryBoundary(A,S,R,db,mode){
+ const X=await import('../server/auxiliary-accounting.mjs'),AS=await import('../server/auxiliary-storage.mjs'),B=await import('../server/local-batch-actions.mjs');
+ const key='R2-'+mode,period='2026-01',format=mode.endsWith('pdf')?'pdf':'xlsx',set=A.createAccountSet({name:key,start_period:'2025-12',enterprise:{enterpriseKey:key}});
+ A.setOpeningBalances(set.id,[{code:'1002',debit:1000},{code:'3001',credit:1000}]);
+ const prior=A.createVoucher(set.id,{period:'2025-12',voucher_date:'2025-12-03',status:'posted',number:1,entries:[{code:'1002',debit:12.34},{code:'5001',credit:12.34}]});
+ async function run(jobKey,periods,hooks={}){const v=S.validateManifest({schemaVersion:1,jobKey,concurrency:1,items:[{itemKey:key,source:{system:'r2',enterpriseKey:key},accountSetId:set.id,periods}]});assert.equal(v.ok,true);const json=S.canonicalJson(v.manifest);return R.createAndRun({manifest:v.manifest,manifestJson:json,manifestHash:S.sha256(json),...S.buildPlan({manifest:v.manifest,manifestDir:root}),outputDir:join(root,'r2-out'),hooks});}
+ const seedKey=key+'-seed',payload={account_set:{name:key,start_period:'2025-12'},vouchers:[{sourceVoucherId:key,period,date:period+'-03',number:1,entries:[{code:'1002',debit:20},{code:'5001',credit:20}]}]};
+ assert.equal((await run(seedKey,[{period,imports:[{batchId:seedKey,mode:'append',confirmNewBinding:true,payload}],post:{vouchers:[{sourceVoucherId:key}]}}])).status,'succeeded');
+ await AS.ensureAuxiliarySchema(db,{dbPath:join(process.env.WORKBENCH_DATA_DIR,'workbench.db'),outDir:join(root,'before-r2-aux')});
+ const entity=(id,code)=>X.createAuxiliaryEntity(db,{accountSetId:id,kind:'party',code,name:code,requestId:'entity-'+code}).id;
+ const p=entity(set.id,'P'),q=entity(set.id,'Q'),entry=(id,code='1002')=>db.prepare('SELECT id FROM voucher_entries WHERE voucher_id=? AND code=?').get(id,code).id;
+ const allocate=(id,target,party,debit,requestId)=>X.replaceAuxiliaryAllocations(db,{accountSetId:id,...target,allocations:[{partyId:party,debit}],requestId,reason:'R2 synthetic scope proof'});
+ allocate(set.id,{openingCode:'1002'},p,1000,'opening-initial');allocate(set.id,{entryId:entry(prior.id)},p,12.34,'prior-initial');
+ const current=db.prepare('SELECT voucher_id AS id FROM import_voucher_sources WHERE account_set_id=? AND source_voucher_id=?').get(set.id,key);assert.ok(current);allocate(set.id,{entryId:entry(current.id)},p,20,'current-initial');
+ X.setAuxiliaryRequirement(db,{accountSetId:set.id,code:'1002',party:true,reason:'actual relevant requirement'});assert.equal(AS.auxiliaryCompletenessStep(db,set.id,period).status,'ok');
+ let futureId,foreignId,foreignParty;
+ if(mode.startsWith('future'))futureId=A.createVoucher(set.id,{period:'2026-02',voucher_date:'2026-02-03',status:mode.includes('posted')?'posted':'draft',number:1,entries:[{code:'1002',debit:10},{code:'5001',credit:10}]}).id;
+ if(mode.startsWith('foreign')){const other=A.createAccountSet({name:'R2 OTHER',start_period:'2026-01',enterprise:{enterpriseKey:'R2-OTHER'}});foreignId=A.createVoucher(other.id,{period, voucher_date:period+'-04',status:'posted',number:1,entries:[{code:'1002',debit:10},{code:'5001',credit:10}]}).id;foreignParty={id:other.id,party:entity(other.id,'FOREIGN')};}
+ const seedStages=()=>db.prepare('SELECT s.id,s.attempt,s.status,s.input_hash,s.outcome_hash FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? ORDER BY s.id').all(seedKey);
+ const finance=()=>JSON.stringify({vouchers:db.prepare('SELECT * FROM vouchers WHERE account_set_id=? ORDER BY id').all(set.id),entries:db.prepare('SELECT e.* FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? ORDER BY e.id').all(set.id),sources:db.prepare('SELECT * FROM import_voucher_sources WHERE account_set_id=? ORDER BY id').all(set.id),batches:db.prepare('SELECT * FROM import_batches WHERE batch_id=?').all(seedKey)});
+ const oldStages=seedStages(),oldFinance=finance(),oldReport=JSON.stringify(A.balanceSheet(set.id,period));assert.equal(A.balanceSheet(set.id,period).totals.assets,1032.34);let changed=false,digests;
+ const result=await run(key+'-report',[{period,reports:[{kind:'balance-sheet',formats:[format]}]}],{beforeArtifactPublish(){assert.equal(changed,false);changed=true;const before=B.reportBusinessDigest(db,set.id,period),financialBefore=B.businessDigest(db,set.id,period);
+  if(mode.startsWith('future'))allocate(set.id,{entryId:entry(futureId)},p,10,'future-changed');
+  else if(mode.startsWith('foreign'))allocate(foreignParty.id,{entryId:entry(foreignId)},foreignParty.party,10,'foreign-changed');
+  else if(mode.startsWith('opening'))allocate(set.id,{openingCode:'1002'},q,1000,'opening-changed');
+  else if(mode.startsWith('current'))allocate(set.id,{entryId:entry(current.id)},q,20,'current-changed');
+  else if(mode.startsWith('prior'))allocate(set.id,{entryId:entry(prior.id)},q,12.34,'prior-changed');
+  else if(mode.startsWith('entity'))X.updateAuxiliaryEntity(db,{accountSetId:set.id,entityId:p,active:false,reason:'actual readiness change'});
+  else X.setAuxiliaryRequirement(db,{accountSetId:set.id,code:'1002',party:false,reason:'actual requirement change'});
+  assert.equal(JSON.stringify(A.balanceSheet(set.id,period)),oldReport,'GL report JSON does not change when only auxiliary dependency changes');digests={before,after:B.reportBusinessDigest(db,set.id,period),financialBefore,financialAfter:B.businessDigest(db,set.id,period)};
+ }});
+ assert.equal(changed,true);const positive=/^(future|foreign)/.test(mode);assert.equal(result.status,positive?'succeeded':'needs_review',JSON.stringify(result));assert.equal(digests.before===digests.after,positive);if(mode.startsWith('future'))assert.notEqual(digests.financialBefore,digests.financialAfter,'original financial-stage digest still includes full auxiliary facts');assert.equal(finance(),oldFinance,'money and actual persistent sources never replay');assert.deepEqual(seedStages(),oldStages,'all completed seed stage attempts and evidence stay exact');
+ const report=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE 'report:%'").get(key+'-report');assert.equal(report.status,positive?'succeeded':'needs_review');
+ const artifacts=db.prepare('SELECT * FROM local_batch_artifacts WHERE item_id=?').all(report.item_id);if(positive){assert.equal(artifacts.length,1);assert.equal(artifacts[0].status,'published');assert.ok(artifacts[0].worker_thread_id>0);assert.ok(artifacts[0].render_finished>=artifacts[0].render_started);}else assert.equal(artifacts.length,0);
+ if(mode.startsWith('entity'))assert.equal(AS.auxiliaryCompletenessStep(db,set.id,period).status,'blocked');
+ writeFileSync(join(root,'r2-result.json'),JSON.stringify({mode,result,report,artifacts,digests,seedStages:oldStages,finance:JSON.parse(oldFinance),allocations:db.prepare('SELECT * FROM aux_allocations ORDER BY id').all()},null,2));console.log('PASS R2 '+mode+' actual '+format+' worker assets1032.34 / scoped auxiliary evidence');
 }
