@@ -1,0 +1,16 @@
+{
+  "version": "offline-vat-input/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-QUARTER-G02",
+    "accountSetId": "1",
+    "period": "2026-Q2",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "profileId": "small-2011-basic-v1",
+  "declaration": "declaration.json",
+  "accountingFacts": "accounting.json",
+  "materialsInput": "materials.json",
+  "taxFacts": "tax.json",
+  "db": "../../data/workbench.db"
+}
