@@ -4,6 +4,7 @@ import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
+import {batchComponentContract} from '../server/local-batch-storage.mjs';
 import {runChild} from './auxiliary-storage.test.mjs';
 const work=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const root=join(work,'.agent-runs','bank-aux-'+randomUUID());fs.mkdirSync(root,{recursive:true});
@@ -11,11 +12,17 @@ for(let p=root;;p=dirname(p)){assert.equal(fs.lstatSync(p).isSymbolicLink(),fals
 process.env.TEMP=root;process.env.TMP=root;process.env.WORKBENCH_DATA_DIR=join(root,'data');process.env.KEEP_FIXTURES='1';
 function assertAuditAppend(after,before,actions,message,state='failure') {
  const row=v=>typeof v==='string'?JSON.parse(v):v;
- const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
+ const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations','local_batch_lock_epochs'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
  assert.deepEqual(business(after),business(before),message);
  for(const table of ['audit_events','audit_operations'])for(const original of before[table]??[])assert.ok((after[table]??[]).some(v=>JSON.stringify(v)===JSON.stringify(original)),table+' history must remain exact');
  const added=table=>(after[table]??[]).filter(v=>!(before[table]??[]).some(old=>JSON.stringify(old)===JSON.stringify(v))).map(row);
  const events=added('audit_events').sort((a,b)=>a.seq-b.seq),ops=added('audit_operations');
+ const expected=new Map(),binding=new Map((before.import_enterprise_account_sets??[]).map(row).map(r=>[r.account_set_id,r.enterprise_key]));
+ for(const event of events){assert.ok(Number.isSafeInteger(event.account_set_id)&&event.account_set_id>0);for(const key of [`account-set:${event.account_set_id}`,...(binding.has(event.account_set_id)?[`book:${binding.get(event.account_set_id)}`]:[])])expected.set(key,(expected.get(key)??0)+1);}
+ const epochMap=value=>new Map((value.local_batch_lock_epochs??[]).map(row).map(r=>[r.resource_key,r.last_token]));const oldEpoch=epochMap(before),newEpoch=epochMap(after);
+ assert.deepEqual([...newEpoch.keys()].sort(),[...oldEpoch.keys()].sort(),'failure may only advance the exact existing resources');
+ for(const [key,token] of oldEpoch)assert.equal(newEpoch.get(key),token+(expected.get(key)??0),'exact resource acquisition count: '+key);
+ assert.deepEqual(after.local_batch_locks,before.local_batch_locks);assert.equal((after.local_batch_locks??[]).length,0,'all temporary active ownership released');
  assert.deepEqual(events.map(e=>e.action),actions);assert.equal(ops.length,actions.length);
  for(const event of events){
   const operation=ops.find(o=>o.operation_id===event.operation_id&&o.attempt===event.attempt&&o.database_instance_id===event.database_instance_id);assert.ok(operation);
@@ -45,7 +52,7 @@ if(!scenario){
  const cli=async(path,scope,command,args=[])=>{const c=await runChild([cliFile,command,'--db',path,'--account-set',String(scope.accountSetId),'--bank-account',scope.bankAccountId,...args],{timeout:60000});assert.equal(c.code,0,c.stderr);assert.equal(c.closed,true);assert.equal(c.timedOut,false);return JSON.parse(c.stdout);};
  const backup=(path,folder)=>{const b=LB.createBackup({dbPath:path,outDir:join(root,folder)});assert.equal(b.ok,true,JSON.stringify(b));assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,true);return b;};
  const restore=(dir,folder)=>{const r=LB.restoreNew({backupDir:dir,targetDir:join(root,folder)});assert.equal(r.ok,true,JSON.stringify(r));return join(r.targetDir,'workbench.db');};
- const components=c=>LB.createBackup({dbPath:c,outDir:join(root,'facts-'+request())}).manifest.components?.map(v=>v.name)??[];
+ const components=c=>{const manifest=LB.createBackup({dbPath:c,outDir:join(root,'facts-'+request())}).manifest;const batch=manifest.components.find(v=>v.name==='local-batch');assert.equal(batch.version,3);assert.equal(batch.tables.length,12);assert.deepEqual(batch.tables,batchComponentContract(3).tables);return manifest.components.map(v=>v.name);};
  const reconArgs=['--period','2025-12','--as-of','2025-12-31','--statement-open','1000','--statement-close','1110','--coverage-from','2025-12-01','--coverage-to','2025-12-31','--statement-source','synthetic independent 1130'];
  const expect1130=r=>{assert.equal(r.book.closingCents,112000);assert.equal(r.statement.closeCents,111000);assert.equal(r.adjusted.bookCents,113000);assert.equal(r.adjusted.bankCents,113000);assert.equal(r.adjusted.differenceCents,0);};
  try{
@@ -76,7 +83,7 @@ if(!scenario){
   }
   assert.equal((await S.ensureBankSchema(db,{dbPath,backupService:LB})).migrated,false);assert.equal((await AS.ensureAuxiliarySchema(db,{dbPath,outDir:join(root,'unused')})).status,'already_installed');
   const beforePath=restore(beforeSecond,'before-second-restored');const beforeDb=new DatabaseSync(beforePath);try{
-   assert.deepEqual(components(beforePath),scenario==='aux-first'?['auxiliary','business-audit']:['bank','business-audit']);assert.equal(beforeDb.prepare('SELECT COUNT(*) n FROM vouchers WHERE status=\'posted\'').get().n,12);
+   assert.deepEqual(components(beforePath),scenario==='aux-first'?['auxiliary','business-audit','local-batch']:['bank','business-audit','local-batch']);assert.equal(beforeDb.prepare('SELECT COUNT(*) n FROM vouchers WHERE status=\'posted\'').get().n,12);
    if(scenario==='aux-first')X.createAuxiliaryEntity(beforeDb,{accountSetId:sets[0].scope.accountSetId,kind:'project',code:'RESTORED',name:'continued',requestId:'continued'});
    else {
     const scope=sets[0].scope;B.registerBankAccount(beforeDb,{...scope,sourceId:'statement',glAccountCode:'1002'});
@@ -108,7 +115,7 @@ if(!scenario){
    const actual=db.prepare('SELECT direction,amount_cents FROM bank_transactions WHERE account_set_id=? ORDER BY id').all(scope.accountSetId);assert.deepEqual(actual.map(r=>r.amount_cents),[20000,2000,10000,1000]);
    console.log(scenario+' '+key+': CLI posted identity, display-only unknown/ambiguous/confirmed/inactive, independent 1130');
   }
-  const joint=backup(dbPath,'joint');assert.deepEqual(joint.manifest.components.map(c=>c.name),['bank','auxiliary','business-audit']);const restored=restore(joint.backupDir,'joint-restored');const expectedTables={'bank':[...S.BANK_TABLES].sort(),'auxiliary':AS.AUX_TABLES,'business-audit':['audit_components','audit_database_instances','audit_events','audit_operations']};for(const component of joint.manifest.components){assert.equal(component.version,component.name==='business-audit'?2:1);assert.deepEqual(component.tables,expectedTables[component.name]);for(const key of ['structureDigest','contentDigest'])assert.match(component[key],/^[a-f0-9]{64}$/);}const restoredAudit=new DatabaseSync(restored,{readOnly:true});try{for(const table of expectedTables['business-audit'])assert.deepEqual(restoredAudit.prepare('SELECT * FROM '+table+' ORDER BY rowid').all(),db.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());}finally{restoredAudit.close();}
+  const joint=backup(dbPath,'joint');assert.deepEqual(joint.manifest.components.map(c=>c.name),['bank','auxiliary','business-audit','local-batch']);const restored=restore(joint.backupDir,'joint-restored');const expectedTables={'bank':[...S.BANK_TABLES].sort(),'auxiliary':AS.AUX_TABLES,'business-audit':['audit_components','audit_database_instances','audit_events','audit_operations'],'local-batch':batchComponentContract(3).tables};assert.equal(expectedTables['local-batch'].length,12);for(const component of joint.manifest.components){assert.equal(component.version,component.name==='business-audit'?2:component.name==='local-batch'?3:1);assert.deepEqual(component.tables,expectedTables[component.name]);for(const key of ['structureDigest','contentDigest'])assert.match(component[key],/^[a-f0-9]{64}$/);}const restoredAudit=new DatabaseSync(restored,{readOnly:true});try{for(const table of expectedTables['business-audit'])assert.deepEqual(restoredAudit.prepare('SELECT * FROM '+table+' ORDER BY rowid').all(),db.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());}finally{restoredAudit.close();}
   for(const item of sets){
    expect1130(await cli(restored,item.scope,'reconcile',reconArgs));
    const csv=join(root,item.key+'-continued.csv');fs.writeFileSync(csv,'date,summary,amount,direction,ref\n2026-01-02,continued,0.01,in,NEXT\n');

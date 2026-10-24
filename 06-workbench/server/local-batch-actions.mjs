@@ -1,3 +1,4 @@
+import { withWriteResources, withWriteStageFence } from './local-write-lock.mjs';
 import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
 import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-batch-storage.mjs';
 // local-batch-actions.mjs — LOCAL-07 固定本地操作的真实领域适配层。
@@ -17,7 +18,7 @@ import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-ba
 
 import {
   STAGE_KEYS, STAGE_STATUS, canonicalJson, getInput, getSnapshot, saveSnapshot, sha256,
-  withFencedTransaction, withReadSnapshot, writeStageResult,
+  withFencedTransaction, withReadSnapshot, writeStageResult, checkInputEvidence, verifyCurrentReportRows, getJob,
 } from "./local-batch-storage.mjs";
 import { assetCardPeriodStatus } from "./period-end-controls.mjs";
 import { centsToNumber } from "./money.mjs";
@@ -41,7 +42,7 @@ const [A, { db }, importStorage, importIncrementalModule, reportExportModule] = 
 const {
   getAccountSetEnterprise, getEnterpriseAccountSet, getVoucherSource, persistedVoucherFingerprint,
 } = importStorage;
-const { getImportBatch, importIncremental } = importIncrementalModule;
+const { getImportBatch, importIncremental, expectedImportSources, verifyImportBatchSources } = importIncrementalModule;
 const { buildReportExport } = reportExportModule;
 
 const r2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
@@ -76,9 +77,9 @@ function sanitizeError(error) {
  * 只按 `period=?` 取本期凭证会漏掉以前期间被反过账 / 改金额 / 删除（报表内容已变、旧产物却仍被当成功）。
  * 本期之后的数据不在此报表依赖范围内，不进入摘要（避免无意义的失效告警）。
  */
-export function businessDigest(db, setId, period) {
+export function businessDigest(db, setId, period, {reportAuxiliary=false}={}) {
   const accountSet = db.prepare(
-    `SELECT id, name, start_period, accounting_standard FROM account_sets WHERE id=?`,
+    `SELECT id, name, start_period, accounting_standard, accounting_profile_id FROM account_sets WHERE id=?`,
   ).get(setId) || null;
   const accounts = db.prepare(
     `SELECT code, name, category, direction, contra, is_leaf FROM accounts WHERE account_set_id=? ORDER BY code`,
@@ -108,9 +109,30 @@ export function businessDigest(db, setId, period) {
     id: voucher.id, period: voucher.period, status: voucher.status, kind: voucher.kind,
     fingerprint: persistedVoucherFingerprint(voucher, entriesByVoucher.get(voucher.id) || []),
   }));
-  return sha256(canonicalJson({
-    setId, period, accountSet, accounts, openings, periods: periodRows, vouchers,
-  }));
+  const identity=db.prepare('SELECT * FROM import_enterprise_account_sets WHERE account_set_id=?').get(setId)??null;
+  const auxiliary={};
+  // Report readiness reads openings and posted movements through its period.
+  // Preserve the original full auxiliary digest for financial stage evidence.
+  const allocated=reportAuxiliary&&db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='aux_allocations'").get()
+    ? db.prepare(`SELECT a.* FROM aux_allocations a LEFT JOIN voucher_entries e ON e.id=a.entry_id LEFT JOIN vouchers v ON v.id=e.voucher_id WHERE a.account_set_id=? AND ((a.entry_id IS NULL AND a.opening_code IS NOT NULL) OR (v.account_set_id=a.account_set_id AND v.status='posted' AND v.period<=?)) ORDER BY a.id`).all(setId,period):[];
+  const entityIds=new Set(allocated.flatMap(row=>['project_id','department_id','party_id'].map(key=>row[key]).filter(id=>id!==null)));
+  for(const table of ['aux_entities','aux_allocations','aux_requirements'])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)){
+    if(reportAuxiliary&&table==='aux_allocations')auxiliary[table]=allocated;
+    else {const rows=db.prepare(`SELECT * FROM ${table} WHERE account_set_id=? ORDER BY rowid`).all(setId);auxiliary[table]=reportAuxiliary&&table==='aux_entities'?rows.filter(row=>entityIds.has(row.id)):rows;}
+  }
+  return sha256(canonicalJson({setId,period,accountSet,identity,auxiliary,accounts,openings,periods:periodRows,vouchers}));
+}
+
+/** Report snapshots freeze the scoped persistent dependencies as well as money.
+ * Comparing current consistency alone cannot detect deletion of both source
+ * sides or their replacement by another internally consistent registration.
+ */
+export function reportBusinessDigest(db,setId,period){
+ const sourceRows=table=>db.prepare(`SELECT s.* FROM ${table} s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
+ const sources=sourceRows('import_voucher_sources'),links=sourceRows('import_batch_vouchers'),ids=[...new Set([...sources,...links].map(r=>r.batch_id))].sort();
+ const batches=ids.map(id=>importStorage.getBatch(db,id)??null);
+ const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(setId,period).map(({content,...row})=>({...row,savedContentHash:content instanceof Uint8Array?sha256(Buffer.from(content)):null}));
+ return sha256(canonicalJson({business:businessDigest(db,setId,period,{reportAuxiliary:true}),sources,links,batches,inputs}));
 }
 
 /**
@@ -146,6 +168,15 @@ export function resolveItemBinding({ db, item, stage = null, allowUnboundSet = f
     throw domainError("enterprise_binding_missing", "该企业身份尚未绑定任何账套：拒绝在未建立绑定时执行", {
       declaredAccountSetId: resolved,
     });
+  }
+  // Resume/retry preflight runs before claiming a fresh attempt. A successful
+  // financial checkpoint whose source proof broke must never enter import again.
+  if (!stage && item.id && resolved !== null) {
+    const prior=db.prepare("SELECT evidence_json,outcome_hash FROM local_batch_stages WHERE item_id=? AND stage_key LIKE 'import:%'").all(item.id);
+    for(const row of prior){const evidence=safeParse(row.evidence_json);if(!row.outcome_hash||!evidence.batchId||!Array.isArray(evidence.sourceTrace))continue;
+      const check=verifyBatchSourceEvidence(evidence.batchId,{...item,account_set_id:resolved},{checkpoint:evidence});
+      if(!check.ok)throw domainError(check.reason,"已成功导入的来源证据不完整，禁止重新执行金融动作");
+    }
   }
   return { accountSetId: resolved, binding, bound: boundSetId !== null };
 }
@@ -225,6 +256,8 @@ export function executeImportStage(ctx) {
   if (!batch?.batch || batch.batch.status !== "completed") {
     throw domainError("import_batch_not_completed", "批次未标记完成", { status: batch?.batch?.status ?? null });
   }
+  const completeness = verifyBatchSourceEvidence(spec.batchId, { ...item, account_set_id: batch.batch.accountSetId });
+  if (!completeness.ok) throw domainError(completeness.reason, "导入来源关联与独立预期不一致");
   const trace = Array.isArray(batch.sourceTrace) ? batch.sourceTrace : [];
   const bad = trace.filter((entry) => entry.state !== "ok");
   if (bad.length) {
@@ -709,12 +742,13 @@ export function buildReportSnapshots({ item, period, reports }) {
     const binding = resolveItemBinding({ db, item });
     const setId = binding.accountSetId;
     if (!setId) throw domainError("account_set_unresolved", "报表面向的账套未确定");
-    const businessHash = businessDigest(db, setId, period);
+    const businessHash = reportBusinessDigest(db, setId, period);
     const list = [];
     for (const report of reports) {
       const options = { kind: report.kind, period, format: "csv" };
       if (report.kind === "ledger") options.code = report.code;
       const built = buildReportExport(setId, options);
+      if(built.report.reportStatus?.status==='incomplete')throw domainError('report_incomplete');
       const dtoJson = JSON.stringify(built.report);
       list.push({
         period,
@@ -834,7 +868,61 @@ function verifyDepreciationEvidence(evidence, stage, expectedSetId) {
  * 恢复时重新核验已成功阶段的上游证据是否仍然成立。
  * 任何被反过账 / 改金额 / 删除 / 状态回退 / 文件损坏都会返回 ok:false（调用方转 needs_review）。
  */
-export function verifyStageEvidence({ stage, item, outputDir = null }) {
+/** Current report dependencies, including report-only jobs using earlier imports.
+ * Scope by actual account set and voucher period; later periods/other books do
+ * not invalidate this report. Reuse the import service's live source verifier.
+ */
+/** The same scoped saved/external input contract for publish and completed resume. */
+export function verifyReportInputEvidence({item,period,allowSnapshotOnly=false}){
+ const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(item.account_set_id,period);
+ for(const input of inputs){const check=checkInputEvidence(input,{allowSnapshotOnly});if(!check.ok)return {ok:false,reason:check.problem??'input_changed'};}
+ return {ok:true};
+}
+
+/** Saved bytes and successful checkpoint tuples remain independent of live links. */
+function verifyBatchSourceEvidence(batchId, item, {period, checkpoint} = {}) {
+ try {
+  const inputs = db.prepare(`SELECT n.*,i.source_system,i.enterprise_key FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.batch_id=? ORDER BY n.input_key`).all(item.account_set_id,batchId);
+  const checkpoints = db.prepare(`SELECT s.evidence_json FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'import:%' ORDER BY s.id`).all(item.account_set_id)
+    .map(s=>safeParse(s.evidence_json)).filter(e=>e.batchId===batchId && Array.isArray(e.sourceTrace));
+  if(checkpoint)checkpoints.push(checkpoint);
+  const base={accountSetId:item.account_set_id,enterpriseKey:item.enterprise_key,period};
+  const record=importStorage.getBatch(db,batchId),result=record?safeParse(record.result_json):{};
+  // Period exclusion belongs to the verifier, after every expected voucher's
+  // actual account set/period agrees with saved and checkpoint scope.
+  const saved = inputs.map(input=>{
+   const registered=importStorage.getBatch(db,batchId);
+   if(!registered||registered.source_system!==input.source_system||registered.enterprise_key!==input.enterprise_key)throw domainError('import_source_trace_changed');
+   const bytes=Buffer.from(input.content);
+   if(sha256(bytes)!==input.source_hash)throw domainError('input_changed');
+   const expected=expectedImportSources(JSON.parse(bytes.toString('utf8')),item.account_set_id,registered);
+   if(!Array.isArray(result.sourceTrace)&&!checkpoints.length&&expected.contentFingerprint!==registered.content_fingerprint)throw domainError('import_source_trace_changed');
+   return expected.sources;
+  });
+  // Saved original identities can establish the first legacy local checkpoint.
+  if(!Array.isArray(result.sourceTrace) && (result.vouchersCreated||result.vouchersDeduplicated) && !saved.length)return {ok:false,reason:'import_source_trace_changed'};
+  const expectations=saved.length?saved:[undefined],traces=checkpoints.length?checkpoints:[undefined];
+  for(const expectedSources of expectations)for(const evidence of traces){
+   if(evidence&&(evidence.contentFingerprint!==record?.content_fingerprint||evidence.mode!==record?.mode||evidence.accountSetId!==item.account_set_id))return {ok:false,reason:'import_source_trace_changed'};
+   const trace=evidence?.sourceTrace.map(t=>({...t,period:evidence.vouchers?.find(v=>v.sourceVoucherId===t.sourceVoucherId)?.period}));
+   const check=verifyImportBatchSources(batchId,{...base,expectedSources,checkpointTrace:trace});if(!check.ok)return check;
+  }
+  return {ok:true};
+ }catch{return {ok:false,reason:'import_source_trace_changed'};}
+}
+
+export function verifyReportSourceEvidence({item,period}) {
+ const setId=item.account_set_id;
+ const scoped=table=>db.prepare(`SELECT s.* FROM ${table} s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
+ const links=scoped('import_batch_vouchers'),sources=scoped('import_voucher_sources');
+ // Registered outcomes discover even batches whose two association sides vanished.
+ const batches=db.prepare("SELECT batch_id FROM import_batches WHERE account_set_id=? AND status='completed'").all(setId);
+ const batchIds=new Set([...batches,...links,...sources].map(r=>r.batch_id));
+ for(const batchId of batchIds){const check=verifyBatchSourceEvidence(batchId,item,{period});if(!check.ok)return check;}
+ return {ok:true};
+}
+
+export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapshotOnly = false }) {
   const evidence = safeParse(stage.evidence_json);
   const key = stage.stage_key;
   try {
@@ -861,6 +949,9 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
     if (key.startsWith(IMPORT_STAGE_PREFIX)) {
       const batch = getImportBatch(evidence.batchId);
       if (!batch?.batch || batch.batch.status !== "completed") return { ok: false, reason: "import_batch_state_changed" };
+      if (batch.source.system !== item.source_system || batch.source.enterpriseKey !== item.enterprise_key) return {ok:false,reason:"import_source_trace_changed"};
+      const completeness = verifyBatchSourceEvidence(evidence.batchId, {...item,account_set_id:expectedSetId}, {checkpoint:evidence});
+      if (!completeness.ok) return completeness;
       const bad = (batch.sourceTrace || []).filter((entry) => entry.state !== "ok");
       if (bad.length) return { ok: false, reason: "import_source_trace_changed", details: { count: bad.length } };
       for (const entry of evidence.vouchers || []) {
@@ -922,25 +1013,24 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
       return { ok: true };
     }
     if (key.startsWith(`${STAGE_KEYS.REPORT}:`)) {
-      const snapshot = getSnapshot(db, { itemId: item.id, period: stage.period, kind: evidence.kind });
-      if (!snapshot) return { ok: false, reason: "report_snapshot_missing" };
-      if (snapshot.business_hash !== evidence.businessHash) return { ok: false, reason: "report_evidence_changed" };
-      if (businessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) {
-        return { ok: false, reason: "report_evidence_changed" };
-      }
-      // 产物文件核验：丢失 / 被改必须标失效（只重做报表，不重做会计）。
-      const artifact = db.prepare(
-        `SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=? ORDER BY id DESC LIMIT 1`,
-      ).get(item.id, stage.period, stage.stage_key);
-      if (!artifact) return { ok: false, reason: "artifact_missing" };
-      if (artifact.status !== "published") return { ok: false, reason: "artifact_not_published" };
-      if (artifact.bytes_hash !== evidence.bytesHash) return { ok: false, reason: "artifact_record_changed" };
-      if (!outputDir) return { ok: true };
+      const input=verifyReportInputEvidence({item:{...item,account_set_id:expectedSetId},period:stage.period,allowSnapshotOnly});if(!input.ok)return input;
+      const rows=verifyCurrentReportRows(db,{job:getJob(db,item.job_id),item,stage});
+      if(!rows.ok)return rows;
+      const {snapshot,artifact}=rows;
+      if (snapshot.business_hash !== evidence.businessHash||evidence.accountSetId!==expectedSetId) return { ok: false, reason: "report_evidence_changed" };
+      if (reportBusinessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) return { ok: false, reason: "report_evidence_changed" };
+      const source=verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)return source;
+      const verifyRows=()=>verifyCurrentReportRows(db,{job:rows.job,item:rows.item,stage:rows.stage,snapshot,artifact});
+      if (!outputDir) {const final=verifyRows();return final.ok?{ok:true}:final;}
       const absolute = resolve(outputDir, artifact.relative_path);
       const root = resolve(outputDir);
       if (absolute !== root && !absolute.startsWith(root + sep)) return { ok: false, reason: "artifact_path_escape" };
       if (!existsSync(absolute)) return { ok: false, reason: "artifact_file_missing" };
-      if (sha256(readFileSync(absolute)) !== artifact.bytes_hash) return { ok: false, reason: "artifact_file_corrupted" };
+      const bytes=readFileSync(absolute);
+      if (bytes.length!==artifact.bytes||sha256(bytes) !== artifact.bytes_hash) return { ok: false, reason: "artifact_file_corrupted" };
+      const final=verifyRows();if(!final.ok)return final;
+      const finalBytes=readFileSync(absolute);
+      if(finalBytes.length!==artifact.bytes||sha256(finalBytes)!==artifact.bytes_hash)return {ok:false,reason:'artifact_file_corrupted'};
       return { ok: true };
     }
     return { ok: true };
@@ -995,6 +1085,9 @@ function auditChildren(ctx) {
  return [];
 }
 export function executeStage(ctx) {
+ return withWriteResources(ctx.db,ctx.resources,()=>withWriteStageFence(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt},()=>executeLockedStage(ctx)));
+}
+function executeLockedStage(ctx) {
  const binding=resolveItemBinding({db:ctx.db,item:ctx.item,stage:ctx.stage});
  const scoped={...ctx,item:{...ctx.item,account_set_id:binding.accountSetId}};
  const children=auditChildren(scoped),scope=binding.accountSetId?{kind:'account_set',value:binding.accountSetId}:{kind:'database',value:null};

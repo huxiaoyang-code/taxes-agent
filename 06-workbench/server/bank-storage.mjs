@@ -1750,7 +1750,12 @@ function runComponentDdl(db, { from, creation, backup }) {
  * @param {string|null} options.dataDir 备份输出根目录（默认库文件所在目录；实际备份目录是其中全新的子目录）
  * @returns {Promise<{migrated:boolean, from:number, to:number, creation:string, backup:object|null}>}
  */
-export async function ensureBankSchema(db, options = {}) {
+export async function ensureBankSchema(db,options={}) {
+ const result=await ensureBankSchemaBody(db,options);
+ await ensureBatchWriteReadiness(db,resolve(String(options.dbPath)));
+ return result;
+}
+async function ensureBankSchemaBody(db, options = {}) {
   const { dbPath, receipt = null, backupService = null, dataDir = null } = options;
   if (!dbPath) throw bankError("db_path_required", "初始化银行组件必须显式提供库路径");
   // 回滚未确认的连接可能仍持着未提交的组件 DDL / 版本行：不能在上面继续「安装 / 已初始化」判断。
@@ -1797,7 +1802,7 @@ export async function ensureBankSchema(db, options = {}) {
         backup: null,
       }));
       if (!releaseFreshDatabaseClaim(receipt)) throw bankError("fresh_receipt_stale", "新库回执释放失败");
-      return result;
+        return result;
     } catch (e) {
       // 事务冲突 / 未开始 / 回滚未确认 / 已确认放弃：原样上抛，不能改写成一个「已回滚」的安装失败。
       if (isTransactionOutcomeError(e)) throw e;
@@ -1854,7 +1859,6 @@ export async function ensureBankSchema(db, options = {}) {
       });
     }
     assertBaseSchema(db);
-    (await import('./local-batch-storage.mjs')).assertBatchMaintenanceReady(db);
     backup = await runBackupGate({
       db,
       backupService,
@@ -1863,6 +1867,9 @@ export async function ensureBankSchema(db, options = {}) {
       version: BANK_SCHEMA_VERSION,
       expectedSchemaVersion,
     });
+    // Keep the original official component backup rejection ahead of batch's
+    // cross-component checks; maintenance still gates every DDL under BEGIN.
+    (await import('./local-batch-storage.mjs')).assertBatchMaintenanceReady(db);
     assertBankInstallIdentity(db,abs,installIdentity);
     const result = runComponentDdl(db, { from, creation, backup });
     db.exec("COMMIT");
@@ -2414,4 +2421,9 @@ export { nowIso as bankNowIso };
 export function assertBankPublicAdmission(db) {
  assertConnectionUsable(db);
  if(db.isTransaction&&!hasActiveAuditExecution(db))throw transactionConflictError('begin');
+}
+
+async function ensureBatchWriteReadiness(db,dbPath) {
+ const {installBatchSchema}=await import('./local-batch-storage.mjs');
+ return installBatchSchema(db,{dbPath,outDir:join(dirname(dbPath),'batch-'+randomUUID())});
 }

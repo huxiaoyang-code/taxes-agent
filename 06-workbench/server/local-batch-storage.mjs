@@ -1,3 +1,4 @@
+import { assertWriteCommitFence, authorizesResourceRenewal } from './local-write-lock.mjs';
 import { hasActiveAuditExecution,withAuditSavepoint } from './local-audit-storage.mjs';
 // local-batch-storage.mjs — 持久批量任务（LOCAL-07）的存储层：manifest 校验 / 任务 / 阶段 /
 // 锁与 fencing / 输入快照 / 报表产物元数据 / 状态汇总。
@@ -8,8 +9,8 @@ import { hasActiveAuditExecution,withAuditSavepoint } from './local-audit-storag
 //    数据目录」之后才决定是否打开 / 迁移业务库；status 只读命令也只使用本文件。
 // 2) 任务、阶段、锁、输入快照、产物元数据全部落在**同一个** workbench.db（local_batch_ 前缀 +
 //    独立 component 版本表），这样业务状态与 checkpoint 处于同一备份时点。不另建队列 DB。
-// 3) 现库安装 / v1→v2 必须显式 async installBatchSchema 并经官方一致备份保护。
-//    同步 ensure 只校验严格v2，或在**显式新目标**（没有任何 workbench.db）上初始化结构，
+// 3) 现库安装 / v1/v2→v3 必须显式 async installBatchSchema 并经官方一致备份保护。
+//    同步 ensure 只校验严格v3，或在**显式新目标**（没有任何 workbench.db）上初始化结构，
 //    且必须持有本进程 claimFreshDataDir 的独占回执（O_EXCL 标记 + 库文件 dev/ino 绑定）；
 //    布尔 fresh / 自造回执无效。已有库不自动建表 / 升级；零字节 / 非产品库不能偷当fresh。
 // 4) 同账套跨进程互斥用数据库行锁 + 单调 fencing token + 租约；租约过期不等于旧执行者已死：
@@ -24,7 +25,7 @@ import * as guard from "./database-open-guard.mjs";
 import { inspectAuditSchema, sqlReferencesNamespace } from "./local-audit-storage.mjs";
 
 export const LOCAL_BATCH_COMPONENT = "local-batch";
-export const LOCAL_BATCH_SCHEMA_VERSION = 2;
+export const LOCAL_BATCH_SCHEMA_VERSION = 3;
 
 /** 新建目标的所有权标记文件：与 workbench.db 同目录，只在「建立批量结构」窗口内存在。 */
 export const FRESH_CLAIM_MARKER = ".local-batch-create";
@@ -40,7 +41,8 @@ export const LOCAL_BATCH_V1_TABLES = [
   "local_batch_inputs",
 ];
 
-export const LOCAL_BATCH_TABLES = [...LOCAL_BATCH_V1_TABLES, 'local_batch_database_instances', 'local_batch_job_bindings', 'local_batch_input_bindings'];
+export const LOCAL_BATCH_V2_TABLES = [...LOCAL_BATCH_V1_TABLES, 'local_batch_database_instances', 'local_batch_job_bindings', 'local_batch_input_bindings'];
+export const LOCAL_BATCH_TABLES = [...LOCAL_BATCH_V2_TABLES, 'local_batch_lock_epochs'];
 
 export const STAGE_STATUS = Object.freeze({
   PENDING: "pending",
@@ -571,7 +573,11 @@ const V2_STATEMENTS = [
  CHECK((mode='source' AND source_path IS NOT NULL) OR (mode<>'source' AND source_path IS NULL))
  )`,
 ];
-const batchTables = version => version===1 ? LOCAL_BATCH_V1_TABLES : LOCAL_BATCH_TABLES;
+const V3_STATEMENTS = [`CREATE TABLE local_batch_lock_epochs (
+ resource_key TEXT PRIMARY KEY,
+ last_token INTEGER NOT NULL CHECK(last_token>=1)
+ )`];
+const batchTables = version => version===1 ? LOCAL_BATCH_V1_TABLES : version===2 ? LOCAL_BATCH_V2_TABLES : LOCAL_BATCH_TABLES;
 const normalizeBatchSql = sql => sql===null?null:sql.replace(/\bIF\s+NOT\s+EXISTS\b/gi,'').replace(/\s+/g,' ').trim();
 export function batchSchemaFacts(db, version) {
  const tables=batchTables(version);
@@ -587,10 +593,10 @@ export function batchSchemaFacts(db, version) {
 }
 const batchContracts=new Map();
 export function batchComponentContract(version) {
- if(version!==1&&version!==2)FAIL('batch_schema_future_version');
+ if(![1,2,3].includes(version))FAIL('batch_schema_future_version');
  if(!batchContracts.has(version)) {
   const ref=new DatabaseSync(':memory:');
-  try {for(const sql of SCHEMA_STATEMENTS)ref.exec(sql);if(version===2)for(const sql of V2_STATEMENTS)ref.exec(sql);
+  try {for(const sql of SCHEMA_STATEMENTS)ref.exec(sql);if(version>=2)for(const sql of V2_STATEMENTS)ref.exec(sql);if(version===3)for(const sql of V3_STATEMENTS)ref.exec(sql);
    batchContracts.set(version,canonicalJson(batchSchemaFacts(ref,version)));
   }finally{ref.close();}
  }
@@ -601,6 +607,11 @@ const batchDigest=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const batchUuid=v=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(v);
 const batchTech=v=>typeof v==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v);
 const positive=v=>Number.isSafeInteger(v)&&v>0;
+export function validResourceKey(v) {
+ if(typeof v!=='string')return false;
+ if(/^(?:job|account-set):[1-9][0-9]*$/.test(v))return positive(Number(v.slice(v.indexOf(':')+1)));
+ if(!v.startsWith('book:'))return false;const key=v.slice(5);return key.length>0&&key.length<=128&&!/[\u0000-\u001f\u007f]/.test(key)&&key.normalize('NFKC').trim()===key;
+}
 const batchPath=v=>typeof v==='string'&&v.length>0&&!/[\u0000-\u001f\u007f]/.test(v)&&sameCanonicalPath(v,resolve(v))&&/^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(v);
 function readSavedJson(text) {
  const value=JSON.parse(text);
@@ -617,7 +628,7 @@ function batchArtifactPath(jobKey,itemKey,period,spec) {
  const filename=spec.kind+(spec.code?'-'+segment(spec.code,32):'')+'-'+period+'.'+spec.format;
  return segment(jobKey,60)+'/'+segment(itemKey,60)+'/'+period+'/'+filename;
 }
-function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
+function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages,snapshotRows,artifactRows}) {
  const stages=new Map(actualStages.map(r=>[r.item_id+':'+r.period+':'+r.stage_key,r]));
  const reportPlans=new Map();
  for(const stage of actualStages)if(stage.stage_key.startsWith('report:')) {
@@ -625,7 +636,7 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
   reportPlans.set(stage.item_id+':'+stage.period+':'+spec.kind,true);
  }
  const snapshots=new Map();
- for(const r of db.prepare('SELECT * FROM local_batch_snapshots').all()) {
+ for(const r of snapshotRows??db.prepare('SELECT * FROM local_batch_snapshots').all()) {
   const item=itemMap.get(r.item_id);
   if(!item||item.job_id!==r.job_id||!REPORT_KINDS.includes(r.kind)||!PERIOD_RE.test(r.period)
     ||!reportPlans.has(r.item_id+':'+r.period+':'+r.kind)
@@ -640,7 +651,7 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
  }
  const artifacts=new Map();
  const mimes={csv:'text/csv; charset=utf-8',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',pdf:'application/pdf'};
- for(const r of db.prepare('SELECT * FROM local_batch_artifacts').all()) {
+ for(const r of artifactRows??db.prepare('SELECT * FROM local_batch_artifacts').all()) {
   artifacts.set(r.item_id+':'+r.period+':'+r.stage_key,r);
   const item=itemMap.get(r.item_id),job=jobMap.get(r.job_id);
   const stage=stages.get(r.item_id+':'+r.period+':'+r.stage_key);
@@ -684,6 +695,33 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}) {
   if(stage.status===STAGE_STATUS.SUCCEEDED&&(!snapshot||!artifacts.has(key)))return false;
  }
  return true;
+}
+/** Targeted read-only publication/checkpoint contract, shared with strict schema reads.
+ * Read the persisted owners and tuple again; supplied snapshots/artifacts only pin
+ * expected bytes and identities and never authorize a write or relax row validity.
+ */
+export function verifyCurrentReportRows(db,{job,item,stage,snapshot=null,artifact=null}) {
+ try {
+  const currentJob=getJob(db,job.id),currentItem=getItem(db,item.id),currentStage=getStage(db,stage.id);
+  const same=(actual,expected,keys)=>actual&&keys.every(k=>actual[k]===expected[k]);
+  if(!same(currentJob,job,['id','job_key','manifest_json','manifest_hash','output_dir'])
+    ||!same(currentItem,item,['id','job_id','item_key','enterprise_key','source_system','account_set_id'])
+    ||!same(currentStage,stage,['id','item_id','period','stage_key','spec_json','attempt','input_hash']))return {ok:false,reason:'report_evidence_changed'};
+  for(const k of ['status','outcome_hash','evidence_json'])if(stage[k]!==undefined&&currentStage[k]!==stage[k])return {ok:false,reason:'report_evidence_changed'};
+  const spec=readSavedJson(currentStage.spec_json),key=item.id+':'+stage.period+':'+stage.stage_key;
+  const snapshots=db.prepare('SELECT * FROM local_batch_snapshots WHERE item_id=? AND period=? AND kind=?').all(item.id,stage.period,spec.kind);
+  const artifactKey=job.job_key+'#'+item.item_key+'#'+stage.period+'#'+stage.stage_key;
+  const artifacts=db.prepare('SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=? OR artifact_key=?').all(item.id,stage.period,stage.stage_key,artifactKey);
+  if(snapshots.length!==1||artifacts.length>1)return {ok:false,reason:'report_evidence_changed'};
+  if(!batchReportRowsValid(db,{jobMap:new Map([[job.id,currentJob]]),itemMap:new Map([[item.id,currentItem]]),actualStages:[currentStage],expectedStages:new Map([[key,{spec}]]),snapshotRows:snapshots,artifactRows:artifacts}))return {ok:false,reason:'report_evidence_changed'};
+  const inputHash=sha256(canonicalJson({dtoHash:snapshots[0].dto_hash,businessHash:snapshots[0].business_hash,format:spec.format,code:spec.code??null}));
+  if(currentStage.status===STAGE_STATUS.SUCCEEDED&&inputHash!==currentStage.input_hash)return {ok:false,reason:'report_snapshot_changed'};
+  if(currentStage.status===STAGE_STATUS.SUCCEEDED){const evidence=readSavedJson(currentStage.evidence_json);if(evidence.businessHash!==snapshots[0].business_hash||evidence.accountSetId!==currentItem.account_set_id)return {ok:false,reason:'report_evidence_changed'};for(const [column,key] of [['worker_thread_id','workerThreadId'],['render_started','renderStarted'],['render_finished','renderFinished']])if(evidence[key]!==undefined&&artifacts[0][column]!==evidence[key])return {ok:false,reason:'report_evidence_changed'};}
+  if(snapshot&&!same(snapshots[0],snapshot,Object.keys(snapshot)))return {ok:false,reason:'report_snapshot_changed'};
+  if(artifact&&!same(artifacts[0],artifact,Object.keys(artifact).filter(k=>!['status','updated_at'].includes(k))))return {ok:false,reason:'report_evidence_changed'};
+  if(artifact&&artifacts[0].status!==artifact.status&&!(artifact.status==='publishing'&&currentStage.status===STAGE_STATUS.SUCCEEDED&&artifacts[0].status==='published'))return {ok:false,reason:'report_evidence_changed'};
+  return {ok:true,job:currentJob,item:currentItem,stage:currentStage,snapshot:snapshots[0],artifact:artifacts[0]??null};
+ }catch{return {ok:false,reason:'report_evidence_changed'};}
 }
 function batchContentValid(db,version) {
  const component=db.prepare('SELECT * FROM local_batch_component').all();
@@ -731,6 +769,13 @@ function batchContentValid(db,version) {
  }
  if(!batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages}))return false;
  for(const r of db.prepare('SELECT * FROM local_batch_locks').all())if(!( /^job:[1-9][0-9]*$/.test(r.resource_key)||/^account-set:[1-9][0-9]*$/.test(r.resource_key)||(r.resource_key.startsWith('book:')&&r.resource_key.length<=133&&!/[\u0000-\u001f\u007f]/.test(r.resource_key)&&r.resource_key.length>5))||!batchTech(r.owner_instance)||!positive(r.fencing_token)||(r.pid!==null&&!positive(r.pid))||!batchIso(r.acquired_at)||!batchIso(r.heartbeat_at)||!batchIso(r.lease_expires_at))return false;
+ if(version===3) {
+  const epochs=new Map();
+  for(const r of db.prepare('SELECT * FROM local_batch_lock_epochs').all()) {
+   if(!validResourceKey(r.resource_key)||!positive(r.last_token))return false;epochs.set(r.resource_key,r.last_token);
+  }
+  for(const r of db.prepare('SELECT * FROM local_batch_locks').all())if(!validResourceKey(r.resource_key)||!positive(r.pid)||epochs.get(r.resource_key)!==r.fencing_token)return false;
+ }
  if(version===1)return true;
  const instances=db.prepare('SELECT * FROM local_batch_database_instances').all(),ids=new Map(instances.map(r=>[r.instance_id,r]));
  const active=instances.filter(r=>r.is_active===1);if(active.length!==1)return false;
@@ -752,15 +797,16 @@ export function inspectBatchSchema(db) {
  const any=db.prepare("SELECT 1 FROM sqlite_master WHERE lower(name) GLOB 'local_batch_*' OR lower(name) GLOB 'idx_local_batch_*'").get();
  if(!any)return {state:'not_installed',ok:false,version:0,present:[],tables:[],problems:[]};
  let version=0;const problems=[];
- try {version=readBatchVersion(db)??0;if(version!==1&&version!==2)problems.push('version_invalid');
+ try {version=readBatchVersion(db)??0;if(![1,2,3].includes(version))problems.push('version_invalid');
   else {if(canonicalJson(batchSchemaFacts(db,version))!==canonicalJson(batchComponentContract(version).facts))problems.push('structure_mismatch');
    if(!problems.length&&!batchContentValid(db,version))problems.push('content_invalid');}
  }catch(e){if(e.code==='batch_instance_mismatch')problems.push('instance_mismatch');else problems.push('structure_or_content_invalid');}
  return {state:problems.length?'invalid':'ok',ok:problems.length===0,version,tables:[...batchTables(version)],present:LOCAL_BATCH_TABLES.filter(t=>db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t)),problems};
 }
-export function assertBatchSchema(db) {const s=inspectBatchSchema(db);if(!s.ok)FAIL(s.problems.includes('instance_mismatch')?'batch_instance_mismatch':s.version>2?'batch_schema_future_version':'batch_schema_invalid');return s;}
-export function readBatchInstance(db) {const s=assertBatchSchema(db);if(s.version!==2)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');return db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();}
+export function assertBatchSchema(db) {const s=inspectBatchSchema(db);if(!s.ok)FAIL(s.problems.includes('instance_mismatch')?'batch_instance_mismatch':s.version>3?'batch_schema_future_version':'batch_schema_invalid');return s;}
+export function readBatchInstance(db) {const s=assertBatchSchema(db);if(s.version<2)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');return db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();}
 export function assertBatchRunnable(db,{jobId}={}) {
+ if(readBatchVersion(db)!==3)FAIL('migration_requires_backup');
  const instance=readBatchInstance(db);if(instance.write_state!=='ready')FAIL('batch_not_ready');
  const jb=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=?').all(instance.instance_id),ib=db.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=?').all(instance.instance_id);
  for(const r of jb.filter(r=>jobId===undefined||r.job_id===jobId))if(r.output_state!=='bound'||r.output_root!==getJob(db,r.job_id).output_dir)FAIL('batch_binding_disabled');
@@ -804,7 +850,7 @@ export async function installBatchSchema(db,{dbPath,outDir}={}) {
  assertBatchConnection(db);if(!dbPath||!outDir)FAIL('batch_install_requires_verified_backup');const before=batchFileIdentity(db,dbPath);
  const LB=await import('./local-backup.mjs');LB.assertSupportedDatabaseConnection(db);
  let state=inspectBatchSchema(db);if(state.state!=='not_installed')assertBatchSchema(db);
- if(state.version===2)return {installed:false,from:2,to:2,activeInstanceId:readBatchInstance(db).instance_id};
+ if(state.version===3)return {installed:false,from:3,to:3,activeInstanceId:readBatchInstance(db).instance_id};
  try {db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){batchQuarantine.add(db);FAIL('batch_commit_unknown');}FAIL('batch_admission_busy');}
  try {
   if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
@@ -816,22 +862,26 @@ export async function installBatchSchema(db,{dbPath,outDir}={}) {
   try{LB.assertBackupSourceConnection(db,verified.manifest);}catch{FAIL('batch_backup_source_mismatch');}
   if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
   if(state.state==='not_installed'){for(const sql of SCHEMA_STATEMENTS)db.exec(sql);db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,1,nowIso(),'LOCAL-07');}
-  for(const sql of V2_STATEMENTS)db.exec(sql);const activeInstanceId=seedBatchInstance(db);
-  db.prepare('UPDATE local_batch_component SET version=2 WHERE component=?').run(LOCAL_BATCH_COMPONENT);
+  let activeInstanceId;
+  if(state.version<2){for(const sql of V2_STATEMENTS)db.exec(sql);activeInstanceId=seedBatchInstance(db);}
+  else activeInstanceId=readBatchInstance(db).instance_id;
+  for(const sql of V3_STATEMENTS)db.exec(sql);
+  db.exec('INSERT INTO local_batch_lock_epochs SELECT resource_key,fencing_token FROM local_batch_locks');
+  db.prepare('UPDATE local_batch_component SET version=3 WHERE component=?').run(LOCAL_BATCH_COMPONENT);
   assertBatchSchema(db);if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
-  db.exec('COMMIT');return {installed:true,from:state.version,to:2,activeInstanceId,backupDir:created.backupDir};
+  db.exec('COMMIT');return {installed:true,from:state.version,to:3,activeInstanceId,backupDir:created.backupDir};
  }catch(e){try{if(!db.isTransaction)throw Error('unknown');db.exec('ROLLBACK');if(db.isTransaction)throw Error('unknown');}catch{batchQuarantine.add(db);FAIL('batch_commit_unknown');}throw batchError(String(e?.code??'').startsWith('batch_')?e.code:'batch_schema_install_failed');}
 }
-/** Synchronous: strict v2 validation, or genuine private fresh ownership only. */
+/** Synchronous: strict v3 validation, or genuine private fresh ownership only. */
 export function ensureBatchSchema(db,{receipt=null}={}) {
  if(receipt)assertFreshReceipt(receipt,db);
  const state=inspectBatchSchema(db);
- if(state.state!=='not_installed'){assertBatchSchema(db);if(state.version!==2)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');return {created:false,version:2};}
+ if(state.state!=='not_installed'){assertBatchSchema(db);if(state.version!==3)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');if(receipt)releaseFreshClaim(receipt);return {created:false,version:3};}
  if(!receipt)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');
  if(db.isTransaction)FAIL('batch_transaction_conflict');assertFreshReceipt(receipt,db);db.exec('BEGIN IMMEDIATE');
- try {for(const sql of [...SCHEMA_STATEMENTS,...V2_STATEMENTS])db.exec(sql);db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,2,nowIso(),'LOCAL-07');seedBatchInstance(db);assertBatchSchema(db);assertFreshReceipt(receipt,db);db.exec('COMMIT');}
+ try {for(const sql of [...SCHEMA_STATEMENTS,...V2_STATEMENTS,...V3_STATEMENTS])db.exec(sql);db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,3,nowIso(),'LOCAL-07');seedBatchInstance(db);assertBatchSchema(db);assertFreshReceipt(receipt,db);db.exec('COMMIT');}
  catch(e){try{if(!db.isTransaction)throw Error('unknown');db.exec('ROLLBACK');}catch{batchQuarantine.add(db);FAIL('batch_commit_unknown');}if(String(e?.code??'').startsWith('fresh_'))throw e;throw batchError('local_batch_schema_failed');}
- releaseFreshClaim(receipt);return {created:true,version:2};
+ releaseFreshClaim(receipt);return {created:true,version:3};
 }
 
 // ---------------------------------------------------------------- manifest（schemaVersion=1）
@@ -1230,11 +1280,13 @@ export function getInput(db, { jobId, itemId, batchId }) {
 /**
  * 单条输入快照的源证据核验：再次读取原始文件字节并与登记指纹比较。
  * 返回 { ok, problem, sourceHash, currentHash }：problem ∈ input_missing / input_changed。
- * 内联 payload（无外部文件）只有已保存快照本身可比，按 input_hash 前一步核验（见 actions）。
+ * 已保存content自身的长度/hash始终校验；显式快照策略仅可豁免外部文件。
  */
-export function checkInputEvidence(input) {
-  if (!input) return { ok: false, problem: "input_snapshot_missing" };
-  if (!input.source_path) return { ok: true, problem: null, external: false };
+export function checkInputEvidence(input,{allowSnapshotOnly=false}={}) {
+  if (!input) return { ok: false, problem: "input_snapshot_missing", savedValid:false };
+  const saved=input.content instanceof Uint8Array?Buffer.from(input.content):null;
+  if(!saved||!Number.isSafeInteger(input.bytes)||input.bytes!==saved.length||sha256(saved)!==input.source_hash)return {ok:false,problem:'input_changed',external:false,savedValid:false,sourceHash:input.source_hash};
+  if (!input.source_path||allowSnapshotOnly) return { ok: true, problem: null, external: !!input.source_path, savedValid:true };
   let bytes = null;
   try { bytes = readFileSync(input.source_path); } catch { bytes = null; }
   if (!bytes) return { ok: false, problem: "input_missing", external: true, sourceHash: input.source_hash };
@@ -1327,58 +1379,33 @@ export function isProcessAlive(pid) {
  * - 租约已过但 PID 仍存活或无法确认：owner_active（保守拒绝，不按超时抢锁）；
  * - 租约已过且 PID 确认不存在：递增 fence 接管。
  */
-export function acquireLock(db, { resourceKey, instance, pid, leaseMs = 120000 }) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const row = db.prepare(`SELECT * FROM local_batch_locks WHERE resource_key=?`).get(resourceKey);
-    const at = new Date(nowMs()).toISOString();
-    const expires = new Date(nowMs() + leaseMs).toISOString();
-    if (!row) {
-      db.prepare(`INSERT INTO local_batch_locks
-          (resource_key, owner_instance, fencing_token, pid, acquired_at, heartbeat_at, lease_expires_at)
-          VALUES (?,?,1,?,?,?,?)`)
-        .run(resourceKey, instance, pid ?? null, at, at, expires);
-      db.exec("COMMIT");
-      return { token: 1, acquired: true, takeover: false };
+export function acquireLock(db, { resourceKey, instance, pid=process.pid, leaseMs = 120000 }) {
+  if(!validResourceKey(resourceKey)||!batchTech(instance)||!positive(pid)||!positive(leaseMs))FAIL('lock_request_invalid');
+  if(db.prepare('SELECT version FROM local_batch_component WHERE component=?').get(LOCAL_BATCH_COMPONENT)?.version!==3)FAIL('migration_requires_backup');
+  const nested=hasActiveAuditExecution(db);
+  if(db.isTransaction&&!nested)FAIL('audit_transaction_conflict');
+  const run=()=>{
+    const row=db.prepare('SELECT * FROM local_batch_locks WHERE resource_key=?').get(resourceKey);
+    const historical=db.prepare('SELECT last_token FROM local_batch_lock_epochs WHERE resource_key=?').get(resourceKey);
+    if(historical&&!positive(historical.last_token))FAIL('lock_epoch_invalid');
+    if(row) {
+      if(!historical||row.fencing_token!==historical.last_token)FAIL('lock_epoch_invalid');
+      const alive=isProcessAlive(Number(row.pid));
+      // Identical public owner/PID is identification, never a renewal capability.
+      if(alive!==false)FAIL(row.lease_expires_at>nowIso()?'lock_active':'owner_active',{resourceKey,pidAlive:alive});
     }
-    if (row.owner_instance === instance) {
-      db.prepare(`UPDATE local_batch_locks SET heartbeat_at=?, lease_expires_at=?, pid=? WHERE resource_key=?`)
-        .run(at, expires, pid ?? row.pid, resourceKey);
-      db.exec("COMMIT");
-      return { token: Number(row.fencing_token), acquired: true, takeover: false };
-    }
-    // 租约未到期但 owner 进程已**确认不存在**：可以直接接管（递增 fence），
-    // 进程已死就不可能再提交；仅「存活或存活无法确认」才保守拒绝。
-    if (row.lease_expires_at > at) {
-      const aliveWhileLeased = isProcessAlive(Number(row.pid));
-      if (aliveWhileLeased !== false) {
-        FAIL("lock_active", {
-          resourceKey, ownerInstance: row.owner_instance, leaseExpiresAt: row.lease_expires_at, pidAlive: aliveWhileLeased,
-        });
-      }
-    } else {
-      const alive = isProcessAlive(Number(row.pid));
-      if (alive !== false) {
-        FAIL("owner_active", {
-          resourceKey, ownerInstance: row.owner_instance, pidAlive: alive, leaseExpiresAt: row.lease_expires_at,
-        });
-      }
-    }
-    const next = Number(row.fencing_token) + 1;
-    const info = db.prepare(`UPDATE local_batch_locks
-        SET owner_instance=?, fencing_token=?, pid=?, acquired_at=?, heartbeat_at=?, lease_expires_at=?
-        WHERE resource_key=? AND owner_instance=? AND fencing_token=?`)
-      .run(instance, next, pid ?? null, at, at, expires, resourceKey, row.owner_instance, row.fencing_token);
-    if (Number(info.changes) !== 1) FAIL("lock_takeover_race", { resourceKey });
-    db.exec("COMMIT");
-    return { token: next, acquired: true, takeover: true, previousOwner: row.owner_instance };
-  } catch (error) {
-    try { db.exec("ROLLBACK"); } catch { /* 以回滚结果为准 */ }
-    throw error;
-  }
+    const next=(historical?.last_token??0)+1;if(!positive(next))FAIL('lock_epoch_overflow');
+    const at=nowIso(),expires=new Date(Date.now()+leaseMs).toISOString();
+    db.prepare('INSERT INTO local_batch_lock_epochs VALUES(?,?) ON CONFLICT(resource_key) DO UPDATE SET last_token=excluded.last_token').run(resourceKey,next);
+    db.prepare(`INSERT INTO local_batch_locks VALUES(?,?,?,?,?,?,?) ON CONFLICT(resource_key) DO UPDATE SET owner_instance=excluded.owner_instance,fencing_token=excluded.fencing_token,pid=excluded.pid,acquired_at=excluded.acquired_at,heartbeat_at=excluded.heartbeat_at,lease_expires_at=excluded.lease_expires_at`).run(resourceKey,instance,next,pid,at,at,expires);
+    return {token:next,acquired:true,takeover:!!row,previousOwner:row?.owner_instance};
+  };
+  if(nested)return withAuditSavepoint(db,run);
+  db.exec('BEGIN IMMEDIATE');try{const out=run();db.exec('COMMIT');return out;}catch(e){try{db.exec('ROLLBACK');}catch{}throw e;}
 }
 
-export function renewLock(db, { resourceKey, instance, token, leaseMs = 120000 }) {
+export function renewLock(db, { resourceKey, instance, token, leaseMs = 120000 }, capability) {
+  if(!authorizesResourceRenewal(db,capability,{resourceKey,instance,token}))FAIL('lock_capability_invalid');
   const at = new Date(nowMs()).toISOString();
   const expires = new Date(nowMs() + leaseMs).toISOString();
   const info = db.prepare(`UPDATE local_batch_locks SET heartbeat_at=?, lease_expires_at=?
@@ -1397,8 +1424,8 @@ export function releaseLock(db, { resourceKey, instance, token }) {
 
 /** 事务内 fence 校验：旧 token / 旧 owner 一律 fence_lost（必须在 BEGIN IMMEDIATE 内调用）。 */
 export function assertFence(db, { resourceKey, instance, token }) {
-  const row = db.prepare(`SELECT owner_instance, fencing_token FROM local_batch_locks WHERE resource_key=?`).get(resourceKey);
-  if (!row || row.owner_instance !== instance || Number(row.fencing_token) !== Number(token)) {
+  const row = db.prepare(`SELECT l.owner_instance, l.fencing_token, e.last_token FROM local_batch_locks l JOIN local_batch_lock_epochs e USING(resource_key) WHERE resource_key=?`).get(resourceKey);
+  if (!row || row.owner_instance !== instance || Number(row.fencing_token) !== Number(token) || row.last_token!==token) {
     FAIL("fence_lost", { resourceKey, expectedToken: token, actual: row ? { owner: row.owner_instance, token: Number(row.fencing_token) } : null });
   }
 }
@@ -1414,6 +1441,8 @@ export function withFencedTransaction(db, { resourceKey, instance, token }, fn) 
   try {
     assertFence(db, { resourceKey, instance, token });
     const out = fn();
+    assertFence(db, { resourceKey, instance, token });
+    assertWriteCommitFence(db);
     db.exec("COMMIT");
     return out;
   } catch (error) {

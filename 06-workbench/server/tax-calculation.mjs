@@ -2,7 +2,7 @@
 import { fields, requirePlainJson, requireValue, validateScope, stable, hash } from './offline-material-adapters.mjs';
 import { buildOfflineCandidates } from './offline-bookkeeping.mjs';
 import { assessAccountingReadiness, sameRef } from './offline-accounting-readiness.mjs';
-import { validateLedgerSnapshot, validateLedgerSnapshotPair } from './offline-ledger-snapshot.mjs';
+import { validateLedgerSnapshot, validateLedgerSnapshotPair, parseImportBatchResult } from './offline-ledger-snapshot.mjs';
 import { assertVatInputPayload, assertVatInputPairCurrent, assertVatInputSessionCurrent } from './offline-vat-input.mjs';
 import { voucherFingerprint, persistedVoucherFingerprint } from './import-storage.mjs';
 import { offlineMoneyToCents } from './offline-contracts.mjs';
@@ -252,12 +252,8 @@ function checkTargetBatchInventory(snapshot, problem) {
     if (h.source_system !== VAT_SOURCE_SYSTEM) issue('target_batch_source_unsupported', field, 'unsupported');
     if (h.status !== 'completed') issue('target_batch_not_completed', field, h.status === 'failed' ? 'conflict' : 'unknown');
     if (h.status === 'completed' && (h.error_code !== null || h.error_message !== null)) issue('target_batch_completed_error_conflict', field);
-    let result;
-    try {
-      result = JSON.parse(h.result_json);
-      fields(result, ['accountSetCreated', 'accountsAdded', 'openingBalancesApplied', 'vouchersCreated', 'vouchersDeduplicated']);
-      requireValue(typeof result.accountSetCreated === 'boolean' && ['accountsAdded', 'openingBalancesApplied', 'vouchersCreated', 'vouchersDeduplicated'].every(k => Number.isSafeInteger(result[k]) && result[k] >= 0));
-    } catch { issue('target_batch_result_missing_or_invalid', field, 'unknown'); result = null; }
+    const parsed=parseImportBatchResult(h.result_json,{header:h,headers:inv.headers,links:inv.batchVouchers,sources:inv.voucherSources,vouchers:inv.vouchers,entries:inv.entries}),result=parsed?.value??null;
+    if(!parsed?.associationsValid)issue('target_batch_result_missing_or_invalid',field,'unknown');
     if (!links.length && !sources.length) {
       const noop = result && h.mode === 'append' && result.accountSetCreated === false && ['accountsAdded', 'openingBalancesApplied', 'vouchersCreated', 'vouchersDeduplicated'].every(k => result[k] === 0);
       if (result && !noop) issue('unexplained_nonzero_import_batch', field);

@@ -117,6 +117,11 @@ const steps = [
   { name: "local-audit-http", file: join(WORKBENCH, "test", "local-audit-http.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-cli", file: join(WORKBENCH, "test", "local-audit-cli.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-mcp", file: join(MCP, "local-audit-test.mjs"), cwd: MCP },
+  // LOCAL07 W3b: preceding 97 registrations remain verbatim and in order.
+  { name: "local-batch-domain", file: join(WORKBENCH, "test", "local-batch-domain.test.mjs"), cwd: WORKBENCH },
+  { name: "local-write-lock", file: join(WORKBENCH, "test", "local-write-lock.test.mjs"), cwd: WORKBENCH },
+  { name: "local-batch-entry-lock", file: join(WORKBENCH, "test", "local-batch-entry-lock.test.mjs"), cwd: WORKBENCH },
+  { name: "seed-demo-lock", file: join(WORKBENCH, "test", "seed-demo-lock.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

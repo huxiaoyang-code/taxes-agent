@@ -1,10 +1,12 @@
+import { randomUUID as demoOperationId } from 'node:crypto';
+import { lockCreatedAccountSet,acquireWriteResources,releaseWriteResources,withWriteResources } from './local-write-lock.mjs';
 import { types as nodeTypes } from "node:util";
 // accounting.mjs — 复式记账领域逻辑 + 报表
 //
 // 金额规则（LOCAL-02）：所有金额以「整数分」计算（money.mjs），落库 / 出参统一两位小数；
 // 舍入唯一 ROUND_HALF_UP；合计在分上累加后再转换，禁止把两位小数用浮点求和。
 import { db } from "./db.mjs";
-import { runDomainOperation, readDomainOperationBinding } from "./local-audit-coordinator.mjs";
+import { runDomainOperation, readDomainOperationBinding,runAuditedBatchStage,copyDomainRequest } from "./local-audit-coordinator.mjs";
 import { withAuditSavepoint } from "./local-audit-storage.mjs";
 import { auditCanonicalDigest, auditError } from "./local-audit.mjs";
 import {
@@ -218,6 +220,7 @@ function createAccountSetBody({ name, taxpayer_type, accounting_standard, start_
       profile.id,
     );
     const id = Number(info.lastInsertRowid);
+    lockCreatedAccountSet(db,id);
     const insAcc = db.prepare(
       `INSERT INTO accounts (account_set_id, code, name, category, direction, contra, is_leaf)
        VALUES (?,?,?,?,?,?,1)`
@@ -3081,3 +3084,24 @@ export function updateAssetCard(...args) {return accountingWrite('asset.update',
 export function deleteAssetCard(...args) {return accountingWrite('asset.delete',args,deleteAssetCardBody,{refs:()=>resultId('asset_card',args[1]),rebuild:()=>({deleted:args[1]})});}
 export function generateDepreciation(...args) {let changed=false;return accountingWrite('asset.depreciate',args,(...input)=>{const before=row('SELECT total_changes() n').n;const value=generateDepreciationBody(...input);changed=row('SELECT total_changes() n').n!==before;return value;},{classify:()=>changed?'succeeded':'no_change',refs:v=>resultId('voucher',v?.voucher?.id)});}
 export function importAccountSet(...args) {const input=admissionInput(args);if(input.value[1]?.dryRun)return importAccountSetBody(...input.value);if(!admissionBinding('import.legacy')){const validation=validateImportPayload(...input.value);if(!validation.ok)return {dryRun:true,validation,created:null};}return accountingWrite('import.legacy',args,importAccountSetBody,{scope:{kind:'database',value:null},refs:v=>resultId('account_set',v?.created?.id),targets:v=>v?.created?.id?{accountSetId:v.created.id}:{}});}
+
+// Explicit local demo replacement. Private bodies share one audited outer and an
+// empty fixed child plan; no guessed future set IDs or relaxed child admission.
+export function replaceDemoAccountSet(input) {
+ const request=copyDomainRequest(input),{force=false,creation,openings,vouchers,asset}=request;
+ if(typeof force!=='boolean')throw Object.assign(new Error('seed_force_invalid'),{code:'seed_force_invalid'});
+ const before=rows('SELECT id FROM account_sets ORDER BY id').map(r=>r.id);
+ const bindings=before.map(id=>({id,key:getAccountSetEnterprise(db,id)?.enterprise_key??null}));
+ if(before.length&&!force)throw Object.assign(new Error('seed_nonempty'),{code:'seed_nonempty'});
+ const key=normalizeEnterpriseIdentity(creation.enterprise).enterpriseKey,keys=[`book:${key}`];
+ for(const id of before){keys.push(`account-set:${id}`);const binding=getAccountSetEnterprise(db,id);if(binding)keys.push(`book:${binding.enterprise_key}`);}
+ const resources=acquireWriteResources(db,keys);
+ try{return withWriteResources(db,resources,()=>runAuditedBatchStage(db,{operationId:'seed:'+demoOperationId(),scope:{kind:'database',value:null},request,refs:value=>[{type:'account_set',id:value.id}]},[],()=>{
+  if(JSON.stringify(rows('SELECT id FROM account_sets ORDER BY id').map(r=>r.id))!==JSON.stringify(before))throw Object.assign(new Error('seed_books_changed'),{code:'seed_books_changed'});
+  if(JSON.stringify(before.map(id=>({id,key:getAccountSetEnterprise(db,id)?.enterprise_key??null})))!==JSON.stringify(bindings))throw Object.assign(new Error('seed_books_changed'),{code:'seed_books_changed'});
+  for(const id of before)deleteAccountSetBody(id);
+  const set=createAccountSetBody(creation),id=set.id;setOpeningBalancesBody(id,openings);
+  for(const voucher of vouchers)createVoucherBody(id,voucher);
+  addAssetCardBody(id,asset);generateDepreciationBody(id,'2026-02');return getAccountSet(id);
+ }));}finally{releaseWriteResources(db,resources);}
+}

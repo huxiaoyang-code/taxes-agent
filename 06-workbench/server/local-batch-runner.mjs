@@ -1,3 +1,4 @@
+import { acquireWriteResources, releaseWriteResources, renewWriteResources, withWriteResources, writeResourceLocks, domainResources, withWriteStageFence } from './local-write-lock.mjs';
 import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
 // local-batch-runner.mjs — LOCAL-07 持久批量任务的编排层：manifest → 计划 → 逐账套执行 →
 // 报表快照 → worker 线程并发渲染 → 受控发布 → 状态机 / 取消 / 重试 / 重启恢复。
@@ -180,37 +181,12 @@ function relativeArtifactPath({ jobKey, itemKey, period, kind, code, format }) {
 }
 
 // ---------------------------------------------------------------- 锁 / 中断恢复
-function bookResourceKeys(item) {
-  const keys = [`book:${item.enterprise_key}`];
-  if (item.account_set_id) keys.push(`account-set:${item.account_set_id}`);
-  return keys.sort();
+function acquireItemLocks({ item, instance, pid, parent }) {
+ const keys=domainResources(db,{action:'import.create',scope:item.account_set_id?{kind:'account_set',value:item.account_set_id}:{kind:'database',value:null},request:{source:{enterpriseKey:item.enterprise_key}}});
+ return acquireWriteResources(db,keys,{instance,pid,parent});
 }
-
-function acquireItemLocks({ item, instance, pid, hooks }) {
-  const acquired = [];
-  try {
-    for (const resourceKey of bookResourceKeys(item)) {
-      const lock = storage.acquireLock(db, { resourceKey, instance, pid, leaseMs: LEASE_MS });
-      acquired.push({ resourceKey, token: lock.token, instance });
-      if (lock.takeover && hooks?.onLockTakeover) hooks.onLockTakeover({ resourceKey, item });
-    }
-    return acquired;
-  } catch (error) {
-    // 部分成功时必须释放已取得的锁，不把半套资源锁遗留给自己。
-    releaseItemLocks(acquired);
-    throw error;
-  }
-}
-
-function releaseItemLocks(locks) {
-  for (const lock of locks) {
-    try { storage.releaseLock(db, lock); } catch { /* 释放失败时租约到期后由下一执行者处理 */ }
-  }
-}
-
-function renewItemLocks(locks) {
-  for (const lock of locks) storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
-}
+function releaseItemLocks(handle) {releaseWriteResources(db,handle);}
+function renewItemLocks(handle) {renewWriteResources(db,handle);}
 
 /** 将上一位执行者（已确认死亡）留下的 running / 中断阶段重置为 pending。 */
 function recoverInterruptedStages(jobId) {
@@ -231,8 +207,9 @@ function recoverInterruptedStages(jobId) {
 const EVIDENCE_CONFLICT_CODES = new Set([
   "source_voucher_voucher_missing", "source_voucher_voucher_unposted", "source_voucher_voucher_modified",
   "source_voucher_content_changed", "source_voucher_account_set_mismatch", "source_voucher_trace_unverified",
-  "import_trace_inconsistent", "import_batch_not_completed", "import_voucher_missing",
-  "import_voucher_unposted", "import_enterprise_binding_mismatch", "evidence_changed",
+  "import_trace_inconsistent", "import_source_trace_changed", "import_batch_not_completed", "import_voucher_missing",
+  "import_voucher_unposted", "import_voucher_account_set_mismatch", "import_enterprise_binding_mismatch", "evidence_changed",
+  "report_evidence_changed", "report_snapshot_changed", "report_incomplete", "output_conflict", "artifact_hash_mismatch",
   "input_changed", "input_missing", "input_snapshot_missing", "input_payload_invalid",
   "account_set_unresolved", "depreciation_run_inconsistent", "depreciation_due_but_no_action",
   "depreciation_amount_mismatch", "depreciation_run_unposted", "year_end_carry_expected", "close_not_confirmed",
@@ -341,9 +318,9 @@ export async function executeJob({
   if (!job) throw batchError("job_required", {});
   storage.assertBatchRunnable(db,{jobId:job.id});
   const lock = { resourceKey: `job:${job.id}`, instance };
-  let primary;
+  let jobResources;
   try {
-    primary = storage.acquireLock(db, { resourceKey: lock.resourceKey, instance, pid, leaseMs: LEASE_MS });
+    jobResources = acquireWriteResources(db,[lock.resourceKey],{instance,pid});
   } catch (error) {
     if (["lock_active", "owner_active", "lock_takeover_race"].includes(error?.code)) {
       const current = getJob(db, job.id);
@@ -351,7 +328,7 @@ export async function executeJob({
     }
     throw error;
   }
-  lock.token = primary.token;
+  lock.token = writeResourceLocks(db,jobResources)[0].token;
   const report = { jobId: job.id, jobKey: job.job_key, active: false, phases: [], reset: [], items: [] };
   const pool = createRenderPool(Math.max(1, Math.min(Number(job.concurrency) || 1, MANIFEST_LIMITS.concurrencyMax)));
   let jobStatus = job.status;
@@ -371,50 +348,28 @@ export async function executeJob({
       // 每个 item 的**任何**动作（含无 import 的过账 / 计提 / 结转 / 检查 / 结账 / 报表 / 恢复核验）之前，
       // 先统一核实「规范企业身份 ↔ 账套」绑定：一家企业只有一个账套。
       // 核实失败直接在本 item 内停止，零业务写入，其它企业继续。
-      let bindingInfo;
-      try {
-        bindingInfo = actions.resolveItemBinding({ db, item, allowUnboundSet: itemAllowsUnboundSet(stages) });
-      } catch (error) {
-        const code = String(error?.code || "enterprise_binding_error").slice(0, 120);
-        itemReport.bindingBlocked = code;
-        itemReport.blockedStages = blockPendingStages({
-          stages, errorCode: code,
-          errorMessage: "企业与账套绑定无法核实：本 item 未执行任何动作",
-          evidence: { reason: "item_binding_unverified", errorCode: code },
-        });
-        const hasPending = stages.some((stage) => stage.status === STAGE_STATUS.PENDING);
-        if (!hasPending) {
-          // 无待办阶段：已成功阶段的上游证据核验会把它们转 needs_review（不盲目续跑）。
-          itemReport.verified = verifySucceededStages(item, stages, job.output_dir);
-        }
-        continue;
-      }
-      // 绑定核验通过后立刻把解析出的账套 ID 落库，后续阶段 / 产物证据 / 恢复核验统一使用这个持久值。
-      const bindingItem = persistResolvedAccountSet(item, bindingInfo);
-      const hasWork = stages.some((stage) => stage.status === STAGE_STATUS.PENDING);
-      if (!hasWork) {
-        // 没有待执行阶段，仍核验已成功阶段的上游证据（恢复时不能只看队列表）。
-        itemReport.verified = verifySucceededStages(bindingItem, stages, job.output_dir);
-        continue;
-      }
-      storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
       let itemLocks;
+      try {itemLocks=acquireItemLocks({item,instance,pid,parent:jobResources});}
+      catch(error){itemReport.lockBlocked=error?.code??'lock_error';blockPendingStages({stages,errorCode:itemReport.lockBlocked});continue;}
+      let bindingItem=item;
+      const verifyCompleted=()=>withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>verifySucceededStages(bindingItem,stages,job.output_dir,{allowSnapshotOnly})));
       try {
-        itemLocks = acquireItemLocks({ item: bindingItem, instance, pid, hooks });
-      } catch (error) {
-        itemReport.lockBlocked = error?.code || "lock_error";
-        for (const stage of stages.filter((entry) => entry.status === STAGE_STATUS.PENDING)) {
-          storage.resetStage(db, {
-            stageId: stage.id,
-            status: STAGE_STATUS.NEEDS_REVIEW,
-            errorCode: error?.code || "lock_error",
-            errorMessage: "同账套 / 同企业已有其它执行者，保守拒绝并等待复核",
-          });
+        try {
+          withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>{
+            const bindingInfo=actions.resolveItemBinding({db,item,allowUnboundSet:itemAllowsUnboundSet(stages)});
+            bindingItem=persistResolvedAccountSet(item,bindingInfo);
+          }));
+        }catch(error){
+          const code=String(error?.code??'enterprise_binding_error').slice(0,120);itemReport.bindingBlocked=code;
+          // A binding failure cannot bypass verification of completed effects.
+          // Keep their evidence, mark drift for review, and never replay finance.
+          itemReport.verified=verifyCompleted();
+          itemReport.blockedStages=blockPendingStages({stages,errorCode:code});continue;
         }
-        continue;
-      }
-      try {
-        const verified = verifySucceededStages(bindingItem, stages, job.output_dir);
+        const hasWork=stages.some(s=>s.status===STAGE_STATUS.PENDING);
+        if(!hasWork){itemReport.verified=verifyCompleted();continue;}
+        renewWriteResources(db,jobResources);
+        const verified = verifyCompleted();
         itemReport.verified = verified;
         if (verified.blocked) {
           for (const stage of stages.filter((entry) => entry.status === STAGE_STATUS.PENDING)) {
@@ -450,7 +405,7 @@ export async function executeJob({
             }];
             if (!check.ok) {
               const code = String(check.problem || "input_changed").slice(0, 120);
-              if (!allowSnapshotOnly) {
+              if (!allowSnapshotOnly||check.savedValid===false) {
                 storage.resetStage(db, {
                   stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW, errorCode: code,
                   errorMessage: "源资料证据已变化 / 丢失：拒绝静默沿用已保存快照",
@@ -463,20 +418,21 @@ export async function executeJob({
               inputPolicy = { mode: "saved_snapshot", problem: code };
             }
           }
-          storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
+          renewWriteResources(db,jobResources);
           renewItemLocks(itemLocks);
           const currentItem = storage.getItem(db, item.id);
           const claim = storage.claimStage(db, { stageId: stage.id, instance, token: lock.token, inputHash: stage.input_hash });
           if (!claim.claimed) continue;
           const ctx = {
             db, stage: claim.stage, item: currentItem, spec: safeJson(stage.spec_json),
-            lock, attempt: claim.attempt, hooks, inputPolicy,
+            lock, resources:itemLocks, attempt: claim.attempt, hooks, inputPolicy,
           };
           let result;
           try {
             result = actions.executeStage(ctx);
             if (result?.accountSetId && !currentItem.account_set_id) {
-              storage.setItemAccountSet(db, { itemId: item.id, accountSetId: result.accountSetId, source: `stage:${stage.stage_key}` });
+              // The audited outer already persisted the resolved set and its lock.
+              bindingItem=storage.getItem(db,item.id);
             }
             itemReport.stages.push({ stageKey: stage.stage_key, period: stage.period, status: result?.status ?? STAGE_STATUS.SUCCEEDED, attempt: claim.attempt });
           } catch (error) {
@@ -531,9 +487,9 @@ export async function executeJob({
             }
             try {
               for (const [period, kinds] of byPeriod) {
-                const snapshots = actions.buildReportSnapshots({
+                const snapshots = withWriteResources(db,itemLocks,()=>actions.buildReportSnapshots({
                   item: finalItem, period, reports: [...kinds.values()],
-                });
+                }));
                 for (const snapshot of snapshots.reports) {
                   actions.persistSnapshot({ jobId: job.id, itemId: item.id, snapshot });
                 }
@@ -573,7 +529,7 @@ export async function executeJob({
         });
         continue;
       }
-      renderTasks.push({ stage, spec, snapshot, item: storage.getItem(db, stage.item_id) });
+      renderTasks.push({ stage, spec, snapshot, allowSnapshotOnly, item: storage.getItem(db, stage.item_id) });
     }
     // Round-robin by item so independent enterprises enter the first worker wave.
     // Preserve each item's original report order and all existing claim/publish fences.
@@ -596,7 +552,7 @@ export async function executeJob({
       if (!claim.claimed) return { stageId: task.stage.id, skipped: true };
       try {
         const outcome = await renderAndPublish({
-          task, job, lock, attempt: claim.attempt, instance, pid, hooks, pool,
+          task, job, lock, jobResources, attempt: claim.attempt, instance, pid, hooks, pool,
         });
         return { stageId: task.stage.id, stageKey: task.stage.stage_key, ...outcome };
       } catch (error) {
@@ -606,10 +562,10 @@ export async function executeJob({
       }
     };
     // 真实并发：同一时刻最多 concurrency 个渲染任务被认领并在池内执行（取消 / 崩溃不会预先占用全部阶段）。
-    storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
+    renewWriteResources(db,jobResources);
     const settled = await mapLimit(renderTasks, pool.size, async (task) => {
       const value = await runOne(task);
-      storage.renewLock(db, { ...lock, leaseMs: LEASE_MS });
+      renewWriteResources(db,jobResources);
       if (hooks?.afterReportStage) await hooks.afterReportStage({ value, task });
       return value;
     });
@@ -626,7 +582,7 @@ export async function executeJob({
     return report;
   } finally {
     await pool.close();
-    try { storage.releaseLock(db, lock); } catch { /* 释放失败由租约兜底 */ }
+    releaseWriteResources(db,jobResources);
     report.finalStatus = (() => {
       try { return getJob(db, job.id)?.status ?? jobStatus; } catch { return jobStatus; }
     })();
@@ -652,11 +608,11 @@ async function mapLimit(items, limit, fn) {
 }
 
 // 已成功阶段的上游证据核验：任何被反过账 / 改动 / 删除都停下并转 needs_review。
-function verifySucceededStages(item, stages, outputDir) {
+function verifySucceededStages(item, stages, outputDir, {allowSnapshotOnly=false}={}) {
   const problems = [];
   for (const stage of stages) {
     if (![STAGE_STATUS.SUCCEEDED, STAGE_STATUS.NOT_APPLICABLE].includes(stage.status)) continue;
-    const check = actions.verifyStageEvidence({ stage, item, outputDir });
+    const check = actions.verifyStageEvidence({ stage, item, outputDir, allowSnapshotOnly });
     if (!check.ok) problems.push({ stageKey: stage.stage_key, period: stage.period, reason: check.reason });
   }
   if (!problems.length) return { ok: true };
@@ -673,7 +629,7 @@ function verifySucceededStages(item, stages, outputDir) {
   return { ok: false, blocked: true, problems };
 }
 
-async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks, pool }) {
+async function renderAndPublish({ task, job, lock, jobResources, attempt, instance, pid, hooks, pool }) {
   const { stage, spec, snapshot, item } = task;
   const outputDir = job.output_dir;
   const relativePath = relativeArtifactPath({
@@ -685,12 +641,35 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
   const existing = getArtifactByStage(db, { itemId: item.id, period: stage.period, stageKey: stage.stage_key });
   const finalPath = resolve(outputDir, relativePath);
 
+  const claimedStage={...stage,attempt,input_hash:snapshotHash,status:undefined,outcome_hash:undefined,evidence_json:undefined};
+  const assertCurrentEvidence=(artifact=existing,terminal=false)=>{
+    const rows=storage.verifyCurrentReportRows(db,{job,item,stage:terminal?{...claimedStage,status:STAGE_STATUS.SUCCEEDED}:claimedStage,snapshot,artifact});
+    if(!rows.ok)throw batchError(rows.reason);
+    const binding=actions.resolveItemBinding({db,item});
+    if(binding.accountSetId!==accountSetId||actions.reportBusinessDigest(db,accountSetId,stage.period)!==snapshot.business_hash)throw batchError('report_evidence_changed');
+    const source=actions.verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)throw batchError('report_evidence_changed',{reason:source.reason});
+    const input=actions.verifyReportInputEvidence({item,period:stage.period,allowSnapshotOnly:task.allowSnapshotOnly});if(!input.ok)throw batchError(input.reason);
+  };
+  const assertArtifactFile=artifact=>{
+    let bytes;try{bytes=readFileSync(finalPath);}catch{throw batchError('artifact_hash_mismatch');}
+    if(bytes.length!==artifact.bytes||sha256(bytes)!==artifact.bytes_hash)throw batchError('artifact_hash_mismatch');
+  };
+  const publishLocked=fn=>{
+    const resources=acquireItemLocks({item,instance,pid,parent:jobResources});
+    try{return withWriteResources(db,resources,()=>{
+      storage.withReadSnapshot(db,()=>assertCurrentEvidence());
+      return withWriteStageFence(db,{stageId:stage.id,instance:lock.instance,token:lock.token,attempt},fn);
+    });}finally{releaseItemLocks(resources);}
+  };
   // 恢复协议：文件已完整发布（含 publish 后、checkpoint 前崩溃）、只是阶段没落 → hash 一致则补记，不重渲染。
   if (existing && ["published", "publishing"].includes(existing.status) && existing.snapshot_hash === snapshotHash
       && existsSync(finalPath) && hashFile(finalPath) === existing.bytes_hash) {
-    auditedReportStep({db,job,item,stage,lock,attempt,phase:'recover'},()=>{
-      db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=?`)
-        .run("published", storage.nowIso(), existing.id);
+    return publishLocked(()=>{auditedReportStep({db,job,item,stage,lock,attempt,phase:'recover'},()=>{
+      assertCurrentEvidence(existing);
+      const updated=db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
+        .run("published", storage.nowIso(), existing.id,job.id,item.id,stage.period,stage.stage_key);
+      if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
+      assertArtifactFile(existing);
       const ok = storage.writeStageResult(db, {
         stageId: stage.id, instance, token: lock.token, attempt,
         status: STAGE_STATUS.SUCCEEDED, outcomeHash: existing.bytes_hash,
@@ -704,13 +683,18 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
         },
       });
       if (!ok) throw batchError("stage_result_rejected", {});
+      assertCurrentEvidence(existing,true);
+      assertArtifactFile(existing);
     });
-    return { status: STAGE_STATUS.SUCCEEDED, recovered: true, artifactKey: existing.artifact_key };
+    return { status: STAGE_STATUS.SUCCEEDED, recovered: true, artifactKey: existing.artifact_key };});
   }
   if (existing && existsSync(finalPath) && hashFile(finalPath) !== existing.bytes_hash) {
     // 文件被改 / 损坏：标失效，只重做该报表。
-    db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=?`)
-      .run("invalid", storage.nowIso(), existing.id);
+    assertCurrentEvidence(existing);
+    const updated=db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
+      .run("invalid", storage.nowIso(), existing.id,job.id,item.id,stage.period,stage.stage_key);
+    if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
+    existing.status='invalid';
   }
   const artifactKey = `${job.job_key}#${item.item_key}#${stage.period}#${stage.stage_key}`;
   let bytes;
@@ -738,16 +722,19 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
   const bytesHash = sha256(bytes);
   if (hooks?.beforeArtifactPublish) hooks.beforeArtifactPublish({ stage, item, relativePath });
 
+  return publishLocked(()=>{
   // 先登记 publishing（含预期 hash），再发布文件；崩溃后可按 hash 确认并补记。
   auditedReportStep({db,job,item,stage,lock,attempt,phase:'publishing'},()=>{
+    assertCurrentEvidence();
     const row = db.prepare(`SELECT id FROM local_batch_artifacts WHERE artifact_key=?`).get(artifactKey);
     if (row) {
-      db.prepare(`UPDATE local_batch_artifacts
+      const updated=db.prepare(`UPDATE local_batch_artifacts
           SET snapshot_hash=?, bytes_hash=?, bytes=?, mime=?, relative_path=?, status=?, attempt=?,
               worker_thread_id=?, render_started=?, render_finished=?, updated_at=?
-          WHERE id=?`)
+          WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
         .run(snapshotHash, bytesHash, bytes.length, contentType, relativePath, "publishing", attempt,
-          workerThreadId, renderStarted, renderFinished, storage.nowIso(), row.id);
+          workerThreadId, renderStarted, renderFinished, storage.nowIso(), row.id,job.id,item.id,stage.period,stage.stage_key);
+      if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
     } else {
       db.prepare(`INSERT INTO local_batch_artifacts
           (artifact_key, job_id, item_id, period, stage_key, kind, format, account_code, snapshot_hash,
@@ -759,11 +746,16 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
           attempt, workerThreadId, renderStarted, renderFinished, storage.nowIso(), storage.nowIso());
     }
   });
+  const registered=getArtifactByStage(db,{itemId:item.id,period:stage.period,stageKey:stage.stage_key});
+  if(!registered)throw batchError('report_evidence_changed');
   const published = publishFile({ bytes, bytesHash, relativePath, outputDir });
   if (hooks?.afterArtifactPublish) hooks.afterArtifactPublish({ stage, item, relativePath, published });
   auditedReportStep({db,job,item,stage,lock,attempt,phase:'published'},()=>{
-    db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE artifact_key=?`)
-      .run("published", storage.nowIso(), artifactKey);
+    assertCurrentEvidence(registered);
+    assertArtifactFile(registered);
+    const updated=db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=? AND job_id=? AND item_id=? AND period=? AND stage_key=?`)
+      .run("published", storage.nowIso(), registered.id,job.id,item.id,stage.period,stage.stage_key);
+    if(Number(updated.changes)!==1)throw batchError('report_evidence_changed');
     const ok = storage.writeStageResult(db, {
       stageId: stage.id, instance, token: lock.token, attempt,
       status: STAGE_STATUS.SUCCEEDED, outcomeHash: bytesHash,
@@ -776,8 +768,11 @@ async function renderAndPublish({ task, job, lock, attempt, instance, pid, hooks
       },
     });
     if (!ok) throw batchError("stage_result_rejected", {});
+    assertCurrentEvidence(registered,true);
+    assertArtifactFile(registered);
   });
   return { status: STAGE_STATUS.SUCCEEDED, artifactKey, bytesHash, bytes: bytes.length, workerThreadId, renderStarted, renderFinished };
+  });
 }
 
 // ---------------------------------------------------------------- 对外命令实现
@@ -812,5 +807,5 @@ export const database = db;
 // File rendering/publication stays outside SQLite. Only verified metadata steps
 // own short synchronous audit transactions; this does not claim cross-media atomicity.
 function auditedReportStep({db,job,item,stage,lock,attempt,phase},fn) {
- return runAuditedBatchStage(db,{action:'batch.stage',operationId:storage.stageAuditOperationId({...stage,attempt})+'.report-'+phase,scope:{kind:'account_set',value:item.account_set_id},context:{jobId:String(job.id),itemId:String(item.id),stageId:String(stage.id),period:stage.period},request:{stageId:stage.id,attempt,phase,inputHash:stage.input_hash}},[],()=>storage.withFencedTransaction(db,lock,()=>{fn();return {phase};}));
+ return runAuditedBatchStage(db,{action:'batch.stage',operationId:storage.stageAuditOperationId({...stage,attempt})+'.report-'+phase,scope:{kind:'account_set',value:item.account_set_id},context:{jobId:String(job.id),itemId:String(item.id),stageId:String(stage.id),period:stage.period},request:{stageId:stage.id,attempt,phase,inputHash:stage.input_hash}},[],()=>storage.withFencedTransaction(db,lock,()=>{storage.assertClaimedStage(db,{stageId:stage.id,instance:lock.instance,token:lock.token,attempt});fn();const owner=db.prepare('SELECT owner_instance,fencing_token,attempt FROM local_batch_stages WHERE id=?').get(stage.id);if(!owner||owner.owner_instance!==lock.instance||owner.fencing_token!==lock.token||owner.attempt!==attempt)throw batchError('fence_lost');return {phase};}));
 }

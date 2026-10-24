@@ -16,9 +16,10 @@ const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: i
 //   期初 1002 借 1000 / 3001 贷 1000；V1 借 1002 1000、贷 5001 1000；
 //   V2 借 5602 300、贷 1002 300；资产原值 1200、残值 5%、12 期 → 每月折旧 95。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, dirname } from "node:path";
 
 // ---------------------------------------------------------------- 合成敏感标记
 const X = {
@@ -64,10 +65,14 @@ async function test(name, fn) {
 }
 
 // ---------------------------------------------------------------- 隔离临时库 + 动态 import
-const dataDir = mkdtempSync(join(tmpdir(), "wb-adapter-"));
-process.env.WORKBENCH_DATA_DIR = dataDir;
+const dataDir = resolve(tmpdir(), "m-"+randomUUID());mkdirSync(dataDir);
+for(let p=dataDir;;p=dirname(p)){assert.equal(lstatSync(p).isSymbolicLink(),false);assert.equal(resolve(realpathSync.native(p)).toLowerCase(),p.toLowerCase());if(dirname(p)===p)break;}
+Object.assign(process.env,{TEMP:dataDir,TMP:dataDir,WORKBENCH_DATA_DIR:dataDir,KEEP_FIXTURES:'1',WORKBENCH_TEST_KEEP_FIXTURES:'1'});
+console.log('FIXTURES '+dataDir);
 const A = await import("../server/accounting.mjs");
 const { db: auditDb } = await import("../server/db.mjs");
+let ownedPolicy;
+try {
 const { operationErrorEvidence } = await import("../server/local-audit-coordinator.mjs");
 const { callAgentTool, AGENT_TOOL_NAMES } = await import("../server/agent-tools.mjs");
 const { COA } = await import("../server/coa.mjs");
@@ -80,9 +85,9 @@ const { createFinanceModelAdapter, FINANCE_QUERY_AVAILABLE, FINANCE_QUERY_UNIMPL
 const executed = [];
 let lastRealFailure;
 function businessSnapshot() {
-  const tables = auditDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'audit_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+  const tables = auditDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
   const rows = tables.map(({name}) => [name, auditDb.prepare('SELECT * FROM "'+name.replaceAll('"','""')+'" ORDER BY rowid').all()]);
-  rows.push(['business_sequences',auditDb.prepare("SELECT * FROM sqlite_sequence WHERE name NOT LIKE 'audit_%' ORDER BY name").all()]);
+  rows.push(['business_sequences',auditDb.prepare("SELECT * FROM sqlite_sequence ORDER BY name").all()]);
   return JSON.stringify(rows);
 }
 const executeRaw = async (name, args) => {
@@ -91,17 +96,29 @@ const executeRaw = async (name, args) => {
   lastRealFailure = null;
   try { return await callAgentTool(name, args); }
   catch (error) {
-    lastRealFailure = { proof: operationErrorEvidence(error), before, after: businessSnapshot() };
+    const prior=Object.fromEntries(JSON.parse(before)),setId=args.accountSetId,binding=prior.import_enterprise_account_sets.find(r=>r.account_set_id===setId);
+    lastRealFailure = { proof: operationErrorEvidence(error), before, after: businessSnapshot(), resources:[`account-set:${setId}`,...(binding?[`book:${binding.enterprise_key}`]:[])] };
     throw error;
   }
 };
 function assertPrivateRollback(envelope) {
   assert.equal(envelope.applied, false);
   assert.ok(lastRealFailure?.proof, '真实 coordinator 私有提交证据必须存在');
-  const {proof,before,after} = lastRealFailure;
+  const {proof,before,after,resources} = lastRealFailure;
   assert.equal(proof.applied,false);
   assert.equal(proof.durability,'committed');
-  assert.equal(before,after,'真实 rollback 后业务/来源/批次/序列全部零变');
+  const old=Object.fromEntries(JSON.parse(before)),current=Object.fromEntries(JSON.parse(after));
+  const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations','local_batch_lock_epochs'].includes(name)).map(([name,rows])=>[name,name==='business_sequences'?rows.filter(r=>r.name!=='audit_events'):rows]));
+  assert.deepEqual(business(current),business(old),'真实 rollback 后业务/来源/批次/全部业务序列/组件/实例逐字段零变');
+  const priorEpoch=new Map(old.local_batch_lock_epochs.map(r=>[r.resource_key,r.last_token])),epochs=new Map(current.local_batch_lock_epochs.map(r=>[r.resource_key,r.last_token]));
+  assert.deepEqual([...epochs.keys()].sort(),[...new Set([...priorEpoch.keys(),...resources])].sort(),'only exact acquired resources may gain epoch history');
+  for(const [key,token] of epochs){assert.ok(Number.isSafeInteger(token)&&token>0);assert.equal(token,(priorEpoch.get(key)??0)+(resources.includes(key)?1:0),'exact resource epoch increment');}
+  assert.deepEqual(current.local_batch_locks,old.local_batch_locks);assert.equal(current.local_batch_locks.length,0,'active locks released');
+  for(const table of ['audit_events','audit_operations'])for(const row of old[table])assert.ok(current[table].some(r=>JSON.stringify(r)===JSON.stringify(row)),'original audit history remains exact');
+  const added=table=>current[table].filter(r=>!old[table].some(o=>JSON.stringify(o)===JSON.stringify(r)));
+  const newEvents=added('audit_events'),newOperations=added('audit_operations');assert.equal(newEvents.length,1);assert.equal(newOperations.length,1);
+  assert.equal(newEvents[0].event_id,proof.receipt.eventId);assert.equal(newOperations[0].operation_id,proof.operationId);assert.deepEqual(JSON.parse(newOperations[0].receipt_json),proof.receipt);
+  const seq=value=>value.business_sequences.find(r=>r.name==='audit_events')?.seq??0;assert.equal(seq(current),seq(old)+1,'exact single failure event sequence');
   assert.ok(['failed','rejected'].includes(proof.receipt.state));
   const saved = auditDb.prepare('SELECT receipt_json FROM audit_operations WHERE operation_id=? AND database_instance_id=? AND attempt=?').get(proof.operationId,proof.receipt.databaseInstanceId,proof.receipt.attempt);
   assert.deepEqual(JSON.parse(saved.receipt_json),proof.receipt,'失败 receipt 已真实持久化');
@@ -109,7 +126,7 @@ function assertPrivateRollback(envelope) {
   assert.equal(event.outcome,proof.receipt.state);
 }
 const adapter = createFinanceModelAdapter({ executeRaw });
-const policy = adapter.policy;
+const policy = adapter.policy;ownedPolicy=policy;
 const TRANSPORT_REGISTRY = {
   operations: [
     ...Object.values(PLAIN_MODEL_TOOLS).map((spec) => spec.operation).filter((operation) => typeof operation === "string"),
@@ -1620,9 +1637,10 @@ await test("模型返回 / 错误投影 / 测试日志都不含合成敏感原�
 });
 
 // ---------------------------------------------------------------- 汇总与清理
-policy.dispose();
-try { (await import("../server/db.mjs")).db.close(); console.log("model-adapter SQLite actualclose"); } catch { /* 已关闭或不可用 */ }
-try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 已在退出时释放 */ }
+} finally {
+ ownedPolicy?.dispose();auditDb.close();console.log("model-adapter SQLite actualclose");
+ if(!process.env.KEEP_FIXTURES)rmSync(dataDir,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+}
 
 console.log(`\nFinance model adapter acceptance: ${results.filter(Boolean).length}/${results.length} passed`);
 if (results.some((passed) => !passed)) process.exitCode = 1;

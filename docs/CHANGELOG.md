@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### Changed — LOCAL-07 W3b 共享领域锁与 batch3 持久代次候选（2026-10-24）
+
+- 普通领域及批量七阶段共用 job→book→set 私有资源能力，持久 epoch 不随释放删除，官方保护升级 batch1/2→3；COMMIT 前核全资源与阶段归属，保原输入副本和固定审计 child membership。
+- 报表取快照、真实 worker 并发与发布重核；seed 强制替换在单一受控 outer 内执行，不重置全局序列。显式银行 / 辅助 CLI 普通写等待同一保护 readiness，只读零升级。
+- 员工定点自测：同库20企、两准则两月七阶段、19成功与1真实期末故障补齐 retry；代表30产物逐行金额与 PDF 可读；运行中官方备份有合法阶段提交交叠。保原48历史 batch1/2 备份组合，新 batch3 另列；四新测试仅追加注册，未声称完整101套已跑。
+- 状态：实施与自测候选，根验收 / 全新独审 / PR / 合并均待管理者核实；[契约](LOCAL-BATCH-CLI.md)、[任务](tasks/LOCAL-07-CLI.md)、[交接](handoffs/LOCAL-07-CLI.md)。W4 恢复执行授权、路径重绑与最终发布不在本候选完成范围。
+
 ### Changed — LOCAL-06 备份 / 验证 / 恢复：精确 v3 + v4 结构契约（2026-10-22，合并后兼容整合）
 
 - 背景：备份子包已随 [PR #55](https://github.com/huxiaoyang-code/youshu-fork/pull/55) 验收合入（merge `98977e0`，已审源码 head `b2dcba3`），但它当时**严格只认 schema v3**；LOCAL-02 已把产品推到 v4（`asset_cards` 5 列）。本轮把备份 / 验证 / 恢复真正适配**两个精确版本**。

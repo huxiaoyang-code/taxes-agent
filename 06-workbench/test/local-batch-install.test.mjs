@@ -7,7 +7,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {spawn} from 'node:child_process';
 export {assert,fs,join,resolve,DatabaseSync,randomUUID,pathToFileURL};
 export const WORKBENCH=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-export const ROOT=join(WORKBENCH,'..','.agent-runs','batch2-test-'+randomUUID());
+export const ROOT=resolve(WORKBENCH,'../../..','.agent-runs','s-'+randomUUID());
 export function plain(p){for(let x=resolve(p);;x=dirname(x)){assert.equal(fs.lstatSync(x).isSymbolicLink(),false);assert.equal(fs.realpathSync.native(x).toLowerCase(),x.toLowerCase());if(dirname(x)===x)break;}}
 fs.mkdirSync(ROOT,{recursive:true});plain(ROOT);fs.mkdirSync(join(ROOT,'seed'));plain(join(ROOT,'seed'));
 process.env.TEMP=ROOT;process.env.TMP=ROOT;process.env.WORKBENCH_DATA_DIR=join(ROOT,'seed');process.env.KEEP_FIXTURES='1';process.env.WORKBENCH_TEST_KEEP_FIXTURES='1';
@@ -15,7 +15,7 @@ export const S=await import('../server/local-batch-storage.mjs'),LB=await import
 let seed;
 export async function fresh({version=5,batch=0,audit=0,bank=false,aux=false,journal='delete'}={}) {
  if(!seed)seed=(async()=>{const {db}=await import('../server/db.mjs');try{const A=await import('../server/accounting.mjs');for(const [key,amount] of [['甲',379.23],['乙',68.59]]){const id=A.createAccountSet({name:'Synthetic '+key,start_period:'2026-01',profileId:'small-2011-basic-v1',enterprise:{enterpriseKey:'BATCH-SYNTH-'+key,enterpriseName:'Synthetic '+key}}).id;A.setOpeningBalances(id,[{code:'1002',debit:amount},{code:'3001',credit:amount}]);}return db.prepare('SELECT path FROM schema_backups ORDER BY id LIMIT 1').get().path;}finally{db.close();console.log('seed DB actualclose');}})();
- const old=await seed,dir=join(ROOT,randomUUID());fs.mkdirSync(dir);plain(dir);const file=join(dir,'workbench.db');
+ const old=await seed,dir=join(dirname(ROOT),'s-'+randomUUID());fs.mkdirSync(dir);plain(dir);const file=join(dir,'workbench.db');
  if(version===5)cloneCore(join(ROOT,'seed','workbench.db'),file);else fs.copyFileSync(old,file);
  if(version!==5){const I=await import('../server/import-storage.mjs'),d=new DatabaseSync(file);try{I.ensureImportSchema(d,{dataDir:dir,targetVersion:version});}finally{d.close();}}
  const db=new DatabaseSync(file);db.exec('PRAGMA foreign_keys=ON;PRAGMA busy_timeout=0');db.exec('PRAGMA journal_mode='+journal);
@@ -23,11 +23,24 @@ export async function fresh({version=5,batch=0,audit=0,bank=false,aux=false,jour
  try{
   if(bank)await (await import('../server/bank-storage.mjs')).ensureBankSchema(db,{dbPath:file,dataDir:dir,backupService:LB});
   if(aux)await (await import('../server/auxiliary-storage.mjs')).ensureAuxiliarySchema(db,{dbPath:file,outDir:join(dir,'before-aux')});
+  // Fixture construction: bank/aux current installers legitimately add batch3.
+  // Remove that empty component before constructing the explicitly requested history.
+  removeFixtureBatch(db);
   if(audit===1)installLegacyAudit(db);else if(audit===2)await AS.installAuditSchema(db,{dbPath:file,outDir:join(dir,'before-audit')});
-  if(batch===1)installLegacyBatch(db);else if(batch===2)await S.installBatchSchema(db,{dbPath:file,outDir:join(dir,'before-batch')});
+  if(batch===1)installLegacyBatch(db);else if(batch===2)installLegacyBatch2(db);else if(batch===3)await S.installBatchSchema(db,{dbPath:file,outDir:join(dir,'before-batch')});
   return h;
  }catch(e){h.close();throw e;}
 }
+function removeFixtureBatch(db){
+ if(!db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_batch_component'").get())return;
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM local_batch_jobs').get().n,0,'only empty setup component may be removed');
+ db.exec('PRAGMA foreign_keys=OFF');try{for(const name of [...S.LOCAL_BATCH_TABLES].reverse())if(db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get(name))db.exec('DROP TABLE '+name);}finally{db.exec('PRAGMA foreign_keys=ON');}
+}
+export function installLegacyBatch2(db){
+ contractDdl(db,S.batchComponentContract(2));db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(S.LOCAL_BATCH_COMPONENT,2,'2026-10-23T00:00:00.000Z','legacy2');
+ const audit=AS.inspectAuditSchema(db);db.prepare("INSERT INTO local_batch_database_instances VALUES(?,NULL,?,1,?,'initial','ready',NULL,NULL)").run(randomUUID(),audit.ok?audit.activeInstanceId:null,'2026-10-23T00:00:00.000Z');assert.equal(S.assertBatchSchema(db).version,2);
+}
+function fixtureLock(db,options){if(S.inspectBatchSchema(db).version===3)return S.acquireLock(db,options);const at=new Date().toISOString();db.prepare('INSERT INTO local_batch_locks VALUES(?,?,1,?,?,?,?)').run(options.resourceKey,options.instance,options.pid,at,at,new Date(Date.now()+120000).toISOString());return {token:1};}
 function cloneCore(source,file){
  const seed=new DatabaseSync(source,{readOnly:true});let target;
  try{seed.exec('BEGIN');LB.assertSupportedDatabaseConnection(seed);const tables=LB.backupContract().requiredTables;assert.equal(tables.length,15);
@@ -47,18 +60,36 @@ export function installLegacyAudit(db){contractDdl(db,AS.auditComponentContract(
 export const logical=db=>JSON.stringify(db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all().concat(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>({name,rows:db.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()}))));
 export const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 export const digest=v=>createHash('sha256').update(v).digest('hex');
-export async function child(args,{env={},onOutput}={}){return new Promise((ok,no)=>{const c=spawn(process.execPath,args,{cwd:WORKBENCH,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let out='',err='';c.stdout.on('data',b=>{out+=b;onOutput?.(String(b),c);});c.stderr.on('data',b=>err+=b);c.on('error',no);c.on('close',(code,signal)=>{console.log('child actualclose '+code+'/'+signal);ok({code,signal,out,err,closed:true});});});}
+export async function child(args,{env={},onOutput}={}){return new Promise((ok,no)=>{const c=spawn(process.execPath,args,{cwd:WORKBENCH,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let out='',err='',exit;c.on('exit',(code,signal)=>exit={code,signal});c.stdout.on('data',b=>{out+=b;onOutput?.(String(b),c);});c.stderr.on('data',b=>err+=b);c.on('error',no);c.on('close',(code,signal)=>{assert.deepEqual(exit,{code,signal});console.log('child actual exit+close '+code+'/'+signal);ok({code,signal,out,err,closed:true});});});}
 const CASE_FILTER=process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href?process.env.BATCH_TEST_CASE:null;let selectedSuites=0;
 export async function suite(name,fn){if(CASE_FILTER&&name!==CASE_FILTER)return;selectedSuites++;try{await fn();console.log('PASS '+name);}catch(e){console.error('FAIL '+name,e);process.exitCode=1;throw e;}}
 export function job(h,{file=false,long=false,report=false}={}) {
  const raw={schemaVersion:1,jobKey:'job-'+randomUUID(),items:[{itemKey:'item1',source:{system:'synthetic',enterpriseKey:long?'中'.repeat(128):'合成企业',enterpriseName:'Synthetic'},periods:[{period:'2026-01',imports:[{batchId:long?'b'.repeat(128):'b1',mode:'create',payload:{amount:42.37},confirmNewBinding:true}],reports:report?[{kind:'balance-sheet',formats:['csv']}]:[]}]}]};
  if(file){fs.writeFileSync(join(h.dir,'input.json'),' { "amount": 42.37 }\n');raw.items[0].periods[0].imports[0].payloadFile='input.json';delete raw.items[0].periods[0].imports[0].payload;}
  const validated=S.validateManifest(raw);assert.equal(validated.ok,true,JSON.stringify(validated.errors));const manifest=validated.manifest,manifestJson=S.canonicalJson(manifest),manifestHash=S.sha256(manifestJson),plan=S.buildPlan({manifest,manifestDir:h.dir});
- const result=S.createJob(h.db,{manifest,manifestJson,manifestHash,outputDir:join(h.dir,'out'),...plan});return {...result,manifest,...plan};
+ const version=S.assertBatchSchema(h.db).version;
+ // Synthetic historical saved rows use the unchanged v2 writer shape, not a v3
+ // execution disguised as v2. Product createJob correctly refuses historical writes.
+ const result=version===2?savedV2Job(h,{manifest,manifestJson,manifestHash,...plan}):S.createJob(h.db,{manifest,manifestJson,manifestHash,outputDir:join(h.dir,'out'),...plan});
+ assert.equal(S.assertBatchSchema(h.db).version,version);return {...result,manifest,...plan};
 }
-export function downgrade(h){h.db.exec('DROP TABLE local_batch_input_bindings; DROP TABLE local_batch_job_bindings; DROP TABLE local_batch_database_instances; UPDATE local_batch_component SET version=1');assert.equal(S.assertBatchSchema(h.db).version,1);}
+function savedV2Job(h,{manifest,manifestJson,manifestHash,plans,inputs}){
+ const db=h.db,instance=S.readBatchInstance(db).instance_id,at='2026-10-23T00:00:00.000Z',output=join(h.dir,'out');
+ assert.equal(S.assertBatchSchema(db).version,2);assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_batch_lock_epochs'").get(),undefined);
+ const existing=db.prepare('SELECT * FROM local_batch_jobs WHERE job_key=?').get(manifest.jobKey);assert.equal(existing,undefined);
+ db.exec('BEGIN IMMEDIATE');try{
+  const id=Number(db.prepare("INSERT INTO local_batch_jobs(job_key,manifest_hash,manifest_json,concurrency,output_dir,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,'pending',0,?,?)").run(manifest.jobKey,manifestHash,manifestJson,manifest.concurrency,output,at,at).lastInsertRowid),itemIds=new Map();
+  for(const item of manifest.items){const itemId=Number(db.prepare("INSERT INTO local_batch_items(job_id,item_key,enterprise_key,source_system,enterprise_name,account_set_id,account_set_source,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)").run(id,item.itemKey,item.source.enterpriseKey,item.source.system,item.source.enterpriseName,item.accountSetId??null,item.accountSetId?'manifest':null,at,at).lastInsertRowid);itemIds.set(item.itemKey,itemId);}
+  for(const plan of plans)for(const stage of plan.stages)db.prepare("INSERT INTO local_batch_stages(item_id,period,stage_key,stage_order,spec_json,status,attempt,input_hash,updated_at) VALUES(?,?,?,?,?,'pending',0,?,?)").run(itemIds.get(plan.itemKey),stage.period,stage.stageKey,stage.order,S.canonicalJson(stage.spec),stage.inputHash,at);
+  for(const input of inputs){const itemId=itemIds.get(input.itemKey),key=id+':'+itemId+':'+input.batchId;db.prepare('INSERT INTO local_batch_inputs(input_key,job_id,item_id,period,batch_id,source_path,source_hash,bytes,content,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,id,itemId,input.period,input.batchId,input.sourcePath??null,input.sourceHash,input.bytes.length,input.bytes,at);db.prepare('INSERT INTO local_batch_input_bindings VALUES(?,?,?,?,?)').run(instance,key,input.sourcePath==null?'inline':'source',input.sourcePath??null,at);}
+  db.prepare("INSERT INTO local_batch_job_bindings VALUES(?,?,'bound',?,?)").run(instance,id,output,at);assert.equal(S.assertBatchSchema(db).version,2);db.exec('COMMIT');
+  const job=db.prepare('SELECT * FROM local_batch_jobs WHERE id=?').get(id);assert.equal(job.manifest_json,manifestJson);assert.equal(job.manifest_hash,manifestHash);assert.equal(db.prepare('SELECT COUNT(*) n FROM local_batch_stages WHERE item_id IN (SELECT id FROM local_batch_items WHERE job_id=?)').get(id).n,plans.reduce((n,p)=>n+p.stages.length,0));return {job,created:true};
+ }catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e;}
+}
+export function downgrade(h){if(h.db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_batch_lock_epochs'").get())h.db.exec('DROP TABLE local_batch_lock_epochs');h.db.exec('DROP TABLE local_batch_input_bindings; DROP TABLE local_batch_job_bindings; DROP TABLE local_batch_database_instances; UPDATE local_batch_component SET version=1');assert.equal(S.assertBatchSchema(h.db).version,1);}
 export function originalRows(db){return JSON.stringify(S.LOCAL_BATCH_V1_TABLES.filter(t=>t!=='local_batch_component').map(t=>[t,db.prepare('SELECT * FROM '+t+' ORDER BY rowid').all()]).concat([['sequence',db.prepare("SELECT * FROM sqlite_sequence WHERE name GLOB 'local_batch_*' ORDER BY name").all()]]));}
 export async function realReports(h,{window=null,formats=['csv','xlsx'],jobKey='report-'+randomUUID()}={}) {
+ assert.equal(S.assertBatchSchema(h.db).version,3,'real runner/publication tests require current batch3');
  const account=h.db.prepare('SELECT account_set_id,enterprise_key FROM import_enterprise_account_sets ORDER BY account_set_id LIMIT 1').get();
  assert.ok(account);const manifest=S.validateManifest({schemaVersion:1,jobKey,concurrency:1,items:[{itemKey:'actual',source:{system:'synthetic',enterpriseKey:account.enterprise_key,enterpriseName:'Synthetic'},accountSetId:account.account_set_id,periods:[{period:'2026-01',reports:[{kind:'balance-sheet',formats}]}]}]}).manifest;
  assert.ok(manifest);const outputDir=join(h.dir,'reports-'+jobKey);
@@ -71,14 +102,14 @@ export async function realReports(h,{window=null,formats=['csv','xlsx'],jobKey='
  const saved=S.getJobByKey(h.db,jobKey);assert.ok(saved);return {job:saved,manifest,outputDir,result};
 }
 async function main(){
- await suite('sync ensure is strict and genuine fresh receipt builds one atomic v2 instance',async()=>{
-  const dir=join(ROOT,randomUUID()),receipt=S.claimFreshDataDir(dir),db=new DatabaseSync(join(dir,'workbench.db'));db.exec('PRAGMA foreign_keys=ON');try{const r=S.ensureBatchSchema(db,{receipt});assert.equal(r.version,2);assert.equal(r.created,true);assert.equal(typeof r.then,'undefined');const id=S.readBatchInstance(db).instance_id;assert.equal(S.ensureBatchSchema(db).created,false);assert.equal(S.readBatchInstance(db).instance_id,id);assert.equal(S.inspectBatchSchema(db).ok,true);}finally{db.close();S.releaseFreshClaim(receipt);}
+ await suite('sync ensure is strict and genuine fresh receipt builds one atomic v3 instance',async()=>{
+  const dir=join(ROOT,randomUUID()),receipt=S.claimFreshDataDir(dir),db=new DatabaseSync(join(dir,'workbench.db'));db.exec('PRAGMA foreign_keys=ON');try{const r=S.ensureBatchSchema(db,{receipt});assert.equal(r.version,3);assert.equal(r.created,true);assert.equal(typeof r.then,'undefined');const id=S.readBatchInstance(db).instance_id;assert.equal(S.ensureBatchSchema(db).created,false);assert.equal(S.readBatchInstance(db).instance_id,id);assert.equal(S.inspectBatchSchema(db).ok,true);}finally{db.close();S.releaseFreshClaim(receipt);}
   const h=await fresh();try{const before=logical(h.db);assert.throws(()=>S.ensureBatchSchema(h.db,{receipt:{}}));assert.equal(logical(h.db),before);}finally{h.close();}
  });
  await suite('v1 upgrade keeps eight old tables, decimals, IDs, sequence, stages, inputs and locks',async()=>{
   const h=await fresh({batch:2,journal:'wal'});try{const j=job(h,{file:true,long:true,report:true});const stage=h.db.prepare("SELECT * FROM local_batch_stages WHERE stage_key LIKE 'report:%'").get();const dto=JSON.stringify({name:'合成',amount:42.37}),csv='amount\n42.37\n',business='a'.repeat(64);S.saveSnapshot(h.db,{jobId:j.job.id,itemId:stage.item_id,period:stage.period,kind:'balance-sheet',dtoHash:S.sha256(dto),businessHash:business,dtoJson:dto,csvText:csv,csvHash:S.sha256(csv)});const inputHash=S.sha256(S.canonicalJson({dtoHash:S.sha256(dto),businessHash:business,format:'csv',code:null}));h.db.prepare("UPDATE local_batch_stages SET attempt=1,status='needs_review',input_hash=?,evidence_json=? WHERE id=?").run(inputHash,S.canonicalJson({snapshotHash:inputHash,businessHash:business}),stage.id);
    const dead=await child(['--input-type=module','-e','console.log(process.pid)']);assert.equal(dead.code,0);const pid=Number(dead.out.trim());assert.equal(S.isProcessAlive(pid),false);
-   S.acquireLock(h.db,{resourceKey:'book:'+'中'.repeat(128),instance:'dead-owner',pid});downgrade(h);const before=originalRows(h.db),v1=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'v1-proof')});assert.equal(v1.ok,true,JSON.stringify(v1));const r=await S.installBatchSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'upgrade')});assert.equal(r.from,1);assert.equal(r.to,2);assert.equal(originalRows(h.db),before);assert.equal(S.assertBatchSchema(h.db).version,2);assert.equal(h.db.prepare('SELECT COUNT(*) n FROM local_batch_input_bindings').get().n,1);console.log('old tables SHA256 '+digest(before)+' -> '+digest(originalRows(h.db)));
+   fixtureLock(h.db,{resourceKey:'book:'+'中'.repeat(128),instance:'dead-owner',pid});downgrade(h);const before=originalRows(h.db),v1=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'v1-proof')});assert.equal(v1.ok,true,JSON.stringify(v1));const r=await S.installBatchSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'upgrade')});assert.equal(r.from,1);assert.equal(r.to,3);assert.equal(originalRows(h.db),before);assert.equal(S.assertBatchSchema(h.db).version,3);assert.equal(h.db.prepare('SELECT COUNT(*) n FROM local_batch_input_bindings').get().n,1);console.log('old tables SHA256 '+digest(before)+' -> '+digest(originalRows(h.db)));
    h.close();const reopened=new DatabaseSync(h.file);try{assert.equal(S.readBatchInstance(reopened).instance_id,r.activeInstanceId);}finally{reopened.close();}
   }finally{h.close();}
  });
@@ -87,7 +118,7 @@ async function main(){
   finally{h.close();other.close();}
  });
  await suite('real living PID, NULL/unverifiable PID, and running without corroborating lock deny maintenance',async()=>{
-  for(const mode of ['alive','unknown','unlinked-stage']){const h=await fresh({batch:2});try{job(h);downgrade(h);if(mode==='unlinked-stage')h.db.exec("UPDATE local_batch_stages SET status='running',owner_instance='no-proof'");else S.acquireLock(h.db,{resourceKey:'job:1',instance:'owner',pid:mode==='alive'?process.pid:null});const before=logical(h.db);await assert.rejects(S.installBatchSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'denied')}),e=>e.code==='batch_owner_active');assert.equal(logical(h.db),before);assert.equal(fs.existsSync(join(h.dir,'denied')),false);}finally{h.close();}}
+  for(const mode of ['alive','unknown','unlinked-stage']){const h=await fresh({batch:2});try{job(h);downgrade(h);if(mode==='unlinked-stage')h.db.exec("UPDATE local_batch_stages SET status='running',owner_instance='no-proof'");else fixtureLock(h.db,{resourceKey:'job:1',instance:'owner',pid:mode==='alive'?process.pid:null});const before=logical(h.db);await assert.rejects(S.installBatchSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'denied')}),e=>e.code==='batch_owner_active');assert.equal(logical(h.db),before);assert.equal(fs.existsSync(join(h.dir,'denied')),false);}finally{h.close();}}
  });
  await suite('official backup/create failure and DDL failure roll back exact original source and retain evidence',async()=>{
   const h=await fresh({batch:1});try{const before=logical(h.db);fs.mkdirSync(join(h.dir,'occupied'));await assert.rejects(S.installBatchSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'occupied')}),e=>e.code==='batch_backup_invalid');assert.equal(logical(h.db),before);
@@ -95,14 +126,14 @@ async function main(){
   }finally{h.close();}
  });
  await suite('active bindings gate cancel/retry/create before cancel mutation or external source reads',async()=>{
-  const h=await fresh({batch:2});try{const j=job(h,{file:true});h.db.exec('UPDATE local_batch_jobs SET cancel_requested=1');fs.unlinkSync(join(h.dir,'input.json'));h.db.exec("UPDATE local_batch_input_bindings SET mode='disabled',source_path=NULL");const before=logical(h.db);assert.throws(()=>S.requestCancel(h.db,j.job.job_key),e=>e.code==='batch_binding_disabled');assert.throws(()=>S.resetStagesForRetry(h.db,{jobKey:j.job.job_key,allowSnapshotOnly:true}),e=>e.code==='batch_binding_disabled');assert.throws(()=>job(h),e=>e.code==='batch_binding_disabled');assert.equal(logical(h.db),before);
+  const h=await fresh({batch:3});try{const j=job(h,{file:true});h.db.exec('UPDATE local_batch_jobs SET cancel_requested=1');fs.unlinkSync(join(h.dir,'input.json'));h.db.exec("UPDATE local_batch_input_bindings SET mode='disabled',source_path=NULL");const before=logical(h.db);assert.throws(()=>S.requestCancel(h.db,j.job.job_key),e=>e.code==='batch_binding_disabled');assert.throws(()=>S.resetStagesForRetry(h.db,{jobKey:j.job.job_key,allowSnapshotOnly:true}),e=>e.code==='batch_binding_disabled');assert.throws(()=>job(h),e=>e.code==='batch_binding_disabled');assert.equal(logical(h.db),before);
    const manifest=join(h.dir,'m.json');fs.writeFileSync(manifest,JSON.stringify({...j.manifest,jobKey:'fresh-job'}));const c=await child(['scripts/local-batch.mjs','start','--data-dir',h.dir,'--manifest',manifest,'--output-dir',join(h.dir,'newout')]);assert.equal(JSON.parse(c.out.trim()).error.code,'batch_binding_disabled');assert.equal(fs.existsSync(join(h.dir,'newout')),false);assert.equal(logical(h.db),before);
   }finally{h.close();}
  });
  await suite('v1 readonly status/inspect and CLI explicit install never implicitly upgrade',async()=>{
   const h=await fresh({batch:2});try{const j=job(h);downgrade(h);const before=logical(h.db);assert.equal(S.inspectDataDir(h.dir).batchVersion,1);const st=await child(['scripts/local-batch.mjs','status','--data-dir',h.dir,'--job-key',j.job.job_key]);assert.equal(st.code,1);assert.equal(JSON.parse(st.out).jobKey,j.job.job_key);assert.equal(logical(h.db),before);
    const r=await child(['scripts/local-batch.mjs','resume','--data-dir',h.dir,'--job-key',j.job.job_key]);assert.equal(r.code,3);assert.equal(JSON.parse(r.out).error.code,'migration_requires_backup');assert.equal(logical(h.db),before);
-   const c=await child(['scripts/local-batch.mjs','install','--data-dir',h.dir,'--out-dir',join(h.dir,'cli-install')]);assert.equal(c.code,0,c.err+c.out);assert.equal(S.assertBatchSchema(h.db).version,2);
+   const c=await child(['scripts/local-batch.mjs','install','--data-dir',h.dir,'--out-dir',join(h.dir,'cli-install')]);assert.equal(c.code,0,c.err+c.out);assert.equal(S.assertBatchSchema(h.db).version,3);
    const missing=join(h.dir,'missing');const no=await child(['scripts/local-batch.mjs','status','--data-dir',missing,'--job-key','x']);assert.equal(no.code,3);assert.equal(fs.existsSync(missing),false);
   }finally{h.close();}
  });
@@ -118,13 +149,13 @@ async function main(){
   }finally{fs.readFileSync=read;if(other.isTransaction)other.exec('ROLLBACK');other.close();h.close();}
  });
  await suite('restore_pending gates storage and direct runner before output or source effects',async()=>{
-  const h=await fresh({batch:2,audit:2});try{const j=job(h,{file:true}),parent=S.readBatchInstance(h.db).instance_id,active=randomUUID(),auditParent=AS.currentAuditInstanceId(h.db),auditActive=randomUUID();h.db.exec('UPDATE audit_database_instances SET is_active=0');h.db.prepare("INSERT INTO audit_database_instances VALUES(?,?,?,1,'restore-new')").run(auditActive,'2026-10-23T00:00:00.000Z',auditParent);assert.equal(AS.currentAuditInstanceId(h.db),auditActive);h.db.exec('UPDATE local_batch_database_instances SET is_active=0');h.db.prepare("INSERT INTO local_batch_database_instances VALUES(?,?,?,1,?,'restore-new','restore_pending',?,?)").run(active,parent,AS.currentAuditInstanceId(h.db),'2026-10-23T00:00:00.000Z','restore-pending-test','b'.repeat(64));h.db.prepare("INSERT INTO local_batch_job_bindings SELECT ?,job_id,'disabled',NULL,bound_at FROM local_batch_job_bindings WHERE database_instance_id=?").run(active,parent);h.db.prepare("INSERT INTO local_batch_input_bindings SELECT ?,input_key,'disabled',NULL,bound_at FROM local_batch_input_bindings WHERE database_instance_id=?").run(active,parent);fs.unlinkSync(join(h.dir,'input.json'));assert.equal(AS.inspectAuditSchema(h.db).ok,true);assert.equal(S.inspectBatchSchema(h.db).ok,true);assert.equal(h.db.prepare('SELECT audit_instance_id FROM local_batch_database_instances WHERE instance_id=?').get(parent).audit_instance_id,auditParent);assert.equal(h.db.prepare('SELECT parent_instance_id FROM audit_database_instances WHERE instance_id=?').get(auditActive).parent_instance_id,auditParent);assert.deepEqual(h.db.prepare("SELECT debit FROM opening_balances WHERE code='1002' ORDER BY account_set_id").all().map(r=>r.debit),[379.23,68.59]);const before=logical(h.db);
+  const h=await fresh({batch:3,audit:2});try{const j=job(h,{file:true}),parent=S.readBatchInstance(h.db).instance_id,active=randomUUID(),auditParent=AS.currentAuditInstanceId(h.db),auditActive=randomUUID();h.db.exec('UPDATE audit_database_instances SET is_active=0');h.db.prepare("INSERT INTO audit_database_instances VALUES(?,?,?,1,'restore-new')").run(auditActive,'2026-10-23T00:00:00.000Z',auditParent);assert.equal(AS.currentAuditInstanceId(h.db),auditActive);h.db.exec('UPDATE local_batch_database_instances SET is_active=0');h.db.prepare("INSERT INTO local_batch_database_instances VALUES(?,?,?,1,?,'restore-new','restore_pending',?,?)").run(active,parent,AS.currentAuditInstanceId(h.db),'2026-10-23T00:00:00.000Z','restore-pending-test','b'.repeat(64));h.db.prepare("INSERT INTO local_batch_job_bindings SELECT ?,job_id,'disabled',NULL,bound_at FROM local_batch_job_bindings WHERE database_instance_id=?").run(active,parent);h.db.prepare("INSERT INTO local_batch_input_bindings SELECT ?,input_key,'disabled',NULL,bound_at FROM local_batch_input_bindings WHERE database_instance_id=?").run(active,parent);fs.unlinkSync(join(h.dir,'input.json'));assert.equal(AS.inspectAuditSchema(h.db).ok,true);assert.equal(S.inspectBatchSchema(h.db).ok,true);assert.equal(h.db.prepare('SELECT audit_instance_id FROM local_batch_database_instances WHERE instance_id=?').get(parent).audit_instance_id,auditParent);assert.equal(h.db.prepare('SELECT parent_instance_id FROM audit_database_instances WHERE instance_id=?').get(auditActive).parent_instance_id,auditParent);assert.deepEqual(h.db.prepare("SELECT debit FROM opening_balances WHERE code='1002' ORDER BY account_set_id").all().map(r=>r.debit),[379.23,68.59]);const before=logical(h.db);
    assert.throws(()=>S.requestCancel(h.db,j.job.job_key),e=>e.code==='batch_not_ready');assert.throws(()=>S.resetStagesForRetry(h.db,{jobKey:j.job.job_key}),e=>e.code==='batch_not_ready');
    const output=join(h.dir,'forbidden-output'),code="const R=await import('./server/local-batch-runner.mjs');try{await R.createAndRun({outputDir:"+JSON.stringify(output)+"});process.exitCode=7;}catch(e){console.log(e.code);if(e.code!=='batch_not_ready')process.exitCode=8;}finally{R.database.close();console.log('DB actualclose');}",r=await child(['--input-type=module','-e',code],{env:{WORKBENCH_DATA_DIR:h.dir}});assert.equal(r.code,0,r.err+r.out);assert.equal(fs.existsSync(output),false);assert.equal(logical(h.db),before);
   }finally{h.close();}
  });
  await suite('mutable report snapshot retry window preserves saved history and rejects succeeded hash drift',async()=>{
-  const h=await fresh({batch:2});try{const j=await realReports(h,{formats:['csv']});const stage=h.db.prepare("SELECT * FROM local_batch_stages WHERE stage_key LIKE 'report:%'").get();
+  const h=await fresh({batch:3});try{const j=await realReports(h,{formats:['csv']});const stage=h.db.prepare("SELECT * FROM local_batch_stages WHERE stage_key LIKE 'report:%'").get();
    const persist=(amount,business)=>{const dto=JSON.stringify({amount});S.saveSnapshot(h.db,{jobId:j.job.id,itemId:stage.item_id,period:stage.period,kind:'balance-sheet',dtoHash:S.sha256(dto),businessHash:business,dtoJson:dto,csvText:null,csvHash:null});return S.sha256(S.canonicalJson({dtoHash:S.sha256(dto),businessHash:business,format:'csv',code:null}));};
    const oldHash=stage.input_hash;persist(19.37,'a'.repeat(64));h.db.prepare("UPDATE local_batch_stages SET attempt=1,status='failed',input_hash=? WHERE id=?").run(oldHash,stage.id);assert.equal(S.inspectBatchSchema(h.db).ok,true);
    h.db.prepare("UPDATE local_batch_stages SET status='pending' WHERE id=?").run(stage.id);const newHash=persist(23.81,'b'.repeat(64));assert.notEqual(oldHash,newHash);assert.equal(S.inspectBatchSchema(h.db).ok,true);assert.equal(LB.createBackup({dbPath:h.file,outDir:join(h.dir,'retry-window')}).ok,true);

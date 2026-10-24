@@ -1,3 +1,4 @@
+import { runDomainAdmission } from './local-audit-coordinator.mjs';
 // import-incremental.mjs — 增量导入（首次建账 / 已有账套追加）领域逻辑。
 //
 // 与旧 `importAccountSet` 的分工：
@@ -286,7 +287,7 @@ function importIncrementalBody(options = {}) {
   catch (error) { if (options?.auxiliaryAppendix !== undefined) throw auxiliaryImportError(error); throw error; }
 }
 const ADMITTED=Symbol('import-admitted');
-function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
+function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=false}={}) {
   const args = options ?? {};
   assertAuxiliaryConnection(db);
   const appendix = parseAuxiliaryAppendix(args.auxiliaryAppendix);
@@ -322,7 +323,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
     else targetAccountSetId = n;
   }
   const rawMode = typeof args.mode === "string" ? args.mode.trim() : "";
-  const mode = rawMode || (targetAccountSetId ? MODE_APPEND : MODE_CREATE);
+  const mode = incrementalAdmissionTarget(args).mode;
   request.mode = mode;
   if (![MODE_CREATE, MODE_APPEND].includes(mode)) {
     argErrors.push(`mode 只能是 ${MODE_CREATE} / ${MODE_APPEND}，收到：${fmt(args.mode)}`);
@@ -341,18 +342,24 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
   // ---------- 2. 最小目标读取：append 目标 / 已完成 create 批次的目标账套 ----------
   // 严格 normalize 必须在定位目标之后：口径要用目标**实际** profile 与科目表，
   // 否则旧 create 批次重放可能被新企业模板提前拒绝（例如企业模板下 5001 不是收入）。
-  const batchRecord = getBatch(db, batchId);
+  // Outside the resource window this projection selects only the profile used
+  // by an already completed create. It grants no replay or target authority;
+  // full batch/source/binding/period admission is repeated under the locks.
+  const batchRecord = staticOnly
+    ? db.prepare('SELECT status,mode,account_set_id FROM import_batches WHERE batch_id=?').get(batchId)
+    : getBatch(db, batchId);
   let targetSet = null;
   let targetContext = null;
   let creationProfile = null;
   const targetErrors = [];
   if (mode === MODE_APPEND && targetAccountSetId) {
     try {
-      targetSet = A.getAccountSet(targetAccountSetId);
+      targetSet = staticOnly ? A.accountSetProfile(targetAccountSetId).set : A.getAccountSet(targetAccountSetId);
     } catch (e) {
       if (e?.code === "accounting_profile_unknown") {
         targetErrors.push(`${e.code}: 目标账套持久会计 profile 未知或已损坏`);
       } else {
+        if(staticOnly)return {marker:ADMITTED}; // target existence is lock-bound admission
         const err = new Error("account_set_not_found");
         err.code = "account_set_not_found";
         err.details = { accountSetId: targetAccountSetId };
@@ -360,7 +367,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
       }
     }
     if (targetSet) {
-      targetContext = { profileId: targetSet.accounting_profile_id, accounts: A.listAccounts(targetAccountSetId) };
+      targetContext = { profileId: targetSet.accounting_profile_id, accounts: staticOnly ? db.prepare('SELECT * FROM accounts WHERE account_set_id=? ORDER BY code').all(targetAccountSetId) : A.listAccounts(targetAccountSetId) };
       request.accountSetId = targetAccountSetId;
     }
   } else if (mode === MODE_CREATE) {
@@ -368,8 +375,8 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
     if (batchRecord && batchRecord.status === "completed" && batchRecord.mode === MODE_CREATE
       && batchRecord.account_set_id != null) {
       try {
-        targetSet = A.getAccountSet(batchRecord.account_set_id);
-        targetContext = { profileId: targetSet.accounting_profile_id, accounts: A.listAccounts(targetSet.id) };
+        targetSet = staticOnly ? A.accountSetProfile(batchRecord.account_set_id).set : A.getAccountSet(batchRecord.account_set_id);
+        targetContext = { profileId: targetSet.accounting_profile_id, accounts: staticOnly ? db.prepare('SELECT * FROM accounts WHERE account_set_id=? ORDER BY code').all(targetSet.id) : A.listAccounts(targetSet.id) };
       } catch (e) {
         if (e?.code === "accounting_profile_unknown") {
           targetErrors.push(`${e.code}: 已完成批次的目标账套持久会计 profile 未知或已损坏`);
@@ -446,6 +453,8 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
     // 严格校验失败：预检与正式都一样拒绝，且不写任何表。
     return rejected(request, strict.errors, { validation });
   }
+
+  if(staticOnly)return {marker:ADMITTED};
 
   const identityConflicts = [];
   const notes = [];
@@ -1142,6 +1151,9 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
         openingBalancesApplied: outcome.openingBalancesApplied,
         vouchersCreated: outcome.vouchersCreated,
         vouchersDeduplicated: outcome.vouchersDeduplicated,
+        contentFingerprint: fingerprint, mode, accountSetId,
+        source: { system: source.value.system, enterpriseKey },
+        sourceTrace: outcome.sourceTrace.map(t => ({ ...t, period: vouchers.find(v => v.sourceVoucherId === t.sourceVoucherId).voucher.period })),
       },
     });
   };
@@ -1266,6 +1278,134 @@ export function getImportBatch(batchId) {
   };
 }
 
+/** Read-only expected identities from saved bytes; never rerun import admission/writes. */
+export function expectedImportSources(payload, accountSetId, record) {
+  const set = A.getAccountSet(accountSetId);
+  // A create request originally normalized against the pinned profile seed plus
+  // its own supplied accounts, never today's mutable COA or opening balances.
+  const context = { profileId: set.accounting_profile_id,
+    ...(record.mode === MODE_CREATE ? {} : { accounts: A.listAccounts(accountSetId) }) };
+  const strict = A.normalizeImportPayload(payload, context);
+  if (!strict.ok) throw Object.assign(new Error("import_saved_input_invalid"), { code: "import_saved_input_invalid" });
+  const normalized = strict.normalized, raw = payload.vouchers ?? [];
+  const sources = normalized.vouchers.map((v, i) => ({
+    sourceVoucherId: textField(raw[i]?.sourceVoucherId ?? raw[i]?.source_voucher_id) || `${DERIVED_PREFIX}${v.period}/${v.word}/${v.number}`,
+    contentFingerprint: voucherFingerprint(v), period: v.period, voucher: v,
+  }));
+  return { sources, contentFingerprint: batchFingerprint({mode:record.mode,targetAccountSetId:accountSetId,
+    source:{system:record.source_system,enterpriseKey:record.enterprise_key},meta:normalized.account_set,normalized,
+    vouchers:sources.map(t=>({sourceVoucherId:t.sourceVoucherId,fingerprint:t.contentFingerprint}))}) };
+}
+
+/** Compare a complete independently persisted expectation with live associations.
+ * New batches retain their original outcome tuples. Older batches need saved
+ * input or an established checkpoint; a residual row count never replaces IDs.
+ * Deduplicated links intentionally keep the source's original owning batch.
+ */
+export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey, sourceSystem, expectedSources, checkpointTrace, period } = {}) {
+  const fail = () => ({ ok: false, reason: "import_source_trace_changed" });
+  const record = getBatch(db, batchId);
+  if (!record || record.status !== "completed" || record.account_set_id !== accountSetId
+      || record.enterprise_key !== enterpriseKey || (sourceSystem !== undefined && record.source_system !== sourceSystem)) return fail();
+  const result = safeJson(record.result_json);
+  if ((result.contentFingerprint !== undefined && result.contentFingerprint !== record.content_fingerprint)
+      || (result.mode !== undefined && result.mode !== record.mode)
+      || (result.accountSetId !== undefined && result.accountSetId !== accountSetId)
+      || (result.source !== undefined && (result.source?.system !== record.source_system || result.source?.enterpriseKey !== enterpriseKey))) return fail();
+  const stored = Array.isArray(result.sourceTrace) ? result.sourceTrace : null;
+  let expected = stored ?? checkpointTrace;
+  // With original saved input, an old counts-only batch can establish its first
+  // local checkpoint. Derive IDs from that full input, not surviving link rows;
+  // verify each actual posted voucher against both the input and source proof.
+  if (!expected && Array.isArray(expectedSources)) {
+    expected = expectedSources.map(input => {
+      const source=getVoucherSource(db,record.source_system,enterpriseKey,input.sourceVoucherId);
+      const voucher=source&&db.prepare('SELECT * FROM vouchers WHERE id=?').get(source.voucher_id);
+      if (!source || !voucher || !input.voucher) return null;
+      const planned={...input.voucher,number:input.voucher.number??voucher.number};
+      // createVoucher defaults each blank entry summary to the voucher summary.
+      planned.entries=planned.entries.map(e=>({...e,summary:e.summary||planned.summary||''}));
+      if (voucherFingerprint(planned)!==source.voucher_fingerprint) return null;
+      return {...input,accountSetId,voucherId:source.voucher_id,action:source.batch_id===batchId?'created':'deduplicated'};
+    });
+    if (expected.some(t=>!t)) return fail();
+  }
+  if (!Array.isArray(expected)) {
+    // A legacy empty batch is provable from its completed result alone.
+    if (result.vouchersCreated !== 0 || result.vouchersDeduplicated !== 0 || (expectedSources && expectedSources.length)) return fail();
+  }
+  const tuples = expected ?? [];
+  const unique = rows => new Set(rows.map(r => r.sourceVoucherId)).size === rows.length;
+  if (!unique(tuples) || (expectedSources && (!unique(expectedSources) || expectedSources.length !== tuples.length))) return fail();
+  const inputs = expectedSources && new Map(expectedSources.map(r => [r.sourceVoucherId, r]));
+  const checkpoints = checkpointTrace && new Map(checkpointTrace.map(r => [r.sourceVoucherId, r]));
+  if (checkpointTrace && (!unique(checkpointTrace) || checkpointTrace.length !== tuples.length)) return fail();
+  const full = [];
+  for (const t of tuples) {
+    const input = inputs?.get(t.sourceVoucherId), checkpoint = checkpoints?.get(t.sourceVoucherId);
+    if ((inputs && !input)
+        || (checkpoints && (!checkpoint || checkpoint.voucherId !== t.voucherId || checkpoint.action !== t.action))) return fail();
+    const fingerprint = t.contentFingerprint ?? input?.contentFingerprint;
+    const voucher = db.prepare('SELECT * FROM vouchers WHERE id=?').get(t.voucherId);
+    const tuplePeriod = t.period ?? input?.period ?? voucher?.period;
+    // Establish actual scope before any before-period filtering. A missing or
+    // moved voucher cannot be hidden by a self-reported future tuple.
+    if (!fingerprint || !tuplePeriod || !voucher || voucher.account_set_id !== accountSetId || voucher.period !== tuplePeriod
+        || (input && input.period !== tuplePeriod) || (checkpoint && checkpoint.period !== tuplePeriod)
+        || ((!period || tuplePeriod <= period) && input && t.contentFingerprint !== undefined && t.contentFingerprint !== input.contentFingerprint)
+        || !['created','deduplicated'].includes(t.action) || !Number.isInteger(t.voucherId)
+        || (t.accountSetId !== undefined && t.accountSetId !== accountSetId)) return fail();
+    full.push({ ...t, contentFingerprint: fingerprint, period: tuplePeriod });
+  }
+  if (result.vouchersCreated !== full.filter(t => t.action === 'created').length
+      || result.vouchersDeduplicated !== full.filter(t => t.action === 'deduplicated').length) return fail();
+  const relevant = t => !period || t.period <= period;
+  const wanted = full.filter(relevant), expectedIds = new Set(wanted.map(t => t.sourceVoucherId));
+  const links = listBatchVouchers(db, batchId);
+  const sources = db.prepare('SELECT * FROM import_voucher_sources WHERE batch_id=?').all(batchId);
+  // Existing associations must not contradict the actual scope used above.
+  // Future financial fingerprints remain outside a current report's checks.
+  for (const row of [...links, ...sources]) {
+    const voucher = db.prepare('SELECT account_set_id,period FROM vouchers WHERE id=?').get(row.voucher_id);
+    const tuple = full.find(t => t.sourceVoucherId === row.source_voucher_id);
+    if (!voucher || voucher.account_set_id !== accountSetId || (tuple && (row.voucher_id !== tuple.voucherId || voucher.period !== tuple.period))) return fail();
+  }
+  // Scope from validated actual periods, including unknown extra links.
+  const scopedLinks = links.filter(l => {
+    const t = full.find(t => t.sourceVoucherId === l.source_voucher_id);
+    if (t) return relevant(t);
+    const v = db.prepare('SELECT period FROM vouchers WHERE id=?').get(l.voucher_id);
+    return !period || !v || v.period <= period;
+  });
+  if (scopedLinks.length !== wanted.length || new Set(scopedLinks.map(l => l.source_voucher_id)).size !== scopedLinks.length) return fail();
+  const same = (row, t) => row && row.source_system === record.source_system && row.enterprise_key === enterpriseKey
+    && row.source_voucher_id === t.sourceVoucherId && row.account_set_id === accountSetId
+    && row.voucher_id === t.voucherId && row.content_fingerprint === t.contentFingerprint;
+  for (const t of wanted) {
+    const link = scopedLinks.find(l => l.source_voucher_id === t.sourceVoucherId);
+    const source = getVoucherSource(db, record.source_system, enterpriseKey, t.sourceVoucherId);
+    const voucher = db.prepare('SELECT * FROM vouchers WHERE id=?').get(t.voucherId);
+    if (!same(link,t) || link.action !== t.action || !same(source,t) || (t.action === 'created' && source.batch_id !== batchId)
+        || !voucher || voucher.account_set_id !== accountSetId || voucher.period !== t.period
+        || registeredVoucherState(source).state !== VOUCHER_STATE.OK) return fail();
+    // Source ownership itself must have the original created link and outcome.
+    const owner = getBatch(db, source.batch_id), ownerResult = owner && safeJson(owner.result_json);
+    const ownerLink = listBatchVouchers(db, source.batch_id).find(l => l.source_voucher_id === t.sourceVoucherId);
+    if (!owner || owner.status !== 'completed' || owner.source_system !== record.source_system || owner.enterprise_key !== enterpriseKey
+        || owner.account_set_id !== accountSetId || !same(ownerLink,t) || ownerLink.action !== 'created'
+        || (Array.isArray(ownerResult.sourceTrace) && !ownerResult.sourceTrace.some(o => o.sourceVoucherId === t.sourceVoucherId && o.voucherId === t.voucherId && o.contentFingerprint === t.contentFingerprint && o.action === 'created'))) return fail();
+  }
+  const ownedSources = sources.filter(s => {
+    const t = full.find(t => t.sourceVoucherId === s.source_voucher_id);
+    if (t) return relevant(t);
+    const v = db.prepare('SELECT period FROM vouchers WHERE id=?').get(s.voucher_id);
+    return !period || !v || v.period <= period;
+  });
+  if (ownedSources.some(s => !expectedIds.has(s.source_voucher_id) || !same(s, wanted.find(t => t.sourceVoucherId === s.source_voucher_id))
+      || wanted.find(t => t.sourceVoucherId === s.source_voucher_id).action !== 'created')) return fail();
+  return { ok: true };
+}
+
 /** 只读：批次 / 企业绑定 / 来源证据的当前状态（来源追踪用）。 */
 export function importBatchState() {
   return {
@@ -1279,17 +1419,30 @@ export function importBatchState() {
   };
 }
 
+function incrementalAdmissionTarget(args) {
+ const raw=args.accountSetId??args.account_set_id;let target=null;
+ if(raw!==undefined&&raw!==null&&raw!==''){const n=Number(raw);if(Number.isInteger(n)&&n>0)target=n;}
+ const mode=(typeof args.mode==='string'?args.mode.trim():'')||(target?MODE_APPEND:MODE_CREATE);
+ return {mode,target};
+}
 export function importIncremental(options={}) {
  if(options&&typeof options==='object'&&!nodeTypes.isProxy(options)&&!Array.isArray(options)&&[Object.prototype,null].includes(Object.getPrototypeOf(options))){const appendix=Object.getOwnPropertyDescriptor(options,'auxiliaryAppendix');if(appendix&&Object.hasOwn(appendix,'value')&&appendix.value!==undefined)parseAuxiliaryAppendix(appendix.value);}
  auditResultSnapshot(options);
  if(options.dryRun!==false)return importIncrementalBody(options);
+ // Static shape/profile/COA rejection must not allocate even an epoch. No
+ // identity binding, source history, period or replay authorization is read here.
+ const staticCheck=runIncrementalImport(options,{staticOnly:true});
+ if(staticCheck?.marker!==ADMITTED)return staticCheck;
+ const normalizedTarget=incrementalAdmissionTarget(options);
+ return runDomainAdmission(db,{action:normalizedTarget.mode===MODE_APPEND?'import.append':'import.create',scope:normalizedTarget.mode===MODE_APPEND&&normalizedTarget.target?{kind:'account_set',value:normalizedTarget.target}:{kind:'database',value:null},request:options},()=>{
  const prior=readDomainOperationBinding(db);
  if(prior&&!['import.create','import.append'].includes(prior.action))throw auditError('audit_operation_conflict');
  let admitted;try{admitted=prior?{marker:ADMITTED,mode:prior.action==='import.append'?'append':'create',targetAccountSetId:prior.scope.value}:runIncrementalImport(options,{admissionOnly:true});}catch(error){if(options?.auxiliaryAppendix!==undefined)throw auxiliaryImportError(error);throw error;}
- if(admitted?.marker!==ADMITTED)return admitted;
+ if(admitted?.marker!==ADMITTED)return {value:admitted};
  const {mode,targetAccountSetId}=admitted;
  const scope=prior?.scope??(mode==='append'?{kind:'account_set',value:targetAccountSetId}:{kind:'database',value:null});
- return runDomainOperation(db,{action:prior?.action??(mode==='append'?'import.append':'import.create'),scope,request:options,
+ return {operation:{action:prior?.action??(mode==='append'?'import.append':'import.create'),scope,request:options,
  refs:v=>[...(v?.created?.accountSetId?[{type:'account_set',id:v.created.accountSetId}]:[]),...(typeof options.batchId==='string'?[{type:'import_batch_key',keyDigest:auditCanonicalDigest([options.batchId])}]:[])],
- targets:v=>v?.created?.accountSetId?{accountSetId:v.created.accountSetId}:{}},()=>importIncrementalBody(options));
+ targets:v=>v?.created?.accountSetId?{accountSetId:v.created.accountSetId}:{}},execute:()=>importIncrementalBody(options)};
+ });
 }

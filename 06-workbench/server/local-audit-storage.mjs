@@ -1,3 +1,4 @@
+import { assertWriteCommitFence } from './local-write-lock.mjs';
 import { markBatchFailed as persistIncrementalImportFailure } from './import-storage.mjs';
 import { markBatchFailed as persistBankImportFailure } from './bank-storage.mjs';
 // Explicit-handle audit1/2 storage. No default database or import-time connection.
@@ -305,7 +306,7 @@ export async function installAuditSchema(db,{dbPath,outDir}={}) {
   if(!sameIdentity(before,identity(db,dbPath)))throw fail('audit_backup_source_mismatch');
   const batchBefore=Batch.inspectBatchSchema(db);
   if(batchBefore.state!=='not_installed')Batch.assertBatchSchema(db);
-  const batchActive=batchBefore.version===2?Batch.readBatchInstance(db):null;
+  const batchActive=[2,3].includes(batchBefore.version)?Batch.readBatchInstance(db):null;
   if(s.state==='not_installed') {
    for(const sql of V1_STATEMENTS)db.exec(sql);
    db.prepare('INSERT INTO audit_components VALUES(?,?,?,?)').run(AUDIT_COMPONENT,1,new Date().toISOString(),'LOCAL-06');
@@ -466,6 +467,7 @@ export function executePreparedOperation(db,authorization,fn) {
   spec=resultSpec(result,saved,p.refClaims);
   if(spec.state==='failed'||spec.state==='rejected'){controlledFailure=spec;throw fail('audit_result_invalid');}
   saved=finish(db,saved,spec);
+  assertWriteCommitFence(db);
  }catch(e){
   activeOperations.delete(db);try{db.setAuthorizer(null);}catch{}
   if(!rollback(db)){p.bankFailure=null;p.incrementalFailure=null;for(const child of p.children??[]){child.bankFailure=null;child.incrementalFailure=null;}quarantine.add(db);return unknown();}

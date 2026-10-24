@@ -138,6 +138,8 @@ export const importSchema = ensureImportSchema(db, { dataDir: DATA_DIR });
 // Module readiness is awaited once; all accounting/import exports remain synchronous.
 try {
   const { installAuditSchema } = await import('./local-audit-storage.mjs');
+  const { installBatchSchema } = await import('./local-batch-storage.mjs');
   const { randomUUID } = await import('node:crypto');
   await installAuditSchema(db,{dbPath:DB_FILE,outDir:join(DATA_DIR,`audit-install-${randomUUID()}`)});
+  await installBatchSchema(db,{dbPath:DB_FILE,outDir:join(DATA_DIR,`batch-${randomUUID()}`)});
 } catch(error) { try { db.close(); } catch {} throw error; }
