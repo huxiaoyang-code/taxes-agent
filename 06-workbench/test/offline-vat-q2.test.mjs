@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, cpSync, copyFileSync, linkSync, unlinkSync, renameSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { lstatSync, realpathSync, mkdirSync, readFileSync, writeFileSync, cpSync, copyFileSync, linkSync, unlinkSync, renameSync, existsSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
@@ -13,9 +14,14 @@ import { getVatRules, getVatQ2Rules } from '../server/tax-rule-registry.mjs';
 import { hash, stable } from '../server/offline-material-adapters.mjs';
 import { persistedVoucherFingerprint } from '../server/import-storage.mjs';
 const wb = resolve('.'); mkdirSync(join(wb, '.agent-runs'), { recursive: true });
-const root = mkdtempSync(join(wb, '.agent-runs', 'q2-synthetic-'));
-let serial = 0, passed = 0, failed = 0;
-const test = async (name, work) => { try { await work(); passed++; console.log('PASS ' + name); } catch (e) { failed++; console.error('FAIL ' + name, e); } };
+const root=resolve(wb,'.agent-runs','q-'+randomUUID());mkdirSync(root);
+for(let p=root;;p=dirname(p)){assert.equal(lstatSync(p).isSymbolicLink(),false);assert.equal(resolve(realpathSync.native(p)).toLowerCase(),p.toLowerCase());if(dirname(p)===p)break;}
+Object.assign(process.env,{TEMP:root,TMP:root,WORKBENCH_DATA_DIR:join(root,'d'),KEEP_FIXTURES:'1',WORKBENCH_TEST_KEEP_FIXTURES:'1'});console.log('FIXTURES '+root);
+const selectedCase=process.env.OFFLINE_Q2_CASE??'';
+const regressionNames=new Set(['real hardlink aliases are rejected and unlink restores the original target','cached parent financial function cannot execute stale code under a new native manifest','actual worker timeout waits for termination before returning']);
+assert.ok(['','r7-existing-failures'].includes(selectedCase),'unknown OFFLINE_Q2_CASE');
+let serial = 0, passed = 0, failed = 0, skipped = 0;
+const test = async (name, work) => { if(selectedCase&&!regressionNames.has(name)){skipped++;return;} try { await work(); passed++; console.log('PASS ' + name); } catch (e) { failed++; console.error('FAIL ' + name, e); } };
 const fixture = options => createQ2Fixture(join(root, String(++serial)), options);
 const row = (p, n, period = 'current') => p.cells.find(c => c.row === n && c.column === 'services' && c.period === period);
 const inspect = (f, work, readOnly = false) => { const db = new DatabaseSync(f.dbPath, { readOnly }); try { return work(db); } finally { db.close(); } };
@@ -76,7 +82,7 @@ await test('unassociated nonzero completed batch is captured privately, blocks Q
 });
 await test('real public empty append is an explained noop and malformed/missing/nonzero/status metadata are never defaulted to zero', async () => {
   const g=await fixture(), noop=createPublicNoopBatch(g); const persisted=inspect(g,db=>db.prepare('SELECT * FROM import_batches WHERE batch_id=?').get(noop.batchId),true);
-  assert.deepEqual(JSON.parse(persisted.result_json),{accountSetCreated:false,accountsAdded:0,openingBalancesApplied:0,vouchersCreated:0,vouchersDeduplicated:0});
+  assert.deepEqual(JSON.parse(persisted.result_json),{accountSetCreated:false,accountsAdded:0,openingBalancesApplied:0,vouchersCreated:0,vouchersDeduplicated:0,contentFingerprint:persisted.content_fingerprint,mode:'append',accountSetId:g.id,source:{system:persisted.source_system,enterpriseKey:g.key},sourceTrace:[]});
   const before=state(g),d=await run(g.request);assert.equal(d.q2CalculationReady,true,JSON.stringify(d));assert.deepEqual(d.computation.issues,[]);assert.deepEqual(state(g),before);
   for(const mutate of [r=>{r.result_json='{}';},r=>{r.result_json='{broken';},r=>{r.result_json='null';},r=>{r.result_json=JSON.stringify({accountSetCreated:false,accountsAdded:0,openingBalancesApplied:0,vouchersCreated:0});},r=>{r.result_json=JSON.stringify({accountSetCreated:false,accountsAdded:1,openingBalancesApplied:0,vouchersCreated:0,vouchersDeduplicated:0});},r=>{r.status='pending';},r=>{r.status='failed';},r=>{r.status='unknown';},r=>{r.mode='unknown';},r=>{r.error_code='CONTRADICTION';}]){
     const orphan=insertHeader(g,r=>{Object.assign(r,{...persisted,batch_id:r.batch_id});mutate(r);});try{const stateBefore=state(g);blocked(await run(g.request));assert.deepEqual(state(g),stateBefore);}finally{deleteHeader(g,orphan);}
@@ -135,6 +141,29 @@ await test('fully explained posted Q3 batch does not enter Q1/Q2 dependency, but
     try{const stateBefore=state(g),x=await run(g.request);blocked(x);assert.ok(x.computation.issues.some(i=>i.code==='target_batch_voucher_period_date_invalid'));assert.equal((await current(g.request,old.contentDigest)).status,'stale');assert.deepEqual(state(g),stateBefore);}finally{inspect(g,db=>{db.prepare('UPDATE vouchers SET period=?,voucher_date=? WHERE id=?').run(v.period,v.voucher_date,v.id);db.prepare('UPDATE import_voucher_sources SET voucher_fingerprint=? WHERE id=?').run(source.voucher_fingerprint,source.id);});}
   }
   assert.equal((await run(g.request)).contentDigest,old.contentDigest);
+});
+await test('strict enriched10 and legacy5 results retain target/future semantics; incomplete or contradictory enrichment never downgrades', async () => {
+  const g=await fixture(),baseline=await run(g.request);await addFuturePostedQuarter(g);assert.equal((await run(g.request)).contentDigest,baseline.contentDigest);
+  for(const period of ['2026-04','2026-07']){
+    const header=inspect(g,db=>db.prepare('SELECT b.* FROM import_batches b JOIN import_batch_vouchers l ON l.batch_id=b.batch_id JOIN vouchers v ON v.id=l.voucher_id WHERE v.period=?').get(period),true),enriched=JSON.parse(header.result_json);
+    assert.deepEqual(Object.keys(enriched).sort(),['accountSetCreated','accountsAdded','openingBalancesApplied','vouchersCreated','vouchersDeduplicated','contentFingerprint','mode','accountSetId','source','sourceTrace'].sort());assert.equal(enriched.sourceTrace.length,1);
+    const legacy=Object.fromEntries(['accountSetCreated','accountsAdded','openingBalancesApplied','vouchersCreated','vouchersDeduplicated'].map(k=>[k,enriched[k]]));
+    inspect(g,db=>db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(legacy),header.batch_id));
+    try{const before=state(g),d=await run(g.request);assert.equal(d.q2CalculationReady,true,JSON.stringify(d.computation.issues));assert.deepEqual(d.computation.cells,baseline.computation.cells);assert.deepEqual(state(g),before);if(period==='2026-07')assert.equal(d.contentDigest,baseline.contentDigest,'fully explained legacy future remains excluded');}
+    finally{inspect(g,db=>db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(header.result_json,header.batch_id));}
+    for(const [label,mutate]of [
+      ['extra-field',r=>{r.extra=true;}],['missing-anchor',r=>{delete r.mode;}],['fingerprint-anchor',r=>{r.contentFingerprint='f'.repeat(64);}],
+      ['set-anchor',r=>{r.accountSetId+=999;}],['source-anchor',r=>{r.source.enterpriseKey+='-WRONG';}],['extra-source-field',r=>{r.source.extra=true;}],
+      ['missing-trace',r=>{r.sourceTrace=[];}],['duplicate-trace',r=>{r.sourceTrace.push({...r.sourceTrace[0]});}],
+      ['trace-period',r=>{r.sourceTrace[0].period='2026-08';}],['trace-fingerprint',r=>{r.sourceTrace[0].contentFingerprint='e'.repeat(64);}],
+      ['trace-state',r=>{r.sourceTrace[0].state='unknown';}],['extra-trace-field',r=>{r.sourceTrace[0].extra=true;}],
+    ]){
+      const bad=structuredClone(enriched);mutate(bad);inspect(g,db=>db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(bad),header.batch_id));
+      try{const before=state(g),bytes=hash(readFileSync(g.dbPath)),d=await run(g.request);blocked(d);assert.ok(d.computation.issues.some(i=>i.code==='target_batch_result_missing_or_invalid'),period+' '+label);assert.equal((await current(g.request,baseline.contentDigest)).status,'stale');assert.deepEqual(state(g),before);assert.equal(hash(readFileSync(g.dbPath)),bytes);}
+      finally{inspect(g,db=>db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(header.result_json,header.batch_id));}
+    }
+  }
+  assert.equal((await run(g.request)).contentDigest,baseline.contentDigest);
 });
 await test('independent amounts and multiple invoices in both quarters are calculated from raw evidence', async () => {
   const g = await fixture({ priorAmounts: ['103789.00', '201113.00', '86791.00'], targetAmounts: ['133127.00', '217913.00', '99837.00'] }), d = await run(g.request);
@@ -302,4 +331,5 @@ await test('read-only successful and blocked runs preserve full schema, every ro
   const files = [f.dbPath, f.dbPath + '-wal'].filter(existsSync), hashes = files.map(p => hash(readFileSync(p))), before = state(f);
   try { const results = await Promise.all([run(f.request), run(f.request)]); assert.ok(results.every(d => d.q2CalculationReady)); blocked(await run({ ...f.request, target: { ...f.request.target, enterpriseKey: 'OTHER' } })); assert.deepEqual(state(f), before); assert.deepEqual(files.map(p => hash(readFileSync(p))), hashes); } finally { held.close(); }
 });
+if(selectedCase){assert.equal(passed+failed,regressionNames.size,'all three explicitly registered regressions executed');console.log('OFFLINE_Q2_CASE '+selectedCase+' executed='+(passed+failed)+' skipped='+skipped);}
 console.log(`offline-vat-q2 ${passed} passed ${failed} failed; all one-shot children exited`); process.exitCode = failed ? 1 : 0;

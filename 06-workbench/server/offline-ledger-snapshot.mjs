@@ -92,13 +92,55 @@ function validVoucherPeriodDate(v) {
   const time = Date.parse(v.voucher_date + 'T00:00:00Z');
   return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === v.voucher_date;
 }
-function batchResult(text) {
+/** Pure strict wire-result parser; actual relations are supplied by the same
+ * private read snapshot. An incomplete enriched result is never legacy data.
+ */
+export function parseImportBatchResult(text, {header,headers=[],links=[],sources=[],vouchers=[],entries=[]} = {}) {
   try {
-    const value = JSON.parse(text), keys = ['accountSetCreated', 'accountsAdded', 'openingBalancesApplied', 'vouchersCreated', 'vouchersDeduplicated'];
-    if (!value || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some(k => !Object.hasOwn(value, k)) || typeof value.accountSetCreated !== 'boolean' || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)) return null;
-    return value;
-  } catch { return null; }
+    const value=JSON.parse(text),legacy=['accountSetCreated','accountsAdded','openingBalancesApplied','vouchersCreated','vouchersDeduplicated'];
+    const exact=(object,keys)=>object&&typeof object==='object'&&!Array.isArray(object)&&Object.keys(object).length===keys.length&&keys.every(k=>Object.hasOwn(object,k));
+    const enriched=[...legacy,'contentFingerprint','mode','accountSetId','source','sourceTrace'];
+    if(!exact(value,legacy)&&!exact(value,enriched))return null;
+    if(typeof value.accountSetCreated!=='boolean'||legacy.slice(1).some(k=>!Number.isSafeInteger(value[k])||value[k]<0))return null;
+    if(exact(value,legacy))return {value,associationsValid:true};
+    const hash=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+    const id=v=>Number.isSafeInteger(v)&&v>0;
+    const textId=(v,max)=>typeof v==='string'&&v===v.trim()&&v.length>0&&v.length<=max&&!/[\u0000-\u001f\u007f]/.test(v);
+    if(!header||!hash(value.contentFingerprint)||value.contentFingerprint!==header.content_fingerprint
+      ||!['create','append'].includes(value.mode)||value.mode!==header.mode||value.accountSetCreated!==(value.mode==='create')
+      ||!id(value.accountSetId)||value.accountSetId!==header.account_set_id
+      ||!exact(value.source,['system','enterpriseKey'])||!textId(value.source.system,64)||!textId(value.source.enterpriseKey,128)
+      ||value.source.system!==header.source_system||value.source.enterpriseKey!==header.enterprise_key||!Array.isArray(value.sourceTrace))return null;
+    const invalidRows=()=>({value,associationsValid:false});
+    const trace=value.sourceTrace,batchLinks=links.filter(r=>r.batch_id===header.batch_id),ownSources=sources.filter(r=>r.batch_id===header.batch_id);
+    const unique=(rows,key)=>new Set(rows.map(r=>r[key])).size===rows.length;
+    const same=(row,t)=>row&&row.source_system===value.source.system&&row.enterprise_key===value.source.enterpriseKey
+      &&row.account_set_id===value.accountSetId&&row.source_voucher_id===t.sourceVoucherId&&row.voucher_id===t.voucherId&&row.content_fingerprint===t.contentFingerprint;
+    for(const t of trace){
+      if(!exact(t,['sourceVoucherId','voucherId','accountSetId','contentFingerprint','action','status','state','period'])
+        ||!textId(t.sourceVoucherId,128)||!id(t.voucherId)||t.accountSetId!==value.accountSetId||!hash(t.contentFingerprint)
+        ||!['created','deduplicated'].includes(t.action)||t.status!==t.action||t.state!=='ok'
+        ||typeof t.period!=='string'||!/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(t.period))return null;
+    }
+    if(!unique(trace,'sourceVoucherId')||!unique(trace,'voucherId'))return null;
+    if(!unique(batchLinks,'source_voucher_id')||batchLinks.length!==trace.length)return invalidRows();
+    for(const t of trace){
+      const link=batchLinks.filter(r=>same(r,t)),registered=sources.filter(r=>same(r,t)),v=vouchers.find(r=>r.id===t.voucherId),es=entries.filter(r=>r.voucher_id===t.voucherId);
+      if(link.length!==1||link[0].action!==t.action||registered.length!==1||!v||v.account_set_id!==value.accountSetId||v.status!=='posted'||v.kind!=='normal'
+        ||v.period!==t.period||!validVoucherPeriodDate(v)||!es.length||es.some(e=>minorUnits(e.debit)===null||minorUnits(e.credit)===null)
+        ||!hash(registered[0].voucher_fingerprint)||registered[0].voucher_fingerprint!==persistedVoucherFingerprint(v,es))return invalidRows();
+      const source=registered[0],owner=headers.find(h=>h.batch_id===source.batch_id);
+      if(t.action==='created'&&source.batch_id!==header.batch_id)return invalidRows();
+      if(t.action==='deduplicated'&&(source.batch_id===header.batch_id||!owner||owner.status!=='completed'||owner.account_set_id!==value.accountSetId
+        ||owner.enterprise_key!==value.source.enterpriseKey||owner.source_system!==value.source.system
+        ||links.filter(r=>r.batch_id===source.batch_id&&r.action==='created'&&same(r,t)).length!==1))return invalidRows();
+    }
+    if(value.vouchersCreated!==trace.filter(t=>t.action==='created').length||value.vouchersDeduplicated!==trace.filter(t=>t.action==='deduplicated').length
+      ||ownSources.length!==value.vouchersCreated||ownSources.some(r=>!trace.some(t=>t.action==='created'&&same(r,t))))return invalidRows();
+    return {value,associationsValid:true};
+  }catch{return null;}
 }
+
 function readTargetBatchInventory(db, scope, presence) {
   const all = (sql, ...params) => db.prepare(sql).all(...params).map(row => ({ ...row }));
   const { enterpriseKey: key, accountSetId: id, toPeriod: to } = scope;
@@ -119,7 +161,7 @@ function readTargetBatchInventory(db, scope, presence) {
   // Exclude only a fully explained, posted future batch. Neither timestamps nor
   // an absent voucher/ambiguous result are evidence of a future business period.
   for (const h of relevantHeaders) {
-    const result = batchResult(h.result_json), bs = relevantLinks.filter(r => r.batch_id === h.batch_id), ss = relevantSources.filter(r => r.batch_id === h.batch_id);
+    const parsed = parseImportBatchResult(h.result_json,{header:h,headers:relevantHeaders,links:relevantLinks,sources:relevantSources,vouchers,entries}), result=parsed?.associationsValid?parsed.value:null, bs = relevantLinks.filter(r => r.batch_id === h.batch_id), ss = relevantSources.filter(r => r.batch_id === h.batch_id);
     const identity = r => r.account_set_id === id && r.enterprise_key === key && r.source_system === h.source_system;
     if (!Object.values(presence).every(Boolean) || !identity(h) || h.mode !== 'append' || h.status !== 'completed' || h.error_code !== null || h.error_message !== null || !Number.isSafeInteger(h.attempts) || h.attempts < 1 || !/^[a-f0-9]{64}$/.test(h.content_fingerprint) || !result || result.accountSetCreated || result.accountsAdded || result.openingBalancesApplied || !bs.length || result.vouchersCreated !== bs.filter(r => r.action === 'created').length || result.vouchersDeduplicated !== bs.filter(r => r.action === 'deduplicated').length) continue;
     const coherent = bs.every(r => {

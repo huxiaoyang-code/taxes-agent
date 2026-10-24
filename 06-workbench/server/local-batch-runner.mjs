@@ -207,8 +207,8 @@ function recoverInterruptedStages(jobId) {
 const EVIDENCE_CONFLICT_CODES = new Set([
   "source_voucher_voucher_missing", "source_voucher_voucher_unposted", "source_voucher_voucher_modified",
   "source_voucher_content_changed", "source_voucher_account_set_mismatch", "source_voucher_trace_unverified",
-  "import_trace_inconsistent", "import_batch_not_completed", "import_voucher_missing",
-  "import_voucher_unposted", "import_enterprise_binding_mismatch", "evidence_changed",
+  "import_trace_inconsistent", "import_source_trace_changed", "import_batch_not_completed", "import_voucher_missing",
+  "import_voucher_unposted", "import_voucher_account_set_mismatch", "import_enterprise_binding_mismatch", "evidence_changed",
   "report_evidence_changed", "report_snapshot_changed", "report_incomplete", "output_conflict", "artifact_hash_mismatch",
   "input_changed", "input_missing", "input_snapshot_missing", "input_payload_invalid",
   "account_set_unresolved", "depreciation_run_inconsistent", "depreciation_due_but_no_action",
