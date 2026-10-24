@@ -1,5 +1,7 @@
 # OFFLINE-04E 实施交接
 
+> PR107实际已合：[PR #107](https://github.com/huxiaoyang-code/youshu-fork/pull/107)，prior base `b7e4aeafce833824b33e3669b1b172f9dc5de308`、accepted head `07de88d1f442ca5066c79c2175ac7727a4b32ccb`、merge/main `bf1caa3f64fc565fbf676e65c1d42f43d24793b6`；实际交付 [#81 comment6378504231](https://github.com/huxiaoyang-code/youshu-fork/issues/81#issuecomment-6378504231) / [#76 comment6378504181](https://github.com/huxiaoyang-code/youshu-fork/issues/76#issuecomment-6378504181)。下文未提交等为合并前候选历史，后续季度golden见 [OFFLINE-00C](OFFLINE-00C.md)。
+
 ## 当前候选与边界
 
 负责人 huxiaoyang-code；认领 #81 comment6377740534／#76 comment6377741769。当前是 v3 实施候选，未 commit／发布；root 的 Git／最终完整 HEAD 审查／PR／合并尚待，不预填接受。基线 PR105 已合 merge `b7e4aeafce833824b33e3669b1b172f9dc5de308`，实际前 base `80b770161859b75174bb6763eaabd13a6f095748`、head `894e66101b2bdcbc0f3d5b3752d5a0e75aca350b`；本片最终 head 由 root 后续给出。

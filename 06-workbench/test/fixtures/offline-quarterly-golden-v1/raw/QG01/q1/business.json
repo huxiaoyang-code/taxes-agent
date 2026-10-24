@@ -1,0 +1,66 @@
+{
+  "version": "business-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-QUARTER-G01",
+    "accountSetId": "1",
+    "period": "2026-Q1",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "facts": [
+    {
+      "factId": "QG01-q1-business-0",
+      "date": "2026-01-13",
+      "nature": "service",
+      "performance": "completed",
+      "settlement": "unpaid",
+      "purpose": "unknown",
+      "benefitPeriod": {
+        "state": "unknown",
+        "from": null,
+        "to": null
+      },
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-QUARTER-G01",
+        "code": "",
+        "number": "70001"
+      }
+    },
+    {
+      "factId": "QG01-q1-business-1",
+      "date": "2026-02-13",
+      "nature": "service",
+      "performance": "completed",
+      "settlement": "unpaid",
+      "purpose": "unknown",
+      "benefitPeriod": {
+        "state": "unknown",
+        "from": null,
+        "to": null
+      },
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-QUARTER-G01",
+        "code": "",
+        "number": "70002"
+      }
+    },
+    {
+      "factId": "QG01-q1-business-2",
+      "date": "2026-03-13",
+      "nature": "service",
+      "performance": "completed",
+      "settlement": "unpaid",
+      "purpose": "unknown",
+      "benefitPeriod": {
+        "state": "unknown",
+        "from": null,
+        "to": null
+      },
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-QUARTER-G01",
+        "code": "",
+        "number": "70003"
+      }
+    }
+  ]
+}
