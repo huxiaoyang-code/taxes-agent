@@ -1,3 +1,5 @@
+> **2026-10-24 W4b 依赖兼容候选**：本次按最终 literal static/dynamic imports 递归核得38节点，新纳入 local-restore-batch；default db.mjs 按既有规则排除。原35注册及全部旧断言保留，新增节点也核观察变化后永久restart。员工已实际运行 native-code 3/3，明确 skipped32，未宣称本字节完整35；root验收/独审仍待完成。下段W4a37/35仅其历史时点。
+
 > **2026-10-24 W4a依赖更新（候选）**：固定名单与真实完整静态图均37文件；新增恢复/ledger/control接点也受代码变化永久restart守卫。本包实际完整35/35、0skip，aggregate及owned child/pair真实关闭、exit/close0；之后local-backup唯一EOF CRLF改LF，另有control丢marker保留物闸门、plain数组与SQL literal保真修复及open-guard回归；35绿属于这些准入修复前时点，最终受影响验证待root，不据此宣称后修源码已全35通过。此为本候选新实跑，父c1d的旧35仍保留其历史时点。
 
 # Q2 新鲜会计复核草稿（OFFLINE-05C）
@@ -26,7 +28,7 @@ node scripts/accountant-review-q2.mjs --input /absolute/q2-request.json --output
 
 ## 新鲜度与信任边界
 
-parent/facade/CLI仅native imports。固定fresh worker先检查expected/initial/current本地字节闭包，再载入财务模块。固定名单与实际37文件静态图逐项核对，包含bank-storage、multiline local-audit、local-write-lock，以及静态可达的auxiliary-storage、local-backup、local-restore-audit和local-restore-control。default db.mjs不在静态图；本Q2只读调用不会执行真正的业务备份、恢复或显式ledger打开分支。观察代码变化永久latch restart，缺失初始字节返回安全诊断；不接受public DTO/digest恢复能力。
+parent/facade/CLI仅native imports。固定fresh worker先检查expected/initial/current本地字节闭包，再载入财务模块。当前固定名单与实际38文件literal依赖图逐项核对，包含bank-storage、multiline local-audit、local-write-lock，以及静态可达的auxiliary-storage、local-backup、local-restore-audit、local-restore-control及local-restore-batch。default db.mjs不在静态图；本Q2只读调用不会执行真正的业务备份、恢复或显式ledger打开分支。观察代码变化永久latch restart，缺失初始字节返回安全诊断；不接受public DTO/digest恢复能力。
 
 worker私有WeakMap绑定live pair、双期raw、snapshot及完整真实计算产物摘要；每次assert重验pair、双期原件及现库、重算完整产物。渲染前后、明细后、manifest前后均核对；仅抽出的renderer是显示函数，无发布资格、无任意guard callback、无可信manifest。旧Q1 build/export原守卫保持。
 

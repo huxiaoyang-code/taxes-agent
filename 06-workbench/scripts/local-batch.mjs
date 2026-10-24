@@ -28,6 +28,8 @@ const USAGE = `本机持久批量 CLI（LOCAL-07）
 用法：
   node scripts/local-batch.mjs help
   node scripts/local-batch.mjs install --data-dir <目录> --out-dir <全新备份目录>
+  node scripts/local-batch.mjs restore-check --data-dir <目标> --backup <备份> --ledger <ledger.db> --operation <ID> [--plan <JSON>]
+  node scripts/local-batch.mjs restore-activate --data-dir <目标> --backup <备份> --ledger <ledger.db> --operation <ID> --plan <JSON> --out-dir <全新保护备份>
   node scripts/local-batch.mjs start  --data-dir <目录> --manifest <manifest.json> --output-dir <目录> [--job-key <键>]
   node scripts/local-batch.mjs status --data-dir <目录> --job-key <键>
   node scripts/local-batch.mjs resume --data-dir <目录> --job-key <键> [--use-saved-inputs]
@@ -42,9 +44,10 @@ const USAGE = `本机持久批量 CLI（LOCAL-07）
   - 输出文件只写入 --output-dir 之内（受控相对路径），从不覆盖已有无关文件。
 `;
 
-const COMMANDS = new Set(["help", "install", "start", "status", "resume", "cancel", "retry"]);
+const COMMANDS = new Set(["help", "install", "start", "status", "resume", "cancel", "retry", "restore-check", "restore-activate"]);
 const FLAGS = new Set([
   "--out-dir", "--data-dir", "--manifest", "--output-dir", "--job-key", "--item", "--period", "--stage",
+  "--backup", "--ledger", "--operation", "--plan",
 ]);
 
 class CliError extends Error {
@@ -202,6 +205,16 @@ async function dispatch({ command, options }) {
     return 0;
   }
   const dataDir = requireDataDir(options);
+  if(command==='restore-check'||command==='restore-activate'){
+    const allowed=new Set(['dataDir','backup','ledger','operation','plan','flags',...(command==='restore-activate'?['outDir']:[])]);
+    if(Object.keys(options).some(k=>!allowed.has(k))||options.flags.size||!options.backup||!options.ledger||!options.operation||command==='restore-activate'&&(!options.plan||!options.outDir))throw fail('restore_contract_required',2,'恢复命令必须提供完整显式参数');
+    const restore=await import('../server/local-restore-batch.mjs');
+    const args={targetDir:dataDir,backupDir:resolve(options.backup),ledgerPath:resolve(options.ledger),operationId:options.operation};
+    if(options.plan)args.plan=restore.readRestorePlanFile(resolve(options.plan));
+    if(options.outDir)args.outDir=resolve(options.outDir);
+    const result=await (command==='restore-check'?restore.checkRestoreBatch(args):restore.activateRestoreBatch(args));
+    emit({command,...result});return result.ok?0:2;
+  }
   if(command==='install') {
     if(!options.outDir)throw fail('batch_install_requires_verified_backup',2,'install 必须显式提供 --out-dir 全新备份目录');
     storage.assertDataDirIdentity(dataDir);const state=storage.inspectDataDir(dataDir);

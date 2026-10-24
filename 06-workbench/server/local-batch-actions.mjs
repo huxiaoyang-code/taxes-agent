@@ -18,8 +18,9 @@ import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-ba
 
 import {
   STAGE_KEYS, STAGE_STATUS, canonicalJson, getInput, getSnapshot, saveSnapshot, sha256,
-  withFencedTransaction, withReadSnapshot, writeStageResult, checkInputEvidence, verifyCurrentReportRows, getJob,
+  withFencedTransaction, withReadSnapshot, writeStageResult, checkInputEvidence, verifyCurrentReportRows, getJob, effectiveOutputRoot,
 } from "./local-batch-storage.mjs";
+import { plainRestorePath, readRestoreActivation } from './local-restore-control.mjs';
 import { assetCardPeriodStatus } from "./period-end-controls.mjs";
 import { centsToNumber } from "./money.mjs";
 import { existsSync, readFileSync } from "node:fs";
@@ -210,6 +211,8 @@ export function executeImportStage(ctx) {
   const { db, stage, item, spec, lock, hooks } = ctx;
   const input = getInput(db, { jobId: item.job_id, itemId: item.id, batchId: spec.batchId });
   if (!input) throw domainError("input_snapshot_missing", "缺少该批次的输入快照");
+  const currentCheck=checkInputEvidence(input,{db,allowSnapshotOnly:ctx.inputPolicy?.mode==='saved_snapshot'});
+  if(!currentCheck.ok)throw domainError(currentCheck.problem,'Input evidence changed');
   const bytes = Buffer.from(input.content);
   const bytesHash = sha256(bytes);
   if (bytesHash !== input.source_hash) throw domainError("input_changed", "已保存的输入快照指纹与登记不一致");
@@ -875,7 +878,7 @@ function verifyDepreciationEvidence(evidence, stage, expectedSetId) {
 /** The same scoped saved/external input contract for publish and completed resume. */
 export function verifyReportInputEvidence({item,period,allowSnapshotOnly=false}){
  const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(item.account_set_id,period);
- for(const input of inputs){const check=checkInputEvidence(input,{allowSnapshotOnly});if(!check.ok)return {ok:false,reason:check.problem??'input_changed'};}
+ for(const input of inputs){const check=checkInputEvidence(input,{db,allowSnapshotOnly});if(!check.ok)return {ok:false,reason:check.problem??'input_changed'};}
  return {ok:true};
 }
 
@@ -1021,15 +1024,17 @@ export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapsh
       if (reportBusinessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) return { ok: false, reason: "report_evidence_changed" };
       const source=verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)return source;
       const verifyRows=()=>verifyCurrentReportRows(db,{job:rows.job,item:rows.item,stage:rows.stage,snapshot,artifact});
-      if (!outputDir) {const final=verifyRows();return final.ok?{ok:true}:final;}
+      outputDir=effectiveOutputRoot(db,rows.job);
       const absolute = resolve(outputDir, artifact.relative_path);
       const root = resolve(outputDir);
       if (absolute !== root && !absolute.startsWith(root + sep)) return { ok: false, reason: "artifact_path_escape" };
       if (!existsSync(absolute)) return { ok: false, reason: "artifact_file_missing" };
+      const pathIdentity=plainRestorePath(absolute);
       const bytes=readFileSync(absolute);
       if (bytes.length!==artifact.bytes||sha256(bytes) !== artifact.bytes_hash) return { ok: false, reason: "artifact_file_corrupted" };
       const final=verifyRows();if(!final.ok)return final;
       const finalBytes=readFileSync(absolute);
+      const finalIdentity=plainRestorePath(absolute);if(pathIdentity.dev!==finalIdentity.dev||pathIdentity.ino!==finalIdentity.ino)return {ok:false,reason:'artifact_file_corrupted'};
       if(finalBytes.length!==artifact.bytes||sha256(finalBytes)!==artifact.bytes_hash)return {ok:false,reason:'artifact_file_corrupted'};
       return { ok: true };
     }
@@ -1039,6 +1044,23 @@ export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapsh
   }
 }
 
+/** Report-only authority comes from the completed activation's exact selection.
+ * Recompute the actual current DTO as well as source/profile/aux/business facts. */
+export function verifyRestoreReportRebuild({item,stage}) {
+ try{
+  const anchor=readRestoreActivation(db);
+  if(!anchor.plan.jobs.some(j=>j.reports.some(r=>r.stageId===stage.id&&r.action==='rebuild')))return {ok:false,reason:'restore_report_not_selected'};
+  const rows=verifyCurrentReportRows(db,{job:getJob(db,item.job_id),item,stage});if(!rows.ok)return rows;
+  const spec=safeParse(stage.spec_json),snapshot=rows.snapshot;
+  const binding=resolveItemBinding({db,item});if(binding.accountSetId!==item.account_set_id)return {ok:false,reason:'enterprise_binding_changed'};
+  const inputs=verifyReportInputEvidence({item,period:stage.period});if(!inputs.ok)return inputs;
+  const source=verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)return source;
+  const options={kind:spec.kind,period:stage.period,format:'csv'};if(spec.kind==='ledger')options.code=spec.code;
+  const current=buildReportExport(item.account_set_id,options);
+  if(reportBusinessDigest(db,item.account_set_id,stage.period)!==snapshot.business_hash||sha256(JSON.stringify(current.report))!==snapshot.dto_hash||sha256(current.body)!==snapshot.csv_hash)return {ok:false,reason:'restore_report_evidence_changed'};
+  effectiveOutputRoot(db,rows.job);return {ok:true};
+ }catch{return {ok:false,reason:'restore_report_evidence_changed'};}
+}
 function safeParse(text) {
   try { return JSON.parse(text || "{}") ?? {}; } catch { return {}; }
 }

@@ -126,6 +126,8 @@ const steps = [
   { name: "local-restore-reconcile", file: join(WORKBENCH, "test", "local-restore-reconcile.test.mjs"), cwd: WORKBENCH },
   { name: "local-restore-open-guard", file: join(WORKBENCH, "test", "local-restore-open-guard.test.mjs"), cwd: WORKBENCH },
   { name: "local-restore-audit", file: join(WORKBENCH, "test", "local-restore-audit.test.mjs"), cwd: WORKBENCH },
+  { name: "local-restore-batch", file: join(WORKBENCH, "test", "local-restore-batch.test.mjs"), cwd: WORKBENCH },
+  { name: "local-restore-path-binding", file: join(WORKBENCH, "test", "local-restore-path-binding.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

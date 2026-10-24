@@ -1,6 +1,16 @@
-> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+> **2026-10-24 当前事实：W4a 已合并，W4b 为待验候选。** [PR #112](https://github.com/huxiaoyang-code/youshu-fork/pull/112) 已于 2026-10-24T06:34:58Z 合并；审定 head `e8a8ceb953a5656634efd9c7a20b3e8032a45ff6`，main merge `782c7701d30a582aed41f42ca9ac2eaf266614a5`，树 `bd140ee0c9d1bdbdfc8ffecce3c1862839b89a15` 一致。W4a 交付 ledger2 / control1 / receipt2 与安全的 **pending** 恢复；它没有授予恢复目标运行权。
 >
-> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+> 本 W4b 候选基于实际 e8a8，补显式全任务输入/输出重绑、保护升级、激活后核证与仅报告重建。员工自测不代替管理者独验及全新独审，尚未为 W4b 建 PR / 合并。LOCAL-06/07 整包、Windows 最终冷链与升级回退、20 企最终恢复续跑整链仍待统一验收；全国税局真实接入 0。以下旧日期状态保留各自历史时点，当前接口以本节及 W4b 合同为准。
+
+## W4b 当前实施与验收门
+
+负责人 huxiaoyang-code；基线为 W4a 审定 head e8a8（页头完整 SHA），与已合 PR112/main782 树相同。当前候选实现恢复检查/显式全 job 输入输出映射、固定私有维护、官方保护点后的 exact core/audit/batch 升级、单事务 ready、激活后的真实连续性核证与指定报告重建。未接税局，不改变一企一套、同库多企的单机产品。
+
+验收必须实际核：只读 check 零建库/DDL；pending 普通入口与伪能力拒绝；官方保护备份早于 DDL且可 verify/只读还原；全映射完整后同事务 ready；未知金融不重试；缺坏报告真实复核与只重建报告；活源不受目标影响；ready 合法后续写入仍可 reconcile，二次 restore 独立 pending。重复计划不能重复 fork、epoch、安装或金融 attempt。路径 junction/hardlink/换 inode、保存快照损坏、未知 sidecar、真实维护 exit/COMMIT 未知均有定点合成反例。
+
+新测试为 `local-restore-batch.test.mjs`、`local-restore-path-binding.test.mjs`，统一测试入口只在原登记尾部追加。Q2 闭包因 literal local-backup→local-restore-batch 新边扩至实际38节点，default db 排除；旧35注册/断言保留，员工仅 native-code 三组，明确32跳过。历史全35不迁移为本次全35证据。
+
+本包仅员工候选：需 root 全 diff / 独验、全新上下文独审、真实最新 main 整合重验后才能提交 PR/合并。Issue49/51 与 LOCAL06/07 总任务继续开放；最终20企恢复续跑、四transport及Windows冷链另作统一交付验收。真实运行记录见 [交接](../handoffs/LOCAL-06-BACKUP.md)，失败记录不覆写。
 
 > **2026-10-23 当前兼容合同**：PR68 已合 core3/4/5 × bank0/1 的精确备份支持；本次 Issue64 A+B1 候选增加 **core5 + bank0/1 + auxiliary1**，待管理验收/独审/PR。无aux旧六组合保持；旧core带aux、aux2、audit/batch及未知组合拒绝。backup/verify/restore-new共用aux精确表/索引/FK/触发器与内容校验，安装先真实备份并绑定源连接；银行必须先于aux安装。接口及限制见 [辅助核算](../LOCAL-AUXILIARY.md)。以下此前候选、未来v5和未支持aux表述按原日期作为历史；不能据此推断当前合同。
 

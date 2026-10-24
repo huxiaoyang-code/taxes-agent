@@ -1,6 +1,20 @@
-> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+> **2026-10-24 当前事实：W4a 已合并，W4b 为待验候选。** [PR #112](https://github.com/huxiaoyang-code/youshu-fork/pull/112) 已于 2026-10-24T06:34:58Z 合并；审定 head `e8a8ceb953a5656634efd9c7a20b3e8032a45ff6`，main merge `782c7701d30a582aed41f42ca9ac2eaf266614a5`，树 `bd140ee0c9d1bdbdfc8ffecce3c1862839b89a15` 一致。W4a 交付 ledger2 / control1 / receipt2 与安全的 **pending** 恢复；它没有授予恢复目标运行权。
 >
-> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+> 本 W4b 候选基于实际 e8a8，补显式全任务输入/输出重绑、保护升级、激活后核证与仅报告重建。员工自测不代替管理者独验及全新独审，尚未为 W4b 建 PR / 合并。LOCAL-06/07 整包、Windows 最终冷链与升级回退、20 企最终恢复续跑整链仍待统一验收；全国税局真实接入 0。以下旧日期状态保留各自历史时点，当前接口以本节及 W4b 合同为准。
+
+## W4b：保护激活与发布后的连续性（当前候选）
+
+`server/local-restore-batch.mjs` 无默认 DB / 目录副作用，只处理显式目标。真实入口见 [批量 CLI 的计划合同](LOCAL-BATCH-CLI.md)。参数仅表达意图，不能取得维护权限；任意 callback、JSON ready/force、caller DB/事务对象不进入固定流程。
+
+激活重新验证官方 backup、不可变 receipt2 / manifest 副本、ledger2 的 succeeded 发布、真实目标文件与 control/实例链。随后持 `BEGIN IMMEDIATE` 核实际连接身份，用另一只读连接生成完整官方保护备份并 verify、绑定 held source；早于任何组件 DDL/路径绑定。固定私有 cap 只服务此连接/目标/事务，finally 撤销，不向调用者返回。普通 pending 写入、install、runner 仍拒绝。
+
+同一事务复用 exact core3/4→5、audit0/1→2、batch0/1/2→3；缺 bank/aux 不安装，未来或半装组件拒绝。legacy profile、合法旧技术 ID、业务金额/来源/旧审计/成功金融 checkpoint 保留；audit0/batch0 安装为真实 initial，不伪造源父；已有 W4a fork 不再分叉，batch3 epoch 不重复递增。全部已有 job/input/output 绑定后记 append-only 激活摘要，最后写 active batch ready 与 control ready/released_at。
+
+`restore-maintenance.json` 和 `restore-activation.json` 是仅本机的技术证据；路径与完整计划不进 ledger/audit 原文，audit 只保存规范摘要。维护事务崩溃仍 pending：对真实 official 保护点、不可变发布记录、目标 inode 与完整原字节重新核证；只有有归属的 rollback journal 才在真实写保留下恢复，恢复后必须回到原发布 SHA。可证的自身未提交 anchor 可重试；未知/被编辑同名文件保全拒绝。正常迁移没有多次已提交的部分状态；任何无法证明的差异保持 pending，不接受自报 JSON 替代实际库核证。COMMIT 确认丢失返回 unknown，随后真实核证决定状态。
+
+激活不改 receipt、过去的 ledger targetDigest 或原备份 manifest。ready 以及后续合法金融写入后，当前整库 SHA 可以不同；reconcile 验原发布绑定、当前 strict 结构/身份/实例链、官方保护点与 append-only 激活摘要，返回的是过去发布 digest，不能伪造新历史。相同完整计划幂等，不重复安装/分叉/epoch/attempt；异计划冲突。ready 再官方 backup→restore-new 会生成独立的新 pending control 和实例，旧 ready 不传递到新目标。
+
+DB 备份不带外部报表文件。报告成功必须在显式新根核真实 bytes/hash；缺坏留 needs_review。只有操作者精确选定的 report-only 重建、且真实当前 DTO/business/source/profile/aux/input 仍相符，才可新开报告 attempt；金融 import/post/计提/结转/结账成功不会为补报告重做。未知金融不能靠换 operation 或 retry 解禁。
 
 > **当前 W2b 已合并（2026-10-24）**：[PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)，merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`；[本次13docs交接认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376358168)。交接元数据待提交／复核，LOCAL06/07未整体完成、八任务仍6/8、税局真实0。审定head、独审和后续边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
 
