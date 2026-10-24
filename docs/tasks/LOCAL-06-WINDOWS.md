@@ -246,3 +246,11 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 [本次认领](https://github.com/huxiaoyang-code/youshu-fork/issues/106#issuecomment-6378154681)，BASE80与五文件窗口不变。root已复现旧候选忽略持久manifest而重新签损坏冷源；R1 改为已存在manifest时必须从磁盘受控读取/严格验证，并将版本、逐文件path/bytes/hash与总摘要对照实际白名单，冻结manifest原始SHA供复制前后重验；无manifest源码构建仍合法动态纳入。旧11组通过不再被解释为已覆盖持久证据消费。
 
 原11组断言全部保留，源码动态正向仅将自有夹具的manifest重命名保留后运行；新增3组真实磁盘坏例与正向/变更保护，最终 `D:/node.exe --test test/windows-release-manifest.test.mjs`（cwd `06-workbench`）**14/14、0 skip、exit0/实际close0**，UUID `4ea25787-3bd0-404e-8123-3701d7b9949b`，约12.37秒。未知字段、缺必需项、重复/穿越、坏摘要、bytes/hash/version不匹配、畸形JSON、同长度改工具、发布后新增源码、manifest硬链接/变更均真实拒绝且不重写坏证据；原真实guard/TOCTOU/旧核心/五CLI/MCP保留。全部新旧夹具保留，本轮无新红例；root独验/全新独审/PR仍待，未跑旧39/npm全套/冷install/W4，不解除w2_contract_pending。
+
+### W2a R2 默认测试布局最小返工（2026-10-24）
+
+[R2认领](https://github.com/huxiaoyang-code/youshu-fork/issues/106#issuecomment-6378425559)，BASE `e9b096373d5ef7fbf7bdc7498740ad0ec77a480c`。只改新聚焦测试与三文档四路径，生产windows-delivery-check及其它产品源码不改。旧默认布局会把cold目标放进REPO受测源，正确的不互含守卫拒绝；R1显式外部14/14不能代替默认入口证据。
+
+R2在本人新UUID根建立与真实完整白名单逐项同版本/bytes/hash的source子目录，让source/cold成为兄弟目录；默认根仍在当前workbench/tmp/w2a，显式授权外部根可覆盖，普通checkout/worktree均无负责人路径假设。产品守卫无豁免、无空壳替代或外部默认写盘；原14组断言全部保持，TEMP/TMP/DATA及双KEEP/import前祖先核验保持，夹具全保留。
+
+实跑cwd `06-workbench`，清除WINDOWS_RELEASE_MANIFEST_TEST_ROOT后直接 `D:/node.exe --test test/windows-release-manifest.test.mjs`：14/14、0skip、exit0/close0，默认UUID `9bbfced2-d55c-4850-9216-f05f7441ba7b`，21.73秒；显式外部新UUID `f8f6a7d7-5190-41e7-b204-a99705218d20` 同命令14/14、0skip、exit0/close0，13.57秒。每轮10个冷副本CLI/MCP child actual exit/close，真实链接/持久清单坏例/TOCTOU保持，无本轮新红。生产script与e9同bytes/SHA；未Git/PR/合并、未旧39/npm全套/冷安装/W4，w2_contract_pending和历史边界不变。四delta清单及新证据见交接，交付后FINAL STOP。

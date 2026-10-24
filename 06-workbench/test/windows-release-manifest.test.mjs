@@ -44,7 +44,36 @@ const sha = (buffer) => createHash("sha256").update(buffer).digest("hex");
 const children = [];
 let sequence = 0;
 const next = (label) => join(root, `${++sequence}-${label}`);
-const original = inspectReleaseBundle(REPO);
+// Seed real, verified whitelist bytes inside our owned root. Source and cold destination are siblings,
+// so the default in-repository fixture obeys the same containment guard as an external fixture.
+const repositorySource = inspectReleaseBundle(REPO);
+const sourceRoot = join(root, "source");
+fs.mkdirSync(sourceRoot);
+for (const entry of repositorySource.bundleManifest.files) {
+  const source = join(REPO, entry.path);
+  auditAncestors(dirname(source));
+  const before = fs.lstatSync(source);
+  assert(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
+  const buffer = fs.readFileSync(source);
+  const afterRead = fs.lstatSync(source);
+  assert.equal(afterRead.dev, before.dev);
+  assert.equal(afterRead.ino, before.ino);
+  assert.equal(afterRead.mtimeMs, before.mtimeMs);
+  assert.equal(afterRead.ctimeMs, before.ctimeMs);
+  assert(afterRead.isFile() && !afterRead.isSymbolicLink() && afterRead.nlink === 1);
+  auditAncestors(dirname(source));
+  assert.equal(buffer.length, entry.bytes);
+  assert.equal(sha(buffer), entry.sha256);
+  const target = join(sourceRoot, entry.path);
+  auditAncestors(dirname(target));
+  fs.mkdirSync(dirname(target), { recursive: true });
+  auditAncestors(dirname(target));
+  fs.writeFileSync(target, buffer, { flag: "wx" });
+  assert.equal(sha(fs.readFileSync(target)), entry.sha256);
+}
+assert.equal(inspectReleaseBundle(REPO).bundleDigest, repositorySource.bundleDigest);
+const original = inspectReleaseBundle(sourceRoot);
+assert.deepEqual(original.bundleManifest, repositorySource.bundleManifest);
 const cold = copyReleaseWhitelist(original, next("cold"), { fullBundle: true });
 const coldSource = () => inspectReleaseBundle(cold.destRoot);
 function expectNoCopy(source, target, code) {
@@ -373,7 +402,7 @@ test("cold-copy five local CLIs and MCP initialize / list load without a default
 });
 
 after(() => {
-  const evidence = { root, uuid: root.slice(-36), retained: true, children, bundleDigest: cold.bundleDigest, coreDigest: cold.digest,
+  const evidence = { root, sourceRoot, repositoryRoot: REPO, uuid: root.slice(-36), retained: true, children, bundleDigest: cold.bundleDigest, coreDigest: cold.digest,
     files: cold.bundleManifest.files.length, noDefaultDatabase: !fs.existsSync(process.env.WORKBENCH_DATA_DIR) };
   fs.writeFileSync(join(root, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(`W2a evidence retained: ${root}`);

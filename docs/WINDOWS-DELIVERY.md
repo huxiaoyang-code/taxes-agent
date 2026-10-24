@@ -397,3 +397,13 @@ schemaVersion 1 / kind `local-product-source-bundle` 清单包含确切 packageV
 R1 区分两类输入：无 manifest 的源码构建来源可按白名单生成清单；已有 manifest 的发布来源先用同一 fd、完整祖先/realpath、普通文件与 nlink=1 守卫读取磁盘证据，严格解析验证，再核对确切版本、排序路径/bytes/SHA256与总摘要和实际完整白名单一致。异常直接拒绝，不忽略或重写证据。检查返回 `manifestSha256`（构建来源为 null），复制前后继续核验该原始文件摘要；manifest 读取期间或复制期间变化也失败并保留现场。动态新增源码正向仅适用于无manifest构建源；已发布来源增加未登记源码同样拒绝。核心digest、bundleDigest与原CLI参数/四工具门保持。
 
 R1 同一聚焦命令最终 **14/14、0 skip，exit0/实际close0**，约12.37秒；原11组断言保留，动态正向夹具的旧manifest仅重命名保留于本次证据根，明确成为源码构建来源。新增正确磁盘manifest冷源再复制、未知字段/缺必需项/重复/穿越/坏摘要/错误bytes或hash/版本不符/畸形JSON、发布工具同长度损坏、发布后多出源码、manifest硬链接及检查后/复制中改manifest，均实际拒绝且不重新签写坏证据。UUID `4ea25787-3bd0-404e-8123-3701d7b9949b` 全新隔离根、原10个冷副本CLI/MCP child均实际exit/close，夹具全保留。本轮无新红例；上一候选及更早失败现场不动。仍未跑旧39套/npm全套/冷安装/W4/最终两冷链或升级回退，待root独验与全新独审，不声明已PR或已合并。
+
+### W2a R2：默认聚焦命令布局（2026-10-24，待管理验收）
+
+R1 的通过证据使用显式外部 fixture 根。旧测试默认把目标放进 REPO 下，而受测source正是REPO，违反产品源目标互不包含守卫，不能把当时14/14推导为无环境变量命令可用。R2只修测试与三文档，生产script与基线 `e9b096373d5ef7fbf7bdc7498740ad0ec77a480c` 字节保持相同，不放宽守卫。
+
+现在默认根仍为当前 `06-workbench/tmp/w2a/<完整新UUID>`；先检查真实仓库完整白名单，逐项核对真实路径、普通文件、bytes/hash后在本人根内建立完整源码 `source` 子目录，再由生产复制入口创建同根兄弟冷副本。source和cold互不包含，真实完整源码版本/hash与原仓库一致，没有用空壳源，也不依赖仓库外默认目录或系统TEMP。路径由当前测试模块推导，适用于普通checkout与worktree；显式 `WINDOWS_RELEASE_MANIFEST_TEST_ROOT` 仍支持调用者授权的绝对新UUID根。全部夹具保留，默认根也不事后补删。
+
+在 `06-workbench` 下直接运行 `D:/node.exe --test test/windows-release-manifest.test.mjs` 即可；PowerShell若曾设置覆盖变量，先执行 `Remove-Item Env:WINDOWS_RELEASE_MANIFEST_TEST_ROOT -ErrorAction SilentlyContinue`。覆盖变量是可选项。测试在业务相关import前仍隔离TEMP/TMP/DATA与双KEEP并检查完整祖先。无manifest构建/持久manifest、全部14组坏例和guard、五CLI及MCP断言保留。
+
+本轮实际两命令：清除覆盖变量后的默认命令 **14/14、0 skip、exit0/close0**，约21.73秒，默认根UUID `9bbfced2-d55c-4850-9216-f05f7441ba7b`；另显式外部新根UUID `f8f6a7d7-5190-41e7-b204-a99705218d20` 同命令 **14/14、0 skip、exit0/close0**，约13.57秒。各10个内部自有child均实际exit/close、无timeout，无默认库/真实库/税务调用；真实junction/hardlink正常审批执行。本轮无新红例，旧失败与旧交付保留。仍未跑旧39/npm全套/冷安装/W4/最终两冷链或升级回退，不解除 `w2_contract_pending`，不声明已PR或已合并。

@@ -164,3 +164,13 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 R1最终聚焦14/14、0 skip、exit0/实际close0、约12.37秒；原11组保留，另3组实际磁盘正向/攻击/变更保护。动态源码正向fixture旧manifest重命名保留后才用作无manifest构建源；已发布源新增源码拒绝。真实未知字段/必需项遗漏/重复/穿越/坏摘要/bytes、hash、version不符/畸形JSON/同长度工具损坏/manifest硬链接与变更全覆盖，坏证据不重写。10个内部冷副本CLI/MCP child实际exit/close、无timeout/默认DB，所有夹具保留。
 
 新证据UUID `4ea25787-3bd0-404e-8123-3701d7b9949b`：`.agent-runs/local06-w2a-r1-selftest-4ea25787-3bd0-404e-8123-3701d7b9949b.{log,exit.json}`；`.agent-runs/w2a-r1-4ea25787-3bd0-404e-8123-3701d7b9949b/evidence.json` 及 `1-cold/windows-release-manifest.json`。新交付为 `.agent-runs/local06-windows-w2a-r1-delivery-20261024.md` / `local06-windows-w2a-r1-final-files-20261024.json`，列全部五个当前WIP文件；旧交付/证据保持，本轮无新红例。未Git/PR/合并、未跑旧39/npm全套/冷install/W4；w2_contract_pending及所有历史未完边界保持。交付后FINAL STOP，无自有运行服务/child，交root独验与全新独审。
+
+### W2a R2 默认入口布局候选（2026-10-24，未PR/未合并）
+
+[R2认领](https://github.com/huxiaoyang-code/youshu-fork/issues/106#issuecomment-6378425559)，BASE/HEAD `e9b096373d5ef7fbf7bdc7498740ad0ec77a480c`。本次只改test+三docs四路径；生产script保持e9的151618 bytes / SHA256 `fcb7ebed096c3496b01dd6a49d0de4cf82612705fb70a76a626a633106f61cf2`，源目标不互含保护不动。旧默认fixture在REPO内但以REPO为source，会被正确守卫拒绝；R1仅有显式外部路径证据，不能冒称已覆盖默认命令。
+
+现先将真实完整白名单逐项核bytes/hash、普通文件与祖先后种入自有根/source，再用生产入口复制到自有根的兄弟cold。默认根仍为模块定位的workbench/tmp/w2a/完整UUID，普通checkout与worktree无路径特例；外部覆盖仍可选。不是空壳或放宽guard，全部14断言及真实磁盘/链接/TOCTOU/五CLI/MCP保留。import前隔离和全部夹具保留规则保持，未清理旧现场。
+
+两轮真实命令均为cwd `06-workbench` 的 `D:/node.exe --test test/windows-release-manifest.test.mjs`：第一轮env实际删除WINDOWS_RELEASE_MANIFEST_TEST_ROOT，默认fixture UUID `9bbfced2-d55c-4850-9216-f05f7441ba7b`，14/14、0skip、exit0/close0、21.73秒；第二轮显式外部UUID `f8f6a7d7-5190-41e7-b204-a99705218d20`，14/14、0skip、exit0/close0、13.57秒。各10个内部child真实exit/close、无timeout或默认DB，本轮无新红例。
+
+日志/外层close证据为 `.agent-runs/local06-w2a-r2-default-25184f03-3e3d-4a43-820b-05461279b542.{log,exit.json}` 与 `.agent-runs/local06-w2a-r2-explicit-f8f6a7d7-5190-41e7-b204-a99705218d20.{log,exit.json}`；各fixture/evidence.json同时记录sourceRoot与cold清单摘要。新交付 `.agent-runs/local06-windows-w2a-r2-delivery-20261024.md` / `local06-windows-w2a-r2-final-files-20261024.json` 仅列相对e9的四内实际delta，旧交付不覆盖。仍待root独验/最新main整合/全新独审，不运行旧39/npm全套/冷安装/W4/升级回退，不解除w2_contract_pending。交付后FINAL STOP，无自有服务或未结束child。
