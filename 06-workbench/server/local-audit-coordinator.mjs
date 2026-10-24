@@ -1,4 +1,5 @@
 import { withDomainWrite, assertWriteCommitFence, withBatchStageResources } from './local-write-lock.mjs';
+import { assertAgencyAdmissionEvidence, assertAgencyCommitEvidence } from './agency-business-evidence.mjs';
 // Trusted synchronous domain coordinator. ALS carries correlation only, never authority.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
@@ -100,6 +101,7 @@ export function runDomainAdmission(db,options,admit) {
  auditResultDigest(options.request);
  assertImmutableDomainBinding(db,options);
  return withDomainWrite(db,options,()=>{
+  assertAgencyAdmissionEvidence(db);
   const result=admit();if(!result.operation)return result.value;
   return runDomainOperationBody(db,result.operation,result.execute);
  });
@@ -144,7 +146,7 @@ function runDomainOperationBody(db,options,fn) {
  let value,businessError,snapshot;
  const terminal=executePreparedOperation(db,prepared.authorization,()=>{
   frames.set(db,{action:options.action,scope:options.scope});
-  try {value=fn();assertWriteCommitFence(db);snapshot=auditResultSnapshot(value);return specification(options,value);}
+  try {value=fn();assertAgencyCommitEvidence(db);assertWriteCommitFence(db);snapshot=auditResultSnapshot(value);return specification(options,value);}
   catch(error){businessError=error;throw error;}
   finally{frames.delete(db);}
  });
