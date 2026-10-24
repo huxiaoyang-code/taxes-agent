@@ -330,6 +330,35 @@ export function openAuditDatabase(file,{readOnly=true}={}) {
  if(typeof file!=='string'||!file)throw fail('audit_operation_invalid');if(readOnly&&!fs.existsSync(file))throw fail('audit_database_missing');
  let db;try{db=new DatabaseSync(file,{readOnly});db.prepare('SELECT name FROM sqlite_master LIMIT 1').all();return db;}catch{try{db?.close();}catch{}throw fail('audit_database_invalid');}
 }
+
+/** Restore's fixed protected upgrade; no callback or general SQL authority. */
+export function upgradeRestoreAuditSchema(db,{capability}={}) {
+ assertPrivateRestoreCapability(db,capability);
+ const s=inspectAuditSchema(db);if(s.state!=='not_installed')assertInstalledSchema(db);
+ if(s.version===2)return;
+ if(s.state==='not_installed'){
+  for(const sql of V1_STATEMENTS)db.exec(sql);
+  db.prepare('INSERT INTO audit_components VALUES(?,?,?,?)').run(AUDIT_COMPONENT,1,new Date().toISOString(),'LOCAL-06');
+  db.prepare('INSERT INTO audit_database_instances VALUES(?,?,?,?,?)').run(randomUUID(),new Date().toISOString(),null,1,'initial');
+ }
+ for(const sql of V2_STEPS)db.exec(sql);
+ db.prepare('UPDATE audit_components SET version=2 WHERE component=?').run(AUDIT_COMPONENT);
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_batch_database_instances'").get())db.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE is_active=1 AND audit_instance_id IS NULL').run(currentAuditInstanceId(db));
+ assertInstalledSchema(db);
+}
+
+/** Append-only activation anchor. Paths/plan contents stay in the local file;
+ * only fixed technical IDs and digests enter audit storage. */
+export function recordRestoreActivation(db,{capability,request}={}) {
+ assertPrivateRestoreCapability(db,capability);
+ const r=normalizeBinding(db,{context:{action:'restore.activate',actor:'cli',operationId:'activate:'+request.targetInstanceId,attempt:1},scope:{kind:'database',value:null},request},{restoreCapability:capability});
+ if(selectOperation(db,r))throw fail('audit_operation_conflict');
+ r.prepared_at=new Date().toISOString();
+ const cols=[...IMMUTABLE_OPERATION_COLUMNS,'state'];
+ db.prepare(`INSERT INTO audit_operations (${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`).run(...IMMUTABLE_OPERATION_COLUMNS.map(k=>r[k]),'pending');
+ finish(db,r,{state:'succeeded',resultCode:'ok',reasonCode:'none',targets:targetsOfRow(r)});
+ assertInstalledSchema(db);
+}
 const EVENT_COLUMNS='*';
 const permissions=new WeakMap();
 const selectOperation=(db,r)=>db.prepare('SELECT * FROM audit_operations WHERE database_instance_id=? AND operation_id=? AND attempt=?').get(r.database_instance_id,r.operation_id,r.attempt);
@@ -337,10 +366,12 @@ function envelope(code,{state='rejected',replayed=false,durability='not_started'
 function unknown(code='audit_commit_unknown'){return envelope(code,{state:'unknown',durability:'unknown',needsReview:true});}
 function terminalEnvelope(r,replayed){const receipt=parseCanonical(r.receipt_json);return envelope(r.state==='succeeded'?'ok':r.state==='no_change'?'no_change':receipt.resultCode,{state:r.state,replayed,durability:'committed',receipt});}
 function requireV2(db){assertRestoreWritable(db);const s=assertInstalledSchema(db);if(s.version!==2)throw fail('audit_operation_protocol_required');return s;}
-function normalizeBinding(db,input,{requireScope=true}={}) {
+function normalizeBinding(db,input,{requireScope=true,restoreCapability}={}) {
  input=JSON.parse(canonicalAuditJson(input));
  if(!input||typeof input!=='object'||Object.keys(input).sort().join(',')!=='context,request,scope')throw fail('audit_operation_invalid');
  const context=createOperationContext(input.context),scope=input.scope;
+ // This internal path is reachable only from the fixed activation recorder.
+ if(restoreCapability!==undefined)assertPrivateRestoreCapability(db,restoreCapability);
  if(!scope||typeof scope!=='object'||Object.keys(scope).sort().join(',')!=='kind,value')throw fail('audit_operation_invalid');
  let value=scope.value;
  if(scope.kind==='database'){if(value!==null||context.accountSetId!==undefined)throw fail('audit_operation_invalid');}
@@ -352,7 +383,7 @@ function normalizeBinding(db,input,{requireScope=true}={}) {
   const binding=db.prepare('SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?').get(value);
   if(requireScope&&context.accountSetId!==undefined&&binding?.account_set_id!==context.accountSetId)throw fail('audit_operation_invalid');
  }else throw fail('audit_operation_invalid');
- const r={database_instance_id:requireV2(db).activeInstanceId,operation_id:context.operationId,attempt:context.attempt,binding_version:1,action:context.action,actor:context.actor,scope_kind:scope.kind,scope_token:auditCanonicalDigest(['audit-scope-v1',scope.kind,value]),targets_json:canonicalAuditJson(auditTargets(context)),parent_operation_id:context.parentOperationId??null,parent_attempt:context.parentAttempt??null,request_digest:auditCanonicalDigest(['audit-request-v1',context.action,input.request])};
+ const r={database_instance_id:(restoreCapability!==undefined?assertInstalledSchema(db):requireV2(db)).activeInstanceId,operation_id:context.operationId,attempt:context.attempt,binding_version:1,action:context.action,actor:context.actor,scope_kind:scope.kind,scope_token:auditCanonicalDigest(['audit-scope-v1',scope.kind,value]),targets_json:canonicalAuditJson(auditTargets(context)),parent_operation_id:context.parentOperationId??null,parent_attempt:context.parentAttempt??null,request_digest:auditCanonicalDigest(['audit-request-v1',context.action,input.request])};
  r.binding_digest=bindingOf(r);return r;
 }
 /** A receipt is a private, one-use object issued only after durable pending COMMIT. */
@@ -450,6 +481,8 @@ export function executePreparedChild(db,authorization,fn) {
  if(businessError)throw businessError;return terminalEnvelope(result,false);
 }
 function identityFromLive(db,live){return permittedSql(db,(a,b)=>a===SQL.SQLITE_PRAGMA&&b==='database_list',()=>identity(db));}
+/** Fixed connection metadata read, including inside an audited body. No callback. */
+export function readAuditDatabasePath(db){return identityFromLive(db,activeOperations.get(db)).path;}
 export function executePreparedOperation(db,authorization,fn) {
  owner(db);const p=authorization&&typeof authorization==='object'?permissions.get(authorization):null;
  if(!p||p.db!==db||p.used||typeof fn!=='function')throw fail('audit_authorization_invalid');

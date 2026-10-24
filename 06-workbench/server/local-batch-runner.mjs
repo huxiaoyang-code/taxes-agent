@@ -13,8 +13,9 @@ import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync,
-  renameSync, unlinkSync, writeSync,
+  renameSync, unlinkSync, writeSync, linkSync,
 } from "node:fs";
+import { plainRestorePath } from './local-restore-control.mjs';
 import { dirname, join, resolve, sep } from "node:path";
 import { Worker } from "node:worker_threads";
 import * as storage from "./local-batch-storage.mjs";
@@ -141,7 +142,10 @@ function hashFile(path) {
  */
 export function publishFile({ bytes, bytesHash, relativePath, outputDir }) {
   const root = resolve(outputDir);
+  plainRestorePath(root,{directory:true});
+  const plainAncestor=file=>{for(let p=file;;p=dirname(p)){if(existsSync(p)){plainRestorePath(p,{directory:true});return;}if(dirname(p)===p)throw batchError('artifact_path_escape');}};
   const tempDir = join(root, ".local-batch-tmp");
+  plainAncestor(tempDir);
   ensureDir(tempDir);
   const tempPath = join(tempDir, `${process.pid}-${randomUUID()}.part`);
   const fd = openSync(tempPath, "wx");
@@ -161,8 +165,9 @@ export function publishFile({ bytes, bytesHash, relativePath, outputDir }) {
     try { unlinkSync(tempPath); } catch { /* ignore */ }
     throw batchError("artifact_path_escape", { relativePath });
   }
-  ensureDir(dirname(finalPath));
+  plainAncestor(dirname(finalPath));ensureDir(dirname(finalPath));plainRestorePath(dirname(finalPath),{directory:true});
   if (existsSync(finalPath)) {
+    plainRestorePath(finalPath);
     const existingHash = hashFile(finalPath);
     if (existingHash !== bytesHash) {
       try { unlinkSync(tempPath); } catch { /* ignore */ }
@@ -171,7 +176,8 @@ export function publishFile({ bytes, bytesHash, relativePath, outputDir }) {
     try { unlinkSync(tempPath); } catch { /* ignore */ }
     return { published: false, recovered: true, finalPath, bytesHash };
   }
-  renameSync(tempPath, finalPath);
+  // Exclusive publication cannot replace a file created by another writer.
+  linkSync(tempPath,finalPath);unlinkSync(tempPath);plainRestorePath(finalPath);
   return { published: true, recovered: false, finalPath, bytesHash };
 }
 
@@ -333,6 +339,7 @@ export async function executeJob({
   const pool = createRenderPool(Math.max(1, Math.min(Number(job.concurrency) || 1, MANIFEST_LIMITS.concurrencyMax)));
   let jobStatus = job.status;
   try {
+    storage.prepareExecutionOutputRoot(db,job);
     report.reset = recoverInterruptedStages(job.id);
     if (jobCancelled(job.id)) {
       for (const item of listItems(db, job.id)) report.items.push({ itemKey: item.item_key, cancelled: markItemPendingCancelled(item.id, "cancelled_by_operator") });
@@ -352,7 +359,7 @@ export async function executeJob({
       try {itemLocks=acquireItemLocks({item,instance,pid,parent:jobResources});}
       catch(error){itemReport.lockBlocked=error?.code??'lock_error';blockPendingStages({stages,errorCode:itemReport.lockBlocked});continue;}
       let bindingItem=item;
-      const verifyCompleted=()=>withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>verifySucceededStages(bindingItem,stages,job.output_dir,{allowSnapshotOnly})));
+      const verifyCompleted=()=>withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>verifySucceededStages(bindingItem,stages,storage.effectiveOutputRoot(db,job),{allowSnapshotOnly})));
       try {
         try {
           withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>{
@@ -365,6 +372,13 @@ export async function executeJob({
           // Keep their evidence, mark drift for review, and never replay finance.
           itemReport.verified=verifyCompleted();
           itemReport.blockedStages=blockPendingStages({stages,errorCode:code});continue;
+        }
+        for(const selected of stages.filter(s=>s.error_code==='restore_report_rebuild_requested')){
+          withWriteResources(db,itemLocks,()=>storage.withFencedTransaction(db,lock,()=>{
+            const check=actions.verifyRestoreReportRebuild({item:bindingItem,stage:selected});
+            if(check.ok){db.prepare("UPDATE local_batch_stages SET status='pending',error_code=NULL,updated_at=? WHERE id=? AND error_code='restore_report_rebuild_requested'").run(storage.nowIso(),selected.id);selected.status=STAGE_STATUS.PENDING;selected.error_code=null;}
+            else db.prepare("UPDATE local_batch_stages SET error_code='restore_report_evidence_changed',updated_at=? WHERE id=?").run(storage.nowIso(),selected.id);
+          }));
         }
         const hasWork=stages.some(s=>s.status===STAGE_STATUS.PENDING);
         if(!hasWork){itemReport.verified=verifyCompleted();continue;}
@@ -398,7 +412,7 @@ export async function executeJob({
           if (stage.stage_key.startsWith(`${STAGE_KEYS.IMPORT}:`)) {
             const importSpec = safeJson(stage.spec_json);
             const input = storage.getInput(db, { jobId: job.id, itemId: item.id, batchId: importSpec.batchId });
-            const check = storage.checkInputEvidence(input);
+            const check = storage.checkInputEvidence(input,{db,allowSnapshotOnly});
             itemReport.inputEvidence = [...(itemReport.inputEvidence || []), {
               period: stage.period, batchId: importSpec.batchId, ok: check.ok === true,
               problem: check.problem ?? null, external: check.external === true,
@@ -631,7 +645,7 @@ function verifySucceededStages(item, stages, outputDir, {allowSnapshotOnly=false
 
 async function renderAndPublish({ task, job, lock, jobResources, attempt, instance, pid, hooks, pool }) {
   const { stage, spec, snapshot, item } = task;
-  const outputDir = job.output_dir;
+  const outputDir = storage.effectiveOutputRoot(db,job);
   const relativePath = relativeArtifactPath({
     jobKey: job.job_key, itemKey: item.item_key, period: stage.period,
     kind: spec.kind, code: spec.code, format: spec.format,
@@ -643,6 +657,9 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
 
   const claimedStage={...stage,attempt,input_hash:snapshotHash,status:undefined,outcome_hash:undefined,evidence_json:undefined};
   const assertCurrentEvidence=(artifact=existing,terminal=false)=>{
+    // Any late schema/binding drift is a report evidence conflict. It must not
+    // turn a source-completeness refusal into a retryable financial failure.
+    try{if(storage.effectiveOutputRoot(db,job)!==outputDir)throw Error();}catch{throw batchError('report_evidence_changed');}
     const rows=storage.verifyCurrentReportRows(db,{job,item,stage:terminal?{...claimedStage,status:STAGE_STATUS.SUCCEEDED}:claimedStage,snapshot,artifact});
     if(!rows.ok)throw batchError(rows.reason);
     const binding=actions.resolveItemBinding({db,item});
@@ -651,7 +668,9 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
     const input=actions.verifyReportInputEvidence({item,period:stage.period,allowSnapshotOnly:task.allowSnapshotOnly});if(!input.ok)throw batchError(input.reason);
   };
   const assertArtifactFile=artifact=>{
+    const identity=plainRestorePath(finalPath);
     let bytes;try{bytes=readFileSync(finalPath);}catch{throw batchError('artifact_hash_mismatch');}
+    const after=plainRestorePath(finalPath);if(identity.dev!==after.dev||identity.ino!==after.ino)throw batchError('artifact_hash_mismatch');
     if(bytes.length!==artifact.bytes||sha256(bytes)!==artifact.bytes_hash)throw batchError('artifact_hash_mismatch');
   };
   const publishLocked=fn=>{

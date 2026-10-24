@@ -26,6 +26,7 @@ import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { centsToNumber, parseMoney } from "./money.mjs";
+import { assertRestoreWritable } from './local-restore-control.mjs';
 
 /** 本文件负责的 schema 版本。新增列 / 新增表必须新增 migration 并递增版本。 */
 export const IMPORT_SCHEMA_VERSION = 5;
@@ -441,6 +442,7 @@ function createBackup(db, dataDir, version) {
  * 返回 { migrated, from, to, backup, reusedBackup }；失败时抛 migration_failed 且原库不变。
  */
 export function ensureImportSchema(db, { dataDir, targetVersion = IMPORT_SCHEMA_VERSION } = {}) {
+  assertRestoreWritable(db);
   if (!dataDir) throw new Error("migration_data_dir_required");
   if (!Number.isInteger(targetVersion) || targetVersion < 1 || targetVersion > IMPORT_SCHEMA_VERSION) {
     throw new Error(`migration_target_invalid:${targetVersion}`);
@@ -500,6 +502,25 @@ export function ensureImportSchema(db, { dataDir, targetVersion = IMPORT_SCHEMA_
   }
 }
 
+/** Fixed restore-only exact migration. The held official protection backup is
+ * verified by the private issuer before this entry receives its one-use cap. */
+export async function upgradeRestoreImportSchema(db, { capability, backup } = {}) {
+  const { assertPrivateRestoreCapability } = await import('./local-backup.mjs');
+  assertPrivateRestoreCapability(db, capability);
+  const from = schemaVersion(db);
+  if (![3,4,5].includes(from)) throw new Error('migration_failed');
+  if (from === 5) return;
+  if (!backup || typeof backup.path !== 'string' || !Number.isSafeInteger(backup.bytes)) throw new Error('migration_failed');
+  db.prepare('INSERT INTO schema_backups(version,path,created_at,bytes,integrity,note) VALUES(?,?,?,?,?,?)')
+    .run(5,backup.path,nowIso(),backup.bytes,'ok','pre-migration');
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= from) continue;
+    for (const step of migration.steps) typeof step === 'function' ? step(db) : db.exec(step);
+    db.prepare('INSERT INTO schema_migrations(version,applied_at,note) VALUES(?,?,?)').run(migration.version,nowIso(),migration.note);
+  }
+  assertPrivateRestoreCapability(db, capability);
+}
+
 // ------------------------------------------------------------------ 规范企业身份 -> 账套
 export function getEnterpriseAccountSet(db, enterpriseKey) {
   return db
@@ -516,6 +537,7 @@ export function getAccountSetEnterprise(db, accountSetId) {
 export function insertEnterpriseAccountSet(db, {
   enterpriseKey, enterpriseName = "", accountSetId, boundBy = "import",
 }) {
+  assertRestoreWritable(db);
   db.prepare(`INSERT INTO import_enterprise_account_sets
                 (enterprise_key, enterprise_name, account_set_id, bound_at, bound_by)
               VALUES (?,?,?,?,?)`)
@@ -556,6 +578,7 @@ export function listSourceBindingsForAccountSet(db, accountSetId) {
 export function insertSourceBinding(db, {
   sourceSystem, enterpriseKey, enterpriseName = "", boundBy = "import",
 }) {
+  assertRestoreWritable(db);
   db.prepare(`INSERT INTO import_source_bindings
                 (source_system, enterprise_key, enterprise_name, bound_at, bound_by)
               VALUES (?,?,?,?,?)`)
@@ -570,6 +593,7 @@ export function getBatch(db, batchId) {
 export function markBatchCompleted(db, {
   batchId, sourceSystem, enterpriseKey, mode, accountSetId, contentFingerprint, result,
 }) {
+  assertRestoreWritable(db);
   db.prepare(`INSERT INTO import_batches
                 (batch_id, source_system, enterprise_key, mode, account_set_id, content_fingerprint,
                  status, attempts, created_at, updated_at, result_json, error_code, error_message)
@@ -597,6 +621,7 @@ export function markBatchCompleted(db, {
 export function markBatchFailed(db, {
   batchId, sourceSystem, enterpriseKey, mode, accountSetId, contentFingerprint, errorCode, errorMessage,
 }) {
+  assertRestoreWritable(db);
   db.prepare(`INSERT INTO import_batches
                 (batch_id, source_system, enterprise_key, mode, account_set_id, content_fingerprint,
                  status, attempts, created_at, updated_at, result_json, error_code, error_message)
@@ -624,6 +649,7 @@ export function insertVoucherSource(db, {
   sourceSystem, enterpriseKey, sourceVoucherId, accountSetId, voucherId,
   contentFingerprint, voucherFingerprint: voucherFp, batchId,
 }) {
+  assertRestoreWritable(db);
   db.prepare(`INSERT INTO import_voucher_sources
                 (source_system, enterprise_key, source_voucher_id, account_set_id, voucher_id,
                  voucher_fingerprint, content_fingerprint, batch_id, created_at)
@@ -645,6 +671,7 @@ export function insertBatchVoucher(db, {
   batchId, sourceSystem, enterpriseKey, sourceVoucherId, accountSetId, voucherId,
   contentFingerprint, action,
 }) {
+  assertRestoreWritable(db);
   db.prepare(`INSERT INTO import_batch_vouchers
                 (batch_id, source_system, enterprise_key, source_voucher_id, account_set_id,
                  voucher_id, content_fingerprint, action, created_at)

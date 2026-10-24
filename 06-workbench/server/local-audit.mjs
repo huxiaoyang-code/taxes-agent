@@ -89,6 +89,7 @@ export const AUDIT_ACTIONS = Object.freeze([
   "batch.stage",
   "batch.job",
   "restore.new",
+  "restore.activate",
 ]);
 
 /** 固定 outcome 词表；中断不得伪造成 failed 或 succeeded。 */

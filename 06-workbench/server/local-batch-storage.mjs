@@ -1,6 +1,6 @@
-import { assertRestoreWritable } from './local-restore-control.mjs';
+import { assertRestoreWritable, inspectRestoreControl, plainRestorePath, readRestoreActivation } from './local-restore-control.mjs';
 import { assertWriteCommitFence, authorizesResourceRenewal } from './local-write-lock.mjs';
-import { hasActiveAuditExecution,withAuditSavepoint } from './local-audit-storage.mjs';
+import { hasActiveAuditExecution,withAuditSavepoint,readAuditDatabasePath } from './local-audit-storage.mjs';
 // local-batch-storage.mjs — 持久批量任务（LOCAL-07）的存储层：manifest 校验 / 任务 / 阶段 /
 // 锁与 fencing / 输入快照 / 报表产物元数据 / 状态汇总。
 //
@@ -809,11 +809,40 @@ export function readBatchInstance(db) {const s=assertBatchSchema(db);if(s.versio
 export function assertBatchRunnable(db,{jobId}={}) {
  assertRestoreWritable(db);
  if(readBatchVersion(db)!==3)FAIL('migration_requires_backup');
- const instance=readBatchInstance(db);if(instance.write_state!=='ready')FAIL('batch_not_ready');
+ // DDL/PRAGMA are denied inside the audited business body. Its already-admitted
+ // connection rechecks fixed current rows; it cannot change schema or main DB.
+ const instance=hasActiveAuditExecution(db)?db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get():readBatchInstance(db);
+ if(!instance||instance.write_state!=='ready')FAIL('batch_not_ready');
+ if(hasActiveAuditExecution(db)){const audit=db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get();if(audit?.instance_id!==instance.audit_instance_id)FAIL('batch_instance_mismatch');}
  const jb=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=?').all(instance.instance_id),ib=db.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=?').all(instance.instance_id);
- for(const r of jb.filter(r=>jobId===undefined||r.job_id===jobId))if(r.output_state!=='bound'||r.output_root!==getJob(db,r.job_id).output_dir)FAIL('batch_binding_disabled');
- for(const r of ib){const input=db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(r.input_key);if(jobId!==undefined&&input.job_id!==jobId)continue;if(!['source','inline'].includes(r.mode)||(r.mode==='source'&&r.source_path!==input.source_path)||(r.mode==='inline'&&input.source_path!==null))FAIL('batch_binding_disabled');}
+ for(const r of jb.filter(r=>jobId===undefined||r.job_id===jobId))if(r.output_state!=='bound')FAIL('batch_binding_disabled');
+ for(const r of ib){const input=db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(r.input_key);if(jobId!==undefined&&input.job_id!==jobId)continue;if(!['source','inline','saved_snapshot'].includes(r.mode)||(r.mode==='inline'&&input.source_path!==null))FAIL('batch_binding_disabled');}
  return instance;
+}
+/** Historical paths are never an execution fallback. All consumers share these resolvers. */
+export function effectiveOutputRoot(db,job) {
+ const instance=assertBatchRunnable(db,{jobId:job.id});
+ const r=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=? AND job_id=?').get(instance.instance_id,job.id);
+ if(r?.output_state!=='bound')FAIL('batch_binding_disabled');
+ const id=plainRestorePath(r.output_root,{directory:true});
+ if(inspectRestoreControl(db).ok){const saved=readRestoreActivation(db,{databaseFile:readAuditDatabasePath(db)}).outputs.find(o=>o.jobId===job.id);if(saved&&(saved.root!==r.output_root||saved.identity.dev!==id.dev||saved.identity.ino!==id.ino))FAIL('batch_binding_changed');}
+ return r.output_root;
+}
+/** The runner may prepare an ordinary job's not-yet-created output directory.
+ * A released restore must keep the directory identity validated at activation. */
+export function prepareExecutionOutputRoot(db,job) {
+ const instance=assertBatchRunnable(db,{jobId:job.id}),r=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=? AND job_id=?').get(instance.instance_id,job.id);
+ if(!r||r.output_state!=='bound')FAIL('batch_binding_disabled');
+ if(!existsSync(r.output_root)&&!inspectRestoreControl(db).ok){for(let p=dirname(r.output_root);;p=dirname(p)){if(existsSync(p)){plainRestorePath(p,{directory:true});break;}if(dirname(p)===p)FAIL('batch_binding_disabled');}mkdirSync(r.output_root,{recursive:true});}
+ return effectiveOutputRoot(db,job);
+}
+export function effectiveInput(db,input) {
+ const instance=assertBatchRunnable(db,{jobId:input.job_id});
+ const r=db.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=? AND input_key=?').get(instance.instance_id,input.input_key);
+ if(!r||!['source','inline','saved_snapshot'].includes(r.mode))FAIL('batch_binding_disabled');
+ const restored=inspectRestoreControl(db).ok;
+ if(restored){const saved=readRestoreActivation(db,{databaseFile:readAuditDatabasePath(db)}).inputs.find(i=>i.inputKey===input.input_key);if(saved&&(saved.mode!==r.mode||saved.source!==r.source_path))FAIL('batch_binding_changed');if(saved?.identity){const id=plainRestorePath(r.source_path);if(saved.identity.dev!==id.dev||saved.identity.ino!==id.ino)FAIL('input_changed');}}
+ return {...input,source_path:r.mode==='source'?r.source_path:null,bindingMode:r.mode,restored};
 }
 function seedBatchInstance(db) {
  const audit=inspectAuditSchema(db);if(audit.state!=='not_installed'&&!audit.ok)FAIL('batch_instance_mismatch');
@@ -874,6 +903,26 @@ export async function installBatchSchema(db,{dbPath,outDir}={}) {
   assertBatchSchema(db);if(!batchIdentityEqual(before,batchFileIdentity(db,dbPath)))FAIL('batch_backup_source_mismatch');
   db.exec('COMMIT');return {installed:true,from:state.version,to:3,activeInstanceId,backupDir:created.backupDir};
  }catch(e){try{if(!db.isTransaction)throw Error('unknown');db.exec('ROLLBACK');if(db.isTransaction)throw Error('unknown');}catch{batchQuarantine.add(db);FAIL('batch_commit_unknown');}throw batchError(String(e?.code??'').startsWith('batch_')?e.code:'batch_schema_install_failed');}
+}
+/** Fixed restore-only exact upgrade under the issuer's held protection point. */
+export async function upgradeRestoreBatchSchema(db,{capability}={}) {
+ const {assertPrivateRestoreCapability}=await import('./local-backup.mjs');
+ assertPrivateRestoreCapability(db,capability);
+ const s=inspectBatchSchema(db);if(s.state!=='not_installed')assertBatchSchema(db);
+ if(s.version===3)return;
+ if(s.state==='not_installed'){
+  for(const sql of SCHEMA_STATEMENTS)db.exec(sql);
+  db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,1,nowIso(),'LOCAL-07');
+ }
+ // Copied v1/v2 execution rights have no authority on this explicit target.
+ if(s.version===1||s.version===2)db.exec("DELETE FROM local_batch_locks; UPDATE local_batch_stages SET status='needs_review' WHERE status='running'");
+ if(s.version<2){for(const sql of V2_STATEMENTS)db.exec(sql);seedBatchInstance(db);}
+ for(const sql of V3_STATEMENTS)db.exec(sql);
+ db.exec('INSERT INTO local_batch_lock_epochs SELECT resource_key,fencing_token FROM local_batch_locks');
+ db.prepare('UPDATE local_batch_component SET version=3 WHERE component=?').run(LOCAL_BATCH_COMPONENT);
+ const audit=inspectAuditSchema(db),active=db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();
+ if(active.audit_instance_id===null)db.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE instance_id=?').run(audit.activeInstanceId,active.instance_id);
+ assertBatchSchema(db);
 }
 /** Synchronous: strict v3 validation, or genuine private fresh ownership only. */
 export function ensureBatchSchema(db,{receipt=null}={}) {
@@ -1289,17 +1338,18 @@ export function getInput(db, { jobId, itemId, batchId }) {
  * 返回 { ok, problem, sourceHash, currentHash }：problem ∈ input_missing / input_changed。
  * 已保存content自身的长度/hash始终校验；显式快照策略仅可豁免外部文件。
  */
-export function checkInputEvidence(input,{allowSnapshotOnly=false}={}) {
+export function checkInputEvidence(input,{allowSnapshotOnly=false,db}={}) {
   if (!input) return { ok: false, problem: "input_snapshot_missing", savedValid:false };
+  if(db){try{input=effectiveInput(db,input);}catch{return {ok:false,problem:'input_changed',savedValid:false};}}
   const saved=input.content instanceof Uint8Array?Buffer.from(input.content):null;
   if(!saved||!Number.isSafeInteger(input.bytes)||input.bytes!==saved.length||sha256(saved)!==input.source_hash)return {ok:false,problem:'input_changed',external:false,savedValid:false,sourceHash:input.source_hash};
-  if (!input.source_path||allowSnapshotOnly) return { ok: true, problem: null, external: !!input.source_path, savedValid:true };
+  if (!input.source_path||allowSnapshotOnly&&!input.restored) return { ok: true, problem: null, external: !!input.source_path, savedValid:true };
   let bytes = null;
-  try { bytes = readFileSync(input.source_path); } catch { bytes = null; }
-  if (!bytes) return { ok: false, problem: "input_missing", external: true, sourceHash: input.source_hash };
+  try { const id=plainRestorePath(input.source_path);bytes=readFileSync(input.source_path);const after=plainRestorePath(input.source_path);if(id.dev!==after.dev||id.ino!==after.ino)bytes=null; } catch { bytes = null; }
+  if (!bytes) return { ok: false, problem: "input_missing", external: true, savedValid:!input.restored, sourceHash: input.source_hash };
   const currentHash = sha256(bytes);
-  if (currentHash !== input.source_hash) {
-    return { ok: false, problem: "input_changed", external: true, sourceHash: input.source_hash, currentHash };
+  if (bytes.length!==input.bytes||currentHash !== input.source_hash) {
+    return { ok: false, problem: "input_changed", external: true, savedValid:!input.restored, sourceHash: input.source_hash, currentHash };
   }
   return { ok: true, problem: null, external: true, sourceHash: input.source_hash, currentHash };
 }
@@ -1309,7 +1359,7 @@ export function verifyInputEvidence(db, { jobId }) {
   const rows = db.prepare(`SELECT * FROM local_batch_inputs WHERE job_id=? ORDER BY item_id, period, batch_id`).all(jobId);
   const problems = [];
   for (const row of rows) {
-    const check = checkInputEvidence(row);
+    const check = checkInputEvidence(row,{db});
     if (check.ok) continue;
     problems.push({
       itemId: row.item_id, period: row.period, batchId: row.batch_id,
@@ -1792,6 +1842,11 @@ export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null,
         (!period || stage.period === period) && (!stageKey || stage.stage_key === stageKey)
       ));
       for (const stage of stages) {
+        // An interrupted restored financial attempt has no authority to retry.
+        // Only domain evidence can resolve it; a new operation is not proof.
+        if((stage.error_code==='restore_financial_unknown'||String(stage.error_code).startsWith('restore_report_'))){
+          skipped.push({itemKey:item.item_key,period:stage.period,stageKey:stage.stage_key,status:STAGE_STATUS.NEEDS_REVIEW});continue;
+        }
         const unresolved=stageAuditNeedsReview(db,stage);
         if(unresolved){resetStage(db,{stageId:stage.id,status:STAGE_STATUS.NEEDS_REVIEW,errorCode:'audit_operation_pending'});skipped.push({itemKey:item.item_key,period:stage.period,stageKey:stage.stage_key,status:STAGE_STATUS.NEEDS_REVIEW});continue;}
         if (TERMINAL_OK.has(stage.status) || stage.status === STAGE_STATUS.RUNNING) {
@@ -1807,27 +1862,9 @@ export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null,
             resetStage(db, { stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW, errorCode: "input_snapshot_missing" });
             continue;
           }
-          if (input.source_path) {
-            const onDisk = existsSync(input.source_path) ? statSync(input.source_path).size : null;
-            if (onDisk === null) {
-              if (!allowSnapshotOnly) {
-                inputNotes.push({ itemKey: item.item_key, batchId, problem: "input_missing" });
-                resetStage(db, { stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW, errorCode: "input_missing" });
-                continue;
-              }
-              inputNotes.push({ itemKey: item.item_key, batchId, problem: "using_saved_snapshot" });
-            } else {
-              const bytes = readFileBytes(input.source_path);
-              if (!bytes || sha256(bytes) !== input.source_hash) {
-                if (!allowSnapshotOnly) {
-                  inputNotes.push({ itemKey: item.item_key, batchId, problem: "input_changed" });
-                  resetStage(db, { stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW, errorCode: "input_changed" });
-                  continue;
-                }
-                inputNotes.push({ itemKey: item.item_key, batchId, problem: "input_changed_using_saved_snapshot" });
-              }
-            }
-          }
+          const boundCheck=checkInputEvidence(input,{db,allowSnapshotOnly});
+          if(!boundCheck.ok){inputNotes.push({itemKey:item.item_key,batchId,problem:boundCheck.problem});resetStage(db,{stageId:stage.id,status:STAGE_STATUS.NEEDS_REVIEW,errorCode:boundCheck.problem});continue;}
+
         }
         resetStage(db, { stageId: stage.id, status: STAGE_STATUS.PENDING });
         reopened.push({ itemKey: item.item_key, period: stage.period, stageKey: stage.stage_key });

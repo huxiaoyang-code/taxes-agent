@@ -54,6 +54,19 @@ export function assertRestoreWritable(db){
  if(s.row.write_state!=='ready')throw restoreError('restore_target_pending');
 }
 export const restorePathKey=p=>process.platform==='win32'?resolve(p).toLowerCase():resolve(p);
+export const RESTORE_ACTIVATION_FILE='restore-activation.json';
+/** Local data is evidence only when bound to the append-only completed operation. */
+export function readRestoreActivation(db,{databaseFile}={}) {
+ const state=assertRestoreControl(db).row;
+ if(state.write_state!=='ready')throw restoreError('restore_target_pending');
+ const file=databaseFile??db.prepare('PRAGMA database_list').all().find(r=>r.name==='main')?.file;
+ plainRestorePath(file);
+ const path=join(dirname(file),RESTORE_ACTIVATION_FILE);plainRestorePath(path);
+ const a=JSON.parse(fs.readFileSync(path,'utf8'));restoreCanonical(a);
+ const r=db.prepare("SELECT * FROM audit_operations WHERE operation_id=? AND attempt=1 AND action='restore.activate' AND state='succeeded'").all('activate:'+state.target_instance_id);
+ if(a.version!==1||a.targetInstanceId!==state.target_instance_id||a.operationId!==state.restore_operation_id||r.length!==1||r[0].database_instance_id!==a.auditInstanceId||r[0].request_digest!==restoreHash(['audit-request-v1','restore.activate',a]))throw restoreError('restore_activation_invalid');
+ return a;
+}
 export function plainRestorePath(file,{absent=false,directory=false}={}){
  if(typeof file!=='string'||!isAbsolute(file)||resolve(file)!==file)throw restoreError('restore_target_binding_mismatch');
  const path=resolve(file),start=absent?dirname(path):path;

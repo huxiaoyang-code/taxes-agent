@@ -1,5 +1,5 @@
 import { markAuditInstanceFork } from './local-audit-storage.mjs';
-import { RESTORE_CONTROL_TABLES,RESTORE_CONTROL_SQL,inspectRestoreControl,restoreControlFacts,assertRestoreControl,restoreHash,restoreCanonical,restorePathKey,plainRestorePath,restoreDigest,restoreTechId,isRestoreUuid,restoreError } from './local-restore-control.mjs';
+import { RESTORE_CONTROL_TABLES,RESTORE_CONTROL_SQL,inspectRestoreControl,restoreControlFacts,assertRestoreControl,restoreHash,restoreCanonical,restorePathKey,plainRestorePath,restoreDigest,restoreTechId,isRestoreUuid,restoreError, readRestoreActivation, RESTORE_ACTIVATION_FILE } from './local-restore-control.mjs';
 import { openRestoreLedger,restoreLedgerId,beginRestoreOperation,markRestorePrepared,completeRestoreOperation,failRestoreOperation,getRestoreOperation,reconcileRestoreOperation } from './local-restore-audit.mjs';
 import { randomUUID } from 'node:crypto';
 // local-backup.mjs — LOCAL-06 独立子包：运行中 SQLite 一致性快照 + 可验证备份清单 + 恢复到全新独立目标。
@@ -2227,7 +2227,9 @@ const restoreCapabilities=new WeakMap();
 export function assertPrivateRestoreCapability(db,cap){
  const r=restoreCapabilities.get(cap);
  if(!r||r.db!==db||!db.isTransaction)throw restoreError('restore_contract_required');
- const id=plainRestorePath(r.file),s=assertRestoreControl(db).row;
+ const main=db.prepare('PRAGMA database_list').all().find(row=>row.name==='main')?.file;
+ if(typeof main!=='string'||restorePathKey(main)!==restorePathKey(r.file))throw restoreError('restore_target_binding_mismatch');
+ const id=plainRestorePath(main),s=assertRestoreControl(db).row;
  if(id.dev!==r.identity.dev||id.ino!==r.identity.ino||s.target_instance_id!==r.targetInstanceId||s.restore_operation_id!==r.operationId||s.ledger_binding_digest!==r.ledgerBindingDigest||s.source_backup_digest!==r.backupDigest||s.target_binding_digest!==r.targetBindingDigest)throw restoreError('restore_target_binding_mismatch');
 }
 const identitySame=(a,b)=>a.dev===b.dev&&a.ino===b.ino;
@@ -2348,6 +2350,15 @@ function receiptEvidence({backupDir,targetDir,ledgerPath,operationId},db,verifie
   identity=ownedPublicationPair(file,partial,receipt.target.database.identity);pair=true;
  }
  if(!identitySame(identity,receipt.target.database.identity))throw restoreError('restore_target_binding_mismatch');
+ // Once released, the append-only activation anchor and its official protection
+ // point establish continuity. A past publication digest never changes.
+ for(const side of sidecarsOf(candidate))if(fs.existsSync(side))plainRestorePath(side);
+ const current=new DatabaseSync(candidate,{readOnly:true});
+ try{const state=assertRestoreControl(current).row;if(state.write_state==='ready'){
+  if(pair||candidate!==file||op.status!=='succeeded'||op.targetDigest!==receipt.target.database.sha256)throw restoreError('restore_verify_failed');
+  verifyActivatedTarget(current,{receipt,op,binding,backupDir,targetDir,operationId,verified});
+  return {receipt,candidate,file,ownedPublicationPair:null,targetDigest:op.targetDigest,targetInstanceId:op.targetInstanceId,receiptDigest:restoreHash(receipt),backupDigest:op.backupDigest};
+ }}finally{current.close();}
  if([...sidecarsOf(candidate),...(pair?sidecarsOf(partial):[])].some(p=>fs.existsSync(p)))throw restoreError('restore_verify_failed');
  const actual=digestFile(candidate);if(actual.sha256!==receipt.target.database.sha256||actual.bytes!==receipt.target.database.bytes)throw restoreError('restore_digest_mismatch');
  const conn=new DatabaseSync(candidate,{readOnly:true});
@@ -2431,4 +2442,197 @@ export function reconcileRestore(args={}){
   const done=reconcileRestoreOperation(ledger,{operationId:args.operationId,verifyPublished:()=>({targetDigest:e.targetDigest,targetInstanceId:e.targetInstanceId,receipt:e.receiptDigest,backupDigest:e.backupDigest})});
   return okResult({targetDir:args.targetDir,database:TARGET_DATABASE_FILE,receipt:e.receipt,durability,terminal:done.terminal,reconciled:done.reconciled});
  }catch(e){if(published)return restoreFailure(e,{published:true});return {ok:false,status:'unknown',code:e?.code==='restore_operation_conflict'?e.code:'restore_reconcile_pending',details:null};}finally{ledger?.close();}
+}
+
+function activationContract(args,{activate=false}={}) {
+ restoreCanonical(args);
+ const allowed=['backupDir','targetDir','ledgerPath','operationId',...(activate?['plan','outDir']:['plan'])];
+ if(Object.keys(args).some(k=>!allowed.includes(k))||activate&&(!args.plan||typeof args.outDir!=='string'))throw restoreError('restore_contract_required');
+ restoreArgs(args);plainRestorePath(args.targetDir,{directory:true});
+ if(fs.existsSync(join(args.targetDir,RESTORE_INCOMPLETE_MARKER))||fs.readdirSync(args.targetDir).some(n=>n.startsWith(PARTIAL_PREFIX)))throw restoreError('restore_target_pending');
+ if(activate){
+  const roots=[args.backupDir,args.targetDir,dirname(args.ledgerPath),args.outDir];
+  if(resolve(args.outDir)!==args.outDir)throw restoreError('restore_target_binding_mismatch');
+  for(let i=0;i<roots.length;i++)for(let j=i+1;j<roots.length;j++)if(isInside(roots[i],roots[j])||isInside(roots[j],roots[i]))throw restoreError('restore_target_binding_mismatch');
+  // A repeated ready request may use its already recorded protection directory.
+  if(fs.existsSync(args.outDir))plainRestorePath(args.outDir,{directory:true});else plainRestorePath(args.outDir,{absent:true});
+ }
+}
+const MAINTENANCE_FILE='restore-maintenance.json';
+function maintenanceEvidence(args,ledger,verified) {
+ const marker=join(args.targetDir,MAINTENANCE_FILE);if(!fs.existsSync(marker))return null;
+ plainRestorePath(marker);const m=JSON.parse(fs.readFileSync(marker,'utf8'));restoreCanonical(m);
+ if(!exactKeys(m,['version','targetInstanceId','operationId','receiptDigest','publishedDigest','targetIdentity','planDigest','protectionDir','protectionDigest','protectionSnapshotDigest','anchorDigest'])||m.version!==1||m.operationId!==args.operationId||m.protectionDir!==args.outDir||!restoreDigest(m.planDigest)||m.anchorDigest!==null&&!restoreDigest(m.anchorDigest))throw restoreError('restore_maintenance_invalid');
+ const receiptFile=join(args.targetDir,RESTORE_RECEIPT_FILE);plainRestorePath(receiptFile);
+ const receipt=validReceipt(JSON.parse(fs.readFileSync(receiptFile,'utf8'))),op=getRestoreOperation(ledger,args.operationId),binding=ledgerBinding(ledger,args.ledgerPath);
+ if(op?.status!=='succeeded'||receipt.operationId!==args.operationId||restoreHash(receipt)!==op.receipt||receipt.ledgerBindingDigest!==binding||receipt.ledgerId!==restoreLedgerId(ledger)||targetBinding(binding,args.operationId,args.targetDir,receipt.targetInstanceId)!==op.targetBindingDigest||m.targetInstanceId!==op.targetInstanceId||m.targetInstanceId!==receipt.targetInstanceId||m.receiptDigest!==op.receipt||m.publishedDigest!==receipt.target.database.sha256||m.publishedDigest!==op.targetDigest||receipt.source.snapshot.sha256!==verified.manifest.snapshot.sha256||receipt.source.manifestFileSha256!==verified.manifestFileSha256||!exactKeys(m.targetIdentity,['dev','ino'])||!identitySame(m.targetIdentity,receipt.target.database.identity)||!identitySame(m.targetIdentity,plainRestorePath(join(args.targetDir,TARGET_DATABASE_FILE))))throw restoreError('restore_maintenance_invalid');
+ const protection=verifyBackup({backupDir:m.protectionDir});
+ if(!protection.ok||m.protectionDigest!==protection.manifestFileSha256||m.protectionSnapshotDigest!==protection.manifest.snapshot.sha256)throw restoreError('restore_maintenance_invalid');
+ const d=new DatabaseSync(join(m.protectionDir,SNAPSHOT_FILE),{readOnly:true});
+ try{
+  const s=assertRestoreControl(d).row,f=inspectDatabase(d);
+  if(s.write_state!=='pending'||s.target_instance_id!==m.targetInstanceId||s.restore_operation_id!==args.operationId||s.source_backup_digest!==op.backupDigest||s.ledger_binding_digest!==binding||s.target_binding_digest!==op.targetBindingDigest||f.structure.schemaVersion!==receipt.target.coreVersion||restoreCanonical(f.components.map(({name,version,structureDigest,contentDigest})=>({name,version,structureDigest,contentDigest})).sort((a,b)=>a.name<b.name?-1:1))!==restoreCanonical(receipt.target.components))throw restoreError('restore_maintenance_invalid');
+  verifyRestorePreservation(join(args.backupDir,SNAPSHOT_FILE),d,receipt);
+ }finally{d.close();}
+ return {marker,m,protection};
+}
+function recoverActivationRollback(args,ledger,verified) {
+ const file=join(args.targetDir,TARGET_DATABASE_FILE),journal=file+'-journal';
+ if(!fs.existsSync(journal))return;
+ // A real interrupted SQLite transaction may need write access just to undo
+ // its own journal. Never recover an unexplained journal or accept its result.
+ plainRestorePath(journal);
+ const proof=maintenanceEvidence(args,ledger,verified);if(!proof)throw restoreError('restore_maintenance_invalid');
+ if([file+'-wal',file+'-shm'].some(p=>fs.existsSync(p)))throw restoreError('restore_maintenance_invalid');
+ const recovery=new DatabaseSync(file);try{
+  recovery.prepare('SELECT COUNT(*) n FROM sqlite_master').get();recovery.exec('BEGIN IMMEDIATE');
+  if(digestFile(file).sha256!==proof.m.publishedDigest||!identitySame(plainRestorePath(file),proof.m.targetIdentity))throw restoreError('restore_maintenance_invalid');
+  // SQLite may retain a non-hot journal if no main pages had spilled. While
+  // holding the real write reservation, exact original bytes prove it harmless.
+  if(fs.existsSync(journal)){plainRestorePath(journal);fs.unlinkSync(journal);}
+  recovery.exec('ROLLBACK');
+ }finally{if(recovery.isTransaction)recovery.exec('ROLLBACK');recovery.close();}
+ if(digestFile(file).sha256!==proof.m.publishedDigest||!identitySame(plainRestorePath(file),proof.m.targetIdentity)||fs.existsSync(journal))throw restoreError('restore_maintenance_invalid');
+}
+function verifyActivatedTarget(conn,{receipt,op,binding,backupDir,targetDir,operationId}) {
+ const facts=inspectDatabase(conn),s=assertRestoreControl(conn).row,a=readRestoreActivation(conn),ids=controlSnapshot(conn);
+ if(s.target_instance_id!==receipt.targetInstanceId||s.restore_operation_id!==operationId||s.source_backup_digest!==op.backupDigest||s.ledger_binding_digest!==binding||s.target_binding_digest!==op.targetBindingDigest||a.receiptDigest!==restoreHash(receipt)||a.publishedDigest!==receipt.target.database.sha256||facts.structure.schemaVersion!==5||ids.auditInstanceId!==a.auditInstanceId||ids.batchInstanceId!==a.batchInstanceId||inspectAuditSchema(conn).version!==2||inspectBatchSchema(conn).version!==3)throw restoreError('restore_activation_invalid');
+ const protection=verifyBackup({backupDir:a.protectionDir});
+ if(!protection.ok||protection.manifestFileSha256!==a.protectionDigest||protection.manifest.snapshot.sha256!==a.protectionSnapshotDigest)throw restoreError('restore_activation_invalid');
+ const point=new DatabaseSync(join(a.protectionDir,SNAPSHOT_FILE),{readOnly:true});
+ try{
+  const p=assertRestoreControl(point).row;
+  if(p.write_state!=='pending'||p.target_instance_id!==s.target_instance_id||p.restore_operation_id!==operationId||p.source_backup_digest!==s.source_backup_digest||p.ledger_binding_digest!==binding||p.target_binding_digest!==s.target_binding_digest)throw restoreError('restore_activation_invalid');
+  verifyRestorePreservation(join(backupDir,SNAPSHOT_FILE),point,receipt);
+  const before=inspectDatabase(point);
+  if(before.structure.schemaVersion!==receipt.target.coreVersion||restoreCanonical(before.components.map(({name,version,structureDigest,contentDigest})=>({name,version,structureDigest,contentDigest})).sort((a,b)=>a.name<b.name?-1:1))!==restoreCanonical(receipt.target.components))throw restoreError('restore_activation_invalid');
+ }finally{point.close();}
+ const audit=conn.prepare('SELECT * FROM audit_database_instances WHERE is_active=1').get();
+ if(receipt.target.auditInstanceId!==null?(audit.instance_id!==receipt.target.auditInstanceId||audit.parent_instance_id!==receipt.source.auditInstanceId):(audit.parent_instance_id!==null||audit.note_code!=='initial'))throw restoreError('restore_activation_invalid');
+ const batch=conn.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();
+ if(batch.write_state!=='ready'||batch.audit_instance_id!==audit.instance_id||(receipt.target.batchInstanceId!==null?(batch.instance_id!==a.batchInstanceId||batch.instance_id!==receipt.target.batchInstanceId||batch.parent_instance_id!==receipt.source.batchInstanceId):(batch.instance_id!==a.batchInstanceId||batch.origin!=='initial'||batch.parent_instance_id!==null)))throw restoreError('restore_activation_invalid');
+ // Existing bound paths are immutable; later normal jobs may add their own bindings.
+ for(const o of a.outputs){const b=conn.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=? AND job_id=?').get(a.batchInstanceId,o.jobId);if(!b||b.output_state!=='bound'||b.output_root!==o.root)throw restoreError('restore_activation_invalid');}
+ for(const i of a.inputs){const b=conn.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=? AND input_key=?').get(a.batchInstanceId,i.inputKey);if(!b||b.mode!==i.mode||b.source_path!==i.source)throw restoreError('restore_activation_invalid');}
+ return a;
+}
+
+/** Strict read-only admission. Incomplete durable publication must be reconciled first. */
+export async function checkRestoreTarget(args={}) {
+ let ledger,conn;
+ try{
+  activationContract(args);
+  const verified=verifyBackup({backupDir:args.backupDir});if(!verified.ok)return {...verified,stage:'verify'};
+  ledger=openRestoreLedger(args.ledgerPath,{readOnly:true});
+  const op=getRestoreOperation(ledger,args.operationId);if(op?.status!=='succeeded')throw restoreError('restore_reconcile_pending');
+  const e=receiptEvidence(args,ledger,verified);
+  conn=new DatabaseSync(e.file,{readOnly:true});const state=assertRestoreControl(conn).row;
+  const Intent=await import('./local-restore-batch.mjs');
+  const activation=state.write_state==='ready'?readRestoreActivation(conn):undefined;
+  const plan=args.plan?Intent.validateRestorePlan(conn,args.plan,{...args,activation}):null;
+  if(state.write_state==='ready'&&plan){
+   if(activation.planDigest!==plan.planDigest)throw restoreError('restore_plan_conflict');
+   if(restoreCanonical(plan.inputs)!==restoreCanonical(activation.inputs))throw restoreError('restore_target_binding_mismatch');
+   for(const o of activation.outputs)if(!identitySame(o.identity,plainRestorePath(o.root,{directory:true})))throw restoreError('restore_target_binding_mismatch');
+  }
+  return {ok:true,status:'ok',writeState:state.write_state,targetInstanceId:state.target_instance_id,operationId:args.operationId,coreVersion:schemaVersion(conn),jobs:Intent.restorePlanRequirements(conn),...(plan?{planDigest:plan.planDigest}:{})};
+ }catch(e){return {ok:false,status:'rejected',code:e.code??'restore_verify_failed'};}finally{conn?.close();ledger?.close();}
+}
+
+/** The sole activation authority. One target, one reservation, fixed migrations,
+ * complete binding, append-only anchor and ready are one business transaction. */
+export async function activateRestoreTarget(args={}) {
+ let ledger,conn,cap,commitStarted=false;
+ try{
+  activationContract(args,{activate:true});
+  const verified=verifyBackup({backupDir:args.backupDir});if(!verified.ok)return {...verified,stage:'verify'};
+  ledger=openRestoreLedger(args.ledgerPath,{readOnly:true});
+  const op=getRestoreOperation(ledger,args.operationId);if(op?.status!=='succeeded')throw restoreError('restore_reconcile_pending');
+  recoverActivationRollback(args,ledger,verified);
+  const e=receiptEvidence(args,ledger,verified),before=plainRestorePath(e.file);
+  if(!identitySame(before,e.receipt.target.database.identity))throw restoreError('restore_target_binding_mismatch');
+  conn=new DatabaseSync(e.file);conn.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
+  if(conn.isTransaction)throw restoreError('restore_transaction_conflict');
+  const Intent=await import('./local-restore-batch.mjs'),released=assertRestoreControl(conn).row.write_state==='ready'?readRestoreActivation(conn):undefined,initial=Intent.validateRestorePlan(conn,args.plan,{...args,activation:released});
+  if(assertRestoreControl(conn).row.write_state==='ready'){
+   const a=readRestoreActivation(conn);
+   if(a.planDigest!==initial.planDigest||a.protectionDir!==args.outDir)throw restoreError('restore_plan_conflict');
+   if(restoreCanonical(initial.inputs)!==restoreCanonical(a.inputs))throw restoreError('restore_target_binding_mismatch');
+   for(const o of a.outputs){const id=plainRestorePath(o.root,{directory:true});if(!identitySame(id,o.identity))throw restoreError('restore_target_binding_mismatch');}
+   return {ok:true,status:'ok',replayed:true,targetInstanceId:e.targetInstanceId,planDigest:initial.planDigest};
+  }
+  const previous=maintenanceEvidence(args,ledger,verified);
+  if(previous&&previous.m.planDigest!==initial.planDigest)throw restoreError('restore_plan_conflict');
+  if(!previous&&fs.existsSync(args.outDir))throw restoreError('target_exists');
+  conn.exec('BEGIN IMMEDIATE');
+  if(!identitySame(before,plainRestorePath(e.file))||digestFile(e.file).sha256!==e.receipt.target.database.sha256)throw restoreError('restore_target_binding_mismatch');
+  // Re-read every plan choice after reserving writes; no caller-provided verifier.
+  const checked=Intent.validateRestorePlan(conn,args.plan,args);
+  if(checked.planDigest!==initial.planDigest)throw restoreError('restore_plan_conflict');
+  const created=previous?null:createBackup({dbPath:e.file,outDir:args.outDir});if(created&&!created.ok)throw restoreError('restore_protection_failed');
+  const protection=verifyBackup({backupDir:args.outDir});
+  if(!protection.ok||protection.manifestFileSha256!==digestFile(join(args.outDir,MANIFEST_FILE)).sha256||created&&restoreCanonical(created.manifest)!==restoreCanonical(protection.manifest))throw restoreError('restore_protection_failed');
+  assertBackupSourceConnection(conn,protection.manifest);
+  if(!identitySame(before,plainRestorePath(e.file)))throw restoreError('restore_target_binding_mismatch');
+  const state=assertRestoreControl(conn).row;
+  const maintenance={version:1,targetInstanceId:state.target_instance_id,operationId:args.operationId,receiptDigest:restoreHash(e.receipt),publishedDigest:e.receipt.target.database.sha256,targetIdentity:{dev:before.dev,ino:before.ino},planDigest:checked.planDigest,protectionDir:args.outDir,protectionDigest:protection.manifestFileSha256,protectionSnapshotDigest:protection.manifest.snapshot.sha256,anchorDigest:null};
+  const maintenanceFile=join(args.targetDir,MAINTENANCE_FILE);
+  if(!previous)writeSyncedFile(maintenanceFile,restoreCanonical(maintenance)+'\n','restore_fsync_failed');
+  cap=Object.freeze(Object.create(null));restoreCapabilities.set(cap,{db:conn,file:e.file,identity:before,targetInstanceId:state.target_instance_id,operationId:state.restore_operation_id,ledgerBindingDigest:state.ledger_binding_digest,backupDigest:state.source_backup_digest,targetBindingDigest:state.target_binding_digest});
+  const Core=await import('./import-storage.mjs'),Audit=await import('./local-audit-storage.mjs'),Batch=await import('./local-batch-storage.mjs');
+  await Core.upgradeRestoreImportSchema(conn,{capability:cap,backup:{path:join(args.outDir,SNAPSHOT_FILE),bytes:protection.manifest.snapshot.bytes}});
+  Audit.upgradeRestoreAuditSchema(conn,{capability:cap});
+  await Batch.upgradeRestoreBatchSchema(conn,{capability:cap});
+  const active=Batch.readBatchInstance(conn),at=new Date().toISOString();
+  // audit-less batch3 was a legal publication; only its active NULL mapping is bound.
+  if(active.audit_instance_id===null)conn.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE instance_id=? AND audit_instance_id IS NULL').run(Audit.currentAuditInstanceId(conn),active.instance_id);
+  for(const o of checked.outputs){
+   if(!fs.existsSync(o.root))fs.mkdirSync(o.root);
+   const id=plainRestorePath(o.root,{directory:true});if(o.identity&&!identitySame(id,o.identity))throw restoreError('restore_target_binding_mismatch');o.identity={dev:id.dev,ino:id.ino};
+   conn.prepare("UPDATE local_batch_job_bindings SET output_state='bound',output_root=?,bound_at=? WHERE database_instance_id=? AND job_id=?").run(o.root,at,active.instance_id,o.jobId);
+  }
+  for(const i of checked.inputs)conn.prepare('UPDATE local_batch_input_bindings SET mode=?,source_path=?,bound_at=? WHERE database_instance_id=? AND input_key=?').run(i.mode,i.source,at,active.instance_id,i.inputKey);
+  for(const j of checked.plan.jobs){
+   const output=checked.outputs.find(o=>conn.prepare('SELECT job_key FROM local_batch_jobs WHERE id=?').get(o.jobId).job_key===j.jobKey);
+   for(const r of j.reports){const stage=conn.prepare('SELECT * FROM local_batch_stages WHERE id=?').get(r.stageId),artifact=conn.prepare('SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=?').get(stage.item_id,stage.period,stage.stage_key);
+    if(r.action==='rebuild'||r.action==='review'||stage.status==='succeeded'&&(!artifact||!Intent.restoredArtifactPresent(output.root,artifact))){
+     conn.prepare("UPDATE local_batch_stages SET status='needs_review',error_code=?,updated_at=? WHERE id=?").run(r.action==='rebuild'?'restore_report_rebuild_requested':'restore_report_file_review',at,stage.id);
+    }
+   }
+  }
+  conn.prepare("UPDATE local_batch_stages SET status='needs_review',error_code='restore_financial_unknown' WHERE stage_key NOT LIKE 'report:%' AND (status='running' OR status='needs_review' OR (status='pending' AND attempt>0))").run();
+  // The read-only status command must not report a successful job while its
+  // restored report or interrupted financial stage is waiting for review.
+  conn.prepare("UPDATE local_batch_items SET status='needs_review',updated_at=? WHERE EXISTS(SELECT 1 FROM local_batch_stages s WHERE s.item_id=local_batch_items.id AND s.status='needs_review')").run(at);
+  conn.prepare("UPDATE local_batch_jobs SET status='needs_review',updated_at=? WHERE EXISTS(SELECT 1 FROM local_batch_items i WHERE i.job_id=local_batch_jobs.id AND i.status='needs_review')").run(at);
+  const anchor={version:1,targetInstanceId:state.target_instance_id,operationId:args.operationId,receiptDigest:restoreHash(e.receipt),publishedDigest:e.receipt.target.database.sha256,planDigest:checked.planDigest,plan:checked.plan,inputs:checked.inputs,outputs:checked.outputs,protectionDir:args.outDir,protectionDigest:protection.manifestFileSha256,protectionSnapshotDigest:protection.manifest.snapshot.sha256,auditInstanceId:Audit.currentAuditInstanceId(conn),batchInstanceId:active.instance_id};
+  const anchorFile=join(args.targetDir,RESTORE_ACTIVATION_FILE);
+  if(fs.existsSync(anchorFile)){
+   // Only an exact previous issuer-recorded orphan may be retired. An unknown
+   // or edited same-name file is preserved and blocks activation.
+   plainRestorePath(anchorFile);const old=JSON.parse(fs.readFileSync(anchorFile,'utf8'));
+   if(!previous?.m.anchorDigest||restoreHash(old)!==previous.m.anchorDigest||old.targetInstanceId!==state.target_instance_id||old.operationId!==args.operationId||old.receiptDigest!==maintenance.receiptDigest||old.planDigest!==checked.planDigest||old.protectionDigest!==maintenance.protectionDigest)throw restoreError('restore_activation_orphaned');
+   fs.unlinkSync(anchorFile);
+  }
+  const priorBytes=fs.readFileSync(maintenanceFile,'utf8');
+  if(priorBytes!==restoreCanonical(previous?previous.m:maintenance)+'\n')throw restoreError('restore_maintenance_invalid');
+  const next=join(args.targetDir,'restore-maintenance.next-'+randomUUID());
+  writeSyncedFile(next,restoreCanonical({...maintenance,anchorDigest:restoreHash(anchor)})+'\n','restore_fsync_failed');
+  plainRestorePath(maintenanceFile);fs.renameSync(next,maintenanceFile);
+  writeSyncedFile(anchorFile,restoreCanonical(anchor)+'\n','restore_fsync_failed');
+  Audit.recordRestoreActivation(conn,{capability:cap,request:anchor});
+  conn.prepare("UPDATE local_batch_database_instances SET write_state='ready' WHERE instance_id=?").run(active.instance_id);
+  conn.prepare("UPDATE restore_control_state SET write_state='ready',released_at=? WHERE singleton=1 AND write_state='pending'").run(at);
+  inspectDatabase(conn);assertPrivateRestoreCapability(conn,cap);
+  // Recheck source and directory identities at the final commit boundary.
+  const final=Intent.validateRestorePlan(conn,args.plan,args);
+  if(final.planDigest!==checked.planDigest||final.inputs.some((i,n)=>restoreCanonical(i)!==restoreCanonical(checked.inputs[n]))||!identitySame(before,plainRestorePath(e.file)))throw restoreError('restore_target_binding_mismatch');
+  for(const o of checked.outputs)if(!identitySame(o.identity,plainRestorePath(o.root,{directory:true})))throw restoreError('restore_target_binding_mismatch');
+  commitStarted=true;conn.exec('COMMIT');
+  return {ok:true,status:'ok',replayed:false,targetInstanceId:state.target_instance_id,planDigest:checked.planDigest,protectionVerified:true};
+ }catch(e){
+  if(conn?.isTransaction)try{conn.exec('ROLLBACK');}catch{return {ok:false,status:'unknown',code:'restore_activation_unknown'};}
+  else if(commitStarted)return {ok:false,status:'unknown',code:'restore_activation_unknown'};
+  return {ok:false,status:'rejected',code:e?.code??'restore_activation_failed'};
+ }finally{if(cap)restoreCapabilities.delete(cap);conn?.close();ledger?.close();}
 }

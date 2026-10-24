@@ -1,6 +1,24 @@
-> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+> **2026-10-24 当前事实：W4a 已合并，W4b 为待验候选。** [PR #112](https://github.com/huxiaoyang-code/youshu-fork/pull/112) 已于 2026-10-24T06:34:58Z 合并；审定 head `e8a8ceb953a5656634efd9c7a20b3e8032a45ff6`，main merge `782c7701d30a582aed41f42ca9ac2eaf266614a5`，树 `bd140ee0c9d1bdbdfc8ffecce3c1862839b89a15` 一致。W4a 交付 ledger2 / control1 / receipt2 与安全的 **pending** 恢复；它没有授予恢复目标运行权。
 >
-> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+> 本 W4b 候选基于实际 e8a8，补显式全任务输入/输出重绑、保护升级、激活后核证与仅报告重建。员工自测不代替管理者独验及全新独审，尚未为 W4b 建 PR / 合并。LOCAL-06/07 整包、Windows 最终冷链与升级回退、20 企最终恢复续跑整链仍待统一验收；全国税局真实接入 0。以下旧日期状态保留各自历史时点，当前接口以本节及 W4b 合同为准。
+
+## W4b R2 候选交接（2026-10-24）
+
+负责人 huxiaoyang-code；实际分叉/交付 BASE 为页头完整 e8a8，原 a721 启动与原三文件 STOP 草稿保留其真实历史，未覆写。W4a 后来已由 PR112 真合并，root 提供 main782 与 e8a8 同树事实；员工不移动 refs、不 commit/push/merge。W4b 当前仍需 root 21 路径 diff / 独验、最新 main 整合重验与全新独立内容审查，未建本包 PR、未声称验收通过。
+
+实施包括：无默认 DB 的 restore-batch 检查/激活；严格完整 JSON 计划（含重复键拒绝）；官方发布/ledger/receipt/实际文件/control/实例链核证；held BEGIN IMMEDIATE 中另一只读连接的完整保护备份、exact core/audit/batch 升级、全 job 绑定与 ready 最后；统一 active input/output resolver、plain/nlink/身份/hash 复核；append-only 激活摘要与官方保护点连续性；仅指定报告重建，未知金融保持复核。check 提供 artifact 相对路径/bytes/hash 供准备，初始输出根未知文件保全拒绝；激活后的 needs_review 同步反映在 item/job，status 不误报全成功。
+
+维护中断使用实际官方保护点和不可变发布证据核 rollback journal 归属，恢复后必须回原发布字节；未知/篡改 anchor 保全拒绝。相同 completed 计划基于当时已审 job/input/report 集合重核，ready 后合法新增 job 不破坏原重放；source 绑定仍核实际已绑定 inode。原 receipt/manifest/ledger targetDigest 不改；后续合法金融写后 reconcile、再次 backup→独立 pending restore 已有真实代表证据。没有 public force、callback 验真或 SQL 权限出口。
+
+新测试两套当前分别4组与5组；最后冻结轮已实际完整9组通过，Q2 native-code 三组同时通过且32跳过，真实起止为 2026-10-24T07:46:33.9119833Z 至 07:47:18.2373272Z，精确命令/日志见员工 R2 delivery/manifest。覆盖六种合法组件/legacy代表、缺 bank/aux 保真、普通 pending/伪能力/caller事务拒绝、保护失败、真实 precommit exit73、真实 COMMIT 后丢确认 unknown 与重核、外部缺坏文件、指定报告新 attempt、junction/hardlink/同字节换 inode、未知输出/sidecar、保存内容损坏、复制 running 金融不被 retry 重开、旧输入输出读取 spy0。所有库/进程只属本轮合成场景，故障现场保全；child 的 exit 和 close 均按实际记录，不将预期 exit73/拒绝码说成成功业务执行。
+
+金额代表与边界：双准则各一账套，同 DB；Jan 银行108000、净利8000、现金8000；Feb 混合销售5000（bank3000+应收2000）、支付费用2000，得到银行109000、应收2000、资产111000、YTD净利11000、当月现金1000，保留草稿999排除。源 child 在目标全程仍活着，随后在自己的 DB 独立完成次月。另一个1企1月真实资产1200/12个月折旧100样例完成 import/post/depreciation/carryforward/period-check/close 六成功阶段，净利8000、现金8100、资产109200；官方恢复激活及仅报告重建前后全部金融行/实际 depreciation_runs/封账与成功 stage tuple（含 attempt）逐项全等。
+
+上述 Feb 是同总额代表，**不是**最终 Windows 的“6000赊销、4000回款、3000费用”故事；后者、最终20企恢复续跑全链、四真实 transport 和最终 Office/Windows 冷链由总交付统一验收。本包不跑 full/npm test、20企全故障矩阵或600/1000场景，不据代表数据宣称8/8或税务已接入。
+
+受影响旧验证：安装/审计安装、restore domain/reconcile/open/ledger22、audit backup、batch backup（完整9组含原48组合与92反例）通过；source-completeness 的原全部断言、报告 positive-csv/recover-file/completed-file 三定点通过。Q2 实际38-node literal依赖闭包兼容，native-code 3/3、明确32 skip；旧35注册及断言保留，没有把历史全35移为本字节全35。test-all 仅原尾追加两新套。
+
+失败历史保全：最初沙箱不允许硬链接的 partial；测试脚本转义与 API 取值；新 resolver 在审计内的 PRAGMA 冲突（改为固定真实连接 metadata 与 fixed row 核证）；普通未运行 job 输出准备；旧 rename-only 故障 fixture 未截获 exclusive link（root 登记21后仅增 link spy）；晚期 saved-input-period 漂移一度归 failed（改回 report_evidence_changed/needs_review，原 source-completeness 全断言重跑绿）。曾遇额度自动审查失败、该未执行动作未当作已完成；恢复授权后接续，不覆盖旧 STOP。精确命令、时间、exit/close、最终 bytes/SHA 在本机 ignored `local06-w4b-r2-delivery-20261024.md` 与 `local06-w4b-r2-final-files-20261024.json`，不把事后最终指纹冒充每次 at-run 全源指纹。
 
 > **2026-10-23 当前兼容合同**：PR68 已合 core3/4/5 × bank0/1 的精确备份支持；本次 Issue64 A+B1 候选增加 **core5 + bank0/1 + auxiliary1**，待管理验收/独审/PR。无aux旧六组合保持；旧core带aux、aux2、audit/batch及未知组合拒绝。backup/verify/restore-new共用aux精确表/索引/FK/触发器与内容校验，安装先真实备份并绑定源连接；银行必须先于aux安装。接口及限制见 [辅助核算](../LOCAL-AUXILIARY.md)。以下此前候选、未来v5和未支持aux表述按原日期作为历史；不能据此推断当前合同。
 
