@@ -12,7 +12,45 @@ import { createHistoryFixture } from './helpers/offline-vat-history-fixture.mjs'
 import { createQ2Fixture, createPublicNoopBatch } from './helpers/offline-vat-q2-fixture.mjs';
 import { initHarness, registerHarnessSource, registerHarnessFacts, planHarness, inspectHarness, runHarnessTask, feedbackHarness, requestHarnessMaterials, registerHarnessTreatment } from '../server/harness-runtime.mjs';
 import { hash } from '../server/harness-store.mjs';
+import { validateHarnessScope, scopeContainsMonth } from '../server/harness-contract.mjs';
 mkdirSync(resolve('.agent-runs'),{recursive:true});const root=mkdtempSync(resolve('.agent-runs/harness-matrix-'));console.log('Synthetic reproduction directory: '+root);
+await annualDependencyFocus(root);
+if(process.argv.includes('--annual-dependencies'))process.exit(0);
+
+// One focused addition to the existing matrix: live month proof -> annual
+// container -> previous-year dependency, plus renamed interrupted-write recovery.
+async function annualDependencyFocus(root) {
+ const f=createPostingFixture(join(root,'annual-focus')),month=join(root,'month-state'),annual=join(root,'annual-state'),prior=join(root,'prior-year-state');
+ const base={enterpriseKey:f.key,accountSetId:f.id,databaseInstanceId:f.instanceId,currency:'CNY'},scope={...base,period:'2026-01'},year={...base,period:'2026'};
+ validateHarnessScope(year);assert.equal(scopeContainsMonth(year,'2026-01'),true);assert.equal(scopeContainsMonth(year,'2026-12'),true);assert.equal(scopeContainsMonth(year,'2025-12'),false);
+ const raw=join(root,'annual-focus.raw');writeFileSync(raw,'Synthetic service originals; year scope is an orchestration container, not an annual calculation.');
+ for(const [path,sc]of [[month,scope],[annual,year],[prior,{...base,period:'2025'}]]){await initHarness(path,sc);await registerHarnessSource(path,{sourceId:'raw',path:raw,locator:'whole synthetic record',parsed:false,unrecognized:[],classification:'provided'});}
+ const target={dbPath:f.dbPath,databaseInstanceId:f.instanceId,enterpriseKey:f.key,accountSetId:f.id},draft=amount=>({period:'2026-01',voucher_date:'2026-01-13',summary:'Synthetic annual-dependency focus',status:'posted',entries:[{code:'1122',debit:amount,credit:0},{code:'5001',debit:0,credit:amount}]}),request={target,voucher:draft(51.23)};
+ const fact=(factId,value)=>({factId,state:'provided',reason:'Synthetic existing-module request',sourceRefs:['raw'],value}),task=(taskId,factId,capabilityId='voucher.create')=>({taskId,capabilityId,factIds:[factId],dependsOn:[],goal:'Synthetic dependency focus'});
+ const call=async(path,taskId,phase='execute')=>{const t=(await inspectHarness(path)).tasks.find(t=>t.taskId===taskId);return runHarnessTask(path,{taskId,phase,dependencyDigest:t.dependencyDigest});};
+ const count=()=>{const d=new DatabaseSync(f.dbPath,{readOnly:true});try{return d.prepare('SELECT COUNT(*) n FROM vouchers').get().n;}finally{d.close();}};
+ await registerHarnessFacts(month,[fact('request',request),fact('independent',{target,voucher:draft(13.07)})]);await planHarness(month,[task('before-rename','request')]);
+ const storeUrl=pathToFileURL(resolve('server/harness-store.mjs')).href,adapterUrl=pathToFileURL(resolve('server/harness-adapters.mjs')).href;
+ const crash=`import{withHarness,appendHarness,harnessView,hash}from ${JSON.stringify(storeUrl)};import{harnessCapabilities,callHarnessAdapter}from ${JSON.stringify(adapterUrl)};await withHarness(${JSON.stringify(month)},async s=>{const caps=harnessCapabilities(),t=(await harnessView(s,caps)).tasks[0],c=caps.get(t.capabilityId),request=s.facts.get('request').value,intent={taskId:t.taskId,capabilityId:t.capabilityId,effect:'write',phase:'execute',dependencyDigest:t.dependencyDigest,operationId:hash(['harness-operation/1',s.meta.scope,t.taskId,t.capabilityId,request]),ruleVersion:c.ruleVersion,codeDigest:c.codeDigest,request,prepared:null};await appendHarness(s,'intent',intent);const r=await callHarnessAdapter({...intent,scope:s.meta.scope});if(r.applied!==true)throw Error(JSON.stringify(r));process.exit(75);});`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',crash],{encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1'},windowsHide:true});assert.equal(child.status,75,child.stderr);assert.equal(count(),1);
+ const {recoverHarnessLock}=await import('../server/harness-runtime.mjs');await recoverHarnessLock(month);
+ let monthlyTasks=[task('after-rename','request'),task('independent','independent')];await planHarness(month,monthlyTasks);await assert.rejects(()=>call(month,'after-rename'),{code:'harness_task_blocked'});assert.equal((await call(month,'independent')).status,'executed');assert.equal(count(),2,'unrelated request continues');
+ const recovered=await call(month,'after-rename','query');assert.equal(recovered.receipt.executionState,'executed');const operationId=recovered.receipt.operationId;
+ monthlyTasks=[task('renamed-again','request'),task('independent','independent')];await planHarness(month,monthlyTasks);const replay=await call(month,'renamed-again');assert.equal(replay.status,'replayed');assert.equal(replay.receipt.operationId,operationId);assert.equal(count(),2,'renaming an unknown or executed request cannot create a new voucher');
+ const nativeParent=await inspectHarness(month),bound=nativeParent.tasks.find(t=>t.taskId==='renamed-again');
+ await registerHarnessFacts(annual,[fact('annual-request',{target,inputPath:f.inputPath,month:'2026-12'})]);
+ const annualTask={...task('annual-close','annual-request','offline.period_plan'),externalDependencies:[{storePath:month,taskId:bound.taskId,period:'2026-01',targetVersion:bound.receipt.targetVersion,dependencyDigest:bound.dependencyDigest}]};await planHarness(annual,[annualTask]);
+ let av=await inspectHarness(annual);const before=av.tasks[0].dependencyDigest;assert.equal(av.tasks[0].externalDependencyStates[0].current,true);assert.ok(av.tasks[0].blockers.some(b=>b.reason==='harness_capability_period_unsupported'));await assert.rejects(()=>call(annual,'annual-close'),{code:'harness_task_blocked'});
+ await registerHarnessFacts(month,[fact('correction',{target,voucherId:replay.receipt.actualImpact.current.voucherId})]);monthlyTasks.push(task('actual-month-change','correction','voucher.unpost'));await planHarness(month,monthlyTasks);assert.equal((await call(month,'actual-month-change')).status,'executed');
+ av=await inspectHarness(annual);assert.notEqual(av.tasks[0].dependencyDigest,before);assert.equal(av.tasks[0].externalDependencyStates[0].current,false,'live voucher proof changes invalidate the annual dependency even with unchanged source/export files');assert.equal(av.tasks[0].externalDependencies[0].targetVersion,bound.receipt.targetVersion,'historical binding is never automatically replaced');
+ // The annual module is absent: previous-year assessment stays explicitly
+ // blocked. A cross-Store cycle must be reported before acquiring its lock.
+ await registerHarnessFacts(prior,[fact('prior-request',{target,inputPath:f.inputPath,month:'2025-12'})]);
+ const placeholder='0'.repeat(64),priorTask={...task('prior-close','prior-request','offline.period_plan'),externalDependencies:[{storePath:annual,taskId:'annual-close',period:'2026',targetVersion:placeholder,dependencyDigest:placeholder}]};await planHarness(prior,[priorTask]);
+ monthlyTasks[0]={...monthlyTasks[0],externalDependencies:[{storePath:prior,taskId:'prior-close',period:'2025',targetVersion:placeholder,dependencyDigest:placeholder}]};await planHarness(month,monthlyTasks);
+ av=await inspectHarness(annual);assert.ok(av.tasks[0].blockers.some(b=>b.reason==='harness_external_dependency_cycle'));
+ console.log('PASS annual focus: explicit year/month/prior-year bindings, live native proof invalidation, blocked annual business/cycles; renamed unknown/executed write uses original operation, independent request continues');
+}
 const f=createPostingFixture(join(root,'company-a')),scope={enterpriseKey:f.key,accountSetId:f.id,databaseInstanceId:f.instanceId,period:'2026-Q1',currency:'CNY'},store=join(root,'harness-a');
 const target={dbPath:f.dbPath,databaseInstanceId:f.instanceId,enterpriseKey:f.key,accountSetId:f.id};
 const original=join(root,'unfamiliar.layout'),parser=join(root,'parser.mjs'),validation=join(root,'validation.json');

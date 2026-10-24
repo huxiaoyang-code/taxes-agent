@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scopeContainsMonth, validateCapabilityDeclaration, CAPABILITY_CONTRACT_VERSION } from './harness-contract.mjs';
+import { scopeContainsMonth, capabilitySupportsScope, validateCapabilityDeclaration, CAPABILITY_CONTRACT_VERSION } from './harness-contract.mjs';
 import { captureHarnessCode } from './harness-code.mjs';
 import { runOfflinePosting } from './offline-posting.mjs';
 import { runOfflinePeriodPlan } from './offline-period-plan.mjs';
@@ -35,12 +35,14 @@ export function harnessCapabilities() {
     const key=rootsFor(s).join('|');if(!captured.has(key))captured.set(key,captureHarnessCode(rootsFor(s)));
     const input=s[0].startsWith('voucher.')?(s[0]==='voucher.create'?'target + voucher {period,voucher_date?,summary?,status:draft|posted,entries:[{code,debit,credit,summary?}]}':'target + voucherId positive integer; correctionOf {taskId,targetVersion} for rejection-linked correction'):s[0]==='offline.action_plan'?'inputPath absolute existing offline-action-input/1 JSON; source manifests and facts are prepared by host':s[0]==='offline.posting'?'version:offline-posting-input/1, inputPath, target, selected:{taskId,businessKey}; confirmNewSourceBinding optional boolean; do not supply confirmation/command':s[0]==='offline.period_plan'?'version:offline-period-plan-input/1, inputPath, target, month:YYYY-MM':s[0]==='offline.vat_q2'?'version:offline-vat-q2-request/1, priorInputPath, targetInputPath, target':s[0].startsWith('materials.')?'path absolute material Store; receive needs configPath absolute sources mapping; init uses Harness scope':s[0].startsWith('review.')?'path absolute review Store; register needs inputPath and options:{expectedJournalHead,supersedes}; feedback needs native feedback payload':'target,jobKey; start additionally manifestPath and outputDir absolute paths';
     const code=captured.get(key), declaration={version:CAPABILITY_CONTRACT_VERSION,capabilityId:s[0],description:s[5]+'; internal input guide: skills_read harness/references/adapters.md',availability:'limited',necessaryFacts:[{factId:'business_request',description:'First task fact value: '+input},...(input.includes('target')?[{factId:'target_binding',description:'target={dbPath:absolute existing workbench.db,databaseInstanceId,enterpriseKey,accountSetId}; identity must match Harness scope and actual database'}]:[])],supportConditions:[s[5],'Business module revalidates actual inputs; unknown/missing/conflicting evidence is never inferred from a callable declaration'],entrypoint:s[3],ruleVersion:s[4],codeDigest:code.digest,effect:s[1],resultSchema:{type:'object',description:'Actual domain return; Harness receipt contains executionState/reviewState/ruleState, version-bound actualImpact and actual business proof where provided',properties:{status:{type:'string'},applied:{description:'true/false/unknown for writes; unknown forbids blind retry'},code:{type:['string','null']}}},traceReferences:code.files.filter(f=>f.path===s[2].replace(/^\.\//,'')).map(f=>({kind:'code',locator:f.path,digest:f.digest})),...(s[1]==='write'?{recovery:{queryEntrypoint:s[0]+'.query',identityFields:['operationId','accountSetId','enterpriseKey','databaseInstanceId']}}:{})};
+    declaration.supportedPeriods=['month','quarter']; // Annual business entrypoints are not connected.
     return [s[0],validateCapabilityDeclaration(declaration)];
   }));
 }
 function validateTarget(scope,target) {requireValue(target&&target.accountSetId===scope.accountSetId&&target.enterpriseKey===scope.enterpriseKey&&target.databaseInstanceId===scope.databaseInstanceId,'harness_target_mismatch');}
 export async function callHarnessAdapter({capabilityId,phase,scope,request,operationId,prepared,codeDigest,priorResult}) {
   const caps=harnessCapabilities(),cap=caps.get(capabilityId); requireValue(cap,'harness_capability_unknown');
+  requireValue(capabilitySupportsScope(cap,scope),'harness_capability_period_unsupported');
   if(phase!=='query')requireValue(cap.codeDigest===codeDigest,'harness_code_changed');
   const businessScope={enterpriseKey:scope.enterpriseKey,accountSetId:String(scope.accountSetId),period:scope.period,currency:scope.currency,unit:'yuan'};
   const sameScope=result=>requireValue(result.scope?.enterpriseKey===scope.enterpriseKey&&String(result.scope?.accountSetId)===String(scope.accountSetId)&&result.scope?.period===scope.period&&result.scope?.currency===scope.currency,'harness_target_mismatch');

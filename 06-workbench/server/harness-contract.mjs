@@ -27,7 +27,7 @@ export function validateHarnessScope(scope) {
   check(scope.enterpriseKey === scope.enterpriseKey.normalize('NFKC').trim() && Number.isSafeInteger(scope.accountSetId) && scope.accountSetId > 0, 'harness_scope_invalid');
   id(scope.databaseInstanceId, 'harness_scope_invalid');
   check(typeof scope.currency === 'string' && /^[A-Z]{3}$/.test(scope.currency), 'harness_scope_invalid');
-  check(typeof scope.period === 'string' && /^20\d\d-(0[1-9]|1[0-2]|Q[1-4])$/.test(scope.period), 'harness_scope_invalid');
+  check(typeof scope.period === 'string' && /^20\d\d(?:-(0[1-9]|1[0-2]|Q[1-4]))?$/.test(scope.period), 'harness_scope_invalid');
   return scope;
 }
 
@@ -36,9 +36,17 @@ export function validateHarnessScope(scope) {
 export function scopeContainsMonth(scope, month) {
   validateHarnessScope(scope);
   if (typeof month !== 'string' || !/^20\d\d-(0[1-9]|1[0-2])$/.test(month)) return false;
+  if (/^20\d\d$/.test(scope.period)) return scope.period === month.slice(0, 4);
   return scope.period.includes('-Q')
     ? scope.period.slice(0, 4) === month.slice(0, 4) && Number(scope.period.at(-1)) === Math.ceil(Number(month.slice(5)) / 3)
     : scope.period === month;
+}
+
+// Containment never widens a business function's implemented period support.
+export function capabilitySupportsScope(capability, scope) {
+  validateHarnessScope(scope);
+  const kind = scope.period.length === 4 ? 'year' : scope.period.includes('-Q') ? 'quarter' : 'month';
+  return (capability.supportedPeriods ?? ['month', 'quarter']).includes(kind);
 }
 
 /** entrypoint names are declarations, never executable paths supplied by a model.
@@ -47,7 +55,7 @@ export function scopeContainsMonth(scope, month) {
  */
 export function validateCapabilityDeclaration(c) {
   const code = 'harness_capability_invalid';
-  fields(c, ['version', 'capabilityId', 'description', 'availability', 'necessaryFacts', 'supportConditions', 'entrypoint', 'ruleVersion', 'codeDigest', 'effect', 'resultSchema', 'traceReferences'], ['recovery'], code);
+  fields(c, ['version', 'capabilityId', 'description', 'availability', 'necessaryFacts', 'supportConditions', 'entrypoint', 'ruleVersion', 'codeDigest', 'effect', 'resultSchema', 'traceReferences'], ['recovery', 'supportedPeriods'], code);
   check(c.version === CAPABILITY_CONTRACT_VERSION, code); id(c.capabilityId, code); text(c.description, code);
   check(['available', 'limited', 'unavailable'].includes(c.availability), code);
   list(c.necessaryFacts, code);
@@ -57,6 +65,7 @@ export function validateCapabilityDeclaration(c) {
     check(!names.has(f.factId), code); names.add(f.factId);
   }
   list(c.supportConditions, code); c.supportConditions.forEach(v => text(v, code));
+  if (c.supportedPeriods !== undefined) { list(c.supportedPeriods, code); check(c.supportedPeriods.length > 0 && c.supportedPeriods.every(v => ['month', 'quarter', 'year'].includes(v)), code); }
   id(c.entrypoint, code); text(c.ruleVersion, code); check(digestPattern.test(c.codeDigest), code);
   check(['read', 'write'].includes(c.effect), code); record(c.resultSchema, code);
   list(c.traceReferences, code); c.traceReferences.forEach(validateTraceReference);
@@ -116,10 +125,19 @@ export function validateExecutionReceipt(r) {
 export function validatePlanGraph(tasks) {
   const code = 'harness_plan_invalid'; list(tasks, code); const byId = new Map();
   for (const t of tasks) {
-    fields(t, ['taskId', 'capabilityId', 'factIds', 'dependsOn', 'goal'], [], code);
+    fields(t, ['taskId', 'capabilityId', 'factIds', 'dependsOn', 'goal'], ['externalDependencies'], code);
     id(t.taskId, code); id(t.capabilityId, code); text(t.goal, code);
     list(t.factIds, code); t.factIds.forEach(v => id(v, code));
     list(t.dependsOn, code); t.dependsOn.forEach(v => id(v, code));
+    if (t.externalDependencies !== undefined) {
+      list(t.externalDependencies, code);
+      for (const ref of t.externalDependencies) {
+        fields(ref, ['storePath', 'taskId', 'period', 'targetVersion', 'dependencyDigest'], [], code);
+        text(ref.storePath, code); id(ref.taskId, code);
+        check(/^20\d\d(?:-(0[1-9]|1[0-2]|Q[1-4]))?$/.test(ref.period) && digestPattern.test(ref.targetVersion) && digestPattern.test(ref.dependencyDigest), code);
+      }
+      check(new Set(t.externalDependencies.map(ref => `${ref.storePath}\0${ref.taskId}`)).size === t.externalDependencies.length, code);
+    }
     check(!byId.has(t.taskId) && new Set(t.factIds).size === t.factIds.length && new Set(t.dependsOn).size === t.dependsOn.length, code);
     byId.set(t.taskId, t);
   }

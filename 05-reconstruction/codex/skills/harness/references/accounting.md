@@ -2,6 +2,10 @@
 
 `harness_plan` 保存 taskId/capabilityId/factIds/dependsOn/goal，允许按事实调整；程序拒绝环、悬空引用和越界。`harness_status` 给当前阻塞和 dependencyDigest；写 execute 使用当前 dependencyDigest。offline.action_plan 复用现有候选/补件，offline.posting 复用实际 prepare/execute/query、锁、审计和稳定业务键；先 prepare，再 execute。unknown 只能先 query 原身份。
 
+跨期间任务可选 `externalDependencies:[{storePath,taskId,period,targetVersion,dependencyDigest}]`，绑定另一本机 Harness Store 的已有任务版本；storePath 为现存绝对目录，程序规范化并读取实际业务 proof，不以旧导出文件证明当前有效。企业/账套/数据库实例/币种必须相同，period 明确为 YYYY、YYYY-MM 或 YYYY-Qn，允许年度引用月/季及上一年度结转依赖。目标缺失、版本变化、unknown、被会计拒绝、循环或无法核查均保留具体 blocker；历史绑定不自动换到新版，父结果与确认随依赖失效。YYYY 仅依赖容器，现有能力的 supportedPeriods 仍限月/季；annual_close_assess/review 尚未接通。
+
+同一 scope/capability/业务 request 的原生写身份不随 taskId 改名。历史 unknown 即使原任务被移出计划也须 query 原 operationId；相同已执行请求改名后只核查原结果，不重复写账。无关请求可继续；新业务或更正必须有明确不同业务/来源身份，不能靠重命名制造。
+
 `materials.init/receive/inspect/recover` 调用现有材料 Store，首事实 value 包含 path 与必要 configPath。`review.init/register/feedback/inspect` 调用现有税务复核 Store，value 包含 path，以及必要 inputPath/options 或 feedback。各入口以实际领域校验和结果为准。
 
 未覆盖业务：核实原始事实、可核验政策与适用条件，宿主可写必要代码并验证。保存资料/政策定位、判断理由、分录草稿、代码、验证和实际影响。`harness_treatment_register` 登记 treatmentId/reason/traceReferences/draftSourceId/applicability；traceReferences 每项 kind/locator/digest，kind 为 source/policy/rule/code/validation/artifact/execution。先将内部 JSON 分录草稿及政策、判断、代码、验证文件登记为 draftSourceId 的来源清单，traceReferences 引用该清单的实际路径与摘要，至少包含 policy 或 rule、code、validation；不是要求客户提供草稿模板。
