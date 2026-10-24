@@ -1,3 +1,5 @@
+> **2026-10-24 W4a依赖更新（候选）**：固定名单与真实完整静态图均37文件；新增恢复/ledger/control接点也受代码变化永久restart守卫。本包实际完整35/35、0skip，aggregate及owned child/pair真实关闭、exit/close0；之后local-backup唯一EOF CRLF改LF，另有control丢marker保留物闸门、plain数组与SQL literal保真修复及open-guard回归；35绿属于这些准入修复前时点，最终受影响验证待root，不据此宣称后修源码已全35通过。此为本候选新实跑，父c1d的旧35仍保留其历史时点。
+
 # Q2 新鲜会计复核草稿（OFFLINE-05C）
 
 本机从实际Q1、Q2原始资料及同一只读账源重算Q1/Q2/累计数，生成 `bundle.json`、七表 `workpaper.xlsx`、最后写入的 `manifest.json`。全部会计确认pending；真实性unverified；未登录税局、未提交；`periodComplete/submittable/authorizesExecution=false`。本片不完成#82整体；Q2反馈版本链另OFFLINE-05D，正式连续账务及既存账更正仍依赖#80/#51。
@@ -24,7 +26,7 @@ node scripts/accountant-review-q2.mjs --input /absolute/q2-request.json --output
 
 ## 新鲜度与信任边界
 
-parent/facade/CLI仅native imports。固定fresh worker先检查expected/initial/current本地字节闭包，再载入财务模块。固定名单与实际静态图逐项核对，包含bank-storage、multiline local-audit依赖及审计/batch storage静态引入的local-write-lock锁模块；DB/backup动态分支本路径不调用。观察代码变化永久latch restart，缺失初始字节返回安全诊断；不接受public DTO/digest恢复能力。
+parent/facade/CLI仅native imports。固定fresh worker先检查expected/initial/current本地字节闭包，再载入财务模块。固定名单与实际37文件静态图逐项核对，包含bank-storage、multiline local-audit、local-write-lock，以及静态可达的auxiliary-storage、local-backup、local-restore-audit和local-restore-control。default db.mjs不在静态图；本Q2只读调用不会执行真正的业务备份、恢复或显式ledger打开分支。观察代码变化永久latch restart，缺失初始字节返回安全诊断；不接受public DTO/digest恢复能力。
 
 worker私有WeakMap绑定live pair、双期raw、snapshot及完整真实计算产物摘要；每次assert重验pair、双期原件及现库、重算完整产物。渲染前后、明细后、manifest前后均核对；仅抽出的renderer是显示函数，无发布资格、无任意guard callback、无可信manifest。旧Q1 build/export原守卫保持。
 
@@ -36,4 +38,4 @@ publicationId只识别该次own marker。失败清理必须同时匹配本次ID�
 
 ## 实际验证范围
 
-最终完整测试入口保留35项。第五阶段完整33/33实际exit0仍因root/fresh独立CLI请求stat反例被拒绝；最终仅CLI及其测试窄修后，实施者从同一最终test字节精确提取6/35实际通过，fresh提取3/35实际通过，root另以真实增长/同长度改写两模式独验通过。未执行最终完整35项。此前金额、七表、全部定位及只读库/WAL证据按未变化的执行支路复用，阶段结果与修复记录见[交接](handoffs/OFFLINE-05C.md)。
+以下为原阶段历史验证记录，未执行完整35的表述不描述本次W4a复验。最终完整测试入口保留35项。第五阶段完整33/33实际exit0仍因root/fresh独立CLI请求stat反例被拒绝；最终仅CLI及其测试窄修后，实施者从同一最终test字节精确提取6/35实际通过，fresh提取3/35实际通过，root另以真实增长/同长度改写两模式独验通过。未执行最终完整35项。此前金额、七表、全部定位及只读库/WAL证据按未变化的执行支路复用，阶段结果与修复记录见[交接](handoffs/OFFLINE-05C.md)。

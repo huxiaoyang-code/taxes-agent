@@ -1,3 +1,18 @@
+import { randomUUID as restoreUUID } from 'node:crypto';
+import { mkdirSync as restoreMkdir,copyFileSync as restoreCopy,existsSync as restoreExists } from 'node:fs';
+import {DatabaseSync as RestoreDb} from 'node:sqlite';
+import {assertRestoreOpenPath as pending4} from '../server/local-restore-control.mjs';
+import { tmpdir as restoreTmpdir } from 'node:os';
+import { join as restoreJoin } from 'node:path';
+const restoreSeedMap=new Map(),restoreSeedCache=new Map();
+function R4(input){const root=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(root);if(input.backupDir&&input.targetDir)restoreSeedMap.set(input.targetDir,input.backupDir);return {...input,ledgerPath:restoreJoin(root,'ledger.db'),operationId:restoreUUID()};}
+function seed4(backupDir){const dir=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(dir);restoreCopy(restoreJoin(backupDir,'workbench.db.snapshot'),restoreJoin(dir,'workbench.db'));return dir;}
+function businessSeed4(dataDir){if(!restoreSeedMap.has(dataDir)||!restoreExists(restoreJoin(dataDir,'restore.json')))return dataDir;if(restoreSeedCache.has(dataDir))return restoreSeedCache.get(dataDir);
+ let code;try{pending4(restoreJoin(dataDir,'workbench.db'));}catch(e){code=e.code;}if(code!=='restore_target_pending')throw Error('expected real pending target');
+ const source=new RestoreDb(restoreJoin(restoreSeedMap.get(dataDir),'workbench.db.snapshot'),{readOnly:true}),target=new RestoreDb(restoreJoin(dataDir,'workbench.db'),{readOnly:true});try{for(const {name} of source.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){if(['audit_database_instances','local_batch_database_instances','local_batch_job_bindings','local_batch_input_bindings','local_batch_stages','local_batch_locks','local_batch_lock_epochs','restore_control_component','restore_control_state'].includes(name))continue;if(JSON.stringify(source.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all())!==JSON.stringify(target.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()))throw Error('restored historical row mismatch '+name);}}finally{source.close();target.close();}
+ const seed=seed4(restoreSeedMap.get(dataDir));restoreSeedCache.set(dataDir,seed);return seed;
+}
+function cli4(input){if(input[0]!=='restore-new'||!input.includes('--backup')||!input.includes('--target')||input.includes('--ledger'))return input;const r=R4({backupDir:input[input.indexOf('--backup')+1],targetDir:input[input.indexOf('--target')+1]});return [...input,'--ledger',r.ledgerPath,'--operation',r.operationId];}
 import {assert,fs,join,DatabaseSync,LS,LA,LB,OP,fresh,input,logical,hash,suite,historyEvent,child,WORKBENCH} from './local-audit-install.test.mjs';
 await suite('WAL and non-WAL committed audit/business + pending snapshots preserve bytes without authority',async()=>{
  for(const journal of ['wal','delete']) {
@@ -7,12 +22,12 @@ await suite('WAL and non-WAL committed audit/business + pending snapshots preser
    const pending=OP.prepareOperation(h.db,input('pending'));assert.equal(pending.code,'prepared');
    const source=logical(h.db),b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'snapshot')});assert.equal(b.ok,true,JSON.stringify(b));assert.equal(logical(h.db),source);assert.equal(b.manifest.components.find(c=>c.name==='business-audit').version,2);
    const verified=LB.verifyBackup({backupDir:b.backupDir});assert.equal(verified.ok,true,JSON.stringify(verified));LB.assertBackupSourceConnection(h.db,verified.manifest);
-   const restored=join(h.dir,'restored');assert.equal(LB.restoreNew({backupDir:b.backupDir,targetDir:restored}).ok,true);
+   const restored=join(h.dir,'restored');assert.equal(LB.restoreNew(R4({backupDir:b.backupDir,targetDir:restored})).ok,true);
    const copy=new DatabaseSync(join(restored,LB.TARGET_DATABASE_FILE));copy.exec('PRAGMA foreign_keys=ON');try {
-    assert.equal(logical(copy),source);assert.deepEqual(copy.prepare('SELECT * FROM audit_database_instances').all(),old);
-    const replay=OP.prepareOperation(copy,input('committed'));assert.deepEqual(replay.receipt,first.receipt);assert.equal(replay.replayed,true);
-    const wait=OP.prepareOperation(copy,input('pending'));assert.equal(wait.needsReview,true);assert.equal(wait.authorization,undefined);
-    assert.throws(()=>OP.executePreparedOperation(copy,pending.authorization,()=>{throw Error('never');}),/audit_authorization_invalid/);
+    businessSeed4(restored);for(const table of ['audit_components','audit_events','audit_operations'])assert.deepEqual(copy.prepare('SELECT * FROM '+table+' ORDER BY rowid').all(),h.db.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());const fork=copy.prepare('SELECT * FROM audit_database_instances WHERE is_active=1').get();assert.equal(fork.parent_instance_id,LS.currentAuditInstanceId(h.db));assert.notEqual(fork.instance_id,LS.currentAuditInstanceId(h.db));assert.equal(copy.prepare('SELECT COUNT(*) n FROM audit_database_instances').get().n,old.length+1);
+    const replay=OP.prepareOperation(h.db,input('committed'));assert.deepEqual(replay.receipt,first.receipt);assert.equal(replay.replayed,true);
+    const wait=OP.prepareOperation(h.db,input('pending'));assert.equal(wait.needsReview,true);assert.equal(wait.authorization,undefined);
+    assert.throws(()=>OP.prepareOperation(copy,input('committed')),/restore_target_pending/);assert.throws(()=>OP.executePreparedOperation(copy,pending.authorization,()=>{throw Error('never');}),/restore_target_pending|audit_authorization_invalid/);
     assert.equal(LB.createBackup({dbPath:join(restored,LB.TARGET_DATABASE_FILE),outDir:join(h.dir,'again')}).ok,true);
    }finally{copy.close();}
    assert.equal(LS.inspectAuditSchema(h.db).ok,true);
@@ -23,7 +38,7 @@ await suite('strict audit1 history is official backup/restore compatible and v2 
  const h=await fresh({audit:1});try {
   const event=historyEvent(h.db),instance=LS.currentAuditInstanceId(h.db);assert.equal(LS.assertAuditSchema(h.db).version,1);
   const b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'v1')});assert.equal(b.ok,true,JSON.stringify(b));assert.equal(b.manifest.components.find(c=>c.name==='business-audit').version,1);assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,true);
-  const target=join(h.dir,'historical');assert.equal(LB.restoreNew({backupDir:b.backupDir,targetDir:target}).ok,true);
+  const target=join(h.dir,'historical');assert.equal(LB.restoreNew(R4({backupDir:b.backupDir,targetDir:target})).ok,true);
   const c=new DatabaseSync(join(target,LB.TARGET_DATABASE_FILE));try{assert.deepEqual(c.prepare('SELECT * FROM audit_events').get(),event);assert.equal(LS.verifyAuditEvents(c).mismatched.length,0);}finally{c.close();}
   await LS.installAuditSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'protected-upgrade')});assert.equal(LS.currentAuditInstanceId(h.db),instance);const {event_format_version,...row}=h.db.prepare('SELECT * FROM audit_events').get();assert.equal(LA.canonicalAuditJson(row),LA.canonicalAuditJson(event));assert.equal(event_format_version,1);
  }finally{h.close();}
@@ -55,7 +70,7 @@ await suite('source and snapshot strict structure/content attack matrix rejects 
    attack(h.db);const before=logical(h.db);assert.equal(LS.inspectAuditSchema(h.db).ok,false,name);const bad=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'bad-source')});assert.equal(bad.ok,false,name);assert.equal(logical(h.db),before,name);
    const snapshot=join(b.backupDir,LB.SNAPSHOT_FILE),c=new DatabaseSync(snapshot);c.exec('PRAGMA foreign_keys=ON');try{attack(c);}finally{c.close();}
    const manifest=JSON.parse(fs.readFileSync(join(b.backupDir,LB.MANIFEST_FILE),'utf8'));manifest.snapshot.sha256=hash(snapshot);manifest.snapshot.bytes=fs.statSync(snapshot).size;fs.writeFileSync(join(b.backupDir,LB.MANIFEST_FILE),JSON.stringify(manifest));
-   assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,false,name);const target=join(h.dir,'refused');assert.equal(LB.restoreNew({backupDir:b.backupDir,targetDir:target}).ok,false,name);assert.equal(fs.existsSync(target),false,name);console.log('attack actual '+name);
+   assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,false,name);const target=join(h.dir,'refused');assert.equal(LB.restoreNew(R4({backupDir:b.backupDir,targetDir:target})).ok,false,name);assert.equal(fs.existsSync(target),false,name);console.log('attack actual '+name);
   }finally{h.close();}
  }
 });
@@ -72,7 +87,7 @@ await suite('SQL CHECK/FK/rowid and full autoindex facts, omitted component mani
    mutate(h.db);const before=logical(h.db);assert.equal(LS.inspectAuditSchema(h.db).ok,false,name);assert.equal(LB.createBackup({dbPath:h.file,outDir:join(h.dir,'invalid-'+name)}).ok,false);assert.equal(logical(h.db),before);
    const snapshot=join(valid.backupDir,LB.SNAPSHOT_FILE),copy=new DatabaseSync(snapshot);try{mutate(copy);}finally{copy.close();}
    const manifest=valid.manifest;manifest.snapshot.sha256=hash(snapshot);manifest.snapshot.bytes=fs.statSync(snapshot).size;fs.writeFileSync(join(valid.backupDir,LB.MANIFEST_FILE),JSON.stringify(manifest));
-   assert.equal(LB.verifyBackup({backupDir:valid.backupDir}).ok,false,name);const target=join(h.dir,'invalid-target');assert.equal(LB.restoreNew({backupDir:valid.backupDir,targetDir:target}).ok,false,name);assert.equal(fs.existsSync(target),false);console.log('SQL attack create/verify/restore actual '+name);
+   assert.equal(LB.verifyBackup({backupDir:valid.backupDir}).ok,false,name);const target=join(h.dir,'invalid-target');assert.equal(LB.restoreNew(R4({backupDir:valid.backupDir,targetDir:target})).ok,false,name);assert.equal(fs.existsSync(target),false);console.log('SQL attack create/verify/restore actual '+name);
   }finally{h.close();}
  }
  const h=await fresh();try{const b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'omit')});assert.equal(b.ok,true);const m=b.manifest;delete m.components;fs.writeFileSync(join(b.backupDir,LB.MANIFEST_FILE),JSON.stringify(m));assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,false);}finally{h.close();}

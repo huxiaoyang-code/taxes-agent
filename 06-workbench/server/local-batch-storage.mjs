@@ -1,3 +1,4 @@
+import { assertRestoreWritable } from './local-restore-control.mjs';
 import { assertWriteCommitFence, authorizesResourceRenewal } from './local-write-lock.mjs';
 import { hasActiveAuditExecution,withAuditSavepoint } from './local-audit-storage.mjs';
 // local-batch-storage.mjs — 持久批量任务（LOCAL-07）的存储层：manifest 校验 / 任务 / 阶段 /
@@ -806,6 +807,7 @@ export function inspectBatchSchema(db) {
 export function assertBatchSchema(db) {const s=inspectBatchSchema(db);if(!s.ok)FAIL(s.problems.includes('instance_mismatch')?'batch_instance_mismatch':s.version>3?'batch_schema_future_version':'batch_schema_invalid');return s;}
 export function readBatchInstance(db) {const s=assertBatchSchema(db);if(s.version<2)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');return db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();}
 export function assertBatchRunnable(db,{jobId}={}) {
+ assertRestoreWritable(db);
  if(readBatchVersion(db)!==3)FAIL('migration_requires_backup');
  const instance=readBatchInstance(db);if(instance.write_state!=='ready')FAIL('batch_not_ready');
  const jb=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=?').all(instance.instance_id),ib=db.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=?').all(instance.instance_id);
@@ -827,7 +829,7 @@ function bindBatchJobInputs(db,instance,at,jobId) {
  for(const i of inputs)db.prepare('INSERT INTO local_batch_input_bindings VALUES(?,?,?,?,?)').run(instance,i.input_key,i.source_path===null?'inline':'source',i.source_path,at);
 }
 const batchQuarantine=new WeakSet();
-function assertBatchConnection(db){if(!db||batchQuarantine.has(db))FAIL('batch_unavailable');if(db.isTransaction)FAIL('batch_transaction_conflict');if(db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)FAIL('batch_database_invalid');}
+function assertBatchConnection(db){assertRestoreWritable(db);if(!db||batchQuarantine.has(db))FAIL('batch_unavailable');if(db.isTransaction)FAIL('batch_transaction_conflict');if(db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)FAIL('batch_database_invalid');}
 function batchFileIdentity(db,explicit) {
  const main=db.prepare('PRAGMA database_list').all().find(r=>r.name==='main');
  function plain(file){if(typeof file!=='string'||!file)FAIL('batch_database_invalid');const full=resolve(file);try{for(let p=full;;p=dirname(p)){const st=lstatSync(p);if(st.isSymbolicLink()||!sameCanonicalPath(realpathSync.native(p),p))FAIL('batch_database_invalid');if(dirname(p)===p)break;}const st=statSync(full,{bigint:true});if(!st.isFile()||st.nlink!==1n)FAIL('batch_database_invalid');return {path:full,dev:st.dev,ino:st.ino};}catch{FAIL('batch_database_invalid');}}
@@ -843,6 +845,7 @@ function assertBatchMaintenance(db,state) {
  }
 }
 export function assertBatchMaintenanceReady(db) {
+ assertRestoreWritable(db);
  const state=inspectBatchSchema(db);if(state.state!=='not_installed')assertBatchSchema(db);assertBatchMaintenance(db,state);
 }
 /** Explicit existing-database install/upgrade. The official reader snapshots while we reserve writes. */
@@ -874,6 +877,7 @@ export async function installBatchSchema(db,{dbPath,outDir}={}) {
 }
 /** Synchronous: strict v3 validation, or genuine private fresh ownership only. */
 export function ensureBatchSchema(db,{receipt=null}={}) {
+ assertRestoreWritable(db);
  if(receipt)assertFreshReceipt(receipt,db);
  const state=inspectBatchSchema(db);
  if(state.state!=='not_installed'){assertBatchSchema(db);if(state.version!==3)FAIL('migration_requires_backup',{},'Run install --data-dir <dir> --out-dir <new-backup-dir> first');if(receipt)releaseFreshClaim(receipt);return {created:false,version:3};}
@@ -1160,6 +1164,7 @@ export function validateManifest(raw) {
  * @param {Array} options.inputs [{ itemKey, period, batchId, sourcePath, sourceHash, bytes(Buffer) }]
  */
 export function createJob(db, { manifest, manifestHash, manifestJson, outputDir, plans, inputs }) {
+ assertRestoreWritable(db);
   const instance=assertBatchRunnable(db);
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -1236,6 +1241,7 @@ export function getItem(db, itemId) {
 }
 
 export function setItemAccountSet(db, { itemId, accountSetId, source }) {
+ assertRestoreWritable(db);
   db.prepare(`UPDATE local_batch_items SET account_set_id=?, account_set_source=?, updated_at=? WHERE id=?`)
     .run(accountSetId, source, nowIso(), itemId);
 }
@@ -1263,6 +1269,7 @@ export function getSnapshot(db, { itemId, period, kind }) {
 }
 
 export function saveSnapshot(db, { jobId, itemId, period, kind, dtoHash, businessHash, dtoJson, csvText, csvHash }) {
+ assertRestoreWritable(db);
   db.prepare(`INSERT INTO local_batch_snapshots
       (snapshot_key, job_id, item_id, period, kind, dto_hash, business_hash, dto_json, csv_text, csv_hash, created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?)
@@ -1314,6 +1321,7 @@ export function verifyInputEvidence(db, { jobId }) {
 
 // ---------------------------------------------------------------- 阶段状态
 export function claimStage(db, { stageId, instance, token, inputHash }) {
+ assertRestoreWritable(db);
   const previous=getStage(db,stageId);if(previous&&stageAuditNeedsReview(db,previous))FAIL('audit_operation_pending');
   const info = db.prepare(`UPDATE local_batch_stages
       SET status=?, attempt=attempt+1, owner_instance=?, fencing_token=?, input_hash=COALESCE(?, input_hash),
@@ -1334,6 +1342,7 @@ export function writeStageResult(db, {
   stageId, instance, token, attempt, status, outcomeHash,
   evidence, errorCode, errorMessage,
 }) {
+ assertRestoreWritable(db);
   const info = db.prepare(`UPDATE local_batch_stages
       SET status=?, outcome_hash=?, evidence_json=?, error_code=?, error_message=?,
           finished_at=?, updated_at=?
@@ -1350,6 +1359,7 @@ export function writeStageResult(db, {
  * evidence 可选：用于把「为什么停下」这类可审计原因写入阶段证据。
  */
 export function resetStage(db, { stageId, status, errorCode, errorMessage, evidence }) {
+ assertRestoreWritable(db);
   db.prepare(`UPDATE local_batch_stages
       SET status=?, error_code=?, error_message=?, evidence_json=COALESCE(?, evidence_json),
           owner_instance=NULL, fencing_token=NULL, updated_at=?
@@ -1380,6 +1390,7 @@ export function isProcessAlive(pid) {
  * - 租约已过且 PID 确认不存在：递增 fence 接管。
  */
 export function acquireLock(db, { resourceKey, instance, pid=process.pid, leaseMs = 120000 }) {
+ assertRestoreWritable(db);
   if(!validResourceKey(resourceKey)||!batchTech(instance)||!positive(pid)||!positive(leaseMs))FAIL('lock_request_invalid');
   if(db.prepare('SELECT version FROM local_batch_component WHERE component=?').get(LOCAL_BATCH_COMPONENT)?.version!==3)FAIL('migration_requires_backup');
   const nested=hasActiveAuditExecution(db);
@@ -1405,6 +1416,7 @@ export function acquireLock(db, { resourceKey, instance, pid=process.pid, leaseM
 }
 
 export function renewLock(db, { resourceKey, instance, token, leaseMs = 120000 }, capability) {
+ assertRestoreWritable(db);
   if(!authorizesResourceRenewal(db,capability,{resourceKey,instance,token}))FAIL('lock_capability_invalid');
   const at = new Date(nowMs()).toISOString();
   const expires = new Date(nowMs() + leaseMs).toISOString();
@@ -1416,6 +1428,7 @@ export function renewLock(db, { resourceKey, instance, token, leaseMs = 120000 }
 }
 
 export function releaseLock(db, { resourceKey, instance, token }) {
+ assertRestoreWritable(db);
   const info = db.prepare(`DELETE FROM local_batch_locks
       WHERE resource_key=? AND owner_instance=? AND fencing_token=?`)
     .run(resourceKey, instance, token);
@@ -1435,6 +1448,7 @@ export function assertFence(db, { resourceKey, instance, token }) {
  * fn 内抛错时整体回滚（会计效果与 checkpoint 一起撤销）。
  */
 export function withFencedTransaction(db, { resourceKey, instance, token }, fn) {
+ assertRestoreWritable(db);
   if(hasActiveAuditExecution(db))return withAuditSavepoint(db,()=>{assertFence(db,{resourceKey,instance,token});const out=fn();assertFence(db,{resourceKey,instance,token});return out;});
   if(db.isTransaction)FAIL('audit_transaction_conflict');
   db.exec("BEGIN IMMEDIATE");
@@ -1484,6 +1498,7 @@ function statusFromCounts(counts) {
 
 /** 依据阶段真实状态刷新 item / job 状态与 error_code。 */
 export function refreshStatuses(db, jobId) {
+ assertRestoreWritable(db);
   db.exec("BEGIN IMMEDIATE");
   try {
     const items = listItems(db, jobId);
@@ -1710,6 +1725,7 @@ export function newInstanceId(pid = process.pid) {
  * 由持有 job 锁的执行者在阶段边界确认；无执行者时可由本命令直接确认。
  */
 export function requestCancel(db, jobKey, { pid = process.pid, instance = newInstanceId(pid) } = {}) {
+ assertRestoreWritable(db);
   assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) FAIL("job_not_found", { jobKey });
@@ -1755,6 +1771,7 @@ export function requestCancel(db, jobKey, { pid = process.pid, instance = newIns
  * 同时核验输入指纹（manifest + 原始资料快照），变化则给 input_changed。
  */
 export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null, stageKey = null, allowSnapshotOnly = false }) {
+ assertRestoreWritable(db);
   assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) FAIL("job_not_found", { jobKey });
@@ -1848,6 +1865,7 @@ export function listStagesByStatus(db, jobId, statuses) {
 }
 
 export function markItemNeedsReview(db, { itemId, stageId, status, errorCode, errorMessage, evidence }) {
+ assertRestoreWritable(db);
   db.exec("BEGIN IMMEDIATE");
   try {
     if (stageId) {

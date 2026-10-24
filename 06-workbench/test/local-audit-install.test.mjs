@@ -54,6 +54,8 @@ export function historyEvent(db,{operationId='historic-1',...over}={}) {
  return db.prepare('SELECT * FROM audit_events WHERE event_id=?').get(e.eventId);
 }
 export const logical=db=>JSON.stringify(db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").all().concat(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(({name})=>({name,rows:db.prepare('SELECT * FROM "'+name+'"').all()}))));
+export function restoreArgs(backupDir,targetDir){const dir=join(ROOT,randomUUID());fs.mkdirSync(dir);plain(dir);return {backupDir,targetDir,ledgerPath:join(dir,'restore-ledger.db'),operationId:randomUUID()};}
+export function restoreNew(backupDir,targetDir){return LB.restoreNew(restoreArgs(backupDir,targetDir));}
 export const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 export async function child(args,{env={},cwd=WORKBENCH,onOutput}={}) {
  return await new Promise((resolve,reject)=>{const c=spawn(process.execPath,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let out='',err='',exit;c.on('exit',(code,signal)=>exit={code,signal});c.stdout.on('data',b=>{out+=b;if(onOutput)onOutput(String(b),c);});c.stderr.on('data',b=>err+=b);c.on('error',reject);c.on('close',(code,signal)=>{assert.deepEqual(exit,{code,signal});console.log('child actual exit+close '+code+'/'+signal);resolve({code,signal,out,err,closed:true});});});
@@ -162,7 +164,7 @@ if(resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)) {
   const B=await import('../server/bank-storage.mjs'),A=await import('../server/auxiliary-storage.mjs');
   for(const order of [['bank'],['aux'],['bank','aux'],['aux','bank']]) {
    const h=await fresh();try {for(const part of order){const r=part==='bank'?await B.ensureBankSchema(h.db,{dbPath:h.file,dataDir:h.dir,backupService:LB}):await A.ensureAuxiliarySchema(h.db,{dbPath:h.file,outDir:join(h.dir,'aux-install')});assert.ok(r);}
-    const b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'combined')});assert.equal(b.ok,true,JSON.stringify(b));const target=join(h.dir,'restored');assert.equal(LB.restoreNew({backupDir:b.backupDir,targetDir:target}).ok,true);assert.equal(LB.createBackup({dbPath:join(target,LB.TARGET_DATABASE_FILE),outDir:join(h.dir,'again')}).ok,true);
+    const b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'combined')});assert.equal(b.ok,true,JSON.stringify(b));const target=join(h.dir,'restored');assert.equal(restoreNew(b.backupDir,target).ok,true);assert.equal(LB.createBackup({dbPath:join(target,LB.TARGET_DATABASE_FILE),outDir:join(h.dir,'again')}).ok,true);
    }finally{h.close();}
   }
  });

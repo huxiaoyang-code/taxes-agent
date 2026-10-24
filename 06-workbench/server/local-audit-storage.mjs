@@ -1,3 +1,5 @@
+import { assertPrivateRestoreCapability } from './local-backup.mjs';
+import { assertRestoreWritable } from './local-restore-control.mjs';
 import { assertWriteCommitFence } from './local-write-lock.mjs';
 import { markBatchFailed as persistIncrementalImportFailure } from './import-storage.mjs';
 import { markBatchFailed as persistBankImportFailure } from './bank-storage.mjs';
@@ -284,7 +286,7 @@ export function recoverBankAuditAdmission(db){
  admissionUnknowns.delete(db);quarantine.delete(db);return true;
 }
 function connection(db){if(!db||typeof db.exec!=='function'||quarantine.has(db))throw fail('audit_unavailable');if(db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)throw fail('audit_database_invalid');}
-function owner(db){connection(db);if(db.isTransaction)throw fail('audit_transaction_conflict');}
+function owner(db){assertRestoreWritable(db);connection(db);if(db.isTransaction)throw fail('audit_transaction_conflict');}
 const busy=e=>e?.errcode===5||e?.errcode===6||e?.code==='SQLITE_BUSY'||e?.code==='SQLITE_LOCKED';
 function rollback(db){try{if(!db.isTransaction)return false;db.exec('ROLLBACK');return !db.isTransaction;}catch{return false;}}
 export async function installAuditSchema(db,{dbPath,outDir}={}) {
@@ -334,7 +336,7 @@ const selectOperation=(db,r)=>db.prepare('SELECT * FROM audit_operations WHERE d
 function envelope(code,{state='rejected',replayed=false,durability='not_started',retryable=false,needsReview=false,receipt=null}={}){return {ok:state==='succeeded'||state==='no_change',code,state,replayed,durability,retryable,needsReview,receipt};}
 function unknown(code='audit_commit_unknown'){return envelope(code,{state:'unknown',durability:'unknown',needsReview:true});}
 function terminalEnvelope(r,replayed){const receipt=parseCanonical(r.receipt_json);return envelope(r.state==='succeeded'?'ok':r.state==='no_change'?'no_change':receipt.resultCode,{state:r.state,replayed,durability:'committed',receipt});}
-function requireV2(db){const s=assertInstalledSchema(db);if(s.version!==2)throw fail('audit_operation_protocol_required');return s;}
+function requireV2(db){assertRestoreWritable(db);const s=assertInstalledSchema(db);if(s.version!==2)throw fail('audit_operation_protocol_required');return s;}
 function normalizeBinding(db,input,{requireScope=true}={}) {
  input=JSON.parse(canonicalAuditJson(input));
  if(!input||typeof input!=='object'||Object.keys(input).sort().join(',')!=='context,request,scope')throw fail('audit_operation_invalid');
@@ -690,4 +692,8 @@ export function listAuditInstances(db) {assertInstalledSchema(db);return db.prep
 export function appendAuditEvent(){throw fail('audit_operation_protocol_required');}
 export function appendDeferredFailure(){throw fail('audit_operation_protocol_required');}
 export function runAuditedOperation(){throw fail('audit_operation_protocol_required');}
-export function markAuditInstanceFork(){throw fail('audit_operation_protocol_required');}
+export function markAuditInstanceFork(db,{capability,createdAt=new Date().toISOString()}={}){
+ assertPrivateRestoreCapability(db,capability);const parent=assertInstalledSchema(db).activeInstanceId,id=randomUUID();
+ db.exec('UPDATE audit_database_instances SET is_active=0 WHERE is_active=1');
+ db.prepare('INSERT INTO audit_database_instances VALUES(?,?,?,?,?)').run(id,createdAt,parent,1,'restore-new');assertInstalledSchema(db);return id;
+}

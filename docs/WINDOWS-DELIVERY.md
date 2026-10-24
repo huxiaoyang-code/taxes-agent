@@ -1,3 +1,7 @@
+> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+>
+> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+
 # Windows 源码交付：安装、启动、备份与验收（W1）
 
 本文对应[任务单](tasks/LOCAL-06-WINDOWS.md)与[交接](handoffs/LOCAL-06-WINDOWS.md)，提供源码分发的预检、显式数据目录启动、干净目录验收与备份恢复说明。
@@ -407,3 +411,9 @@ R1 的通过证据使用显式外部 fixture 根。旧测试默认把目标放�
 在 `06-workbench` 下直接运行 `D:/node.exe --test test/windows-release-manifest.test.mjs` 即可；PowerShell若曾设置覆盖变量，先执行 `Remove-Item Env:WINDOWS_RELEASE_MANIFEST_TEST_ROOT -ErrorAction SilentlyContinue`。覆盖变量是可选项。测试在业务相关import前仍隔离TEMP/TMP/DATA与双KEEP并检查完整祖先。无manifest构建/持久manifest、全部14组坏例和guard、五CLI及MCP断言保留。
 
 本轮实际两命令：清除覆盖变量后的默认命令 **14/14、0 skip、exit0/close0**，约21.73秒，默认根UUID `9bbfced2-d55c-4850-9216-f05f7441ba7b`；另显式外部新根UUID `f8f6a7d7-5190-41e7-b204-a99705218d20` 同命令 **14/14、0 skip、exit0/close0**，约13.57秒。各10个内部自有child均实际exit/close、无timeout，无默认库/真实库/税务调用；真实junction/hardlink正常审批执行。本轮无新红例，旧失败与旧交付保留。仍未跑旧39/npm全套/冷安装/W4/最终两冷链或升级回退，不解除 `w2_contract_pending`，不声明已PR或已合并。
+
+## 2026-10-24 Windows108与恢复后续依赖
+
+[PR108](https://github.com/huxiaoyang-code/youshu-fork/pull/108) 已合；已审head `e3f3f9380ea158d348ce25574e1d6128f23727cf`，merge `f0b6d00bf3beaa3f5d03faf4eea49f3244e5c082`。管理者与独审均在精确候选验证默认/显式外部目录的14/14、0skip、exit/close0，三持久manifest攻击拒绝。此事实只覆盖源码manifest消费、依赖完整性与边界；不含离线依赖/安装器，不代表最终两次冷链或升级失败回退，w2_contract_pending保留。独立offline-Q2 CLI仍不在当前发布CLI合同。
+
+W4a新增恢复命令必须显式backup、全新target、独立ledger文件和operation；恢复目标pending，没有普通记账/自动安装/批量续跑权限。Windows脚本与专属测试本轮未改，待W4b真实激活链完成后再适配最终冷验收；不得把旧双参恢复通过当成新恢复合同已覆盖。旧事故8/4/4与native3221226505未知根因继续保留。

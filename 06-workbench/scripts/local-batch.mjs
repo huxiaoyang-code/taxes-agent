@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertRestoreOpenPath } from '../server/local-restore-control.mjs';
 import { operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
 // local-batch.mjs — LOCAL-07 本机持久批量 CLI（可直接运行，无 HTTP / 无 Agent 入口）。
 //
@@ -99,6 +100,7 @@ function requireJobKey(options) {
 }
 
 function openDirect(dbPath, { readOnly }) {
+  if(!readOnly)assertRestoreOpenPath(dbPath);
   const db = new DatabaseSync(dbPath, { readOnly });
   if(!readOnly)db.exec("PRAGMA foreign_keys=ON");
   try { db.exec("PRAGMA busy_timeout = 10000"); } catch { /* 只读连接可能不允许，忽略 */ }

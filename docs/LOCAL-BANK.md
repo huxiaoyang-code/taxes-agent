@@ -1,3 +1,7 @@
+> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+>
+> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+
 > **当前 W2b 已合并（2026-10-24）**：[PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)，merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`；[本次13docs交接认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376358168)。交接元数据待提交／复核，LOCAL06/07未整体完成、八任务仍6/8、税局真实0。审定head、独审和后续边界见[LOCAL06当前交接](handoffs/LOCAL-06-AUDIT.md)。
 
 以下保留合并前阶段说明；最新PR #100已合并事实与后续边界以页头交接为准。
@@ -751,3 +755,5 @@ LOCAL-03 双准则 / 辅助维度 / 往来合同未在本窗验收，不声称 L
 本轮在 `06-workbench` 的受影响自测实际通过，均 exit 0：`node test/bank-reconciliation.test.mjs` 43/43、`node test/bank-reconcile-cli.test.mjs` 15/15、`node test/local-bank-backup-integration.test.mjs` 5/5、`node test/local-backup.test.mjs` 22/22、`node test/local-batch-persistence.test.mjs` 39/39、`node test/local-batch-cli.test.mjs` 11/11，合计 135 项。junction 用获批准的真实合成构造验证，没有 skip。07 CLI 首轮 10/11 exit 1 是本次漏设 `REPORT_OFFICE_PYTHON`；补设指定内置 Python 后完整 11/11 exit 0，初轮日志保留。纯文件自有探针另有正常只写创建 fd 成功、读取 EIO、短读三组：后两组在任何 SQLite SQL 前拒绝，读取 fd 关闭，创建 fd 未误关，主库不变且无 sidecar。
 
 全部 TEMP / TMP / fallback DATA 在本轮新建 workspace 专属根内，事先核验祖先无 reparse point，只用合成 fixture 与自有子进程；未扫描清理全局 TEMP、未读取真实账套或税局凭据。日志、命令和最终五路径 SHA256 见管理者本机忽略目录 `.agent-runs/bank-narrow-wal-p2-delivery-20261023.md`。本次实现未执行 Git 写操作，未运行新候选全 65 入口，未声明最终独审接受、PR ready / 合并或 LOCAL-04 整体完成。边界仅闭合已实证时序及同根因文件内容检查，不承诺检查后无限持续恶意物理并发改写；下一步由管理者冻结新 head、fresh 独审和最终回归验收。
+
+恢复pending目标银行历史索引BINARY/ASC、金额/批次/匹配逐项保留；重新import/cancel/unpost/reconcile写拒pending。1130、stale与Ref-A/ref-a真实场景仍在正式seed核验。

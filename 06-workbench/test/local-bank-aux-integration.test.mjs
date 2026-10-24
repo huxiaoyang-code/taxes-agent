@@ -1,3 +1,18 @@
+import { randomUUID as restoreUUID } from 'node:crypto';
+import { mkdirSync as restoreMkdir,copyFileSync as restoreCopy,existsSync as restoreExists } from 'node:fs';
+import {DatabaseSync as RestoreDb} from 'node:sqlite';
+import {assertRestoreOpenPath as pending4} from '../server/local-restore-control.mjs';
+import { tmpdir as restoreTmpdir } from 'node:os';
+import { join as restoreJoin } from 'node:path';
+const restoreSeedMap=new Map(),restoreSeedCache=new Map();
+function R4(input){const root=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(root);if(input.backupDir&&input.targetDir)restoreSeedMap.set(input.targetDir,input.backupDir);return {...input,ledgerPath:restoreJoin(root,'ledger.db'),operationId:restoreUUID()};}
+function seed4(backupDir){const dir=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(dir);restoreCopy(restoreJoin(backupDir,'workbench.db.snapshot'),restoreJoin(dir,'workbench.db'));return dir;}
+function businessSeed4(dataDir){if(!restoreSeedMap.has(dataDir)||!restoreExists(restoreJoin(dataDir,'restore.json')))return dataDir;if(restoreSeedCache.has(dataDir))return restoreSeedCache.get(dataDir);
+ let code;try{pending4(restoreJoin(dataDir,'workbench.db'));}catch(e){code=e.code;}if(code!=='restore_target_pending')throw Error('expected real pending target');
+ const source=new RestoreDb(restoreJoin(restoreSeedMap.get(dataDir),'workbench.db.snapshot'),{readOnly:true}),target=new RestoreDb(restoreJoin(dataDir,'workbench.db'),{readOnly:true});try{for(const {name} of source.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){if(['audit_database_instances','local_batch_database_instances','local_batch_job_bindings','local_batch_input_bindings','local_batch_stages','local_batch_locks','local_batch_lock_epochs','restore_control_component','restore_control_state'].includes(name))continue;if(JSON.stringify(source.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all())!==JSON.stringify(target.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()))throw Error('restored historical row mismatch '+name);}}finally{source.close();target.close();}
+ const seed=seed4(restoreSeedMap.get(dataDir));restoreSeedCache.set(dataDir,seed);return seed;
+}
+function cli4(input){if(input[0]!=='restore-new'||!input.includes('--backup')||!input.includes('--target')||input.includes('--ledger'))return input;const r=R4({backupDir:input[input.indexOf('--backup')+1],targetDir:input[input.indexOf('--target')+1]});return [...input,'--ledger',r.ledgerPath,'--operation',r.operationId];}
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {join,dirname,resolve} from 'node:path';
@@ -51,7 +66,7 @@ if(!scenario){
  const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
  const cli=async(path,scope,command,args=[])=>{const c=await runChild([cliFile,command,'--db',path,'--account-set',String(scope.accountSetId),'--bank-account',scope.bankAccountId,...args],{timeout:60000});assert.equal(c.code,0,c.stderr);assert.equal(c.closed,true);assert.equal(c.timedOut,false);return JSON.parse(c.stdout);};
  const backup=(path,folder)=>{const b=LB.createBackup({dbPath:path,outDir:join(root,folder)});assert.equal(b.ok,true,JSON.stringify(b));assert.equal(LB.verifyBackup({backupDir:b.backupDir}).ok,true);return b;};
- const restore=(dir,folder)=>{const r=LB.restoreNew({backupDir:dir,targetDir:join(root,folder)});assert.equal(r.ok,true,JSON.stringify(r));return join(r.targetDir,'workbench.db');};
+ const restore=(dir,folder)=>{const r=LB.restoreNew(R4({backupDir:dir,targetDir:join(root,folder)}));assert.equal(r.ok,true,JSON.stringify(r));return join(r.targetDir,'workbench.db');};
  const components=c=>{const manifest=LB.createBackup({dbPath:c,outDir:join(root,'facts-'+request())}).manifest;const batch=manifest.components.find(v=>v.name==='local-batch');assert.equal(batch.version,3);assert.equal(batch.tables.length,12);assert.deepEqual(batch.tables,batchComponentContract(3).tables);return manifest.components.map(v=>v.name);};
  const reconArgs=['--period','2025-12','--as-of','2025-12-31','--statement-open','1000','--statement-close','1110','--coverage-from','2025-12-01','--coverage-to','2025-12-31','--statement-source','synthetic independent 1130'];
  const expect1130=r=>{assert.equal(r.book.closingCents,112000);assert.equal(r.statement.closeCents,111000);assert.equal(r.adjusted.bookCents,113000);assert.equal(r.adjusted.bankCents,113000);assert.equal(r.adjusted.differenceCents,0);};
@@ -82,8 +97,8 @@ if(!scenario){
    const result=await AS.ensureAuxiliarySchema(db,{dbPath,outDir:join(root,'before-aux')});beforeSecond=result.backupDir;
   }
   assert.equal((await S.ensureBankSchema(db,{dbPath,backupService:LB})).migrated,false);assert.equal((await AS.ensureAuxiliarySchema(db,{dbPath,outDir:join(root,'unused')})).status,'already_installed');
-  const beforePath=restore(beforeSecond,'before-second-restored');const beforeDb=new DatabaseSync(beforePath);try{
-   assert.deepEqual(components(beforePath),scenario==='aux-first'?['auxiliary','business-audit','local-batch']:['bank','business-audit','local-batch']);assert.equal(beforeDb.prepare('SELECT COUNT(*) n FROM vouchers WHERE status=\'posted\'').get().n,12);
+  const beforePath=restore(beforeSecond,'before-second-restored');assert.throws(()=>pending4(beforePath),/restore_target_pending/);const beforeDb=new DatabaseSync(join(seed4(beforeSecond),'workbench.db'));try{
+   assert.deepEqual(components(beforePath),scenario==='aux-first'?['auxiliary','business-audit','local-batch','restore-control']:['bank','business-audit','local-batch','restore-control']);assert.equal(beforeDb.prepare('SELECT COUNT(*) n FROM vouchers WHERE status=\'posted\'').get().n,12);
    if(scenario==='aux-first')X.createAuxiliaryEntity(beforeDb,{accountSetId:sets[0].scope.accountSetId,kind:'project',code:'RESTORED',name:'continued',requestId:'continued'});
    else {
     const scope=sets[0].scope;B.registerBankAccount(beforeDb,{...scope,sourceId:'statement',glAccountCode:'1002'});
@@ -115,13 +130,14 @@ if(!scenario){
    const actual=db.prepare('SELECT direction,amount_cents FROM bank_transactions WHERE account_set_id=? ORDER BY id').all(scope.accountSetId);assert.deepEqual(actual.map(r=>r.amount_cents),[20000,2000,10000,1000]);
    console.log(scenario+' '+key+': CLI posted identity, display-only unknown/ambiguous/confirmed/inactive, independent 1130');
   }
-  const joint=backup(dbPath,'joint');assert.deepEqual(joint.manifest.components.map(c=>c.name),['bank','auxiliary','business-audit','local-batch']);const restored=restore(joint.backupDir,'joint-restored');const expectedTables={'bank':[...S.BANK_TABLES].sort(),'auxiliary':AS.AUX_TABLES,'business-audit':['audit_components','audit_database_instances','audit_events','audit_operations'],'local-batch':batchComponentContract(3).tables};assert.equal(expectedTables['local-batch'].length,12);for(const component of joint.manifest.components){assert.equal(component.version,component.name==='business-audit'?2:component.name==='local-batch'?3:1);assert.deepEqual(component.tables,expectedTables[component.name]);for(const key of ['structureDigest','contentDigest'])assert.match(component[key],/^[a-f0-9]{64}$/);}const restoredAudit=new DatabaseSync(restored,{readOnly:true});try{for(const table of expectedTables['business-audit'])assert.deepEqual(restoredAudit.prepare('SELECT * FROM '+table+' ORDER BY rowid').all(),db.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());}finally{restoredAudit.close();}
+  const joint=backup(dbPath,'joint');assert.deepEqual(joint.manifest.components.map(c=>c.name),['bank','auxiliary','business-audit','local-batch']);const restored=restore(joint.backupDir,'joint-restored');const expectedTables={'bank':[...S.BANK_TABLES].sort(),'auxiliary':AS.AUX_TABLES,'business-audit':['audit_components','audit_database_instances','audit_events','audit_operations'],'local-batch':batchComponentContract(3).tables};assert.equal(expectedTables['local-batch'].length,12);for(const component of joint.manifest.components){assert.equal(component.version,component.name==='business-audit'?2:component.name==='local-batch'?3:1);assert.deepEqual(component.tables,expectedTables[component.name]);for(const key of ['structureDigest','contentDigest'])assert.match(component[key],/^[a-f0-9]{64}$/);}const restoredAudit=new DatabaseSync(restored,{readOnly:true});try{for(const table of expectedTables['business-audit'].filter(t=>t!=='audit_database_instances'))assert.deepEqual(restoredAudit.prepare('SELECT * FROM '+table+' ORDER BY rowid').all(),db.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());}finally{restoredAudit.close();}
+  assert.throws(()=>pending4(restored),/restore_target_pending/);const continuedPath=join(seed4(joint.backupDir),'workbench.db');
   for(const item of sets){
-   expect1130(await cli(restored,item.scope,'reconcile',reconArgs));
+   expect1130(await cli(continuedPath,item.scope,'reconcile',reconArgs));
    const csv=join(root,item.key+'-continued.csv');fs.writeFileSync(csv,'date,summary,amount,direction,ref\n2026-01-02,continued,0.01,in,NEXT\n');
-   const r=await cli(restored,item.scope,'import',['--source','statement','--period','2026-01','--batch','continued-'+item.key,'--csv',csv,'--mapping',mappingFile]);assert.equal(r.transactionIds.length,1);
+   const r=await cli(continuedPath,item.scope,'import',['--source','statement','--period','2026-01','--batch','continued-'+item.key,'--csv',csv,'--mapping',mappingFile]);assert.equal(r.transactionIds.length,1);
   }
-  const check=new DatabaseSync(restored);try{
+  const check=new DatabaseSync(continuedPath);try{
    for(const mutate of [c=>c.exec('CREATE TABLE aux_unknown(id INTEGER)'),c=>c.exec('PRAGMA ignore_check_constraints=ON;UPDATE aux_component_migrations SET version=2')]){
     mutate(check);const before=rows(check);assert.throws(()=>B.listCandidates(check,{...sets[0].scope,transactionId:sets[0].transactionIds[0]}),e=>e.code==='aux_structure_invalid');assertAuditAppend(rows(check),before,['bank.refresh'],'invalid auxiliary rejects and records exact failed terminal');check.exec('DROP TABLE IF EXISTS aux_unknown;UPDATE aux_component_migrations SET version=1');
    }

@@ -1,3 +1,4 @@
+import { assertRestoreOpenPath, assertRestoreWritable } from './local-restore-control.mjs';
 // db.mjs — SQLite 存储（node:sqlite，零依赖）
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
@@ -8,6 +9,7 @@ import { assertOpenedDatabaseClaimsMatch } from "./database-open-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WORKBENCH_DATA_DIR || join(__dirname, "..", "data");
+assertRestoreOpenPath(join(DATA_DIR,'workbench.db'));
 mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_FILE = join(DATA_DIR, "workbench.db");
@@ -24,6 +26,9 @@ export const db = new DatabaseSync(DB_FILE);
 // 普通业务入口（本进程没有任何活动创建事实）行为与旧实现完全一致。
 try {
   assertOpenedDatabaseClaimsMatch(db, { dataDir: DATA_DIR, dbPath: DB_FILE });
+  // The path preflight used a different connection. Recheck the actual handle
+  // before WAL, core DDL or migrations if the file changed after preflight.
+  assertRestoreWritable(db);
 } catch (error) {
   try { db.close(); } catch { /* 拒绝后关闭失败不改变结论 */ }
   throw error;

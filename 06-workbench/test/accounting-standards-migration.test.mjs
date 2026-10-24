@@ -1,4 +1,19 @@
 #!/usr/bin/env node
+import { randomUUID as restoreUUID } from 'node:crypto';
+import { mkdirSync as restoreMkdir,copyFileSync as restoreCopy,existsSync as restoreExists } from 'node:fs';
+import {DatabaseSync as RestoreDb} from 'node:sqlite';
+import {assertRestoreOpenPath as pending4} from '../server/local-restore-control.mjs';
+import { tmpdir as restoreTmpdir } from 'node:os';
+import { join as restoreJoin } from 'node:path';
+const restoreSeedMap=new Map(),restoreSeedCache=new Map();
+function R4(input){const root=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(root);if(input.backupDir&&input.targetDir)restoreSeedMap.set(input.targetDir,input.backupDir);return {...input,ledgerPath:restoreJoin(root,'ledger.db'),operationId:restoreUUID()};}
+function seed4(backupDir){const dir=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(dir);restoreCopy(restoreJoin(backupDir,'workbench.db.snapshot'),restoreJoin(dir,'workbench.db'));return dir;}
+function businessSeed4(dataDir){if(!restoreSeedMap.has(dataDir)||!restoreExists(restoreJoin(dataDir,'restore.json')))return dataDir;if(restoreSeedCache.has(dataDir))return restoreSeedCache.get(dataDir);
+ let code;try{pending4(restoreJoin(dataDir,'workbench.db'));}catch(e){code=e.code;}if(code!=='restore_target_pending')throw Error('expected real pending target');
+ const source=new RestoreDb(restoreJoin(restoreSeedMap.get(dataDir),'workbench.db.snapshot'),{readOnly:true}),target=new RestoreDb(restoreJoin(dataDir,'workbench.db'),{readOnly:true});try{for(const {name} of source.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){if(['audit_database_instances','local_batch_database_instances','local_batch_job_bindings','local_batch_input_bindings','local_batch_stages','local_batch_locks','local_batch_lock_epochs','restore_control_component','restore_control_state'].includes(name))continue;if(JSON.stringify(source.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all())!==JSON.stringify(target.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()))throw Error('restored historical row mismatch '+name);}}finally{source.close();target.close();}
+ const seed=seed4(restoreSeedMap.get(dataDir));restoreSeedCache.set(dataDir,seed);return seed;
+}
+function cli4(input){if(input[0]!=='restore-new'||!input.includes('--backup')||!input.includes('--target')||input.includes('--ledger'))return input;const r=R4({backupDir:input[input.indexOf('--backup')+1],targetDir:input[input.indexOf('--target')+1]});return [...input,'--ledger',r.ledgerPath,'--operation',r.operationId];}
 /**
  * LOCAL-03a B1 迁移验收：真实 v3 / v4 合成旧库 → v5 profile 迁移、迁移前备份、恢复后由真实 db 入口再升级、
  * 旧业务行 / 指纹 / 旧报表值不变、旧 create 批次跨升级重启原样重放、append 与查询、故障回滚。
@@ -350,7 +365,7 @@ try {
       assert.equal(backup.backupMeta.schemaVersion, 4, "迁移前备份必须保持 v4 结构");
       const verify = LB.verifyBackup({ backupDir });
       assert.equal(verify.ok, true, JSON.stringify(verify));
-      const restored = LB.restoreNew({ backupDir, targetDir: join(root, "restored") });
+      const restored = LB.restoreNew(R4({ backupDir, targetDir: join(root, "restored") }));
       assert.equal(restored.ok, true, JSON.stringify(restored));
       assert.equal(restored.summary.schemaVersion, 4);
       const restoredPath = join(restored.targetDir, "workbench.db");
@@ -368,7 +383,8 @@ try {
       } finally { restoredConn.close(); }
 
       // 恢复库由真实 db.mjs 入口再升级到 v5，并核对旧报表值 / legacy 状态。
-      const report = runChild(restored.targetDir, reportScript);
+      assert.throws(()=>pending4(restoredPath),/restore_target_pending/);
+      const report = runChild(businessSeed4(restored.targetDir), reportScript);
       assert.equal(report.version, S.IMPORT_SCHEMA_VERSION);
       assert.equal(report.columns.includes("accounting_profile_id"), true);
       assert.equal(report.profileId, "legacy-small-coa-v1");
@@ -382,7 +398,7 @@ try {
       assert.equal(report.diagnostic, "legacy_profile_compatibility");
     } finally {
       try { fixture.conn.close(); } catch { /* ignore */ }
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      if(process.env.WORKBENCH_TEST_KEEP_FIXTURES!=='1')rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 

@@ -254,6 +254,7 @@ const REJECT_CODES = new Set([
   "restore_state_conflict",
   "restore_receipt_mismatch",
   "restore_digest_mismatch",
+  "restore_target_pending", "restore_control_invalid", "restore_control_future_version", "restore_target_binding_mismatch", "restore_contract_required", "restore_verify_failed",
   "restore_reconcile_insufficient_evidence",
 ]);
 

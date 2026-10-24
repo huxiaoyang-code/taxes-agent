@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertRestoreOpenPath } from '../server/local-restore-control.mjs';
 import { randomUUID } from 'node:crypto';
 import { withRequestMetadata,operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
 import { installBatchSchema } from '../server/local-batch-storage.mjs';
@@ -184,6 +185,7 @@ function openExplicitDatabase(rawPath) {
   }
   let db;
   try {
+    assertRestoreOpenPath(abs);
     db = new DatabaseSync(abs);
     db.exec("PRAGMA foreign_keys = ON");
     const tables = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`)

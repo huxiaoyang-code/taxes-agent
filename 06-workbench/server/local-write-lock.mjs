@@ -1,3 +1,4 @@
+import { assertRestoreWritable } from './local-restore-control.mjs';
 // Local domain lock capabilities. Tokens/owners in JSON and ALS never authorize inheritance.
 // No default db and no user callbacks are stored across an await.
 import { randomUUID } from 'node:crypto';
@@ -20,6 +21,7 @@ function fileIdentity(db) {
  return {path,dev:st.dev,ino:st.ino};
 }
 function instance(db) {
+ assertRestoreWritable(db);
  if(db.prepare("SELECT version FROM local_batch_component WHERE component='local-batch'").get()?.version!==3)fail('migration_requires_backup');
  const rows=db.prepare('SELECT instance_id,write_state FROM local_batch_database_instances WHERE is_active=1').all();
  if(rows.length!==1||rows[0].write_state!=='ready')fail('batch_not_ready');return rows[0].instance_id;
@@ -34,6 +36,7 @@ function assertGroup(db,g) {
  if(g.stage){const row=db.prepare('SELECT owner_instance,fencing_token,attempt FROM local_batch_stages WHERE id=?').get(g.stage.stageId);if(!row||row.owner_instance!==g.stage.instance||row.fencing_token!==g.stage.token||row.attempt!==g.stage.attempt)fail('fence_lost');}
 }
 export function acquireWriteResources(db,keys,{instance:owner=`write:${process.pid}:${randomUUID()}`,pid=process.pid,parent=null}={}) {
+ assertRestoreWritable(db);
  if(db.isTransaction)fail('audit_transaction_conflict');
  cleanupWriteResources(db);
  const ordered=[...new Set(keys)].sort(resourceOrder);if(ordered.some(k=>!validResourceKey(k)))fail('lock_request_invalid');
