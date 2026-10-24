@@ -20,6 +20,7 @@ export const REVIEW_Q2_CODE_FILES = Object.freeze([
   "local-audit-storage.mjs",
   "local-audit.mjs",
   "local-batch-storage.mjs",
+ "local-write-lock.mjs",
   "material-completeness.mjs",
   "money.mjs",
   "offline-accounting-readiness.mjs",
