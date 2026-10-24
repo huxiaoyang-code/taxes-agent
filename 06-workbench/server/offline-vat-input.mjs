@@ -108,7 +108,7 @@ export async function openVatInputPairFiles(request) {
     source = openReadonlyLedgerSource(request.target.dbPath);
     for (const c of configs) { requireValue(typeof c.config.db === 'string', 'pair_target_mismatch'); assertLedgerSourcePath(source, resolve(dirname(c.path), c.config.db)); }
     const scopes = configs.map(c => ({ enterpriseKey: request.target.enterpriseKey, accountSetId: request.target.accountSetId, fromPeriod: c.range.from, toPeriod: c.range.to }));
-    const snapshots = captureLedgerSnapshotPair(source, ...scopes);
+    const snapshots = captureLedgerSnapshotPair(source, ...scopes, request.version === 'offline-vat-q2-request/1' ? 'q2-target-batch-inventory/1' : undefined);
     for (const snapshot of [snapshots.prior, snapshots.target]) {
       requireValue(snapshot.instance.status === 'verified_local_audit_instance' && snapshot.instance.instanceId === request.target.databaseInstanceId, 'pair_instance_mismatch');
       requireValue(snapshot.profile.status === 'registered' && snapshot.accountSet.accounting_profile_id === configs[0].config.profileId && snapshot.accountSet.accounting_profile_id === configs[1].config.profileId, 'pair_profile_mismatch');
