@@ -1,0 +1,72 @@
+{
+  "version": "offline-accounting-facts/1",
+  "scope": {
+    "enterpriseKey": "SYNTHETIC-QUARTER-G02",
+    "accountSetId": "1",
+    "period": "2026-Q2",
+    "currency": "CNY",
+    "unit": "yuan"
+  },
+  "facts": [
+    {
+      "factId": "QG02-q2-facts-0",
+      "kind": "service_sale",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80004"
+      },
+      "contractId": "QG02-CONTRACT-80004",
+      "serviceStartDate": "2026-04-17",
+      "completionDate": "2026-04-17",
+      "collectionRightDate": "2026-04-17",
+      "mainService": true,
+      "ordinaryService": true
+    },
+    {
+      "factId": "QG02-q2-facts-1",
+      "kind": "service_sale",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80005"
+      },
+      "contractId": "QG02-CONTRACT-80005",
+      "serviceStartDate": "2026-05-17",
+      "completionDate": "2026-05-17",
+      "collectionRightDate": "2026-05-17",
+      "mainService": true,
+      "ordinaryService": true
+    },
+    {
+      "factId": "QG02-q2-facts-2",
+      "kind": "service_sale",
+      "confirmedBy": {
+        "name": "SYNTHETIC-OPERATOR",
+        "role": "business_operator"
+      },
+      "basis": "合成合同、验收、索款和结算登记，未经真实会计签字",
+      "invoiceRef": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80006"
+      },
+      "contractId": "QG02-CONTRACT-80006",
+      "serviceStartDate": "2026-06-17",
+      "completionDate": "2026-06-17",
+      "collectionRightDate": "2026-06-17",
+      "mainService": true,
+      "ordinaryService": true
+    }
+  ]
+}

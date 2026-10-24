@@ -1,0 +1,150 @@
+{
+  "version": "offline-quarterly-golden-manifest/1",
+  "syntheticOnly": true,
+  "accountantApproval": "pending",
+  "frozenBeforeDriver": true,
+  "base": "bf1caa3f64fc565fbf676e65c1d42f43d24793b6",
+  "expectationMethod": "Python Decimal from literal independent basic sales inputs; no product imports/runtime outputs",
+  "cases": [
+    "QG01",
+    "QG02"
+  ],
+  "files": [
+    {
+      "path": "expected/QG01.json",
+      "sha256": "c22259e9a4f14806a5166239a600aa41594d1717bde194c702b6134b71811ae2"
+    },
+    {
+      "path": "expected/QG02.json",
+      "sha256": "4e3d76950233754cc6976951e41b8d0df4907d274c0bca7e1f4d425c38e2fe25"
+    },
+    {
+      "path": "raw/QG01/q1/accounting.json",
+      "sha256": "414892579cef880e7706ae8f95f32cddb368386b7c44aabc843b745f0a9ae093"
+    },
+    {
+      "path": "raw/QG01/q1/action.json",
+      "sha256": "ddf2dac5ee4506f7dc662f08226b0d9c9bbf0bcd9dfebf982f83e80fd258b227"
+    },
+    {
+      "path": "raw/QG01/q1/business.json",
+      "sha256": "368180e789f8b087fabc5176a820c67c910797df20de9b09c5069689b3bfdeab"
+    },
+    {
+      "path": "raw/QG01/q1/declaration.json",
+      "sha256": "333f88b72ec9f0c7d9aac90095bb2fefee5576459476c63fc7f0e930bbf557ad"
+    },
+    {
+      "path": "raw/QG01/q1/input.json",
+      "sha256": "a07988ce578e4d6f2cf09a7700da097d0e709cf80fa346fe2444c17625d33fed"
+    },
+    {
+      "path": "raw/QG01/q1/materials.json",
+      "sha256": "60ad4fce6939390592ebed7bd10feeeddf03c4a145b60da94f2c1d611b037fc2"
+    },
+    {
+      "path": "raw/QG01/q1/sales.csv",
+      "sha256": "35bdc0be307901f6dec0162f7a449a894385216adbf7c073eb1d8097536a2c66"
+    },
+    {
+      "path": "raw/QG01/q1/tax.json",
+      "sha256": "419506d17ada907ed66d056c49a8382daad9c6c49d3f53bb44cddbbd5f56e424"
+    },
+    {
+      "path": "raw/QG01/q2/accounting.json",
+      "sha256": "8611863c079bb2ff16a6227f8b8a73cb14db11bbe143e257cbe9f76fd3d63355"
+    },
+    {
+      "path": "raw/QG01/q2/action.json",
+      "sha256": "b41f8f8c9e82ce7425e9d669ed41beef14d6b649f0b3dcdd459dce8b1c3b4883"
+    },
+    {
+      "path": "raw/QG01/q2/business.json",
+      "sha256": "67daf89cfdd31e123cd08add9a9c6b02f90c2f9c6177aee1600405aa67b0794c"
+    },
+    {
+      "path": "raw/QG01/q2/declaration.json",
+      "sha256": "40bcf2ba3e72bd4e7a8a81dc5b1d4e949da46f7db0b7cce6836f48bb431755d5"
+    },
+    {
+      "path": "raw/QG01/q2/input.json",
+      "sha256": "12918501a53afd337e52dce782d0dfde8424c408dd7de8a5f467ea857e922a4d"
+    },
+    {
+      "path": "raw/QG01/q2/materials.json",
+      "sha256": "ebc05c71a9fa8536756d246b34a07ac83447c61f89b73b5eef6679c8946b4a45"
+    },
+    {
+      "path": "raw/QG01/q2/sales.csv",
+      "sha256": "ccfc027bf95ddd6796757fdec59c502f066f12c0718a4ab35dc0e400871d3c36"
+    },
+    {
+      "path": "raw/QG01/q2/tax.json",
+      "sha256": "d0247010440c937923e58c012a7c369abd73affefba0192ee1b66b212469141b"
+    },
+    {
+      "path": "raw/QG02/q1/accounting.json",
+      "sha256": "48184dc5fbbc84f8e65699ca2a1498a8314405889a59f1c6aef9d0909209ace3"
+    },
+    {
+      "path": "raw/QG02/q1/action.json",
+      "sha256": "08edbdffb3bd60c31b02d05454a869f2cb82239c08c4c13bea107b4a681fd009"
+    },
+    {
+      "path": "raw/QG02/q1/business.json",
+      "sha256": "740ce0a1be40f506193bf5ac09597bb3d907f392315b9f9b79c8791d59a6f6a6"
+    },
+    {
+      "path": "raw/QG02/q1/declaration.json",
+      "sha256": "23cedefa43dd1cf7d306b00b08a26616dab9cfe236c1fa21aa9f2417bca5809f"
+    },
+    {
+      "path": "raw/QG02/q1/input.json",
+      "sha256": "12eb312a92cac11820902c5b7e6e0caaf90d7142c67ac43492787698e69886df"
+    },
+    {
+      "path": "raw/QG02/q1/materials.json",
+      "sha256": "5b08ddae4e3c16cdf87f425e35d497f2964f72dc62a8e8898f5b5b06a858b3fd"
+    },
+    {
+      "path": "raw/QG02/q1/sales.xlsx",
+      "sha256": "7332de34b95fd5fa35f1670ef5ad06294f706b3139017c514ed1063f41535f84"
+    },
+    {
+      "path": "raw/QG02/q1/tax.json",
+      "sha256": "0d16977b172e8af4c0997da1edcbf1e12bcd1ea33c30568e0bc92ca28b771b4c"
+    },
+    {
+      "path": "raw/QG02/q2/accounting.json",
+      "sha256": "fd1d23200aeef51fbf7507552fa6b43543ae555a186a6a5f8eed7e99c52dea39"
+    },
+    {
+      "path": "raw/QG02/q2/action.json",
+      "sha256": "c5ee292e42eba6822000e539bf5a2f041e502c9ea8fe609947151b6211648a5c"
+    },
+    {
+      "path": "raw/QG02/q2/business.json",
+      "sha256": "579c0a728c0fcf2170be45361029defdfe9c28c4628302c881ae5634c8740bba"
+    },
+    {
+      "path": "raw/QG02/q2/declaration.json",
+      "sha256": "3e133a16287326ae335b006db252ba3b0bf4d1665ce76baf4aa4ade86054cd63"
+    },
+    {
+      "path": "raw/QG02/q2/input.json",
+      "sha256": "2ea26f3d5a23687f7799b149f7999732119958e5a8ee36e3455f852ba4d72df7"
+    },
+    {
+      "path": "raw/QG02/q2/materials.json",
+      "sha256": "389821ab1a3dee92d5a581b44c3ef359c0dcf828c99ac262209f245249b6e1e6"
+    },
+    {
+      "path": "raw/QG02/q2/sales.csv",
+      "sha256": "845038b496f58712e17cb028d72c094dd66376424f7f2141d89107eafdb83c54"
+    },
+    {
+      "path": "raw/QG02/q2/tax.json",
+      "sha256": "1df1b8a9b8e7c5f9fa024ff9e827f38eb55325e98ca573e9678c987719e148d3"
+    }
+  ]
+}

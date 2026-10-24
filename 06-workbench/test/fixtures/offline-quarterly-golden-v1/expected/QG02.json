@@ -1,0 +1,672 @@
+{
+  "movements": [
+    {
+      "period": "2026-01",
+      "date": "2026-01-13",
+      "invoiceNumber": "80001",
+      "net": "174613.00",
+      "invoiceVAT": "1746.13",
+      "gross": "176359.13",
+      "expectedEntries": [
+        {
+          "accountCode": "1122",
+          "debit": "176359.13",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "174613.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "1746.13"
+        }
+      ],
+      "unclosedAsOf": {
+        "1122debit": "176359.13",
+        "5001credit": "174613.00",
+        "2221credit": "1746.13",
+        "totalDebitAndCreditEach": "176359.13"
+      },
+      "identity": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80001"
+      },
+      "expectedRuleId": "small-service-sale/1",
+      "sourceRef": {
+        "path": "q1/sales.xlsx",
+        "sourceId": "sales",
+        "sha256": "7332de34b95fd5fa35f1670ef5ad06294f706b3139017c514ed1063f41535f84",
+        "row": 2,
+        "fields": {
+          "number": {
+            "column": 1,
+            "cell": "A2"
+          },
+          "date": {
+            "column": 2,
+            "cell": "B2"
+          },
+          "sellerKey": {
+            "column": 3,
+            "cell": "C2"
+          },
+          "buyerKey": {
+            "column": 4,
+            "cell": "D2"
+          },
+          "net": {
+            "column": 5,
+            "cell": "E2"
+          },
+          "tax": {
+            "column": 6,
+            "cell": "F2"
+          },
+          "gross": {
+            "column": 7,
+            "cell": "G2"
+          },
+          "status": {
+            "column": 8,
+            "cell": "H2"
+          }
+        },
+        "sheet": "原票"
+      },
+      "accountingFactRef": {
+        "path": "q1/accounting.json",
+        "sha256": "48184dc5fbbc84f8e65699ca2a1498a8314405889a59f1c6aef9d0909209ace3",
+        "pointer": "/facts/0"
+      },
+      "businessFactRef": {
+        "path": "q1/business.json",
+        "sha256": "740ce0a1be40f506193bf5ac09597bb3d907f392315b9f9b79c8791d59a6f6a6",
+        "pointer": "/facts/0"
+      },
+      "taxFactRef": {
+        "path": "q1/tax.json",
+        "sha256": "0d16977b172e8af4c0997da1edcbf1e12bcd1ea33c30568e0bc92ca28b771b4c",
+        "pointer": "/invoices/0"
+      }
+    },
+    {
+      "period": "2026-02",
+      "date": "2026-02-13",
+      "invoiceNumber": "80002",
+      "net": "91723.00",
+      "invoiceVAT": "917.23",
+      "gross": "92640.23",
+      "expectedEntries": [
+        {
+          "accountCode": "1122",
+          "debit": "92640.23",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "91723.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "917.23"
+        }
+      ],
+      "unclosedAsOf": {
+        "1122debit": "268999.36",
+        "5001credit": "266336.00",
+        "2221credit": "2663.36",
+        "totalDebitAndCreditEach": "268999.36"
+      },
+      "identity": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80002"
+      },
+      "expectedRuleId": "small-service-sale/1",
+      "sourceRef": {
+        "path": "q1/sales.xlsx",
+        "sourceId": "sales",
+        "sha256": "7332de34b95fd5fa35f1670ef5ad06294f706b3139017c514ed1063f41535f84",
+        "row": 3,
+        "fields": {
+          "number": {
+            "column": 1,
+            "cell": "A3"
+          },
+          "date": {
+            "column": 2,
+            "cell": "B3"
+          },
+          "sellerKey": {
+            "column": 3,
+            "cell": "C3"
+          },
+          "buyerKey": {
+            "column": 4,
+            "cell": "D3"
+          },
+          "net": {
+            "column": 5,
+            "cell": "E3"
+          },
+          "tax": {
+            "column": 6,
+            "cell": "F3"
+          },
+          "gross": {
+            "column": 7,
+            "cell": "G3"
+          },
+          "status": {
+            "column": 8,
+            "cell": "H3"
+          }
+        },
+        "sheet": "原票"
+      },
+      "accountingFactRef": {
+        "path": "q1/accounting.json",
+        "sha256": "48184dc5fbbc84f8e65699ca2a1498a8314405889a59f1c6aef9d0909209ace3",
+        "pointer": "/facts/1"
+      },
+      "businessFactRef": {
+        "path": "q1/business.json",
+        "sha256": "740ce0a1be40f506193bf5ac09597bb3d907f392315b9f9b79c8791d59a6f6a6",
+        "pointer": "/facts/1"
+      },
+      "taxFactRef": {
+        "path": "q1/tax.json",
+        "sha256": "0d16977b172e8af4c0997da1edcbf1e12bcd1ea33c30568e0bc92ca28b771b4c",
+        "pointer": "/invoices/1"
+      }
+    },
+    {
+      "period": "2026-03",
+      "date": "2026-03-13",
+      "invoiceNumber": "80003",
+      "net": "109339.00",
+      "invoiceVAT": "1093.39",
+      "gross": "110432.39",
+      "expectedEntries": [
+        {
+          "accountCode": "1122",
+          "debit": "110432.39",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "109339.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "1093.39"
+        }
+      ],
+      "unclosedAsOf": {
+        "1122debit": "379431.75",
+        "5001credit": "375675.00",
+        "2221credit": "3756.75",
+        "totalDebitAndCreditEach": "379431.75"
+      },
+      "identity": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80003"
+      },
+      "expectedRuleId": "small-service-sale/1",
+      "sourceRef": {
+        "path": "q1/sales.xlsx",
+        "sourceId": "sales",
+        "sha256": "7332de34b95fd5fa35f1670ef5ad06294f706b3139017c514ed1063f41535f84",
+        "row": 4,
+        "fields": {
+          "number": {
+            "column": 1,
+            "cell": "A4"
+          },
+          "date": {
+            "column": 2,
+            "cell": "B4"
+          },
+          "sellerKey": {
+            "column": 3,
+            "cell": "C4"
+          },
+          "buyerKey": {
+            "column": 4,
+            "cell": "D4"
+          },
+          "net": {
+            "column": 5,
+            "cell": "E4"
+          },
+          "tax": {
+            "column": 6,
+            "cell": "F4"
+          },
+          "gross": {
+            "column": 7,
+            "cell": "G4"
+          },
+          "status": {
+            "column": 8,
+            "cell": "H4"
+          }
+        },
+        "sheet": "原票"
+      },
+      "accountingFactRef": {
+        "path": "q1/accounting.json",
+        "sha256": "48184dc5fbbc84f8e65699ca2a1498a8314405889a59f1c6aef9d0909209ace3",
+        "pointer": "/facts/2"
+      },
+      "businessFactRef": {
+        "path": "q1/business.json",
+        "sha256": "740ce0a1be40f506193bf5ac09597bb3d907f392315b9f9b79c8791d59a6f6a6",
+        "pointer": "/facts/2"
+      },
+      "taxFactRef": {
+        "path": "q1/tax.json",
+        "sha256": "0d16977b172e8af4c0997da1edcbf1e12bcd1ea33c30568e0bc92ca28b771b4c",
+        "pointer": "/invoices/2"
+      }
+    },
+    {
+      "period": "2026-04",
+      "date": "2026-04-17",
+      "invoiceNumber": "80004",
+      "net": "181127.00",
+      "invoiceVAT": "1811.27",
+      "gross": "182938.27",
+      "expectedEntries": [
+        {
+          "accountCode": "1122",
+          "debit": "182938.27",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "181127.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "1811.27"
+        }
+      ],
+      "unclosedAsOf": {
+        "1122debit": "562370.02",
+        "5001credit": "556802.00",
+        "2221credit": "5568.02",
+        "totalDebitAndCreditEach": "562370.02"
+      },
+      "identity": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80004"
+      },
+      "expectedRuleId": "small-service-sale/1",
+      "sourceRef": {
+        "path": "q2/sales.csv",
+        "sourceId": "sales",
+        "sha256": "845038b496f58712e17cb028d72c094dd66376424f7f2141d89107eafdb83c54",
+        "row": 2,
+        "fields": {
+          "number": {
+            "column": 1
+          },
+          "date": {
+            "column": 2
+          },
+          "sellerKey": {
+            "column": 3
+          },
+          "buyerKey": {
+            "column": 4
+          },
+          "net": {
+            "column": 5
+          },
+          "tax": {
+            "column": 6
+          },
+          "gross": {
+            "column": 7
+          },
+          "status": {
+            "column": 8
+          }
+        },
+        "line": 2
+      },
+      "accountingFactRef": {
+        "path": "q2/accounting.json",
+        "sha256": "fd1d23200aeef51fbf7507552fa6b43543ae555a186a6a5f8eed7e99c52dea39",
+        "pointer": "/facts/0"
+      },
+      "businessFactRef": {
+        "path": "q2/business.json",
+        "sha256": "579c0a728c0fcf2170be45361029defdfe9c28c4628302c881ae5634c8740bba",
+        "pointer": "/facts/0"
+      },
+      "taxFactRef": {
+        "path": "q2/tax.json",
+        "sha256": "1df1b8a9b8e7c5f9fa024ff9e827f38eb55325e98ca573e9678c987719e148d3",
+        "pointer": "/invoices/0"
+      }
+    },
+    {
+      "period": "2026-05",
+      "date": "2026-05-17",
+      "invoiceNumber": "80005",
+      "net": "113449.00",
+      "invoiceVAT": "1134.49",
+      "gross": "114583.49",
+      "expectedEntries": [
+        {
+          "accountCode": "1122",
+          "debit": "114583.49",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "113449.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "1134.49"
+        }
+      ],
+      "unclosedAsOf": {
+        "1122debit": "676953.51",
+        "5001credit": "670251.00",
+        "2221credit": "6702.51",
+        "totalDebitAndCreditEach": "676953.51"
+      },
+      "identity": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80005"
+      },
+      "expectedRuleId": "small-service-sale/1",
+      "sourceRef": {
+        "path": "q2/sales.csv",
+        "sourceId": "sales",
+        "sha256": "845038b496f58712e17cb028d72c094dd66376424f7f2141d89107eafdb83c54",
+        "row": 3,
+        "fields": {
+          "number": {
+            "column": 1
+          },
+          "date": {
+            "column": 2
+          },
+          "sellerKey": {
+            "column": 3
+          },
+          "buyerKey": {
+            "column": 4
+          },
+          "net": {
+            "column": 5
+          },
+          "tax": {
+            "column": 6
+          },
+          "gross": {
+            "column": 7
+          },
+          "status": {
+            "column": 8
+          }
+        },
+        "line": 3
+      },
+      "accountingFactRef": {
+        "path": "q2/accounting.json",
+        "sha256": "fd1d23200aeef51fbf7507552fa6b43543ae555a186a6a5f8eed7e99c52dea39",
+        "pointer": "/facts/1"
+      },
+      "businessFactRef": {
+        "path": "q2/business.json",
+        "sha256": "579c0a728c0fcf2170be45361029defdfe9c28c4628302c881ae5634c8740bba",
+        "pointer": "/facts/1"
+      },
+      "taxFactRef": {
+        "path": "q2/tax.json",
+        "sha256": "1df1b8a9b8e7c5f9fa024ff9e827f38eb55325e98ca573e9678c987719e148d3",
+        "pointer": "/invoices/1"
+      }
+    },
+    {
+      "period": "2026-06",
+      "date": "2026-06-17",
+      "invoiceNumber": "80006",
+      "net": "92431.00",
+      "invoiceVAT": "924.31",
+      "gross": "93355.31",
+      "expectedEntries": [
+        {
+          "accountCode": "1122",
+          "debit": "93355.31",
+          "credit": "0.00"
+        },
+        {
+          "accountCode": "5001",
+          "debit": "0.00",
+          "credit": "92431.00"
+        },
+        {
+          "accountCode": "2221",
+          "debit": "0.00",
+          "credit": "924.31"
+        }
+      ],
+      "unclosedAsOf": {
+        "1122debit": "770308.82",
+        "5001credit": "762682.00",
+        "2221credit": "7626.82",
+        "totalDebitAndCreditEach": "770308.82"
+      },
+      "identity": {
+        "sellerKey": "SYNTHETIC-QUARTER-G02",
+        "code": "",
+        "number": "80006"
+      },
+      "expectedRuleId": "small-service-sale/1",
+      "sourceRef": {
+        "path": "q2/sales.csv",
+        "sourceId": "sales",
+        "sha256": "845038b496f58712e17cb028d72c094dd66376424f7f2141d89107eafdb83c54",
+        "row": 4,
+        "fields": {
+          "number": {
+            "column": 1
+          },
+          "date": {
+            "column": 2
+          },
+          "sellerKey": {
+            "column": 3
+          },
+          "buyerKey": {
+            "column": 4
+          },
+          "net": {
+            "column": 5
+          },
+          "tax": {
+            "column": 6
+          },
+          "gross": {
+            "column": 7
+          },
+          "status": {
+            "column": 8
+          }
+        },
+        "line": 4
+      },
+      "accountingFactRef": {
+        "path": "q2/accounting.json",
+        "sha256": "fd1d23200aeef51fbf7507552fa6b43543ae555a186a6a5f8eed7e99c52dea39",
+        "pointer": "/facts/2"
+      },
+      "businessFactRef": {
+        "path": "q2/business.json",
+        "sha256": "579c0a728c0fcf2170be45361029defdfe9c28c4628302c881ae5634c8740bba",
+        "pointer": "/facts/2"
+      },
+      "taxFactRef": {
+        "path": "q2/tax.json",
+        "sha256": "1df1b8a9b8e7c5f9fa024ff9e827f38eb55325e98ca573e9678c987719e148d3",
+        "pointer": "/invoices/2"
+      }
+    }
+  ],
+  "quarters": {
+    "2026-Q1": {
+      "current": {
+        "1": "375675.00",
+        "2": "0.00",
+        "3": "375675.00",
+        "15": "11270.25",
+        "16": "7513.50",
+        "20": "3756.75",
+        "21": "0.00",
+        "22": "3756.75"
+      },
+      "yearToDate": {
+        "1": "375675.00",
+        "2": "0.00",
+        "3": "375675.00",
+        "15": "11270.25",
+        "16": "7513.50",
+        "20": "3756.75",
+        "21": null,
+        "22": null
+      }
+    },
+    "2026-Q2": {
+      "current": {
+        "1": "387007.00",
+        "2": "0.00",
+        "3": "387007.00",
+        "15": "11610.21",
+        "16": "7740.14",
+        "20": "3870.07",
+        "21": "0.00",
+        "22": "3870.07"
+      },
+      "yearToDate": {
+        "1": "762682.00",
+        "2": "0.00",
+        "3": "762682.00",
+        "15": "22880.46",
+        "16": "15253.64",
+        "20": "7626.82",
+        "21": null,
+        "22": null
+      }
+    }
+  },
+  "wholeCase": {
+    "vouchers": 6,
+    "entries": 18,
+    "closingMeansUnclosedAsOfNotSealed": true
+  },
+  "accountantApproval": "pending",
+  "sourceAuthenticity": "synthetic",
+  "yearToDateMeaning": "engineering_inference_pending_accountant_not_official_direct_Q2_FAQ",
+  "version": "offline-quarterly-golden-expected/1",
+  "id": "QG02",
+  "enterpriseKey": "SYNTHETIC-QUARTER-G02",
+  "expectationOrigin": {
+    "method": "Python Decimal from literal independent basic sales inputs; no product imports/runtime outputs",
+    "budgetVersion": "root-quarterly-acceptance-before-test-driver/1",
+    "base": "bf1caa3f64fc565fbf676e65c1d42f43d24793b6"
+  },
+  "derivation": {
+    "entries": "D1122=invoice gross; C5001=invoice net; C2221=original invoice VAT, not precomputed return VAT",
+    "trials": "Initial=0; cumulative literal monthly entry sums, no carryforward or closing; monthly is adjacent cumulative difference",
+    "tax": "S=sum original integer-yuan net per quarter; rows1/3=S,2=0,15=S*3%,16=S*2%,20=15-16,21=0,22=20-21; YTD six rows=actual Q1+Q2; YTD21/22=official dash null",
+    "status": "engineering expectation only; human accountant approval pending"
+  },
+  "sourceRefs": [
+    {
+      "path": "q1/accounting.json",
+      "sha256": "48184dc5fbbc84f8e65699ca2a1498a8314405889a59f1c6aef9d0909209ace3"
+    },
+    {
+      "path": "q1/action.json",
+      "sha256": "08edbdffb3bd60c31b02d05454a869f2cb82239c08c4c13bea107b4a681fd009"
+    },
+    {
+      "path": "q1/business.json",
+      "sha256": "740ce0a1be40f506193bf5ac09597bb3d907f392315b9f9b79c8791d59a6f6a6"
+    },
+    {
+      "path": "q1/declaration.json",
+      "sha256": "23cedefa43dd1cf7d306b00b08a26616dab9cfe236c1fa21aa9f2417bca5809f"
+    },
+    {
+      "path": "q1/input.json",
+      "sha256": "12eb312a92cac11820902c5b7e6e0caaf90d7142c67ac43492787698e69886df"
+    },
+    {
+      "path": "q1/materials.json",
+      "sha256": "5b08ddae4e3c16cdf87f425e35d497f2964f72dc62a8e8898f5b5b06a858b3fd"
+    },
+    {
+      "path": "q1/sales.xlsx",
+      "sha256": "7332de34b95fd5fa35f1670ef5ad06294f706b3139017c514ed1063f41535f84"
+    },
+    {
+      "path": "q1/tax.json",
+      "sha256": "0d16977b172e8af4c0997da1edcbf1e12bcd1ea33c30568e0bc92ca28b771b4c"
+    },
+    {
+      "path": "q2/accounting.json",
+      "sha256": "fd1d23200aeef51fbf7507552fa6b43543ae555a186a6a5f8eed7e99c52dea39"
+    },
+    {
+      "path": "q2/action.json",
+      "sha256": "c5ee292e42eba6822000e539bf5a2f041e502c9ea8fe609947151b6211648a5c"
+    },
+    {
+      "path": "q2/business.json",
+      "sha256": "579c0a728c0fcf2170be45361029defdfe9c28c4628302c881ae5634c8740bba"
+    },
+    {
+      "path": "q2/declaration.json",
+      "sha256": "3e133a16287326ae335b006db252ba3b0bf4d1665ce76baf4aa4ade86054cd63"
+    },
+    {
+      "path": "q2/input.json",
+      "sha256": "2ea26f3d5a23687f7799b149f7999732119958e5a8ee36e3455f852ba4d72df7"
+    },
+    {
+      "path": "q2/materials.json",
+      "sha256": "389821ab1a3dee92d5a581b44c3ef359c0dcf828c99ac262209f245249b6e1e6"
+    },
+    {
+      "path": "q2/sales.csv",
+      "sha256": "845038b496f58712e17cb028d72c094dd66376424f7f2141d89107eafdb83c54"
+    },
+    {
+      "path": "q2/tax.json",
+      "sha256": "1df1b8a9b8e7c5f9fa024ff9e827f38eb55325e98ca573e9678c987719e148d3"
+    }
+  ]
+}
