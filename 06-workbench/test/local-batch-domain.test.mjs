@@ -16,7 +16,7 @@ let db;
 try {
  const A=await import('../server/accounting.mjs');({db}=await import('../server/db.mjs'));
  const R=await import('../server/local-batch-runner.mjs'),S=await import('../server/local-batch-storage.mjs');
- if(process.env.W3B_CASE!=='boundaries'){
+ if(!['boundaries','source-evidence','source-case'].includes(process.env.W3B_CASE)){
  const count=process.env.W3B_SMOKE==='1'?1:20;
  const companies=[];
  const kinds=['balance-sheet','income-statement','cash-flow-statement','trial-balance','ledger'];
@@ -93,7 +93,14 @@ try {
  }
  console.log('local-batch-domain: chain passed '+count);
  }
- await boundaries(A,S,R,db);
+ if(process.env.W3B_CASE==='source-case')await reportSourceBoundary(A,S,R,db,process.env.R1_CASE);
+ else {
+  if(process.env.W3B_CASE!=='source-evidence')await boundaries(A,S,R,db);
+  for(const mode of ['positive','source-before','inline-before','inline-type-before','source-after','inline-after','source-recover','inline-recover','report-only','report-only-delete']){
+   const child=await owned(['test/local-batch-domain.test.mjs'],{env:{...process.env,W3B_CASE:'source-case',R1_CASE:mode}}).done;writeFileSync(join(root,'r1-'+mode+'.log'),child.stdout+'\n'+child.stderr);assert.equal(child.code,0,mode+' '+child.stdout+' '+child.stderr);
+  }
+  console.log('R1 report source evidence: ten real isolated cases passed');
+ }
 }finally {if(db){db.close();console.log('DB_CLOSED');}}
 
 async function boundaries(A,S,R,db){
@@ -148,4 +155,39 @@ async function boundaries(A,S,R,db){
  const crossed=await run(yearKey,year,periods);assert.equal(crossed.status,'succeeded');assert.equal(A.incomeStatement(year.id,'2026-12').current['净利润'],1700);assert.equal(A.incomeStatement(year.id,'2027-01').ytd['净利润'],1250);assert.equal(A.balanceSheet(year.id,'2027-01').totals.equity,12950);
  const profitDecember=db.prepare("SELECT COALESCE(SUM(e.credit-e.debit),0) total FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND v.status='posted' AND v.period<=? AND e.code='3103'").get(year.id,'2026-12').total;assert.equal(profitDecember,0);
  writeFileSync(join(root,'boundaries-result.json'),JSON.stringify({lossResult,lateResult,closeResult,posted,reportCases,crossed},null,2));console.log('local-batch-domain boundaries: all-resource and stage fence rollback, actual pre-COMMIT loss, seven real worker mutation refusals, year-end continuation passed');
+}
+
+async function reportSourceBoundary(A,S,R,db,mode){
+ const I=await import('../server/import-incremental.mjs'),B=await import('../server/local-batch-actions.mjs');
+ const key='R1-'+mode,set=A.createAccountSet({name:key,start_period:'2026-01',enterprise:{enterpriseKey:key}}),period='2026-01',format=mode.startsWith('inline')?'xlsx':'pdf';
+ A.setOpeningBalances(set.id,[{code:'1002',debit:1000},{code:'3001',credit:1000}]);
+ const amount=mode==='report-only-delete'?12.34:20;
+ const payload=(name,p='2026-01')=>({account_set:{name,start_period:'2026-01'},vouchers:[{sourceVoucherId:name+'-'+p,period:p,date:p+'-03',number:1,entries:[{code:'1002',debit:amount},{code:'5001',credit:amount}]}]});
+ const request={dryRun:false,mode:'append',accountSetId:set.id,source:{system:'r1',enterpriseKey:key},batchId:key,confirmNewBinding:true,payload:payload(key)};
+ if(mode.startsWith('report-only'))assert.equal(I.importIncremental(request).ok,true);
+ const reports=[{kind:'income-statement',formats:mode==='positive'?['pdf','xlsx']:[format]}];
+ const periods=[{period,...(mode.startsWith('report-only')?{}:{imports:[{batchId:key,mode:'append',confirmNewBinding:true,payload:request.payload}],post:{vouchers:[{sourceVoucherId:key+'-'+period}]},depreciation:true,carryforward:{yearEnd:false},periodCheck:true,close:true}),reports}];
+ const v=S.validateManifest({schemaVersion:1,jobKey:key,concurrency:2,items:[{itemKey:key,source:request.source,accountSetId:set.id,periods}]});assert.equal(v.ok,true,JSON.stringify(v));
+ const json=S.canonicalJson(v.manifest),plan=S.buildPlan({manifest:v.manifest,manifestDir:root}),out=join(root,'r1-out');
+ const facts=()=>JSON.stringify({vouchers:db.prepare('SELECT * FROM vouchers WHERE account_set_id=? AND period<=? ORDER BY id').all(set.id,period),entries:db.prepare('SELECT e.* FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND v.period<=? ORDER BY e.id').all(set.id,period),batches:db.prepare('SELECT * FROM import_batches WHERE batch_id=?').all(key),links:db.prepare('SELECT * FROM import_batch_vouchers WHERE batch_id=? ORDER BY id').all(key)});
+ let injected=false,before,importStage,stageBefore,file;
+ const inject=()=>{if(injected)return;injected=true;before=facts();importStage=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'import:%'").get(set.id);if(importStage){assert.equal(importStage.status,'succeeded');stageBefore={id:importStage.id,attempt:importStage.attempt,input_hash:importStage.input_hash,outcome_hash:importStage.outcome_hash};}
+  if(mode.startsWith('inline')){const row=db.prepare('SELECT * FROM local_batch_inputs WHERE batch_id=?').get(key);assert.equal(S.checkInputEvidence(row).ok,true);db.prepare('UPDATE local_batch_inputs SET content=? WHERE input_key=?').run(mode==='inline-type-before'?123:Buffer.from('tampered inline bytes'),row.input_key);const bad=db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(row.input_key);assert.equal(S.checkInputEvidence(bad,{allowSnapshotOnly:true}).ok,false);assert.equal(S.checkInputEvidence(bad).savedValid,false);writeFileSync(join(root,'tampered-input.bin'),bad.content instanceof Uint8Array?Buffer.from(bad.content):Buffer.from(String(bad.content)));}
+  else if(mode==='report-only-delete'){db.prepare('DELETE FROM import_batch_vouchers WHERE account_set_id=?').run(set.id);db.prepare('DELETE FROM import_voucher_sources WHERE account_set_id=?').run(set.id);assert.equal(db.prepare('SELECT COUNT(*) n FROM import_voucher_sources').get().n,0);assert.equal(db.prepare('SELECT SUM(e.debit-e.credit) n FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND e.code=\'1002\'').get(set.id).n,12.34);}
+  else {db.prepare('UPDATE import_voucher_sources SET voucher_fingerprint=? WHERE account_set_id=?').run('f'.repeat(64),set.id);assert.ok(I.getImportBatch(key).sourceTrace.some(t=>t.state!=='ok'));if(importStage){const item=db.prepare('SELECT * FROM local_batch_items WHERE id=?').get(importStage.item_id);assert.deepEqual(B.verifyStageEvidence({stage:importStage,item}).reason,'import_source_trace_changed');}}
+ };
+ const positive=()=>{if(injected)return;injected=true;const future={...request,batchId:key+'-future',payload:payload(key,'2026-02')};assert.equal(I.importIncremental(future).ok,true);db.prepare("UPDATE import_voucher_sources SET voucher_fingerprint=? WHERE batch_id=?").run('e'.repeat(64),future.batchId);const other=A.createAccountSet({name:'unrelated',start_period:period,enterprise:{enterpriseKey:'R1-OTHER'}});const foreign={...request,accountSetId:other.id,batchId:'R1-OTHER',source:{system:'r1',enterpriseKey:'R1-OTHER'},payload:payload('R1-OTHER')};assert.equal(I.importIncremental(foreign).ok,true);db.prepare('UPDATE import_voucher_sources SET voucher_fingerprint=? WHERE account_set_id=?').run('d'.repeat(64),other.id);};
+ const hooks=mode==='positive'?{beforeArtifactPublish:positive}:mode.endsWith('-before')||mode.startsWith('report-only')?{beforeArtifactPublish:inject}:mode.endsWith('-after')?{afterArtifactPublish(args){file=join(out,args.relativePath);assert.ok(readFileSync(file).length>0);inject();}}:{};
+ let result=await R.createAndRun({manifest:v.manifest,manifestJson:json,manifestHash:S.sha256(json),...plan,outputDir:out,hooks,allowSnapshotOnly:mode.startsWith('inline')});
+ if(mode.endsWith('-recover')){
+  assert.equal(result.status,'succeeded');const report=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'report:%'").get(set.id),artifact=S.getArtifactByStage(db,{itemId:report.item_id,period,stageKey:report.stage_key});file=join(out,artifact.relative_path);assert.ok(readFileSync(file).length>0);const original=readFileSync(file);
+  S.resetStage(db,{stageId:report.id,status:S.STAGE_STATUS.NEEDS_REVIEW,errorCode:'r1-controlled-recovery'});S.resetStagesForRetry(db,{jobKey:key});
+  const prepare=db.prepare;db.prepare=function(sql){const stmt=prepare.call(db,sql);if(!String(sql).startsWith('SELECT * FROM local_batch_artifacts WHERE item_id=? AND period=? AND stage_key=?'))return stmt;return new Proxy(stmt,{get(target,property){if(property==='get')return (...args)=>{const row=target.get(...args);if(row?.id===artifact.id)inject();return row;};const value=Reflect.get(target,property,target);return typeof value==='function'?value.bind(target):value;}});};
+  try{result=await R.resumeJob({jobKey:key,allowSnapshotOnly:mode.startsWith('inline')});}finally{db.prepare=prepare;}assert.deepEqual(readFileSync(file),original,'recovery retains published bytes');
+ }
+ assert.equal(injected,true,mode);
+ const stages=db.prepare('SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? ORDER BY s.id').all(set.id),reportStages=stages.filter(s=>s.stage_key.startsWith('report:'));
+ if(mode==='positive'){assert.equal(result.status,'succeeded',JSON.stringify(result));assert.ok(reportStages.every(s=>s.status==='succeeded'));assert.equal(A.incomeStatement(set.id,period).current['净利润'],20);}
+ else {assert.equal(result.status,'needs_review',JSON.stringify(result));assert.ok(reportStages.every(s=>s.status==='needs_review'));if(mode==='report-only-delete'){const after=JSON.parse(facts()),original=JSON.parse(before);assert.deepEqual(after.links,[]);delete after.links;delete original.links;assert.deepEqual(after,original,'only the explicitly deleted source associations change; 12.34 finance never replayed');}else assert.equal(facts(),before,'completed finance and source-batch associations never replay');if(stageBefore){const old=S.getStage(db,stageBefore.id);assert.deepEqual({id:old.id,attempt:old.attempt,input_hash:old.input_hash,outcome_hash:old.outcome_hash},stageBefore);assert.equal(old.status,'succeeded');}if(mode.endsWith('-before')||mode.startsWith('report-only'))assert.equal(db.prepare('SELECT COUNT(*) n FROM local_batch_artifacts').get().n,0,'before publish drift leaves no successful artifact');if(file)assert.ok(readFileSync(file).length>0,'published drift retains actual file');}
+ writeFileSync(join(root,'r1-result.json'),JSON.stringify({mode,result,stages,artifacts:db.prepare('SELECT * FROM local_batch_artifacts ORDER BY id').all(),sourceTrace:I.getImportBatch(key).sourceTrace,finance:JSON.parse(facts())},null,2));console.log('PASS R1 '+mode+' actual '+format+' worker / persisted source evidence');
 }

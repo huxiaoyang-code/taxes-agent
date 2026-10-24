@@ -404,7 +404,7 @@ export async function executeJob({
             }];
             if (!check.ok) {
               const code = String(check.problem || "input_changed").slice(0, 120);
-              if (!allowSnapshotOnly) {
+              if (!allowSnapshotOnly||check.savedValid===false) {
                 storage.resetStage(db, {
                   stageId: stage.id, status: STAGE_STATUS.NEEDS_REVIEW, errorCode: code,
                   errorMessage: "源资料证据已变化 / 丢失：拒绝静默沿用已保存快照",
@@ -640,17 +640,20 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
   const existing = getArtifactByStage(db, { itemId: item.id, period: stage.period, stageKey: stage.stage_key });
   const finalPath = resolve(outputDir, relativePath);
 
+  const assertCurrentEvidence=()=>{
+    const binding=actions.resolveItemBinding({db,item});
+    if(binding.accountSetId!==accountSetId||actions.reportBusinessDigest(db,accountSetId,stage.period)!==snapshot.business_hash)throw batchError('report_evidence_changed');
+    const saved=getSnapshot(db,{itemId:item.id,period:stage.period,kind:spec.kind});
+    if(!saved||['dto_hash','dto_json','business_hash','csv_hash','csv_text'].some(k=>saved[k]!==snapshot[k]))throw batchError('report_snapshot_changed');
+    const source=actions.verifyReportSourceEvidence({item,period:stage.period});if(!source.ok)throw batchError('report_evidence_changed',{reason:source.reason});
+    // Earlier jobs' saved input belongs to the same report dependency too.
+    const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(accountSetId,stage.period);
+    if(inputs.some(input=>!storage.checkInputEvidence(input,{allowSnapshotOnly:task.allowSnapshotOnly}).ok))throw batchError('input_changed');
+  };
   const publishLocked=fn=>{
     const resources=acquireItemLocks({item,instance,pid,parent:jobResources});
     try{return withWriteResources(db,resources,()=>{
-      storage.withReadSnapshot(db,()=>{
-        const binding=actions.resolveItemBinding({db,item});
-        if(binding.accountSetId!==accountSetId||actions.businessDigest(db,accountSetId,stage.period)!==snapshot.business_hash)throw batchError('report_evidence_changed');
-        const saved=getSnapshot(db,{itemId:item.id,period:stage.period,kind:spec.kind});
-        if(!saved||['dto_hash','dto_json','business_hash','csv_hash','csv_text'].some(k=>saved[k]!==snapshot[k]))throw batchError('report_snapshot_changed');
-        const inputs=db.prepare('SELECT * FROM local_batch_inputs WHERE item_id=? AND period<=?').all(item.id,stage.period);
-        if(!task.allowSnapshotOnly&&inputs.some(input=>!storage.checkInputEvidence(input).ok))throw batchError('input_changed');
-      });
+      storage.withReadSnapshot(db,assertCurrentEvidence);
       return withWriteStageFence(db,{stageId:stage.id,instance:lock.instance,token:lock.token,attempt},fn);
     });}finally{releaseItemLocks(resources);}
   };
@@ -658,6 +661,7 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
   if (existing && ["published", "publishing"].includes(existing.status) && existing.snapshot_hash === snapshotHash
       && existsSync(finalPath) && hashFile(finalPath) === existing.bytes_hash) {
     return publishLocked(()=>{auditedReportStep({db,job,item,stage,lock,attempt,phase:'recover'},()=>{
+      assertCurrentEvidence();
       db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE id=?`)
         .run("published", storage.nowIso(), existing.id);
       const ok = storage.writeStageResult(db, {
@@ -673,6 +677,7 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
         },
       });
       if (!ok) throw batchError("stage_result_rejected", {});
+      assertCurrentEvidence();
     });
     return { status: STAGE_STATUS.SUCCEEDED, recovered: true, artifactKey: existing.artifact_key };});
   }
@@ -710,6 +715,7 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
   return publishLocked(()=>{
   // 先登记 publishing（含预期 hash），再发布文件；崩溃后可按 hash 确认并补记。
   auditedReportStep({db,job,item,stage,lock,attempt,phase:'publishing'},()=>{
+    assertCurrentEvidence();
     const row = db.prepare(`SELECT id FROM local_batch_artifacts WHERE artifact_key=?`).get(artifactKey);
     if (row) {
       db.prepare(`UPDATE local_batch_artifacts
@@ -733,10 +739,7 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
   if (hooks?.afterArtifactPublish) hooks.afterArtifactPublish({ stage, item, relativePath, published });
   auditedReportStep({db,job,item,stage,lock,attempt,phase:'published'},()=>{
     if(!existsSync(finalPath)||hashFile(finalPath)!==bytesHash)throw batchError('artifact_hash_mismatch');
-    if(actions.resolveItemBinding({db,item}).accountSetId!==accountSetId||actions.businessDigest(db,accountSetId,stage.period)!==snapshot.business_hash)throw batchError('report_evidence_changed');
-    const current=getSnapshot(db,{itemId:item.id,period:stage.period,kind:spec.kind});
-    if(!current||['dto_hash','dto_json','business_hash','csv_hash','csv_text'].some(k=>current[k]!==snapshot[k]))throw batchError('report_snapshot_changed');
-    if(!task.allowSnapshotOnly&&db.prepare('SELECT * FROM local_batch_inputs WHERE item_id=? AND period<=?').all(item.id,stage.period).some(input=>!storage.checkInputEvidence(input).ok))throw batchError('input_changed');
+    assertCurrentEvidence();
     db.prepare(`UPDATE local_batch_artifacts SET status=?, updated_at=? WHERE artifact_key=?`)
       .run("published", storage.nowIso(), artifactKey);
     const ok = storage.writeStageResult(db, {
@@ -751,6 +754,7 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
       },
     });
     if (!ok) throw batchError("stage_result_rejected", {});
+    assertCurrentEvidence();
   });
   return { status: STAGE_STATUS.SUCCEEDED, artifactKey, bytesHash, bytes: bytes.length, workerThreadId, renderStarted, renderFinished };
   });

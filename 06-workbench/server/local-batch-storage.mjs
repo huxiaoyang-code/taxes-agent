@@ -1253,11 +1253,13 @@ export function getInput(db, { jobId, itemId, batchId }) {
 /**
  * 单条输入快照的源证据核验：再次读取原始文件字节并与登记指纹比较。
  * 返回 { ok, problem, sourceHash, currentHash }：problem ∈ input_missing / input_changed。
- * 内联 payload（无外部文件）只有已保存快照本身可比，按 input_hash 前一步核验（见 actions）。
+ * 已保存content自身的长度/hash始终校验；显式快照策略仅可豁免外部文件。
  */
-export function checkInputEvidence(input) {
-  if (!input) return { ok: false, problem: "input_snapshot_missing" };
-  if (!input.source_path) return { ok: true, problem: null, external: false };
+export function checkInputEvidence(input,{allowSnapshotOnly=false}={}) {
+  if (!input) return { ok: false, problem: "input_snapshot_missing", savedValid:false };
+  const saved=input.content instanceof Uint8Array?Buffer.from(input.content):null;
+  if(!saved||!Number.isSafeInteger(input.bytes)||input.bytes!==saved.length||sha256(saved)!==input.source_hash)return {ok:false,problem:'input_changed',external:false,savedValid:false,sourceHash:input.source_hash};
+  if (!input.source_path||allowSnapshotOnly) return { ok: true, problem: null, external: !!input.source_path, savedValid:true };
   let bytes = null;
   try { bytes = readFileSync(input.source_path); } catch { bytes = null; }
   if (!bytes) return { ok: false, problem: "input_missing", external: true, sourceHash: input.source_hash };

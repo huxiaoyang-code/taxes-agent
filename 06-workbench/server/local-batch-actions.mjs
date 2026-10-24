@@ -115,6 +115,18 @@ export function businessDigest(db, setId, period) {
   return sha256(canonicalJson({setId,period,accountSet,identity,auxiliary,accounts,openings,periods:periodRows,vouchers}));
 }
 
+/** Report snapshots freeze the scoped persistent dependencies as well as money.
+ * Comparing current consistency alone cannot detect deletion of both source
+ * sides or their replacement by another internally consistent registration.
+ */
+export function reportBusinessDigest(db,setId,period){
+ const sourceRows=table=>db.prepare(`SELECT s.* FROM ${table} s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
+ const sources=sourceRows('import_voucher_sources'),links=sourceRows('import_batch_vouchers'),ids=[...new Set([...sources,...links].map(r=>r.batch_id))].sort();
+ const batches=ids.map(id=>importStorage.getBatch(db,id)??null);
+ const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(setId,period).map(({content,...row})=>({...row,savedContentHash:content instanceof Uint8Array?sha256(Buffer.from(content)):null}));
+ return sha256(canonicalJson({business:businessDigest(db,setId,period),sources,links,batches,inputs}));
+}
+
 /**
  * 统一核实「规范企业身份 ↔ 账套」绑定（一家企业一个账套），任何阶段执行前都先过这一关。
  * - 绑定的账套与本次声明的账套不一致：enterprise_binding_mismatch；
@@ -711,7 +723,7 @@ export function buildReportSnapshots({ item, period, reports }) {
     const binding = resolveItemBinding({ db, item });
     const setId = binding.accountSetId;
     if (!setId) throw domainError("account_set_unresolved", "报表面向的账套未确定");
-    const businessHash = businessDigest(db, setId, period);
+    const businessHash = reportBusinessDigest(db, setId, period);
     const list = [];
     for (const report of reports) {
       const options = { kind: report.kind, period, format: "csv" };
@@ -837,6 +849,25 @@ function verifyDepreciationEvidence(evidence, stage, expectedSetId) {
  * 恢复时重新核验已成功阶段的上游证据是否仍然成立。
  * 任何被反过账 / 改金额 / 删除 / 状态回退 / 文件损坏都会返回 ok:false（调用方转 needs_review）。
  */
+/** Current report dependencies, including report-only jobs using earlier imports.
+ * Scope by actual account set and voucher period; later periods/other books do
+ * not invalidate this report. Reuse the import service's live source verifier.
+ */
+export function verifyReportSourceEvidence({item,period}) {
+ const setId=item.account_set_id;
+ const links=db.prepare(`SELECT l.* FROM import_batch_vouchers l LEFT JOIN vouchers v ON v.id=l.voucher_id WHERE l.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY l.id`).all(setId,period);
+ const sources=db.prepare(`SELECT s.* FROM import_voucher_sources s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
+ const batchIds=new Set([...links,...sources].map(r=>r.batch_id));
+ for(const batchId of batchIds){
+  const record=importStorage.getBatch(db,batchId),batch=getImportBatch(batchId);
+  if(!record||record.status!=='completed'||record.account_set_id!==setId||record.enterprise_key!==item.enterprise_key)return {ok:false,reason:'import_batch_state_changed'};
+  const relevant=[...links,...sources].filter(r=>r.batch_id===batchId),ids=new Set(relevant.map(r=>r.voucher_id)),trace=(batch.sourceTrace??[]).filter(r=>ids.has(r.voucherId));
+  if(!trace.length||relevant.some(row=>!trace.some(t=>t.sourceVoucherId===row.source_voucher_id&&t.voucherId===row.voucher_id&&t.accountSetId===setId))||trace.some(t=>t.state!=='ok'))return {ok:false,reason:'import_source_trace_changed'};
+ }
+ for(const link of links){const source=getVoucherSource(db,link.source_system,link.enterprise_key,link.source_voucher_id);if(!source||source.account_set_id!==setId||source.voucher_id!==link.voucher_id||source.content_fingerprint!==link.content_fingerprint)return {ok:false,reason:'import_source_trace_changed'};}
+ return {ok:true};
+}
+
 export function verifyStageEvidence({ stage, item, outputDir = null }) {
   const evidence = safeParse(stage.evidence_json);
   const key = stage.stage_key;
@@ -928,7 +959,7 @@ export function verifyStageEvidence({ stage, item, outputDir = null }) {
       const snapshot = getSnapshot(db, { itemId: item.id, period: stage.period, kind: evidence.kind });
       if (!snapshot) return { ok: false, reason: "report_snapshot_missing" };
       if (snapshot.business_hash !== evidence.businessHash) return { ok: false, reason: "report_evidence_changed" };
-      if (businessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) {
+      if (reportBusinessDigest(db, expectedSetId, stage.period) !== snapshot.business_hash) {
         return { ok: false, reason: "report_evidence_changed" };
       }
       // 产物文件核验：丢失 / 被改必须标失效（只重做报表，不重做会计）。
