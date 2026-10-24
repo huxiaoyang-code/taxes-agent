@@ -50,10 +50,14 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  closeSync,
+  constants as FS_CONSTANTS,
   copyFileSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -137,7 +141,7 @@ const EXIT = Object.freeze({ ok: 0, usage: 1, blocked: 2, failed: 3 });
 
 const USAGE = [
   "node scripts/windows-delivery-check.mjs --help",
-  "node scripts/windows-delivery-check.mjs --phase install-start --release <冷拷贝根> --node <node.exe> --npm <npm> --cache <授权缓存> --out <新输出目录> [--scratch-root <显式授权的绝对路径>] [--require-packaged-tooling]",
+  "node scripts/windows-delivery-check.mjs --phase install-start --release <冷拷贝根> --node <node.exe> --npm <npm> --cache <授权缓存> --out <新输出目录> [--scratch-root <显式授权的绝对路径>] [--require-packaged-tooling] [--full-bundle]",
   "node scripts/windows-delivery-check.mjs --phase upgrade-rollback --release <发布根> --out <新输出目录>   # W1: 恒为 w2_contract_pending blocked",
 ].join("\n");
 
@@ -159,10 +163,10 @@ function isForbiddenName(name) {
 
 export function parseArgs(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return { help: true };
-  const options = { phase: null, release: null, previousRelease: null, schemaPair: null, scratchRoot: null, node: process.execPath, npm: null, cache: null, out: null, keep: false, font: null, fontFamily: null, requirePackagedTooling: false };
+  const options = { phase: null, release: null, previousRelease: null, schemaPair: null, scratchRoot: null, node: process.execPath, npm: null, cache: null, out: null, keep: false, font: null, fontFamily: null, requirePackagedTooling: false, fullBundle: false };
   const seen = new Set();
-  const flags = new Set(["keep", "require-packaged-tooling"]);
-  const allowed = new Set(["phase", "release", "previous-release", "schema-pair", "scratch-root", "node", "npm", "cache", "out", "keep", "font", "font-family", "require-packaged-tooling"]);
+  const flags = new Set(["keep", "require-packaged-tooling", "full-bundle"]);
+  const allowed = new Set(["phase", "release", "previous-release", "schema-pair", "scratch-root", "node", "npm", "cache", "out", "keep", "font", "font-family", "require-packaged-tooling", "full-bundle"]);
   const valueKey = (name) => (name === "previous-release" ? "previousRelease" : name === "schema-pair" ? "schemaPair" : name === "scratch-root" ? "scratchRoot" : name === "font-family" ? "fontFamily" : name);
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -174,6 +178,7 @@ export function parseArgs(argv) {
     if (flags.has(name)) {
       if (name === "keep") options.keep = true;
       if (name === "require-packaged-tooling") options.requirePackagedTooling = true;
+      if (name === "full-bundle") options.fullBundle = true;
       continue;
     }
     const value = argv[index + 1];
@@ -604,6 +609,7 @@ export function auditInvocationPaths({ out = null, release = null, scratchRoot =
  * `tmp` / 其它目录仍按 forbidden 拒绝。
  */
 export function inspectRelease(releasePath, options = {}) {
+  if (options.fullBundle === true) return inspectReleaseBundle(releasePath);
   // 扫描 / 复制来源之前先核验根：原始绝对路径、非重解析点、完整祖先链到卷根、realpath 一致。
   const rootAudit = auditDirectoryRoot(releasePath, "release");
   if (!rootAudit.ok) throw new StageError(rootAudit.code, { details: { reason: rootAudit.reason } });
@@ -729,6 +735,182 @@ const OPTIONAL_RELEASE_FILES = [
   "test/windows-delivery.test.mjs",
 ];
 
+// A source bundle, not an offline dependency bundle. Paths are relative to the repository root.
+export const RELEASE_BUNDLE_SCHEMA_VERSION = 1;
+export const RELEASE_BUNDLE_MANIFEST = "windows-release-manifest.json";
+export const REQUIRED_BUNDLE_FILES = Object.freeze([
+  "06-workbench/package.json", "06-workbench/package-lock.json",
+  ...OPTIONAL_RELEASE_FILES.map((file) => `06-workbench/${file}`),
+  ...["bank-reconcile.mjs", "local-auxiliary.mjs", "local-audit.mjs", "local-batch.mjs"].map((file) => `06-workbench/scripts/${file}`),
+  "05-reconstruction/catalog.json",
+  ...["server.mjs", "backend.mjs", "tools.mjs", "tax-tools.mjs", "finance-model-transport.mjs", "package.json"].map((file) => `05-reconstruction/codex/mcp/finance-mcp/${file}`),
+]);
+const BUNDLE_KIND = "local-product-source-bundle";
+const bundleCompare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const bundleError = (code, path = null) => new StageError(code, { details: path === null ? null : { path } });
+function bundlePathAllowed(path) {
+  if (typeof path !== "string" || !path || /[\\:\x00-\x1f]/.test(path)) return false;
+  const parts = path.split("/");
+  if (parts.some((part) => !part || part === "." || part === ".." || /[. ]$/.test(part) || isForbiddenName(part))) return false;
+  return REQUIRED_BUNDLE_FILES.includes(path) || /^06-workbench\/(server|public)\/.+/.test(path);
+}
+function sameFileIdentity(a, b) {
+  return a.isFile() && b.isFile() && a.nlink === 1 && b.nlink === 1
+    && a.dev === b.dev && a.ino === b.ino && a.size === b.size
+    && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
+/** Read only a plain single-link file through an owned descriptor; validate the path on both sides. */
+function readBundleFile(root, rel) {
+  if (!bundlePathAllowed(rel) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
+  const path = join(root, ...rel.split("/"));
+  const check = () => {
+    const chain = auditAncestorChain(dirname(path));
+    const stat = lstatOrNull(path);
+    if (!chain.ok || !stat?.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+      || pathKey(realpathOrNull(path) ?? "") !== pathKey(path)) throw bundleError("bundle_file_refused", rel);
+    return stat;
+  };
+  const before = check();
+  let fd;
+  try {
+    fd = openSync(path, FS_CONSTANTS.O_RDONLY | (FS_CONSTANTS.O_NOFOLLOW ?? 0));
+    if (!sameFileIdentity(before, fstatSync(fd))) throw bundleError("bundle_source_changed", rel);
+    const buffer = readFileSync(fd);
+    if (!sameFileIdentity(before, fstatSync(fd)) || !sameFileIdentity(before, check()) || buffer.length !== before.size) throw bundleError("bundle_source_changed", rel);
+    return buffer;
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+function bundleDigest(manifest) {
+  return createHash("sha256").update(JSON.stringify({ schemaVersion: manifest.schemaVersion, kind: manifest.kind, packageVersion: manifest.packageVersion, files: manifest.files })).digest("hex");
+}
+const exactKeys = (object, names) => object && typeof object === "object" && !Array.isArray(object)
+  && Object.keys(object).sort().join("\0") === [...names].sort().join("\0");
+
+/** Reject unknown fields, aliases, paths and noncanonical lists before consulting the filesystem. */
+export function validateReleaseManifest(manifest) {
+  if (!exactKeys(manifest, ["schemaVersion", "kind", "packageVersion", "files", "digest"])
+    || manifest.schemaVersion !== RELEASE_BUNDLE_SCHEMA_VERSION || manifest.kind !== BUNDLE_KIND
+    || typeof manifest.packageVersion !== "string" || !manifest.packageVersion.trim()
+    || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 40000
+    || typeof manifest.digest !== "string" || !/^[a-f0-9]{64}$/.test(manifest.digest)) throw bundleError("bundle_manifest_invalid");
+  let previous = "";
+  const seen = new Set();
+  for (const entry of manifest.files) {
+    if (!exactKeys(entry, ["path", "bytes", "sha256"]) || !bundlePathAllowed(entry.path)
+      || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)
+      || (previous && bundleCompare(previous, entry.path) >= 0) || seen.has(entry.path.toLowerCase())) throw bundleError("bundle_manifest_invalid");
+    seen.add(entry.path.toLowerCase());
+    previous = entry.path;
+  }
+  for (const rel of [...REQUIRED_BUNDLE_FILES, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
+    if (!seen.has(rel.toLowerCase())) throw bundleError("bundle_manifest_required_missing", rel);
+  }
+  if (manifest.digest !== bundleDigest(manifest)) throw bundleError("bundle_manifest_digest_mismatch");
+  return true;
+}
+
+/** Strict, bounded whitelist enumeration; unrelated repository files are never scanned or copied. */
+export function inspectReleaseBundle(releasePath) {
+  const rootAudit = auditDirectoryRoot(releasePath, "bundle_source_root");
+  if (!rootAudit.ok) throw bundleError(rootAudit.code);
+  const root = rootAudit.resolved;
+  const workbenchDir = join(root, "06-workbench");
+  const workbenchAudit = auditDirectoryRoot(workbenchDir, "bundle_source_workbench");
+  if (!workbenchAudit.ok) throw bundleError(workbenchAudit.code);
+  // A build tree may have no manifest. A published source must retain and satisfy its disk evidence.
+  const manifestPath = join(root, RELEASE_BUNDLE_MANIFEST);
+  const manifestBytes = lstatOrNull(manifestPath) ? readBundleFile(root, RELEASE_BUNDLE_MANIFEST) : null;
+  let publishedManifest = null;
+  if (manifestBytes !== null) {
+    try { publishedManifest = JSON.parse(manifestBytes.toString("utf8")); }
+    catch { throw bundleError("bundle_manifest_invalid"); }
+    validateReleaseManifest(publishedManifest);
+  }
+  const paths = [...REQUIRED_BUNDLE_FILES];
+  const walk = (rel, depth = 0) => {
+    const path = join(root, ...rel.split("/"));
+    const audit = auditDirectoryRoot(path, "bundle_source_directory");
+    if (!audit.ok || depth > 14) throw bundleError("bundle_directory_refused", rel);
+    for (const name of readdirSync(path).sort(bundleCompare)) {
+      const child = `${rel}/${name}`;
+      if (!bundlePathAllowed(`${child}/placeholder`) && !bundlePathAllowed(child)) throw bundleError("bundle_path_invalid", child);
+      const stat = lstatSync(join(path, name));
+      if (stat.isSymbolicLink()) throw bundleError("bundle_file_refused", child);
+      if (stat.isDirectory()) walk(child, depth + 1);
+      else if (stat.isFile()) paths.push(child);
+      else throw bundleError("bundle_file_refused", child);
+      if (paths.length > 40000) throw bundleError("bundle_too_large");
+    }
+  };
+  walk("06-workbench/server");
+  walk("06-workbench/public");
+  const files = paths.sort(bundleCompare).map((rel) => {
+    const buffer = readBundleFile(root, rel);
+    return { path: rel, bytes: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") };
+  });
+  const packageJson = JSON.parse(readBundleFile(root, "06-workbench/package.json").toString("utf8"));
+  const bundleManifest = { schemaVersion: RELEASE_BUNDLE_SCHEMA_VERSION, kind: BUNDLE_KIND, packageVersion: String(packageJson.version ?? ""), files };
+  bundleManifest.digest = bundleDigest(bundleManifest);
+  validateReleaseManifest(bundleManifest);
+  if (publishedManifest !== null && (publishedManifest.digest !== bundleManifest.digest
+    || publishedManifest.packageVersion !== bundleManifest.packageVersion
+    || JSON.stringify(publishedManifest.files) !== JSON.stringify(bundleManifest.files))) throw bundleError("bundle_source_changed");
+  if (manifestBytes !== null) {
+    if (!readBundleFile(root, RELEASE_BUNDLE_MANIFEST).equals(manifestBytes)) throw bundleError("bundle_source_changed");
+  } else if (lstatOrNull(manifestPath)) throw bundleError("bundle_source_changed");
+  return { root, workbenchDir, packageVersion: bundleManifest.packageVersion, engines: String(packageJson?.engines?.node ?? ""),
+    lockSha256: files.find((file) => file.path === "06-workbench/package-lock.json").sha256,
+    digest: digestTree(workbenchDir, ["server", "public", "package.json", "package-lock.json"]),
+    bundleDigest: bundleManifest.digest, bundleManifest, manifestSha256: manifestBytes === null ? null : createHash("sha256").update(manifestBytes).digest("hex"),
+    files: files.length, excludedScratch: [] };
+}
+
+function assertBundleMatches(inspected) {
+  validateReleaseManifest(inspected?.bundleManifest);
+  const actual = inspectReleaseBundle(inspected.root);
+  if (pathKey(actual.workbenchDir) !== pathKey(inspected.workbenchDir)
+    || actual.bundleDigest !== inspected.bundleDigest || actual.digest !== inspected.digest
+    || actual.manifestSha256 !== inspected.manifestSha256
+    || JSON.stringify(actual.bundleManifest) !== JSON.stringify(inspected.bundleManifest)) throw bundleError("bundle_source_changed");
+  return actual;
+}
+
+function copyReleaseBundle(inspected, destRoot) {
+  // All source and destination checks precede the first mkdir. Repeat source inspection at the boundary.
+  const source = assertBundleMatches(inspected);
+  const raw = inspectRawAbsolutePath(destRoot);
+  if (!raw.ok) throw bundleError("copy_destination_not_absolute");
+  const dest = raw.resolved;
+  if (lstatOrNull(dest)) throw bundleError("copy_destination_exists");
+  if (!auditExistingAncestorChain(dest).ok) throw bundleError("copy_destination_refused");
+  if (pathCovers(source.root, dest)) throw bundleError("copy_destination_inside_source");
+  if (pathCovers(dest, source.root)) throw bundleError("copy_destination_contains_source");
+  assertBundleMatches(inspected);
+  mkdirSync(dest, { recursive: false });
+  if (!auditDirectoryRoot(dest, "copy_destination").ok) throw bundleError("copy_destination_refused");
+  const writeOwned = (rel, buffer) => {
+    const target = join(dest, ...rel.split("/"));
+    if (!auditExistingAncestorChain(dirname(target)).ok) throw bundleError("copy_destination_refused", rel);
+    mkdirSync(dirname(target), { recursive: true });
+    if (!auditDirectoryRoot(dirname(target), "copy_destination_directory").ok) throw bundleError("copy_destination_refused", rel);
+    writeFileSync(target, buffer, { flag: "wx" });
+    if (!readBundleFile(dest, rel).equals(buffer)) throw bundleError("bundle_copy_bytes_mismatch", rel);
+  };
+  for (const entry of source.bundleManifest.files) {
+    const buffer = readBundleFile(source.root, entry.path);
+    if (buffer.length !== entry.bytes || createHash("sha256").update(buffer).digest("hex") !== entry.sha256) throw bundleError("bundle_source_changed", entry.path);
+    writeOwned(entry.path, buffer);
+  }
+  assertBundleMatches(inspected);
+  const copied = inspectReleaseBundle(dest);
+  if (copied.bundleDigest !== source.bundleDigest || copied.digest !== source.digest) throw bundleError("bundle_copy_digest_mismatch");
+  writeOwned(RELEASE_BUNDLE_MANIFEST, Buffer.from(`${JSON.stringify(source.bundleManifest, null, 2)}\n`));
+  return { destRoot: dest, workbenchDir: copied.workbenchDir, copied: source.bundleManifest.files.map((entry) => entry.path), optionalMissing: [],
+    digest: copied.digest, bundleDigest: copied.bundleDigest, bundleManifest: copied.bundleManifest, manifestPath: join(dest, RELEASE_BUNDLE_MANIFEST) };
+}
+
 /**
  * 冷拷贝：把**已核验**发布目录的白名单文件复制到 `destRoot`。
  *
@@ -741,7 +923,8 @@ const OPTIONAL_RELEASE_FILES = [
  *  3) 拒绝时**不创建目标、不补删除**；目标创建后仍重验 realpath，不符即停手（已复制内容原样保留）。
  * 只做根 / 祖先 / 路径关系校验，不试图演绎全部恶意并发 TOCTOU，也不扫描系统目录。
  */
-export function copyReleaseWhitelist(inspected, destRoot) {
+export function copyReleaseWhitelist(inspected, destRoot, options = {}) {
+  if (options.fullBundle === true || inspected?.bundleManifest !== undefined) return copyReleaseBundle(inspected, destRoot);
   if (!inspected || typeof inspected !== "object" || typeof inspected.root !== "string" || typeof inspected.workbenchDir !== "string") {
     throw new StageError("copy_source_unverified", { details: { reason: "inspected_unavailable" } });
   }
@@ -2169,7 +2352,7 @@ async function installStart(run, options, paths) {
   run.phase = "install-start";
   const inspected = await run.stage("preflight", async () => {
     // 发布扫描只排除**明确已知**的本任务专属 scratch 路径（本工具固定 base + 本次运行刚建的根）。
-    const release = inspectRelease(options.release, { excludeScratch: [paths.scratch.base, paths.scratch.root] });
+    const release = inspectRelease(options.release, { excludeScratch: [paths.scratch.base, paths.scratch.root], fullBundle: options.fullBundle });
     // 固定 lock 的来源/完整性先静态校验；不把 npm 配置的 registry 当成能约束 lock URL 的保证。
     const lockSources = validateLockSources(join(release.workbenchDir, "package-lock.json"));
     run.assert("preflight.lock_sources", lockSources.ok, { code: "lock_source_not_allowed", details: { checked: lockSources.checked, violations: lockSources.violations } });
@@ -2182,12 +2365,20 @@ async function installStart(run, options, paths) {
       run.addAssertion("preflight.engines_declaration", "pass", null, { declared: release.engines });
     }
     if (release.excludedScratch.length > 0) run.note("preflight.scratch_excluded", "known_task_scratch_dirs_skipped", { relative: release.excludedScratch });
-    const copied = copyReleaseWhitelist(release, join(paths.tempRoot, "release-old"));
+    const copied = copyReleaseWhitelist(release, join(paths.tempRoot, "release-old"), { fullBundle: options.fullBundle });
     const copiedDestRegistered = trackExistingPath(paths.scratch, copied.destRoot, "cold_copy_root");
     const copiedWorkbenchRegistered = trackExistingPath(paths.scratch, copied.workbenchDir, "cold_copy_workbench");
     run.assert("preflight.cold_copy_registered", Boolean(copiedDestRegistered) && Boolean(copiedWorkbenchRegistered), { code: "cleanup_refused:cold_copy_not_registered" });
     run.assert("preflight.cold_copy_clean", !existsSync(join(copied.workbenchDir, "node_modules")) && !existsSync(join(copied.workbenchDir, "data")), { code: "cold_copy_not_clean" });
     run.assert("preflight.cold_copy_digest", copied.digest === release.digest, { code: "cold_copy_digest_mismatch" });
+    if (options.fullBundle) {
+      run.assert("preflight.full_bundle", copied.bundleDigest === release.bundleDigest && copied.optionalMissing.length === 0,
+        { code: "full_bundle_incomplete" });
+      jsonWrite(join(run.outDir, "artifacts", RELEASE_BUNDLE_MANIFEST), copied.bundleManifest);
+      run.note("preflight.bundle_manifest", "complete_source_bundle", { schemaVersion: RELEASE_BUNDLE_SCHEMA_VERSION,
+        packageVersion: release.packageVersion, bundleDigest: copied.bundleDigest, coreDigest: copied.digest,
+        files: copied.bundleManifest.files.length, manifest: `artifacts/${RELEASE_BUNDLE_MANIFEST}` });
+    }
     run.note("preflight.source", "release_inspected", { lockSha256: release.lockSha256, digest: release.digest, engines: release.engines, files: release.files });
     const tooling = selectTooling(copied.workbenchDir);
     run.note("preflight.tooling_source", tooling.mode, { missing: tooling.missing, files: tooling.digest });
@@ -2393,6 +2584,7 @@ async function main(argv) {
     font: options.font ? "<explicit-font>" : null,
     keep: options.keep,
     requirePackagedTooling: options.requirePackagedTooling,
+    fullBundle: options.fullBundle,
   };
   let scratch = null;
   let status = "ok";

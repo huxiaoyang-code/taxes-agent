@@ -142,3 +142,25 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 - 阶段预算为耗时后验，不能中途中断；子进程 / HTTP / 探针有真实 deadline，无总进程 watchdog。原生崩溃根因与事故未知影响继续保留。
 
 本实施会话交付后冻结停止；管理者继续最终完整 head 审查、PR 与合并，不把三文档收口当作 LOCAL-06 全包完成。
+
+## 2026-10-24 W2a 完整源码 bundle 候选交接
+
+负责人 `huxiaoyang-code`；[Issue #106](https://github.com/huxiaoyang-code/youshu-fork/issues/106)；BASE `80b770161859b75174bb6763eaabd13a6f095748`，分支 `codex/huxiaoyang-code/local-06-windows-w2a`。仅五授权路径实施；root已核本机员工额度失败后启用唯一兜底实施者，独验/全新独审/Git/PR仍由root管理。当前为候选交付，未PR/未合并，不预填最终验收。
+
+新增实际可用的 `--full-bundle` 与 `inspectReleaseBundle` → `copyReleaseWhitelist` 严格通路。manifest schema1含确切packageVersion、排序路径/bytes/SHA256与稳定bundleDigest；旧digest继续核心四目标合同。完整门要求server/public动态普通源码、package/lock、旧五项、四新增CLI与MCP/catalog七文件，保原相对结构；不能缺项再借开发脚本证明随包成功。四工具旧门、历史core-only兼容及owned清理协议保留。详见 [交付文档新增章节](../WINDOWS-DELIVERY.md)。
+
+最终命令 `D:/node.exe --test test/windows-release-manifest.test.mjs`，cwd `06-workbench`：11/11、0 skip、约9.95秒，外层exit0/close0、timedOut=false，内部所有自有child实际exit/close。UUID `346674d2-5e5b-4d10-8946-a2716904a998` 的全新合成根在import前设置TEMP/TMP/DATA与KEEP_FIXTURES/WORKBENCH_TEST_KEEP_FIXTURES；逐祖先无alias，夹具全部保留。实际复制逐文件字节/hash、缺项与清单攻击、真实junction/hardlink、改源TOCTOU及失败现场、旧核心兼容、冷副本五CLI安全调用与MCP initialize/list已覆盖，未建默认DB、未调用税务工具或税局。
+
+本机证据（ignored，仅交接定位）：`.agent-runs/local06-w2a-selftest-346674d2-5e5b-4d10-8946-a2716904a998.{log,exit.json}`、`.agent-runs/w2a-346674d2-5e5b-4d10-8946-a2716904a998/evidence.json`；完整清单在该root的 `1-cold/windows-release-manifest.json`。交付与五文件SHA登记为 `.agent-runs/local06-windows-w2a-delivery-20261024.md`、`local06-windows-w2a-final-files-20261024.json`。
+
+保留失败历史：UUID `28bfdd41-954d-476a-910f-1f4c1c97043d` 首轮8/11，链接创建沙箱EPERM、batch测试误用--help；经正常审批，UUID `ee9ee23b-4449-4069-bbd5-1566ed7a0512` 10/11，真实链接组已过，batch帮助纯文本被测试误按JSON解析。最终修正测试的真实命令与输出通道假设，未改生产CLI、未skip负例、未删除历史现场。
+
+未跑旧39全套、npm全套、完整冷安装/两最终冷链；此源码bundle不含离线依赖，不是正式安装器。W3b/W4、ledger/restore/重绑与升级回退仍后包；`w2_contract_pending`未解除，原W1历史数值与8/4/4事故/3221226505未知根因保持。root需在最新整合基线锁定完整head、独验与全新独审后处理PR/自动合并。实施者交付后FINAL STOP，无自有服务或未结束child。
+
+### W2a R1 持久manifest消费返工（2026-10-24，未PR/未合并）
+
+同Issue106/BASE80/原五路径；[R1认领](https://github.com/huxiaoyang-code/youshu-fork/issues/106#issuecomment-6378154681)。原五WIP开工bytes/SHA与上一交付一致，HEAD/branch通过只读元数据核对。旧实现忽略已有磁盘manifest的缺口由本轮修复；旧11/11仅覆盖当时内存清单与复制链，不能替代持久完整性证据。R1 必须消费已有磁盘manifest、受控读取并严格比实际版本/路径/bytes/hash/digest，记录原始manifestSha256防检查后或复制期间变动；无manifest构建源可生成清单，损坏发布来源不得重新签成新版本。
+
+R1最终聚焦14/14、0 skip、exit0/实际close0、约12.37秒；原11组保留，另3组实际磁盘正向/攻击/变更保护。动态源码正向fixture旧manifest重命名保留后才用作无manifest构建源；已发布源新增源码拒绝。真实未知字段/必需项遗漏/重复/穿越/坏摘要/bytes、hash、version不符/畸形JSON/同长度工具损坏/manifest硬链接与变更全覆盖，坏证据不重写。10个内部冷副本CLI/MCP child实际exit/close、无timeout/默认DB，所有夹具保留。
+
+新证据UUID `4ea25787-3bd0-404e-8123-3701d7b9949b`：`.agent-runs/local06-w2a-r1-selftest-4ea25787-3bd0-404e-8123-3701d7b9949b.{log,exit.json}`；`.agent-runs/w2a-r1-4ea25787-3bd0-404e-8123-3701d7b9949b/evidence.json` 及 `1-cold/windows-release-manifest.json`。新交付为 `.agent-runs/local06-windows-w2a-r1-delivery-20261024.md` / `local06-windows-w2a-r1-final-files-20261024.json`，列全部五个当前WIP文件；旧交付/证据保持，本轮无新红例。未Git/PR/合并、未跑旧39/npm全套/冷install/W4；w2_contract_pending及所有历史未完边界保持。交付后FINAL STOP，无自有运行服务/child，交root独验与全新独审。

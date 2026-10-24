@@ -230,3 +230,19 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 - 阶段预算为耗时后验，不能中途中断；子进程 / HTTP / 探针有真实 deadline，无总进程 watchdog。原生崩溃根因与事故未知影响继续保留。
 
 上游固定 e86 冷源依赖为 schema v3、LOCAL-06-BACKUP CLI、PR #52 Office 纯模块与 PR #58 审计独立原语；不描述为 main47 的全部现状。产品方向为本机单用户、多企业、每企一套；一个工作台 DB 可存多企业各自账套，main47 所有手工入口尚未统一强制该方向。禁止同 dataDir 多实例并发；两独立 dataDir / 端口只属本次隔离验收，不要求每企一目录。W1 / W2 分开验收；先更新交接再结束本实施会话，之后由管理者锁定最终 head。
+
+## 2026-10-24 W2a 五文件候选
+
+负责人 `huxiaoyang-code`；[Issue #106](https://github.com/huxiaoyang-code/youshu-fork/issues/106)，BASE `80b770161859b75174bb6763eaabd13a6f095748`。本片只改 windows-delivery-check、新 windows-release-manifest 聚焦测试及本任务/交接/Windows交付三文档；未改 server、生产CLI、MCP生产实现、package/lock、test-all、STATE 或索引。按项目负责人已授权额度耗尽兜底例外实施；root 仍负责独验、全新独审及 Git/PR/合并。
+
+已实施 `--full-bundle`、`inspectReleaseBundle`、严格逐文件版本清单与真实 `copyReleaseWhitelist` 接入。核心四目标 digest 保持，完整源码总摘要独立为 bundleDigest；旧五项转为完整门必需项，新增四本地CLI与MCP七必要文件保仓库结构。server/public动态枚举，不硬编码文件总数。缺项、清单攻击、路径别名、硬链接、检查后变更先拒绝；复制中变化保留失败现场；不把旧optionalMissing或四工具门冒充完整成功。完整API/参数/清单算法见 [Windows交付说明](../WINDOWS-DELIVERY.md)。
+
+实施者最终聚焦 `D:/node.exe --test test/windows-release-manifest.test.mjs`（cwd `06-workbench`）：11/11、0 skip，exit0/实际close0，证据 UUID `346674d2-5e5b-4d10-8946-a2716904a998`；实际完整复制、逐项hash、缺项/篡改/清单攻击/动态源码、真实junction/hardlink、复制中改源保留、旧核心兼容、冷副本五CLI安全入口和MCP stdio initialize/tools/list通过。import前隔离TEMP/TMP/DATA、双KEEP，所有夹具保留，无真实库/凭据/税局/网络调用。首红8/11（链接沙箱EPERM与batch错误帮助参数）、第二轮10/11（帮助文本格式假设）按原事实保留，最终通过不覆盖历史。
+
+待 root 管理验收与全新未参与实现者独审；未开PR/未合并，不关闭Windows或LOCAL06总任务。未跑旧39完整套/npm全套/冷安装/最终两冷链；W4 ledger/restore/重绑与upgrade-rollback仍属后包，`w2_contract_pending`保持。既有W1数值、删除事故8/4/4、3221226505根因未知等历史保持。本片交付后实施会话停止，下一包新会话。
+
+### W2a R1 同包最小返工候选（2026-10-24）
+
+[本次认领](https://github.com/huxiaoyang-code/youshu-fork/issues/106#issuecomment-6378154681)，BASE80与五文件窗口不变。root已复现旧候选忽略持久manifest而重新签损坏冷源；R1 改为已存在manifest时必须从磁盘受控读取/严格验证，并将版本、逐文件path/bytes/hash与总摘要对照实际白名单，冻结manifest原始SHA供复制前后重验；无manifest源码构建仍合法动态纳入。旧11组通过不再被解释为已覆盖持久证据消费。
+
+原11组断言全部保留，源码动态正向仅将自有夹具的manifest重命名保留后运行；新增3组真实磁盘坏例与正向/变更保护，最终 `D:/node.exe --test test/windows-release-manifest.test.mjs`（cwd `06-workbench`）**14/14、0 skip、exit0/实际close0**，UUID `4ea25787-3bd0-404e-8123-3701d7b9949b`，约12.37秒。未知字段、缺必需项、重复/穿越、坏摘要、bytes/hash/version不匹配、畸形JSON、同长度改工具、发布后新增源码、manifest硬链接/变更均真实拒绝且不重写坏证据；原真实guard/TOCTOU/旧核心/五CLI/MCP保留。全部新旧夹具保留，本轮无新红例；root独验/全新独审/PR仍待，未跑旧39/npm全套/冷install/W4，不解除w2_contract_pending。

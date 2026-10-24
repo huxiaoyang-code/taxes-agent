@@ -367,3 +367,33 @@ upgrade-rollback 在 W1 一律 w2_contract_pending / blocked / exit 2，不建�
 真实 W2 尚未实现：需旧发布真实入口建数据 → 运行中一致备份 / verify → restore-new 到升级副本 → 停旧发布自有测试进程 → 新发布迁移副本 → 核对金额 / 来源 / 迁移与备份记录 → 重启确认不重复迁移。旧数据保留、不被新发布打开；失败保留副本，再从升级前已验证备份恢复到另一新目录，用旧发布核对。
 
 未知组件被备份拒绝是当前安全边界，不得过滤表制造兼容。最终 core5 / 辅助核算、审计、银行、批量组合需各自提交与 schema 契约，不能从本次 e86 冷源验证推导。
+
+## 2026-10-24 W2a 完整源码发布清单候选（待管理验收）
+
+本片基线为 `80b770161859b75174bb6763eaabd13a6f095748`，负责人 `huxiaoyang-code`，认领 [Issue #106](https://github.com/huxiaoyang-code/youshu-fork/issues/106)。新增完整**源码** bundle，不包含 Node、npm 缓存或 `node_modules`，不代表完整离线发行包，也不代表 W4 或 Windows 最终验收完成。
+
+`install-start` 新增 `--full-bundle`。`--release` 必须指向同时含 `06-workbench` 与 `05-reconstruction` 的根，保留仓库相对结构。原 `--require-packaged-tooling` 仍只检查 runtime/start/delivery/test 四工具；完整门由 `--full-bundle` 单独启用。原默认核心发布路径继续可用，缺工具的旧 core-only 来源不会自动成为完整 bundle。
+
+```powershell
+node scripts/windows-delivery-check.mjs --phase install-start --release <完整源码根> --node <node.exe> --npm <npm入口> --cache <授权缓存> --out <新输出目录> --scratch-root <授权专属根> --full-bundle --require-packaged-tooling
+```
+
+也可直接调用 `inspectReleaseBundle(sourceRoot)`，再将其返回对象传给 `copyReleaseWhitelist(inspected, newDestination, { fullBundle: true })`；携带 `bundleManifest` 的对象即使不传第三参数也强制走完整校验。`inspectRelease(sourceRoot, { fullBundle: true })` 等价于完整检查。`validateReleaseManifest` 只校验清单结构，真实复制还会重新检查来源和实际字节，不能仅凭自造清单获得复制授权。
+
+完整白名单为 `06-workbench/server`、`public` 递归普通文件，package/lock，旧五项（local-backup、Windows runtime/start/delivery 及原交付测试），另加 bank-reconcile/local-auxiliary/local-audit/local-batch 四 CLI；MCP 仅复制 `05-reconstruction/catalog.json` 与 `codex/mcp/finance-mcp` 下 server/backend/tools/tax-tools/finance-model-transport/package 六文件。所有项目均必需，server/public 的后续普通源码按实际枚举纳入，不固定历史文件数。不扫描或复制白名单外的账套、配置、会话、依赖和整个 `05-reconstruction`。
+
+schemaVersion 1 / kind `local-product-source-bundle` 清单包含确切 packageVersion、按路径排序的 `files[{path,bytes,sha256}]` 与稳定总摘要 `digest`；总摘要为 `{schemaVersion,kind,packageVersion,files}` 按该顺序 JSON 序列化的 SHA256。未知字段、重复或大小写冲突路径、穿越、ADS、尾部点/空格、未知工具路径及不合法摘要拒绝。返回值 `digest` 继续保持旧核心四目标合同；完整总摘要另为 `bundleDigest`，不能混用。复制根生成 `windows-release-manifest.json`，正式 install-start 另将同份清单写入 out/artifacts 并记录两个摘要。
+
+源与目标的原始绝对路径、完整祖先链、realpath、互不包含和目标不存在均在目标创建前核验。逐文件以自有 fd 读取，核对读取前后普通文件身份和 nlink=1；重解析点与普通文件硬链接拒绝。缺项、旧检查后变更或清单与实际内容不符在冷副本创建前失败。复制时独占新建文件，逐项核对字节，再重验完整源/目标与两个摘要；中途变更失败保留现场，无补删或回滚宣称。既有 scratch 所有权与清理协议保持。
+
+实施者聚焦命令（cwd `06-workbench`）：`D:/node.exe --test test/windows-release-manifest.test.mjs`，最终 **11/11、0 skip、exit 0 且实际 close 0**。新 UUID `346674d2-5e5b-4d10-8946-a2716904a998` 在 import 前隔离 TEMP/TMP/DATA 与双 KEEP；所有夹具保留。覆盖实际完整复制/逐项摘要、每个固定必需项缺失、同长度错误内容、未知清单字段/路径与重复/穿越、未来 server 源码动态纳入、真实 junction/hardlink、复制中改源保留、旧核心兼容；五 CLI 从冷副本走帮助或显式缺库只读失败路径，MCP 从冷副本实际 stdio initialize/tools/list，无税务调用、无默认库。
+
+首轮 **8/11**：junction/hardlink 为沙箱 EPERM，batch 测试误用 `--help`；正常审批重跑 **10/11** 时真实链接组已通过，但测试误把 batch 的 help 纯文本当 JSON。修正测试对既有命令/输出通道的假设后才得到上述最终结果，历史红例均保留，未删改旧套断言。未运行旧39全套、npm全套、冷安装、两条最终冷链或升级回退；`w2_contract_pending` 仍保持。W3b/W4 及最终完整 head 的管理独验、全新独审、PR/合并另行完成；旧 W1 数值、删除事故8/4/4与原生3221226505根因未知事实保持。
+
+### W2a R1：消费磁盘持久清单（2026-10-24，待管理验收）
+
+上一候选的完整检查只从现有文件重建内存清单，未消费冷根已有 `windows-release-manifest.json`；因此持久清单损坏、缺项或发布文件同长度损坏可能被重新签成新源。原11组通过不能证明这条发布后完整性合同，旧结果按其实际覆盖范围保留。
+
+R1 区分两类输入：无 manifest 的源码构建来源可按白名单生成清单；已有 manifest 的发布来源先用同一 fd、完整祖先/realpath、普通文件与 nlink=1 守卫读取磁盘证据，严格解析验证，再核对确切版本、排序路径/bytes/SHA256与总摘要和实际完整白名单一致。异常直接拒绝，不忽略或重写证据。检查返回 `manifestSha256`（构建来源为 null），复制前后继续核验该原始文件摘要；manifest 读取期间或复制期间变化也失败并保留现场。动态新增源码正向仅适用于无manifest构建源；已发布来源增加未登记源码同样拒绝。核心digest、bundleDigest与原CLI参数/四工具门保持。
+
+R1 同一聚焦命令最终 **14/14、0 skip，exit0/实际close0**，约12.37秒；原11组断言保留，动态正向夹具的旧manifest仅重命名保留于本次证据根，明确成为源码构建来源。新增正确磁盘manifest冷源再复制、未知字段/缺必需项/重复/穿越/坏摘要/错误bytes或hash/版本不符/畸形JSON、发布工具同长度损坏、发布后多出源码、manifest硬链接及检查后/复制中改manifest，均实际拒绝且不重新签写坏证据。UUID `4ea25787-3bd0-404e-8123-3701d7b9949b` 全新隔离根、原10个冷副本CLI/MCP child均实际exit/close，夹具全保留。本轮无新红例；上一候选及更早失败现场不动。仍未跑旧39套/npm全套/冷安装/W4/最终两冷链或升级回退，待root独验与全新独审，不声明已PR或已合并。
