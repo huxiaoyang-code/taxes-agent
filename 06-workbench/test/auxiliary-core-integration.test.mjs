@@ -2,11 +2,17 @@ import {assert,suite,DatabaseSync,fs,join} from './auxiliary-storage.test.mjs';
 const all=c=>Object.fromEntries(c.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,c.prepare('SELECT * FROM \"'+name+'\" ORDER BY rowid').all()]));
 function assertAuditAppend(after,before,actions,message,state='failure') {
  const row=v=>typeof v==='string'?JSON.parse(v):v;
- const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
+ const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations','local_batch_lock_epochs'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
  assert.deepEqual(business(after),business(before),message);
  for(const table of ['audit_events','audit_operations'])for(const original of before[table]??[])assert.ok((after[table]??[]).some(v=>JSON.stringify(v)===JSON.stringify(original)),table+' history must remain exact');
  const added=table=>(after[table]??[]).filter(v=>!(before[table]??[]).some(old=>JSON.stringify(old)===JSON.stringify(v))).map(row);
  const events=added('audit_events').sort((a,b)=>a.seq-b.seq),ops=added('audit_operations');
+ const expected=new Map(),binding=new Map((before.import_enterprise_account_sets??[]).map(row).map(r=>[r.account_set_id,r.enterprise_key]));
+ for(const event of events){assert.ok(Number.isSafeInteger(event.account_set_id)&&event.account_set_id>0);for(const key of [`account-set:${event.account_set_id}`,...(binding.has(event.account_set_id)?[`book:${binding.get(event.account_set_id)}`]:[])])expected.set(key,(expected.get(key)??0)+1);}
+ const epochMap=value=>new Map((value.local_batch_lock_epochs??[]).map(row).map(r=>[r.resource_key,r.last_token]));const oldEpoch=epochMap(before),newEpoch=epochMap(after);
+ assert.deepEqual([...newEpoch.keys()].sort(),[...oldEpoch.keys()].sort(),'failure may only advance the exact existing resources');
+ for(const [key,token] of oldEpoch)assert.equal(newEpoch.get(key),token+(expected.get(key)??0),'exact resource acquisition count: '+key);
+ assert.deepEqual(after.local_batch_locks,before.local_batch_locks);assert.equal((after.local_batch_locks??[]).length,0,'all temporary active ownership released');
  assert.deepEqual(events.map(e=>e.action),actions);assert.equal(ops.length,actions.length);
  for(const event of events){
   const operation=ops.find(o=>o.operation_id===event.operation_id&&o.attempt===event.attempt&&o.database_instance_id===event.database_instance_id);assert.ok(operation);

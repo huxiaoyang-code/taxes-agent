@@ -1,3 +1,5 @@
+> 2026-10-24：LOCAL-07 W3b 共享领域锁 / batch3 持久代次候选已实施与定点自测，根独验、全新独审和 PR 尚待完成。见 [CLI 契约](LOCAL-BATCH-CLI.md)、[任务](tasks/LOCAL-07-CLI.md)、[交接](handoffs/LOCAL-07-CLI.md)。历史 batch1/2 只读备份兼容保留；W4 恢复执行授权与路径重绑仍后置。
+
 > 2026-10-23：辅助B2a已随PR70合并；B2b八工具真实入口/模型边界已实施、自测83套通过的候选，待管理验收，真实进展与限制见 [辅助交接](handoffs/LOCAL-03b.md)，不以旧候选记录推断已完成。
 
 # 代码管理索引 · CODE INDEX

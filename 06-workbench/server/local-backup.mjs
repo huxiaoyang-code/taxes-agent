@@ -824,7 +824,7 @@ function describeContent(conn, tables) {
  * 注册表里的 v1 契约才被当成受支持组件。
  */
 const COMPONENT_REGISTRY = Object.freeze({
-  [LOCAL_BATCH_COMPONENT]: Object.freeze({name:LOCAL_BATCH_COMPONENT,version:2,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2]}}),
+  [LOCAL_BATCH_COMPONENT]: Object.freeze({name:LOCAL_BATCH_COMPONENT,version:3,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2,3]}}),
   [AUDIT_COMPONENT]: Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}}),
   auxiliary: Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}),
   bank: Object.freeze({
@@ -1789,7 +1789,7 @@ function validateManifest(manifest) {
     for (const entry of manifest.components) {
       if (!isPlainObject(entry)) return { code: "manifest_invalid", details: { field: "components" } };
       if (!isNonEmptyString(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
-      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : entry.name===LOCAL_BATCH_COMPONENT && (entry.version===1||entry.version===2) ? batchComponentContract(entry.version) : COMPONENT_REGISTRY[entry.name];
+      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : entry.name===LOCAL_BATCH_COMPONENT && ([1,2,3].includes(entry.version)) ? batchComponentContract(entry.version) : COMPONENT_REGISTRY[entry.name];
       if (!contract) return { code: "component_unsupported", details: { component: entry.name } };
       if (seen.has(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
       seen.add(entry.name);

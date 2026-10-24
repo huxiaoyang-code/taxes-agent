@@ -498,3 +498,34 @@ createJob 在既有事务内同时写全部新 job/input 绑定；当前实例�
 最新snapshot可以覆盖；旧artifact可属于旧attempt、可为invalid重渲染中断或发布后checkpoint前的publishing。reportInputHash不含CSV摘要，因此历史/成功artifact按自己的checkpoint字节证据检查，不能强制等最新可变CSV；只有同attempt、running且publishing的当前发布窗核当前CSV bytes/hash。validator不读输入源或输出路径；产物/业务新鲜度仍由原runner检查。
 
 claim内部stamp失败也固定preserveDatabase，未登记分支也不删除本次零字节DB；不打开SQLite判空，不增加force/cleanup。实际fsync成功后注入EIO已证实4096字节种子及dev/ino不变、marker/db两个自有fd均EBADF、ownmarker释放；此内部catch只实测种子，不夸大为在该故障窗实测了WAL改写。
+
+
+## W3b 实施候选（2026-10-24，尚待管理验收与合并）
+
+本节覆盖此前 W3a 的当前写版本与共享互斥限制；W3a 的验收记录继续作为历史保留。本机仍为单用户、多企业一企一套，税局真实接入仍为 0。此次基线为 `f74460f30699c2740b2163743050b78845979885`，不以候选实现宣告 LOCAL06/07 或八包完成。
+
+当前写版本为 batch3；只读 `status` 与官方备份继续严格识别历史 batch1/2。新增且唯一的版本3表：
+
+```sql
+CREATE TABLE local_batch_lock_epochs (
+ resource_key TEXT PRIMARY KEY,
+ last_token INTEGER NOT NULL CHECK(last_token>=1)
+)
+```
+
+原 v2 活动锁 DDL 保持不变。资源为 `job:<正安全整数>`、`book:<NFKC 后规范企业键>`、`account-set:<正安全整数>`，固定顺序为 job → book 字典序 → set 数值序。epoch 是本库分配历史，不要求历史目标当前仍存在，也没有目标外键或级联删除。释放、取消仅删除活动锁；同 owner 释放再取得也严格增代。活 PID 或无法确认的 PID 拒绝接管；确认死亡可在租约未过期时接管。溢出、非正安全整数、非规范资源键和活动 token 与 last_token 不符均拒绝。
+
+`installBatchSchema` 对历史1/2及未装组件的既有库，先核维护条件与文件身份，经官方 createBackup → verifyBackup → held-source 核对后在一个事务安装缺项、按源活动 token 回填 epoch 并严格验证3；失败保源与官方备份。已释放的旧代次不可追溯，不编造历史。普通默认库启动等待官方保护 readiness；已装银行/辅助组件的显式 CLI 普通写也等待相同 readiness。只读命令不 import 默认 db、不安装或升级、不创建缺失库。
+
+领域写与批量写共享真实规范企业及账套资源。公开 JSON 的 owner/token、symbol、ALS、PID 或事务状态不授继承权。继承来自模块私有句柄，绑定实际 DB 连接、文件身份、持久 batch 实例、资源与代次及同步执行范围；固定审计 child membership 和 data-only 输入预检保持。新建账套在同一活审计 outer 内扩充真实新 set 锁。金融、来源、父子成功终态、checkpoint 在同一 outer 内提交，COMMIT 前再核所有资源及 stage owner/token/attempt。释放遇真实 SQLite BUSY 时能力永久撤销，只允许重试其原 owner/token 的清理；本连接私有 unref 定时重试及以后取锁都会尝试只清理原 owner/token 活动行；不依赖新业务请求，不恢复业务执行能力，不删 epoch，遇调用者事务先等待其结束。
+
+报表锁内取同读快照，包含规范绑定、profile、期间状态与辅助就绪依据；映射 incomplete 拒绝。worker 渲染不跨 await 持 SQLite 写事务，不串行所有企业；发布重新取得全资源并核当前业务/快照/来源摘要，文件发布后再核实际 bytesHash。变化转 needs_review。文件与 SQLite 仍不宣称跨介质原子。
+
+`seed-demo --force` 通过专用领域替换函数严格校验 force 布尔值，枚举并锁内重核真实账套及规范绑定集合，在一个审计 outer 中复用既有 private 会计实现删除/重建；有辅助历史等不可删除关系则原子拒绝。新 ID 使用真实序列，不执行全局 `sqlite_sequence` 重置，原 append-only 审计保留。
+
+本包自测为同一 workbench.db 的20家真实企业、两准则、两连续月份七阶段，19家成功与1家真实期末草稿阻断，补齐后只 retry 未完成。代表两企业五报表×三格式核 CSV 金额、XLSX 结构数值、PDF 文本可读，并核真实跨企业 worker 区间重叠；没有重复600份全笛卡尔压力。运行中官方备份区间有合法阶段提交，verify/restore-new 后仅只读核副本。四新入口为 `test/local-batch-domain.test.mjs`、`local-write-lock.test.mjs`、`local-batch-entry-lock.test.mjs`、`seed-demo-lock.test.mjs`，原 test-all 注册逐字原序保留，仅末追加。定点选项仅供该新测试开发排障：`W3B_SMOKE=1` 单企，`W3B_CASE=boundaries` 边界；默认入口仍执行真实20企与全部边界。
+
+恢复副本执行授权、instance fork/ledger、路径重绑、pending/unknown 裁决和恢复续跑属于 W4。本候选只证明历史/当前备份兼容与恢复副本只读核证；不因备份成功允许旧能力跨恢复继续执行。
+
+
+W3b v2 补充：增量导入仅允许安全副本检查后、锁前只读执行参数/profile/科目静态校验，以使非法新增科目连epoch也零写；已有create批次只读取status/mode/account_set_id来确定实际profile，不授重放或目标权。正式来源、规范绑定、期间与去重/重放授权仍在共享锁内重验。普通领域申请资源遭SQLite写保留冲突，在尚未进入审计callback的边界给既有 `audit_admission_busy`；不改变低层锁或COMMIT后错误语义。企业绑定失败仍核已完成stage证据，不跳过evidence_changed裁决。

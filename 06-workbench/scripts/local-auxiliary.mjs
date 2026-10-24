@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { join,dirname } from 'node:path';
 import { withRequestMetadata,operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
+import { installBatchSchema } from '../server/local-batch-storage.mjs';
 import { installAuditSchema } from '../server/local-audit-storage.mjs';
 // Explicit local file/JSON interface. It never imports db.mjs or initializes an unknown target.
 import fs from 'node:fs';
@@ -21,9 +22,9 @@ try {
   if(command==='install'&&options['--input']||command!=='install'&&options['--out'])throw new Error('aux_usage');
   const path=assertPlainPath(options['--db']); db=new DatabaseSync(path,{readOnly:readOnly.has(command)}); db.exec('PRAGMA foreign_keys=ON');
   const operationId=options['--operation-id']??randomUUID();if(!readOnly.has(command)&&command!=='install')cliOperationId=operationId;
-  if(!readOnly.has(command)&&command!=='install'){await installAuditSchema(db,{dbPath:path,outDir:join(dirname(path),'audit-install-'+randomUUID())});}
+  if(!readOnly.has(command)&&command!=='install'){await installAuditSchema(db,{dbPath:path,outDir:join(dirname(path),'audit-install-'+randomUUID())});await installBatchSchema(db,{dbPath:path,outDir:join(dirname(path),'batch-'+randomUUID())});}
   const result=command==='install'?await ensureAuxiliarySchema(db,{dbPath:path,outDir:options['--out']}):withRequestMetadata({operationId,actor:'cli'},()=>commands[command](db,JSON.parse(fs.readFileSync(options['--input'],'utf8').replace(/^\uFEFF/,''))));
   console.log(JSON.stringify({ok:true,...(cliOperationId?{operationId:cliOperationId}:{}),result}));
  }
-} catch(error) { const code=error.code??error.message; console.log(JSON.stringify({ok:false,...(cliOperationId?{operationId:cliOperationId}:{}),...operationErrorEvidence(error),code:/^(audit_|aux_|account_set_|accounting_profile_|later_|period_)[a-z_]+$/.test(code)?code:'aux_operation_failed'})); process.exitCode=2; }
+} catch(error) { const code=error.code??error.message; console.log(JSON.stringify({ok:false,...(cliOperationId?{operationId:cliOperationId}:{}),...operationErrorEvidence(error),code:['lock_active','owner_active','fence_lost','lock_resource_missing','lock_binding_changed','lock_epoch_invalid','lock_epoch_overflow','lock_capability_invalid','batch_owner_active','batch_not_ready'].includes(code)||/^(audit_|aux_|account_set_|accounting_profile_|later_|period_)[a-z_]+$/.test(code)?code:'aux_operation_failed'})); process.exitCode=2; }
 finally { if(db)db.close(); }

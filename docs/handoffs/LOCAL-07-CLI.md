@@ -566,3 +566,21 @@ root后续仍须重新冻结21路径、十一影响套、独立probe与新的完
 
 本次report-p2和v1日志根w3a-reverse-ef4994d7-72b2-4f51-82c0-e452717e446f（对应install测试中间hash，产品/backup hash与最终同）；mutable最终根w3a-reverse-mutable-54b0147c-4b62-42cc-93a3-00f52523f938。每次新UUID、import前TEMP/TMP/DATA/两KEEP及祖先realpath/lstat，所有新成功/失败现场保留，source-before/after相同。最终产品SHA256 0143a5715e98a9351886502ab4b0a37655a469afe1f941db6c2677b0a4bf26a5；先前b1e360、13/8/39等仅历史阶段，不冒称最终全验。root仍须统一十一套与新完整head独审；未PR/合并、八包6/8与06/07及后包未完。
 > **2026-10-24 W3a 已合事实**：[PR #87](https://github.com/huxiaoyang-code/youshu-fork/pull/87) 已于 `2026-10-23T16:56:21Z` 合并；最终已审 head `f11e92dfad79e975fbdaa6bab68c41ee44a59b5a`，merge/main `882c5b65564fd7e2281eba4a799b3a7a25c5b5f3`。root 十一影响套实际 exit 0，两组独立验收及全新未实施者最终完整 head 独审接受，无确认 P1/P2；合并签名、tree 与父链接收 exit 0。原 e470 / 605 拒绝与下方候选记录保留为历史。原八包仍 6/8，LOCAL06/07、W2b/W3b/W4、Windows 与最终链未完，税局真实接入 0。
+
+
+### W3b 候选实施与自测（2026-10-24）
+
+基于 `f74460f30699c2740b2163743050b78845979885`，唯一授权 fallback 实施员工已落实 batch3 持久 epoch、普通领域/批量/显式 bank 与 aux CLI 共享资源锁、全部 COMMIT fence、报表快照与发布重核及原子 demo 重建。接口与精确 DDL 见 [LOCAL-BATCH-CLI](../LOCAL-BATCH-CLI.md)。R4 的恶意输入零写和固定 entry、R5 固定 child membership 未放宽；原审计领域26组保持通过。旧动态会计断言仅精确记录真实资源 epoch 增量，原金融、来源、checkpoint、旧审计和 static-invalid 全表零写保持，45个原金额用例通过。
+
+同一库20企、两准则两月七阶段的真实自测已得到19成功+1期末草稿缺项；补齐后续未完，326个已完成 checkpoint 及19家金融/来源/runs 不增。代表五报表三格式与真实跨企 worker 重叠通过。官方备份实际区间内成功阶段5→6，verify/restore-new成功，恢复副本只读核证。另真实全资源失 fence（含 audit terminal UPDATE 后 COMMIT 前）、close/post、7种 worker 期间变更拒绝和跨年接续已通过。正常与异常现场、首次失败、实际命令及连接/子进程退出记录留本次 `.agent-runs/` 交付，不把自测冒称管理独验。
+
+当前仍是候选：需 root 完成最终源码冻结、受影响验证、全新未参与实施者独审、PR合并及合后交接。LOCAL06/07、八包剩余、W4、Windows与最终整链不提前关闭；税局0。
+
+
+### W3b 根独验 v1 返工候选 v2（2026-10-24）
+
+根 v1 四新入口与真实20企通过，但旧补验发现两处产品回归：静态非法新增科目归一化在新锁之后使epoch写入；企业绑定失败提前continue遗漏已完成stage证据核验。v2复用原profile/normalize仅作只读静态拒绝，真正source/binding/期间/replay admission仍锁内重跑；绑定失败仍在实际私有资源和job fence内核已完成证据，变化needs_review且金融/产物不重做。另真实aux双连接BUSY拒绝恢复原audit_admission_busy；bank官方backup gate先拒未知/损坏组件，再在同持有BEGIN内核maintenance后执行DDL，原备份负例错误语义不变。
+
+扩窗5三旧套只动态helper按真实audit事件核book/set代次、保持其它表/epoch和receipt2；bank-aux增加实际batch3/12表。persistence仅E1b精确resume job/book/set+1与retry零增，保pending callback0与金融来源审计；J2保公开写拒锁，再受控SQL插入真实平衡草稿核close重查；H5核当前默认batch3且原外部nonce/inode保护不减。原import-incremental与I2断言未改。
+
+员工v2定点：原import57/57、voucher103/103、auxcore全套、bankaux两安装顺序/三profile与全部原负例、原audit-domain26、新锁及含新增alias静态零写的全部domain边界均exit0；persistence仅E1b/I2/J2/H5共4/4。详见本轮delivery v2，原红现场保留，未重新跑20企或full101。根v2冻结独验 / fresh / PR仍待完成；W4及整体完成边界不变。

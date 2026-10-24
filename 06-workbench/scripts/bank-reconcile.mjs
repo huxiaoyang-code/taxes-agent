@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { withRequestMetadata,operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
+import { installBatchSchema } from '../server/local-batch-storage.mjs';
 import { installAuditSchema,assertAuditSchema } from '../server/local-audit-storage.mjs';
 // bank-reconcile.mjs — LOCAL-04 本机银行流水与余额调节 CLI。
 //
@@ -52,7 +53,9 @@ const USAGE_CODES = new Set([
   "currency_unsupported", "bank_account_currency_mismatch",
 ]);
 
+const LOCK_CODES=new Set(['lock_active','owner_active','fence_lost','lock_resource_missing','lock_binding_changed','lock_epoch_invalid','lock_epoch_overflow','lock_capability_invalid','batch_owner_active','batch_not_ready']);
 const BLOCKED_CODES = new Set([
+  ...LOCK_CODES,
   "migration_backup_unavailable", "migration_backup_failed", "migration_backup_invalid",
   "schema_not_supported", "bank_schema_missing", "bank_migration_failed",
   "bank_schema_future_version", "bank_schema_version_contradiction", "bank_schema_corrupt",
@@ -227,7 +230,7 @@ async function ensureBankReady(ctx, flags) {
   // 矛盾版本、缺表 / 缺列 / 主键 / 索引 / 外键动作）必须在任何命令动作之前拒绝；
   // 只有「完全没有 bank_*」才进入备份门槛迁移。
   const contract = STORAGE.bankSchemaContract(ctx.db);
-  if (contract.ok) return null;
+  if (contract.ok) return installBatchSchema(ctx.db,{dbPath:ctx.abs,outDir:join(dirname(ctx.abs),'batch-'+randomUUID())});
   if (contract.initialized) {
     throw new CliError(contract.code, contract.message, {
       version: contract.version,
@@ -721,7 +724,7 @@ try {
   // 不打印 SQL / 堆栈。
   const known = rawCode !== "internal_error" && /^[a-z][a-z0-9_]{2,60}$/.test(rawCode);
   const code = known ? rawCode : "internal_error";
-  const message = known ? (e?.message || code) : "内部错误：操作未完成（默认不输出 SQL / 堆栈）";
+  const message = LOCK_CODES.has(code)?code:known ? (e?.message || code) : "内部错误：操作未完成（默认不输出 SQL / 堆栈）";
   const payload = {
     ok: false,
     ...(cliOperationId?{operationId:cliOperationId}:{}),
@@ -729,7 +732,7 @@ try {
     error: {
       code,
       message,
-      ...(known && e?.details !== undefined ? { details: e.details } : {}),
+      ...(known && !LOCK_CODES.has(code) && e?.details !== undefined ? { details: e.details } : {}),
       ...(e?.auditRecorded === false
         ? { auditFailure: e.auditFailure ?? "失败结果未能写入审计（已如实返回）" }
         : {}),

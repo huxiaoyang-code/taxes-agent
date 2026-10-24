@@ -1,8 +1,9 @@
+import { withDomainWrite, assertWriteCommitFence, withBatchStageResources } from './local-write-lock.mjs';
 // Trusted synchronous domain coordinator. ALS carries correlation only, never authority.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { types as nodeTypes } from 'node:util';
-import { auditError, auditResultDigest, auditResultSnapshot, normalizeAuditResultRefs, isTechId } from './local-audit.mjs';
+import { auditError, auditCanonicalDigest, auditResultDigest, auditResultSnapshot, normalizeAuditResultRefs, isTechId } from './local-audit.mjs';
 import { prepareOperation, executePreparedOperation, executePreparedChild, bindPreparedChildren } from './local-audit-operation.mjs';
 const bankInvalidationListeners=new Set();
 export function onBankInvalidation(listener){bankInvalidationListeners.add(listener);return ()=>bankInvalidationListeners.delete(listener);}
@@ -90,6 +91,30 @@ function specification(options,value) {
  return {state,resultCode:state==='succeeded'?'ok':state==='no_change'?'no_change':'rejected_validation',reasonCode:state==='rejected'?'validation_failed':'none',targets:typeof options.targets==='function'?options.targets(value):options.targets??{},resultRefs:normalizeAuditResultRefs(options.refs?.(value)??[]),resultDigest:auditResultDigest(value)};
 }
 export function runDomainOperation(db,options,fn) {
+ auditResultDigest(options.request);
+ assertImmutableDomainBinding(db,options);
+ return withDomainWrite(db,options,()=>runDomainOperationBody(db,options,fn));
+}
+// Admission reads which select an import target run under the same resources as execution.
+export function runDomainAdmission(db,options,admit) {
+ auditResultDigest(options.request);
+ assertImmutableDomainBinding(db,options);
+ return withDomainWrite(db,options,()=>{
+  const result=admit();if(!result.operation)return result.value;
+  return runDomainOperationBody(db,result.operation,result.execute);
+ });
+}
+function assertImmutableDomainBinding(db,options) {
+ // Existing immutable technical bindings may reject a conflict before *any* new
+ // lock/epoch write. A match grants nothing: ordinary lock and audit admission follow.
+ if(frames.has(db))return;const operationId=metadata.getStore()?.operationId;if(!operationId)return;
+ const exists=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_operations'").get();if(!exists)return;
+ const row=db.prepare('SELECT action,scope_kind,scope_token,request_digest FROM audit_operations WHERE database_instance_id=(SELECT instance_id FROM audit_database_instances WHERE is_active=1) AND operation_id=? AND attempt=1').get(operationId);if(!row)return;
+ const requestDigest=auditCanonicalDigest(['audit-request-v1',options.action,{domainRequestDigest:auditResultDigest(options.request)}]);
+ const scopeToken=auditCanonicalDigest(['audit-scope-v1',options.scope.kind,options.scope.value]);
+ if(row.action!==options.action||row.scope_kind!==options.scope.kind||row.scope_token!==scopeToken||row.request_digest!==requestDigest)throw envelopeError({code:'audit_operation_conflict',state:'rejected',durability:'not_started',needsReview:false});
+}
+function runDomainOperationBody(db,options,fn) {
  const outer=frames.get(db);
  if(outer) {
   if(outer.children) {
@@ -119,13 +144,13 @@ export function runDomainOperation(db,options,fn) {
  let value,businessError,snapshot;
  const terminal=executePreparedOperation(db,prepared.authorization,()=>{
   frames.set(db,{action:options.action,scope:options.scope});
-  try {value=fn();snapshot=auditResultSnapshot(value);return specification(options,value);}
+  try {value=fn();assertWriteCommitFence(db);snapshot=auditResultSnapshot(value);return specification(options,value);}
   catch(error){businessError=error;throw error;}
   finally{frames.delete(db);}
  });
  if(!terminal.ok) {
   if(businessError&&terminal.durability==='committed'&&['failed','rejected'].includes(terminal.state)){evidence.set(businessError,Object.freeze({operationId:context.operationId,applied:false,durability:'committed',needsLocalReview:false,receipt:terminal.receipt}));throw businessError;}
-  if(!businessError&&terminal.durability==='committed'&&['failed','rejected'].includes(terminal.state))return value;
+  if(!businessError&&terminal.durability==='committed'&&terminal.state==='rejected'&&value!==undefined&&specification(options,value).state==='rejected')return value;
   throw envelopeError(terminal);
  }
  snapshots.set(`${terminal.receipt.databaseInstanceId}:${context.operationId}:1`,snapshot);
@@ -134,6 +159,10 @@ export function runDomainOperation(db,options,fn) {
 }
 // A fixed stage plan is prepared before the outer transaction. No dynamic child tree.
 export function runAuditedBatchStage(db,options,children,fn) {
+ auditResultDigest(options.request);for(const child of children)auditResultDigest(child.request);
+ return withBatchStageResources(db,options,children,()=>runAuditedBatchStageBody(db,options,children,fn));
+}
+function runAuditedBatchStageBody(db,options,children,fn) {
  const operationId=options.operationId,actor='batch';
  const context={operationId,actor,action:'batch.stage',attempt:1,...options.context,...(options.scope.kind==='account_set'?{accountSetId:options.scope.value}:{})};
  let prepared;try{prepared=prepareOperation(db,{context,scope:options.scope,request:{domainRequestDigest:auditResultDigest(options.request)}});}catch(error){throw envelopeError({code:error?.code??'audit_unavailable',state:'rejected',durability:'not_started',needsReview:false});}
@@ -148,7 +177,7 @@ export function runAuditedBatchStage(db,options,children,fn) {
  let value,error;
  const terminal=executePreparedOperation(db,prepared.authorization,()=>{
   frames.set(db,{action:'batch.stage',scope:options.scope,children:preparedChildren});
-  try {value=fn();if(preparedChildren.some(c=>!c.used))throw auditError('audit_authorization_invalid');return specification(options,value);}
+  try {value=fn();assertWriteCommitFence(db);if(preparedChildren.some(c=>!c.used))throw auditError('audit_authorization_invalid');return specification(options,value);}
   catch(e){error=e;throw e;}finally{frames.delete(db);}
  });
  if(!terminal.ok) {if(error&&terminal.durability==='committed'){evidence.set(error,{operationId,applied:false,durability:'committed',needsLocalReview:false,receipt:terminal.receipt});throw error;}throw envelopeError(terminal);}

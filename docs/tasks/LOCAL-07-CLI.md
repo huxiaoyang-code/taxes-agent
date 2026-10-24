@@ -331,3 +331,12 @@ Issue51 当前 claim 对应独立分支 `codex/huxiaoyang-code/local-07-w3a-batc
 W3a固定保留失败DB/WAL/SHM（含空种子），仅释放自有marker/fd；不承诺失败路径可直接fresh重试。实际sameinode回归与限制见交接，guard原件未改。
 
 独审返工验收项：snapshot/artifact实际manifest与阶段/路径/枚举/attempt/可证摘要关联；内部已登记/未登记claim失败均保全DB及种子，actual fsync后EIO和fd关闭。两P2初修新13/8/旧39全0，最后CSV历史增量仅新backup2组+原E4/G3/H6/H8四例0；待root最终十一套与完整新head复审，不合并e470。
+
+
+### W3b 候选实施与自测（2026-10-24）
+
+基于 `f74460f30699c2740b2163743050b78845979885`，唯一授权 fallback 实施员工已落实 batch3 持久 epoch、普通领域/批量/显式 bank 与 aux CLI 共享资源锁、全部 COMMIT fence、报表快照与发布重核及原子 demo 重建。接口与精确 DDL 见 [LOCAL-BATCH-CLI](../LOCAL-BATCH-CLI.md)。R4 的恶意输入零写和固定 entry、R5 固定 child membership 未放宽；原审计领域26组保持通过。旧动态会计断言仅精确记录真实资源 epoch 增量，原金融、来源、checkpoint、旧审计和 static-invalid 全表零写保持，45个原金额用例通过。
+
+同一库20企、两准则两月七阶段的真实自测已得到19成功+1期末草稿缺项；补齐后续未完，326个已完成 checkpoint 及19家金融/来源/runs 不增。代表五报表三格式与真实跨企 worker 重叠通过。官方备份实际区间内成功阶段5→6，verify/restore-new成功，恢复副本只读核证。另真实全资源失 fence（含 audit terminal UPDATE 后 COMMIT 前）、close/post、7种 worker 期间变更拒绝和跨年接续已通过。正常与异常现场、首次失败、实际命令及连接/子进程退出记录留本次 `.agent-runs/` 交付，不把自测冒称管理独验。
+
+当前仍是候选：需 root 完成最终源码冻结、受影响验证、全新未参与实施者独审、PR合并及合后交接。LOCAL06/07、八包剩余、W4、Windows与最终整链不提前关闭；税局0。

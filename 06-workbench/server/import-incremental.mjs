@@ -1,3 +1,4 @@
+import { runDomainAdmission } from './local-audit-coordinator.mjs';
 // import-incremental.mjs — 增量导入（首次建账 / 已有账套追加）领域逻辑。
 //
 // 与旧 `importAccountSet` 的分工：
@@ -286,7 +287,7 @@ function importIncrementalBody(options = {}) {
   catch (error) { if (options?.auxiliaryAppendix !== undefined) throw auxiliaryImportError(error); throw error; }
 }
 const ADMITTED=Symbol('import-admitted');
-function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
+function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=false}={}) {
   const args = options ?? {};
   assertAuxiliaryConnection(db);
   const appendix = parseAuxiliaryAppendix(args.auxiliaryAppendix);
@@ -322,7 +323,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
     else targetAccountSetId = n;
   }
   const rawMode = typeof args.mode === "string" ? args.mode.trim() : "";
-  const mode = rawMode || (targetAccountSetId ? MODE_APPEND : MODE_CREATE);
+  const mode = incrementalAdmissionTarget(args).mode;
   request.mode = mode;
   if (![MODE_CREATE, MODE_APPEND].includes(mode)) {
     argErrors.push(`mode 只能是 ${MODE_CREATE} / ${MODE_APPEND}，收到：${fmt(args.mode)}`);
@@ -341,18 +342,24 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
   // ---------- 2. 最小目标读取：append 目标 / 已完成 create 批次的目标账套 ----------
   // 严格 normalize 必须在定位目标之后：口径要用目标**实际** profile 与科目表，
   // 否则旧 create 批次重放可能被新企业模板提前拒绝（例如企业模板下 5001 不是收入）。
-  const batchRecord = getBatch(db, batchId);
+  // Outside the resource window this projection selects only the profile used
+  // by an already completed create. It grants no replay or target authority;
+  // full batch/source/binding/period admission is repeated under the locks.
+  const batchRecord = staticOnly
+    ? db.prepare('SELECT status,mode,account_set_id FROM import_batches WHERE batch_id=?').get(batchId)
+    : getBatch(db, batchId);
   let targetSet = null;
   let targetContext = null;
   let creationProfile = null;
   const targetErrors = [];
   if (mode === MODE_APPEND && targetAccountSetId) {
     try {
-      targetSet = A.getAccountSet(targetAccountSetId);
+      targetSet = staticOnly ? A.accountSetProfile(targetAccountSetId).set : A.getAccountSet(targetAccountSetId);
     } catch (e) {
       if (e?.code === "accounting_profile_unknown") {
         targetErrors.push(`${e.code}: 目标账套持久会计 profile 未知或已损坏`);
       } else {
+        if(staticOnly)return {marker:ADMITTED}; // target existence is lock-bound admission
         const err = new Error("account_set_not_found");
         err.code = "account_set_not_found";
         err.details = { accountSetId: targetAccountSetId };
@@ -360,7 +367,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
       }
     }
     if (targetSet) {
-      targetContext = { profileId: targetSet.accounting_profile_id, accounts: A.listAccounts(targetAccountSetId) };
+      targetContext = { profileId: targetSet.accounting_profile_id, accounts: staticOnly ? db.prepare('SELECT * FROM accounts WHERE account_set_id=? ORDER BY code').all(targetAccountSetId) : A.listAccounts(targetAccountSetId) };
       request.accountSetId = targetAccountSetId;
     }
   } else if (mode === MODE_CREATE) {
@@ -368,8 +375,8 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
     if (batchRecord && batchRecord.status === "completed" && batchRecord.mode === MODE_CREATE
       && batchRecord.account_set_id != null) {
       try {
-        targetSet = A.getAccountSet(batchRecord.account_set_id);
-        targetContext = { profileId: targetSet.accounting_profile_id, accounts: A.listAccounts(targetSet.id) };
+        targetSet = staticOnly ? A.accountSetProfile(batchRecord.account_set_id).set : A.getAccountSet(batchRecord.account_set_id);
+        targetContext = { profileId: targetSet.accounting_profile_id, accounts: staticOnly ? db.prepare('SELECT * FROM accounts WHERE account_set_id=? ORDER BY code').all(targetSet.id) : A.listAccounts(targetSet.id) };
       } catch (e) {
         if (e?.code === "accounting_profile_unknown") {
           targetErrors.push(`${e.code}: 已完成批次的目标账套持久会计 profile 未知或已损坏`);
@@ -446,6 +453,8 @@ function runIncrementalImport(options = {}, {admissionOnly=false}={}) {
     // 严格校验失败：预检与正式都一样拒绝，且不写任何表。
     return rejected(request, strict.errors, { validation });
   }
+
+  if(staticOnly)return {marker:ADMITTED};
 
   const identityConflicts = [];
   const notes = [];
@@ -1279,17 +1288,30 @@ export function importBatchState() {
   };
 }
 
+function incrementalAdmissionTarget(args) {
+ const raw=args.accountSetId??args.account_set_id;let target=null;
+ if(raw!==undefined&&raw!==null&&raw!==''){const n=Number(raw);if(Number.isInteger(n)&&n>0)target=n;}
+ const mode=(typeof args.mode==='string'?args.mode.trim():'')||(target?MODE_APPEND:MODE_CREATE);
+ return {mode,target};
+}
 export function importIncremental(options={}) {
  if(options&&typeof options==='object'&&!nodeTypes.isProxy(options)&&!Array.isArray(options)&&[Object.prototype,null].includes(Object.getPrototypeOf(options))){const appendix=Object.getOwnPropertyDescriptor(options,'auxiliaryAppendix');if(appendix&&Object.hasOwn(appendix,'value')&&appendix.value!==undefined)parseAuxiliaryAppendix(appendix.value);}
  auditResultSnapshot(options);
  if(options.dryRun!==false)return importIncrementalBody(options);
+ // Static shape/profile/COA rejection must not allocate even an epoch. No
+ // identity binding, source history, period or replay authorization is read here.
+ const staticCheck=runIncrementalImport(options,{staticOnly:true});
+ if(staticCheck?.marker!==ADMITTED)return staticCheck;
+ const normalizedTarget=incrementalAdmissionTarget(options);
+ return runDomainAdmission(db,{action:normalizedTarget.mode===MODE_APPEND?'import.append':'import.create',scope:normalizedTarget.mode===MODE_APPEND&&normalizedTarget.target?{kind:'account_set',value:normalizedTarget.target}:{kind:'database',value:null},request:options},()=>{
  const prior=readDomainOperationBinding(db);
  if(prior&&!['import.create','import.append'].includes(prior.action))throw auditError('audit_operation_conflict');
  let admitted;try{admitted=prior?{marker:ADMITTED,mode:prior.action==='import.append'?'append':'create',targetAccountSetId:prior.scope.value}:runIncrementalImport(options,{admissionOnly:true});}catch(error){if(options?.auxiliaryAppendix!==undefined)throw auxiliaryImportError(error);throw error;}
- if(admitted?.marker!==ADMITTED)return admitted;
+ if(admitted?.marker!==ADMITTED)return {value:admitted};
  const {mode,targetAccountSetId}=admitted;
  const scope=prior?.scope??(mode==='append'?{kind:'account_set',value:targetAccountSetId}:{kind:'database',value:null});
- return runDomainOperation(db,{action:prior?.action??(mode==='append'?'import.append':'import.create'),scope,request:options,
+ return {operation:{action:prior?.action??(mode==='append'?'import.append':'import.create'),scope,request:options,
  refs:v=>[...(v?.created?.accountSetId?[{type:'account_set',id:v.created.accountSetId}]:[]),...(typeof options.batchId==='string'?[{type:'import_batch_key',keyDigest:auditCanonicalDigest([options.batchId])}]:[])],
- targets:v=>v?.created?.accountSetId?{accountSetId:v.created.accountSetId}:{}},()=>importIncrementalBody(options));
+ targets:v=>v?.created?.accountSetId?{accountSetId:v.created.accountSetId}:{}},execute:()=>importIncrementalBody(options)};
+ });
 }

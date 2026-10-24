@@ -190,3 +190,6 @@ LOCAL06 W2b最初以已合PR87 merge882c5b6实施；当前以页头6465/66窗交
 - [团队协作协议](../TEAM-COLLABORATION.md) · [项目章程](../PROJECT-CHARTER.md)
 - [报表闭环补全方案](../REPORT-CLOSURE-PLAN.md) · [阶段状态](../handoffs/STATE.md)
 - [成员入场包](../handoffs/MEMBER-ONBOARDING.md) · [交接模板](../handoffs/TEMPLATE.md)
+
+
+> 2026-10-24 W3b 候选增量：batch3持久代次、领域/批量共享锁、报表发布重核与原子demo重建已有实施与定点自测；同库20企两准则两月19+1修复续未完及运行中官方备份/恢复副本只读核证已有真实证据。最终冻结、管理独验、全新独审与PR合并仍待完成；详见 LOCAL-07-CLI 任务/交接及 LOCAL-BATCH-CLI 新节。此候选不改变八包6/8、LOCAL06/07未整包完成、W4/Windows/最终链未完和税局0的状态。

@@ -1,3 +1,4 @@
+import { withWriteResources, withWriteStageFence } from './local-write-lock.mjs';
 import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
 import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-batch-storage.mjs';
 // local-batch-actions.mjs — LOCAL-07 固定本地操作的真实领域适配层。
@@ -78,7 +79,7 @@ function sanitizeError(error) {
  */
 export function businessDigest(db, setId, period) {
   const accountSet = db.prepare(
-    `SELECT id, name, start_period, accounting_standard FROM account_sets WHERE id=?`,
+    `SELECT id, name, start_period, accounting_standard, accounting_profile_id FROM account_sets WHERE id=?`,
   ).get(setId) || null;
   const accounts = db.prepare(
     `SELECT code, name, category, direction, contra, is_leaf FROM accounts WHERE account_set_id=? ORDER BY code`,
@@ -108,9 +109,10 @@ export function businessDigest(db, setId, period) {
     id: voucher.id, period: voucher.period, status: voucher.status, kind: voucher.kind,
     fingerprint: persistedVoucherFingerprint(voucher, entriesByVoucher.get(voucher.id) || []),
   }));
-  return sha256(canonicalJson({
-    setId, period, accountSet, accounts, openings, periods: periodRows, vouchers,
-  }));
+  const identity=db.prepare('SELECT * FROM import_enterprise_account_sets WHERE account_set_id=?').get(setId)??null;
+  const auxiliary={};
+  for(const table of ['aux_entities','aux_allocations','aux_requirements'])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))auxiliary[table]=db.prepare(`SELECT * FROM ${table} WHERE account_set_id=? ORDER BY rowid`).all(setId);
+  return sha256(canonicalJson({setId,period,accountSet,identity,auxiliary,accounts,openings,periods:periodRows,vouchers}));
 }
 
 /**
@@ -715,6 +717,7 @@ export function buildReportSnapshots({ item, period, reports }) {
       const options = { kind: report.kind, period, format: "csv" };
       if (report.kind === "ledger") options.code = report.code;
       const built = buildReportExport(setId, options);
+      if(built.report.reportStatus?.status==='incomplete')throw domainError('report_incomplete');
       const dtoJson = JSON.stringify(built.report);
       list.push({
         period,
@@ -995,6 +998,9 @@ function auditChildren(ctx) {
  return [];
 }
 export function executeStage(ctx) {
+ return withWriteResources(ctx.db,ctx.resources,()=>withWriteStageFence(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt},()=>executeLockedStage(ctx)));
+}
+function executeLockedStage(ctx) {
  const binding=resolveItemBinding({db:ctx.db,item:ctx.item,stage:ctx.stage});
  const scoped={...ctx,item:{...ctx.item,account_set_id:binding.accountSetId}};
  const children=auditChildren(scoped),scope=binding.accountSetId?{kind:'account_set',value:binding.accountSetId}:{kind:'database',value:null};

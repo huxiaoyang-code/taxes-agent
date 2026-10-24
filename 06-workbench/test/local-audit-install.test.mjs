@@ -25,7 +25,7 @@ export async function fresh({version=5,audit=2,bank=false,aux=false,journal='del
  try {
   if(bank){const B=await import('../server/bank-storage.mjs');await B.ensureBankSchema(db,{dbPath:file,dataDir:dir,backupService:LB});}
   if(aux){const A=await import('../server/auxiliary-storage.mjs');await A.ensureAuxiliarySchema(db,{dbPath:file,outDir:join(dir,'before-aux')});}
-  if(audit===1)legacy(db);else if(audit===2)await LS.installAuditSchema(db,{dbPath:file,outDir:join(dir,'before-audit')});
+  if(audit===1){legacy(db);if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_batch_database_instances'").get())db.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE is_active=1 AND audit_instance_id IS NULL').run(LS.currentAuditInstanceId(db));}else if(audit===2)await LS.installAuditSchema(db,{dbPath:file,outDir:join(dir,'before-audit')});
   return h;
  }catch(e){h.close();throw e;}
 }
@@ -34,18 +34,19 @@ export async function fresh({version=5,audit=2,bank=false,aux=false,journal='del
 function cloneSyntheticCore(source,file) {
  const seed=new DatabaseSync(source,{readOnly:true}),target=new DatabaseSync(file);
  try {
-  const before=seed.prepare("SELECT account_set_id,code,debit,credit FROM opening_balances ORDER BY account_set_id,code").all();
-  target.exec('PRAGMA foreign_keys=OFF');
-  const tables=seed.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB 'audit_*' ORDER BY rowid").all();
-  for(const table of tables)target.exec(table.sql);
-  for(const table of tables)for(const row of seed.prepare('SELECT * FROM "'+table.name+'" ORDER BY rowid').all()) {const keys=Object.keys(row);target.prepare('INSERT INTO "'+table.name+'" ('+keys.map(k=>'"'+k+'"').join(',')+') VALUES ('+keys.map(()=>'?').join(',')+')').run(...Object.values(row));}
-  for(const row of seed.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index','trigger','view') AND sql IS NOT NULL AND tbl_name NOT GLOB 'audit_*' AND name NOT GLOB 'idx_audit_*' ORDER BY rowid").all())target.exec(row.sql);
-  target.exec('DELETE FROM sqlite_sequence');for(const row of seed.prepare("SELECT name,seq FROM sqlite_sequence WHERE name NOT GLOB 'audit_*' ORDER BY rowid").all())target.prepare('INSERT INTO sqlite_sequence VALUES(?,?)').run(row.name,row.seq);
-  target.exec('PRAGMA foreign_keys=ON');
-  assert.deepEqual(target.prepare("SELECT account_set_id,code,debit,credit FROM opening_balances ORDER BY account_set_id,code").all(),before);
-  assert.equal(LS.inspectAuditSchema(target).state,'not_installed');
- }finally{target.close();seed.close();console.log('core fixture source/target DB actualclose');}
+  seed.exec('BEGIN');LB.assertSupportedDatabaseConnection(seed);const names=LB.backupContract().requiredTables;assert.equal(names.length,15);
+  const facts=db=>JSON.stringify(names.map(name=>({name,sql:db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(name).sql,rows:db.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()})));
+  const before=facts(seed),sequence=seed.prepare('SELECT * FROM sqlite_sequence ORDER BY rowid').all().filter(r=>names.includes(r.name));
+  const objects=seed.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY rowid').all().filter(o=>names.includes(o.tbl_name));
+  target.exec('PRAGMA foreign_keys=OFF;BEGIN');for(const table of objects.filter(o=>o.type==='table'))target.exec(table.sql);
+  for(const name of names)for(const row of seed.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()){const keys=Object.keys(row);target.prepare('INSERT INTO "'+name+'" ('+keys.map(k=>'"'+k+'"').join(',')+') VALUES ('+keys.map(()=>'?').join(',')+')').run(...Object.values(row));}
+  target.exec('DELETE FROM sqlite_sequence');for(const row of sequence)target.prepare('INSERT INTO sqlite_sequence VALUES(?,?)').run(row.name,row.seq);
+  for(const object of objects.filter(o=>o.type!=='table')){assert.ok(!/\b(?:audit_|local_batch_|aux_|bank_)/i.test(object.sql));target.exec(object.sql);}
+  target.exec('COMMIT;PRAGMA foreign_keys=ON');assert.equal(facts(target),before);assert.equal(facts(seed),before);assert.deepEqual(target.prepare('SELECT * FROM sqlite_sequence ORDER BY rowid').all(),sequence);assert.deepEqual(target.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(target.prepare('PRAGMA integrity_check').get().integrity_check,'ok');assert.equal(LS.inspectAuditSchema(target).state,'not_installed');assert.equal((awaitBatchState(target)).state,'not_installed');LB.assertSupportedDatabaseConnection(target);assert.deepEqual(target.prepare("SELECT debit FROM opening_balances WHERE code='1002' ORDER BY account_set_id").all().map(r=>r.debit),[9.79,28.63]);
+ }finally{try{if(seed.isTransaction)seed.exec('ROLLBACK');}finally{target.close();seed.close();console.log('core fixture source/target DB actualclose');}}
 }
+function awaitBatchState(db){return {state:db.prepare("SELECT 1 FROM sqlite_master WHERE name GLOB 'local_batch_*'").get()?'present':'not_installed'};}
+
 export const input=(operationId='op-1',over={})=>({context:{operationId,actor:'domain',action:'voucher.post',attempt:1,...over},scope:{kind:'database',value:null},request:{amountCents:137}});
 export function historyEvent(db,{operationId='historic-1',...over}={}) {
  const e=LA.normalizeAuditEvent({operationId,actor:'domain',action:'voucher.post',attempt:1,outcome:'succeeded',resultCode:'voucher_post_succeeded',...over},null,{eventId:randomUUID(),databaseInstanceId:LS.currentAuditInstanceId(db),occurredAt:'2026-10-22T00:00:00.000Z'});
@@ -55,7 +56,7 @@ export function historyEvent(db,{operationId='historic-1',...over}={}) {
 export const logical=db=>JSON.stringify(db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").all().concat(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(({name})=>({name,rows:db.prepare('SELECT * FROM "'+name+'"').all()}))));
 export const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 export async function child(args,{env={},cwd=WORKBENCH,onOutput}={}) {
- return await new Promise((resolve,reject)=>{const c=spawn(process.execPath,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let out='',err='';c.stdout.on('data',b=>{out+=b;if(onOutput)onOutput(String(b),c);});c.stderr.on('data',b=>err+=b);c.on('error',reject);c.on('close',(code,signal)=>{console.log('child actualclose '+code+'/'+signal);resolve({code,signal,out,err,closed:true});});});
+ return await new Promise((resolve,reject)=>{const c=spawn(process.execPath,args,{cwd,env:{...process.env,...env},stdio:['ignore','pipe','pipe']});let out='',err='',exit;c.on('exit',(code,signal)=>exit={code,signal});c.stdout.on('data',b=>{out+=b;if(onOutput)onOutput(String(b),c);});c.stderr.on('data',b=>err+=b);c.on('error',reject);c.on('close',(code,signal)=>{assert.deepEqual(exit,{code,signal});console.log('child actual exit+close '+code+'/'+signal);resolve({code,signal,out,err,closed:true});});});
 }
 export async function suite(name,fn){try{await fn();console.log('PASS '+name);}catch(e){console.error('FAIL '+name,e);process.exitCode=1;throw e;}}const AUDIT_TRIGGER_SQL = Object.freeze({
   audit_events_no_update: `CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events

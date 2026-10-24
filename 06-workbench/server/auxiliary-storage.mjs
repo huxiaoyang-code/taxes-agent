@@ -97,6 +97,8 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
  fail(version!==5,'aux_core_unsupported');
  const state=inspectAuxiliarySchema(db,version);
  const LB=await import('./local-backup.mjs');
+ if(state.present&&state.problems.length)throw auxError('aux_structure_invalid');
+ await (await import('./local-batch-storage.mjs')).installBatchSchema(db,{dbPath:path,outDir:resolve(dirname(path),'batch-'+randomUUID())});
  if(state.present) { fail(state.problems.length,'aux_structure_invalid'); LB.assertSupportedDatabaseConnection(db); return {status:'already_installed',version:1}; }
  try { db.exec('BEGIN IMMEDIATE'); } catch(error) { if(db.isTransaction)throw unknown(db); throw error; }
  try {

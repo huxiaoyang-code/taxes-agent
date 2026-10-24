@@ -137,7 +137,7 @@ function withBatchDatabase(dataDir, { readOnly }, fn) {
   const state = storage.inspectDataDir(dataDir);
   if (!state.exists) throw fail("database_not_found", 3, "数据目录中没有 workbench.db（不会被当成新库）");
   if (!state.readable) throw fail("database_unreadable", 3, "workbench.db 无法打开");
-  if (!(readOnly && state.batchVersion===1) && state.batchVersion !== storage.LOCAL_BATCH_SCHEMA_VERSION) {
+  if (!(readOnly && [1,2].includes(state.batchVersion)) && state.batchVersion !== storage.LOCAL_BATCH_SCHEMA_VERSION) {
     throw fail("batch_schema_unavailable", 3, "请先执行 install --data-dir <目录> --out-dir <全新备份目录>", {
       batchVersion: state.batchVersion, supported: storage.LOCAL_BATCH_SCHEMA_VERSION,
       dependency: "LOCAL-06 createBackup/verifyBackup",
@@ -249,6 +249,7 @@ async function dispatch({ command, options }) {
     try {
       runner = await withStartupDatabase(dataDir, async () => {
         const loaded = await import("../server/local-batch-runner.mjs");
+        openedBusinessDatabase=loaded.database;
         storage.ensureBatchSchema(loaded.database, { receipt });
         return loaded;
       });
@@ -287,9 +288,9 @@ async function dispatch({ command, options }) {
       results: result.results ?? [],
       limits: [
         "period-check / close 调用已合入的 LOCAL-02 A.periodEndCheck / setPeriodStatus；旧 check 成功不代替核心重新校验",
-        "既有库须先显式 install，以官方一致备份保护 batch2 安装 / 升级",
+        "既有库须先显式 install，以官方一致备份保护 batch3 安装 / 升级",
         "新建目标必须通过本进程独占创建回执 + 页 1 nonce（创建 fd 写入）；布尔 fresh / 自造回执无效",
-        "本 CLI 只保证批量 runner 之间按账套互斥，未接线手工 HTTP / Agent 入口",
+        "普通领域与批量入口共享持久企业 / 账套锁，发布前重新核业务快照",
       ],
     });
     return status === storage.JOB_STATUS.SUCCEEDED ? 0 : 1;
@@ -341,6 +342,7 @@ async function dispatch({ command, options }) {
   process.env.WORKBENCH_DATA_DIR = dataDir;
   const runner = await withStartupDatabase(dataDir, async () => {
     const loaded = await import("../server/local-batch-runner.mjs");
+        openedBusinessDatabase=loaded.database;
     storage.ensureBatchSchema(loaded.database, { receipt: null });
     return loaded;
   });
@@ -373,6 +375,7 @@ async function dispatch({ command, options }) {
   return status === storage.JOB_STATUS.SUCCEEDED ? 0 : 1;
 }
 
+let openedBusinessDatabase=null;
 let parsed;
 try {
   parsed = parseArgs(process.argv.slice(2));
@@ -385,7 +388,7 @@ try {
 
 try {
   const code = await dispatch(parsed);
-  process.exit(code);
+  process.exitCode=code;
 } catch (error) {
   const rawCode = error?.code || "cli_failed";
   // 并发竞争下的瞬时锁冲突（共享库初始化 / 事务窗口）不是参数错误：归一成稳定错误码 + 依赖类退出码，
@@ -412,8 +415,8 @@ try {
       details: sanitizeDetails(error?.details),
     },
   });
-  process.exit(exitCode);
-}
+  process.exitCode=exitCode;
+}finally{if(openedBusinessDatabase)openedBusinessDatabase.close();}
 
 /** 错误详情只保留结构化字段，绝不外泄 SQL / 堆栈 / 账务原值。 */
 function sanitizeDetails(details) {

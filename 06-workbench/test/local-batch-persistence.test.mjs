@@ -70,8 +70,9 @@ function spawnNode(code, { env = {} } = {}) {
   let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk; });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
+  let observedExit;child.on("exit",(status,signal)=>observedExit={status,signal});
   const done = new Promise((resolvePromise) => {
-    child.on("close", (status, signal) => {console.log("owned child actualclose",status,signal);resolvePromise({ status, signal, stdout, stderr });});
+    child.on("close", (status, signal) => {assert.deepEqual(observedExit,{status,signal});console.log("owned child actual exit+close",status,signal);resolvePromise({ status, signal, stdout, stderr });});
   });
   return { child, done };
 }
@@ -110,12 +111,13 @@ const dataDir = process.env.WORKBENCH_DATA_DIR;
 const init = storage.assertInitializable(dataDir);
 const receipt = init.fresh ? storage.claimFreshDataDir(dataDir) : null;
 process.env.WORKBENCH_DATA_DIR = dataDir;
-try {
-  const runner = await import("./server/local-batch-runner.mjs");
+let runner;try {
+  runner = await import("./server/local-batch-runner.mjs");
   const schema = storage.ensureBatchSchema(runner.database, { receipt });
   console.log(JSON.stringify({ fresh: init.fresh, schema }));
 } finally {
   if (receipt) storage.releaseFreshClaim(receipt);
+  runner?.database.close();
 }
 `;
 function primeDataDir(dataDir) {
@@ -129,7 +131,7 @@ import * as A from "./server/accounting.mjs";
 import { insertEnterpriseAccountSet } from "./server/import-storage.mjs";
 const specs = JSON.parse(process.env.FIXTURE_SPECS);
 const out = [];
-for (const spec of specs) {
+try{for (const spec of specs) {
   const set = A.createAccountSet({ enterprise: { enterpriseKey: spec.enterpriseKey },
     name: spec.name, taxpayer_type: "小规模纳税人",
     accounting_standard: "小企业会计准则", start_period: "2026-01",
@@ -167,7 +169,7 @@ for (const spec of specs) {
     draftVoucherId: draft ? draft.id : null,
   });
 }
-console.log(JSON.stringify(out));
+console.log(JSON.stringify(out));}finally{db.close();}
 `;
 function createFixture(dataDir, specs) {
   const result = runNode(FIXTURE_CODE, { env: { WORKBENCH_DATA_DIR: dataDir, FIXTURE_SPECS: JSON.stringify(specs) } });
@@ -228,25 +230,34 @@ if (mode === "kill-after-close") hooks.afterStageCommit = ({ stage, result }) =>
 };
 if (mode === "draft-after-check") {
   const A = await import("./server/accounting.mjs");
+  const awaitImportAssert=await import('node:assert');
   hooks.afterStageCommit = ({ stage, item, result }) => {
     if (stage.stage_key !== "period-check" || result?.status !== "succeeded") return;
-    A.createVoucher(Number(item.account_set_id), {
-      period: stage.period, voucher_date: stage.period + "-15", word: "记", number: 999,
-      summary: "封账前新增草稿", status: "draft",
-      entries: [{ code: "5602", debit: 1, credit: 0 }, { code: "1002", debit: 0, credit: 1 }],
-    });
+    const {strict:assert}=awaitImportAssert; // synchronous hook: no await or public capability bypass
+    const request={period:stage.period,voucher_date:stage.period+'-15',word:'记',number:999,summary:'封账前新增草稿',entries:[{code:'5602',debit:1},{code:'1002',credit:1}]};
+    const before=runner.database.prepare('SELECT total_changes() n').get().n;
+    assert.throws(()=>A.createVoucher(Number(item.account_set_id),request),e=>e.code==='lock_active');
+    assert.equal(runner.database.prepare('SELECT total_changes() n').get().n,before,'public write refusal allocates no epoch');
+    // Explicit fault injection into this synthetic DB, not domain authorization:
+    // insert a real, balanced draft after the saved check, before close rereads it.
+    const db=runner.database;db.exec('BEGIN IMMEDIATE');try{
+      const id=Number(db.prepare("INSERT INTO vouchers(account_set_id,period,voucher_date,word,number,summary,status,created_at) VALUES(?,?,?,'记',999,?,'draft',?)").run(Number(item.account_set_id),stage.period,stage.period+'-15','封账前新增草稿',new Date().toISOString()).lastInsertRowid);
+      const ins=db.prepare('INSERT INTO voucher_entries(voucher_id,line_no,code,summary,debit,credit) VALUES(?,?,?,?,?,?)');ins.run(id,1,'5602','受控故障注入',1,0);ins.run(id,2,'1002','受控故障注入',0,1);db.exec('COMMIT');
+    }catch(error){if(db.isTransaction)db.exec('ROLLBACK');throw error;}
+    console.log('public create locked; controlled real balanced draft injected');
   };
 }
 if (mode === "kill-after-publish") hooks.afterArtifactPublish = kill;
 if (mode === "pause-after-import") hooks.afterStageCommit=({stage,result})=>{if(stage.stage_key.startsWith('import:')&&result?.status==='succeeded')pause();};
 if (mode === "pause-after-report-stage") hooks.afterReportStage = pause;
 if (mode === "pause-after-stage") hooks.afterStageCommit = pause;
-const result = await runner.createAndRun({
+try{const result = await runner.createAndRun({
   manifest: validated.manifest,
   manifestHash: storage.sha256(manifestJson),
   manifestJson, plans, inputs, outputDir: outDir, hooks,
 });
 console.log(JSON.stringify({ ok: result.finalStatus === "succeeded", status: result.finalStatus, jobId: result.jobId, renders: result.renders }));
+}finally{runner.database.close();console.log('RUN_JOB_DB_ACTUAL_CLOSE');}
 `;
 
 function openDb(dataDir) {
@@ -261,19 +272,24 @@ const count = (dataDir, sql, ...args) => {
 function assertPendingQuarantine(dataDir,jobKey,stageKey) {
  const snapshot=()=>{const db=openDb(dataDir);try{
   const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
-  const mutable=['local_batch_jobs','local_batch_items','local_batch_stages','local_batch_locks'];
-  return {schema:db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all(),
+  const mutable=['local_batch_jobs','local_batch_items','local_batch_stages','local_batch_locks','local_batch_lock_epochs'];
+  const job=db.prepare('SELECT id FROM local_batch_jobs WHERE job_key=?').get(jobKey),items=db.prepare('SELECT * FROM local_batch_items WHERE job_id=? ORDER BY id').all(job.id),resources=[['job:'+job.id]];
+  for(const item of items){const keys=new Set(['book:'+item.enterprise_key]);if(item.account_set_id)keys.add('account-set:'+item.account_set_id);const bound=db.prepare('SELECT account_set_id FROM import_enterprise_account_sets WHERE enterprise_key=?').get(item.enterprise_key);if(bound)keys.add('account-set:'+bound.account_set_id);resources.push([...keys]);}
+  return {resources,epochs:db.prepare('SELECT * FROM local_batch_lock_epochs ORDER BY resource_key').all(),locks:db.prepare('SELECT * FROM local_batch_locks ORDER BY resource_key').all(),schema:db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all(),
    stage:db.prepare('SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON s.item_id=i.id JOIN local_batch_jobs j ON i.job_id=j.id WHERE j.job_key=? AND s.stage_key=?').get(jobKey,stageKey),
    pending:db.prepare("SELECT * FROM audit_operations WHERE state='pending' ORDER BY database_instance_id,operation_id,attempt").all(),
    business:JSON.stringify(tables.filter(r=>!mutable.includes(r.name)).map(({name})=>[name,db.prepare('SELECT * FROM "'+name.replaceAll('"','""')+'"').all().map(r=>JSON.stringify(r)).sort()]))};
  }finally{db.close();}};
  const before=snapshot();assert.ok(before.pending.length);const parent=storage.stageAuditOperationId(before.stage);assert.ok(before.pending.some(r=>r.operation_id===parent));
  for(const command of ['resume','retry','resume']) {
-  const args=[command,'--data-dir',dataDir,'--job-key',jobKey];
+  const previous=snapshot();const args=[command,'--data-dir',dataDir,'--job-key',jobKey];
   const observed=runNode(`import {DatabaseSync} from 'node:sqlite';const original=DatabaseSync.prototype.setAuthorizer;let admissions=0;DatabaseSync.prototype.setAuthorizer=function(fn){if(fn!==null)admissions++;return original.call(this,fn);};process.once('exit',()=>{DatabaseSync.prototype.setAuthorizer=original;console.log(JSON.stringify({auditCallbackAdmissions:admissions}));});process.argv=${JSON.stringify([process.execPath,'cli'])}.concat(JSON.parse(process.env.OBSERVED_ARGS));await import(${JSON.stringify(pathToFileURL(CLI).href)});`,{env:{WORKBENCH_DATA_DIR:dataDir,OBSERVED_ARGS:JSON.stringify(args)}});
   const lines=String(observed.stdout).trim().split(/\r?\n/);const measured=JSON.parse(lines.pop());assert.equal(measured.auditCallbackAdmissions,0,'no real audited callback may be admitted for old pending');console.log('measured audit callback admissions',jobKey,command,measured.auditCallbackAdmissions);
   assert.equal(observed.status,command==='retry'?0:1,observed.stdout+observed.stderr);if(command!=='retry')assert.equal(JSON.parse(lines.pop()).status,'needs_review');
   const after=snapshot();assert.equal(after.stage.attempt,before.stage.attempt);assert.equal(after.stage.status,'needs_review');assert.deepEqual(after.schema,before.schema);const fixed=['id','item_id','period','stage_key','stage_order','input_hash','spec_json','attempt','outcome_hash','evidence_json'];assert.deepEqual(fixed.map(k=>after.stage[k]),fixed.map(k=>before.stage[k]));assert.deepEqual(after.pending,before.pending);assert.equal(after.business,before.business);
+  const expected=new Map(previous.epochs.map(r=>[r.resource_key,r.last_token]));if(command==='resume')for(const resources of previous.resources)for(const key of resources)expected.set(key,(expected.get(key)??0)+1);
+  assert.deepEqual(after.epochs.map(r=>({...r})),[...expected].sort(([a],[b])=>a<b?-1:a>b?1:0).map(([resource_key,last_token])=>({resource_key,last_token})),command+' exact job/book/set epoch allocation, all other epochs unchanged');
+  assert.equal(after.locks.length,0,'quarantined request releases all temporary active owners');console.log('exact quarantine epochs',command,JSON.stringify(after.epochs));
  }
 }
 
@@ -635,20 +651,21 @@ await test("F2 同账套两任务：第二个任务保守拒绝（lock_active）
   assert.equal(count(dataDir, `SELECT COUNT(*) FROM vouchers`), 3, "第二个任务追加 1 张凭证");
 });
 
-await test("F3 租约过期但旧 owner 进程仍活：保守拒绝（owner_active），不抢锁", () => {
+await test("F3 租约过期但旧 owner 进程仍活：保守拒绝（owner_active），不抢锁", async () => {
   const dataDir = join(ROOT, "f3-data");
   const outDir = join(ROOT, "f3-out");
   primeDataDir(dataDir);
   const spec = { itemKey: "item-1", enterpriseKey: "91350000ALIVE0001A", name: "存活检查", revenue: 500, other: 0, capital: 10000 };
   const [fixture] = createFixture(dataDir, [spec]);
-  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore",env:{...process.env},windowsHide:true });let sleeperExit;const sleeperClosed=new Promise(resolve=>{sleeper.on("exit",(code,signal)=>sleeperExit={code,signal});sleeper.on("close",(code,signal)=>{assert.deepEqual(sleeperExit,{code,signal});console.log("sleeper exit+close "+code+"/"+signal);resolve();});});
   try {
     const db = new DatabaseSync(join(dataDir, "workbench.db"));
-    const past = new Date(Date.now() - 60000).toISOString();
+    try{db.exec("BEGIN IMMEDIATE");const past = new Date(Date.now() - 60000).toISOString();
     db.prepare(`INSERT INTO local_batch_locks (resource_key, owner_instance, fencing_token, pid, acquired_at, heartbeat_at, lease_expires_at)
                 VALUES (?,?,?,?,?,?,?)`)
       .run(`book:${spec.enterpriseKey}`, "ghost-owner", 7, sleeper.pid, past, past, past);
-    db.close();
+    const priorEpoch=db.prepare("SELECT last_token FROM local_batch_lock_epochs WHERE resource_key=?").get(`book:${spec.enterpriseKey}`)?.last_token??0;assert.ok(priorEpoch<=7);db.prepare("INSERT INTO local_batch_lock_epochs VALUES(?,7) ON CONFLICT(resource_key) DO UPDATE SET last_token=excluded.last_token").run(`book:${spec.enterpriseKey}`);
+    db.exec("COMMIT");}finally{if(db.isTransaction)db.exec("ROLLBACK");db.close();}
     const manifestPath = writeManifest("f3", jobManifest({
       jobKey: "alive-lock",
       items: [itemFor(fixture, spec, {
@@ -670,29 +687,24 @@ await test("F3 租约过期但旧 owner 进程仍活：保守拒绝（owner_acti
     assert.equal(lock.owner_instance, "ghost-owner", "不得抢占仍存活的 owner");
     assert.equal(lock.fencing_token, 7);
   } finally {
-    sleeper.kill();
+    sleeper.kill();await sleeperClosed;
   }
 });
 
-await test("F4 旧 owner 已确认死亡：接管并递增 fencing token，业务完整写入", () => {
+await test("F4 旧 owner 已确认死亡：接管并递增 fencing token，业务完整写入", async () => {
   const dataDir = join(ROOT, "f4-data");
   const outDir = join(ROOT, "f4-out");
   primeDataDir(dataDir);
   const spec = { itemKey: "item-1", enterpriseKey: "91350000DEAD00001A", name: "死主接管", revenue: 800, other: 0, capital: 15000 };
   const [fixture] = createFixture(dataDir, [spec]);
-  const dead = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
-  assert.equal(dead.status, 0);
-  const deadPid = (() => {
-    // 取一个已退出进程的 PID：再启动后立即结束并记录 PID。
-    const child = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
-    return child.pid;
-  })();
+  const deadChild=spawn(process.execPath,['-e','process.exit(0)'],{stdio:'ignore',env:{...process.env},windowsHide:true});const deadPid=deadChild.pid;let deadExit;const deadClosed=await new Promise(resolve=>{deadChild.on('exit',(code,signal)=>deadExit={code,signal});deadChild.on('close',(code,signal)=>resolve({code,signal}));});assert.deepEqual(deadClosed,deadExit);assert.equal(deadClosed.code,0);assert.equal(storage.isProcessAlive(deadPid),false);console.log('dead child actual exit+close '+JSON.stringify(deadClosed));
   const db = new DatabaseSync(join(dataDir, "workbench.db"));
-  const past = new Date(Date.now() - 60000).toISOString();
+  try{db.exec("BEGIN IMMEDIATE");const past = new Date(Date.now() - 60000).toISOString();
   db.prepare(`INSERT INTO local_batch_locks (resource_key, owner_instance, fencing_token, pid, acquired_at, heartbeat_at, lease_expires_at)
               VALUES (?,?,?,?,?,?,?)`)
     .run(`book:${spec.enterpriseKey}`, "dead-owner", 3, deadPid, past, past, past);
-  db.close();
+  const priorEpoch=db.prepare("SELECT last_token FROM local_batch_lock_epochs WHERE resource_key=?").get(`book:${spec.enterpriseKey}`)?.last_token??0;assert.ok(priorEpoch<=3);db.prepare("INSERT INTO local_batch_lock_epochs VALUES(?,3) ON CONFLICT(resource_key) DO UPDATE SET last_token=excluded.last_token").run(`book:${spec.enterpriseKey}`);
+  db.exec("COMMIT");}finally{if(db.isTransaction)db.exec("ROLLBACK");db.close();}
   const manifestPath = writeManifest("f4", jobManifest({
     jobKey: "dead-lock",
     items: [itemFor(fixture, spec, {
@@ -736,11 +748,12 @@ await test("F5 旧 token / 旧 attempt 迟到提交被 fence 拒绝，不覆盖�
     const future = new Date(Date.now() + 60000).toISOString();
     db.prepare(`INSERT INTO local_batch_locks (resource_key, owner_instance, fencing_token, pid, acquired_at, heartbeat_at, lease_expires_at)
                 VALUES (?,?,?,?,?,?,?)`).run(`job:${jobId}`, "old-owner", 1, process.pid, now, now, future);
+    db.prepare("INSERT INTO local_batch_lock_epochs VALUES(?,1)").run(`job:${jobId}`);
     // 旧 owner 认领阶段（token=1 / attempt=1）。
     const claim = db.prepare(`UPDATE local_batch_stages SET status='running', attempt=1, owner_instance='old-owner', fencing_token=1 WHERE id=?`).run(stageId);
     assert.equal(Number(claim.changes), 1);
     // 新执行者接管：fence 递增到 2。
-    db.prepare(`UPDATE local_batch_locks SET owner_instance='new-owner', fencing_token=2 WHERE resource_key=?`).run(`job:${jobId}`);
+    db.exec("BEGIN IMMEDIATE");db.prepare(`UPDATE local_batch_locks SET owner_instance='new-owner', fencing_token=2 WHERE resource_key=?`).run(`job:${jobId}`);db.prepare("UPDATE local_batch_lock_epochs SET last_token=2 WHERE resource_key=?").run(`job:${jobId}`);db.exec("COMMIT");
     // 旧 token 的迟到提交必须被拒。
     assert.throws(
       () => storage.withFencedTransaction(db, { resourceKey: `job:${jobId}`, instance: "old-owner", token: 1 }, () => {
@@ -2349,13 +2362,13 @@ import { db } from "./server/db.mjs";
 const tables = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'").get().n;
 const uv = Number(db.prepare("PRAGMA user_version").get().user_version);
 const hasBatch = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='local_batch_jobs'").get().n;
-console.log(JSON.stringify({ tables, uv, hasBatch }));
+const batch=(await import('./server/local-batch-storage.mjs')).assertBatchSchema(db);console.log(JSON.stringify({tables,uv,hasBatch,batchVersion:batch.version,batchTables:batch.present}));db.close();console.log('H5_NORMAL_DB_ACTUAL_CLOSE');
 `, { env: { WORKBENCH_DATA_DIR: okDir } });
   assert.equal(normal.status, 0, normal.stderr);
-  const normalInfo = JSON.parse(String(normal.stdout).trim().split(/\r?\n/).at(-1));
+  const normalInfo = JSON.parse(String(normal.stdout).trim().split(/\r?\n/).find(line=>line.startsWith('{')));
   assert.ok(normalInfo.tables >= 10, "普通业务入口照常打开核心库");
   assert.equal(normalInfo.uv, okRun.nonce, "页 1 nonce 保留在本次创建的库里");
-  assert.equal(normalInfo.hasBatch, 0, "db.mjs 初始化本身不建立本包批量结构");
+  assert.equal(normalInfo.hasBatch,1,'normal default db installs current official batch readiness');assert.equal(normalInfo.batchVersion,3);assert.deepEqual(normalInfo.batchTables,storage.LOCAL_BATCH_TABLES);assert.equal(normalInfo.batchTables.length,12);
 
   // 6) 回执不可变：改字段 / 嵌套改值 / 复制 / 伪造 / 删字段都不能改变授权目标；
   //    失败清理必须保留被替换的外部对象。
