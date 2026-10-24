@@ -28,18 +28,44 @@ A.setPeriodStatus(set.id, "2026-01", "closed");
 A.createVoucher(set.id, { period: "2026-02", status: "posted", summary: "二月合成收入", entries: [
   { code: "1002", debit: 50 }, { code: "5001", credit: 50 },
 ] });
+const metadataSets = [
+  ["小企业会计准则", "small-2011-basic-v1", "3001", "5001", "5602"],
+  ["企业会计准则", "enterprise-2019-general-basic-v1", "4001", "6001", "6602"],
+].map(([standard, profile, capital, revenue, expense]) => {
+  const fixture = identityFixtureCreate(A, { name: `合成HTTP元数据-${standard}`, accounting_standard: standard, start_period: "2026-01" });
+  A.setOpeningBalances(fixture.id, [{ code: "1002", debit: 1000 }, { code: capital, credit: 1000 }]);
+  for (const [summary, entries] of [
+    ["合成收入", [{ code: "1002", debit: 123.45 }, { code: revenue, credit: 123.45 }]],
+    ["合成费用", [{ code: expense, debit: 23.45 }, { code: "1002", credit: 23.45 }]],
+  ]) A.createVoucher(fixture.id, { period: "2026-01", status: "posted", summary, entries });
+  return { id: fixture.id, profile };
+});
 const snapshot = () => Object.fromEntries(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({ name }) => {
   assert.match(name, /^[a-z_]+$/i);
   return [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()];
 }));
 const beforeReads = snapshot();
-let child, exited, base;
+let child, exited, closed, exitObserved, closeObserved, spawnError, base;
+async function bounded(promise, milliseconds, label) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 
 before(async () => {
   child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "../server/server.mjs")], {
     env: { ...process.env, PORT: "0", WORKBENCH_DATA_DIR: directory }, stdio: ["ignore", "pipe", "pipe"],
   });
-  exited = new Promise((resolve) => { child.once("exit", resolve); child.once("error", resolve); });
+  exited = new Promise((resolve) => child.once("exit", (code, signal) => {
+    exitObserved = { code, signal }; resolve(exitObserved);
+  }));
+  closed = new Promise((resolve) => child.once("close", (code, signal) => {
+    closeObserved = { code, signal }; resolve(closeObserved);
+  }));
+  child.once("error", (error) => { spawnError = error; });
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   const port = await new Promise((resolve, reject) => {
@@ -60,10 +86,23 @@ before(async () => {
 after(async () => {
   try {
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
-    if (exited) await exited;
+    if (closed) {
+      try {
+        // A spawn failure emits error/close without exit; it must remain a failure.
+        await bounded(spawnError ? closed : Promise.all([exited, closed]), 10000, "HTTP server exit/close");
+      } catch (error) {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await bounded(closed, 5000, "HTTP server forced close");
+        throw error;
+      }
+      if (spawnError) throw spawnError;
+      assert.ok(exitObserved && closeObserved, "Server must emit both real exit and close");
+      assert.deepEqual(closeObserved, exitObserved);
+    }
     assert.deepEqual(snapshot(), beforeReads, "All successful/failed downloads must leave every database row unchanged");
   } finally {
     db.close();
+    console.log(`Synthetic HTTP lifecycle: ${JSON.stringify({ exit: exitObserved ?? null, close: closeObserved ?? null, dbClosed: true })}`);
     console.log(`Synthetic HTTP fixture retained: ${directory}`);
   }
 });
@@ -81,6 +120,69 @@ async function expectError(url, code, status = 400, method = "GET") {
   assert.equal(typeof body.message, "string");
   assert.ok(Object.hasOwn(body, "details"));
   return response;
+}
+
+// Independent RFC4180 reader for the actual downloaded bytes; no production CSV/DTO parser.
+function csvRows(text) {
+  const rows = []; let row = [], field = "", quoted = false;
+  for (let i = text.charCodeAt(0) === 0xfeff ? 1 : 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (quoted && text[i + 1] === '"') { field += '"'; i++; }
+      else quoted = !quoted;
+    } else if (!quoted && ch === ",") { row.push(field); field = ""; }
+    else if (!quoted && ch === "\r" && text[i + 1] === "\n") {
+      row.push(field); rows.push(row); row = []; field = ""; i++;
+    } else field += ch;
+  }
+  assert.equal(quoted, false, "CSV quotes must close");
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+for (const { id, profile } of metadataSets) {
+  for (const [kind, title] of [
+    ["balance-sheet", "资产负债表"], ["income-statement", "利润表"], ["cash-flow-statement", "现金流量表"],
+    ["trial-balance", "科目余额表"], ["ledger", "明细账"],
+  ]) test(`${profile}/${kind}: real CSV attachment has one CNY/yuan pair and independent amounts`, async () => {
+    const response = await request(path(kind, `period=2026-01${kind === "ledger" ? "&code=1002" : ""}`, id));
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/csv;\s*charset=utf-8$/i);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    const disposition = response.headers.get("content-disposition");
+    assert.match(disposition, /^attachment; filename="[^"\r\n]+\.csv"; filename\*=UTF-8''/);
+    assert.match(decodeURIComponent(disposition.split("UTF-8''")[1]), /\.csv$/);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.deepEqual([...bytes.subarray(0, 3)], [239, 187, 191]);
+    assert.equal(+response.headers.get("content-length"), bytes.length);
+    const csv = bytes.toString("utf8");
+    assert.ok(csv.endsWith("\r\n"));
+    assert.doesNotMatch(csv.replaceAll("\r\n", ""), /[\r\n]/);
+    const rows = csvRows(csv);
+    for (const expected of [["币种", "人民币(CNY)"], ["金额单位", "元"], ["报表", title], ["期间", "2026-01"], ["持久profile", profile]])
+      assert.deepEqual(rows.filter(row => row[0] === expected[0]), [expected]);
+    const row = (label, column = 0, length) => rows.find(item => item[column] === label && (length === undefined || item.length === length));
+    // Hand-calculated for both profiles: opening 1000, receipts 123.45, expenses 23.45.
+    if (kind === "balance-sheet") {
+      assert.deepEqual(row("货币资金", 1), ["资产", "货币资金", "1000.00", "1100.00"]);
+      assert.deepEqual(row("资产总计", 1), ["资产", "资产总计", "1000.00", "1100.00"]);
+    } else if (kind === "income-statement") {
+      for (const [label, amount] of [["营业收入", "123.45"], ["管理费用", "23.45"], ["净利润", "100.00"]])
+        assert.deepEqual(row(label), [label, amount, amount]);
+    } else if (kind === "cash-flow-statement") {
+      for (const [label, amount] of [["经营活动净额", "100.00"], ["现金净增加额", "100.00"], ["现金期初余额", "1000.00"], ["现金期末余额", "1100.00"]])
+        assert.deepEqual(row(label), [label, "", "", amount, amount]);
+    } else if (kind === "trial-balance") {
+      assert.deepEqual(row("1002"), ["1002", "银行存款", "debit", "1000.00", "0.00", "123.45", "23.45", "123.45", "23.45", "1100.00", "0.00"]);
+    } else {
+      for (const [label, debit, credit] of [["期间期初", "1000.00", "0.00"], ["本期发生", "123.45", "23.45"], ["本年累计", "123.45", "23.45"], ["期末", "1100.00", "0.00"]])
+        assert.deepEqual(row(label, 0, 3), [label, debit, credit]);
+      assert.deepEqual(rows.filter(item => item[5] === "1002").map(item => item.slice(7)), [
+        ["合成收入", "123.45", "0.00", "1123.45"], ["合成费用", "0.00", "23.45", "1100.00"],
+      ]);
+    }
+  });
 }
 
 for (const kind of ["trial-balance", "balance-sheet", "income-statement", "cash-flow-statement", "ledger"]) {

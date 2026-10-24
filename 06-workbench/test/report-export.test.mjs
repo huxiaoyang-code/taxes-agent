@@ -146,6 +146,53 @@ try {
     const ledger = csvRows(out(s, 'ledger', '2026-02', { code: '1002' }).body);
     assert.deepEqual(ledger.find(row => row[0] === '期末' && row.length === 3), ['期末', '1670.00', '0.00']);
   });
+  // Both persistent profiles use hand-calculated amounts: 1000 + 123.45 - 23.45 = 1100;
+  // profit and operating cash increase are 100. No report DTO supplies the expected CSV values.
+  for (const [standard, profile, capital, revenue, expense] of [
+    ['小企业会计准则', 'small-2011-basic-v1', '3001', '5001', '5602'],
+    ['企业会计准则', 'enterprise-2019-general-basic-v1', '4001', '6001', '6602'],
+  ]) {
+    const id = identityFixtureCreate(A, { name: `合成CSV元数据-${standard}`, accounting_standard: standard, start_period: '2026-01' }).id;
+    A.setOpeningBalances(id, [e('1002', 1000), e(capital, 0, 1000)]);
+    voucher(id, '2026-01', [e('1002', 123.45), e(revenue, 0, 123.45)], { summary: '合成收入' });
+    voucher(id, '2026-01', [e(expense, 23.45), e('1002', 0, 23.45)], { summary: '合成费用' });
+    for (const [kind, title] of [
+      ['balance-sheet', '资产负债表'], ['income-statement', '利润表'], ['cash-flow-statement', '现金流量表'],
+      ['trial-balance', '科目余额表'], ['ledger', '明细账'],
+    ]) await test(`${profile}/${kind}: one CNY/yuan metadata pair preserves CSV headings, period and independent amounts`, () => {
+      const file = out(id, kind, '2026-01', { code: '1002' });
+      assert.equal(file.body.charCodeAt(0), 0xfeff);
+      assert.ok(file.body.endsWith('\r\n'));
+      assert.doesNotMatch(file.body.replaceAll('\r\n', ''), /[\r\n]/);
+      const rows = csvRows(file.body);
+      for (const expected of [['币种', '人民币(CNY)'], ['金额单位', '元'], ['报表', title], ['期间', '2026-01'], ['持久profile', profile]]) {
+        assert.deepEqual(rows.filter(row => row[0] === expected[0]), [expected]);
+      }
+      const row = (label, column = 0, length) => rows.find(item => item[column] === label && (length === undefined || item.length === length));
+      if (kind === 'balance-sheet') {
+        assert.deepEqual(row('分类'), ['分类', '项目', '期间期初', '期末']);
+        assert.deepEqual(row('货币资金', 1), ['资产', '货币资金', '1000.00', '1100.00']);
+        assert.deepEqual(row('资产总计', 1), ['资产', '资产总计', '1000.00', '1100.00']);
+      } else if (kind === 'income-statement') {
+        assert.deepEqual(row('项目'), ['项目', '本期发生', '本年累计']);
+        for (const [label, amount] of [['营业收入', '123.45'], ['管理费用', '23.45'], ['净利润', '100.00']])
+          assert.deepEqual(row(label), [label, amount, amount]);
+      } else if (kind === 'cash-flow-statement') {
+        assert.deepEqual(row('分类'), ['分类', '科目编码', '科目名称', '本期发生', '本年累计']);
+        for (const [label, amount] of [['经营活动净额', '100.00'], ['现金净增加额', '100.00'], ['现金期初余额', '1000.00'], ['现金期末余额', '1100.00']])
+          assert.deepEqual(row(label), [label, '', '', amount, amount]);
+      } else if (kind === 'trial-balance') {
+        assert.deepEqual(row('科目编码'), ['科目编码', '科目名称', '方向', '期初借方', '期初贷方', '本期借方', '本期贷方', '本年借方', '本年贷方', '期末借方', '期末贷方']);
+        assert.deepEqual(row('1002'), ['1002', '银行存款', 'debit', '1000.00', '0.00', '123.45', '23.45', '123.45', '23.45', '1100.00', '0.00']);
+      } else {
+        assert.deepEqual(row('日期'), ['日期', '凭证字', '凭证号', '凭证ID', '分录ID', '科目编码', '科目名称', '摘要', '借方', '贷方', '余额（借减贷）']);
+        for (const [label, debit, credit] of [['期间期初', '1000.00', '0.00'], ['本期发生', '123.45', '23.45'], ['本年累计', '123.45', '23.45'], ['期末', '1100.00', '0.00']])
+          assert.deepEqual(row(label, 0, 3), [label, debit, credit]);
+        const details = rows.filter(item => item[5] === '1002');
+        assert.deepEqual(details.map(item => item.slice(7)), [['合成收入', '123.45', '0.00', '1123.45'], ['合成费用', '0.00', '23.45', '1100.00']]);
+      }
+    });
+  }
   await test('trial balance: direct parent and child stay separate without double counting', () => {
     const r = report(s, 'trial-balance', '2026-02');
     const bank = r.data.lines.find(x => x.code === '1002'), child = r.data.lines.find(x => x.code === '100201');
