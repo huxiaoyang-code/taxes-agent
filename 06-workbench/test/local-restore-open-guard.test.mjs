@@ -19,6 +19,39 @@ await suite('default startup and explicit domain/runner admissions refuse before
   assert.equal(LB.createBackup({dbPath:file,outDir:join(h.dir,'pending-readonly-backup')}).ok,true);
  }finally{h.close();}
 });
+await suite('actual startup handle rejects pending invalid and future replacements after path preflight without writes',async()=>{
+ const h=await fresh({audit:2,batch:3});try{
+  const b=backup(h),source=logical(h.db),snapshot=hash(join(b.backupDir,LB.SNAPSHOT_FILE));
+  for(const [state,expected] of [['pending','restore_target_pending'],['invalid','restore_control_invalid'],['future','restore_control_future_version']]){
+   const {file,a}=restore(h,b);
+   if(state!=='pending'){
+    const d=new DatabaseSync(file);try{
+     if(state==='invalid')d.exec('DROP TABLE restore_control_state');
+     else d.exec('PRAGMA ignore_check_constraints=ON;UPDATE restore_control_component SET version=2;PRAGMA ignore_check_constraints=OFF');
+    }finally{d.close();}
+   }
+   const ledger=hash(a.ledgerPath),receipt=hash(join(a.targetDir,'restore.json'));
+   const code=`import assert from 'node:assert/strict';import fs from 'node:fs';import {createHash} from 'node:crypto';import {syncBuiltinESMExports} from 'node:module';import {DatabaseSync} from 'node:sqlite';import {join,resolve} from 'node:path';
+const [dir,snapshot,expected]=process.argv.slice(1),file=join(dir,'workbench.db'),saved=join(dir,'pending.saved'),plain=file+'.original';
+const measure=p=>{const s=fs.statSync(p,{bigint:true}),b=fs.readFileSync(p);return {sha256:createHash('sha256').update(b).digest('hex'),dev:String(s.dev),ino:String(s.ino),bytes:String(s.size),journalHeader:[b[18],b[19]]};};
+fs.renameSync(file,saved);fs.copyFileSync(snapshot,file);const before=measure(saved),beforeBytes=fs.readFileSync(saved),mkdir=fs.mkdirSync,prepare=DatabaseSync.prototype.prepare,exec=DatabaseSync.prototype.exec,close=DatabaseSync.prototype.close;
+let swapped=false,writes=0,callbacks=0,closed=0,preflightClosed=0;const actual=new Set();
+const isTarget=d=>prepare.call(d,'PRAGMA database_list').all().some(r=>r.name==='main'&&r.file&&resolve(r.file)===resolve(file));
+fs.mkdirSync=function(p,...rest){if(!swapped&&resolve(String(p))===resolve(dir)){assert.equal(preflightClosed,1,'temporary preflight connection closed before swap');swapped=true;fs.renameSync(file,plain);fs.renameSync(saved,file);}return mkdir.call(fs,p,...rest);};syncBuiltinESMExports();
+DatabaseSync.prototype.prepare=function(sql,...rest){if(swapped&&isTarget(this))actual.add(this);return prepare.call(this,sql,...rest);};
+DatabaseSync.prototype.exec=function(sql,...rest){if(swapped&&isTarget(this)){actual.add(this);writes++;}return exec.call(this,sql,...rest);};
+DatabaseSync.prototype.close=function(...rest){const target=isTarget(this),result=close.apply(this,rest);if(target){if(swapped){actual.add(this);closed++;}else preflightClosed++;}return result;};
+let error;try{const D=await import('./server/db.mjs');callbacks++;D.db.close();}catch(e){error=e.code??e.message;}
+assert.equal(error,expected);assert.equal(swapped,true);assert.equal(callbacks,0);assert.equal(writes,0);assert.equal(actual.size,1);assert.equal(closed,1);for(const d of actual)assert.throws(()=>prepare.call(d,'SELECT 1'));
+assert.deepEqual(measure(file),before);assert.equal(fs.readFileSync(file).equals(beforeBytes),true);for(const suffix of ['-wal','-shm','-journal'])assert.equal(fs.existsSync(file+suffix),false);
+console.log(JSON.stringify({state:expected,swapped,writes,callbacks,actualHandles:actual.size,closed,before,after:measure(file)}));`;
+   const result=await child(['--input-type=module','-e',code,a.targetDir,join(b.backupDir,LB.SNAPSHOT_FILE),expected],{env:{WORKBENCH_DATA_DIR:a.targetDir}});
+   assert.equal(result.code,0,result.out+result.err);assert.equal(result.closed,true);const proof=JSON.parse(result.out.trim().split(/\r?\n/).at(-1));assert.deepEqual(proof.before,proof.after);assert.equal(proof.before.journalHeader[0],1);assert.equal(proof.before.journalHeader[1],1);console.log('actual handle replacement '+JSON.stringify(proof));
+   assert.equal(hash(a.ledgerPath),ledger);assert.equal(hash(join(a.targetDir,'restore.json')),receipt);assert.equal(logical(h.db),source);assert.equal(hash(join(b.backupDir,LB.SNAPSHOT_FILE)),snapshot);
+   if(state==='pending')assert.equal(LB.reconcileRestore(a).ok,true,'failed startup preserves legitimate reconciliation');
+  }
+ }finally{h.close();}
+});
 await suite('partial, half/future control and aliases refuse; fsync EIO closes only owned fds and preserves evidence',async()=>{
  const h=await fresh({audit:2,batch:3});try{
   const b=backup(h),a=args(b.backupDir,join(h.dir,'eio')),original=fs.fsyncSync,open=fs.openSync,close=fs.closeSync,owned=new Set();let injected=false;
@@ -65,12 +98,25 @@ await suite('explicit directory ancestors are plain before any retained-artifact
   const b=backup(h),{a}=restore(h,b),before=logical(h.db),snapshot=hash(join(b.backupDir,LB.SNAPSHOT_FILE)),ledger=hash(a.ledgerPath);
   const owned=join(h.dir,'owned-other-root'),alias=join(h.dir,'junction');fs.mkdirSync(owned);fs.mkdirSync(join(owned,'nested'));fs.writeFileSync(join(owned,'.partial-'+randomUUID()+'.db'),'owned retained artifact');fs.symlinkSync(owned,alias,'junction');assert.equal(fs.lstatSync(alias).isSymbolicLink(),true);
   const list=fs.readdirSync;let scans=0;fs.readdirSync=function(...v){scans++;return list.apply(fs,v);};
-  try{for(const dir of [alias,join(alias,'nested')])assert.throws(()=>C.assertRestoreOpenPath(join(dir,'workbench.db')),e=>e.code==='restore_target_binding_mismatch');assert.equal(scans,0,'readdir must never reach the alias root or any child through it');}
+  try{for(const dir of [alias,join(alias,'nested'),join(alias,'missing-one'),join(alias,'missing-two','deeper')])assert.throws(()=>C.assertRestoreOpenPath(join(dir,'workbench.db')),e=>e.code==='restore_target_binding_mismatch');assert.equal(scans,0,'readdir must never reach the alias root or any child through it');}
   finally{fs.readdirSync=list;}
+  // Exercise the actual default opener too: no scan, mkdir or SQLite open may
+  // reach either a one-level or a multi-level missing target through a junction.
+  for(const parts of [['missing-one'],['missing-two','deeper']]){
+   const dir=join(alias,...parts),code=`import assert from 'node:assert/strict';import fs from 'node:fs';import {syncBuiltinESMExports,registerHooks} from 'node:module';let scans=0,mkdirs=0,callbacks=0,instrumented=0;globalThis.__restoreOpenCount=0;const list=fs.readdirSync,mkdir=fs.mkdirSync;
+// Count immediately before the actual constructors; node:sqlite named exports
+// cannot be replaced with syncBuiltinESMExports. Keep all admission code intact.
+const hooks=registerHooks({load(url,context,next){const r=next(url,context);if(url.endsWith('/server/db.mjs')||url.endsWith('/server/local-restore-control.mjs')){let source=String(r.source);for(const expression of ['new DatabaseSync(DB_FILE)','new DatabaseSync(path,{readOnly:true})'])if(source.includes(expression)){source=source.replace(expression,'(globalThis.__restoreOpenCount++, '+expression+')');instrumented++;}return {...r,source};}return r;}});
+fs.readdirSync=function(...v){scans++;return list.apply(fs,v);};fs.mkdirSync=function(...v){mkdirs++;return mkdir.apply(fs,v);};syncBuiltinESMExports();let error;try{const D=await import('./server/db.mjs');callbacks++;D.db.close();}catch(e){error=e.code??e.message;}finally{hooks.deregister();}
+const opens=globalThis.__restoreOpenCount;assert.equal(instrumented,2);assert.equal(error,'restore_target_binding_mismatch');assert.deepEqual({scans,mkdirs,opens,callbacks},{scans:0,mkdirs:0,opens:0,callbacks:0});assert.equal(fs.existsSync(process.env.WORKBENCH_DATA_DIR),false);console.log(JSON.stringify({error,scans,mkdirs,opens,callbacks}));`;
+   const denied=await child(['--input-type=module','-e',code],{env:{WORKBENCH_DATA_DIR:dir}});assert.equal(denied.code,0,denied.out+denied.err);assert.equal(denied.closed,true);assert.equal(fs.existsSync(join(owned,parts[0])),false);
+  }
   for(const dir of [owned,join(owned,'nested')])for(const suffix of ['','-wal','-shm','-journal'])assert.equal(fs.existsSync(join(dir,'workbench.db'+suffix)),false);
   assert.equal(logical(h.db),before);assert.equal(hash(join(b.backupDir,LB.SNAPSHOT_FILE)),snapshot);assert.equal(hash(a.ledgerPath),ledger);
   // A missing, non-aliased fresh directory is still admitted without creating it.
   const missing=join(h.dir,'missing-fresh');C.assertRestoreOpenPath(join(missing,'workbench.db'));assert.equal(fs.existsSync(missing),false);
+  const ordinary=join(h.dir,'ordinary-new','nested','deeper');C.assertRestoreOpenPath(join(ordinary,'workbench.db'));assert.equal(fs.existsSync(join(h.dir,'ordinary-new')),false);
+  const started=await child(['--input-type=module','-e',`import assert from 'node:assert/strict';const D=await import('./server/db.mjs');try{assert.equal(D.importSchema.to??D.importSchema.version,5);assert.ok(D.db.prepare("SELECT 1 FROM sqlite_master WHERE name='account_sets'").get());console.log('ordinary missing multilevel startup ready');}finally{D.db.close();console.log('ordinary DB actualclose');}`],{env:{WORKBENCH_DATA_DIR:ordinary}});assert.equal(started.code,0,started.out+started.err);assert.equal(started.closed,true);assert.equal(fs.existsSync(join(ordinary,'workbench.db')),true);
  }finally{h.close();}
 });
 console.log('local-restore-open-guard PASS');

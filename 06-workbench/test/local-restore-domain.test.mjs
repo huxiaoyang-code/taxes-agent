@@ -48,6 +48,23 @@ if(resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)){
  await suite('pending backup preservation and restore again creates separate control and audit identities',async()=>{
   const h=await fresh({audit:2,batch:3});try{const one=restore(h),b=LB.createBackup({dbPath:one.file,outDir:join(h.dir,'pending-backup')});assert.equal(b.ok,true,JSON.stringify(b));assert.ok(b.manifest.components.some(c=>c.name==='restore-control'));const a=args(b.backupDir,join(h.dir,'second')),two=LB.restoreNew(a);assert.equal(two.ok,true,JSON.stringify(two));assert.equal(two.receipt.source.controlTargetInstanceId,one.r.receipt.targetInstanceId);assert.notEqual(two.receipt.targetInstanceId,one.r.receipt.targetInstanceId);assert.equal(two.receipt.source.auditInstanceId,one.r.receipt.target.auditInstanceId);}finally{h.close();}
  });
+ await suite('pending status refresh refuses before transaction and preserves target ledger receipt and source',async()=>{
+  const h=await fresh({audit:2,batch:3});try{
+   const j=job(h),source=logical(h.db),b=backup(h),snapshot=hash(join(b.backupDir,LB.SNAPSHOT_FILE)),{file,a}=restore(h,b),before=fs.readFileSync(file),dbHash=hash(file),ledger=hash(a.ledgerPath),receipt=hash(join(a.targetDir,'restore.json'));
+   const d=new DatabaseSync(file);try{
+    const state=logical(d),exec=d.exec;let transactions=0;d.exec=function(...v){transactions++;return exec.apply(this,v);};
+    try{assert.throws(()=>S.refreshStatuses(d,j.job.id),e=>e.code==='restore_target_pending');assert.equal(transactions,0);assert.equal(d.isTransaction,false);assert.equal(logical(d),state);
+     d.exec=exec;d.exec('BEGIN');d.exec=function(...v){transactions++;return exec.apply(this,v);};assert.throws(()=>S.refreshStatuses(d,j.job.id),e=>e.code==='restore_target_pending');assert.equal(transactions,0);assert.equal(d.isTransaction,true);
+    }finally{d.exec=exec;if(d.isTransaction)d.exec('ROLLBACK');}
+   }finally{d.close();console.log('pending refresh DB actualclose');}
+   assert.equal(fs.readFileSync(file).equals(before),true);assert.equal(hash(file),dbHash);assert.equal(hash(a.ledgerPath),ledger);assert.equal(hash(join(a.targetDir,'restore.json')),receipt);assert.equal(logical(h.db),source);assert.equal(hash(join(b.backupDir,LB.SNAPSHOT_FILE)),snapshot);for(const suffix of ['-wal','-shm','-journal'])assert.equal(fs.existsSync(file+suffix),false);
+   assert.equal(LB.reconcileRestore(a).ok,true,'denied refresh leaves genuine restore reconciliation valid');
+   // Preserve existing aggregation and transaction behavior on an ordinary DB,
+   // and on a valid ready control contract (fixture-only activation).
+   assert.equal(S.refreshStatuses(h.db,j.job.id),'pending');const item=S.listItems(h.db,j.job.id)[0],stage=S.listStages(h.db,item.id)[0];S.resetStage(h.db,{stageId:stage.id,status:'failed',errorCode:'synthetic_failure'});assert.equal(S.refreshStatuses(h.db,j.job.id),'failed');assert.equal(S.getItem(h.db,item.id).error_code,'synthetic_failure');
+   const ready=restore(h,b),r=new DatabaseSync(ready.file);try{r.prepare("UPDATE restore_control_state SET write_state='ready',released_at=? WHERE singleton=1").run(new Date().toISOString());assert.doesNotThrow(()=>C.assertRestoreWritable(r));assert.equal(S.refreshStatuses(r,j.job.id),'pending');assert.equal(r.isTransaction,false);}finally{r.close();console.log('ready refresh fixture DB actualclose');}
+  }finally{h.close();}
+ });
  await suite('control exact DDL/content, getters/proxies, fake capability and target binding are rejected',async()=>{
   let traps=0;const proxy=new Proxy({},{get(){traps++;throw Error('trap')}}),getter={};Object.defineProperty(getter,'x',{enumerable:true,get(){traps++;return 1}});for(const v of [proxy,getter,{x:Infinity},{x:1.5}])assert.throws(()=>C.restoreHash(v));assert.equal(traps,0);
   const h=await fresh({audit:2,batch:3});try{const {file,a}=restore(h);const d=new DatabaseSync(file);try{d.exec('PRAGMA foreign_keys=ON');assert.throws(()=>AS.markAuditInstanceFork(d,{capability:{}}),/restore_contract_required/);const original=logical(d);await assert.rejects(AS.installAuditSchema(d,{dbPath:file,outDir:join(h.dir,'no-install')}),/restore_target_pending/);await assert.rejects(S.installBatchSchema(d,{dbPath:file,outDir:join(h.dir,'no-batch')}),/restore_target_pending/);assert.equal(logical(d),original);

@@ -1498,6 +1498,7 @@ function statusFromCounts(counts) {
 
 /** 依据阶段真实状态刷新 item / job 状态与 error_code。 */
 export function refreshStatuses(db, jobId) {
+ assertRestoreWritable(db);
   db.exec("BEGIN IMMEDIATE");
   try {
     const items = listItems(db, jobId);

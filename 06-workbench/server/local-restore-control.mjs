@@ -65,6 +65,13 @@ export function plainRestorePath(file,{absent=false,directory=false}={}){
 }
 export function assertRestoreOpenPath(file){
  const path=resolve(file),dir=dirname(path);
+ // Missing target directories still inherit every existing ancestor. Validate
+ // the nearest existing directory (and its full chain) before scanning/opening
+ // anything through it, or allowing the caller to create missing descendants.
+ for(let p=dir;;p=dirname(p)){
+  try{fs.lstatSync(p);}catch(error){if(error.code==='ENOENT'&&dirname(p)!==p)continue;throw error;}
+  plainRestorePath(p,{directory:true});break;
+ }
  if(basename(path).startsWith('.partial-')||fs.existsSync(join(dir,'.restore-incomplete')))throw restoreError('restore_target_pending');
  // A lost marker does not release the restore reservation. Examine only the
  // explicit target directory; never discover a source, ledger or another root.
