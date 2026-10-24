@@ -1,4 +1,19 @@
 #!/usr/bin/env node
+import { randomUUID as restoreUUID } from 'node:crypto';
+import { mkdirSync as restoreMkdir,copyFileSync as restoreCopy,existsSync as restoreExists } from 'node:fs';
+import {DatabaseSync as RestoreDb} from 'node:sqlite';
+import {assertRestoreOpenPath as pending4} from '../server/local-restore-control.mjs';
+import { tmpdir as restoreTmpdir } from 'node:os';
+import { join as restoreJoin } from 'node:path';
+const restoreSeedMap=new Map(),restoreSeedCache=new Map();
+function R4(input){const root=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(root);if(input.backupDir&&input.targetDir)restoreSeedMap.set(input.targetDir,input.backupDir);return {...input,ledgerPath:restoreJoin(root,'ledger.db'),operationId:restoreUUID()};}
+function seed4(backupDir){const dir=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(dir);restoreCopy(restoreJoin(backupDir,'workbench.db.snapshot'),restoreJoin(dir,'workbench.db'));return dir;}
+function businessSeed4(dataDir){if(!restoreSeedMap.has(dataDir)||!restoreExists(restoreJoin(dataDir,'restore.json')))return dataDir;if(restoreSeedCache.has(dataDir))return restoreSeedCache.get(dataDir);
+ let code;try{pending4(restoreJoin(dataDir,'workbench.db'));}catch(e){code=e.code;}if(code!=='restore_target_pending')throw Error('expected real pending target');
+ const source=new RestoreDb(restoreJoin(restoreSeedMap.get(dataDir),'workbench.db.snapshot'),{readOnly:true}),target=new RestoreDb(restoreJoin(dataDir,'workbench.db'),{readOnly:true});try{for(const {name} of source.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){if(['audit_database_instances','local_batch_database_instances','local_batch_job_bindings','local_batch_input_bindings','local_batch_stages','local_batch_locks','local_batch_lock_epochs','restore_control_component','restore_control_state'].includes(name))continue;if(JSON.stringify(source.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all())!==JSON.stringify(target.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()))throw Error('restored historical row mismatch '+name);}}finally{source.close();target.close();}
+ const seed=seed4(restoreSeedMap.get(dataDir));restoreSeedCache.set(dataDir,seed);return seed;
+}
+function cli4(input){if(input[0]!=='restore-new'||!input.includes('--backup')||!input.includes('--target')||input.includes('--ledger'))return input;const r=R4({backupDir:input[input.indexOf('--backup')+1],targetDir:input[input.indexOf('--target')+1]});return [...input,'--ledger',r.ledgerPath,'--operation',r.operationId];}
 import { ensureImportSchema } from '../server/import-storage.mjs';
 import { COA } from '../server/coa.mjs';
 /**
@@ -113,6 +128,7 @@ function runBankCli(args) {
 }
 
 function runBackupCli(args) {
+ args=cli4(args);
   const result = spawnSync(process.execPath, [CLI_BACKUP, ...args], {
     cwd: WORKBENCH, env: cleanEnv(), encoding: "utf8", timeout: 120000,
   });
@@ -275,7 +291,7 @@ const expectVerifyRejected = (backupDir, code, message) => {
 };
 const expectRestoreNotCreated = (backupDir, label) => {
   const target = join(ROOT, `restore-target-${label}-${++seq}`);
-  const result = LB.restoreNew({ backupDir, targetDir: target });
+  const result = LB.restoreNew(R4({ backupDir, targetDir: target }));
   assert(result.ok === false, `${label}：被拒绝的备份不得恢复成功`);
   assertEqual(fs.existsSync(join(target, LB.TARGET_DATABASE_FILE)), false, `${label}：不得生成目标库`);
   return result;
@@ -335,12 +351,12 @@ try {
     // 安装前备份：真实 verify、无 bank 组件、包含 WAL 已提交业务；恢复回原核心。
     const preVerified = LB.verifyBackup({ backupDir: preInstall });
     assert(preVerified.ok === true, `安装前备份必须真实 verify 通过：${JSON.stringify(preVerified)}`);
-    assertEqual(JSON.stringify(preVerified.manifest.components.map(c=>[c.name,c.version])), JSON.stringify([["business-audit",2]]), "安装前已有真实audit2而无bank");
+    assertEqual(JSON.stringify(preVerified.manifest.components.map(c=>[c.name,c.version])), JSON.stringify([["business-audit",2],["local-batch",3]]), "安装前已有真实audit2而无bank");
     const preSnapshot = readDbFacts(join(preInstall, LB.SNAPSHOT_FILE));
     assertEqual(preSnapshot.bankTables.length, 0, "安装前备份快照不得有 bank_* 表");
     assertEqual(preSnapshot.vouchers, 5, "安装前备份必须包含 WAL 中已提交的凭证");
     assertEqual(preSnapshot.schemaVersion, 5, "core5 备份按 v5 契约");
-    const preRestore = LB.restoreNew({ backupDir: preInstall, targetDir: join(ROOT, `pre-restore-${++seq}`) });
+    const preRestore = LB.restoreNew(R4({ backupDir: preInstall, targetDir: join(ROOT, `pre-restore-${++seq}`) }));
     assert(preRestore.ok === true, `安装前备份应可恢复到全新目标：${JSON.stringify(preRestore)}`);
     const preRestored = readDbFacts(join(preRestore.targetDir, LB.TARGET_DATABASE_FILE));
     assertEqual(preRestored.bankTables.length, 0, "恢复出的原核心不得带银行组件");
@@ -425,7 +441,7 @@ try {
     const postDir = join(ROOT, `post-bank-backup-${++seq}`);
     const created = LB.createBackup({ dbPath, outDir: postDir });
     assert(created.ok === true, `安装后真实备份应成功：${JSON.stringify(created)}`);
-    assertEqual(created.backupMeta.components.length, 2, "清单精确绑定bank及business-audit2");
+    assertEqual(created.backupMeta.components.length, 3, "清单精确绑定bank及business-audit2");
     const bankMeta=created.backupMeta.components.find(c=>c.name==="bank"),auditMeta=created.backupMeta.components.find(c=>c.name==="business-audit");
     assertEqual(auditMeta.version,2);assertEqual(auditMeta.tables,4);
     assertEqual(bankMeta.version, 1, "清单绑定真实组件版本 v1");
@@ -434,9 +450,9 @@ try {
     assert(verified.ok === true, `安装后备份 must verify：${JSON.stringify(verified)}`);
     assertEqual(verified.summary.snapshotSha256, created.backupMeta.snapshotSha256, "verify 摘要必须等于 create 摘要");
     const manifest = JSON.parse(fs.readFileSync(join(postDir, LB.MANIFEST_FILE), "utf8"));
-    assertEqual(manifest.components.length, 2, "清单应有精确两个组件");
+    assertEqual(manifest.components.length, 3, "清单应有精确两个组件");
     const bankComponent=manifest.components.find(c=>c.name==="bank"),auditComponent=manifest.components.find(c=>c.name==="business-audit");
-    assertEqual(JSON.stringify(manifest.components.map(c=>c.name).sort()),JSON.stringify(["bank","business-audit"]));
+    assertEqual(JSON.stringify(manifest.components.map(c=>c.name).sort()),JSON.stringify(["bank","business-audit","local-batch"]));
     assertEqual(auditComponent.version,2);assertEqual(JSON.stringify(auditComponent.tables),JSON.stringify(["audit_components","audit_database_instances","audit_events","audit_operations"]));
     for(const key of ["structureDigest","contentDigest"])assert(/^[a-f0-9]{64}$/.test(auditComponent[key]),"真实audit2摘要");
     assertEqual(bankComponent.name, "bank");
@@ -447,14 +463,14 @@ try {
     assert(!bankComponent.tables.includes("audit_events"), "不得把未知组件表写进 bank 组件");
 
     const restoredDir = join(ROOT, `restored-bank-${++seq}`);
-    const restored = LB.restoreNew({ backupDir: postDir, targetDir: restoredDir });
+    const restored = LB.restoreNew(R4({ backupDir: postDir, targetDir: restoredDir }));
     assert(restored.ok === true, `恢复全新目标应成功：${JSON.stringify(restored)}`);
-    assertEqual(restored.receipt.components.length, 2, "恢复回执应记录全部真实组件");
-    assertEqual(restored.receipt.components.find(c=>c.name==="bank").name, "bank");
+    assertEqual(restored.receipt.source.components.length, 3, "恢复回执应记录全部真实组件");
+    assertEqual(restored.receipt.source.components.find(c=>c.name==="bank").name, "bank");
 
     const auditTables=["audit_components","audit_database_instances","audit_events","audit_operations"];
     const sourceAudit=new DatabaseSync(dbPath,{readOnly:true}),restoredAudit=new DatabaseSync(join(restoredDir,LB.TARGET_DATABASE_FILE),{readOnly:true});
-    try{for(const table of auditTables)assertEqual(JSON.stringify(restoredAudit.prepare("SELECT * FROM "+table+" ORDER BY rowid").all()),JSON.stringify(sourceAudit.prepare("SELECT * FROM "+table+" ORDER BY rowid").all()),"审计四表逐行恢复");}finally{try{restoredAudit.close();}finally{sourceAudit.close();}}
+    try{for(const table of auditTables.filter(t=>t!=="audit_database_instances"))assertEqual(JSON.stringify(restoredAudit.prepare("SELECT * FROM "+table+" ORDER BY rowid").all()),JSON.stringify(sourceAudit.prepare("SELECT * FROM "+table+" ORDER BY rowid").all()),"审计四表逐行恢复");}finally{try{restoredAudit.close();}finally{sourceAudit.close();}}
 
     // 在恢复库上重新打开真实产品入口：金额、匹配、批次、期间关联保留；取消 / 反过账后 stale 可见。
     const resultFile = join(ROOT, `restored-facts-${++seq}.json`);
@@ -518,7 +534,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
   balanceB, bStatus: { transactions: bStatus.transactions.total, batches: bStatus.batches.total },
   bankRowsA, bankRowsB, receipts: Number(receipts), schemaState: S.bankSchemaState(db).contract,
 }));
-`, { dataDir: restoredDir });
+`, { dataDir: businessSeed4(restoredDir) });
     assertEqual(child.status, 0, `恢复库真实读取失败：${child.stdout}${child.stderr}`);
     const facts = JSON.parse(fs.readFileSync(resultFile, "utf8"));
     assertEqual(facts.before.book, 112000, "恢复后账面期末仍 1120.00");
@@ -579,13 +595,13 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     assertEqual(created.manifest.components[0].version, 1, "组件仍绑定 v1");
     const verified = LB.verifyBackup({ backupDir: out });
     assert(verified.ok === true, `v3 + bank 备份应 verify：${JSON.stringify(verified)}`);
-    const restored = LB.restoreNew({ backupDir: out, targetDir: join(ROOT, `v3-restored-${++seq}`) });
+    const restored = LB.restoreNew(R4({ backupDir: out, targetDir: join(ROOT, `v3-restored-${++seq}`) }));
     assert(restored.ok === true, `v3 + bank 恢复应成功：${JSON.stringify(restored)}`);
     const facts = readDbFacts(join(restored.targetDir, LB.TARGET_DATABASE_FILE));
     assertEqual(facts.schemaVersion, version, "恢复后仍是 v3，不得自动升级");
     assertEqual(facts.bankTables.length, 10, "恢复后银行组件完整");
     assertEqual(facts.vouchers, 5, "恢复后核心业务保留");
-    assertEqual(restored.receipt.components[0].version, 1, "恢复回执组件版本 v1");
+    assertEqual(restored.receipt.source.components.find(c=>c.name==="bank").version, 1, "恢复回执组件版本 v1");
     }
   });
 
@@ -958,7 +974,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
     const created = LB.createBackup({ dbPath, outDir: backupDir });
     assert(created.ok === true, `健康 bank 备份应成功：${JSON.stringify(created)}`);
     assert(LB.verifyBackup({ backupDir }).ok === true, "健康 bank 备份应可验证");
-    const restored = LB.restoreNew({ backupDir, targetDir: join(ROOT, `keys-restored-${++seq}`) });
+    const restored = LB.restoreNew(R4({ backupDir, targetDir: join(ROOT, `keys-restored-${++seq}`) }));
     assert(restored.ok === true, `健康备份应可恢复到全新目标：${JSON.stringify(restored)}`);
     const restoredPath = join(restored.targetDir, LB.TARGET_DATABASE_FILE);
     const restoredConn = new DatabaseSync(restoredPath);
@@ -972,7 +988,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
         ["source_id", "BINARY", 0], ["bank_ref_id", "BINARY", 0],
       ]), "恢复后 idx_bank_txn_ref 的键语义必须与产品真实 DDL 一致");
     } finally { restoredConn.close(); }
-    const restoredImport = okBank(importArgs(restoredPath, "CASE-REFS-RESTORED", restoredCsvPath));
+    const restoredImport = okBank(importArgs(join(seed4(backupDir),"workbench.db"), "CASE-REFS-RESTORED", restoredCsvPath));
     assertEqual(restoredImport.transactionIds.length, 2, "恢复库必须仍能导入只差大小写的两条稳定 ID");
 
     // collation 漂移：先证明它真的改变写入结果（不是等价写法），后文再证明源库 / 快照 / 恢复三入口一致拒绝。

@@ -1,3 +1,4 @@
+import { assertRestoreWritable } from './local-restore-control.mjs';
 import { readAuditMetadata, hasActiveAuditExecution, withAuditSavepoint,auditConnectionQuarantined,recoverBankAuditAdmission } from './local-audit-storage.mjs';
 // bank-storage.mjs — LOCAL-04 银行组件持久层：bank_* 独立命名空间、组件版本与迁移门槛。
 //
@@ -1756,6 +1757,7 @@ export async function ensureBankSchema(db,options={}) {
  return result;
 }
 async function ensureBankSchemaBody(db, options = {}) {
+ assertRestoreWritable(db);
   const { dbPath, receipt = null, backupService = null, dataDir = null } = options;
   if (!dbPath) throw bankError("db_path_required", "初始化银行组件必须显式提供库路径");
   // 回滚未确认的连接可能仍持着未提交的组件 DDL / 版本行：不能在上面继续「安装 / 已初始化」判断。
@@ -2419,6 +2421,7 @@ export function listReconcileRuns(db, { accountSetId, bankAccountId, limit = 20 
 export { nowIso as bankNowIso };
 
 export function assertBankPublicAdmission(db) {
+ assertRestoreWritable(db);
  assertConnectionUsable(db);
  if(db.isTransaction&&!hasActiveAuditExecution(db))throw transactionConflictError('begin');
 }

@@ -1,3 +1,7 @@
+> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+>
+> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+
 > **2026-10-23 已合并事实（优先于下方历史候选）**：PR [#67](https://github.com/huxiaoyang-code/youshu-fork/pull/67) 已合，已审 head `8ec01c4c6855fb088278f23003d1738ccc399ac4`，merge `ef599f86b948e574aa1b796e2da21a31b7685fa6`；Issue59 已关闭。pure 11、fault 2、full 39 均 exit 0；两个固定 e86 冷源各 162 pass / 1 warn / 9 skip。14 PNG 与先前目视 7 页逐 SHA 相同，不能冒充新目视或 W2 最终升级。后续 PR68 已合 core5 整合，Windows 实际 service 5/5、skip 0、exit 0。W2 最终升级、LOCAL06 整包仍未完成；旧删除事故与未知根因结论原样保留。下方未 PR/未合表述为当时历史。
 # LOCAL-06-WINDOWS 交接
 
@@ -174,3 +178,9 @@ R1最终聚焦14/14、0 skip、exit0/实际close0、约12.37秒；原11组保留
 两轮真实命令均为cwd `06-workbench` 的 `D:/node.exe --test test/windows-release-manifest.test.mjs`：第一轮env实际删除WINDOWS_RELEASE_MANIFEST_TEST_ROOT，默认fixture UUID `9bbfced2-d55c-4850-9216-f05f7441ba7b`，14/14、0skip、exit0/close0、21.73秒；第二轮显式外部UUID `f8f6a7d7-5190-41e7-b204-a99705218d20`，14/14、0skip、exit0/close0、13.57秒。各10个内部child真实exit/close、无timeout或默认DB，本轮无新红例。
 
 日志/外层close证据为 `.agent-runs/local06-w2a-r2-default-25184f03-3e3d-4a43-820b-05461279b542.{log,exit.json}` 与 `.agent-runs/local06-w2a-r2-explicit-f8f6a7d7-5190-41e7-b204-a99705218d20.{log,exit.json}`；各fixture/evidence.json同时记录sourceRoot与cold清单摘要。新交付 `.agent-runs/local06-windows-w2a-r2-delivery-20261024.md` / `local06-windows-w2a-r2-final-files-20261024.json` 仅列相对e9的四内实际delta，旧交付不覆盖。仍待root独验/最新main整合/全新独审，不运行旧39/npm全套/冷安装/W4/升级回退，不解除w2_contract_pending。交付后FINAL STOP，无自有服务或未结束child。
+
+## 2026-10-24 Windows108与恢复后续依赖
+
+[PR108](https://github.com/huxiaoyang-code/youshu-fork/pull/108) 已合；已审head `e3f3f9380ea158d348ce25574e1d6128f23727cf`，merge `f0b6d00bf3beaa3f5d03faf4eea49f3244e5c082`。管理者与独审均在精确候选验证默认/显式外部目录的14/14、0skip、exit/close0，三持久manifest攻击拒绝。此事实只覆盖源码manifest消费、依赖完整性与边界；不含离线依赖/安装器，不代表最终两次冷链或升级失败回退，w2_contract_pending保留。独立offline-Q2 CLI仍不在当前发布CLI合同。
+
+W4a新增恢复命令必须显式backup、全新target、独立ledger文件和operation；恢复目标pending，没有普通记账/自动安装/批量续跑权限。Windows脚本与专属测试本轮未改，待W4b真实激活链完成后再适配最终冷验收；不得把旧双参恢复通过当成新恢复合同已覆盖。旧事故8/4/4与native3221226505未知根因继续保留。

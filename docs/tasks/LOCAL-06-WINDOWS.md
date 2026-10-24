@@ -1,3 +1,7 @@
+> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+>
+> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+
 # 任务单 · LOCAL-06-WINDOWS 干净目录安装、启动与升级交付
 
 > **当前状态（2026-10-23）**：服务 / 包装器生命周期窄修获独立源码审查接受（本范围无 P1 / P2）；管理者在冻结四代码哈希上实际完成纯验证 **11/11**、生产入口真实故障 **2/2**、完整正式套件 **39/39**，均 **0 skip / exit 0**。两次新的随包冷验收均 **11 阶段 pass、162 pass / 1 warn / 9 skip、exit 0**。本轮文档窄修输入 clean HEAD 为 e7205585c759716db05014806fa901d502ffaa08。最终完整 head / 三文档 / 全 PR 仍待独立接受；**未开 PR、未合并，LOCAL-06 总包未完成。**
@@ -254,3 +258,9 @@ npm / Office 生命周期保护继续有效：只有自有 child 实际 close �
 R2在本人新UUID根建立与真实完整白名单逐项同版本/bytes/hash的source子目录，让source/cold成为兄弟目录；默认根仍在当前workbench/tmp/w2a，显式授权外部根可覆盖，普通checkout/worktree均无负责人路径假设。产品守卫无豁免、无空壳替代或外部默认写盘；原14组断言全部保持，TEMP/TMP/DATA及双KEEP/import前祖先核验保持，夹具全保留。
 
 实跑cwd `06-workbench`，清除WINDOWS_RELEASE_MANIFEST_TEST_ROOT后直接 `D:/node.exe --test test/windows-release-manifest.test.mjs`：14/14、0skip、exit0/close0，默认UUID `9bbfced2-d55c-4850-9216-f05f7441ba7b`，21.73秒；显式外部新UUID `f8f6a7d7-5190-41e7-b204-a99705218d20` 同命令14/14、0skip、exit0/close0，13.57秒。每轮10个冷副本CLI/MCP child actual exit/close，真实链接/持久清单坏例/TOCTOU保持，无本轮新红。生产script与e9同bytes/SHA；未Git/PR/合并、未旧39/npm全套/冷安装/W4，w2_contract_pending和历史边界不变。四delta清单及新证据见交接，交付后FINAL STOP。
+
+## 2026-10-24 Windows108与恢复后续依赖
+
+[PR108](https://github.com/huxiaoyang-code/youshu-fork/pull/108) 已合；已审head `e3f3f9380ea158d348ce25574e1d6128f23727cf`，merge `f0b6d00bf3beaa3f5d03faf4eea49f3244e5c082`。管理者与独审均在精确候选验证默认/显式外部目录的14/14、0skip、exit/close0，三持久manifest攻击拒绝。此事实只覆盖源码manifest消费、依赖完整性与边界；不含离线依赖/安装器，不代表最终两次冷链或升级失败回退，w2_contract_pending保留。独立offline-Q2 CLI仍不在当前发布CLI合同。
+
+W4a新增恢复命令必须显式backup、全新target、独立ledger文件和operation；恢复目标pending，没有普通记账/自动安装/批量续跑权限。Windows脚本与专属测试本轮未改，待W4b真实激活链完成后再适配最终冷验收；不得把旧双参恢复通过当成新恢复合同已覆盖。旧事故8/4/4与native3221226505未知根因继续保留。

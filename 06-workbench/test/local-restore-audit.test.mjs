@@ -51,6 +51,7 @@ const openLedger = (path, options) => {
 
 const beginArgs = (over = {}) => ({
   operationId: "restore-op-1",
+  targetInstanceId:"c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",targetBindingDigest:"f".repeat(64),
   backupDigest: DIGEST_A,
   backupBytes: 4096,
   backupSchemaVersion: 4,
@@ -203,7 +204,7 @@ try {
     assert.throws(
       () => LR.completeRestoreOperation(db, {
         operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_A,
-        targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1",
+        targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
       }),
       (e) => e.code === "restore_state_conflict",
     );
@@ -220,21 +221,21 @@ try {
 
     assert.throws(() => LR.completeRestoreOperation(db, {
       operationId: "restore-op-1", receipt: "f".repeat(64), backupDigest: DIGEST_A,
-      targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1",
+      targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
     }), (e) => e.code === "restore_receipt_mismatch");
     assert.throws(() => LR.completeRestoreOperation(db, {
       operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_B,
-      targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1",
+      targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
     }), (e) => e.code === "restore_digest_mismatch");
     assert.throws(() => LR.completeRestoreOperation(db, {
       operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_A,
-      targetDigest: "not-a-digest", targetInstanceId: "instance-1",
+      targetDigest: "not-a-digest", targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
     }), (e) => e.code === "restore_operation_invalid");
     assert.equal(LR.getRestoreOperation(db, "restore-op-1").status, "prepared", "证据不足不得落终态");
 
     const done = LR.completeRestoreOperation(db, {
       operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_A,
-      targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1",
+      targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
     });
     assert.equal(done.changed, true);
     assert.equal(done.operation.status, "succeeded");
@@ -243,13 +244,13 @@ try {
     assert.ok(done.operation.publishedAt && done.operation.terminalAt);
     const repeat = LR.completeRestoreOperation(db, {
       operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_A,
-      targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1",
+      targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
     });
     assert.equal(repeat.changed, false);
     assert.throws(() => LR.completeRestoreOperation(db, {
       operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_A,
       targetDigest: "9".repeat(64), targetInstanceId: "instance-2",
-    }), (e) => e.code === "restore_digest_mismatch");
+    }), (e) => e.code === "restore_target_binding_mismatch");
     assert.throws(() => LR.failRestoreOperation(db, {
       operationId: "restore-op-1", resultCode: "restore_new_failed",
     }), (e) => e.code === "restore_state_conflict");
@@ -375,7 +376,7 @@ try {
     try {
       LR.completeRestoreOperation(db, {
         operationId: "restore-op-1", receipt: RECEIPT, backupDigest: DIGEST_A,
-        targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1",
+        targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f",
       });
     } catch (e) { thrown = e; }
     db.exec(`DROP TRIGGER inject_ledger_update_failure`);
@@ -393,7 +394,7 @@ try {
     LR.beginRestoreOperation(db, beginArgs());
     const early = LR.reconcileRestoreOperation(db, {
       operationId: "restore-op-1",
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: RECEIPT }),
     });
     assert.equal(early.reconciled, false);
     assert.equal(early.terminal, "unknown");
@@ -402,14 +403,14 @@ try {
     LR.markRestorePrepared(db, { operationId: "restore-op-1", receipt: RECEIPT });
     const insufficient = LR.reconcileRestoreOperation(db, {
       operationId: "restore-op-1",
-      verifyPublished: () => ({ targetDigest: "not-a-digest", targetInstanceId: "instance-1", receipt: RECEIPT }),
+      verifyPublished: () => ({ targetDigest: "not-a-digest", targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: RECEIPT }),
     });
     assert.equal(insufficient.reconciled, false);
     assert.equal(insufficient.terminal, "unknown");
     assert.equal(insufficient.operation.status, "prepared", "证据不足不得改状态");
     const wrongReceipt = LR.reconcileRestoreOperation(db, {
       operationId: "restore-op-1",
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: "9".repeat(64) }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: "9".repeat(64) }),
     });
     assert.equal(wrongReceipt.reconciled, false);
     const throwsEvidence = LR.reconcileRestoreOperation(db, {
@@ -421,7 +422,7 @@ try {
 
     const done = LR.reconcileRestoreOperation(db, {
       operationId: "restore-op-1",
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: RECEIPT }),
     });
     assert.equal(done.reconciled, true);
     assert.equal(done.operation.status, "succeeded");
@@ -465,14 +466,14 @@ try {
 
     const wrongReceipt = LR.reconcileRestoreOperation(db, {
       operationId,
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: "9".repeat(64) }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: "9".repeat(64) }),
     });
     assert.equal(wrongReceipt.reconciled, false);
     assert.equal(wrongReceipt.operation.status, "unknown");
 
     const done = LR.reconcileRestoreOperation(db, {
       operationId,
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: RECEIPT }),
     });
     assert.equal(done.reconciled, true);
     assert.equal(done.operation.status, "succeeded");
@@ -487,8 +488,8 @@ try {
     assert.throws(() => LR.completeRestoreOperation(db, {
       operationId, receipt: RECEIPT, backupDigest: DIGEST_A,
       targetDigest: "9".repeat(64), targetInstanceId: "instance-2",
-    }), (e) => e.code === "restore_digest_mismatch");
-    assert.equal(LR.getRestoreOperation(db, operationId).targetInstanceId, "instance-1");
+    }), (e) => e.code === "restore_target_binding_mismatch");
+    assert.equal(LR.getRestoreOperation(db, operationId).targetInstanceId, "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f");
 
     // started → unknown（无 receipt）也保留在待对账列表，但不会被猜成成功。
     const startedUnknown = "restore-op-unknown-started";
@@ -499,7 +500,7 @@ try {
     assert.ok(LR.listPendingRestoreOperations(db, { limit: 10 }).some((o) => o.operationId === startedUnknown));
     const noReceipt = LR.reconcileRestoreOperation(db, {
       operationId: startedUnknown,
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: RECEIPT }),
     });
     assert.equal(noReceipt.reconciled, false);
     assert.equal(noReceipt.terminal, "unknown");
@@ -583,7 +584,7 @@ try {
     assert.equal(op.status, "prepared");
     const reconcile = LR.reconcileRestoreOperation(db, {
       operationId: "restore-op-1",
-      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "instance-1", receipt: RECEIPT }),
+      verifyPublished: () => ({ targetDigest: DIGEST_TARGET, targetInstanceId: "c4f8b1e2-904e-4c1d-875b-df65bbc3e67f", receipt: RECEIPT }),
     });
     assert.equal(reconcile.operation.status, "succeeded");
     db.close();
@@ -720,12 +721,17 @@ try {
   for (const db of OPEN) {
     try { db.close(); } catch { /* 已关闭 */ }
   }
-  try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch (e) {
-    console.error("临时目录清理失败：", e && e.message);
-    process.exitCode = 1;
-  }
-  if (existsSync(dataDir)) {
-    console.error(`临时目录未清理：${dataDir}`);
-    process.exitCode = 1;
+  const keepFixtures = process.env.KEEP_FIXTURES === "1" || process.env.WORKBENCH_TEST_KEEP_FIXTURES === "1";
+  if (keepFixtures) {
+    console.log(`保留合成 ledger 夹具：${dataDir}`);
+  } else {
+    try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch (e) {
+      console.error("临时目录清理失败：", e && e.message);
+      process.exitCode = 1;
+    }
+    if (existsSync(dataDir)) {
+      console.error(`临时目录未清理：${dataDir}`);
+      process.exitCode = 1;
+    }
   }
 }

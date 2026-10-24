@@ -1,3 +1,4 @@
+import { assertRestoreWritable } from './local-restore-control.mjs';
 import { hasActiveAuditExecution, withAuditSavepoint } from './local-audit-storage.mjs';
 // Optional aux1 component. Importing this module never opens or initializes a database.
 import fs from 'node:fs';
@@ -89,6 +90,7 @@ export function assertPlainPath(file) {
  fail(fs.statSync(full).nlink!==1,'aux_path_alias'); return full;
 }
 export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
+ assertRestoreWritable(db);
  assertAuxiliaryConnection(db); fail(!dbPath || !outDir,'aux_install_paths_required'); fail(db.isTransaction,'aux_install_transaction_active');
  const path=assertPlainPath(dbPath), main=db.prepare('PRAGMA database_list').all().find(r=>r.name==='main');
  fail(!main?.file || resolve(main.file).toLowerCase()!==path.toLowerCase(),'aux_database_handle_mismatch');
@@ -120,6 +122,7 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
  }
 }
 export function auxTransaction(db,fn) {
+ assertRestoreWritable(db);
  assertAuxiliaryConnection(db);
  if(hasActiveAuditExecution(db)) {const result=withAuditSavepoint(db,fn);return result&&typeof result==='object'?{...result,durability:'committed'}:result;}
  if(db.isTransaction)throw auxError('audit_transaction_conflict');

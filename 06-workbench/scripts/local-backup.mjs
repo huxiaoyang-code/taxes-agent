@@ -5,7 +5,7 @@
  * 用法（PowerShell / cmd / bash 通用，路径按本机实际填写）：
  *   node scripts/local-backup.mjs backup      --db <源库文件> --out <全新的备份目录>
  *   node scripts/local-backup.mjs verify      --backup <备份目录>
- *   node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全新的目标目录>
+ *   node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全新的目标目录> --ledger <独立ledger文件> --operation <技术ID>
  *
  * 行为约定：
  *  - 只处理显式传入的路径；不猜测默认数据目录，不读环境变量里未显式给出的库。
@@ -13,18 +13,19 @@
  *  - 退出码：0 = 成功；1 = 用法错误；2 = 明确拒绝（数据 / 清单 / 目标不合格）；3 = 内部错误。
  */
 
-import { createBackup, verifyBackup, restoreNew, backupContract } from "../server/local-backup.mjs";
+import { createBackup, verifyBackup, restoreNew, reconcileRestore, backupContract } from "../server/local-backup.mjs";
 
 const USAGE = [
   "node scripts/local-backup.mjs backup --db <源库文件> --out <全新的备份目录>",
   "node scripts/local-backup.mjs verify --backup <备份目录>",
-  "node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全新的目标目录>",
+  "node scripts/local-backup.mjs restore-new --backup <备份目录> --target <全新的目标目录> --ledger <独立ledger文件> --operation <技术ID>",
 ].join("\n");
 
 const COMMANDS = {
   backup: { required: ["db", "out"], run: (options) => createBackup({ dbPath: options.db, outDir: options.out }) },
+  reconcile: { required: ["backup","target","ledger","operation"], run: o => reconcileRestore({backupDir:o.backup,targetDir:o.target,ledgerPath:o.ledger,operationId:o.operation}) },
   verify: { required: ["backup"], run: (options) => verifyBackup({ backupDir: options.backup }) },
-  "restore-new": { required: ["backup", "target"], run: (options) => restoreNew({ backupDir: options.backup, targetDir: options.target }) },
+  "restore-new": { required: ["backup", "target", "ledger", "operation"], run: (options) => restoreNew({ backupDir: options.backup, targetDir: options.target, ledgerPath: options.ledger, operationId: options.operation }) },
 };
 
 /** 严格解析：只接受 `--name value`；未知 / 重复 / 缺值 / 多余位置参数一律用法错误。 */

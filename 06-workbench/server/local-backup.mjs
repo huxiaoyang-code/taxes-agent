@@ -1,3 +1,7 @@
+import { markAuditInstanceFork } from './local-audit-storage.mjs';
+import { RESTORE_CONTROL_TABLES,RESTORE_CONTROL_SQL,inspectRestoreControl,restoreControlFacts,assertRestoreControl,restoreHash,restoreCanonical,restorePathKey,plainRestorePath,restoreDigest,restoreTechId,isRestoreUuid,restoreError } from './local-restore-control.mjs';
+import { openRestoreLedger,restoreLedgerId,beginRestoreOperation,markRestorePrepared,completeRestoreOperation,failRestoreOperation,getRestoreOperation,reconcileRestoreOperation } from './local-restore-audit.mjs';
+import { randomUUID } from 'node:crypto';
 // local-backup.mjs — LOCAL-06 独立子包：运行中 SQLite 一致性快照 + 可验证备份清单 + 恢复到全新独立目标。
 //
 // 设计约束（实施契约，改动需同步 docs/LOCAL-BACKUP.md）：
@@ -824,8 +828,9 @@ function describeContent(conn, tables) {
  * 注册表里的 v1 契约才被当成受支持组件。
  */
 const COMPONENT_REGISTRY = Object.freeze({
-  [LOCAL_BATCH_COMPONENT]: Object.freeze({name:LOCAL_BATCH_COMPONENT,version:3,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2,3]}}),
-  [AUDIT_COMPONENT]: Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}}),
+ 'restore-control':Object.freeze({name:'restore-control',version:1,tables:RESTORE_CONTROL_TABLES,structure:RESTORE_CONTROL_SQL}),
+  get 'local-batch'(){return Object.freeze({name:LOCAL_BATCH_COMPONENT,version:3,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2,3]}})},
+  get 'business-audit'(){return Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}})},
   auxiliary: Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}),
   bank: Object.freeze({
     name: BANK_COMPONENT_STRUCTURE.name,
@@ -1574,13 +1579,15 @@ function inspectStructure(conn, { notProductCode }) {
   const auxiliary = inspectAuxiliarySchema(conn, version);
   const audit=inspectAuditSchema(conn);
   const batch=inspectBatchSchema(conn);
+  const control=inspectRestoreControl(conn);
   const effectiveStructure = component.present
     ? { ...structure, ...COMPONENT_REGISTRY.bank.structure.tables }
     : structure;
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !audit.present.includes(table) && !batch.present.includes(table)), effectiveStructure),
+    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !audit.present.includes(table) && !batch.present.includes(table) && !control.present.includes(table)), effectiveStructure),
     ...auxiliary.problems,
+    ...(control.state==='not_installed'||control.ok?[]:[{kind:'restore_control_invalid'}]),
     ...(audit.state==='not_installed'||audit.ok?[]:[{kind:'audit_structure_or_content_invalid'}]),
     ...(batch.state==='not_installed'||batch.ok?[]:[{kind:'batch_structure_or_content_invalid'}]),
     ...component.problems,
@@ -1594,7 +1601,7 @@ function inspectStructure(conn, { notProductCode }) {
       problems: problems.slice(0, MAX_DETAIL_ITEMS),
     });
   }
-  return { version, tables, migrations: migrations.versions, component, auxiliary, audit, batch };
+  return { version, tables, migrations: migrations.versions, component, auxiliary, audit, batch, control };
 }
 
 /**
@@ -1646,6 +1653,7 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
       contentDigest:componentContentDigest({tables},content),
       rows:tables.reduce((sum,t)=>sum+content.tables[t].rows,0)});
   }
+  if(structure.control.ok){const tables=RESTORE_CONTROL_TABLES;components.push({name:'restore-control',version:1,tables:[...tables],structureDigest:restoreHash(restoreControlFacts(conn)),contentDigest:componentContentDigest({tables},content),rows:tables.reduce((n,t)=>n+content.tables[t].rows,0)});}
   return {
     structure: {
       schemaVersion: structure.version,
@@ -1984,15 +1992,15 @@ function readManifest(backupDir) {
   if (stat.isSymbolicLink()) return { error: rejected("manifest_invalid", { field: "manifest.link" }) };
   if (!stat.isFile()) return { error: rejected("manifest_missing") };
   if (stat.size > MAX_MANIFEST_BYTES) return { error: rejected("manifest_invalid", { field: "manifest.size" }) };
-  let parsed;
+  let parsed,raw;
   try {
-    parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    raw=fs.readFileSync(manifestPath,"utf8"); parsed = JSON.parse(raw);
   } catch {
     return { error: rejected("manifest_invalid", { field: "manifest.json" }) };
   }
   const invalid = validateManifest(parsed);
   if (invalid) return { error: rejected(invalid.code, invalid.details) };
-  return { manifest: parsed };
+  return { manifest: parsed, manifestFileSha256:sha256Text(raw) };
 }
 
 function incompleteArtifacts(backupDir) {
@@ -2140,7 +2148,7 @@ export function verifyBackup({ backupDir } = {}) {
 
     return okResult({
       backupDir: resolvedDir,
-      manifest,
+      manifest,manifestFileSha256:read.manifestFileSha256,
       summary: {
         formatVersion: manifest.formatVersion,
         appVersion: manifest.appVersion,
@@ -2166,157 +2174,6 @@ export function verifyBackup({ backupDir } = {}) {
  * 把已验证的备份恢复到一个**全新目录**（恢复后目录内是 `<target>/workbench.db`）。
  * 已存在的目标（空目录也算）默认拒绝且不写入任何内容；先验证再发布；失败 / 中断不留半套数据。
  */
-export function restoreNew({ backupDir, targetDir, now = () => new Date() } = {}) {
-  const verified = verifyBackup({ backupDir });
-  if (!verified.ok) return { ...verified, stage: "verify" };
-  const manifest = verified.manifest;
-  const sourceBackupDir = verified.backupDir;
-  // 备份目录本身可能就是别名（例如父目录 junction）：用真实路径做「目标是否落在备份内」判定。
-  const backupReal = realpathOrNull(sourceBackupDir) ?? sourceBackupDir;
-
-  const target = prepareNewDirectory(targetDir, "target", TARGET_DATABASE_FILE);
-  if (target.error) return rejected(target.error, null, { stage: "target" });
-  if (isInside(target.path, backupReal)
-    || isInside(target.path, sourceBackupDir)
-    || isInside(backupReal, target.path)) {
-    return rejected("target_conflicts_backup", null, { stage: "target" });
-  }
-
-  const databasePath = join(target.path, TARGET_DATABASE_FILE);
-  const receiptPath = join(target.path, RESTORE_RECEIPT_FILE);
-  const manifestCopyPath = join(target.path, MANIFEST_FILE);
-  if (conflictsWithSource([databasePath, receiptPath, manifestCopyPath], join(backupReal, SNAPSHOT_FILE))) {
-    // 极端别名布局（例如目标目录与备份目录是同一真实目录的别名）——拒绝，不冒险覆盖。
-    return rejected("target_conflicts_backup", null, { stage: "target" });
-  }
-
-  try {
-    fs.mkdirSync(target.path);
-  } catch (error) {
-    if (error?.code === "EEXIST") return rejected("target_exists", null, { stage: "target" });
-    return rejected("target_uncreatable", null, { stage: "target" });
-  }
-
-  const created = [];
-  try {
-    writeSyncedFile(
-      join(target.path, RESTORE_INCOMPLETE_MARKER),
-      `${JSON.stringify({ startedAt: now().toISOString(), snapshotSha256: manifest.snapshot.sha256 })}\n`,
-      "write_failed",
-    );
-    created.push(RESTORE_INCOMPLETE_MARKER);
-
-    // ---- 1) 复制（复制后重新计算摘要，防止验证与复制之间快照被替换）----
-    const partialName = `${PARTIAL_PREFIX}${process.pid}-${randomTag()}.db`;
-    const partialPath = join(target.path, partialName);
-    created.push(partialName);
-    try {
-      fs.copyFileSync(join(sourceBackupDir, SNAPSHOT_FILE), partialPath);
-    } catch (error) {
-      throw expected(error?.code === "ENOSPC" ? "target_no_space" : "restore_copy_failed");
-    }
-    const copied = digestFile(partialPath);
-    if (copied.bytes !== manifest.snapshot.bytes) {
-      throw expected("snapshot_size_mismatch", { recorded: manifest.snapshot.bytes, actual: copied.bytes });
-    }
-    if (copied.sha256 !== manifest.snapshot.sha256) throw expected("snapshot_digest_mismatch");
-
-    // ---- 2) 落盘耐久：fsync 后再原子发布 ----
-    syncFile(partialPath, "restore_fsync_failed");
-    try {
-      fs.renameSync(partialPath, databasePath);
-    } catch {
-      throw expected("restore_publish_failed");
-    }
-    forgetCreated(created, partialName);
-    created.push(TARGET_DATABASE_FILE);
-    syncDirectory(target.path);
-
-    // ---- 3) 发布后再验证一次已发布文件（内容 + 结构 + 摘要），失败即撤回 ----
-    let published;
-    try {
-      published = inspectSnapshotFile(databasePath);
-    } catch {
-      throw expected("restore_verify_failed");
-    }
-    if (published.snapshot.bytes !== manifest.snapshot.bytes
-      || published.snapshot.sha256 !== manifest.snapshot.sha256
-      || published.content.digest !== manifest.content.digest
-      || published.structure.schemaVersion !== manifest.structure.schemaVersion
-      || published.structure.migrations.join(",") !== manifest.structure.migrations.join(",")) {
-      throw expected("restore_verify_failed");
-    }
-    if (componentBindingProblems(manifest.components, published.components ?? [])) {
-      throw expected("restore_verify_failed");
-    }
-    const strayRestore = SIDECAR_SUFFIXES.map((suffix) => `${databasePath}${suffix}`).filter((file) => lstatOrNull(file));
-    if (strayRestore.length) throw expected("restore_verify_failed", { sidecars: strayRestore.length });
-
-    // ---- 4) 回执与清单副本（只含仓库相对 / 文件名信息，不写本机绝对路径）----
-    const receipt = {
-      product: PRODUCT_ID,
-      format: BACKUP_FORMAT,
-      formatVersion: manifest.formatVersion,
-      restoredAt: now().toISOString(),
-      verified: true,
-      database: TARGET_DATABASE_FILE,
-      sourceDatabase: manifest.source.file,
-      snapshot: {
-        file: SNAPSHOT_FILE,
-        bytes: manifest.snapshot.bytes,
-        sha256: manifest.snapshot.sha256,
-      },
-      structure: {
-        schemaVersion: manifest.structure.schemaVersion,
-        migrations: manifest.structure.migrations,
-        tables: manifest.structure.tables,
-      },
-      components: (manifest.components ?? []).map((entry) => ({
-        name: entry.name,
-        version: entry.version,
-        tables: entry.tables,
-        structureDigest: entry.structureDigest,
-        contentDigest: entry.contentDigest,
-        rows: entry.rows,
-      })),
-    };
-    created.push(MANIFEST_FILE);
-    writeSyncedFile(manifestCopyPath, `${JSON.stringify(manifest, null, 2)}\n`, "write_failed");
-    created.push(RESTORE_RECEIPT_FILE);
-    writeSyncedFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "write_failed");
-    syncDirectory(target.path);
-
-    fs.rmSync(join(target.path, RESTORE_INCOMPLETE_MARKER), { force: true });
-    forgetCreated(created, RESTORE_INCOMPLETE_MARKER);
-    const finalDirState = syncDirectory(target.path);
-
-    return okResult({
-      targetDir: target.path,
-      database: TARGET_DATABASE_FILE,
-      receipt,
-      durability: durabilityReport(finalDirState),
-      summary: {
-        schemaVersion: manifest.structure.schemaVersion,
-        migrations: manifest.structure.migrations,
-        tables: manifest.structure.tables.length,
-        rows: Object.values(manifest.content.tables).reduce((sum, entry) => sum + entry.rows, 0),
-        components: (manifest.components ?? []).map((entry) => ({
-          name: entry.name, version: entry.version, tables: entry.tables.length, rows: entry.rows,
-        })),
-        snapshotBytes: manifest.snapshot.bytes,
-        snapshotSha256: manifest.snapshot.sha256,
-        restoredAt: receipt.restoredAt,
-      },
-    });
-  } catch (error) {
-    const cleanup = removeCreated(target.path, created, { removeDirectory: true });
-    const failure = asFailure(error);
-    const stage = { ...failure, stage: "restore" };
-    if (!cleanup.directoryRemoved) stage.details = { ...(stage.details ?? {}), cleanup: "directory_kept" };
-    return stage;
-  }
-}
-
 /** 供上层（CLI / 后续接线）查询当前支持的备份格式与结构契约。 */
 export function backupContract() {
   return {
@@ -2364,4 +2221,214 @@ export function assertInstallableComponentSet(manifest,target) {
  }
  if(entries.some(e=>e.name==='auxiliary')&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');
  return true;
+}
+// Restore publication is a separate transaction domain from the business database.
+const restoreCapabilities=new WeakMap();
+export function assertPrivateRestoreCapability(db,cap){
+ const r=restoreCapabilities.get(cap);
+ if(!r||r.db!==db||!db.isTransaction)throw restoreError('restore_contract_required');
+ const id=plainRestorePath(r.file),s=assertRestoreControl(db).row;
+ if(id.dev!==r.identity.dev||id.ino!==r.identity.ino||s.target_instance_id!==r.targetInstanceId||s.restore_operation_id!==r.operationId||s.ledger_binding_digest!==r.ledgerBindingDigest||s.source_backup_digest!==r.backupDigest||s.target_binding_digest!==r.targetBindingDigest)throw restoreError('restore_target_binding_mismatch');
+}
+const identitySame=(a,b)=>a.dev===b.dev&&a.ino===b.ino;
+const pathDigest=path=>restoreHash(restorePathKey(path));
+const ledgerBinding=(db,path)=>{const id=plainRestorePath(path);return restoreHash(['restore-ledger-binding-v1',restoreLedgerId(db),pathDigest(path),id.dev,id.ino]);};
+const targetBinding=(binding,op,path,id)=>restoreHash(['restore-target-binding-v1',binding,op,pathDigest(path),id]);
+function restoreArgs({backupDir,targetDir,ledgerPath,operationId}){
+ if(![backupDir,targetDir,ledgerPath].every(v=>typeof v==='string'&&v.length)||!restoreTechId(operationId))throw restoreError('restore_contract_required');
+ plainRestorePath(backupDir,{directory:true});plainRestorePath(join(backupDir,SNAPSHOT_FILE));plainRestorePath(join(backupDir,MANIFEST_FILE));
+ plainRestorePath(dirname(targetDir),{directory:true});plainRestorePath(dirname(ledgerPath),{directory:true});
+ // Require explicit, canonical absolute paths even for not-yet-created objects.
+ if(resolve(targetDir)!==targetDir||resolve(ledgerPath)!==ledgerPath)throw restoreError('restore_target_binding_mismatch');
+ const roots=[backupDir,targetDir,dirname(ledgerPath)];
+ for(let i=0;i<roots.length;i++)for(let j=i+1;j<roots.length;j++)if(isInside(roots[i],roots[j])||isInside(roots[j],roots[i]))throw restoreError('restore_target_binding_mismatch');
+ for(const file of [ledgerPath,...sidecarsOf(ledgerPath)])if(fs.existsSync(file))plainRestorePath(file);
+}
+function restoreFailure(e,{published=false}={}){
+ const code=typeof e?.code==='string'&&(/^(restore_|target_|snapshot_|structure_|component_)/.test(e.code))?e.code:'restore_verify_failed';
+ return {ok:false,status:published?'unknown':'rejected',code:published?'restore_published_pending':code,details:null};
+}
+function controlSnapshot(db){const c=inspectRestoreControl(db);return {controlTargetInstanceId:c.ok?c.row.target_instance_id:null,auditInstanceId:inspectAuditSchema(db).activeInstanceId??null,batchInstanceId:[2,3].includes(inspectBatchSchema(db).version)?db.prepare('SELECT instance_id FROM local_batch_database_instances WHERE is_active=1').get()?.instance_id??null:null};}
+function convertPrivateCopy(file,ctx){
+ const db=new DatabaseSync(file);const cap=Object.freeze(Object.create(null));let source;
+ try {
+  db.exec('PRAGMA foreign_keys=ON');const facts=inspectDatabase(db);source=controlSnapshot(db);
+  db.exec('BEGIN IMMEDIATE');
+  const old=inspectRestoreControl(db);
+  if(old.state==='not_installed')for(const sql of RESTORE_CONTROL_SQL)db.exec(sql);
+  else {if(!old.ok)throw restoreError('restore_control_invalid');db.exec('DELETE FROM restore_control_state; DELETE FROM restore_control_component');}
+  db.prepare('INSERT INTO restore_control_component VALUES(?,?,?)').run('restore-control',1,ctx.at);
+  db.prepare("INSERT INTO restore_control_state VALUES(1,?,?,?,?,?,'pending',?,NULL)").run(ctx.targetInstanceId,ctx.operationId,ctx.backupDigest,ctx.ledgerBindingDigest,ctx.targetBindingDigest,ctx.at);
+  restoreCapabilities.set(cap,{...ctx,db,file,identity:plainRestorePath(file)});
+  if(facts.components.some(e=>e.name===AUDIT_COMPONENT))markAuditInstanceFork(db,{capability:cap,createdAt:ctx.at});
+  const batch=facts.components.find(e=>e.name===LOCAL_BATCH_COMPONENT);
+  if(batch){
+   if(batch.version>=2){
+    const parent=source.batchInstanceId,id=randomUUID(),audit=inspectAuditSchema(db).activeInstanceId??null;
+    db.exec('UPDATE local_batch_database_instances SET is_active=0 WHERE is_active=1');
+    db.prepare("INSERT INTO local_batch_database_instances VALUES(?,?,?,1,?,'restore-new','restore_pending',?,?)").run(id,parent,audit,ctx.at,ctx.operationId,ctx.backupDigest);
+    db.prepare("INSERT INTO local_batch_job_bindings SELECT ?,id,'disabled',NULL,? FROM local_batch_jobs").run(id,ctx.at);
+    db.prepare("INSERT INTO local_batch_input_bindings SELECT ?,input_key,'disabled',NULL,? FROM local_batch_inputs").run(id,ctx.at);
+   }
+   if(batch.version===3){
+    const locks=db.prepare('SELECT * FROM local_batch_locks').all();
+    for(const l of locks){const row=db.prepare('SELECT last_token FROM local_batch_lock_epochs WHERE resource_key=?').get(l.resource_key);if(!row||row.last_token!==l.fencing_token||row.last_token>=Number.MAX_SAFE_INTEGER)throw restoreError('restore_verify_failed');db.prepare('UPDATE local_batch_lock_epochs SET last_token=? WHERE resource_key=?').run(row.last_token+1,l.resource_key);}
+   }
+   db.exec("DELETE FROM local_batch_locks; UPDATE local_batch_stages SET status='needs_review' WHERE status='running'");
+  }
+  assertRestoreControl(db);inspectDatabase(db);db.exec('COMMIT');
+  if(String(db.prepare('PRAGMA journal_mode').get().journal_mode).toLowerCase()==='wal')db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+ }catch(e){if(db.isTransaction)try{db.exec('ROLLBACK');}catch{}throw e;}finally{restoreCapabilities.delete(cap);db.close();}
+ for(const side of sidecarsOf(file))if(fs.existsSync(side))throw restoreError('restore_verify_failed');
+ return source;
+}
+const exactKeys=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
+function validReceipt(r){
+ restoreCanonical(r);
+ const top=['product','receiptVersion','operationId','ledgerId','ledgerBindingDigest','targetBindingDigest','targetInstanceId','source','target','createdAt'];
+ const src=['snapshot','manifestFileSha256','coreVersion','components','controlTargetInstanceId','auditInstanceId','batchInstanceId'];
+ const tgt=['database','coreVersion','components','auditInstanceId','batchInstanceId','writeState'];
+ const comp=(a,target)=>Array.isArray(a)&&a.every((x,i)=>exactKeys(x,target?['name','version','structureDigest','contentDigest']:['name','version'])&&typeof x.name==='string'&&Number.isSafeInteger(x.version)&&x.version>0&&(!i||a[i-1].name<x.name)&&(!target||restoreDigest(x.structureDigest)&&restoreDigest(x.contentDigest)));
+ if(!exactKeys(r,top)||r.product!==PRODUCT_ID||r.receiptVersion!==2||!restoreTechId(r.operationId)||![r.ledgerId,r.targetInstanceId].every(isRestoreUuid)||![r.ledgerBindingDigest,r.targetBindingDigest].every(restoreDigest)||!exactKeys(r.source,src)||!exactKeys(r.target,tgt)||!exactKeys(r.source.snapshot,['sha256','bytes'])||!restoreDigest(r.source.snapshot.sha256)||!Number.isSafeInteger(r.source.snapshot.bytes)||r.source.snapshot.bytes<1||!restoreDigest(r.source.manifestFileSha256)||!SUPPORTED_SCHEMA_VERSIONS.includes(r.source.coreVersion)||r.target.coreVersion!==r.source.coreVersion||!comp(r.source.components,false)||!comp(r.target.components,true)||!exactKeys(r.target.database,['file','bytes','sha256','identity'])||r.target.database.file!==TARGET_DATABASE_FILE||!restoreDigest(r.target.database.sha256)||!Number.isSafeInteger(r.target.database.bytes)||r.target.database.bytes<1||!exactKeys(r.target.database.identity,['dev','ino'])||![r.target.database.identity.dev,r.target.database.identity.ino].every(v=>typeof v==='string'&&/^\d+$/.test(v))||r.target.writeState!=='pending'||typeof r.createdAt!=='string'||!Number.isFinite(Date.parse(r.createdAt))||new Date(r.createdAt).toISOString()!==r.createdAt)throw restoreError('restore_receipt_mismatch');
+ for(const o of [r.source,r.target])for(const k of ['auditInstanceId','batchInstanceId'])if(o[k]!==null&&!restoreTechId(o[k]))throw restoreError('restore_receipt_mismatch');
+ if(r.source.controlTargetInstanceId!==null&&!isRestoreUuid(r.source.controlTargetInstanceId))throw restoreError('restore_receipt_mismatch');
+ return r;
+}
+
+function verifyRestorePreservation(snapshot,target,receipt){
+ const source=new DatabaseSync(snapshot,{readOnly:true});
+ const rows=(db,t)=>db.prepare('SELECT * FROM '+quoteIdent(t)+' ORDER BY rowid').all();
+ const equal=(a,b)=>JSON.stringify(a.map(canonicalRow))===JSON.stringify(b.map(canonicalRow));
+ try {
+  const original=inspectDatabase(source),ids=controlSnapshot(source);
+  if(ids.controlTargetInstanceId!==receipt.source.controlTargetInstanceId||ids.auditInstanceId!==receipt.source.auditInstanceId||ids.batchInstanceId!==receipt.source.batchInstanceId)throw Error();
+  const exceptions=new Set([...RESTORE_CONTROL_TABLES,'audit_database_instances','local_batch_database_instances','local_batch_job_bindings','local_batch_input_bindings','local_batch_locks','local_batch_lock_epochs','local_batch_stages']);
+  for(const t of original.structure.tables)if(!exceptions.has(t)&&!equal(rows(source,t),rows(target,t)))throw Error();
+  const audit=original.components.find(c=>c.name===AUDIT_COMPONENT);
+  if(audit){const old=rows(source,'audit_database_instances').map(r=>({...r,is_active:0})),actual=rows(target,'audit_database_instances');if(!equal(old,actual.filter(r=>r.instance_id!==receipt.target.auditInstanceId))||actual.length!==old.length+1)throw Error();}
+  const batch=original.components.find(c=>c.name===LOCAL_BATCH_COMPONENT);
+  if(batch){
+   if(!equal(rows(source,'local_batch_stages').map(r=>r.status==='running'?{...r,status:'needs_review'}:r),rows(target,'local_batch_stages'))||rows(target,'local_batch_locks').length)throw Error();
+   if(batch.version>=2){
+    const old=rows(source,'local_batch_database_instances').map(r=>({...r,is_active:0})),actual=rows(target,'local_batch_database_instances');if(!equal(old,actual.filter(r=>r.instance_id!==receipt.target.batchInstanceId))||actual.length!==old.length+1)throw Error();
+    for(const t of ['local_batch_job_bindings','local_batch_input_bindings'])if(!equal(rows(source,t),rows(target,t).filter(r=>r.database_instance_id!==receipt.target.batchInstanceId)))throw Error();
+    if(rows(target,'local_batch_job_bindings').filter(r=>r.database_instance_id===receipt.target.batchInstanceId).some(r=>r.output_state!=='disabled'||r.output_root!==null)||rows(target,'local_batch_input_bindings').filter(r=>r.database_instance_id===receipt.target.batchInstanceId).some(r=>r.mode!=='disabled'||r.source_path!==null))throw Error();
+   }
+   if(batch.version===3){const active=new Set(rows(source,'local_batch_locks').map(r=>r.resource_key));if(!equal(rows(source,'local_batch_lock_epochs').map(r=>active.has(r.resource_key)?{...r,last_token:r.last_token+1}:r),rows(target,'local_batch_lock_epochs')))throw Error();}
+  }
+ }catch{throw restoreError('restore_verify_failed');}finally{source.close();}
+}
+
+
+// The only permitted two-link object is this operation's exact publication pair.
+// No directory discovery or generic hardlink exception is used.
+function ownedPublicationPair(file,partial,expectedIdentity){
+ plainRestorePath(dirname(file),{directory:true});
+ const a=fs.lstatSync(file,{bigint:true}),b=fs.lstatSync(partial,{bigint:true});
+ if(!a.isFile()||!b.isFile()||a.isSymbolicLink()||b.isSymbolicLink()||a.nlink!==2n||b.nlink!==2n||a.dev!==b.dev||a.ino!==b.ino||String(a.dev)!==expectedIdentity.dev||String(a.ino)!==expectedIdentity.ino||restorePathKey(fs.realpathSync.native(file))!==restorePathKey(file)||restorePathKey(fs.realpathSync.native(partial))!==restorePathKey(partial))throw restoreError('restore_target_binding_mismatch');
+ return {dev:String(a.dev),ino:String(a.ino)};
+}
+
+function receiptEvidence({backupDir,targetDir,ledgerPath,operationId},db,verified){
+ const op=getRestoreOperation(db,operationId);if(!op||op.bindingVersion!==1)throw restoreError('restore_target_binding_mismatch');
+ plainRestorePath(targetDir,{directory:true});plainRestorePath(join(targetDir,RESTORE_RECEIPT_FILE));
+ const receipt=validReceipt(JSON.parse(fs.readFileSync(join(targetDir,RESTORE_RECEIPT_FILE),'utf8'))),binding=ledgerBinding(db,ledgerPath),manifest=verified.manifest;
+ if(receipt.operationId!==operationId||receipt.ledgerId!==restoreLedgerId(db)||receipt.ledgerBindingDigest!==binding||receipt.targetInstanceId!==op.targetInstanceId||receipt.targetBindingDigest!==op.targetBindingDigest||targetBinding(binding,operationId,targetDir,receipt.targetInstanceId)!==op.targetBindingDigest||receipt.source.snapshot.sha256!==op.backupDigest||receipt.source.snapshot.sha256!==manifest.snapshot.sha256||receipt.source.snapshot.bytes!==manifest.snapshot.bytes||receipt.source.manifestFileSha256!==digestFile(join(backupDir,MANIFEST_FILE)).sha256||receipt.source.coreVersion!==manifest.structure.schemaVersion||restoreCanonical(receipt.source.components)!==restoreCanonical((manifest.components??[]).map(({name,version})=>({name,version})).sort((a,b)=>a.name<b.name?-1:1)))throw restoreError('restore_target_binding_mismatch');
+ if(op.receipt!==null&&restoreHash(receipt)!==op.receipt)throw restoreError('restore_receipt_mismatch');
+ const manifestCopy=join(targetDir,MANIFEST_FILE);plainRestorePath(manifestCopy);if(digestFile(manifestCopy).sha256!==receipt.source.manifestFileSha256)throw restoreError('restore_receipt_mismatch');
+ const file=join(targetDir,TARGET_DATABASE_FILE);
+ let candidate=file;
+ if(!fs.existsSync(file)){
+  // The private filename is operation-bound, never discovered by scanning other directories.
+  candidate=join(targetDir,`${PARTIAL_PREFIX}${receipt.targetInstanceId}.db`);
+ }
+ const partial=join(targetDir,`${PARTIAL_PREFIX}${receipt.targetInstanceId}.db`);let pair=false,identity;
+ try{identity=plainRestorePath(candidate);}catch(error){
+  if(candidate!==file||!op.receipt||!['prepared','unknown','succeeded'].includes(op.status)||!fs.existsSync(partial))throw error;
+  identity=ownedPublicationPair(file,partial,receipt.target.database.identity);pair=true;
+ }
+ if(!identitySame(identity,receipt.target.database.identity))throw restoreError('restore_target_binding_mismatch');
+ if([...sidecarsOf(candidate),...(pair?sidecarsOf(partial):[])].some(p=>fs.existsSync(p)))throw restoreError('restore_verify_failed');
+ const actual=digestFile(candidate);if(actual.sha256!==receipt.target.database.sha256||actual.bytes!==receipt.target.database.bytes)throw restoreError('restore_digest_mismatch');
+ const conn=new DatabaseSync(candidate,{readOnly:true});
+ try {
+  const facts=inspectDatabase(conn),s=assertRestoreControl(conn).row,ids=controlSnapshot(conn);
+  verifyRestorePreservation(join(backupDir,SNAPSHOT_FILE),conn,receipt);
+  if(s.target_instance_id!==receipt.targetInstanceId||s.restore_operation_id!==operationId||s.source_backup_digest!==op.backupDigest||s.ledger_binding_digest!==binding||s.target_binding_digest!==op.targetBindingDigest||s.write_state!=='pending'||facts.structure.schemaVersion!==receipt.target.coreVersion||ids.auditInstanceId!==receipt.target.auditInstanceId||ids.batchInstanceId!==receipt.target.batchInstanceId||restoreCanonical(facts.components.map(({name,version,structureDigest,contentDigest})=>({name,version,structureDigest,contentDigest})).sort((a,b)=>a.name<b.name?-1:1))!==restoreCanonical(receipt.target.components))throw restoreError('restore_verify_failed');
+  // Each new active fork must link to exactly the source active identity recorded at publication.
+  if(ids.auditInstanceId!==null&&conn.prepare('SELECT parent_instance_id,note_code FROM audit_database_instances WHERE is_active=1').get()?.parent_instance_id!==receipt.source.auditInstanceId)throw restoreError('restore_verify_failed');
+  if(ids.batchInstanceId!==null){const active=conn.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();if(active.parent_instance_id!==receipt.source.batchInstanceId||active.write_state!=='restore_pending'||active.restore_operation_id!==operationId||active.source_backup_digest!==op.backupDigest)throw restoreError('restore_verify_failed');}
+ }finally{conn.close();}
+ return {receipt,candidate,file,ownedPublicationPair:pair?partial:null,targetDigest:actual.sha256,targetInstanceId:op.targetInstanceId,receiptDigest:restoreHash(receipt),backupDigest:op.backupDigest};
+}
+function publishEvidence(e,targetDir){
+ if(e.ownedPublicationPair){
+  // Only after receiptEvidence verified all ledger/receipt, SHA, strict content,
+  // source preservation and instance-chain bindings may this known partial go.
+  ownedPublicationPair(e.file,e.ownedPublicationPair,e.receipt.target.database.identity);
+  fs.unlinkSync(e.ownedPublicationPair);
+ }
+ if(e.candidate!==e.file){
+  // link is exclusive (unlike rename over an existing file); unlink preserves the verified object.
+  fs.linkSync(e.candidate,e.file);fs.unlinkSync(e.candidate);
+ }
+ const identity=plainRestorePath(e.file);if(!identitySame(identity,e.receipt.target.database.identity))throw restoreError('restore_target_binding_mismatch');
+ const marker=join(targetDir,RESTORE_INCOMPLETE_MARKER);if(fs.existsSync(marker)){plainRestorePath(marker);fs.unlinkSync(marker);}
+ const state=syncDirectory(targetDir);if(state.supported&&!state.synced)throw restoreError('restore_fsync_failed');return durabilityReport(state);
+}
+export function restoreNew(args={}){
+ let ledger,published=false,started=false;
+ try {
+  const {backupDir,targetDir,ledgerPath,operationId,now=()=>new Date()}=args;
+  if(![backupDir,targetDir,ledgerPath].every(v=>typeof v==='string'&&v.length)||!restoreTechId(operationId))throw restoreError('restore_contract_required');
+  const verified=verifyBackup({backupDir});if(!verified.ok)return {...verified,stage:'verify'};restoreArgs(args);
+  const manifest=verified.manifest,sourceManifestBytes=fs.readFileSync(join(backupDir,MANIFEST_FILE));if(sha256Text(sourceManifestBytes)!==verified.manifestFileSha256)throw restoreError("restore_verify_failed");
+  ledger=openRestoreLedger(ledgerPath,{create:true});ledger.exec('PRAGMA busy_timeout=5000');
+  const binding=ledgerBinding(ledger,ledgerPath),existing=getRestoreOperation(ledger,operationId),id=existing?.targetInstanceId??randomUUID();
+  const input={operationId,backupDigest:manifest.snapshot.sha256,backupBytes:manifest.snapshot.bytes,backupSchemaVersion:manifest.structure.schemaVersion,componentVersions:{core:manifest.structure.schemaVersion,...Object.fromEntries((manifest.components??[]).map(c=>[c.name,c.version]))},producer:PRODUCT_ID,targetInstanceId:id,targetBindingDigest:targetBinding(binding,operationId,targetDir,id)};
+  let begin;
+  try{begin=beginRestoreOperation(ledger,input);}catch(error){
+   if(error.code!=='restore_operation_conflict'||existing)throw error;
+   const race=getRestoreOperation(ledger,operationId);if(!race)throw error;
+   input.targetInstanceId=race.targetInstanceId;input.targetBindingDigest=targetBinding(binding,operationId,targetDir,race.targetInstanceId);begin=beginRestoreOperation(ledger,input);
+  }
+  if(!begin.created){ledger.close();ledger=null;return reconcileRestore(args);}
+  started=true;const planned=prepareNewDirectory(targetDir,'target',TARGET_DATABASE_FILE);if(planned.error)throw expected(planned.error);plainRestorePath(targetDir,{absent:true});fs.mkdirSync(targetDir);plainRestorePath(targetDir,{directory:true});
+  const at=now().toISOString(),partial=join(targetDir,`${PARTIAL_PREFIX}${id}.db`);
+  writeSyncedFile(join(targetDir,RESTORE_INCOMPLETE_MARKER),restoreCanonical({operationId,targetInstanceId:id,targetBindingDigest:input.targetBindingDigest})+'\n','restore_fsync_failed');
+  fs.copyFileSync(join(backupDir,SNAPSHOT_FILE),partial,fs.constants.COPYFILE_EXCL);
+  if(digestFile(partial).sha256!==manifest.snapshot.sha256||digestFile(partial).bytes!==manifest.snapshot.bytes)throw restoreError('snapshot_digest_mismatch');
+  inspectSnapshotFile(partial);
+  const source=convertPrivateCopy(partial,{targetInstanceId:id,operationId,backupDigest:manifest.snapshot.sha256,ledgerBindingDigest:binding,targetBindingDigest:input.targetBindingDigest,at});
+  syncFile(partial,'restore_fsync_failed');const converted=inspectSnapshotFile(partial),conn=new DatabaseSync(partial,{readOnly:true});let ids;try{ids=controlSnapshot(conn);}finally{conn.close();}
+  const receipt=validReceipt({product:PRODUCT_ID,receiptVersion:2,operationId,ledgerId:restoreLedgerId(ledger),ledgerBindingDigest:binding,targetBindingDigest:input.targetBindingDigest,targetInstanceId:id,source:{snapshot:{sha256:manifest.snapshot.sha256,bytes:manifest.snapshot.bytes},manifestFileSha256:sha256Text(sourceManifestBytes),coreVersion:manifest.structure.schemaVersion,components:(manifest.components??[]).map(({name,version})=>({name,version})).sort((a,b)=>a.name<b.name?-1:1),...source},target:{database:{file:TARGET_DATABASE_FILE,bytes:converted.snapshot.bytes,sha256:converted.snapshot.sha256,identity:((({dev,ino})=>({dev,ino}))(plainRestorePath(partial)))},coreVersion:converted.structure.schemaVersion,components:converted.components.map(({name,version,structureDigest,contentDigest})=>({name,version,structureDigest,contentDigest})).sort((a,b)=>a.name<b.name?-1:1),auditInstanceId:ids.auditInstanceId,batchInstanceId:ids.batchInstanceId,writeState:'pending'},createdAt:at});
+  writeSyncedFile(join(targetDir,MANIFEST_FILE),sourceManifestBytes,'restore_fsync_failed');
+  writeSyncedFile(join(targetDir,RESTORE_RECEIPT_FILE),restoreCanonical(receipt)+'\n','restore_fsync_failed');
+  const dirState=syncDirectory(targetDir);if(dirState.supported&&!dirState.synced)throw restoreError('restore_fsync_failed');
+  markRestorePrepared(ledger,{operationId,receipt:restoreHash(receipt)});
+  const evidence=receiptEvidence(args,ledger,verified),durability=publishEvidence(evidence,targetDir);published=true;
+  completeRestoreOperation(ledger,{operationId,receipt:evidence.receiptDigest,backupDigest:evidence.backupDigest,targetDigest:evidence.targetDigest,targetInstanceId:id});
+  return okResult({targetDir,database:TARGET_DATABASE_FILE,receipt,durability,sourcePathVerified:false,summary:{schemaVersion:receipt.target.coreVersion,snapshotBytes:manifest.snapshot.bytes,snapshotSha256:manifest.snapshot.sha256,targetSha256:evidence.targetDigest,components:receipt.target.components}});
+ }catch(error){
+  if(started&&ledger){
+   const targetFile=join(args.targetDir,TARGET_DATABASE_FILE);published=published||fs.existsSync(targetFile);
+   try{failRestoreOperation(ledger,{operationId:args.operationId,status:published?'unknown':'failed',resultCode:published?'restore_published_pending':'restore_new_failed',reasonCode:'restore_verify_failed'});}catch{}
+  }
+  return restoreFailure(error,{published});
+ }finally{ledger?.close();}
+}
+export function reconcileRestore(args={}){
+ let ledger,published=false;
+ try {
+  restoreArgs(args);const verified=verifyBackup({backupDir:args.backupDir});if(!verified.ok)return {...verified,stage:'verify'};
+  ledger=openRestoreLedger(args.ledgerPath);ledger.exec('PRAGMA busy_timeout=5000');
+  const op=getRestoreOperation(ledger,args.operationId);if(!op||op.bindingVersion!==1)throw restoreError('restore_target_binding_mismatch');
+  if(targetBinding(ledgerBinding(ledger,args.ledgerPath),args.operationId,args.targetDir,op.targetInstanceId)!==op.targetBindingDigest||op.backupDigest!==verified.manifest.snapshot.sha256)throw restoreError('restore_operation_conflict');
+  const e=receiptEvidence(args,ledger,verified);
+  if(['failed','rejected'].includes(op.status))return {ok:false,status:op.status,code:'restore_reconcile_pending',details:null};
+  if(op.status==='started')markRestorePrepared(ledger,{operationId:args.operationId,receipt:e.receiptDigest});
+  const durability=publishEvidence(e,args.targetDir);published=true;
+  const done=reconcileRestoreOperation(ledger,{operationId:args.operationId,verifyPublished:()=>({targetDigest:e.targetDigest,targetInstanceId:e.targetInstanceId,receipt:e.receiptDigest,backupDigest:e.backupDigest})});
+  return okResult({targetDir:args.targetDir,database:TARGET_DATABASE_FILE,receipt:e.receipt,durability,terminal:done.terminal,reconciled:done.reconciled});
+ }catch(e){if(published)return restoreFailure(e,{published:true});return {ok:false,status:'unknown',code:e?.code==='restore_operation_conflict'?e.code:'restore_reconcile_pending',details:null};}finally{ledger?.close();}
 }

@@ -1,3 +1,7 @@
+> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+>
+> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+
 > **当前 W2b 已合并（2026-10-24）**：[PR #100](https://github.com/huxiaoyang-code/youshu-fork/pull/100)，merge `e13cc43d9f95ee78599b288486ff5721b01f00e2`；[本次13docs交接认领](https://github.com/huxiaoyang-code/youshu-fork/issues/54#issuecomment-6376358168)。交接元数据待提交／复核，LOCAL06/07未整体完成、八任务仍6/8、税局真实0。审定head、独审和后续边界见[LOCAL06当前交接](../handoffs/LOCAL-06-AUDIT.md)。
 
 以下保留合并前阶段说明；最新PR #100已合并事实与后续边界以页头交接为准。

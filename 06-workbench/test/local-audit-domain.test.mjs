@@ -1,3 +1,18 @@
+import { randomUUID as restoreUUID } from 'node:crypto';
+import { mkdirSync as restoreMkdir,copyFileSync as restoreCopy,existsSync as restoreExists } from 'node:fs';
+import {DatabaseSync as RestoreDb} from 'node:sqlite';
+import {assertRestoreOpenPath as pending4} from '../server/local-restore-control.mjs';
+import { tmpdir as restoreTmpdir } from 'node:os';
+import { join as restoreJoin } from 'node:path';
+const restoreSeedMap=new Map(),restoreSeedCache=new Map();
+function R4(input){const root=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(root);if(input.backupDir&&input.targetDir)restoreSeedMap.set(input.targetDir,input.backupDir);return {...input,ledgerPath:restoreJoin(root,'ledger.db'),operationId:restoreUUID()};}
+function seed4(backupDir){const dir=restoreJoin(restoreTmpdir(),restoreUUID());restoreMkdir(dir);restoreCopy(restoreJoin(backupDir,'workbench.db.snapshot'),restoreJoin(dir,'workbench.db'));return dir;}
+function businessSeed4(dataDir){if(!restoreSeedMap.has(dataDir)||!restoreExists(restoreJoin(dataDir,'restore.json')))return dataDir;if(restoreSeedCache.has(dataDir))return restoreSeedCache.get(dataDir);
+ let code;try{pending4(restoreJoin(dataDir,'workbench.db'));}catch(e){code=e.code;}if(code!=='restore_target_pending')throw Error('expected real pending target');
+ const source=new RestoreDb(restoreJoin(restoreSeedMap.get(dataDir),'workbench.db.snapshot'),{readOnly:true}),target=new RestoreDb(restoreJoin(dataDir,'workbench.db'),{readOnly:true});try{for(const {name} of source.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){if(['audit_database_instances','local_batch_database_instances','local_batch_job_bindings','local_batch_input_bindings','local_batch_stages','local_batch_locks','local_batch_lock_epochs','restore_control_component','restore_control_state'].includes(name))continue;if(JSON.stringify(source.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all())!==JSON.stringify(target.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()))throw Error('restored historical row mismatch '+name);}}finally{source.close();target.close();}
+ const seed=seed4(restoreSeedMap.get(dataDir));restoreSeedCache.set(dataDir,seed);return seed;
+}
+function cli4(input){if(input[0]!=='restore-new'||!input.includes('--backup')||!input.includes('--target')||input.includes('--ledger'))return input;const r=R4({backupDir:input[input.indexOf('--backup')+1],targetDir:input[input.indexOf('--target')+1]});return [...input,'--ledger',r.ledgerPath,'--operation',r.operationId];}
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {join,dirname,resolve} from 'node:path';
@@ -174,7 +189,7 @@ try {
  const bigintReconcile=B.reconcileBank(db,{accountSetId:b.id,bankAccountId:'SYN-BANK-B',period:'2026-01',asOf:'2026-01-31',coverageFrom:'2026-01-01',coverageTo:'2026-01-31',statementSource:'synthetic',statementOpenCents:0n,statementCloseCents:20000n});
  assert.equal(bigintReconcile.statement.openCents,0);assert.equal(bigintReconcile.statement.closeCents,20000);assert.equal(bigintReconcile.book.closingCents,20000);assert.equal(bigintReconcile.statement.differenceCents,0);console.log('BigInt top-level cents: open 0, close 20000; enterprise book 20000; statement difference 0');groups++;
  const backed=LB.createBackup({dbPath,outDir:join(root,'roundtrip-backup')});assert.equal(backed.ok,true,JSON.stringify(backed));assert.equal(LB.verifyBackup({backupDir:backed.backupDir}).ok,true);
- const restored=join(root,'restored');assert.equal(LB.restoreNew({backupDir:backed.backupDir,targetDir:restored}).ok,true);assert.equal(LB.createBackup({dbPath:join(restored,'workbench.db'),outDir:join(root,'again-backup')}).ok,true);groups++;
+ const restored=join(root,'restored');assert.equal(LB.restoreNew(R4({backupDir:backed.backupDir,targetDir:restored})).ok,true);assert.equal(LB.createBackup({dbPath:join(restored,'workbench.db'),outDir:join(root,'again-backup')}).ok,true);groups++;
  const restart=await runChild(['--input-type=module','-e',`import {db} from './server/db.mjs';import * as A from './server/accounting.mjs';import {withRequestMetadata} from './server/local-audit-coordinator.mjs';try{const out=withRequestMetadata({operationId:${JSON.stringify(deleteId)},actor:'domain'},()=>A.deleteAccountSet(${gone.id}));console.log(out===undefined?'undefined replay':'bad');}finally{db.close();console.log('DB actual close');}`],{env:{...process.env}});assert.equal(restart.code,0,restart.stderr);assert.match(restart.stdout,/undefined replay/);assert.match(restart.stdout,/DB actual close/);groups++;
  // Private parent IDs alone do not make a child part of the bound fixed plan.
  const planSet=A.createAccountSet({name:'R5 fixed plan synthetic',start_period:'2026-01',enterprise:{enterpriseKey:'SYN-R5-PLAN'}});

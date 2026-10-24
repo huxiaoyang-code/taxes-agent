@@ -1402,6 +1402,7 @@ export const MODEL_OUTPUT_CONTRACT = Object.freeze({
 // 只有固定 allowlist 的 code 能出模型通道；其他一律归为 operation_failed。
 // error.message / error.details / error.stack 从不读取——它们可能带账套名、科目名、金额原文。
 const ERROR_CODES = dict({
+  restore_target_pending:'restore',restore_control_invalid:'restore',restore_control_future_version:'restore',restore_target_binding_mismatch:'restore',restore_contract_required:'restore',
   audit_operation_invalid: "audit",
   audit_result_invalid: "audit",
   audit_result_unavailable: "audit",

@@ -1,3 +1,4 @@
+import { assertRestoreOpenPath } from './local-restore-control.mjs';
 // db.mjs — SQLite 存储（node:sqlite，零依赖）
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
@@ -8,6 +9,7 @@ import { assertOpenedDatabaseClaimsMatch } from "./database-open-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WORKBENCH_DATA_DIR || join(__dirname, "..", "data");
+assertRestoreOpenPath(join(DATA_DIR,'workbench.db'));
 mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_FILE = join(DATA_DIR, "workbench.db");

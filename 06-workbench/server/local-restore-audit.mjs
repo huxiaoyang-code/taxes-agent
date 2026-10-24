@@ -14,11 +14,13 @@
 //   4) 只存固定词表 + 摘要 + 内部技术 ID；不存备份 / 目标原始路径、业务金额、凭证内容或异常原文。
 
 import { DatabaseSync } from "node:sqlite";
-import { existsSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { plainRestorePath,isRestoreUuid,restoreDigest,restoreCanonical,restoreHash,normalizeRestoreSql } from "./local-restore-control.mjs";
 import { auditError as fail, runInTransaction } from "./local-audit.mjs";
 
 export const RESTORE_LEDGER_COMPONENT = "restore-ledger";
-export const RESTORE_LEDGER_SCHEMA_VERSION = 1;
+export const RESTORE_LEDGER_SCHEMA_VERSION = 2;
 export const RESTORE_LEDGER_TABLES = Object.freeze([
   "restore_ledger_meta",
   "restore_operations",
@@ -176,13 +178,48 @@ const V1_STATEMENTS = Object.freeze([
   ...Object.values(RESTORE_TRIGGER_SQL),
 ]);
 
+
+const V2_STEPS = Object.freeze([
+ 'ALTER TABLE restore_ledger_meta ADD COLUMN ledger_id TEXT',
+ "ALTER TABLE restore_operations ADD COLUMN target_binding_digest TEXT CHECK(target_binding_digest IS NULL OR (length(target_binding_digest)=64 AND target_binding_digest NOT GLOB '*[^a-f0-9]*'))",
+ 'ALTER TABLE restore_operations ADD COLUMN binding_version INTEGER NOT NULL DEFAULT 0 CHECK(binding_version IN (0,1) AND (binding_version=0 OR (target_binding_digest IS NOT NULL AND target_instance_id IS NOT NULL)))',
+ "CREATE TRIGGER restore_operations_bound_insert BEFORE INSERT ON restore_operations WHEN NEW.binding_version<>1 BEGIN SELECT RAISE(ABORT,'restore_binding_required'); END",
+ "CREATE TRIGGER restore_operations_binding_immutable BEFORE UPDATE OF binding_version,target_binding_digest,target_instance_id ON restore_operations WHEN NEW.binding_version IS NOT OLD.binding_version OR NEW.target_binding_digest IS NOT OLD.target_binding_digest OR NEW.target_instance_id IS NOT OLD.target_instance_id BEGIN SELECT RAISE(ABORT,'restore_binding_immutable'); END",
+]);
+const schemaFacts=db=>db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>({...r,sql:normalizeSql(r.sql)}));
+const schemaContracts=new Map();
+function ledgerContract(version){if(!schemaContracts.has(version)){const d=new DatabaseSync(':memory:');try{for(const sql of V1_STATEMENTS)d.exec(sql);if(version===2)for(const sql of V2_STEPS)d.exec(sql);schemaContracts.set(version,restoreCanonical(schemaFacts(d)));}finally{d.close();}}return schemaContracts.get(version);}
+const iso=v=>typeof v==='string'&&Number.isFinite(Date.parse(v))&&new Date(v).toISOString()===v;
+function strictLedgerContent(db,version){
+ try {
+ const meta=db.prepare('SELECT * FROM restore_ledger_meta').all();
+ if(meta.length!==1||meta[0].component!==RESTORE_LEDGER_COMPONENT||meta[0].version!==version||!iso(meta[0].installed_at)||(version===2&&!isRestoreUuid(meta[0].ledger_id)))return false;
+ const ops=db.prepare('SELECT * FROM restore_operations').all(),events=db.prepare('SELECT * FROM restore_operation_events ORDER BY id').all(),ids=new Set(ops.map(r=>r.operation_id));
+ for(const r of ops){
+  if(!isTechId(r.operation_id)||!iso(r.started_at)||!iso(r.updated_at)||!STATUS_SET.has(r.status)||!RESULT_CODE_SET.has(r.result_code)||!REASON_CODE_SET.has(r.reason_code)||!isDigest(r.backup_digest)||!Number.isSafeInteger(r.backup_bytes)||r.backup_bytes<1||!isTechId(r.producer)||!Number.isSafeInteger(r.attempts)||r.attempts<1)return false;
+  if(JSON.stringify(normalizeComponentVersions(JSON.parse(r.component_versions)))!==r.component_versions)return false;
+  if(version===2&&(r.binding_version===1?(!isRestoreUuid(r.target_instance_id)||!isDigest(r.target_binding_digest)):r.binding_version!==0||r.target_binding_digest!==null))return false;
+  if(r.target_instance_id!==null&&!isTechId(r.target_instance_id))return false;
+  if(r.receipt!==null&&!isDigest(r.receipt)||r.target_digest!==null&&!isDigest(r.target_digest))return false;
+  if(r.prepared_at!==null&&!iso(r.prepared_at)||r.published_at!==null&&!iso(r.published_at)||r.terminal_at!==null&&!iso(r.terminal_at))return false;
+  if(r.status==='started'&&(r.result_code!=='restore_started'||r.receipt!==null||r.prepared_at!==null||r.terminal_at!==null))return false;
+  if(r.status==='prepared'&&(r.result_code!=='restore_prepared'||!r.receipt||!r.prepared_at||r.terminal_at!==null))return false;
+  if(r.status==='succeeded'&&(r.result_code!=='restore_new_succeeded'||!r.receipt||!r.target_digest||!r.target_instance_id||!r.prepared_at||!r.published_at||!r.terminal_at))return false;
+  if(FAIL_RESULT_CODES[r.status]&&(!FAIL_RESULT_CODES[r.status].includes(r.result_code)||!r.terminal_at))return false;
+  const history=events.filter(e=>e.operation_id===r.operation_id);if(!history.length||history[0].from_status!==null||history[0].to_status!=='started'||history[0].result_code!=='restore_started'||history.at(-1).to_status!==r.status)return false;
+  let status=null;for(const e of history){if(e.from_status!==status)return false;status=e.to_status;}
+ }
+ return events.every(e=>ids.has(e.operation_id)&&Number.isSafeInteger(e.id)&&e.id>0&&iso(e.at)&&STATUS_SET.has(e.to_status)&&RESULT_CODE_SET.has(e.result_code)&&REASON_CODE_SET.has(e.reason_code));
+ }catch{return false;}
+}
+
 // ------------------------------------------------------------------ 结构
 const listTables = (db) =>
   db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
     .all()
     .map((r) => r.name);
 
-const normalizeSql = (text) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+const normalizeSql = text => normalizeRestoreSql(String(text ?? ""));
 const columnsOf = (db, name) => db.prepare(`PRAGMA table_info(${name})`).all().map((r) => r.name);
 
 /**
@@ -238,6 +275,8 @@ export function inspectRestoreLedger(db) {
   else if (missingTriggers.length || invalidTriggers.length) state = "invalid";
   else state = "ok";
 
+  if ([1,2].includes(version) && (!columnsReady || restoreCanonical(schemaFacts(db))!==ledgerContract(version) || !strictLedgerContent(db,version))) state="invalid";
+  else if ([1,2].includes(version)) state="ok";
   return {
     tables,
     present,
@@ -275,9 +314,10 @@ export function ensureRestoreLedgerSchema(db) {
   }
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const step of V1_STATEMENTS) db.exec(step);
+    for (const step of [...V1_STATEMENTS,...V2_STEPS]) db.exec(step);
     db.prepare(`INSERT INTO restore_ledger_meta (component, version, installed_at, note) VALUES (?,?,?,?)`)
       .run(RESTORE_LEDGER_COMPONENT, RESTORE_LEDGER_SCHEMA_VERSION, new Date().toISOString(), "local-06-audit");
+    db.prepare("UPDATE restore_ledger_meta SET ledger_id=?").run(randomUUID());
     db.exec("COMMIT");
   } catch (e) {
     try { db.exec("ROLLBACK"); } catch { /* 保留原始拒绝 */ }
@@ -299,11 +339,12 @@ function assertLedgerSchema(db) {
   if (state.version > RESTORE_LEDGER_SCHEMA_VERSION) {
     throw fail("restore_ledger_incompatible", { reason: "version", version: state.version });
   }
-  if (state.version !== RESTORE_LEDGER_SCHEMA_VERSION) {
+  if (![1,2].includes(state.version)) {
     throw fail("restore_ledger_inconsistent", { reason: "version", version: state.version });
   }
   if (state.missingTriggers.length) throw fail("restore_ledger_inconsistent", { reason: "missing_triggers" });
   if (state.invalidTriggers.length) throw fail("restore_ledger_inconsistent", { reason: "invalid_triggers" });
+  if(!state.ok)throw fail("restore_ledger_inconsistent");
   return state;
 }
 
@@ -330,6 +371,7 @@ export function openRestoreLedger(path, { create = false, readOnly = false } = {
       assertLedgerSchema(db);
       return db;
     }
+    if(exists && inspectRestoreLedger(db).version===1)throw fail("restore_ledger_incompatible",{reason:"protected_upgrade_required"});
     ensureRestoreLedgerSchema(db);
     return db;
   } catch (e) {
@@ -355,6 +397,8 @@ const toOperationDto = (row) => ({
   receipt: row.receipt ?? null,
   targetDigest: row.target_digest ?? null,
   targetInstanceId: row.target_instance_id ?? null,
+  targetBindingDigest: row.target_binding_digest ?? null,
+  bindingVersion: row.binding_version ?? 0,
   preparedAt: row.prepared_at ?? null,
   publishedAt: row.published_at ?? null,
   terminalAt: row.terminal_at ?? null,
@@ -367,7 +411,7 @@ const OPERATION_COLUMNS = `operation_id, started_at, updated_at, status, result_
   target_instance_id, prepared_at, published_at, terminal_at, attempts, note_code`;
 
 const getRow = (db, operationId) =>
-  db.prepare(`SELECT ${OPERATION_COLUMNS} FROM restore_operations WHERE operation_id=?`).get(operationId) || null;
+  db.prepare(`SELECT * FROM restore_operations WHERE operation_id=?`).get(operationId) || null;
 
 /**
  * ledger 写入统一在一条短事务内完成；底层写入失败（IO / 锁 / 触发器）归一成固定错误码，
@@ -375,7 +419,7 @@ const getRow = (db, operationId) =>
  * 写之前先做结构断言：未知版本 / 缺列 / 缺触发器 / 同名无效触发器给固定结构化拒绝。
  */
 const guardedWrite = (db, fn) => {
-  assertLedgerSchema(db);
+  if(assertLedgerSchema(db).version!==2)throw fail("restore_contract_required");
   try {
     return runInTransaction(db, fn).result;
   } catch (e) {
@@ -401,7 +445,7 @@ const insertTransition = (db, { operationId, fromStatus, toStatus, resultCode, r
  */
 export function beginRestoreOperation(db, input = {}) {
   const {
-    operationId, backupDigest, backupBytes, backupSchemaVersion = null, componentVersions, producer, noteCode = null,
+    operationId, backupDigest, backupBytes, backupSchemaVersion = null, componentVersions, producer, noteCode = null, targetInstanceId,targetBindingDigest,
   } = input;
   if (!isTechId(operationId)) throw fail("restore_operation_invalid", { field: "operationId" });
   if (!isDigest(backupDigest)) throw fail("restore_operation_invalid", { field: "backupDigest" });
@@ -413,6 +457,7 @@ export function beginRestoreOperation(db, input = {}) {
     throw fail("restore_operation_invalid", { field: "producer" });
   }
   if (noteCode !== null && !isTechId(noteCode)) throw fail("restore_operation_invalid", { field: "noteCode" });
+  if(!isRestoreUuid(targetInstanceId)||!isDigest(targetBindingDigest))throw fail("restore_contract_required");
   const components = normalizeComponentVersions(componentVersions);
   const componentJson = JSON.stringify(components);
 
@@ -420,7 +465,7 @@ export function beginRestoreOperation(db, input = {}) {
     const now = new Date().toISOString();
     const existing = getRow(db, operationId);
     if (existing) {
-      const same = existing.backup_digest === backupDigest
+      const same = existing.binding_version===1 && existing.target_instance_id===targetInstanceId && existing.target_binding_digest===targetBindingDigest && existing.backup_digest === backupDigest
         && Number(existing.backup_bytes) === backupBytes
         && (existing.backup_schema_version === null ? null : Number(existing.backup_schema_version)) === backupSchemaVersion
         && JSON.stringify(normalizeComponentVersions(JSON.parse(existing.component_versions))) === componentJson
@@ -431,9 +476,9 @@ export function beginRestoreOperation(db, input = {}) {
     }
     db.prepare(`INSERT INTO restore_operations
                   (operation_id, started_at, updated_at, status, result_code, reason_code, backup_digest,
-                   backup_bytes, backup_schema_version, component_versions, producer, attempts, note_code)
-                VALUES (?,?,?,'started','restore_started','none',?,?,?,?,?,1,?)`)
-      .run(operationId, now, now, backupDigest, backupBytes, backupSchemaVersion, componentJson, producer, noteCode);
+                   backup_bytes, backup_schema_version, component_versions, producer, attempts, note_code,target_instance_id,target_binding_digest,binding_version)
+                VALUES (?,?,?,'started','restore_started','none',?,?,?,?,?,1,?,?,?,1)`)
+      .run(operationId, now, now, backupDigest, backupBytes, backupSchemaVersion, componentJson, producer, noteCode,targetInstanceId,targetBindingDigest);
     insertTransition(db, {
       operationId, fromStatus: null, toStatus: "started", resultCode: "restore_started", reasonCode: "none", noteCode,
     });
@@ -451,6 +496,7 @@ export function markRestorePrepared(db, { operationId, receipt } = {}) {
   return guardedWrite(db, () => {
     const row = getRow(db, operationId);
     if (!row) throw fail("restore_operation_invalid", { reason: "operation_missing" });
+    if(row.binding_version!==1)throw fail("restore_contract_required");
     if (row.status === "prepared") {
       if (row.receipt !== receipt) throw fail("restore_receipt_mismatch", { reason: "prepared_receipt_differs" });
       return { changed: false, operation: toOperationDto(row) };
@@ -491,6 +537,7 @@ export function completeRestoreOperation(db, input = {}) {
   return guardedWrite(db, () => {
     const row = getRow(db, operationId);
     if (!row) throw fail("restore_operation_invalid", { reason: "operation_missing" });
+    if(row.binding_version!==1||row.target_instance_id!==targetInstanceId)throw fail("restore_target_binding_mismatch");
     if (row.status === "succeeded") {
       const same = row.receipt === receipt && row.backup_digest === backupDigest
         && row.target_digest === targetDigest && row.target_instance_id === targetInstanceId;
@@ -549,6 +596,7 @@ export function failRestoreOperation(db, input = {}) {
   return guardedWrite(db, () => {
     const row = getRow(db, operationId);
     if (!row) throw fail("restore_operation_invalid", { reason: "operation_missing" });
+    if(row.binding_version!==1)throw fail("restore_contract_required");
     if (row.status === "succeeded") throw fail("restore_state_conflict", { reason: "already_succeeded" });
     // noteCode 为 null 时 UPDATE 用 COALESCE 保留原值；因此「同请求」判定只在调用方显式给出
     // noteCode 时要求与库内一致，不给时沿用原值，重复调用仍然幂等。
@@ -599,6 +647,7 @@ export function reconcileRestoreOperation(db, input = {}) {
 
   const row = getRow(db, operationId);
   if (!row) throw fail("restore_operation_invalid", { reason: "operation_missing" });
+  if(row.binding_version!==1)throw fail("restore_contract_required");
   if (row.status === "succeeded") return { reconciled: false, changed: false, terminal: "succeeded", operation: toOperationDto(row) };
   if (!PENDING_STATUSES.includes(row.status)) {
     // failed / rejected 是已确认终态，不参与猜成功。
@@ -663,7 +712,7 @@ export function listPendingRestoreOperations(db, { limit = 50 } = {}) {
     throw fail("restore_operation_invalid", { field: "limit" });
   }
   assertLedgerSchema(db);
-  const rows = db.prepare(`SELECT ${OPERATION_COLUMNS} FROM restore_operations
+  const rows = db.prepare(`SELECT * FROM restore_operations
                             WHERE status IN (${PENDING_STATUSES.map(() => "?").join(",")})
                             ORDER BY started_at ASC, operation_id ASC LIMIT ?`)
     .all(...PENDING_STATUSES, limit);
@@ -762,3 +811,22 @@ export function restoreLedgerStats(db) {
   const total = byStatus.reduce((sum, item) => sum + item.count, 0);
   return { total, byStatus };
 }
+
+/** Explicit ledger1 upgrade, with an independent verified protection file. */
+export function upgradeRestoreLedger(path,{backupPath}={}){
+ plainRestorePath(path);plainRestorePath(backupPath,{absent:true});
+ if(!backupPath||path===backupPath)throw fail('restore_contract_required');
+ const db=new DatabaseSync(path);let reader;
+ try {
+  if(db.isTransaction)throw fail('restore_state_conflict');db.exec('BEGIN IMMEDIATE');
+  if(assertLedgerSchema(db).version!==1)throw fail('restore_state_conflict');
+  reader=new DatabaseSync(path,{readOnly:true});reader.prepare('VACUUM INTO ?').run(backupPath);reader.close();reader=null;
+  const fd=fs.openSync(backupPath,'r+');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+  const copy=new DatabaseSync(backupPath,{readOnly:true});
+  const rows=d=>restoreCanonical({meta:d.prepare('SELECT * FROM restore_ledger_meta').all(),ops:d.prepare('SELECT * FROM restore_operations ORDER BY operation_id').all(),events:d.prepare('SELECT * FROM restore_operation_events ORDER BY id').all(),sequence:d.prepare('SELECT * FROM sqlite_sequence ORDER BY name').all()});
+  try{if(assertLedgerSchema(copy).version!==1||rows(copy)!==rows(db))throw fail('restore_verify_failed');}finally{copy.close();}
+  for(const sql of V2_STEPS)db.exec(sql);db.prepare('UPDATE restore_ledger_meta SET version=2,ledger_id=?').run(randomUUID());
+  assertLedgerSchema(db);db.exec('COMMIT');return {version:2,protected:true};
+ }catch(e){if(db.isTransaction)try{db.exec('ROLLBACK');}catch{}throw String(e?.code??'').startsWith('restore_')?e:fail('restore_ledger_write_failed');}finally{reader?.close();db.close();}
+}
+export function restoreLedgerId(db){if(assertLedgerSchema(db).version!==2)throw fail('restore_contract_required');return db.prepare('SELECT ledger_id FROM restore_ledger_meta').get().ledger_id;}

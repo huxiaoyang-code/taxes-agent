@@ -122,6 +122,10 @@ const steps = [
   { name: "local-write-lock", file: join(WORKBENCH, "test", "local-write-lock.test.mjs"), cwd: WORKBENCH },
   { name: "local-batch-entry-lock", file: join(WORKBENCH, "test", "local-batch-entry-lock.test.mjs"), cwd: WORKBENCH },
   { name: "seed-demo-lock", file: join(WORKBENCH, "test", "seed-demo-lock.test.mjs"), cwd: WORKBENCH },
+  { name: "local-restore-domain", file: join(WORKBENCH, "test", "local-restore-domain.test.mjs"), cwd: WORKBENCH },
+  { name: "local-restore-reconcile", file: join(WORKBENCH, "test", "local-restore-reconcile.test.mjs"), cwd: WORKBENCH },
+  { name: "local-restore-open-guard", file: join(WORKBENCH, "test", "local-restore-open-guard.test.mjs"), cwd: WORKBENCH },
+  { name: "local-restore-audit", file: join(WORKBENCH, "test", "local-restore-audit.test.mjs"), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

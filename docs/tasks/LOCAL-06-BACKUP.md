@@ -1,3 +1,7 @@
+> **2026-10-24 当前事实：W3b 已合，W4a 为待审候选。** [PR111](https://github.com/huxiaoyang-code/youshu-fork/pull/111) 于 2026-10-24T05:13:10Z 合并；已审 head `d8a15f9d793653cb7a32387425df1ee94c0715bb`，merge `cfa19ed9f4c438005e029aa169e52cd8c96105ab`，tree `1951407c5c8de8f9cf222ab2a0c3ca419987dce2` 一致。该 head 管理者实跑完整20企两月、19＋1隔离、30代表报表、运行中官方备份、326 checkpoint续跑及R1–R9故障/来源矩阵，exit/close 0；独立完整内容审查接受。直接父c1d的Q2 35及七套通过属于原时点，R9未重复这八套，旧失败不改写。
+>
+> 本包W4a在该head实现 ledger2 预绑定、restore-control1、receipt2、真实审计/批量分叉与pending准入；员工自测不代替root/fresh最终验收，尚未PR/合并。W4b输入/输出重绑与合法激活、最终Windows冷链/升级回退和总合成E2E仍未完成，LOCAL06/07与总任务继续开放。产品仍本机单用户、一企一套、同DB多企业；全国税局真实接入0。下方旧候选与旧接口保留历史，当前恢复合同以本节及LOCAL-BACKUP当前W4a说明为准。
+
 > **2026-10-23 当前兼容合同**：PR68 已合 core3/4/5 × bank0/1 的精确备份支持；本次 Issue64 A+B1 候选增加 **core5 + bank0/1 + auxiliary1**，待管理验收/独审/PR。无aux旧六组合保持；旧core带aux、aux2、audit/batch及未知组合拒绝。backup/verify/restore-new共用aux精确表/索引/FK/触发器与内容校验，安装先真实备份并绑定源连接；银行必须先于aux安装。接口及限制见 [辅助核算](../LOCAL-AUXILIARY.md)。以下此前候选、未来v5和未支持aux表述按原日期作为历史；不能据此推断当前合同。
 
 # 任务单 · LOCAL-06-BACKUP 本机一致性备份 / 验证 / 恢复到全新目标
@@ -272,3 +276,24 @@ LOCAL-01 已把增量导入落成 schema v3，并在**每次真正迁移前**生
   集成 **5 / 5**，合计 **95 / 95，exit 0**（合成临时库）。**未跑**全量 `npm test`：整合面全量由 root 冻结后执行。
 - 仍未支持：v0 / v1 / v2 旧库、未来 v5+、bank v2+、batch / audit 等未登记组件、原位覆盖 / 版本回退；
   未接 HTTP / Agent / MCP / UI / 共享模型入口；不声称 LOCAL-06 整体完成，也不声称已提交 / 已建 PR / 已合。
+
+## W4a当前候选：显式恢复、分叉与只读保全
+
+`backup`与`verify`仍使用format1。恢复单独使用receiptVersion2；旧restore.json format1只能只读理解，不授新恢复执行权。旧文中的双参restore-new示例已停止适用：API缺少ledgerPath/operationId返回restore_contract_required，CLI缺参是usage错误，零目标副作用。
+
+```sh
+node scripts/local-backup.mjs restore-new --backup /absolute/BACKUP --target /absolute/NEW_TARGET --ledger /absolute/LEDGER_ROOT/restore.db --operation OPERATION_ID
+node scripts/local-backup.mjs reconcile --backup /absolute/BACKUP --target /absolute/TARGET --ledger /absolute/LEDGER_ROOT/restore.db --operation OPERATION_ID
+```
+
+三个使用根互为独立兄弟，ledger根不能包住备份或目标；路径必须完整绝对、逐祖先plain/realpath、普通文件单链接。产品不扫描目录猜源路径；manifest没有已绑定源绝对路径，结果诚实返回sourcePathVerified=false。备份快照/manifest均先verify，再核复制后的原bytes/SHA和strict内容；源与备份不升级、不锁杀源进程。
+
+API为 `restoreNew({backupDir,targetDir,ledgerPath,operationId,now?})` 和同四路径参数的 `reconcileRestore`。ledger2在复制前持久目标UUID、ledger文件dev/ino与规范路径摘要绑定；同op只能同备份、同ledger和同target。ledger1保留合法旧技术ID及完整历史，只读兼容；显式 `upgradeRestoreLedger(path,{backupPath})` 先BEGIN IMMEDIATE保源，再由另一真实只读连接VACUUM INTO独占保护文件，fsync并逐行/sequence/strict1核相同后迁移；失败回滚、保保护副本，不能由业务备份冒充ledger保护。
+
+目标在未公开partial连接内建立独立restore-control1 pending，控制UUID不冒充audit/batch实例。audit0保持缺失；audit1/2真实fork活动父、旧event/operation/receipt不重写。batch0/1不伪造源实例，batch2/3真实fork父并把新输入输出绑定disabled/path NULL；版本不盲升。batch3只使目标活动lock对应epoch安全+1并清该副本活动lock，已释放epoch保持，running stage为needs_review且attempt/证据/已成功金融不改。源PID不探杀。
+
+关闭目标连接、checkpoint/fsync后记录转换后DB bytes/SHA与真实dev/ino；目标SHA正常不同于原snapshot SHA。receipt2固定source/target版本、组件摘要、父/新身份及pending，不含原始路径/业务金额。receipt canonical hash只存ledger，不写回DB，避免自引用。prepared持久后独占发布，完整证据才succeeded。Windows目录fsync如实unsupported，不声称目录项已耐久。
+
+ledger成功不授业务写。默认DB/TLA、显式bank/aux/batch安装/写、锁/runner先拒restore_target_pending，目标只允许安全只读验库、查询及再次备份。control半装/未知对象/错版本拒绝，不靠缺失receipt/marker退回普通库；无public force或set-ready。reconcile实读显式receipt、ledger/file绑定、发布SHA、strict内容及源→目标允许变更与实例父链，重复succeeded仍重核，不能传恒真callback代验。无足够证据返回restore_reconcile_pending并保状态；发布后ledger终态失败返回unknown/restore_published_pending，目标/回执保全。
+
+旧套将恢复pending历史只读与正式合成seed上的原业务正负场景分开：1130对账、683辅助后续、v3/v4迁移、封账/计提/级联、Ref-A/ref-a与四unknown注入仍真实执行；W4b才补恢复目标合法激活后的正向。三新恢复套及旧ledger套仅末尾追加总入口，原登记逐字/顺序保持；本轮不运行full/npm，具体实际exit/close与失败历史见员工交付和管理者最终验收。
