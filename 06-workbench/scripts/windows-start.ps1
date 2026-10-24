@@ -32,7 +32,7 @@
   claiming success.
 
   If your organization blocks local script execution, do not bypass the policy.
-  Use the equivalent manual steps instead (see docs/WINDOWS-DELIVERY.md):
+  Use the equivalent manual steps instead (see docs/CODE-INDEX.md#windows):
       $env:HOST = '127.0.0.1'
       $env:PORT = '0'
       $env:WORKBENCH_DATA_DIR = '<explicit data directory>'

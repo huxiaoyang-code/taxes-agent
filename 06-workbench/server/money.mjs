@@ -1,6 +1,6 @@
 // money.mjs — 人民币金额的统一十进制规则（LOCAL-02）
 //
-// 目标（与 docs/ACCOUNTING-PERIOD-INTEGRITY.md 一致）：
+// 目标（相关入口与测试见 docs/CODE-INDEX.md#money-period-assets）：
 // 1) 金额一律按「分」为最小单位：内部用 BigInt 整数分计算，落库 / 出参时再转成
 //    两位小数的 Number。这样 1.005、0.1+0.2、100/3 之类的二进制误差不会进入账簿。
 // 2) 舍入规则唯一：ROUND_HALF_UP（四舍五入，远离零），输入直接按「十进制文本」判定，

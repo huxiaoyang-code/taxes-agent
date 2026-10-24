@@ -10,8 +10,3 @@
 *.zip  binary
 *.woff binary
 *.woff2 binary
-
-# 压缩过的前端产物按第三方/生成物统计，避免污染代码统计
-02-scripts/**   linguist-vendored=true
-03-analysis/*.json linguist-generated=true
-01-capture/*.json  linguist-generated=true
