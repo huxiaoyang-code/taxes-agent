@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync,lstatSync,realpathSync,writeFileSync,readFileSync,unlinkSync } from 'node:fs';
+import { mkdirSync,lstatSync,realpathSync,writeFileSync,readFileSync,unlinkSync,existsSync,readdirSync } from 'node:fs';
 import { dirname,resolve,join,basename } from 'node:path';
 import { spawn } from 'node:child_process';
 const root=resolve('../../../.agent-runs','s-'+randomUUID());mkdirSync(root,{recursive:true});
@@ -418,5 +418,49 @@ async function sourceCompleteness(A,S,R,db){
   if(mode==='raw-deleted')mutations['both-all'](rawSet);else{const result=I.getImportBatch(rawKey).batch.result;delete result.sourceTrace;db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(result),rawKey);assert.equal(I.getImportBatch(rawKey).voucherCount,2,'legacy raw batch remains independently queryable');}
   const unchanged=finance(rawSet);assert.equal((await run(rawKey+'-report',rawSet,{system:'reader',enterpriseKey:rawKey},[{period,reports:[{kind:'income-statement',formats:['csv']}]}])).status,'needs_review',mode+' cannot infer missing source identities');assert.equal(finance(rawSet),unchanged);assert.equal(A.incomeStatement(rawSet.id,period).current['净利润'],18.51);console.log('PASS R5 '+mode+' report review without source repair');
  }
+ // R9: scope is established from actual vouchers before excluding future tuples.
+ const outputFiles=(dir=out)=>existsSync(dir)?readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?outputFiles(join(dir,e.name)):[{file:join(dir,e.name),hash:S.sha256(readFileSync(join(dir,e.name)))}]).sort((a,b)=>a.file.localeCompare(b.file)):[];
+ const r9Cases=['raw-both','raw-link','raw-source','raw-period','raw-missing-voucher','raw-wrong-book','saved-period','saved-input-period','checkpoint-period','legacy-checkpoint-period'];
+ for(const mode of r9Cases){
+  const k='R9-'+mode,target=create(k),src={system:'r9',enterpriseKey:k},data={account_set:{name:k,start_period:period},vouchers:[{sourceVoucherId:k,period,date:period+'-03',number:1,entries:[{code:'1002',debit:14.73},{code:'5001',credit:14.73}]}]};
+  if(mode.startsWith('raw-')){
+   assert.equal(I.importIncremental({dryRun:false,mode:'append',accountSetId:target.id,source:src,batchId:k,confirmNewBinding:true,payload:data}).ok,true);
+   assert.equal(db.prepare('SELECT COUNT(*) n FROM local_batch_inputs WHERE batch_id=?').get(k).n,0);assert.equal(tuples(target).length,0,'raw import has no successful local checkpoint');
+  }else assert.equal((await run(k,target,src,[importPeriod(k,data)])).status,'succeeded');
+  const scope={accountSetId:target.id,enterpriseKey:k,sourceSystem:src.system,period},item={account_set_id:target.id,enterprise_key:k,source_system:'report-reader'};
+  assert.equal(I.verifyImportBatchSources(k,scope).ok,true);assert.equal(B.verifyReportSourceEvidence({item,period}).ok,true);assert.equal(A.incomeStatement(target.id,period).current['净利润'],14.73);
+  let moved,inputOriginal,changeInput;
+  if(mode==='raw-both')for(const table of ['import_batch_vouchers','import_voucher_sources'])db.prepare(`DELETE FROM ${table} WHERE batch_id=?`).run(k);
+  if(mode==='raw-link')db.prepare('DELETE FROM import_batch_vouchers WHERE batch_id=?').run(k);
+  if(mode==='raw-source')db.prepare('DELETE FROM import_voucher_sources WHERE batch_id=?').run(k);
+  const result=I.getImportBatch(k).batch.result;
+  if(['raw-both','raw-link','raw-source','raw-period','raw-missing-voucher','raw-wrong-book','saved-period'].includes(mode)){result.sourceTrace[0].period='2026-02';db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(result),k);}
+  if(mode==='raw-missing-voucher'){const id=result.sourceTrace[0].voucherId;db.prepare('DELETE FROM voucher_entries WHERE voucher_id=?').run(id);db.prepare('DELETE FROM vouchers WHERE id=?').run(id);assert.equal(db.prepare('SELECT * FROM vouchers WHERE id=?').get(id),undefined);}
+  if(mode==='raw-wrong-book'){moved=create(k+'-other');db.prepare('UPDATE vouchers SET account_set_id=? WHERE id=?').run(moved.id,result.sourceTrace[0].voucherId);}
+  if(mode==='saved-input-period'){const input=db.prepare('SELECT * FROM local_batch_inputs WHERE batch_id=?').get(k),changed=JSON.parse(Buffer.from(input.content).toString('utf8'));changed.vouchers[0].period='2026-02';changed.vouchers[0].date='2026-02-03';const bytes=Buffer.from(JSON.stringify(changed));inputOriginal=input;changeInput=()=>db.prepare('UPDATE local_batch_inputs SET content=?,source_hash=? WHERE input_key=?').run(bytes,S.sha256(bytes),input.input_key);changeInput();}
+  if(mode.includes('checkpoint-period')){const stage=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'import:%'").get(target.id),evidence=JSON.parse(stage.evidence_json);evidence.vouchers[0].period='2026-02';db.prepare('UPDATE local_batch_stages SET evidence_json=? WHERE id=?').run(JSON.stringify(evidence),stage.id);if(mode==='legacy-checkpoint-period'){for(const field of ['sourceTrace','contentFingerprint','mode','accountSetId','source'])delete result[field];db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(result),k);}}
+  const input=db.prepare('SELECT * FROM local_batch_inputs WHERE batch_id=?').get(k),stage=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'import:%'").get(target.id),evidence=stage&&JSON.parse(stage.evidence_json),record=db.prepare('SELECT * FROM import_batches WHERE batch_id=?').get(k);
+  const expectedSources=input?I.expectedImportSources(JSON.parse(Buffer.from(input.content).toString('utf8')),target.id,record).sources:undefined,checkpointTrace=evidence?.sourceTrace.map(t=>({...t,period:evidence.vouchers.find(v=>v.sourceVoucherId===t.sourceVoucherId)?.period}));
+  const bad=I.verifyImportBatchSources(k,{...scope,expectedSources,checkpointTrace});assert.deepEqual(bad,{ok:false,reason:'import_source_trace_changed'},mode+' direct verifier');assert.deepEqual(B.verifyReportSourceEvidence({item,period}),bad,mode+' report verifier');
+  const oldFinance=finance(target),otherFinance=moved&&finance(moved),oldInputs=input&&{...input},oldStage=stage&&{...stage},oldFiles=outputFiles(),oldArtifacts=db.prepare('SELECT * FROM local_batch_artifacts ORDER BY id').all();
+  // Preserve the strict startup schema: inject saved-byte corruption only at
+  // the real publish window, after the new report job has passed admission.
+  if(inputOriginal)db.prepare('UPDATE local_batch_inputs SET content=?,source_hash=? WHERE input_key=?').run(inputOriginal.content,inputOriginal.source_hash,inputOriginal.input_key);
+  const job=k+'-report',report=await run(job,target,{system:'reader',enterpriseKey:k},[{period,reports:[{kind:'income-statement',formats:['csv']}]}],changeInput?{beforeArtifactPublish:changeInput}:{});
+  assert.equal(report.status,'needs_review',mode+' actual report-only runner');const reportStages=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE 'report:%'").all(job);assert.equal(reportStages.length,1);assert.equal(reportStages[0].status,'needs_review');assert.equal(reportStages[0].error_code,'report_evidence_changed');
+  assert.deepEqual(db.prepare('SELECT * FROM local_batch_artifacts ORDER BY id').all(),oldArtifacts,'no new artifact or repaired historical artifact');assert.deepEqual(outputFiles(),oldFiles,'no externally published file, previous bytes retained');assert.equal(finance(target),oldFinance,'no source/finance repair or replay');if(moved)assert.equal(finance(moved),otherFinance,'no repair of moved actual voucher');if(input)assert.deepEqual({...db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(input.input_key)},oldInputs);if(stage)assert.deepEqual({...S.getStage(db,stage.id)},oldStage,'successful original checkpoint is untouched');
+  writeFileSync(join(root,k+'-result.json'),JSON.stringify({mode,direct:bad,report,reportStages,originalCheckpoint:oldStage,originalInput:inputOriginal,tamperedInput:inputOriginal&&oldInputs},null,2));
+  // Only a fully successful test restores its own saved-input fixture so later
+  // independent cases retain the schema contract. Failed scenes remain intact.
+  if(inputOriginal){db.prepare('UPDATE local_batch_inputs SET content=?,source_hash=? WHERE input_key=?').run(inputOriginal.content,inputOriginal.source_hash,inputOriginal.input_key);assert.deepEqual({...db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(inputOriginal.input_key)},{...inputOriginal});}
+  console.log('PASS R9 '+mode+' actual scope before filtering / report-only needs_review / no publication or replay');
+ }
+ for(const saved of [false,true]){
+  const k='R9-true-future-'+(saved?'saved':'raw'),target=create(k),src={system:'r9',enterpriseKey:k},data=payload(k,'2026-02');
+  if(saved)assert.equal((await run(k,target,src,[{period:'2026-02',imports:[{batchId:k,mode:'append',confirmNewBinding:true,payload:data}]}])).status,'succeeded');else assert.equal(I.importIncremental({dryRun:false,mode:'append',accountSetId:target.id,source:src,batchId:k,confirmNewBinding:true,payload:data}).ok,true);
+  db.prepare('UPDATE import_voucher_sources SET voucher_fingerprint=? WHERE batch_id=?').run('f'.repeat(64),k);assert.equal(I.verifyImportBatchSources(k,{accountSetId:target.id,enterpriseKey:k}).ok,false,'real future financial fingerprint is invalid');assert.equal(I.verifyImportBatchSources(k,{accountSetId:target.id,enterpriseKey:k,period}).ok,true,'future financial fingerprint is outside current report scope');
+  const unchanged=finance(target),checkpoints=tuples(target);assert.equal(B.verifyReportSourceEvidence({item:{account_set_id:target.id,enterprise_key:k,source_system:'reader'},period}).ok,true);assert.equal((await run(k+'-report',target,{system:'reader',enterpriseKey:k},[{period,reports:[{kind:'income-statement',formats:['csv']}]}])).status,'succeeded');assert.equal(finance(target),unchanged);assert.deepEqual(tuples(target),checkpoints);assert.equal(A.incomeStatement(target.id,period).current['净利润'],0);assert.equal(A.incomeStatement(target.id,'2026-02').current['净利润'],18.51);console.log('PASS R9 true future '+(saved?'saved':'raw')+' bad financial fingerprint isolated / January report succeeds');
+ }
+ writeFileSync(join(root,'r9-result.json'),JSON.stringify({corruptions:r9Cases,passed:10,trueFutureFingerprintPositives:['raw','saved'],originalR5R6AssertionsRetained:true},null,2));
  writeFileSync(join(root,'r5-result.json'),JSON.stringify({mutations:Object.keys(mutations),positive:{normal:true,replay:true,dedup:true,empty:true,legacyCheckpoint:true,legacyCreateReplay:true,future:true,foreign:true,multipleSystems:true,manual:true,rawDeletedRefused:true,legacyInsufficientRefused:true},amounts:{twoVouchers:18.51,secondSystem:37.02}},null,2));console.log('R5 source-completeness: twelve corruptions, four atomic fault windows, empty/dedup/replay/legacy/scoped/manual positives and raw-deleted/legacy-insufficient review passed');
 }

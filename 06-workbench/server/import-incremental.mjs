@@ -1343,12 +1343,16 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
   const full = [];
   for (const t of tuples) {
     const input = inputs?.get(t.sourceVoucherId), checkpoint = checkpoints?.get(t.sourceVoucherId);
-    if ((inputs && (!input || (t.contentFingerprint !== undefined && t.contentFingerprint !== input.contentFingerprint)))
+    if ((inputs && !input)
         || (checkpoints && (!checkpoint || checkpoint.voucherId !== t.voucherId || checkpoint.action !== t.action))) return fail();
     const fingerprint = t.contentFingerprint ?? input?.contentFingerprint;
     const voucher = db.prepare('SELECT * FROM vouchers WHERE id=?').get(t.voucherId);
     const tuplePeriod = t.period ?? input?.period ?? voucher?.period;
-    if (!fingerprint || !tuplePeriod || (input && input.period !== tuplePeriod)
+    // Establish actual scope before any before-period filtering. A missing or
+    // moved voucher cannot be hidden by a self-reported future tuple.
+    if (!fingerprint || !tuplePeriod || !voucher || voucher.account_set_id !== accountSetId || voucher.period !== tuplePeriod
+        || (input && input.period !== tuplePeriod) || (checkpoint && checkpoint.period !== tuplePeriod)
+        || ((!period || tuplePeriod <= period) && input && t.contentFingerprint !== undefined && t.contentFingerprint !== input.contentFingerprint)
         || !['created','deduplicated'].includes(t.action) || !Number.isInteger(t.voucherId)
         || (t.accountSetId !== undefined && t.accountSetId !== accountSetId)) return fail();
     full.push({ ...t, contentFingerprint: fingerprint, period: tuplePeriod });
@@ -1358,7 +1362,15 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
   const relevant = t => !period || t.period <= period;
   const wanted = full.filter(relevant), expectedIds = new Set(wanted.map(t => t.sourceVoucherId));
   const links = listBatchVouchers(db, batchId);
-  // Scope from the independent tuple period, including unknown extra links.
+  const sources = db.prepare('SELECT * FROM import_voucher_sources WHERE batch_id=?').all(batchId);
+  // Existing associations must not contradict the actual scope used above.
+  // Future financial fingerprints remain outside a current report's checks.
+  for (const row of [...links, ...sources]) {
+    const voucher = db.prepare('SELECT account_set_id,period FROM vouchers WHERE id=?').get(row.voucher_id);
+    const tuple = full.find(t => t.sourceVoucherId === row.source_voucher_id);
+    if (!voucher || voucher.account_set_id !== accountSetId || (tuple && (row.voucher_id !== tuple.voucherId || voucher.period !== tuple.period))) return fail();
+  }
+  // Scope from validated actual periods, including unknown extra links.
   const scopedLinks = links.filter(l => {
     const t = full.find(t => t.sourceVoucherId === l.source_voucher_id);
     if (t) return relevant(t);
@@ -1383,7 +1395,7 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
         || owner.account_set_id !== accountSetId || !same(ownerLink,t) || ownerLink.action !== 'created'
         || (Array.isArray(ownerResult.sourceTrace) && !ownerResult.sourceTrace.some(o => o.sourceVoucherId === t.sourceVoucherId && o.voucherId === t.voucherId && o.contentFingerprint === t.contentFingerprint && o.action === 'created'))) return fail();
   }
-  const ownedSources = db.prepare('SELECT * FROM import_voucher_sources WHERE batch_id=?').all(batchId).filter(s => {
+  const ownedSources = sources.filter(s => {
     const t = full.find(t => t.sourceVoucherId === s.source_voucher_id);
     if (t) return relevant(t);
     const v = db.prepare('SELECT period FROM vouchers WHERE id=?').get(s.voucher_id);

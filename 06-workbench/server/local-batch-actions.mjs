@@ -888,11 +888,8 @@ function verifyBatchSourceEvidence(batchId, item, {period, checkpoint} = {}) {
   if(checkpoint)checkpoints.push(checkpoint);
   const base={accountSetId:item.account_set_id,enterpriseKey:item.enterprise_key,period};
   const record=importStorage.getBatch(db,batchId),result=record?safeParse(record.result_json):{};
-  const independent=Array.isArray(result.sourceTrace)?result.sourceTrace:checkpoints[0]?.vouchers;
-  if(period&&record?.enterprise_key===item.enterprise_key&&Array.isArray(independent)&&independent.length&&independent.every(t=>typeof t.period==='string'&&t.period>period)){
-   const current=[...db.prepare('SELECT voucher_id FROM import_batch_vouchers WHERE batch_id=?').all(batchId),...db.prepare('SELECT voucher_id FROM import_voucher_sources WHERE batch_id=?').all(batchId)];
-   if(current.every(t=>{const v=db.prepare('SELECT account_set_id,period FROM vouchers WHERE id=?').get(t.voucher_id);return v&&v.account_set_id===item.account_set_id&&v.period>period;}))return {ok:true};
-  }
+  // Period exclusion belongs to the verifier, after every expected voucher's
+  // actual account set/period agrees with saved and checkpoint scope.
   const saved = inputs.map(input=>{
    const registered=importStorage.getBatch(db,batchId);
    if(!registered||registered.source_system!==input.source_system||registered.enterprise_key!==input.enterprise_key)throw domainError('import_source_trace_changed');
