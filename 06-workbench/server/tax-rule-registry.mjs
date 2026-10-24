@@ -24,3 +24,13 @@ export const VAT_RULE_REGISTRY = freeze({
   },
 });
 export const getVatRules = () => structuredClone(VAT_RULE_REGISTRY);
+
+// A separate policy: this never changes the v1 registry or its Q1 contract.
+export const VAT_Q2_RULE_VERSION = 'offline-vat-selected-q2/1';
+export const VAT_Q2_RULE_REGISTRY = freeze({
+  ...getVatRules(), version: VAT_Q2_RULE_VERSION,
+  formApplication: 'offline_Q2_workpaper_2026_04_01_through_2026_06_30',
+  engineeringScope: { ...getVatRules().engineeringScope, period: '2026-Q2', establishment: 'January_2026_only', opening: 'January_zero_initial_ledger_proven_from_same_capture', history: 'entire_Q1_recomputed_and_each_prior_voucher_and_source_explained', rounding: 'whole_yuan_net_engineering_restriction_not_official_rounding_policy' },
+  yearToDate: { rows: [1, 2, 3, 15, 16, 20], formula: 'actual_recomputed_Q1_current+actual_Q2_current', inference: 'engineering_inference_from_official_year_to_date_column_meaning_pending_accountant_review', directOfficialQ2AccumulationFAQFound: false, officialDashRows: [21, 22], priorPaymentIsTargetPrepayment: false },
+});
+export const getVatQ2Rules = () => structuredClone(VAT_Q2_RULE_REGISTRY);
