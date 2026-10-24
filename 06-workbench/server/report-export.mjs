@@ -159,6 +159,7 @@ function toCsv(report) {
   const rows = [
     ["报表", TITLES[report.kind]], ["账套", report.accountSet.name], ["账套ID", String(report.accountSet.id)],
     ["期间", report.period], ["期间状态", report.scope.periodStatus], ["会计准则（账套登记值）", report.accountSet.accountingStandard],
+    ["币种", "人民币(CNY)"], ["金额单位", "元"],
     ["持久profile", report.accountingContext.profileId], ["科目版本", report.accountingContext.coaVersion], ["映射版本", report.accountingContext.reportMappingVersion], ["旧账兼容", report.accountingContext.legacy],
     ["报表映射状态", report.reportStatus.status], ["映射完整", report.reportStatus.complete], ["部分金额", report.reportStatus.partialValues],
     ["数据范围", "仅已过账凭证及建账期初"], ["本年累计起点", report.scope.yearStart],
