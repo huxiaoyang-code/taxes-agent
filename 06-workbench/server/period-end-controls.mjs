@@ -9,7 +9,7 @@ import { auxiliaryCompletenessStep } from './auxiliary-storage.mjs';
 // 3) 每一步都给「适用 / 不适用 / 不适用理由」，不对所有企业一刀切：
 //    无资产卡片、无损益发生、非年末期间都显式标 not_applicable 并说明理由。
 // 4) 拒绝必须是可解除的：每条阻塞都带 code / 期望 / 当前 / 建议顺序，
-//    补项与反操作顺序写进 docs/ACCOUNTING-PERIOD-INTEGRITY.md。
+//    补项与反操作顺序的实现及测试入口见 docs/CODE-INDEX.md#money-period-assets。
 // 5) 「依赖」按实际业务读取的余额判定，不按「曾经执行过」：普通损益结转读累计损益余额，
 //    所以依赖所有前期损益发生额；计提读卡片事实与截至本期的累计，所以依赖前期计提状态。
 //    前期修改一律「明确拒绝 + 给撤销顺序」，不保留后期错误的已过账派生结果。

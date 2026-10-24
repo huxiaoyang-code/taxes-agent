@@ -1,69 +1,37 @@
-# 有数云「代账 / 财税工作台」逆向分析与复刻
+# 本机财税工作台
 
-本仓库分两部分：**对线上站点的证据化逆向分析**，以及**独立的记账+报表复刻工程**。
+Node.js + SQLite 的本机单用户财税工作台，以 Agent / MCP 为主要工作入口，已有网页作为可选界面。面向一名操作者处理多家企业，每家企业一个账套。能力及限制以源码、工具契约和实际返回为准；入口存在不代表业务已实现。
 
-| 部分 | 目录 | 说明 |
-|---|---|---|
-| 📊 分析归档 | `00-recon/` … `04-report/` + `REPORT.md` | REA 工具产出的证据、报告、原始脚本 |
-| 🧩 复刻方案 | `05-reconstruction/` | 从 bundle 提取的 Agent 契约 + Codex/MCP 骨架 |
-| ⚙️ 复刻工程 | `06-workbench/` | **可运行的记账 + 报表 MVP**（Node + SQLite；含结转损益/折旧摊销/现金流量表） |
-| 📚 工程索引 | `docs/` | 代码管理索引、规范、变更日志、路线图 |
+## 启动与验证
 
-> 产品形态：**本机单用户**财税工作台，目标支持对多个企业 / 账套的批量处理（批量队列与管理尚待开发）；**不是多租户 / SaaS**（无账户体系、无对外服务、无权限平台）。全国电子税务局是产品目标，当前只预留接口，真实接入地区为 0。
->
-> 目标站点身份：有数云（YOUSURE）· 司书财税大模型 · AI 财税工作台。
-> 用户原始地址 `daizhang.youshu.yuork` 不存在，实际分析目标为 `daizhang.youshu.yun`
-> （更正证据见 [`00-recon/dns-corrected-url.md`](00-recon/dns-corrected-url.md)）。
+在仓库根目录运行；Node 资格检查与 Windows 启动方式见[代码索引](docs/CODE-INDEX.md#windows)。
 
-## 快速开始
-
-```bash
-# 记账 + 报表工作台
+```sh
 cd 06-workbench
-npm start            # = node server/server.mjs  → http://127.0.0.1:8787/
-npm test             # 全套回归、MCP 契约与完整闭环（自动建临时库，不影响 data/）
-
-# Codex / MCP 打通（工作台需先启动）
-cd 05-reconstruction/codex/mcp/finance-mcp
-node smoke-test.mjs
+npm ci
+npm start
+npm test
 ```
 
-## 文档地图
+`npm test` 的套件清单由 [test-all.mjs](06-workbench/scripts/test-all.mjs) 定义，使用临时数据。服务默认数据库为 `06-workbench/data/workbench.db`；真实数据不用于自动测试。更新代码后需重启已有服务以加载变更。
 
-- **工程入口**：[`docs/INDEX.md`](docs/INDEX.md) ← 代码管理索引（从这里开始）
-- 分析总报告：[`REPORT.md`](REPORT.md)
-- 复刻方案：[`05-reconstruction/ARCHITECTURE.md`](05-reconstruction/ARCHITECTURE.md)
-- 工作台说明：[`06-workbench/README.md`](06-workbench/README.md)
-- 变更日志：[`docs/CHANGELOG.md`](docs/CHANGELOG.md) ｜ 路线图：[`docs/ROADMAP.md`](docs/ROADMAP.md)
-- 协作规范：[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md)
-- 总流程与阶段重置：[`docs/PROJECT-CHARTER.md`](docs/PROJECT-CHARTER.md) ｜ [阶段交接](docs/handoffs/STATE.md) ｜ [新会话入口](docs/handoffs/NEXT-SESSION.md)
-- 本地执行 / Codex 管理范式：[`team-skills/local-agent-first/SKILL.md`](team-skills/local-agent-first/SKILL.md)
-- 本轮功能与验收：[`docs/PHASE1-ACCEPTANCE.md`](docs/PHASE1-ACCEPTANCE.md) ｜ [电子税务局接口边界](docs/TAX-INTEGRATION.md)
+MCP stdio 入口（由客户端启动）：
 
-## 目录一览
-
-```
-.
-├── REPORT.md                 分析总索引（结论/证据台账/如何复现）
-├── docs/                     ★ 代码管理索引目录
-│   ├── INDEX.md              代码与产物索引（总入口）
-│   ├── CONVENTIONS.md        提交 / 分支 / 风格约定
-│   ├── CHANGELOG.md          版本变更
-│   ├── ROADMAP.md            待办与优先级
-│   └── handoffs/             阶段状态、任务交接与新会话入口
-├── team-skills/              仓库权威技能（local-agent-first）
-├── 00-recon/                 侦察：域名更正、HTTP 头、首页 HTML
-├── 01-capture/               REA 被动抓取：页面/DOM/网络/截图
-├── 02-scripts/               前端脚本：work（工作台）/ finance（登录）
-├── 03-analysis/              REA 原始证据 JSON（应用图、接口、分包）
-├── 04-report/                主题报告（01…09）+ 报告生成脚本
-├── 05-reconstruction/        复刻契约与 Codex MCP 骨架
-└── 06-workbench/             记账 + 报表 MVP（后端 + 网页 + 测试）
+```sh
+node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 ```
 
-## 合规声明
+后端默认地址是 `http://127.0.0.1:8787`，可用 `FINANCE_API_BASE` 配置。工具注册、Skill 资源与示例命令见[代码索引](docs/CODE-INDEX.md#mcp)。
 
-- `00-recon/`…`04-report/` 为**被动观察与静态分析**产物，未登录、未提交表单、未做任何主动利用。
-- `05-reconstruction/` 与 `06-workbench/` 是**独立实现**，不复用对方源代码；工具/接口的
-  *名称与契约* 属接口事实，业务规则（Skill 正文）需自行编写。
-- 前端脚本（`02-scripts/`）仅作分析留档，版权归原权利人。
+## 目录
+
+| 路径 | 用途 |
+|---|---|
+| [06-workbench/server](06-workbench/server/) | HTTP、记账、报表及本机业务模块 |
+| [06-workbench/public](06-workbench/public/) | 网页 |
+| [06-workbench/scripts](06-workbench/scripts/) | CLI、运行和验证入口 |
+| [06-workbench/test](06-workbench/test/) | 回归测试、合成 fixtures 与独立预期 |
+| [05-reconstruction](05-reconstruction/) | MCP、运行时 Skills、catalog、导入示例与转换工具 |
+| [docs/CODE-INDEX.md](docs/CODE-INDEX.md) | 按任务定位源码、入口与测试 |
+
+协作规则见 [AGENTS.md](AGENTS.md)；当前需求与未完工作在 [GitHub Issues](https://github.com/huxiaoyang-code/youshu-fork/issues) 跟踪。

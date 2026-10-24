@@ -13,7 +13,7 @@
 //     借审计写入或错误信息外泄。
 //   * 不存金额、原始凭证、任意 metadata JSON；跨库（业务库 ↔ 恢复 ledger）**不假装原子**。
 //
-// 接口清单见 docs/LOCAL-AUDIT.md §4；B / C 接线只允许用该清单，不猜内部实现。
+// 接口入口与测试见 docs/CODE-INDEX.md#audit-lock-batch-backup-restore；接线以导出接口为准。
 
 import { createHash, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";

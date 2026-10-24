@@ -4,7 +4,7 @@ import { openRestoreLedger,restoreLedgerId,beginRestoreOperation,markRestorePrep
 import { randomUUID } from 'node:crypto';
 // local-backup.mjs — LOCAL-06 独立子包：运行中 SQLite 一致性快照 + 可验证备份清单 + 恢复到全新独立目标。
 //
-// 设计约束（实施契约，改动需同步 docs/LOCAL-BACKUP.md）：
+// 设计约束（相关入口与测试见 docs/CODE-INDEX.md#audit-lock-batch-backup-restore）：
 // 1) **无模块级副作用**：不 import db.mjs，不在导入时打开任何数据库、不读默认数据目录、不创建目录。
 //    所有函数只处理调用方**显式传入**的路径（源库文件 / 新备份目录 / 新恢复目标目录）。
 // 2) 快照在**真正只读**的连接（`readOnly: true`）上用 `VACUUM INTO` 生成：单文件一致快照，
