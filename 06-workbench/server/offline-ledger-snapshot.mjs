@@ -8,7 +8,7 @@ import { getAccountingProfile } from './accounting-profiles.mjs';
 import { persistedVoucherFingerprint } from './import-storage.mjs';
 import { canonicalEnterpriseKey } from './enterprise-identity.mjs';
 
-const sources = new WeakMap(), products = new WeakMap();
+const sources = new WeakMap(), products = new WeakMap(), pairs = new WeakMap();
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const freeze = value => {
   if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); }
@@ -36,9 +36,10 @@ function fileIdentity(file) {
 function sourceState(source) {
   const state = sources.get(source);
   if (!state || state.closed) fail('ledger_source_unavailable');
+  if (state.retired) fail('ledger_pair_retired');
   try {
     if (fileIdentity(state.file) !== state.identity || identity(fstatSync(state.fd, { bigint: true })) !== state.identity) fail('ledger_source_replaced');
-  } catch { fail('ledger_source_replaced'); }
+  } catch { if (state.pairOwned) state.retired = true; fail('ledger_source_replaced'); }
   return state;
 }
 export function openReadonlyLedgerSource(file) {
@@ -197,4 +198,41 @@ export function validateLedgerSnapshot(source, snapshot) {
     if (['ledger_binding_mismatch', 'ledger_scope_missing'].includes(error.code)) return freeze({ status: 'stale', calculationReady: false, submittable: false });
     throw error;
   }
+}
+
+// Two products from one SQLite read transaction and one physically held source.
+// The public digests are diagnostics; membership and capture identity stay private.
+export function captureLedgerSnapshotPair(source, priorScope, targetScope) {
+  const state = sourceState(source), scopes = [normalizeScope(priorScope), normalizeScope(targetScope)];
+  state.pairOwned = true;
+  let data;
+  try {
+    data = withReadSnapshot(state.db, () => scopes.map(scope => {
+      const value = readScope(state.db, scope); assertFiniteNumbers(value); return value;
+    }));
+    sourceState(source);
+  } catch (e) { state.retired = true; throw e; }
+  const snapshots = data.map((value, i) => {
+    const contentDigest = digest(value), snapshot = freeze({ ...value, contentDigest, exportTrust: 'diagnostic_only_not_restorable' });
+    products.set(snapshot, { source, scope: scopes[i], contentDigest }); return snapshot;
+  });
+  const pair = Object.freeze({ prior: snapshots[0], target: snapshots[1] });
+  pairs.set(pair, { source, scopes, digests: snapshots.map(s => s.contentDigest) });
+  return pair;
+}
+export function assertLedgerSourcePath(source, path) {
+  const state = sourceState(source);
+  if (typeof path !== 'string' || !samePath(resolve(path), state.file) || fileIdentity(resolve(path)) !== state.identity) fail('ledger_target_file_mismatch');
+}
+export function validateLedgerSnapshotPair(source, pair) {
+  const state = sourceState(source), record = pairs.get(pair);
+  if (!record || record.source !== source || products.get(pair.prior)?.source !== source || products.get(pair.target)?.source !== source) fail('ledger_pair_untrusted');
+  try {
+    const current = withReadSnapshot(state.db, () => record.scopes.map(scope => {
+      const value = readScope(state.db, scope); assertFiniteNumbers(value); return digest(value);
+    }));
+    sourceState(source);
+    if (current.some((d, i) => d !== record.digests[i])) { state.retired = true; fail('ledger_pair_changed'); }
+    return freeze({ status: 'current', relationship: 'same_held_readonly_source_same_capture', priorDigest: record.digests[0], targetDigest: record.digests[1], proofDigest: digest({ scopes: record.scopes, digests: record.digests, identity: state.identity }), authorizesExecution: false });
+  } catch (e) { state.retired = true; throw e; }
 }
