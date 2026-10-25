@@ -7,6 +7,9 @@ import { captureHarnessCode } from './harness-code.mjs';
 import { validateHarnessScope, scopeContainsMonth } from './harness-contract.mjs';
 import { auditCanonicalDigest, auditResultDigest } from './local-audit.mjs';
 import { queryOperation } from './local-audit-operation.mjs';
+import { inspectAuditSchema } from './local-audit-storage.mjs';
+import { inspectBatchSchema } from './local-batch-storage.mjs';
+import { ANNUAL_CLOSE_CODE_ROOTS, createAnnualCloseAdapter } from './annual-close.mjs';
 import * as Agency from './agency-business.mjs';
 import { hash, stable } from './harness-store.mjs';
 const check = (v,code) => {if(!v)throw Object.assign(new Error(code),{code});};
@@ -68,15 +71,35 @@ async function agencyCall(r,path) {
 try {
   const r = JSON.parse(readFileSync(0,'utf8'));requestContext=r; validateHarnessScope(r.scope);
   check(captureHarnessCode(roots).digest === (r.workerCodeDigest??r.codeDigest),'harness_code_changed');
-  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
-  const path = await checkedPath(r.target.dbPath); check(basename(path)==='workbench.db','harness_db_invalid');
+  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
+  let path;
+  try { path = await checkedPath(r.target.dbPath); } catch (error) { if(r.action==='annual.inspect')check(false,'harness_annual_target_unavailable');throw error; }
+  check(basename(path)==='workbench.db','harness_db_invalid');
   const before = statSync(path), verify = connection => {
+    try {
     check(connection.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get()?.instance_id===r.scope.databaseInstanceId,'harness_instance_mismatch');
     check(connection.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(r.scope.accountSetId)?.enterprise_key===r.scope.enterpriseKey,'harness_enterprise_mismatch');
     check(connection.prepare('SELECT MAX(version) v FROM schema_migrations').get()?.v===5,'harness_schema_unsupported');
+    } catch(error) { if(r.action==='annual.inspect'&&!['harness_instance_mismatch','harness_enterprise_mismatch'].includes(error.code))check(false,'harness_annual_database_not_ready');throw error; }
   };
   db = new DatabaseSync(path,{readOnly:true}); verify(db);
-  if(r.action.startsWith('agency.')) {
+  if(r.action==='annual.inspect') {
+    check(r.phase==='execute'&&/^20\d\d$/.test(r.scope.period)&&r.scope.currency==='CNY','harness_annual_scope_invalid');
+    check(r.request&&Object.keys(r.request).length===1&&Object.hasOwn(r.request,'target'),'harness_annual_request_invalid');
+    check(captureHarnessCode([...ANNUAL_CLOSE_CODE_ROOTS,'./harness-domain-worker.mjs']).digest===r.codeDigest,'harness_code_changed');
+    check(inspectAuditSchema(db).ok&&inspectBatchSchema(db).ok,'harness_annual_database_not_ready');
+    check(db.prepare('PRAGMA journal_mode').get().journal_mode==='wal','harness_annual_wal_required');
+    db.close();db=null;
+    // SQLite readOnly is enabled in db.mjs at connection construction, before
+    // any imports can execute DDL or migrations. This mode skips all installers.
+    process.env.WORKBENCH_DATABASE_MODE='readonly';process.env.WORKBENCH_DATA_DIR=dirname(path);
+    const A=await import('./accounting.mjs'),D=await import('./db.mjs'),R=await import('./report-export.mjs');db=D.db;
+    const now=statSync(await checkedPath(path));check(before.dev===now.dev&&before.ino===now.ino&&before.birthtimeMs===now.birthtimeMs,'harness_path_changed');verify(db);
+    check(db.prepare('PRAGMA query_only').get().query_only===1&&db.prepare('SELECT total_changes() n').get().n===0,'harness_annual_readonly_connection_required');
+    const domain=createAnnualCloseAdapter({db,buildReportExport:R.buildReportExport,periodEndCheck:A.periodEndCheck}).inspect({accountSetId:r.scope.accountSetId,enterpriseKey:r.scope.enterpriseKey,year:r.scope.period});
+    check(['enterpriseKey','accountSetId','databaseInstanceId','currency'].every(k=>domain.scope[k]===r.scope[k])&&domain.scope.year===r.scope.period,'harness_annual_scope_mismatch');
+    process.stdout.write(JSON.stringify({status:'annual_review_draft',scope:r.scope,domain,periodComplete:false,submittable:false}));
+  } else if(r.action.startsWith('agency.')) {
     db.close();db=null;process.env.WORKBENCH_DATA_DIR=dirname(path);
     process.stdout.write(JSON.stringify(await agencyCall(r,path)));
   } else {
@@ -117,5 +140,6 @@ try {
   }
 } catch(e) {let uncertain=started;
   if(started&&db&&requestContext)try{const proof=queryOperation(db,{databaseInstanceId:requestContext.scope.databaseInstanceId,operationId:requestContext.operationId});if(!proof.ok&&proof.state!=='unknown')uncertain=false;}catch{}
-  process.stdout.write(JSON.stringify({status:uncertain?'unknown':'blocked',applied:uncertain?'unknown':false,code:/^[a-z][a-z0-9_]+$/.test(e?.code??e?.message)?e.code??e.message:'harness_domain_failed'}));}
+  const annual=requestContext?.action==='annual.inspect',code=/^[a-z][a-z0-9_]+$/.test(e?.code??e?.message)?e.code??e.message:annual?'harness_annual_database_not_ready':'harness_domain_failed';
+  process.stdout.write(JSON.stringify({status:uncertain?'unknown':'blocked',applied:uncertain?'unknown':false,code,...(annual?{initializationPerformed:false,handlingPath:'年度核对只接收已建账且结构就绪的现存目标。缺库/结构或WAL不支持时转交既有首次接入或显式升级/恢复流程，由另一线处理；此调用不创建、初始化、迁移或转换目标。范围或版本冲突先核实实际目标及证据，保留未完成。'}:{})}));}
 finally {try{db?.close();}catch{}}

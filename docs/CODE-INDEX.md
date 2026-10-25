@@ -51,6 +51,12 @@
 - 复核包：[accountant-review.mjs](../06-workbench/server/accountant-review.mjs) 的 `createAccountantReview`；[accountant-review-store.mjs](../06-workbench/server/accountant-review-store.mjs) 的 `registerReview`、`recordReviewFeedback`；[accountant-review-feedback.mjs](../06-workbench/server/accountant-review-feedback.mjs) 的 `validateFeedback`；[accountant-review-q2.mjs](../06-workbench/server/accountant-review-q2.mjs) 的 `runAccountantReviewQ2`。
 - CLI：[accountant-review](../06-workbench/scripts/accountant-review.mjs)、[accountant-review-feedback](../06-workbench/scripts/accountant-review-feedback.mjs)、[accountant-review-q2](../06-workbench/scripts/accountant-review-q2.mjs)。测试：[accountant-review](../06-workbench/test/accountant-review.test.mjs)、[accountant-review-feedback](../06-workbench/test/accountant-review-feedback.test.mjs)、[accountant-review-q2](../06-workbench/test/accountant-review-q2.test.mjs)。
 
+## annual-close
+
+- 年度 Skill：[annual-close/SKILL.md](../05-reconstruction/codex/skills/annual-close/SKILL.md)，官方改编来源与 Apache-2.0 许可保留在同目录。只读证据适配：[annual-close.mjs](../06-workbench/server/annual-close.mjs)，复用实际年累计报表、期末检查与账簿能力，不复制所得税或账务公式。
+- 通过既有十二个 Harness MCP 工具发现/计划/执行 `annual.inspect`（year scope、只读）。年度税会计算使用已发布 `agency.annual-calculation`，以实际任务版本与跨 Store 依赖绑定历史、年度核对与次年任务；执行、会计复核和全年业务完成分别列示。缺件、未实现调整或未审定事项保留未完成。
+- 合成验证：在 `06-workbench` 运行 `node test/annual-close.test.mjs`（独立全年/历史金额及更正/辅助分配失效）与 `node test/annual-close-harness.test.mjs`（真实 stdio MCP＋原生 Harness 联调，脚本不构成 Agent 验收）。后者的 `prepare <全新绝对目录>` 仅生成合成既有账簿、全年原件/manifest、scope/target、独立手算与 goal.txt，不调用 Harness 或模型；可供另一 Agent 逐步通过 MCP 独立验收并记录剩余限制。
+
 ## audit-lock-batch-backup-restore
 
 - 审计 / 锁：[local-audit.mjs](../06-workbench/server/local-audit.mjs) 的 `serializeAuditResult`；[local-audit-operation.mjs](../06-workbench/server/local-audit-operation.mjs)；[local-write-lock.mjs](../06-workbench/server/local-write-lock.mjs) 的 `acquireWriteResources`、`withDomainWrite`。
