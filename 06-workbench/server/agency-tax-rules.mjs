@@ -477,6 +477,7 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
   }
   const sixTaxRelief=determineAgencySixTaxRelief({scope,entity,records}),half=sixTaxRelief.eligible;
   const extended = (id,clues) => {
+    if(!clues.length)return add(id,'missing',`${id}原义务清单确认存在业务，但未提供对应原始资产/交易/监测/执照记录；须补原件后才能确定应缴、成本及所得，不能按零`,{issues:[{...issue('agency_extended_original_records_missing','存在义务但对应原始业务资料尚缺',inventory?.id),missingOriginalFacts:['originalBusinessRecords']}],sourceRefs:answer(id)?.sourceRefs??[]});
     const calculations=[],failures=[],identities=new Set();
     for(const r of clues)try{
       const holding=['urban_land','vehicle_vessel'].includes(id),key=holding?(r.landRightDocumentNumber??r.registrationNumber??r.id):id==='vessel_tonnage'?`${r.vesselId}:${r.licenseNumber}`:r.businessIdentity?.documentNumber;
@@ -484,7 +485,16 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
       const qualification=id==='urban_land'?Object.fromEntries(Array.from({length:Number(scope.period.slice(5))},(_,i)=>{const period=`${scope.period.slice(0,4)}-${String(i+1).padStart(2,'0')}`;return [period,determineAgencySixTaxRelief({scope:{...scope,period},entity,records}).eligible];})):null;
       const c=calculateAgencyExtendedTax({obligationId:id,record:r,scope,entity,sixTaxRelief:half,sixTaxReliefByPeriod:qualification});
       if(['consumption','resource'].includes(id)&&c.status==='calculated'){
-        const actual=accounting.vatTransactions.filter(t=>r.saleFactIds?.includes(t.factId)),ids=new Set(actual.map(t=>t.factId));requireValue(r.saleFactIds.length===new Set(r.saleFactIds).size&&r.saleFactIds.every(x=>ids.has(x))&&sum(actual,'net')===cents(r.salesExcludingVat),'agency_extended_original_sales_reconciliation_missing');
+        requireValue(Array.isArray(r.saleFactIds)&&r.saleFactIds.length>0&&r.saleFactIds.length===new Set(r.saleFactIds).size,'agency_extended_original_sales_reconciliation_missing');
+        const actual=accounting.vatTransactions.filter(t=>r.saleFactIds.includes(t.factId)),ids=new Set(actual.map(t=>t.factId)),saleRows=r.saleFactIds.map(id=>records.find(s=>s.id===id));
+        requireValue(r.saleFactIds.every(x=>ids.has(x))&&saleRows.every(s=>s?.type==='sale'&&s.businessIdentity?.documentNumber&&s.businessIdentity?.issuerKey)&&sum(actual,'net')===cents(r.salesExcludingVat),'agency_extended_original_sales_reconciliation_missing');
+        requireValue(saleRows.every(s=>s.date.slice(0,7)===r.date.slice(0,7))&&actual.every(t=>t.date.slice(0,7)===r.date.slice(0,7)),'agency_extended_sales_tax_period_conflict');
+        // The supported branch consumes whole original sales, never caller-created tax allocations.
+        const saleIdentity=s=>stable([s.businessIdentity.issuerKey,s.businessIdentity.documentNumber]),claimed=new Set(saleRows.map(saleIdentity));
+        requireValue(claimed.size===saleRows.length,'agency_extended_original_sales_duplicate_identity');
+        const competing=records.filter(x=>x!==r&&x.id!==r.id&&x.date.slice(0,7)<=scope.period&&x.type===r.type&&(id==='consumption'?x.taxStage==='domestic_production_sale':x.use==='sale')).some(x=>Array.isArray(x.saleFactIds)&&x.saleFactIds.some(id=>{const sale=records.find(s=>s.id===id);return sale?.businessIdentity&&claimed.has(saleIdentity(sale));}));
+        requireValue(!competing,'agency_extended_same_tax_sale_duplicate_claim');
+        c.salesAttribution={method:'whole_original_sales',assessmentPeriod:r.date.slice(0,7),saleFactIds:[...r.saleFactIds],originalSaleIdentities:[...claimed],net:money(sum(actual,'net')),correction:'revise_original_period_and_replay_history; new tax fact identity cannot consume the same sale again'};
       }
       if(c.costTreatment==='inventory_cost'){
         const p=records.find(x=>x.id===c.relatedBusinessFactId);requireValue(p?.type==='purchase'&&p.date.slice(0,7)===r.date.slice(0,7),'agency_extended_tax_purchase_link_missing');
