@@ -2,16 +2,13 @@
 import { getAccountingProfile, getAccountingRoles } from './accounting-profiles.mjs';
 import { evaluateAccountingStatement } from './accounting-report-rules.mjs';
 import { hash, stable, requireValue, requirePlainJson } from './offline-material-adapters.mjs';
-import { cents, money, quantity, roundRatio, calculateAgencyOutputVat, splitAgencyOriginalPrice, calculateAgencyObligations, calculateAgencyContributionNotices, calculateAgencyOfficialPayroll, calculateAgencyRentalPrice,calculateAgencyVehicleAcquisition,calculateAgencyUnionFees,calculateAgencyOldPropertyAppreciation } from './agency-tax-rules.mjs';
+import { cents, money, quantity, roundRatio, calculateAgencyOutputVat, splitAgencyOriginalPrice, calculateAgencyObligations, calculateAgencyContributionNotices, calculateAgencyOfficialPayroll, calculateAgencyRentalPrice,calculateAgencyVehicleAcquisition,calculateAgencyUnionFees,calculateAgencyOldPropertyAppreciation,determineAgencySixTaxRelief } from './agency-tax-rules.mjs';
+import { calculateAgencyExtendedTax } from './agency-extended-tax-rules.mjs';
 
 export const AGENCY_ACCOUNTING_RULE_VERSION = 'agency-business-accounting/1';
 export const AGENCY_INDUSTRIES = Object.freeze(['service', 'trade', 'ecommerce', 'catering', 'manufacturing', 'construction', 'transport', 'rental_property']);
-export const AGENCY_ACCOUNTING_SOURCES = Object.freeze([
-  { url: 'https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852319878.pdf', title: '小企业会计准则', locator: '第11至14、49、63至65条；职工薪酬按提供服务期及受益对象归集' },
-  { url: 'https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf', title: '小企业会计准则附录', locator: '存货/生产成本/应收应付/收入成本科目与报表' },
-  { url: 'https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/200806/t20080618_46239.htm', title: '企业会计准则第9号——职工薪酬（2014修订）', locator: '第5、7条；只在适用CAS profile使用，个体不冒用' },
-  { url: 'https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/201709/t20170907_2694006.htm', title: '企业会计准则第14号——收入', locator: '第11至13条、履约成本与销售退回条款' },
-]);
+export { AGENCY_ACCOUNTING_SOURCES } from './agency-rule-catalog.mjs';
+import { AGENCY_ACCOUNTING_SOURCES } from './agency-rule-catalog.mjs';
 const positive = (v, code) => { requireValue(v > 0n, code); return v; };
 const total = (rows, field) => rows.reduce((n, r) => n + cents(r[field]), 0n);
 const clone = structuredClone;
@@ -83,7 +80,15 @@ export function evaluateAgencyAccounting(document) {
       if (r.businessIdentity&&!derivedLeaseEvents.has(r)&&!trustedNativeEvents.has(r)) { const key = stable(r.businessIdentity); requireValue(!originalIdentities.has(key), 'agency_original_business_duplicate'); originalIdentities.add(key); }
       if (['sale', 'sale_return', 'service_complete', 'transport_complete', 'property_service_complete', 'construction_billing', 'rental', 'lease_lessee'].includes(r.type)) requireValue(r.taxJurisdiction === 'domestic' && r.specialVatTreatment === 'ordinary' && r.crossBorder !== true, 'agency_vat_transaction_scope_unverified');
       switch (r.type) {
-        case 'entity': case 'period_coverage': case 'obligation_inventory': case 'income_evidence': case 'prior_loss': case 'quarter_profile': case 'tax_location': case 'owner': case 'annual_employment': case 'contract': case 'opening_vat_prepayment': case 'opening_vat': case 'tax_payment': case 'property_asset': case 'land_asset': case 'vehicle': case 'vehicle_catalogue_entry': case 'excise_product': case 'extraction': case 'water_extraction': case 'pollutant_discharge': case 'property_acquisition': case 'farmland_use': case 'import_export': case 'advertising': case 'entertainment': case 'union': case 'union_payment': case 'personal_payment': case 'construction_cash': case 'construction_tax_trigger': case 'subcontract_payment': case 'contribution_parameters': case 'contribution_wage_history': case 'filing_context': case 'six_tax_relief_qualification': case 'contribution_notice': case 'contribution_payment': case 'disability_parameters': case 'tobacco_leaf_purchase': case 'foreign_port_vessel_entry': case 'rental_repair': case 'personal_rental_tax': case 'land_appreciation_unit': break;
+        case 'entity': case 'period_coverage': case 'obligation_inventory': case 'income_evidence': case 'prior_loss': case 'quarter_profile': case 'tax_location': case 'owner': case 'annual_employment': case 'contract': case 'opening_vat_prepayment': case 'opening_vat': case 'tax_payment': case 'property_asset': case 'land_asset': case 'vehicle': case 'vehicle_catalogue_entry': case 'excise_product': case 'extraction': case 'water_extraction': case 'pollutant_discharge': case 'farmland_use': case 'import_export': case 'advertising': case 'entertainment': case 'union': case 'union_payment': case 'personal_payment': case 'construction_cash': case 'construction_tax_trigger': case 'subcontract_payment': case 'contribution_parameters': case 'contribution_wage_history': case 'filing_context': case 'six_tax_relief_qualification': case 'contribution_notice': case 'contribution_payment': case 'disability_parameters': case 'tobacco_leaf_purchase': case 'foreign_port_vessel_entry': case 'rental_repair': case 'personal_rental_tax': case 'land_appreciation_unit': break;
+        case 'property_acquisition': {
+          // Old holding clues remain metadata until an actual acquisition invoice exists.
+          if(!r.assetPurchaseInvoiceNumber)break;
+          requireValue(r.assetUse==='under_construction'&&r.assetKind==='building'&&r.deliveryAcceptanceDocumentNumber&&r.deliveredOn&&validateDate(r.deliveredOn)<=r.date&&['paid','unpaid'].includes(r.settlement)&&r.inputVatTreatment==='non_deductible','agency_extended_property_acquisition_accounting_missing');
+          const net=cents(r.priceExcludingVat),vat=cents(r.invoiceVat),gross=cents(r.invoiceGross);requireValue(net+vat===gross&&net>=0n&&vat>=0n,'agency_invoice_total_mismatch');
+          const taxes=[r,...records.filter(x=>x.type==='farmland_use'&&x.relatedBusinessFactId===r.id&&x.date.slice(0,7)===r.date.slice(0,7))].map(x=>calculateAgencyExtendedTax({obligationId:x===r?'deed':'farmland_occupation',record:x,scope,entity,sixTaxRelief:determineAgencySixTaxRelief({scope:{...scope,period:r.date.slice(0,7)},entity,records}).eligible}));
+          const extra=taxes.reduce((n,c)=>n+cents(c.due),0n);journal({...r,sourceRefs:[...r.sourceRefs,...taxes.flatMap(t=>t.sourceRefs)]},'property_construction',[line('1604',gross+extra,0n),line(r.settlement==='paid'?'bank':'payable',0n,gross),...(extra?[line('tax',0n,extra)]:[])],'取得原工程/未达可使用状态房产按原票及已核契税耕占税资本化，达到可用后须既有core资产流程，不提前折旧');payables.set(r.id,r.settlement==='paid'?0n:gross);break;
+        }
         case 'vehicle_acquisition':{
           requireValue(['admin','transport','production'].includes(r.use),'agency_vehicle_benefit_use_missing');
           const v=calculateAgencyVehicleAcquisition({entity,record:r,records}),gross=cents(v.invoiceGross),input=cents(v.deductibleInputVat),purchaseCost=gross-input,tax=cents(v.due);
@@ -129,10 +134,12 @@ export function evaluateAgencyAccounting(document) {
           requireValue(['paid', 'unpaid'].includes(r.settlement) && ['deductible', 'non_deductible'].includes(r.inputVatTreatment), 'agency_purchase_facts_missing');
           const net = cents(r.net), tax = cents(r.invoiceTax), gross = cents(r.gross); requireValue(net >= 0n && tax >= 0n && gross === net + tax, 'agency_invoice_total_mismatch');
           const deductible = entity.vatStatus === 'general' && r.inputVatTreatment === 'deductible';
-          const cost = deductible ? net : gross;
-          receive(r, quantity(r.quantity), cost, r.inventoryType, r.sourceRefs);
-          const entries = [line(r.inventoryType, cost, 0n), ...(deductible && tax ? [line('tax', tax, 0n, '应交增值税—进项税额')] : []), line(r.settlement === 'paid' ? 'bank' : 'payable', 0n, gross)];
-          journal(r, 'purchase', entries, '验收购入存货；可抵扣进项与成本分离，FIFO保留原始批次'); payables.set(r.id, r.settlement === 'paid' ? 0n : gross); break;
+          const taxFacts=records.filter(x=>['tobacco_leaf_purchase','import_export'].includes(x.type)&&x.relatedBusinessFactId===r.id),taxes=taxFacts.map(x=>{requireValue(x.date.slice(0,7)===r.date.slice(0,7),'agency_extended_tax_purchase_period_missing');const c=calculateAgencyExtendedTax({obligationId:x.type==='tobacco_leaf_purchase'?'tobacco':'customs',record:x,scope:{...scope,period:r.date.slice(0,7)},entity});if(x.type==='tobacco_leaf_purchase')requireValue(cents(x.purchasePrice)===net,'agency_extended_tobacco_invoice_conflict');else requireValue(cents(x.invoiceCny)===net&&['freightToBorderCny','insuranceToBorderCny','assistsCny','royaltiesCny'].every(k=>cents(x[k])===0n),'agency_extended_customs_ancillary_accounting_allocation_missing');return c;});
+          let importVat=0n,importDeductible=0n;for(const [i,x] of taxFacts.entries())if(x.type==='import_export'){const c=taxes[i];requireValue(c.importVat!==null&&cents(r.invoiceTax)===0n&&['deductible','non_deductible'].includes(x.inputVatTreatment),'agency_extended_import_vat_original_missing');const v=cents(c.importVat);importVat+=v;if(x.inputVatTreatment==='deductible'){requireValue(entity.vatStatus==='general'&&x.importVatTaxReceiptNumber&&/^20\d\d-\d\d-\d\d$/.test(x.certifiedDate??''),'agency_extended_import_vat_certification_missing');importDeductible+=v;}}
+          const extra=taxes.reduce((n,c)=>n+cents(c.due),0n),cost = (deductible ? net : gross)+extra+importVat-importDeductible,sourceRefs=[...r.sourceRefs,...taxFacts.flatMap(x=>x.sourceRefs)];
+          receive(r, quantity(r.quantity), cost, r.inventoryType, sourceRefs);
+          const entries = [line(r.inventoryType, cost, 0n), ...(deductible && tax ? [line('tax', tax, 0n, '应交增值税—进项税额')] : []),...(importDeductible?[line('tax',importDeductible,0n,'按原进口专用缴款书认证日期抵扣；进口VAT不进入可抵扣存货成本')]:[]), line(r.settlement === 'paid' ? 'bank' : 'payable', 0n, gross),...(extra+importVat?[line('tax',0n,extra+importVat,'原采购关联烟叶税/关税/反补贴及进口VAT')]:[])];
+          journal({...r,sourceRefs}, 'purchase', entries, '验收购入存货；可抵扣进项与成本分离，原采购关联烟叶税/关税进入批次成本；FIFO保留原始批次'); payables.set(r.id, r.settlement === 'paid' ? 0n : gross); break;
         }
         case 'sale': {
           requireValue(r.delivered === true && r.collectionRight === true && ['paid', 'unpaid', 'platform'].includes(r.settlement), 'agency_sale_performance_missing');
@@ -313,7 +320,7 @@ export function evaluateAgencyAccounting(document) {
           requireValue(typeof r.relatedFactId === 'string' && typeof r.bankAccountId === 'string' && typeof r.bankReference === 'string' && r.bankReference.length > 0, 'agency_settlement_source_missing');
           const cashKey = stable([r.bankAccountId, r.bankReference]); requireValue(!cashIdentities.has(cashKey), 'agency_cash_movement_already_allocated');
           const source = currentRows.find(x => x.id === r.relatedFactId && x.date <= r.date), amounts = r.type === 'collection' ? receivables : payables;
-          requireValue(source && (r.type === 'collection' ? ['sale', 'service_complete', 'transport_complete', 'property_service_complete', 'construction_billing', 'rental','property_disposal'].includes(source.type) || source.type === 'opening_balance' && source.accountCode === '1122' : ['purchase', 'expense','vehicle_acquisition'].includes(source.type) || source.type === 'opening_balance' && source.accountCode === '2202'), 'agency_settlement_wrong_business_kind');
+          requireValue(source && (r.type === 'collection' ? ['sale', 'service_complete', 'transport_complete', 'property_service_complete', 'construction_billing', 'rental','property_disposal'].includes(source.type) || source.type === 'opening_balance' && source.accountCode === '1122' : ['purchase', 'expense','vehicle_acquisition','property_acquisition'].includes(source.type) || source.type === 'opening_balance' && source.accountCode === '2202'), 'agency_settlement_wrong_business_kind');
           const amount = positive(cents(r.amount), 'agency_settlement_amount_invalid'), outstanding = amounts.get(r.relatedFactId); requireValue(outstanding !== undefined && outstanding >= amount, 'agency_settlement_exceeds_open_balance');
           journal(r, 'settlement', r.type === 'collection' ? [line('bank', amount, 0n), line('receivable', 0n, amount)] : [line('payable', amount, 0n), line('bank', 0n, amount)], '原始银行账户/流水唯一核销对应应收应付剩余余额，不以相关ID存在就重复收付'); amounts.set(r.relatedFactId, outstanding - amount); cashIdentities.add(cashKey); break;
         }

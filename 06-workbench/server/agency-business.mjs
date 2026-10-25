@@ -12,6 +12,7 @@ import { getBatch, listBatchVouchers, getVoucherSource, voucherFingerprint, pers
 import { hash, stable, requireValue } from './offline-material-adapters.mjs';
 import { getAccountingRoles } from './accounting-profiles.mjs';
 import {cardMoney,assetCardPeriodStatus} from './period-end-controls.mjs';
+import { resolveAgencyRuleTrace, agencyRuleCatalogDigest, AGENCY_RULE_CATALOG_VERSION } from './agency-rule-catalog.mjs';
 
 export const AGENCY_BUSINESS_VERSION = 'agency-business-workpaper/1';
 export const AGENCY_RULE_VERSION = `${AGENCY_ACCOUNTING_RULE_VERSION}+${AGENCY_TAX_RULE_VERSION}`;
@@ -37,6 +38,7 @@ export function buildAgencyWorkpaper(session, { previous,dbPath } = {}) {
     result.impact = accounting.vouchers.filter(v => before.get(v.sourceVoucherId) !== businessRevision(v)).map(v => ({ factId: v.factId, sourceVoucherId: v.sourceVoucherId, state: before.has(v.sourceVoucherId) ? 'changed' : 'added', affected: ['ledger', 'inventory_cost', 'financial_reports', 'vat', 'income_tax', 'accountant_review'], fromPeriod: v.period }));
     for (const old of previous.accounting.vouchers) if (!accounting.vouchers.some(v => v.sourceVoucherId === old.sourceVoucherId)) result.impact.push({ factId: old.factId, sourceVoucherId: old.sourceVoucherId, state: 'withdrawn', affected: ['ledger', 'inventory_cost', 'financial_reports', 'vat', 'income_tax', 'accountant_review'], fromPeriod: old.period });
   }
+  result.ruleSelection=resolveAgencyRuleTrace({scope:document.scope,entity:document.entity,records:document.records,obligations:tax.obligations,accounting});result.ruleCatalogDigest=result.ruleSelection.catalogDigest;
   result.contentDigest = hash(stable(result)); return result;
 }
 
@@ -50,6 +52,7 @@ export async function buildAgencyAnnualWorkpaper(materialSessions,{dbPath}={}) {
   for (const document of documents) for (const record of document.records) { const old = byId.get(record.id); requireValue(!old || stable(old) === stable(record), 'agency_annual_fact_version_conflict'); byId.set(record.id, record); }
   const document = { scope: { ...first.scope, period: `${year}-12` }, entity: first.entity, records: [...byId.values()] };if(dbPath)document.nativeAssetContext=readNativeAssetContext(dbPath,document);
   const result = await calculateAgencyAnnualAdjustments({ document });
+  result.ruleCatalogDigest=agencyRuleCatalogDigest();result.ruleCatalogVersion=AGENCY_RULE_CATALOG_VERSION;
   materialSessions.forEach(assertAgencyEvidenceCurrent);
   result.entrypoint = 'buildAgencyAnnualWorkpaper'; result.ruleVersion = AGENCY_RULE_VERSION; result.dependencies = materialSessions.map(s => ({ period: s.scope.period, dependencyDigest: s.dependencyDigest, codeDigest: s.codeDigest, sourceRefs: s.sourceRefs }));
   if(document.nativeAssetContext){const current=readNativeAssetContext(dbPath,document);requireValue(current.targetDigest===document.nativeAssetContext.targetDigest&&current.digest===document.nativeAssetContext.digest,'agency_annual_native_asset_context_changed');result.nativeAssetContext=document.nativeAssetContext;result.dependencies.push({kind:'native_asset_context',period:document.scope.period,scope:copy(document.scope),dbPath,targetDigest:current.targetDigest,dependencyDigest:current.digest,context:copy(current)});}
@@ -58,12 +61,20 @@ export async function buildAgencyAnnualWorkpaper(materialSessions,{dbPath}={}) {
 
 export function getAgencyCapabilities() {
   const code = assertAgencyLoadedCode();
-  const common = { version: 'finance-capability/1', availability: 'limited', necessaryFacts: [{ factId: 'agency.raw_materials', description: '同企业/账套/数据库及期间绑定的原始业务事实、原文路径/摘要/指针' }], supportConditions: ['2026-2027 CNY local single-user multiple enterprises', `行业:${AGENCY_INDUSTRIES.join(',')}`, '客户提供原始订单/合同/交付/资金/工资等材料；程序派生金额', '地区政策未核实阻断对应义务，不将未知当零', '完整能力和未完成项以每份workpaper.issues为准'], ruleVersion: AGENCY_RULE_VERSION, codeDigest: code.digest, resultSchema: { version: AGENCY_BUSINESS_VERSION, accountantApproval: 'pending', periodComplete: false, submittable: false }, traceReferences: code.files.map(f => ({ kind: 'code', locator: f.path, digest: f.sha256 })) };
+  const common = { version: 'finance-capability/1', availability: 'limited', necessaryFacts: [{ factId: 'agency.raw_materials', description: '同企业/账套/数据库及期间绑定的原始业务事实、原文路径/摘要/指针' }], supportConditions: ['2026-2027 CNY local single-user multiple enterprises', `行业:${AGENCY_INDUSTRIES.join(',')}`, '客户提供原始订单/合同/交付/资金/工资等材料；程序派生金额', '地区政策未核实阻断对应义务，不将未知当零', '完整能力和未完成项以每份workpaper.issues为准','按需规则目录：node scripts/agency-business.mjs rules；详情rule <ruleId>；实际匹配match-rules <manifest> [dbPath]；导航docs/AGENCY-RULES.md'], ruleVersion: AGENCY_RULE_VERSION, codeDigest: code.digest, resultSchema: { version: AGENCY_BUSINESS_VERSION, accountantApproval: 'pending', periodComplete: false, submittable: false,ruleSelectionVersion:'agency-rule-match/1',ruleCatalogVersion:AGENCY_RULE_CATALOG_VERSION }, traceReferences: code.files.map(f => ({ kind: 'code', locator: f.path, digest: f.sha256 })) };
   return [
     { ...common, capabilityId: 'agency.workpaper', description: '重放原始业务事实生成会计成本/税费底稿及缺项', entrypoint: 'buildAgencyWorkpaper', effect: 'read' },
     { ...common, capabilityId: 'agency.posting', description: '人审绑定当前证据后经增量导入/审计正式入账；更正保留红冲历史', entrypoint: 'executeAgencyPosting', effect: 'write', recovery: { queryEntrypoint: 'queryAgencyPosting', identityFields: ['dbPath', 'databaseInstanceId', 'accountSetId', 'enterpriseKey', 'period', 'batchId', 'operationId', 'archivePath', 'archiveId'] } },
     { ...common, capabilityId: 'agency.annual-calculation', description: '全年原始资料重放的年度税会调整计算，年度流程由年度窗口编排', entrypoint: 'buildAgencyAnnualWorkpaper', effect: 'read' },
   ];
+}
+
+/** Same private material session and actual calculations as workpaper, bounded projection. */
+export function matchAgencyRules(session,{dbPath}={}){
+  const full=buildAgencyWorkpaper(session,{dbPath}).ruleSelection,clip=(v,n)=>typeof v==='string'?v.slice(0,n):v;
+  const scope=Object.fromEntries(Object.entries(full.scope).map(([k,v])=>[k,clip(v,120)])),scopeTruncatedFields=Object.keys(full.scope).filter(k=>typeof full.scope[k]==='string'&&full.scope[k].length>120);
+  return {version:full.version,projection:'bounded_summary',catalogVersion:full.catalogVersion,catalogDigest:full.catalogDigest,scope,scopeTruncatedFields,fullSelectionDigest:hash(stable(full)),readiness:full.readiness,amountsInWorkpaper:true,fullTraceEntrypoint:'buildAgencyWorkpaper',submittable:false,
+    trace:full.trace.map(t=>{const facts=t.factIds??[],codes=[...new Set(t.issueCodes??[])],missing=t.missingOriginalFacts??[];return {ruleId:t.ruleId,revision:t.revision,state:t.state,calculationStatus:t.calculationStatus??null,reason:clip(t.reason,160),reasonTruncated:(t.reason?.length??0)>160,composedRuleIds:t.composedRuleIds??[t.ruleId],factCount:facts.length,factIds:facts.slice(0,5).map(id=>clip(id,80)),factIdsTruncated:facts.length>5||facts.some(id=>id.length>80),issueCodeCount:codes.length,issueCodes:codes.slice(0,5).map(c=>clip(c,80)),issueCodesTruncated:codes.length>5||codes.some(c=>c.length>80),missingOriginalFactCount:missing.length,missingOriginalFacts:missing.slice(0,10).map(f=>clip(f,80)),missingOriginalFactsTruncated:missing.length>10||missing.some(f=>f.length>80),detailEntrypoint:'getAgencyRuleDetail'};})};
 }
 
 function checkedDatabasePath(path) {

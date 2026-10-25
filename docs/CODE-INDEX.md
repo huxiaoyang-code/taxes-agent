@@ -39,6 +39,12 @@
 - 记账 / 过账：[offline-bookkeeping.mjs](../06-workbench/server/offline-bookkeeping.mjs) 的 `buildOfflineCandidates`；[offline-posting.mjs](../06-workbench/server/offline-posting.mjs) 的 `runOfflinePosting`；快照：[offline-ledger-snapshot.mjs](../06-workbench/server/offline-ledger-snapshot.mjs) 的 `captureLedgerSnapshot`；CLI：[offline-bookkeeping](../06-workbench/scripts/offline-bookkeeping.mjs)、[offline-posting](../06-workbench/scripts/offline-posting.mjs)、[offline-ledger-snapshot](../06-workbench/scripts/offline-ledger-snapshot.mjs)。
 - 测试：[offline-materials](../06-workbench/test/offline-materials.test.mjs)、[offline-material-store](../06-workbench/test/offline-material-store.test.mjs)、[offline-plan](../06-workbench/test/offline-plan.test.mjs)、[offline-period-plan](../06-workbench/test/offline-period-plan.test.mjs)、[offline-posting](../06-workbench/test/offline-posting.test.mjs)、[offline-business-golden](../06-workbench/test/offline-business-golden.test.mjs)。
 
+## agency-rules
+
+- 规则 Wiki 与按需导航：[AGENCY-RULES.md](AGENCY-RULES.md)；统一登记/来源/修订/候选政策：[agency-rule-catalog.mjs](../06-workbench/server/agency-rule-catalog.mjs)，地区参数：[agency-regional-rules.mjs](../06-workbench/server/agency-regional-rules.mjs)。
+- 原件与底稿/实际规则匹配：[agency-business.mjs](../06-workbench/server/agency-business.mjs) 的 `loadAgencyMaterials`、`buildAgencyWorkpaper`、`matchAgencyRules`；会计/成本重放：[agency-business-rules.mjs](../06-workbench/server/agency-business-rules.mjs)，税费：[agency-tax-rules.mjs](../06-workbench/server/agency-tax-rules.mjs)、[agency-extended-tax-rules.mjs](../06-workbench/server/agency-extended-tax-rules.mjs)。
+- 目录/详情/匹配和本机政策维护 CLI：[agency-business.mjs](../06-workbench/scripts/agency-business.mjs)；测试：[agency-business](../06-workbench/test/agency-business.test.mjs)。`finance-capability/1` 仍复用三项 agency 能力；候选登记不自动激活、不执行申报缴费。
+
 ## vat-history-q2
 
 - VAT 计算：[tax-calculation.mjs](../06-workbench/server/tax-calculation.mjs) 的 `calculateOfflineVat`、`calculateOfflineVatQ2`；规则入口：[tax-rule-registry.mjs](../06-workbench/server/tax-rule-registry.mjs)。
