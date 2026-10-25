@@ -165,7 +165,7 @@ test("listAccountingProfiles 摘要字段完整，legacy 不可新建且不是�
   const list = listAccountingProfiles();
   assert.deepStrictEqual(
     list.map((item) => item.id),
-    [LEGACY, SMALL, ENTERPRISE]
+    [LEGACY, SMALL, ENTERPRISE, 'individual-bookkeeping-semantic-v1']
   );
   for (const item of list) {
     for (const key of [

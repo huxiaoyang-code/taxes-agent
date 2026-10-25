@@ -172,6 +172,10 @@ function enterpriseBalanceSheetRows(plRoots) {
     accountsRow("cash", "货币资金", "debit", ["1001", "1002", "1012"]),
     accountsRow("notes-receivable", "应收票据", "debit", ["1121"]),
     accountsRow("accounts-receivable", "应收账款", "debit", ["1122"]),
+    accountsRow("contract-assets", "合同资产", "debit", ["1151"]),
+    accountsRow("right-of-use-cost", "使用权资产原值", "debit", ["1621"]),
+    accountsRow("right-of-use-depreciation", "减：使用权资产累计折旧", "debit", ["1622"]),
+    subtotalRow("right-of-use-net", "使用权资产", [t("right-of-use-cost"), t("right-of-use-depreciation")]),
     accountsRow("prepayments", "预付款项", "debit", ["1123"]),
     // 企业口径：应收股利 / 应收利息 / 其他应收款按已核实范围汇总列示。
     accountsRow("other-receivables", "其他应收款", "debit", ["1131", "1132", "1221"]),
@@ -203,6 +207,8 @@ function enterpriseBalanceSheetRows(plRoots) {
       t("cash"),
       t("notes-receivable"),
       t("accounts-receivable"),
+      t("contract-assets"),
+      t("right-of-use-net"),
       t("prepayments"),
       t("other-receivables"),
       t("inventory"),
@@ -222,6 +228,8 @@ function enterpriseBalanceSheetRows(plRoots) {
     accountsRow("other-payables", "其他应付款", "credit", ["2241"]),
     accountsRow("long-term-loans", "长期借款", "credit", ["2501"]),
     accountsRow("long-term-payables", "长期应付款", "credit", ["2701"]),
+    accountsRow("lease-liabilities", "租赁负债", "credit", ["2801"]),
+    accountsRow("lease-liabilities-current", "一年内到期的租赁负债", "credit", ["2802"]),
     subtotalRow("total-liabilities", "负债合计", [
       t("short-term-loans"),
       t("notes-payable"),
@@ -234,6 +242,8 @@ function enterpriseBalanceSheetRows(plRoots) {
       t("other-payables"),
       t("long-term-loans"),
       t("long-term-payables"),
+      t("lease-liabilities"),
+      t("lease-liabilities-current"),
     ]),
     accountsRow("paid-in-capital", "实收资本", "credit", ["4001"]),
     accountsRow("capital-reserve", "资本公积", "credit", ["4002"]),
@@ -256,6 +266,36 @@ function enterpriseBalanceSheetRows(plRoots) {
       t("total-liabilities"),
       t("total-equity"),
     ]),
+  ];
+}
+
+function individualBalanceSheetRows(plRoots) {
+  const rows = [
+    accountsRow('cash', '现金', 'debit', ['1001']), accountsRow('bank', '银行存款', 'debit', ['1002']),
+    accountsRow('accounts-receivable', '应收款项（含预收抵减）', 'debit', ['1122', '2203', '1221']),
+    accountsRow('inventory', '存货（含生产明细）', 'debit', ['1403', '1405', '4001']),
+    accountsRow('deferred-expenses', '待摊费用', 'debit', ['1801']), accountsRow('property-loss', '待处理财产损失', 'debit', ['1901']),
+    accountsRow('fixed-assets-cost', '固定资产原价', 'debit', ['1601']), accountsRow('accumulated-depreciation', '减：累计折旧', 'credit', ['1602']),
+    subtotalRow('fixed-assets-net', '固定资产净值', [t('fixed-assets-cost'), m('accumulated-depreciation')]),
+    accountsRow('asset-disposal', '固定资产清理', 'debit', ['1606']), accountsRow('construction-in-progress', '在建工程', 'debit', ['1604']), accountsRow('intangible-assets', '无形资产', 'debit', ['1701']),
+    accountsRow('borrowings', '借入款项', 'credit', ['2001']), accountsRow('accounts-payable', '应付款项（含预付抵减）', 'credit', ['2202', '1123', '2241']), accountsRow('employee-benefits-payable', '应付工资', 'credit', ['2211']), accountsRow('taxes-payable', '未交税金', 'credit', ['2221']),
+    accountsRow('owner-capital', '业主投资', 'credit', ['3001']), accountsRow('retained-profit', '留存利润', 'credit', ['3104']), accountsRow('current-year-profit', '本年经营所得（未结转内部底稿）', 'credit', ['3103']), unclosedProfitRow('unclosed-profit', '未结转经营所得', plRoots),
+  ];
+  rows.push(subtotalRow('total-assets', '资产总计', ['cash', 'bank', 'accounts-receivable', 'inventory', 'deferred-expenses', 'property-loss', 'fixed-assets-net', 'asset-disposal', 'construction-in-progress', 'intangible-assets'].map(t)));
+  rows.push(subtotalRow('total-liabilities', '负债合计', ['borrowings', 'accounts-payable', 'employee-benefits-payable', 'taxes-payable'].map(t)));
+  rows.push(subtotalRow('total-equity', '业主权益内部核对合计', ['owner-capital', 'retained-profit', 'current-year-profit', 'unclosed-profit'].map(t)));
+  rows.push(subtotalRow('total-liabilities-and-equity', '负债及业主权益总计', [t('total-liabilities'), t('total-equity')])); return rows;
+}
+function individualIncomeRows() {
+  return [
+    accountsRow('operating-revenue', '营业收入', 'credit', ['5001', '5051']),
+    accountsRow('operating-cost', '营业成本', 'debit', ['5401', '5402']),
+    accountsRow('operating-expenses', '营业费用及营业税金', 'debit', ['5403', '5601', '5602', '5603']),
+    subtotalRow('operating-profit', '营业利润内部核对数', [t('operating-revenue'), m('operating-cost'), m('operating-expenses')]),
+    accountsRow('non-operating-income', '营业外收入', 'credit', ['5301']),
+    accountsRow('non-operating-expense', '营业外支出', 'debit', ['5711']),
+    subtotalRow('total-profit', '经营所得会计底稿（税会差异另列）', [t('operating-profit'), t('non-operating-income'), m('non-operating-expense')]),
+    subtotalRow('net-profit', '经营所得内部核对数', [t('total-profit')]),
   ];
 }
 
@@ -290,6 +330,7 @@ const RECIPROCAL_BALANCE_RULES = {
 // 小企附录第73页(28)明确应交税费期末借方余额以“－”号填列；备抵常规余额按有符号金额
 // 进入净值，权益亏损 / 损益红冲不进入资产 / 负债 / 成本反向分支。企业 profile 未核实对应条目，不扩张。
 const NEGATIVE_PRESENTATION_RULES = {
+  "individual-bookkeeping-semantic-v1": Object.fromEntries(['1122', '2203', '2202', '1123', '2221', '1606', '3001'].map(code => [code, { reason: 'official-individual-A06534-signed-presentation' }])),
   "small-2011-basic-v1": {
     "2221": {
       reason: "small-enterprise-appendix-p73-item-28-taxes-payable-debit-negative",
@@ -307,6 +348,7 @@ function incomeStatementRows(codes) {
     accountsRow("administrative-expense", "管理费用", "debit", [codes.admin]),
     accountsRow("finance-expense", "财务费用", "debit", [codes.finance]),
     accountsRow("investment-income", "投资收益", "credit", [codes.investment]),
+    ...(codes.otherGains ? [accountsRow("other-gains", "其他收益", "credit", [codes.otherGains])] : []),
     subtotalRow("operating-profit", "营业利润", [
       t("operating-revenue"),
       m("operating-cost"),
@@ -315,6 +357,7 @@ function incomeStatementRows(codes) {
       m("administrative-expense"),
       m("finance-expense"),
       t("investment-income"),
+      ...(codes.otherGains ? [t("other-gains")] : []),
     ]),
     accountsRow("non-operating-income", "营业外收入", "credit", [codes.nonOperatingIncome]),
     accountsRow("non-operating-expense", "营业外支出", "debit", [codes.nonOperatingExpense]),
@@ -349,6 +392,7 @@ const ENTERPRISE_INCOME_CODES = {
   admin: "6602",
   finance: "6603",
   investment: "6111",
+  otherGains: "6117",
   nonOperatingIncome: "6301",
   nonOperatingExpense: "6711",
   incomeTax: "6801",
@@ -527,11 +571,12 @@ function buildRules(profile) {
     .filter((a) => a.category === "损益" && a.scope.status === "mapped")
     .map((a) => a.code);
 
-  const balanceSheetRows =
+  const individual = profile.id === 'individual-bookkeeping-semantic-v1';
+  const balanceSheetRows = individual ? individualBalanceSheetRows(plRoots) :
     profile.id === "small-2011-basic-v1"
       ? smallBalanceSheetRows(plRoots)
       : enterpriseBalanceSheetRows(plRoots);
-  const incomeRows = incomeStatementRows(
+  const incomeRows = individual ? individualIncomeRows() : incomeStatementRows(
     profile.id === "small-2011-basic-v1" ? SMALL_INCOME_CODES : ENTERPRISE_INCOME_CODES
   );
 
@@ -563,7 +608,7 @@ function buildRules(profile) {
     }
   }
 
-  const cashFlow = CASH_FLOW_RULES[profile.id];
+  const cashFlow = CASH_FLOW_RULES[profile.id] ?? { operatingRoots: [], investingRoots: [], financingRoots: [], ambiguousRoots: [] };
   const reciprocal = RECIPROCAL_BALANCE_RULES[profile.id] || {};
   const negativePresentation = NEGATIVE_PRESENTATION_RULES[profile.id] || {};
   const cashFlowRoots = [

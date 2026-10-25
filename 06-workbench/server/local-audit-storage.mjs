@@ -1,6 +1,7 @@
 import { assertPrivateRestoreCapability } from './local-backup.mjs';
 import { assertRestoreWritable } from './local-restore-control.mjs';
 import { assertWriteCommitFence } from './local-write-lock.mjs';
+import { assertAgencyCommitEvidence } from './agency-business-evidence.mjs';
 import { markBatchFailed as persistIncrementalImportFailure } from './import-storage.mjs';
 import { markBatchFailed as persistBankImportFailure } from './bank-storage.mjs';
 // Explicit-handle audit1/2 storage. No default database or import-time connection.
@@ -502,6 +503,7 @@ export function executePreparedOperation(db,authorization,fn) {
   spec=resultSpec(result,saved,p.refClaims);
   if(spec.state==='failed'||spec.state==='rejected'){controlledFailure=spec;throw fail('audit_result_invalid');}
   saved=finish(db,saved,spec);
+  assertAgencyCommitEvidence(db);
   assertWriteCommitFence(db);
  }catch(e){
   activeOperations.delete(db);try{db.setAuthorizer(null);}catch{}
