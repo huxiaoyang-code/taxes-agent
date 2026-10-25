@@ -2,7 +2,8 @@
 // task persistence or accountant-approval authority. The server binds the fixed
 // existing report/check functions to its already-open database in trusted code.
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
+import { captureHarnessCode } from './harness-code.mjs';
 import {
   openReadonlyLedgerSource, captureLedgerSnapshot, validateLedgerSnapshot,
   assertLedgerSourcePath,
@@ -22,15 +23,10 @@ const digest = value => createHash('sha256').update(JSON.stringify(canonical(val
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const copy = structuredClone;
 const months = year => Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
-// Conservative local code binding also covers indirect report/rule dependencies.
-// Captured when this adapter loads; changing files requires a service restart,
-// rather than attributing new on-disk code to old functions already in memory.
-function sourceCodeDigest() {
-  const dir = new URL('.', import.meta.url);
-  return digest(readdirSync(dir).filter(name => name.endsWith('.mjs')).sort().map(name => ({
-    name, sha256: createHash('sha256').update(readFileSync(new URL(name, dir))).digest('hex'),
-  })));
-}
+// Reuse the Harness's fixed static dependency closure; unrelated source files
+// do not change this annual result. Hot edits still require a fresh worker.
+export const ANNUAL_CLOSE_CODE_ROOTS = Object.freeze(['./annual-close.mjs', './report-export.mjs', './period-end-controls.mjs']);
+const sourceCodeDigest = () => captureHarnessCode(ANNUAL_CLOSE_CODE_ROOTS).digest;
 const loadedSourceDigest = sourceCodeDigest();
 function scopeOf(input, validation = false) {
   const keys = validation ? ['accountSetId', 'enterpriseKey', 'year', 'expectedDigest'] : ['accountSetId', 'enterpriseKey', 'year'];
@@ -104,7 +100,7 @@ export function createAnnualCloseAdapter({ db, buildReportExport, periodEndCheck
   check(db && typeof db.prepare === 'function' && typeof buildReportExport === 'function' && typeof periodEndCheck === 'function', 'annual_runtime_invalid');
   const runtimeFunctionDigest = digest({ report: buildReportExport.toString(), periodCheck: periodEndCheck.toString() });
   const codeEvidence = { codeDigest: digest({ loadedSourceDigest, runtimeFunctionDigest }), dependencySourceDigest: loadedSourceDigest,
-    runtimeFunctionDigest, dependencyScope: '06-workbench/server/*.mjs', restartRequiredOnSourceChange: true };
+    runtimeFunctionDigest, dependencyRoots: ANNUAL_CLOSE_CODE_ROOTS, restartRequiredOnSourceChange: true };
   const inspect = input => {
     check(sourceCodeDigest() === loadedSourceDigest, 'annual_runtime_restart_required');
     const scope = scopeOf(input), yearPeriods = months(scope.year), last = yearPeriods.at(-1);
