@@ -64,6 +64,11 @@
 
 ## mcp
 
+- Harness：共享声明契约 [harness-contract.mjs](../06-workbench/server/harness-contract.mjs)，固定业务注册 [harness-adapters.mjs](../06-workbench/server/harness-adapters.mjs)，生命周期 [harness-runtime.mjs](../06-workbench/server/harness-runtime.mjs)、元数据证据日志 [harness-store.mjs](../06-workbench/server/harness-store.mjs)。企业特例调用现有审计 accounting API，批处理复用既有 runner；均显式绑定本机目标。
+- 代账接线：复用 [agency-business.mjs](../06-workbench/server/agency-business.mjs) 的 getAgencyCapabilities、buildAgencyWorkpaper、prepare/execute/queryAgencyPosting 与 buildAgencyAnnualWorkpaper，经既有 Harness domain worker 隔离目标，原生人审材料和 archive 身份恢复；年度计算不是年度关账。集中增量验证：`node test/harness-lifecycle.test.mjs --agency-capabilities`，使用独立合成原件/临时库。
+- Harness MCP 工具：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs)；渐进式入口 [harness/SKILL.md](../05-reconstruction/codex/skills/harness/SKILL.md)。pi 1.1.0 原生 MCP 与禁止递归的解析委派扩展 [finance-harness.ts](../05-reconstruction/codex/pi/finance-harness.ts)。其他宿主仍使用标准 stdio。
+- Harness 验证：[harness-contract](../06-workbench/test/harness-contract.test.mjs)、[harness-lifecycle](../06-workbench/test/harness-lifecycle.test.mjs)、[harness-mcp](../05-reconstruction/codex/mcp/finance-mcp/harness-test.mjs)。[pi接入命令](../05-reconstruction/codex/pi/README.md)，[无模型原生MCP探针](../06-workbench/scripts/harness-pi-probe.mjs)。陌生合成资料演示准备：从 `06-workbench` 运行 `node scripts/harness-demo.mjs prepare <全新绝对目录>`；此命令不调用模型，也不构成 Agent 演示。获当次测试授权后，运行实际 pi 加载上述扩展并读生成的 goal.txt，保留模型/扩展/MCP/子 Agent 轨迹和产物；`assess` 仅核查真实账务结果。
+
 - stdio 分派：[server.mjs](../05-reconstruction/codex/mcp/finance-mcp/server.mjs) 的 `callTool`、`listSkillFiles`、`readSkill`，协议入口 `tools/list`、`tools/call`、`resources/list`、`resources/read`。
 - 工具契约：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs) 的 `TOOLS`、`TOOL_BY_NAME`、`validateArgs`；HTTP 适配：[backend.mjs](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)；配置示例：[config.toml](../05-reconstruction/codex/config.toml)。客户端配置使用本机实际 Node / 脚本绝对路径，按需设置 `FINANCE_API_BASE`、`FINANCE_SKILLS_DIR`。
 - 运行资源：[catalog.json](../05-reconstruction/catalog.json)、[skills](../05-reconstruction/codex/skills/)；通过 `skills_list` / `skills_read` 或 MCP resources 读取，Skill 相对引用保留在同目录树。`catalog.source_bundle` 是历史来源元数据。

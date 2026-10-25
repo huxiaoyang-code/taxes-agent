@@ -1,61 +1,12 @@
 ---
 name: tax-filing
-description: 处理增值税、附加税、企业所得税、印花税、年度申报及申报状态。
+description: 发现现有离线税务计算与复核范围，记录不支持分支；本机未接通税局申报。
 ---
 
-# 全税种申报（tax-filing）
+# 离线税务与支持范围
 
-> 模板：原文案在有数云服务端，需按你的实现补全。此文件对应
-> `catalog.json -> skill_files -> "tax-filing/SKILL.md"`。
+业务入口见 `harness/SKILL.md`，按需读 `harness/references/tax.md`。先发现实际能力，依据原始资料调查税务属性和历史，不要求客户提供固定模板或已算好的申报数字。现有模块只覆盖明确条件下的离线 VAT 部分字段与复核，不代表全税种、年度汇算或正式申报。
 
-## 目标
+全国电子税务局真实接入数为0。登录、在线采集、申报提交、缴款、更正/作废申报在本 Harness 范围外；目录/预留工具存在不代表接入。`invoice_*` 开票占位、`declaration_query`、`tax_declaration_query`、`finance_task_status`、`exec` 不得列为本机可用工作流。
 
-处理增值税、附加税、企业所得税、印花税、年度申报及申报状态。
-
-## 可用工具
-
-account_context, finance_context_resolve, finance_query, finance_query_catalog, finance_task_status, invoice_collect, invoice_file, invoice_issue, invoice_issue_result, invoice_precheck, invoice_red_apply, invoice_red_issue, invoice_red_status, invoice_tax_code, declaration_query, exec, list, read, tax_declaration_query, update_plan, voucher_check, voucher_create
-
-## 可用查询能力（finance_query 的 nodeId）
-
-- `enterprise_account.account_set` — 查询账套信息
-- `enterprise_account.bank` — 查询银行信息
-- `enterprise_account.business` — 查询工商信息
-- `enterprise_account.personnel` — 查询人员信息
-- `enterprise_account.tax_assessment` — 查询税种核定
-- `enterprise_account.tax` — 查询税务信息
-- `enterprise_account.auxiliary_accounting.all` — 查询辅助核算
-- `enterprise_account.subject_system.all` — 查询科目体系
-- `fund.unbooked.list` — 查询未入账银行流水
-- `fund.unbooked.summary` — 查询未入账银行流水
-- `invoice.detail` — 读取发票详情
-- `invoice.unbooked.list` — 查询未入账发票
-- `invoice.unbooked.summary` — 查询未入账发票
-- `report.balance_sheet` — 查询资产负债表
-- `report.cash_flow_statement` — 查询现金流量表
-- `report.income_statement` — 查询利润表
-- `period_end.summary` — 盘点期末状态
-- `voucher.detail` — 读取凭证详情
-- `voucher.draft.summary` — 查询草稿凭证
-- `voucher.generated.list` — 查询已生成凭证
-- `voucher.generated.summary` — 查询已生成凭证
-
-## 工作流（TODO）
-
-1. 用 `finance_context_resolve` / `account_context` 核对账套与期间。
-2. 按需用 `finance_query` 读取数据。
-3. 变更类操作必须走审批（开票、申报、凭证入账）。
-4. 完成后用 `finance_task_status` 汇报结果。
-
-## 输出约定（TODO）
-
-- 金额单位、期间格式、四舍五入规则。
-- 失败/待人工确认的处理方式。
-
-## 参考
-
-- `tax-filing/references/enterprise-tax.md` — 读取企业税申报规则
-- `tax-filing/references/individual-income-tax.md` — 读取个税申报路由
-- `tax-filing/references/declaration-data-query.md` — 读取申报数据查询规则
-- `tax-filing/references/correction-cancel.md` — 读取申报更正与作废规则
-- `tax-filing/references/annual-tax.md` — 读取年度申报规则
+任务、具体补件、计算回执、会计反馈和恢复使用 `harness_*`；`update_plan` 仍仅回显。保留可执行核算分支，不把税务阻塞隐藏或猜成完成。该目录原 references 为历史模板，仅调查历史描述时读取，不作为可执行规则。
