@@ -1,19 +1,25 @@
 import { assertRestoreOpenPath, assertRestoreWritable } from './local-restore-control.mjs';
 // db.mjs — SQLite 存储（node:sqlite，零依赖）
 import { DatabaseSync } from "node:sqlite";
-import { dirname, join } from "node:path";
+import { dirname, join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 import { ensureImportSchema } from "./import-storage.mjs";
 import { assertOpenedDatabaseClaimsMatch } from "./database-open-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Explicit process-level read mode is used by the isolated annual worker.
+// It never creates a directory/database or invokes any installer/migration.
+const DATABASE_MODE = process.env.WORKBENCH_DATABASE_MODE ?? 'readwrite';
+if (!['readwrite', 'readonly'].includes(DATABASE_MODE)) throw Object.assign(new Error('database_mode_invalid'), { code: 'database_mode_invalid' });
+const READ_ONLY = DATABASE_MODE === 'readonly';
+if (READ_ONLY && (!process.env.WORKBENCH_DATA_DIR || !isAbsolute(process.env.WORKBENCH_DATA_DIR))) throw Object.assign(new Error('readonly_data_dir_required'), { code: 'readonly_data_dir_required' });
 const DATA_DIR = process.env.WORKBENCH_DATA_DIR || join(__dirname, "..", "data");
 assertRestoreOpenPath(join(DATA_DIR,'workbench.db'));
-mkdirSync(DATA_DIR, { recursive: true });
+if (!READ_ONLY) mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_FILE = join(DATA_DIR, "workbench.db");
-export const db = new DatabaseSync(DB_FILE);
+export const db = READ_ONLY ? new DatabaseSync(DB_FILE, { readOnly: true }) : new DatabaseSync(DB_FILE);
 
 // 初始化钩子（**必须**在任何核心 DDL、`journal_mode = WAL` 与导入结构迁移写之前）：
 // 若本进程刚用独占创建回执创建了这个 workbench.db（页 1 种子由创建 fd 写入），则必须证明
@@ -34,6 +40,38 @@ try {
   throw error;
 }
 
+if (READ_ONLY) {
+  try {
+    db.exec('PRAGMA query_only=ON; PRAGMA foreign_keys=ON');
+    // Require the complete current core DDL plus the v4 asset/v5 profile
+    // columns. A version row cannot substitute for missing columns: some
+    // business readers intentionally default absent values for old evidence.
+    const required = {
+      schema_migrations: ['version', 'applied_at', 'note'],
+      account_sets: ['id', 'name', 'taxpayer_type', 'accounting_standard', 'start_period', 'created_at', 'accounting_profile_id'],
+      accounts: ['id', 'account_set_id', 'code', 'name', 'category', 'direction', 'contra', 'is_leaf'],
+      opening_balances: ['account_set_id', 'code', 'debit', 'credit'], periods: ['account_set_id', 'period', 'status'],
+      vouchers: ['id', 'account_set_id', 'period', 'voucher_date', 'word', 'number', 'summary', 'status', 'created_at', 'kind'],
+      voucher_entries: ['id', 'voucher_id', 'line_no', 'code', 'summary', 'debit', 'credit'],
+      asset_cards: ['id', 'account_set_id', 'kind', 'name', 'original_cost', 'residual_rate', 'useful_life_months', 'start_period',
+        'asset_account', 'accum_account', 'expense_account', 'created_at', 'acquired_period', 'opening_accumulated', 'ledger_status', 'ledger_note', 'origin'],
+      asset_depreciation_runs: ['id', 'account_set_id', 'asset_id', 'period', 'amount', 'voucher_id', 'created_at'],
+    };
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
+    const ready = Object.entries(required).every(([name, fields]) => tables.has(name) && fields.every(field => db.prepare(`PRAGMA table_info(${name})`).all().some(column => column.name === field)));
+    if (!ready || db.prepare('SELECT MAX(version) v FROM schema_migrations').get()?.v !== 5) throw Object.assign(new Error('readonly_database_not_ready'), { code: 'readonly_database_not_ready' });
+    const { inspectAuditSchema } = await import('./local-audit-storage.mjs');
+    const { inspectBatchSchema } = await import('./local-batch-storage.mjs');
+    if (!inspectAuditSchema(db).ok || !inspectBatchSchema(db).ok) throw Object.assign(new Error('readonly_database_not_ready'), { code: 'readonly_database_not_ready' });
+    if (db.prepare('PRAGMA journal_mode').get().journal_mode !== 'wal') throw Object.assign(new Error('readonly_database_wal_required'), { code: 'readonly_database_wal_required' });
+  } catch (error) {
+    try { db.close(); } catch {}
+    if (!['readonly_database_not_ready', 'readonly_database_wal_required'].includes(error.code)) throw Object.assign(new Error('readonly_database_not_ready'), { code: 'readonly_database_not_ready' });
+    throw error;
+  }
+}
+
+if (!READ_ONLY) {
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -138,10 +176,13 @@ if (!voucherCols.includes("kind")) {
 // ---- LOCAL-01 增量导入表 / 版本化迁移 ----
 // 先产生一致备份，再把新增结构放进迁移事务（见 import-storage.mjs）；
 // 每次真正升级都重新备份，启动时版本已达目标则不备份；迁移失败整体回滚并抛 migration_failed。
-export const importSchema = ensureImportSchema(db, { dataDir: DATA_DIR });
+}
+export const importSchema = READ_ONLY
+  ? Object.freeze({ from: 5, to: 5, version: 5, migrated: false, readOnly: true })
+  : ensureImportSchema(db, { dataDir: DATA_DIR });
 
 // Module readiness is awaited once; all accounting/import exports remain synchronous.
-try {
+if (!READ_ONLY) try {
   const { installAuditSchema } = await import('./local-audit-storage.mjs');
   const { installBatchSchema } = await import('./local-batch-storage.mjs');
   const { randomUUID } = await import('node:crypto');
