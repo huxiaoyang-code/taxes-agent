@@ -1,19 +1,74 @@
 // Fixed native worker for enterprise exceptions. No supplied module or SQL is run.
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, statSync } from 'node:fs';
-import { dirname, basename } from 'node:path';
-import { checkedPath } from './offline-material-store.mjs';
+import { dirname, basename, isAbsolute } from 'node:path';
+import { checkedPath, readLocalFile, readArchivedMaterialEvidence } from './offline-material-store.mjs';
 import { captureHarnessCode } from './harness-code.mjs';
 import { validateHarnessScope, scopeContainsMonth } from './harness-contract.mjs';
 import { auditCanonicalDigest, auditResultDigest } from './local-audit.mjs';
 import { queryOperation } from './local-audit-operation.mjs';
+import * as Agency from './agency-business.mjs';
+import { hash, stable } from './harness-store.mjs';
 const check = (v,code) => {if(!v)throw Object.assign(new Error(code),{code});};
 const roots = ['./harness-domain-worker.mjs'];
 let db, started = false, requestContext;
+async function agencyCall(r,path) {
+  const cap=Agency.getAgencyCapabilities().find(c=>c.capabilityId===r.action);check(cap&&cap.codeDigest===r.codeDigest,'harness_code_changed');
+  const sameScope=s=>check(['enterpriseKey','accountSetId','databaseInstanceId','currency'].every(k=>s?.[k]===r.scope[k]),'harness_agency_scope_mismatch');
+  const identity=r.prepared?.proposal?.identity??r.priorResult?.identity;
+  const prove=async (domain,feedbackEvidence=r.priorResult?.feedbackEvidence)=>{
+    const evidenceBindings=[];
+    if(!feedbackEvidence&&r.request.feedbackPath){try{const file=await readLocalFile(r.request.feedbackPath);feedbackEvidence={path:file.canonicalPath,digest:hash(file.bytes),feedback:JSON.parse(file.bytes.toString('utf8'))};}catch{}}
+    if(identity){const archive=await readArchivedMaterialEvidence(identity.archivePath,identity.archiveId);for(const record of archive.records.filter(f=>isAbsolute(f.name))){let current=null;try{current=hash((await readLocalFile(record.name)).bytes);}catch{}evidenceBindings.push({path:record.name,expected:hash(record.bytes),current});}}
+    if(feedbackEvidence){let current=null;try{current=hash((await readLocalFile(feedbackEvidence.path)).bytes);}catch{}evidenceBindings.push({path:feedbackEvidence.path,expected:feedbackEvidence.digest,current});}
+    const approval=r.prepared?.proposal,confirmationCurrent=!!approval&&feedbackEvidence?.feedback?.decision==='accept'&&typeof feedbackEvidence.feedback.reviewer==='string'&&!!feedbackEvidence.feedback.reviewer.trim()&&['targetVersion','dependencyDigest','planDigest'].every(k=>feedbackEvidence.feedback[k]===approval[k]);
+    return {status:domain.status,applied:domain.applied,scope:r.scope,identity:domain.identity,domain,...(feedbackEvidence?{feedbackEvidence}:{}),confirmationCurrent,evidenceCurrent:evidenceBindings.every(b=>b.expected===b.current),evidenceBindings,proofDigest:hash({domain,evidenceBindings,confirmationCurrent}),periodComplete:false,submittable:false};
+  };
+  const inspectIdentity=async()=>{
+    check(identity&&identity.dbPath===path&&identity.period===r.scope.period&&identity.batchId===r.request.batchId&&identity.operationId===r.operationId,'harness_agency_identity_missing_or_changed');sameScope({...identity,currency:r.scope.currency});
+    return Agency.queryAgencyPosting(identity);
+  };
+  if(r.action==='agency.posting'&&r.phase==='query')return prove(await inspectIdentity());
+  check(r.phase==='execute'||r.phase==='prepare','harness_agency_phase_invalid');
+  if(r.action==='agency.posting'&&r.phase==='execute') {
+    const observed=await inspectIdentity();
+    // The original archived identity is queried before loading/rebuilding any
+    // proposal. Unknown/committed outcomes can never cause another execute.
+    if(observed.status!=='not_started')return prove(observed);
+    let file,feedback;
+    try{file=await readLocalFile(r.request.feedbackPath);feedback=JSON.parse(file.bytes.toString('utf8'));}
+    catch{return {status:'blocked',applied:false,code:'agency_accountant_confirmation_required',identity,queryEntrypoint:'queryAgencyPosting',periodComplete:false,submittable:false};}
+    const old=r.prepared.proposal;
+    const bound=feedback&&['accept','reject'].includes(feedback.decision)&&typeof feedback.reviewer==='string'&&feedback.reviewer.trim()&&['targetVersion','dependencyDigest','planDigest'].every(k=>feedback[k]===old[k]);
+    const feedbackEvidence={path:file.canonicalPath,digest:hash(file.bytes),feedback};
+    if(!bound)return {status:'blocked',applied:false,code:'agency_confirmation_stale',identity,feedbackEvidence,periodComplete:false,submittable:false};
+    if(feedback.decision==='reject')return {status:'rejected',applied:false,code:'agency_accountant_rejected',identity,feedbackEvidence,periodComplete:false,submittable:false};
+    const session=Agency.loadAgencyMaterials(r.request.manifestPath);sameScope(session.scope);check(session.scope.period===r.scope.period,'harness_period_mismatch');
+    const proposal=await Agency.prepareAgencyPosting(session,{batchId:r.request.batchId,dbPath:path,evidenceDir:r.request.evidenceDir,correction:r.request.correction,ledgerReconciliation:r.request.ledgerReconciliation});
+    check(['targetVersion','dependencyDigest','planDigest','codeDigest','targetDigest'].every(k=>proposal[k]===old[k])&&stable(proposal.identity)===stable(old.identity)&&proposal.archive.archiveId===old.archive.archiveId,'harness_agency_preparation_stale');
+    check(hash((await readLocalFile(file.canonicalPath)).bytes)===feedbackEvidence.digest,'agency_confirmation_changed');
+    started=true;
+    const domain=await Agency.executeAgencyPosting(session,{...feedback,proposal});
+    const observedAfter=await Agency.queryAgencyPosting(identity);
+    return {...await prove(observedAfter,feedbackEvidence),domain,feedbackEvidence};
+  }
+  if(r.action==='agency.annual-calculation') {
+    check(/^202[67]$/.test(r.scope.period)&&Array.isArray(r.request.manifestPaths)&&r.request.manifestPaths.length>0&&r.request.manifestPaths.length<=12,'harness_agency_annual_inputs_invalid');
+    const sessions=r.request.manifestPaths.map(p=>Agency.loadAgencyMaterials(p));for(const s of sessions){sameScope(s.scope);check(s.scope.period.slice(0,4)===r.scope.period,'harness_period_mismatch');}
+    const domain=await Agency.buildAgencyAnnualWorkpaper(sessions,{dbPath:path});sameScope(domain.scope);check(domain.scope.period===r.scope.period+'-12','harness_period_mismatch');
+    return {status:'calculated',scope:r.scope,nativeScope:domain.scope,domain,periodComplete:false,submittable:false};
+  }
+  const session=Agency.loadAgencyMaterials(r.request.manifestPath);sameScope(session.scope);check(session.scope.period===r.scope.period,'harness_period_mismatch');
+  if(r.action==='agency.workpaper')return {status:'workpaper',scope:r.scope,domain:Agency.buildAgencyWorkpaper(session,{dbPath:path}),periodComplete:false,submittable:false};
+  check(r.action==='agency.posting'&&r.phase==='prepare','harness_agency_action_invalid');
+  const proposal=await Agency.prepareAgencyPosting(session,{batchId:r.request.batchId,dbPath:path,evidenceDir:r.request.evidenceDir,correction:r.request.correction,ledgerReconciliation:r.request.ledgerReconciliation});
+  check(proposal.identity.operationId===r.operationId,'harness_agency_operation_mismatch');
+  return {status:'prepared',applied:false,scope:r.scope,proposal,periodComplete:false,submittable:false};
+}
 try {
   const r = JSON.parse(readFileSync(0,'utf8'));requestContext=r; validateHarnessScope(r.scope);
-  check(captureHarnessCode(roots).digest === r.codeDigest,'harness_code_changed');
-  check(['voucher.create','voucher.post','voucher.unpost'].includes(r.action) && ['execute','query'].includes(r.phase),'harness_domain_action_invalid');
+  check(captureHarnessCode(roots).digest === (r.workerCodeDigest??r.codeDigest),'harness_code_changed');
+  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
   const path = await checkedPath(r.target.dbPath); check(basename(path)==='workbench.db','harness_db_invalid');
   const before = statSync(path), verify = connection => {
     check(connection.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get()?.instance_id===r.scope.databaseInstanceId,'harness_instance_mismatch');
@@ -21,6 +76,10 @@ try {
     check(connection.prepare('SELECT MAX(version) v FROM schema_migrations').get()?.v===5,'harness_schema_unsupported');
   };
   db = new DatabaseSync(path,{readOnly:true}); verify(db);
+  if(r.action.startsWith('agency.')) {
+    db.close();db=null;process.env.WORKBENCH_DATA_DIR=dirname(path);
+    process.stdout.write(JSON.stringify(await agencyCall(r,path)));
+  } else {
   const action = r.action==='voucher.create' && r.request.voucher?.status==='posted' ? 'voucher.create_posted' : r.action;
   const args = r.action==='voucher.create' ? [r.scope.accountSetId,r.request.voucher] : [r.scope.accountSetId,r.request.voucherId];
   if (r.action==='voucher.create') check(scopeContainsMonth(r.scope,r.request.voucher?.period),'harness_period_mismatch');
@@ -54,6 +113,7 @@ try {
     const proof=queryOperation(db,{databaseInstanceId:r.scope.databaseInstanceId,operationId:r.operationId});
     check(proof.ok&&proof.receipt.resultDigest===auditResultDigest(result),'harness_result_unverified');
     process.stdout.write(JSON.stringify({status:'executed',applied:true,proof,current:{voucherId:result.id,period:result.period,status:result.status,entries:result.entries?.map(e=>({code:e.code,debit:e.debit,credit:e.credit}))}}));
+  }
   }
 } catch(e) {let uncertain=started;
   if(started&&db&&requestContext)try{const proof=queryOperation(db,{databaseInstanceId:requestContext.scope.databaseInstanceId,operationId:requestContext.operationId});if(!proof.ok&&proof.state!=='unknown')uncertain=false;}catch{}

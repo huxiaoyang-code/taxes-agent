@@ -16,6 +16,7 @@ import * as materials from './offline-material-store.mjs';
 import * as reviews from './accountant-review-store.mjs';
 import { BOOKKEEPING_RULE_VERSION } from './offline-voucher-rules.mjs';
 import { VAT_Q2_RULE_VERSION } from './tax-rule-registry.mjs';
+import { getAgencyCapabilities } from './agency-business.mjs';
 
 const specs = [
   ['offline.action_plan','read','./offline-action-plan.mjs','buildOfflineActionPlanFromFiles',BOOKKEEPING_RULE_VERSION,'Existing supported candidate preparation, not whole-period completion'],
@@ -31,13 +32,22 @@ const specs = [
 ];
 const rootsFor=s=>s[0].startsWith('voucher.')?['./harness-domain-worker.mjs']:[s[2]];
 export function harnessCapabilities() {
-  const captured=new Map();return new Map(specs.map(s=>{
+  const captured=new Map();const capabilities=new Map(specs.map(s=>{
     const key=rootsFor(s).join('|');if(!captured.has(key))captured.set(key,captureHarnessCode(rootsFor(s)));
     const input=s[0].startsWith('voucher.')?(s[0]==='voucher.create'?'target + voucher {period,voucher_date?,summary?,status:draft|posted,entries:[{code,debit,credit,summary?}]}':'target + voucherId positive integer; correctionOf {taskId,targetVersion} for rejection-linked correction'):s[0]==='offline.action_plan'?'inputPath absolute existing offline-action-input/1 JSON; source manifests and facts are prepared by host':s[0]==='offline.posting'?'version:offline-posting-input/1, inputPath, target, selected:{taskId,businessKey}; confirmNewSourceBinding optional boolean; do not supply confirmation/command':s[0]==='offline.period_plan'?'version:offline-period-plan-input/1, inputPath, target, month:YYYY-MM':s[0]==='offline.vat_q2'?'version:offline-vat-q2-request/1, priorInputPath, targetInputPath, target':s[0].startsWith('materials.')?'path absolute material Store; receive needs configPath absolute sources mapping; init uses Harness scope':s[0].startsWith('review.')?'path absolute review Store; register needs inputPath and options:{expectedJournalHead,supersedes}; feedback needs native feedback payload':'target,jobKey; start additionally manifestPath and outputDir absolute paths';
     const code=captured.get(key), declaration={version:CAPABILITY_CONTRACT_VERSION,capabilityId:s[0],description:s[5]+'; internal input guide: skills_read harness/references/adapters.md',availability:'limited',necessaryFacts:[{factId:'business_request',description:'First task fact value: '+input},...(input.includes('target')?[{factId:'target_binding',description:'target={dbPath:absolute existing workbench.db,databaseInstanceId,enterpriseKey,accountSetId}; identity must match Harness scope and actual database'}]:[])],supportConditions:[s[5],'Business module revalidates actual inputs; unknown/missing/conflicting evidence is never inferred from a callable declaration'],entrypoint:s[3],ruleVersion:s[4],codeDigest:code.digest,effect:s[1],resultSchema:{type:'object',description:'Actual domain return; Harness receipt contains executionState/reviewState/ruleState, version-bound actualImpact and actual business proof where provided',properties:{status:{type:'string'},applied:{description:'true/false/unknown for writes; unknown forbids blind retry'},code:{type:['string','null']}}},traceReferences:code.files.filter(f=>f.path===s[2].replace(/^\.\//,'')).map(f=>({kind:'code',locator:f.path,digest:f.digest})),...(s[1]==='write'?{recovery:{queryEntrypoint:s[0]+'.query',identityFields:['operationId','accountSetId','enterpriseKey','databaseInstanceId']}}:{})};
     declaration.supportedPeriods=['month','quarter']; // Annual business entrypoints are not connected.
     return [s[0],validateCapabilityDeclaration(declaration)];
   }));
+  const bridge=captureHarnessCode(['./harness-domain-worker.mjs']).files.map(f=>({kind:'code',locator:f.path,digest:f.digest}));
+  for(const native of getAgencyCapabilities()) {
+    const annual=native.capabilityId==='agency.annual-calculation';
+    const input=annual?'target + manifestPaths: absolute paths to all original monthly agency-business-materials/1 manifests from actual business start through December; never summary/workpaper JSON':native.capabilityId==='agency.posting'?'target + manifestPath + batchId + evidenceDir + feedbackPath (local accountant-feedback.json, not Agent-authored approval); optional correction/ledgerReconciliation as existing CLI; prepare before execute':'target + manifestPath: absolute agency-business-materials/1 manifest with real originals and extracted raw facts';
+    const traces=[...new Map([...native.traceReferences,...bridge].map(ref=>[`${ref.kind}\0${ref.locator}`,ref])).values()];
+    const declaration={...native,supportedPeriods:annual?['year']:['month'],necessaryFacts:[...native.necessaryFacts,{factId:'business_request',description:input}],supportConditions:[...native.supportConditions,annual?'Harness YYYY maps explicitly to native YYYY-12; native validates complete current original month sessions, not annual close workflow':'Exact monthly scope; posting requires explicit current human feedback from the fixed local feedbackPath, not general task authorization'],traceReferences:traces};
+    capabilities.set(native.capabilityId,validateCapabilityDeclaration(declaration));
+  }
+  return capabilities;
 }
 function validateTarget(scope,target) {requireValue(target&&target.accountSetId===scope.accountSetId&&target.enterpriseKey===scope.enterpriseKey&&target.databaseInstanceId===scope.databaseInstanceId,'harness_target_mismatch');}
 export async function callHarnessAdapter({capabilityId,phase,scope,request,operationId,prepared,codeDigest,priorResult}) {
@@ -74,10 +84,10 @@ export async function callHarnessAdapter({capabilityId,phase,scope,request,opera
     if(child.error||child.signal||child.status!==0||child.stderr)return {status:'unknown',applied:'unknown',code:'harness_batch_worker_unavailable'};
     try{return JSON.parse(child.stdout);}catch{return {status:'unknown',applied:'unknown',code:'harness_batch_response_invalid'};}
   }
-  if(capabilityId.startsWith('voucher.')) {
+  if(capabilityId.startsWith('voucher.')||capabilityId.startsWith('agency.')) {
     validateTarget(scope,request.target);
     const env={...process.env,NODE_NO_WARNINGS:'1'};for(const k of Object.keys(env))if(['NODE_OPTIONS','NODE_PATH','WORKBENCH_DATA_DIR'].includes(k.toUpperCase()))delete env[k];
-    const r=spawnSync(process.execPath,[fileURLToPath(new URL('./harness-domain-worker.mjs',import.meta.url))],{input:JSON.stringify({action:capabilityId,phase,scope,target:request.target,request,operationId,codeDigest:cap.codeDigest}),env,encoding:'utf8',windowsHide:true,timeout:60000,maxBuffer:8*1024*1024});
+    const r=spawnSync(process.execPath,[fileURLToPath(new URL('./harness-domain-worker.mjs',import.meta.url))],{input:JSON.stringify({action:capabilityId,phase,scope,target:request.target,request,operationId,prepared,priorResult,codeDigest:cap.codeDigest,workerCodeDigest:captureHarnessCode(['./harness-domain-worker.mjs']).digest}),env,encoding:'utf8',windowsHide:true,timeout:120000,maxBuffer:16*1024*1024});
     if(r.error||r.signal||r.status!==0||r.stderr)return {status:'unknown',applied:'unknown',code:'harness_worker_unavailable'};
     try{return JSON.parse(r.stdout);}catch{return {status:'unknown',applied:'unknown',code:'harness_worker_response_invalid'};}
   }

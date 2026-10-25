@@ -10,6 +10,11 @@ export const VERSION = 'finance-harness-store/1';
 export const stable = v => Array.isArray(v) ? `[${v.map(stable).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v);
 export const hash = v => createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : stable(v)).digest('hex');
 export const requireValue = (v, code = 'harness_input_invalid') => { if (!v) throw Object.assign(new Error(code), { code }); };
+export const sameBusinessRequest = (capabilityId,left,right) => {
+  if(capabilityId!=='agency.posting'||!left||!right)return stable(left)===stable(right);
+  const business=({batchId,evidenceDir,feedbackPath,...facts})=>facts;
+  return stable(business(left))===stable(business(right));
+};
 const jsonFile = async p => JSON.parse((await readLocalFile(p, 16 * 1024 * 1024)).bytes.toString('utf8'));
 const identity = s => `${s.dev}:${s.ino}:${s.birthtimeMs}`;
 async function writeNew(path, bytes) { const f = await open(path, 'wx', 0o600); try { await f.writeFile(bytes); await f.sync(); } finally { await f.close(); } }
@@ -43,7 +48,7 @@ function apply(s, e) {
   if (e.kind === 'source') {s.sources.set(d.sourceId, d);s.invalidatedSources.delete(d.sourceId);}
   else if (e.kind === 'invalidate_source') s.invalidatedSources.add(d.sourceId);
   else if (e.kind === 'invalidate_result') s.invalidatedResults.add(d.targetVersion);
-  else if (e.kind === 'capabilities') d.forEach(c=>s.capabilityEpochs.set(c.capabilityId,{codeDigest:c.codeDigest,epoch:e.digest}));
+  else if (e.kind === 'capabilities') d.forEach(c=>s.capabilityEpochs.set(c.capabilityId,{codeDigest:c.codeDigest,...(c.codeTraceDigest?{codeTraceDigest:c.codeTraceDigest}:{}),epoch:e.digest}));
   else if (e.kind === 'facts') d.forEach(f => {s.facts.set(f.factId, f);s.factEpochs.set(f.factId,e.digest);});
   else if (e.kind === 'plan') s.tasks = d;
   else if (e.kind === 'intent') s.attempts.push({ ...d, intentDigest: e.digest, result: null });
@@ -144,7 +149,10 @@ export async function sourceFreshness(s) {
 export async function harnessView(s, capabilities, externalByTask = new Map()) {
   const fresh = await sourceFreshness(s), byId = new Map(s.tasks.map(t => [t.taskId, t])), views = new Map();
   for(const [sourceId,current] of fresh)if(!current&&!s.invalidatedSources.has(sourceId))await appendHarness(s,'invalidate_source',{sourceId});
-  const changedCaps=[...capabilities.values()].filter(c=>s.capabilityEpochs.get(c.capabilityId)?.codeDigest!==c.codeDigest).map(c=>({capabilityId:c.capabilityId,codeDigest:c.codeDigest}));
+  // Old events without codeTraceDigest remain readable and conservatively gain
+  // one new epoch. An observed bridge change/restore never revives old review.
+  const currentCaps=[...capabilities.values()].map(c=>({capabilityId:c.capabilityId,codeDigest:c.codeDigest,codeTraceDigest:hash(c.traceReferences.filter(r=>r.kind==='code'))}));
+  const changedCaps=currentCaps.filter(c=>{const prior=s.capabilityEpochs.get(c.capabilityId);return prior?.codeDigest!==c.codeDigest||prior?.codeTraceDigest!==c.codeTraceDigest;});
   if(changedCaps.length)await appendHarness(s,'capabilities',changedCaps);
   const treatmentCurrent=new Map();
   for(const treatment of s.treatments)treatmentCurrent.set(treatment.treatmentId,s.sources.get(treatment.draftSourceId)?.sourceVersion===treatment.draftSourceVersion&&fresh.get(treatment.draftSourceId)&&!s.invalidatedSources.has(treatment.draftSourceId));
@@ -172,7 +180,7 @@ export async function harnessView(s, capabilities, externalByTask = new Map()) {
     if (cap.availability === 'unavailable') blockers.push({ state: 'unsupported', reason: 'capability_unavailable' });
     if (!capabilitySupportsScope(cap,s.meta.scope)) blockers.push({state:'unsupported',reason:'harness_capability_period_unsupported',period:s.meta.scope.period});
     // An older interrupted write remains unresolved even if facts or rules changed.
-    const sameRequest=s.attempts.filter(a=>a.capabilityId===t.capabilityId&&stable(a.request)===stable(facts[0]?.value));
+    const sameRequest=s.attempts.filter(a=>a.capabilityId===t.capabilityId&&sameBusinessRequest(t.capabilityId,a.request,facts[0]?.value));
     const unresolved = [...attempts,...sameRequest].find(a => a.effect === 'write' && (!a.result || a.result.executionState === 'unknown'));
     if (unresolved) blockers.push({ state: 'unknown', reason: 'write_outcome_unknown', intentDigest: unresolved.intentDigest,originalTaskId:unresolved.taskId });
     const latestWrite=sameRequest.filter(a=>a.effect==='write').at(-1);

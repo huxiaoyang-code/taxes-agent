@@ -5,7 +5,7 @@ description: 从目标和原始资料开始，发现能力，维护证据、计�
 
 # 本机财税 Harness
 
-先 `harness_discover`，按实际支持条件选择可执行分支；声明可调用不代表适用。用 `harness_scope_discover` 从明确现库路径或启动配置 FINANCE_DATABASE_PATH 核实企业/账套/实例/期间，不让客户提供内部ID，不猜默认账套。新企业通过已有 `account_set_create` 建账再发现绑定（后端需指向同一明确本机数据目录）；资料不足则具体补件。显式绑定企业、账套、数据库实例、月/季/年、币种，用 `harness_init` 创建独立元数据目录。YYYY 年度目前仅管理依赖；年度 assess/review 业务入口待提供，不能用年度范围扩张现有月/季业务支持。
+先 `harness_discover`，按实际支持条件选择可执行分支；声明可调用不代表适用。用 `harness_scope_discover` 从明确现库路径或启动配置 FINANCE_DATABASE_PATH 核实企业/账套/实例/期间，不让客户提供内部ID，不猜默认账套。新企业通过已有 `account_set_create` 建账再发现绑定（后端需指向同一明确本机数据目录）；资料不足则具体补件。显式绑定企业、账套、数据库实例、月/季/年、币种，用 `harness_init` 创建独立元数据目录。月度 agency.workpaper/posting 与年度 agency.annual-calculation 按需调用现有原始资料算法；年度计算不等于年度关账流程，不能扩大其他月/季能力支持。
 
 用户只需给业务目标和原始资料。宿主可委派解析子 Agent，编写并运行解析/整理代码；不要要求客户固定模板、预制分录、科目或已算好的税额。按阶段只读相关指引：
 
