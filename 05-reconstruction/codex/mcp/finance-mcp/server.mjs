@@ -15,6 +15,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOLS, TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
+import { HARNESS_TOOL_NAMES } from './tools.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
@@ -74,6 +75,7 @@ async function callTool(name, args = {}) {
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
+  if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length) {
     throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems });
   }
@@ -84,6 +86,12 @@ async function callTool(name, args = {}) {
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
   if (name === "skills_list") return { files: listSkillFiles(), labels: CATALOG.skill_files };
   if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
+  if (HARNESS_TOOL_NAMES.has(name)) {
+    try {
+      const { callHarnessTool } = await import('../../../../06-workbench/server/harness-runtime.mjs');
+      return await callHarnessTool(name,args);
+    } catch(e) {throw new ToolCallError(/^harness_[a-z0-9_]+$/.test(e?.code)?e.code:'harness_operation_failed','harness_operation_failed');}
+  }
 
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
   const payload = { ...args };
@@ -166,7 +174,7 @@ rl.on("line", async (line) => {
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
   if (method === "ping") return ok(id, {});
-  if (method === "tools/list") return ok(id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
+  if (method === "tools/list") return ok(id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
   if (method === "tools/call") {
     try {
       const result = await callTool(params?.name, params?.arguments || {});
@@ -183,7 +191,7 @@ rl.on("line", async (line) => {
         }
         return ok(id, envelopeResult(checked.envelope));
       }
-      return ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
+      return ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }],...(HARNESS_TOOL_NAMES.has(params?.name)?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) });
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, transportFailureResult(e.failure));
       if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, errorResult(e));

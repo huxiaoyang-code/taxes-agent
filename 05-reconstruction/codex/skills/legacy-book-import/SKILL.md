@@ -1,19 +1,19 @@
 ---
 name: legacy-book-import
-description: 通过 JSON/CSV 导入历史账套、科目、期初余额与凭证；Excel 需先转换为 CSV。
+description: 调查任意原始旧账资料，由 Agent 转换核验后通过现有 JSON/CSV 内部导入接口登记历史账套。
 ---
 
 # 导入旧账（legacy-book-import）
 
 本文件描述本机 `finance-mcp` 分支**真实可用**的旧账导入方式与边界。字段与工具名以
 `05-reconstruction/codex/mcp/finance-mcp/tools.mjs`、后端 `06-workbench/server/agent-tools.mjs`
-和领域层 `06-workbench/server/accounting.mjs` 为准。详细 CSV 格式与示例见
+和领域层 `06-workbench/server/accounting.mjs` 为准。客户不需要提供固定模板或预制分录。先按 `harness/SKILL.md` 保存来源、解析代码、验证和未识别内容，再由 Agent 编制内部输入。以下规范是程序内部导入合同，不是客户交付要求。详细 CSV 格式与示例见
 `legacy-book-import/references/import-rules.md`。
 
 ## 何时使用
 
 - 用户要把历史账套（账套信息 + 科目 + 期初余额 + 历史凭证）一次性导入，建立新账套；
-- 用户已把旧账整理成本机 CSV/Excel（Excel 需先自行转 CSV）。
+- 用户提供任意原始旧账资料；Agent 按 Harness 资料指引调查、委派解析并核验，不要求用户自行转换或固定模板。
 
 ## 真实能力
 
