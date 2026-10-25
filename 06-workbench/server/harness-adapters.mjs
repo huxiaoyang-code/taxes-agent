@@ -108,6 +108,14 @@ export async function callHarnessAdapter({capabilityId,phase,scope,request,opera
   requireValue(phase==='execute','harness_read_phase_invalid');
   if(capabilityId==='offline.action_plan') {const s=await openOfflineActionInput(request.inputPath);try{const result=await buildOfflineActionPlanFromFiles(s);requireValue(result.scope.enterpriseKey===scope.enterpriseKey&&String(result.scope.accountSetId)===String(scope.accountSetId)&&result.scope.period===scope.period&&result.scope.currency===scope.currency,'harness_target_mismatch');return result;}finally{s.close();}}
   if(capabilityId==='offline.period_plan') {validateTarget(scope,request.target);requireValue(scopeContainsMonth(scope,request.month),'harness_period_mismatch');return runOfflinePeriodPlan(request);}
-  if(capabilityId==='offline.vat_q2') {validateTarget(scope,request.target);const doc=JSON.parse(readFileSync(request.targetInputPath,'utf8'));requireValue(doc.scope?.period===scope.period&&doc.scope?.enterpriseKey===scope.enterpriseKey&&String(doc.scope?.accountSetId)===String(scope.accountSetId)&&doc.scope?.currency===scope.currency,'harness_target_mismatch');return runOfflineVatQ2(request);}
+  if(capabilityId==='offline.vat_q2') {
+    validateTarget(scope,request.target);const doc=JSON.parse(readFileSync(request.targetInputPath,'utf8'));requireValue(doc.scope?.period===scope.period&&doc.scope?.enterpriseKey===scope.enterpriseKey&&String(doc.scope?.accountSetId)===String(scope.accountSetId)&&doc.scope?.currency===scope.currency,'harness_target_mismatch');
+    const result=await runOfflineVatQ2(request);
+    // A blocked computation can still have a successfully captured ledger/input
+    // version. Compare that native binding before treating blocked as unavailable.
+    // Failure diagnostics without this proof remain temporarily unverifiable.
+    const captured=value=>value?.targetBinding==='same_held_readonly_source'&&value.proof?.status==='current'&&typeof value.binding?.bindingDigest==='string';
+    return captured(result)&&captured(priorResult)&&result.binding.bindingDigest!==priorResult.binding.bindingDigest?{...result,businessProofCurrent:false}:result;
+  }
   requireValue(false,'harness_capability_unknown');
 }

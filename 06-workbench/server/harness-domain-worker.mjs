@@ -25,7 +25,12 @@ async function agencyCall(r,path) {
     if(identity){const archive=await readArchivedMaterialEvidence(identity.archivePath,identity.archiveId);for(const record of archive.records.filter(f=>isAbsolute(f.name))){let current=null;try{current=hash((await readLocalFile(record.name)).bytes);}catch{}evidenceBindings.push({path:record.name,expected:hash(record.bytes),current});}}
     if(feedbackEvidence){let current=null;try{current=hash((await readLocalFile(feedbackEvidence.path)).bytes);}catch{}evidenceBindings.push({path:feedbackEvidence.path,expected:feedbackEvidence.digest,current});}
     const approval=r.prepared?.proposal,confirmationCurrent=!!approval&&feedbackEvidence?.feedback?.decision==='accept'&&typeof feedbackEvidence.feedback.reviewer==='string'&&!!feedbackEvidence.feedback.reviewer.trim()&&['targetVersion','dependencyDigest','planDigest'].every(k=>feedbackEvidence.feedback[k]===approval[k]);
-    return {status:domain.status,applied:domain.applied,scope:r.scope,identity:domain.identity,domain,...(feedbackEvidence?{feedbackEvidence}:{}),confirmationCurrent,evidenceCurrent:evidenceBindings.every(b=>b.expected===b.current),evidenceBindings,proofDigest:hash({domain,evidenceBindings,confirmationCurrent}),periodComplete:false,submittable:false};
+    const evidenceCurrent=evidenceBindings.some(b=>b.current!==null&&b.expected!==b.current)?false:evidenceBindings.some(b=>b.current===null)?null:true;
+    // Native recovery explicitly emits these null fields only after reading a
+    // committed operation (or no-change reconciliation) and finding mismatched
+    // persisted fingerprints. A transport/read failure has neither field.
+    const businessProofCurrent=domain.evidence===null||domain.existingPostedEvidence===null?false:undefined;
+    return {status:domain.status,applied:domain.applied,scope:r.scope,identity:domain.identity,domain,...(feedbackEvidence?{feedbackEvidence}:{}),...(businessProofCurrent===false?{businessProofCurrent}:{}),confirmationCurrent,evidenceCurrent,evidenceBindings,proofDigest:hash({domain,evidenceBindings,confirmationCurrent}),periodComplete:false,submittable:false};
   };
   const inspectIdentity=async()=>{
     check(identity&&identity.dbPath===path&&identity.period===r.scope.period&&identity.batchId===r.request.batchId&&identity.operationId===r.operationId,'harness_agency_identity_missing_or_changed');sameScope({...identity,currency:r.scope.currency});
@@ -80,7 +85,7 @@ try {
     check(connection.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get()?.instance_id===r.scope.databaseInstanceId,'harness_instance_mismatch');
     check(connection.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(r.scope.accountSetId)?.enterprise_key===r.scope.enterpriseKey,'harness_enterprise_mismatch');
     check(connection.prepare('SELECT MAX(version) v FROM schema_migrations').get()?.v===5,'harness_schema_unsupported');
-    } catch(error) { if(r.action==='annual.inspect'&&!['harness_instance_mismatch','harness_enterprise_mismatch'].includes(error.code))check(false,'harness_annual_database_not_ready');throw error; }
+    } catch(error) { if(r.action==='annual.inspect'&&!['harness_instance_mismatch','harness_enterprise_mismatch','harness_schema_unsupported'].includes(error.code))check(false,'harness_annual_database_not_ready');throw error; }
   };
   db = new DatabaseSync(path,{readOnly:true}); verify(db);
   if(r.action==='annual.inspect') {

@@ -119,6 +119,20 @@ export function validateExecutionReceipt(r) {
   return r;
 }
 
+// Task projections never rewrite immutable execution receipts. Null means a
+// temporary observation could not establish current applicability/confirmation.
+export const HARNESS_STATE_AXES = Object.freeze({
+  operationState: 'Historical execution outcome retained across dependency changes; executed does not imply current applicability or accountant acceptance',
+  resultCurrent: 'true: executed result verified against current dependencies; false: inapplicable or blocked by verified change; null: temporarily unverifiable',
+  confirmationCurrent: 'true: accepted review of the current result; false: absent, rejected or stale review; null: accepted result temporarily unverifiable',
+});
+export function validateHarnessTaskState(task) {
+  check(EXECUTION_STATES.includes(task.operationState),'harness_task_state_invalid');
+  check([true,false,null].includes(task.resultCurrent)&&[true,false,null].includes(task.confirmationCurrent),'harness_task_state_invalid');
+  check(task.confirmationCurrent!==true||task.resultCurrent===true&&task.reviewState==='accepted','harness_task_state_invalid');
+  return task;
+}
+
 // Facts refer to source evidence separately; runtime computes task input and
 // dependency digests from current facts, capability code/rule and parent results.
 // The Agent may replace the DAG; no fixed stage sequence is assumed here.

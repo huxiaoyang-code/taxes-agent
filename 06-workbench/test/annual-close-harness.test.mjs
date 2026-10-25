@@ -17,48 +17,53 @@ const nativeRecord = (key, id, type, period, extra = {}) => ({ id, type, date: p
   taxJurisdiction: 'domestic', specialVatTreatment: 'ordinary', businessIdentity: { issuerKey: key, documentNumber: id, event: type },
   originalRefs: [{ originalId: period, locator: 'whole monthly original schedule', extractionReason: 'Synthetic independently authored original business and registration facts' }], ...extra });
 
-function seed(root) {
+function seed(root, empty = false) {
   process.env.WORKBENCH_DATA_DIR = join(root, 'data'); process.env.TMP = root; process.env.TEMP = root;
   return import('../server/accounting.mjs').then(async A => {
     const { db } = await import('../server/db.mjs');
     try {
       const key = 'SYNTHETIC-ANNUAL-HARNESS-A';
-      const id = A.createAccountSet({ name: '合成年度核对公司', start_period: '2025-12', profileId: 'small-2011-basic-v1', enterprise: { enterpriseKey: key } }).id;
+      const id = A.createAccountSet({ name: '合成年度核对公司', start_period: empty ? '2026-01' : '2025-12', profileId: 'small-2011-basic-v1', enterprise: { enterpriseKey: key } }).id;
       const post = (accountSetId, period, entries) => A.createVoucher(accountSetId, { period, voucher_date: period + '-15', status: 'posted', entries });
+      if (!empty) {
       A.setOpeningBalances(id, [{ code: '1002', debit: 1000 }, { code: '3001', credit: 1000 }]);
       post(id, '2025-12', [{ code: '1002', debit: 200 }, { code: '5001', credit: 200 }]);
       post(id, '2025-12', [{ code: '5602', debit: 40 }, { code: '1002', credit: 40 }]);
       A.carryForwardProfit(id, '2025-12', { yearEnd: true });
+      }
       for (let m = 1; m <= 12; m++) A.ensurePeriod(id, `2026-${String(m).padStart(2, '0')}`);
       // Pre-existing synthetic ledger, not an action performed by the Agent.
-      post(id, '2026-01', [{ code: '1122', debit: 202 }, { code: '5001', credit: 200 }, { code: '2221', credit: 2 }]);
-      post(id, '2026-01', [{ code: '2221', debit: 2 }, { code: '5301', credit: 2 }]);
+      if (!empty) {
+        post(id, '2026-01', [{ code: '1122', debit: 202 }, { code: '5001', credit: 200 }, { code: '2221', credit: 2 }]);
+        post(id, '2026-01', [{ code: '2221', debit: 2 }, { code: '5301', credit: 2 }]);
+      }
       A.ensurePeriod(id, '2027-01');
       const otherId = A.createAccountSet({ name: '另一合成企业', start_period: '2026-01', profileId: 'small-2011-basic-v1', enterprise: { enterpriseKey: 'SYNTHETIC-ANNUAL-HARNESS-B' } }).id;
-      post(otherId, '2026-12', [{ code: '1122', debit: 7 }, { code: '5001', credit: 7 }]);
+      if (!empty) post(otherId, '2026-12', [{ code: '1122', debit: 7 }, { code: '5001', credit: 7 }]);
       return { target: { dbPath: join(root, 'data', 'workbench.db'), databaseInstanceId: db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get().instance_id, enterpriseKey: key, accountSetId: id }, otherId };
     } finally { db.close(); }
   });
 }
 
-export function prepareAnnualScenario(directory) {
+export function prepareAnnualScenario(directory, { empty = false } = {}) {
   assert.ok(isAbsolute(directory), 'prepare requires an absolute path');
   const root = resolve(directory); assert.equal(existsSync(root), false, 'prepare never overwrites a directory'); mkdirSync(root, { recursive: true });
-  const child = spawnSync(process.execPath, [thisFile, '--seed', root], { encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1' }, windowsHide: true });
+  const child = spawnSync(process.execPath, [thisFile, empty ? '--seed-empty' : '--seed', root], { encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1' }, windowsHide: true });
   assert.equal(child.status, 0, child.stderr || child.stdout); const seeded = JSON.parse(child.stdout);
   const { target } = seeded, scope = { enterpriseKey: target.enterpriseKey, accountSetId: target.accountSetId, databaseInstanceId: target.databaseInstanceId, period: '2026', currency: 'CNY' };
   const dir = join(root, 'customer-originals'); mkdirSync(dir);
-  const entity = { kind: 'company', industry: 'service', profileId: 'small-2011-basic-v1', businessStartDate: '2025-01-01', vatStatus: 'small', vatPeriod: 'monthly', vatReliefWaived: false,
+  const entity = { kind: 'company', industry: 'service', profileId: 'small-2011-basic-v1', businessStartDate: empty ? '2026-01-01' : '2025-01-01', vatStatus: 'small', vatPeriod: 'monthly', vatReliefWaived: false,
     incomeLevyMethod: 'actual_accounts', bookkeepingMethod: 'double_entry', region: 'synthetic-no-unverified-regional-assumption' };
   const sources = [], originals = [], manifestPaths = [];
   const prior = join(dir, 'prior-year.original');
   writeFileSync(prior, '合成历史资料：2025年1月成立，2025年12月启用本账。建账银行1000元、实收资本1000元；12月营业收入收款200元、行政费用支付40元，净利160元已结转。2026年期初银行1160元、资本1000元、留存收益160元；无以前年度未弥补亏损。本历史说明仍需会计逐项核实。');
+  if (empty) writeFileSync(prior, '合成企业2026年1月新设，期初全部为零，无历史经营或未弥补亏损；两家合成企业均未入账。');
   for (let m = 1; m <= 12; m++) {
     const period = `2026-${String(m).padStart(2, '0')}`, original = join(dir, period + '.original'), facts = join(dir, period + '.facts.json');
-    writeFileSync(original, `合成${period}基础原件和覆盖清单：全部合同、未开票业务、银行及往来清单已提供，银行本月无收付，无工资、资产购置、存货或其他地方税费活动；季度人数0、资产总额1362元。${m === 1 ? '境内普通主营咨询服务已完成验收并取得索款权，2小时，每小时100.00元不含税，普通发票，税率登记1%，未收款。全年适用小企业会计准则、小规模月报、查账实际利润预缴；非限制行业、无往年亏损，其他年度调整资料完整。' : '本月无新增业务。'}此为客户基础资料，不是会计确认或年度完成声明。`);
+    writeFileSync(original, `合成${period}基础原件和覆盖清单：全部合同、未开票业务、银行及往来清单已提供，银行本月无收付，无工资、资产购置、存货或其他地方税费活动；季度人数0、资产总额${empty ? '202' : '1362'}元。${m === 1 ? '境内普通主营咨询服务已完成验收并取得索款权，2小时，每小时100.00元不含税，普通发票，税率登记1%，未收款。全年适用小企业会计准则、小规模月报、查账实际利润预缴；非限制行业、无往年亏损，其他年度调整资料完整。登记所在地为市区。' : '本月无新增业务。'}此为客户基础资料，不是会计确认或年度完成声明。`);
     const record = (id, type, extra) => nativeRecord(target.enterpriseKey, id, type, period, extra);
     const records = [record('coverage-' + period, 'period_coverage', { date: period + '-28', period, complete: true, accountsCovered: true, unbilledSalesCovered: true, bankCovered: true }),
-      record('profile-' + period, 'quarter_profile', { date: period + '-28', asOfDate: period + '-28', quarter: `2026-Q${Math.ceil(m / 3)}`, startStaff: 0, endStaff: 0, startAssets: '1362.00', endAssets: '1362.00' })];
+      record('profile-' + period, 'quarter_profile', { date: period + '-28', asOfDate: period + '-28', quarter: `2026-Q${Math.ceil(m / 3)}`, startStaff: 0, endStaff: 0, startAssets: empty ? '202.00' : '1362.00', endAssets: empty ? '202.00' : '1362.00' })];
     if (m === 1) records.unshift(record('entity', 'entity', { date: period + '-01', entity }),
       record('activities', 'obligation_inventory', { activities: Object.fromEntries(OBLIGATION_IDS.map(id => [id, { present: false, reason: 'Synthetic complete original contract/asset/workforce inventory records no such activity' }])) }),
       record('income', 'income_evidence', { date: period + '-01', lossCarryforwardVerified: true, noPriorLosses: true, otherAdjustmentsComplete: true, restrictedIndustry: false, citFilingFrequency: 'monthly', citPrepaymentMethod: 'actual_profit', prepaymentAdjustmentsComplete: true }),
@@ -72,6 +77,7 @@ export function prepareAnnualScenario(directory) {
     sourcePath: join(dir, '2026-01.original'), annualStore: join(root, 'annual-store'), calculationStore: join(root, 'calculation-store'), nextStore: join(root, 'next-year-store'), modelInvoked: false, harnessInvoked: false };
   json(join(root, 'scenario.json'), scenario);
   writeFileSync(join(root, 'independent-expectations.txt'), '仅供验收者；不是工具输入。手算：历史1000+200-40=1160银行，留存收益160。2026年未收服务2×100=200，不含税，税2；适用小规模免税收入转入收益2，因此原有账簿年利润202、应收202、银行1160。已发布年度计算应税利润202；小型微利适用范围内5%计算值10.10（仍待会计审定，不代替适用资格调查）。次年期初银行1160、应收202。同企业额外年度费用50后原业务利润152、手算字段7.60；只改原件不改账时年度税算与账簿必须暴露差异，不能声称已更正。另一企业利润7必须隔离。');
+  if (empty) writeFileSync(join(root, 'independent-expectations.txt'), '仅供验收者。初始两企业凭证均为0、期初0。原始服务2×100=200不含税，未收款。验收前不得把原件或底稿当作已经入账。');
   writeFileSync(join(root, 'goal.txt'), `全部为合成验收。读取年度和Harness Skill、发现真实MCP能力。目标已有历史及全年合成账簿；通过annual.inspect核对真实年报，再通过独立agency.annual-calculation任务重放全年原件。自行组织事实、补件与依赖；复核包引用两种真实结果的数字/原件/政策/计算版本，保留年度调整、跨年台账及人类会计未审定事项。源码测试已做的调用不是Agent验收；本次须保存真实逐步MCP调用及判断。不得伪造人类反馈；需要确认的阶段向当前验收者报告。\n范围：${JSON.stringify(scope)}\n目标：${JSON.stringify(target)}\n合成资料及12个manifestPaths：${join(root, 'scenario.json')}\n客户原件：${dir}\nprepare未初始化任何Harness或调用模型，所有Harness目录须由本次Agent按实际返回建立。independent-expectations.txt为验收者手算，不作业务输入。\n`);
   return scenario;
 }
@@ -233,8 +239,8 @@ async function integration() {
   } finally { await client?.close(); }
 }
 
-if (process.argv[2] === '--seed') process.stdout.write(JSON.stringify(await seed(resolve(process.argv[3]))));
-else if (process.argv[2] === 'prepare') console.log(JSON.stringify(prepareAnnualScenario(process.argv[3]), null, 2));
-else if (resolve(process.argv[1] ?? '') === thisFile) {
-  await integration();
+if (resolve(process.argv[1] ?? '') === thisFile) {
+  if (['--seed','--seed-empty'].includes(process.argv[2])) process.stdout.write(JSON.stringify(await seed(resolve(process.argv[3]),process.argv[2]==='--seed-empty')));
+  else if (process.argv[2] === 'prepare') console.log(JSON.stringify(prepareAnnualScenario(process.argv[3]), null, 2));
+  else await integration();
 }
