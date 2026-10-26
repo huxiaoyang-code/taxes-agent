@@ -443,7 +443,15 @@ export async function executeJob({
           };
           let result;
           try {
-            result = actions.executeStage(ctx);
+            if(stage.stage_key.startsWith('harness:')){
+              // The domain worker acquires the existing accounting resources.
+              // Keep the persisted stage claim/job fence, release only item locks.
+              releaseItemLocks(itemLocks);itemLocks=null;
+              let bridge;
+              try{bridge=actions.queryHarnessBatchTask(ctx,'execute');if(hooks?.afterHarnessEffect)hooks.afterHarnessEffect({stage:claim.stage,bridge});}
+              finally{itemLocks=acquireItemLocks({item:currentItem,instance,pid,parent:jobResources});ctx.resources=itemLocks;}
+              result=actions.checkpointHarnessBatchTask(ctx,bridge);
+            }else result = actions.executeStage(ctx);
             if (result?.accountSetId && !currentItem.account_set_id) {
               // The audited outer already persisted the resolved set and its lock.
               bindingItem=storage.getItem(db,item.id);
@@ -526,7 +534,7 @@ export async function executeJob({
           }
         }
       } finally {
-        releaseItemLocks(itemLocks);
+        if(itemLocks)releaseItemLocks(itemLocks);
       }
     }
     // ---------------- Phase 2：worker 并发渲染 + 受控发布 ----------------

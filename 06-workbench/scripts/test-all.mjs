@@ -133,6 +133,11 @@ const steps = [
   { name: "local-restore-path-binding", file: join(WORKBENCH, "test", "local-restore-path-binding.test.mjs"), cwd: WORKBENCH },
   { name: 'annual-close', file: join(WORKBENCH, 'test', 'annual-close.test.mjs'), cwd: WORKBENCH },
   { name: 'annual-close-harness', file: join(WORKBENCH, 'test', 'annual-close-harness.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-business', file: join(WORKBENCH, 'test', 'period-business.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-batch', file: join(WORKBENCH, 'test', 'period-batch.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-interruption', file: join(WORKBENCH, 'test', 'period-interruption.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-proof', file: join(WORKBENCH, 'test', 'period-proof.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-correction-dates', file: join(WORKBENCH, 'test', 'period-correction-dates.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

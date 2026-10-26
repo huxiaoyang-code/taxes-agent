@@ -10,6 +10,7 @@ import { queryOperation } from './local-audit-operation.mjs';
 import { inspectAuditSchema } from './local-audit-storage.mjs';
 import { inspectBatchSchema } from './local-batch-storage.mjs';
 import { ANNUAL_CLOSE_CODE_ROOTS, createAnnualCloseAdapter } from './annual-close.mjs';
+import { createPeriodAdapter, PERIOD_CAPABILITIES } from './period-business.mjs';
 import * as Agency from './agency-business.mjs';
 import { hash, stable } from './harness-store.mjs';
 const check = (v,code) => {if(!v)throw Object.assign(new Error(code),{code});};
@@ -76,7 +77,7 @@ async function agencyCall(r,path) {
 try {
   const r = JSON.parse(readFileSync(0,'utf8'));requestContext=r; validateHarnessScope(r.scope);
   check(captureHarnessCode(roots).digest === (r.workerCodeDigest??r.codeDigest),'harness_code_changed');
-  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
+  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||PERIOD_CAPABILITIES.includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
   let path;
   try { path = await checkedPath(r.target.dbPath); } catch (error) { if(r.action==='annual.inspect')check(false,'harness_annual_target_unavailable');throw error; }
   check(basename(path)==='workbench.db','harness_db_invalid');
@@ -104,6 +105,15 @@ try {
     const domain=createAnnualCloseAdapter({db,buildReportExport:R.buildReportExport,periodEndCheck:A.periodEndCheck}).inspect({accountSetId:r.scope.accountSetId,enterpriseKey:r.scope.enterpriseKey,year:r.scope.period});
     check(['enterpriseKey','accountSetId','databaseInstanceId','currency'].every(k=>domain.scope[k]===r.scope[k])&&domain.scope.year===r.scope.period,'harness_annual_scope_mismatch');
     process.stdout.write(JSON.stringify({status:'annual_review_draft',scope:r.scope,domain,periodComplete:false,submittable:false}));
+  } else if(r.action.startsWith('period.')) {
+    check(/^20\d\d-(0[1-9]|1[0-2])$/.test(r.scope.period),'harness_period_mismatch');
+    db.close();db=null;process.env.WORKBENCH_DATA_DIR=dirname(path);
+    if(['period.inspect','period.impact'].includes(r.action))process.env.WORKBENCH_DATABASE_MODE='readonly';
+    const A=await import('./accounting.mjs'),D=await import('./db.mjs'),C=await import('./local-audit-coordinator.mjs');db=D.db;
+    const now=statSync(await checkedPath(path));check(before.dev===now.dev&&before.ino===now.ino,'harness_path_changed');verify(db);
+    check(captureHarnessCode(roots).digest===r.codeDigest,'harness_code_changed');
+    started=r.phase==='execute'&&!['period.inspect','period.impact'].includes(r.action);
+    process.stdout.write(JSON.stringify(await createPeriodAdapter({db,A,C}).call({scope:r.scope,action:r.action,phase:r.phase,request:r.request,operationId:r.operationId})));
   } else if(r.action.startsWith('agency.')) {
     db.close();db=null;process.env.WORKBENCH_DATA_DIR=dirname(path);
     process.stdout.write(JSON.stringify(await agencyCall(r,path)));

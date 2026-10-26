@@ -784,6 +784,7 @@ function postVoucherBody(setId, id) {
   // 先读原始行 + 分录做校验，再看 hydrate 合计：即使库里金额已被损坏，也必须先给 voucher_invalid。
   const raw = row(`SELECT * FROM vouchers WHERE account_set_id=? AND id=?`, setId, id);
   if (!raw) throw new Error("voucher_not_found");
+  if (raw.status === "superseded") throw new Error("derived_voucher_superseded");
   if (raw.status === "posted") return hydrate(raw);
   if (periodStatus(setId, raw.period) === "closed") throw new Error("period_closed");
   const entries = rows(
@@ -806,6 +807,7 @@ function postVoucherBody(setId, id) {
 }
 function unpostVoucherBody(setId, id) {
   const v = getVoucher(setId, id);
+  if (v.status === "superseded") throw new Error("derived_voucher_superseded");
   if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   assertPeriodMutable(db, setId, v.period, {
     operation: "unpost_voucher",
@@ -816,6 +818,7 @@ function unpostVoucherBody(setId, id) {
 }
 function deleteVoucherBody(setId, id) {
   const v = getVoucher(setId, id);
+  if (v.status === "superseded") throw new Error("derived_voucher_superseded");
   if (periodStatus(setId, v.period) === "closed") throw new Error("period_closed");
   if (v.status === "posted") throw new Error("posted_voucher_requires_unpost");
   // 删除的是**未过账**凭证：它不在任何已过账余额里，因此不构成后期派生凭证的已实现依赖；
@@ -1500,7 +1503,7 @@ function prevPeriod(period) {
  * - 年末结转与资产负债表口径一致：3103 及其下级明细逐个转出到 3104，不遗漏明细；
  * - 期间登记（ensurePeriod）在保存点内执行，失败不留下新建的空期间。
  */
-function carryForwardProfitBody(setId, period, { yearEnd = false } = {}) {
+function carryForwardProfitBody(setId, period, { yearEnd = false, retainHistory = false } = {}) {
   const { profile, roles } = accountSetProfile(setId);
   const p = requirePeriod(period);
   if (periodStatus(setId, p) === "closed") throw new Error("period_closed");
@@ -1554,7 +1557,10 @@ function carryForwardProfitBody(setId, period, { yearEnd = false } = {}) {
     ensurePeriodBody(setId, p);
     // 先清掉可能残留的草稿结转凭证（含被反过账的），避免其日后过账造成重复入账。
     for (const v of [...plCarries, ...yearEndCarries]) {
-      if (v.status !== "posted") deleteVoucherRow(setId, v.id);
+      if (v.status === "draft") {
+        if (retainHistory === true) run(`UPDATE vouchers SET status='superseded' WHERE account_set_id=? AND id=? AND status='draft'`, setId, v.id);
+        else deleteVoucherRow(setId, v.id);
+      }
     }
 
     // ---- 1. 结转本期损益到 profile 的本年利润角色 ----
@@ -1631,6 +1637,7 @@ function carryForwardProfitBody(setId, period, { yearEnd = false } = {}) {
     }
     return {
       voucher, yearEndVoucher,
+      ...(retainHistory===true?{supersededVoucherIds:[...plCarries,...yearEndCarries].filter(v=>v.status==='draft').map(v=>v.id)}:{}),
       revenue: centsToNumber(revenueCents),
       expense: centsToNumber(expenseCents),
       profit: centsToNumber(profitCents),
@@ -3078,7 +3085,7 @@ export function createVoucher(...args) {const input=admissionInput(args);const a
 export function postVoucher(...args) {let unchanged=false;return accountingWrite('voucher.post',args,(...a)=>{unchanged=row('SELECT status FROM vouchers WHERE account_set_id=? AND id=?',...a)?.status==='posted';return postVoucherBody(...a);},{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),classify:()=>unchanged?'no_change':'succeeded',rebuild:()=>getVoucher(...args)});}
 export function unpostVoucher(...args) {return accountingWrite('voucher.unpost',args,unpostVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>getVoucher(...args)});}
 export function deleteVoucher(...args) {return accountingWrite('voucher.delete',args,deleteVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>({deleted:args[1]})});}
-export function carryForwardProfit(...args) {return accountingWrite('profit.carry_forward',args,carryForwardProfitBody,{refs:v=>[...resultId('voucher',v?.voucher?.id),...resultId('year_end_voucher',v?.yearEndVoucher?.id)]});}
+export function carryForwardProfit(...args) {return accountingWrite('profit.carry_forward',args,carryForwardProfitBody,{refs:v=>[...resultId('voucher',v?.voucher?.id),...resultId('year_end_voucher',v?.yearEndVoucher?.id),...(v?.supersededVoucherIds??[]).map(id=>({type:'superseded_voucher',id}))]});}
 export function addAssetCard(...args) {const input=admissionInput(args);if(!admissionBinding('asset.create'))preflightInput(input,validateAssetCreation);return accountingWrite('asset.create',args,addAssetCardBody,{refs:v=>resultId('asset_card',v.id),rebuild:r=>listAssetCards(args[0]).find(v=>v.id===r.resultRefs.find(x=>x.type==='asset_card').id)});}
 export function updateAssetCard(...args) {return accountingWrite('asset.update',args,updateAssetCardBody,{refs:()=>resultId('asset_card',args[1]),rebuild:()=>listAssetCards(args[0]).find(v=>v.id===args[1])});}
 export function deleteAssetCard(...args) {return accountingWrite('asset.delete',args,deleteAssetCardBody,{refs:()=>resultId('asset_card',args[1]),rebuild:()=>({deleted:args[1]})});}

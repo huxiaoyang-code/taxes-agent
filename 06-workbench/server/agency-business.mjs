@@ -171,6 +171,12 @@ function reconcileLedger(app, document, workpaper, input) {
   requireValue(!input?.matches||input.matches.length===usedMatches.size,'agency_reconciliation_unused_match');
   return { reused, proof, opening: [...expected].map(([code,amount])=>({code,net:money(amount)})), review: input??null };
 }
+function correctionPostingDate(correction, period) {
+  const date=correction?.postingDate;
+  requireValue(typeof date==='string' && /^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date) && new Date(date+'T00:00:00Z').toISOString().slice(0,10)===date, 'agency_correction_posting_date_required');
+  requireValue(date.slice(0,7)===period, 'agency_correction_posting_period_mismatch');
+  return date;
+}
 function postingPlan(app, scope, workpaper, correction, reconciliation) {
   const existing = verifyExisting(app, scope), result = [], impacts = [];
   const active = new Map(), ordinals = new Map();
@@ -181,25 +187,27 @@ function postingPlan(app, scope, workpaper, correction, reconciliation) {
     requireValue(!active.has(key), 'agency_multiple_active_versions'); active.set(key, { row, ordinal, revision: m[3] });
   }
   const current = [...workpaper.accounting.historicalVouchers, ...workpaper.accounting.vouchers], wanted = new Set();
-  const makeReverse = (key, old) => {
+  const makeReverse = (key, old, businessDate) => {
     requireValue(correction && typeof correction.reason === 'string' && correction.reason.trim().length > 0 && correction.previousSourceIds.includes(old.row.source_voucher_id), 'agency_explicit_correction_evidence_required');
     const voucher = app.db.prepare('SELECT * FROM vouchers WHERE id=?').get(old.row.voucher_id), entries = app.db.prepare('SELECT code,summary,debit,credit FROM voucher_entries WHERE voucher_id=? ORDER BY line_no').all(voucher.id);
     requireValue(voucher.account_set_id === scope.accountSetId && voucher.status === 'posted', 'agency_correction_original_invalid');
     if (voucher.period.slice(0, 4) < scope.period.slice(0, 4) && workpaper.profileId === 'enterprise-2019-general-basic-v1') requireValue(correction.priorYearAssessment?.material === false && correction.priorYearAssessment?.method === 'current_period_nonmaterial' && correction.priorYearAssessment?.reviewer && correction.priorYearAssessment?.reason, 'agency_prior_year_cas_materiality_and_restatement_required');
-    result.push({ sourceVoucherId: `R:${key}:${old.ordinal}`, period: scope.period, date: `${scope.period}-01`, word: '记', summary: `更正红冲原凭证${voucher.id}`, entries: entries.map(e => ({ code: e.code, summary: e.summary, debit: money(cents(e.credit)), credit: money(cents(e.debit)) })) });
-    impacts.push({ sourceVoucherId: old.row.source_voucher_id, originalVoucherId: voucher.id, originalPeriod: voucher.period, correctionPeriod: scope.period, affected: ['ledger', 'inventory', 'financial_reports', 'prior_tax_drafts', 'annual_calculations', 'accountant_review'], historicalTaxCorrection: 'accountant_confirmation_required' });
+    result.push({ sourceVoucherId: `R:${key}:${old.ordinal}`, period: scope.period, date: correctionPostingDate(correction, scope.period), word: '记', summary: `更正红冲原凭证${voucher.id}`, entries: entries.map(e => ({ code: e.code, summary: e.summary, debit: money(cents(e.credit)), credit: money(cents(e.debit)) })) });
+    const firstSource=existing.find(r=>r.source_voucher_id.startsWith(`A:${key}:1:`)),firstVoucher=firstSource&&app.db.prepare('SELECT * FROM vouchers WHERE account_set_id=? AND id=?').get(scope.accountSetId,firstSource.voucher_id);requireValue(firstVoucher,'agency_correction_original_history_missing');
+    impacts.push({ sourceVoucherId: old.row.source_voucher_id, originalVoucherId: voucher.id, originalPeriod: voucher.period, originalVoucherDate:voucher.voucher_date, originalBusinessDate:firstVoucher.voucher_date, sourceBusinessDate:businessDate??firstVoucher.voucher_date, correctionPeriod: scope.period, correctionPostingDate: correctionPostingDate(correction,scope.period), affected: ['ledger', 'inventory', 'financial_reports', 'prior_tax_drafts', 'annual_calculations', 'accountant_review'], historicalTaxCorrection: 'accountant_confirmation_required' });
   };
   for (const v of current) {
     const key = v.sourceVoucherId.slice('agency:'.length), revision = businessRevision(v), old = active.get(key); wanted.add(key);
     if(reconciliation.reused.has(v.sourceVoucherId))continue;
     if (old?.revision === revision) continue;
-    if (old) makeReverse(key, old);
+    if (old) makeReverse(key, old, v.date);
     const ordinal = (ordinals.get(key) ?? 0) + 1;
-    const corrected = old ? { period: scope.period, date: `${scope.period}-01` } : { period: v.period, date: v.date };
+    const corrected = old ? { period: scope.period, date: correctionPostingDate(correction, scope.period) } : { period: v.period, date: v.date };
     result.push({ sourceVoucherId: `A:${key}:${ordinal}:${revision}`, ...corrected, word: '记', summary: v.summary, entries: v.entries.map(e => ({ ...e, summary: e.summary ?? v.summary })) });
   }
   for(const [key,old]of active)if(!wanted.has(key)&&!correction?.withdrawnSourceIds?.includes(old.row.source_voucher_id)){
     const period=app.db.prepare('SELECT period FROM vouchers WHERE id=?').get(old.row.voucher_id).period;
+    if(period>scope.period)continue; // Later native agency business is retained; its own period must be recomputed explicitly.
     requireValue(period<workpaper.accounting.replayFrom&&reconciliation.proof.some(p=>p.voucherId===old.row.voucher_id&&p.kind==='verified_opening_checkpoint'),'agency_owned_source_not_replayed');
   }
   // Withdrawal requires a complete source inventory, never absence caused by missing materials.
@@ -240,7 +248,7 @@ export async function prepareAgencyPosting(session, { batchId, dbPath, evidenceD
   const overlaps = (a, b) => { const within = (x, y) => { const r = relative(x.toLowerCase(), y.toLowerCase()); return r === '' || !r.startsWith('..') && !isAbsolute(r); }; return within(a, b) || within(b, a); };
   requireValue(!overlaps(archiveRoot, dirname(dbPath)) && !session.sourceRefs.some(ref => overlaps(archiveRoot, dirname(ref.locator))), 'agency_evidence_directory_overlap');
   const reconciliationProof={proof:reconciliation.proof,opening:reconciliation.opening,review:reconciliation.review};
-  const result = { version: 'agency-posting-prepare/1', identity: identity(session.scope, batchId, dbPath), dependencyDigest: session.dependencyDigest, codeDigest: session.codeDigest, targetDigest, targetVersion: workpaper.contentDigest, planDigest: hash(stable({options,reconciliationProof})), plannedVouchers: copy(plan.vouchers), reconciliation:reconciliationProof, impact: plan.impact, correction: correction ? copy(correction) : null, taxIssues: workpaper.issues.filter(i => !workpaper.accounting.issues.includes(i)), status: plan.vouchers.length ? 'prepared' : 'no_change', authorizesExecution: false, periodComplete: false, submittable: false };
+  const result = { version: 'agency-posting-prepare/1', identity: identity(session.scope, batchId, dbPath), dependencyDigest: session.dependencyDigest, codeDigest: session.codeDigest, targetDigest, targetVersion: workpaper.contentDigest, planDigest: hash(stable({options,reconciliationProof})), plannedVouchers: copy(plan.vouchers), reconciliation:reconciliationProof, impact: plan.impact, correction: correction ? copy(correction) : null, correctionDates: plan.impact.map(i=>({originalVoucherId:i.originalVoucherId,originalBusinessDate:i.originalBusinessDate,reversedVoucherPostingDate:i.originalVoucherDate,sourceBusinessDate:i.sourceBusinessDate,postingDate:i.correctionPostingDate,postingPeriod:i.correctionPeriod})), taxIssues: workpaper.issues.filter(i => !workpaper.accounting.issues.includes(i)), status: plan.vouchers.length ? 'prepared' : 'no_change', authorizesExecution: false, periodComplete: false, submittable: false };
   const archive = await archiveMaterialEvidence(archiveRoot, { scope: session.scope, records: [...agencyEvidenceArchiveRecords(session), { name: 'workpaper.json', bytes: Buffer.from(stable(workpaper)) }], metadata: { kind: 'agency_preparation', identity: result.identity, options, reconciliationProof, targetDigest, targetVersion: result.targetVersion, dependencyDigest: result.dependencyDigest, codeDigest: result.codeDigest, planDigest: result.planDigest, ruleVersion: AGENCY_RULE_VERSION, impact: result.impact, correction: correction ?? null } });
   result.archive = archive; result.identity = { ...result.identity, archivePath: archive.path, archiveId: archive.archiveId };
   bindAgencyArchive(session, archive);

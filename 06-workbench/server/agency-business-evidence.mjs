@@ -93,8 +93,10 @@ export function bindAgencyArchive(session, archive) {
   cap.archives.push(files);
 }
 export function assertAgencyLoadedCode() { const code = captureAgencyCode(); check(code.digest === loadedAgencyCodeDigest, 'agency_code_restart_required'); return code; }
-export function agencyTargetSnapshot(db, scope) {
-  validateScope(scope);
+export function agencyTargetSnapshot(db,scope){validateScope(scope);return scopedAccountingTargetSnapshot(db,scope);}
+// Shared fixed read for native period controls; agency keeps its own supported years.
+export function scopedAccountingTargetSnapshot(db, scope) {
+  check(scope&&typeof scope.enterpriseKey==='string'&&scope.enterpriseKey===scope.enterpriseKey.normalize('NFKC').trim()&&Number.isSafeInteger(scope.accountSetId)&&scope.accountSetId>0&&typeof scope.databaseInstanceId==='string'&&/^20\d\d-(0[1-9]|1[0-2])$/.test(scope.period)&&scope.currency==='CNY','period_scope_invalid');
   const instance = db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get();
   const binding = db.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(scope.accountSetId);
   check(instance?.instance_id === scope.databaseInstanceId && binding?.enterprise_key === scope.enterpriseKey, 'agency_target_identity_mismatch');

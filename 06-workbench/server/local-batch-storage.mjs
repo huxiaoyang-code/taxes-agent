@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { assertRestoreWritable, inspectRestoreControl, plainRestorePath, readRestoreActivation } from './local-restore-control.mjs';
 import { assertWriteCommitFence, authorizesResourceRenewal } from './local-write-lock.mjs';
 import { hasActiveAuditExecution,withAuditSavepoint,readAuditDatabasePath } from './local-audit-storage.mjs';
@@ -960,7 +961,7 @@ const ALLOWED = {
   root: ["schemaVersion", "jobKey", "concurrency", "items"],
   item: ["itemKey", "source", "accountSetId", "periods"],
   source: ["system", "enterpriseKey", "enterpriseName"],
-  period: ["period", "imports", "post", "depreciation", "carryforward", "periodCheck", "close", "reports"],
+  period: ["period", "imports", "post", "depreciation", "carryforward", "periodCheck", "close", "reports", "harnessTasks"],
   import: ["batchId", "mode", "payloadFile", "payload", "confirmNewBinding"],
   post: ["vouchers"],
   voucherRef: ["voucherId", "sourceVoucherId"],
@@ -968,6 +969,8 @@ const ALLOWED = {
   report: ["kind", "formats", "code"],
 };
 
+const harnessStoreIdentity=path=>process.platform==='win32'?resolve(path).toLowerCase():resolve(path);
+export const harnessBatchStageKey=task=>`harness:${task.taskId}:${sha256(canonicalJson({storePath:harnessStoreIdentity(task.storePath),taskId:task.taskId}))}`;
 function rejectUnknownKeys(raw, allowed, where, errors) {
   for (const key of Object.keys(raw)) {
     if (!allowed.includes(key)) errors.push(`${where} 含未知字段：${key}（schemaVersion=1 只接受白名单字段）`);
@@ -1177,7 +1180,16 @@ export function validateManifest(raw) {
           if (kind && REPORT_KINDS.includes(kind) && formats.length) reports.push({ kind, formats, code });
         });
       }
-      const selected = imports.length || post || rawPeriod.depreciation === true || carryforward
+      const harnessTasks=[];
+      if(rawPeriod.harnessTasks!==undefined){
+       if(!Array.isArray(rawPeriod.harnessTasks)||rawPeriod.harnessTasks.length>200)errors.push(`${pWhere}.harnessTasks must be an array of at most 200 current native Harness task bindings`);
+       else for(const t of rawPeriod.harnessTasks){
+        if(!isPlainObject(t)||Object.keys(t).some(k=>!['storePath','taskId','capabilityId','dependencyDigest'].includes(k))||typeof t.storePath!=='string'||!isAbsolute(t.storePath)||!JOB_KEY_RE.test(t.taskId??'')||!['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect','period.inspect','period.impact','period.carryforward','period.close','period.reopen','period.unpost-derived'].includes(t.capabilityId)||!/^[a-f0-9]{64}$/.test(t.dependencyDigest??''))errors.push(`${pWhere}.harnessTasks invalid explicit task identity/version`);
+        else if(harnessTasks.some(old=>old.taskId===t.taskId&&harnessStoreIdentity(old.storePath)===harnessStoreIdentity(t.storePath)))errors.push(`${pWhere}.harnessTasks duplicate task`);
+        else harnessTasks.push({...t});
+       }
+      }
+      const selected = harnessTasks.length || imports.length || post || rawPeriod.depreciation === true || carryforward
         || rawPeriod.periodCheck === true || rawPeriod.close === true || reports.length;
       if (!selected) errors.push(`${pWhere} 未选择任何操作（不得以空步骤伪造成功）`);
       if (rawPeriod.close === true && rawPeriod.periodCheck !== true) {
@@ -1192,6 +1204,7 @@ export function validateManifest(raw) {
         periodCheck: rawPeriod.periodCheck === true,
         close: rawPeriod.close === true,
         reports,
+        ...(harnessTasks.length?{harnessTasks}:{}),
       });
     });
     items.push({ itemKey, source: sourceValue, accountSetId, periods });
@@ -1708,6 +1721,7 @@ export function buildPlan({ manifest, manifestDir }) {
     }));
     for (const periodSpec of item.periods) {
       const period = periodSpec.period;
+      for(const task of periodSpec.harnessTasks??[]){const stageKey=harnessBatchStageKey(task);push(period,stageKey,task,stageHash(period,stageKey,task));}
       for (const raw of periodSpec.imports) {
         let bytes;
         let sourcePath = null;

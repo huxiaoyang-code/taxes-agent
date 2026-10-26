@@ -2,6 +2,8 @@
 import { openSync, closeSync, fstatSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { auditCanonicalDigest } from './local-audit.mjs';
+import { queryOperation } from './local-audit-operation.mjs';
 import { openAuditDatabase, inspectAuditSchema } from './local-audit-storage.mjs';
 import { withReadSnapshot } from './local-batch-storage.mjs';
 import { getAccountingProfile } from './accounting-profiles.mjs';
@@ -248,7 +250,13 @@ function readScope(db, scope, policy) {
     componentRows: table('local_batch_component') ? all('SELECT * FROM local_batch_component ORDER BY component') : [] };
   const requested = vouchers.filter(v => v.period >= from);
   const missingPeriods = scope.requestedPeriods.filter(p => !periods.some(row => row.period === p));
-  const unknownStatuses = vouchers.filter(v => !['posted', 'draft'].includes(v.status)).map(v => v.id);
+  const retiredIds=new Set();
+  if(audit.ok)for(const operation of all("SELECT database_instance_id,operation_id,attempt,receipt_json FROM audit_operations WHERE scope_kind='account_set' AND scope_token=? AND action='profit.carry_forward' AND state IN ('succeeded','no_change')",auditCanonicalDigest(['audit-scope-v1','account_set',id]))){
+    const proof=queryOperation(db,{databaseInstanceId:operation.database_instance_id,operationId:operation.operation_id,attempt:operation.attempt});
+    if(proof.ok&&proof.durability==='committed'&&proof.receipt.targets?.accountSetId===id)for(const ref of proof.receipt.resultRefs??[])if(ref.type==='superseded_voucher')retiredIds.add(ref.id);
+  }
+  const superseded=vouchers.filter(v=>v.status==='superseded'&&v.kind==='carryforward'&&retiredIds.has(v.id));
+  const unknownStatuses = vouchers.filter(v => !['posted', 'draft'].includes(v.status)&&!superseded.some(old=>old.id===v.id)).map(v => v.id);
   const posted = requested.filter(v => v.status === 'posted'), drafts = requested.filter(v => v.status === 'draft');
   const voucherData = vouchers.map(v => ({ ...v, range: v.period < from ? 'prior_history' : 'requested', entries: entryMap.get(v.id) }));
   return {
@@ -256,7 +264,7 @@ function readScope(db, scope, policy) {
     profile: { status: profile ? 'registered' : 'unknown', definition: profile }, accounts,
     openingBalances: monetaryOpenings, periods, vouchers: voucherData,
     sources: { schemaStatus: sourceSchemaPresent ? 'present' : 'unknown', tablePresence, missingTables: sourceTables.filter(name => !tablePresence[name]), sourceBindings, voucherSources, batchVouchers, batches, checks: sourceChecks, ...(policy === Q2_BATCH_POLICY ? { targetBatchInventory: readTargetBatchInventory(db, scope, tablePresence) } : {}) },
-    completeness: { requestedPeriods: scope.requestedPeriods, missingPeriods, coverage: 'unverified', openingCompleteness: 'unverified', priorHistoryCompleteness: 'unverified', realWorldAuthenticity: 'unverified', originalFiles: 'unverified', zeroDeclaration: 'not_assessed', moneyIssues, unknownStatuses, vouchersWithoutRegisteredSource: vouchers.filter(v => !voucherSources.some(s => s.voucher_id === v.id)).map(v => v.id) },
+    completeness: { requestedPeriods: scope.requestedPeriods, missingPeriods, coverage: 'unverified', openingCompleteness: 'unverified', priorHistoryCompleteness: 'unverified', realWorldAuthenticity: 'unverified', originalFiles: 'unverified', zeroDeclaration: 'not_assessed', moneyIssues, unknownStatuses, supersededVoucherIds:superseded.map(v=>v.id), vouchersWithoutRegisteredSource: vouchers.filter(v => !voucherSources.some(s => s.voucher_id === v.id)).map(v => v.id) },
     counts: { posted: posted.length, draft: drafts.length, otherStatus: requested.length - posted.length - drafts.length, postedEntries: posted.reduce((n, v) => n + entryMap.get(v.id).length, 0), priorVouchers: vouchers.length - requested.length },
     calculationReady: false, submittable: false, authorizesExecution: false,
   };
