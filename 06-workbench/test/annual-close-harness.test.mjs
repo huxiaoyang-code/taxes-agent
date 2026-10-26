@@ -137,7 +137,7 @@ async function integration() {
   const start = async () => { client = new McpStdioClient(server, { cwd: repo, timeoutMs: 120000,
     env: { NODE_NO_WARNINGS: '1', FINANCE_API_BASE: 'http://127.0.0.1:1', WORKBENCH_DATA_DIR: join(directory, 'forbidden-default') } }).start(); await client.initialize('annual-native-script-test'); };
   const call = async (name, args = {}, error = false) => {
-    const result = await client.call(name, args); appendFileSync(trace, JSON.stringify({ name, args, result }) + '\n');
+    const result = await client.call(name, {...args,...(name.startsWith('harness_')?{responseMode:'full'}:{})}); appendFileSync(trace, JSON.stringify({ name, args, result }) + '\n');
     assert.equal(result.isError, error, result.text); return result.structured ?? result.data;
   };
   const fact = (factId, value, sourceRefs = ['original']) => ({ factId, state: 'provided', reason: 'Synthetic host request derived from actual original paths and target discovery', sourceRefs, value });
@@ -151,7 +151,7 @@ async function integration() {
   const reference = (storePath, t, period = '2026') => ({ storePath, taskId: t.taskId, period, targetVersion: t.receipt.targetVersion, dependencyDigest: t.dependencyDigest });
   try {
     await start();
-    const listed = (await client.rpc('tools/list')).result.tools; assert.equal(listed.filter(t => t.name.startsWith('harness_')).length, 12);
+    const listed = (await client.rpc('tools/list')).result.tools; assert.equal(listed.filter(t => t.name.startsWith('harness_')).length, 13);
     const discovery = await call('harness_discover'); const cap = discovery.capabilities.find(c => c.capabilityId === 'annual.inspect');
     assert.ok(cap); assert.equal(cap.effect, 'read'); assert.deepEqual(cap.supportedPeriods, ['year']);
     assert.ok(discovery.capabilities.some(c => c.capabilityId === 'agency.annual-calculation'));
