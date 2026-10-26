@@ -51,7 +51,7 @@ export function serializeAuditResult(value) {
   return encode(snapshot);
 }
 export function auditResultDigest(value) { return createHash('sha256').update(serializeAuditResult(value), 'utf8').digest('hex'); }
-export const AUDIT_RESULT_REF_TYPES = Object.freeze(['account_set','voucher','year_end_voucher','asset_card','aux_entity','voucher_entry','bank_transaction','bank_match','bank_ambiguity','bank_reconcile_run','account_key','import_batch_key','bank_account_key']);
+export const AUDIT_RESULT_REF_TYPES = Object.freeze(['account_set','voucher','year_end_voucher','asset_card','aux_entity','voucher_entry','bank_transaction','bank_match','bank_ambiguity','bank_reconcile_run','account_key','import_batch_key','bank_account_key','superseded_voucher']);
 export function normalizeAuditResultRefs(refs) {
   if (!Array.isArray(refs)) throw auditError('audit_result_invalid');
   const rows=refs.map(r=>{
