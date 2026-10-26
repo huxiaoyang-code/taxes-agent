@@ -16,4 +16,6 @@ agency.posting 使用 prepare 已保存的 batchId/operationId/archivePath/archi
 
 解析失败或关键证据不足保留未识别内容、阻塞事实与具体处理路径。补件 request_materials 的 request={taskIds,text} 仅生成本机可转发文本，不发送。补齐只登记与重跑受影响分支。
 
+补件调用最小形状为 `harness_request_materials({storePath,request:{taskIds:["当前计划中的taskId"],text:"具体缺件、用途和所需原件定位"}})`；text不可省略或仅用questions/reason替代，taskIds是字符串数组，未关联任务时可用[]。工具完整scope、task、feedback/evidenceRefs、treatment输入结构均由标准MCP tools/list公开；evidenceRefs/traceReferences是 `{kind,locator,digest}` 对象数组，facts.sourceRefs才是sourceId字符串数组。
+
 故障分 skill/capability/mcp/parser/business_rule/agent_judgment/environment，保存复现输入、版本、实际返回、预期和产物；公共场景仅合成/脱敏。经复核的问题转回归用例；脚本测试不能代替真实 pi 委派及 MCP 演示。

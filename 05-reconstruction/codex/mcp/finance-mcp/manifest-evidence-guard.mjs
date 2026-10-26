@@ -39,6 +39,15 @@ export async function inspectManifestEvidence(request) {
  return issues;
 }
 export async function guardHarnessBoundary(name,args){
+ if(name==='harness_request_materials'){
+  const request=args.request,problems=[];
+  if(typeof request?.text!=='string'||!request.text.trim())problems.push({code:'harness_request_invalid',field:'request.text',hint:'Provide nonblank forwardable text in request.text. questions/reason are not substitutes. Shape: request:{taskIds:[existing task IDs],text:"specific supplement request"}; this saves locally and sends nothing.'});
+  if(!Array.isArray(request?.taskIds))problems.push({code:'harness_request_invalid',field:'request.taskIds',hint:'Provide an array of taskId strings from the current plan/status, or [] for an unassigned request.'});
+  else request.taskIds.forEach((id,index)=>{if(typeof id!=='string')problems.push({code:'harness_request_invalid',field:`request.taskIds[${index}]`,hint:'Each item must be an existing taskId string, not an object or a question.'});});
+  if(!problems.length&&request.taskIds.length){const current=await loadHarness(args.storePath);request.taskIds.forEach((id,index)=>{if(!current.tasks.some(t=>t.taskId===id))problems.push({code:'harness_request_invalid',field:`request.taskIds[${index}]`,hint:'This task reference is not in the current plan. Read harness_status and use an existing taskId; a request does not create a task.'});});}
+  if(problems.length)throw Object.assign(new Error('harness_request_invalid'),{code:'harness_request_invalid',details:{problems}});
+  return [];
+ }
  if(name==='harness_source_register'){
   const source=args.source,problems=[];
   for(const key of ['sourceId','path','locator','classification'])if(typeof source?.[key]!=='string')problems.push({code:'harness_source_invalid',field:'source.'+key,hint:key==='path'?'Use source.path as one absolute original file path. originals/code/validation are returned inventories, not inputs. Parser/validation inputs are codePaths/validationPaths.':'Provide the required source field using the public harness_source_register input schema.'});
