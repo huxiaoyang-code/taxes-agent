@@ -87,11 +87,12 @@ export function validateTraceReference(ref) {
 
 export function validateFact(f) {
   const code = 'harness_fact_invalid';
-  fields(f, ['factId', 'state', 'reason', 'sourceRefs'], ['value'], code);
+  fields(f, ['factId', 'state', 'reason', 'sourceRefs'], ['value','evidence'], code);
   id(f.factId, code); check(FACT_STATES.includes(f.state), code); text(f.reason, code);
   list(f.sourceRefs, code); f.sourceRefs.forEach(v => id(v, code));
   if (f.state === 'provided') check(Object.hasOwn(f, 'value') && f.sourceRefs.length > 0, code);
   else check(!Object.hasOwn(f, 'value'), code);
+  if(f.evidence!==undefined){check(f.evidence&&f.evidence.version==='harness-fact-evidence/1'&&['original','derived','judgment'].includes(f.evidence.kind),'harness_fact_evidence_invalid');check(!(f.state==='provided'&&f.evidence.kind==='judgment'),'harness_judgment_cannot_be_provided');}
   return f;
 }
 

@@ -1,5 +1,9 @@
 # 恢复与故障
 
+默认 MCP 的 text 与 structuredContent 是同一摘要：范围、关键数字、execution/review/rule 三轴及 operationState/resultCurrent/confirmationCurrent、阻塞、下一步与详情引用。完整原生对象保存于对应 Store 的 mcp-receipts，不改变原版本和确认绑定。旧客户端可显式 `responseMode:"full"` 取得原生对象；不要在普通大回执上常态使用。
+
+`harness_receipt_read({storePath,receiptRef,pointer:"/receipt/actualImpact/domain/obligations",offset:0,maxBytes:8192})` 仅读已有回执；receiptRef/sha256 来自 `presentation.details`，不是文件路径。每页返回 fragment、fragmentBytes、valueSha256、nextOffset、complete；依 nextOffset 接续，拼接 fragment 后再 JSON.parse，不把不完整 JSON 当完整对象。pointer 可精确读取凭证明细/底稿/来源定位；不能任意读文件。大摘要区段变为 count+details 时表示明确分页，关键错误分组与完整原生对象仍保存。持久化失败会明确 outcome 可能已执行，先 query 原操作，不因展示失败重复写入。
+
 中断后先 status：实读原始源、解析代码、验证、业务代码和真实账务证明。观察变更后持久失效，改回原字节不会复活旧确认，须重新登记复核。写意图先落日志；unknown 用 run phase=query 核对原 operationId、真实业务回执和凭证，不能新造 ID 盲重试。
 
 创建草稿的证明绑定创建事实、凭证期间和分录，允许随后正常过账；实际状态仍如实返回。post/unpost 或直接创建 posted 凭证的状态变化仍失效。旧版本已记录的失效不删除：修复或代码升级后，先对 create、再对其 post 等依赖任务显式 `run phase=query`。只有原 request 一致、来源及父依赖当前可核验、原操作没有历史会计拒绝，才以原 operationId 追加当前代码/依赖版本的新查询回执，返回 currentBinding=true；不再执行业务写，旧回执和旧确认保留历史，新回执待复核。currentBinding=false 或 harness_query_historical_only 表示仅完成历史核查，不能据此声称当前任务已恢复；历史拒绝必须走更正，不能靠改依赖或 query 清除。

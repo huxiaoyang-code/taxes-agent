@@ -60,7 +60,7 @@
 ## annual-close
 
 - 年度 Skill：[annual-close/SKILL.md](../05-reconstruction/codex/skills/annual-close/SKILL.md)，官方改编来源与 Apache-2.0 许可保留在同目录。只读证据适配：[annual-close.mjs](../06-workbench/server/annual-close.mjs)，复用实际年累计报表、期末检查与账簿能力，不复制所得税或账务公式。
-- 通过既有十二个 Harness MCP 工具发现/计划/执行 `annual.inspect`（year scope、只读）。年度税会计算使用已发布 `agency.annual-calculation`，以实际任务版本与跨 Store 依赖绑定历史、年度核对与次年任务；执行、会计复核和全年业务完成分别列示。缺件、未实现调整或未审定事项保留未完成。
+- 通过 Harness MCP 工具发现/计划/执行 `annual.inspect`（year scope、只读）。年度税会计算使用已发布 `agency.annual-calculation`，以实际任务版本与跨 Store 依赖绑定历史、年度核对与次年任务；执行、会计复核和全年业务完成分别列示。缺件、未实现调整或未审定事项保留未完成。
 - 合成验证：在 `06-workbench` 运行 `node test/annual-close.test.mjs`（独立全年/历史金额及更正/辅助分配失效）与 `node test/annual-close-harness.test.mjs`（真实 stdio MCP＋原生 Harness 联调，脚本不构成 Agent 验收）。后者的 `prepare <全新绝对目录>` 仅生成合成既有账簿、全年原件/manifest、scope/target、独立手算与 goal.txt，不调用 Harness 或模型；可供另一 Agent 逐步通过 MCP 独立验收并记录剩余限制。
 
 ## audit-lock-batch-backup-restore
@@ -79,6 +79,8 @@
 - Harness：共享声明契约 [harness-contract.mjs](../06-workbench/server/harness-contract.mjs)，固定业务注册 [harness-adapters.mjs](../06-workbench/server/harness-adapters.mjs)，生命周期 [harness-runtime.mjs](../06-workbench/server/harness-runtime.mjs)、元数据证据日志 [harness-store.mjs](../06-workbench/server/harness-store.mjs)。企业特例调用现有审计 accounting API，批处理复用既有 runner；均显式绑定本机目标。
 - 代账接线：复用 [agency-business.mjs](../06-workbench/server/agency-business.mjs) 的 getAgencyCapabilities、buildAgencyWorkpaper、prepare/execute/queryAgencyPosting 与 buildAgencyAnnualWorkpaper，经既有 Harness domain worker 隔离目标，原生人审材料和 archive 身份恢复；年度计算不是年度关账。集中增量验证：`node test/harness-lifecycle.test.mjs --agency-capabilities`，使用独立合成原件/临时库。
 - Harness MCP 工具：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs)；渐进式入口 [harness/SKILL.md](../05-reconstruction/codex/skills/harness/SKILL.md)。pi 1.1.0 原生 MCP 与禁止递归的解析委派扩展 [finance-harness.ts](../05-reconstruction/codex/pi/finance-harness.ts)。其他宿主仍使用标准 stdio。
+- 渐进披露：[disclosure-contracts.mjs](../05-reconstruction/codex/mcp/finance-mcp/disclosure-contracts.mjs) 提供选中能力的 schema/最小示例/恢复；[receipt-presentation.mjs](../05-reconstruction/codex/mcp/finance-mcp/receipt-presentation.mjs) 同时压缩 MCP text/structuredContent、完整保存并按 receiptRef/pointer 分页。显式 responseMode=full 兼容原生对象。事实证据：[harness-fact-evidence.mjs](../06-workbench/server/harness-fact-evidence.mjs)，关键地区/缴款值的 MCP 边界：[manifest-evidence-guard.mjs](../05-reconstruction/codex/mcp/finance-mcp/manifest-evidence-guard.mjs)。旧 sourceRefs-only 调用仍标未验证，直接原生API不受该MCP guard约束；精确值绑定也不保证语义理解。
+- 合成披露/事实/恢复回归：`node test/harness-disclosure.test.mjs`（工作目录06-workbench）。真实 pi 验收准备与固定条件日志：[harness-disclosure-acceptance.mjs](../06-workbench/scripts/harness-disclosure-acceptance.mjs) 的 prepare/supplement/correct/recover/run；准备不调用模型，run仅使用本人已授权官方DeepSeek环境变量，记录实际源码/资料哈希及text/structured体积，人工介入和无效源码调查待验收者实际审查，不能按调用次数直接判通过。
 - Harness 验证：[harness-contract](../06-workbench/test/harness-contract.test.mjs)、[harness-lifecycle](../06-workbench/test/harness-lifecycle.test.mjs)、[harness-mcp](../05-reconstruction/codex/mcp/finance-mcp/harness-test.mjs)。[pi接入命令](../05-reconstruction/codex/pi/README.md)，[无模型原生MCP探针](../06-workbench/scripts/harness-pi-probe.mjs)。陌生合成资料演示准备：从 `06-workbench` 运行 `node scripts/harness-demo.mjs prepare <全新绝对目录>`；此命令不调用模型，也不构成 Agent 演示。获当次测试授权后，运行实际 pi 加载上述扩展并读生成的 goal.txt，保留模型/扩展/MCP/子 Agent 轨迹和产物；`assess` 仅核查真实账务结果。
 
 - stdio 分派：[server.mjs](../05-reconstruction/codex/mcp/finance-mcp/server.mjs) 的 `callTool`、`listSkillFiles`、`readSkill`，协议入口 `tools/list`、`tools/call`、`resources/list`、`resources/read`。

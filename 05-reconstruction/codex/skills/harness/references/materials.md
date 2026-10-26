@@ -4,6 +4,14 @@
 
 保存原始来源、解析代码与验证输出。`harness_source_register` 的 source 包含 sourceId/path/locator/parsed/codePaths/validationPaths/unrecognized/classification；路径为绝对路径，locator 具体到页/表/行/字段或段落。parsed=true 必须同时有代码和验证文件；核对记录数、金额关系及汇总，保留未识别内容和失败报告。
 
-`harness_facts_register` 每项 `{factId,state,reason,sourceRefs,value?}`；provided 必须有 value 和已登记 sourceRefs；其他状态不能夹带推测 value。缺件 missing、含混 unknown、矛盾 conflict、工具边界 unsupported，有依据的不适用 not_applicable。
+`harness_facts_register` 每项 `{factId,state,reason,sourceRefs,value?,evidence?}`；provided 必须有 value。缺件 missing、含混 unknown、矛盾 conflict、工具边界 unsupported、有依据的不适用 not_applicable，均不能夹带猜测 value。新任务使用 `factEvidencePolicy:"require"`；旧调用仍可注册 sourceRefs-only 事实，但返回 `legacyEvidence.verified=false`，不表示值已获支持。
 
-Agent 把事实映射到已有业务函数输入：任务首事实 value 是固定入口的请求对象；这是 Agent 内部适配，不要求客户按 JSON 模板交资料。解析成功不等于会计事实已确认。
+原件值的 evidence 为 `{version:"harness-fact-evidence/1",kind:"original",bindings:[{sourceId:"raw",valuePath:"",locator:{jsonPointer:"/invoice/total"}}]}`。空 valuePath 指整个事实值；对象每个叶字段都须被绑定覆盖。结构原件用 JSON pointer 精确取值。文本用 `{valuePath:"",sourceId:"raw",locator:{startLine:3,endLine:3},quote:"1246.17",format:"decimal"}`；quote 必须等于该行，decimal 只允许金额表示差异，不能拿同一页出现过这个数字当成支持。复杂版式应由解析代码生成定位/验证报告，保留原件，不伪装成结构原件。
+
+quote 始终是 binding 的字段，与 locator 同级，不能写为 locator.quote。JSON pointer 通常省略quote；若提供，必须等于 `JSON.stringify(该pointer选中的原件值)`（字符串值因此包含JSON引号），不是直接填未序列化的字符串。失败返回保留原code并给 `details.problems` 的 factId/sourceId/valuePath/bindingIndex/locatorKind/field/hint，不回原文值；按具体字段提示修复，无需读源码猜层级。值不相符仍须修正事实/来源或保留缺项，不能仅改提示或放松验证。
+
+推导值使用 `{version:"harness-fact-evidence/1",kind:"derived",inputs:[{factId:"invoice-total",valueDigest:"<该输入值稳定JSON的SHA256>"}],method:"说明输入到输出的计算或适配方法",validationRefs:["adapter-validation"]}`；稳定JSON对象键排序、数组保序，不留空白。输入须有原件/推导证据且值摘要相符，sourceRefs 包含输入来源与 validationRefs；validationRefs 是已登记 parsed=true、具备代码与验证文件的来源。计划 factIds 包含所有推导输入，补件变更后重算推导，不复用过期请求。工具核对输入绑定与保存的验证，不执行 method 或替代会计判断。待核判断 kind=judgment 不得标 provided。
+
+`agency.workpaper/posting/annual-calculation` 的内部 manifest 形状见[原生资料输入](agency-input.md)。有值的地区/缴款关键字段必须直接定位原件；无地区记录保留相关税分支 missing，不阻断独立会计分支。MCP 对未支持关键值返回 evidenceIssues；posting execute 拒绝未支持值。直接原生API与旧 sourceRefs-only 事实仍有兼容限制，不能当成全面语义校验。
+
+Agent 把事实映射到已有业务函数输入：任务首事实 value 是推导的固定入口请求，不是客户原话；合同从选中 capability 的 discover 返回读取。客户不需 JSON 模板。陌生布局可委派解析子 Agent 写并验证适配代码；它不得递归委派或写账。解析成功不等于会计事实已确认。
