@@ -4,7 +4,11 @@
 
 保存原始来源、解析代码与验证输出。`harness_source_register` 的 source 包含 sourceId/path/locator/parsed/codePaths/validationPaths/unrecognized/classification；路径为绝对路径，locator 具体到页/表/行/字段或段落。parsed=true 必须同时有代码和验证文件；核对记录数、金额关系及汇总，保留未识别内容和失败报告。
 
+source 必填 `sourceId/path/locator/classification/unrecognized`，path是**单个绝对原件文件路径**，不是数组；parsed/codePaths/validationPaths可选。最小结构为 `{sourceId:"main",path:"<原件绝对路径>",locator:"第2行",classification:"provided",unrecognized:[],parsed:false}`。`originals/code/validation` 是登记后的返回清单，不能把 `originals:[{path:...}]` 当作输入替代 source.path；解析代码与验证输入使用 codePaths/validationPaths。
+
 `harness_facts_register` 每项 `{factId,state,reason,sourceRefs,value?,evidence?}`；provided 必须有 value。缺件 missing、含混 unknown、矛盾 conflict、工具边界 unsupported、有依据的不适用 not_applicable，均不能夹带猜测 value。新任务使用 `factEvidencePolicy:"require"`；旧调用仍可注册 sourceRefs-only 事实，但返回 `legacyEvidence.verified=false`，不表示值已获支持。
+
+sourceRefs **只允许已登记sourceId的字符串数组**，如 `sourceRefs:["main"]`，不能写 `[{sourceId:"main",locator:"line2-3"}]`；精确定位写在 `evidence.bindings`。最小缺项示例：`{factId:"region",state:"missing",reason:"地区原件未提供",sourceRefs:["main"]}`（不带value）；原件值示例：`{factId:"amount",state:"provided",reason:"核对原件金额字段",sourceRefs:["main"],value:"37.23",evidence:{version:"harness-fact-evidence/1",kind:"original",bindings:[{sourceId:"main",valuePath:"",locator:{startLine:2,endLine:2},quote:"37.23",format:"decimal"}]}}`，金额及行号仅为结构示例，须替换为实际支持值。
 
 原件值的 evidence 为 `{version:"harness-fact-evidence/1",kind:"original",bindings:[{sourceId:"raw",valuePath:"",locator:{jsonPointer:"/invoice/total"}}]}`。空 valuePath 指整个事实值；对象每个叶字段都须被绑定覆盖。结构原件用 JSON pointer 精确取值。文本用 `{valuePath:"",sourceId:"raw",locator:{startLine:3,endLine:3},quote:"1246.17",format:"decimal"}`；quote 必须等于该行，decimal 只允许金额表示差异，不能拿同一页出现过这个数字当成支持。复杂版式应由解析代码生成定位/验证报告，保留原件，不伪装成结构原件。
 

@@ -39,6 +39,14 @@ export async function inspectManifestEvidence(request) {
  return issues;
 }
 export async function guardHarnessBoundary(name,args){
+ if(name==='harness_source_register'){
+  const source=args.source,problems=[];
+  for(const key of ['sourceId','path','locator','classification'])if(typeof source?.[key]!=='string')problems.push({code:'harness_source_invalid',field:'source.'+key,hint:key==='path'?'Use source.path as one absolute original file path. originals/code/validation are returned inventories, not inputs. Parser/validation inputs are codePaths/validationPaths.':'Provide the required source field using the public harness_source_register input schema.'});
+  if(!Array.isArray(source?.unrecognized))problems.push({code:'harness_source_invalid',field:'source.unrecognized',hint:'Provide the array of preserved unrecognized items; use [] when none.'});
+  if(!problems.length&&!isAbsolute(source.path))problems.push({code:'harness_evidence_invalid',field:'source.path',hint:'source.path must be one absolute file path; do not use a relative path or the returned originals array.'});
+  if(problems.length)throw Object.assign(new Error(problems[0].code),{code:problems[0].code,details:{problems}});
+  return [];
+ }
  if(name==='harness_facts_register'&&args.factEvidencePolicy==='require'&&args.facts.some(f=>f.state==='provided'&&!f.evidence))fail('harness_fact_evidence_required',[]);
  if(!['harness_run','harness_plan'].includes(name))return [];
  const s=await loadHarness(args.storePath);
