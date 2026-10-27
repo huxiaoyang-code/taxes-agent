@@ -28,4 +28,8 @@ pi --no-session --no-context-files --no-extensions -e builtin:mcp -e builtin:too
 
 扩展只将发现与入口 Skill 直接披露，其他 Harness 和既有 context/create 工具按需发现；不开放在线登录、采集、申报或缴款。`finance_delegate_parser` 启动全新 pi 进程，显式关闭其他扩展、MCP、上下文文件和递归委派，Windows 使用 PowerShell。它能写解析代码并运行验证；这些是角色和工具限制，**不是操作系统沙箱**。真实资料需在用户授权、可信本机环境中处理；公共演示只用合成/脱敏数据。
 
+能力选择使用 `harness_discover({capabilityId})` 的具体输入合同、最小示例和恢复说明；默认不加载代码清单。MCP 默认 text/structuredContent 同步摘要，完整原生回执在Store保存，由 `harness_receipt_read` 按引用/JSON pointer/nextOffset读回；旧客户端可显式 responseMode=full。新的事实证据请用 factEvidencePolicy=require，精确定位/推导输入方法见 materials 指引。sourceRefs-only旧调用保持兼容但明确未验证，不保证直接原生API或语义理解。
+
+本轮披露验收可用 `node 06-workbench/scripts/harness-disclosure-acceptance.mjs prepare <全新目录>` 生成陌生合成原件；经当次授权再以 `run <目录> <pi包目录> initial` 启动实际pi/官方DeepSeek。此runner禁止再次委派，允许父Agent运行自己的解析验证代码，保存真实MCP返回体积、源码/Skill/资料哈希和调用参数；supplement/correct/recover只生成后续原件与目标。人工介入及无效源码搜索必须据实际日志评审，原601次调用不是同条件基线。
+
 设计与版本依据：[pi v1.1.0 上游子 Agent 示例](https://github.com/earendil-works/pi/tree/v1.1.0/packages/coding-agent/examples/extensions/subagent)、[MIT 许可证](https://github.com/earendil-works/pi/blob/v1.1.0/LICENSE)、[MCP 2025-06-18 Tools 契约](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)。本扩展复用原生 MCP 并参考上游新进程/独立上下文设计；未复制上游示例实现。

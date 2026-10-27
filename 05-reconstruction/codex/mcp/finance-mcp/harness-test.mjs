@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { McpStdioClient } from './mcp-stdio-client.mjs';
 mkdirSync(resolve('.agent-runs'),{recursive:true});const here=dirname(fileURLToPath(import.meta.url)),root=mkdtempSync(resolve('.agent-runs/harness-mcp-'));
 const client=new McpStdioClient(join(here,'server.mjs'),{env:{NODE_NO_WARNINGS:'1'},timeoutMs:60000}).start();
+// Preserve the pre-summary native assertions as an explicit compatibility lane.
+const nativeCall=client.call.bind(client);client.call=(name,args={})=>nativeCall(name,{...args,...(name.startsWith('harness_')?{responseMode:'full'}:{})});
 try {
  assert.equal((await client.initialize()).result.protocolVersion,'2025-06-18');
- const listed=(await client.rpc('tools/list')).result.tools;assert.equal(listed.filter(t=>t.name.startsWith('harness_')).length,12);assert.equal(listed.find(t=>t.name==='harness_discover').annotations.readOnlyHint,true);
+ const listed=(await client.rpc('tools/list')).result.tools;assert.equal(listed.filter(t=>t.name.startsWith('harness_')).length,13);assert.equal(listed.find(t=>t.name==='harness_discover').annotations.readOnlyHint,true);
  const discovery=await client.call('harness_discover');assert.equal(discovery.isError,false,discovery.text);assert.ok(discovery.structured.capabilities.some(c=>c.capabilityId==='batch.resume'));assert.ok(discovery.structured.capabilities.some(c=>c.capabilityId==='review.feedback'));
  const skill=await client.call('skills_read',{resource:'harness/SKILL.md'});assert.match(skill.data.markdown,/原始资料/);
  const resources=(await client.rpc('resources/list')).result.resources;assert.ok(resources.some(r=>r.uri==='skill://harness/references/recovery.md'));

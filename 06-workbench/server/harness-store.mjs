@@ -5,6 +5,7 @@ import { resolve, dirname, join, isAbsolute } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { checkedPath, readLocalFile } from './offline-material-store.mjs';
 import { validateHarnessScope, validateFact, validatePlanGraph, validateFeedback, validateHarnessTaskState, capabilitySupportsScope, idPattern } from './harness-contract.mjs';
+import {validateRegisteredFactEvidence,factEvidenceError} from './harness-fact-evidence.mjs';
 
 export const VERSION = 'finance-harness-store/1';
 export const stable = v => Array.isArray(v) ? `[${v.map(stable).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v);
@@ -109,12 +110,14 @@ export async function registerHarnessSource(path, source, currentView) {
   return locked(path, async s => { const old = s.sources.get(data.sourceId),same=old?.contentDigest===data.contentDigest&&!s.invalidatedSources.has(data.sourceId);data.revision=(old?.revision??0)+(same?0:1);data.sourceVersion=hash(data);if(!same)await appendHarness(s,'source',data);return {status:same?'replayed':'registered',sourceVersion:same?old.sourceVersion:data.sourceVersion,...(currentView?continuation(await currentView(s),same?[]:s.tasks.filter(t=>t.factIds.some(id=>s.facts.get(id)?.sourceRefs.includes(data.sourceId))).map(t=>t.taskId)):{} )}; });
 }
 export async function registerHarnessFacts(path, facts, currentView) {
-  requireValue(Array.isArray(facts) && facts.length > 0 && facts.length <= 10000, 'harness_facts_invalid'); facts.forEach(validateFact);
+  requireValue(Array.isArray(facts) && facts.length > 0 && facts.length <= 10000, 'harness_facts_invalid'); facts.forEach(f=>{try{validateFact(f);}catch(error){throw factEvidenceError(error,f,{field:'fact'});}});
   requireValue(new Set(facts.map(f => f.factId)).size === facts.length, 'harness_facts_invalid');
   return locked(path, async s => {
     for (const f of facts) requireValue(f.sourceRefs.every(ref => s.sources.has(ref)), 'harness_source_missing');
+    const combinedFacts=new Map([...s.facts,...facts.map(f=>[f.factId,f])]);
+    for(const f of facts)await validateRegisteredFactEvidence(f,s.sources,combinedFacts);
     const changed = facts.filter(f => stable(f) !== stable(s.facts.get(f.factId)));
-    if (changed.length) await appendHarness(s, 'facts', changed); return { status: changed.length ? 'registered' : 'replayed', changedFactIds: changed.map(f => f.factId),...(currentView?continuation(await currentView(s),s.tasks.filter(t=>t.factIds.some(id=>changed.some(f=>f.factId===id))).map(t=>t.taskId)):{} ) };
+    if (changed.length) await appendHarness(s, 'facts', changed); return { status: changed.length ? 'registered' : 'replayed', changedFactIds: changed.map(f => f.factId),legacyEvidence:{factIds:facts.filter(f=>f.state==='provided'&&!f.evidence).map(f=>f.factId),verified:false,limitation:'Compatibility facts with sourceRefs alone have no checked support for their values.'},...(currentView?continuation(await currentView(s),s.tasks.filter(t=>t.factIds.some(id=>changed.some(f=>f.factId===id))).map(t=>t.taskId)):{} ) };
   });
 }
 export async function saveHarnessPlan(path, tasks, capabilities) {

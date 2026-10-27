@@ -6,4 +6,6 @@ offline.vat_q2 仅计算既有历史/目标季度支持的 VAT 部分字段。�
 
 `agency.workpaper` 复用已有月度会计/税费算法与缺项判断；`agency.annual-calculation` 在 YYYY 容器从完整原始月 sessions 调用 buildAgencyAnnualWorkpaper，保留原生 YYYY-12、年度调整和次年承接条件。月份缺口、scope冲突、原始资料/规则/实际账簿变化均须核查；不能只交月度汇总替代原始证据。结果中的 issues、accountantApproval、periodComplete/submittable 如实报告，年度算法计算不等于年度关账流程已接通。
 
+交易/凭证税额、应纳、计提、实缴、未缴分别报告：`accounting.vatTransactions[*].tax` 或凭证2221行只是该交易/原生草稿的税额，不能据此说依法应纳或已计提。应纳仅取同期间 `obligations[*].due`，计提仅取明确 `accountingAccrual`（草稿分录不等于已过账计提），实缴仅取 `paid` 并核缴款证据，差额仅取原生 `difference`，不凭凭证推未缴。原生paid原值（包括0/null）应忠实引为程序结果；只有字段缺失时不能补0。缺缴款证据既不能称现实已缴，也不能断言现实未缴或支付未发生；只能报告“证据未证实、工具未登记”。VAT status=missing且没有due时，应写“应纳未确定”，即使交易税额是3.00。`amountState.present=false`表示原字段不存在，显式null仍是null；都不能填0。字段、期间、单位、原pointer及当前性同时引用，不能把报表分值和元值混用。
+
 全国电子税务局真实接入数为 0。本 Harness 不做登录、在线采集、申报提交或缴款。核算独立分支可以执行，税务不支持或证据不足分支保留具体阻塞。

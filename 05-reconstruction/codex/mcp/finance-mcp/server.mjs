@@ -16,6 +16,9 @@ import { callBackend, backendInfo, BackendError, ModelTransportError } from "./b
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOLS, TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
 import { HARNESS_TOOL_NAMES } from './tools.mjs';
+import {discoverySummary} from './disclosure-contracts.mjs';
+import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
+import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
@@ -88,9 +91,18 @@ async function callTool(name, args = {}) {
   if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
   if (HARNESS_TOOL_NAMES.has(name)) {
     try {
+      if(name==='harness_receipt_read')return await readHarnessReceipt(args);
       const { callHarnessTool } = await import('../../../../06-workbench/server/harness-runtime.mjs');
-      return await callHarnessTool(name,args);
-    } catch(e) {throw new ToolCallError(/^harness_[a-z0-9_]+$/.test(e?.code)?e.code:'harness_operation_failed','harness_operation_failed');}
+      const {responseMode,capabilityId,factEvidencePolicy,...nativeArgs}=args;
+      const evidenceIssues=await guardHarnessBoundary(name,args);
+      const result=await callHarnessTool(name,nativeArgs);
+      if(evidenceIssues.some(i=>i.layer!=='input_contract'))result.evidenceIssues=evidenceIssues.filter(i=>i.layer!=='input_contract');
+      if(evidenceIssues.some(i=>i.layer==='input_contract'))result.contractIssues=evidenceIssues.filter(i=>i.layer==='input_contract');
+      if(name==='harness_discover')return responseMode==='full'&&!capabilityId?result:discoverySummary(result,capabilityId,responseMode==='full');
+      if(!args.storePath||responseMode==='full')return result;
+      try{return await summarizeHarnessReceipt(args.storePath,name,result);}
+      catch(e){return {status:'unknown',code:'harness_receipt_persistence_failed',nativeStatus:result?.status??null,operationState:result?.operationState??result?.receipt?.executionState??null,resultCurrent:result?.resultCurrent??null,confirmationCurrent:result?.confirmationCurrent??null,operationId:result?.receipt?.operationId??null,taskId:args.taskId??null,outcome:'native_call_may_have_completed',retryBlockedBy:'query_original_operation',nextSteps:[{tool:args.taskId?'harness_run':'harness_status',...(args.taskId?{phase:'query',taskId:args.taskId}:{})}],details:{nativeJournalPreserved:true,presentationError:e.code??'receipt_storage_unavailable'}};}
+    } catch(e) {throw new ToolCallError(/^harness_[a-z0-9_]+$/.test(e?.code)?e.code:'harness_operation_failed','harness_operation_failed',e.details);}
   }
 
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
@@ -129,6 +141,12 @@ function errorResult(e) {
   if (e?.tool) payload.tool = e.tool;
   if (e?.details !== undefined && e?.details !== null) payload.details = e.details;
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
+}
+async function harnessErrorResult(e,name,args){
+  if(!HARNESS_TOOL_NAMES.has(name)||!args?.storePath||!e?.details||args.responseMode==='full')return errorResult(e);
+  const native={status:'failed',code:e.code??'harness_operation_failed',blockers:e.details.evidenceIssues??e.details.problems??[],details:e.details,...(e.details.contractIssues?{contractIssues:e.details.contractIssues}:{}),nextSteps:[{action:'resolve_evidence_before_new_execution',tool:'harness_status'}]};
+  try{const payload=await summarizeHarnessReceipt(args.storePath,name,native);return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload,isError:true};}
+  catch{return errorResult(new ToolCallError(e.code??'harness_operation_failed','harness_operation_failed',{fullErrorPersistenceFailed:true,errorCount:native.blockers.length,nextStep:'Inspect local native journal and resolve the original error; do not blindly repeat a write.'}));}
 }
 
 /** 模型通道运输失败：只回固定常量，不带响应片段 / 地址 / 原始异常。 */
@@ -191,10 +209,10 @@ rl.on("line", async (line) => {
         }
         return ok(id, envelopeResult(checked.envelope));
       }
-      return ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }],...(HARNESS_TOOL_NAMES.has(params?.name)?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) });
+      return ok(id, { content: [{ type: "text", text: HARNESS_TOOL_NAMES.has(params?.name)?JSON.stringify(result):JSON.stringify(result, null, 2) }],...(HARNESS_TOOL_NAMES.has(params?.name)?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) });
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, transportFailureResult(e.failure));
-      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, errorResult(e));
+      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, await harnessErrorResult(e,params?.name,params?.arguments));
       return ok(id, errorResult(new ToolCallError("tool_error", "tool_error")));
     }
   }
