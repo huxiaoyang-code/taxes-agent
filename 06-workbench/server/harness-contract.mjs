@@ -87,11 +87,12 @@ export function validateTraceReference(ref) {
 
 export function validateFact(f) {
   const code = 'harness_fact_invalid';
-  fields(f, ['factId', 'state', 'reason', 'sourceRefs'], ['value'], code);
+  fields(f, ['factId', 'state', 'reason', 'sourceRefs'], ['value','evidence'], code);
   id(f.factId, code); check(FACT_STATES.includes(f.state), code); text(f.reason, code);
   list(f.sourceRefs, code); f.sourceRefs.forEach(v => id(v, code));
   if (f.state === 'provided') check(Object.hasOwn(f, 'value') && f.sourceRefs.length > 0, code);
   else check(!Object.hasOwn(f, 'value'), code);
+  if(f.evidence!==undefined){check(f.evidence&&f.evidence.version==='harness-fact-evidence/1'&&['original','derived','judgment'].includes(f.evidence.kind),'harness_fact_evidence_invalid');check(!(f.state==='provided'&&f.evidence.kind==='judgment'),'harness_judgment_cannot_be_provided');}
   return f;
 }
 
@@ -119,15 +120,30 @@ export function validateExecutionReceipt(r) {
   return r;
 }
 
+// Task projections never rewrite immutable execution receipts. Null means a
+// temporary observation could not establish current applicability/confirmation.
+export const HARNESS_STATE_AXES = Object.freeze({
+  operationState: 'Historical execution outcome retained across dependency changes; executed does not imply current applicability or accountant acceptance',
+  resultCurrent: 'true: executed result verified against current dependencies; false: inapplicable or blocked by verified change; null: temporarily unverifiable',
+  confirmationCurrent: 'true: accepted review of the current result; false: absent, rejected or stale review; null: accepted result temporarily unverifiable',
+});
+export function validateHarnessTaskState(task) {
+  check(EXECUTION_STATES.includes(task.operationState),'harness_task_state_invalid');
+  check([true,false,null].includes(task.resultCurrent)&&[true,false,null].includes(task.confirmationCurrent),'harness_task_state_invalid');
+  check(task.confirmationCurrent!==true||task.resultCurrent===true&&task.reviewState==='accepted','harness_task_state_invalid');
+  return task;
+}
+
 // Facts refer to source evidence separately; runtime computes task input and
 // dependency digests from current facts, capability code/rule and parent results.
 // The Agent may replace the DAG; no fixed stage sequence is assumed here.
 export function validatePlanGraph(tasks) {
   const code = 'harness_plan_invalid'; list(tasks, code); const byId = new Map();
   for (const t of tasks) {
-    fields(t, ['taskId', 'capabilityId', 'factIds', 'dependsOn', 'goal'], ['externalDependencies'], code);
+    fields(t, ['taskId', 'capabilityId', 'factIds', 'dependsOn', 'goal'], ['externalDependencies','requestFactId'], code);
     id(t.taskId, code); id(t.capabilityId, code); text(t.goal, code);
     list(t.factIds, code); t.factIds.forEach(v => id(v, code));
+    if(t.requestFactId!==undefined){id(t.requestFactId,code);check(t.factIds.includes(t.requestFactId),code);}
     list(t.dependsOn, code); t.dependsOn.forEach(v => id(v, code));
     if (t.externalDependencies !== undefined) {
       list(t.externalDependencies, code);
@@ -158,3 +174,6 @@ export function validateFeedback(f) {
   check(['accept', 'reject', 'retain_enterprise_exception', 'propose_public_rule'].includes(f.decision), code);
   list(f.evidenceRefs, code); f.evidenceRefs.forEach(validateTraceReference); return f;
 }
+
+// Explicit binding for new tasks; immutable legacy plans retain their original first-fact meaning.
+export const requestFactIdForTask=task=>task.requestFactId??task.factIds[0];

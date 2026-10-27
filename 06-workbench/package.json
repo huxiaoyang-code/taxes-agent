@@ -17,9 +17,10 @@
     "seed": "node scripts/seed-demo.mjs"
   },
   "dependencies": {
+    "ajv": "8.20.0",
     "exceljs": "4.4.0",
-    "pdfkit": "0.20.2",
     "fflate": "0.8.3",
+    "pdfkit": "0.20.2",
     "saxes": "5.0.1"
   }
 }

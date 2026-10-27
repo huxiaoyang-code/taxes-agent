@@ -10,6 +10,7 @@ import { queryOperation } from './local-audit-operation.mjs';
 import { inspectAuditSchema } from './local-audit-storage.mjs';
 import { inspectBatchSchema } from './local-batch-storage.mjs';
 import { ANNUAL_CLOSE_CODE_ROOTS, createAnnualCloseAdapter } from './annual-close.mjs';
+import { createPeriodAdapter, PERIOD_CAPABILITIES } from './period-business.mjs';
 import * as Agency from './agency-business.mjs';
 import { hash, stable } from './harness-store.mjs';
 const check = (v,code) => {if(!v)throw Object.assign(new Error(code),{code});};
@@ -25,7 +26,12 @@ async function agencyCall(r,path) {
     if(identity){const archive=await readArchivedMaterialEvidence(identity.archivePath,identity.archiveId);for(const record of archive.records.filter(f=>isAbsolute(f.name))){let current=null;try{current=hash((await readLocalFile(record.name)).bytes);}catch{}evidenceBindings.push({path:record.name,expected:hash(record.bytes),current});}}
     if(feedbackEvidence){let current=null;try{current=hash((await readLocalFile(feedbackEvidence.path)).bytes);}catch{}evidenceBindings.push({path:feedbackEvidence.path,expected:feedbackEvidence.digest,current});}
     const approval=r.prepared?.proposal,confirmationCurrent=!!approval&&feedbackEvidence?.feedback?.decision==='accept'&&typeof feedbackEvidence.feedback.reviewer==='string'&&!!feedbackEvidence.feedback.reviewer.trim()&&['targetVersion','dependencyDigest','planDigest'].every(k=>feedbackEvidence.feedback[k]===approval[k]);
-    return {status:domain.status,applied:domain.applied,scope:r.scope,identity:domain.identity,domain,...(feedbackEvidence?{feedbackEvidence}:{}),confirmationCurrent,evidenceCurrent:evidenceBindings.every(b=>b.expected===b.current),evidenceBindings,proofDigest:hash({domain,evidenceBindings,confirmationCurrent}),periodComplete:false,submittable:false};
+    const evidenceCurrent=evidenceBindings.some(b=>b.current!==null&&b.expected!==b.current)?false:evidenceBindings.some(b=>b.current===null)?null:true;
+    // Native recovery explicitly emits these null fields only after reading a
+    // committed operation (or no-change reconciliation) and finding mismatched
+    // persisted fingerprints. A transport/read failure has neither field.
+    const businessProofCurrent=domain.evidence===null||domain.existingPostedEvidence===null?false:undefined;
+    return {status:domain.status,applied:domain.applied,scope:r.scope,identity:domain.identity,domain,...(feedbackEvidence?{feedbackEvidence}:{}),...(businessProofCurrent===false?{businessProofCurrent}:{}),confirmationCurrent,evidenceCurrent,evidenceBindings,proofDigest:hash({domain,evidenceBindings,confirmationCurrent}),periodComplete:false,submittable:false};
   };
   const inspectIdentity=async()=>{
     check(identity&&identity.dbPath===path&&identity.period===r.scope.period&&identity.batchId===r.request.batchId&&identity.operationId===r.operationId,'harness_agency_identity_missing_or_changed');sameScope({...identity,currency:r.scope.currency});
@@ -71,7 +77,7 @@ async function agencyCall(r,path) {
 try {
   const r = JSON.parse(readFileSync(0,'utf8'));requestContext=r; validateHarnessScope(r.scope);
   check(captureHarnessCode(roots).digest === (r.workerCodeDigest??r.codeDigest),'harness_code_changed');
-  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
+  check((['voucher.create','voucher.post','voucher.unpost'].includes(r.action)||PERIOD_CAPABILITIES.includes(r.action)||['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect'].includes(r.action)) && ['prepare','execute','query'].includes(r.phase),'harness_domain_action_invalid');
   let path;
   try { path = await checkedPath(r.target.dbPath); } catch (error) { if(r.action==='annual.inspect')check(false,'harness_annual_target_unavailable');throw error; }
   check(basename(path)==='workbench.db','harness_db_invalid');
@@ -80,7 +86,7 @@ try {
     check(connection.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get()?.instance_id===r.scope.databaseInstanceId,'harness_instance_mismatch');
     check(connection.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(r.scope.accountSetId)?.enterprise_key===r.scope.enterpriseKey,'harness_enterprise_mismatch');
     check(connection.prepare('SELECT MAX(version) v FROM schema_migrations').get()?.v===5,'harness_schema_unsupported');
-    } catch(error) { if(r.action==='annual.inspect'&&!['harness_instance_mismatch','harness_enterprise_mismatch'].includes(error.code))check(false,'harness_annual_database_not_ready');throw error; }
+    } catch(error) { if(r.action==='annual.inspect'&&!['harness_instance_mismatch','harness_enterprise_mismatch','harness_schema_unsupported'].includes(error.code))check(false,'harness_annual_database_not_ready');throw error; }
   };
   db = new DatabaseSync(path,{readOnly:true}); verify(db);
   if(r.action==='annual.inspect') {
@@ -99,6 +105,15 @@ try {
     const domain=createAnnualCloseAdapter({db,buildReportExport:R.buildReportExport,periodEndCheck:A.periodEndCheck}).inspect({accountSetId:r.scope.accountSetId,enterpriseKey:r.scope.enterpriseKey,year:r.scope.period});
     check(['enterpriseKey','accountSetId','databaseInstanceId','currency'].every(k=>domain.scope[k]===r.scope[k])&&domain.scope.year===r.scope.period,'harness_annual_scope_mismatch');
     process.stdout.write(JSON.stringify({status:'annual_review_draft',scope:r.scope,domain,periodComplete:false,submittable:false}));
+  } else if(r.action.startsWith('period.')) {
+    check(/^20\d\d-(0[1-9]|1[0-2])$/.test(r.scope.period),'harness_period_mismatch');
+    db.close();db=null;process.env.WORKBENCH_DATA_DIR=dirname(path);
+    if(['period.inspect','period.impact'].includes(r.action))process.env.WORKBENCH_DATABASE_MODE='readonly';
+    const A=await import('./accounting.mjs'),D=await import('./db.mjs'),C=await import('./local-audit-coordinator.mjs');db=D.db;
+    const now=statSync(await checkedPath(path));check(before.dev===now.dev&&before.ino===now.ino,'harness_path_changed');verify(db);
+    check(captureHarnessCode(roots).digest===r.codeDigest,'harness_code_changed');
+    started=r.phase==='execute'&&!['period.inspect','period.impact'].includes(r.action);
+    process.stdout.write(JSON.stringify(await createPeriodAdapter({db,A,C}).call({scope:r.scope,action:r.action,phase:r.phase,request:r.request,operationId:r.operationId})));
   } else if(r.action.startsWith('agency.')) {
     db.close();db=null;process.env.WORKBENCH_DATA_DIR=dirname(path);
     process.stdout.write(JSON.stringify(await agencyCall(r,path)));

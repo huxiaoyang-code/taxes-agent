@@ -1,3 +1,4 @@
+import { assertPeriodAdmissionEvidence, assertPeriodCommitEvidence } from './period-business-evidence.mjs';
 import { withDomainWrite, assertWriteCommitFence, withBatchStageResources } from './local-write-lock.mjs';
 import { assertAgencyAdmissionEvidence, assertAgencyCommitEvidence } from './agency-business-evidence.mjs';
 // Trusted synchronous domain coordinator. ALS carries correlation only, never authority.
@@ -94,7 +95,7 @@ function specification(options,value) {
 export function runDomainOperation(db,options,fn) {
  auditResultDigest(options.request);
  assertImmutableDomainBinding(db,options);
- return withDomainWrite(db,options,()=>runDomainOperationBody(db,options,fn));
+ return withDomainWrite(db,options,()=>{assertPeriodAdmissionEvidence(db,options);return runDomainOperationBody(db,options,fn);});
 }
 // Admission reads which select an import target run under the same resources as execution.
 export function runDomainAdmission(db,options,admit) {
@@ -146,7 +147,7 @@ function runDomainOperationBody(db,options,fn) {
  let value,businessError,snapshot;
  const terminal=executePreparedOperation(db,prepared.authorization,()=>{
   frames.set(db,{action:options.action,scope:options.scope});
-  try {value=fn();assertAgencyCommitEvidence(db);assertWriteCommitFence(db);snapshot=auditResultSnapshot(value);return specification(options,value);}
+  try {value=fn();assertAgencyCommitEvidence(db);assertPeriodCommitEvidence(db);assertWriteCommitFence(db);snapshot=auditResultSnapshot(value);return specification(options,value);}
   catch(error){businessError=error;throw error;}
   finally{frames.delete(db);}
  });

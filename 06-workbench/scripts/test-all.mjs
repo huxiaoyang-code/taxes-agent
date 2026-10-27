@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-mcp");
 const steps = [
+  { name: 'harness-tool-engineering', file: join(WORKBENCH, 'test', 'harness-tool-engineering.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-contract', file: join(WORKBENCH, 'test', 'harness-contract.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-lifecycle', file: join(WORKBENCH, 'test', 'harness-lifecycle.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-mcp', file: join(MCP, 'harness-test.mjs'), cwd: WORKBENCH },
@@ -133,6 +134,15 @@ const steps = [
   { name: "local-restore-path-binding", file: join(WORKBENCH, "test", "local-restore-path-binding.test.mjs"), cwd: WORKBENCH },
   { name: 'annual-close', file: join(WORKBENCH, 'test', 'annual-close.test.mjs'), cwd: WORKBENCH },
   { name: 'annual-close-harness', file: join(WORKBENCH, 'test', 'annual-close-harness.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-business', file: join(WORKBENCH, 'test', 'period-business.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-batch', file: join(WORKBENCH, 'test', 'period-batch.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-interruption', file: join(WORKBENCH, 'test', 'period-interruption.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-proof', file: join(WORKBENCH, 'test', 'period-proof.test.mjs'), cwd: WORKBENCH },
+  { name: 'period-correction-dates', file: join(WORKBENCH, 'test', 'period-correction-dates.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness-disclosure', file: join(WORKBENCH, 'test', 'harness-disclosure.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness-batch-partial-effects', file: join(WORKBENCH, 'test', 'harness-batch-partial-effects.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness-tax-presentation', file: join(WORKBENCH, 'test', 'harness-tax-presentation.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness-local-tool-contract', file: join(WORKBENCH, 'test', 'harness-local-tool-contract.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

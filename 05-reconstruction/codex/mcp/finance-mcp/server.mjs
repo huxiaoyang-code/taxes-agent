@@ -16,6 +16,12 @@ import { callBackend, backendInfo, BackendError, ModelTransportError } from "./b
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOLS, TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
 import { HARNESS_TOOL_NAMES } from './tools.mjs';
+import {validateFact} from '../../../../06-workbench/server/harness-contract.mjs';
+import {factEvidenceError} from '../../../../06-workbench/server/harness-fact-evidence.mjs';
+import {validateSchemaValue} from '../../../../06-workbench/server/harness-schema-validation.mjs';
+import {discoverySummary} from './disclosure-contracts.mjs';
+import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
+import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
@@ -89,8 +95,24 @@ async function callTool(name, args = {}) {
   if (HARNESS_TOOL_NAMES.has(name)) {
     try {
       const { callHarnessTool } = await import('../../../../06-workbench/server/harness-runtime.mjs');
-      return await callHarnessTool(name,args);
-    } catch(e) {throw new ToolCallError(/^harness_[a-z0-9_]+$/.test(e?.code)?e.code:'harness_operation_failed','harness_operation_failed');}
+      const {responseMode,capabilityId,factEvidencePolicy,domain,query,offset,limit,...nativeArgs}=args;
+      const schemaProblems=validateSchemaValue(spec.inputSchema,args);
+      if(schemaProblems.length){
+        // Preserve the established field-specific diagnostics without reading business inputs.
+        if(['harness_source_register','harness_request_materials'].includes(name))await guardHarnessBoundary(name,args);
+        if(name==='harness_facts_register'&&Array.isArray(args.facts))for(const fact of args.facts)try{validateFact(fact);}catch(e){throw factEvidenceError(e,fact,{field:'fact'});}
+        throw new ToolCallError('harness_tool_input_invalid','harness_tool_input_invalid',{tool:name,problems:schemaProblems,errorInventory:{total:schemaProblems.length,shown:schemaProblems.length,omitted:0}});
+      }
+      if(name==='harness_receipt_read')return await readHarnessReceipt(args);
+      const evidenceIssues=await guardHarnessBoundary(name,args);
+      const result=await callHarnessTool(name,nativeArgs);
+      if(evidenceIssues.some(i=>i.layer!=='input_contract'))result.evidenceIssues=evidenceIssues.filter(i=>i.layer!=='input_contract');
+      if(evidenceIssues.some(i=>i.layer==='input_contract'))result.contractIssues=evidenceIssues.filter(i=>i.layer==='input_contract');
+      if(name==='harness_discover')return responseMode==='full'&&!capabilityId&&domain===undefined&&query===undefined&&offset===undefined&&limit===undefined?result:discoverySummary(result,capabilityId,responseMode==='full',{domain,query,offset,limit});
+      if(!args.storePath||responseMode==='full')return result;
+      try{return await summarizeHarnessReceipt(args.storePath,name,result);}
+      catch(e){return {status:'unknown',code:'harness_receipt_persistence_failed',nativeStatus:result?.status??null,operationState:result?.operationState??result?.receipt?.executionState??null,resultCurrent:result?.resultCurrent??null,confirmationCurrent:result?.confirmationCurrent??null,operationId:result?.receipt?.operationId??null,taskId:args.taskId??null,outcome:'native_call_may_have_completed',retryBlockedBy:'query_original_operation',nextSteps:[{tool:args.taskId?'harness_run':'harness_status',...(args.taskId?{phase:'query',taskId:args.taskId}:{})}],details:{nativeJournalPreserved:true,presentationError:e.code??'receipt_storage_unavailable'}};}
+    } catch(e) {throw new ToolCallError(/^harness_[a-z0-9_]+$/.test(e?.code)?e.code:'harness_operation_failed','harness_operation_failed',e.details);}
   }
 
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
@@ -129,6 +151,12 @@ function errorResult(e) {
   if (e?.tool) payload.tool = e.tool;
   if (e?.details !== undefined && e?.details !== null) payload.details = e.details;
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
+}
+async function harnessErrorResult(e,name,args){
+  if(!HARNESS_TOOL_NAMES.has(name)||!args?.storePath||!e?.details||args.responseMode==='full')return errorResult(e);
+  const native={status:'failed',code:e.code??'harness_operation_failed',blockers:e.details.evidenceIssues??e.details.problems??e.details.blockers??[],details:e.details,...(e.details.contractIssues?{contractIssues:e.details.contractIssues}:{}),nextSteps:e.details.contract?[{action:'inspect_selected_contract_and_repair_indicated_fields',...e.details.contract,hint:e.details.hint}]:[{action:e.code==='harness_phase_unsupported'?'choose_supported_phase':'resolve_indicated_facts_or_evidence',tool:e.code==='harness_phase_unsupported'?'harness_discover':'harness_facts_register',...(e.details.capabilityId?{capabilityId:e.details.capabilityId}:{}),hint:e.details.hint??'Resolve the specific field/source problems above; preserve unknown original writes and use query before retry.'}]};
+  try{const payload=await summarizeHarnessReceipt(args.storePath,name,native);return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload,isError:true};}
+  catch{return errorResult(new ToolCallError(e.code??'harness_operation_failed','harness_operation_failed',{fullErrorPersistenceFailed:true,errorCount:native.blockers.length,nextStep:'Inspect local native journal and resolve the original error; do not blindly repeat a write.'}));}
 }
 
 /** 模型通道运输失败：只回固定常量，不带响应片段 / 地址 / 原始异常。 */
@@ -191,10 +219,10 @@ rl.on("line", async (line) => {
         }
         return ok(id, envelopeResult(checked.envelope));
       }
-      return ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }],...(HARNESS_TOOL_NAMES.has(params?.name)?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) });
+      return ok(id, { content: [{ type: "text", text: HARNESS_TOOL_NAMES.has(params?.name)?JSON.stringify(result):JSON.stringify(result, null, 2) }],...(HARNESS_TOOL_NAMES.has(params?.name)?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) });
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, transportFailureResult(e.failure));
-      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, errorResult(e));
+      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, await harnessErrorResult(e,params?.name,params?.arguments));
       return ok(id, errorResult(new ToolCallError("tool_error", "tool_error")));
     }
   }
