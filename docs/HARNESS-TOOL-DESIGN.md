@@ -17,3 +17,5 @@
 这是对公开设计思想的项目适配，没有复制第三方金融技能正文、默认税务值或供应商MCP实现。公开金融仓库的.mcp.json主要注册外部服务地址；该结构不提供本项目账务执行的替代实现。
 
 合成回归：在06-workbench运行 `node test/harness-tool-engineering.test.mjs`，并按实际影响运行合同、披露、恢复、生命周期、期间、年度与MCP测试。脚本不会调用模型，也不宣称真实Pi/真实会计审定通过。
+
+批量回执中的 applied 继续只表示整批成功。整批未完成或暂时无法核验时，partialEffects=true 表示已持久保存且匹配当前 manifest 的 taskId、capabilityId、dependencyDigest 的 stage/原 Harness 回执证明该请求曾发生效果；false 表示各 stage 可证明未执行或不适用；null 表示当前证据不足，不能据此声称零写入。整批成功仍为 applied=true、partialEffects=false。同一 task 的全局 executed 不证明其新请求执行；不同请求版本的旧回执仅保留历史，当前效果为 null。checkpoint 保留 priorCommittedObservation 历史观察同样匹配原 manifest 版本，只用于报告已发生效果，不恢复当前结果、会计确认或授权重试。默认 MCP 摘要及任务状态保留该三态和定向原回执指针。合成真实三凭证与 stdio 回归：`node test/harness-batch-partial-effects.test.mjs`。

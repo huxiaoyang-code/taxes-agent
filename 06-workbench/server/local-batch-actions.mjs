@@ -1,3 +1,4 @@
+import {committedBridgeObservation} from './harness-batch-effects.mjs';
 import { captureHarnessCode } from './harness-code.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -1141,8 +1142,13 @@ export function queryHarnessBatchTask(ctx,phase='query'){
 export function checkpointHarnessBatchTask(ctx,bridge){
  return withWriteResources(ctx.db,ctx.resources,()=>withWriteStageFence(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt},()=>{
   resolveItemBinding({db:ctx.db,item:ctx.item,stage:ctx.stage});
+  const expectedIdentity={...ctx.spec,period:ctx.stage.period};
+  const previousCommitted=committedBridgeObservation(bridge,expectedIdentity)??committedBridgeObservation(safeParse(ctx.stage.evidence_json).bridge,expectedIdentity);
   const current=queryHarnessBatchTask(ctx,'query');
   if(bridge.status==='succeeded'&&(current.status!=='succeeded'||current.operationId!==bridge.operationId))bridge={...current,status:'needs_review',code:current.code??'batch_harness_result_changed'};
+  // Keep actual prior committed evidence if the current observation is temporarily unavailable.
+  // This is history only: needs_review/currentness/confirmation and retry guards stay unchanged.
+  if(previousCommitted&&!committedBridgeObservation(bridge,expectedIdentity))bridge={...bridge,taskIdentity:expectedIdentity,priorCommittedObservation:previousCommitted};
   const evidence={accountSetId:ctx.item.account_set_id,bridge};
   return runAuditedBatchStage(ctx.db,{action:'batch.stage',operationId:stageAuditOperationId(ctx.stage),scope:{kind:'account_set',value:ctx.item.account_set_id},request:{jobId:ctx.item.job_id,itemId:ctx.item.id,stageId:ctx.stage.id,attempt:ctx.attempt,spec:ctx.spec},context:{jobId:String(ctx.item.job_id),itemId:String(ctx.item.id),stageId:String(ctx.stage.id),period:ctx.stage.period}},[],()=>{
    const ok=writeStageResult(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt,status:bridge.status==='succeeded'?STAGE_STATUS.SUCCEEDED:STAGE_STATUS.NEEDS_REVIEW,outcomeHash:sha256(canonicalJson(evidence)),evidence,errorCode:bridge.code??null});
