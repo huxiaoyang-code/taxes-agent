@@ -21,6 +21,7 @@ description: 根据业务目标与原件，按需发现本机财税能力；维�
 - [计划与核算](references/accounting.md)：显式请求绑定、依赖与固定业务能力。
 - [期间与税务](references/tax.md)：当前支持范围、税款口径与年度限制。
 - [会计反馈与更正](references/review.md)：实际人审、版本和关联更正。
+- [综合分析](references/analysis.md)：账务/税费可分析后的多期疑点、缺项、应对及有限老板方案比较。
 - [恢复与故障](references/recovery.md)：原操作查询、历史及定向回执。
 
 新任务用 requestFactId 选择已登记的请求事实，同时将它和全部推导输入放入 factIds；无需靠数组首位选择请求。登记/status 返回 factBindings 的当前 valueDigest/factVersion，直接使用这些绑定，不自行计算摘要。业务日期、原件事实、业务判断和授权须明确有据；Harness 不默认填事实。

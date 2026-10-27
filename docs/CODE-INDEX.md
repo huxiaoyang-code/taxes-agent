@@ -58,6 +58,10 @@
 - 复核包：[accountant-review.mjs](../06-workbench/server/accountant-review.mjs) 的 `createAccountantReview`；[accountant-review-store.mjs](../06-workbench/server/accountant-review-store.mjs) 的 `registerReview`、`recordReviewFeedback`；[accountant-review-feedback.mjs](../06-workbench/server/accountant-review-feedback.mjs) 的 `validateFeedback`；[accountant-review-q2.mjs](../06-workbench/server/accountant-review-q2.mjs) 的 `runAccountantReviewQ2`。
 - CLI：[accountant-review](../06-workbench/scripts/accountant-review.mjs)、[accountant-review-feedback](../06-workbench/scripts/accountant-review-feedback.mjs)、[accountant-review-q2](../06-workbench/scripts/accountant-review-q2.mjs)。测试：[accountant-review](../06-workbench/test/accountant-review.test.mjs)、[accountant-review-feedback](../06-workbench/test/accountant-review-feedback.test.mjs)、[accountant-review-q2](../06-workbench/test/accountant-review-q2.test.mjs)。
 
+## comprehensive-analysis
+
+- 可选月度综合分析：`analysis.comprehensive`，固定只读实现 [comprehensive-analysis.mjs](../06-workbench/server/comprehensive-analysis.mjs)，步骤提示词、输入及一期边界见 [Harness 综合分析指引](../05-reconstruction/codex/skills/harness/references/analysis.md)。复用原生多期账表、原件税费底稿、来源/任务/复核与失效机制，不新增 MCP 工具；规划限条件性应收回收，税费影响和税后现金未支持。实际 stdio/临时合成验证 [comprehensive-analysis.test.mjs](../06-workbench/test/comprehensive-analysis.test.mjs)。
+
 ## annual-close
 
 - 年度 Skill：[annual-close/SKILL.md](../05-reconstruction/codex/skills/annual-close/SKILL.md)，官方改编来源与 Apache-2.0 许可保留在同目录。只读证据适配：[annual-close.mjs](../06-workbench/server/annual-close.mjs)，复用实际年累计报表、期末检查与账簿能力，不复制所得税或账务公式。
