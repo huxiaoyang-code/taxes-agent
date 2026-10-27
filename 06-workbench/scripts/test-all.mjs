@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-mcp");
 const steps = [
+  { name: 'harness-tool-engineering', file: join(WORKBENCH, 'test', 'harness-tool-engineering.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-contract', file: join(WORKBENCH, 'test', 'harness-contract.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-lifecycle', file: join(WORKBENCH, 'test', 'harness-lifecycle.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-mcp', file: join(MCP, 'harness-test.mjs'), cwd: WORKBENCH },

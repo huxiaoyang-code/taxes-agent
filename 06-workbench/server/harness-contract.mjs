@@ -140,9 +140,10 @@ export function validateHarnessTaskState(task) {
 export function validatePlanGraph(tasks) {
   const code = 'harness_plan_invalid'; list(tasks, code); const byId = new Map();
   for (const t of tasks) {
-    fields(t, ['taskId', 'capabilityId', 'factIds', 'dependsOn', 'goal'], ['externalDependencies'], code);
+    fields(t, ['taskId', 'capabilityId', 'factIds', 'dependsOn', 'goal'], ['externalDependencies','requestFactId'], code);
     id(t.taskId, code); id(t.capabilityId, code); text(t.goal, code);
     list(t.factIds, code); t.factIds.forEach(v => id(v, code));
+    if(t.requestFactId!==undefined){id(t.requestFactId,code);check(t.factIds.includes(t.requestFactId),code);}
     list(t.dependsOn, code); t.dependsOn.forEach(v => id(v, code));
     if (t.externalDependencies !== undefined) {
       list(t.externalDependencies, code);
@@ -173,3 +174,6 @@ export function validateFeedback(f) {
   check(['accept', 'reject', 'retain_enterprise_exception', 'propose_public_rule'].includes(f.decision), code);
   list(f.evidenceRefs, code); f.evidenceRefs.forEach(validateTraceReference); return f;
 }
+
+// Explicit binding for new tasks; immutable legacy plans retain their original first-fact meaning.
+export const requestFactIdForTask=task=>task.requestFactId??task.factIds[0];

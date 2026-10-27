@@ -58,7 +58,7 @@ const {McpServerConnection,createDefaultTransport}=await import(pathToFileURL(jo
 const connection=new McpServerConnection({entry:{name:registered.name,config:registered.config,source:extension,scope:'extension'},cwd:repo,createTransport:createDefaultTransport,onTools:()=>{}});
 try {
  await connection.getClient();assert.equal(connection.state,'connected');assert.ok(connection.tools.some(t=>t.name==='harness_discover'));
- const discovery=await connection.callTool('harness_discover',{},{});assert.equal(discovery.isError,undefined);const payload=discovery.structuredContent;assert.ok(payload.capabilities.some(c=>c.capabilityId==='offline.vat_q2'));
+ const discovery=await connection.callTool('harness_discover',{},{});assert.equal(discovery.isError,undefined);const payload=discovery.structuredContent;assert.deepEqual(payload.capabilities,[]);assert.ok(payload.domains.some(d=>d.domain==='offline'));const filtered=await connection.callTool('harness_discover',{domain:'offline'},{});assert.ok(filtered.structuredContent.capabilities.some(c=>c.capabilityId==='offline.vat_q2'));const selected=await connection.callTool('harness_discover',{capabilityId:'offline.vat_q2'},{});assert.equal(selected.structuredContent.contractAvailable,true);
  const skill=await connection.readResource('skill://harness/SKILL.md',{});assert.match(skill.contents[0].text,/原始资料/);
  // Reproduce the documented CLI extension selection: -ne, explicit built-in
  // mcp and tool-search, plus this extension. No silently injected defaults.

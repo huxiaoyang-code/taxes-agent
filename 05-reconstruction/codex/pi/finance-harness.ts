@@ -15,7 +15,7 @@ export default function financeHarness(pi: ExtensionAPI) {
   pi.registerMcpServer('finance',{
     command:process.execPath,args:[join(root,'codex/mcp/finance-mcp/server.mjs')],cwd:resolve(root,'..'),
     exposure:'hidden',toolExposure:{harness_discover:'direct',skills_read:'direct','harness_*':'deferred',skills_list:'deferred',account_context:'deferred',finance_context_resolve:'deferred',account_set_create:'deferred',account_list:'deferred',voucher_check:'deferred'},
-    description:'Local finance Harness. First harness_discover for applicability, facts and limits; then harness_discover({capabilityId}) for schema/example/recovery. Standard MCP returns compact text and structuredContent plus persistent native receipt pages via harness_receipt_read. Preserve original/derived/judgment evidence and separate due, accrual, paid and difference.',timeout:180,
+    description:'Local finance Harness. Start harness_discover for a lightweight domain catalog; use domain/query and bounded pages, then capabilityId for the executable schema/example/phase/Wiki/recovery. Bind the source-supported Agent-authored request with task.requestFactId. Returned factBindings supply current valueDigest/factVersion; do not compute or guess them. Standard MCP returns compact text and structuredContent plus persistent native receipt pages via harness_receipt_read. Preserve original/derived/judgment evidence and separate due, accrual, paid and difference.',timeout:180,
   });
   pi.registerTool({
     name:'finance_delegate_parser',label:'Delegate finance material investigation',

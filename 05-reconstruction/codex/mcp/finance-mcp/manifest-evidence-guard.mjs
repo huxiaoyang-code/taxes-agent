@@ -1,3 +1,5 @@
+import {requestFactIdForTask} from '../../../../06-workbench/server/harness-contract.mjs';
+import {validateCapabilityRequest} from '../../../../06-workbench/server/harness-input-contracts.mjs';
 import {dirname,resolve,isAbsolute} from 'node:path';
 import {readLocalFile} from '../../../../06-workbench/server/offline-material-store.mjs';
 import {locatedBinding,evidencePointer,validateRegisteredFactEvidence} from '../../../../06-workbench/server/harness-fact-evidence.mjs';
@@ -97,11 +99,16 @@ export async function guardHarnessBoundary(name,args){
  // Recovery must reach the original native query even if CURRENT materials are
  // missing, changed or unreadable. An identical completed execute is a query-only
  // replay in #121; its safety decision remains in the native runtime.
- if(args.phase==='query'||(args.phase??'execute')==='execute'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.result?.executionState==='executed'&&sameBusinessRequest(task.capabilityId,a.request,s.facts.get(task.factIds[0])?.value)))return [];
- if(task.capabilityId==='agency.posting'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.operationId===`agency-${s.facts.get(task.factIds[0])?.value?.batchId}`&&stable(a.request)!==stable(s.facts.get(task.factIds[0])?.value)))return []; // Native identity-conflict refusal has precedence over new-request evidence checks.
+ if(args.phase==='query'||(args.phase??'execute')==='execute'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.result?.executionState==='executed'&&sameBusinessRequest(task.capabilityId,a.request,s.facts.get(requestFactIdForTask(task))?.value)))return [];
+ if(task.capabilityId==='agency.posting'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.operationId===`agency-${s.facts.get(requestFactIdForTask(task))?.value?.batchId}`&&stable(a.request)!==stable(s.facts.get(requestFactIdForTask(task))?.value)))return []; // Native identity-conflict refusal has precedence over new-request evidence checks.
+ const requestFact=s.facts.get(requestFactIdForTask(task));
+ // Missing/conflicting/unknown facts are business blockers, not malformed requests.
+ // not_applicable still reaches the runtime request-fact requirement. No manifest is read.
+ if(requestFact?.state!=='provided')return [];
+ validateCapabilityRequest(task.capabilityId,requestFact.value,args.phase??'execute');
  if(args.phase!=='query')for(const id of task.factIds){const f=s.facts.get(id);if(f?.evidence)await validateRegisteredFactEvidence(f,s.sources,s.facts);}
  if(!task.capabilityId.startsWith('agency.'))return [];
- const issues=await inspectManifestEvidence(s.facts.get(task.factIds[0])?.value);
+ const issues=await inspectManifestEvidence(s.facts.get(requestFactIdForTask(task))?.value);
  const invalid=issues.filter(i=>i.layer==='input_contract'&&i.state==='invalid');
  if(invalid.length)throw Object.assign(new Error('harness_agency_input_contract_invalid'),{code:'harness_agency_input_contract_invalid',details:{contractIssues:invalid,problems:invalid}});
  if(issues.some(i=>i.layer!=='input_contract')&&task.capabilityId==='agency.posting'&&args.phase!=='query')fail('harness_critical_fact_unverified',issues.filter(i=>i.layer!=='input_contract'));

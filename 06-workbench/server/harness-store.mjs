@@ -4,8 +4,8 @@ import { mkdir, open, readdir, rename, unlink, lstat } from 'node:fs/promises';
 import { resolve, dirname, join, isAbsolute } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { checkedPath, readLocalFile } from './offline-material-store.mjs';
-import { validateHarnessScope, validateFact, validatePlanGraph, validateFeedback, validateHarnessTaskState, capabilitySupportsScope, idPattern } from './harness-contract.mjs';
-import {validateRegisteredFactEvidence,factEvidenceError} from './harness-fact-evidence.mjs';
+import { validateHarnessScope, validateFact, validatePlanGraph, validateFeedback, validateHarnessTaskState, capabilitySupportsScope, idPattern, requestFactIdForTask } from './harness-contract.mjs';
+import {validateRegisteredFactEvidence,factEvidenceError,factValueDigest} from './harness-fact-evidence.mjs';
 
 export const VERSION = 'finance-harness-store/1';
 export const stable = v => Array.isArray(v) ? `[${v.map(stable).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v);
@@ -107,7 +107,7 @@ export async function registerHarnessSource(path, source, currentView) {
   requireValue(!source.parsed || code.length > 0 && validation.length > 0, 'harness_parser_proof_required');
   const data = { sourceId: source.sourceId, locator: source.locator, originals, code, validation, parsed: source.parsed === true, unrecognized: source.unrecognized, classification: source.classification };
   data.contentDigest = hash(data);
-  return locked(path, async s => { const old = s.sources.get(data.sourceId),same=old?.contentDigest===data.contentDigest&&!s.invalidatedSources.has(data.sourceId);data.revision=(old?.revision??0)+(same?0:1);data.sourceVersion=hash(data);if(!same)await appendHarness(s,'source',data);return {status:same?'replayed':'registered',sourceVersion:same?old.sourceVersion:data.sourceVersion,...(currentView?continuation(await currentView(s),same?[]:s.tasks.filter(t=>t.factIds.some(id=>s.facts.get(id)?.sourceRefs.includes(data.sourceId))).map(t=>t.taskId)):{} )}; });
+  return locked(path, async s => { const old = s.sources.get(data.sourceId),same=old?.contentDigest===data.contentDigest&&!s.invalidatedSources.has(data.sourceId);data.revision=(old?.revision??0)+(same?0:1);data.sourceVersion=hash(data);if(!same)await appendHarness(s,'source',data);return {status:same?'replayed':'registered',sourceId:data.sourceId,sourceVersion:same?old.sourceVersion:data.sourceVersion,...(currentView?continuation(await currentView(s),same?[]:s.tasks.filter(t=>t.factIds.some(id=>s.facts.get(id)?.sourceRefs.includes(data.sourceId))).map(t=>t.taskId)):{} )}; });
 }
 export async function registerHarnessFacts(path, facts, currentView) {
   requireValue(Array.isArray(facts) && facts.length > 0 && facts.length <= 10000, 'harness_facts_invalid'); facts.forEach(f=>{try{validateFact(f);}catch(error){throw factEvidenceError(error,f,{field:'fact'});}});
@@ -117,7 +117,7 @@ export async function registerHarnessFacts(path, facts, currentView) {
     const combinedFacts=new Map([...s.facts,...facts.map(f=>[f.factId,f])]);
     for(const f of facts)await validateRegisteredFactEvidence(f,s.sources,combinedFacts);
     const changed = facts.filter(f => stable(f) !== stable(s.facts.get(f.factId)));
-    if (changed.length) await appendHarness(s, 'facts', changed); return { status: changed.length ? 'registered' : 'replayed', changedFactIds: changed.map(f => f.factId),legacyEvidence:{factIds:facts.filter(f=>f.state==='provided'&&!f.evidence).map(f=>f.factId),verified:false,limitation:'Compatibility facts with sourceRefs alone have no checked support for their values.'},...(currentView?continuation(await currentView(s),s.tasks.filter(t=>t.factIds.some(id=>changed.some(f=>f.factId===id))).map(t=>t.taskId)):{} ) };
+    if (changed.length) await appendHarness(s, 'facts', changed); return { status: changed.length ? 'registered' : 'replayed', changedFactIds: changed.map(f => f.factId),factBindings:facts.map(f=>({factId:f.factId,state:f.state,factVersion:s.factEpochs.get(f.factId),...(f.state==='provided'?{valueDigest:factValueDigest(f.value)}:{})})),legacyEvidence:{factIds:facts.filter(f=>f.state==='provided'&&!f.evidence).map(f=>f.factId),verified:false,limitation:'Compatibility facts with sourceRefs alone have no checked support for their values.'},...(currentView?continuation(await currentView(s),s.tasks.filter(t=>t.factIds.some(id=>changed.some(f=>f.factId===id))).map(t=>t.taskId)):{} ) };
   });
 }
 export async function saveHarnessPlan(path, tasks, capabilities) {
@@ -162,7 +162,7 @@ export async function harnessView(s, capabilities, externalByTask = new Map(), p
   const visit = t => {
     if (views.has(t.taskId)) return views.get(t.taskId);
     const cap = capabilities.get(t.capabilityId), parents = t.dependsOn.map(id => visit(byId.get(id))), facts = t.factIds.map(id => s.facts.get(id));
-    const treatmentId=facts[0]?.value?.treatmentId,treatment=treatmentId?s.treatments.find(x=>x.treatmentId===treatmentId):null;
+    const treatmentId=s.facts.get(requestFactIdForTask(t))?.value?.treatmentId,treatment=treatmentId?s.treatments.find(x=>x.treatmentId===treatmentId):null;
     const external = externalByTask.get(t.taskId) ?? (t.externalDependencies ?? []).map(ref=>({...ref,current:false,reason:'harness_external_dependency_unchecked'}));
     const sourceIds = [...new Set([...facts.flatMap(f => f.sourceRefs),...(treatment?[treatment.draftSourceId]:[])])];
     // Availability observations are blockers, never new business versions.
@@ -182,12 +182,12 @@ export async function harnessView(s, capabilities, externalByTask = new Map(), p
     sourceIds.filter(id=>fresh.get(id)===null).forEach(sourceId=>blockers.push({sourceId,state:'unverified',reason:'source_temporarily_unverifiable',retryable:true}));
     if(proofObservations.has(t.taskId))blockers.push(proofObservations.get(t.taskId));
     sourceIds.filter(id=>['unknown','missing','conflict','unsupported'].includes(s.sources.get(id)?.classification)).forEach(id=>blockers.push({sourceId:id,state:s.sources.get(id).classification,reason:'source_investigation_unresolved',layer:'parser',reproductionRefs:s.sources.get(id).validation.map(f=>f.path),handlingPath:'Investigate saved parser/validation report, retain unrecognized items, supplement evidence and register a resolved source version'}));
-    const correction=facts[0]?.value?.correctionOf;
+    const correction=s.facts.get(requestFactIdForTask(t))?.value?.correctionOf;
     parents.filter(p => !(correction?.taskId===p.taskId&&correction.targetVersion===p.receipt?.targetVersion&&s.attempts.some(a=>a.taskId===p.taskId&&a.result?.targetVersion===correction.targetVersion&&a.result.executionState==='executed'))&&(p.executionState !== 'executed' || p.reviewState === 'rejected' || p.blockers.length)).forEach(p => blockers.push({ taskId: p.taskId, state: 'dependency_blocked', reason: p.executionState,...(p.blockers.length&&p.blockers.every(b=>b.retryable)?{retryable:true}:{}) }));
     if (cap.availability === 'unavailable') blockers.push({ state: 'unsupported', reason: 'capability_unavailable' });
     if (!capabilitySupportsScope(cap,s.meta.scope)) blockers.push({state:'unsupported',reason:'harness_capability_period_unsupported',period:s.meta.scope.period});
     // An older interrupted write remains unresolved even if facts or rules changed.
-    const sameRequest=s.attempts.filter(a=>a.effect==='write'&&a.capabilityId===t.capabilityId&&sameBusinessRequest(t.capabilityId,a.request,facts[0]?.value));
+    const sameRequest=s.attempts.filter(a=>a.effect==='write'&&a.capabilityId===t.capabilityId&&sameBusinessRequest(t.capabilityId,a.request,s.facts.get(requestFactIdForTask(t))?.value));
     const unresolved = [...attempts,...sameRequest].find(a => a.effect === 'write' && (!a.result || a.result.executionState === 'unknown'));
     if (unresolved) blockers.push({ state: 'unknown', reason: 'write_outcome_unknown', intentDigest: unresolved.intentDigest,originalTaskId:unresolved.taskId });
     const latestWrite=sameRequest.filter(a=>a.effect==='write').at(-1);
@@ -202,7 +202,8 @@ export async function harnessView(s, capabilities, externalByTask = new Map(), p
     views.set(t.taskId, v); return v;
   };
   s.tasks.forEach(visit);
-  return { version: VERSION, scope: s.meta.scope, journalHead: s.head, sources: [...s.sources.values()].map(x => ({ ...x, current: fresh.get(x.sourceId) })), facts: [...s.facts.values()], tasks: s.tasks.map(t => views.get(t.taskId)), feedbacks: s.feedbacks, requests: s.requests, treatments: s.treatments, history: s.attempts, periodComplete: false, submittable: false };
+  const view = { version: VERSION, storePath:s.info.root, scope: s.meta.scope, journalHead: s.head, sources: [...s.sources.values()].map(x => ({ ...x, current: fresh.get(x.sourceId) })), facts: [...s.facts.values()], factBindings:[...s.facts.values()].map(f=>({factId:f.factId,state:f.state,factVersion:s.factEpochs.get(f.factId),...(f.state==='provided'?{valueDigest:factValueDigest(f.value)}:{})})), tasks: s.tasks.map(t => views.get(t.taskId)), feedbacks: s.feedbacks, requests: s.requests, treatments: s.treatments, history: s.attempts, periodComplete: false, submittable: false };
+  view.nextSteps=continuation(view,view.tasks.map(t=>t.taskId)).nextSteps;return view;
 }
 export async function recordHarnessFeedback(path, feedback, capabilities, currentView = s=>harnessView(s,capabilities)) {
   validateFeedback(feedback);
@@ -220,16 +221,16 @@ export function continuation(view, roots) {
   do{size=affected.size;for(const t of view.tasks)if(t.dependsOn.some(id=>affected.has(id)))affected.add(t.taskId);}while(size!==affected.size);
   const tasks=view.tasks.filter(t=>affected.has(t.taskId));
   return {affectedTasks:tasks.map(t=>t.taskId),invalidatedResults:tasks.filter(t=>t.historicalReceipt&&t.executionState==='stale').map(t=>({taskId:t.taskId,targetVersion:t.historicalReceipt.targetVersion})),blockers:tasks.flatMap(t=>t.blockers.map(b=>({taskId:t.taskId,...b}))),nextSteps:tasks.map(t=>{
-    const base={taskId:t.taskId,dependencyDigest:t.dependencyDigest};
+    const base={taskId:t.taskId,requestFactId:requestFactIdForTask(t),dependencyDigest:t.dependencyDigest};
     if(t.unresolvedIntent)return {...base,action:'query_original_operation',tool:'harness_run',phase:'query',intentDigest:t.unresolvedIntent};
     if(t.blockers.some(b=>b.retryable))return {...base,action:'retry_verification',tool:'harness_status'};
     if(t.reviewState==='rejected'||t.blockers.some(b=>['native_operation_previously_rejected','accountant_rejected_execution'].includes(b.reason)))return {...base,action:'correct_with_existing_business_tools',originalReceipt:t.historicalReceipt?.targetVersion??t.receipt?.targetVersion,requiresNewPreparationAndConfirmation:true};
-    if(t.blockers.length)return {...base,action:'resolve_blockers',tool:'harness_status'};
+    if(t.blockers.length)return {...base,action:'resolve_blockers',tool:'harness_facts_register',requestFactId:requestFactIdForTask(t),requiredFacts:t.blockers.filter(b=>b.factId).map(({factId,state})=>({factId,state})),contract:{tool:'harness_discover',arguments:{capabilityId:t.capabilityId}},handlingPath:'Supplement or reconcile the indicated facts/sources, register the supported version and refresh the request fact. Independent branches can continue.'};
     if(t.executionState==='executed')return {...base,action:t.reviewState==='accepted'?'continue_dependents':'review_current_result',...(t.reviewState==='accepted'?{}:{tool:'harness_feedback',targetVersion:t.receipt.targetVersion})};
     if(t.historicalReceipt&&['agency.posting','offline.posting','voucher.create','voucher.post','voucher.unpost'].includes(t.capabilityId))return {...base,action:'query_original_operation',tool:'harness_run',phase:'query',originalOperationId:t.historicalReceipt.operationId,requiresCorrectionForChangedBusiness:true,requiresNewPreparationAndConfirmation:true};
     if(t.capabilityId==='agency.posting')return {...base,action:'prepare_current_proposal',tool:'harness_run',phase:'prepare',requiresAccountantConfirmation:true};
     return {...base,action:'recompute_task',tool:'harness_run',phase:'execute'};
-  }),periodComplete:false,submittable:false};
+  }).map(step=>step.tool==='harness_run'?{...step,arguments:{storePath:view.storePath,taskId:step.taskId,phase:step.phase??'execute',...(step.phase==='query'?{}:{dependencyDigest:step.dependencyDigest})}}:step),periodComplete:false,submittable:false};
 }
 export async function requestHarnessMaterials(path, request) {
   requireValue(request && typeof request.text === 'string' && request.text.trim().length > 0 && Array.isArray(request.taskIds), 'harness_request_invalid');

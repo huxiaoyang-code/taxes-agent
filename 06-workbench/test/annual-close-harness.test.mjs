@@ -152,7 +152,7 @@ async function integration() {
   try {
     await start();
     const listed = (await client.rpc('tools/list')).result.tools; assert.equal(listed.filter(t => t.name.startsWith('harness_')).length, 13);
-    const discovery = await call('harness_discover'); const cap = discovery.capabilities.find(c => c.capabilityId === 'annual.inspect');
+    const discovery = await call('harness_discover', { responseMode: 'full' }); const cap = discovery.capabilities.find(c => c.capabilityId === 'annual.inspect');
     assert.ok(cap); assert.equal(cap.effect, 'read'); assert.deepEqual(cap.supportedPeriods, ['year']);
     assert.ok(discovery.capabilities.some(c => c.capabilityId === 'agency.annual-calculation'));
     const found = await call('harness_scope_discover', { dbPath: f.target.dbPath }); assert.equal(found.databaseInstanceId, f.scope.databaseInstanceId);

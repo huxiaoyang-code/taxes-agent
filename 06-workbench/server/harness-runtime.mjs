@@ -1,6 +1,7 @@
 import { harnessCapabilities, callHarnessAdapter } from './harness-adapters.mjs';
 import { withHarness, appendHarness, harnessView, hash, stable, requireValue, operationWasRejected, sameBusinessRequest, initHarness, registerHarnessSource as registerSource, registerHarnessFacts as registerFacts, saveHarnessPlan, recordHarnessFeedback, requestHarnessMaterials, registerHarnessTreatment, recoverHarnessLock } from './harness-store.mjs';
-import { validateExecutionReceipt, HARNESS_STATE_AXES } from './harness-contract.mjs';
+import { validateExecutionReceipt, HARNESS_STATE_AXES, requestFactIdForTask } from './harness-contract.mjs';
+import {validateCapabilityRequest} from './harness-input-contracts.mjs';
 import { discoverHarnessTarget } from './harness-target.mjs';
 import { readLocalFile, checkedPath } from './offline-material-store.mjs';
 export { initHarness, requestHarnessMaterials, registerHarnessTreatment, recoverHarnessLock };
@@ -118,7 +119,7 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
   return withHarness(path,async s=>{
     const caps=harnessCapabilities(),view=await currentHarnessView(s),task=view.tasks.find(t=>t.taskId===taskId);
     requireValue(task,'harness_task_missing');const cap=caps.get(task.capabilityId);
-    const requestValue=s.facts.get(task.factIds[0])?.value;
+    const requestValue=s.facts.get(requestFactIdForTask(task))?.value;
     const sameRequest=s.attempts.filter(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&sameBusinessRequest(task.capabilityId,a.request,requestValue));
     if(task.capabilityId==='agency.posting'){
       const identityAttempts=s.attempts.filter(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.operationId===`agency-${requestValue?.batchId}`);
@@ -153,11 +154,12 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
       const resultCurrent=applicability(task,result,currentBinding);
       return {status:'queried',receipt:linked,currentBinding,operationState:known?'executed':state,resultCurrent,confirmationCurrent:known&&unverifiable(result)&&task.reviewState==='accepted'?resultCurrent:false,originalReceipt:attempt.result,observation:{...result,...(unverifiable(result)?{retryable:true}:{})},...(!currentBinding?{code:'harness_query_historical_only'}:{}),currentDependencyDigest:task.dependencyDigest};
     }
-    requireValue(!task.blockers.length,'harness_task_blocked');
+    if(task.blockers.length)throw Object.assign(new Error('harness_task_blocked'),{code:'harness_task_blocked',details:{taskId,requestFactId:requestFactIdForTask(task),blockers:task.blockers,contract:{tool:'harness_discover',arguments:{capabilityId:task.capabilityId}},hint:'Resolve the indicated facts or dependencies; independent unblocked tasks may continue. Query an unknown original write before any retry.'}});
     requireValue(!dependencyDigest||dependencyDigest===task.dependencyDigest,'harness_dependency_stale');
     const last=s.attempts.filter(a=>a.taskId===taskId&&a.dependencyDigest===task.dependencyDigest).at(-1);
-    const fact=s.facts.get(task.factIds[0]);requireValue(fact?.state==='provided'&&fact.value&&typeof fact.value==='object','harness_request_fact_required');
+    const fact=s.facts.get(requestFactIdForTask(task));requireValue(fact?.state==='provided'&&fact.value&&typeof fact.value==='object','harness_request_fact_required');
     const request=structuredClone(fact.value);
+    validateCapabilityRequest(task.capabilityId,request,phase);
     requireValue(treatmentId===undefined||treatmentId===request.treatmentId,'harness_treatment_binding_mismatch');
     if(last?.result?.executionState==='executed'&&task.executionState==='executed')return {status:'replayed',receipt:last.result};
     const existing=sameRequest.filter(a=>a.result?.executionState==='executed').at(-1);
