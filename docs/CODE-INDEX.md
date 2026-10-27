@@ -10,6 +10,7 @@
 
 ## account-import
 
+- Codex 首次接手、整理和迁入历史账务：[legacy-book-import/SKILL.md](../05-reconstruction/codex/skills/legacy-book-import/SKILL.md)，[内部导入格式及create/append边界](../05-reconstruction/codex/skills/legacy-book-import/references/import-rules.md)。优先稳定企业/来源/批次的增量导入；原件、派生输入与正式账务分别保存，核对真实目标后转入 Harness 持续核算。没有统一接管包自动验收入口。
 - 账套、凭证与导入：[accounting.mjs](../06-workbench/server/accounting.mjs) 的 `createAccountSet`、`createVoucher`、`parseImportTexts`、`validateImportPayload`、`importAccountSet`；[accounting-profiles.mjs](../06-workbench/server/accounting-profiles.mjs) 的 `getAccountingProfile`；[enterprise-identity.mjs](../06-workbench/server/enterprise-identity.mjs) 的 `normalizeEnterpriseIdentity`。
 - 增量导入：[import-incremental.mjs](../06-workbench/server/import-incremental.mjs) 的 `importIncremental`；数据库与迁移：[db.mjs](../06-workbench/server/db.mjs)，科目：[coa.mjs](../06-workbench/server/coa.mjs)。
 - 测试：[import-strict](../06-workbench/test/import-strict.test.mjs)、[import-incremental](../06-workbench/test/import-incremental.test.mjs)、[accounting-standard-profiles](../06-workbench/test/accounting-standard-profiles.test.mjs)、[enterprise-identity](../06-workbench/test/enterprise-identity.test.mjs)。
