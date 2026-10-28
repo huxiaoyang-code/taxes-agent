@@ -33,5 +33,6 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 | [06-workbench/test](06-workbench/test/) | 回归测试、合成 fixtures 与独立预期 |
 | [05-reconstruction](05-reconstruction/) | MCP、运行时 Skills、catalog、导入示例与转换工具 |
 | [docs/CODE-INDEX.md](docs/CODE-INDEX.md) | 按任务定位源码、入口与测试 |
+| [企业接手与财税顾问技能包](docs/COMPANY-ADVISOR-SKILL.md) | Codex 接手历史、疑点复核、税费与现金规划；同事安装和使用入口 |
 
-协作规则见 [AGENTS.md](AGENTS.md)；当前需求与未完工作在 [GitHub Issues](https://github.com/huxiaoyang-code/youshu-fork/issues) 跟踪。
+协作规则见 [AGENTS.md](AGENTS.md)；当前需求与未完工作在 [GitHub Issues](https://github.com/huxiaoyang-code/taxes-agent/issues) 跟踪。

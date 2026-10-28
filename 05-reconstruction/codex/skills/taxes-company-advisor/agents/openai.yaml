@@ -1,0 +1,4 @@
+interface:
+  display_name: "企业接手与财税顾问"
+  short_description: "整理新公司历史账务、复核疑点，编制有证据的税费和税后现金方案"
+  default_prompt: "使用 $taxes-company-advisor 核实这家企业的资料与当前问题，列出可开展的工作、具体缺件和下一步交付。"
