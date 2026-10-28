@@ -1,6 +1,6 @@
 # 代码索引
 
-从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/youshu-fork/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/youshu-fork/issues/76) 及相关 Issue / PR。
+从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
 ## 入口
 
@@ -10,6 +10,7 @@
 
 ## account-import
 
+- Codex 顾问技能：[taxes-company-advisor/SKILL.md](../05-reconstruction/codex/skills/taxes-company-advisor/SKILL.md)，[同事安装与使用](COMPANY-ADVISOR-SKILL.md)。按需组织陌生企业接手、历史整理、疑点复核和税费/税后现金方案；复用下列执行入口，不新增工具或计算支持。
 - Codex 首次接手、整理和迁入历史账务：[legacy-book-import/SKILL.md](../05-reconstruction/codex/skills/legacy-book-import/SKILL.md)，[内部导入格式及create/append边界](../05-reconstruction/codex/skills/legacy-book-import/references/import-rules.md)。优先稳定企业/来源/批次的增量导入；原件、派生输入与正式账务分别保存，核对真实目标后转入 Harness 持续核算。没有统一接管包自动验收入口。
 - 账套、凭证与导入：[accounting.mjs](../06-workbench/server/accounting.mjs) 的 `createAccountSet`、`createVoucher`、`parseImportTexts`、`validateImportPayload`、`importAccountSet`；[accounting-profiles.mjs](../06-workbench/server/accounting-profiles.mjs) 的 `getAccountingProfile`；[enterprise-identity.mjs](../06-workbench/server/enterprise-identity.mjs) 的 `normalizeEnterpriseIdentity`。
 - 增量导入：[import-incremental.mjs](../06-workbench/server/import-incremental.mjs) 的 `importIncremental`；数据库与迁移：[db.mjs](../06-workbench/server/db.mjs)，科目：[coa.mjs](../06-workbench/server/coa.mjs)。
