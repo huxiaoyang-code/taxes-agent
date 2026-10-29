@@ -23,6 +23,8 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 
 后端默认地址是 `http://127.0.0.1:8787`，可用 `FINANCE_API_BASE` 配置。工具注册、Skill 资源与示例命令见[代码索引](docs/CODE-INDEX.md#mcp)。
 
+除 Pi 外，还提供 [Claude Code、dsh 与 ZCode 接入](05-reconstruction/codex/hosts/README.md)：生成独立工作区的原生配置，复用同一财税 MCP 与中文 Skill；实际连接和模型业务验收范围分别记录，不自动修改用户全局配置。
+
 ## 目录
 
 | 路径 | 用途 |

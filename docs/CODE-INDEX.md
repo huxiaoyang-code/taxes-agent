@@ -82,6 +82,8 @@
 
 ## mcp
 
+- 多宿主：[Claude Code、dsh、ZCode 接入](../05-reconstruction/codex/hosts/README.md)，配置生成入口 [finance-host-config.mjs](../06-workbench/scripts/finance-host-config.mjs)，共享验证 [finance-host-config.test.mjs](../06-workbench/test/finance-host-config.test.mjs)。显式 `FINANCE_MCP_PROFILE=harness` 由 [tool-profile.mjs](../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs)限定列表与直接调用；未设置时兼容既有工具面。配置生成、宿主无模型连接和业务验收分别记录。
+
 - Harness：共享声明契约 [harness-contract.mjs](../06-workbench/server/harness-contract.mjs)，固定业务注册 [harness-adapters.mjs](../06-workbench/server/harness-adapters.mjs)，生命周期 [harness-runtime.mjs](../06-workbench/server/harness-runtime.mjs)、元数据证据日志 [harness-store.mjs](../06-workbench/server/harness-store.mjs)。企业特例调用现有审计 accounting API，批处理复用既有 runner；均显式绑定本机目标。
 - 代账接线：复用 [agency-business.mjs](../06-workbench/server/agency-business.mjs) 的 getAgencyCapabilities、buildAgencyWorkpaper、prepare/execute/queryAgencyPosting 与 buildAgencyAnnualWorkpaper，经既有 Harness domain worker 隔离目标，原生人审材料和 archive 身份恢复；年度计算不是年度关账。集中增量验证：`node test/harness-lifecycle.test.mjs --agency-capabilities`，使用独立合成原件/临时库。
 - Harness MCP 工具：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs)；渐进式入口 [harness/SKILL.md](../05-reconstruction/codex/skills/harness/SKILL.md)。pi 1.1.0 原生 MCP 与禁止递归的解析委派扩展 [finance-harness.ts](../05-reconstruction/codex/pi/finance-harness.ts)。其他宿主仍使用标准 stdio。

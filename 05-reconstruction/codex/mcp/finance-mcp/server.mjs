@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
-import { TOOLS, TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
+import { TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
 import { HARNESS_TOOL_NAMES } from './tools.mjs';
 import {validateFact} from '../../../../06-workbench/server/harness-contract.mjs';
 import {factEvidenceError} from '../../../../06-workbench/server/harness-fact-evidence.mjs';
@@ -22,6 +22,11 @@ import {validateSchemaValue} from '../../../../06-workbench/server/harness-schem
 import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
+import {toolsForProfile} from './tool-profile.mjs';
+
+const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE;
+const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
+const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
@@ -78,6 +83,7 @@ function readPathTexts(args) {
 async function callTool(name, args = {}) {
   const spec = TOOL_BY_NAME.get(name);
   if (!spec) throw new ToolCallError("unknown_tool", "unknown_tool");
+  if (!EXPOSED_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
@@ -202,7 +208,7 @@ rl.on("line", async (line) => {
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
   if (method === "ping") return ok(id, {});
-  if (method === "tools/list") return ok(id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
+  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
   if (method === "tools/call") {
     try {
       const result = await callTool(params?.name, params?.arguments || {});
