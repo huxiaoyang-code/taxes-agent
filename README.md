@@ -23,6 +23,8 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 
 后端默认地址是 `http://127.0.0.1:8787`，可用 `FINANCE_API_BASE` 配置。工具注册、Skill 资源与示例命令见[代码索引](docs/CODE-INDEX.md#mcp)。
 
+[主 Agent 配置与首次运行](05-reconstruction/codex/hosts/START-HERE.md)是 Pi、Claude Code、dsh、ZCode 的统一入口：选择宿主、启动明确账库的后端、生成全新工作区、配置本人模型并检验合成流程。四者均可作为主体运行；解析子 Agent 按宿主单独核实。配置、原生连接、模型短流程与整账验收分别记录，详见[接入与实测范围](05-reconstruction/codex/hosts/README.md)。
+
 ## 目录
 
 | 路径 | 用途 |
