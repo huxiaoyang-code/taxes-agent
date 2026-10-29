@@ -11,7 +11,8 @@ export function decodeAnthropicRequest(body){
   if(body.stream!==undefined&&typeof body.stream!=='boolean')bad();
   if(body.thinking!==undefined&&(!object(body.thinking)||!['enabled','disabled','adaptive'].includes(body.thinking.type)))bad();
   if(body.top_k!==undefined||(body.stop_sequences?.length??0)>0)bad();
-  const result={model:body.model,messages:[],max_tokens:body.max_tokens,stream:body.stream===true,reasoning_effort:'low'};
+  const result={model:body.model,messages:[],max_tokens:body.max_tokens,stream:body.stream===true};
+  if(body.thinking!==undefined)result.thinking={type:body.thinking.type==='disabled'?'disabled':'enabled'};
   if(body.system!==undefined)result.messages.push({role:'system',content:text(body.system)});
   for(const message of body.messages){
     if(!object(message)||!['user','assistant'].includes(message.role))bad();
@@ -30,7 +31,7 @@ export function decodeAnthropicRequest(body){
   if(body.tools!==undefined){if(!Array.isArray(body.tools))bad();result.tools=body.tools.map(tool=>{if(!object(tool)||typeof tool.name!=='string'||!object(tool.input_schema)||(tool.type&&tool.type!=='custom')||(tool.description!==undefined&&typeof tool.description!=='string'))bad();return {type:'function',function:{name:tool.name,...tool.description!==undefined?{description:tool.description}:{},parameters:tool.input_schema}};});}
   if(body.tool_choice!==undefined){const choice=body.tool_choice;if(!object(choice))bad();if(choice.type==='auto')result.tool_choice='auto';else if(choice.type==='any')result.tool_choice='required';else if(choice.type==='none')result.tool_choice='none';else if(choice.type==='tool'&&typeof choice.name==='string')result.tool_choice={type:'function',function:{name:choice.name}};else bad();}
   for(const key of ['temperature','top_p'])if(body[key]!==undefined){if(typeof body[key]!=='number'||!Number.isFinite(body[key]))bad();result[key]=body[key];}
-  if(body.output_config?.effort!==undefined&&body.output_config.effort!=='low')bad();
+  if(body.output_config?.effort!==undefined){if(!['low','high','max'].includes(body.output_config.effort))bad();result.reasoning_effort=body.output_config.effort;}
   return result;
 }
 export function encodeAnthropicResponse(chat,{stream=false}={}){

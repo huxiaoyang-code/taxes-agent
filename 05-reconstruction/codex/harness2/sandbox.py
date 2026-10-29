@@ -77,7 +77,12 @@ class LinuxSandbox:
             raise RuntimeError('harness2_windows_interop_forbidden')
         return command + ['--'] + argv
 
-    def run(self, argv: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess:
+    def run(self, argv: list[str], *, timeout: int | None = 30,
+            output_limit: int | None = None) -> subprocess.CompletedProcess:
+        if output_limit is not None and (type(output_limit) is not int or output_limit < 1):
+            raise ValueError('harness2_sandbox_output_limit_invalid')
+        if timeout is not None and (type(timeout) not in (int, float) or timeout <= 0):
+            raise ValueError('harness2_sandbox_timeout_invalid')
         command = self.command(argv)
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env={'PATH': '/usr/bin:/bin'}, start_new_session=True)
@@ -85,21 +90,21 @@ class LinuxSandbox:
         selector.register(proc.stdout, selectors.EVENT_READ, 'stdout')
         selector.register(proc.stderr, selectors.EVENT_READ, 'stderr')
         chunks = {'stdout': bytearray(), 'stderr': bytearray()}
-        deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         try:
             while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
-                for key, _ in selector.select(min(remaining, 0.1)):
+                for key, _ in selector.select(0.1 if remaining is None else min(remaining, 0.1)):
                     data = os.read(key.fileobj.fileno(), 65536)
                     if not data:
                         selector.unregister(key.fileobj)
                     else:
                         chunks[key.data].extend(data)
-                        if sum(len(v) for v in chunks.values()) > 1024 * 1024:
+                        if output_limit is not None and sum(len(v) for v in chunks.values()) > output_limit:
                             raise RuntimeError('harness2_sandbox_output_limit')
-            proc.wait(timeout=max(0.001, deadline-time.monotonic()))
+            proc.wait(timeout=None if deadline is None else max(0.001, deadline-time.monotonic()))
         except BaseException:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)

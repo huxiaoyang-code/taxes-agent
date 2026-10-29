@@ -13,6 +13,8 @@ const steps = [
   { name: 'harness2-research-mcp', file: join(WORKBENCH, 'test', 'harness2-research-mcp.test.mjs'), cwd: WORKBENCH },
   { name: 'harness2-recovery', file: join(WORKBENCH, 'test', 'harness2-recovery.test.mjs'), cwd: WORKBENCH },
   { name: 'harness2-launcher', file: join(WORKBENCH, 'test', 'harness2-launcher.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-codex-proposer', file: join(WORKBENCH, 'test', 'harness2-codex-proposer.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-assessment', file: join(WORKBENCH, 'test', 'harness2-assessment.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-host-config', file: join(WORKBENCH, 'test', 'finance-host-config.test.mjs'), cwd: WORKBENCH },
   { name: 'host-dsh', file: join(WORKBENCH, 'test', 'host-dsh.test.mjs'), cwd: WORKBENCH },
   { name: 'host-zcode', file: join(WORKBENCH, 'test', 'host-zcode.test.mjs'), cwd: WORKBENCH },

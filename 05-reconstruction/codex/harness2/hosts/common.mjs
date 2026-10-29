@@ -61,8 +61,8 @@ export function prepare(options,host,buildConfig){
     const candidate=inside(workspace,options.candidateDir,'candidate'),path=inside(workspace,join(candidate,'SKILL.md'),'candidate_file');
     if(!statSync(path).isFile()||statSync(path).size>65536)fail('harness2_candidate_invalid');candidateText=readFileSync(path,'utf8');if(candidateText.includes('\0'))fail('harness2_candidate_invalid');
   }else if(options.mode==='run')fail('harness2_candidate_required');
-  const timeoutMs=options.timeoutMs??30000;if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>600000)fail('harness2_host_timeout_invalid');
-  const maxOutputTokens=options.maxOutputTokens??2048;if(!Number.isSafeInteger(maxOutputTokens)||maxOutputTokens<1||maxOutputTokens>8192)fail('harness2_host_output_limit_invalid');
+  const timeoutMs=options.timeoutMs??(options.mode==='run'?null:30000);if(timeoutMs!==null&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>2147483647))fail('harness2_host_timeout_invalid');
+  const maxOutputTokens=options.maxOutputTokens;if(maxOutputTokens!==undefined&&(!Number.isSafeInteger(maxOutputTokens)||maxOutputTokens<1))fail('harness2_host_output_limit_invalid');
   writeBundle(context,buildConfig(context));
   const home=join(configDir,'home');mkdirSync(home);mkdirSync(join(home,'tmp'));
   const env={...systemEnv(),...context.mcpEnv,HOME:home,USERPROFILE:home,APPDATA:join(home,'appdata'),LOCALAPPDATA:join(home,'localappdata'),XDG_CONFIG_HOME:join(home,'config'),XDG_DATA_HOME:join(home,'data'),XDG_CACHE_HOME:join(home,'cache'),TMP:join(home,'tmp'),TEMP:join(home,'tmp'),TMPDIR:join(home,'tmp'),PATH:dirname(context.nodePath),NODE_NO_WARNINGS:'1'};

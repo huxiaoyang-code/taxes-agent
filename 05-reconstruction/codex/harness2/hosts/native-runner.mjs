@@ -3,7 +3,6 @@ import {readFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-const OUTPUT_LIMIT=2*1024*1024;
 export function killTree(child){
   if(!child?.pid)return;
   if(process.platform==='win32'){
@@ -14,19 +13,21 @@ export function killTree(child){
   else if(child.harness2OwnGroup)try{process.kill(-child.pid,'SIGKILL');}catch{try{child.kill('SIGKILL');}catch{}}
   else try{child.kill('SIGKILL');}catch{}
 }
-export async function capture(command,args,{cwd,env,timeoutMs,signal,onLine}={}){
+export async function capture(command,args,{cwd,env,timeoutMs,signal,onLine,outputLimit}={}){
+  if(outputLimit!==undefined&&(!Number.isSafeInteger(outputLimit)||outputLimit<1))throw Error('harness2_output_limit_invalid');
+  if(timeoutMs!=null&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>2147483647))throw Error('harness2_timeout_invalid');
   if(signal?.aborted)return {exitCode:null,reason:'cancelled',stdout:'',stderr:''};
   const ownGroup=process.platform!=='win32'&&env?.FINANCE_HARNESS2_SUPERVISED!=='1';
   const child=spawn(command,args,{cwd,env,windowsHide:true,shell:false,detached:ownGroup,stdio:['ignore','pipe','pipe']});child.harness2OwnGroup=ownGroup;
   child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
   let stdout='',stderr='',bytes=0,reason=null,partial='';
   const stop=why=>{reason??=why;killTree(child);child.stdout.destroy();child.stderr.destroy();};
-  const cancel=()=>stop('cancelled'),timer=setTimeout(()=>stop('timeout'),timeoutMs);
+  const cancel=()=>stop('cancelled'),timer=timeoutMs==null?null:setTimeout(()=>stop('timeout'),timeoutMs);
   signal?.addEventListener('abort',cancel,{once:true});
   const term=()=>stop('cancelled');process.once('SIGTERM',term);process.once('SIGINT',term);
   const exit=()=>killTree(child);process.once('exit',exit);
   for(const [stream,name] of [[child.stdout,'stdout'],[child.stderr,'stderr']])stream.on('data',chunk=>{
-    bytes+=Buffer.byteLength(chunk);if(bytes>OUTPUT_LIMIT){stop('output_limit');return;}
+    bytes+=Buffer.byteLength(chunk);if(outputLimit!==undefined&&bytes>outputLimit){stop('output_limit');return;}
     if(name==='stdout'){stdout+=chunk;partial+=chunk;let i;while((i=partial.indexOf('\n'))>=0){onLine?.(partial.slice(0,i));partial=partial.slice(i+1);}}else stderr+=chunk;
   });
   try{return await new Promise((ok,no)=>{child.once('error',no);child.once('close',(exitCode,signal)=>{if(partial)onLine?.(partial);ok({exitCode,signal,reason,stdout,stderr});});});}
@@ -45,17 +46,18 @@ export function inspectEvent(value){
 }
 export function versionMatches(text,version){return new RegExp('(?:^|[^0-9.])'+version.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:$|[^0-9A-Za-z.-])').test(text.trim());}
 export async function runPlan(plan,{env=process.env,emit=value=>process.stdout.write(JSON.stringify(value)+'\n')}={}){
-  if(plan?.schema!=='harness2-native-plan/1'||!['check','run'].includes(plan.mode)||!Array.isArray(plan.native?.prefix)||!Number.isSafeInteger(plan.timeoutMs))throw Error('harness2_native_plan_invalid');
-  const started=Date.now(),remaining=()=>Math.max(1,plan.timeoutMs-(Date.now()-started));
-  const version=await capture(plan.native.command,[...plan.native.prefix,'--version'],{cwd:plan.cwd,env,timeoutMs:remaining()});
+  if(plan?.schema!=='harness2-native-plan/1'||!['check','run'].includes(plan.mode)||!Array.isArray(plan.native?.prefix)||(plan.timeoutMs!=null&&(!Number.isSafeInteger(plan.timeoutMs)||plan.timeoutMs<1||plan.timeoutMs>2147483647)))throw Error('harness2_native_plan_invalid');
+  const deadlineMs=plan.timeoutMs??(plan.mode==='run'?null:30000);
+  const started=Date.now(),remaining=()=>deadlineMs===null?null:Math.max(1,deadlineMs-(Date.now()-started));
+  const version=await capture(plan.native.command,[...plan.native.prefix,'--version'],{cwd:plan.cwd,env,timeoutMs:remaining()??15000});
   if(version.exitCode!==0||version.reason||!versionMatches(version.stdout+'\n'+version.stderr,plan.expectedVersion))throw Error('harness2_native_version_mismatch');
   emit({type:'host_version',host:plan.host,version:plan.expectedVersion,modelInvoked:false});
   if(plan.mode==='check'&&plan.mcp){
     const {McpStdioClient}=await import('../../mcp/finance-mcp/mcp-stdio-client.mjs');
-    const client=new McpStdioClient(plan.mcp.serverPath,{cwd:plan.cwd,env:plan.mcp.env,timeoutMs:Math.min(15000,remaining())}).start();
+    const client=new McpStdioClient(plan.mcp.serverPath,{cwd:plan.cwd,env:plan.mcp.env,timeoutMs:Math.min(15000,remaining()??15000)}).start();
     try{await client.initialize('harness2-contract-probe');const listed=(await client.rpc('tools/list')).result?.tools?.map(tool=>tool.name).sort();if(JSON.stringify(listed)!==JSON.stringify(plan.expectedMcpTools))throw Error('harness2_mcp_tool_contract_mismatch');emit({type:'mcp_contract_probe',host:plan.host,toolNames:listed,modelInvoked:false});}finally{await client.close();}
   }
-  if(plan.setupArgs){const setup=await capture(plan.native.command,[...plan.native.prefix,...plan.setupArgs],{cwd:plan.cwd,env,timeoutMs:remaining()});if(setup.exitCode!==0||setup.reason)throw Error('harness2_native_setup_failed');}
+  if(plan.setupArgs){const setup=await capture(plan.native.command,[...plan.native.prefix,...plan.setupArgs],{cwd:plan.cwd,env,timeoutMs:remaining()??15000});if(setup.exitCode!==0||setup.reason)throw Error('harness2_native_setup_failed');}
   if(plan.protocol==='zcode-app-server'){
     const {runZcode}=await import('./zcode-rpc.mjs');return runZcode(plan,{env,emit,timeoutMs:remaining(),killTree,inspectEvent});
   }

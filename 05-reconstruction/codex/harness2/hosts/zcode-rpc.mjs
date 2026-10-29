@@ -11,11 +11,11 @@ export async function runZcode(plan,{env,emit,timeoutMs,killTree,inspectEvent}){
   const closed=new Promise(resolve=>child.once('close',(exitCode,signal)=>resolve({exitCode,signal})));
   const send=message=>{if(!child.stdin.destroyed)child.stdin.write(JSON.stringify(message)+'\n');};
   const stop=why=>{reason??=why;completion.reject(Error('harness2_zcode_'+why));killTree(child);child.stdout.destroy();child.stderr.destroy();child.stdin.destroy();};
-  const timer=setTimeout(()=>stop('timeout'),timeoutMs),cancel=()=>stop('cancelled');
+  const timer=timeoutMs==null?null:setTimeout(()=>stop('timeout'),timeoutMs),cancel=()=>stop('cancelled');
   process.once('SIGTERM',cancel);process.once('SIGINT',cancel);const exit=()=>killTree(child);process.once('exit',exit);
-  function rpc(method,params={}){return new Promise((ok,no)=>{const id=nextId++,t=setTimeout(()=>{pending.delete(id);no(Error('harness2_zcode_rpc_timeout'));},Math.min(timeoutMs,15000));pending.set(id,{ok,no,t});send({id,method,params});});}
+  function rpc(method,params={}){return new Promise((ok,no)=>{const id=nextId++,limit=method==='session/send'&&plan.mode==='run'?timeoutMs:Math.min(timeoutMs??15000,15000),t=limit==null?null:setTimeout(()=>{pending.delete(id);no(Error('harness2_zcode_rpc_timeout'));},limit);pending.set(id,{ok,no,t});send({id,method,params});});}
   child.stdout.on('data',chunk=>{
-    bytes+=Buffer.byteLength(chunk);if(bytes>2*1024*1024){stop('output_limit');return;}buffer+=chunk;
+    bytes+=Buffer.byteLength(chunk);if(plan.outputLimit!==undefined&&bytes>plan.outputLimit){stop('output_limit');return;}buffer+=chunk;
     let at;while((at=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,at);buffer=buffer.slice(at+1);if(!line.trim())continue;
       let frame;try{frame=JSON.parse(line);}catch{stop('invalid_protocol');return;}
       const errors=inspectEvent(frame);innerErrors+=errors.length;emit({type:'native_event',host:'zcode',event:frame,innerErrors:errors});
@@ -30,16 +30,16 @@ export async function runZcode(plan,{env,emit,timeoutMs,killTree,inspectEvent}){
       if(event?.type==='turn.failed')completion.reject(Error('harness2_zcode_turn_failed'));
     }
   });
-  child.stderr.on('data',chunk=>{bytes+=Buffer.byteLength(chunk);if(bytes>2*1024*1024)stop('output_limit');else process.stderr.write(chunk);});
+  child.stderr.on('data',chunk=>{bytes+=Buffer.byteLength(chunk);if(plan.outputLimit!==undefined&&bytes>plan.outputLimit)stop('output_limit');else process.stderr.write(chunk);});
   child.on('error',error=>{completion.reject(error);for(const r of pending.values()){clearTimeout(r.t);r.no(error);}pending.clear();});
   child.on('close',()=>{completion.reject(Error('harness2_zcode_closed'));for(const r of pending.values()){clearTimeout(r.t);r.no(Error('harness2_zcode_closed'));}pending.clear();});
   try{
-    const created=await rpc('session/create',{workspace,mode:'build',model:{providerId:plan.providerId,modelId:'deepseek-flash',options:{reasoningLevel:'low'}},titleGenerationEnabled:false,thoughtLevel:'low',toolAllowlist:plan.allowedTools,dynamicWorkflowEnabled:false});
+    const created=await rpc('session/create',{workspace,mode:'build',model:{providerId:plan.providerId,modelId:'deepseek-flash',options:{}},titleGenerationEnabled:false,toolAllowlist:plan.allowedTools,dynamicWorkflowEnabled:false});
     sessionId=created.session?.sessionId??created.session?.id??created.sessionId;if(!sessionId)throw Error('harness2_zcode_session_missing');
     const selected=created.settings?.model?.current,available=created.settings?.model?.available;
-    if(selected?.providerId!==plan.providerId||selected?.modelId!=='deepseek-flash'||selected?.options?.reasoningLevel!=='low'||created.settings?.mode?.current!=='build'||created.settings?.thoughtLevel?.current!=='low'||available?.length!==1||available[0].maxOutputTokens!==plan.maxOutputTokens)throw Error('harness2_zcode_model_preselection_unproven');
+    if(selected?.providerId!==plan.providerId||selected?.modelId!=='deepseek-flash'||created.settings?.mode?.current!=='build'||available?.length!==1||(plan.maxOutputTokens!==undefined&&available[0].maxOutputTokens!==plan.maxOutputTokens))throw Error('harness2_zcode_model_preselection_unproven');
     if(created.projection?.turnCount!==0||created.projection?.totalTokenCount!==0)throw Error('harness2_zcode_unexpected_initial_model_activity');
-    emit({type:'model_preselection',host:'zcode',providerId:selected.providerId,modelId:selected.modelId,reasoningLevel:'low',maxOutputTokens:plan.maxOutputTokens,turnCount:0,totalTokenCount:0,modelInvoked:false});
+    emit({type:'model_preselection',host:'zcode',providerId:selected.providerId,modelId:selected.modelId,reasoningLevel:selected.options?.reasoningLevel??null,thoughtLevel:created.settings?.thoughtLevel?.current??null,maxOutputTokens:available[0].maxOutputTokens??null,outputLimitExplicit:plan.maxOutputTokens!==undefined,turnCount:0,totalTokenCount:0,modelInvoked:false});
     await rpc('session/subscribe',{sessionId,deliveryKind:'desktop-continuous',includeSnapshot:true});
     if(plan.mode==='run'){
       await rpc('session/send',{sessionId,content:plan.task});await completion.promise;

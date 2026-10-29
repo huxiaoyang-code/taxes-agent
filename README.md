@@ -25,7 +25,9 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 
 [主 Agent 配置与首次运行](05-reconstruction/codex/hosts/START-HERE.md)是 Pi、Claude Code、dsh、ZCode 的统一入口：选择宿主、启动明确账库的后端、生成全新工作区、配置本人模型并检验合成流程。四者均可作为主体运行；解析子 Agent 按宿主单独核实。配置、原生连接、模型短流程与整账验收分别记录，详见[接入与实测范围](05-reconstruction/codex/hosts/README.md)。
 
-[Harness² 可选研究接入](docs/HARNESS2-INTEGRATION.md)固定 Google Research 原始源码，通过独立合成快照比较候选指引；四宿主原生探针、Google 核心测试、Pi 原生业务循环与模型实验分别采证。默认关闭，候选只形成待审查制品，不覆盖全局配置或真实账套。
+[Harness² 可选研究接入](docs/HARNESS2-INTEGRATION.md)固定 Google Research 原始源码，由本人 Codex 优化指引、Pi＋DeepSeek 等原生宿主执行，独立评估实际 Store/DB。优化和执行认证、模型与调用记录分开；原生探针、模拟传输、真实完整循环分别采证。默认关闭，候选只形成待审查制品，不覆盖全局配置或真实账套。
+
+优化 CLI 的 MCP 禁用仅支持已验证的 `stdio`、`streamable_http` transport 和字母/数字/下划线/短横线服务器名；未知类型或禁用复查失败会在优化调用前停止。优化器接入故障直接终止循环，不执行回退候选。
 
 ## 目录
 

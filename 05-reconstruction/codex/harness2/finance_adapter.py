@@ -116,7 +116,7 @@ class FinanceAdapter:
     def __init__(self, *, root: Path, repo: Path, node: Path, host: str,
                  package_root: str | None = None, cli_path: str | None = None,
                  channels: dict[str, ChannelSpec] | None = None,
-                 execution_mode: str = 'model'):
+                 execution_mode: str = 'model', execution_timeout_ms: int | None = None):
         if host not in HOSTS:
             raise ValueError("harness2_host_invalid")
         self.root, self.repo, self.node = root.resolve(), repo.resolve(), node
@@ -124,6 +124,9 @@ class FinanceAdapter:
         if execution_mode not in ('model', 'synthetic-native'):
             raise ValueError('harness2_execution_mode_invalid')
         self.execution_mode = execution_mode
+        if execution_timeout_ms is not None and (type(execution_timeout_ms) is not int or execution_timeout_ms < 1):
+            raise ValueError('harness2_host_timeout_invalid')
+        self.execution_timeout_ms = execution_timeout_ms
         self.windows_bridge = str(node).lower().endswith('.exe')
         self.substrate = FinanceSubstrate(self)
         # These are upstream improver CHANNELS, independent of solver HOSTS.
@@ -155,14 +158,16 @@ class FinanceAdapter:
         return None
 
     def bridge(self, action: str, run_id: str, harness_dir: Path | None = None,
-               timeout: int = 30) -> dict:
+               timeout: int | None = None) -> dict:
         if not re.fullmatch(r"[-a-zA-Z0-9_]{1,80}", run_id):
             raise ValueError("harness2_run_id_invalid")
         convert = windows_path if self.windows_bridge else lambda path: str(path.absolute())
+        timeout = timeout if timeout is not None else (None if action == 'execute' and self.execution_mode == 'model' else 30)
         request = {"version": "finance-harness2-request/1", "action": action,
             "root": convert(self.root), "host": self.host, "runId": run_id,
-            "executionMode": self.execution_mode,
-            "timeoutMs": min(timeout * 1000, 120000)}
+            "executionMode": self.execution_mode}
+        if timeout is not None:
+            request['timeoutMs'] = int(timeout * 1000)
         if self.package_root:
             request["packageRoot"] = self.package_root
         if self.cli_path:
@@ -174,7 +179,7 @@ class FinanceAdapter:
         # This is only an input envelope, not a receipt. Never store credentials.
         path.write_text(json.dumps(request), encoding="utf-8")
         proc = subprocess.run([str(self.node), convert(self.repo / "06-workbench/scripts/harness2-bridge.mjs"),
-            convert(path)], capture_output=True, text=True, encoding="utf-8", timeout=timeout + 20,
+            convert(path)], capture_output=True, text=True, encoding="utf-8", timeout=None if timeout is None else timeout + 20,
             env={"SystemRoot": "C:\\Windows", "PATH": "/usr/bin:/bin"})
         try:
             result = json.loads(proc.stdout.strip())
@@ -187,7 +192,9 @@ class FinanceAdapter:
     def execute(self, task_id: str, harness_dir: Path | None, run_id: str,
                 *, timeout: int | None = None) -> Path:
         self.task_prompt(task_id)
-        self.bridge("execute", run_id, harness_dir, timeout or 30)
+        if timeout is None and self.execution_mode == 'model' and self.execution_timeout_ms is not None:
+            timeout = self.execution_timeout_ms / 1000
+        self.bridge("execute", run_id, harness_dir, timeout=timeout)
         return self.root / "runs" / run_id
 
     def delivered(self, run_dir: Path) -> bool:

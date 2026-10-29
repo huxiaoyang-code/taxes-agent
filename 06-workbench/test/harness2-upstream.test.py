@@ -11,6 +11,8 @@ import shutil
 import importlib.util
 import marshal
 import struct
+import io
+from unittest.mock import patch
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
@@ -44,6 +46,8 @@ from harness2.core.recursion import run_parallel, run_sequential
 from harness2.core.selection import run_selection, reflect_adoption, selection_pool
 from harness2.core.library import Library
 from harness2.core.tree import write_tree
+from codex_proposer import CodexProposer, CodexIntegrationError
+from harness2.core.proposer import ProposerError
 
 
 class SyntheticAdapter(FinanceAdapter):
@@ -129,6 +133,41 @@ with tempfile.TemporaryDirectory(prefix="harness2-core-") as directory:
         assert library.context_dir() and library.entries() == [adapter.tasks()[0]]
         assert any(label.startswith("experience.") for label in prop.labels)
         assert adapter.score(rd, adapter.tasks()[0]) is None
+
+    # Exercise the real Google catch boundary: optimizer integration failures
+    # must escape rather than becoming baseline-backed candidate executions.
+    assert not issubclass(CodexIntegrationError,ProposerError)
+    class FailedWorker:
+        def __init__(self, protocol=False):
+            self.stdin=io.BytesIO()
+            self.returncode=0 if protocol else 23
+            self.protocol=protocol
+        def communicate(self, **kwargs):
+            response={'ok':False,'code':'codex_process_failed','metadata':{'status':'process_failed','exitCode':23}}
+            return (b'not-json' if self.protocol else json.dumps(response).encode(),b'synthetic worker failure')
+    for mode,native_method in (('agg',run_parallel),('seq',run_sequential)):
+        for failure in ('process','protocol','transport'):
+            prop=CodexProposer(experiment=root,codex_cli='synthetic-codex',node='synthetic-node',work_root=str(root/'unused-context'))
+            work=root/('fatal-'+mode+'-'+failure)
+            popen_options={'side_effect':OSError('synthetic transport failure')} if failure=='transport' else {'return_value':FailedWorker(failure=='protocol')}
+            with patch('codex_proposer.subprocess.Popen',**popen_options) as popen,patch.object(adapter,'execute',wraps=adapter.execute) as execute:
+                try:
+                    native_method(adapter.tasks()[0],1,base,adapter=adapter,prop=prop,
+                        work_dir=work,run_id_of=lambda label:'forbidden-'+label,
+                        base_tree=base_tree,propose_workers=1,rollout_workers=1)
+                    raise AssertionError('fatal optimizer failure became a fallback rollout')
+                except CodexIntegrationError as error:
+                    assert str(error)=='harness2_codex_'+('process_failed' if failure=='process' else 'worker_'+failure+'_failed'),error
+                assert execute.call_count==0,'optimizer failure must not execute fallback candidates'
+                assert popen.call_count==1,'queued proposer jobs must reuse the sticky fatal failure'
+                assert len(prop.invocations)==1
+                audit=prop.invocations[0]
+                assert audit['status']==('process_failed' if failure=='process' else 'worker_'+failure+'_failed'),audit
+                assert list((root/'codex-invocations').glob('*.json'))
+                try:prop.call('synthetic',root,'after-fatal')
+                except CodexIntegrationError:pass
+                else:raise AssertionError('sticky optimizer failure was cleared')
+                assert popen.call_count==1
 
 if args.native_probe:
     adapter = FinanceAdapter(root=args.native_probe, repo=REPO, node=Path("/mnt/d/node.exe"), host="pi", package_root=args.pi_root)

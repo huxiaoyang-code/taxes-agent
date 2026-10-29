@@ -38,14 +38,15 @@ export async function stopChild(child,{platform=process.platform,taskkill=spawnS
   }
   else {try{process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}}
 }
-export async function boundedSpawn(spec,{timeoutMs=30000,outputLimit=1024*1024,signal}={}){
-  if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>120000)fail('harness2_timeout_invalid');
+export async function boundedSpawn(spec,{timeoutMs=30000,outputLimit,signal}={}){
+  if(timeoutMs!==null&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>2147483647))fail('harness2_timeout_invalid');
+  if(outputLimit!==undefined&&(!Number.isSafeInteger(outputLimit)||outputLimit<1))fail('harness2_output_limit_invalid');
   if(signal?.aborted)return {exitCode:null,signal:null,reason:'cancelled',stdout:'',stderr:''};
   const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:{...spec.env,FINANCE_HARNESS2_SUPERVISED:'1'},windowsHide:true,shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
   let stdout='',stderr='',bytes=0,reason=null;
   const stop=why=>{if(!reason){reason=why;void stopChild(child);}};
-  const timer=setTimeout(()=>stop('timeout'),timeoutMs),cancel=()=>stop('cancelled');signal?.addEventListener('abort',cancel,{once:true});
-  for(const [stream,name] of [[child.stdout,'stdout'],[child.stderr,'stderr']]){stream.setEncoding('utf8');stream.on('data',chunk=>{bytes+=Buffer.byteLength(chunk);if(bytes>outputLimit){stop('output_limit');return;}if(name==='stdout')stdout+=chunk;else stderr+=chunk;});}
+  const timer=timeoutMs===null?null:setTimeout(()=>stop('timeout'),timeoutMs),cancel=()=>stop('cancelled');signal?.addEventListener('abort',cancel,{once:true});
+  for(const [stream,name] of [[child.stdout,'stdout'],[child.stderr,'stderr']]){stream.setEncoding('utf8');stream.on('data',chunk=>{bytes+=Buffer.byteLength(chunk);if(outputLimit!==undefined&&bytes>outputLimit){stop('output_limit');return;}if(name==='stdout')stdout+=chunk;else stderr+=chunk;});}
   if(spec.stdin)child.stdin.end(spec.stdin);else child.stdin.end();
   try{return await new Promise((ok,no)=>{child.once('error',no);child.once('close',(exitCode,exitSignal)=>ok({exitCode,signal:exitSignal,reason,stdout,stderr}));});}
   finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);await stopChild(child);}
@@ -92,6 +93,7 @@ export async function dispatch(request,{signal}={}){
   // Model entry remains fail-closed until the Linux sandbox and one budget
   // gateway cover proposer, candidate, selector and experience calls alike.
   const modelRun=request.action==='execute'&&request.executionMode==='model';
+  const timeoutMs=request.timeoutMs??(modelRun?null:30000);
   if(request.action==='execute'&&!['synthetic-native','model'].includes(request.executionMode))fail('harness2_isolated_metered_runner_required');
   if(modelRun){
     if(process.platform!=='linux'||existsSync('/mnt/d')||existsSync('/home')||existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')||!existsSync('/run/finance-gateway.sock')||!lstatSync('/run/finance-gateway.sock').isSocket()||readFileSync('/proc/net/route','utf8').trim().split('\n').length>1||!/^http:\/\/127\.0\.0\.1:\d+\/v1$/.test(process.env.FINANCE_HARNESS2_RELAY_BASE??''))fail('harness2_isolated_metered_runner_required');
@@ -117,8 +119,8 @@ export async function dispatch(request,{signal}={}){
   try{
     const apiBase=await new Promise((ok,no)=>{let text='';const t=setTimeout(()=>no(Error('harness2_backend_timeout')),15000);backend.once('error',e=>{clearTimeout(t);no(e);});backend.once('exit',()=>{clearTimeout(t);no(Error('harness2_backend_failed'));});backend.stdout.on('data',b=>{text+=b;if(text.length>65536){clearTimeout(t);no(Error('harness2_backend_output_limit'));}const match=text.match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(t);ok(match[0]);}});});
     const {buildHostSpec}=await import(`./hosts/${request.host}.mjs`);
-    const spec=buildHostSpec({workspace,nodePath:process.execPath,packageRoot:request.packageRoot,cliPath:request.cliPath,apiBase,databasePath:join(run,'synthetic/data/workbench.db'),candidateDir:candidate,candidateText:readFileSync(join(candidate,'SKILL.md'),'utf8'),taskFile,mcpServerPath:join(repo,'05-reconstruction/codex/harness2/restricted-mcp.mjs'),mcpEnv:{FINANCE_HARNESS2_SYNTHETIC_ROOT:join(run,'synthetic')},modelBaseUrl:process.env.FINANCE_HARNESS2_RELAY_BASE,maxOutputTokens:request.maxOutputTokens??1024,mode:request.action==='execute'?(modelRun?'run':'synthetic-native'):'check',timeoutMs:request.timeoutMs??30000});
-    const result=await boundedSpawn(spec,{timeoutMs:request.timeoutMs??30000,signal});
+    const spec=buildHostSpec({workspace,nodePath:process.execPath,packageRoot:request.packageRoot,cliPath:request.cliPath,apiBase,databasePath:join(run,'synthetic/data/workbench.db'),candidateDir:candidate,candidateText:readFileSync(join(candidate,'SKILL.md'),'utf8'),taskFile,mcpServerPath:join(repo,'05-reconstruction/codex/harness2/restricted-mcp.mjs'),mcpEnv:{FINANCE_HARNESS2_SYNTHETIC_ROOT:join(run,'synthetic')},modelBaseUrl:process.env.FINANCE_HARNESS2_RELAY_BASE,...request.maxOutputTokens===undefined?{}:{maxOutputTokens:request.maxOutputTokens},mode:request.action==='execute'?(modelRun?'run':'synthetic-native'):'check',timeoutMs});
+    const result=await boundedSpawn(spec,{timeoutMs,signal});
     const native=await nativeSummary(result.stdout);
     // Native output stays inside the synthetic local experiment; it is never
     // placed in the public receipt or optimizer experience context.

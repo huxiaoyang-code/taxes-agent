@@ -13,7 +13,7 @@ export function buildHostSpec(options){
   writeFileSync(patch,JSON.stringify([
     ...disabled.map(id=>({id,disabled:true})),
     {id:'agent-default-model',config:{provider:'deepseek-official',model:'deepseek-flash'}},
-    {id:'llm-deepseek',config:{apiKeyEnv:'DEEPSEEK_API_KEY',baseURL:endpoint,reasoningEffort:'low',maxTokens:p.maxOutputTokens,retryPolicy:{mode:'normal',maxRetries:0}}},
+    {id:'llm-deepseek',config:{apiKeyEnv:'DEEPSEEK_API_KEY',baseURL:endpoint,...p.maxOutputTokens===undefined?{}:{maxTokens:p.maxOutputTokens},retryPolicy:{mode:'normal',maxRetries:0}}},
     {id:'system-prompt',config:{personaPrefix:'Authorized synthetic research only. Execute only the requested period.inspect capability; never fabricate approval. '+p.candidateText}},
     {insert:[{id:'harness2-metadata-restriction',name:pathToFileURL(fileURLToPath(new URL('./dsh-restrict.mjs',import.meta.url))).href,config:{allowedToolNames:p.allowedToolNames}}]},
   ],null,2),{flag:'wx'});
