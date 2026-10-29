@@ -82,6 +82,8 @@
 
 ## mcp
 
+- 可选 Google Research Harness²：[设计与运行](HARNESS2-INTEGRATION.md)、[Python BenchmarkAdapter/Substrate](../05-reconstruction/codex/harness2/finance_adapter.py)、[Codex优化器](../05-reconstruction/codex/harness2/codex_proposer.py)、[本人Codex外层worker](../05-reconstruction/codex/harness2/codex-proposer-worker.mjs)、[Linux候选namespace](../05-reconstruction/codex/harness2/sandbox.py)、[仅执行模型relay](../05-reconstruction/codex/harness2/budget-gateway.mjs)、[Node桥](../05-reconstruction/codex/harness2/bridge.mjs)。研究入口 [harness2-run.mjs](../06-workbench/scripts/harness2-run.mjs) 与 [harness2-google.py](../06-workbench/scripts/harness2-google.py)。Codex负责优化，Pi＋DS等宿主执行；本人认证/default model与执行账本分开。Node合同/worker/relay回归登记在统一测试入口；真实Google核心、原生探针、模拟传输和真实完整循环按运行文档分别验证。
+
 - 多宿主：[Pi、Claude Code、dsh、ZCode 主 Agent 统一入口](../05-reconstruction/codex/hosts/START-HERE.md)，[接入与实测范围](../05-reconstruction/codex/hosts/README.md)，配置生成入口 [finance-host-config.mjs](../06-workbench/scripts/finance-host-config.mjs)（`--host pi|claude-code|dsh|zcode`），共享验证 [finance-host-config.test.mjs](../06-workbench/test/finance-host-config.test.mjs)。显式 `FINANCE_MCP_PROFILE=harness` 由 [tool-profile.mjs](../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs)限定列表与直接调用；未设置时兼容既有工具面。配置生成、宿主无模型连接和业务验收分别记录。
 
 - Harness：共享声明契约 [harness-contract.mjs](../06-workbench/server/harness-contract.mjs)，固定业务注册 [harness-adapters.mjs](../06-workbench/server/harness-adapters.mjs)，生命周期 [harness-runtime.mjs](../06-workbench/server/harness-runtime.mjs)、元数据证据日志 [harness-store.mjs](../06-workbench/server/harness-store.mjs)。企业特例调用现有审计 accounting API，批处理复用既有 runner；均显式绑定本机目标。

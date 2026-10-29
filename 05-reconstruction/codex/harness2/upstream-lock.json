@@ -1,0 +1,216 @@
+{
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+      "size": 11358
+    },
+    {
+      "path": "README.md",
+      "sha": "a5e91206948cd3d5bbed30c2a951923020e780d2",
+      "size": 9374
+    },
+    {
+      "path": "harness2/__init__.py",
+      "sha": "e2bf767dbe010e23fd18e416ea21f438b1a1fc93",
+      "size": 639
+    },
+    {
+      "path": "harness2/benchmarks/__init__.py",
+      "sha": "828e61ff724e26221ad6691622367de1c269b45e",
+      "size": 632
+    },
+    {
+      "path": "harness2/benchmarks/jb_opencode_runner.py",
+      "sha": "1b35190d44c0b09c3efe01730a96e3887d94230a",
+      "size": 10595
+    },
+    {
+      "path": "harness2/benchmarks/jobbench.py",
+      "sha": "3d5e1720c8b85e055e121780d2f5fd8fc90f64a2",
+      "size": 51747
+    },
+    {
+      "path": "harness2/benchmarks/lab.py",
+      "sha": "77320b21ebe5777812927617157286d028eedf90",
+      "size": 44979
+    },
+    {
+      "path": "harness2/benchmarks/tasks.py",
+      "sha": "6fff81cdd53906703a6c88bb3f78f4e4c5ff235a",
+      "size": 3901
+    },
+    {
+      "path": "harness2/benchmarks/wb_render.py",
+      "sha": "3c5bee619d4dd1c42738ff4c8663aa1a211088d2",
+      "size": 20690
+    },
+    {
+      "path": "harness2/benchmarks/workbuddy.py",
+      "sha": "27a95b5c75798b31a880ea68c4858041242e1b93",
+      "size": 41925
+    },
+    {
+      "path": "harness2/cli/__init__.py",
+      "sha": "3c22791bce99b5be50410877a25d0be02709a896",
+      "size": 631
+    },
+    {
+      "path": "harness2/cli/_common.py",
+      "sha": "06d413073885de370ab8936e13824a315d69e4f6",
+      "size": 5520
+    },
+    {
+      "path": "harness2/cli/bridge.py",
+      "sha": "3e340bf89e74a3dbf79dca3756c6133294733832",
+      "size": 3728
+    },
+    {
+      "path": "harness2/cli/check.py",
+      "sha": "638eaab5c60e46a0ea5c3fe3b02a4e649c9df65b",
+      "size": 1745
+    },
+    {
+      "path": "harness2/cli/demo.py",
+      "sha": "2d957dba34890d76f5cf41cf5e31e4ebe79b6771",
+      "size": 2141
+    },
+    {
+      "path": "harness2/cli/judge.py",
+      "sha": "6e8be6f0387fbdc10785521d543e488331f6ac79",
+      "size": 7855
+    },
+    {
+      "path": "harness2/cli/report.py",
+      "sha": "8f80fc56efd3a3337184fc8d7e10d62f6665b1e5",
+      "size": 4428
+    },
+    {
+      "path": "harness2/cli/run_sweep.py",
+      "sha": "0876f4e68f3b92a4cf9d6838223c00e2ef960d27",
+      "size": 9359
+    },
+    {
+      "path": "harness2/cli/setup.py",
+      "sha": "6c9afc352d7fa7ea36732bc5856042398eb6421c",
+      "size": 4361
+    },
+    {
+      "path": "harness2/config.py",
+      "sha": "59e0703d11f3904e63c526bb2d7ebaf3ce2bb53d",
+      "size": 6615
+    },
+    {
+      "path": "harness2/core/__init__.py",
+      "sha": "d59d80d5c6ccb02d7d224fce5435fe4d928125c8",
+      "size": 802
+    },
+    {
+      "path": "harness2/core/context.py",
+      "sha": "72f2868b06c13e30c031cb91c0f04dcd80293ec9",
+      "size": 21597
+    },
+    {
+      "path": "harness2/core/judge.py",
+      "sha": "cf4e7b9fe2b603421fce6519808deb81bc3ec9c0",
+      "size": 5005
+    },
+    {
+      "path": "harness2/core/ledger.py",
+      "sha": "319a6697758d05294dab9f42e8f8700759d7e6f6",
+      "size": 4536
+    },
+    {
+      "path": "harness2/core/library.py",
+      "sha": "39e50684b4044e483a3c16a447958044d4b5e6de",
+      "size": 8449
+    },
+    {
+      "path": "harness2/core/prompts.py",
+      "sha": "9ccacf23b64ac15b06a1939f26224960f56d757c",
+      "size": 66499
+    },
+    {
+      "path": "harness2/core/proposer.py",
+      "sha": "4a235075cae72059fa701001f31bf4505cbbc3ba",
+      "size": 18560
+    },
+    {
+      "path": "harness2/core/recursion.py",
+      "sha": "dda6b98cd5af100b8941f33cbb079462299c5280",
+      "size": 18895
+    },
+    {
+      "path": "harness2/core/report.py",
+      "sha": "b7ecf6e42a1061218b0eb8cde9c441c136e28e72",
+      "size": 6183
+    },
+    {
+      "path": "harness2/core/runmark.py",
+      "sha": "1de5794b40f043e40ecba66be08a65a5787ebbb1",
+      "size": 3783
+    },
+    {
+      "path": "harness2/core/schedule.py",
+      "sha": "f91f450b1d01011982069f4b41e6e3a77abcc9cc",
+      "size": 30524
+    },
+    {
+      "path": "harness2/core/selection.py",
+      "sha": "2cf04f50e35fd82d7abaea279a83b4a7eb4c2193",
+      "size": 18262
+    },
+    {
+      "path": "harness2/core/spec.py",
+      "sha": "e58d14852490b2d4ae3aa6da1c1c796e3e961b48",
+      "size": 9720
+    },
+    {
+      "path": "harness2/core/tree.py",
+      "sha": "c9bf1341226aac448f6ec82038cb6d3896799412",
+      "size": 16265
+    },
+    {
+      "path": "harness2/demo.py",
+      "sha": "487de02d44941754d955ad8a4b0a9e0e6f841db5",
+      "size": 6921
+    },
+    {
+      "path": "harness2/install.py",
+      "sha": "e126bc42402164f3886e3d1a13c3a03ac3e6bc20",
+      "size": 12499
+    },
+    {
+      "path": "harness2/preflight.py",
+      "sha": "93651cde7318f60a401a05e88ce53a1405caac6f",
+      "size": 6533
+    },
+    {
+      "path": "harness2/substrate/__init__.py",
+      "sha": "3fa7f651352570390e081742a555549f74c40c9b",
+      "size": 1155
+    },
+    {
+      "path": "harness2/substrate/base.py",
+      "sha": "19ef1dac7c07e1788e1a99fbdd1e7b833da44a41",
+      "size": 2891
+    },
+    {
+      "path": "harness2/substrate/codex.py",
+      "sha": "fd34eacdf4a7b6991ba75e6ed34df5dd87f4e5e0",
+      "size": 18082
+    },
+    {
+      "path": "harness2/substrate/opencode.py",
+      "sha": "ad0a2ea4d59bda362838c76912e43b6f7c333254",
+      "size": 15411
+    },
+    {
+      "path": "pyproject.toml",
+      "sha": "d5892bea7cfd1d2a6d509b057a9cb6a66d6901ae",
+      "size": 1195
+    }
+  ],
+  "repository": "google-research/harness2",
+  "commit": "1cfe254e8d25b15f37048c3730134686abe60335"
+}
