@@ -90,8 +90,8 @@ export async function dispatch(request,{signal}={}){
     }
     return existsSync(receipt)?JSON.parse(readFileSync(receipt,'utf8')):{status:'unknown',operationState:'unknown',resultCurrent:null,confirmationCurrent:null,recovery:'query_original_run_id',modelInvoked:false};
   }
-  // Model entry remains fail-closed until the Linux sandbox and one budget
-  // gateway cover proposer, candidate, selector and experience calls alike.
+  // Model execution remains fail-closed outside the Linux candidate sandbox.
+  // Its relay serves the executor only; Codex optimization uses its own host.
   const modelRun=request.action==='execute'&&request.executionMode==='model';
   const timeoutMs=request.timeoutMs??(modelRun?null:30000);
   if(request.action==='execute'&&!['synthetic-native','model'].includes(request.executionMode))fail('harness2_isolated_metered_runner_required');
@@ -119,7 +119,7 @@ export async function dispatch(request,{signal}={}){
   try{
     const apiBase=await new Promise((ok,no)=>{let text='';const t=setTimeout(()=>no(Error('harness2_backend_timeout')),15000);backend.once('error',e=>{clearTimeout(t);no(e);});backend.once('exit',()=>{clearTimeout(t);no(Error('harness2_backend_failed'));});backend.stdout.on('data',b=>{text+=b;if(text.length>65536){clearTimeout(t);no(Error('harness2_backend_output_limit'));}const match=text.match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(t);ok(match[0]);}});});
     const {buildHostSpec}=await import(`./hosts/${request.host}.mjs`);
-    const spec=buildHostSpec({workspace,nodePath:process.execPath,packageRoot:request.packageRoot,cliPath:request.cliPath,apiBase,databasePath:join(run,'synthetic/data/workbench.db'),candidateDir:candidate,candidateText:readFileSync(join(candidate,'SKILL.md'),'utf8'),taskFile,mcpServerPath:join(repo,'05-reconstruction/codex/harness2/restricted-mcp.mjs'),mcpEnv:{FINANCE_HARNESS2_SYNTHETIC_ROOT:join(run,'synthetic')},modelBaseUrl:process.env.FINANCE_HARNESS2_RELAY_BASE,...request.maxOutputTokens===undefined?{}:{maxOutputTokens:request.maxOutputTokens},mode:request.action==='execute'?(modelRun?'run':'synthetic-native'):'check',timeoutMs});
+    const spec=buildHostSpec({workspace,nodePath:process.execPath,packageRoot:request.packageRoot,cliPath:request.cliPath,apiBase,databasePath:join(run,'synthetic/data/workbench.db'),candidateDir:candidate,taskFile,mcpServerPath:join(repo,'05-reconstruction/codex/harness2/restricted-mcp.mjs'),mcpEnv:{FINANCE_HARNESS2_SYNTHETIC_ROOT:join(run,'synthetic')},modelBaseUrl:process.env.FINANCE_HARNESS2_RELAY_BASE,...request.maxOutputTokens===undefined?{}:{maxOutputTokens:request.maxOutputTokens},mode:request.action==='execute'?(modelRun?'run':'synthetic-native'):'check',timeoutMs});
     const result=await boundedSpawn(spec,{timeoutMs,signal});
     const native=await nativeSummary(result.stdout);
     // Native output stays inside the synthetic local experiment; it is never

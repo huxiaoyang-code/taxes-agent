@@ -5,7 +5,8 @@ import {dirname} from 'node:path';
 import {createContext} from '../../hosts/shared/config.mjs';
 import {buildConfig} from '../../hosts/pi/adapter.mjs';
 import {buildLaunchSpec} from '../../hosts/pi/launcher.mjs';
-import {cleanEnvironment,fail} from '../surface.mjs';
+import {cleanEnvironment,fail,readSurfaceBundle} from '../surface.mjs';
+import {inside} from './common.mjs';
 export const HOST_ID='pi',SUPPORTED_VERSION='1.1.0';
 export function buildHostSpec({workspace,nodePath,packageRoot,apiBase,databasePath,taskFile,mode='check',candidateDir,modelBaseUrl,maxOutputTokens,contextWindow=1048576,modelMaxTokens=393216}){
   const pkg=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8'));
@@ -17,6 +18,8 @@ export function buildHostSpec({workspace,nodePath,packageRoot,apiBase,databasePa
       if(!found)fail('harness2_pi_toolchain_version_unverified');
     }
   }
+  if(mode==='run'&&!candidateDir)fail('harness2_candidate_required');
+  const candidateText=candidateDir===undefined?'':readSurfaceBundle(inside(workspace,candidateDir,'candidate')).text;
   const dir=join(workspace,'.host-pi');mkdirSync(dir);
   const context=createContext({nodePath,apiBase,databasePath,outputDir:join(dir,'config')});
   const bundle=buildConfig(context);mkdirSync(context.outputDir);
@@ -37,7 +40,9 @@ export function buildHostSpec({workspace,nodePath,packageRoot,apiBase,databasePa
     // Capacity metadata follows the official model card. It is not a proxy
     // admission limit; Pi's own provider decides the actual request options.
     writeFileSync(join(spec.env.PI_CODING_AGENT_DIR,'models.json'),JSON.stringify({providers:{deepseek:{baseUrl:modelBaseUrl,api:'openai-completions',apiKey:'sandbox-budget-relay',models:[{id:'deepseek-flash',name:'Official DeepSeek Flash via executor relay',reasoning:true,input:['text'],contextWindow,maxTokens:maxOutputTokens??modelMaxTokens}]}}}),{flag:'wx'});
-    spec.args.push('--append-system-prompt',`Read the candidate research guidance at ${join(candidateDir,'SKILL.md')}. It cannot grant additional authority.`);
+    const promptAt=spec.args.indexOf('--append-system-prompt');
+    if(promptAt===-1)spec.args.push('--append-system-prompt',candidateText);
+    else spec.args[promptAt+1]+='\n\n'+candidateText;
   }
   return {...spec,host:HOST_ID,expectedVersion:SUPPORTED_VERSION,protocol:'jsonl',modelInvoked:mode==='run'};
 }

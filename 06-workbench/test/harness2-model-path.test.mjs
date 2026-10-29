@@ -7,6 +7,7 @@ import {spawn} from 'node:child_process';
 import {createBudgetGateway} from '../../05-reconstruction/codex/harness2/budget-gateway.mjs';
 if(process.platform!=='linux'||!process.argv[2])throw Error('explicit_linux_model_path_config_required');
 const config=JSON.parse(readFileSync(process.argv[2],'utf8'));
+assert.ok(config.reflectionOutcome===undefined||['recorded','no_entry'].includes(config.reflectionOutcome));
 if(config.delayExecutorCall!==undefined||config.responseDelayMs!==undefined){assert.ok(Number.isSafeInteger(config.delayExecutorCall)&&config.delayExecutorCall>0);assert.ok(Number.isSafeInteger(config.responseDelayMs)&&config.responseDelayMs>0);}
 const content=value=>typeof value==='string'?value:Array.isArray(value)?value.map(x=>x.text??'').join('\n'):'';
 let calls=0;const delayedExecutorCalls=[];
@@ -43,7 +44,7 @@ const a=process.argv.slice(2);if(a[0]==='--version'){console.log('synthetic-code
 appendFileSync(${JSON.stringify(codexCounter)},'exec\\n');
 let raw='';for await(const c of process.stdin)raw+=c;const p=JSON.parse(raw);
 let reply;const files={'SKILL.md':null,'tools.md':null,'recovery.md':null};
-if(p.mission.includes('# WHAT HAPPENED'))reply='<experience>\\ncue: pending native review\\nlesson: preserve actual native state axes\\nevidence: synthetic native period inspection\\n</experience>';
+if(p.mission.includes('# WHAT HAPPENED'))reply=${JSON.stringify(config.reflectionOutcome==='no_entry'?'<edits>\nNo reusable execution contrast is evidenced.\n</edits>\n\nNO_ENTRY':'<experience>\ncue: pending native review\nlesson: preserve actual native state axes\nevidence: synthetic native period inspection\n</experience>')};
 else{reply='<notes>Clarified pending native review.</notes>';files['SKILL.md']=p.syntheticFiles['harness/SKILL.md']+'\\nKeep human review pending.\\n';}
 writeFileSync(a[a.indexOf('--output-last-message')+1],JSON.stringify({reply,files}));console.log(JSON.stringify({type:'thread.started',thread_id:'synthetic-codex'}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:100,output_tokens:100}}));`);
 const args=[join(config.sourceRepo,'06-workbench/scripts/harness2-google.py'),'--upstream',config.upstream,'--repo-stage',config.repoStage,'--host-stage',config.hostStage,'--node',config.node,'--work',config.work,'--canary',config.canary,'--execution-mode','model','--gateway-socket',config.budget.socketPath,'--budget-config',budgetPath,'--optimizer','codex','--codex-cli',config.node,'--codex-node',config.node,'--codex-work-root',join(config.brokerDir,'codex-contexts'),'--codex-script',fakeCodex];
@@ -59,6 +60,9 @@ try{
  writeFileSync(join(config.brokerDir,'cycle.stdout'),stdout);writeFileSync(join(config.brokerDir,'cycle.stderr'),stderr);
  assert.equal(exit,0,stderr+'\n'+stdout);assert.ok(calls>0&&(config.budget.maxCalls===undefined||calls<=config.budget.maxCalls));assert.equal(gateway.ledger.stopped,null);
  const cyclePath=join(config.work,'experiment/cycle.json'),cycleBytes=readFileSync(cyclePath),cycle=JSON.parse(cycleBytes);assert.equal(cycle.optimizer.kind,'codex');assert.equal(cycle.optimizer.invocations.length,4);assert.equal(cycle.executor.calls,calls);assert.equal(cycle.optimizer.actualBilledUsd,null);assert.equal(cycle.executionMode,'model');assert.equal(optimizerCalls(),4);
+ assert.equal(cycle.experience.status,config.reflectionOutcome??'recorded');assert.equal(cycle.experience.libraryRecorded,config.reflectionOutcome!=='no_entry');assert.equal(cycle.experience.qualityImprovementVerified,false);
+ const libraryFiles=(await import('node:fs')).existsSync(join(config.work,'experiment/experience-library'))?(await import('node:fs')).readdirSync(join(config.work,'experiment/experience-library'),{recursive:true}):[];
+ assert.equal(libraryFiles.some(path=>path.endsWith('EXPERIENCE.md')),config.reflectionOutcome!=='no_entry');
  const bound=JSON.parse(readFileSync(join(config.work,'experiment/controller.json'),'utf8'));assert.equal(bound.binding.assessor.sha256,cycle.assessment.assessmentCodeDigest,'completed result binds the trusted assessor that actually checked it');
  const beforeCalls=calls;
  const reused=await invoke(args);assert.equal(reused.code,0,reused.stderr);assert.equal(JSON.parse(reused.stdout).resumeStatus,'already_completed');assert.equal(calls,beforeCalls);assert.equal(optimizerCalls(),4);
@@ -75,5 +79,5 @@ try{
  const synthetic=await invoke(syntheticArgs);assert.equal(synthetic.code,0,synthetic.stderr);assert.equal(JSON.parse(synthetic.stdout).executionMode,'synthetic-native');assert.equal(calls,beforeCalls);assert.equal(optimizerCalls(),4);
  let toModel=setArg(setArg(syntheticArgs,'--execution-mode','model'),'--optimizer','codex');toModel=setArg(setArg(toModel,'--gateway-socket',config.budget.socketPath),'--budget-config',budgetPath);await rejectChanged(toModel);
  if(config.delayExecutorCall!==undefined){assert.equal(delayedExecutorCalls.length,1);assert.ok(delayedExecutorCalls[0].elapsedMs>=config.responseDelayMs);}
- console.log(JSON.stringify({status:'passed',nativeHost:'pi',mockModelTransport:true,mockCodexCli:true,paidModelInvoked:false,executorGatewayCalls:calls,optimizerCliInvocations:4,fullProductionModelPath:true,rolesSeparated:true,delayedExecutorCalls,candidateDelayVerified:config.delayExecutorCall===8&&delayedExecutorCalls.length===1&&!delayedExecutorCalls[0].storePath.includes('/runs/base1/'),resumeBinding:['same config has no new calls','mode/host/executionMode/relay config/CLI changes refused','changed completion mode refused','synthetic to model refused']}));
+ console.log(JSON.stringify({status:'passed',nativeHost:'pi',mockModelTransport:true,mockCodexCli:true,paidModelInvoked:false,executorGatewayCalls:calls,optimizerCliInvocations:4,fullProductionModelPath:true,rolesSeparated:true,experienceStatus:cycle.experience.status,libraryRecorded:cycle.experience.libraryRecorded,delayedExecutorCalls,candidateDelayVerified:config.delayExecutorCall===8&&delayedExecutorCalls.length===1&&!delayedExecutorCalls[0].storePath.includes('/runs/base1/'),resumeBinding:['same config has no new calls','mode/host/executionMode/relay config/CLI changes refused','changed completion mode refused','synthetic to model refused']}));
 }finally{await gateway.close();}

@@ -12,7 +12,7 @@
 | 执行模型relay | `budget-gateway.mjs`仅转发/记录执行器的DeepSeek请求；不生成候选、不代理Codex登录 |
 | 独立评估 | 另行读取实际Store/DB/回执，不调用模型、不向候选提供判题器 |
 
-Codex CLI复用操作者现有认证和默认model/provider，不传`--model`、不忽略本人config、不复制token或auth文件。worker只把受控合成上下文经stdin交给Codex，使用read-only sandbox、禁shell/web、apps/plugins、browser/computer、多agent、image、依赖安装与hooks能力，并在内存读取MCP列表后逐个禁用无关MCP；配置中的env/header原文不落日志。输出通过JSON schema和Markdown文件白名单后才安装。`gateway_proposer.py`已退役，调用即明确失败，绝不回退DeepSeek自我优化。
+Codex CLI复用操作者现有认证和默认model/provider，不传`--model`、不忽略本人config、不复制token或auth文件。worker只把受控合成上下文经stdin交给Codex，使用read-only sandbox、禁shell/web、apps/plugins、browser/computer、多agent、`view_image`工具、依赖安装与hooks能力，并在内存读取MCP列表后逐个禁用无关MCP；配置中的env/header原文不落日志。输出通过JSON schema和Markdown文件白名单后才安装。`gateway_proposer.py`已退役，调用即明确失败，绝不回退DeepSeek自我优化。
 
 MCP逐次覆盖使用有效但禁用的stub配置，不复制原command、env、URL或header。目前仅支持已验证的`stdio`和`streamable_http`，服务器名限字母/数字/下划线/短横线；其他形式明确拒绝。带同一组flags再次读取MCP列表，确认名称集合一致且所有项`enabled=false`后才启动优化。worker传输、CLI进程或输出协议故障属于不可恢复的接入错误，Google不把它当作候选失败回退；已排队的后续优化任务同样停止，保留首次故障metadata。
 
@@ -45,7 +45,9 @@ Codex优化记录和DeepSeek执行账本分别保存。Codex若未在机器事�
 
 当前任务为合成企业A的2026-01 `period.inspect`。执行始终经原生MCP和实际Store/DB，不用模型自述代替回执，保留`executed / resultCurrent / confirmationCurrent`，会计review保持pending。
 
-原版`k=1`仍有3个改进阶段和3次候选执行，另需1次基线；不是只调用一次私有`_run_stage`。本入口一次只跑`agg`或`seq`一种，单线程调度。每个阶段使用Codex产生修改，候选由真实执行宿主运行；k=1只有一个最终候选，使用上游`trivial_selection`，不额外花模型请求假装比较单个候选。之后由Codex反思、原版Library持久化经验，最后独立评估。
+原版`k=1`仍有3个改进阶段和3次候选执行，另需1次基线；不是只调用一次私有`_run_stage`。本入口一次只跑`agg`或`seq`一种，单线程调度。每个阶段使用Codex产生修改，候选由真实执行宿主运行；k=1只有一个最终候选，使用上游`trivial_selection`，不额外花模型请求假装比较单个候选。之后由Codex反思，按原版Library规则决定是否收录经验，最后独立评估。
+
+反思遵循原版可拒绝收录的语义：完成的合法回复可以明确写独立行`NO_ENTRY`（可附`<edits>`记录），表示没有可复用执行对照。控制器同时核实本次成功反思reply与原版解析结果；`{}`本身不构成成功，缺反思、格式错误或接入失败仍停止。`cycle.json`分别记录`experience.status=recorded/no_entry`；仅有有效cue/lesson/evidence时调用原版Library写入，`no_entry`不写假经验。这两种结果都不证明质量提升，`qualityImprovementVerified=false`。
 
 验收必须同时满足：所有原版阶段无失败回退；候选文件确实被对应原生宿主加载；实际Store证明任务执行且结果当前有效；选择/反思/Library文件可追溯；独立评估通过，未伪造人审。`cycle.json`分别列出optimizer和executor证据。流程pass依据真实执行证据；历史工具错误不再一票否决，但innerErrorCount/nativeStatus原样保留，zeroObservedErrors单独标注，qualityVerified=false。原生退出失败、timeout、错误目标、stale结果或人审accepted仍不能pass。只证明完整流程连通，不证明跨企业泛化、整账完成或效率收益；heldout为空仍保留false。
 

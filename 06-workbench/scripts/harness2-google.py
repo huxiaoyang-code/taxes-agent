@@ -68,19 +68,24 @@ from harness2.core.recursion import run_mode
 from harness2.core import recursion as native_recursion
 from harness2.core.selection import selection_pool,trivial_selection,reflect_adoption
 from harness2.core.library import Library
+from codex_proposer import classify_reflection
 native_recursion.STAGE_ATTEMPTS=1
 native_recursion.TRANSPORT_ATTEMPTS=1
 
 
 class SyntheticEditor:
+    def __init__(self):self.replies={}
     def call(self,mission,root,label,**kwargs):
         if label.startswith('select.'):
-            return Reply(label,'```choice\nA\n```\n<why>Preserves native uncertainty.</why>',True,attempts=1)
-        if label.startswith('experience.'):
-            return Reply(label,'<experience>\ncue: pending native review\nlesson: preserve state axes\nevidence: actual synthetic period inspection\n</experience>',True,attempts=1)
-        path=Path(root)/'harness'
-        skill=path/'SKILL.md';skill.write_text(skill.read_text()+'\nKeep human review pending.\n')
-        return Reply(label,'<notes>Clarified existing review boundary.</notes>',True,attempts=1,workspace=path)
+            reply=Reply(label,'```choice\nA\n```\n<why>Preserves native uncertainty.</why>',True,attempts=1)
+        elif label.startswith('experience.'):
+            reply=Reply(label,'<experience>\ncue: pending native review\nlesson: preserve state axes\nevidence: actual synthetic period inspection\n</experience>',True,attempts=1)
+        else:
+            path=Path(root)/'harness'
+            skill=path/'SKILL.md';skill.write_text(skill.read_text()+'\nKeep human review pending.\n')
+            reply=Reply(label,'<notes>Clarified existing review boundary.</notes>',True,attempts=1,workspace=path)
+        self.replies[label]=reply.text
+        return reply
 
 
 if args.optimizer=='codex':
@@ -173,8 +178,12 @@ if not selection.ok:
     raise RuntimeError('harness2_selection_incomplete')
 experience=reflect_adoption(task,selection,pool,adapter=adapter,prop=prop,work_dir=work)
 library=Library(adapter.root/'experience-library',adapter.domain_of(task),adapter.substrate.surface())
-if not library.add(task,result.trees[selection.chosen_label],experience=experience):
-    raise RuntimeError('harness2_experience_incomplete')
+reflection_label=f'experience.{args.mode}1'
+experience_status=classify_reflection(prop.replies.get(reflection_label),experience)
+library_entry=None
+if experience_status=='recorded':
+    library_entry=library.add(task,result.trees[selection.chosen_label],experience=experience)
+    if not library_entry:raise RuntimeError('harness2_experience_incomplete')
 # Only AFTER committed selection; independent local business evidence is never
 # sent back to the optimizer. No accountant feedback is synthesized.
 assessment=adapter.score(pool[selection.chosen_label].run_dir,task)
@@ -185,6 +194,7 @@ rates=budget and budget.get('inputUsdPerMillion') is not None and budget.get('ou
 known_cost=sum((event['usage']['inputTokens']*budget['inputUsdPerMillion']+event['usage']['outputTokens']*budget['outputUsdPerMillion'])/1e6 for event in ledger['events']) if rates and all(event.get('usage') for event in ledger['events']) else None
 summary={'version':'finance-harness2-cycle/1','status':'completed','host':args.host,
     'method':args.mode,'executionMode':args.execution_mode,'controllerBindingSha256':binding_digest,
+    'experience':{'status':experience_status,'reflectionLabel':reflection_label,'libraryRecorded':library_entry is not None,'entryPath':str(library_entry) if library_entry else None,'qualityImprovementVerified':False},
     'upstream':verified,'modelInvoked':bool(budget) or args.optimizer=='codex','assessment':assessment,
     'optimizer':{'kind':args.optimizer,'modelSelection':'inherited' if args.optimizer=='codex' else 'synthetic','actualBilledUsd':None,'invocations':getattr(prop,'invocations',[]),'upstreamNumericCost':'unpriced_placeholder' if args.optimizer=='codex' else 'no_model_calls'},
     'executor':{'host':args.host,'model':budget.get('model','deepseek-flash') if budget else None,'gatewayRole':'native_execution_only' if budget else None,'calls':ledger['calls'] if ledger else 0},

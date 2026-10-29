@@ -2,7 +2,7 @@
 
 `buildHostSpec(options)` 为显式选定的 Pi、Claude Code、dsh 或 ZCode 构造原生进程。选择后三者不会转交 Pi。Pi 的包路径和加载方式复用既有 launcher；其余适配固定 Claude Code 2.1.309、dsh 0.2.1-rc.2、ZCode CLI 0.16.9，启动时先读取真实 `--version`，版本不匹配即退出。
 
-这些是执行器，不是优化器：候选、组合和反思由本人Codex外层worker负责，DeepSeek仅供执行。共用参数为 `workspace`、`nodePath`、`apiBase`、`databasePath`、`candidateDir`、`mode: "check" | "run"`、`timeoutMs`。Pi 接收 `packageRoot`；其余三者接收明确 `cliPath`。run 另需 `taskFile` 和执行模型relay的 loopback `modelBaseUrl`。数据库、任务与候选须位于同一合成 workspace；候选正文从已通过外层树验证的 `candidateDir/SKILL.md` 加载。宿主层的路径检查不取代外层树、目标身份、模型出口和操作系统隔离检查。
+这些是执行器，不是优化器：候选、组合和反思由本人Codex外层worker负责，DeepSeek仅供执行。共用参数为 `workspace`、`nodePath`、`apiBase`、`databasePath`、`candidateDir`、`mode: "check" | "run"`、`timeoutMs`。Pi 接收 `packageRoot`；其余三者接收明确 `cliPath`。run 另需 `taskFile` 和执行模型relay的 loopback `modelBaseUrl`。数据库、任务与候选须位于同一合成 workspace。四宿主都先以 `inspectSurface` 校验候选树，再按 `SKILL.md → tools.md → recovery.md` 顺序，将所有现存允许文件及文件名边界打包为 always-on 正文；重新读取的内容须匹配已校验摘要。Pi 与 Claude 用原生 `--append-system-prompt` 直接注入完整正文，dsh 放入原生 system-prompt，ZCode 放入原生会话任务前缀。它们不依赖模型主动 read 文件，也不接受调用方用 `candidateText` 替换或省略候选表面。候选不能新增权限；宿主层的路径检查不取代外层树、目标身份、模型出口和操作系统隔离检查。
 
 每次在 workspace 下独占创建 `.host-<宿主>`，放置原生配置、全新 home 与不含密钥的进程计划。不读取或复制用户 auth、会话、全局设置。系统环境采用白名单；模型子进程只持本地网关占位 key。所有进程使用 `shell:false`；Windows `.cmd`、`.bat`、`.ps1` 明确拒绝，操作者应指定其实际 `.exe` 或包内 `.js/.cjs/.mjs` 入口。没有 PATH 探索、自动安装、升级或宿主回退。
 

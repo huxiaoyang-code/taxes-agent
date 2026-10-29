@@ -11,8 +11,8 @@ export function buildHostSpec(options){
   const builtin=resolve(dirname(options.cliPath),'../config/provider/zcode-builtin.json');
   if(!existsSync(builtin)||!statSync(builtin).isFile())fail('harness2_zcode_builtin_provider_missing');
   p.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=builtin;
-  // The app's native codec stores API keys in its provider file. A bounded local
-  // gateway owns operator credentials, so this file contains only a placeholder.
+  // The app's native codec stores API keys in its provider file. The executor
+  // relay owns operator credentials, so this file contains only a placeholder.
   let endpoint=modelEndpoint(options.modelBaseUrl??(options.mode==='check'?'http://127.0.0.1:9/v1':undefined),'chat');
   if(options.mode==='run')endpoint=requireGateway(endpoint,'chat');
   const providerPath=join(p.home,'provider.json'),providerId='harness2-deepseek-local';

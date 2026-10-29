@@ -46,7 +46,7 @@ from harness2.core.recursion import run_parallel, run_sequential
 from harness2.core.selection import run_selection, reflect_adoption, selection_pool
 from harness2.core.library import Library
 from harness2.core.tree import write_tree
-from codex_proposer import CodexProposer, CodexIntegrationError
+from codex_proposer import CodexProposer, CodexIntegrationError, classify_reflection
 from harness2.core.proposer import ProposerError
 
 
@@ -76,8 +76,10 @@ class SyntheticAdapter(FinanceAdapter):
 
 class DeterministicProposer:
     """Only the model IO seam is synthetic. Google method code is unmodified."""
-    def __init__(self):
+    def __init__(self,reflection_reply=None):
         self.labels = []
+        self.replies = {}
+        self.reflection_reply=reflection_reply
 
     def call(self, mission, context_dir, label, **kwargs):
         self.labels.append(label)
@@ -85,13 +87,14 @@ class DeterministicProposer:
             text = "```choice\nA\n```\n<why>Retains explicit unknown status.</why>"
             workspace = None
         elif label.startswith("experience."):
-            text = "<experience>\ncue: uncertain native receipt\nlesson: query original intent\nevidence: synthetic fixture preserved unknown\nconfidence: synthetic only\n</experience>"
+            text = self.reflection_reply or "<experience>\ncue: uncertain native receipt\nlesson: query original intent\nevidence: synthetic fixture preserved unknown\nconfidence: synthetic only\n</experience>"
             workspace = None
         else:
             workspace = Path(context_dir) / "harness"
             path = workspace / "SKILL.md"
             path.write_text(path.read_text() + "\nPreserve pending human review.\n")
             text = "<notes>Clarified review boundary.</notes>"
+        self.replies[label]=text
         return Reply(label=label, text=text, ok=True, workspace=workspace, attempts=1)
 
 
@@ -128,11 +131,31 @@ with tempfile.TemporaryDirectory(prefix="harness2-core-") as directory:
         assert sel.ok and not sel.chosen_is_base
         experience = reflect_adoption(adapter.tasks()[0], sel, pool, adapter=adapter,
                                       prop=prop, work_dir=work)
+        assert classify_reflection(prop.replies['experience.'+mode+'1'],experience)=='recorded'
         library = Library(root / "library" / mode, adapter.domain_of(adapter.tasks()[0]), adapter.substrate.surface())
         assert library.add(adapter.tasks()[0], result.trees[sel.chosen_label], experience=experience)
         assert library.context_dir() and library.entries() == [adapter.tasks()[0]]
         assert any(label.startswith("experience.") for label in prop.labels)
         assert adapter.score(rd, adapter.tasks()[0]) is None
+
+        # NO_ENTRY is the original prompt's explicit decision to store no lesson.
+        # Keep the recorded case above and its library intact in a separate tree.
+        no_entry_work=root/(mode+'-no-entry');shutil.copytree(work,no_entry_work)
+        no_entry_reply='<edits>\nNo reusable execution contrast is evidenced.\n</edits>\n\nNO_ENTRY'
+        no_entry_prop=DeterministicProposer(reflection_reply=no_entry_reply)
+        no_entry=reflect_adoption(adapter.tasks()[0],sel,pool,adapter=adapter,prop=no_entry_prop,work_dir=no_entry_work)
+        assert no_entry=={}
+        assert classify_reflection(no_entry_prop.replies['experience.'+mode+'1'],no_entry)=='no_entry'
+        no_entry_library=Library(root/'no-entry-library'/mode,adapter.domain_of(adapter.tasks()[0]),adapter.substrate.surface())
+        assert no_entry_library.add(adapter.tasks()[0],result.trees[sel.chosen_label],experience=no_entry) is None
+        assert no_entry_library.entries()==[] and no_entry_library.context_dir() is None
+        assert not list(no_entry_library.root.rglob('EXPERIENCE.md'))
+
+    assert classify_reflection('NO_ENTRY',{})=='no_entry'
+    for malformed in (None,'','<edits>Missing reflection decision</edits>','<edits>NO_ENTRY appears only in a quotation</edits>','NO_ENTRY plus unexplained text','<experience>invalid</experience>\nNO_ENTRY','<edits></edits>\nNO_ENTRY','<edits>extra</edits>closing</edits>\nNO_ENTRY'):
+        try:classify_reflection(malformed,{})
+        except CodexIntegrationError:pass
+        else:raise AssertionError('malformed or absent reflection was accepted as NO_ENTRY')
 
     # Exercise the real Google catch boundary: optimizer integration failures
     # must escape rather than becoming baseline-backed candidate executions.

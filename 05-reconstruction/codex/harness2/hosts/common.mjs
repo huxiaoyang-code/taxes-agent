@@ -3,6 +3,7 @@ import {isAbsolute,resolve,relative,sep,join,dirname,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createContext,writeBundle} from '../../hosts/shared/config.mjs';
 import {toolsForProfile} from '../../mcp/finance-mcp/tool-profile.mjs';
+import {readSurfaceBundle} from '../surface.mjs';
 
 export const HOST_VERSIONS=Object.freeze({'claude-code':'2.1.309',dsh:'0.2.1-rc.2',zcode:'0.16.9'});
 export const EXPERIMENT_TOOLS=Object.freeze(['harness_discover','harness_scope_discover','harness_init','harness_source_register','harness_facts_register','harness_plan','harness_run','harness_status','harness_receipt_read','skills_list','skills_read']);
@@ -58,8 +59,8 @@ export function prepare(options,host,buildConfig){
     if(!task.trim()||task.includes('\0'))fail('harness2_task_invalid');
   }
   if(options.candidateDir!==undefined){
-    const candidate=inside(workspace,options.candidateDir,'candidate'),path=inside(workspace,join(candidate,'SKILL.md'),'candidate_file');
-    if(!statSync(path).isFile()||statSync(path).size>65536)fail('harness2_candidate_invalid');candidateText=readFileSync(path,'utf8');if(candidateText.includes('\0'))fail('harness2_candidate_invalid');
+    const candidate=inside(workspace,options.candidateDir,'candidate');
+    candidateText=readSurfaceBundle(candidate).text;
   }else if(options.mode==='run')fail('harness2_candidate_required');
   const timeoutMs=options.timeoutMs??(options.mode==='run'?null:30000);if(timeoutMs!==null&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>2147483647))fail('harness2_host_timeout_invalid');
   const maxOutputTokens=options.maxOutputTokens;if(maxOutputTokens!==undefined&&(!Number.isSafeInteger(maxOutputTokens)||maxOutputTokens<1))fail('harness2_host_output_limit_invalid');

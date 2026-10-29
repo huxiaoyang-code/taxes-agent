@@ -29,6 +29,8 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 
 优化 CLI 的 MCP 禁用仅支持已验证的 `stdio`、`streamable_http` transport 和字母/数字/下划线/短横线服务器名；未知类型或禁用复查失败会在优化调用前停止。优化器接入故障直接终止循环，不执行回退候选。
 
+反思可以按原版协议明确返回 `NO_ENTRY`，表示没有足够证据收录可复用经验；循环记录 `experience.status=no_entry`，不向 Library 写入假经验。流程跑通或收录经验均不等于已证明质量提升。
+
 ## 目录
 
 | 路径 | 用途 |

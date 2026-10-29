@@ -20,6 +20,20 @@ class CodexIntegrationError(RuntimeError):
     """Fatal optimizer IO/protocol failure, never a recoverable candidate rejection."""
 
 
+def classify_reflection(reply, experience):
+    """Distinguish an explicit upstream NO_ENTRY from missing/malformed output."""
+    if not isinstance(reply,str) or not reply.strip():
+        raise CodexIntegrationError('harness2_reflection_incomplete')
+    if experience:
+        if not isinstance(experience,dict) or not all(isinstance(experience.get(key),str) and experience[key].strip() for key in ('cue','lesson','evidence')) or re.search(r'(?m)^\s*NO_ENTRY\s*$',reply):
+            raise CodexIntegrationError('harness2_reflection_incomplete')
+        return 'recorded'
+    no_entry=re.fullmatch(r'\s*(?:<edits>(?P<edits>.*?)</edits>\s*)?NO_ENTRY\s*',reply,re.S)
+    if no_entry and (no_entry.group('edits') is None or no_entry.group('edits').strip()) and reply.count('<edits>')==reply.count('</edits>')<=1 and not re.search(r'</?experience\b',reply):
+        return 'no_entry'
+    raise CodexIntegrationError('harness2_reflection_incomplete')
+
+
 def launch_path(value):
     value=str(value)
     if os.name!='nt' and re.match(r'^[A-Za-z]:[/\\]',value):
@@ -37,6 +51,7 @@ class CodexProposer:
         self.timeout_ms=timeout_ms
         self.codex_script=codex_script
         self.invocations=[]
+        self.replies={}
         self._failure=None
         self._call_lock=threading.Lock()
 
@@ -124,6 +139,7 @@ class CodexProposer:
             workspace=destination
         elif edits:
             raise CodexIntegrationError('harness2_codex_nonedit_stage_returned_files')
+        self.replies[label]=reply
         # The upstream numeric accounting seam requires a float. This is a
         # placeholder only: CLI/subscription billing remains explicitly unknown.
         return Reply(label=label,text=reply,ok=True,cost_usd=0.0,attempts=1,

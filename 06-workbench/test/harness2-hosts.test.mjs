@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {nativeCommand,systemEnv,modelEndpoint,inside,requireGateway,EXPERIMENT_TOOLS,RESEARCH_TOOLS} from '../../05-reconstruction/codex/harness2/hosts/common.mjs';
 import {inspectEvent,versionMatches,capture,runPlan} from '../../05-reconstruction/codex/harness2/hosts/native-runner.mjs';
 import {decodeAnthropicRequest,encodeAnthropicResponse} from '../../05-reconstruction/codex/harness2/hosts/anthropic-codec.mjs';
+import {readSurfaceBundle} from '../../05-reconstruction/codex/harness2/surface.mjs';
 
 const nativeArgs=process.argv.slice(2),outAt=nativeArgs.indexOf('--out');let root;
 if(outAt!==-1){assert.equal(outAt,3);assert.equal(nativeArgs.length,5);root=nativeArgs[4];assert.ok(isAbsolute(root));assert.equal(existsSync(root),false);mkdirSync(root);nativeArgs.splice(3);}
@@ -75,6 +76,32 @@ for(const host of ['claude-code','dsh','zcode']){
     const spec=buildHostSpec({workspace,nodePath:process.execPath,packageRoot,apiBase:'http://127.0.0.1:49123',databasePath:join(workspace,'synthetic.db'),taskFile,candidateDir,mode:'run',modelBaseUrl:'http://127.0.0.1:49124/v1',...requested===undefined?{}:{maxOutputTokens:requested}});
     const models=JSON.parse(readFileSync(join(spec.env.PI_CODING_AGENT_DIR,'models.json'),'utf8')),model=models.providers.deepseek.models[0];
     assert.equal(model.contextWindow,1048576);assert.equal(model.maxTokens,requested??393216);assert.equal(model.reasoning,true);
+  }
+  for(const host of ['pi','claude-code','dsh','zcode']){
+    const {buildHostSpec}=await import(`../../05-reconstruction/codex/harness2/hosts/${host}.mjs`),prompts=[];
+    for(const changed of ['none','tools','recovery']){
+      const workspace=join(root,'surface-'+host+'-'+changed),candidateDir=join(workspace,'candidate');mkdirSync(candidateDir,{recursive:true});
+      const markers=['SURFACE_SKILL_ALWAYS','SURFACE_TOOLS_ALWAYS'+(changed==='tools'?'_CHANGED':''),'SURFACE_RECOVERY_ALWAYS'+(changed==='recovery'?'_CHANGED':'')];
+      for(const [index,name] of ['SKILL.md','tools.md','recovery.md'].entries())writeFileSync(join(candidateDir,name),markers[index]);
+      const taskFile=join(workspace,'task.txt');writeFileSync(taskFile,'Synthetic task');
+      const options={workspace,nodePath:process.execPath,packageRoot,cliPath:fakeCliPaths[host],apiBase:'http://127.0.0.1:49123',databasePath:join(workspace,'synthetic.db'),taskFile,candidateDir,candidateText:'CALLER_MUST_NOT_REPLACE_SURFACE',mode:'run',modelBaseUrl:'http://127.0.0.1:49124/v1'};
+      const spec=buildHostSpec(options),expected=readSurfaceBundle(candidateDir).text;let prompt;
+      if(host==='pi'){assert.equal(spec.args.filter(arg=>arg==='--append-system-prompt').length,1);prompt=spec.args[spec.args.indexOf('--append-system-prompt')+1];assert.ok(prompt.includes('你是本机财税主 Agent。'));assert.ok(prompt.includes('不得编造会计批准、申报或付款。'));}
+      else{
+        const plan=JSON.parse(readFileSync(spec.planPath,'utf8'));
+        if(host==='claude-code')prompt=plan.runArgs[plan.runArgs.indexOf('--append-system-prompt')+1];
+        else if(host==='zcode')prompt=plan.task;
+        else prompt=JSON.parse(readFileSync(join(workspace,'.host-dsh/model.cordis.patch.yml'),'utf8')).find(entry=>entry.id==='system-prompt').config.personaPrefix;
+      }
+      assert.ok(prompt.includes(expected),host+' must receive the complete verified always-on bundle');
+      assert.equal(prompt.includes('CALLER_MUST_NOT_REPLACE_SURFACE'),false);
+      for(const marker of markers)assert.ok(prompt.includes(marker),host+' missing '+marker);
+      assert.ok(prompt.indexOf(markers[0])<prompt.indexOf(markers[1]));assert.ok(prompt.indexOf(markers[1])<prompt.indexOf(markers[2]));
+      prompts.push(prompt);
+    }
+    assert.notEqual(prompts[0],prompts[1],host+' tools-only edits must affect the native prompt');assert.notEqual(prompts[0],prompts[2],host+' recovery-only edits must affect the native prompt');
+    const workspace=join(root,'surface-'+host+'-invalid'),candidateDir=join(workspace,'candidate');mkdirSync(candidateDir,{recursive:true});writeFileSync(join(candidateDir,'SKILL.md'),'SYNTHETIC');writeFileSync(join(candidateDir,'forbidden.js'),'SYNTHETIC');const taskFile=join(workspace,'task.txt');writeFileSync(taskFile,'Synthetic task');
+    assert.throws(()=>buildHostSpec({workspace,nodePath:process.execPath,packageRoot,cliPath:fakeCliPaths[host],apiBase:'http://127.0.0.1:49123',databasePath:join(workspace,'synthetic.db'),taskFile,candidateDir,mode:'run',modelBaseUrl:'http://127.0.0.1:49124/v1'}),/harness2_surface_file_forbidden/);
   }
 }
 
