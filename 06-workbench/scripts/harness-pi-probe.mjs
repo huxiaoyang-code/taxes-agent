@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, mkdirSync, mkdtempSync, createReadStream, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, join, dirname, isAbsolute } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 // The real registered parser tool launches this script in replay mode. It only
 // emits previously saved protocol bytes; it never creates a model runtime.
@@ -21,7 +21,12 @@ if(process.argv.includes('--mode')&&process.env.FINANCE_HARNESS_REPLAY_SOURCE){
 const piRoot=process.argv[2]&&resolve(process.argv[2]);if(!piRoot)throw new Error('explicit_pi_package_root_required');
 const pkg=JSON.parse(readFileSync(join(piRoot,'package.json'),'utf8'));assert.equal(pkg.version,'1.1.0');assert.equal(pkg.license,'MIT');
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),extension=join(repo,'05-reconstruction/codex/pi/finance-harness.ts');
-mkdirSync(join(repo,'06-workbench/.agent-runs'),{recursive:true});const agentDir=mkdtempSync(join(repo,'06-workbench/.agent-runs/pi-model-free-'));process.env.PI_CODING_AGENT_DIR=agentDir;
+const agentDirFlag=process.argv.indexOf('--agent-dir');let agentDir;
+if(agentDirFlag>=0){
+ const selected=process.argv[agentDirFlag+1];if(!selected||!isAbsolute(selected))throw Error('explicit_new_probe_agent_dir_required');
+ agentDir=resolve(selected);mkdirSync(agentDir); // exclusive: never load an existing user's auth/config/session
+}else{mkdirSync(join(repo,'06-workbench/.agent-runs'),{recursive:true});agentDir=mkdtempSync(join(repo,'06-workbench/.agent-runs/pi-model-free-'));}
+process.env.PI_CODING_AGENT_DIR=agentDir;
 const {loadExtensions}=await import(pathToFileURL(join(piRoot,'dist/core/extensions/loader.js')).href);
 const loaded=await loadExtensions([extension],repo);assert.deepEqual(loaded.errors,[]);assert.equal(loaded.extensions.length,1);
 let offlineReplay=null;
