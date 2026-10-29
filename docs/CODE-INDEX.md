@@ -111,3 +111,8 @@
 统一入口：[scripts/test-all.mjs](../06-workbench/scripts/test-all.mjs)，在 `06-workbench` 运行 `npm test`；单套件按索引路径使用 `node test/对应文件.test.mjs`。套件参数以统一入口为准，部分套件需要额外 Node 参数。
 
 合成数据和独立预期保留在 [test/fixtures](../06-workbench/test/fixtures/)；测试辅助入口在 [test/helpers](../06-workbench/test/helpers/)。验证报告写实际运行结果与未验证范围，不以索引中的链接推断测试通过。
+
+## sol-pi
+
+- Pi 可选 ObservationPack 接入默认 `off`：[使用与固定依赖](SOL-PI-INTEGRATION.md)、[独立入口](../06-workbench/scripts/sol-pi-run.mjs)、[选择/验证/启动接口](../05-reconstruction/codex/sol-pi/runtime.mjs)、[官方 factory 窄适配](../05-reconstruction/codex/sol-pi/extension.ts)。只允许 Pi，其他机制与 Harness² 组合明确拒绝。
+- 从仓库根运行 `node 06-workbench/test/sol-pi-integration.test.mjs` 验证默认与拒绝合同；准备文档指定的完整锁工具目录后，运行 `node 06-workbench/scripts/sol-pi-probe.mjs --tool-root <绝对工具目录> --archive-root <绝对合成归档目录> --account-set-id synthetic_account`。探针使用实际 Pi/MCP/官方扩展，不调用模型，不代替业务或收益验收。
