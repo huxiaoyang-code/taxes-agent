@@ -155,6 +155,7 @@ const steps = [
   { name: 'harness-batch-partial-effects', file: join(WORKBENCH, 'test', 'harness-batch-partial-effects.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-tax-presentation', file: join(WORKBENCH, 'test', 'harness-tax-presentation.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-local-tool-contract', file: join(WORKBENCH, 'test', 'harness-local-tool-contract.test.mjs'), cwd: WORKBENCH },
+  { name: 'sol-pi-integration', file: join(WORKBENCH, 'test', 'sol-pi-integration.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

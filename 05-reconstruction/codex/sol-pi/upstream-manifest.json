@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/NVlabs/SoL-Pi",
+  "commit": "219568034fa54ed121ede80961655e33dfb9d0e3",
+  "version": "0.1.1",
+  "files": {
+    "LICENSE": "3d48837289818b1f3efac782ec22fed30c4656b6c5abecdf5a04f3c0e0cbe7d2",
+    "src/sol-pi/runtime-paths.ts": "d80cf7c739d3b7a3a60ca1998be9e05d1ec245833eba11c5d910f724d2cc0495",
+    "src/sol-pi/tui.ts": "237ee4b664e6c7c311864bbec6028479d33ef74949d7f4633100b930b9eb44da",
+    "src/sol-pi/extensions/observation-pack/index.ts": "faf45850360a6207dcebc284dac3c1fe568e9e6842f86f01cfca10c2f95d1c2a",
+    "src/sol-pi/extensions/observation-pack/ledger.ts": "518f2fa13e21fa1eeba5e372e875dc3217dbbae0a24863801d5309dbb1a1fb5c",
+    "src/sol-pi/extensions/observation-pack/observation.ts": "439d937cd2eedec6a44777f6b75a2e71af052cfea5e5808693e79e915f9aac0c"
+  }
+}
