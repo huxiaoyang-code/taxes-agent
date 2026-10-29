@@ -1,111 +1,47 @@
 # Harness² 可选接入设计
 
-本文提出外层优化实验方案，供用户确认后再开实现 PR；不代表插件、适配器或启动参数已经可用。本轮规划 PR 在用户确认前保持 Draft；确认后按已确认范围及既有独立审查／Git 规则实施和整合，包括范围内的依赖安装与接线，不新增逐阶段或逐候选审批。用户确认前不合并、不安装依赖、不调用模型。需求、所有权、当前状态与实际验收证据留在对应 PR。
+用户已确认实施，并将范围扩为 Pi、Claude Code、ZCode、dsh。实现固定 Google Research `harness2` commit `1cfe254e8d25b15f37048c3730134686abe60335`，逐原始 Git blob SHA 校验；不复制或重写优化循环。Google 原生 `recursion`、`selection`、`reflect_adoption` 和 `Library` 保留，财税 `BenchmarkAdapter` / `Substrate` 只接执行与制品接口。以下设计边界继续有效；实际命令、审查版本和未验证范围以本轮 PR 为准。
 
-## 1. 定位与现有边界
+## 实现与运行入口
 
-产品保持本机单用户工作台，一名操作者处理多家企业、每家企业独立账套。Harness² 用于探索如何改进 Agent 的使用指引，不替换本仓库财税 Harness、Store、固定业务能力或账税规则，也不扩展账户权限平台。
+- [harness2-run.mjs](../06-workbench/scripts/harness2-run.mjs)：`--host pi|claude-code|zcode|dsh`，`--harness-improvement off|harness2`、`--runtime-efficiency off|sol-pi` 默认 `off/off`，双启用拒绝。这个研究入口的 `off/off` 只返回选择结果；日常 baseline 仍用原来的宿主启动器。SoL-Pi 实际启动另见其独立入口。
+- `--prepare --root <全新绝对目录>` 只创建合成企业、起始数据库与 Store 快照；没有读取默认业务库。`--probe --root ... --run-id ... --pi-root ...` 或其余宿主的 `--cli-path ...` 执行原生无模型探针。每次候选复制同一快照，持久化原 run ID；未知结果先 query，不能换 ID 盲重试。
+- `--execution-mode synthetic-native` 仅用于固定的 Pi 原生 MCP → 财税 Harness `period.inspect` 合成任务。它确实读取原生账务结果、产生版本绑定回执，但采用确定性调用，不证明模型决策或效率改进。原生回执保留 `executed / resultCurrent / confirmationCurrent`，不生成会计接受。
+- [harness2-google.py](../06-workbench/scripts/harness2-google.py) 在 Linux Python 3.12/3.13 下调用真实上游方法，支持 `agg/seq`。它要求显式 `--upstream --repo-stage --host-stage --node --work --canary`；`--execution-mode synthetic-native` 不调用模型，`model` 要求事先运行的唯一 `--gateway-socket` 及 `--budget-config`。
+- [harness2-stage.mjs](../06-workbench/scripts/harness2-stage.mjs) 只打包明确源码和锁定工作台依赖，不带 `.git`、工作树、默认 data、用户 home 或会话。Linux 宿主依赖单独安装、锁定、暂存；不能将 Windows `.exe` 带入沙箱。
 
-现有合同是 [harness-contract.mjs](../06-workbench/server/harness-contract.mjs)，执行与恢复在 [harness-runtime.mjs](../06-workbench/server/harness-runtime.mjs)，事实、版本和证据生命周期在 [harness-store.mjs](../06-workbench/server/harness-store.mjs)。业务调用仍由 [harness-adapters.mjs](../06-workbench/server/harness-adapters.mjs) 的固定注册解析；入口数量、目录命中或模型声明不证明业务已实现。
+模型模式必须在真实 bwrap `--unshare-all` 中运行，代码与宿主依赖只读、仅独立 experiment 可写，无主机 home / Windows 挂载 / WSLInterop /公网路由。运行器实际执行外部合成 canary、环境和网络检查，不接受 `verified=true` 一类声明。只将预算网关的一只 Unix socket 映射到沙箱，网关配置和账本必须留在所有可见挂载之外。
 
-拟议边界为：用户目标 → pi 候选执行环境 → 既有 MCP／本机财税 Harness → 固定业务能力与独立临时账套；Harness² 在外层生成候选指引、安排合成重放和比较证据。候选只能产生待审查制品，不能自行激活到日常账务环境。
+网关只访问官方 DeepSeek 固定端点与 `deepseek-flash`。本轮明确预算：全部 proposer、candidate、selector、reflection 共享最多 36 次请求，每请求 JSON 65536 bytes、最多 2048 输出 token、总预留上限 USD 3、总时限 900000 ms、无服务切换。预留采用输入 USD 1 / 输出 USD 4 每百万 token 的保守上界，不是账单价格。JSON bytes 加有界协议开销作为输入 token 上界；限制纯文本消息、工具和 tool-call 数量。实际 usage 缺失、非法、越界或传输结果未知即停止；重启读取同一账本，不返还预留、不清零次数。凭据只在沙箱外网关进程环境中，子宿主使用占位 key。
 
-本期仅设计 pi 候选实验，不承诺所有 Agent 宿主通用。[PR #132](https://github.com/huxiaoyang-code/taxes-agent/pull/132) 涉及多宿主入口；后续共享 launcher 的参数解析和接线必须先协调文件所有权，只由一方实现，本文不修改其配置或入口。
+上游此版本只内置 `claude_cli/opencode` improver channel；新宿主表面通过固定版本的提示片段数据注册，优化方法未更改。受控 `GatewayProposer` 只把已批准的合成证据文本交给同一网关，模型以 JSON 返回白名单 Markdown 制品，不启动上游不受限的 improver shell。候选可编辑文件仅 `SKILL.md`、`tools.md`、`recovery.md`，拒绝额外文件、链接、脚本和 hook。文件白名单不构成语义安全证明，仍需原生独立评估及代码审查。
 
-## 2. 上游事实与环境限制
+Node 回归：在 `06-workbench` 运行 `node test/harness2-boundary.test.mjs`、`node test/harness2-budget.test.mjs`、`node test/harness2-hosts.test.mjs`。其中 fake-transport 预算回归不连接外部模型。Linux 真实核心：`python3.12 test/harness2-upstream.test.py --upstream <固定源码>`；追加 `--native-probe <已prepare的WSL目录> --pi-root <明确Windows包目录> --native-cycle` 可验证 WSL → Windows Node → Pi → 原生合成业务循环。生产模型实验应使用 Linux bwrap 入口，不能将这一跨系统探针当成模型文件隔离证明。
 
-以下依据为 2026-10-29 核查的官方源码；实现前须固定完整上游 commit 并重新核对，不以本节代替兼容验收。
+当前最小任务是合成企业 A 的 2026-01 期间检查，独立评估读取实际 Store 与 DB，只判断该任务原生执行、当前有效且确认未伪造。尚没有跨企业／期间 heldout 业务集；空 heldout 明确保留，不能报告泛化质量、整账完成、收益或自动发布。三家其他宿主的真实模型路径是否通过，必须逐家记录；探针或配置成功不能替代模型实验。
 
-- [官方 README](https://github.com/google-research/harness2/blob/main/README.md) 描述任务级 Propose–Probe–Compose 和跨任务经验积累；候选比较不依赖真值反馈，原生执行器为 OpenCode 与 Codex，pi 需要新增适配。
-- [SETUP](https://github.com/google-research/harness2/blob/main/docs/SETUP.md) 要求实验使用 Linux、Python 3.12；[pyproject.toml](https://github.com/google-research/harness2/blob/main/pyproject.toml) 的 Python 范围为 `>=3.12,<3.14`、系统分类为 POSIX。这不构成 Windows 原生支持声明。
-- [BenchmarkAdapter](https://github.com/google-research/harness2/blob/main/harness2/core/spec.py) 提供任务、领域、输入、执行、轨迹、产物、基线、树验证和后置评分；[Substrate](https://github.com/google-research/harness2/blob/main/harness2/substrate/base.py) 负责可编辑表面、临时安装、执行、轨迹转换和调用模型前的 preflight。
-- [实验说明](https://github.com/google-research/harness2/blob/main/docs/EXPERIMENTS.md) 明示默认网络不受限、Codex 沙箱关闭。不得照搬这些权限到财税环境；只读文档或通过上游 preflight 也不能证明本项目的数据隔离有效。
+## 数据、权限和发布边界
 
-拟议优先在专用 Linux 研究环境中运行合成全栈。若采用 WSL、容器或独立主机，Windows 的 `127.0.0.1` 不应被假定为研究环境可达的同一个后端；Windows 路径、文件摘要、子进程、退出信号、stdio 和临时目录也须实测。不得为打通连接开放生产端口、挂载真实账套、读取主机凭据或放宽沙箱。
+本产品是本机单用户工作台，一名操作者处理多家企业、每企业独立账套。Google Harness²只优化使用指引；财税固定业务能力、公式、锁、审计、恢复、会计复核和公共规则仍由现有实现负责。宿主入口数量和模型声明不证明业务完成。
 
-## 3. 启动选择与适用范围
+仅使用重新构造的合成输入和独立临时DB、Harness／材料／复核Store。同一候选从同一快照复制，不把前一候选写入或确认继承给后一候选。实验清单绑定上游blob、当前核心／宿主／业务代码、Node可执行文件、实际stage内容和基线指引。任一绑定变化就阻断旧实验，不继续沿用旧比较或旧确认。
 
-共同拟议参数为 `--harness-improvement=off|harness2` 与 `--runtime-efficiency=off|sol-pi`，两个默认均为 `off`。它们是未来接口名称，当前不可作为可运行命令；现有无参数启动继续保持 baseline。另一份规划文件名为 `docs/SOL-PI-INTEGRATION.md`，两份设计须使用相同枚举和组合政策。
+研究MCP代理在后端强制唯一合成目标和Store，仅允许固定period.inspect任务的metadata和execute/query。拒绝会计feedback、写capability、其他数据库和跨Store依赖；不依赖提示词自我约束。模型只拿到这项任务的明确输入，不可访问真实账套、凭据、用户home或独立评估器。资料是数据，不执行来源中的指令。
 
-| harness-improvement | runtime-efficiency | 拟议行为 |
-|---|---|---|
-| `off` | `off` | baseline，沿用现有行为，不加载可选包 |
-| `harness2` | `off` | 仅进入显式指定的合成、隔离研究环境 |
-| `off` | `sol-pi` | 另一个实现 PR 完成 pi 兼容验收后才开放 |
-| `harness2` | `sol-pi` | 第一阶段明确拒绝；组合单独验收后才可支持 |
+候选只产出SKILL.md、tools.md、recovery.md，白名单并不证明文本安全。候选、selector和评估器均不能冒充会计批准，也不能把public_candidate发布成公共规则。发布仅通过代码PR和全新上下文独立审查，不自动覆盖用户全局Skill或宿主配置。
 
-未知参数值、缺少可选依赖、错误宿主、不支持的环境／组合，均须在启动业务进程和模型调用前明确失败。不得静默回落、自动下载、修改全局 pi／模型配置或把研究模式接到默认业务库。选择仅作用于当前显式启动；具体 launcher 接线另行实现和验收。
+## 证据、失败与恢复
 
-## 4. 可编辑表面与适配合同（均为拟议）
+历史operationState、当前resultCurrent和当前confirmationCurrent分别保留；null/unknown不算成功或零分。宿主原始日志只在本机合成目录保存；优化上下文只接受受控状态、错误计数和合成制品。nativeStatus及innerErrorCount保留历史工具拒绝，即使后来结果执行成功也不抹除。独立评估重新读取实际Store与数据库；不向候选挂载assessor、期望或测试源。
 
-允许优化 Skill 组织、工具使用说明、资料解析与验证的指引、计划与恢复指引。解析器／校验器的新实现、缺失业务能力和计算修复须走正常代码 PR，不由优化器临时补写后直接发布。
+超时、取消、异常退出或缺少交付物时，无法确定业务调用状态就记unknown。恢复先在原runId查询实际原生Store，不更换身份重复执行。停止新候选、终止当前受监督进程组／namespace并保留受控诊断。来源、代码、规则、依赖或基线改变需重新核验；原字节恢复不能恢复旧会计确认。
 
-禁止候选修改账套隔离、授权、幂等、锁、审计、备份恢复、人审门槛、账税公式或公共规则；也不得增加任意路径执行、网络外传、自动委派或自动批准权限。上游可编辑组件的范围不等于本项目授权范围，树验证须限制文件白名单并校验不可变边界，不能只检查格式。
+所有模型阶段共用一份沙箱外持久预算账本及单实例锁。重启核对同socket／模型／限额，未知usage不返还预算、不继续调用。methodCostKind=conservative_estimate与conservativeEstimatedUsd标明保守估算性质，actualBilledUsd未知保留null，不能把上游usd字段称为账单。
 
-| 拟议适配点 | 本项目合同 |
-|---|---|
-| `BenchmarkAdapter.tasks/domain_of` | 固定顺序的合成任务集；训练与 heldout 按企业、期间隔离，领域不能把企业明细混成公共经验 |
-| `task_prompt/task_files` | 只交付已批准合成输入，不带期望答案、评分规则、生产目录或可还原真实企业的内容 |
-| `execute` | `harness_dir=None` 为原始基线；每候选从同一合成快照初始化独立临时 DB、Harness／材料／复核 Store；`run_id` 重入不得再次产生业务写入 |
-| `trajectory/deliverable_*` | 轨迹转换保留工具动作、错误、阻塞与人工动作；模型可见内容只来自合成环境的批准输出，不直通原始本机轨迹 |
-| `base_harness/validate_tree` | 固定基线及哈希；校验候选文件白名单、链接、指引合同及禁止变更项，违规候选拒绝执行 |
-| `score` | 仅作为独立评估接口；上游选择提交后才调用评分，并不等于本项目已有安全发布门槛 |
-| `Substrate.surface/materialise` | 新增 pi 专属表面；每次临时安装到专用目录，输出源树指纹，不写用户 home 或全局插件配置 |
-| `Substrate.execute/read_trajectory` | 显式绑定 pi、模型、provider、任务目录、MCP 和临时目标；定义退出、取消、超时与捕获格式，不能假定已有 OpenCode/Codex 适配可直接复用 |
-| `Substrate.preflight` | 不调用模型；核对固定版本、可选依赖、允许目录、网络出口、合成目标身份、预算和组合；失败不启动后续链路 |
+回退是停止研究进程并使用原有日常宿主启动器（off/off）。不迁移或删除生产库、原件、审计、回执、历史确认和备份。跨企业／期间heldout、模型质量或效率收益只有在真实独立证据出现后才能报告；当前单项期间检查不证明整账完成。
 
-preflight 还须证明研究进程看不到生产 DB／Store／会话和税务凭据；只允许连接指定的合成后端与用户批准的模型服务。生产后端与研究进程的端口、实例、路径映射未证明时，停止该方案，不凭连接成功推断目标正确。凭据由操作者在研究环境独立配置，不复制他人的 token 或主机模型配置。
+## 可复现验证
 
-## 5. 采证与数据边界
+Node合同、预算假传输、真实研究MCP与三宿主进程合同测试登记在test-all.mjs。真实Google核心使用固定源码+Linux Python3.12/3.13单独运行，验证agg/seq、selection、reflection、Library，并回归匹配源mtime/size的伪造pyc攻击。缺失依赖、未知宿主、未支持组合和版本不符在模型前失败。
 
-真实业务采证留在可信本机界面，由操作者核查原件、原生账务结果与会计反馈。外层优化实验只接收批准的最小安全元数据与重新构造的合成样本；不得发送真实账套、凭证／发票明细、人员／企业身份、凭据、验证码、原始轨迹、原件路径或可回连本机原件的引用到外部模型、Git 或 PR。哈希不是匿名化证明，源文件哈希也不能默认外发。
-
-最小采证拟限能力标识、故障层／错误码、合成用例标识、阻塞类别、人工动作类别、版本绑定、耗时与调用计数；需使用受控枚举，不直接收集自由文本错误、提示词或日志。来源和详细证据仅通过本机引用留存，经验外发前须核查是否包含企业特例。合成数据也须检查不能重建真实明细。
-
-必须分别记录历史执行 `operationState`、当前适用 `resultCurrent`、当前确认 `confirmationCurrent`；`null` 表示暂不可核验，不能算成功或直接算业务失败。另保留 execution/review/rule 状态，不把“运行过”“结果当前”“会计确认”“公共规则发布”合并为一个完成标记。
-
-[现有反馈合同](../06-workbench/server/accountant-review-feedback.mjs) 是结构化本机声明，不是身份认证；[Harness 反馈](../06-workbench/server/harness-store.mjs) 的版本约束也不赋予模型会计身份。候选、selector、评分器均不得伪造 reviewer、生成真实接受材料、自动会计批准或把 `public_candidate` 升级为公共规则。合成反馈必须标明测试用途，不得移植成真实授权。
-
-企业经验只在本企业边界内适用；抽象成通用指引前须去除明细并经跨企业 heldout 和独立复核。经验库按实验版本／数据划分隔离，不共享企业原始记忆，不将 heldout、未来期间或评分答案反哺候选。
-
-## 6. 实验与发布门槛
-
-上游的无真值对比、自我选择和历史经验积累只产生候选，不能直接发布。评估须增加独立的业务门槛：用本机原生账务结果／回执与人工复核检查业务语义；合成期望由独立预期提供，放在执行器不可访问的位置。训练企业和期间之外的 heldout 不得进入优化上下文。
-
-每次比较固定相同输入、起始快照、模型、provider、工具合同和预算；baseline 与候选各有独立临时库和全部相关 Store，不能让前一候选的写入、确认或经验污染后一候选。多次重启也不复用真实库。baseline 改变须按影响重验，不能继续沿用旧比较或旧会计确认。
-
-业务门槛优先于效率指标：金额与原生账表／分录一致、账套期间隔离、不重复写入、审计与来源完整、历史与当前确认不混淆、人审与恢复约束不退化。指标同时报告资料完整性、未识别内容、缺件／冲突、人工动作与复核负担、失败／unknown／超时、重试、调用、耗时和实际 token／cost，不能只展示完成率或省 token。
-
-运行 manifest 拟记录：
-
-- 仓库与上游源码 commit、Skill 与候选树 hash、工具合同、pi／插件版本、依赖锁定和环境／路径／网络策略摘要。
-- 合成输入及起始 DB／Store hash、任务划分与随机种子、独立期望版本、baseline 和候选身份、模型完整 ID／版本及 provider、实际参数。
-- 全链路预算：单次与总超时、最大候选／调用／重试次数、token／金额上限、失败预算与停止条件；计数应包含 proposer、probe、selector、反思与评估。
-- 实际调用、token、耗时、cost 与计量来源；未返回的值保留 `unknown`，估算另列假设，不能伪造账单或将未知记为零。实际用量无法测量时不得声称满足硬 token／成本上限，须按预先确认的停止策略退出。
-
-禁止自动切换模型、provider 或服务以凑成功率；重试有上限，恢复不隐式追加无限预算。效率收益须连同质量、人工负担、失败率和未知用量报告。独立业务复核不通过即不发布，即使 selector 或后置 score 更优。
-
-## 7. 失败、恢复与退出
-
-运行前配置／隔离／预算检查失败即退出。运行中发生越界访问、不可验证目标、边界变更、预算耗尽、异常退出或取消，停止调度新候选，保留受控 manifest 和本机诊断；日志不得复制凭据与真实材料。未完成评估记未完成，`unknown` 不记零分或成功。
-
-业务写结果 `unknown` 时先按原 operationId／意图执行 query，不换 ID 盲重试。重启后先核对目标、输入、代码和依赖版本；无法证明一致就保留阻塞。查询只证明历史时不能宣称当前恢复；历史拒绝走更正流程，不靠换候选或重启消除。
-
-来源、代码、规则、依赖或基线改变后必须重新核验，旧确认留作历史。恢复必须遵循[既有恢复合同](../05-reconstruction/codex/skills/harness/references/recovery.md)，不得因原字节恢复就复活会计确认，也不得由实验脚本改写回执。
-
-回退方式是停止研究进程、移除专用可选包／当前启动配置并使用默认 `off/off`。此接入不设计生产 DB 迁移；不删除业务原件、审计、回执、历史确认或备份。候选从研究环境进入日常使用须经单独代码 PR、独立审查，并遵守已确认的发布范围和授权，不原地覆盖已发布 Skill；实质扩大范围、引入新服务或真实业务，以及当次付费模型测试，按用户原有明确边界再沟通。
-
-## 8. 分阶段验收方向与待确认取舍
-
-先确认本文与 SOL-Pi 的范围、默认关闭及组合拒绝政策。实现阶段再以独立 PR 固定版本、落实 pi 适配与无模型 preflight，用合成临时目标验证配置拒绝、隔离、重启恢复和回退；之后才在用户批准的模型／数据／预算内开展受限 baseline 对比。最后经跨企业／期间 heldout、原生业务门槛与全新上下文的独立审查，决定是否发布候选。两个插件的组合另行验收，不由单项通过推导组合可用。
-
-后续验证应覆盖 [Harness 生命周期测试](../06-workbench/test/harness-lifecycle.test.mjs)、[反馈失效测试](../06-workbench/test/accountant-review-feedback.test.mjs) 和实际 pi／MCP 端到端运行；现有测试源码说明应保留的边界，不代表此接入已经通过。实现 PR 记录实际命令、已审查版本、结果与未验证范围，脚本通过不能代替业务人审。
-
-用户需确认的方案取舍：
-
-1. 是否接受先采用专用 Linux 合成全栈、只做 pi 候选适配；Windows 联接方式在证明进程／路径／loopback 隔离后再决定。
-2. 是否接受两个开关默认关闭、第一阶段拒绝组合，以及候选只经代码 PR 和独立业务门槛发布。
-3. 首个合成业务范围、训练与跨企业／期间 heldout 划分；真实业务只本机采证，外部实验只用批准的安全元数据和合成输入。
-4. 模型与 provider、递归模式、候选与失败预算、token／金额／超时上限、用量未知时的停止策略，以及谁在本机完成业务复核。
-
-这些选择未确认前不进入安装、模型实验或接线实现；预算数值和可用性不由本文推定。
+真实native探针、确定性native业务循环、受控模型循环和独立heldout是不同证据。当前命令、源码版本、exit code、预算结果和未验证范围记录在本轮PR；没有实际执行的项目不预填通过。Windows模型loopback试验若被系统沙箱或自动审批拒绝，应保留该限制并使用真正Linuxnamespace安全替代，不修改防火墙、loopback豁免或WSLInterop来绕过。

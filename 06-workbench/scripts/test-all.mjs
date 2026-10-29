@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-mcp");
 const steps = [
+  { name: 'harness2-boundary', file: join(WORKBENCH, 'test', 'harness2-boundary.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-budget', file: join(WORKBENCH, 'test', 'harness2-budget.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-hosts', file: join(WORKBENCH, 'test', 'harness2-hosts.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-research-mcp', file: join(WORKBENCH, 'test', 'harness2-research-mcp.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-recovery', file: join(WORKBENCH, 'test', 'harness2-recovery.test.mjs'), cwd: WORKBENCH },
+  { name: 'harness2-launcher', file: join(WORKBENCH, 'test', 'harness2-launcher.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-host-config', file: join(WORKBENCH, 'test', 'finance-host-config.test.mjs'), cwd: WORKBENCH },
   { name: 'host-dsh', file: join(WORKBENCH, 'test', 'host-dsh.test.mjs'), cwd: WORKBENCH },
   { name: 'host-zcode', file: join(WORKBENCH, 'test', 'host-zcode.test.mjs'), cwd: WORKBENCH },
