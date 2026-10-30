@@ -1,4 +1,23 @@
-# pi 接入
+# Pi 直接业务接入
+
+当前默认扩展为 [finance-direct.ts](finance-direct.ts)，使用 Pi 1.1.0 原生 MCP 与 `tool_search` 按需加载业务工具。先按[统一入口](../hosts/START-HERE.md)生成明确后端、账库与记录目录的新工作区；Pi 的启动参数和工具范围见[当前宿主说明](../hosts/pi/README.md)。
+
+在生成的工作区执行无模型连接检查：
+
+```powershell
+node start-pi.mjs --pi-root '<官方Pi 1.1.0包目录>' --check
+```
+
+该检查验证 CLI 参数、SDK 会话注册、原生 MCP 连接及延迟工具激活，不调用模型或执行业务计算。需要从产品仓库直接检查时，使用 `node 06-workbench/scripts/direct-pi-probe.mjs '<官方Pi 1.1.0包目录>' --agent-dir '<已存在父目录下的全新探针目录>'`。
+
+Agent 按业务目标读取 Skill 并选择工具，不登记 Harness 事实、Store 或任务 DAG；后台自动保存调用记录。独立汇总条件试算通过 `finance_record_contract(recordType=tax_summary)` 按需取得合同，再使用 `finance_tax_summary_calculate`；结果与完整账务底稿分别核对，不证明完整账务、资格真实性或正式申报。交付顺序为账本金额→凭证/计算结果→规则依据→工具调用→输入与原件。
+
+<details>
+<summary>历史 Harness 扩展与验收流程（仅用于显式兼容任务）</summary>
+
+以下命令与设计说明对应 `finance-harness.ts` 和旧 Harness 工作流，保留用于源码调查及历史复现；新工作区使用上方 direct 入口。
+
+## 历史 pi 接入
 
 本入口按 `@earendil-works/pi-coding-agent` 1.1.0 验证，使用原生 `registerMcpServer`；安装 pi 不代表已加载本扩展或具备子 Agent。以下命令从仓库根目录运行，Node 需满足工作台资格检查。不要改用户全局配置。
 
@@ -35,3 +54,5 @@ pi --no-session --no-context-files --no-extensions -e builtin:mcp -e builtin:too
 本轮披露验收可用 `node 06-workbench/scripts/harness-disclosure-acceptance.mjs prepare <全新目录>` 生成陌生合成原件；经当次授权再以 `run <目录> <pi包目录> initial` 启动实际pi/官方DeepSeek。此runner禁止再次委派，允许父Agent运行自己的解析验证代码，保存真实MCP返回体积、源码/Skill/资料哈希和调用参数；supplement/correct/recover只生成后续原件与目标。人工介入及无效源码搜索必须据实际日志评审，原601次调用不是同条件基线。
 
 设计与版本依据：[pi v1.1.0 上游子 Agent 示例](https://github.com/earendil-works/pi/tree/v1.1.0/packages/coding-agent/examples/extensions/subagent)、[MIT 许可证](https://github.com/earendil-works/pi/blob/v1.1.0/LICENSE)、[MCP 2025-06-18 Tools 契约](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)。本扩展复用原生 MCP 并参考上游新进程/独立上下文设计；未复制上游示例实现。
+
+</details>
