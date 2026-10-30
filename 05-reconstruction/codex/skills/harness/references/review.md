@@ -1,13 +1,11 @@
-# 会计反馈与更正
+# 复核与更正
 
-`harness_feedback` 需要 taskId/targetVersion/dependencyDigest/decision/reason/reviewer/evidenceRefs，版本从当前 status 取得。decision 为 accept/reject/retain_enterprise_exception/propose_public_rule。必须记录真实会计反馈，不由 Agent 冒充会计。执行、待/已复核、公共规则状态分别记录；未覆盖处理即便已执行仍 uncovered，保留企业特例或公共候选由人决定。公共规则需明确适用条件并经 PR，不自动跨企业推广。
+先展示账本金额、凭证/计算及规则依据，再让实际复核者查看相关原件与调用记录。实际人审与Agent自检分别记录，不代签，不把一般任务授权写成特定版本的会计接受。
 
-拒绝保留历史并使依赖失效。Agent 根据实际账务制定更正 DAG，使用现有 voucher.unpost 或合适的新更正凭证；首事实请求的 correctionOf={taskId,targetVersion} 指向原执行，任务 dependsOn 包含原 task，允许更正分支处理已拒绝结果。新 create 必须使用独立更正 task；不重复入账，不删历史或 SQL 改账。
+正式业务工具的准备、执行、查询及人审字段以真实合同为准。需要人类反馈的方案，使用实际方案版本与真实反馈，不由Agent生成接受记录。直接调用并不移除写账、审计、备份和期间控制。
 
-`agency.posting` 更正请求加 `correction:{reason,previousEvidence:[{archivePath,archiveId}],previousSourceIds:[...]}`。archivePath/archiveId 从上次完整 prepare.proposal.identity 读取，previousSourceIds 从该 proposal.plannedVouchers[*].sourceVoucherId 读取；不能由摘要金额反推身份。仅明确撤销的原业务才加 withdrawnSourceIds，原件缺失不等于撤销。跨以前年度企业会计准则事项须有真实 `priorYearAssessment:{material:false,method:"current_period_nonmaterial",reviewer,reason}`；重大差错不在此路径内。#121 本身仍使用既有更正日期策略；窗口二的 correction.postingDate 合同需待其真实能力集成后核验，当前不宣称已实现。
+发现差错先定位原业务、原凭证、期间和来源，再提出更正。使用实际过账/反过账、冲回或更正业务工具，不删历史或直接SQL改账。重大前期差错、封账和后期派生影响如工具未支持就列具体缺口，不能用当期普通分录掩盖。
 
-人类提供的 native feedbackPath JSON 精确为 `{decision:"accept"|"reject",reviewer:"实际人类",targetVersion:"原生proposal.targetVersion",dependencyDigest:"原生proposal.dependencyDigest",planDigest:"原生proposal.planDigest"}`。一般任务授权不是这一版本的会计接受。prepare只展示/保存方案，Agent不能代写接受；测试验收者如提供模拟反馈必须明确标注 SYNTHETIC-TEST-ONLY。
+对已有非原生业务凭证，不能只凭金额相同认定同一事项；关联需要原始业务身份、日期、分录、来源与实际核销支持。原件未提供不等于业务撤销。源、规则或账务变化后重新计算和复核受影响结果，保留旧版本，不把恢复旧字节当重新接受。
 
-已有非agency凭证需人工业务核对时，请求可加 `ledgerReconciliation:{reviewer,reason,matches:[{existingVoucherId,agencySourceVoucherId,originalBusinessIdentity:{issuerKey,documentNumber,event},reason,existingSourceSystem?,existingSourceVoucherId?}],openingCarry?:{reviewer,reason,throughPeriod}}`。matches必须逐一对应当前真实凭证及原始业务身份，日期、分录和来源由原生模块核对；不是把金额相同当同一业务。早于重放起点的已有账务须 openingCarry.throughPeriod 覆盖所有前期且小于重放月；原始期初与真实账簿必须相等。无现账匹配需求不要编造matches。未知写先query，不用reconciliation掩盖未知结果。
-
-源、代码、事实、规则及实际账务变化使旧结果/确认失效，仅重算受影响分支。封账或派生依赖拦截时保留具体更正顺序，不绕过锁。税务具体字段复核继续使用原 accountant-review Store，Harness 任务确认不冒充申报确认。
+结果未知先核原操作及当前账簿；不为重试换来源或批次。会计复核、已入账、已申报、已缴款各自使用真实证据，不能相互替代。

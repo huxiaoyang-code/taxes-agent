@@ -11,6 +11,7 @@
  *   - unavailable ：本地未实现，调用必须返回 isError，绝不伪装成功。
  */
 import { TAX_TOOLS } from "./tax-tools.mjs";
+import { DIRECT_TOOLS } from './direct-tools.mjs';
 const harnessText={type:'string'},object={type:'object'},array={type:'array'};
 const harnessId={type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'},harnessDigest={type:'string',pattern:'^[a-f0-9]{64}$'},harnessRequiredText={type:'string',minLength:1,maxLength:32768,description:'去除首尾空白后非空；不得包含 NUL 字符。'},harnessPeriod={type:'string',pattern:'^20\\d\\d(?:-(0[1-9]|1[0-2]|Q[1-4]))?$'};
 const harnessIds={type:'array',items:harnessId,maxItems:10000};
@@ -415,7 +416,7 @@ const withModelNote = (tool) => (MODEL_PLAIN_TOOL_SET.has(tool.name)
   ? { ...tool, description: `${tool.description}${MODEL_OUTPUT_NOTE}`, modelOutput: "summary_envelope" }
   : tool);
 
-export const TOOLS = [...HARNESS_TOOLS, ...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
+export const TOOLS = [...DIRECT_TOOLS, ...HARNESS_TOOLS, ...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
   .map(withModelNote).map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema?.properties,operationId:{type:'string',description:'Stable local operation ID; preserve before a write and reuse only for the identical request.'}}}}):t);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

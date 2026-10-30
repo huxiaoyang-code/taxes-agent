@@ -26,7 +26,7 @@ const posting=structuredClone(capabilityInputContract('agency.posting').minimalE
 posting.correction.postingDate='2026-02-30';assert.throws(()=>validateCapabilityRequest('agency.posting',posting,'prepare'),e=>e.details.problems.some(p=>p.keyword==='format'));
 posting.correction.postingDate='2026-01-20';posting.correction.extra='SYN-PRIVATE-VALUE';assert.throws(()=>validateCapabilityRequest('agency.posting',posting,'prepare'),e=>e.details.problems.some(p=>p.inputPointer==='/correction/extra')&&!JSON.stringify(e.details).includes('SYN-PRIVATE-VALUE'));delete posting.correction.extra;validateCapabilityRequest('agency.posting',posting,'prepare');
 validateCapabilityRequest('batch.resume',{target:fixture.target,jobKey:'synthetic',retry:{reason:'retry unfinished task',period:'2026-01'}},'execute');
-const client=new McpStdioClient(join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:repo,env:{NODE_NO_WARNINGS:'1'},timeoutMs:120000}).start();
+const client=new McpStdioClient(join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:repo,env:{FINANCE_MCP_PROFILE:'harness',NODE_NO_WARNINGS:'1'},timeoutMs:120000}).start();
 const measurements=[];
 const call=async(name,args={},error=false)=>{const r=await client.call(name,args);assert.equal(r.isError,error,r.text);if(args.responseMode!=='full'){const bytes=Buffer.byteLength(JSON.stringify(r.structured??r.data));assert.ok(bytes<=24576,name+': '+bytes);measurements.push({name,bytes});}return r.structured??r.data;};
 const fact=(factId,value)=>({factId,state:'provided',reason:'SYNTHETIC ONLY: agent request built from explicitly known fixture and original values',sourceRefs:['original'],value});

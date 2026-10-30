@@ -1,100 +1,40 @@
 ---
 name: bookkeeping
-description: 根据已核实数据登记凭证、查账核对、处理固定资产与期末结转结账。
+description: 根据中国企业已核实业务直接编制凭证、核对账簿报表、资产和期末处理，保留原件、计算和未决差异。
 ---
 
-# 智能核算（bookkeeping）
+# 中国企业核算
 
-本文件是本机 `finance-mcp` 分支实际可用的记账规则入口。它描述**已经能真实执行**的操作、
-调用触发条件和边界，不承诺原站完整会计准则、正式申报或税局能力。字段名与工具名以
-`05-reconstruction/codex/mcp/finance-mcp/tools.mjs` 和后端 `06-workbench/server/agent-tools.mjs`
-为准；详细规则按需读取 `references/`，不要一次性全部载入。
+主Agent理解资料并选择直接业务工具，后台自动记录实际调用。工作步骤可按目标和资料调整，不需要先登记来源、事实、计划或运行时依赖图。
 
-## 何时使用
+## 工作流程
 
-用户提出以下任一诉求时使用本技能：
+### 1. 明确业务与资料
 
-- 把一张/一批原始单据（销售、采购、费用、报销、工资、资产购入等）登记成凭证；
-- 查询/核对凭证、科目余额、明细账、试算平衡、资产负债表、利润表、现金流量表；
-- 计提折旧/摊销、结转本期损益、年末结转；
-- 期末盘点、结账（封账）或反结账。
+用`account_context`核实账套，核实际准则、期间、币种和原件。客户提供原始发票、合同、流水、工资或资产资料，内部整理由Agent完成。已有旧账按[旧账导入](../legacy-book-import/SKILL.md)核验，不把人员说明当完整账目。
 
-本技能**不做**：发票采集/查验、开票/红冲、银行流水自动匹配、工资与个税计算、正式纳税申报、
-真实电子税务局登录。上述能力本地未接入，对应工具会返回 `not_implemented`，不要假装完成。
-发现业务口径 bug（金额、平衡、状态、原子性）时停下并报告管理者，不要为通过测试改口径。
+### 2. 按业务选工具
 
-## 可用工具（本分支真实可用）
+原始业务通过`finance_record_contract`查字段，以`finance_workpaper`生成实际分录、库存和账税底稿；已有分录用`voucher_check`。按需读取：
 
-- 上下文与查询：`account_context`、`finance_context_resolve`、`finance_query`、`finance_query_catalog`
-- 规则读取：`skills_list`、`skills_read`
-- 账套/科目/期初/期间：`account_set_create`、`account_list`、`account_create`、
-  `opening_balance_get`、`opening_balance_set`、`period_list`、`period_set_status`
-- 凭证：`voucher_check`、`voucher_create`、`voucher_post`、`voucher_unpost`、`voucher_delete`
-- 查账：`ledger_query`
-- 资产/折旧/结转：`asset_list`、`asset_create`、`depreciation_run`、`carry_forward_profit`
-- 旧账导入：`legacy_book_import`（见 `legacy-book-import` 技能）
-- 兼容入口（行为受限）：`update_plan`（仅回显，`persisted=false`）；持久生命周期使用 `harness/SKILL.md` 与 `harness_*`
+| 业务 | 参考 |
+|---|---|
+| 发票及采购销售 | [发票核算](references/invoice-bookkeeping.md) |
+| 银行收付 | [银行](references/bank-transaction-bookkeeping.md) |
+| 报销与费用 | [报销](references/reimbursement-bookkeeping.md) |
+| 工资 | [薪酬](references/payroll-bookkeeping.md) |
+| 资产 | [固定资产](references/fixed-asset-bookkeeping.md) |
+| 其他业务 | [其他](references/other-business-bookkeeping.md) |
+| 期末 | [期末](references/period-end-bookkeeping.md) |
 
-**不可用（占位，调用必返回 isError，列为可用会误导用户）**：
-`invoice_collect`、`invoice_file`、`invoice_issue`、`invoice_issue_result`、`invoice_precheck`、
-`invoice_red_apply`、`invoice_red_issue`、`invoice_red_status`、`invoice_tax_code`、
-`declaration_query`、`tax_declaration_query`、`exec`、`finance_task_status`。
+### 3. 查询与复核
 
-## 可用查询能力（`finance_query` 的 nodeId）
+`finance_query`和`ledger_query`取得真实账簿及报表；科目、期初、资产、导入和期间工具按当前合同使用。核对科目用途、金额精度、价税、借贷、数量批次、核销及期间，不将平衡或执行成功当全部业务正确。税费规则及金额交`finance_rules`和`finance_tax_calculate`。
 
-已实现（`accountSetId` 必填；标 * 的还需 `period`）：
+### 4. 草稿与写账
 
-- `enterprise_account.account_set` — 查询账套信息
-- `enterprise_account.subject_system.all` — 查询科目体系
-- `voucher.generated.list` * — 查询已生成（已过账）凭证
-- `voucher.generated.summary` * — 当前与 list 相同，返回凭证列表而非独立汇总
-- `voucher.draft.summary` * — 查询草稿凭证
-- `voucher.detail` — 读取凭证详情，需 `params.voucherId`
-- `report.balance_sheet` * / `report.income_statement` * / `report.cash_flow_statement` * — 三大报表
-- `period_end.summary` * — 盘点期间与试算
-- `report.trial_balance` * — 试算平衡（本地扩展）
-- `ledger.general` * — 科目明细账，需 `params.code`（本地扩展）
+先给凭证草稿及支持计算。按实际授权和工具控制使用创建、过账、反过账或期末操作，保留原始业务和当前账簿引用；不直接SQL改账或绕过期间检查。准备、人审、已入账分别核实，结果未知先核原操作。
 
-**未接入（原站契约存在但本地无数据源）**：`enterprise_account.bank|business|personnel|tax|tax_assessment`、
-`enterprise_account.auxiliary_accounting.all`、`fund.unbooked.list|summary`、`invoice.detail`、
-`invoice.unbooked.list|summary`。调用返回 `not_implemented`，不得据此报告"已查到"。
+### 5. 输出
 
-## 通用规则
-
-- **账套与期间必须显式**：所有变更与查询都要明确 `accountSetId` 与 `period`（`YYYY-MM`，月份 01–12）。
-  `account_context` 不保存"当前账套"（`current_account_set_id` 恒为 null），不要假设上下文持久。
-- **金额**：人民币元，精度、分转换、平衡与边界以业务模块校验为准，不用任意容差掩盖不平。
-- **凭证形态**：`entries` 每项 `{ code, debit, credit, summary? }`，至少两行；借贷合计必须相等；
-  单行不能同时有借方和贷方；金额不得为负；`code` 必须是该账套已存在的科目（否则 `voucher_check` 报错）。
-- **默认草稿**：`voucher_create` 缺省 `status='draft'`；只有显式 `status='posted'` 或调用 `voucher_post`
-  才过账。技能应遵循 `voucher_check` → `voucher_create`（草稿）→ 在当前授权范围内 `voucher_post`，
-  只有授权缺失时才向用户确认。
-- **审批**：用户已授权的凭证/过账等操作不要重复索取审批；只有权限或授权范围不明确时才询问。
-- **调查原始资料**：用户提供目标与原始资料，Agent 解析、核验，按事实与可核验规则形成草稿，不要求客户固定模板、预制分录或已算好的税额。缺失冲突留下具体补件，不臆造数据。
-- **依据实际能力执行**：发现 `harness_discover` 的实现和支持条件，复用资料、核算与税务模块；规则未覆盖时按 Harness 核算指引保存判断、代码、验证及影响，交会计复核。
-
-## 工作流
-
-1. 用 `account_context` 核对账套，用 `period_list` / `finance_query(period_end.summary)` 核对期间状态；
-   期间未登记时先 `period_set_status`（`open`）登记。
-2. 按业务类型读取对应 reference，确定分录与科目。
-3. `voucher_check` 校验分录；通过后 `voucher_create` 生成草稿；在当前授权范围内 `voucher_post` 过账，
-   只有授权缺失时才确认。
-4. 用 `ledger_query`、`report.trial_balance`、三大报表复核金额与平衡。
-5. 期末按 `period-end-bookkeeping.md` 顺序处理折旧、结转与结账。
-
-## 输出约定
-
-- 汇报时给出：账套 ID、期间、凭证 ID 与状态、借贷合计、关键报表数值；未完成或失败的步骤如实说明。
-- 失败信息保留后端返回的结构化 `error`（如 `period_closed`、`voucher_invalid`、`opening_unbalanced`），
-  不要改写为"已完成"。需要人工确认时明确列出待确认字段。
-
-## 参考（按需读取）
-
-- `bookkeeping/references/invoice-bookkeeping.md` — 发票入账规则（仅限用户已核实数据）
-- `bookkeeping/references/bank-transaction-bookkeeping.md` — 银行流水入账规则（无流水数据源）
-- `bookkeeping/references/reimbursement-bookkeeping.md` — 报销入账规则
-- `bookkeeping/references/payroll-bookkeeping.md` — 工资入账规则（工资系统与个税计算未接入）
-- `bookkeeping/references/fixed-asset-bookkeeping.md` — 固定资产入账规则（凭证与卡片分别创建）
-- `bookkeeping/references/other-business-bookkeeping.md` — 其他业务入账规则（销售/采购/费用等）
-- `bookkeeping/references/period-end-bookkeeping.md` — 期末做账规则（折旧/结转/封账）
+按[报告顺序](../harness/references/reporting.md)先给账本金额、凭证/计算、规则依据，调用及输入原件供深入排错。未接通的开票、红冲、税局采集、申报、缴款保留不支持，不能因预留工具存在就称已完成。

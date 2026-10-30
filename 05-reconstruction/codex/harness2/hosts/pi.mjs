@@ -28,7 +28,8 @@ export function buildHostSpec({workspace,nodePath,packageRoot,apiBase,databasePa
   if(mode==='run')config.extensionPath=join(config.repoRoot,'05-reconstruction/codex/harness2/pi-extension.mjs');
   const options={'--pi-root':packageRoot,...(mode!=='run'?{'--check':true}:{'--task-file':taskFile,'--json':true,'--tools':'read,tool_search,mcp__finance__harness_*,mcp__finance__skills_read,mcp__finance__skills_list'})};
   const spec=buildLaunchSpec(config,dir,options),home=join(dir,'home');mkdirSync(home);
-  spec.env={...cleanEnvironment(home),...config.mcpEnv,FINANCE_HARNESS2_SYNTHETIC_ROOT:dirname(dirname(databasePath)),PI_CODING_AGENT_DIR:spec.env.PI_CODING_AGENT_DIR};
+  // check实际加载旧finance-harness扩展，run使用本目录pi-extension/restricted-mcp；均属显式兼容研究。
+  spec.env={...cleanEnvironment(home),...config.mcpEnv,FINANCE_MCP_PROFILE:'harness',FINANCE_HARNESS2_SYNTHETIC_ROOT:dirname(dirname(databasePath)),PI_CODING_AGENT_DIR:spec.env.PI_CODING_AGENT_DIR};
   if(mode==='check')spec.args[0]=join(config.repoRoot,'06-workbench/scripts/harness2-pi-probe.mjs');
   if(mode==='synthetic-native')spec.args[0]=join(config.repoRoot,'06-workbench/scripts/harness2-pi-task.mjs');
   if(mode==='run'){

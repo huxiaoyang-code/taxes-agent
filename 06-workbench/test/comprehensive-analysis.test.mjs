@@ -65,7 +65,7 @@ async function test() {
   const request = { target: f.target, historyPeriods: ['2026-01'], manifestPaths: f.manifestPaths.slice(0, 2), contextPath };
   validateCapabilityRequest('analysis.comprehensive', request);
   assert.throws(() => validateCapabilityRequest('analysis.comprehensive', { ...request, reports: {} }), /harness_capability_input_invalid/);
-  const client = new McpStdioClient(join(repo, '05-reconstruction/codex/mcp/finance-mcp/server.mjs'), { cwd: repo, env: { NODE_NO_WARNINGS: '1' }, timeoutMs: 120000 }).start();
+  const client = new McpStdioClient(join(repo, '05-reconstruction/codex/mcp/finance-mcp/server.mjs'), { cwd: repo, env: { FINANCE_MCP_PROFILE:'harness', NODE_NO_WARNINGS: '1' }, timeoutMs: 120000 }).start();
   const call = async (name, args, isError = false) => { const r = await client.call(name, args); assert.equal(r.isError, isError, r.text); return r.structured ?? r.data; };
   const fact = (factId, value) => ({ factId, state: 'provided', reason: 'SYNTHETIC explicit request; originals and native ledger separately verified', sourceRefs: ['request-original'], value });
   const task = (taskId, factId) => ({ taskId, capabilityId: 'analysis.comprehensive', requestFactId: factId, factIds: [factId], dependsOn: [], goal: 'Read-only reviewable comprehensive analysis' });

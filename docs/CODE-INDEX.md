@@ -2,7 +2,17 @@
 
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
-## 按调用链阅读
+## 当前 direct 默认调用链
+
+日常路径为业务 Skill→MCP→原生业务工具，完整记录自动产生；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
+
+- 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
+- 每次工具调用记录与本机核查：`06-workbench/server/finance-call-chain.mjs`；测试 `test/finance-call-chain.test.mjs`。
+- 直接宿主入口：`hosts/shared/config.mjs`、四宿主 adapter、`pi/finance-direct.ts`；生成器支持 `--plugin-root`、`--audit-dir`。
+- 验证：`06-workbench/test/finance-host-config.test.mjs`、`host-dsh.test.mjs`、`host-zcode.test.mjs`；`scripts/direct-pi-probe.mjs`仅无模型程序加载。
+- 人读顺序：账本金额→凭证/计算结果→规则依据→工具调用→输入与原件；日常前三项、异常按需深查，完整记录不裁剪。
+
+## 按调用链阅读（含历史兼容源码）
 
 本仓库面向中国财税 Agent 开发。业务入口、流程编排、交付结果、工具连接均已有实现；下列路线用于找到实际代码，不是功能完成清单。首次阅读先看[中文架构与调用链](AGENT-ARCHITECTURE.md)，配置与启动继续使用[四宿主统一入口](../05-reconstruction/codex/hosts/START-HERE.md)。
 

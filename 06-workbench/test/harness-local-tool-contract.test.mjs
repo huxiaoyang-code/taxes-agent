@@ -6,7 +6,7 @@ import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-
 import {validateHarnessScope,validatePlanGraph,validateFeedback} from '../server/harness-contract.mjs';
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../..');mkdirSync(join(repo,'.agent-runs'),{recursive:true});const root=mkdtempSync(join(repo,'.agent-runs/local-contract-')),storePath=join(root,'store');
 const scope={enterpriseKey:'SYN-LOCAL-CONTRACT',accountSetId:1,databaseInstanceId:'synthetic-instance',period:'2026-01',currency:'CNY'};
-const client=new McpStdioClient(join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:repo,env:{NODE_NO_WARNINGS:'1'}}).start();
+const client=new McpStdioClient(join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:repo,env:{FINANCE_MCP_PROFILE:'harness',NODE_NO_WARNINGS:'1'}}).start();
 const call=async(name,args,error=false)=>{const r=await client.call(name,args);assert.equal(r.isError,error,r.text);return r.structured??r.data;};
 try{
  await client.initialize();const listed=(await client.rpc('tools/list')).result.tools,get=name=>listed.find(t=>t.name===name).inputSchema.properties;

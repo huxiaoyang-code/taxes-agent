@@ -18,6 +18,7 @@ import {
   transportFailure,
 } from "./finance-model-transport.mjs";
 import { MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES } from "./tools.mjs";
+import { annotateFinanceCall } from '../../../../06-workbench/server/finance-call-chain.mjs';
 
 const API_BASE = String(process.env.FINANCE_API_BASE ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
 const API_TOKEN = process.env.FINANCE_API_TOKEN || "";
@@ -99,6 +100,8 @@ export async function callBackend(name, args, catalog) {
       body: JSON.stringify(args ?? {}),
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
+    // 仅关联服务器实际返回的原生身份；不改请求ID、不以有ID推断写成功。
+    annotateFinanceCall({nativeOperationId:res.headers?.get?.('X-Workbench-Operation-Id')??null});
   } catch (e) {
     if (modelMode) {
       const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";

@@ -1,29 +1,44 @@
-# 原生 agency 资料输入
+# 原始业务与直接整理输入
 
-仅在选中 agency 能力后读取。客户提供任意原始布局；以下是 Agent 内部适配合同。路径可相对 manifest 所在目录，必须保留独立原件，不以 Agent 整理JSON或底稿冒充原件。
+客户提供任意原始布局，Agent只整理原件支持的字段。原件与派生记录分开，字段合同和示例用`finance_record_contract({recordType:"实际类型"})`按需取得；本文件不维护第二套全量schema。
 
-manifest 为 `{version:"agency-business-materials/1",scope:{enterpriseKey,accountSetId:正整数,databaseInstanceId,period:"2026-03",currency:"CNY"},originals:[{id:"receipt",path:"原件路径",sha256?:"实际摘要"}],sources:[{path:"整理事实JSON路径",sha256?:"实际摘要"}]}`，没有其他顶层字段。sources JSON 为 `{version:"agency-raw-facts/1",scope:同企业账套实例币种的原月份,records:[...]}`；累计来源可承接前月，manifest period 为本次计算月。
+## 选择输入载体
 
-每条 record 有 `id/type/date/enterpriseKey/originalRefs`。originalRefs 为 `[{originalId:"receipt",locator:"页/表/行/字段",extractionReason:"为什么此处支持该事实"}]`；原件引用必须存在。每个 manifest 必须有且只有一条 type=entity，包含 entity 对象。公司主体示例字段为 `kind:"company"`（其他主体按实际能力适用条件核验）、industry、profileId、businessStartDate、vatStatus、vatPeriod、vatReliefWaived、incomeLevyMethod、bookkeepingMethod；region仅有原件时提供，缺地区可省略，不能填placeholder。只填原件已支持值，不能照抄示例猜税务属性。具体业务未满足条件会返回 issues，不能反向伪造事实消除它。
+`finance_workpaper`和`finance_tax_calculate`使用以下三种形状之一，不混用；正常业务优先第一种：
 
-原生枚举：`vatStatus:"small"|"general"`（不是 small_scale）；`vatPeriod:"monthly"|"quarterly"`（不是 month/quarter）；`vatReliefWaived` 是原件支持的 boolean。支持行业枚举为 service/trade/ecommerce/catering/manufacturing/construction/transport/rental_property，不能用行业名替代税务认定。小企业公司示例主体为 `{kind:"company",industry:"service",profileId:"small-2011-basic-v1",businessStartDate:"2026-01-01",vatStatus:"small",vatPeriod:"monthly",vatReliefWaived:false,incomeLevyMethod:"actual_accounts",bookkeepingMethod:"double_entry"}`；仅当这些字段各自有原件依据时采用。
+- 已核账套的直接资料：`{target:{accountSetId,period:"实际YYYY-MM"},originals:[{id,path,sha256?}],records:[原件支持的记录],dbPath?}`。`accountSetId`取实际已核账套，后台从`FINANCE_DATABASE_PATH`或明确`dbPath`绑定真实`enterpriseKey/databaseInstanceId`；records中的`enterpriseKey`可省略，显式冲突会拒绝。客户不需提供内部实例身份，也不用先建manifest。
+- 已有原生材料：`{manifestPath:"实际绝对路径",dbPath?:"实际账库绝对路径"}`。
+- 显式身份兼容资料：`{scope:{enterpriseKey,accountSetId,databaseInstanceId,period:"实际YYYY-MM",currency:"CNY"},originals:[{id,path,sha256?}],records:[原件支持的记录],dbPath?}`。工具自动保存整理输入和材料清单，不先登记来源、事实或运行图。
 
-上述只是record内部的entity对象，不能直接当一条record。完整结构示例（仅当原件明确记载2026-01-01成立/登记事件时）：`{id:"entity-registration",type:"entity",date:"2026-01-01",enterpriseKey:"实际企业",originalRefs:[{originalId:"registration",locator:"原件成立/登记日期与主体属性字段",extractionReason:"该原件明确支持本记录日期和主体属性"}],entity:{kind:"company",industry:"service",profileId:"small-2011-basic-v1",businessStartDate:"2026-01-01",vatStatus:"small",vatPeriod:"monthly",vatReliefWaived:false,incomeLevyMethod:"actual_accounts",bookkeepingMethod:"double_entry"}}`。外层date必填，内层businessStartDate不替代它；两者相同也必须各有该原件事件的依据，不能自动拷日期或因是月初就填1日。缺实际日期时保留缺项/补件，不把不完整entity塞进可计算bundle。每条raw record禁止输入sourceRefs；只输入originalRefs，由原生生成追踪sourceRefs。
+税费工具可用`obligationIds`选择需核税费。target/兼容scope和原件必须对应真实目标；业务记录可跨原始月份时按工具实际合同处理。月、季度和全年资料覆盖不得互相冒充。
 
-`record.date` 是有原件支持的完整实际日期 `YYYY-MM-DD`，须为真实日历日期、归属于实际业务月；不是仅填YYYY-MM。缺日不能用月初/月末占位，不得把猜填的date写入可执行manifest，即使另有一个missing事实也不能冲销这个假值。保留原件中的月份事实，在Harness独立缺项/冲突分支请求实际日期；该未决record不进入当前可计算bundle。产生分录的每条业务还必须带 `businessIdentity:{issuerKey:"原始出具方身份",documentNumber:"原合同/票/收据号",event:"该原始事件标识"}`；不同事件不可复制同一完整身份。
+每条记录有`id/type/date/originalRefs`；优先target路径由后台绑定记录的`enterpriseKey`，显式scope兼容路径须包含该字段。`originalRefs`使用`originalId/locator/extractionReason`关联本次原件，定位到页/表/行/字段并说明支持关系。金额使用人民币元十进制字符串，数量单位独立；不在记录中输入程序生成的`sourceRefs`。
 
-普通咨询服务的记录形状示例（不是客户事实）：`{id:"service-1",type:"service_complete",date:"2026-03-24",enterpriseKey:"实际企业",taxJurisdiction:"domestic",specialVatTreatment:"ordinary",businessIdentity:{issuerKey:"实际销方",documentNumber:"实际合同/票号",event:"service_complete"},accepted:true,collectionRight:true,work:[{units:"2",unitPrice:"100.00",priceIncludesVat:false}],invoiceKind:"ordinary",settlement:"unpaid",originalRefs:[...]}`。金额由已有规则计算；原件无验收/索款权、结算状态或税务性质时保留缺项，不套示例。
+`date`须有原件支持的真实完整日期。只有月份时不填月初月末；缺件写入报告，不生成假完整记录。产生分录的记录依真实schema提供`businessIdentity:{issuerKey,documentNumber,event}`，不得用技术占位当已核客户身份。必须有唯一主体entity，纳税身份、准则、启用日期和申报频次分别有据，不能照抄例子。
 
-行政服务费用完整结构示例为 `{id:"expense-1",type:"expense",date:"2026-03-20",enterpriseKey:"实际企业",businessIdentity:{issuerKey:"实际供应商",documentNumber:"实际收据号",event:"expense"},use:"admin",gross:"37.23",net:"37.23",invoiceTax:"0.00",inputVatTreatment:"non_deductible",settlement:"unpaid",benefitPeriod:"2026-03",originalRefs:[...]}`。必要金额关系 net+invoiceTax=gross；use可选 admin/sales/service/transport/production/contract/rental，inputVatTreatment为 deductible/non_deductible，settlement为 paid/unpaid，benefitPeriod须等于实际date所在月。资产/项目/跨期不能无依据选 admin；taxNature等税会判断仅有依据时补充，不是绕过缺件的标签。
+## 常见类型与容易混淆的字段
 
-可计算bundle只包含本次已具备完整必要字段的record；这不表示客户整体资料已齐。服务工时冲突应登记Harness `state:"conflict"` 和来源，保留对应任务/补件，不要塞一条缺work/units的service_complete进ready sources试图让程序猜值。已知费用可由独立workpaper或企业处理分支继续；补件后再登记已核工时并加入受影响bundle，整张DAG仍保留未决任务。无覆盖清单不得造 period_coverage.complete 或 obligation_inventory.activities.present=false。原件未涉及事项保留 missing/unknown；超出现有规则的事项用企业处理草稿与验证，不扩大支持范围。
+| 业务 | 实际record.type | 核对要点 |
+|---|---|---|
+| 期初库存 | opening_inventory | 实际盘点、数量、成本和重放起点；不是opening_stock |
+| 采购 | purchase | 商品/类别、数量、原发票价税、用途、结算及认证实际日；不是goods_purchase |
+| 销售 | sale | 交付、索款、发票、数量单价和税务性质；不是goods_sale |
+| 退货 | sale_return | 原销售行、红字/原票、实际入库；指定采购批次用真实`lines[].originalPurchaseId`；不是sales_return |
+| 收款 | collection | 原销售关联、银行账户、唯一流水身份和金额 |
+| 付款 | supplier_payment | 原采购关联、银行账户、唯一流水身份和金额 |
+| 费用 | expense | 实际use、gross/net/invoiceTax、inputVatTreatment、settlement和benefitPeriod |
+| 合同 | contract | 法定税目、金额列示和资格；`separatelyStatedVat`为boolean，不是税额 |
 
-地区是独立记录 `type:"tax_location",classification:"city"|"county_town"|"other"`，缺地区时不生成该记录。实缴是独立 `type:"tax_payment",amount,obligationId,assessmentPeriod/assessmentYear` 及真实银行/完税身份；应纳或计提结果不构成税款支付记录。
+销售配送费用对应有据的`use:"sales"`；`transport`指运输业务履约成本，不因单据写“运费”就选择它。采购入库运费、销售费用、资产和跨期对象须分开判断。`paid/unpaid`、抵扣资格和认证日均需事实支持，缺失不能默认。
 
-中文原件不需改成英文模板。绑定可声明有限转换 `transform:"tax-location-classification-v1"`，精确原文“市区/县城/镇/县城镇/其他地区”映射既有 city/county_town/other。例原件第2行为“登记所在地：市区”，定位 `{startLine:2,endLine:2,startColumn:7,endColumn:8}`、quote="市区"；列按1基Unicode码点且end含。`tax-payment-document-kind-v1` 仅把“税收完税证明/银行税款扣缴回单/税款缴款回单”映射 tax_payment，不接受“应纳税计算单/计提凭证”；`tax-obligation-id-v1` 仅把“企业所得税/增值税”映射当前 corporate_income/vat，其他税种ID不推断。支付类别、日期、金额、税种、所属期与银行/完税身份分别定位；文档类别文字本身仍不是无误语义保证。
+覆盖清单、无业务和优惠资格不是消除issues的标签。不能因仅传了可计算记录就造`period_coverage.complete`，也不能因原件未提到某税费就声称不适用。汇总收付款可支持模型参考余额，却不能虚构逐笔核销、银行账户和流水编号。
 
-MCP 关键值支持：originalRefs 可加 `bindings:[{valuePath:"/classification",locator:{jsonPointer:"/registration/location/classification"}}]`，只访问该 originalId 对应原件。文本精确行绑定为 `{valuePath:"/amount",locator:{startLine:8,endLine:8},quote:"54.73",format:"decimal"}`；不得用“在页中找到金额”推断款项性质。结构原件兼容原 originalRef.locator 为 `/records/0` 时，MCP按该对象下同名字段精确核值。tax_location 检 classification；tax_payment 检 amount、obligationId 和已提供所属期/支付身份字段。若原件使用中文地区等描述，须先保留原值为原件事实，再记录映射方法及核验；不能把英文枚举写回原件伪造支持。
+## 结果与深入核对
 
-月度底稿从 `receipt.actualImpact.domain` 读 accounting/obligations/issues，详情分段读取。obligations 的 due、paid、difference、paymentState 各自独立；会计计提从真实会计分录/对应 accountingAccrual 取值，不把 due 当已缴。`payment_evidence_missing` 即无缴款证据，paid=0 只是已提供清单内未识别到实缴，不宣称客观上永未缴款。
+正常结果先给金额、凭证/计算计数和规则；完整原名、分录、输入和原件留在本机review文件与索引。沿实际返回的opaque引用查看，不推测文件路径。每笔关键金额区分原生工具、模型推导和待核，遵守[报告顺序](reporting.md)。证据定位与哈希匹配不能代替业务语义复核。
 
+## 合同披露完整度
 
+`finance_record_contract`可发现当前全部原生类型（数量以实际返回为准），按需返回`contractCompleteness`、字段、示例和真实规则定位。`verified_fields_with_conditional_native_validation`表示已核字段说明，仍受原生条件校验；`common_schema_and_rule_references_only`表示目前只有通用结构及规则引用，专用字段未完整披露，不能解释为引擎不支持。没有示例也不等于没有算法。无法据合同安全构造输入时具体记录披露缺口，不猜参数。`inputRole:native_generated_only`仅供原生生成，不由Agent伪造。
+
+全年工具仍使用`manifestPaths`兼容入口；同一主体事实跨月份应引用同一原件和事实文件，不把相同ID复制为不同来源版本。示例中的内部企业字段用于显式身份形状，target路径可省略；不将示例占位词当真实身份。

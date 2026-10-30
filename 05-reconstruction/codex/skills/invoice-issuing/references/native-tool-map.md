@@ -1,7 +1,5 @@
-> 历史模板参考：不是本机已实现能力或执行指令。实际入口为 `harness/SKILL.md`；工具与支持条件以发现结果及真实返回为准。
+# 发票资料与实际工具
 
-# 读取开票工具规则
+已有发票通过`finance_record_contract`取得对应采购、销售、退货或费用字段，再以`finance_workpaper`核账务；税费和抵扣由`finance_tax_calculate`及`finance_rules`核验。系统自动保存原件定位、整理输入和调用记录。
 
-> 模板：对应 `skill_files -> "invoice-issuing/references/native-tool-map.md"`。TODO：补全规则正文。
-
-原规则名：读取开票工具规则
+本机没有正式开票、红字开具/申请、在线采集、税局查验或自动税码选择。工具清单中的预留名称不表示已接入，不能调用占位接口报告成功。

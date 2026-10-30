@@ -1,57 +1,39 @@
 # 中国财税 Agent
 
-面向中国企业财务核算、税费计算与会计复核开发的本机 Agent 工程。主 Agent 理解业务目标、调查获准资料、发现能力和组织任务；Node.js + SQLite 本机工具负责确定性计算、账务执行、审计和恢复，已有网页作为可选界面。面向一名操作者处理多家企业，每家企业一个账套。
+按 Anthropic 官方知识工作插件的 Skill、连接器与原生 MCP 格式组织中国财税业务。Agent 调查资料、判断处理路径并自主选用工具；本机后端负责确定性计算、受控记账和自动调用记录，不替 Agent 建立事实登记或任务 DAG。
 
-业务入口、流程编排、交付结果和工具连接四层均已有实现。中国财税是建设方向，具体准则、地区、税种、期间及业务支持以当前源码、能力合同和实际返回为准；Skill、工具名称或配置存在不代表相应业务已完成。
+默认 MCP 工具面为 `direct`。旧 Harness 仅以显式 `FINANCE_MCP_PROFILE=harness` 保留历史兼容，不是日常前置流程；`legacy` 是旧全量工具面的显式兼容入口。
 
-## 从哪里开始阅读
-
-| 想了解什么 | 阅读入口 |
+| 需要做什么 | 入口 |
 |---|---|
-| Agent 如何调用工具、编排任务、补件、更正与恢复 | [中文架构与调用链](docs/AGENT-ARCHITECTURE.md)（含流程图、时序图与合成调用示例） |
-| 某项业务对应哪些源码和测试 | [中文代码索引](docs/CODE-INDEX.md) |
-| 选择宿主、配置模型和账库、首次运行 | [四宿主统一入口](05-reconstruction/codex/hosts/START-HERE.md) |
-| 接手陌生企业、核查历史、形成财税顾问意见 | [企业接手与财税顾问技能包](docs/COMPANY-ADVISOR-SKILL.md) |
-| 工具合同、按需发现和回执设计的依据 | [Harness 工具设计依据](docs/HARNESS-TOOL-DESIGN.md) |
+| 安装、明确账库、选择 Pi / Claude Code / dsh / ZCode | [主 Agent 接入](05-reconstruction/codex/hosts/START-HERE.md) |
+| 了解业务与证据调用链 | [中文架构](docs/AGENT-ARCHITECTURE.md) |
+| 找业务源码与测试 | [代码索引](docs/CODE-INDEX.md) |
+| 复用官方格式的中国化财务插件 | [中国化 fork](https://github.com/huxiaoyang-code/knowledge-work-plugins)；配置生成器可用 `--plugin-root` 指向其 `finance` 目录 |
 
-建议先读架构图和一个只读调用示例，再按代码索引追踪具体模块。文件名、函数名、JSON 字段和错误码保留原名，中文解释帮助将文档与代码对应起来。
+## 工具与结果
+
+`finance_rules` 查询实际规则与官方出处，`finance_record_contract` 按需披露业务字段，`finance_workpaper` / `finance_annual_workpaper` 生成本机完整底稿，`finance_tax_calculate` 调用既有税费计算；账套、凭证、查账和报表继续使用既有会计工具。未接入的税局、开票和正式申报不能因 Skill 或目录存在而称已完成。
+
+每次 MCP 工具调用（包括参数拒绝）自动保存开始/结束、输入、结果或错误、本机范围及来源引用。结果通过 `_meta.financeCall.callId` 关联记录；正常业务无需模型维护 Store、requestFactId、版本摘要或计划。完整结果与人工核对页留在本机，模型输出仍遵守资料披露规则。
+
+交付顺序固定为 **账本金额 → 凭证/计算结果 → 规则依据 → 工具调用 → 输入与原件**。日常展示前三项，严重或多项错误时按需展开后两项；完整后台记录始终保存。原件缺失保留未知，哈希核验不代表原件真实、业务正确或真人审定。
 
 ## 启动与验证
 
-在仓库根目录运行；Node 资格检查与 Windows 启动方式见[代码索引](docs/CODE-INDEX.md#windows)。
-
-```sh
+```powershell
 cd 06-workbench
 npm ci
 npm start
-npm test
 ```
 
-`npm test` 的套件清单由 [test-all.mjs](06-workbench/scripts/test-all.mjs) 定义，使用临时数据。服务默认数据库为 `06-workbench/data/workbench.db`；真实数据不用于自动测试。更新代码后需重启已有服务以加载变更。
+MCP 由宿主启动 `05-reconstruction/codex/mcp/finance-mcp/server.mjs`，通过 `FINANCE_API_BASE` 连接明确的本机后端。配置生成器只写入全新工作区，不修改全局模型凭据或真实账库。
 
-MCP stdio 入口（由客户端启动）：
-
-```sh
-node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
+```powershell
+node 06-workbench/test/finance-host-config.test.mjs
+node 06-workbench/test/host-dsh.test.mjs
+node 06-workbench/test/host-zcode.test.mjs
+node --test 06-workbench/test/finance-call-chain.test.mjs
 ```
 
-后端默认地址是 `http://127.0.0.1:8787`，可用 `FINANCE_API_BASE` 配置。工具注册、Skill 资源与示例命令见[代码索引](docs/CODE-INDEX.md#mcp)。
-
-[主 Agent 配置与首次运行](05-reconstruction/codex/hosts/START-HERE.md)是 Pi、Claude Code、dsh、ZCode 的统一入口：选择宿主、启动明确账库的后端、生成全新工作区、配置本人模型并检验合成流程。四者均可作为主体运行；解析子 Agent 按宿主单独核实。配置、原生连接、模型短流程与整账验收分别记录，详见[接入与实测范围](05-reconstruction/codex/hosts/README.md)。
-
-可选研究层与日常业务 Harness 分开：[Harness²](docs/HARNESS2-INTEGRATION.md)研究指引优化，[SoL-Pi](docs/SOL-PI-INTEGRATION.md)提供 Pi 的 ObservationPack 接入；二者默认关闭，目前不允许组合。候选、经验或压缩结果都不增加财税权限，也不代替业务结果与会计审定。具体接入约束、失败处理和验证范围见各自文档。
-
-## 目录
-
-| 路径 | 用途 |
-|---|---|
-| [06-workbench/server](06-workbench/server/) | HTTP、记账、报表及本机业务模块 |
-| [06-workbench/public](06-workbench/public/) | 网页 |
-| [06-workbench/scripts](06-workbench/scripts/) | CLI、运行和验证入口 |
-| [06-workbench/test](06-workbench/test/) | 回归测试、合成测试样本与独立预期 |
-| [05-reconstruction](05-reconstruction/) | MCP、宿主适配、运行时技能、能力目录、导入示例及研究接入；其中历史来源元数据不代表当前能力 |
-| [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) | 中国财税 Agent 定位、实际调用链、流程编排及后续扩展原则 |
-| [docs/CODE-INDEX.md](docs/CODE-INDEX.md) | 按任务定位源码、入口与测试 |
-| [企业接手与财税顾问技能包](docs/COMPANY-ADVISOR-SKILL.md) | Codex 接手历史、疑点复核、税费与现金规划；同事安装和使用入口 |
-
-协作规则见 [AGENTS.md](AGENTS.md)；当前需求与未完工作在 [GitHub Issues](https://github.com/huxiaoyang-code/taxes-agent/issues) 跟踪。
+以上只使用合成数据，不调用模型。完整套件见 `06-workbench/scripts/test-all.mjs`；Pi 模型测试按改造审查和 PR 后的明确任务执行。产品是一名本机操作者处理多家企业，每家企业一个账套，具体地区、税种、期间和业务范围以实际计算合同与结果为准。
