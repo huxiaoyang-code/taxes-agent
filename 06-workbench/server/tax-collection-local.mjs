@@ -1,4 +1,4 @@
-// Local-only private storage and cross-checkout exclusion. Never return local paths.
+// 仅供本机私有存储及跨检出目录互斥，绝不返回本机路径。
 import {execFile} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {mkdir,realpath,lstat,open,readFile,unlink,rename,link} from 'node:fs/promises';
@@ -75,7 +75,7 @@ export class TaxCollectionStore{
   }
   async assertNotAbandoned(sourceRef){
     if(typeof sourceRef!=='string'||!/^taxsource_[a-f0-9]{48}$/.test(sourceRef))throw fail();
-    // Presence is fail-closed even if a damaged journal cannot be decoded.
+    // 即使损坏的日志无法解码，只要存在也按失败关闭处理。
     try{await lstat(join(this.root,`abandon_${sourceRef}.commit.json`));throw fail()}
     catch(error){if(error.code!=='ENOENT')throw error}
   }
@@ -88,8 +88,8 @@ export async function collectionLock(profilePath,{security={},scope}={}){
   let handle;try{handle=await open(file,'wx',0o600)}catch{throw new Error('tax_collection_busy')}
   try{await handle.writeFile(JSON.stringify({version:1,nonce,ownerPid:process.pid,scope}));await handle.sync()}finally{await handle.close()}
   await d.verifyFile(file);
-  // Recovery can acquire its mutex after the preflight check but before wx.
-  // Never enter a browser request in that window, or delete another owner's lock.
+  // 恢复流程可能在预检后、wx 创建前取得互斥锁；
+  // 这个窗口绝不发起浏览器请求，也不删除其他拥有者的锁。
   let recoveryPresent=false;
   try{await lstat(join(profilePath,RECOVERY));recoveryPresent=true}catch(error){if(error.code!=='ENOENT')throw error}
   if(recoveryPresent){

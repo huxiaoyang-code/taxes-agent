@@ -78,7 +78,7 @@ import {
 import { inspectAuxiliarySchema } from "./auxiliary-storage.mjs";
 import { entryPartyAllocation } from "./auxiliary-accounting.mjs";
 
-/** Live display only: no party field enters matching, snapshots or invalidation. */
+/** 仅供实时展示：往来对象字段不参与匹配、快照或失效判断。 */
 function entryPartyView(db, accountSetId, entryId) {
   const coreVersion = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()?.version;
   const state = inspectAuxiliarySchema(db, coreVersion);
@@ -2009,7 +2009,7 @@ export function readBankAudit(db, options = {}) {
   return { scope: scopeSummary(scope), events };
 }
 
-// Fixed public admissions include the real refresh side effects of query-shaped entries.
+// 固定公开准入包含看似查询的入口实际产生的刷新副作用。
 function auditedBankCall(db,action,entry,body,options) {
  try{return auditedBankCallBody(db,action,entry,body,options);}catch(error){
   const fact=operationErrorEvidence(error);

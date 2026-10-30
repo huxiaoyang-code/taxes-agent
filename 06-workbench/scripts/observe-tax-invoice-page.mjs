@@ -1,4 +1,4 @@
-// Local-only passive observer. No raw URLs, script sources or business data output.
+// 仅限本机的被动观察器。不输出原始 URL、脚本源码或业务数据。
 import {pathToFileURL} from 'node:url';
 import {TaxDownloadInvoiceObserver} from '../server/tax-download-invoice-observer.mjs';
 export async function observeTaxInvoicePage(args,overrides={}){return new TaxDownloadInvoiceObserver(overrides).observe(args);}

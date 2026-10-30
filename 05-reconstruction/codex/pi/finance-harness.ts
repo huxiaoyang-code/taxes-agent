@@ -1,6 +1,6 @@
-// Pi 1.1.0 extension. Design references the upstream MIT subagent example at
+// Pi 1.1.0 扩展。设计参考以下上游 MIT 子 Agent 示例：
 // https://github.com/earendil-works/pi/tree/v1.1.0/packages/coding-agent/examples/extensions/subagent
-// Uses native MCP registration; parser children explicitly disable extensions.
+// 使用原生 MCP 注册；解析子进程显式禁用扩展。
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
@@ -56,8 +56,8 @@ export default function financeHarness(pi: ExtensionAPI) {
         };
         child.stderr.on('data',b=>{stderrBytes+=b.length;saveStderr(stderrDecoder.write(b));});
         child.stderr.on('end',()=>saveStderr(stderrDecoder.end()));
-        // Cumulative transport is diagnostic only. Completed streaming deltas
-        // are released; limits apply to one event and the retained evidence.
+        // 累计传输量仅作诊断。已完成的流式增量会释放，
+        // 限制针对单个事件及需要保留的证据。
         child.stdout.on('data',b=>{bytes+=b.length;consume(stdoutDecoder.write(b));});
         child.stdout.on('end',()=>{consume(stdoutDecoder.end());if(buffer.length)consume('\n');});
         child.on('error',no);child.on('close',(code,closeSignal)=>{rawExitCode=code;rawExitSignal=closeSignal;ok(code??1);});

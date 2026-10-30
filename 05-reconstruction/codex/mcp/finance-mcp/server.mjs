@@ -2,7 +2,10 @@
 /**
  * finance-mcp — 财税工作台 MCP Server（stdio）
  *
- * 工具契约见 tools.mjs；后端执行经 backend.mjs 转发到 06-workbench。
+ * 工具契约见 tools.mjs；callTool 按真实职责分为三条路径：
+ *   - skills_list / skills_read：本进程读取本机 Skill 资源；
+ *   - harness_*：本进程直接调用 06-workbench 的 Harness 运行时，再由固定适配器执行业务；
+ *   - 其他工具：经 backend.mjs 转发 HTTP，普通财务工具走模型摘要通道，税务/目录走既有通道。
  * 原则：工具描述与调用结果必须真实——未实现的工具返回 isError，绝不伪装成功。
  *
  * 运行：node server.mjs   （由 Codex config.toml 以 stdio 方式拉起）
@@ -36,7 +39,7 @@ const SKILLS_DIR = process.env.FINANCE_SKILLS_DIR || join(RECON, "codex", "skill
 const SERVER = { name: "finance-mcp", version: "0.2.0" };
 const PROTOCOL = "2025-06-18";
 
-// ------------------------------------------------------------------ resources
+// ------------------------------------------------------------------ 资源读取
 function listSkillFilesUnsafe(dir = SKILLS_DIR, base = SKILLS_DIR) {
   if (!existsSync(dir)) return [];
   const out = [];
@@ -104,7 +107,7 @@ async function callTool(name, args = {}) {
       const {responseMode,capabilityId,factEvidencePolicy,domain,query,offset,limit,...nativeArgs}=args;
       const schemaProblems=validateSchemaValue(spec.inputSchema,args);
       if(schemaProblems.length){
-        // Preserve the established field-specific diagnostics without reading business inputs.
+        // 保留已有的字段级诊断，期间不读取业务输入。
         if(['harness_source_register','harness_request_materials'].includes(name))await guardHarnessBoundary(name,args);
         if(name==='harness_facts_register'&&Array.isArray(args.facts))for(const fact of args.facts)try{validateFact(fact);}catch(e){throw factEvidenceError(e,fact,{field:'fact'});}
         throw new ToolCallError('harness_tool_input_invalid','harness_tool_input_invalid',{tool:name,problems:schemaProblems,errorInventory:{total:schemaProblems.length,shown:schemaProblems.length,omitted:0}});
@@ -145,7 +148,7 @@ async function callTool(name, args = {}) {
   return result;
 }
 
-// ------------------------------------------------------------------ transport
+// ------------------------------------------------------------------ 协议传输
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
 const ok = (id, result) => send({ jsonrpc: "2.0", id, result });

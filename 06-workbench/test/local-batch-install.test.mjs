@@ -23,8 +23,8 @@ export async function fresh({version=5,batch=0,audit=0,bank=false,aux=false,jour
  try{
   if(bank)await (await import('../server/bank-storage.mjs')).ensureBankSchema(db,{dbPath:file,dataDir:dir,backupService:LB});
   if(aux)await (await import('../server/auxiliary-storage.mjs')).ensureAuxiliarySchema(db,{dbPath:file,outDir:join(dir,'before-aux')});
-  // Fixture construction: bank/aux current installers legitimately add batch3.
-  // Remove that empty component before constructing the explicitly requested history.
+  // 测试样本构造：当前银行/辅助核算安装器会合法添加 batch3。
+  // 构造明确要求的历史版本之前，先移除该空组件。
   removeFixtureBatch(db);
   if(audit===1)installLegacyAudit(db);else if(audit===2)await AS.installAuditSchema(db,{dbPath:file,outDir:join(dir,'before-audit')});
   if(batch===1)installLegacyBatch(db);else if(batch===2)installLegacyBatch2(db);else if(batch===3)await S.installBatchSchema(db,{dbPath:file,outDir:join(dir,'before-batch')});
@@ -68,8 +68,8 @@ export function job(h,{file=false,long=false,report=false}={}) {
  if(file){fs.writeFileSync(join(h.dir,'input.json'),' { "amount": 42.37 }\n');raw.items[0].periods[0].imports[0].payloadFile='input.json';delete raw.items[0].periods[0].imports[0].payload;}
  const validated=S.validateManifest(raw);assert.equal(validated.ok,true,JSON.stringify(validated.errors));const manifest=validated.manifest,manifestJson=S.canonicalJson(manifest),manifestHash=S.sha256(manifestJson),plan=S.buildPlan({manifest,manifestDir:h.dir});
  const version=S.assertBatchSchema(h.db).version;
- // Synthetic historical saved rows use the unchanged v2 writer shape, not a v3
- // execution disguised as v2. Product createJob correctly refuses historical writes.
+ // 合成历史已保存行采用未变更的 v2 写入结构，不把 v3
+ // 执行伪装成 v2。产品 createJob 会正确拒绝历史写入。
  const result=version===2?savedV2Job(h,{manifest,manifestJson,manifestHash,...plan}):S.createJob(h.db,{manifest,manifestJson,manifestHash,outputDir:join(h.dir,'out'),...plan});
  assert.equal(S.assertBatchSchema(h.db).version,version);return {...result,manifest,...plan};
 }

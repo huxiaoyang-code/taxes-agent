@@ -196,7 +196,7 @@ async function authenticatedSession(gateway, args = { region: GD, accountSetId: 
 
 const makeGateway = (opts = {}) => new TaxGateway({ accountSetExists: (id) => id === 1, ...opts });
 
-// ================================================================== PART A
+// ================================================================== A 部分
 async function partA() {
   console.log("\nA. 网关契约（本地 fake adapter，不联网）\n");
 
@@ -1184,7 +1184,7 @@ async function partA() {
   });
 }
 
-// ================================================================== PART B
+// ================================================================== B 部分
 function freePort() {
   return new Promise((resolve, reject) => {
     const srv = createServer();
@@ -1202,7 +1202,7 @@ async function waitReady(base, timeoutMs = 15000) {
     try {
       const res = await fetch(`${base}/api/meta`, { signal: AbortSignal.timeout(2000) });
       if (res.ok) return;
-    } catch { /* retry */ }
+    } catch { /* 重试 */ }
     if (Date.now() > deadline) throw new Error("backend_not_ready");
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -1392,9 +1392,9 @@ async function partB() {
       const done = new Promise((r) => backend.once("exit", r));
       backend.kill();
       await Promise.race([done, new Promise((r) => setTimeout(r, 3000))]);
-      if (backend.exitCode === null && backend.signalCode === null) { try { backend.kill("SIGKILL"); } catch { /* ignore */ } }
+      if (backend.exitCode === null && backend.signalCode === null) { try { backend.kill("SIGKILL"); } catch { /* 忽略此处异常 */ } }
     }
-    try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+    try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略此处异常 */ }
   }
 }
 

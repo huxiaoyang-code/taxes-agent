@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-standards-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
@@ -1203,6 +1203,6 @@ try {
   console.error("测试初始化失败：", error);
   process.exitCode = 1;
 } finally {
-  try { db?.close(); } catch { /* ignore */ }
-  try { if (!results.some(([ok]) => !ok) && process.env.WORKBENCH_TEST_KEEP_FIXTURES !== "1") rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); else console.log(`保留合成夹具：${dataDir}`); } catch { /* ignore */ }
+  try { db?.close(); } catch { /* 忽略 */ }
+  try { if (!results.some(([ok]) => !ok) && process.env.WORKBENCH_TEST_KEEP_FIXTURES !== "1") rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); else console.log(`保留合成夹具：${dataDir}`); } catch { /* 忽略 */ }
 }

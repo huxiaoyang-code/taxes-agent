@@ -1,4 +1,4 @@
-// Fixed native worker for enterprise exceptions. No supplied module or SQL is run.
+// 企业特例的固定原生 worker，不执行外部提供的模块或 SQL。
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, basename, isAbsolute } from 'node:path';
@@ -28,9 +28,9 @@ async function agencyCall(r,path) {
     if(feedbackEvidence){let current=null;try{current=hash((await readLocalFile(feedbackEvidence.path)).bytes);}catch{}evidenceBindings.push({path:feedbackEvidence.path,expected:feedbackEvidence.digest,current});}
     const approval=r.prepared?.proposal,confirmationCurrent=!!approval&&feedbackEvidence?.feedback?.decision==='accept'&&typeof feedbackEvidence.feedback.reviewer==='string'&&!!feedbackEvidence.feedback.reviewer.trim()&&['targetVersion','dependencyDigest','planDigest'].every(k=>feedbackEvidence.feedback[k]===approval[k]);
     const evidenceCurrent=evidenceBindings.some(b=>b.current!==null&&b.expected!==b.current)?false:evidenceBindings.some(b=>b.current===null)?null:true;
-    // Native recovery explicitly emits these null fields only after reading a
-    // committed operation (or no-change reconciliation) and finding mismatched
-    // persisted fingerprints. A transport/read failure has neither field.
+    // 原生恢复只有在读取已提交操作（或无变更核对）并发现
+    // 持久化指纹不匹配后，才显式输出这些 null 字段。
+    // 传输或读取失败不包含上述任一字段。
     const businessProofCurrent=domain.evidence===null||domain.existingPostedEvidence===null?false:undefined;
     return {status:domain.status,applied:domain.applied,scope:r.scope,identity:domain.identity,domain,...(feedbackEvidence?{feedbackEvidence}:{}),...(businessProofCurrent===false?{businessProofCurrent}:{}),confirmationCurrent,evidenceCurrent,evidenceBindings,proofDigest:hash({domain,evidenceBindings,confirmationCurrent}),periodComplete:false,submittable:false};
   };
@@ -42,8 +42,8 @@ async function agencyCall(r,path) {
   check(r.phase==='execute'||r.phase==='prepare','harness_agency_phase_invalid');
   if(r.action==='agency.posting'&&r.phase==='execute') {
     const observed=await inspectIdentity();
-    // The original archived identity is queried before loading/rebuilding any
-    // proposal. Unknown/committed outcomes can never cause another execute.
+    // 加载或重建任何提案前，先查询原始归档身份；
+    // 未知或已提交结果绝不触发再次 execute。
     if(observed.status!=='not_started')return prove(observed);
     let file,feedback;
     try{file=await readLocalFile(r.request.feedbackPath);feedback=JSON.parse(file.bytes.toString('utf8'));}
@@ -97,8 +97,8 @@ try {
     check(inspectAuditSchema(db).ok&&inspectBatchSchema(db).ok,'harness_annual_database_not_ready');
     check(db.prepare('PRAGMA journal_mode').get().journal_mode==='wal','harness_annual_wal_required');
     db.close();db=null;
-    // SQLite readOnly is enabled in db.mjs at connection construction, before
-    // any imports can execute DDL or migrations. This mode skips all installers.
+    // db.mjs 在构造连接时启用 SQLite readOnly，早于任何可能
+    // 执行 DDL 或迁移的导入；此模式跳过全部安装器。
     process.env.WORKBENCH_DATABASE_MODE='readonly';process.env.WORKBENCH_DATA_DIR=dirname(path);
     const A=await import('./accounting.mjs'),D=await import('./db.mjs'),R=await import('./report-export.mjs');db=D.db;
     const now=statSync(await checkedPath(path));check(before.dev===now.dev&&before.ino===now.ino&&before.birthtimeMs===now.birthtimeMs,'harness_path_changed');verify(db);

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-adapter-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
@@ -53,7 +53,7 @@ const logBuffer = [];
 for (const level of ["log", "error", "warn"]) {
   const original = console[level].bind(console);
   console[level] = (...args) => {
-    try { logBuffer.push(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")); } catch { /* ignore */ }
+    try { logBuffer.push(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")); } catch { /* 忽略 */ }
     original(...args);
   };
 }

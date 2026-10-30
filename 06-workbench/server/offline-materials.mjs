@@ -1,4 +1,4 @@
-// Pure batch preflight; never a receipt for posting or period completeness.
+// 纯批次预检，不是过账或期间完整性的回执。
 import { MATERIAL_VERSION, hash, stable, fields, identifier, requireValue, validateScope, normalizeMaterial, safeMaterialError, requirePlainJson } from './offline-material-adapters.mjs';
 
 export function preflightMaterials(input) {
@@ -48,7 +48,7 @@ export function preflightMaterials(input) {
       counts: { sources: sources.length, records: records.length, conflicts: conflictCount, duplicates: records.filter(r => r.duplicateStatus === 'duplicate').length, suspectedDuplicates: records.filter(r => r.duplicateStatus === 'suspected_duplicate').length },
       errors: conflictCount ? [{ code: 'material_conflict' }] : [] };
   } catch (error) {
-    // Never expose raw parser messages, identifiers, paths or arbitrary error codes.
+    // 绝不暴露原始解析错误、标识符、路径或任意错误码。
     return { ...base, ok: false, status: 'rejected', sources: [], records: [], counts: { sources: 0, records: 0, conflicts: 0, duplicates: 0, suspectedDuplicates: 0 }, errors: [safeMaterialError(error, sourceIndex)] };
   }
 }

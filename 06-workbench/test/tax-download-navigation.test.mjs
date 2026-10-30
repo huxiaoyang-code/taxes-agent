@@ -1,4 +1,4 @@
-// Entirely in-memory synthetic browser/stores. No private directory or real service is read.
+// 完全内存中的合成浏览器/存储。不读取私有目录或真实服务。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';

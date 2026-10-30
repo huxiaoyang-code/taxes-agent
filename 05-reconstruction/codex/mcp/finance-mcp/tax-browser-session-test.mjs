@@ -1,6 +1,6 @@
-// Actual stdio MCP -> HTTP -> Agent tools; only synthetic transports and temporary DBs.
-// The production singleton is injected in this test child before the HTTP server starts.
-// This test never launches Edge or contacts a real CDP/tax endpoint.
+// 真实 stdio MCP → HTTP → Agent 工具；仅使用合成传输和临时数据库。
+// 生产单例在此测试子进程启动 HTTP 服务前注入。
+// 本测试不启动 Edge，也不访问真实 CDP 或税局端点。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn } from 'node:child_process';
@@ -112,7 +112,7 @@ test('browser tools run through stdio, HTTP and Agent with isolated synthetic co
     await rejected(client, 'tax_session_verify', { sessionId: second.connectionId });
     await rejected(client, 'tax_browser_probe', { connectionId: first.connectionId });
     assert.equal((await ok(client, 'tax_browser_probe', { connectionId: second.connectionId })).requestPerformed, true);
-    // HTTP bypass of MCP schema still reaches the same strict Agent argument validator.
+    // 即使 HTTP 绕过 MCP schema，也必须经过相同的严格 Agent 参数校验。
     const response = await fetch(`${base}/agent/tools/tax_browser_probe`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ connectionId: second.connectionId, url: 'PRIVATE_SYNTHETIC_INJECTION' }),

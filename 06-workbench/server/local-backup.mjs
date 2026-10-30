@@ -668,7 +668,7 @@ function syncFile(filePath, code) {
   } catch {
     throw expected(code);
   } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* 忽略此处异常 */ } }
   }
 }
 
@@ -682,7 +682,7 @@ function writeSyncedFile(filePath, text, code) {
   } catch {
     throw expected(code);
   } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* 忽略此处异常 */ } }
   }
 }
 
@@ -700,7 +700,7 @@ function syncDirectory(directory) {
   } catch {
     return { supported: true, synced: false };
   } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* 忽略此处异常 */ } }
   }
 }
 
@@ -2198,7 +2198,7 @@ export function backupContract() {
   };
 }
 
-/** Bind a migration backup to the actual reserved source connection, not just a basename. */
+/** 将迁移备份绑定到实际持锁的来源连接，而非仅凭文件名。 */
 export function assertBackupSourceConnection(conn, manifest) {
   const facts = inspectDatabase(conn);
   if (facts.content.digest !== manifest.content.digest || facts.structure.schemaVersion !== manifest.structure.schemaVersion
@@ -2207,10 +2207,10 @@ export function assertBackupSourceConnection(conn, manifest) {
   }
 }
 
-/** Read-only full registry validation for an already installed optional component. */
+/** 只读完整校验已安装可选组件的注册表。 */
 export function assertSupportedDatabaseConnection(conn) { inspectDatabase(conn); }
 
-/** Qualification only after fixed official verification; target must be absent. */
+/** 仅在固定官方校验通过后授予资格，目标必须不存在。 */
 export function assertInstallableComponentSet(manifest,target) {
  const entries=manifest?.components??[];
  if(!Array.isArray(entries)||entries.some(e=>e.name===target||!COMPONENT_REGISTRY[e.name]))throw expected('component_unsupported');
@@ -2222,7 +2222,7 @@ export function assertInstallableComponentSet(manifest,target) {
  if(entries.some(e=>e.name==='auxiliary')&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');
  return true;
 }
-// Restore publication is a separate transaction domain from the business database.
+// 恢复发布和业务数据库属于不同的事务领域。
 const restoreCapabilities=new WeakMap();
 export function assertPrivateRestoreCapability(db,cap){
  const r=restoreCapabilities.get(cap);
@@ -2240,7 +2240,7 @@ function restoreArgs({backupDir,targetDir,ledgerPath,operationId}){
  if(![backupDir,targetDir,ledgerPath].every(v=>typeof v==='string'&&v.length)||!restoreTechId(operationId))throw restoreError('restore_contract_required');
  plainRestorePath(backupDir,{directory:true});plainRestorePath(join(backupDir,SNAPSHOT_FILE));plainRestorePath(join(backupDir,MANIFEST_FILE));
  plainRestorePath(dirname(targetDir),{directory:true});plainRestorePath(dirname(ledgerPath),{directory:true});
- // Require explicit, canonical absolute paths even for not-yet-created objects.
+ // 即使对象尚未创建，也必须提供显式、规范化的绝对路径。
  if(resolve(targetDir)!==targetDir||resolve(ledgerPath)!==ledgerPath)throw restoreError('restore_target_binding_mismatch');
  const roots=[backupDir,targetDir,dirname(ledgerPath)];
  for(let i=0;i<roots.length;i++)for(let j=i+1;j<roots.length;j++)if(isInside(roots[i],roots[j])||isInside(roots[j],roots[i]))throw restoreError('restore_target_binding_mismatch');
@@ -2322,8 +2322,8 @@ function verifyRestorePreservation(snapshot,target,receipt){
 }
 
 
-// The only permitted two-link object is this operation's exact publication pair.
-// No directory discovery or generic hardlink exception is used.
+// 唯一允许有两个硬链接的对象，是本操作精确的发布配对；
+// 不进行目录发现，也不提供通用硬链接例外。
 function ownedPublicationPair(file,partial,expectedIdentity){
  plainRestorePath(dirname(file),{directory:true});
  const a=fs.lstatSync(file,{bigint:true}),b=fs.lstatSync(partial,{bigint:true});
@@ -2341,7 +2341,7 @@ function receiptEvidence({backupDir,targetDir,ledgerPath,operationId},db,verifie
  const file=join(targetDir,TARGET_DATABASE_FILE);
  let candidate=file;
  if(!fs.existsSync(file)){
-  // The private filename is operation-bound, never discovered by scanning other directories.
+  // 私有文件名绑定操作，不通过扫描其他目录发现。
   candidate=join(targetDir,`${PARTIAL_PREFIX}${receipt.targetInstanceId}.db`);
  }
  const partial=join(targetDir,`${PARTIAL_PREFIX}${receipt.targetInstanceId}.db`);let pair=false,identity;
@@ -2350,8 +2350,8 @@ function receiptEvidence({backupDir,targetDir,ledgerPath,operationId},db,verifie
   identity=ownedPublicationPair(file,partial,receipt.target.database.identity);pair=true;
  }
  if(!identitySame(identity,receipt.target.database.identity))throw restoreError('restore_target_binding_mismatch');
- // Once released, the append-only activation anchor and its official protection
- // point establish continuity. A past publication digest never changes.
+ // 释放之后，由仅追加激活锚点及其官方保护点确立连续关系；
+ // 已发生的发布摘要永不改变。
  for(const side of sidecarsOf(candidate))if(fs.existsSync(side))plainRestorePath(side);
  const current=new DatabaseSync(candidate,{readOnly:true});
  try{const state=assertRestoreControl(current).row;if(state.write_state==='ready'){
@@ -2366,7 +2366,7 @@ function receiptEvidence({backupDir,targetDir,ledgerPath,operationId},db,verifie
   const facts=inspectDatabase(conn),s=assertRestoreControl(conn).row,ids=controlSnapshot(conn);
   verifyRestorePreservation(join(backupDir,SNAPSHOT_FILE),conn,receipt);
   if(s.target_instance_id!==receipt.targetInstanceId||s.restore_operation_id!==operationId||s.source_backup_digest!==op.backupDigest||s.ledger_binding_digest!==binding||s.target_binding_digest!==op.targetBindingDigest||s.write_state!=='pending'||facts.structure.schemaVersion!==receipt.target.coreVersion||ids.auditInstanceId!==receipt.target.auditInstanceId||ids.batchInstanceId!==receipt.target.batchInstanceId||restoreCanonical(facts.components.map(({name,version,structureDigest,contentDigest})=>({name,version,structureDigest,contentDigest})).sort((a,b)=>a.name<b.name?-1:1))!==restoreCanonical(receipt.target.components))throw restoreError('restore_verify_failed');
-  // Each new active fork must link to exactly the source active identity recorded at publication.
+  // 每个新激活分叉都须精确链接到发布时记录的来源激活身份。
   if(ids.auditInstanceId!==null&&conn.prepare('SELECT parent_instance_id,note_code FROM audit_database_instances WHERE is_active=1').get()?.parent_instance_id!==receipt.source.auditInstanceId)throw restoreError('restore_verify_failed');
   if(ids.batchInstanceId!==null){const active=conn.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();if(active.parent_instance_id!==receipt.source.batchInstanceId||active.write_state!=='restore_pending'||active.restore_operation_id!==operationId||active.source_backup_digest!==op.backupDigest)throw restoreError('restore_verify_failed');}
  }finally{conn.close();}
@@ -2374,13 +2374,13 @@ function receiptEvidence({backupDir,targetDir,ledgerPath,operationId},db,verifie
 }
 function publishEvidence(e,targetDir){
  if(e.ownedPublicationPair){
-  // Only after receiptEvidence verified all ledger/receipt, SHA, strict content,
-  // source preservation and instance-chain bindings may this known partial go.
+  // 只有 receiptEvidence 验完全部台账/回执、SHA、严格内容、
+  // 来源保全及实例链绑定后，才可移除此已知部分对象。
   ownedPublicationPair(e.file,e.ownedPublicationPair,e.receipt.target.database.identity);
   fs.unlinkSync(e.ownedPublicationPair);
  }
  if(e.candidate!==e.file){
-  // link is exclusive (unlike rename over an existing file); unlink preserves the verified object.
+  // link 是独占创建，不会像 rename 那样覆盖既有文件；unlink 只移除链接并保留已验证对象。
   fs.linkSync(e.candidate,e.file);fs.unlinkSync(e.candidate);
  }
  const identity=plainRestorePath(e.file);if(!identitySame(identity,e.receipt.target.database.identity))throw restoreError('restore_target_binding_mismatch');
@@ -2454,7 +2454,7 @@ function activationContract(args,{activate=false}={}) {
   const roots=[args.backupDir,args.targetDir,dirname(args.ledgerPath),args.outDir];
   if(resolve(args.outDir)!==args.outDir)throw restoreError('restore_target_binding_mismatch');
   for(let i=0;i<roots.length;i++)for(let j=i+1;j<roots.length;j++)if(isInside(roots[i],roots[j])||isInside(roots[j],roots[i]))throw restoreError('restore_target_binding_mismatch');
-  // A repeated ready request may use its already recorded protection directory.
+  // 重复 ready 请求可使用已记录的保护目录。
   if(fs.existsSync(args.outDir))plainRestorePath(args.outDir,{directory:true});else plainRestorePath(args.outDir,{absent:true});
  }
 }
@@ -2479,16 +2479,16 @@ function maintenanceEvidence(args,ledger,verified) {
 function recoverActivationRollback(args,ledger,verified) {
  const file=join(args.targetDir,TARGET_DATABASE_FILE),journal=file+'-journal';
  if(!fs.existsSync(journal))return;
- // A real interrupted SQLite transaction may need write access just to undo
- // its own journal. Never recover an unexplained journal or accept its result.
+ // 真实中断的 SQLite 事务可能仅为回滚自身 journal 就需要写权限；
+ // 绝不恢复来历不明的 journal，也不接受其结果。
  plainRestorePath(journal);
  const proof=maintenanceEvidence(args,ledger,verified);if(!proof)throw restoreError('restore_maintenance_invalid');
  if([file+'-wal',file+'-shm'].some(p=>fs.existsSync(p)))throw restoreError('restore_maintenance_invalid');
  const recovery=new DatabaseSync(file);try{
   recovery.prepare('SELECT COUNT(*) n FROM sqlite_master').get();recovery.exec('BEGIN IMMEDIATE');
   if(digestFile(file).sha256!==proof.m.publishedDigest||!identitySame(plainRestorePath(file),proof.m.targetIdentity))throw restoreError('restore_maintenance_invalid');
-  // SQLite may retain a non-hot journal if no main pages had spilled. While
-  // holding the real write reservation, exact original bytes prove it harmless.
+  // 主库页面尚未溢写时，SQLite 可能保留非 hot journal；
+  // 持有实际写入保留锁时，精确原始字节可证明它无害。
   if(fs.existsSync(journal)){plainRestorePath(journal);fs.unlinkSync(journal);}
   recovery.exec('ROLLBACK');
  }finally{if(recovery.isTransaction)recovery.exec('ROLLBACK');recovery.close();}
@@ -2511,13 +2511,13 @@ function verifyActivatedTarget(conn,{receipt,op,binding,backupDir,targetDir,oper
  if(receipt.target.auditInstanceId!==null?(audit.instance_id!==receipt.target.auditInstanceId||audit.parent_instance_id!==receipt.source.auditInstanceId):(audit.parent_instance_id!==null||audit.note_code!=='initial'))throw restoreError('restore_activation_invalid');
  const batch=conn.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get();
  if(batch.write_state!=='ready'||batch.audit_instance_id!==audit.instance_id||(receipt.target.batchInstanceId!==null?(batch.instance_id!==a.batchInstanceId||batch.instance_id!==receipt.target.batchInstanceId||batch.parent_instance_id!==receipt.source.batchInstanceId):(batch.instance_id!==a.batchInstanceId||batch.origin!=='initial'||batch.parent_instance_id!==null)))throw restoreError('restore_activation_invalid');
- // Existing bound paths are immutable; later normal jobs may add their own bindings.
+ // 已有绑定路径不可变；后续普通任务可增加自己的绑定。
  for(const o of a.outputs){const b=conn.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=? AND job_id=?').get(a.batchInstanceId,o.jobId);if(!b||b.output_state!=='bound'||b.output_root!==o.root)throw restoreError('restore_activation_invalid');}
  for(const i of a.inputs){const b=conn.prepare('SELECT * FROM local_batch_input_bindings WHERE database_instance_id=? AND input_key=?').get(a.batchInstanceId,i.inputKey);if(!b||b.mode!==i.mode||b.source_path!==i.source)throw restoreError('restore_activation_invalid');}
  return a;
 }
 
-/** Strict read-only admission. Incomplete durable publication must be reconciled first. */
+/** 严格只读准入。持久发布未完成时须先核对解决。 */
 export async function checkRestoreTarget(args={}) {
  let ledger,conn;
  try{
@@ -2539,8 +2539,7 @@ export async function checkRestoreTarget(args={}) {
  }catch(e){return {ok:false,status:'rejected',code:e.code??'restore_verify_failed'};}finally{conn?.close();ledger?.close();}
 }
 
-/** The sole activation authority. One target, one reservation, fixed migrations,
- * complete binding, append-only anchor and ready are one business transaction. */
+/** 唯一的激活权限入口：单一目标、单一保留锁、固定迁移、完整绑定、仅追加锚点与 ready 在同一业务事务完成。 */
 export async function activateRestoreTarget(args={}) {
  let ledger,conn,cap,commitStarted=false;
  try{
@@ -2566,7 +2565,7 @@ export async function activateRestoreTarget(args={}) {
   if(!previous&&fs.existsSync(args.outDir))throw restoreError('target_exists');
   conn.exec('BEGIN IMMEDIATE');
   if(!identitySame(before,plainRestorePath(e.file))||digestFile(e.file).sha256!==e.receipt.target.database.sha256)throw restoreError('restore_target_binding_mismatch');
-  // Re-read every plan choice after reserving writes; no caller-provided verifier.
+  // 取得写入保留锁后重读全部计划选择，不接受调用者提供校验器。
   const checked=Intent.validateRestorePlan(conn,args.plan,args);
   if(checked.planDigest!==initial.planDigest)throw restoreError('restore_plan_conflict');
   const created=previous?null:createBackup({dbPath:e.file,outDir:args.outDir});if(created&&!created.ok)throw restoreError('restore_protection_failed');
@@ -2584,7 +2583,7 @@ export async function activateRestoreTarget(args={}) {
   Audit.upgradeRestoreAuditSchema(conn,{capability:cap});
   await Batch.upgradeRestoreBatchSchema(conn,{capability:cap});
   const active=Batch.readBatchInstance(conn),at=new Date().toISOString();
-  // audit-less batch3 was a legal publication; only its active NULL mapping is bound.
+  // 不含 audit 的 batch3 曾是合法发布；这里只绑定其 active NULL 映射。
   if(active.audit_instance_id===null)conn.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE instance_id=? AND audit_instance_id IS NULL').run(Audit.currentAuditInstanceId(conn),active.instance_id);
   for(const o of checked.outputs){
    if(!fs.existsSync(o.root))fs.mkdirSync(o.root);
@@ -2601,15 +2600,15 @@ export async function activateRestoreTarget(args={}) {
    }
   }
   conn.prepare("UPDATE local_batch_stages SET status='needs_review',error_code='restore_financial_unknown' WHERE stage_key NOT LIKE 'report:%' AND (status='running' OR status='needs_review' OR (status='pending' AND attempt>0))").run();
-  // The read-only status command must not report a successful job while its
-  // restored report or interrupted financial stage is waiting for review.
+  // 恢复后的报表或中断财务阶段尚待复核时，
+  // 只读状态命令不能报告整个作业成功。
   conn.prepare("UPDATE local_batch_items SET status='needs_review',updated_at=? WHERE EXISTS(SELECT 1 FROM local_batch_stages s WHERE s.item_id=local_batch_items.id AND s.status='needs_review')").run(at);
   conn.prepare("UPDATE local_batch_jobs SET status='needs_review',updated_at=? WHERE EXISTS(SELECT 1 FROM local_batch_items i WHERE i.job_id=local_batch_jobs.id AND i.status='needs_review')").run(at);
   const anchor={version:1,targetInstanceId:state.target_instance_id,operationId:args.operationId,receiptDigest:restoreHash(e.receipt),publishedDigest:e.receipt.target.database.sha256,planDigest:checked.planDigest,plan:checked.plan,inputs:checked.inputs,outputs:checked.outputs,protectionDir:args.outDir,protectionDigest:protection.manifestFileSha256,protectionSnapshotDigest:protection.manifest.snapshot.sha256,auditInstanceId:Audit.currentAuditInstanceId(conn),batchInstanceId:active.instance_id};
   const anchorFile=join(args.targetDir,RESTORE_ACTIVATION_FILE);
   if(fs.existsSync(anchorFile)){
-   // Only an exact previous issuer-recorded orphan may be retired. An unknown
-   // or edited same-name file is preserved and blocks activation.
+   // 只有由前次签发者精确记录的孤立对象才可退役；未知对象
+   // 或编辑过的同名文件须保留，并阻塞激活。
    plainRestorePath(anchorFile);const old=JSON.parse(fs.readFileSync(anchorFile,'utf8'));
    if(!previous?.m.anchorDigest||restoreHash(old)!==previous.m.anchorDigest||old.targetInstanceId!==state.target_instance_id||old.operationId!==args.operationId||old.receiptDigest!==maintenance.receiptDigest||old.planDigest!==checked.planDigest||old.protectionDigest!==maintenance.protectionDigest)throw restoreError('restore_activation_orphaned');
    fs.unlinkSync(anchorFile);
@@ -2624,7 +2623,7 @@ export async function activateRestoreTarget(args={}) {
   conn.prepare("UPDATE local_batch_database_instances SET write_state='ready' WHERE instance_id=?").run(active.instance_id);
   conn.prepare("UPDATE restore_control_state SET write_state='ready',released_at=? WHERE singleton=1 AND write_state='pending'").run(at);
   inspectDatabase(conn);assertPrivateRestoreCapability(conn,cap);
-  // Recheck source and directory identities at the final commit boundary.
+  // 在最终提交边界再次核验来源和目录身份。
   const final=Intent.validateRestorePlan(conn,args.plan,args);
   if(final.planDigest!==checked.planDigest||final.inputs.some((i,n)=>restoreCanonical(i)!==restoreCanonical(checked.inputs[n]))||!identitySame(before,plainRestorePath(e.file)))throw restoreError('restore_target_binding_mismatch');
   for(const o of checked.outputs)if(!identitySame(o.identity,plainRestorePath(o.root,{directory:true})))throw restoreError('restore_target_binding_mismatch');

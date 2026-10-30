@@ -1,5 +1,5 @@
-// Opt-in local administration. Fixed portal reload, quarantined bootstrap,
-// then three fully fresh reads; never registered as an Agent/HTTP/MCP tool.
+// 显式启用的本机管理操作：固定门户重载、隔离启动，
+// 随后执行三次完全全新的读取；绝不注册为 Agent/HTTP/MCP 工具。
 import {dirname,resolve,join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomBytes,createHash} from 'node:crypto';
@@ -189,8 +189,8 @@ export async function bootstrapTaxPortalSource(args={},overrides={}){
     }
     for(const off of remove)try{off();}catch{failed('listeners');}
     closing=true;try{if(transport)await closeTransport();}catch{failed('transport_close');}
-    // Application scope changes prohibit consumption. They do not imply that a
-    // clearly settled owned operation remains executing after confirmed teardown.
+    // 应用作用域发生变化时禁止消费结果；但在确认清理完成后，
+    // 这不表示已明确结束的自有操作仍在执行。
     const settledOwnWork=!attachUnknown&&!ownUnknown&&!sessionLost&&(!reloadAttempted||reloadAcknowledged)&&attempted===settled;
     lockRetained=lockAcquiring||attachUnknown;
     if(lock){

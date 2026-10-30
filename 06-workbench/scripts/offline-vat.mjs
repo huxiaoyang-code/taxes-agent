@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Explicit files/store + fresh private read capability on EVERY invocation.
+// 每次调用均使用显式文件/存储及全新的私有读取能力。
 import { open, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

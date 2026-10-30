@@ -1,4 +1,4 @@
-// Native-only facade: no default database or cached application modules.
+// 只含原生依赖的外观层，不导入默认数据库或缓存应用模块。
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, relative, isAbsolute } from 'node:path';
@@ -29,7 +29,7 @@ export function capturePeriodPlanCode() {
     for (const m of b.toString('utf8').matchAll(/(?:from\s*|import\s*\()\s*['"](\.[^'"\n]+\.mjs)['"]/g)) visit(new URL(m[1], url));
   }
   visit(new URL('./offline-period-plan-target.mjs', import.meta.url));
-  // A fixed child URL is not an ES import; include its full application closure explicitly.
+  // 固定子进程 URL 不属于 ES import，须显式纳入其完整应用依赖闭包。
   visit(new URL('./offline-posting-target.mjs', import.meta.url));
   visit(new URL('../scripts/offline-period-plan.mjs', import.meta.url));
   const files = [...found].map(([p, sha256]) => ({ path: relative(root,p).replaceAll('\\','/'), sha256 })).sort((a,b)=>a.path.localeCompare(b.path));

@@ -35,8 +35,8 @@ class LinuxFinanceAdapter(FinanceAdapter):
     def bridge(self, action, run_id, harness_dir=None, timeout=None):
         if not re.fullmatch(r'[-a-zA-Z0-9_]{1,80}', run_id):
             raise ValueError('harness2_run_id_invalid')
-        # Actual canary verification is repeated before every execution, not
-        # trusted from a user-entered "verified" flag or stale manifest.
+        # 每次执行前都重复实际探针核验，不采信用户填写的
+        # verified 标志或已过期 manifest。
         self.sandbox.verify(self.canary)
         timeout = timeout if timeout is not None else (None if action == 'execute' and self.execution_mode == 'model' else 60)
         request = {'version':'finance-harness2-request/1','action':action,'host':self.host,

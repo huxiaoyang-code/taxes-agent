@@ -1,4 +1,4 @@
-// Local administrator only. No refresh/admin endpoint is registered with Agent or MCP.
+// 仅供本机管理员使用。不向 Agent 或 MCP 注册刷新/管理端点。
 import {pathToFileURL} from 'node:url';
 import {TaxHistoryCollection} from '../server/tax-history-collection.mjs';
 export const refreshTaxHistoryContext=(args,overrides)=>new TaxHistoryCollection(overrides).refresh(args);

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-import-incremental-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
@@ -218,8 +218,8 @@ try {
       assert.equal(again.migrated, false);
       assert.equal(migrator.prepare(`SELECT COUNT(*) n FROM schema_backups`).get().n, 1, "同版本只应备份一次");
     } finally {
-      try { migrator?.close(); } catch { /* ignore */ }
-      try { writer?.close(); } catch { /* ignore */ }
+      try { migrator?.close(); } catch { /* 忽略 */ }
+      try { writer?.close(); } catch { /* 忽略 */ }
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -298,8 +298,8 @@ try {
       assert.equal(again.migrated, false);
       assert.equal(migrator.prepare(`SELECT COUNT(*) n FROM schema_backups`).get().n, 1, "成功后重启不重复备份");
     } finally {
-      try { migrator?.close(); } catch { /* ignore */ }
-      try { writer?.close(); } catch { /* ignore */ }
+      try { migrator?.close(); } catch { /* 忽略 */ }
+      try { writer?.close(); } catch { /* 忽略 */ }
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -363,8 +363,8 @@ try {
       assert.equal(link.action, "created");
       assert.equal(link.content_fingerprint, "fp-v1");
     } finally {
-      try { migrator?.close(); } catch { /* ignore */ }
-      try { writer?.close(); } catch { /* ignore */ }
+      try { migrator?.close(); } catch { /* 忽略 */ }
+      try { writer?.close(); } catch { /* 忽略 */ }
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1119,7 +1119,7 @@ try {
     const set = identityFixtureCreate(A, {
       name: "填空合成公司", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
-    // Synthetic historical unbound fixture: SQL removes only this test book binding.
+    // 合成历史未绑定测试样本：SQL 仅移除此测试账簿的绑定。
     db.prepare("DELETE FROM import_enterprise_account_sets WHERE account_set_id=?").run(set.id);
     assert.equal(A.getOpeningBalances(set.id).length, 0);
     assert.equal(A.listVouchers(set.id).length, 0);
@@ -1152,7 +1152,7 @@ try {
     const set = identityFixtureCreate(A, {
       name: "填空合成公司二", taxpayer_type: "小规模纳税人", accounting_standard: "小企业会计准则", start_period: "2026-01",
     });
-    // Synthetic historical unbound fixture: SQL removes only this test book binding.
+    // 合成历史未绑定测试样本：SQL 仅移除此测试账簿的绑定。
     db.prepare("DELETE FROM import_enterprise_account_sets WHERE account_set_id=?").run(set.id);
     const voucher = journal("2026-01", "2026-01-05", 1, "填空首张凭证", cashEntries(10), "EMPTY2-SRC-1");
     const args = {
@@ -1645,6 +1645,6 @@ try {
   console.error("测试初始化失败：", e);
   process.exitCode = 1;
 } finally {
-  try { db?.close(); } catch { /* ignore */ }
-  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { db?.close(); } catch { /* 忽略 */ }
+  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
 }

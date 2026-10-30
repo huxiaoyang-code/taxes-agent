@@ -1,4 +1,4 @@
-// Optional restore identity and admission contract. No default connection or ready setter.
+// 可选的恢复身份及准入合同；不提供默认连接或 ready 设置器。
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { resolve, dirname, basename, isAbsolute, join } from 'node:path';
@@ -31,7 +31,7 @@ export function restoreCanonical(value) {
  }return encode(value);
 }
 export const restoreHash=value=>createHash('sha256').update(restoreCanonical(value)).digest('hex');
-// Preserve SQL string literals: SQLite CHECK token values are case-sensitive.
+// 保留 SQL 字符串字面量：SQLite CHECK 的 token 值区分大小写。
 export const normalizeRestoreSql=s=>s.split(/('(?:''|[^'])*')/g).map((part,i)=>i%2?part:part.replace(/\s+/g,' ').toLowerCase()).join('').trim();
 export function restoreControlFacts(db){return db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE lower(name) GLOB 'restore_control_*' OR lower(tbl_name) GLOB 'restore_control_*' ORDER BY name").all().map(r=>({...r,sql:r.sql===null?null:normalizeRestoreSql(r.sql)}));}
 let expectedFacts;
@@ -55,7 +55,7 @@ export function assertRestoreWritable(db){
 }
 export const restorePathKey=p=>process.platform==='win32'?resolve(p).toLowerCase():resolve(p);
 export const RESTORE_ACTIVATION_FILE='restore-activation.json';
-/** Local data is evidence only when bound to the append-only completed operation. */
+/** 本机数据只有绑定到仅追加的已完成操作时，才构成证据。 */
 export function readRestoreActivation(db,{databaseFile}={}) {
  const state=assertRestoreControl(db).row;
  if(state.write_state!=='ready')throw restoreError('restore_target_pending');
@@ -78,16 +78,16 @@ export function plainRestorePath(file,{absent=false,directory=false}={}){
 }
 export function assertRestoreOpenPath(file){
  const path=resolve(file),dir=dirname(path);
- // Missing target directories still inherit every existing ancestor. Validate
- // the nearest existing directory (and its full chain) before scanning/opening
- // anything through it, or allowing the caller to create missing descendants.
+ // 尚不存在的目标目录仍继承全部已有祖先。经其扫描或打开任何对象前，
+ // 或允许调用者创建缺失子目录前，先验证最近的已有目录
+ // 及完整祖先链。
  for(let p=dir;;p=dirname(p)){
   try{fs.lstatSync(p);}catch(error){if(error.code==='ENOENT'&&dirname(p)!==p)continue;throw error;}
   plainRestorePath(p,{directory:true});break;
  }
  if(basename(path).startsWith('.partial-')||fs.existsSync(join(dir,'.restore-incomplete')))throw restoreError('restore_target_pending');
- // A lost marker does not release the restore reservation. Examine only the
- // explicit target directory; never discover a source, ledger or another root.
+ // 标记丢失不释放恢复保留锁。只检查显式目标目录，
+ // 绝不发现来源、台账或其他根目录。
  if(fs.existsSync(dir)){
   plainRestorePath(dir,{directory:true});
   const names=fs.readdirSync(dir);

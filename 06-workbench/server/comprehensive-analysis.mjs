@@ -1,5 +1,5 @@
-// Read-only, deliberately limited analysis over existing native books and workpapers.
-// No tax formula, accounting write, independent review store or workflow engine.
+// 基于已有原生账簿与工作底稿的只读分析，支持范围明确受限。
+// 不包含税费公式、账务写入、独立复核存储或工作流引擎。
 import { readLocalFile } from './offline-material-store.mjs';
 import { statSync } from 'node:fs';
 import { openReadonlyLedgerSource, captureLedgerSnapshot, validateLedgerSnapshot } from './offline-ledger-snapshot.mjs';
@@ -19,12 +19,12 @@ const sum = values => values.reduce((n, value) => n + value, 0n);
 const sameScope = (a, b) => ['enterpriseKey', 'accountSetId', 'databaseInstanceId', 'currency'].every(k => a?.[k] === b[k]);
 const errorCode = error => /^[a-z][a-z0-9_]+$/.test(error?.code ?? '') ? error.code : 'analysis_native_material_unavailable';
 
-/** Functions and the database are supplied only by the fixed local worker. */
+/** 函数和数据库只能由固定的本机 worker 提供。 */
 export async function buildComprehensiveAnalysis({ db, incomeStatement, cashFlowStatement, scope, request, priorResult }) {
   check(/^20\d\d-(0[1-9]|1[0-2])$/.test(scope.period) && scope.currency === 'CNY', 'harness_period_mismatch');
   check(['enterpriseKey', 'accountSetId', 'databaseInstanceId'].every(k => request.target?.[k] === scope[k]), 'harness_target_mismatch');
-  // Compare known bytes before parsing: malformed corrected material is a
-  // proven change, not a transient failure that could revive an old approval.
+  // 解析前比较已知字节：更正材料即使格式错误，也已证明发生变化，
+  // 不能视为可恢复旧批准的暂时读取失败。
   for (const binding of priorResult?.evidenceBindings ?? []) {
     if (hash((await readLocalFile(binding.path, 64 * 1024 * 1024)).bytes) !== binding.digest) return { status: 'analysis_dependencies_changed', businessProofCurrent: false, scope, periodComplete: false, submittable: false };
   }
@@ -94,8 +94,8 @@ export async function buildComprehensiveAnalysis({ db, incomeStatement, cashFlow
       }
     }
     const contextRef = pointer => ({ kind: 'source', locator: `${contextFile.canonicalPath}#${pointer}`, digest: hash(contextFile.bytes) });
-    // Only a simple, balanced bank debit/AR credit pair can be attributed here.
-    // Mixed vouchers remain unexplained; no proportional or priority allocation.
+    // 这里只能归属简单、借贷平衡的银行借方/应收贷方配对。
+    // 混合凭证保留未解释，不进行比例或优先级分摊。
     const posted = snapshot.vouchers.filter(v => v.status === 'posted' && v.kind !== 'carryforward');
     const bankDebit = v => sum(v.entries.filter(e => e.code.startsWith('1002')).map(e => minor(e.debit)));
     const arDebit = v => sum(v.entries.filter(e => e.code.startsWith('1122')).map(e => minor(e.debit)));
@@ -111,7 +111,7 @@ export async function buildComprehensiveAnalysis({ db, incomeStatement, cashFlow
       (valid ? validMappings : invalidMappings).push({ ...m, index, value, originPeriod: origin?.period ?? null });
     });
     if (invalidMappings.length) add('collection-conflict', 'reminder', 'conflict', '回款归属说明与实际凭证不符或重复超额，冲突金额不作为已解释历史回款。', { mappingIndexes: invalidMappings.map(m => m.index) }, [ledgerRef, ...invalidMappings.map(m => contextRef(`/collectionMappings/${m.index}`))], ['原始应收、回款金额、期间或配对有冲突'], ['补原始合同、发票、往来核销表及银行回单，逐笔核实']);
-    // A conflicting group is excluded in full; no first-claim wins behavior.
+    // 冲突组整组排除，不采用先声明者优先。
     const conflictReceipts = new Set(invalidMappings.map(m => m.receiptVoucherId)), conflictOrigins = new Set(invalidMappings.map(m => m.originVoucherId));
     const acceptedMappings = validMappings.filter(m => !conflictReceipts.has(m.receiptVoucherId) && !conflictOrigins.has(m.originVoucherId));
     const currentReceipts = posted.filter(v => v.period === scope.period && bankDebit(v) > 0n);
@@ -173,8 +173,8 @@ export async function buildComprehensiveAnalysis({ db, incomeStatement, cashFlow
           const origin = posted.find(v => v.id === id && v.period <= scope.period);
           const mappedCollections = sum(acceptedMappings.filter(m => m.originVoucherId === id).map(m => m.value));
           const available = origin ? arDebit(origin) - mappedCollections : null;
-          // No unallocated AR credit may be silently assumed to settle another
-          // debt. A remaining unallocated credit blocks this narrow projection.
+          // 不能静默假定未分配的应收贷方发生额用于清偿其他债务；
+          // 残余未分配贷方会阻塞这项窄范围投影。
           const unallocatedCredits = sum(posted.filter(v => v.period <= scope.period).map(arCredit)) - sum(acceptedMappings.map(m => m.value));
           const usable = !!origin && wanted > 0n && available !== null && wanted <= available && unallocatedCredits === 0n && !conflictOrigins.has(id);
           return { originVoucherId: id, requestedCollection: money(wanted), availableBookClaim: available === null ? null : money(available), status: usable ? 'conditional' : 'conflict_or_missing', evidenceRefs: origin ? [voucherRef(id)] : [] };
@@ -192,8 +192,8 @@ export async function buildComprehensiveAnalysis({ db, incomeStatement, cashFlow
         ['providedBy及原文引用不证明真实老板授权或语义正确，原始计划及提取仍需人工核实', '仅适用于已确认应收本金回收，假设无折扣、坏账转回、利息、外汇及新增履约；这些适用条件须核实', '不预测其他未来业务；税费、税后现金和完整经营预算未支持'],
         ['核实合同回款承诺及客户信用、未收余额', '按现金需求选择可实现方案；确认实际税点与历史申报后另走现有税费核算', '不得为目标税负虚构业务或倒推账目']);
     } else add('owner-plan-gap', 'reminder', 'missing', '尚无老板提供的未来方案与明确假设，不生成经营规划结论。', { required: 'ownerPlan with explicit future period, assumptions and at least two actual proposed collection scenarios' }, [ledgerRef], ['缺老板计划；其他类型经营/税务规划一期未支持'], ['在老板提供真实计划后比较可分析部分']);
-    // Material response suggestions are tied to each finding, not a blanket
-    // declaration of wrongdoing or a fabricated final treatment decision.
+    // 资料补充建议须逐项关联发现的问题，不作笼统违规结论，
+    // 也不编造最终处理决定。
     for (const finding of findings.filter(f => f.state === 'investigate')) finding.responseOptions = {
       existingBasis: finding.evidenceRefs, unresolvedQuestions: finding.missingOrUncertain,
       requestedEvidence: ['相关合同/履约、票据、银行回单和往来核销明细'], optionalSteps: finding.suggestedActions,

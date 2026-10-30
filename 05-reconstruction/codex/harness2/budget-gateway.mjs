@@ -1,5 +1,5 @@
-// Executor-only DeepSeek relay. Limits are opt-in operator configuration.
-// The optimizer uses Codex independently and never passes through this relay.
+// 仅供执行者使用的 DeepSeek 中继；限额由操作者显式配置。
+// 优化器独立使用 Codex，不经过此中继。
 import {createServer} from 'node:http';
 import {request as httpsRequest} from 'node:https';
 import {writeFileSync,existsSync,renameSync,readFileSync,openSync,closeSync,unlinkSync} from 'node:fs';

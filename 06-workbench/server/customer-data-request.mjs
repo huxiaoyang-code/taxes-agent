@@ -1,4 +1,4 @@
-// Produces local forwardable text only. Never sends messages.
+// 仅生成可转发的本机文本，绝不发送消息。
 const REASONS = Object.freeze({
   declaration_invalid_or_scope_mismatch: '基础声明的格式或企业、账套、期间范围不一致，需要更正后核对',
   explicit_enterprise_profile_and_business_scope_required: '企业身份、业务范围、适用准则或确认依据尚未明确',

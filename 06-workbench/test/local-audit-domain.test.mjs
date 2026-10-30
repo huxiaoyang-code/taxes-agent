@@ -111,7 +111,7 @@ try {
  const BS=await import('../server/bank-storage.mjs'),B=await import('../server/bank-reconciliation.mjs'),LB=await import('../server/local-backup.mjs');
  const dbPath=join(process.env.WORKBENCH_DATA_DIR,'workbench.db');await BS.ensureBankSchema(db,{dbPath,dataDir:process.env.WORKBENCH_DATA_DIR,backupService:LB});
  B.registerBankAccount(db,{accountSetId:a.id,bankAccountId:'SYN-BANK',sourceId:'SYN',glAccountCode:'1002'});
- // All-table snapshots include audit rows and sqlite_sequence, not just bank data.
+ // 全表快照包含审计行和 sqlite_sequence，不限于银行数据。
  const allTables=()=>Object.fromEntries(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,db.prepare('SELECT * FROM "'+name.replaceAll('"','""')+'"').all().map(row=>JSON.stringify(row)).sort()]));
  const AS=await import('../server/auxiliary-storage.mjs'),X=await import('../server/auxiliary-accounting.mjs');
  await AS.ensureAuxiliarySchema(db,{dbPath,outDir:join(root,'aux-install')});
@@ -191,7 +191,7 @@ try {
  const backed=LB.createBackup({dbPath,outDir:join(root,'roundtrip-backup')});assert.equal(backed.ok,true,JSON.stringify(backed));assert.equal(LB.verifyBackup({backupDir:backed.backupDir}).ok,true);
  const restored=join(root,'restored');assert.equal(LB.restoreNew(R4({backupDir:backed.backupDir,targetDir:restored})).ok,true);assert.equal(LB.createBackup({dbPath:join(restored,'workbench.db'),outDir:join(root,'again-backup')}).ok,true);groups++;
  const restart=await runChild(['--input-type=module','-e',`import {db} from './server/db.mjs';import * as A from './server/accounting.mjs';import {withRequestMetadata} from './server/local-audit-coordinator.mjs';try{const out=withRequestMetadata({operationId:${JSON.stringify(deleteId)},actor:'domain'},()=>A.deleteAccountSet(${gone.id}));console.log(out===undefined?'undefined replay':'bad');}finally{db.close();console.log('DB actual close');}`],{env:{...process.env}});assert.equal(restart.code,0,restart.stderr);assert.match(restart.stdout,/undefined replay/);assert.match(restart.stdout,/DB actual close/);groups++;
- // Private parent IDs alone do not make a child part of the bound fixed plan.
+ // 只有私有父 ID，并不能让子项成为已绑定固定计划的一部分。
  const planSet=A.createAccountSet({name:'R5 fixed plan synthetic',start_period:'2026-01',enterprise:{enterpriseKey:'SYN-R5-PLAN'}});
  const preparePlan=(action,parentOperationId)=>{
   const operationId=randomUUID(),prepared=LS.prepareOperation(db,{context:{operationId,actor:'domain',action,attempt:1,accountSetId:planSet.id,...(parentOperationId?{parentOperationId,parentAttempt:1}:{})},scope:{kind:'account_set',value:planSet.id},request:{}});

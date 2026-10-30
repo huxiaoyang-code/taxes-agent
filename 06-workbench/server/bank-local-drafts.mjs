@@ -1,6 +1,6 @@
 import { withRequestMetadata,currentRequestMetadata } from './local-audit-coordinator.mjs';
 import { isTechId } from './local-audit.mjs';
-// Process-local input vault. No database, filesystem or network access.
+// 进程内输入保险库；不访问数据库、文件系统或网络。
 import { randomBytes, createHash, randomUUID } from "node:crypto";
 import { types } from "node:util";
 
@@ -115,10 +115,10 @@ export class BankLocalDrafts {
       const value=await withRequestMetadata({operationId:r.operationId,actor:current?.actor??'agent',explicit:true},()=>execute({...r.payload,accountSetId:r.accountSetId}));
       if(tool==="bank_import_preview") r.previewOK=value?.result?.preview?.ok===true;
       if(write) {
-        // Cache never makes the vault exceed its total memory budget. A successful
-        // first result still carries commit evidence when caching is unavailable.
+        // 缓存不能使保险库超过总内存预算；无法缓存时，
+        // 第一次成功结果仍须携带提交证据。
         r.value=null;r.state="completed";
-        try {const bytes=Buffer.byteLength(JSON.stringify(value));if(this.#bytes+bytes<=16*1024*1024){r.value=structuredClone(value);r.bytes+=bytes;this.#bytes+=bytes;}}catch{/* never re-execute a successful write */}
+        try {const bytes=Buffer.byteLength(JSON.stringify(value));if(this.#bytes+bytes<=16*1024*1024){r.value=structuredClone(value);r.bytes+=bytes;this.#bytes+=bytes;}}catch{/* 绝不重复执行已成功的写入 */}
         if(r.revoked){this.#records.delete(a.draftRef);this.#bytes-=r.bytes;}
       }
       return value;

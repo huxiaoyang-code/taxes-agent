@@ -1,6 +1,6 @@
-// finance-model-transport.mjs — 模型通道信封的**纯出站校验 / 固定错误转换**（未挂载）。
+// finance-model-transport.mjs — 模型通道信封的纯出站校验及固定错误转换。
 //
-// 用途：给后续 MCP backend.mjs / server.mjs 接线时用。它只做三件事：
+// 当前由 MCP backend.mjs / server.mjs 调用，只做三件事：
 //   1) 严格校验后端返回的「模型通道信封」字段与值形状（默认拒绝未知字段 / 不适用字段）；
 //   2) 把运输层失败（不可达 / 超时 / 非 2xx / 非 JSON / 畸形信封）转换成固定错误常量；
 //   3) 保证任何原始 message / details / stack / 路径 / API_BASE / 额外字段都不会穿出。
@@ -10,8 +10,8 @@
 // 为了不把安全交给“调用方记得传完整登记表”，operation / tool / nodeId / 错误码 / 目录
 // 都内置固定登记语义；调用方仍可传登记表作为额外的收紧（必须同时命中）。
 //
-// 重要：本模块与它的测试**不是 MCP / HTTP 挂载验收**。当前 MCP 仍是原样透传后端结果
-// （见 tools.mjs / backend.mjs / server.mjs，归 LOCAL-02 共享入口），接入必须另走集成任务。
+// 本模块及其单元测试只验证信封合同；完整 MCP/HTTP 接线由 backend.mjs、server.mjs
+// 及对应集成测试验证。普通财务结果须通过模型信封校验，税务/目录仍走各自既有通道。
 export const TRANSPORT_VERSION = "finance-model-transport/v1";
 export const MODEL_ENVELOPE_VERSION = "finance-output-policy/v1";
 export const MODEL_ADAPTER_VERSION = "finance-model-adapter/v1";

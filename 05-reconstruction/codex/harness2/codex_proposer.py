@@ -61,8 +61,8 @@ class CodexProposer:
         (audit/(hashlib.sha256(label.encode()).hexdigest()+'.json')).write_text(json.dumps(metadata,indent=2))
 
     def call(self, mission, context_dir, label, *, harvest=None, max_attempts=1):
-        # Google may already have queued more proposer jobs. Once this optimizer
-        # connection fails, none may launch another CLI or fall back to a solver.
+        # Google 可能已排队更多提案任务；此优化器连接一旦失败，
+        # 所有任务均不得再启动 CLI，也不得回退到求解器。
         with self._call_lock:
             if self._failure is not None:raise CodexIntegrationError(self._failure)
             try:return self._call(mission,context_dir,label,harvest=harvest)
@@ -95,8 +95,8 @@ class CodexProposer:
             raise CodexIntegrationError('harness2_codex_worker_transport_failed') from None
         input_stream=proc.stdin
         try:
-            # A persistent input pipe makes parent cancellation observable by the
-            # outer worker. communicate() must not close it before Codex exits.
+            # 保持输入管道持续打开，使外层 worker 能观察父进程取消；
+            # Codex 退出前，communicate() 不能关闭该管道。
             input_stream.write((json.dumps(request,ensure_ascii=False)+'\n').encode());input_stream.flush();proc.stdin=None
             stdout,stderr=proc.communicate(timeout=None if self.timeout_ms is None else self.timeout_ms/1000+10)
         except (OSError,subprocess.TimeoutExpired):
@@ -140,7 +140,7 @@ class CodexProposer:
         elif edits:
             raise CodexIntegrationError('harness2_codex_nonedit_stage_returned_files')
         self.replies[label]=reply
-        # The upstream numeric accounting seam requires a float. This is a
-        # placeholder only: CLI/subscription billing remains explicitly unknown.
+        # 上游数值计量接口要求浮点数，此处仅提供占位值；
+        # CLI 或订阅账单仍明确保留未知。
         return Reply(label=label,text=reply,ok=True,cost_usd=0.0,attempts=1,
             workspace=workspace,channel='operator-codex-cli')

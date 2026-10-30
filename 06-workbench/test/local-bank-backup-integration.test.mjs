@@ -722,7 +722,7 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
           } catch (error) {
             observedBusy = String(error?.code || error?.message || error).includes("SQLITE_BUSY")
               || /busy|locked/i.test(String(error?.message || ""));
-            try { other.exec("ROLLBACK"); } catch { /* ignore */ }
+            try { other.exec("ROLLBACK"); } catch { /* 忽略 */ }
           } finally { other.close(); }
           return result;
         },
@@ -1176,5 +1176,5 @@ writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
   const failed = results.filter(([ok]) => !ok).length;
   console.log(`\n${results.length - failed}/${results.length} 通过\n`);
   process.exitCode = failed ? 1 : 0;
-  try { if (!process.env.KEEP_FIXTURES) fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* 忽略 */ }
 }

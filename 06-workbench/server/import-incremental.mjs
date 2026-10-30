@@ -342,9 +342,9 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
   // ---------- 2. 最小目标读取：append 目标 / 已完成 create 批次的目标账套 ----------
   // 严格 normalize 必须在定位目标之后：口径要用目标**实际** profile 与科目表，
   // 否则旧 create 批次重放可能被新企业模板提前拒绝（例如企业模板下 5001 不是收入）。
-  // Outside the resource window this projection selects only the profile used
-  // by an already completed create. It grants no replay or target authority;
-  // full batch/source/binding/period admission is repeated under the locks.
+  // 资源锁窗口之外的投影，仅选择已完成 create 当时使用的 profile；
+  // 它不授予重放或目标操作权限。
+  // 持锁后仍须完整重检批次、来源、绑定及期间准入。
   const batchRecord = staticOnly
     ? db.prepare('SELECT status,mode,account_set_id FROM import_batches WHERE batch_id=?').get(batchId)
     : getBatch(db, batchId);
@@ -359,7 +359,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
       if (e?.code === "accounting_profile_unknown") {
         targetErrors.push(`${e.code}: 目标账套持久会计 profile 未知或已损坏`);
       } else {
-        if(staticOnly)return {marker:ADMITTED}; // target existence is lock-bound admission
+        if(staticOnly)return {marker:ADMITTED}; // 目标是否存在，必须在锁内进行准入判断。
         const err = new Error("account_set_not_found");
         err.code = "account_set_not_found";
         err.details = { accountSetId: targetAccountSetId };
@@ -405,7 +405,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
       if (typeof rawStandard === "string" && rawStandard !== "" && rawStandard !== rawStandard.trim()) {
         throw Object.assign(new Error("accounting_standard_invalid"), { code: "accounting_standard_invalid" });
       }
-      // Explicit invalid aliases must never be treated as an omitted default.
+      // 显式提供的无效别名绝不能当作省略的默认值。
       for (const raw of [args.profileId, args.profile_id]) {
         if (raw !== undefined && (typeof raw !== "string" || raw.trim() === "")) {
           throw Object.assign(new Error("accounting_profile_unknown"), { code: "accounting_profile_unknown" });
@@ -989,7 +989,7 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
   };
   const createdVoucherIds = new Set();
   const writeCore = () => {
-    // Existing source state is rechecked under the write reservation.
+    // 取得写入保留锁后，重新检查已有来源状态。
     if (appendix) processAuxiliaryAppendix(db, appendix, appendixContext(appendixSetId));
     for (const item of vouchers) if (item.action === "dedupe") {
       const registered = getVoucherSource(db, source.value.system, enterpriseKey, item.sourceVoucherId);
@@ -1167,8 +1167,8 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
       withAuditSavepoint(db,writeCore);
     }
   } catch (e) {
-    // Caller/aux unknown transactions never authorize failure metadata. A live private
-    // audit outer owns final rollback; its fixed queue is consumed only after proof.
+    // 调用者或辅助核算的未知事务不能授权失败元数据写入；实时私有审计外层
+    // 负责最终回滚，固定队列仅在证明成立后消费。
     if (appendix && (e?.code === "aux_commit_unknown" || e?.code === "aux_connection_quarantined" || (db.isTransaction&&!hasActiveAuditExecution(db)))) throw e;
     if (appendix) e = auxiliaryImportError(e);
     // 已完成的批次永远不能被失败审计覆写；只有未完成的批次才写失败记录。
@@ -1278,11 +1278,11 @@ export function getImportBatch(batchId) {
   };
 }
 
-/** Read-only expected identities from saved bytes; never rerun import admission/writes. */
+/** 从已保存字节只读取得预期身份，绝不重跑导入准入或写入。 */
 export function expectedImportSources(payload, accountSetId, record) {
   const set = A.getAccountSet(accountSetId);
-  // A create request originally normalized against the pinned profile seed plus
-  // its own supplied accounts, never today's mutable COA or opening balances.
+  // create 请求最初按固定 profile 种子及该请求自己的科目规范化，
+  // 不能改用今天已经可变的科目表或期初余额。
   const context = { profileId: set.accounting_profile_id,
     ...(record.mode === MODE_CREATE ? {} : { accounts: A.listAccounts(accountSetId) }) };
   const strict = A.normalizeImportPayload(payload, context);
@@ -1297,11 +1297,7 @@ export function expectedImportSources(payload, accountSetId, record) {
     vouchers:sources.map(t=>({sourceVoucherId:t.sourceVoucherId,fingerprint:t.contentFingerprint}))}) };
 }
 
-/** Compare a complete independently persisted expectation with live associations.
- * New batches retain their original outcome tuples. Older batches need saved
- * input or an established checkpoint; a residual row count never replaces IDs.
- * Deduplicated links intentionally keep the source's original owning batch.
- */
+/** 将完整、独立持久化的预期与实时关联比较。新批次保留原始结果元组；旧批次需要已保存输入或既有检查点，残存行数不能代替 ID。去重关联有意保留来源最初所属批次。 */
 export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey, sourceSystem, expectedSources, checkpointTrace, period } = {}) {
   const fail = () => ({ ok: false, reason: "import_source_trace_changed" });
   const record = getBatch(db, batchId);
@@ -1314,16 +1310,16 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
       || (result.source !== undefined && (result.source?.system !== record.source_system || result.source?.enterpriseKey !== enterpriseKey))) return fail();
   const stored = Array.isArray(result.sourceTrace) ? result.sourceTrace : null;
   let expected = stored ?? checkpointTrace;
-  // With original saved input, an old counts-only batch can establish its first
-  // local checkpoint. Derive IDs from that full input, not surviving link rows;
-  // verify each actual posted voucher against both the input and source proof.
+  // 有原始保存输入时，旧的仅计数批次可建立第一个本机检查点；
+  // ID 从该完整输入推导，不能从残存关联行反推。
+  // 须分别对照输入和来源证明，核验每张实际已过账凭证。
   if (!expected && Array.isArray(expectedSources)) {
     expected = expectedSources.map(input => {
       const source=getVoucherSource(db,record.source_system,enterpriseKey,input.sourceVoucherId);
       const voucher=source&&db.prepare('SELECT * FROM vouchers WHERE id=?').get(source.voucher_id);
       if (!source || !voucher || !input.voucher) return null;
       const planned={...input.voucher,number:input.voucher.number??voucher.number};
-      // createVoucher defaults each blank entry summary to the voucher summary.
+      // createVoucher 会将空的分录摘要默认设为凭证摘要。
       planned.entries=planned.entries.map(e=>({...e,summary:e.summary||planned.summary||''}));
       if (voucherFingerprint(planned)!==source.voucher_fingerprint) return null;
       return {...input,accountSetId,voucherId:source.voucher_id,action:source.batch_id===batchId?'created':'deduplicated'};
@@ -1331,7 +1327,7 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
     if (expected.some(t=>!t)) return fail();
   }
   if (!Array.isArray(expected)) {
-    // A legacy empty batch is provable from its completed result alone.
+    // 历史空批次可仅凭其已完成结果证明。
     if (result.vouchersCreated !== 0 || result.vouchersDeduplicated !== 0 || (expectedSources && expectedSources.length)) return fail();
   }
   const tuples = expected ?? [];
@@ -1348,8 +1344,8 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
     const fingerprint = t.contentFingerprint ?? input?.contentFingerprint;
     const voucher = db.prepare('SELECT * FROM vouchers WHERE id=?').get(t.voucherId);
     const tuplePeriod = t.period ?? input?.period ?? voucher?.period;
-    // Establish actual scope before any before-period filtering. A missing or
-    // moved voucher cannot be hidden by a self-reported future tuple.
+    // 任何按期间过滤前先确定实际范围；缺失或移到其他范围的凭证
+    // 不能被自行声明的未来期间元组隐藏。
     if (!fingerprint || !tuplePeriod || !voucher || voucher.account_set_id !== accountSetId || voucher.period !== tuplePeriod
         || (input && input.period !== tuplePeriod) || (checkpoint && checkpoint.period !== tuplePeriod)
         || ((!period || tuplePeriod <= period) && input && t.contentFingerprint !== undefined && t.contentFingerprint !== input.contentFingerprint)
@@ -1363,14 +1359,14 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
   const wanted = full.filter(relevant), expectedIds = new Set(wanted.map(t => t.sourceVoucherId));
   const links = listBatchVouchers(db, batchId);
   const sources = db.prepare('SELECT * FROM import_voucher_sources WHERE batch_id=?').all(batchId);
-  // Existing associations must not contradict the actual scope used above.
-  // Future financial fingerprints remain outside a current report's checks.
+  // 已有的关联不能与上面核验的实际范围矛盾。
+  // 未来期间的财务指纹不进入当前报表检查。
   for (const row of [...links, ...sources]) {
     const voucher = db.prepare('SELECT account_set_id,period FROM vouchers WHERE id=?').get(row.voucher_id);
     const tuple = full.find(t => t.sourceVoucherId === row.source_voucher_id);
     if (!voucher || voucher.account_set_id !== accountSetId || (tuple && (row.voucher_id !== tuple.voucherId || voucher.period !== tuple.period))) return fail();
   }
-  // Scope from validated actual periods, including unknown extra links.
+  // 按已校验的实际期间确定范围，包括未知的额外关联。
   const scopedLinks = links.filter(l => {
     const t = full.find(t => t.sourceVoucherId === l.source_voucher_id);
     if (t) return relevant(t);
@@ -1388,7 +1384,7 @@ export function verifyImportBatchSources(batchId, { accountSetId, enterpriseKey,
     if (!same(link,t) || link.action !== t.action || !same(source,t) || (t.action === 'created' && source.batch_id !== batchId)
         || !voucher || voucher.account_set_id !== accountSetId || voucher.period !== t.period
         || registeredVoucherState(source).state !== VOUCHER_STATE.OK) return fail();
-    // Source ownership itself must have the original created link and outcome.
+    // 来源归属本身必须保留原始 created 关联及结果。
     const owner = getBatch(db, source.batch_id), ownerResult = owner && safeJson(owner.result_json);
     const ownerLink = listBatchVouchers(db, source.batch_id).find(l => l.source_voucher_id === t.sourceVoucherId);
     if (!owner || owner.status !== 'completed' || owner.source_system !== record.source_system || owner.enterprise_key !== enterpriseKey
@@ -1429,8 +1425,8 @@ export function importIncremental(options={}) {
  if(options&&typeof options==='object'&&!nodeTypes.isProxy(options)&&!Array.isArray(options)&&[Object.prototype,null].includes(Object.getPrototypeOf(options))){const appendix=Object.getOwnPropertyDescriptor(options,'auxiliaryAppendix');if(appendix&&Object.hasOwn(appendix,'value')&&appendix.value!==undefined)parseAuxiliaryAppendix(appendix.value);}
  auditResultSnapshot(options);
  if(options.dryRun!==false)return importIncrementalBody(options);
- // Static shape/profile/COA rejection must not allocate even an epoch. No
- // identity binding, source history, period or replay authorization is read here.
+ // 静态结构、profile 或科目表拒绝时，连 epoch 都不能分配；
+ // 此处不读取身份绑定、来源历史、期间或重放授权。
  const staticCheck=runIncrementalImport(options,{staticOnly:true});
  if(staticCheck?.marker!==ADMITTED)return staticCheck;
  const normalizedTarget=incrementalAdmissionTarget(options);

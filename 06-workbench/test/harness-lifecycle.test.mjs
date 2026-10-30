@@ -1,5 +1,5 @@
-// One synthetic matrix: real domain writes, source/ledger versioning, selective
-// continuation, original-intent recovery and existing offline/batch/review APIs.
+// 一个合成矩阵：真实领域写入、来源/账簿版本、选择性
+// 接续、原始意图恢复及已有离线/批次/复核 API。
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, cpSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -21,8 +21,8 @@ if(process.argv.includes('--agency-capabilities'))process.exit(0);
 await annualDependencyFocus(root);
 if(process.argv.includes('--annual-dependencies'))process.exit(0);
 
-// Reuse a completed synthetic chain for these two checks: native recovery is
-// read-only, and the copied metadata isolates review/epoch mutations from it.
+// 这两项检查复用已完成的合成链：原生恢复是
+// 只读操作，复制的元数据隔离了复核/epoch 变更。
 async function agencyBindingChecks(existingRoot,probeRoot=mkdtempSync(resolve('.agent-runs/agency-binding-'))) {
  const {harnessCapabilities,callHarnessAdapter}=await import('../server/harness-adapters.mjs');
  const month=await loadHarness(join(existingRoot,'agency-month')),attempt=month.attempts.filter(a=>a.capabilityId==='agency.posting'&&a.result?.executionState==='executed').at(-1);assert.ok(attempt);
@@ -40,8 +40,8 @@ async function agencyBindingChecks(existingRoot,probeRoot=mkdtempSync(resolve('.
  const fresh=await call();assert.equal(fresh.status,'executed');assert.notEqual(fresh.receipt.targetVersion,baseline.receipt.targetVersion);assert.equal((await inspectHarness(state)).tasks[0].reviewState,'pending');console.log('PASS agency binding checks: empty reviewer stays non-current after lost response; native digest preserved while transitive bridge trace epochs prevent accepted-result ABA revival; explicit read recomputation remains pending. Artifacts: '+probeRoot);
 }
 
-// One incremental native chain, not the separate agency algorithm matrix and
-// not an Agent demonstration. Every original is physically separate from facts.
+// 一条增量原生链，不是独立的代账算法矩阵，也
+// 不是 Agent 演示。每份原件在物理上都与事实分开。
 async function agencyCapabilityFocus(root) {
  const f=createPostingFixture(join(root,'agency-target')),scope={enterpriseKey:f.key,accountSetId:f.id,databaseInstanceId:f.instanceId,period:'2026-01',currency:'CNY'},target={dbPath:f.dbPath,databaseInstanceId:f.instanceId,enterpriseKey:f.key,accountSetId:f.id};
  const dir=join(root,'agency-originals'),evidence=join(root,'agency-evidence'),store=join(root,'agency-month'),annual=join(root,'agency-year'),feedbackPath=join(root,'accountant-feedback.json');mkdirSync(dir);mkdirSync(evidence);
@@ -61,8 +61,8 @@ async function agencyCapabilityFocus(root) {
  const work=await call(store,'workpaper');assert.equal(work.status,'executed',JSON.stringify(work));assert.equal(work.receipt.actualImpact.domain.accounting.yearRevenue,'200.00');
  const prepared=await call(store,'posting','prepare');assert.equal(prepared.status,'prepared',JSON.stringify(prepared));const proposal=prepared.receipt.actualImpact.proposal;assert.ok(proposal.identity.archiveId);assert.equal((await call(store,'posting')).receipt.actualImpact.code,'agency_accountant_confirmation_required');assert.equal(count(),0);
  const human={reviewer:'SYNTHETIC-HUMAN-ACCOUNTANT',decision:'reject',targetVersion:proposal.targetVersion,dependencyDigest:proposal.dependencyDigest,planDigest:proposal.planDigest};writeFileSync(feedbackPath,JSON.stringify(human));const rejected=await call(store,'posting');assert.equal(rejected.status,'failed');assert.equal(rejected.receipt.actualImpact.feedbackEvidence.feedback.decision,'reject');assert.equal(count(),0);
- // This fixture supplies a distinct explicit human record; the adapter never
- // manufactures a reviewer or treats ordinary Agent authorization as approval.
+ // 此测试样本提供独立明确的人工记录；适配器绝不
+ // 制造复核人，也不将普通 Agent 授权当作批准。
  writeFileSync(feedbackPath,JSON.stringify({...human,decision:'accept'}));
  const storeUrl=pathToFileURL(resolve('server/harness-store.mjs')).href,adapterUrl=pathToFileURL(resolve('server/harness-adapters.mjs')).href;
  const crash=`import{withHarness,appendHarness,harnessView}from ${JSON.stringify(storeUrl)};import{harnessCapabilities,callHarnessAdapter}from ${JSON.stringify(adapterUrl)};await withHarness(${JSON.stringify(store)},async s=>{const caps=harnessCapabilities(),t=(await harnessView(s,caps)).tasks.find(t=>t.taskId==='posting'),c=caps.get(t.capabilityId),request=s.facts.get('post').value,p=s.attempts.filter(a=>a.taskId===t.taskId&&a.phase==='prepare'&&a.result?.executionState==='prepared').at(-1),intent={taskId:t.taskId,capabilityId:t.capabilityId,effect:'write',phase:'execute',dependencyDigest:t.dependencyDigest,operationId:'agency-'+request.batchId,ruleVersion:c.ruleVersion,codeDigest:c.codeDigest,request,prepared:p.result.actualImpact};await appendHarness(s,'intent',intent);const r=await callHarnessAdapter({...intent,scope:s.meta.scope});if(r.applied!==true)throw Error(JSON.stringify(r));process.exit(75);});`;
@@ -82,8 +82,8 @@ async function agencyCapabilityFocus(root) {
  console.log('PASS agency integration: actual declarations/original workpaper, missing/rejected/accepted human material, native prepared rehydration, committed-write interruption/query/archive identity/no duplicate, 12-month annual calculation/live dependency ABA recomputation and same-DB company isolation');
 }
 
-// One focused addition to the existing matrix: live month proof -> annual
-// container -> previous-year dependency, plus renamed interrupted-write recovery.
+// 对现有矩阵的一项聚焦补充：实时月度证明 -> 年度
+// 容器 -> 上年依赖，再加上重命名后的中断写入恢复。
 async function annualDependencyFocus(root) {
  const f=createPostingFixture(join(root,'annual-focus')),month=join(root,'month-state'),annual=join(root,'annual-state'),prior=join(root,'prior-year-state');
  const base={enterpriseKey:f.key,accountSetId:f.id,databaseInstanceId:f.instanceId,currency:'CNY'},scope={...base,period:'2026-01'},year={...base,period:'2026'};
@@ -108,15 +108,15 @@ async function annualDependencyFocus(root) {
  let av=await inspectHarness(annual);const before=av.tasks[0].dependencyDigest;assert.equal(av.tasks[0].externalDependencyStates[0].current,true);assert.ok(av.tasks[0].blockers.some(b=>b.reason==='harness_capability_period_unsupported'));await assert.rejects(()=>call(annual,'annual-close'),{code:'harness_task_blocked'});
  await registerHarnessFacts(month,[fact('correction',{target,voucherId:replay.receipt.actualImpact.current.voucherId})]);monthlyTasks.push(task('actual-month-change','correction','voucher.unpost'));await planHarness(month,monthlyTasks);assert.equal((await call(month,'actual-month-change')).status,'executed');
  av=await inspectHarness(annual);assert.notEqual(av.tasks[0].dependencyDigest,before);assert.equal(av.tasks[0].externalDependencyStates[0].current,false,'live voucher proof changes invalidate the annual dependency even with unchanged source/export files');assert.equal(av.tasks[0].externalDependencies[0].targetVersion,bound.receipt.targetVersion,'historical binding is never automatically replaced');
- // The annual module is absent: previous-year assessment stays explicitly
- // blocked. A cross-Store cycle must be reported before acquiring its lock.
+ // 年度模块缺失：上年评估保持明确
+ // 阻塞。跨 Store 循环必须在获取锁前报告。
  await registerHarnessFacts(prior,[fact('prior-request',{target,inputPath:f.inputPath,month:'2025-12'})]);
  const placeholder='0'.repeat(64),priorTask={...task('prior-close','prior-request','offline.period_plan'),externalDependencies:[{storePath:annual,taskId:'annual-close',period:'2026',targetVersion:placeholder,dependencyDigest:placeholder}]};await planHarness(prior,[priorTask]);
  monthlyTasks[0]={...monthlyTasks[0],externalDependencies:[{storePath:prior,taskId:'prior-close',period:'2025',targetVersion:placeholder,dependencyDigest:placeholder}]};await planHarness(month,monthlyTasks);
  av=await inspectHarness(annual);assert.ok(av.tasks[0].blockers.some(b=>b.reason==='harness_external_dependency_cycle'));
- // The real pi demonstration found draft-create -> post invalidated creation.
- // Exercise that native lifecycle, then reproduce the already-persisted old
- // invalidation and explicitly query original operations without another write.
+ // 实际 Pi 演示发现：创建草稿 -> 过账会使创建失效。
+ // 覆盖这一原生生命周期，再复现已持久化的旧
+ // 失效状态，并显式查询原始操作，不再次写入。
  const lifecycle=join(root,'draft-lifecycle');await initHarness(lifecycle,scope);await registerHarnessSource(lifecycle,{sourceId:'raw',path:raw,locator:'whole synthetic record',parsed:false,unrecognized:[],classification:'provided'});
  const draftRequest={target,voucher:{...draft(29.31),status:'draft'}};await registerHarnessFacts(lifecycle,[fact('draft-request',draftRequest)]);const draftTask=task('draft-create','draft-request');await planHarness(lifecycle,[draftTask]);const created=await call(lifecycle,'draft-create');assert.equal(created.status,'executed');assert.equal(created.receipt.actualImpact.current.status,'draft');
  const decide=async(taskId,decision)=>{const t=(await inspectHarness(lifecycle)).tasks.find(t=>t.taskId===taskId);return feedbackHarness(lifecycle,{taskId,targetVersion:t.receipt.targetVersion,dependencyDigest:t.dependencyDigest,decision,reason:'Synthetic lifecycle review',reviewer:'synthetic-accountant',evidenceRefs:[]});};
@@ -140,8 +140,8 @@ const count=()=>readDb(d=>d.prepare('SELECT COUNT(*) n FROM vouchers').get().n);
 const run=async(id,phase='execute',extra={})=>{const view=await inspectHarness(store),t=view.tasks.find(t=>t.taskId===id);return runHarnessTask(store,{taskId:id,phase,dependencyDigest:t.dependencyDigest,...extra});};
 const feedback=async(id,decision)=>{const v=await inspectHarness(store),t=v.tasks.find(t=>t.taskId===id),receipt=t.receipt??v.history.filter(a=>a.taskId===id&&a.result).at(-1).result;return feedbackHarness(store,{taskId:id,targetVersion:receipt.targetVersion,dependencyDigest:t.dependencyDigest,decision,reason:'Synthetic accountant decision',reviewer:'synthetic-accountant',evidenceRefs:[]});};
 await initHarness(store,scope);await registerHarnessSource(store,source);
-// Saved synthetic treatment evidence belongs to this execution; it is neither
-// national policy nor an Agent demonstration. The actual domain validates entry.
+// 保存的合成处理证据只属于本次执行；它既不是
+// 国家政策，也不是 Agent 演示。实际领域负责校验入口。
 const policy=join(root,'synthetic-policy.txt'),judgment=join(root,'synthetic-judgment.txt'),draft=join(root,'synthetic-draft.json'),fixtureCode=fileURLToPath(import.meta.url);
 writeFileSync(policy,'SYNTHETIC TEST POLICY: only this fixture company/quarter/service permits the documented service-revenue draft. Not a national rule.\n');
 writeFileSync(judgment,'SYNTHETIC TEST JUDGMENT: source line 1 records 73.19 on 2026-01-13; preserve the balanced receivable/revenue draft for accountant review.\n');
@@ -173,7 +173,7 @@ await registerHarnessFacts(store,[{...fact('lost-request',{target,voucher:vouche
 const runtimeUrl=pathToFileURL(resolve('server/harness-store.mjs')).href,adapterUrl=pathToFileURL(resolve('server/harness-adapters.mjs')).href;
 const crashScript=`import{withHarness,appendHarness,harnessView,hash}from ${JSON.stringify(runtimeUrl)};import{harnessCapabilities,callHarnessAdapter}from ${JSON.stringify(adapterUrl)};await withHarness(${JSON.stringify(store)},async s=>{const caps=harnessCapabilities(),v=await harnessView(s,caps),t=v.tasks.find(t=>t.taskId==='lost-write'),c=caps.get(t.capabilityId),request=s.facts.get(t.factIds[0]).value;const intent={taskId:t.taskId,capabilityId:t.capabilityId,effect:'write',phase:'execute',dependencyDigest:t.dependencyDigest,operationId:hash(['harness-operation/1',s.meta.scope,t.taskId,t.capabilityId,request]),ruleVersion:c.ruleVersion,codeDigest:c.codeDigest,request,prepared:null};await appendHarness(s,'intent',intent);const result=await callHarnessAdapter({...intent,scope:s.meta.scope});if(result.applied!==true)throw Error(JSON.stringify(result));process.exit(75);});`;
 const crash=spawnSync(process.execPath,['--input-type=module','-e',crashScript],{encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1'},windowsHide:true});assert.equal(crash.status,75,crash.stderr);assert.equal(count(),3);
-// Test cleanup only after proving the actual process is absent; same production recovery API.
+// 证明实际进程不存在后才做测试清理；使用与生产相同的恢复 API。
 const {recoverHarnessLock}=await import('../server/harness-runtime.mjs');await recoverHarnessLock(store);view=await inspectHarness(store);assert.equal(view.tasks.find(t=>t.taskId==='lost-write').executionState,'unknown');await assert.rejects(()=>run('lost-write'),{code:'harness_task_blocked'});
 const recovered=await run('lost-write','query');assert.equal(recovered.receipt.executionState,'executed',JSON.stringify(recovered));assert.equal((await run('lost-write')).status,'replayed');assert.equal(count(),3);
 await feedback('lost-write','accept');
@@ -184,8 +184,8 @@ assert.equal(bad.receipt.failure.layer,'capability');assert.ok(bad.receipt.failu
 const other=createPostingFixture(join(root,'company-b')),otherScope={enterpriseKey:other.key,accountSetId:other.id,databaseInstanceId:other.instanceId,period:'2026-Q1',currency:'CNY'},otherStore=join(root,'harness-b');await initHarness(otherStore,otherScope);assert.notEqual(other.instanceId,f.instanceId);assert.equal((await inspectHarness(otherStore)).tasks.length,0);
 console.log('PASS isolation: independent company/database-instance metadata and actual cross-company target rejection');
 
-// All following business calls pass through the Harness task lifecycle, not an
-// adapter-only happy path. Fixtures contain synthetic originals only.
+// 后续所有业务调用都经过 Harness 任务生命周期，不走
+// 仅适配器的顺利路径。测试样本只含合成原件。
 async function chain(path,scope,sourcePath) {
  await initHarness(path,scope);await registerHarnessSource(path,{sourceId:'chain-original',path:sourcePath,locator:'Synthetic module fixture input; original attachments revalidated by business module',parsed:false,unrecognized:[],classification:'provided'});
  const tasks=[];
@@ -197,7 +197,7 @@ for(const [id,kind]of [['supported-sale','service_sale'],['supported-admin','adm
 await pc.add('period-admission','offline.period_plan',pf.request,['supported-sale','supported-admin']);const periodReceipt=await pc.run('period-admission');assert.equal(periodReceipt.status,'executed',JSON.stringify(periodReceipt));const plan=periodReceipt.receipt.actualImpact;assert.equal(plan.status,'ready_for_manifest',JSON.stringify(plan));
 const manifestPath=join(root,'period-manifest.json');writeFileSync(manifestPath,JSON.stringify(plan.manifest));const batchRequest={target:pf.request.target,manifestPath,outputDir:join(root,'reports'),jobKey:plan.manifest.jobKey};
 await pc.add('period-batch','batch.start',batchRequest,['period-admission']);const batch=await pc.run('period-batch');assert.equal(batch.status,'executed',JSON.stringify(batch));assert.ok(batch.receipt.actualImpact.report.items[0].artifacts.length>=5);assert.ok(batch.receipt.actualImpact.report.items[0].artifacts.every(a=>a.status==='published'));
-// Resume/status identify the existing job; start-only manifest/output fields are no longer silently ignored.
+// resume/status 标识已有作业；不再静默忽略仅供启动使用的 manifest/output 字段。
 const batchPointer={target:batchRequest.target,jobKey:batchRequest.jobKey};await pc.add('resume-batch','batch.resume',batchPointer);const resumed=await pc.run('resume-batch');assert.equal(resumed.status,'executed',JSON.stringify(resumed));await pc.add('query-batch','batch.status',batchPointer);assert.equal((await pc.run('query-batch')).receipt.actualImpact.applied,true);
 const materialPath=join(root,'existing-materials');await pc.add('materials-init','materials.init',{path:materialPath});assert.equal((await pc.run('materials-init')).status,'executed');await pc.add('materials-receive','materials.receive',{path:materialPath,configPath:join(pf.dir,'materials.json')});assert.equal((await pc.run('materials-receive')).status,'executed');await pc.add('materials-query','materials.inspect',{path:materialPath});assert.equal((await pc.run('materials-query')).receipt.actualImpact.domain.status,'verified');
 console.log('PASS actual Harness chain: supported candidates -> real audited posting -> period manifest -> batch reports/resume/status and material receipts');
@@ -224,7 +224,7 @@ await registerHarnessSource(store,{sourceId:'parser-failure',path:unreadable,loc
 const unbalanced={...voucher(1),entries:[{code:'1122',debit:1,credit:0},{code:'5001',debit:0,credit:2}]};await registerHarnessFacts(store,[{...fact('invalid-request',{target,voucher:unbalanced}),sourceRefs:['lost-source']}]);tasks.push(task('invalid-entry','invalid-request'));await planHarness(store,tasks);const invalid=await run('invalid-entry');assert.equal(invalid.status,'failed',JSON.stringify(invalid));assert.equal(invalid.receipt.failure.layer,'business_rule');assert.equal(invalid.receipt.failure.code,'voucher_invalid');assert.equal(count(),3);
 console.log('PASS E: saved parser failure/unrecognized content with handling path, capability scope rejection and native business validation have distinct recorded reproduction references');
 
-// Business-code changes in a copied installation cannot mutate the repository.
+// 复制安装中的业务代码变更不能修改仓库。
 const copy=join(root,'code-copy');mkdirSync(copy);cpSync(resolve('server'),join(copy,'server'),{recursive:true});const codeProbe=join(copy,'probe.mjs');writeFileSync(codeProbe,`import{harnessCapabilities}from'./server/harness-adapters.mjs';console.log(harnessCapabilities().get('voucher.create').codeDigest);`);
 const probe=()=>{const p=spawnSync(process.execPath,[codeProbe],{encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1'},windowsHide:true});assert.equal(p.status,0,p.stderr);return p.stdout.trim();};const originalCode=probe();const domainFile=join(copy,'server','accounting.mjs'),originalBusinessCode=readFileSync(domainFile,'utf8');writeFileSync(domainFile,originalBusinessCode+'\n// synthetic code version change\n');assert.notEqual(probe(),originalCode);
 const statusProbe=join(copy,'status-probe.mjs');writeFileSync(statusProbe,`import{inspectHarness}from'./server/harness-runtime.mjs';const s=await inspectHarness(${JSON.stringify(store)});const t=s.tasks.find(t=>t.taskId==='lost-write');console.log(JSON.stringify({executionState:t.executionState,reviewState:t.reviewState}));`);

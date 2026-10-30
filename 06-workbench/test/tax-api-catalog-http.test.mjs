@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Real local HTTP -> Agent tool integration for the tax API catalog.
-// Only a temporary database and an ephemeral loopback port are used.
-// No tax endpoint, browser, credential or account data is touched.
+// 税务 API 目录的实际本机 HTTP -> Agent 工具集成。
+// 仅使用临时数据库及临时回环端口。
+// 不触及税务端点、浏览器、凭据或账套数据。
 import assert from "node:assert/strict";
 import { test, before, after } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";

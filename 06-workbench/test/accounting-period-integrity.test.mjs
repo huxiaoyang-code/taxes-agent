@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-period-integrity-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
@@ -58,8 +58,8 @@ const snapshot = () => Object.fromEntries(
   ]),
 );
 
-// Only these audited dynamic operations may append terminal audit rows.
-// Original snapshot() remains full for all static invalid-input assertions.
+// 只有这些经过审计的动态操作可以追加终态审计行。
+// 所有静态无效输入断言仍使用完整的原始 snapshot()。
 function assertAuditAppend(after,before,actions,message,state='failure') {
  const row=v=>typeof v==='string'?JSON.parse(v):v;
  const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations','local_batch_lock_epochs'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
@@ -1430,8 +1430,8 @@ try {
         );
       } finally { probe.close(); }
     } finally {
-      try { migrator?.close(); } catch { /* ignore */ }
-      try { base?.close(); } catch { /* ignore */ }
+      try { migrator?.close(); } catch { /* 忽略 */ }
+      try { base?.close(); } catch { /* 忽略 */ }
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1476,7 +1476,7 @@ try {
       assert.ok(columnNames(base, "asset_cards").includes("ledger_status"));
       assert.equal(base.prepare("SELECT name FROM asset_cards").get().name, "v3 历史设备");
     } finally {
-      try { base?.close(); } catch { /* ignore */ }
+      try { base?.close(); } catch { /* 忽略 */ }
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1503,6 +1503,6 @@ try {
   console.error("测试初始化失败：", error);
   process.exitCode = 1;
 } finally {
-  try { db?.close(); } catch { /* ignore */ }
-  try { if(process.env.KEEP_FIXTURES==='1'||process.env.WORKBENCH_TEST_KEEP_FIXTURES==='1')console.log('fixtures retained '+dataDir);else rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { db?.close(); } catch { /* 忽略 */ }
+  try { if(process.env.KEEP_FIXTURES==='1'||process.env.WORKBENCH_TEST_KEEP_FIXTURES==='1')console.log('fixtures retained '+dataDir);else rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略 */ }
 }

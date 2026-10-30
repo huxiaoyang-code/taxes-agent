@@ -89,7 +89,7 @@ export function persistedVoucherFingerprint(v = {}, entries = []) {
   });
 }
 
-// ---------------------------------------------------------------- schema v1
+// ---------------------------------------------------------------- 数据库结构 v1
 const V1_STATEMENTS = [
   // ---- 迁移记录与备份记录（最小版本化 / 回退依据）----
   `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -161,7 +161,7 @@ const V1_STATEMENTS = [
      ON import_voucher_sources (batch_id)`,
 ];
 
-// ---------------------------------------------------------------- schema v2
+// ---------------------------------------------------------------- 数据库结构 v2
 /** v1 的来源绑定 -> 规范企业账套映射；遇到互相矛盾的旧数据时拒绝迁移（不自动合并 / 删除 / 改名）。 */
 function backfillEnterpriseAccountSets(db) {
   const rows = db.prepare(`SELECT * FROM import_source_bindings ORDER BY id`).all();
@@ -263,7 +263,7 @@ const V2_STATEMENTS = [
   backfillVoucherFingerprints,
 ];
 
-// ---------------------------------------------------------------- schema v3
+// ---------------------------------------------------------------- 数据库结构 v3
 /** v2 的逐张来源登记回填「批次 → 逐张来源凭证」关联（历史批次都按 created 记录）。 */
 function backfillBatchVouchers(db) {
   db.exec(`INSERT INTO import_batch_vouchers
@@ -299,7 +299,7 @@ const V3_STATEMENTS = [
   backfillBatchVouchers,
 ];
 
-// ---------------------------------------------------------------- schema v4
+// ---------------------------------------------------------------- 数据库结构 v4
 /** 加列前先看当前列（旧库 / 新建库 / 重试都要幂等）；表不存在时跳过（合成旧库可能只有子集表）。 */
 const columnExists = (db, table, column) => {
   if (!tableExists(db, table)) return true; // 表不存在：跳过，不报错
@@ -327,7 +327,7 @@ const V4_STATEMENTS = [
   addColumnIfMissing("asset_cards", "origin", "TEXT NOT NULL DEFAULT 'purchase'"),
 ];
 
-// ---------------------------------------------------------------- schema v5
+// ---------------------------------------------------------------- 数据库结构 v5
 /**
  * LOCAL-03a 会计 profile 持久化（只加一列，不做准则转换）：
  *  - accounting_profile_id  不可变 profile ID（解析科目表 / 报表映射版本）；
@@ -502,8 +502,7 @@ export function ensureImportSchema(db, { dataDir, targetVersion = IMPORT_SCHEMA_
   }
 }
 
-/** Fixed restore-only exact migration. The held official protection backup is
- * verified by the private issuer before this entry receives its one-use cap. */
+/** 仅供恢复的固定精确迁移。私有签发者先验证其持有的官方保护备份，再向此入口交付一次性能力。 */
 export async function upgradeRestoreImportSchema(db, { capability, backup } = {}) {
   const { assertPrivateRestoreCapability } = await import('./local-backup.mjs');
   assertPrivateRestoreCapability(db, capability);

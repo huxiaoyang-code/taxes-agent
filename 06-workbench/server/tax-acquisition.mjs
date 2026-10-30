@@ -1,4 +1,4 @@
-// Business tools return safe references and coverage only. No raw business records leave this layer.
+// 业务工具只返回安全引用及覆盖范围，原始业务记录不离开此层。
 import { randomBytes } from "node:crypto";
 import { TaxError } from "./tax-gateway.mjs";
 import { buildTaxPreparation } from "./tax-preparation.mjs";
@@ -42,8 +42,8 @@ export class TaxAcquisition {
     input(args, ["sessionId", "resource", "period"]);
     const period = periodOf(args.period);
     if (!ACQUISITION_RESOURCES.includes(args.resource)) throw new TaxError("tax_resource_unknown", "未知资源类别");
-    // Order refreshes by invocation, including their very first scope verification.
-    // A failed verification must invalidate the earlier successful summary too.
+    // 按调用顺序串行刷新，包括首次范围核验；
+    // 核验失败也须使前次成功摘要失效。
     const requestKey = JSON.stringify([args.sessionId, period, args.resource]);
     const operation = Symbol();
     this.inflight.set(requestKey, operation);

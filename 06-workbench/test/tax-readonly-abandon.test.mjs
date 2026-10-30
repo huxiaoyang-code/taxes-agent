@@ -1,5 +1,5 @@
-// Synthetic private files and a fake CDP only. Never open real registry/profile,
-// checkpoint, business evidence, browser, service or endpoint.
+// 仅使用合成私有文件和假 CDP。绝不打开真实注册表/配置目录、
+// 检查点、业务证据、浏览器、服务或端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,lstat,readdir,rm} from 'node:fs/promises';
@@ -36,7 +36,7 @@ async function fixture(run){
           navigation:{present:0,missing:0,sameOrigin:0,externalOrigin:0,hasQuery:0,hasAuthMaterial:0,invalid:0}}}};
     await writeFile(join(store.root,sourceRef+'.json'),JSON.stringify(source));
     const lockPath=join(profile,LOCK),mutexPath=join(profile,MUTEX);
-    // Deliberately unusual formatting proves the archive preserves exact bytes.
+    // 刻意使用非常规格式，以证明归档保留精确字节。
     const old={version:1,nonce:'c'.repeat(48),ownerPid:2147483000,scope:{sourceRef,operation:'business_page_prepare'}};
     const original=Buffer.from(JSON.stringify(old,null,2)+'\r\n');await writeFile(lockPath,original);
     const claimPath=join(profile,'legacy-claim.synthetic'),claim=PRIVATE+'_QUARANTINED';await writeFile(claimPath,claim);
@@ -127,7 +127,7 @@ test('durable commit precedes original lock retirement and preserves its exact p
     const p=JSON.parse(await readFile(f.base+'.prepare.json'));assert.equal(p.originalSha256,digest(f.original));
     assert.equal(p.attestation.operatorAttested,true);assert.equal(p.attestation.loadedBytesProof,false);assert.equal(p.attestation.prototypeBytesRecovered,false);
     assert.equal(p.attestation.terminationProven,false);
-    // New work continues through the very same canonical lock name.
+    // 新工作继续使用完全相同的规范锁名。
     const fresh=await collectionLock(f.profile,{scope:{sourceRef:'taxsource_'+'2'.repeat(48),operation:'active_replay'},security});
     assert.equal((await readCollectionLock(f.profile,{security})).scope.sourceRef,'taxsource_'+'2'.repeat(48));await fresh.release();
   });

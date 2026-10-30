@@ -1,4 +1,4 @@
-// Data-only aux-import/v1 appendix. No database is opened or migrated here.
+// aux-import/v1 附录仅含数据；此处不打开或迁移数据库。
 import { assertAuxiliaryReady, auxError, auxFingerprint } from './auxiliary-storage.mjs';
 import { createAuxiliaryEntity, replaceAuxiliaryAllocations } from './auxiliary-accounting.mjs';
 import { persistedVoucherFingerprint } from './import-storage.mjs';
@@ -65,7 +65,7 @@ function allocations(value, entities) {
   return result;
 }
 
-/** Strict shape validation is performed before any core business write. */
+/** 在任何核心业务写入前，先进行严格结构校验。 */
 export function parseAuxiliaryAppendix(raw) {
   if (raw === undefined) return null;
   object(raw, ['version', 'requestId', 'reason', 'entities', 'entries', 'openings']);
@@ -147,7 +147,7 @@ function expectedParts(parts, ids) {
     debitCents: p.debitCents, creditCents: p.creditCents })).sort((a, b) => json(a).localeCompare(json(b)));
 }
 
-/** Read-only preflight; apply must run on the same connection in the core transaction. */
+/** 只读预检；正式 apply 必须在核心事务的同一连接执行。 */
 export function processAuxiliaryAppendix(db, appendix, ctx, { apply = false } = {}) {
   assertAuxiliaryReady(db);
   fail(apply && !db.isTransaction, 'aux_import_transaction_required');
@@ -173,7 +173,7 @@ export function processAuxiliaryAppendix(db, appendix, ctx, { apply = false } = 
       const made = createAuxiliaryEntity(db, { accountSetId: ctx.accountSetId, ...entity, requestId: childKey });
       row = db.prepare('SELECT * FROM aux_entities WHERE id=?').get(made.id);
     }
-    // Negative placeholders are used only during the zero-write new-entity preview.
+    // 负数占位 ID 仅用于零写入的新实体预览。
     ids.set(entity.ref, row?.id ?? -(ids.size + 1));
     entityStates.push({ ref: entity.ref, row });
   }
@@ -216,7 +216,7 @@ export function processAuxiliaryAppendix(db, appendix, ctx, { apply = false } = 
     if (actualEntryId !== null) {
       fail(usedActual.has(actualEntryId), 'aux_import_identity_duplicate'); usedActual.add(actualEntryId);
       if (assignment.actualEntryId !== undefined) fail(assignment.actualEntryId !== actualEntryId, 'aux_import_mapping_conflict');
-      // A real row cannot acquire a second source-entry identity, even in another request.
+      // 同一真实行不能取得第二个来源分录身份，即使来自另一次请求。
       const historical = db.prepare("SELECT target_json,result_json FROM aux_receipts WHERE account_set_id=? AND request_id LIKE 'aux-import:map:%'").all(ctx.accountSetId);
       for (const h of historical) {
         let target, result; try { target = JSON.parse(h.target_json); result = JSON.parse(h.result_json); } catch { throw auxError('aux_import_receipt_invalid'); }

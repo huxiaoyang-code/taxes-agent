@@ -617,10 +617,10 @@ export function validResourceKey(v) {
 const batchPath=v=>typeof v==='string'&&v.length>0&&!/[\u0000-\u001f\u007f]/.test(v)&&sameCanonicalPath(v,resolve(v))&&/^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(v);
 function readSavedJson(text) {
  const value=JSON.parse(text);
- // Batch's existing canonical serializer deliberately supports finite currency decimals.
+ // 批处理已有规范序列化器有意支持有限货币小数。
  if(canonicalJson(value)!==text)FAIL('batch_content_invalid');return value;
 }
-/** Pure saved-row protocol checks. Never read historical source or output paths. */
+/** 仅检查已保存行的协议，不读取历史来源或输出路径。 */
 function batchArtifactPath(jobKey,itemKey,period,spec) {
  const segment=(value,max)=>{
   const text=String(value??'');
@@ -670,8 +670,8 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages,sna
   if(!time(r.render_started))return false;
   if(r.format==='csv') {if(r.worker_thread_id!==null||r.render_finished!==null)return false;}
   else if(!positive(r.worker_thread_id)||!time(r.render_finished)||r.render_finished<r.render_started)return false;
-  // An artifact of the current claim is bound to that claim, even before file publication/checkpoint.
-  // Older attempts may outlive a replaced mutable snapshot or a newer failed/running claim.
+  // 当前认领的制品绑定该认领，即使尚未发布文件或保存检查点。
+  // 旧尝试可能比被替换的可变快照，或更新的失败/运行中认领存在更久。
   if(r.attempt===stage.attempt&&r.snapshot_hash!==stage.input_hash)return false;
   if(stage.status===STAGE_STATUS.SUCCEEDED) {
    const e=readSavedJson(stage.evidence_json);
@@ -681,14 +681,14 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages,sna
      ||r.kind!==e.kind||r.format!==e.format||r.account_code!==(e.code??null))return false;
   }
   const latestHash=sha256(canonicalJson({dtoHash:snapshot.dto_hash,businessHash:snapshot.business_hash,format:r.format,code:r.account_code}));
-  // CSV bytes are absent from reportInputHash. Compare mutable CSV only for the
-  // current running publication; old/checkpointed artifacts retain their own byte evidence.
+  // reportInputHash 不包含 CSV 字节。只对当前运行中的发布比较可变 CSV；
+  // 旧制品或已有检查点的制品保留各自字节证据。
   if(r.format==='csv'&&r.attempt===stage.attempt&&stage.status===STAGE_STATUS.RUNNING
     &&r.status==='publishing'&&r.snapshot_hash===latestHash
     &&(snapshot.csv_text===null||r.bytes_hash!==snapshot.csv_hash||r.bytes!==Buffer.byteLength(snapshot.csv_text,'utf8')))return false;
  }
- // persistSnapshot precedes claimStage; artifact registration follows rendering.
- // Successful checkpoints must retain their own tuple, even if evidence names another item.
+ // persistSnapshot 先于 claimStage；制品登记在渲染之后。
+ // 成功检查点须保留自己的元组，即使证据指向另一项。
  for(const stage of actualStages)if(stage.stage_key.startsWith('report:')) {
   const key=stage.item_id+':'+stage.period+':'+stage.stage_key;
   const spec=expectedStages.get(key).spec,item=itemMap.get(stage.item_id);
@@ -698,10 +698,7 @@ function batchReportRowsValid(db,{jobMap,itemMap,actualStages,expectedStages,sna
  }
  return true;
 }
-/** Targeted read-only publication/checkpoint contract, shared with strict schema reads.
- * Read the persisted owners and tuple again; supplied snapshots/artifacts only pin
- * expected bytes and identities and never authorize a write or relax row validity.
- */
+/** 定向只读发布/检查点合同，与严格 schema 读取共享。重新读取持久化所有者及元组；传入快照/制品只固定预期字节及身份，不授权写入，也不放宽行有效性要求。 */
 export function verifyCurrentReportRows(db,{job,item,stage,snapshot=null,artifact=null}) {
  try {
   const currentJob=getJob(db,job.id),currentItem=getItem(db,item.id),currentStage=getStage(db,stage.id);
@@ -762,8 +759,8 @@ function batchContentValid(db,version) {
   if(r.stage_order!==expected.order||canonicalJson(spec)!==canonicalJson(expected.spec))return false;
   const h=sha256(canonicalJson({jobKey:j.job_key,itemKey:item.item_key,period:r.period,stageKey:r.stage_key,spec}));
   if(r.stage_key.startsWith('report:')&&r.attempt>0) {
-   // Snapshots can be overwritten before retry claims a new attempt. Only the
-   // succeeded checkpoint owns immutable evidence for that attempt's input hash.
+   // 重试认领新尝试前，快照可能被覆盖；只有成功的检查点
+   // 持有该尝试输入哈希的不可变证据。
    if(!batchDigest(r.input_hash))return false;
    if(r.status===STAGE_STATUS.SUCCEEDED&&(!batchDigest(evidence.snapshotHash)||r.input_hash!==evidence.snapshotHash))return false;
   }else if(r.input_hash!==h)return false;
@@ -810,8 +807,8 @@ export function readBatchInstance(db) {const s=assertBatchSchema(db);if(s.versio
 export function assertBatchRunnable(db,{jobId}={}) {
  assertRestoreWritable(db);
  if(readBatchVersion(db)!==3)FAIL('migration_requires_backup');
- // DDL/PRAGMA are denied inside the audited business body. Its already-admitted
- // connection rechecks fixed current rows; it cannot change schema or main DB.
+ // 受审计业务体内禁止 DDL/PRAGMA；已准入连接只重检固定当前行，
+ // 不能改变 schema 或主数据库。
  const instance=hasActiveAuditExecution(db)?db.prepare('SELECT * FROM local_batch_database_instances WHERE is_active=1').get():readBatchInstance(db);
  if(!instance||instance.write_state!=='ready')FAIL('batch_not_ready');
  if(hasActiveAuditExecution(db)){const audit=db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get();if(audit?.instance_id!==instance.audit_instance_id)FAIL('batch_instance_mismatch');}
@@ -820,7 +817,7 @@ export function assertBatchRunnable(db,{jobId}={}) {
  for(const r of ib){const input=db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(r.input_key);if(jobId!==undefined&&input.job_id!==jobId)continue;if(!['source','inline','saved_snapshot'].includes(r.mode)||(r.mode==='inline'&&input.source_path!==null))FAIL('batch_binding_disabled');}
  return instance;
 }
-/** Historical paths are never an execution fallback. All consumers share these resolvers. */
+/** 历史路径绝不作为执行回退。全部使用者共享这些解析器。 */
 export function effectiveOutputRoot(db,job) {
  const instance=assertBatchRunnable(db,{jobId:job.id});
  const r=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=? AND job_id=?').get(instance.instance_id,job.id);
@@ -829,8 +826,7 @@ export function effectiveOutputRoot(db,job) {
  if(inspectRestoreControl(db).ok){const saved=readRestoreActivation(db,{databaseFile:readAuditDatabasePath(db)}).outputs.find(o=>o.jobId===job.id);if(saved&&(saved.root!==r.output_root||saved.identity.dev!==id.dev||saved.identity.ino!==id.ino))FAIL('batch_binding_changed');}
  return r.output_root;
 }
-/** The runner may prepare an ordinary job's not-yet-created output directory.
- * A released restore must keep the directory identity validated at activation. */
+/** 运行器可准备普通作业尚未创建的输出目录；已释放的恢复必须保持激活时核验的目录身份。 */
 export function prepareExecutionOutputRoot(db,job) {
  const instance=assertBatchRunnable(db,{jobId:job.id}),r=db.prepare('SELECT * FROM local_batch_job_bindings WHERE database_instance_id=? AND job_id=?').get(instance.instance_id,job.id);
  if(!r||r.output_state!=='bound')FAIL('batch_binding_disabled');
@@ -878,7 +874,7 @@ export function assertBatchMaintenanceReady(db) {
  assertRestoreWritable(db);
  const state=inspectBatchSchema(db);if(state.state!=='not_installed')assertBatchSchema(db);assertBatchMaintenance(db,state);
 }
-/** Explicit existing-database install/upgrade. The official reader snapshots while we reserve writes. */
+/** 显式安装或升级已有数据库；持有写入保留锁期间由官方读取器生成快照。 */
 export async function installBatchSchema(db,{dbPath,outDir}={}) {
  assertBatchConnection(db);if(!dbPath||!outDir)FAIL('batch_install_requires_verified_backup');const before=batchFileIdentity(db,dbPath);
  const LB=await import('./local-backup.mjs');LB.assertSupportedDatabaseConnection(db);
@@ -905,7 +901,7 @@ export async function installBatchSchema(db,{dbPath,outDir}={}) {
   db.exec('COMMIT');return {installed:true,from:state.version,to:3,activeInstanceId,backupDir:created.backupDir};
  }catch(e){try{if(!db.isTransaction)throw Error('unknown');db.exec('ROLLBACK');if(db.isTransaction)throw Error('unknown');}catch{batchQuarantine.add(db);FAIL('batch_commit_unknown');}throw batchError(String(e?.code??'').startsWith('batch_')?e.code:'batch_schema_install_failed');}
 }
-/** Fixed restore-only exact upgrade under the issuer's held protection point. */
+/** 仅供恢复的固定精确升级，在签发者持有的保护点下执行。 */
 export async function upgradeRestoreBatchSchema(db,{capability}={}) {
  const {assertPrivateRestoreCapability}=await import('./local-backup.mjs');
  assertPrivateRestoreCapability(db,capability);
@@ -915,7 +911,7 @@ export async function upgradeRestoreBatchSchema(db,{capability}={}) {
   for(const sql of SCHEMA_STATEMENTS)db.exec(sql);
   db.prepare('INSERT INTO local_batch_component VALUES(?,?,?,?)').run(LOCAL_BATCH_COMPONENT,1,nowIso(),'LOCAL-07');
  }
- // Copied v1/v2 execution rights have no authority on this explicit target.
+ // 复制来的 v1/v2 执行权限，在此显式目标上不具权威性。
  if(s.version===1||s.version===2)db.exec("DELETE FROM local_batch_locks; UPDATE local_batch_stages SET status='needs_review' WHERE status='running'");
  if(s.version<2){for(const sql of V2_STATEMENTS)db.exec(sql);seedBatchInstance(db);}
  for(const sql of V3_STATEMENTS)db.exec(sql);
@@ -925,7 +921,7 @@ export async function upgradeRestoreBatchSchema(db,{capability}={}) {
  if(active.audit_instance_id===null)db.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE instance_id=?').run(audit.activeInstanceId,active.instance_id);
  assertBatchSchema(db);
 }
-/** Synchronous: strict v3 validation, or genuine private fresh ownership only. */
+/** 同步执行：严格 v3 校验，或仅凭真正的私有全新归属能力。 */
 export function ensureBatchSchema(db,{receipt=null}={}) {
  assertRestoreWritable(db);
  if(receipt)assertFreshReceipt(receipt,db);
@@ -938,7 +934,7 @@ export function ensureBatchSchema(db,{receipt=null}={}) {
  releaseFreshClaim(receipt);return {created:true,version:3};
 }
 
-// ---------------------------------------------------------------- manifest（schemaVersion=1）
+// ---------------------------------------------------------------- 批处理清单（schemaVersion=1）
 export const MANIFEST_LIMITS = Object.freeze({
   manifestBytes: 4 * 1024 * 1024,
   payloadBytes: 16 * 1024 * 1024,
@@ -1465,7 +1461,7 @@ export function acquireLock(db, { resourceKey, instance, pid=process.pid, leaseM
     if(row) {
       if(!historical||row.fencing_token!==historical.last_token)FAIL('lock_epoch_invalid');
       const alive=isProcessAlive(Number(row.pid));
-      // Identical public owner/PID is identification, never a renewal capability.
+      // 相同的公开 owner/PID 仅用于识别，不是续租能力。
       if(alive!==false)FAIL(row.lease_expires_at>nowIso()?'lock_active':'owner_active',{resourceKey,pidAlive:alive});
     }
     const next=(historical?.last_token??0)+1;if(!positive(next))FAIL('lock_epoch_overflow');
@@ -1856,8 +1852,8 @@ export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null,
         (!period || stage.period === period) && (!stageKey || stage.stage_key === stageKey)
       ));
       for (const stage of stages) {
-        // An interrupted restored financial attempt has no authority to retry.
-        // Only domain evidence can resolve it; a new operation is not proof.
+        // 恢复后中断的财务尝试不具备重试权限；
+        // 只有业务证据能解决其状态，新操作不能作为证明。
         if((stage.error_code==='restore_financial_unknown'||String(stage.error_code).startsWith('restore_report_'))){
           skipped.push({itemKey:item.item_key,period:stage.period,stageKey:stage.stage_key,status:STAGE_STATUS.NEEDS_REVIEW});continue;
         }
@@ -1935,7 +1931,7 @@ export function markItemNeedsReview(db, { itemId, stageId, status, errorCode, er
 
 export { DatabaseSync };
 
-// The persistent stage/attempt tuple is the audit association; no invented schema column.
+// 持久化 stage/attempt 元组就是审计关联，不另造 schema 字段。
 export function stageAuditOperationId(stage){return `stage:${stage.id}:${stage.attempt}`;}
 export function stageAuditNeedsReview(db,stage){
  if(!stage.attempt)return false;

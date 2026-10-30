@@ -1,5 +1,5 @@
-// Preparation metadata only. No tax rates, obligation inference, submission or real values.
-// Applicable forms/rules have not been verified: every package remains blocked.
+// 仅提供准备元数据，不含税率、义务推断、提交或真实业务值。
+// 适用表单与规则尚未核实，全部包保持 blocked。
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/;
 const REF = /^[A-Za-z0-9_.:-]{1,160}$/;
 export const PREPARATION_RESOURCES = Object.freeze([
@@ -35,7 +35,7 @@ export function buildTaxPreparation({ companyRef, period, coverage = [], account
   const coverageSummary = PREPARATION_RESOURCES.map((resource) => {
     const item = byResource.get(resource);
     const status = item?.status ?? 'not_acquired';
-    // A synthetic result, count=0, or a success flag alone is never production evidence.
+    // 合成结果、count=0 或单独的成功标志，都不能作为生产证据。
     const verified = item?.complete === true && ['success', 'no_records'].includes(status)
       && ['repeated', 'integrated'].includes(item?.evidenceLevel) && ref(item?.sourceRef)
       && item?.evidencePersisted === true && item?.metadataOnly === false
@@ -66,7 +66,7 @@ export function buildTaxPreparation({ companyRef, period, coverage = [], account
     if (!provenance) gaps.push({ code: 'field_source_missing', fieldId: field.fieldId, source: 'user_material' });
     if (!samePeriod) gaps.push({ code: 'field_period_mismatch', fieldId: field.fieldId, source: 'source_record' });
     if (!known) gaps.push({ code: 'field_value_unknown', fieldId: field.fieldId, source: 'existing_local_account_set_then_user_material' });
-    // Explicit whitelist: real values, free text, identity and account names stay local.
+    // 显式白名单：真实值、自由文本、身份和账户名称均留本机。
     return { fieldId: field.fieldId, status: known && provenance && samePeriod ? 'requires_rule_validation' : 'incomplete',
       sourceKind: SOURCES.has(field.sourceKind) ? field.sourceKind : null,
       sourceRef: provenance ? field.sourceRef : null, sourceVersion: provenance ? field.sourceVersion : null,

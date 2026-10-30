@@ -1,4 +1,4 @@
-// Independent evidence check. Flow completion is separate from model quality.
+// 独立证据检查。流程完成与模型质量分别判断。
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';

@@ -158,8 +158,8 @@ test('live/unknown locks block writes and recovery; inspect still verifies durab
   await writeFile(join(f.store, 'lock.json'), '{}'); await assert.rejects(recoverMaterialStoreLock(f.store)); assert.equal(await readFile(join(f.store, 'lock.json'), 'utf8'), '{}');
 }));
 async function crashReceive(f, when) {
-  // Test-only wrapper performs real fs writes/rename, then kills this actual child.
-  // No product fault flag, fabricated receipt or mocked normalization.
+  // 仅供测试的包装器执行真实文件写入/重命名，再终止此实际子进程。
+  // 不添加产品故障开关，不伪造回执，也不模拟规范化。
   const code = `import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module'; const original=fs.promises.rename; fs.promises.rename=async(...args)=>{ ${when === 'before' ? "process.kill(process.pid,'SIGKILL');" : ''} const r=await original(...args); ${when === 'after' ? "process.kill(process.pid,'SIGKILL');" : ''} return r; }; syncBuiltinESMExports(); const m=await import(${JSON.stringify(moduleUrl)}); await m.receiveMaterials(${JSON.stringify(f.store)},${JSON.stringify(f.configPath)});`;
   const c = spawnSync(process.execPath, ['--input-type=module', '--eval', code], { encoding: 'utf8', timeout: 20000 }); assert.equal(c.error, undefined); assert.ok(c.signal || c.status !== 0); assert.equal(c.stdout, ''); assert.equal(c.stderr, '');
 }

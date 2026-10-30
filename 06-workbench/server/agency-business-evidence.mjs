@@ -1,4 +1,4 @@
-// Fixed, reject-only evidence fence. No DB opening, callbacks, model execution or IO writes.
+// 固定的仅拒绝式证据边界；不打开数据库、不执行回调/模型，也不写入文件。
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync, lstatSync, realpathSync } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute, parse, join } from 'node:path';
@@ -94,7 +94,7 @@ export function bindAgencyArchive(session, archive) {
 }
 export function assertAgencyLoadedCode() { const code = captureAgencyCode(); check(code.digest === loadedAgencyCodeDigest, 'agency_code_restart_required'); return code; }
 export function agencyTargetSnapshot(db,scope){validateScope(scope);return scopedAccountingTargetSnapshot(db,scope);}
-// Shared fixed read for native period controls; agency keeps its own supported years.
+// 供原生期间控制共享的固定读取；agency 仍保留自己的支持年度范围。
 export function scopedAccountingTargetSnapshot(db, scope) {
   check(scope&&typeof scope.enterpriseKey==='string'&&scope.enterpriseKey===scope.enterpriseKey.normalize('NFKC').trim()&&Number.isSafeInteger(scope.accountSetId)&&scope.accountSetId>0&&typeof scope.databaseInstanceId==='string'&&/^20\d\d-(0[1-9]|1[0-2])$/.test(scope.period)&&scope.currency==='CNY','period_scope_invalid');
   const instance = db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get();
@@ -121,9 +121,9 @@ export function assertAgencyAdmissionEvidence(db) {
 export function assertAgencyCommitEvidence(db) {
   const current = context.getStore(); if (!current) return;
   check(current.admitted, 'agency_admission_missing'); assertAgencyEvidenceCurrent(current.session);
-  // A commit changes target contents; identity still must match the same database/enterprise.
+  // 提交会改变目标内容；身份仍必须匹配同一数据库和企业。
   agencyTargetSnapshot(db, sessions.get(current.session).document.scope);
 }
-// Bind execution to the files present when this process imported its fixed
-// business closure. A later disk edit requires a new process, even before load.
+// 将执行绑定到本进程导入固定业务依赖闭包时的文件；
+// 此后磁盘编辑须启动新进程，即使尚未加载业务材料也一样。
 const loadedAgencyCodeDigest = (() => { try { return captureAgencyCode().digest; } catch { return null; } })();

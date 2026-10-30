@@ -152,7 +152,7 @@ await test('有意义的成功信封能通过（不是“总是拒绝”）：�
   assert.equal(degraded.localRef, null);
   assert.equal(degraded.needsLocalReview, true);
   assert.deepEqual(degraded.projection, { voucherId: 7 });
-  // Only failed projection with no reference permits applied=true + local review.
+  // 仅在投影失败且没有引用时，允许 applied=true 并要求本机复核。
   for (const reason of ['value_invalid', 'summary_unavailable']) {
     assert.equal(validateModelEnvelope({ ...degraded, refUnavailable: reason }, REGISTRY).ok, true);
   }

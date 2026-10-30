@@ -1,4 +1,4 @@
-// Local administrator passive observation only; never an HTTP/Agent/MCP tool.
+// 仅供本机管理员被动观察，不是 HTTP/Agent/MCP 工具。
 import {dirname,resolve} from 'node:path';
 import {TaxDownloadPageStore} from './tax-download-page.mjs';
 import {TaxCollectionStore,collectionLock} from './tax-collection-local.mjs';

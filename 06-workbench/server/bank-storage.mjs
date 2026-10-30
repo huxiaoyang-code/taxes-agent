@@ -1169,8 +1169,8 @@ export function claimFreshDatabase({ dbPath }) {
   if (existsSync(abs)) {
     throw bankError("fresh_database_file_exists", "目标库文件已存在，不能作为新库初始化", { dbPath: abs });
   }
-  // Every ancestor must be a real directory. In particular, a junction above the
-  // immediate parent must not turn an explicit fresh target into another path.
+  // 每个祖先目录都必须是真实目录；尤其不能让父目录上层的 junction
+  // 把显式全新目标重定向到其他路径。
   for (let dir = dirname(abs); ; dir = dirname(dir)) {
     const stat = lstatSync(dir);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw bankError("data_dir_alias", "新库目录不能经过别名 / junction");
@@ -1204,10 +1204,10 @@ export function claimFreshDatabase({ dbPath }) {
   } catch (error) {
     if (token) freshGuard.releaseFreshClaimFacts(token, { preserveDatabase: true });
     else {
-      // Before registration there is no complete immutable creation fact. Close
-      // only our handles and retain the objects for inspection, never guess ownership.
-      try { if (fd !== undefined) closeSync(fd); } catch { /* preserve */ }
-      try { if (markerFd !== undefined) closeSync(markerFd); } catch { /* preserve */ }
+      // 登记前尚无完整且不可变的创建事实；只关闭本次自有句柄，
+      // 保留对象供检查，绝不猜测归属。
+      try { if (fd !== undefined) closeSync(fd); } catch { /* 保留现场 */ }
+      try { if (markerFd !== undefined) closeSync(markerFd); } catch { /* 保留现场 */ }
     }
     throw error;
   }
@@ -1224,7 +1224,7 @@ function requireFreshClaim(receipt, dbPath) {
   return claim;
 }
 
-/** Release only immutable privately registered facts, even if receipt fields changed. */
+/** 仅释放私有登记的不可变事实，即使回执字段已经变化。 */
 export function releaseFreshDatabaseClaim(receipt) {
   const claim = receipt && typeof receipt === "object" ? freshClaims.get(receipt) : null;
   if (!claim) return false;
@@ -1232,7 +1232,7 @@ export function releaseFreshDatabaseClaim(receipt) {
   return freshGuard.releaseFreshClaimFacts(claim.token, { preserveDatabase: true }).released === true;
 }
 
-/** Explicit hand-written core initializers must call this before any DDL / WAL. */
+/** 显式手写的核心初始化器须在任何 DDL/WAL 操作前调用这里。 */
 export function verifyFreshDatabaseConnection(receipt, db, dbPath) {
   const claim = requireFreshClaim(receipt, dbPath);
   freshGuard.assertFreshClaimConnection(claim.token, db);
@@ -1241,9 +1241,9 @@ export function verifyFreshDatabaseConnection(receipt, db, dbPath) {
   return result;
 }
 
-// Opening even a read-only SQLite connection to an old WAL-mode database can
-// create -wal/-shm. Reject changed creation objects before opening that probe;
-// this supplements, never replaces, the actual-connection pre-DDL guard.
+// 对已有 WAL 模式数据库打开只读 SQLite 连接，也可能创建
+// -wal/-shm；因此须在探测连接前拒绝已变化的创建对象。
+// 此检查补充实际连接的 DDL 前守卫，不能替代它。
 function assertPristineCreationFiles(claim) {
   const sameIdentity = (stat, expected) => stat.isFile() && !stat.isSymbolicLink?.()
     && String(stat.dev) === String(expected.dev) && String(stat.ino) === String(expected.ino);
@@ -1268,7 +1268,7 @@ function assertPristineCreationFiles(claim) {
   }
 }
 
-/** Fixed real core entry, never an arbitrary callback or a post-DDL trust flag. */
+/** 固定真实核心入口，不接受任意回调或 DDL 执行后的信任标志。 */
 export async function initializeFreshDatabaseCore(receipt) {
   const claim = requireFreshClaim(receipt, freshClaims.get(receipt)?.dbPath);
   assertPristineCreationFiles(claim);
@@ -1276,8 +1276,8 @@ export async function initializeFreshDatabaseCore(receipt) {
   try { verifyFreshDatabaseConnection(receipt, probe, claim.dbPath); }
   finally { probe.close(); }
   process.env.WORKBENCH_DATA_DIR = dirname(claim.dbPath);
-  // The imported core must execute its actual-connection pre-DDL hook. A cached
-  // module cannot bless a new path: the binding assertion below rejects it.
+  // 导入的核心必须执行实际连接的 DDL 前钩子；缓存模块
+  // 不能为新路径背书，下方绑定断言会拒绝这种情况。
   const core = await import("./db.mjs");
   freshGuard.assertFreshClaimConnection(claim.token, core.db);
   claim.connections.add(core.db);
@@ -1289,7 +1289,7 @@ export function hasFreshDatabaseClaim(receipt, dbPath) {
   try { requireFreshClaim(receipt, dbPath); return true; } catch { return false; }
 }
 
-// ------------------------------------------------------------------ schema DDL
+// ------------------------------------------------------------------ 数据库结构 DDL
 const COMPONENT_DDL = [
   `CREATE TABLE IF NOT EXISTS bank_component_migrations (
      version INTEGER PRIMARY KEY,
@@ -1590,8 +1590,8 @@ async function runBackupGate({ db, backupService, dbPath, outDir, version, expec
       });
     }
   }
-  // Always use the fixed official verifier and connection validator. Injected service
-  // responses alone cannot establish a backup or impersonate source-content checks.
+  // 始终使用固定官方校验器和连接校验器。仅凭注入服务的响应
+  // 不能证明备份成立，也不能冒充来源内容检查。
   try {
     const official = await import("./local-backup.mjs");
     const checked = official.verifyBackup({ backupDir });
@@ -1763,7 +1763,7 @@ async function ensureBankSchemaBody(db, options = {}) {
   // 回滚未确认的连接可能仍持着未提交的组件 DDL / 版本行：不能在上面继续「安装 / 已初始化」判断。
   assertConnectionUsable(db);
   const abs = resolve(String(dbPath));
-  // A supplied invalid claim must never silently fall back to existing install.
+  // 传入的声明无效时，绝不能静默回退到既有安装。
   const freshClaim = receipt === null ? null : requireFreshClaim(receipt, abs);
   if (freshClaim) freshGuard.assertFreshClaimConnection(freshClaim.token, db);
   if (freshClaim && !freshClaim.connections.has(db)) {
@@ -1869,8 +1869,8 @@ async function ensureBankSchemaBody(db, options = {}) {
       version: BANK_SCHEMA_VERSION,
       expectedSchemaVersion,
     });
-    // Keep the original official component backup rejection ahead of batch's
-    // cross-component checks; maintenance still gates every DDL under BEGIN.
+    // 保留原有官方组件备份拒绝，并使其先于批处理的
+    // 跨组件检查；维护守卫仍须在 BEGIN 内约束每次 DDL。
     (await import('./local-batch-storage.mjs')).assertBatchMaintenanceReady(db);
     assertBankInstallIdentity(db,abs,installIdentity);
     const result = runComponentDdl(db, { from, creation, backup });

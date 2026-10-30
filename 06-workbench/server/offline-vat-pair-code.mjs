@@ -1,4 +1,4 @@
-// Native-only byte closure, captured before loading application code in the worker.
+// 只含原生依赖的字节闭包，在 worker 加载应用代码前捕获。
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');

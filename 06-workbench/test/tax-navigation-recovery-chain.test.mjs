@@ -1,4 +1,4 @@
-// All locks, process observations, CDP events and private audits are synthetic.
+// 所有锁、进程观测、CDP 事件和私有审计均为合成数据。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { recoverTaxCollectionLock } from '../scripts/recover-tax-collection-lock.mjs';
@@ -47,8 +47,8 @@ async function run(mode='normal',execute=true,extra={}){
           if(method==='Page.getFrameTree')return{frameTree:{frame:{...frame}}};
           if(method==='Page.reload'){
             assert.deepEqual(params,{});reloaded=true;
-            // Observed shape: six clears, three main documents, two within-doc
-            // events and one frame detach. No pre-seal document is consumed.
+            // 观测结构：六次清空、三份主文档、两次文档内
+            // 事件及一次 frame 分离。不消费任何封存前文档。
             if(mode!=='no_destroy')for(let i=0;i<6;i++)emit('Runtime.executionContextsCleared');
             if(mode==='known_destroy')emit('Runtime.executionContextDestroyed',{executionContextId:101});
             if(mode==='unknown_destroy')emit('Runtime.executionContextDestroyed',{executionContextId:202});
@@ -70,7 +70,7 @@ async function run(mode='normal',execute=true,extra={}){
         }},
     }),
   };
-  // Context-destroy alternatives do not also rely on the contextsCleared proof.
+  // 销毁上下文的替代路径不再同时依赖 contextsCleared 证明。
   if(['known_destroy','unknown_destroy'].includes(mode)){
     const open=overrides.openDiagnostic;overrides.openDiagnostic=async()=>{const t=await open(),on=t.cdp.on;t.cdp.on=(name,fn)=>on(name,name==='Runtime.executionContextsCleared'?()=>{}:fn);return t;};
   }

@@ -105,7 +105,7 @@ const steps = [
   { name: "enterprise-identity-mcp", file: join(MCP, "enterprise-identity-test.mjs"), cwd: MCP },
   { name: "accounting-standards-http", file: join(WORKBENCH, "test", "accounting-standards-http.test.mjs"), cwd: WORKBENCH },
   { name: "accounting-standards-mcp", file: join(MCP, "accounting-standards-test.mjs"), cwd: MCP },
-  // LOCAL-03b: append only; original 73 suites retain their exact order.
+  // LOCAL-03b：只追加；原有 73 个套件顺序完全保留。
   { name: "auxiliary-storage", file: join(WORKBENCH, "test", "auxiliary-storage.test.mjs"), cwd: WORKBENCH },
   { name: "auxiliary-accounting", file: join(WORKBENCH, "test", "auxiliary-accounting.test.mjs"), cwd: WORKBENCH },
   { name: "auxiliary-cli", file: join(WORKBENCH, "test", "auxiliary-cli.test.mjs"), cwd: WORKBENCH },
@@ -121,19 +121,19 @@ const steps = [
   { name: "bank-http", file: join(WORKBENCH, "test", "bank-http.test.mjs"), cwd: WORKBENCH },
   { name: "bank-ui-contract", file: join(WORKBENCH, "test", "bank-ui-contract.test.mjs"), cwd: WORKBENCH },
   { name: "bank-mcp", file: join(MCP, "bank-test.mjs"), cwd: MCP },
-  // LOCAL06 W2a: original 88 entries remain verbatim and in order.
+  // LOCAL06 W2a：原有 88 个条目逐字保留且顺序不变。
   { name: "local-audit-operation", file: join(WORKBENCH, "test", "local-audit-operation.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-install", file: join(WORKBENCH, "test", "local-audit-install.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-backup-integration", file: join(WORKBENCH, "test", "local-audit-backup-integration.test.mjs"), cwd: WORKBENCH },
-  // LOCAL07 W3a: original 91 entries remain verbatim and in order.
+  // LOCAL07 W3a：原有 91 个条目逐字保留且顺序不变。
   { name: "local-batch-install", file: join(WORKBENCH, "test", "local-batch-install.test.mjs"), cwd: WORKBENCH },
   { name: "local-batch-backup-integration", file: join(WORKBENCH, "test", "local-batch-backup-integration.test.mjs"), cwd: WORKBENCH },
-  // LOCAL06 W2b: the preceding 93 entries are unchanged and retain their order.
+  // LOCAL06 W2b：前 93 个条目不变，并保留原顺序。
   { name: "local-audit-domain", file: join(WORKBENCH, "test", "local-audit-domain.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-http", file: join(WORKBENCH, "test", "local-audit-http.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-cli", file: join(WORKBENCH, "test", "local-audit-cli.test.mjs"), cwd: WORKBENCH },
   { name: "local-audit-mcp", file: join(MCP, "local-audit-test.mjs"), cwd: MCP },
-  // LOCAL07 W3b: preceding 97 registrations remain verbatim and in order.
+  // LOCAL07 W3b：前 97 项登记逐字保留且顺序不变。
   { name: "local-batch-domain", file: join(WORKBENCH, "test", "local-batch-domain.test.mjs"), cwd: WORKBENCH },
   { name: "local-write-lock", file: join(WORKBENCH, "test", "local-write-lock.test.mjs"), cwd: WORKBENCH },
   { name: "local-batch-entry-lock", file: join(WORKBENCH, "test", "local-batch-entry-lock.test.mjs"), cwd: WORKBENCH },

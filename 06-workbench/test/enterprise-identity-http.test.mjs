@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-// Wait for the exact owned ChildProcess close event, including spawn failure.
+// 等待精确的自有 ChildProcess close 事件，包括 spawn 失败。
 export async function closeOwnedChild(child, closed) {
  const wait = (ms) => new Promise((resolve,reject) => {
   const timer=setTimeout(()=>reject(Error('owned_child_close_timeout')),ms);

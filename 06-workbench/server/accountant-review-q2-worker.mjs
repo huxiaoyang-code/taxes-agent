@@ -1,4 +1,4 @@
-// Only native bootstrap code is evaluated before the expected/initial/current guard.
+// expected/initial/current 守卫之前，只求值原生引导代码。
 import { assertAccountantReviewQ2CodeCurrent } from './accountant-review-q2-code.mjs';
 let pair, publication, reviewApi, reviewBundle;
 const close = () => { try { pair?.close(); } finally { pair=undefined; } };

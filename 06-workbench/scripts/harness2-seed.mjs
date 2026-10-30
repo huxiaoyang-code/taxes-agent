@@ -1,4 +1,4 @@
-// This worker only creates a new synthetic snapshot. It cannot select a user DB.
+// 此工作进程只创建新的合成快照，不能选择用户数据库。
 import {mkdirSync,existsSync,writeFileSync} from 'node:fs';
 import {resolve,join,isAbsolute} from 'node:path';
 const root=process.argv[2];if(!root||!isAbsolute(root)||existsSync(root))throw Error('harness2_seed_new_absolute_required');

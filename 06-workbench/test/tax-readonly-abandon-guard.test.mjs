@@ -1,5 +1,5 @@
-// Windows OS-mutex smoke only: random synthetic identity, no registry, profile,
-// endpoint or tax data. The killed process is this test's own Node worker.
+// 仅对 Windows 操作系统互斥量做冒烟测试：随机合成身份，无注册表、配置目录、
+// 端点或税务数据。被终止进程是本测试自己的 Node 工作进程。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -12,8 +12,8 @@ import {acquireReadonlyAdminGuard} from '../server/tax-readonly-abandon.mjs';
 if(process.argv[2]==='--synthetic-hold-guard'){
   const guard=await acquireReadonlyAdminGuard(process.argv[3]);
   process.stdout.write(JSON.stringify({held:true,helperPid:guard.helperPid})+'\n');
-  // This worker is deliberately terminated by its parent. There is no cleanup
-  // handler: the helper must observe the dead worker's stdin pipe EOF itself.
+  // 父进程刻意终止此工作进程。不设清理
+  // 处理器：辅助进程必须自行观测死亡工作进程的 stdin 管道 EOF。
   setInterval(()=>{},1000);
 }else{
   test('Windows restricted global admin mutex excludes competition and releases on host death via pipe EOF',
@@ -35,8 +35,8 @@ if(process.argv[2]==='--synthetic-hold-guard'){
         assert.equal(held.held,true);helperPid=held.helperPid;assert.equal(alive(helperPid),true);
         await assert.rejects(acquireReadonlyAdminGuard(identity));
         const exited=new Promise(done=>worker.once('exit',done));worker.kill();await exited;worker=null;
-        // Acquiring after host death verifies the actual production helper's EOF
-        // behavior. No direct helper termination is used on the passing path.
+        // 宿主死亡后获取锁，以验证实际生产辅助进程的 EOF
+        // 行为。通过路径不直接终止辅助进程。
         const deadline=Date.now()+6000;
         while(Date.now()<deadline){try{third=await acquireReadonlyAdminGuard(identity);break}catch{await new Promise(done=>setTimeout(done,50))}}
         assert.ok(third,'dead host must release its OS mutex');third.verify();
@@ -46,8 +46,8 @@ if(process.argv[2]==='--synthetic-hold-guard'){
         const final=await acquireReadonlyAdminGuard(identity);await final.close();
       }finally{
         worker?.kill();await first?.close();await third?.close();
-        // Worker death closes the helper's pipe. Never target a numeric PID
-        // after its owner is gone, because that PID could have been reused.
+        // 工作进程死亡会关闭辅助进程管道。所有者消失后绝不
+        // 以数字 PID 为目标，因为该 PID 可能已被复用。
       }
     });
 }

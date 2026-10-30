@@ -1,6 +1,6 @@
-// A real stdio-MCP/native-Harness integration, never a model/Agent acceptance.
-// `prepare <new absolute directory>` only creates synthetic originals, existing
-// ledger, native input manifests and an explicit target. It calls no Harness.
+// 实际 stdio-MCP/原生 Harness 集成，绝不作为模型/Agent 验收。
+// `prepare <全新绝对目录>` 仅创建合成原件、已有
+// 账簿、原生输入清单及明确目标，不调用 Harness。
 import assert from 'node:assert/strict';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, mkdtempSync, appendFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve, isAbsolute } from 'node:path';
@@ -32,7 +32,7 @@ function seed(root, empty = false) {
       A.carryForwardProfit(id, '2025-12', { yearEnd: true });
       }
       for (let m = 1; m <= 12; m++) A.ensurePeriod(id, `2026-${String(m).padStart(2, '0')}`);
-      // Pre-existing synthetic ledger, not an action performed by the Agent.
+      // 预先存在的合成账簿，不是 Agent 执行的动作。
       if (!empty) {
         post(id, '2026-01', [{ code: '1122', debit: 202 }, { code: '5001', credit: 200 }, { code: '2221', credit: 2 }]);
         post(id, '2026-01', [{ code: '2221', debit: 2 }, { code: '5301', credit: 2 }]);
@@ -197,8 +197,8 @@ async function integration() {
     await client.close(); await start();
     assert.equal((await status(f.annualStore)).tasks[0].reviewState, 'accepted'); assert.equal((await run(f.annualStore, 'review')).status, 'replayed');
     assert.deepEqual(databaseState(f.target.dbPath), beforeRead, 'MCP restart and replay do not post again or change audit/metadata');
-    // Change actual December originals/facts. Native tax reads the new cost,
-    // but the ledger has not been corrected: the review must expose this gap.
+    // 修改实际十二月原件及事实。原生税费读取新成本，
+    // 但账簿尚未更正：复核必须揭示这个缺口。
     const dec = join(f.root, 'customer-originals', '2026-12.facts.json'), doc = read(dec);
     doc.records.push(nativeRecord(f.scope.enterpriseKey, 'dec-cost', 'expense', '2026-12', { use: 'admin', gross: '50.00', net: '50.00', invoiceTax: '0.00', inputVatTreatment: 'non_deductible', settlement: 'unpaid', benefitPeriod: '2026-12', taxNature: 'ordinary' }));
     json(dec, doc); appendFileSync(join(f.root, 'customer-originals', '2026-12.original'), '\n合成补件：12月已验收行政服务50元、无税额、未付款，仅受益12月，尚待账务更正和会计复核。');

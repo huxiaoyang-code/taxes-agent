@@ -68,8 +68,8 @@ export async function summarizeHarnessReceipt(storePath,name,native) {
  result.problemCountMeaning='Problem occurrences across native issues/blockers/contract/evidence sections; repeated representations may count more than once. This is not a count of distinct blocked business tasks.';
  result.blockers={count:issues.total,countUnit:'problem_occurrences',groups:issues.groups,details:presentRef(ref)};
  if(Buffer.byteLength(JSON.stringify(issues))>4096){result.issues={total:issues.total,distinctGroups:issues.groups.length,allErrorsListed:false,details:presentRef(ref),reason:'error_inventory_requires_paging'};result.blockers={count:issues.total,allErrorsListed:false,details:presentRef(ref)};result.presentation.omittedSections.push('issues.groups','blockers.groups');}
- // Never truncate strings or silently drop failures. Large sections become
- // explicit inventories with exact counts and a content-addressed read handle.
+ // 不截断字符串或静默丢弃失败。超大段落改为明确的清单，
+ // 提供精确计数及按内容寻址的读取引用。
  for(const k of ['sources','facts','factBindings','nextSteps','tasks','issues','blockers','taskIds','affectedTasks','invalidatedResults','text','legacyEvidence','evidenceIssues','contractIssues','details','keyNumbers']){
   if(Buffer.byteLength(JSON.stringify(result))<=SUMMARY_MAX_BYTES)break;
   if(result[k]!==undefined){const original=result[k];result.presentation.omittedSections.push(k);
@@ -97,8 +97,8 @@ export async function readHarnessReceipt({storePath,receiptRef,pointer='',offset
  const root=await safePath(storePath,true),meta=JSON.parse(await readFile(await safePath(join(root,'store.json')),'utf8'));check(meta.version==='finance-harness-store/1'&&typeof meta.storeId==='string','harness_receipt_store_invalid');
  const bytes=await readFile(await safePath(join(root,'mcp-receipts',receiptRef+'.json')));check(digest(bytes)===receiptRef,'harness_receipt_changed');
  const saved=JSON.parse(bytes);check(saved.version==='finance-native-receipt/1'&&saved.storeId===meta.storeId,'harness_receipt_store_mismatch');const value=pointerValue(saved.result,pointer),serialized=JSON.stringify(value);
- // UTF-16 offset is explicit and stable; advance by code points so no surrogate
- // pair or UTF-8 sequence can be split. JSON fragments are reconstructed first.
+ // 明确采用稳定的 UTF-16 偏移；按码点前进，避免拆开代理对
+ // 或 UTF-8 序列。读取后先重组 JSON 片段。
  check(offset<=serialized.length&&(offset===0||!(serialized.charCodeAt(offset)>=0xDC00&&serialized.charCodeAt(offset)<=0xDFFF)),'harness_receipt_offset_invalid');
  let fragment='',used=0,end=offset;for(const point of serialized.slice(offset)){const wireSize=Buffer.byteLength(JSON.stringify(point))-2;if(used+wireSize>maxBytes)break;fragment+=point;used+=wireSize;end+=point.length;}
  return {version:'finance-receipt-page/1',receiptRef,sha256:receiptRef,nativeBytes:bytes.length,pointer,valueSha256:digest(serialized),valueBytes:Buffer.byteLength(serialized),navigation:childNavigation(value,pointer,childOffset),encoding:'json-string-fragment; concatenate fragments then JSON.parse',offsetUnit:'UTF-16 code units, code-point boundaries',offset,fragment,fragmentBytes:Buffer.byteLength(fragment),fragmentJsonBytes:used,maxFragmentJsonBytes:maxBytes,nextOffset:end<serialized.length?end:null,complete:end===serialized.length};

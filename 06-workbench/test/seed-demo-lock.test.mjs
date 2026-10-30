@@ -19,7 +19,7 @@ try {
  const baseline=facts();const sequence=db.prepare('SELECT * FROM sqlite_sequence ORDER BY name').all();
  const nonforce=await run(['scripts/seed-demo.mjs']);assert.equal(nonforce.code,1);assert.equal(facts(),baseline);
  const held=L.acquireWriteResources(db,[`account-set:${seeded.accountSetId}`]);try{const blocked=await run(['scripts/seed-demo.mjs','--force']);assert.equal(blocked.code,1,blocked.stdout+blocked.stderr);assert.match(blocked.stderr,/lock_active/);assert.equal(facts(),baseline);}finally{L.releaseWriteResources(db,held);}
- // Mid-seed real SQLite RAISE rejects after the outer deletes old books, all deletions roll back.
+ // 种子生成中真实 SQLite RAISE 在外层删除旧账簿后拒绝，所有删除均回滚。
  db.exec("CREATE TRIGGER synthetic_seed_raise BEFORE INSERT ON vouchers BEGIN SELECT RAISE(ABORT,'synthetic_seed_raise'); END");
  try{const raised=await run(['scripts/seed-demo.mjs','--force']);writeFileSync(join(root,'seed-raise.log'),raised.stdout+raised.stderr);assert.equal(raised.code,1,raised.stdout+raised.stderr);assert.equal(facts(),baseline);}finally{db.exec('DROP TRIGGER synthetic_seed_raise');}
  for(const row of sequence){const now=db.prepare('SELECT seq FROM sqlite_sequence WHERE name=?').get(row.name);assert.ok(now.seq>=row.seq,row.name+' never regresses');}

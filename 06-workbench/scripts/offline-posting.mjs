@@ -13,7 +13,7 @@ export async function runCli(args) {
     const request = JSON.parse(input.bytes.toString('utf8').replace(/^\uFEFF/, ''));
     request.inputPath = resolve(dirname(input.canonicalPath), request.inputPath);
     await checkedPath(dirname(resolve(args[3])), true);
-    // Reserve the output before any operation: an existing output never executes a write.
+    // 任何操作之前先预留输出：输出已存在时绝不执行写入。
     handle = await open(resolve(args[3]), 'wx', 0o600);
     started = true; result = runOfflinePosting(request);
     await handle.writeFile(JSON.stringify(result, null, 2) + '\n'); await handle.sync(); await handle.close(); handle = null;

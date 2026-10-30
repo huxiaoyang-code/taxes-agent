@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-export-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
-// RC-B independent acceptance: every expected amount below is hand-calculated.
+// RC-B 独立验收：下方每个预期金额都由手算得出。
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,7 @@ async function test(name, fn) {
 }
 const e = (code, debit = 0, credit = 0, summary) => ({ code, debit, credit, summary });
 const value = (data, label) => [...data.assets, ...data.liabilities].find(row => row.label === label)?.value;
-// Independent RFC4180 reader; deliberately does not reuse accounting.parseCsv.
+// 独立 RFC4180 读取器；刻意不复用 accounting.parseCsv。
 function csvRows(text) {
   const rows = []; let row = [], field = '', quoted = false;
   for (let i = text.charCodeAt(0) === 0xfeff ? 1 : 0; i < text.length; i++) {
@@ -146,8 +146,8 @@ try {
     const ledger = csvRows(out(s, 'ledger', '2026-02', { code: '1002' }).body);
     assert.deepEqual(ledger.find(row => row[0] === '期末' && row.length === 3), ['期末', '1670.00', '0.00']);
   });
-  // Both persistent profiles use hand-calculated amounts: 1000 + 123.45 - 23.45 = 1100;
-  // profit and operating cash increase are 100. No report DTO supplies the expected CSV values.
+  // 两种持久化配置均采用手算金额：1000 + 123.45 - 23.45 = 1100；
+  // 利润及经营现金增加额为 100。不用报告 DTO 提供预期 CSV 值。
   for (const [standard, profile, capital, revenue, expense] of [
     ['小企业会计准则', 'small-2011-basic-v1', '3001', '5001', '5602'],
     ['企业会计准则', 'enterprise-2019-general-basic-v1', '4001', '6001', '6602'],
@@ -307,7 +307,7 @@ try {
   });
   await test('all four trial balance checkpoints expose an unbalanced imported/corrupt book', () => {
     const bad = make('失衡合成库', '2026-01');
-    // Deliberate isolated corruption, never a production write or relaxed import rule.
+    // 刻意隔离的损坏测试，绝不执行生产写入或放宽导入规则。
     db.prepare('INSERT INTO opening_balances (account_set_id,code,debit,credit) VALUES (?,?,?,?)').run(bad, '1002', 10, 0);
     const r = report(bad, 'trial-balance');
     assert.equal(r.checks.trialBalance.opening.balanced, false);

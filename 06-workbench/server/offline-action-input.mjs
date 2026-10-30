@@ -1,4 +1,4 @@
-// Explicit local files only. This module never imports a ledger or default DB.
+// 只接受显式本机文件；本模块不导入账簿或默认数据库。
 import { resolve, dirname, join } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { readLocalFile, inspectMaterialStore } from './offline-material-store.mjs';
@@ -61,12 +61,12 @@ export async function openOfflineActionInput(inputPath) {
       const store = await inspectMaterialStore(storePath); storeDigest = hash(stable(store));
       requireValue(stable(store.scope) === stable(c.scope), 'scope_mismatch');
       const stale = new Set(store.staleSourceIds ?? []);
-      // A lock blocks current candidate admission, not visibility of known receipt evidence.
+      // 锁会阻塞当前候选准入，不影响已知回执证据的可见性。
       reports.push(...store.reports);
       for (const e of store.active) {
         inventory.push({ ...e });
         if (stale.has(e.sourceId) || store.writerBlocked) {
-          // Receipt blob is diagnostic evidence only when its original is stale/locked.
+          // 原件已失效或加锁时，回执 blob 仅作为诊断证据。
           const blob = await read(join(storePath, `${String(e.sequence).padStart(6, '0')}-${e.receiptId}`, e.blob), e.kind);
           const result = preflightMaterials({ scope: c.scope, sources: [{ sourceId: e.sourceId, kind: e.kind, scope: e.scope, mapping: e.mapping, text: blob.text, fileSha256: blob.fileSha256 }] });
           rejectedRecords.push(...result.records);

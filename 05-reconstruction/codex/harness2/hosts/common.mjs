@@ -18,7 +18,7 @@ export function inside(root,path,label){
 export function nativeCommand(nodePath,cliPath){
   nodePath=absolute(nodePath,'node');cliPath=absolute(cliPath,'cli');
   for(const p of [nodePath,cliPath])if(!existsSync(p)||!statSync(p).isFile())fail('harness2_native_cli_missing');
-  // npm PowerShell/CMD wrappers execute shell text. Select their actual package entry instead.
+  // npm 的 PowerShell/CMD 包装器会执行 shell 文本；应选择实际的包入口。
   const extension=extname(cliPath).toLowerCase();
   if(['.cmd','.bat','.ps1'].includes(extension))fail('harness2_native_entry_required_no_shell_wrapper');
   if(['.mjs','.cjs','.js'].includes(extension))return {command:realpathSync(nodePath),prefix:[realpathSync(cliPath)]};
@@ -51,7 +51,7 @@ export function prepare(options,host,buildConfig){
     if(!options.mcpEnv||typeof options.mcpEnv!=='object'||Object.keys(options.mcpEnv).some(key=>key!=='FINANCE_HARNESS2_SYNTHETIC_ROOT'))fail('harness2_mcp_environment_forbidden');
     context.mcpEnv.FINANCE_HARNESS2_SYNTHETIC_ROOT=inside(workspace,options.mcpEnv.FINANCE_HARNESS2_SYNTHETIC_ROOT,'synthetic_root');
   }
-  // The bridge owns target identity/isolation. Host helpers additionally refuse a DB outside this workspace.
+  // 桥接层负责目标身份和隔离；宿主辅助层还会拒绝工作区之外的数据库。
   inside(workspace,options.databasePath,'database');
   let task,candidateText='';
   if(options.mode==='run'){

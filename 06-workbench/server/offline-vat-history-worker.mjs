@@ -1,4 +1,4 @@
-// Fixed private child entrypoint. Never imports db.mjs or accepts caller capabilities.
+// 固定私有子进程入口，不导入 db.mjs，也不接受调用者提供的能力对象。
 import { fields, requireValue, stable, hash } from './offline-material-adapters.mjs';
 import { openVatInputFiles, assertVatInputSessionCurrent } from './offline-vat-input.mjs';
 import { calculateOfflineVat } from './tax-calculation.mjs';

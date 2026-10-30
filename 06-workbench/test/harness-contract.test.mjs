@@ -19,7 +19,7 @@ for (const mutate of [c => delete c.recovery, c => c.recovery.identityFields = [
   const c = clone(capability); mutate(c);
   assert.throws(() => validateCapabilityDeclaration(c), { code: 'harness_capability_invalid' });
 }
-// A read capability must not accidentally advertise recovery as execution authority.
+// 读取能力不得意外将恢复能力宣告为执行权限。
 const read = { ...capability, effect: 'read' }; delete read.recovery;
 validateCapabilityDeclaration(read);
 assert.throws(() => validateCapabilityDeclaration({ ...read, recovery: capability.recovery }), { code: 'harness_capability_invalid' });
@@ -33,7 +33,7 @@ for (const state of ['missing', 'conflict', 'unknown', 'unsupported', 'not_appli
 assert.throws(() => validateFact({ ...fact, sourceRefs: [] }), { code: 'harness_fact_invalid' });
 assert.throws(() => validateFact({ ...fact, state: 'not_applicable', reason: '' }), { code: 'harness_fact_invalid' });
 const receipt = { taskId: 'task-1', operationId: 'operation-1', targetVersion: 'a'.repeat(64), dependencyDigest: 'a'.repeat(64), capabilityId: capability.capabilityId, ruleVersion: 'posting/1', codeDigest: 'b'.repeat(64), executionState: 'executed', reviewState: 'pending', ruleState: 'enterprise_exception', resultRefs: ['local:synthetic-receipt'], actualImpact: { voucherIds: [1], outcome: 'committed' } };
-// Executed does not mean reviewed or promoted to a common business rule.
+// 已执行不表示已复核，也不表示已提升为通用业务规则。
 validateExecutionReceipt(receipt);
 const unknown = { ...receipt, executionState: 'unknown', recovery: { queryEntrypoint: 'offline.posting.query', identity: { operationId: receipt.operationId } } };
 validateExecutionReceipt(unknown);

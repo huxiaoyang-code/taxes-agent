@@ -253,7 +253,7 @@ export function getAccountSet(id) {
   const { set, context } = accountSetProfile(id);
   return { ...set, enterprise: getAccountSetEnterpriseIdentity(id), accountingContext: context };
 }
-/** Local-only identity read; null marks an existing unbound historical book. */
+/** 仅在本机读取身份；null 表示已有但未绑定身份的历史账套。 */
 export function getAccountSetEnterpriseIdentity(id) {
   if (!accountSetRow(id)) throw identityError("account_set_not_found");
   const binding = getAccountSetEnterprise(db, id);
@@ -308,7 +308,7 @@ function addAccountBody(setId, { code, name, category, direction, parent_code = 
   return listAccounts(setId);
 }
 
-// Admission-only data clone: never serialized, persisted or used as an authorization.
+// 仅供准入校验的数据克隆：不序列化、不持久化，也不作为授权。
 const pureInputErrors=new WeakSet();
 function admissionInput(value) {
  const active=new Set();let nonfinite=false;
@@ -390,7 +390,7 @@ function setOpeningBalancesBody(setId,items=[]) {
       `INSERT INTO opening_balances (account_set_id, code, debit, credit) VALUES (?,?,?,?)`
     );
     for (const it of resolved) {
-      // Preserve auxiliary references for the core DELETE+INSERT no-op path.
+      // 核心 DELETE+INSERT 无实质变更路径须保留辅助核算引用。
       const prior = row(`SELECT debit, credit FROM opening_balances WHERE account_set_id=? AND code=?`, setId, it.code);
       if (prior && storedCents(prior.debit) === it.debitCents && storedCents(prior.credit) === it.creditCents) continue;
       del.run(setId, it.code);
@@ -3021,7 +3021,7 @@ function importValidation(normalized, enterprise) {
  * 返回 validation 中可带 profileError，不把非法准则逃逸成泛 500。
  */
 function importAccountSetBody(payload = {}, { dryRun = false, enterprise, profileId } = {}) {
-  // profileId is an envelope option and never changes historical payload/fingerprint fields.
+  // profileId 是信封选项，不改变历史 payload 或指纹字段。
   let context = null;
   if (profileId !== undefined) {
     try { const profile = resolveCreationProfile({ accounting_standard: payload?.account_set?.accounting_standard, profileId });
@@ -3068,7 +3068,7 @@ function importAccountSetBody(payload = {}, { dryRun = false, enterprise, profil
   });
 }
 
-// Public synchronous write admissions. Internal combinations call the private bodies above.
+// 公开同步写入准入；内部组合操作调用上方的私有实现。
 const setScope=id=>({kind:'account_set',value:id});
 const resultId=(type,id)=>Number.isSafeInteger(id)&&id>0?[{type,id}]:[];
 function accountingWrite(action,args,body,{scope=setScope(args[0]),refs=()=>[],rebuild,classify,targets}={}) {
@@ -3092,8 +3092,8 @@ export function deleteAssetCard(...args) {return accountingWrite('asset.delete',
 export function generateDepreciation(...args) {let changed=false;return accountingWrite('asset.depreciate',args,(...input)=>{const before=row('SELECT total_changes() n').n;const value=generateDepreciationBody(...input);changed=row('SELECT total_changes() n').n!==before;return value;},{classify:()=>changed?'succeeded':'no_change',refs:v=>resultId('voucher',v?.voucher?.id)});}
 export function importAccountSet(...args) {const input=admissionInput(args);if(input.value[1]?.dryRun)return importAccountSetBody(...input.value);if(!admissionBinding('import.legacy')){const validation=validateImportPayload(...input.value);if(!validation.ok)return {dryRun:true,validation,created:null};}return accountingWrite('import.legacy',args,importAccountSetBody,{scope:{kind:'database',value:null},refs:v=>resultId('account_set',v?.created?.id),targets:v=>v?.created?.id?{accountSetId:v.created.id}:{}});}
 
-// Explicit local demo replacement. Private bodies share one audited outer and an
-// empty fixed child plan; no guessed future set IDs or relaxed child admission.
+// 显式替换本机演示数据；私有实现共享一个受审计的外层操作和
+// 固定空子计划，不猜测未来账套 ID，也不放宽子操作准入。
 export function replaceDemoAccountSet(input) {
  const request=copyDomainRequest(input),{force=false,creation,openings,vouchers,asset}=request;
  if(typeof force!=='boolean')throw Object.assign(new Error('seed_force_invalid'),{code:'seed_force_invalid'});

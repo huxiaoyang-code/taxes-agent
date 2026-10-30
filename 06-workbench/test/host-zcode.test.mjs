@@ -31,8 +31,8 @@ assert.match(file('manual-user/agents/finance-parser.md'), /injectAgentsMd: fals
 assert.match(file('AGENTS.md'), /harness\/SKILL\.md/);
 assert.ok(bundle.notes.some(n => n.includes('自动连接')));
 
-// Use the exact command/args/env emitted for ZCode with the real MCP server.
-// This is a protocol probe, not a ZCode process or a model invocation.
+// 使用为 ZCode 生成的精确 command/args/env 连接实际 MCP 服务。
+// 这是协议探针，不是 ZCode 进程或模型调用。
 const native = config.mcp.servers.finance;
 assert.equal(native.command, process.execPath);
 assert.equal(native.args.length, 1);

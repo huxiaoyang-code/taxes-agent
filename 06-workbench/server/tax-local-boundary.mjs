@@ -1,4 +1,4 @@
-// Reuses PR #19's loopback/Origin boundary without its browser/DOM collector.
+// 复用 PR #19 的回环地址/Origin 边界，不复用其浏览器或 DOM 采集器。
 export function isLoopbackHost(host) {
   if (typeof host !== "string") return false;
   const match = /^(\[::1\]|127\.0\.0\.1|localhost)(?::(\d{1,5}))?$/.exec(host.trim().toLowerCase());

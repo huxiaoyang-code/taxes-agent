@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-import-strict-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
@@ -680,7 +680,7 @@ try {
     child.kill();
     // 等子进程真正退出后再删临时目录，避免端口/文件残留或连到旧进程。
     await childExit;
-    try { rmSync(httpDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(httpDataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
   }
 
   const failed = results.filter(([ok]) => !ok).length;
@@ -690,6 +690,6 @@ try {
   console.error("测试初始化失败：", e);
   process.exitCode = 1;
 } finally {
-  try { db?.close(); } catch { /* ignore */ }
-  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { db?.close(); } catch { /* 忽略 */ }
+  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
 }

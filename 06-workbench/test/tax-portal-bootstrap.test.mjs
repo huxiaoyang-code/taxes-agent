@@ -1,4 +1,4 @@
-// Pure synthetic CDP and in-memory private store/audit. No real data or files.
+// 纯合成 CDP 和内存私有存储/审计。不使用真实数据或文件。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bootstrapTaxPortalSource } from '../scripts/bootstrap-tax-portal-source.mjs';

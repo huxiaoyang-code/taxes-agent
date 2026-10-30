@@ -15,7 +15,7 @@ export async function runCli(args) {
     await checkedPath(dirname(output), true);
     const rel = relative(store, output);
     if (rel === '' || !rel.startsWith('..') && !isAbsolute(rel)) throw new Error('output_inside_store');
-    // Reserve new output before mutations; never receive and then discover overwrite.
+    // 变更之前先预留新输出；绝不能接收完成后才发现会覆盖文件。
     handle = await open(output, 'wx', 0o600);
     let result;
     if (command === 'init') {
@@ -29,7 +29,7 @@ export async function runCli(args) {
     if (result.status === 'blocked_origin_changed') return { exitCode: 4, message: 'OFFLINE_STORE_BLOCKED code=origin_changed' };
     return { exitCode: 0, message: `OFFLINE_STORE_${result.status.toUpperCase()} sources=${result.counts?.sources ?? 0} records=${result.counts?.records ?? 0} receipts=${result.counts?.receipts ?? 0}` };
   } catch (e) {
-    // A reserved output can survive errors/response loss. It contains no usable reports.
+    // 出错或响应丢失后，预留输出可能仍存在，但不含可用报告。
     if (handle) { try { await handle.writeFile(JSON.stringify({ status: 'blocked', code: safeStoreError(e), authorizesExecution: false, reports: [] }) + '\n'); await handle.sync(); } catch {} }
     return { exitCode: 4, message: `OFFLINE_STORE_BLOCKED code=${safeStoreError(e)}` };
   } finally { if (handle) await handle.close(); }

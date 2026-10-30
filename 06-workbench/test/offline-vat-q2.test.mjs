@@ -187,8 +187,8 @@ await test('Q2 cannot run through the old Q1 historical gate or copied public pa
     assert.equal((await calculateOfflineVatQ2(s)).computation.calculationReady, true);
   } finally { s.close(); }
   await assert.rejects(() => calculateOfflineVatQ2(s));
-  // A witnessed tuple change may permanently retire its real pair. Each attack
-  // gets its own held pair; restoring public fields never restores authority.
+  // 观测到的元组变化可能永久停用实际配对。每次攻击
+  // 都有自己持有的配对；恢复公开字段绝不恢复权限。
   for (const mutate of [s => { s.target.rawInput = structuredClone(s.target.rawInput); }, s => { s.prior = { ...s.prior }; }, s => { s.snapshots = structuredClone(s.snapshots); }]) {
     const held = await openVatInputPairFiles(f.request); try { mutate(held); await assert.rejects(() => calculateOfflineVatQ2(held)); } finally { held.close(); }
   }

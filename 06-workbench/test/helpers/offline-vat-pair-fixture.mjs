@@ -1,4 +1,4 @@
-// Synthetic originals -> public OFFLINE-03B formal posting -> an existing target DB.
+// 合成原件 -> 公开 OFFLINE-03B 正式记账 -> 已有目标数据库。
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -16,7 +16,7 @@ export async function createPairFixture(directory, options = {}) {
   directory = resolve(directory);
   const f = createHistoryFixture(directory, { amounts: [options.priorAmount ?? '407191.00'], post: false });
   const q2 = join(directory, 'q2'); mkdirSync(q2);
-  // Derive independent raw evidence with actual April dates, never shift Q2 into Q1.
+  // 用实际四月日期推导独立原始证据，绝不把 Q2 移到 Q1。
   const transform = value => Array.isArray(value) ? value.map(transform) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, transform(v)])) : typeof value === 'string' ? value.replaceAll('2026-Q1', '2026-Q2').replaceAll('2026-01-13', '2026-04-17').replaceAll('2026-03', '2026-06').replaceAll('2026-01', '2026-04').replaceAll('1001', '2001') : value;
   for (const name of readdirSync(f.dir).filter(n => /\.(json|csv)$/.test(n) && n !== 'request.json')) {
     if (name.endsWith('.json')) writeJson(join(q2, name), transform(readJson(join(f.dir, name))));
@@ -36,7 +36,7 @@ export async function createPairFixture(directory, options = {}) {
   if (options.establishedOn) {
     const path = join(f.dir, 'tax.json'), tax = readJson(path); tax.enterprise.establishedOn = options.establishedOn; writeJson(path, tax);
   }
-  // Opening months must already exist before the read-only consumer runs.
+  // 只读消费者运行前，期初月份必须已存在。
   const setup = spawnSync(process.execPath, ['--input-type=module', '-e', `process.env.WORKBENCH_DATA_DIR=process.argv[1];const {db}=await import(${JSON.stringify(new URL('../../server/db.mjs',import.meta.url).href)});const A=await import(${JSON.stringify(new URL('../../server/accounting.mjs',import.meta.url).href)});try{for(const p of ['2026-04','2026-05','2026-06'])A.ensurePeriod(Number(process.argv[2]),p);}finally{db.close();}`, dirname(f.dbPath), String(f.id)], {encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1',TEMP:directory,TMP:directory}});
   assert.equal(setup.status,0,setup.stderr);
   const db = new DatabaseSync(f.dbPath, {readOnly:true});

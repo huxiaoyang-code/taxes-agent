@@ -1,4 +1,4 @@
-// Explicit local read capability. Never import the application's default db.mjs.
+// 显式本机读取能力，绝不导入应用的默认 db.mjs。
 import { openSync, closeSync, fstatSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -18,15 +18,15 @@ const freeze = value => {
 };
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function assertFiniteNumbers(value) {
-  // JSON would collapse +Infinity/-Infinity to null. Reject before any digest or
-  // export, including numeric evidence outside the monetary columns.
+  // JSON 会把 +Infinity/-Infinity 折叠为 null，须在任何摘要或
+  // 导出之前拒绝它们，金额列之外的数值证据同样适用。
   if (typeof value === 'number' && !Number.isFinite(value)) fail('ledger_stored_number_invalid');
   if (value && typeof value === 'object') for (const child of Object.values(value)) assertFiniteNumbers(child);
 }
 const samePath = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 const identity = stat => `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
 function fileIdentity(file) {
-  // Reject aliases, links and non-files, including linked ancestor directories.
+  // 拒绝别名、链接和非文件对象，包括存在链接的祖先目录。
   for (let p = file;; p = dirname(p)) {
     if (lstatSync(p).isSymbolicLink() || !samePath(realpathSync.native(p), p)) fail('ledger_source_invalid');
     if (dirname(p) === p) break;
@@ -62,8 +62,8 @@ export function openReadonlyLedgerSource(file) {
     sources.set(source, state);
     return source;
   } catch {
-    try { db?.close(); } catch { /* cleanup */ }
-    try { if (fd !== undefined) closeSync(fd); } catch { /* cleanup */ }
+    try { db?.close(); } catch { /* 清理 */ }
+    try { if (fd !== undefined) closeSync(fd); } catch { /* 清理 */ }
     fail('ledger_source_invalid');
   }
 }
@@ -80,7 +80,7 @@ function normalizeScope(input) {
   for (let n = start; n <= end; n++) requestedPeriods.push(`${Math.floor(n / 12)}-${String(n % 12 + 1).padStart(2, '0')}`);
   return { enterpriseKey, accountSetId, fromPeriod, toPeriod, requestedPeriods };
 }
-// Do not use parseMoney here: its intentional input rounding must not repair bad stored evidence.
+// 此处不使用 parseMoney，其有意的输入舍入不能修复损坏的持久化证据。
 function minorUnits(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
   const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(value));
@@ -94,9 +94,7 @@ function validVoucherPeriodDate(v) {
   const time = Date.parse(v.voucher_date + 'T00:00:00Z');
   return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === v.voucher_date;
 }
-/** Pure strict wire-result parser; actual relations are supplied by the same
- * private read snapshot. An incomplete enriched result is never legacy data.
- */
+/** 纯且严格的传输结果解析器；实际关系来自同一个私有读取快照。增强结果不完整时，不能当作旧版数据。 */
 export function parseImportBatchResult(text, {header,headers=[],links=[],sources=[],vouchers=[],entries=[]} = {}) {
   try {
     const value=JSON.parse(text),legacy=['accountSetCreated','accountsAdded','openingBalancesApplied','vouchersCreated','vouchersDeduplicated'];
@@ -160,8 +158,8 @@ function readTargetBatchInventory(db, scope, presence) {
   const vouchers = referenceIds.flatMap(voucher => all('SELECT * FROM vouchers WHERE id=?', voucher));
   const entries = referenceIds.flatMap(voucher => all('SELECT * FROM voucher_entries WHERE voucher_id=? ORDER BY line_no,id', voucher));
   const future = new Set();
-  // Exclude only a fully explained, posted future batch. Neither timestamps nor
-  // an absent voucher/ambiguous result are evidence of a future business period.
+  // 仅排除归属已完整解释且已过账的未来批次。时间戳、
+  // 缺失凭证或模糊结果，都不能证明业务发生在未来期间。
   for (const h of relevantHeaders) {
     const parsed = parseImportBatchResult(h.result_json,{header:h,headers:relevantHeaders,links:relevantLinks,sources:relevantSources,vouchers,entries}), result=parsed?.associationsValid?parsed.value:null, bs = relevantLinks.filter(r => r.batch_id === h.batch_id), ss = relevantSources.filter(r => r.batch_id === h.batch_id);
     const identity = r => r.account_set_id === id && r.enterprise_key === key && r.source_system === h.source_system;
@@ -188,11 +186,11 @@ function readScope(db, scope, policy) {
   const accountSet = all('SELECT * FROM account_sets WHERE id=?', id)[0];
   if (!accountSet) fail('ledger_scope_missing');
   let profile = null;
-  try { profile = structuredClone(getAccountingProfile(accountSet.accounting_profile_id)); } catch { /* explicit unknown, no fallback */ }
+  try { profile = structuredClone(getAccountingProfile(accountSet.accounting_profile_id)); } catch { /* 显式保留 unknown，不回退 */ }
   const accounts = all('SELECT * FROM accounts WHERE account_set_id=? ORDER BY code,id', id);
   const openings = all('SELECT * FROM opening_balances WHERE account_set_id=? ORDER BY code', id);
   const periods = all('SELECT * FROM periods WHERE account_set_id=? AND period<=? ORDER BY period', id, to);
-  // Include earlier history because it can affect later tax calculations. No balance engine is added.
+  // 包含更早历史，因为它可能影响后续税算；不另建余额引擎。
   const vouchers = all('SELECT * FROM vouchers WHERE account_set_id=? AND period<=? ORDER BY period,voucher_date,id', id, to);
   const entries = all('SELECT e.* FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND v.period<=? ORDER BY v.id,e.line_no,e.id', id, to);
   const moneyIssues = [];
@@ -211,8 +209,8 @@ function readScope(db, scope, policy) {
   if (tablePresence.import_source_bindings) {
     sourceBindings = all('SELECT * FROM import_source_bindings WHERE enterprise_key=? ORDER BY id', key);
   }
-  // A missing optional association table must never erase known evidence from
-  // the remaining tables or hide a later change to it.
+  // 可选关联表缺失时，不能抹去其他表中的已知证据，
+  // 也不能隐藏其后续变化。
   if (tablePresence.import_voucher_sources) {
     voucherSources = all(`SELECT s.* FROM import_voucher_sources s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE (s.account_set_id=? OR v.account_set_id=?) AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`, id, id, to);
   }
@@ -221,8 +219,8 @@ function readScope(db, scope, policy) {
   }
   if (tablePresence.import_batches) {
     const batchIds = [...new Set([...voucherSources, ...batchVouchers].map(s => s.batch_id))].sort();
-    // Without either relation, existing batch metadata is still known local
-    // evidence; retain target metadata conservatively rather than call it absent.
+    // 即使两种关联均缺失，已有批次元数据仍是已知的本机证据；
+    // 应保守保留目标元数据，不能称其不存在。
     batches = !tablePresence.import_voucher_sources || !tablePresence.import_batch_vouchers
       ? all('SELECT * FROM import_batches WHERE account_set_id=? OR enterprise_key=? ORDER BY batch_id', id, key)
       : batchIds.flatMap(batch => all('SELECT * FROM import_batches WHERE batch_id=?', batch));
@@ -240,8 +238,8 @@ function readScope(db, scope, policy) {
     return { sourceId: s.id, voucherId: s.voucher_id, status, batchAssociation: batchLinked ? 'registered' : 'unverified', originalFileVerification: 'unverified' };
   });
   const audit = inspectAuditSchema(db);
-  // Unverified is not an excuse to discard persisted instance changes. Keep diagnostics
-  // in the content binding even when the component cannot authenticate an instance.
+  // 未核实不能成为丢弃持久实例变化的理由；即使组件不能认证实例，
+  // 诊断也要进入内容绑定。
   const instanceRows = table('audit_database_instances') ? all('SELECT * FROM audit_database_instances ORDER BY instance_id') : [];
   const instance = { status: audit.ok && audit.activeInstanceCount === 1 ? 'verified_local_audit_instance' : 'unverified', instanceId: audit.ok && audit.activeInstanceCount === 1 ? audit.activeInstanceId : null,
     schema: { state: audit.state, version: audit.version, problems: audit.problems, activeInstanceCount: audit.activeInstanceCount }, rows: instanceRows };
@@ -272,7 +270,7 @@ function readScope(db, scope, policy) {
 function captureData(state, scope, policy) {
   try {
     const value = withReadSnapshot(state.db, () => { const data = readScope(state.db, scope, policy); assertFiniteNumbers(data); return data; });
-    // Check identity after all reads as well; a removed old connection is never current at its path.
+    // 全部读取完成后再次核对身份；文件已移除的旧连接不能视为原路径的当前连接。
     if (fileIdentity(state.file) !== state.identity) fail('ledger_source_replaced');
     return value;
   } catch (error) {
@@ -299,8 +297,8 @@ export function validateLedgerSnapshot(source, snapshot) {
   }
 }
 
-// Two products from one SQLite read transaction and one physically held source.
-// The public digests are diagnostics; membership and capture identity stay private.
+// 两个产物来自同一 SQLite 读取事务及同一个实际持有来源。
+// 公开摘要仅作诊断，成员资格和捕获身份保持私有。
 export function captureLedgerSnapshotPair(source, priorScope, targetScope, targetPolicy) {
   if (targetPolicy !== undefined && targetPolicy !== Q2_BATCH_POLICY) fail('ledger_pair_policy_invalid');
   const state = sourceState(source), scopes = [normalizeScope(priorScope), normalizeScope(targetScope)];

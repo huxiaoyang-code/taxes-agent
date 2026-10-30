@@ -1,4 +1,4 @@
-// Public bridge: every invocation runs in a fresh fixed Node process. No default DB import.
+// 公开桥接：每次调用运行于全新固定 Node 进程，不导入默认数据库。
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 
 const requireValue = (condition, code = 'posting_request_invalid') => { if (!condition) throw Object.assign(new Error(code), { code }); };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-// Shared native-only scanner. The public caller never accepts a supplied manifest.
+// 共享的原生依赖扫描器；公开调用者不能提供自定义 manifest。
 export function capturePostingCode() {
   const found = new Map(), moduleRoot = dirname(fileURLToPath(import.meta.url));
   const visit = url => {

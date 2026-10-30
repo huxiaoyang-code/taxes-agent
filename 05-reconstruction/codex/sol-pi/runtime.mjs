@@ -11,7 +11,7 @@ const json=path=>JSON.parse(readFileSync(path,'utf8'));
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const requiredAbsolute=(value,code)=>{if(typeof value!=='string'||!isAbsolute(value))throw Error(code);return resolve(value);};
 
-// Selecting off is deliberately pure: no dependency imports, reads, mkdirs or installs.
+// 选择 off 时保持纯操作：不导入依赖、不读取、不建目录、不安装。
 export function resolveSolPi(options={}){
   const {host,runtimeEfficiency='off',harnessImprovement='off'}=options;
   if(!['pi','claude-code','dsh','zcode'].includes(host))throw Error('sol_pi_host_invalid');
@@ -21,7 +21,7 @@ export function resolveSolPi(options={}){
   if(harnessImprovement!=='off')throw Error('sol_pi_harness2_combination_unsupported');
   const toolRoot=requiredAbsolute(options.toolRoot,'sol_pi_explicit_tool_root_required');
   const archiveRoot=requiredAbsolute(options.archiveRoot,'sol_pi_explicit_archive_root_required');
-  // IDs name local archive scopes; never accept a path or an enterprise name here.
+  // ID 仅标识本机归档范围；此处不接受路径或企业名称。
   if(!/^[A-Za-z0-9_-]{1,80}$/.test(options.accountSetId??''))throw Error('sol_pi_archive_account_id_required');
   return {enabled:true,host,runtimeEfficiency,harnessImprovement,toolRoot,archiveRoot,accountSetId:options.accountSetId,sessionId:randomUUID()};
 }
@@ -62,7 +62,7 @@ export function prepareArchive(selection){
   const runDirectory=join(selection.archiveRoot,selection.accountSetId,selection.sessionId);
   const noLinks=path=>{for(let current=resolve(path);;current=dirname(current)){if(existsSync(current)&&lstatSync(current).isSymbolicLink())throw Error('sol_pi_archive_reparse_point_refused');if(dirname(current)===current)break;}};
   noLinks(runDirectory);mkdirSync(dirname(runDirectory),{recursive:true,mode:0o700});mkdirSync(runDirectory,{mode:0o700});noLinks(runDirectory);
-  // Windows ignores POSIX mode. Restrict and verify a dedicated per-run directory.
+  // Windows 不遵循 POSIX mode；须限制并核验每次运行的专用目录。
   if(process.platform==='win32'){
     const script='$ErrorActionPreference="Stop"; $p=$args[0]; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=Get-Acl -LiteralPath $p; $acl.SetAccessRuleProtection($true,$false); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl; $check=Get-Acl -LiteralPath $p; if(-not $check.AreAccessRulesProtected){throw "archive_acl_not_protected"}; foreach($r in $check.Access){if($r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $r.AccessControlType -ne "Allow"){throw "archive_acl_unexpected_principal"}}';
     const encoded=Buffer.from(`$args=@('${runDirectory.replaceAll("'","''")}'); ${script}`,'utf16le').toString('base64');

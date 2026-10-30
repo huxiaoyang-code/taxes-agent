@@ -1,5 +1,5 @@
 import { captureHarnessCode } from './harness-code.mjs';
-// Native Harness task bridge used by existing persisted batch stages. No new queue.
+// 已有持久批处理阶段使用的原生 Harness 任务桥接，不另建队列。
 import { readFileSync } from 'node:fs';
 import { inspectHarness,runHarnessTask } from './harness-runtime.mjs';
 const check=(v,code)=>{if(!v)throw Object.assign(new Error(code),{code});};
@@ -13,8 +13,8 @@ try{
  let task=view.tasks.find(t=>t.taskId===spec.taskId);check(task&&allowed.has(task.capabilityId)&&task.capabilityId===spec.capabilityId,'batch_harness_capability_invalid');
  const writeCapability=['agency.posting','period.carryforward','period.close','period.reopen','period.unpost-derived'].includes(task.capabilityId);
  let observation=null;
- // Query the original write before deciding if any execution remains. A known
- // historical success never permits another financial write.
+ // 判断还有什么可执行之前，先查询原始写入；已知的
+ // 历史成功绝不允许再次财务写入。
  if(writeCapability&&(task.operationState==='executed'||task.operationState==='unknown')){
   try{observation=await runHarnessTask(spec.storePath,{taskId:task.taskId,phase:'query'});}catch(e){if(e.code!=='harness_attempt_missing')throw e;}
   view=await inspectHarness(spec.storePath);task=view.tasks.find(t=>t.taskId===spec.taskId);
@@ -31,8 +31,8 @@ try{
  const receipt=task.receipt??task.historicalReceipt;
  process.stdout.write(JSON.stringify({status:current||operationCompleted?'succeeded':'needs_review',code:current||operationCompleted?null:task.operationState==='unknown'?'batch_harness_outcome_unknown':'batch_harness_result_not_current',taskIdentity:{...spec,period:r.period},completionBasis:current?'current_result':operationCompleted?'original_committed_operation':'unresolved',operationState:task.operationState,resultCurrent:task.resultCurrent,confirmationCurrent:task.confirmationCurrent,targetVersion:receipt?.targetVersion??null,operationId:receipt?.operationId??null,historicalReceipt:task.historicalReceipt,blockers:task.blockers,nextSteps:current||operationCompleted?[]:[{action:task.dependencyDigest===spec.dependencyDigest?'retry_only_unfinished_stage_after_resolving_blocker':'create_new_job_for_only_unfinished_or_affected_tasks',reason:task.dependencyDigest===spec.dependencyDigest?'Original manifest version retained':'Immutable original job cannot adopt new task facts/graph versions',storePath:spec.storePath,taskId:spec.taskId,currentDependencyDigest:task.dependencyDigest,preserveOriginalOperation:true}],observation,periodComplete:false,submittable:false}));
  }catch(e){
- // Re-read retained task state after an error. A failed call or unavailable Store
- // alone cannot establish zero writes; only an actual matching task observation can.
+ // 错误后重新读取保留的任务状态；调用失败或 Store 不可用本身
+ // 不能证明零写入，只有实际匹配的任务观察才能证明。
  let retained={};
  if(requestContext?.spec)try{
   const r=requestContext,view=await inspectHarness(r.spec.storePath),task=view.tasks.find(t=>t.taskId===r.spec.taskId);

@@ -57,7 +57,7 @@ await suite('auxiliary-core-integration',async h=>{
  const sourceBefore=JSON.stringify(db.prepare('SELECT * FROM import_voucher_sources').all());const batchBefore=JSON.stringify(db.prepare('SELECT * FROM import_batches').all());
  const replay=IM.importIncremental({dryRun:false,mode:'create',batchId:'aux-import-1',source:{system:'synthetic',enterpriseKey:'SYNTH-IMPORT'},payload:{account_set:{name:'Synthetic Import',start_period:'2025-12'},vouchers:[{sourceVoucherId:'SRC-1',period:'2025-12',date:'2025-12-01',number:1,entries:[{code:'1122',debit:100},{code:'5001',credit:100}]}]}});
  assert.equal(replay.ok,true);assert.equal(JSON.stringify(db.prepare('SELECT * FROM import_voucher_sources').all()),sourceBefore);assert.equal(JSON.stringify(db.prepare('SELECT * FROM import_batches').all()),batchBefore);assert.equal(X.auxiliaryLedger(db,{accountSetId:setId,period:'2025-12',code:'1122'}).totals.closing,100);
- // Real derived-voucher recalculation must preserve all original rows on auxiliary rejection.
+ // 辅助核算拒绝时，实际派生凭证重算必须保留全部原始行。
  const derived=makeSet('derived'),dp=entity(derived,'party','P'),sale=voucher(derived,'2025-12',[{code:'1122',debit:31},{code:'5001',credit:31}]);A.postVoucher(derived,sale.id);
  const carry=A.carryForwardProfit(derived,'2025-12').voucher;
  const ce=X.listAuxiliaryEntries(db,{accountSetId:derived,voucherId:carry.id}).find(r=>r.code==='5001');allocate(derived,{entryId:ce.entryId},[{partyId:dp,debit:31}]);A.unpostVoucher(derived,carry.id);
@@ -67,7 +67,7 @@ await suite('auxiliary-core-integration',async h=>{
  const opening=makeSet('opening-atomic'),op=entity(opening,'party','P');A.setOpeningBalances(opening,[{code:'1002',debit:900},{code:'1122',debit:100},{code:'3001',credit:1000}]);allocate(opening,{openingCode:'1122'},[{partyId:op,debit:100}]);const openingBefore=A.getOpeningBalances(opening);
  assert.throws(()=>A.setOpeningBalances(opening,[{code:'1002',debit:800},{code:'1122',debit:200}]),/aux_opening_reallocation_required/);assert.deepEqual(A.getOpeningBalances(opening),openingBefore);
  A.setPeriodStatus(opening,'2025-12','closed');assert.throws(()=>X.updateAuxiliaryEntity(db,{accountSetId:opening,entityId:op,name:'closed rename',reason:'test'}),/aux_period_closed/);A.setPeriodStatus(opening,'2025-12','open');
- // These faults use real SQLite connections; only the named exec boundary is injected.
+ // 这些故障使用真实 SQLite 连接；只在指定 exec 边界注入故障。
  const snap=await h.LB.createBackup({dbPath:h.dbPath,outDir:join(h.root,'transaction-fault-seed')});assert.equal(snap.ok,true);
  const connection=label=>{const path=join(h.root,label+'.db');fs.copyFileSync(join(snap.backupDir,h.LB.SNAPSHOT_FILE),path);const c=new DatabaseSync(path);c.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE');return {c,path};};
  {

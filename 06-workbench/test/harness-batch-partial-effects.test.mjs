@@ -11,8 +11,8 @@ import {committedBridgeObservation,batchPartialEffects} from '../server/harness-
 import {queryOperation} from '../server/local-audit-operation.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 
-// Real native posting + actual batch checkpoint race, not a fabricated report.
-// Every source, review and database below is synthetic and remains in this run.
+// 真实原生记账与实际批次检查点竞争，不伪造报告。
+// 下方每份来源、复核及数据库均为合成数据，只留在本次运行范围。
 mkdirSync(resolve('.agent-runs'),{recursive:true});
 const root=mkdtempSync(resolve('.agent-runs/batch-partial-'));
 console.log('Synthetic partial-effects reproduction: '+root);
@@ -68,13 +68,13 @@ assert.match(status.partialEffectsMeaning,/null means effects cannot yet be esta
 const execute=await adapter(f,'batch.start');assert.equal(execute.applied,false);assert.equal(execute.partialEffects,true);assert.deepEqual(nativeState(f),initialNative);
 const retry={itemKey:'enterprise-a',period:'2026-01',stageKey:stage.stageKey,reason:'Synthetic exact retry after checking the original operation'};
 const stillMissing=await adapter(f,'batch.resume','execute',{retry});assert.equal(stillMissing.applied,false);assert.equal(stillMissing.partialEffects,true);assert.equal(stillMissing.report.items[0].stages[0].status,'needs_review');assert.deepEqual(nativeState(f),initialNative);
-// A later unavailable Store must not erase a proven original commit at checkpoint.
+// 后续 Store 不可用，不能抹掉检查点处已经证实的原始提交。
 renameSync(f.store,f.store+'.unavailable');
 try{const unavailable=await adapter(f,'batch.resume','execute',{retry});assert.equal(unavailable.partialEffects,true);assert.ok(unavailable.report.items[0].stages[0].evidence.bridge.priorCommittedObservation);assert.equal((await adapter(f,'batch.status')).partialEffects,true);}
 finally{renameSync(f.store+'.unavailable',f.store);}
 assert.deepEqual(nativeState(f),initialNative);
 
-// Actual stdio presentation: immediate run, original query, task status and full.
+// 实际 stdio 展示：即时运行、原始查询、任务状态及完整结果。
 const batchStore=join(f.root,'batch-harness');await initHarness(batchStore,{...f.scope,period:'2026'});
 await registerHarnessSource(batchStore,{sourceId:'raw',path:f.sourcePath,locator:'Synthetic original for explicit batch request',parsed:false,unrecognized:[],classification:'provided'});
 await registerHarnessFacts(batchStore,[fact('start',{target:f.target,jobKey:f.manifest.jobKey,manifestPath:f.manifestPath,outputDir:join(f.root,'batch-output')}),fact('status',{target:f.target,jobKey:f.manifest.jobKey}),fact('resume',{target:f.target,jobKey:f.manifest.jobKey,retry})]);
@@ -90,7 +90,7 @@ try{
  const resume=await run('resume');assert.equal(resume.receipt.actualImpact.partialEffects,true);assert.equal(resume.receipt.actualImpact.applied,false);
  for(const responseMode of ['summary','full']){const queried=await run('resume',{phase:'query',responseMode});assert.equal(queried.observation.partialEffects,true);assert.equal(queried.observation.applied,false);}
  const view=await call('harness_status');for(const t of view.tasks){const receipt=t.receipt??t.historicalReceipt;assert.equal(receipt.actualImpact.partialEffects,true,JSON.stringify(t));}
- // Receipt detail pointer returns original report and flags, not the bounded preview.
+ // 回执详情指针返回原始报告和标志，而非受限预览。
  const pointer=summary.receipt.actualImpact.details;
  const detail=await call('harness_receipt_read',{receiptRef:pointer.receiptRef,pointer:'/receipt/actualImpact/partialEffects'});assert.equal(JSON.parse(detail.fragment),true,JSON.stringify(detail));
  renameSync(f.request.feedbackPath+'.unavailable',f.request.feedbackPath);
@@ -120,9 +120,9 @@ async function verifyMcpEffects(f,report,expected){
  }finally{await client.close();}
 }
 
-// After the actual commit, a synthetic child-transport failure exercises the
-// real no-identity query return. Only the already-verified ctx-bound prior receipt
-// supplies the retained identity; no source files or production workers change.
+// 实际提交后，通过合成的子进程传输失败触发
+// 真实的无身份查询返回。只有已验证且绑定 ctx 的先前回执
+// 提供保留的身份；不修改源文件或生产工作进程。
 const unavailableWorker=await scenario('committed-worker-unavailable'),workerReport=startWithRace(unavailableWorker,{workerUnavailable:true}),workerStage=workerReport.items[0].stages[0];
 assert.equal(workerStage.status,'needs_review');assert.equal(workerStage.evidence.bridge.code,'batch_harness_worker_unavailable');assert.ok(workerStage.evidence.bridge.priorCommittedObservation);
 assert.equal(workerStage.evidence.bridge.taskIdentity.dependencyDigest,workerStage.evidence.bridge.priorCommittedObservation.taskIdentity.dependencyDigest);
@@ -134,9 +134,9 @@ const workerResume=await adapter(unavailableWorker,'batch.resume','execute',{ret
 assert.equal(workerResume.applied,true);assert.equal(workerResume.partialEffects,false);assert.deepEqual(nativeState(unavailableWorker),workerNative);
 console.log('PASS actual commit with injected child transport failure: ctx-bound identity/prior effect retained, original native event and 3 vouchers unchanged after recovery');
 
-// A task's historical executed state is not proof that its new request ran.
-// Reuse the committed book, change the request identity, and start a new version
-// job without preparing or executing that new native posting operation.
+// 任务历史上的 executed 状态不能证明其新请求已经执行。
+// 复用已提交账簿，修改请求身份，并启动新版本
+// 作业，但不准备或执行该次新的原生记账操作。
 const newRequest={...f.request,batchId:'new-version-never-executed'};
 await registerHarnessFacts(f.store,[fact('request',newRequest)]);
 const changedTask=(await inspectHarness(f.store)).tasks[0];
@@ -162,8 +162,8 @@ assert.equal(noNewNative(),0);assert.deepEqual(nativeState(f),initialNative);
 assert.ok((await inspectHarness(f.store)).history.some(a=>a.result?.operationId===initialNative.operation.receipt.operationId&&a.result.executionState==='executed'),'old successful history remains observable');
 console.log('PASS actual old write -> new same-task request/version/job remains unknown; normal/catch/prior-history bindings exclude old receipt, new native operation count=0, old 3 vouchers/event remain; MCP summary/full retain null');
 
-// Distinct real jobs prove no execution vs unavailable evidence, rather than
-// deriving false solely from the fact that no stage says succeeded.
+// 使用不同的实际作业区分未执行与证据不可用，不能
+// 仅因没有阶段标为 succeeded 就推导为 false。
 const zero=await scenario('known-not-executed',{missing:true}),zeroResult=await adapter(zero,'batch.start');
 assert.equal(zeroResult.applied,false);assert.equal(zeroResult.partialEffects,false,JSON.stringify(zeroResult));assert.equal(zeroResult.report.items[0].stages[0].evidence.bridge.operationState,'not_started');assert.equal(nativeState(zero).vouchers.length,0);assert.equal((await adapter(zero,'batch.status')).partialEffects,false);await verifyMcpEffects(zero,zeroResult.report,false);
 const unknown=await scenario('unavailable-before-observation');renameSync(unknown.store,unknown.store+'.unavailable');

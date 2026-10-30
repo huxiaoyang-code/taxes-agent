@@ -1,5 +1,5 @@
-// Shared boundary: business modules declare what they implement; the Harness owns
-// scheduling and evidence lifecycle. No accounting decisions or database imports.
+// 共享边界：业务模块声明实际实现内容；Harness 负责
+// 调度及证据生命周期，不作会计判断，也不导入数据库。
 export const HARNESS_CONTRACT_VERSION = 'finance-harness/1';
 export const CAPABILITY_CONTRACT_VERSION = 'finance-capability/1';
 export const FACT_STATES = Object.freeze(['provided', 'missing', 'conflict', 'unknown', 'unsupported', 'not_applicable']);
@@ -31,8 +31,8 @@ export function validateHarnessScope(scope) {
   return scope;
 }
 
-// Explicit containment is useful for adapters; equality must still use the full
-// period string so a monthly execution cannot become a quarterly confirmation.
+// 显式包含关系供适配器使用；相等判断仍须比较完整期间字符串，
+// 防止月度执行被提升成季度确认。
 export function scopeContainsMonth(scope, month) {
   validateHarnessScope(scope);
   if (typeof month !== 'string' || !/^20\d\d-(0[1-9]|1[0-2])$/.test(month)) return false;
@@ -42,17 +42,14 @@ export function scopeContainsMonth(scope, month) {
     : scope.period === month;
 }
 
-// Containment never widens a business function's implemented period support.
+// 期间包含关系不能扩大业务函数已经实现的期间支持范围。
 export function capabilitySupportsScope(capability, scope) {
   validateHarnessScope(scope);
   const kind = scope.period.length === 4 ? 'year' : scope.period.includes('-Q') ? 'quarter' : 'month';
   return (capability.supportedPeriods ?? ['month', 'quarter']).includes(kind);
 }
 
-/** entrypoint names are declarations, never executable paths supplied by a model.
- * The adapter registry must bind each name to a fixed local business function.
- * supportConditions describe limits and do not assert that input facts satisfy them.
- */
+/** entrypoint 只是声明名，不能是模型提供的可执行路径。适配器注册表须将名称绑定到固定本机业务函数。supportConditions 只描述限制，不证明输入事实满足条件。 */
 export function validateCapabilityDeclaration(c) {
   const code = 'harness_capability_invalid';
   fields(c, ['version', 'capabilityId', 'description', 'availability', 'necessaryFacts', 'supportConditions', 'entrypoint', 'ruleVersion', 'codeDigest', 'effect', 'resultSchema', 'traceReferences'], ['recovery', 'supportedPeriods'], code);
@@ -96,10 +93,7 @@ export function validateFact(f) {
   return f;
 }
 
-/** Execution, accountant review, and public rule promotion are independent axes.
- * A receipt from the fixed business adapter is authoritative for actual effects.
- * An unknown write is query-only until a business recovery result resolves it.
- */
+/** 执行、会计复核及公共规则晋升分别为独立状态轴。实际效果以固定业务适配器回执为准。未知写入在业务恢复结果解决前只能 query。 */
 export function validateExecutionReceipt(r) {
   const code = 'harness_receipt_invalid';
   fields(r, ['taskId', 'operationId', 'targetVersion', 'dependencyDigest', 'capabilityId', 'ruleVersion', 'codeDigest', 'executionState', 'reviewState', 'ruleState', 'resultRefs', 'actualImpact'], ['recovery', 'failure'], code);
@@ -120,8 +114,8 @@ export function validateExecutionReceipt(r) {
   return r;
 }
 
-// Task projections never rewrite immutable execution receipts. Null means a
-// temporary observation could not establish current applicability/confirmation.
+// 任务投影不改写不可变执行回执。null 表示暂时观察不足，
+// 无法确立当前适用性或确认状态。
 export const HARNESS_STATE_AXES = Object.freeze({
   operationState: 'Historical execution outcome retained across dependency changes; executed does not imply current applicability or accountant acceptance',
   resultCurrent: 'true: executed result verified against current dependencies; false: inapplicable or blocked by verified change; null: temporarily unverifiable',
@@ -134,9 +128,9 @@ export function validateHarnessTaskState(task) {
   return task;
 }
 
-// Facts refer to source evidence separately; runtime computes task input and
-// dependency digests from current facts, capability code/rule and parent results.
-// The Agent may replace the DAG; no fixed stage sequence is assumed here.
+// 事实单独引用来源证据；运行时根据当前事实、能力代码/规则
+// 及父任务结果，计算任务输入和依赖摘要。
+// Agent 可替换整个 DAG，此处不假设固定阶段顺序。
 export function validatePlanGraph(tasks) {
   const code = 'harness_plan_invalid'; list(tasks, code); const byId = new Map();
   for (const t of tasks) {
@@ -175,5 +169,5 @@ export function validateFeedback(f) {
   list(f.evidenceRefs, code); f.evidenceRefs.forEach(validateTraceReference); return f;
 }
 
-// Explicit binding for new tasks; immutable legacy plans retain their original first-fact meaning.
+// 新任务使用显式绑定；不可变旧计划保留原有首事实含义。
 export const requestFactIdForTask=task=>task.requestFactId??task.factIds[0];

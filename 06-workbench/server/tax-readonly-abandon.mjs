@@ -1,6 +1,6 @@
-// Explicit local administrator capability. Never exported by HTTP, Agent or MCP.
-// This retires an audited read-only operation; it does NOT stop a renderer or
-// request, prove a destroyed realm, or prevent a late response/Set-Cookie.
+// 显式本机管理员能力，不通过 HTTP、Agent 或 MCP 导出。
+// 这里只退役已审计的只读操作，不会停止渲染器或请求，
+// 不能证明执行域已销毁，也不阻止延迟响应或 Set-Cookie。
 import {createHash,randomBytes} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {open,lstat,unlink,realpath,link} from 'node:fs/promises';
@@ -37,11 +37,11 @@ function mutexShape(v){
 async function ownerAlive(pid){
   try{process.kill(pid,0);return true}catch(error){if(error.code==='ESRCH')return false;throw fail()}
 }
-// The persistent recovery file excludes ordinary collectors across crashes.
-// An OS mutex additionally serializes administrators adopting that dead owner's
-// file: two resume processes must not both retire its exclusion prematurely.
-// The helper has no browser access; closing its stdin releases the OS mutex,
-// including when the Node administrator exits unexpectedly.
+// 持久恢复文件在崩溃后仍排除普通采集者；
+// 操作系统互斥锁进一步串行化接管死进程文件的管理员，
+// 防止两个恢复进程同时提前退役其互斥保护。
+// 辅助进程无浏览器权限；关闭 stdin 即释放操作系统互斥锁，
+// Node 管理员意外退出时也一样。
 export async function acquireReadonlyAdminGuard(profile){
   if(process.platform!=='win32')throw fail();
   const script=`$ErrorActionPreference='Stop'
@@ -87,7 +87,7 @@ try {
     child.once('exit',()=>finish(true));child.once('error',()=>finish(true));
   });}catch{await close();throw fail()}
   const guard={verify(){if(!held||exited)throw fail()},close};
-  // Local-only smoke verification; not enumerable, journaled or model-facing.
+  // 仅供本机冒烟核验，不可枚举、不写日志，也不向模型暴露。
   Object.defineProperty(guard,'helperPid',{value:child.pid});return guard;
 }
 async function bounded(path,d,limit=16384){
@@ -99,9 +99,9 @@ async function bounded(path,d,limit=16384){
 }
 async function maybe(path,d){try{return await bounded(path,d)}catch(e){if(e.code==='ENOENT')return null;throw e}}
 async function createDurable(path,bytes,d){
-  // Publish complete immutable bytes with an exclusive link; a crash while
-  // writing leaves only an unreferenced private staging file, never a partial
-  // prepare/commit marker. Existing evidence is never overwritten.
+  // 使用独占链接发布完整不可变字节；写入期间崩溃只会留下
+  // 无引用的私有 staging 文件，绝不留下部分 prepare/commit 标记。
+  // 既有证据永不覆盖。
   const staging=path+'.'+randomBytes(16).toString('hex')+'.tmp';
   try{
     const h=await open(staging,'wx',0o600);
@@ -174,7 +174,7 @@ export async function abandonReadonlyOperation(args={},overrides={}){
             ||await maybe(lockPath,d)!==null)throw fail();
           await verifyRegistration();await unlink(mutexPath);
         }
-        // Once the original mutex is gone, never touch a new canonical lock.
+        // 原始互斥锁消失后，绝不触碰新的规范锁。
         return result=safeResult('abandoned_readonly','finished',{lockRetired:true,resumed:true});
       }
       const actual=mutexShape(JSON.parse(await bounded(mutexPath,d)));
@@ -243,9 +243,9 @@ export async function abandonReadonlyOperation(args={},overrides={}){
     await unlink(mutexPath);await d.checkpoint('mutex_retired');
     return result=safeResult('abandoned_readonly','finished',{lockRetired:true,resumed:args.resume===true});
   }catch{
-    // Publication precedes ACL/readback verification. A rejected await can have
-    // left complete durable state on disk, so the in-memory booleans cannot
-    // justify a negative conclusion. Unreadable state remains explicitly unknown.
+    // 发布先于 ACL 和读回核验；await 被拒绝时，磁盘可能已经
+    // 存在完整持久化状态，因此不能凭内存布尔值作否定结论。
+    // 状态不可读时，须显式保留 unknown。
     let commitState=committed?true:'unknown',resumeRequired=mutex||prepared?true:'unknown';
     if(!committed&&journalPaths){
       try{const bytes=await maybe(journalPaths.commit,d);

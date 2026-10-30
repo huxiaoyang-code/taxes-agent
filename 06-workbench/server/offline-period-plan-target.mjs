@@ -1,4 +1,4 @@
-// One fresh read-only worker. Application loading follows the parent code comparison.
+// 使用一个全新只读 worker；父进程代码比较后才加载应用。
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, lstatSync, realpathSync, openSync, fstatSync, closeSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
@@ -13,7 +13,7 @@ function checked(p) {
   for (let part=p;;part=dirname(part)) { const s=lstatSync(part); need(!s.isSymbolicLink() && realpathSync.native(part).toLowerCase()===part.toLowerCase(), 'period_plan_db_alias'); if (part===dirname(part)) break; }
   const s=lstatSync(p); need(s.isFile() && s.nlink===1 && s.size>=4096, 'period_plan_db_invalid'); return s;
 }
-// All table/schema rows, including audit/import/period state. No business algorithms here.
+// 包含全部表/结构记录及审计、导入、期间状态，此处没有业务算法。
 function snapshot(db) {
   const schema=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all();
   const tables=schema.filter(s=>s.type==='table').map(s=>({ name:s.name, rows:db.prepare('SELECT * FROM "'+s.name.replaceAll('"','""')+'"').all().map(r=>JSON.stringify(r,(_,v)=>typeof v==='bigint'?String(v):v)).sort() }));
@@ -99,7 +99,7 @@ async function handle(request) {
     };
     await assertOfflineActionInputCurrent(session); currentCode(); assertIdentity();
     need(snapshot(db)===before,'period_plan_ledger_changed'); db.exec('COMMIT');
-    // End the held snapshot, then re-read actual current rows (not stale WAL view).
+    // 结束持有的快照后重新读取实际当前行，不能使用过期 WAL 视图。
     db.exec('BEGIN'); need(snapshot(db)===before,'period_plan_ledger_changed'); db.exec('COMMIT');
     await assertOfflineActionInputCurrent(session); currentCode(); assertIdentity();
     const evidence={ code:expectedCode, ledgerDigest:sha(stable(relevant)), input:offlineActionSessionEvidence(session), actionPlanVersion:plan.planVersion, businesses:proofs, declarationVerification:'local_statements_attachments_unverified' };

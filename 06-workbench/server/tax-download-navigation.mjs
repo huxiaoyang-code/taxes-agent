@@ -1,4 +1,4 @@
-// Local administrator only: a single fixed normal navigation, never an Agent/MCP tool.
+// 仅供本机管理员执行一次固定普通导航，不是 Agent/MCP 工具。
 import {dirname,resolve} from 'node:path';
 import {createHash,randomBytes} from 'node:crypto';
 import {openRegisteredBrowserDiagnostic} from './tax-browser-diagnostic.mjs';
@@ -35,8 +35,8 @@ export class TaxDownloadNavigation{
     const eventUnknown=kind=>{unexpected=true;unknown=true;unexpectedEventKind??=kind;};
     const cleanupFailed=(step,error)=>{unknown=true;cleanupFailureStep??=step;
       cleanupFailureKind??=error?.code==='operation_timeout'?'timeout':REASONS.has(error?.code)?error.code:'unconfirmed';};
-    // ACL checks invoke bounded Windows helpers. Reserve thirty seconds for
-    // final ACL/frame verification, session detach, socket close and lock CAS.
+    // ACL 检查会调用有界 Windows 辅助进程；预留三十秒
+    // 进行最终 ACL/frame 核验、会话分离、socket 关闭和锁 CAS。
     const bounded=async(action,ms,cleanup=false)=>{
       const remaining=(cleanup?90000:60000)-(this.d.clock()-started);
       if(remaining<=0){unknown=true;throw fail('operation_timeout');}
@@ -46,7 +46,7 @@ export class TaxDownloadNavigation{
     };
     const active=async(cleanup=false)=>{
       if(context.createdAt>this.d.now()||context.expiresAt<=this.d.now())throw fail('context_expired');
-      // This check is a private lstat, without an ACL helper subprocess.
+      // 此处为私有 lstat 检查，不启动 ACL 辅助子进程。
       try{await bounded(()=>this.d.parentStore.assertNotAbandoned(template.parentSourceRef),2000,cleanup);}catch(e){if(e.code==='operation_timeout')throw e;throw fail('source_inactive');}
     };
     const send=async(method,params={},ms=3000,cleanup=false)=>{
@@ -68,8 +68,8 @@ export class TaxDownloadNavigation{
       let reply;try{reply=await send('Runtime.evaluate',{expression:liveRequestScript(template.identityRecipe,'identity',requestRef,document.fullUrl),
         returnByValue:true,awaitPromise:true,timeout:13000},14000);}catch(e){requestUnknown++;unknown=true;throw e;}
       const value=reply?.result?.value,matched=!reply?.exceptionDetails&&value?.requestRef===requestRef;
-      // Only the audited native-fetch preflight failure proves no dispatch.
-      // scope_changed is also returned after a response: it remains unknown.
+      // 只有受审计的原生 fetch 预检失败，才能证明尚未分派；
+      // 响应后也可能返回 scope_changed，因此仍保留 unknown。
       const knownNoDispatch=!reply?.exceptionDetails&&exact(value,['status','settled'])&&value.status==='scope_invalid'&&value.settled===true;
       if(matched&&value.requestPerformed===true)performed++;else if(knownNoDispatch)notPerformed++;else requestUnknown++;
       if(matched&&value.responseComplete===true)complete++;
@@ -96,12 +96,12 @@ export class TaxDownloadNavigation{
       try{transport=await bounded(async()=>{
         const opened=await this.d.openDiagnostic({registrationRef:template.registrationRef,registrationRoot:template.registrationRoot},
           {registrationBase:dirname(resolve(template.registrationRoot))});
-        // A diagnostic that finishes after our deadline must not leak its CDP socket.
+        // 超过期限后才完成的诊断不能泄露其 CDP socket。
         if(openingEnded){try{await opened.close();}catch{}throw fail('operation_timeout');}return opened;
       },30000);}finally{openingEnded=true;}
       await registered();await active();
-      // Do not begin an administrator browser operation when the remaining
-      // work budget cannot even cover the two read deadlines and navigation.
+      // 剩余工作预算连两次读取期限与导航都无法覆盖时，
+      // 不得开始管理员浏览器操作。
       if(60000-(this.d.clock()-started)<40000)throw fail('budget_insufficient');
       phase='lock';lockAcquiring=true;lock=await bounded(()=>this.d.acquireLock(transport.localScope.profilePath,
         {scope:{operation:'download_return_to_portal',parentSourceRef:template.parentSourceRef,contextRef:args.contextRef}}),5000);lockAcquiring=false;
@@ -117,14 +117,14 @@ export class TaxDownloadNavigation{
       });
       for(const [name,kind] of [['Page.navigatedWithinDocument','within_document'],['Page.frameDetached','frame_detached'],['Inspector.detached','inspector_detached']])listen(name,()=>eventUnknown(kind));
       listen('Runtime.executionContextCreated',p=>{
-        // Runtime.enable enumerates existing contexts before the first identity read.
+        // Runtime.enable 在首次身份读取前枚举已有上下文。
         if(navigationAttempted===0&&Number.isSafeInteger(p.context?.id)&&p.context.id>0){
           if(oldContextIds.size>=1024)eventUnknown('context_limit');else oldContextIds.add(p.context.id);
         }
       });
       listen('Runtime.executionContextsCleared',()=>{
-        // Match the observed portal bootstrap: at most two clears before its
-        // unique initial main-frame event. Never carry this allowance into reads.
+        // 匹配已观察到的门户启动行为：唯一初始主 frame 事件前
+        // 最多允许两次清空；此例外不能延伸到读取阶段。
         if(navigating&&navEvents===0&&initialContextClearCount<2)initialContextClearCount++;
         else eventUnknown('contexts_cleared');
       });
@@ -161,16 +161,16 @@ export class TaxDownloadNavigation{
     finally{
       const operationSettled=!!finalDocument&&identityMatches===2&&performed===2&&complete===2&&requestUnknown===0&&navigationConfirmed===1&&!unknown&&!unexpected;
       const operationFailurePhase=result?.status==='portal_return_failed'?result.phase:null,operationFailureReason=result?.status==='portal_return_failed'?result.reason:null;
-      // Cleanup failure never grants another collector permission to reuse an uncertain browser.
+      // 清理失败不会授权下一位采集者复用状态不明的浏览器。
       if(attached?.sessionId){
         try{
           cleanupStep='source_verify';await active(true);cleanupStep='registration_verify';await registered(true);cleanupStep='document_verify';
           if(canonical(await currentDocument(true))!==canonical(document))throw fail('document_changed');
           if(unexpected)throw fail('event_unknown');
         }catch(error){cleanupFailed(cleanupStep,error);finalDocument=null;}
-        // Detaching the owned CDP session tears down its enabled domains. A
-        // preceding Runtime.disable can itself emit contextsCleared, which must
-        // not be confused with an application document change.
+        // 分离自有 CDP 会话会关闭其已启用领域；此前若调用
+        // Runtime.disable 本身也可能发出 contextsCleared，
+        // 不能把该事件误认为应用文档变化。
         cleanupStep='detach';try{detachRequested=true;await bounded(()=>transport.cdp.send('Target.detachFromTarget',{sessionId:attached.sessionId},{timeoutMs:3000}),3000,true);}
         catch(error){cleanupFailed(cleanupStep,error);}
       }

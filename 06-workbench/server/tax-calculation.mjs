@@ -1,4 +1,4 @@
-// Read-only VAT workpaper. Capability arguments cannot be replaced by JSON/digests.
+// 只读 VAT 工作底稿；能力参数不能被 JSON 或摘要替代。
 import { fields, requirePlainJson, requireValue, validateScope, stable, hash } from './offline-material-adapters.mjs';
 import { buildOfflineCandidates } from './offline-bookkeeping.mjs';
 import { assessAccountingReadiness, sameRef } from './offline-accounting-readiness.mjs';
@@ -9,7 +9,7 @@ import { offlineMoneyToCents } from './offline-contracts.mjs';
 import { VAT_RULE_VERSION, getVatRules, VAT_Q2_RULE_VERSION, getVatQ2Rules } from './tax-rule-registry.mjs';
 
 export const VAT_VERSION = 'offline-vat-workpaper/1';
-// Reserved bridge contract. This module never performs this import; tests use the core importer.
+// 预留桥接合同；本模块从不执行此导入，测试使用核心导入器。
 export const VAT_SOURCE_SYSTEM = 'offline-bookkeeping-candidates-v1';
 export const VAT_EXCLUSIONS = Object.freeze(['otherSales', 'realEstateSalesAndLeasing', 'landUseRights', 'constructionPrepayments', 'differentialTaxation', 'crossBorder', 'deemedSales', 'exemptions', 'otherReliefsAndCredits', 'waivedReduction', 'prepayments', 'priorAdjustments', 'nonMonetaryOrAbnormalPricing', 'mixedTransactions', 'withholdingOrImports']);
 const same = (a, b) => stable(a) === stable(b);
@@ -59,7 +59,7 @@ export function calculateOfflineVat(input, source, snapshot) {
   return calculatePeriod(input, source, snapshot);
 }
 function calculatePeriod(input, source, snapshot, bridge) {
-  // Authenticate before examining caller-provided data. Never accept arbitrary DBs/JSON snapshots.
+  // 检查调用者数据前先认证，不接受任意数据库或 JSON 快照。
   const initial = validateLedgerSnapshot(source, snapshot);
   requirePlainJson(input); fields(input, ['scope', 'reports', 'declaration', 'profileId', 'accountingFacts', 'taxFacts'], ['previousComputation']);
   const ledgerScope = scopeFor(input.scope);
@@ -212,23 +212,23 @@ function calculatePeriod(input, source, snapshot, bridge) {
 }
 export function vatComparisonSummary(p) { return Object.fromEntries(['version', 'scope', 'contentDigest', 'inputHash', 'ruleVersion', 'ruleDigest', 'ledgerSnapshotDigest'].map(k => [k, structuredClone(p[k])])); }
 
-// This extra integrity check is deliberately confined to the new historical bridge.
-// Existing v1 output and admission policy remain byte-for-byte compatible.
+// 额外完整性检查有意限定在新增历史桥接内；
+// 已有 v1 输出和准入策略逐字节保持兼容。
 function checkAllSourceRows(snapshot, used, problem, batchProof) {
   const issue = (code, field) => problem(code, field, 'blocked', 'conflict', { audience: 'operator_engineering', customerActionRequired: false, requestedFact: '操作者核对实际导入批次、创建/去重关联及已过账来源，修复后重新读取；不要求客户重复提供已核对原件或预制税额/分录' });
   for (const link of snapshot.sources.voucherSources) if (!used.has(link.voucher_id)) problem('unexplained_source_association', `source:${link.id}`);
   const explained = new Set();
   for (const row of snapshot.sources.batchVouchers) {
     const links = snapshot.sources.voucherSources.filter(s => ['voucher_id', 'enterprise_key', 'account_set_id', 'source_system', 'source_voucher_id', 'content_fingerprint'].every(k => s[k] === row[k]));
-    // The complete target inventory authenticates counts even when this is the
-    // Q1 projection of a single batch containing both Q1 and Q2 deduplications.
+    // 完整目标清单可认证计数，即使这里是同时含 Q1/Q2
+    // 去重的同一批次的 Q1 投影也一样。
     const authenticated = batchProof?.headers.has(row.batch_id) && same(batchProof.links.get(row.id), row);
     if (authenticated && used.has(row.voucher_id) && links.length === 1 && (row.action === 'deduplicated' || row.action === 'created' && links[0].batch_id === row.batch_id)) explained.add(row.batch_id);
     else issue('unexplained_import_batch_association', `batchVoucher:${row.id ?? row.voucher_id}`);
   }
   for (const batch of snapshot.sources.batches) if (!explained.has(batch.batch_id) || !same(batchProof?.headers.get(batch.batch_id), batch)) issue('unexplained_import_batch', `batch:${batch.batch_id}`);
-  // Current normalized bindings carry enterprise identity; the real account set
-  // is authenticated by snapshot.binding, not a nonexistent binding column.
+  // 当前规范化绑定包含企业身份；真实账套
+  // 由 snapshot.binding 认证，不依赖不存在的绑定字段。
   for (const binding of snapshot.sources.sourceBindings) if (binding.source_system !== VAT_SOURCE_SYSTEM || binding.enterprise_key !== snapshot.scope.enterpriseKey) problem('unexplained_source_binding', `binding:${binding.id}`);
 }
 
@@ -271,9 +271,7 @@ function checkTargetBatchInventory(snapshot, problem) {
   return proof;
 }
 
-/** Only a live, private, same-source file-backed pair can enter the Q2 bridge.
- * No previous computation, public snapshot JSON, receipt digest or client number
- * is accepted. Q1 is actually recomputed here on every invocation. */
+/** 只有实时、私有、同来源、基于文件的配对才能进入 Q2 桥接。不接受前次计算、公开快照 JSON、回执摘要或客户预制数字；每次调用都实际重算 Q1。 */
 export async function calculateOfflineVatQ2(session) {
   const before = await assertVatInputPairCurrent(session);
   const { source, snapshots, prior: priorSession, target: targetSession } = session;
@@ -302,8 +300,8 @@ export async function calculateOfflineVatQ2(session) {
     const value = input.declaration[area], state = area === 'opening' ? 'balances_required' : 'prior_required';
     if (value?.state !== state) problem('explicit_Q2_history_dependency_required', `declaration.${area}`, 'blocked', value?.state === 'unknown' ? 'unknown' : value ? 'conflict' : 'missing');
     if (!(value?.evidenceIds ?? []).some(id => input.declaration.evidence?.some(e => e.evidenceId === id && e.kind !== 'attachment_reference' && e.confirmedBy.role === 'accountant' && e.basis))) problem('accountant_Q2_history_dependency_required', `declaration.${area}`, 'blocked', 'missing');
-    // An external history/balance attachment is outside this bridge. Its meaning
-    // must be resolved rather than erasing the old unsupported/conflict status.
+    // 外部历史或余额附件不在此桥接范围内；须解释其含义，
+    // 不能抹去旧的 unsupported/conflict 状态。
     if (input.declaration.materials?.some(m => m.area === area)) problem('external_history_material_not_supported_by_bridge', `declaration.${area}`, 'unsupported');
   }
   const a = snapshots.prior, b = snapshots.target;
@@ -324,9 +322,9 @@ export async function calculateOfflineVatQ2(session) {
   if (!batchesSame) problem('prior_batch_metadata_conflict', 'ledger.sources');
   let priorSourceIssue = false;
   checkAllSourceRows(a, new Set(priorVoucherIds), (...args) => { priorSourceIssue = true; problem(...args); }, batchProof);
-  // Explanation of already reconciled accounting is independent of whether a
-  // tax fact is unknown or another target batch blocks the overall tax bridge.
-  // This changes no admission condition: every upstream/target issue remains.
+  // 对已经核对的会计结果作解释，不依赖税务事实是否未知，
+  // 也不依赖其他目标批次是否阻塞整条税算桥接。
+  // 这不改变准入条件，全部上游及目标问题仍保留。
   const priorExplained = historySame && sourcesSame && batchLinksSame && batchesSame && !priorSourceIssue && a.sources.schemaStatus === 'present' && a.accountSet.start_period === '2026-01' && a.openingBalances.every(e => e.debitMinor === 0 && e.creditMinor === 0) && !a.counts.priorVouchers && !a.completeness.moneyIssues.length && !a.completeness.unknownStatuses.length && !a.completeness.missingPeriods.length && priorVoucherIds.length === a.vouchers.length && new Set(priorVoucherIds).size === priorVoucherIds.length;
   const bridge = { admitted: issues.length === 0, priorExplained, prior, issues, priorVoucherIds, priorSourceIds, proof, batchProof };
   const computation = calculatePeriod(input, source, snapshot, bridge);

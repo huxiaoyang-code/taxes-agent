@@ -126,7 +126,7 @@ try {
       const index = allText(book).join('\n'); assert.ok(index.includes('000000000000000000001001')); assert.ok(index.includes('=SUM(1+2)中文-1.23@危险')); assert.ok(index.includes('2026-03-20')); assert.ok(index.includes('=会计中文+@-731'));
       assert.ok(index.includes(f.input.reports[0].sources[0].fileSha256)); assert.ok(index.includes('/computation/calculationNodes/')); assert.ok(index.includes('https://')); assert.ok(index.includes('voucherId'));
       assert.ok(manifest.inputFiles.some(x => x.path.endsWith('sales.csv')));
-      assert.ok(!JSON.stringify(saved).includes('rawContent')); // No embedded source/base64 payloads.
+      assert.ok(!JSON.stringify(saved).includes('rawContent')); // 不嵌入源码或 base64 载荷。
       for (const sheet of book.worksheets) sheet.eachRow((row, n) => { if (n > 1) row.eachCell(c => assert.equal(c.type, ExcelJS.ValueType.String)); });
       assert.equal(book.getWorksheet('申报字段').views[0].state, 'frozen');
     } finally { session.close(); }
@@ -198,7 +198,7 @@ try {
       const inventory = await assertVatInputSessionCurrent(session, session.rawInput, session.source, session.snapshot); inventory.length = 0;
       assert.ok((await assertVatInputSessionCurrent(session, session.rawInput, session.source, session.snapshot)).length > 0);
       write(join(f.dir, 'sales.csv'), f.sources[0].text + '\n');
-      session.assertCurrent = async () => {}; // A changed facade cannot replace the private guard.
+      session.assertCurrent = async () => {}; // 改变外观对象不能替换私有保护。
       await assert.rejects(assertVatInputSessionCurrent(session, session.rawInput, session.source, session.snapshot), /input_changed/);
       await assert.rejects(exportAccountantReview(b, join(f.dir, 'stale-file'), { inputSession: session }), /input_changed/);
       await assert.rejects(exportAccountantReview(b, join(f.dir, 'omitted-session')), /input_changed/);

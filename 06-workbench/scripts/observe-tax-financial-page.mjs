@@ -1,4 +1,4 @@
-// Local-only CLI: two opaque references, no URLs, bodies, targets or endpoints.
+// 仅限本机的 CLI：两个不透明引用，不输出 URL、正文、目标或端点。
 import {pathToFileURL} from 'node:url';
 import {TaxDownloadFinancialPassive} from '../server/tax-download-financial-passive.mjs';
 export async function observeTaxFinancialPage(args,overrides={}){return new TaxDownloadFinancialPassive(overrides).capture(args);}

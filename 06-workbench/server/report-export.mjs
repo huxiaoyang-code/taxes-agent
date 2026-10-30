@@ -1,4 +1,4 @@
-// Internal report downloads. Reading existing books is not a completeness or tax-filing certification.
+// 内部报表下载；读取已有账簿不代表完整性认证或申报认证。
 import { db } from "./db.mjs";
 import { storedCents, centsToNumber, formatCents } from "./money.mjs";
 import { balanceSheet, incomeStatement, cashFlowStatement, accountSetProfile } from "./accounting.mjs";
@@ -6,7 +6,7 @@ import { balanceSheet, incomeStatement, cashFlowStatement, accountSetProfile } f
 const KINDS = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
 const TITLES = { "balance-sheet": "资产负债表", "income-statement": "利润表", "cash-flow-statement": "现金流量表", "trial-balance": "科目余额表", ledger: "明细账" };
 const MONEY_FIELDS = ["opening_debit", "opening_credit", "period_debit", "period_credit", "ytd_debit", "ytd_credit", "closing_debit", "closing_credit"];
-// Read every amount before adding/subtracting; SQL SUM and Number arithmetic can lose cents.
+// 加减前逐项读取金额；SQL SUM 或 Number 运算可能损失分。
 const cents = value => { try { return storedCents(value); } catch { fail("report_data_invalid"); } };
 const number = value => { try { return centsToNumber(value); } catch { fail("report_data_invalid"); } };
 const sum = values => number(values.reduce((total, value) => total + cents(value), 0n));
@@ -27,8 +27,8 @@ function previousPeriod(period) {
   return month === 1 ? `${String(year - 1).padStart(4, "0")}-12` : `${period.slice(0, 4)}-${String(month - 1).padStart(2, "0")}`;
 }
 
-// No roll-up rows: each account's own postings occur exactly once in the totals.
-// Existing trialBalance.period_debit is inception-to-date, so do not relabel its fields.
+// 不生成重复汇总行，每个科目自身发生额只进入合计一次。
+// 已有 trialBalance.period_debit 为开账至今累计，不能重新标注其字段含义。
 function buildTrial(setId, period, startPeriod, yearStart, accounts) {
   const openings = new Map(all("SELECT code,debit,credit FROM opening_balances WHERE account_set_id=?", setId).map((item) => [item.code, item]));
   const movements = new Map();
@@ -90,7 +90,7 @@ function buildLedger(setId, period, account, trial) {
   return { code: account.code, name: account.name, direction: account.direction, period, opening, current, ytd, closing: split(running), items };
 }
 
-// Combine every included window; arithmetic reconciliation never certifies mapping completeness.
+// 合并全部纳入窗口；算术勾稽不证明映射完整。
 function aggregateStatus(statuses) {
   if (!statuses.length || statuses.some(s => !s || !["complete", "incomplete", "legacy_compatibility"].includes(s.status)
     || typeof s.complete !== "boolean" || typeof s.partialValues !== "boolean" || !Array.isArray(s.diagnostics))) fail("report_data_invalid");
@@ -116,7 +116,7 @@ export function incomeExportRows(data) {
   return Object.keys(data.current).map(label => ({ id: label, label, current: data.current[label], ytd: data.ytd[label] }));
 }
 
-// Cash flow is a flow measure: sum each month's existing classifications, never sum cash balances.
+// 现金流是期间流量，累加每月已有分类，不能相加现金余额。
 function yearCashFlow(setId, period, yearStart) {
   const months = [];
   for (let month = Number(yearStart.slice(5)); month <= Number(period.slice(5)); month++) {
@@ -139,8 +139,8 @@ function yearCashFlow(setId, period, yearStart) {
   return result;
 }
 
-// Numeric cells are generated internally. Untrusted text is quoted and formula-neutralized,
-// including leading whitespace, tabs, CR/LF, and BOM before a spreadsheet formula marker.
+// 金额数值单元格由程序内部生成；不可信文本须加引号并中和公式，
+// 包括公式标记前的空白、制表符、CR/LF 和 BOM。
 function csvCell(value) {
   if (typeof value === "number") return formatCents(cents(value));
   let text = typeof value === "boolean" ? (value ? "是" : "否") : String(value ?? "");
@@ -206,7 +206,7 @@ function toCsv(report) {
   return `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`;
 }
 
-/** Build a local, internal CSV download without writing bookkeeping data. */
+/** 生成本机内部 CSV 下载，不写记账数据。 */
 export function buildReportExport(setId, options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) fail("report_options_invalid");
   const { kind, period, format = "csv", code } = options;
@@ -276,7 +276,7 @@ export function buildReportExport(setId, options = {}) {
       : "仅已核实的准则基础业务子集；映射状态与来源完整性分别列示，不代表法定完整财务报表。" });
     if (report.reportStatus.partialValues) report.warnings.push({ code: "report_partial_values", message: "本报表含部分金额；未分类或缺明细金额未计入相关合计，请查看映射诊断。" });
   }
-  // JSON would silently turn Infinity/NaN into null; reject corrupt amounts before emitting any file.
+  // JSON 会静默把 Infinity/NaN 转为 null；输出任何文件前先拒绝损坏金额。
   requireFiniteNumbers(report);
   const suffix = account ? `-${account.code.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64)}` : "";
   return { filename: `${kind}-${id}-${period}${suffix}.csv`, contentType: "text/csv; charset=utf-8", body: toCsv(report), report };

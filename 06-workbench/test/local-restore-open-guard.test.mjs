@@ -14,7 +14,7 @@ await suite('default startup and explicit domain/runner admissions refuse before
   }finally{d.close();}
   for(const entry of ['server/db.mjs','server/accounting.mjs','server/agent-tools.mjs']){const c=await child(['--input-type=module','-e',`try{await import('./${entry}');throw Error('opened')}catch(e){if(e.code!=='restore_target_pending')throw e;console.log(e.code)}`],{env:{WORKBENCH_DATA_DIR:a.targetDir}});assert.equal(c.code,0,c.out+c.err);assert.equal(c.closed,true);}
   assert.equal(hash(file),before);assert.equal(logical(h.db),source);assert.equal(fs.existsSync(file+'-wal'),false);assert.equal(fs.existsSync(file+'-shm'),false);target(file,d=>assert.equal(d.prepare('PRAGMA integrity_check').get().integrity_check,'ok'));
-  // Missing receipt or marker cannot make a controlled database writable.
+  // 缺失回执或标记不能让受控数据库变为可写。
   fs.renameSync(join(a.targetDir,'restore.json'),join(a.targetDir,'receipt.saved'));assert.throws(()=>C.assertRestoreOpenPath(file),/restore_target_pending/);assert.equal(hash(file),before);
   assert.equal(LB.createBackup({dbPath:file,outDir:join(h.dir,'pending-readonly-backup')}).ok,true);
  }finally{h.close();}
@@ -70,7 +70,7 @@ await suite('lost marker after actual copy/control crash never admits a new stan
    const code=`import fs from 'node:fs';import {DatabaseSync} from 'node:sqlite';const a=JSON.parse(process.argv[1]),mode=process.argv[2];let copied=false;const cp=fs.copyFileSync;fs.copyFileSync=function(...v){const r=cp.apply(fs,v);copied=true;if(mode==='copy')process.exit(92);return r};const ex=DatabaseSync.prototype.exec;DatabaseSync.prototype.exec=function(sql){const r=ex.call(this,sql);if(copied&&mode==='control-commit'&&sql==='COMMIT'&&this.prepare("SELECT 1 FROM sqlite_master WHERE name='restore_control_state'").get())process.exit(92);return r};const LB=await import('./server/local-backup.mjs');console.log(LB.restoreNew(a));throw Error('crash was not reached');`;
    const crashed=await child(['--input-type=module','-e',code,JSON.stringify(a),window]);assert.equal(crashed.code,92,crashed.out+crashed.err);assert.equal(crashed.closed,true);
    const partial=fs.readdirSync(a.targetDir).filter(n=>n.startsWith('.partial-')&&n.endsWith('.db'));assert.equal(partial.length,1);const partialFile=join(a.targetDir,partial[0]),partialHash=hash(partialFile),ledgerHash=hash(a.ledgerPath);
-   // Simulate the operator losing only the disposable marker, preserving it under an explicit name.
+   // 模拟操作者只丢失可丢弃标记，以明确名称保留该标记。
    fs.renameSync(join(a.targetDir,'.restore-incomplete'),join(a.targetDir,'marker.saved'));
    for(const entry of ['server/db.mjs','server/agent-tools.mjs','server/server.mjs']){
     const denied=await child(['--input-type=module','-e',`let callbacks=0;try{await import('./${entry}');callbacks++;throw Error('opened')}catch(e){if(e.code!=='restore_target_pending')throw e;if(callbacks!==0)throw Error('callback reached');console.log(e.code)}`],{env:{WORKBENCH_DATA_DIR:a.targetDir}});assert.equal(denied.code,0,denied.out+denied.err);assert.equal(denied.closed,true);
@@ -100,8 +100,8 @@ await suite('explicit directory ancestors are plain before any retained-artifact
   const list=fs.readdirSync;let scans=0;fs.readdirSync=function(...v){scans++;return list.apply(fs,v);};
   try{for(const dir of [alias,join(alias,'nested'),join(alias,'missing-one'),join(alias,'missing-two','deeper')])assert.throws(()=>C.assertRestoreOpenPath(join(dir,'workbench.db')),e=>e.code==='restore_target_binding_mismatch');assert.equal(scans,0,'readdir must never reach the alias root or any child through it');}
   finally{fs.readdirSync=list;}
-  // Exercise the actual default opener too: no scan, mkdir or SQLite open may
-  // reach either a one-level or a multi-level missing target through a junction.
+  // 也覆盖实际默认打开器：通过目录联接时，无论目标缺失一级还是多级，
+  // 扫描、mkdir 及 SQLite 打开都不得触达该目标。
   for(const parts of [['missing-one'],['missing-two','deeper']]){
    const dir=join(alias,...parts),code=`import assert from 'node:assert/strict';import fs from 'node:fs';import {syncBuiltinESMExports,registerHooks} from 'node:module';let scans=0,mkdirs=0,callbacks=0,instrumented=0;globalThis.__restoreOpenCount=0;const list=fs.readdirSync,mkdir=fs.mkdirSync;
 // Count immediately before the actual constructors; node:sqlite named exports
@@ -113,7 +113,7 @@ const opens=globalThis.__restoreOpenCount;assert.equal(instrumented,2);assert.eq
   }
   for(const dir of [owned,join(owned,'nested')])for(const suffix of ['','-wal','-shm','-journal'])assert.equal(fs.existsSync(join(dir,'workbench.db'+suffix)),false);
   assert.equal(logical(h.db),before);assert.equal(hash(join(b.backupDir,LB.SNAPSHOT_FILE)),snapshot);assert.equal(hash(a.ledgerPath),ledger);
-  // A missing, non-aliased fresh directory is still admitted without creating it.
+  // 不存在且无别名的全新目录仍可通过准入，但不会被创建。
   const missing=join(h.dir,'missing-fresh');C.assertRestoreOpenPath(join(missing,'workbench.db'));assert.equal(fs.existsSync(missing),false);
   const ordinary=join(h.dir,'ordinary-new','nested','deeper');C.assertRestoreOpenPath(join(ordinary,'workbench.db'));assert.equal(fs.existsSync(join(h.dir,'ordinary-new')),false);
   const started=await child(['--input-type=module','-e',`import assert from 'node:assert/strict';const D=await import('./server/db.mjs');try{assert.equal(D.importSchema.to??D.importSchema.version,5);assert.ok(D.db.prepare("SELECT 1 FROM sqlite_master WHERE name='account_sets'").get());console.log('ordinary missing multilevel startup ready');}finally{D.db.close();console.log('ordinary DB actualclose');}`],{env:{WORKBENCH_DATA_DIR:ordinary}});assert.equal(started.code,0,started.out+started.err);assert.equal(started.closed,true);assert.equal(fs.existsSync(join(ordinary,'workbench.db')),true);

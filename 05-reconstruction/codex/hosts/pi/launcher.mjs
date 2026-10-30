@@ -37,7 +37,7 @@ export function buildLaunchSpec(config,workspace,options){
 export async function runPi(configUrl,args){
   const options=parseArgs(args);if(options['--help']){console.log(HELP);return;}
   const configPath=fileURLToPath(configUrl),workspace=dirname(configPath),config=JSON.parse(readFileSync(configPath,'utf8')),spec=buildLaunchSpec(config,workspace,options);
-  // This isolated directory starts empty: never seed credentials, sessions or user settings.
+  // 此隔离目录从空目录开始：禁止预置凭据、会话或用户设置。
   if(!options['--check'])mkdirSync(spec.env.PI_CODING_AGENT_DIR,{recursive:true});
   const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:spec.env,windowsHide:true,shell:false,stdio:'inherit'});
   const code=await new Promise((ok,no)=>{child.once('error',no);child.once('close',(code,signal)=>ok(signal?1:code??1));});process.exitCode=code;

@@ -8,6 +8,6 @@ const bank=app.slice(app.indexOf('// LOCAL04B:'),app.indexOf('// ---------------
 assert.equal(bank.includes('innerHTML'),false);assert.equal(bank.includes('insertAdjacentHTML'),false);assert.match(bank,/textContent/);assert.match(bank,/f\.text\(\)/);assert.match(bank,/\$\('#bankCsv'\)\.value=text/);assert.match(bank,/csvText:\$\('#bankCsv'\)\.value/);
 assert.match(bank,/JSON\.parse\(\$\('#bankMapping'\)\.value\)/);assert.match(bank,/bank_import_preview/);assert.match(bank,/approve-import/);assert.match(bank,/previewRef:v.ref/);assert.match(bank,/bankCurrent\(c\)/);assert.match(bank,/BANK_GEN\+\+/);assert.match(bank,/SETS.find\(item=>item.id===c.set\)/);assert.match(app,/async function selectSet\(\) \{\n  bankClear\(\)/);
 for(const tool of ['bank_account_register','bank_ambiguity_resolve','bank_confirm','bank_cancel','bank_reconcile'])assert.ok(bank.includes(tool));assert.match(bank,/window\.confirm/);assert.match(bank,/2\*1024\*1024/);assert.match(css,/#tab-bank textarea/);
-// Static scope contract executes the actual source guards with independent scope/epoch values.
+// 静态作用域契约以独立的 scope/epoch 值执行实际源码保护。
 const currentSource=bank.match(/const bankCurrent=c=>([^;]+);/)[1];const current=Function('c','SET_ID','BANK_GEN','return '+currentSource);assert.equal(current({set:1,gen:2},1,2),true);assert.equal(current({set:1,gen:2},2,2),false);assert.equal(current({set:1,gen:2},1,3),false);
 console.log('bank-ui-contract PASS file+paste common text/mapping/preview/approve chain, safe DOM, scope+generation guards; actual page paste/filechooser NOT RUN');

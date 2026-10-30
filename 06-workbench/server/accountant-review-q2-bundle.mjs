@@ -1,4 +1,4 @@
-// Private pair capabilities remain inside the fresh worker. Public JSON is display only.
+// 私有配对能力保留在全新 worker 内；公开 JSON 仅供展示。
 import { mkdir, open, unlink, lstat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, dirname } from 'node:path';
@@ -64,9 +64,9 @@ async function verifyOutput(directory, expected) {
 async function removeOwnMarker(directory, expected, publicationId) {
   if(!expected?.identity) return;
   try { const bytes=await verifyOutput(directory,expected); if(JSON.parse(bytes).publicationId===publicationId) await unlink(join(directory,expected.name)); }
-  catch { /* Changed/unknown/foreign markers are diagnostic residue and are never deleted. */ }
+  catch { /* 变化、未知或外来标记属于诊断残留，绝不删除。 */ }
 }
-// This identity is not recoverable from manifest JSON, hashes or output-proof DTOs.
+// 不能从 manifest JSON、哈希或输出证明 DTO 恢复该私有身份。
 export async function assertAccountantReviewQ2PublicationCurrent(manifest, bundle, pair) {
   const state=publications.get(manifest);
   requireValue(state && state.bundle===bundle && state.pair===pair, 'review_q2_publication_untrusted');

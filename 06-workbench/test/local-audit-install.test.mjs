@@ -29,8 +29,8 @@ export async function fresh({version=5,audit=2,bank=false,aux=false,journal='del
   return h;
  }catch(e){h.close();throw e;}
 }
-// A new historical core fixture has no audit component. The original audited seed
-// remains read-only; financial rows/IDs/sequences and actual index creation order survive.
+// 新的历史核心测试样本没有审计组件。原始已审计种子
+// 保持只读；保留财务行、ID、序列及实际索引创建顺序。
 function cloneSyntheticCore(source,file) {
  const seed=new DatabaseSync(source,{readOnly:true}),target=new DatabaseSync(file);
  try {
@@ -141,7 +141,7 @@ const V1_STATEMENTS = Object.freeze([
   ...Object.values(AUDIT_TRIGGER_SQL),
 ]);
 
-// Frozen audit1 historical fixture only; production has no legacy/fresh write switch.
+// 仅使用冻结的 audit1 历史测试样本；生产实现没有旧版/全新写入开关。
 export function legacy(db){for(const sql of V1_STATEMENTS)db.exec(sql);db.prepare('INSERT INTO audit_components VALUES(?,?,?,?)').run('business-audit',1,'2026-10-22T00:00:00.000Z','LOCAL-06');db.prepare('INSERT INTO audit_database_instances VALUES(?,?,?,?,?)').run(randomUUID(),'2026-10-22T00:00:00.000Z',null,1,'initial');}
 if(resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)) {
  await suite('supported core/optional component/audit versions + protected upgrade preserve historical bytes',async()=>{
@@ -184,9 +184,9 @@ if(resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)) {
    const junction=join(h.dir,'alias');fs.symlinkSync(h.dir,junction,'junction');try{await assert.rejects(LS.installAuditSchema(h.db,{dbPath:join(junction,'workbench.db'),outDir:join(h.dir,'junction-out')}),/audit_database_invalid/);}finally{fs.rmdirSync(junction);}
    const exec=h.db.exec.bind(h.db);h.db.exec=sql=>{if(sql.startsWith('ALTER TABLE audit_events'))throw Error('synthetic DDL fault');return exec(sql);};await assert.rejects(LS.installAuditSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'ddl')}),/audit_schema_install_failed/);h.db.exec=exec;assert.equal(logical(h.db),before);assert.equal(h.db.isTransaction,false);
    const lock=new DatabaseSync(h.file);try{lock.exec('BEGIN IMMEDIATE');await assert.rejects(LS.installAuditSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'busy')}),/audit_admission_busy/);assert.equal(logical(h.db),before);}finally{lock.exec('ROLLBACK');lock.close();}
-   // A stale same-basename manifest cannot bind the actual held source.
+   // 过时的同名清单无法绑定实际持有的源。
    const b=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'stale')});assert.equal(b.ok,true);h.db.exec("UPDATE schema_backups SET integrity='changed-synthetic'");assert.throws(()=>LB.assertBackupSourceConnection(h.db,b.manifest));
-   // Physical object replacement is rejected on the next identity check.
+   // 下一次身份检查会拒绝物理对象替换。
    const alternate=join(h.dir,'replacement.db');fs.copyFileSync(other.file,alternate);let replaced=false;try{fs.renameSync(h.file,join(h.dir,'old.db'));replaced=true;}catch(e){assert.equal(process.platform,'win32');assert.equal(e.code,'EBUSY');console.log('Windows actual EBUSY prevents replacement of an open SQLite source');}
    if(replaced){fs.renameSync(alternate,h.file);await assert.rejects(LS.installAuditSchema(h.db,{dbPath:h.file,outDir:join(h.dir,'replace')}));}
    else {assert.equal(LS.inspectAuditSchema(h.db).state,'not_installed');assert.equal(h.db.isTransaction,false);}

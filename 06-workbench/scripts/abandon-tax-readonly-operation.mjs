@@ -1,4 +1,4 @@
-// Administrator CLI only; no arbitrary requests, browser actions or API route.
+// 仅供管理员使用的 CLI；不支持任意请求、浏览器操作或 API 路由。
 import {pathToFileURL} from 'node:url';
 import {abandonReadonlyOperation,READONLY_AUDIT_VERSION} from '../server/tax-readonly-abandon.mjs';
 export function parseAbandonArguments(a){

@@ -119,10 +119,10 @@ await suite('each malformed snapshot/artifact field rejects inspect source verif
  const h=await fresh({batch:3});let v1;
  try{
   const actual=await realReports(h);const other=await realReports(h,{formats:['csv'],jobKey:'other-'+randomUUID()});const ownItem=h.db.prepare('SELECT id FROM local_batch_items WHERE job_id=?').get(actual.job.id).id,otherArtifact=h.db.prepare('SELECT * FROM local_batch_artifacts WHERE job_id=?').get(other.job.id);job(h,{file:true});
-  // Synthetic historical saved-row projection only: actual reports above ran on
-  // batch3. This is not an official downgrade or historical runner execution.
-  // v2 shares these eleven tables and saved rows; released epoch history has no
-  // v2 representation. Keep all rows/sequence bytes, then validate strict v2.
+  // 仅投影合成历史已保存行：上面的实际报告运行于
+  // batch3。这不是正式降级，也不是历史运行器执行。
+  // v2 共用这十一张表及已保存行；已发布的 epoch 历史没有
+  // v2 表示形式。保留全部行/序列字节，再严格验证 v2。
   const beforeRows=originalRows(h.db);assert.equal(h.db.prepare('SELECT COUNT(*) n FROM local_batch_locks').get().n,0);h.db.exec('DROP TABLE local_batch_lock_epochs;UPDATE local_batch_component SET version=2');assert.equal(S.assertBatchSchema(h.db).version,2);assert.equal(originalRows(h.db),beforeRows);
   const initial=LB.createBackup({dbPath:h.file,outDir:join(h.dir,'template-v2')});assert.equal(initial.ok,true);
   const v1dir=join(ROOT,randomUUID());fs.mkdirSync(v1dir);const v1file=join(v1dir,'workbench.db');fs.copyFileSync(join(initial.backupDir,LB.SNAPSHOT_FILE),v1file);const d=new DatabaseSync(v1file);d.exec('PRAGMA foreign_keys=ON');try{downgrade({db:d});v1=LB.createBackup({dbPath:v1file,outDir:join(v1dir,'template-v1')});assert.equal(v1.ok,true);}finally{d.close();console.log('v1 template DB actualclose');}

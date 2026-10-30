@@ -1,5 +1,5 @@
-// Period business adapter. Every write delegates to the existing audited accounting API.
-// This module owns no execution journal; Harness and native audit receipts own recovery.
+// 期间业务适配器；每项写入都委派给已有受审计会计 API。
+// 本模块不拥有执行日志；恢复由 Harness 和原生审计回执负责。
 import { createHash } from 'node:crypto';
 import { persistedVoucherFingerprint } from './import-storage.mjs';
 import { auditCanonicalDigest, auditResultDigest } from './local-audit.mjs';
@@ -48,9 +48,9 @@ export function createPeriodAdapter({db,A,C}) {
   const v=A.getVoucher(scope.accountSetId,request.voucherId);check(v.kind==='carryforward'&&v.period===scope.period,'period_derived_voucher_scope_mismatch');
   return {action:'voucher.unpost',args:[scope.accountSetId,request.voucherId]};
  };
- // Reusing an open/closed value does not revive an earlier control version.
- // Bind only this book/month's committed native close/reopen events, not future
- // months or unrelated books. The native audit owns the monotone event sequence.
+ // 再次出现 open/closed 值，不会使早期控制版本复活。
+ // 只绑定本账套本月已提交的原生封账/重开事件，不绑定未来月份
+ // 或无关账套；单调事件序列由原生审计负责。
  const periodControlVersion=scope=>{
   const digest=(action,status)=>auditCanonicalDigest(['audit-request-v1',action,{domainRequestDigest:auditResultDigest([scope.accountSetId,scope.period,status])}]);
   const latest=db.prepare("SELECT o.operation_id,o.attempt,o.action FROM audit_operations o JOIN audit_events e ON e.event_id=o.terminal_event_id AND e.database_instance_id=o.database_instance_id WHERE o.database_instance_id=? AND o.scope_kind='account_set' AND o.scope_token=? AND o.state IN ('succeeded','no_change') AND ((o.action='period.close' AND o.request_digest=?) OR (o.action='period.reopen' AND o.request_digest=?)) ORDER BY e.seq DESC LIMIT 1").get(scope.databaseInstanceId,auditCanonicalDigest(['audit-scope-v1','account_set',scope.accountSetId]),digest('period.close','closed'),digest('period.reopen','open'));

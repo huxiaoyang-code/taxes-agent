@@ -1,4 +1,4 @@
-// Dedicated-browser diagnostics only. A shape is not an authenticated tax session.
+// 仅为专用浏览器诊断；结构符合不代表已认证的税局会话。
 import { randomBytes } from "node:crypto";
 import { createDedicatedBrowserTransport, TaxBrowserError } from "./tax-browser-transport.mjs";
 
@@ -12,8 +12,8 @@ const emptyShape = () => ({ json: false, rootKind: "unknown", rootFieldCount: nu
   userIdString: false, userTypeString: false, userTypeNumber: false, regNumberString: false,
   businessCodeNumber: false, errorFieldPresent: false });
 
-// No credentials, headers, arbitrary property names, text or business values leave
-// the page. The backend receives only these fixed counters and structural flags.
+// 凭据、请求头、任意属性名、文本及业务值均不离开页面；
+// 后端仅接收这些固定计数与结构标记。
 export const IDENTITY_PROBE_SCRIPT = `(async () => {
   const shape = { json:false, rootKind:'unknown', rootFieldCount:null, hasResponse:false,
     hasData:false, dataKind:'unknown', dataFieldCount:null, dataCount:null, hasError:false,
@@ -133,7 +133,7 @@ function sanitizeProbe(raw) {
   if ((["login_required", "unsupported_page"].includes(raw.status) && raw.requestPerformed)
       || (["schema_unverified", "business_failed"].includes(raw.status)
         && (!raw.requestPerformed || raw.httpStatus < 200 || raw.httpStatus >= 300))) throw new TaxBrowserError("tax_browser_response_invalid");
-  // Rebuild; never spread browser-returned objects across the tool boundary.
+  // 重建对象，不把浏览器返回对象直接展开到工具边界之外。
   return { status: raw.status, requestPerformed: raw.requestPerformed, httpStatus: raw.httpStatus,
     businessCode: raw.businessCode, responseShape: {
       json: s.json, rootKind: s.rootKind, rootFieldCount: s.rootFieldCount,
@@ -216,7 +216,7 @@ export class FujianBrowserSessions {
       const target = pages[0];
       attached = await cdp.send("Target.attachToTarget", { targetId: target.targetId, flatten: true }, { timeoutMs: this.timeoutMs });
       if (!attached?.sessionId) throw new TaxBrowserError("tax_browser_response_invalid");
-      // A timed-out attach can still finish. Release its late session as well.
+      // attach 超时后仍可能完成，其延迟返回的会话同样要释放。
       if (expired || state.closed || state.revision !== revision) {
         void cdp.send("Target.detachFromTarget", { sessionId: attached.sessionId }, { timeoutMs: 500 }).catch(() => {});
       }
@@ -246,8 +246,8 @@ export class FujianBrowserSessions {
       return { connectionId: args.connectionId, ...result };
     } catch (error) {
       if (error instanceof TaxBrowserError && error.code === "tax_browser_cdp_timeout") {
-        // A protocol timeout may lose a late attach reply. Closing our dedicated
-        // browser prevents both orphan attachments and an overlapping fetch.
+        // 协议超时可能丢失延迟 attach 响应；关闭自有专用浏览器，
+        // 避免遗留连接和请求重叠。
         state.closed = true; state.revision++;
         void state.transport.close().then(() => { state.cleaned = true; }).catch(() => {});
       }
@@ -255,7 +255,7 @@ export class FujianBrowserSessions {
     } finally {
       clearTimeout(timer); expired = true;
       for (const off of offs) off();
-      // Detach only our CDP session, without navigating or closing the user's page.
+      // 仅分离自有 CDP 会话，不导航或关闭用户页面。
       if (attached?.sessionId) {
         let detachTimer;
         try {

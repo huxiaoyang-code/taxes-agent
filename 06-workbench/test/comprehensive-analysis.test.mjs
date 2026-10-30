@@ -1,4 +1,4 @@
-// Synthetic actual books + original agency workpapers + real stdio Harness.
+// 合成实际账簿、原始代账底稿及真实 stdio Harness。
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -93,7 +93,7 @@ async function test() {
     assert.equal(receipt.facts.sourceMappedHistoricalCollections, 202); assert.equal(receipt.facts.unallocatedArCollectionCandidates, 0); assert.equal(receipt.facts.otherBookReceipts, 50);
     assert.match(receipt.content, /不得仅因/); assert.ok(receipt.responseOptions.existingBasis.length);
     const difference = analysis.findings.find(v => v.id === 'profit-difference-2026-02');
-    assert.ok(difference); assert.equal(difference.facts.unexplainedDifference, -340); // replay 202 versus books 502+50-10=542
+    assert.ok(difference); assert.equal(difference.facts.unexplainedDifference, -340); // 重放结果 202，对比账簿 502+50-10=542。
     assert.ok(difference.evidenceRefs.some(r => r.locator.includes('native-workpaper'))); assert.ok(difference.responseOptions.requestedEvidence.length);
     assert.ok(analysis.findings.some(v => v.id === 'tax-2026-02')); assert.ok(analysis.findings.some(v => v.id === 'invoice-2026-02'));
     const plan = analysis.findings.find(v => v.id === 'owner-collection-plan');
@@ -115,7 +115,7 @@ async function test() {
     const detail = await call('harness_receipt_read', { storePath, receiptRef: summary.presentation.details.receiptRef, pointer: '/receipt/actualImpact/findings/0' }); assert.ok(detail.fragment.includes('ledger-coverage'));
     const reviewed = await run();
     await call('harness_feedback', { storePath, feedback: { taskId: reviewed.id, targetVersion: reviewed.result.receipt.targetVersion, dependencyDigest: reviewed.result.receipt.dependencyDigest, decision: 'accept', reason: 'SYNTHETIC TEST ONLY current review', reviewer: 'SYNTHETIC TEST ONLY', evidenceRefs: [] } });
-    // A known original correction, even malformed, permanently stales old approval.
+    // 已知原件更正即使格式错误，也会永久使旧批准失效。
     const rawPath = join(dirname(f.manifestPaths[1]), '2026-02.facts.json'), saved = readFileSync(rawPath);
     writeFileSync(rawPath, '{ malformed corrected source');
     status = await call('harness_status', { storePath, responseMode: 'full' }); assert.equal(status.tasks.find(t => t.taskId === reviewed.id).resultCurrent, false); assert.equal(status.tasks.find(t => t.taskId === reviewed.id).confirmationCurrent, false);
@@ -139,8 +139,8 @@ async function test() {
     const missingFile = await run({ ...request, contextPath: join(root, 'does-not-exist.json') }, true); assert.equal(missingFile.result.receipt.executionState, 'failed');
     const badContext = structuredClone(context); badContext.ownerPlan.scenarios[0].collections[0].originVoucherId = 999999; json(conflictContextPath, badContext);
     const badPlan = (await run({ ...request, contextPath: conflictContextPath })).result.receipt.actualImpact.findings.find(v => v.id === 'owner-collection-plan'); assert.equal(badPlan.facts.scenarios[0].incrementalCashInflow, null);
-    // Coverage can be declared complete while a specific business fact cannot
-    // be replayed. Native mapped partial totals must not become a full gap.
+    // 覆盖范围可声明完整，但某项具体业务事实仍可能无法
+    // 重放。原生映射得到的部分合计不得当作完整差额。
     const januaryPath = join(dirname(f.manifestPaths[0]), '2026-01.facts.json'), januaryBytes = readFileSync(januaryPath);
     const incompleteRaw = JSON.parse(januaryBytes.toString('utf8')); incompleteRaw.records.find(r => r.type === 'service_complete').accepted = false; json(januaryPath, incompleteRaw);
     try {

@@ -10,7 +10,7 @@ import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-ba
 // 只允许这 7 类操作：import → post → depreciation → carryforward → period-check → close → reports。
 // 本文件不复制任何金额 / 结账 / 折旧算法，只调用既有已审领域接口：
 //   - import：import-incremental.mjs（自带 BEGIN IMMEDIATE，禁止外包事务）
-//   - post / depreciation / carryforward：accounting.mjs
+//    - 过账 / 折旧 / 结转：accounting.mjs
 //    折旧 / 结转 / 封账的应提 / 不适用 / 拒绝一律复用已合入的 LOCAL-02 纯领域规则与事务保存点，
 //    不另写金额 / 起提 / 封账算法。
 //   - period-check / close：已合入的 LOCAL-02 A.periodEndCheck / setPeriodStatus（只读检查 + 核心重新校验前置）
@@ -116,8 +116,8 @@ export function businessDigest(db, setId, period, {reportAuxiliary=false}={}) {
   }));
   const identity=db.prepare('SELECT * FROM import_enterprise_account_sets WHERE account_set_id=?').get(setId)??null;
   const auxiliary={};
-  // Report readiness reads openings and posted movements through its period.
-  // Preserve the original full auxiliary digest for financial stage evidence.
+  // 报表就绪检查读取该期间及以前的期初和已过账变动。
+  // 保留原始完整辅助核算摘要，作为财务阶段证据。
   const allocated=reportAuxiliary&&db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='aux_allocations'").get()
     ? db.prepare(`SELECT a.* FROM aux_allocations a LEFT JOIN voucher_entries e ON e.id=a.entry_id LEFT JOIN vouchers v ON v.id=e.voucher_id WHERE a.account_set_id=? AND ((a.entry_id IS NULL AND a.opening_code IS NOT NULL) OR (v.account_set_id=a.account_set_id AND v.status='posted' AND v.period<=?)) ORDER BY a.id`).all(setId,period):[];
   const entityIds=new Set(allocated.flatMap(row=>['project_id','department_id','party_id'].map(key=>row[key]).filter(id=>id!==null)));
@@ -128,10 +128,7 @@ export function businessDigest(db, setId, period, {reportAuxiliary=false}={}) {
   return sha256(canonicalJson({setId,period,accountSet,identity,auxiliary,accounts,openings,periods:periodRows,vouchers}));
 }
 
-/** Report snapshots freeze the scoped persistent dependencies as well as money.
- * Comparing current consistency alone cannot detect deletion of both source
- * sides or their replacement by another internally consistent registration.
- */
+/** 报表快照除金额外还冻结范围内的持久化依赖。只比较当前内部一致性，无法发现来源两端同时被删除，或被另一组内部一致登记替换。 */
 export function reportBusinessDigest(db,setId,period){
  const sourceRows=table=>db.prepare(`SELECT s.* FROM ${table} s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
  const sources=sourceRows('import_voucher_sources'),links=sourceRows('import_batch_vouchers'),ids=[...new Set([...sources,...links].map(r=>r.batch_id))].sort();
@@ -174,8 +171,8 @@ export function resolveItemBinding({ db, item, stage = null, allowUnboundSet = f
       declaredAccountSetId: resolved,
     });
   }
-  // Resume/retry preflight runs before claiming a fresh attempt. A successful
-  // financial checkpoint whose source proof broke must never enter import again.
+  // 恢复或重试的预检先于认领新尝试；已成功财务检查点的
+  // 来源证明失效时，绝不能再次进入导入。
   if (!stage && item.id && resolved !== null) {
     const prior=db.prepare("SELECT evidence_json,outcome_hash FROM local_batch_stages WHERE item_id=? AND stage_key LIKE 'import:%'").all(item.id);
     for(const row of prior){const evidence=safeParse(row.evidence_json);if(!row.outcome_hash||!evidence.batchId||!Array.isArray(evidence.sourceTrace))continue;
@@ -206,7 +203,7 @@ function voucherEvidence(voucher) {
   };
 }
 
-// ---------------------------------------------------------------- import
+// ---------------------------------------------------------------- 导入
 /**
  * 执行一条 import 规格（item 内一个时期的一条 batch）。
  * 校验顺序：输入快照指纹 → 领域严格校验 / 幂等 → 批次与逐张来源凭证真实核验 → fence 事务补 checkpoint。
@@ -253,8 +250,8 @@ export function executeImportStage(ctx) {
   if (![ "applied", "idempotent_replay" ].includes(result.status)) {
     throw domainError("import_status_unexpected", "增量导入返回了非落库状态", { status: result.status });
   }
-  // Historical hook name: still inside the audited outer transaction, before checkpoint/COMMIT.
-  // Use runner.afterStageCommit for an actual durable commit boundary.
+  // 历史钩子名称：实际仍在受审计外层事务内，先于检查点和 COMMIT。
+  // 真实持久提交边界应使用 runner.afterStageCommit。
   const afterCommit = () => { if (hooks?.afterImportCommit) hooks.afterImportCommit({ stage, item, result }); };
   afterCommit();
 
@@ -321,7 +318,7 @@ export function executeImportStage(ctx) {
   return { status: STAGE_STATUS.SUCCEEDED, evidence, accountSetId };
 }
 
-// ---------------------------------------------------------------- post
+// ---------------------------------------------------------------- 过账
 function resolveVoucherRef(db, setId, ref, enterpriseKey, sourceSystem) {
   if (ref.voucherId) {
     const voucher = db.prepare(`SELECT * FROM vouchers WHERE id=?`).get(ref.voucherId);
@@ -369,7 +366,7 @@ export function executePostStage(ctx) {
   });
 }
 
-// ---------------------------------------------------------------- depreciation
+// ---------------------------------------------------------------- 折旧
 /**
  * 卡片「与当期适用性相关的事实」快照（持久化到阶段证据，resume 时逐项重算比对）。
  * 只用已合入的 LOCAL-02 `assetCardPeriodStatus`（期间口径），不自算应提额；不含资产 / 企业名称等自由文本。
@@ -568,7 +565,7 @@ export function executeDepreciationStage(ctx) {
   });
 }
 
-// ---------------------------------------------------------------- carryforward
+// ---------------------------------------------------------------- 结转
 /** 结转本期损益（yearEnd 只按 manifest 明确选择）；effect 与 checkpoint 同一事务。 */
 export function executeCarryForwardStage(ctx) {
   const { db, stage, item, spec, lock } = ctx;
@@ -634,7 +631,7 @@ export function executeCarryForwardStage(ctx) {
   });
 }
 
-// ---------------------------------------------------------------- period-check
+// ---------------------------------------------------------------- 期末检查
 /**
  * 期末完整性检查：只使用已合入的 LOCAL-02 `A.periodEndCheck`。
  * 真实返回是 `{ accountSetId, period, ready, steps, blocking, missing, rules }`：
@@ -686,7 +683,7 @@ export function executePeriodCheckStage(ctx) {
   });
 }
 
-// ---------------------------------------------------------------- close
+// ---------------------------------------------------------------- 封账
 /**
  * 封账：必须同一期间已有成功的期末检查；真实调用 `A.setPeriodStatus(setId, period, 'closed')`，
  * 由核心在业务变化后重新拒绝（草稿 / 不平 / 计提 / 卡片总账 / 结转 / 连续期间）。
@@ -875,18 +872,15 @@ function verifyDepreciationEvidence(evidence, stage, expectedSetId) {
  * 恢复时重新核验已成功阶段的上游证据是否仍然成立。
  * 任何被反过账 / 改金额 / 删除 / 状态回退 / 文件损坏都会返回 ok:false（调用方转 needs_review）。
  */
-/** Current report dependencies, including report-only jobs using earlier imports.
- * Scope by actual account set and voucher period; later periods/other books do
- * not invalidate this report. Reuse the import service's live source verifier.
- */
-/** The same scoped saved/external input contract for publish and completed resume. */
+/** 当前报表依赖包含使用前期导入的纯报表任务。按实际账套及凭证期间限定范围；后期或其他账套不使本报表失效。复用导入服务的实时来源校验器。 */
+/** 发布和已完成任务恢复，共享相同的范围内保存输入/外部输入合同。 */
 export function verifyReportInputEvidence({item,period,allowSnapshotOnly=false}){
  const inputs=db.prepare('SELECT n.* FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.period<=? ORDER BY n.item_id,n.period,n.batch_id').all(item.account_set_id,period);
  for(const input of inputs){const check=checkInputEvidence(input,{db,allowSnapshotOnly});if(!check.ok)return {ok:false,reason:check.problem??'input_changed'};}
  return {ok:true};
 }
 
-/** Saved bytes and successful checkpoint tuples remain independent of live links. */
+/** 已保存字节及成功检查点元组，保持独立于实时关联。 */
 function verifyBatchSourceEvidence(batchId, item, {period, checkpoint} = {}) {
  try {
   const inputs = db.prepare(`SELECT n.*,i.source_system,i.enterprise_key FROM local_batch_inputs n JOIN local_batch_items i ON i.id=n.item_id WHERE i.account_set_id=? AND n.batch_id=? ORDER BY n.input_key`).all(item.account_set_id,batchId);
@@ -895,8 +889,8 @@ function verifyBatchSourceEvidence(batchId, item, {period, checkpoint} = {}) {
   if(checkpoint)checkpoints.push(checkpoint);
   const base={accountSetId:item.account_set_id,enterpriseKey:item.enterprise_key,period};
   const record=importStorage.getBatch(db,batchId),result=record?safeParse(record.result_json):{};
-  // Period exclusion belongs to the verifier, after every expected voucher's
-  // actual account set/period agrees with saved and checkpoint scope.
+  // 每张预期凭证的实际账套和期间与保存输入及检查点范围一致后，
+  // 才由校验器执行期间排除。
   const saved = inputs.map(input=>{
    const registered=importStorage.getBatch(db,batchId);
    if(!registered||registered.source_system!==input.source_system||registered.enterprise_key!==input.enterprise_key)throw domainError('import_source_trace_changed');
@@ -906,7 +900,7 @@ function verifyBatchSourceEvidence(batchId, item, {period, checkpoint} = {}) {
    if(!Array.isArray(result.sourceTrace)&&!checkpoints.length&&expected.contentFingerprint!==registered.content_fingerprint)throw domainError('import_source_trace_changed');
    return expected.sources;
   });
-  // Saved original identities can establish the first legacy local checkpoint.
+  // 保存的原始身份可建立第一个历史本机检查点。
   if(!Array.isArray(result.sourceTrace) && (result.vouchersCreated||result.vouchersDeduplicated) && !saved.length)return {ok:false,reason:'import_source_trace_changed'};
   const expectations=saved.length?saved:[undefined],traces=checkpoints.length?checkpoints:[undefined];
   for(const expectedSources of expectations)for(const evidence of traces){
@@ -922,7 +916,7 @@ export function verifyReportSourceEvidence({item,period}) {
  const setId=item.account_set_id;
  const scoped=table=>db.prepare(`SELECT s.* FROM ${table} s LEFT JOIN vouchers v ON v.id=s.voucher_id WHERE s.account_set_id=? AND (v.id IS NULL OR v.period<=?) ORDER BY s.id`).all(setId,period);
  const links=scoped('import_batch_vouchers'),sources=scoped('import_voucher_sources');
- // Registered outcomes discover even batches whose two association sides vanished.
+ // 已登记结果也能发现两个关联端均已消失的批次。
  const batches=db.prepare("SELECT batch_id FROM import_batches WHERE account_set_id=? AND status='completed'").all(setId);
  const batchIds=new Set([...batches,...links,...sources].map(r=>r.batch_id));
  for(const batchId of batchIds){const check=verifyBatchSourceEvidence(batchId,item,{period});if(!check.ok)return check;}
@@ -1052,8 +1046,7 @@ export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapsh
   }
 }
 
-/** Report-only authority comes from the completed activation's exact selection.
- * Recompute the actual current DTO as well as source/profile/aux/business facts. */
+/** 纯报表权限来自已完成激活时的精确选择；重算实际当前 DTO，同时重核来源、profile、辅助核算及业务事实。 */
 export function verifyRestoreReportRebuild({item,stage}) {
  try{
   const anchor=readRestoreActivation(db);
@@ -1128,7 +1121,7 @@ function executeLockedStage(ctx) {
  });
 }
 
-/** Scope and versions are verified by a fixed child; no supplied executable path. */
+/** 范围及版本由固定子进程核验，不接受外部可执行路径。 */
 const loadedHarnessBridgeCode=captureHarnessCode(['./local-batch-harness-worker.mjs']).digest;
 export function queryHarnessBatchTask(ctx,phase='query'){
  const {db,item,stage,spec}=ctx;
@@ -1146,8 +1139,8 @@ export function checkpointHarnessBatchTask(ctx,bridge){
   const previousCommitted=committedBridgeObservation(bridge,expectedIdentity)??committedBridgeObservation(safeParse(ctx.stage.evidence_json).bridge,expectedIdentity);
   const current=queryHarnessBatchTask(ctx,'query');
   if(bridge.status==='succeeded'&&(current.status!=='succeeded'||current.operationId!==bridge.operationId))bridge={...current,status:'needs_review',code:current.code??'batch_harness_result_changed'};
-  // Keep actual prior committed evidence if the current observation is temporarily unavailable.
-  // This is history only: needs_review/currentness/confirmation and retry guards stay unchanged.
+  // 当前观察暂时不可用时，保留实际前次已提交证据。
+  // 这些仅是历史；needs_review、当前性、确认及重试守卫均不变。
   if(previousCommitted&&!committedBridgeObservation(bridge,expectedIdentity))bridge={...bridge,taskIdentity:expectedIdentity,priorCommittedObservation:previousCommitted};
   const evidence={accountSetId:ctx.item.account_set_id,bridge};
   return runAuditedBatchStage(ctx.db,{action:'batch.stage',operationId:stageAuditOperationId(ctx.stage),scope:{kind:'account_set',value:ctx.item.account_set_id},request:{jobId:ctx.item.job_id,itemId:ctx.item.id,stageId:ctx.stage.id,attempt:ctx.attempt,spec:ctx.spec},context:{jobId:String(ctx.item.job_id),itemId:String(ctx.item.id),stageId:String(ctx.stage.id),period:ctx.stage.period}},[],()=>{

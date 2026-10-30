@@ -1,6 +1,6 @@
-// Explicit local administrator capability. Never register in HTTP, Agent or MCP.
-// Retires only the audited, settled return-to-portal operation. No renderer code,
-// identity requests, navigation, domain enable/disable, or browser lifecycle calls.
+// 显式本机管理员能力，不得注册到 HTTP、Agent 或 MCP。
+// 只退役已审计且结果确定的返回门户操作；不执行渲染器代码、
+// 身份请求、导航、领域启停或浏览器生命周期调用。
 import {createHash,randomBytes} from 'node:crypto';
 import {open,lstat,realpath,link,unlink} from 'node:fs/promises';
 import {join,resolve,dirname} from 'node:path';
@@ -53,7 +53,7 @@ async function durable(path,bytes,d){
     const h=await open(staging,'wx',0o600);try{await h.writeFile(bytes);await h.sync()}finally{await h.close()}
     if(!(await read(staging,d)).equals(bytes))throw fail();
     await link(staging,path);await unlink(staging);
-    // Both private read and nlink=1 verification run after unlinking staging.
+    // 私有读取及 nlink=1 核验均在 staging 解除链接后执行。
     const published=await open(path,'r+');try{await published.sync()}finally{await published.close()}
     if(!(await read(path,d)).equals(bytes))throw fail();
   }finally{await unlink(staging).catch(()=>{});}
@@ -79,8 +79,8 @@ export class TaxDownloadRetirement{
     this.d={store:new TaxHistoryStore(),parentStore:new TaxCollectionStore(),openDiagnostic:openRegisteredBrowserDiagnostic,
       readLock:readCollectionLock,acquireRecovery:collectionRecoveryLock,acquireAdminGuard:acquireReadonlyAdminGuard,
       isOwnerAlive:ownerAlive,verifyFile:verifyPrivateFile,verifyDirectory:verifyPrivateDirectory,
-      // Only trusted local administrator configuration supplies this record.
-      // No proof, URL, path, PID or request body is accepted from action args.
+      // 只有可信本机管理员配置可以提供此记录；
+      // 动作参数不接收证明、URL、路径、PID 或请求体。
       trustedAttestation:null,checkpoint:async()=>{},...overrides};
   }
   async retire(args={}){
@@ -143,8 +143,8 @@ export class TaxDownloadRetirement{
       }else if(commitBytes||finishedBytes)throw fail();
       const recoveryBytes=await maybe(recoveryPath,d);recoveryPresent=recoveryBytes!==null;
       if(finished&&!recoveryPresent){
-        // A later collector may have a new lock: completed retries never inspect,
-        // remove, or adopt it. This immutable journal is the only completed claim.
+        // 后续采集者可能已经取得新锁；已完成重试绝不检查、
+        // 移除或接管新锁，此不可变日志才是唯一的已完成声明。
         recoveryRetired=true;retired=true;await cleanupTransport();phase='admin_cleanup';await cleanupGuard();
         return result('portal_retired_locally','finished',{lockRetired:true,abandonedStateCommitted:true,cleanupConfirmed:true,
           oldResultConsumption:'permanently_forbidden',resumed:true,alreadyFinished:true});
@@ -154,9 +154,9 @@ export class TaxDownloadRetirement{
         original=await read(lockPath,d);if(canonical(JSON.parse(original))!==canonical(expected))throw fail();}
       if(expected.ownerPid!==proof.ownerPid||hash(original)!==proof.originalLockSha256||await d.isOwnerAlive(expected.ownerPid))throw fail();
       if(recoveryBytes){
-        // The generic recovery creator publishes its random nonce before it
-        // returns. A crash before our prepare is durable leaves no trustworthy
-        // binding to that nonce. Refuse this gap; never adopt an unknown orphan.
+        // 通用恢复创建器在返回前先发布随机 nonce；
+        // 如果在本次 prepare 持久化前崩溃，就没有可信的 nonce 绑定。
+        // 拒绝这个证据缺口，绝不接管未知孤立对象。
         if(args.resume!==true||!prepare)throw fail();const actual=mutexShape(JSON.parse(recoveryBytes));
         if(mutex&&canonical(actual)!==canonical(mutex)||actual.ownerPid!==process.pid&&await d.isOwnerAlive(actual.ownerPid))throw fail();mutex=actual;recoveryBindingVerified=true;
       }else if(prepare||args.resume===true)throw fail();
@@ -208,7 +208,7 @@ export class TaxDownloadRetirement{
           forbiddenScope:'parent_context_template_and_runs',requestTermination:'unknown',realmDestructionProven:false};
         await durable(paths.commit,JSON.stringify(marker),d);committed=true;await d.checkpoint('commit_durable');
       }
-      // Prove the permanent guard is consumed by the actual parent store.
+      // 证明实际父存储已经消费永久守卫。
       const verifyCommitted=async()=>{const bytes=await read(paths.commit,d);if(canonical(JSON.parse(bytes))!==canonical(marker))throw fail();return bytes;};
       await verifyCommitted();let blocked=false;try{await d.parentStore.assertNotAbandoned(template.parentSourceRef)}catch{blocked=true}if(!blocked)throw fail();
       phase='transport_cleanup';await cleanupTransport();await d.checkpoint('transport_closed');
@@ -217,8 +217,8 @@ export class TaxDownloadRetirement{
       const actualCommit=await verifyCommitted();
       if(!finished){await durable(paths.finished,JSON.stringify({version:1,state:'finished',commitSha256:hash(actualCommit)}),d);finished=true;}
       await d.checkpoint('finished_durable');await verifyMutex();await verifyRegistration();
-      // Keep OS administrator exclusion through exact recovery retirement. A
-      // later resume/collector must never replace this path between read/unlink.
+      // 操作系统管理员互斥须持续到精确恢复退役完成；
+      // 后续恢复者或采集者绝不能在读取和 unlink 之间替换此路径。
       phase='recovery_cleanup';
       const actual=await read(recoveryPath,d);if(canonical(JSON.parse(actual))!==canonical(mutex)||await maybe(lockPath,d)!==null)throw fail();
       await d.checkpoint('before_recovery_retire');await verifyMutex();guard.verify();
@@ -228,13 +228,13 @@ export class TaxDownloadRetirement{
       return result('portal_retired_locally','finished',{lockRetired:true,abandonedStateCommitted:true,cleanupConfirmed:true,
         oldResultConsumption:'permanently_forbidden',portalReadCount:2,resumed:args.resume===true});
     }catch{
-      // A publish may have succeeded before its readback/ACL await failed.
-      // Do not infer absence or success from in-memory stage flags alone.
+      // 发布可能已成功，而读回或 ACL 的 await 随后失败；
+      // 不能仅凭内存阶段标志推断不存在或已成功。
       let commitState=committed?true:'unknown';if(paths)try{
         const bytes=await maybe(paths.commit,d);commitState=bytes===null?false:marker&&canonical(JSON.parse(bytes))===canonical(marker)?true:'unknown';
       }catch{commitState='unknown'}
-      // Once our exact recovery was removed, a later path occupant belongs to
-      // another operation. Do not inspect/adopt it or claim our exclusion remains.
+      // 精确自有恢复对象被移除后，后续占用此路径的对象属于
+      // 其他操作；不得检查或接管，也不能声称本次互斥仍有效。
       if(recoveryPath&&!recoveryRetired)try{recoveryPresent=await maybe(recoveryPath,d)!==null}catch{recoveryPresent='unknown'}
       output=result(recoveryPresent||committed?'portal_retirement_partial':'portal_retirement_refused',phase,
         {lockRetired:retired,abandonedStateCommitted:commitState,recoveryRetained:recoveryPresent,resumeRequired:recoveryPresent||adminGuardUnconfirmed,

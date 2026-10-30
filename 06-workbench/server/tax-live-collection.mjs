@@ -1,4 +1,4 @@
-// Active replay is restricted to a fresh, privately stored authorized navigation.
+// 主动重放仅限当前、私有存储且已授权的导航。
 import {dirname,resolve} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 import {openRegisteredBrowserDiagnostic} from './tax-browser-diagnostic.mjs';
@@ -130,8 +130,8 @@ export class TaxLiveCollection{
         projectionComplete:false,requestCount:3,comparison:compareProjections(source,record),
         ...summarizeFilingPeriods(filing.capture.projection.wsbxxGrid),
         enterpriseBasicFieldCoverage:enterpriseBasicFieldCoverage(after.capture.projection.userinfo),
-        // The legacy business_period code continues to mean CURRENT PENDING
-        // scope. Valid filing-row periods do not resolve that separate gap.
+        // 旧 business_period 代码仍表示当前待办范围；
+        // 合法的申报记录所属期不能解决这个独立缺口。
         filingShape:filing.shape,identityShape:after.shape,missing:['business_period','full_enterprise_profile','full_business_fields']};
     }catch(error){result={status:'collection_failed',phase,
       reason:['tax_collection_scope_changed','tax_collection_source_expired','tax_collection_source_reobservation_required','tax_collection_enterprise_changed','tax_collection_busy',

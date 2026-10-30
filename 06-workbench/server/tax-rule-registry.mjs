@@ -1,4 +1,4 @@
-// Source-checked selected-field engineering policy; never an online filing adapter.
+// 已核查来源的选定字段工程规则，绝不是在线申报适配器。
 const freeze = v => { if (v && typeof v === 'object') { Object.values(v).forEach(freeze); Object.freeze(v); } return v; };
 export const VAT_RULE_VERSION = 'offline-vat-selected/1';
 export const VAT_RULE_REGISTRY = freeze({
@@ -25,7 +25,7 @@ export const VAT_RULE_REGISTRY = freeze({
 });
 export const getVatRules = () => structuredClone(VAT_RULE_REGISTRY);
 
-// A separate policy: this never changes the v1 registry or its Q1 contract.
+// 独立政策分支，不改变 v1 注册表或其 Q1 合同。
 export const VAT_Q2_RULE_VERSION = 'offline-vat-selected-q2/1';
 export const VAT_Q2_RULE_REGISTRY = freeze({
   ...getVatRules(), version: VAT_Q2_RULE_VERSION,

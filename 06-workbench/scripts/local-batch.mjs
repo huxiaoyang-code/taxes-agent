@@ -343,7 +343,7 @@ async function dispatch({ command, options }) {
       return 0;
     });
   }
-  // resume
+  // 恢复执行
   const jobKey = requireJobKey(options);
   storage.assertDataDirIdentity(dataDir);
   const state = storage.inspectDataDir(dataDir);

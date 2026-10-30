@@ -1,5 +1,5 @@
-// Deterministic no-model integration driver through Pi's actual MCP runtime.
-// This is an explicit synthetic task, not evidence of model decision quality.
+// 通过 Pi 实际 MCP 运行时进行确定性的无模型集成驱动。
+// 这是明确的合成任务，不作为模型决策质量的证据。
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join,dirname} from 'node:path';

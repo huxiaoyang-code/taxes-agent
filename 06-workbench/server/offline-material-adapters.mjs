@@ -1,4 +1,4 @@
-// Pure material normalization. No filesystem, database, golden expectations or execution.
+// 纯材料标准化；不访问文件系统/数据库，不读取黄金预期，也不执行。
 import { readInvoiceXlsx, readBankXlsx } from './offline-invoice-xlsx.mjs';
 import { createHash } from 'node:crypto';
 import { canonicalEnterpriseKey } from './enterprise-identity.mjs';
@@ -72,7 +72,7 @@ function date(raw, format, scope) {
   return parsed.date;
 }
 function money(raw) {
-  // CSV whole yuan and single decimal are accepted; normalized contract is exactly 2 decimals.
+  // CSV 接受整数元或一位小数，标准化合同严格输出两位小数。
   requireValue(typeof raw === 'string' && /^-?(?:0|[1-9]\d{0,12})(?:\.\d{1,2})?$/.test(raw), 'amount_invalid');
   const [whole, fraction = ''] = raw.split('.');
   const normalized = `${whole}.${fraction.padEnd(2, '0')}`;
@@ -137,7 +137,7 @@ function bank(text, mapping, scope, parsedInput) {
   fields(mapping, ['format', 'ownerEnterpriseKey', 'bankAccountId', 'columns', 'dateFormat', 'amountMode', 'currency', 'negativeAmount'], ['directionLabels', 'thousandsSeparator', 'allowCurrencySymbol']);
   requireValue(mapping.format === 'bank-csv-v1' && mapping.ownerEnterpriseKey === scope.enterpriseKey && mapping.currency === 'CNY', 'bank_owner_or_currency_mismatch');
   identifier(mapping.bankAccountId);
-  // Deliberately narrow to explicit amount + enterprise-perspective direction.
+  // 有意只支持显式金额和以企业视角定义的收付方向。
   requireValue(mapping.amountMode === 'amount_direction', 'bank_mapping_unsupported');
   columnMap(mapping.columns, ['date', 'amount', 'direction'], ['summary', 'refId', 'balance', 'currency']);
   fields(mapping.directionLabels, ['inflow', 'outflow']);
@@ -176,7 +176,7 @@ function business(text, mapping, scope) {
     return { kind: 'business_fact', semantic: fact, identity: fact.factId, reliability: 'stable', location: { row: i + 1, pointer: `/facts/${i}`, fields: Object.fromEntries(Object.keys(fact).map(k => [k, { pointer: `/facts/${i}/${k}` }])) }, raw: fact };
   }, { row: i + 1 }));
 }
-// Binary sources use canonical base64 ONLY as JSON transport. Hash raw bytes, never base64.
+// 二进制来源仅用规范 base64 作为 JSON 传输；哈希计算原始字节，不能计算 base64。
 export function sourceBytes(kind, text) {
   requireValue(typeof text === 'string', 'source_digest_invalid');
   if (!['invoice_xlsx', 'bank_xlsx'].includes(kind)) {
@@ -191,7 +191,7 @@ export function sourceBytes(kind, text) {
 export function sourceText(kind, bytes) {
   return ['invoice_xlsx', 'bank_xlsx'].includes(kind) ? Buffer.from(bytes).toString('base64') : new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 }
-// Every replay reparses the actual original bytes; scope/ownership remain assertions.
+// 每次重放都重新解析真实原件字节；范围及归属仍须断言核验。
 export function normalizeMaterial(input) {
   requirePlainJson(input);
   fields(input, ['kind', 'text', 'mapping', 'scope', 'fileSha256'], ['sourceId']);

@@ -1,5 +1,5 @@
-// Explicit recovery of synthetic abandoned locks only. No real browser, process,
-// registry, legacy claim, or quarantine is opened or changed by this test.
+// 仅显式恢复合成的遗弃锁。不打开或修改真实浏览器、进程、
+// 注册表、旧声明或隔离状态。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,lstat,readFile,writeFile,readdir,rm} from 'node:fs/promises';

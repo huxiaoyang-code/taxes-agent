@@ -1,5 +1,5 @@
-// Synthetic native Q2 proof: blocked computation and unavailable observation
-// are distinct. No tax formula or caller-fabricated receipt is supplied.
+// 合成原生 Q2 证明：计算被阻塞与观测不可用
+// 是不同状态。不提供税费公式或调用者伪造的回执。
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';

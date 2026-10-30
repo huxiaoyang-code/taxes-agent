@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-http-test-mjs-' + (++identityFixtureSequence) });
 
@@ -93,7 +93,7 @@ async function stopBackend() {
   const done = new Promise((resolve) => proc.once("exit", resolve));
   proc.kill();
   await Promise.race([done, new Promise((resolve) => setTimeout(resolve, 5000))]);
-  if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill("SIGKILL"); } catch { /* ignore */ } }
+  if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill("SIGKILL"); } catch { /* 忽略 */ } }
 }
 
 async function http(method, path, body, headers = {}) {
@@ -589,7 +589,7 @@ try {
   console.error("模型 HTTP 入口测试初始化失败：", error.stack);
 } finally {
   await stopBackend();
-  try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略 */ }
 }
 
 const failed = results.filter((ok) => !ok).length;

@@ -136,7 +136,7 @@ export function parseBankCsv(text, options = {}) {
   }
 
   let input = text;
-  if (input.charCodeAt(0) === 0xfeff) input = input.slice(1); // UTF-8 BOM
+  if (input.charCodeAt(0) === 0xfeff) input = input.slice(1); // UTF-8 字节序标记（BOM）
   if (input.length === 0) {
     return {
       ok: false, headers: [], rows: [], skippedBlankRows: 0, errorsTruncated: false,

@@ -1,4 +1,4 @@
-// Active reads reuse the registered diagnostic, shared profile lock and identity projection.
+// 主动读取复用已登记诊断、共享 profile 锁及身份投影。
 import {dirname,resolve} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 import {openRegisteredBrowserDiagnostic} from './tax-browser-diagnostic.mjs';

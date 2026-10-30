@@ -25,7 +25,7 @@ export function writeBundle(context,bundle){
     if(typeof file.path!=='string'||!file.path||isAbsolute(file.path)||file.path.includes('\\')||file.path.split('/').some(p=>!p||p==='.'||p==='..')||/[\0\r\n:]/.test(file.path)||typeof file.content!=='string')fail('host_file_invalid');
     const path=resolve(context.outputDir,file.path),rel=relative(context.outputDir,path);if(rel.startsWith('..'+sep)||isAbsolute(rel)||names.has(path.toLowerCase()))fail('host_file_invalid');names.add(path.toLowerCase());
   }
-  mkdirSync(context.outputDir); // exclusive new output; never merge into user config
+  mkdirSync(context.outputDir); // 仅允许全新独占输出，绝不合并到用户配置。
   for(const file of bundle.files){const path=join(context.outputDir,file.path);mkdirSync(dirname(path),{recursive:true});writeFileSync(path,file.content,{encoding:'utf8',flag:'wx'});}
   return {outputDir:context.outputDir,files:bundle.files.map(f=>f.path),notes:bundle.notes??[],modelInvoked:false};
 }

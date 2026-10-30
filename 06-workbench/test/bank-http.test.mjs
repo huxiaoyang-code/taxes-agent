@@ -71,14 +71,14 @@ export async function exerciseBank(h,f,invoke){
  assert.equal(persisted.book_close_cents,113000+f.cent);assert.equal(persisted.statement_close_cents,113000+f.cent);assert.equal(persisted.difference_cents,0);
  assert.equal(used.size,15);
  const oneCent=await run('bank_reconcile',{...s,period:'2026-01',asOf:'2026-01-10',coverageFrom:'2026-01-01',coverageTo:'2026-01-31',statementSource:BANK_MARK,statementOpenCents:100000+f.cent,statementCloseCents:113001+f.cent,currency:'CNY'},true);
- // Overlapping stable IDs reuse four originals and add exactly three cents.
+ // 重叠的稳定 ID 复用四条原始记录，恰好新增三分钱。
  const overlap=await rawImport({...payload,batchId:'overlap-'+set,csvText:csvText+'\n2026-01-15,'+BANK_MARK+',0.03,,R5'});
  const overlapBatch=h.db.prepare("SELECT imported_rows,reused_rows FROM bank_batches WHERE account_set_id=? AND batch_id=?").get(set,'overlap-'+set);assert.equal(overlapBatch.imported_rows,1);assert.equal(overlapBatch.reused_rows,4);
- // No stable ID: the operator explicitly selects an existing candidate (same).
+ // 没有稳定 ID：操作者显式选择已有候选（同一条）。
  await rawImport({...payload,batchId:'amb3-'+set,csvText:ambiguousCsv+'\n2026-01-12,another,0.02,\n2026-01-13,third,0.03,',mapping:noRefMapping});
  for(const a of h.db.prepare("SELECT id,candidate_transaction_ids FROM bank_ambiguities WHERE account_set_id=? AND status='pending'").all(set)){const selected=JSON.parse(a.candidate_transaction_ids)[0];await run('bank_ambiguity_resolve',{...s,ambiguityId:a.id,decision:'same',transactionId:selected,reason:BANK_MARK},true);}
  assert.equal(h.db.prepare("SELECT COUNT(*) n FROM bank_ambiguities WHERE account_set_id=? AND status='pending'").get(set).n,0);
- // Two equal posted January entries are both candidates for a February bank row.
+ // 一月已记账的两笔等额分录都是二月银行流水的候选。
  const crossVouchers=[];for(let j=0;j<2;j++){const v=await h.q('/api/account-sets/'+set+'/vouchers',{period:'2026-01',voucher_date:'2026-01-31',status:'posted',entries:[{code:'1002',debit:0.07},{code:'1122',credit:0.07}]});assert.equal(v.status,201);crossVouchers.push(v.data.id);}
  await rawImport({...payload,batchId:'cross-'+set,period:'2026-02',csvText:'日期,摘要,收入,支出,流水号\n2026-02-01,'+BANK_MARK+',0.07,,CROSS'});
  const crossTxn=h.db.prepare("SELECT id FROM bank_transactions WHERE account_set_id=? AND bank_ref_id='CROSS'").get(set).id;

@@ -1,5 +1,5 @@
-// Filing-row tax-period dates stay local. Public summaries expose counts and
-// equality only; they do not prove current pending obligations or completeness.
+// 申报记录的税款所属期日期只留本机；公开摘要仅暴露计数及
+// 相等关系，不证明当前待办义务或资料完整性。
 export const FILING_PERIOD_FIELDS=Object.freeze(['skssqq','skssqz','skssqzqz']);
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const has=(row,key)=>object(row)&&Object.hasOwn(row,key)&&row[key]!==undefined;

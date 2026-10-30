@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Synthetic-only unit tests for the tax API catalog, classifier and readiness layer.
-// No network, no browser, no credentials, no tax endpoint, no account data.
+// 税务 API 目录、分类器及就绪层的纯合成单元测试。
+// 无网络、浏览器、凭据、税务端点或账套数据。
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

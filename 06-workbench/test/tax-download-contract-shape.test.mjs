@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { inspectDownloadContractShape as inspect } from '../server/tax-download-contract-shape.mjs';
 
-// Only synthetic component strings and synthetic observed keys. No private I/O.
+// 仅使用合成组件字符串及合成观测键。不执行私有 I/O。
 const keys = ['Skssqq', 'Skssqz', 'PageNum', 'PageSize', 'reportType', 'status', 'category'];
 const body = '{Skssqq:row.start,Skssqz:row.end,PageNum:1,PageSize:20,reportType:row.kind,status:row.status,category:row.category}';
 const schema = (fields = [], complete = false) => ({ fields, complete, schemaOnly: true,
@@ -305,7 +305,7 @@ test('detail query schema rejects the entire object on unsafe structure or names
 
 test('query schema output is bounded without altering original route selection or authority', () => {
   const out = inspect('router.resolve({path:"/reports/detail",query:{token:"SENTINEL_VALUE"}});'.repeat(40), keys);
-  assert.equal(out.routerCandidates.length, 18); // Original 32-name budget minus body/observed fields.
+  assert.equal(out.routerCandidates.length, 18); // 原有 32 个名称的预算，减去 body/observed 字段。
   assert.equal(out.truncated, true);
   let fieldCount = 0, names = out.bodyFields.length + out.observedBodyFields.length;
   for (const route of out.routerCandidates) {

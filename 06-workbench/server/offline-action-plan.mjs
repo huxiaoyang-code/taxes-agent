@@ -1,4 +1,4 @@
-// Candidate preparation façade. No accounting rules, DB, network or execution receipts.
+// 候选准备外观层，不含会计规则、数据库、网络或执行回执。
 import { assessCompleteness, replayReports } from './material-completeness.mjs';
 import { planOffline } from './offline-task-planner.mjs';
 import { buildOfflineCandidates } from './offline-bookkeeping.mjs';
@@ -41,7 +41,7 @@ function classification(p, facts, record, declaration, materials) {
     if (!raw.length) return 'missing';
     return raw.some(x => ['nature', 'performance', 'settlement'].some(k => x.data[k] === 'unknown')) ? 'unknown' : 'unsupported';
   }
-  // Old requirements mix missing facts with known unsupported values. Inspect actual values.
+  // 旧要求混合了缺失事实和已知不支持的值，须检查实际值。
   const keys = p.field.split('/');
   const values = keys.map(k => facts[0]?.data[k] ?? record?.data[k]);
   if (values.some(v => v === undefined)) return 'missing';
@@ -97,7 +97,7 @@ export function buildOfflineActionPlan(input) {
     const gates = ids.map(id => matrix.find(row => row.id === id)).filter(row => row && !['provided_valid', 'not_applicable'].includes(row.status));
     return { businessKey: identity(input.scope, r), subjectKey: r.docId, kind: r.kind === 'invoice' ? r.data.role === 'sales' ? 'service_sale' : 'administrative_service' : 'service_prepayment', status: gates.some(row => row.status === 'conflict') ? 'conflict' : 'needs_review', requirements: [request(input.profileId == null ? 'profile_missing' : 'profile_unsupported', 'profileId', '请会计按企业实际情况确认适用的准则与科目方案'), ...gates.map(row => request(`planning_${row.status}`, row.id, row.requestedFields?.join('；') || '提供对应原始资料及确认依据'))] };
   });
-  // Rejected receipt branches remain visible even when no valid source yields a decision.
+  // 即使没有有效来源能给出决定，被拒绝的回执分支仍须可见。
   for (const r of records) if (!decisions.some(x => x.businessKey === identity(input.scope, r))) decisions.push({ businessKey: identity(input.scope, r), subjectKey: r.docId, kind: r.kind === 'invoice' ? r.data.role === 'sales' ? 'service_sale' : 'administrative_service' : 'service_prepayment', status: 'needs_review', requirements: [] });
   const candidates = [];
   for (const key of [...new Set(decisions.map(x => x.businessKey ?? x.subjectKey))].sort()) {
@@ -106,7 +106,7 @@ export function buildOfflineActionPlan(input) {
     const kind = linkedPrepay.length ? 'related_purchase_evidence' : ds[0].kind;
     const seeds = unique([...own, ...linkedPrepay]);
     const sameFactIds = new Set(seeds.map(f => f.data.factId));
-    // One-hop actual relationships match the existing admission gates; no whole-file hashes.
+    // 一跳实际关系与现有准入守卫保持一致，不使用整个文件的哈希。
     const relatedFacts = facts.filter(f => sameFactIds.has(f.data.factId) || seeds.some(o => o.data.contractId && f.data.contractId === o.data.contractId && (f.data.supplierKey === (o.data.kind === 'service_prepayment' ? o.data.supplierKey : r?.kind === 'invoice' ? r.data.role === 'sales' ? r.data.buyerKey : r.data.sellerKey : o.data.supplierKey) || f.data.invoiceRef?.sellerKey === (o.data.kind === 'service_prepayment' ? o.data.supplierKey : r?.kind === 'invoice' ? r.data.role === 'sales' ? r.data.buyerKey : r.data.sellerKey : o.data.supplierKey))) || r?.kind === 'invoice' && f.data.relatedInvoiceRefs?.some(ref => sameRef(ref, r.data)));
     const refs = relatedFacts.flatMap(f => [...(f.data.relatedInvoiceRefs ?? []), ...(f.data.invoiceRef ? [f.data.invoiceRef] : [])]);
     const materials = allRecords.filter(x => r && x.docId === r.docId || x.kind === 'business_fact' && r?.kind === 'invoice' && sameRef(x.data.invoiceRef, r.data) || x.kind === 'invoice' && refs.some(ref => sameRef(ref, x.data)) || x.kind === 'business_fact' && refs.some(ref => sameRef(ref, x.data.invoiceRef)) || x.kind === 'bank_activity' && relatedFacts.some(f => sameBank(f.data.bankRef, x.data)));
@@ -115,8 +115,8 @@ export function buildOfflineActionPlan(input) {
     const localDiagnostics = diagnostics.filter(x => sourceIds.has(x.sourceId) || x.reason === 'accounting_facts_invalid' || x.reason === 'accountingFacts_read_invalid');
     let problems = unique(ds.flatMap(x => x.requirements));
     if (linkedPrepay.length) {
-      // A future-service purchase supports its payment. Administrative completion/use
-      // questions are inapplicable even while the payment needs a specific fact.
+      // 购买未来服务可支持付款；即使付款仍缺某项具体事实，
+      // 也不适用行政性完成或使用问题。
       problems = unique(linkedPrepay.flatMap(f => {
         const bankRecord = records.find(x => x.kind === 'bank_activity' && sameBank(f.data.bankRef, x.data));
         const ownerKey = identity(input.scope, bankRecord ?? { kind: 'bank_activity', data: f.data.bankRef });
@@ -151,7 +151,7 @@ export function buildOfflineActionPlan(input) {
     if (resolvedRow && resolvedRow.status === 'unknown' && status === 'candidate_preparation_ready' && (resolvedRow.reason === 'purchase_use_service_beneficiary_and_benefit_period_need_detail' || resolvedRow.reason === 'bank_nature_requires_explicit_statement_not_summary_inference')) {
       resolvedRow.originalAssessment = structuredClone(resolvedRow); resolvedRow.status = 'provided_valid'; resolvedRow.reason = linkedPrepay.length ? 'related_prepayment_evidence_currently_valid' : 'complete_current_accounting_facts_admitted'; resolvedRow.requestedFields = []; resolvedRow.resolvedByTaskId = taskId; resolvedRow.accountingFactTrace = relatedFacts;
     }
-    // Replace the broad old use/nature question with the exact current requirements.
+    // 用当前精确要求替换旧的宽泛用途或性质问题。
     const originalBusiness = allRecords.filter(x => x.kind === 'business_fact' && r?.kind === 'invoice' && sameRef(x.data.invoiceRef, r.data));
     const resolvableUse = originalBusiness.length && originalBusiness.every(x => x.data.nature === 'service' && x.data.performance === 'completed' && x.data.settlement === 'unpaid' && ['unknown', 'operating_service'].includes(x.data.purpose));
     if (resolvedRow?.status === 'unknown' && own.length && (resolvedRow.reason === 'purchase_use_service_beneficiary_and_benefit_period_need_detail' && resolvableUse || resolvedRow.reason === 'bank_nature_requires_explicit_statement_not_summary_inference' && r?.data.direction === 'outflow' && r.data.refId)) {
@@ -173,7 +173,7 @@ export function buildOfflineActionPlan(input) {
   }
   for (const area of ['bank-accounts', 'payroll', 'assets', 'opening', 'history']) {
     const row = matrix.find(r => r.id === area);
-    // These are period context gates, not dependencies of independent transactions.
+    // 这些是期间上下文守卫，不是独立交易的依赖。
     add(area, `prepare_${area}`, ({ 'bank-accounts': '核对全部银行账户', payroll: '核对工资资料', assets: '核对资产资料', opening: '核对期初资料', history: '核对历史资料' })[area], row.status === 'provided_valid' ? 'candidate_preparation_ready' : row.status, [area], [], row);
   }
   for (let i = 0; i < diagnostics.length; i++) {
@@ -183,7 +183,7 @@ export function buildOfflineActionPlan(input) {
   const preparationIds = tasks.map(t => t.taskId);
   for (const [id, deps, goal] of [['post', preparationIds, '等待正式过账实现及真实回执'], ['close', ['post'], '等待正式结转结账'], ['compute_tax', ['post', 'tax', 'history'], '等待账务结果及本计划接入税务计算'], ['review', ['close', 'compute_tax'], '等待账务结果及本计划接入结果复核']]) add(id, id, goal, 'blocked_not_implemented', [], deps, { implementation: 'not_integrated_in_action_plan' }, { implementationStatus: 'not_integrated_in_action_plan', implementationScope: 'this_preparation_facade_only', externalCapability: ['compute_tax', 'review'].includes(id) ? 'existing_narrow_vat_and_review_apis_require_separate_fresh_ledger_workflow' : 'formal_post_close_chain_pending', artifact: { produced: false, kind: `${id}_not_produced` } });
   add('period', 'assess_period', '核对整期资料及真实后续结果', 'blocked_not_implemented', matrix.map(r => r.id), ['review', ...preparationIds], { matrix, execution: 'not_implemented' }, { implementationStatus: 'not_implemented' });
-  // Old plan remains diagnostic trace; its old customer requests are never presented as current.
+  // 旧计划保留为诊断轨迹，旧客户补件请求不再作为当前请求展示。
   const requestRows = [], requestGroups = new Map();
   for (const row of matrix.filter(r => !r.operatorOnly && !r.customerRequestSuperseded)) {
     const key = row.businessKey ? stable([row.businessKey, row.requestedFieldKey, row.expectedCoverage]) : row.id;

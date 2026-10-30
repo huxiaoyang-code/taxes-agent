@@ -1,13 +1,13 @@
-// Read-only projection over existing batch checkpoints and original Harness receipts.
-// This does not resolve an operation, authorize a retry, or change task/review state.
+// 只读投影已有批处理检查点与原始 Harness 回执。
+// 此处不解决操作结果、不授权重试，也不改变任务或复核状态。
 const identityKeys=['storePath','taskId','capabilityId','dependencyDigest','period'];
 const sameIdentity=(identity,expected)=>identity&&expected&&identityKeys.every(key=>typeof identity[key]==='string'&&identity[key]===expected[key]);
 const receiptMatches=(receipt,identity)=>receipt&&['taskId','capabilityId','dependencyDigest'].every(key=>typeof identity?.[key]==='string'&&receipt[key]===identity[key]);
 const receipts=bridge=>[bridge?.historicalReceipt,bridge?.observation?.originalReceipt,bridge?.observation?.receipt];
 export function committedBridgeObservation(bridge,expected=bridge?.taskIdentity,depth=0){
  if(!bridge||depth>4||!sameIdentity(bridge.taskIdentity,expected))return null;
- // operationState belongs to the task's history, not necessarily this manifest
- // request. Only a receipt bound to this exact task and input version proves it.
+ // operationState 属于任务历史，未必对应当前 manifest 的请求；
+ // 只有绑定精确任务及输入版本的回执，才能证明该请求的效果。
  if(receipts(bridge).some(receipt=>receiptMatches(receipt,expected)&&receipt.executionState==='executed'))return Object.fromEntries(['taskIdentity','operationId','operationState','historicalReceipt','observation'].filter(key=>bridge[key]!==undefined).map(key=>[key,bridge[key]]));
  return committedBridgeObservation(bridge.priorCommittedObservation,expected,depth+1);
 }

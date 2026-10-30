@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { McpStdioClient } from './mcp-stdio-client.mjs';
 mkdirSync(resolve('.agent-runs'),{recursive:true});const here=dirname(fileURLToPath(import.meta.url)),root=mkdtempSync(resolve('.agent-runs/harness-mcp-'));
 const client=new McpStdioClient(join(here,'server.mjs'),{env:{NODE_NO_WARNINGS:'1'},timeoutMs:60000}).start();
-// Preserve the pre-summary native assertions as an explicit compatibility lane.
+// 将摘要引入前的原生断言保留为明确的兼容验证路径。
 const nativeCall=client.call.bind(client);client.call=(name,args={})=>nativeCall(name,{...args,...(name.startsWith('harness_')?{responseMode:'full'}:{})});
 try {
  assert.equal((await client.initialize()).result.protocolVersion,'2025-06-18');
@@ -23,7 +23,7 @@ try {
  const status=await client.call('harness_status',{storePath});assert.equal(status.structured.tasks[0].blockers[0].state,'missing');
  const blocked=await client.call('harness_run',{storePath,taskId:'blocked'});assert.equal(blocked.isError,true);assert.equal(blocked.data.error,'harness_task_blocked');assert.ok(blocked.data.details.blockers.some(b=>b.factId==='missing'&&b.state==='missing'));
  const summaryBlocked=await nativeCall('harness_run',{storePath,taskId:'blocked'});assert.equal(summaryBlocked.structured.code,'harness_task_blocked');assert.ok(summaryBlocked.structured.details.blockers.some(b=>b.factId==='missing'&&b.state==='missing'));
- // Unavailable business facts retain their state-specific blockers; provided malformed values retain structural diagnostics.
+ // 不可用的业务事实保留各自状态的阻塞；provided 值结构错误时保留结构诊断。
  const unavailable=['conflict','unknown','not_applicable'].map(state=>({factId:'request-'+state,state,reason:'Synthetic '+state+' business state',sourceRefs:[]}));
  const malformed=[{factId:'request-string',state:'provided',reason:'Synthetic malformed request',sourceRefs:['raw'],value:'SYN-NOT-A-REQUEST'},{factId:'request-null',state:'provided',reason:'Synthetic malformed request',sourceRefs:['raw'],value:null}];
  assert.equal((await client.call('harness_facts_register',{storePath,facts:[...unavailable,...malformed]})).isError,false);

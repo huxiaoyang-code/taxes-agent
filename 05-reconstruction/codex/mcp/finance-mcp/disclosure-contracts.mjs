@@ -1,5 +1,5 @@
-// Catalog → inspect → invoke, following Anthropic progressive tool discovery.
-// Input definitions are shared with the executing Harness, not a second schema copy.
+// 目录 → 查看合同 → 调用，遵循 Anthropic 的渐进式工具发现方式。
+// 输入定义与实际执行的 Harness 共享，不另外复制一套 schema。
 import {capabilityInputContract,CAPABILITY_DOMAINS} from '../../../../06-workbench/server/harness-input-contracts.mjs';
 const failure=(code,details)=>{throw Object.assign(new Error(code),{code,details});};
 export function capabilityGuide(capability,includeTrace=false){

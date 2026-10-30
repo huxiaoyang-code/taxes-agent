@@ -77,7 +77,7 @@ const ENTRIES = {
 
 const obj = (properties, required = []) => ({ type: "object", properties, required });
 
-// Strict appendix v1 data only; detailed business validation remains in B2a.
+// 仅接收严格的 appendix v1 数据；详细业务校验仍由 B2a 负责。
 const auxObject = (properties, required = []) => ({ ...obj(properties, required), additionalProperties: false });
 const AUX_ID = { type: "integer", minimum: 1 };
 const AUX_KIND = { type: "string", enum: ["project", "department", "party"] };
@@ -493,7 +493,7 @@ export function validateArgs(schema, args) {
   if(args?.operationId!==undefined){if(typeof args.operationId!=='string'||! /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(args.operationId))return ['audit_operation_invalid']; args={...args};delete args.operationId;}
   if (!schema || schema.type !== "object") return problems;
   if (args === null || typeof args !== "object" || Array.isArray(args)) return ["arguments 必须是 JSON 对象"];
-  // Bank model input is exclusively a local opaque draft and integer scope.
+  // 银行模型输入仅接受本机不透明草稿引用及整数账套范围。
   if (schema.properties?.draftRef?.pattern === "^bankdraft_[a-f0-9]{48}$") {
     if (Object.keys(args).some(k=>!["accountSetId","draftRef"].includes(k)) || !Number.isSafeInteger(args.accountSetId) || args.accountSetId<=0 || typeof args.draftRef!=="string" || !/^bankdraft_[a-f0-9]{48}$/.test(args.draftRef)) return ["bank_draft_input_invalid"];
   }

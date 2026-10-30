@@ -1,4 +1,4 @@
-// Dedicated local immutable review receipts. No business database writes or recovery engine.
+// 专用的本机不可变复核回执；不写业务数据库，也不另建恢复引擎。
 import { mkdir, open, readdir, unlink, lstat } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
@@ -14,7 +14,7 @@ export const REVIEW_STORE_VERSION = 'offline-accountant-review-store/1';
 const DIGEST = /^[a-f0-9]{64}$/, LIMIT = 64 * 1024 * 1024;
 const same = (a, b) => stable(a) === stable(b);
 const json = bytes => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-// Explicit local dependency closure for this read/replay/verification path, not all server code.
+// 只包含本次读取、重放和校验路径的显式依赖闭包，并非全部服务端代码。
 export const REVIEW_CODE_FILES = Object.freeze([
   'accountant-review-store.mjs', 'accountant-review-feedback.mjs', 'accountant-review.mjs', 'accountant-review-export.mjs',
   'offline-vat-input.mjs', 'offline-ledger-snapshot.mjs', 'offline-accounting-readiness.mjs',
@@ -30,8 +30,8 @@ const loadedCodeDigest = codeDigest();
 const identity = s => `${s.dev}:${s.ino}:${s.birthtimeMs}`;
 const flags = { periodComplete: false, submittable: false, authorizesExecution: false, sourceAuthenticity: 'unverified', actorAuthentication: 'local_operator_declaration_only' };
 const inside = (root, p) => { const r = relative(root, p); return r === '' || r.split(/[\\/]/)[0] !== '..' && !isAbsolute(r); };
-// The existing loader has absent optional inventory members represented as undefined.
-// Match its exported manifest JSON exactly, without treating null/false/zero as absent.
+// 既有加载器将不存在的可选清单成员表示为 undefined；
+// 严格匹配其导出的 manifest JSON，不能把 null/false/zero 视为缺失。
 const bindingFor = (bundle, inventory) => ({ bundleDigest: bundle.contentDigest, inputHash: bundle.computation.inputHash, ruleVersion: bundle.computation.ruleVersion, ruleDigest: bundle.computation.ruleDigest, calculationVersion: bundle.computation.version, ledgerSnapshotDigest: bundle.computation.ledgerSnapshotDigest, ruleCodeDigest: loadedCodeDigest, inputFilesDigest: hash(stable(JSON.parse(JSON.stringify(inventory)))) });
 const cellKey = c => `${c.row}:${c.column}:${c.period}`;
 function differences(previous, current) {
@@ -50,7 +50,7 @@ async function exists(path) { try { await lstat(path); return true; } catch (e) 
 export async function initReviewStore(path, scope) {
   scope = structuredClone(scope);
   validateScope(scope); const root = resolve(path); await checkedPath(dirname(root), true);
-  await mkdir(root, { mode: 0o700 }); // Never adopt an existing or interrupted directory.
+  await mkdir(root, { mode: 0o700 }); // 绝不接管已有或执行中断留下的目录。
   await mkdir(join(root, 'receipts')); await mkdir(join(root, 'artifacts'));
   const metadata = { version: REVIEW_STORE_VERSION, storeId: randomUUID(), scope: structuredClone(scope) };
   await writeNew(join(root, 'store.json'), stable(metadata) + '\n');
@@ -195,7 +195,7 @@ export async function recordReviewFeedback(path, payload) {
     }
     assertFeedbackTarget(payload, current, state.meta.scope); check(payload.expectedJournalHead === state.head, 'review_cas_mismatch'); check(fresh.current, 'review_version_stale');
     if (payload.action === 'confirm_selected_fields') assertSelectedConfirmation(payload, fresh.bundle);
-    // New private session immediately before commit; no persisted ready flag is authoritative.
+    // 提交前立即创建新的私有会话，持久化 ready 标志不能作为权威依据。
     const final = await freshVersion(current); check(final.current, 'review_version_stale');
     if (payload.action === 'confirm_selected_fields') assertSelectedConfirmation(payload, final.bundle);
     await append(state, 'feedback', structuredClone(payload), async () => { const latest = await freshVersion(current); check(latest.current, 'review_version_stale'); if (payload.action === 'confirm_selected_fields') assertSelectedConfirmation(payload, latest.bundle); });

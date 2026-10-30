@@ -1,4 +1,4 @@
-// Raw execution never reads an expectation or creates entries outside 03B.
+// 原始执行绝不读取预期结果，也不在 03B 之外创建分录。
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
@@ -59,7 +59,7 @@ export async function plansFor(directory) {
 
 async function executeRaw(directory, rawDirectory) {
   mkdirSync(directory, { recursive: true }); cpSync(rawDirectory, join(directory, 'raw'), { recursive: true });
-  // Set isolation BEFORE any core/default DB module is loaded.
+  // 在加载任何核心/默认数据库模块之前设置隔离。
   process.env.WORKBENCH_DATA_DIR = join(directory, 'data'); process.env.TEMP = directory; process.env.TMP = directory;
   mkdirSync(process.env.WORKBENCH_DATA_DIR);
   const { db } = await import('../../server/db.mjs');
@@ -133,8 +133,8 @@ export function assertQuarterlyOutput(actual, expected, rawDirectory) {
     assert.equal(m.expectedEntries.reduce((n, e) => n + minor(e.debit) - minor(e.credit), 0n), 0n);
     const ref = c.evidence.materials.find(r => r.docId === record.docId && r.sourceId === 'sales'); assert.ok(ref);
     assert.equal(ref.fileSha256, m.sourceRef.sha256);
-    // Frozen locator is the physical CSV line/XLSX row (header is row 1).
-    // CSV adapter's row is its 1-based DATA-record ordinal; line is physical.
+    // 冻结的定位信息是物理 CSV 行/XLSX 行（表头为第 1 行）。
+    // CSV 适配器的 row 是从 1 开始的数据记录序号；line 表示物理行。
     assert.equal(ref.location.row, m.sourceRef.sheet ? m.sourceRef.row : m.sourceRef.row - 1);
     if (m.sourceRef.sheet) assert.equal(ref.location.sheet, m.sourceRef.sheet); else assert.equal(ref.location.line, m.sourceRef.line);
     assert.ok(c.evidence.businessFacts.some(f => f.fileSha256 === m.accountingFactRef.sha256 && f.pointer === m.accountingFactRef.pointer));

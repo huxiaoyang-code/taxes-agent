@@ -1,4 +1,4 @@
-// Synthetic CDP, identity replies and store only. No real profile/cache/network.
+// 仅使用合成 CDP、身份响应及存储。不使用真实配置目录/缓存/网络。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { observeTaxNavigation } from '../scripts/observe-tax-navigation.mjs';

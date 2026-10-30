@@ -1,4 +1,4 @@
-// A review draft is minted only by replaying raw materials and the private ledger capability.
+// 复核草稿只能通过重放原始材料及私有账簿能力生成。
 import { assertVatInputCurrent, assertVatInputPayload } from './offline-vat-input.mjs';
 import { calculateOfflineVat } from './tax-calculation.mjs';
 import { assessAccountingReadiness } from './offline-accounting-readiness.mjs';
@@ -43,7 +43,7 @@ export function createAccountantReview(rawInput, source, snapshot) {
   capabilities.set(bundle, { rawInput, rawDigest: hash(stable(rawInput)), source, snapshot, computationDigest: computation.contentDigest });
   return bundle;
 }
-// The public JSON, even byte-identical, cannot be used as this identity.
+// 公开 JSON 即使字节完全相同，也不能作为该私有身份。
 export async function assertAccountantReviewCurrent(bundle, inputSession) {
   const cap = capabilities.get(bundle);
   requireValue(cap, 'review_bundle_untrusted');

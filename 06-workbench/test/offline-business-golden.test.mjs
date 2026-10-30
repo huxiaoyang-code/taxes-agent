@@ -12,8 +12,8 @@ const json = p => JSON.parse(readFileSync(p, 'utf8'));
 const write = (p, v) => writeFileSync(p, JSON.stringify(v, null, 2));
 const parent = resolve(workbench, '../.agent-runs'); mkdirSync(parent, { recursive: true });
 
-// This execution function accepts only an actual raw directory. It never reads an
-// expectation. Every case uses a fresh process, fresh DB and unchanged raw scope.
+// 此执行函数只接受实际原始目录，绝不读取
+// 预期结果。每个用例都使用全新进程、全新数据库及不变的原始作用域。
 async function executeRaw(rawDirectory, temporaryDirectory) {
   process.env.WORKBENCH_DATA_DIR = join(temporaryDirectory, 'data');
   process.env.TEMP = temporaryDirectory; process.env.TMP = temporaryDirectory;
@@ -35,7 +35,7 @@ async function executeRaw(rawDirectory, temporaryDirectory) {
     for (const p of ['2026-01','2026-02','2026-03']) A.ensurePeriod(set.id, p);
     if (existsSync(join(rawDirectory, 'opening-facts.json'))) {
       const f = json(join(rawDirectory, 'opening-facts.json'));
-      // Explicit test prerequisite derived from historical bank/capital facts.
+      // 从历史银行/资本事实推导出的显式测试前置条件。
       A.setOpeningBalances(set.id, [{ code: '1002', debit: Number(f.bankBalance) }, { code: '3001', credit: Number(f.contributedCapital) }]);
     }
     let inputPath = join(rawDirectory, 'config.json'), receipts;
@@ -48,7 +48,7 @@ async function executeRaw(rawDirectory, temporaryDirectory) {
       assert.equal(reopen.status,0,reopen.stderr); assert.equal(reopen.signal,null); assert.equal(reopen.stderr,'');
       const reopened = json(receiptOutput); assert.equal(reopened.status, 'verified'); assert.ok(reopened.active.length > 0);
       assert.deepEqual((await inspectMaterialStore(store)).active, reopened.active);
-      // A new reader below inspects actual persisted receipts and original files.
+      // 下方新读取器检查实际持久化回执和原始文件。
       const c = { ...config, declaration: join(rawDirectory, config.declaration), accountingFacts: join(rawDirectory, config.accountingFacts), materialStore: store }; delete c.materialsInput;
       inputPath = join(temporaryDirectory, 'store-config.json'); write(inputPath, c);
       receipts = { status: reopened.status, receiptIds: received.receiptIds, active: reopened.active, freshProcessReopen: true };
@@ -58,8 +58,8 @@ async function executeRaw(rawDirectory, temporaryDirectory) {
     const candidates = buildOfflineCandidates(candidateInput);
     await assertOfflineActionInputCurrent(session);
     assert.ok(candidates.decisions.every(d => d.status === 'candidate'), JSON.stringify(candidates.decisions));
-    // Test-only existing domain API bridge, identical to offline-vat's narrow
-    // candidate-to-import adapter. No coordinator/permission/snapshot fabrication.
+    // 仅供测试的已有领域 API 桥接，与 offline-vat 的窄范围
+    // 候选到导入适配器一致。不制造协调器、权限或快照。
     const result = IM.importIncremental({ dryRun: false, confirmNewBinding: true, accountSetId: set.id, batchId: 'business-golden-' + meta.id, source: { system: VAT_SOURCE_SYSTEM, enterpriseKey: config.scope.enterpriseKey }, payload: { account_set: { name: config.scope.enterpriseKey, start_period: '2026-01', profileId: config.profileId }, vouchers: candidates.candidates.map(c => ({ period: c.date.slice(0, 7), date: c.date, sourceVoucherId: c.businessKey, summary: `offline:${c.businessKey}`, entries: c.entries.map(e => ({ code: e.accountCode, debit: e.debit, credit: e.credit, summary: e.detail ?? c.kind })) })) } });
     assert.equal(result.status, 'applied', JSON.stringify(result));
     const trials = ['2026-01','2026-02','2026-03'].map(p => A.trialBalance(set.id, p));
@@ -95,8 +95,8 @@ async function executeRaw(rawDirectory, temporaryDirectory) {
       output.diagnostics.adminMonthControls = [...invalid.map(([name]) => name), 'original_fact_conflict'];
     }
     if (meta.id === 'G01') {
-      // Missing fact reopens admission; corrected facts change a stable business
-      // version. These are extra controls, not additional business goldens.
+      // 缺失事实会重新开启准入；更正事实会改变稳定业务
+      // 版本。这些是额外控制项，不是额外业务黄金预期。
       const less = structuredClone(candidateInput), facts = JSON.parse(less.accountingFacts.text); delete facts.facts[0].completionDate;
       less.accountingFacts.text = JSON.stringify(facts); less.accountingFacts.fileSha256 = hash(less.accountingFacts.text);
       assert.equal(buildOfflineCandidates(less).candidates.length, 0);
@@ -130,7 +130,7 @@ if (process.argv[2] === '--execute-raw') {
     const id = 'G' + String(i).padStart(2, '0'), raw = join(fixtures, 'raw', id);
     test(id + ' independent raw -> domain ledger -> Jan/Feb/Mar trials -> VAT', () => {
       const actual = run(raw, id); outputs.set(id, actual);
-      // The expected file is first read only after raw execution has completed.
+      // 只有原始执行完成后，才首次读取预期文件。
       assertGoldenOutput(actual, json(join(fixtures, 'expected', id + '.json')), raw);
       if (id === 'G03') assert.equal(actual.candidates.length, 3);
       if (id === 'G05') { assert.equal(actual.receipts.status, 'verified'); assert.equal(actual.receipts.freshProcessReopen,true); assert.ok(actual.receipts.receiptIds.length > 0); }
@@ -147,7 +147,7 @@ if (process.argv[2] === '--execute-raw') {
     assert.throws(() => assertGoldenOutput(actual, poison, join(fixtures, 'raw/G01')));
   });
   test('raw corrections and red invoice cannot reuse original golden', () => {
-    // Raw-only material replay probes, without any posting or expectation input.
+    // 仅重放原始材料的探针，不含任何记账或预期输入。
     const probeScript = join(root, 'probe.mjs');
     writeFileSync(probeScript, `import {preflightMaterials} from ${JSON.stringify(new URL('../server/offline-materials.mjs', import.meta.url).href)}; import {buildOfflineCandidates} from ${JSON.stringify(new URL('../server/offline-bookkeeping.mjs', import.meta.url).href)}; import {openOfflineActionInput} from ${JSON.stringify(new URL('../server/offline-action-input.mjs', import.meta.url).href)}; import {hash} from ${JSON.stringify(new URL('../server/offline-material-adapters.mjs', import.meta.url).href)}; import {readFileSync,writeFileSync} from 'node:fs'; const s=await openOfflineActionInput(process.argv[2]);const i=(({scope,profileId,reports,declaration,accountingFacts})=>({scope,profileId,reports,declaration,accountingFacts}))(s.rawInput);const out=[]; for(const [from,to] of [['300000.00,3000.00,303000.00','300001.00,3000.01,303001.01'],['300000.00,3000.00,303000.00,blue','-300000.00,-3000.00,-303000.00,red']]){const x=structuredClone(i);const source=x.reports[0].sources[0];const text=source.rawContent.replace(from,to);x.reports[0]=preflightMaterials({scope:x.scope,sources:[{sourceId:source.sourceId,kind:source.kind,scope:source.scope,mapping:source.mapping,text,fileSha256:hash(text)}]});out.push(buildOfflineCandidates(x));} writeFileSync(process.argv[3],JSON.stringify(out));s.close();`);
     const path = join(root, 'probes.json'), c = spawnSync(process.execPath, [probeScript, join(fixtures,'raw/G01/config.json'), path], { encoding:'utf8',timeout:20000 });

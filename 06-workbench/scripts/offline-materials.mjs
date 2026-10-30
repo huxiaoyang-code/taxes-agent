@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Explicit local-only read boundary. No DB connection, network or official import.
+// 显式的本机只读边界。不连接数据库、访问网络或执行正式导入。
 import { readFile, open, realpath, stat, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,10 +32,10 @@ export async function runCli(args) {
       paths.push({ sourceId: source.sourceId, path: file.canonicalPath });
     }
     const result = preflightMaterials({ scope: config.scope, sources });
-    // Structural failures never create an output. Conflicts are valid local review reports.
+    // 结构性失败绝不创建输出。冲突属于有效的本机复核报告。
     if (result.status === 'rejected') return { exitCode: 3, message: `OFFLINE_MATERIALS_REJECTED code=${result.errors[0].code}` };
     output = resolve(args[3]);
-    // wx also rejects symlinks/hardlinks and input aliases because they already exist.
+    // wx 也会拒绝符号链接、硬链接及输入别名，因为它们已经存在。
     const handle = await open(output, 'wx', 0o600);
     try { await handle.writeFile(JSON.stringify({ ...result, localFiles: paths, configPath: configFile.canonicalPath }, null, 2) + '\n', 'utf8'); }
     catch (error) { await handle.close(); await unlink(output); throw error; }

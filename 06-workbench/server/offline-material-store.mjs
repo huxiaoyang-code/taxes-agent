@@ -1,4 +1,4 @@
-// Local receipt journal only. No ledger, network, default directory or accounting authority.
+// 仅为本机回执日志，不是账簿，不使用网络/默认目录，也不授予会计权限。
 import { open, lstat, realpath, readdir, mkdir, rename, unlink } from 'node:fs/promises';
 import { resolve, dirname, basename, join, parse, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +15,7 @@ const json = bytes => JSON.parse(decode(bytes).replace(/^\uFEFF/, ''));
 const inside = (root, path) => { const p = relative(root, path); return p === '' || (!p.startsWith('..') && !isAbsolute(p)); };
 const identity = s => `${s.dev}:${s.ino}:${s.birthtimeMs}`;
 
-// Reject links at every existing component, not merely at the final filename.
+// 检查每个已有路径组件并拒绝链接，不能只检查最终文件名。
 export async function checkedPath(path, directory = false) {
   check(typeof path === 'string' && path.length > 0 && path.length <= 32768, 'path_rejected');
   const absolute = resolve(path), root = parse(absolute).root;
@@ -37,7 +37,7 @@ export async function readLocalFile(path, limit = LIMIT) {
   try {
     const held = await h.stat();
     check(identity(before) === identity(held) && held.nlink === 1 && held.size <= limit, 'path_changed');
-    // Bounded read even if an external writer grows the file after stat.
+    // 即使外部写入者在 stat 后扩大文件，也保持有界读取。
     const buffer = Buffer.alloc(limit + 1); let length = 0;
     while (length <= limit) { const r = await h.read(buffer, length, buffer.length - length, null); if (!r.bytesRead) break; length += r.bytesRead; }
     check(length <= limit, 'file_too_large');
@@ -61,7 +61,7 @@ export async function initMaterialStore(path, scope) {
   validateScope(scope);
   const root = resolve(path), parent = await checkedPath(dirname(root), true);
   check(basename(root) !== '' && root !== parent, 'path_rejected');
-  // Never adopt an existing empty/unknown directory. Interrupted init remains diagnostic.
+  // 绝不接管已有空目录或未知目录；中断初始化保留为诊断现场。
   await mkdir(root, { mode: 0o700 });
   const metadata = { version: VERSION, storeId: randomUUID(), scope, normalizationVersion: MATERIAL_VERSION };
   await writeNew(join(root, 'store.json'), stable(metadata) + '\n');
@@ -150,12 +150,12 @@ async function lockStore(info, storeId) {
   const path = join(info.root, 'lock.json'), lock = { version: VERSION, storeId, pid: process.pid, token: randomUUID() }, bytes = stable(lock) + '\n';
   try { await writeNew(path, bytes); } catch (e) { if (e.code === 'EEXIST') fail('store_locked'); throw e; }
   const release = async () => { await rootStill(info); const current = await readLocalFile(path); check(current.bytes.equals(Buffer.from(bytes)), 'lock_changed'); await unlink(path); };
-  // A recovery guard that appeared after our first check owns this interval.
+  // 第一次检查后出现的恢复守卫，拥有当前区间。
   try { await guardAbsent(info); } catch (e) { await release(); throw e; }
   return release;
 }
-// Explicit recovery only: a valid own-store lock whose OS PID is proven absent.
-// PID reuse/EPERM/uncertain liveness blocks recovery; there is no age-based deletion.
+// 仅显式恢复：锁须属于当前 Store 且结构有效，并证明对应操作系统 PID 已不存在。
+// PID 复用、EPERM 或进程存活不明都会阻塞恢复，不按锁龄删除。
 export async function recoverMaterialStoreLock(path) {
   const state = await loadStore(path), lockPath = join(state.info.root, 'lock.json');
   const guardPath = join(state.info.root, 'recovery.guard');
@@ -201,7 +201,7 @@ export async function receiveMaterials(path, configPath) {
     for (let i = 0; i < input.report.sources.length; i++) {
       const s = input.report.sources[i], f = input.inputs[i], old = state.active.get(s.sourceId);
       if (old?.sourceVersion === s.sourceVersion) {
-        // A retry of a committed correction must still name that correction's predecessor.
+        // 重试已提交的更正，仍须明确引用该更正的前版。
         check(!f.correction || f.correction === old.supersedes, 'correction_cas_conflict');
         check(f.originPath === old.originPath, 'source_origin_conflict'); receipts.add(old.receiptId); continue;
       }
@@ -222,7 +222,7 @@ export async function receiveMaterials(path, configPath) {
       for (let i = 0; i < blobs.length; i++) await writeNew(join(staging, `${i}.blob`), blobs[i]);
       await writeNew(join(staging, 'manifest.json'), bytes);
       await rootStill(state.info);
-      // New unique journal directory: no mutation/overwrite of previously committed state.
+      // 创建全新唯一日志目录，不修改或覆盖已提交状态。
       await rename(staging, join(state.info.root, `${String(manifest.sequence).padStart(6, '0')}-${receiptId}`));
       receipts.add(receiptId);
     }
@@ -232,8 +232,8 @@ export async function receiveMaterials(path, configPath) {
   } finally { await release(); }
 }
 
-// Immutable content-addressed evidence bundle, separate from the material
-// store's active-source journal. No executable content is loaded from a bundle.
+// 不可变、按内容寻址的证据包，与材料存储的活动来源日志分开；
+// 不从证据包加载任何可执行内容。
 export async function archiveMaterialEvidence(path, { scope, records, metadata }) {
   const info = await rootInfo(path);
   check(Array.isArray(records) && records.length > 0 && records.length <= 1000 && metadata && typeof metadata === 'object', 'archive_input_invalid');

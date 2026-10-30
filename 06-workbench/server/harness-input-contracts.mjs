@@ -1,6 +1,6 @@
-// Shared executable adapter contracts. Discovery and execution import this registry.
-// Inspired by Anthropic tool design: explicit inputs, meaningful boundaries and actionable errors.
-// No model-supplied executable path or alternate business rules.
+// 共享可执行适配合同；能力发现和实际执行都导入此注册表。
+// 参考 Anthropic 工具设计：明确输入、有意义的边界及可操作错误。
+// 不接受模型提供的可执行路径，也不提供另一套业务规则。
 import {validateSchemaValue} from './harness-schema-validation.mjs';
 import {FEEDBACK_VERSION,BINDING_KEYS} from './accountant-review-feedback.mjs';
 const text = {type:'string',minLength:1}, object={type:'object'};
@@ -8,8 +8,8 @@ const shape=(properties,required=Object.keys(properties))=>({type:'object',prope
 const contextMonth={type:'string',pattern:'^20\\d\\d-(0[1-9]|1[0-2])$'},contextId={type:'integer',minimum:1},contextAmount={type:'string',pattern:'^\\d+(?:\\.\\d{1,2})?$'};
 const contextList=(items,maxItems=100)=>({type:'array',items,maxItems});
 const contextSourceRefs={...contextList(shape({path:text,locator:text}),20),minItems:1};
-// Selected-capability file contract: the executing analysis imports this exact
-// schema. Default domain discovery does not disclose it or invent file values.
+// 选定能力的文件合同：执行分析时直接导入这一份 schema；
+// 默认领域发现不披露此合同，也不编造文件字段值。
 export const ANALYSIS_CONTEXT_SCHEMA=shape({
  version:{const:'analysis-context/1'},scope:shape({enterpriseKey:text,accountSetId:contextId,databaseInstanceId:text,period:contextMonth,currency:{const:'CNY'}}),
  collectionMappings:contextList(shape({receiptVoucherId:contextId,originVoucherId:contextId,amount:contextAmount,reason:text,sourceRefs:contextSourceRefs})),
@@ -87,7 +87,7 @@ export const capabilityContractIds=()=>Object.keys(definitions);
 export function validateCapabilityRequest(capabilityId,request,phase='execute'){
  const contract=capabilityInputContract(capabilityId);
  if(!contract.phases.includes(phase))throw Object.assign(new Error('harness_phase_unsupported'),{code:'harness_phase_unsupported',details:{capabilityId,phase,supportedPhases:contract.phases,hint:contract.phaseSemantics.prepareNotRecommended??'Choose a supported phase from the selected capability contract.'}});
- // Historical queries use their saved original request, before any new-input validation.
+ // 历史查询先使用已保存的原始请求，再考虑任何新输入校验。
  if(phase==='query')return;
  const problems=validateSchemaValue(contract.requestSchema,request,{field:'request'});
  if(problems.length)throw Object.assign(new Error('harness_capability_input_invalid'),{code:'harness_capability_input_invalid',details:{capabilityId,problems,errorInventory:{total:problems.length,shown:problems.length,omitted:0},contract:{tool:'harness_discover',arguments:{capabilityId}},hint:'Repair the indicated structure using source-supported facts. Missing facts stay missing; do not invent values to satisfy a schema.'}});

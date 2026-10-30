@@ -1,4 +1,4 @@
-// Synthetic only. No registered browser, private capture or live account is read.
+// 仅用合成数据。不读取已登记浏览器、私有采集结果或实时账套。
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,lstat,rm,writeFile} from 'node:fs/promises';
 import {join,dirname,resolve} from 'node:path';

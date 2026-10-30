@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// All reads are explicit local snapshots; the only write is a new output file.
+// 所有读取都使用显式本机快照；唯一写入是创建一个新输出文件。
 import { readFile, realpath, stat, open, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +31,7 @@ export async function runCli(args) {
     for (const path of p.reports) { try { reports.push((await readJson(resolve(planBase, path))).value); } catch { reports.push(null); } }
     let declaration = null;
     if (p.declaration !== null) { try { declaration = (await readJson(resolve(planBase, p.declaration))).value; } catch { declaration = {}; } }
-    // previousPlan is a #79 comparison hint only; its uploaded ready/status is never used.
+    // previousPlan 只是 #79 的比较提示，绝不使用上传的 ready/status。
     const facts = await readJson(resolve(base, config.accountingFacts), 5 * 1024 * 1024);
     const previous = config.previousCandidates ? (await readJson(resolve(base, config.previousCandidates))).value : null;
     const result = buildOfflineCandidates({ scope: p.scope, reports, declaration, profileId: config.profileId, accountingFacts: { text: facts.text, fileSha256: facts.fileSha256 }, previousCandidates: previous });

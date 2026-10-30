@@ -60,8 +60,8 @@ export async function inspectManifestEvidence(request) {
     let supported=false,reason='critical_value_original_support_missing';
     for(const ref of r.originalRefs??[]){if(!originals.has(ref.originalId))continue;const file=await readLocalFile(originals.get(ref.originalId),5*1024*1024);
      const bindings=(ref.bindings??[]).filter(b=>b.valuePath===`/${key}`);
-     // Compatible structured originals: a precise pointer selects an original
-     // object containing this field. A free-form locator or sourceId is not proof.
+     // 兼容结构化原件：精确指针须选中一个包含目标字段的原件对象。
+     // 自由文本定位说明或仅有 sourceId 都不能作为该字段的证据。
      if(!bindings.length&&typeof ref.locator==='string'&&ref.locator.startsWith('/'))bindings.push({valuePath:`/${key}`,locator:{jsonPointer:ref.locator.replace(/\/$/,'')+'/'+key},...(key==='amount'?{format:'decimal'}:{})});
      for(const b of bindings)try{await locatedBinding(file.bytes,b,evidencePointer(r,b.valuePath));supported=true;}catch(e){reason=e.code??'critical_value_original_support_invalid';}
     }
@@ -96,14 +96,14 @@ export async function guardHarnessBoundary(name,args){
   for(const task of args.tasks)for(const id of task.factIds){const f=s.facts.get(id);for(const input of f?.evidence?.inputs??[])if(!task.factIds.includes(input.factId))fail('harness_derived_plan_input_missing',[{taskId:task.taskId,factId:id,inputFactId:input.factId}]);}return [];
  }
  const task=s.tasks.find(t=>t.taskId===args.taskId);if(!task)return [];
- // Recovery must reach the original native query even if CURRENT materials are
- // missing, changed or unreadable. An identical completed execute is a query-only
- // replay in #121; its safety decision remains in the native runtime.
+ // 即使当前材料缺失、变化或无法读取，恢复仍须到达原生的原操作查询。
+ // 对相同且已完成的 execute，只进行查询式重放；
+ // 其 #121 安全判定仍由原生运行时负责。
  if(args.phase==='query'||(args.phase??'execute')==='execute'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.result?.executionState==='executed'&&sameBusinessRequest(task.capabilityId,a.request,s.facts.get(requestFactIdForTask(task))?.value)))return [];
- if(task.capabilityId==='agency.posting'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.operationId===`agency-${s.facts.get(requestFactIdForTask(task))?.value?.batchId}`&&stable(a.request)!==stable(s.facts.get(requestFactIdForTask(task))?.value)))return []; // Native identity-conflict refusal has precedence over new-request evidence checks.
+ if(task.capabilityId==='agency.posting'&&s.attempts.some(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.operationId===`agency-${s.facts.get(requestFactIdForTask(task))?.value?.batchId}`&&stable(a.request)!==stable(s.facts.get(requestFactIdForTask(task))?.value)))return []; // 原生身份冲突拒绝优先于新请求的证据检查。
  const requestFact=s.facts.get(requestFactIdForTask(task));
- // Missing/conflicting/unknown facts are business blockers, not malformed requests.
- // not_applicable still reaches the runtime request-fact requirement. No manifest is read.
+ // missing/conflict/unknown 事实属于业务阻塞，不是请求结构错误。
+ // not_applicable 仍须满足运行时的请求事实要求；此处不读取 manifest。
  if(requestFact?.state!=='provided')return [];
  validateCapabilityRequest(task.capabilityId,requestFact.value,args.phase??'execute');
  if(args.phase!=='query')for(const id of task.factIds){const f=s.facts.get(id);if(f?.evidence)await validateRegisteredFactEvidence(f,s.sources,s.facts);}

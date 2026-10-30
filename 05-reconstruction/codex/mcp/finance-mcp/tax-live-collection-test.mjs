@@ -1,5 +1,5 @@
-// Real MCP stdio -> HTTP -> Agent -> production collector and evidence store.
-// Only CDP and OS-specific ACL checks are synthetic; no browser/registry is opened.
+// 真实 MCP stdio → HTTP → Agent → 生产采集器和证据存储。
+// 仅 CDP 和操作系统 ACL 检查使用合成实现；不打开浏览器或注册表。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';

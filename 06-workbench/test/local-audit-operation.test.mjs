@@ -77,7 +77,7 @@ await suite('audit RAISE rollback, failure audit also RAISE leaves only pending'
   const h=await fresh();try {
    const p=OP.prepareOperation(h.db,input('raise'));const setter=h.db.setAuthorizer.bind(h.db);let injected=false;
    h.db.setAuthorizer=value=>{setter(value);if(value===null&&!injected){injected=true;h.db.exec(`CREATE TRIGGER synthetic_raise BEFORE INSERT ON audit_events ${all?'':"WHEN NEW.outcome='succeeded'"} BEGIN SELECT RAISE(ABORT,'synthetic'); END`);}};
-   // Trigger is injected in the owned transaction after callback, then rolled back with business.
+   // 在回调后、自有事务内注入触发器，再随业务一起回滚。
    if(all) {const prepare=h.db.prepare.bind(h.db);h.db.prepare=sql=>{if(sql.startsWith('INSERT INTO audit_events')){h.db.exec("CREATE TEMP TRIGGER IF NOT EXISTS synthetic_persistent_raise BEFORE INSERT ON main.audit_events BEGIN SELECT RAISE(ABORT,'synthetic'); END");}return prepare(sql);};}
    const r=OP.executePreparedOperation(h.db,p.authorization,()=>{h.db.exec("UPDATE schema_backups SET integrity='raise-dirty'");return {state:'succeeded'};});h.db.setAuthorizer=setter;
    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM schema_backups WHERE integrity='raise-dirty'").get().n,0);

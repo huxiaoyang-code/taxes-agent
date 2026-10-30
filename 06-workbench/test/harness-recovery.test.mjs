@@ -50,7 +50,7 @@ await planHarness(year,[task('year','annual.inspect',[{storePath:month,taskId:'m
 await run(year,'year');const baseline=(await inspectHarness(year)).tasks[0];
 async function postingRecovery(){
  const rows=()=>{const db=new DatabaseSync(f.target.dbPath,{readOnly:true});try{return {vouchers:db.prepare('SELECT * FROM vouchers WHERE account_set_id=? ORDER BY id').all(f.target.accountSetId),balances:Object.fromEntries(db.prepare('SELECT e.code,ROUND(SUM(e.debit-e.credit)*100) cents FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND v.status=\'posted\' GROUP BY e.code').all(f.target.accountSetId).map(r=>[r.code,r.cents])),other:db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(f.otherId).n};}finally{db.close();}};
- // A separate unchanged expense must survive the sales correction exactly once.
+ // 销售更正后，另一笔未改动费用必须恰好保留一次。
  const inputPath=join(f.root,'customer-originals','2026-01.facts.json'),initialRaw=JSON.parse(readFileSync(inputPath)),service=initialRaw.records.find(r=>r.type==='service_complete');
  initialRaw.records.push({...service,id:'admin',type:'expense',businessIdentity:{issuerKey:'SYNTHETIC-SUPPLIER',documentNumber:'ADMIN-1',event:'expense'},work:undefined,use:'admin',gross:'37.23',net:'37.23',invoiceTax:'0.00',inputVatTreatment:'non_deductible',settlement:'unpaid',benefitPeriod:'2026-01',taxNature:'ordinary'});writeFileSync(inputPath,JSON.stringify(initialRaw));writeFileSync(f.sourcePath,readFileSync(f.sourcePath,'utf8')+' 合成独立原始费用收据ADMIN-1：当月行政服务37.23元，零税额，未付款，不含可抵扣税；仅当月受益。');
  await registerHarnessSource(month,{sourceId:'raw',path:f.sourcePath,locator:'service and separate administrative receipt',parsed:false,unrecognized:[],classification:'provided'});await run(month,'month');
@@ -111,8 +111,8 @@ assert.equal((await loadHarness(year)).invalidatedResults.size,0);
 renameSync(f.sourcePath,f.sourcePath+'.unavailable');
 try{const unreadable=(await inspectHarness(year)).tasks[0];assert.equal(unreadable.dependencyDigest,baseline.dependencyDigest);assert.ok(unreadable.blockers.some(b=>b.retryable));assert.equal((await loadHarness(year)).invalidatedSources.size,0);}finally{renameSync(f.sourcePath+'.unavailable',f.sourcePath);}
 assert.equal((await inspectHarness(year)).tasks[0].executionState,'executed');
-// Native API throws during observation: all three public entrypoints retain a
-// known execution and accepted review without inventing a revision.
+// 原生 API 在观测时抛错：三个公开入口均保留
+// 已知执行和已接受复核，不凭空制造修订版本。
 const materials=join(root,'native-materials'),stateStore=join(root,'native-state');await initHarness(stateStore,{...f.scope,period:'2026-Q1'});await registerHarnessSource(stateStore,{sourceId:'raw',path:f.sourcePath,locator:'whole original',parsed:false,unrecognized:[],classification:'provided'});await registerHarnessFacts(stateStore,[fact('request',{path:materials})]);await planHarness(stateStore,[task('init','materials.init')]);
 const initialized=await run(stateStore,'init'),initial=(await inspectHarness(stateStore)).tasks[0];await feedbackHarness(stateStore,{taskId:'init',targetVersion:initial.receipt.targetVersion,dependencyDigest:initial.dependencyDigest,decision:'accept',reason:'Synthetic scoped material Store creation reviewed',reviewer:'SYNTHETIC-ACCOUNTANT',evidenceRefs:[]});
 renameSync(materials,materials+'.unavailable');

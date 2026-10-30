@@ -250,7 +250,7 @@ export function mulCentsByRatio(cents, ratio) {
   const abs = negative ? -raw : raw;
   let q = abs / scale;
   const r = abs % scale;
-  if (r * 2n >= scale) q += 1n;               // ROUND_HALF_UP
+  if (r * 2n >= scale) q += 1n;               // 四舍五入（ROUND_HALF_UP）
   return negative ? -q : q;
 }
 

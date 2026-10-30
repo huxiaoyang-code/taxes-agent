@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { openReadonlyLedgerSource, captureLedgerSnapshot, validateLedgerSnapshot } from '../server/offline-ledger-snapshot.mjs';
 
-// The writer imports occur only after isolation. No production/default database is used.
+// 只在隔离后导入写入器。不使用生产/默认数据库。
 const fixtureParent = resolve('..', '.agent-runs'); mkdirSync(fixtureParent, { recursive: true });
 const root = mkdtempSync(join(fixtureParent, 'offline-ledger-synthetic-'));
 process.env.TEMP = root; process.env.TMP = root;
@@ -37,7 +37,7 @@ try {
   const draft = A.createVoucher(id, { period: '2026-02', voucher_date: '2026-02-17', summary: '合成草稿', entries: [{ code: '5602', debit: 74.29 }, { code: '1002', credit: 74.29 }] });
   const other = A.createAccountSet({ name: '合成乙', start_period: '2026-01', enterprise: { enterpriseKey: 'SYNTHETIC-SNAPSHOT-OTHER' } });
   const scope = { enterpriseKey: key, accountSetId: id, fromPeriod: '2026-01', toPeriod: '2026-03' };
-  // Private exact15-table historical core/import copy; default seed keeps audit2.
+  // 私有的精确 15 表历史核心/导入副本；默认种子保留 audit2。
   const LB=await import('../server/local-backup.mjs');
   const tables=LB.backupContract().requiredTables;
   assert.equal(tables.length,15);
@@ -143,8 +143,8 @@ try {
       }
     } finally { db.prepare('UPDATE voucher_entries SET debit=1297.43 WHERE voucher_id=? AND line_no=1').run(postedId); }
     current(s);
-    // Corruption/forward-column fixture on a core-created copy: raw non-money
-    // numeric evidence is subject to the same check, including actual SQL NULL.
+    // 核心创建副本上的损坏/前向列测试样本：原始非金额
+    // 数字证据也接受相同检查，包括实际 SQL NULL。
     const copy = join(root, 'nonfinite-column.db'); db.exec(`VACUUM INTO '${copy.replaceAll("'", "''")}'`);
     const writer = new DatabaseSync(copy); let h;
     try {
@@ -187,8 +187,8 @@ try {
   await test('canonical binding correction invalidates old target', () => {
     const s = capture(); db.prepare('UPDATE import_enterprise_account_sets SET enterprise_name=? WHERE account_set_id=?').run('合成更正', id);
     stale(s);
-    // The empty book has no FK-bound imported source rows; rebinding it exercises
-    // scope disappearance without weakening SQLite's valid import FK contract.
+    // 空账簿没有受外键绑定的已导入来源行；重新绑定它可覆盖
+    // 作用域消失，同时不削弱 SQLite 有效导入外键契约。
     const now = captureLedgerSnapshot(source, { ...scope, enterpriseKey: 'SYNTHETIC-SNAPSHOT-OTHER', accountSetId: other.id });
     db.prepare('UPDATE import_enterprise_account_sets SET enterprise_key=? WHERE account_set_id=?').run('SYNTHETIC-REBOUND', other.id);
     try { stale(now); } finally { db.prepare('UPDATE import_enterprise_account_sets SET enterprise_key=? WHERE account_set_id=?').run('SYNTHETIC-SNAPSHOT-OTHER', other.id); }

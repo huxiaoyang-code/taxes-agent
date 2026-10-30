@@ -1,4 +1,4 @@
-// Structured local declarations, never identity authentication or a posting instruction.
+// 本机结构化声明；不是身份认证，也不是过账指令。
 import { fields, requirePlainJson, requireValue as check, validateScope, identifier, stable } from './offline-material-adapters.mjs';
 
 export const FEEDBACK_VERSION = 'offline-accountant-feedback/1';

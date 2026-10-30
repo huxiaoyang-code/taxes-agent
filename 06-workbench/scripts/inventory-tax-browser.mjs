@@ -1,4 +1,4 @@
-// Fixed local administrative inspection; no navigation, fetch, cookies or leases.
+// 固定的本机管理检查；不导航、fetch、读取 cookie 或操作租约。
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -34,8 +34,8 @@ export async function inventoryRegisteredBrowser({ registrationRef, registration
   let transport;
   try {
     if (!/^taxr_[a-f0-9]{48}$/.test(registrationRef || '')) throw new Error('input');
-    // Explicit local administrative registry location. The primitive still verifies
-    // canonical directory, ACL, record/claim, owner identity, private profile and port.
+    // 显式指定本机管理注册表位置。底层操作仍验证
+    // 规范目录、ACL、记录/声明、所有者身份、私有配置目录及端口。
     const options = registrationRoot ? { registrationBase: dirname(resolve(registrationRoot)) } : {};
     transport = await (overrides.openDiagnostic || openRegisteredBrowserDiagnostic)({ registrationRef, registrationRoot }, options);
     const response = await transport.cdp.send('Target.getTargets', {}, { timeoutMs: 5000 });

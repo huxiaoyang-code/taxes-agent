@@ -1,4 +1,4 @@
-// No Edge process, user profile, live CDP endpoint or tax-service request is used.
+// 不使用 Edge 进程、用户配置目录、实时 CDP 端点或税务服务请求。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';

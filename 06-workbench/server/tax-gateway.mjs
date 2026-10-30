@@ -905,8 +905,8 @@ export class TaxGateway {
     };
   }
 
-  // A verified read requires business success, authority and exact enterprise scope.
-  // This contract is code registered only. No browser/network implementation is enabled by default.
+  // 已核实读取必须同时满足业务成功、权限有效和精确企业范围。
+  // 合同仅由代码注册，默认不启用浏览器或网络实现。
   async verifyScope({ sessionId } = {}) {
     const session = this.#authenticatedSession(sessionId);
     const stamp = this.#scopeStamp(session);
@@ -1012,12 +1012,12 @@ export class TaxGateway {
             || (resource === "declaration_status" && row.period !== period)) {
           throw new TaxError("tax_scope_mismatch", "记录企业或期间不一致");
         }
-        // Optional code-registered contract: recordIdentity: "adapter_key" requires
-        // an own recordKey string of 1..256 UTF-16 code units, with no surrounding
-        // whitespace or control characters. The adapter supplies a stable key, not
-        // a page/row position; different filing versions must have different keys.
-        // Without opt-in, retain legacy DTO-content identity. Neither raw keys nor
-        // their digests leave this call; only digests are retained for comparison.
+        // 可选代码注册合同：recordIdentity: "adapter_key" 要求自有
+        // recordKey 为 1..256 个 UTF-16 码元的字符串，且无首尾
+        // 空白或控制字符。适配器提供稳定键，不用页码或行位置；
+        // 不同申报版本必须使用不同键。
+        // 未显式启用时保留旧的 DTO 内容身份；原始键及其摘要均不离开
+        // 本次调用，只保留摘要作后续比较。
         const canonical = Object.keys(fields).sort().map((key) => [key, row[key] ?? null]);
         const contentDigest = createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
         let key = contentDigest;

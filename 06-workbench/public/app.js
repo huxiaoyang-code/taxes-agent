@@ -404,7 +404,7 @@ const REPORT_FORMATS = {
     magicError: "服务器返回的内容不是有效的 PDF 文档，下载已取消",
   },
 };
-// Fixed user-facing wording: never render server stack traces, environment details or font paths.
+// 固定的用户提示文字：绝不渲染服务端堆栈、环境详情或字体路径。
 const REPORT_ERROR_MESSAGES = {
   period_required: "请选择报表期间", period_invalid: "报表期间格式不正确", period_before_start: "期间早于账套启用期间",
   period_not_registered: "该期间尚未登记，请先在期间页登记", account_set_not_found: "账套不存在，请重新选择",
@@ -442,7 +442,7 @@ async function downloadReport() {
       const error = await response.json().catch(() => ({}));
       throw new Error(reportErrorMessage(error, response.status));
     }
-    // Check the declared type before reading bytes: an HTML/JSON error page must never be saved as a report.
+    // 读取字节前检查声明类型：HTML/JSON 错误页绝不能另存为报告。
     const contentType = response.headers.get("content-type") || "";
     if (!spec.mime.test(contentType)) throw new Error(`服务器返回的类型不是 ${spec.label}，下载已取消`);
     const disposition = response.headers.get("content-disposition") || "";
@@ -554,7 +554,7 @@ async function renderPeriods() {
   });
 }
 
-// LOCAL04B: file and paste share one text -> mapping -> preview -> explicit import chain.
+// LOCAL04B：文件和粘贴共用 文本 -> 映射 -> 预览 -> 显式导入 链。
 let BANK_GEN=0, BANK_PREVIEW=null, BANK_REFS=new Map();
 function bankNode(tag,text) {const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);return n;}
 function bankClear() {

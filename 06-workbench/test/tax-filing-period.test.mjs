@@ -1,5 +1,5 @@
-// Synthetic local evidence and fake CDP only. Never opens a real registry,
-// profile, account database, browser or tax endpoint.
+// 仅使用合成本机证据和假 CDP。绝不打开真实注册表、
+// 配置目录、账套数据库、浏览器或税务端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,lstat,readFile,writeFile,rm} from 'node:fs/promises';

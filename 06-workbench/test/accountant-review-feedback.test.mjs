@@ -253,7 +253,7 @@ try {
   });
   await test('2000 actual valid receipts remain queryable/replayable and capacity refusal writes no 2001 or artifact', async () => {
     const f = await setup(), initial = readJson(join(f.store, 'receipts', '00000001.json')); let head = initial.digest, last;
-    // Synthetic legal chain built directly, avoiding 1999 repeated expensive file/DB calculations.
+    // 直接构造合成的合法链，避免重复 1999 次昂贵的文件/数据库计算。
     for (let sequence = 2; sequence <= 2000; sequence++) {
       last = payload({ ...f.view, journalHead: head }, 'request_materials', 'capacity-' + sequence);
       const body = { version: initial.version, sequence, previousHead: head, metadataDigest: initial.metadataDigest, kind: 'feedback', data: last }, receipt = { ...body, digest: hash(stable(body)) };

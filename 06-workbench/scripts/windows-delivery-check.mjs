@@ -300,7 +300,7 @@ function minimalEnv(extra = {}) {
   for (const name of ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"]) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
-  // All callers must identify their run-owned temporary scope; never inherit OS defaults.
+  // 所有调用者必须标识本次运行拥有的临时范围；绝不继承操作系统默认值。
   if (!extra.TEMP || !extra.TMP || !isAbsolute(extra.TEMP) || !isAbsolute(extra.TMP)) throw new StageError("child_environment_scope_required");
   const childRoot = dirname(extra.TEMP);
   env.WORKBENCH_DATA_DIR = join(childRoot, "fallback-data");
@@ -378,15 +378,15 @@ function spawnCaptured(command, args, options = {}) {
     // 真实 deadline：到点先礼后兵；强杀后仍不 close 就在 KILL_GRACE_MS 后按「未回收」返回。
     timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill(); } catch { /* ignore */ }
+      try { child.kill(); } catch { /* 忽略 */ }
       graceTimer = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch { /* ignore */ }
+        try { child.kill("SIGKILL"); } catch { /* 忽略 */ }
         hangTimer = setTimeout(() => {
           hardDeadline = true;
           // 硬截止：断开管道并 unref，避免一个杀不掉的孩子把父进程事件循环拖住。
-          try { child.stdout?.destroy(); } catch { /* ignore */ }
-          try { child.stderr?.destroy(); } catch { /* ignore */ }
-          try { child.unref?.(); } catch { /* ignore */ }
+          try { child.stdout?.destroy(); } catch { /* 忽略 */ }
+          try { child.stderr?.destroy(); } catch { /* 忽略 */ }
+          try { child.unref?.(); } catch { /* 忽略 */ }
           finish({ code: null, signal: "SIGKILL", pid: child.pid ?? null, unreclaimed: true });
         }, KILL_GRACE_MS);
         hangTimer.unref?.();
@@ -396,7 +396,7 @@ function spawnCaptured(command, args, options = {}) {
   });
 }
 
-/** Only the owned handle's close event proves reclamation; exit code alone does not. */
+/** 只有自有句柄的 close 事件才能证明已回收；单凭退出码不够。 */
 export function childLifecycleFailure(result) {
   if (result.unreclaimed || result.hardDeadline) return "child_process_unreclaimed";
   if (result.spawnError) return "child_process_spawn_failed";
@@ -411,7 +411,7 @@ function requireChildCompletion(result) {
   if (code) throw new StageError(code, { details: { exitCode: result.code ?? null, spawnError: result.spawnError ?? null, timedOut: result.timedOut === true } });
 }
 
-/** Lifecycle failures stop every caller before further work or cleanup in that directory. */
+/** 生命周期失败会让所有调用者停止，之后不得继续操作或清理该目录。 */
 async function spawnChecked(run, label, command, args, options = {}) {
   const result = await spawnCaptured(command, args, options);
   const failure = childLifecycleFailure(result);
@@ -735,7 +735,7 @@ const OPTIONAL_RELEASE_FILES = [
   "test/windows-delivery.test.mjs",
 ];
 
-// A source bundle, not an offline dependency bundle. Paths are relative to the repository root.
+// 这是源码包，不是离线依赖包。路径相对于仓库根目录。
 export const RELEASE_BUNDLE_SCHEMA_VERSION = 1;
 export const RELEASE_BUNDLE_MANIFEST = "windows-release-manifest.json";
 export const REQUIRED_BUNDLE_FILES = Object.freeze([
@@ -760,7 +760,7 @@ function sameFileIdentity(a, b) {
     && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
 
-/** Read only a plain single-link file through an owned descriptor; validate the path on both sides. */
+/** 仅通过自有描述符读取普通单链接文件；读取前后都校验路径。 */
 function readBundleFile(root, rel) {
   if (!bundlePathAllowed(rel) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
   const path = join(root, ...rel.split("/"));
@@ -788,7 +788,7 @@ function bundleDigest(manifest) {
 const exactKeys = (object, names) => object && typeof object === "object" && !Array.isArray(object)
   && Object.keys(object).sort().join("\0") === [...names].sort().join("\0");
 
-/** Reject unknown fields, aliases, paths and noncanonical lists before consulting the filesystem. */
+/** 查询文件系统之前，先拒绝未知字段、别名、路径及非规范列表。 */
 export function validateReleaseManifest(manifest) {
   if (!exactKeys(manifest, ["schemaVersion", "kind", "packageVersion", "files", "digest"])
     || manifest.schemaVersion !== RELEASE_BUNDLE_SCHEMA_VERSION || manifest.kind !== BUNDLE_KIND
@@ -811,7 +811,7 @@ export function validateReleaseManifest(manifest) {
   return true;
 }
 
-/** Strict, bounded whitelist enumeration; unrelated repository files are never scanned or copied. */
+/** 严格、有界地枚举白名单；绝不扫描或复制无关仓库文件。 */
 export function inspectReleaseBundle(releasePath) {
   const rootAudit = auditDirectoryRoot(releasePath, "bundle_source_root");
   if (!rootAudit.ok) throw bundleError(rootAudit.code);
@@ -819,7 +819,7 @@ export function inspectReleaseBundle(releasePath) {
   const workbenchDir = join(root, "06-workbench");
   const workbenchAudit = auditDirectoryRoot(workbenchDir, "bundle_source_workbench");
   if (!workbenchAudit.ok) throw bundleError(workbenchAudit.code);
-  // A build tree may have no manifest. A published source must retain and satisfy its disk evidence.
+  // 构建树可能没有清单。发布源码必须保留并满足磁盘上的证据。
   const manifestPath = join(root, RELEASE_BUNDLE_MANIFEST);
   const manifestBytes = lstatOrNull(manifestPath) ? readBundleFile(root, RELEASE_BUNDLE_MANIFEST) : null;
   let publishedManifest = null;
@@ -878,7 +878,7 @@ function assertBundleMatches(inspected) {
 }
 
 function copyReleaseBundle(inspected, destRoot) {
-  // All source and destination checks precede the first mkdir. Repeat source inspection at the boundary.
+  // 首次 mkdir 前完成全部源和目标检查。在边界处再次检查源。
   const source = assertBundleMatches(inspected);
   const raw = inspectRawAbsolutePath(destRoot);
   if (!raw.ok) throw bundleError("copy_destination_not_absolute");
@@ -1106,13 +1106,13 @@ async function npmCi(run, label, { npm, nodePath, workbenchDir, cache, tempRoot,
   return { ...result, offline, cacheMiss: isOfflineCacheMiss(result) };
 }
 
-/** npm's explicit error code is required; connectivity, permissions and usage errors are not cache misses. */
+/** 必须有 npm 的明确错误码；连接、权限和用法错误都不是缓存未命中。 */
 export function isOfflineCacheMiss(result) {
   return childLifecycleFailure(result) === null && result.code !== 0
     && /^\s*npm (?:error|ERR!) code ENOTCACHED\s*$/mi.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
 }
 
-/** Install protocol with explicit effects: only a completed ENOTCACHED may start online work. */
+/** 安装协议明确限定副作用：只有已完成的 ENOTCACHED 才能启动联网操作。 */
 export async function runDependencyInstallSequence({ install, removeModules }) {
   const first = await install("offline", true);
   requireChildCompletion(first);
@@ -1121,7 +1121,7 @@ export async function runDependencyInstallSequence({ install, removeModules }) {
   const online = await install("online", false);
   requireChildCompletion(online);
   if (online.code !== 0) throw new StageError("dependency_install_failed", { details: { exitCode: online.code } });
-  // No remove or reinstall is reachable until both preceding owned children completed.
+  // 只有前面两个自有子进程均完成后，才可能进入移除或重新安装路径。
   await removeModules();
   const second = await install("offline-after-online", true);
   requireChildCompletion(second);
@@ -1191,7 +1191,7 @@ async function installDependencies(run, { npm, nodePath, copied, cache, tempRoot
 
 // ------------------------------------------------------------------ 服务器进程
 
-/** Production-owned child observer: exit is diagnostic; only close proves reclamation. */
+/** 生产实现的自有子进程观察器：exit 仅用于诊断，只有 close 才证明回收。 */
 export function observeOwnedChild(child, { wait = waitBounded, termMs = 10000, killMs = KILL_GRACE_MS } = {}) {
   let closed = false;
   let exited = false;
@@ -1210,15 +1210,15 @@ export function observeOwnedChild(child, { wait = waitBounded, termMs = 10000, k
     stop() {
       if (!stopping) stopping = (async () => {
         if (closed) return info;
-        try { child.kill(); } catch { /* owned handle only */ }
+        try { child.kill(); } catch { /* 仅限自有句柄 */ }
         let result = await wait(completion, termMs);
         if (!result) {
-          try { child.kill("SIGKILL"); } catch { /* owned handle only */ }
+          try { child.kill("SIGKILL"); } catch { /* 仅限自有句柄 */ }
           result = await wait(completion, killMs);
         }
         if (!closed || !result) {
-          // Do not let unknown owned handles keep the manager event loop alive.
-          // This changes no reclamation fact; callers must record unknown and retain.
+          // 不让状态未知的自有句柄继续维持管理器事件循环。
+          // 这不改变回收事实；调用者必须记录未知状态并保留现场。
           child.stdout?.unref?.(); child.stderr?.unref?.(); child.unref?.();
           throw new StageError("owned_child_close_unknown");
         }
@@ -1267,7 +1267,7 @@ export async function startServer(run, { nodePath, workbenchDir, dataDir, tempRo
     catch (error) {
       run.recordResidual({ kind: "server", label, pid: child.pid ?? null, reason, exited: lifecycle.exited, closed: lifecycle.closed, spawnError: lifecycle.spawnError?.code ?? null });
       run.addAssertion(`${label}.service_reclaimed`, "fail", "service_not_reclaimed", { reason });
-      // Unknown close blocks callers, including restart and sequential same-directory starts.
+      // 关闭状态未知会阻止调用者继续，包括重启和按顺序在同目录启动。
       throw error;
     }
   };
@@ -1298,7 +1298,7 @@ export async function startServer(run, { nodePath, workbenchDir, dataDir, tempRo
     requested.push(path.split("?")[0]);
     return (ops.fetchJson ?? fetchJson)(`${base}${path}`, { method, body });
   };
-  // Port output is only a candidate. HTTP success and a live owned child are both required.
+  // 端口输出只是候选值。必须同时有 HTTP 成功和仍存活的自有子进程。
   try {
     const readyDeadline = Date.now() + (ops.readinessMs ?? LIMITS.readinessMs);
     while (Date.now() < readyDeadline) {
@@ -1306,7 +1306,7 @@ export async function startServer(run, { nodePath, workbenchDir, dataDir, tempRo
       try {
         const probe = await request("GET", "/api/account-sets");
         if (probe.status === 200 && !lifecycle.exited && !lifecycle.closed && !lifecycle.spawnError) { ready = true; break; }
-      } catch { /* bounded HTTP retry, never return an unready handle */ }
+      } catch { /* 有界 HTTP 重试，绝不返回尚未就绪的句柄。 */ }
       if (lifecycle.exited || lifecycle.closed || lifecycle.spawnError) throw new StageError("server_exited_before_ready");
       await delay(100);
     }
@@ -1576,7 +1576,7 @@ async function assertDtoReports(run, handle, setId) {
   const ledgerDto = dto.get("ledger");
   run.assert("reports.dto.ledger_amounts", moneyEqual(ledgerDto?.data?.current?.debit, 11300) && moneyEqual(ledgerDto?.data?.closing?.debit, 61300), { code: "dto_amount_mismatch" });
 
-  // The current HTTP layer intentionally supports CSV only; XLSX / PDF are pure DTO renderers.
+  // 当前 HTTP 层有意只支持 CSV；XLSX / PDF 是纯 DTO 渲染器。
   for (const format of ["xlsx", "pdf"]) {
     const httpOffice = await handle.get(`/api/account-sets/${setId}/reports/trial-balance/export?period=2026-02&format=${format}`);
     run.assert(`office.http_${format}_not_wired`, httpOffice.status === 400 && httpOffice.json?.error === "report_format_unsupported", { code: "http_office_unexpectedly_wired", details: { status: httpOffice.status } });
@@ -1646,7 +1646,7 @@ export function classifyOfficeOutputs(results, requiredKinds = REQUIRED_OFFICE_K
   return { required: kinds.length, rendered: kinds.length - requiredBlocked.length, requiredBlocked };
 }
 
-/** Cleanup is a success effect, never a finally effect: rejection retains the real evidence. */
+/** 清理只在成功时发生，绝不作为 finally 副作用：拒绝时保留真实证据。 */
 export async function runWithSuccessCleanup(operation, cleanup) {
   const result = await operation();
   await cleanup();
@@ -1673,7 +1673,7 @@ async function runOfficeStage(run, { nodePath, workbenchDir, tempRoot, outDir, d
   writeHelper();
   return runWithSuccessCleanup(async () => {
     const results = new Map();
-    // Keep the exact helper on any failed/blocked path, including a failed owned child.
+    // 任何失败或阻塞路径均保留该精确辅助进程，包括自有子进程失败。
     for (const [kind, report] of dto.entries()) {
       const dtoPath = join(artifacts, `${kind}.dto.json`);
       jsonWrite(dtoPath, report);
@@ -1746,7 +1746,7 @@ async function runOfficeStage(run, { nodePath, workbenchDir, tempRoot, outDir, d
       }
     }
 
-    // Missing font must be an explicit, isolated failure; CSV/XLSX stay usable.
+    // 缺字体必须明确、独立地失败；CSV/XLSX 仍可使用。
     mkdirSync(join(artifacts, "missing-font"), { recursive: true });
     {
       const probe = await spawnChecked(run, "office-missing-font", nodePath, [helperPath, `dto=${join(artifacts, "trial-balance.dto.json")}`, `outdir=${join(artifacts, "missing-font")}`], {
@@ -1815,16 +1815,16 @@ async function extractPdfPages(run, { pdfPath, pngPrefix, tempRoot, label }) {
     env: minimalEnv({
       TEMP: join(tempRoot, "tmp"),
       TMP: join(tempRoot, "tmp"),
-      // Optional development-only tool: PyMuPDF may live in the per-user Python
-      // site-packages, so keep the standard Windows profile pointers. They are
-      // never printed or written to the result.
+      // 仅供开发使用的可选工具：PyMuPDF 可能位于用户级 Python
+      // site-packages 中，因此保留标准 Windows 用户目录指针。这些指针
+      // 绝不打印或写入结果。
       USERPROFILE: process.env.USERPROFILE,
       APPDATA: process.env.APPDATA,
       LOCALAPPDATA: process.env.LOCALAPPDATA,
     }),
     timeoutMs: LIMITS.officeMs,
   });
-  // Only an absent optional executable is harmless without a close event.
+  // 仅当可选可执行文件不存在时，缺少 close 事件才可忽略。
   if (result.spawnError === "ENOENT" && result.pid == null) return { status: "unavailable", reason: "python_pdf_tool_unavailable" };
   const failure = childLifecycleFailure(result);
   if (failure) {
@@ -1890,7 +1890,7 @@ async function backupDrill(run, { nodePath, workbenchDir, tempRoot, dataDir, rel
   const verified = await runBackupCli(run, { nodePath, workbenchDir, tempRoot, args: ["verify", "--backup", backupDir], label: "backup-verify" });
   run.assert("backup.verify", verified.code === 0 && verified.payload?.ok === true && verified.payload?.summary?.snapshotSha256 === snapshotHash, { code: "backup_verify_failed", details: { exitCode: verified.code } });
 
-  // Negative: corrupted snapshot must be rejected and the original left untouched.
+  // 反例：必须拒绝损坏快照，并保持原件不变。
   const corrupt = join(backups, `corrupt-${randomTag()}`);
   mkdirSync(corrupt);
   copyFileSync(join(backupDir, "workbench.db.snapshot"), join(corrupt, "workbench.db.snapshot"));
@@ -1909,7 +1909,7 @@ async function backupDrill(run, { nodePath, workbenchDir, tempRoot, dataDir, rel
   const manifestVerify = await runBackupCli(run, { nodePath, workbenchDir, tempRoot, args: ["verify", "--backup", corruptManifest], label: "backup-corrupt-manifest" });
   run.assert("backup.reject_corrupt_manifest", manifestVerify.code === 2 && manifestVerify.payload?.ok === false, { code: "corrupt_manifest_accepted", details: { exitCode: manifestVerify.code } });
 
-  // Negative: unknown schema must not be "fixed" or accepted.
+  // 反例：不得“修复”或接受未知 schema。
   const tampered = join(backups, `unknown-schema-${randomTag()}.db`);
   copyFileSync(join(backupDir, "workbench.db.snapshot"), tampered);
   const tamperScript = [
@@ -1927,7 +1927,7 @@ async function backupDrill(run, { nodePath, workbenchDir, tempRoot, dataDir, rel
   const unknown = await runBackupCli(run, { nodePath, workbenchDir, tempRoot, args: ["backup", "--db", tampered, "--out", join(backups, `unknown-schema-out-${randomTag()}`)], label: "backup-unknown-schema" });
   run.assert("backup.reject_unknown_schema", unknown.code === 2 && unknown.payload?.ok === false, { code: "unknown_schema_accepted", details: { exitCode: unknown.code, code: unknown.payload?.code ?? null } });
 
-  // Negative: an existing target (even empty / with a sentinel) must be rejected untouched.
+  // 反例：必须拒绝已有目标（即使为空或含哨兵文件），并保持其不变。
   const sentinelDir = join(tempRoot, "data-existing-sentinel");
   mkdirSync(sentinelDir);
   const sentinel = join(sentinelDir, "sentinel.txt");
@@ -1935,7 +1935,7 @@ async function backupDrill(run, { nodePath, workbenchDir, tempRoot, dataDir, rel
   const existing = await runBackupCli(run, { nodePath, workbenchDir, tempRoot, args: ["restore-new", "--backup", backupDir, "--target", sentinelDir], label: "restore-existing-target" });
   run.assert("backup.reject_existing_target", existing.code === 2 && existing.payload?.ok === false && readFileSync(sentinel, "utf8") === "keep-me", { code: "existing_target_accepted", details: { exitCode: existing.code, code: existing.payload?.code ?? null } });
 
-  // Restore to a new directory, then boot the same release against it.
+  // 恢复到新目录，再以同一发布包启动该目录。
   const restoredDir = join(tempRoot, "data-restored");
   const restored = await runBackupCli(run, { nodePath, workbenchDir, tempRoot, args: ["restore-new", "--backup", backupDir, "--target", restoredDir], label: "restore-new" });
   run.assert("backup.restore_new", restored.code === 0 && restored.payload?.ok === true && existsSync(join(restoredDir, "workbench.db")), { code: "restore_new_failed", details: { exitCode: restored.code, code: restored.payload?.code ?? null } });
@@ -2071,8 +2071,8 @@ export async function startScriptProbe(run, { tempRoot, nodePath, startScript, s
     failed = true;
     throw error;
   } finally {
-    // First allow the launcher its bounded natural shutdown so its .NET owned service
-    // handle can run finally. Never guess-kill the service by its printed PID.
+    // 先允许启动器在时限内自然关闭，让其 .NET 自有服务
+    // 句柄执行 finally。绝不根据打印的 PID 猜测并终止服务。
     let cleanupError = null;
     try {
       if (!lifecycle.closed) await waitWrapper();
@@ -2087,8 +2087,8 @@ export async function startScriptProbe(run, { tempRoot, nodePath, startScript, s
       signal: lifecycle.info?.signal ?? null, spawnError: lifecycle.spawnError?.code ?? null,
     });
     trackPid();
-    // ESRCH is absence only, never PID identity. Missing PID after a launched wrapper
-    // is unknown; spawn failure before execution is the sole no-service case.
+    // ESRCH 只表明不存在，不能证明 PID 身份。包装进程已启动后缺少 PID
+    // 表示状态未知；只有执行前 spawn 失败才表示未启动服务。
     let serviceUnknown = servicePid === null && !lifecycle.spawnError;
     if (servicePid !== null) {
       for (let attempt = 0; attempt < 20 && alive(servicePid); attempt += 1) await (ops.delay ?? delay)(100);
@@ -2461,7 +2461,7 @@ async function installStart(run, options, paths) {
       for (const kind of ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"]) {
         const query = kind === "ledger" ? "&code=1002" : "";
         const response = await server.handle.get(`/api/account-sets/${business.setId}/reports/${kind}/export?period=2026-02${query === "" ? "" : query}`);
-        // ledger requires code, so build the query without a leading separator issue.
+        // 账本查询要求 code，因此构造查询时避免前置分隔符问题。
         responses.set(kind, response);
         run.assert(`reports.export.${kind}.status`, response.status === 200, { code: "csv_export_failed", details: { kind, status: response.status } });
       }
@@ -2470,7 +2470,7 @@ async function installStart(run, options, paths) {
       return { dto };
     });
 
-    // Restart on the same data directory before Office/backups; this proves persistence.
+    // 在 Office/备份检查之前，使用同一数据目录重启，以证明持久化有效。
     await run.stage("restart", async () => {
       await server.handle.stop();
       const restarted = await startServer(run, { nodePath: options.node, workbenchDir: dependencies.workbenchDir, dataDir, tempRoot: paths.tempRoot, label: "restart" });
@@ -2532,7 +2532,7 @@ async function installStart(run, options, paths) {
       await stabilityParallel(run, { nodePath: options.node, workbenchDir: dependencies.workbenchDir, tempRoot: paths.tempRoot });
     });
   } catch (error) {
-    try { await server.handle.stop(); } catch { /* ignore */ }
+    try { await server.handle.stop(); } catch { /* 忽略 */ }
     throw error;
   }
 
@@ -2620,7 +2620,7 @@ async function main(argv) {
       try {
         const detail = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error);
         if (outDir) writeFileSync(join(outDir, "logs", "internal-error.log"), detail, "utf8");
-      } catch { /* ignore */ }
+      } catch { /* 忽略 */ }
     }
     failure = error instanceof StageError
       ? error

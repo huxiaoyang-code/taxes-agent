@@ -1,4 +1,4 @@
-// Fixed business entrypoints. Only explicit dbPath requests open a read-only context.
+// 固定业务入口；只有显式 dbPath 请求才打开只读上下文。
 import { resolve, dirname, basename, isAbsolute, relative } from 'node:path';
 import { lstatSync, realpathSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -69,7 +69,7 @@ export function getAgencyCapabilities() {
   ];
 }
 
-/** Same private material session and actual calculations as workpaper, bounded projection. */
+/** 使用与工作底稿相同的私有材料会话和实际计算，输出有界投影。 */
 export function matchAgencyRules(session,{dbPath}={}){
   const full=buildAgencyWorkpaper(session,{dbPath}).ruleSelection,clip=(v,n)=>typeof v==='string'?v.slice(0,n):v;
   const scope=Object.fromEntries(Object.entries(full.scope).map(([k,v])=>[k,clip(v,120)])),scopeTruncatedFields=Object.keys(full.scope).filter(k=>typeof full.scope[k]==='string'&&full.scope[k].length>120);
@@ -82,7 +82,7 @@ function checkedDatabasePath(path) {
   for (let p = path;; p = dirname(p)) { const s = lstatSync(p); requireValue(!s.isSymbolicLink() && realpathSync.native(p).toLowerCase() === p.toLowerCase(), 'agency_db_alias'); if (dirname(p) === p) break; }
   const s = lstatSync(path); requireValue(s.isFile() && s.nlink === 1 && s.size >= 4096, 'agency_db_file_invalid'); return path;
 }
-/** Explicit, fixed read-only native asset context; JSON receipts cannot mint it. */
+/** 显式、固定、只读的原生资产上下文；JSON 回执不能生成该能力。 */
 function readNativeAssetContext(dbPath,document){
   checkedDatabasePath(dbPath);const db=new DatabaseSync(dbPath,{readOnly:true}),scope=document.scope,issues=[],cards=[],vouchers=[],knownCards=new Set(),voucherIds=new Set();
   const missing=(code,reason,factId,period)=>issues.push({code,state:'missing',request:reason,factId,period:period??scope.period});
@@ -110,7 +110,7 @@ function readNativeAssetContext(dbPath,document){
 }
 async function application(dbPath) {
   checkedDatabasePath(dbPath);
-  // Never silently attach to the repository's default data directory.
+  // 绝不静默连接仓库的默认数据目录。
   requireValue(typeof process.env.WORKBENCH_DATA_DIR === 'string' && resolve(process.env.WORKBENCH_DATA_DIR, 'workbench.db').toLowerCase() === dbPath.toLowerCase(), 'agency_explicit_database_context_required');
   const { db } = await import('./db.mjs'); const I = await import('./import-incremental.mjs'); const C = await import('./local-audit-coordinator.mjs'); const S = await import('./local-audit-storage.mjs'); const A = await import('./accounting.mjs');
   requireValue(resolve(S.readAuditDatabasePath(db)).toLowerCase() === dbPath.toLowerCase(), 'agency_database_context_mismatch'); return { db, I, C, S, A };
@@ -207,10 +207,10 @@ function postingPlan(app, scope, workpaper, correction, reconciliation) {
   }
   for(const [key,old]of active)if(!wanted.has(key)&&!correction?.withdrawnSourceIds?.includes(old.row.source_voucher_id)){
     const period=app.db.prepare('SELECT period FROM vouchers WHERE id=?').get(old.row.voucher_id).period;
-    if(period>scope.period)continue; // Later native agency business is retained; its own period must be recomputed explicitly.
+    if(period>scope.period)continue; // 保留后续原生 agency 业务；其所属期间须显式重算。
     requireValue(period<workpaper.accounting.replayFrom&&reconciliation.proof.some(p=>p.voucherId===old.row.voucher_id&&p.kind==='verified_opening_checkpoint'),'agency_owned_source_not_replayed');
   }
-  // Withdrawal requires a complete source inventory, never absence caused by missing materials.
+  // 撤回需要完整来源清单，不能把缺少材料造成的未发现当成撤回依据。
   if (correction?.withdrawnSourceIds?.length) for (const [key, old] of active) if (correction.withdrawnSourceIds.includes(old.row.source_voucher_id)) {
     requireValue(!wanted.has(key) && workpaper.coverageVerified, 'agency_withdrawal_coverage_or_fact_conflict');
     const original = app.db.prepare('SELECT period FROM vouchers WHERE id=?').get(old.row.voucher_id); requireValue(original.period === scope.period, 'agency_withdrawal_original_period_not_covered');
@@ -282,7 +282,7 @@ export async function executeAgencyPosting(session, confirmation) {
   }
 }
 
-/** Recovery reads persisted audit/import/source/current posted entries, never a caller receipt. */
+/** 恢复只读持久化审计、导入、来源及当前已过账分录，不采信调用者回执。 */
 export async function queryAgencyPosting(id) {
   requireValue(id && id.operationId === `agency-${id.batchId}` && /^202[67]-\d\d$/.test(id.period), 'agency_query_identity_invalid');
   checkedDatabasePath(id.dbPath);

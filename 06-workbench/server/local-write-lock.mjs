@@ -1,6 +1,6 @@
 import { assertRestoreWritable } from './local-restore-control.mjs';
-// Local domain lock capabilities. Tokens/owners in JSON and ALS never authorize inheritance.
-// No default db and no user callbacks are stored across an await.
+// 本机业务锁能力；JSON 和 ALS 中的 token/owner 不授予继承权限。
+// 不使用默认数据库，也不跨 await 保存用户回调。
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -64,7 +64,7 @@ function cleanupGroup(db,g){
 export function cleanupWriteResources(db){for(const g of pendingCleanup.get(db)??[])if(!cleanupGroup(db,g))return {pending:true};return {pending:false};}
 export function releaseWriteResources(db,handle) {
  const g=groups.get(handle);if(!g||g.db!==db)fail('lock_capability_invalid');
- // A revoked handle may only retry exact owner/token cleanup after real BUSY.
+ // 句柄被撤销后，仅在真实 BUSY 后允许按精确 owner/token 重试清理。
  g.revoked=true;if(g.cleaned)return {released:true,pending:false};queueCleanup(db,g);
  return {released:cleanupGroup(db,g),pending:!g.cleaned};
 }
@@ -94,7 +94,7 @@ export function domainResources(db,options) {
  }
  return [...new Set(keys)].sort(resourceOrder);
 }
-// Called only from server-derived coordinator options AFTER strict input validation.
+// 严格输入校验后，才由服务端推导的协调器选项调用这里。
 export function withDomainWrite(db,options,fn) {
  const keys=domainResources(db,options),g=active.get(db);
  if(g) {
@@ -102,14 +102,14 @@ export function withDomainWrite(db,options,fn) {
   if(keys.some(k=>![...(g.parent?.locks??[]),...g.locks].some(l=>l.resourceKey===k)))fail('lock_resource_missing');
   return fn();
  }
- // Ordinary domain admission stopped by a writer reservation has not begun
- // an audit callback. Preserve that existing rejection code at this boundary.
- // Low-level locking and post-admission COMMIT failures keep their own errors.
+ // 普通业务准入若被写入保留锁拒绝，审计回调尚未开始；
+ // 此边界保留已有拒绝码。
+ // 底层加锁及准入后的 COMMIT 失败保留各自错误。
  let handle;try{handle=acquireWriteResources(db,keys);}catch(error){if(error?.errcode===5)fail('audit_admission_busy');throw error;}
  try{return withWriteResources(db,handle,()=>{if(JSON.stringify(domainResources(db,options))!==JSON.stringify(keys))fail('lock_binding_changed');return fn();});}
  finally{releaseWriteResources(db,handle);}
 }
-// Newly inserted sets can extend the same live audited outer; no second BEGIN/COMMIT.
+// 新插入账套可扩展同一个实时受审计外层，不再启动第二次 BEGIN/COMMIT。
 export function lockCreatedAccountSet(db,id) {
  const g=active.get(db);if(!g||!hasActiveAuditExecution(db)||!Number.isSafeInteger(id)||id<1)fail('lock_capability_invalid');assertGroup(db,g);
  const key=boundKey(db,id),setKey=`account-set:${id}`;

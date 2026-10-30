@@ -1,6 +1,6 @@
-// Local administrative registration only. Never expose PID/path/endpoint inputs through MCP.
-// The original backend remains the lifecycle owner. This module never launches, kills,
-// navigates, or removes a browser/profile, and never reads cookies or credentials.
+// 仅供本机管理登记，绝不经 MCP 暴露 PID、路径或端点输入。
+// 生命周期仍由原后端负责；本模块不启动、终止、导航或删除
+// 浏览器或 profile，也不读取 cookie 或凭据。
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpath, lstat, open } from "node:fs/promises";
@@ -25,7 +25,7 @@ async function powershell(script, env = {}) {
     Buffer.from("$ErrorActionPreference='Stop'\n" + script, "utf16le").toString("base64")], env);
 }
 
-// Windows argv decoding, rather than substring tests that could accept a forged flag.
+// 解析 Windows argv，不使用可能接受伪造参数的子串匹配。
 export function splitWindowsCommandLine(text) {
   const args = []; let at = 0;
   while (at < text.length) {
@@ -81,8 +81,8 @@ async function privatePath(path, directory) {
   });
   if (answer !== "ok") throw fail();
 }
-// Local storage consumers may reuse the same strict ACL boundary. Existing
-// directories are only verified, never silently re-permissioned.
+// 本机存储使用者可复用相同严格 ACL 边界；已有目录
+// 只核验，不静默重新赋权。
 export const verifyPrivateDirectory = (path) => privatePath(path, true);
 export const verifyPrivateFile = (path) => privatePath(path, false);
 async function inspectProcesses(ownerPid, browserPid) {
@@ -142,7 +142,7 @@ async function boundedFile(path, limit, d) {
 }
 async function rootDirectory(raw, d) {
   const root = resolve(raw || DEFAULT_REGISTRATION_ROOT);
-  // One canonical root per checkout: changing subdirectories cannot bypass the browser claim.
+  // 每个检出目录只允许一个规范根路径，切换子目录不能绕过浏览器认领。
   if (root !== resolve(d.registrationBase, "tax-browser-registry")) throw fail();
   await d.verifyDirectory(root);
   return root;
@@ -160,11 +160,11 @@ function processIdentity(snapshot, ownerPid, browserPid) {
   const flags = ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
     "--new-window", "--edge-skip-compat-layer-relaunch"];
   for (const flag of flags) if (browser.args.filter((arg) => arg === flag).length !== 1) throw fail();
-  // Legacy owned launches used InPrivate; the current launch runs a normal window.
-  // Accept either, but reject malformed or duplicated InPrivate switches.
+  // 旧的自有启动使用 InPrivate，当前启动使用普通窗口；
+  // 两种均接受，但拒绝格式错误或重复的 InPrivate 参数。
   const inprivate = browser.args.filter((arg) => arg === "--inprivate" || arg.startsWith("--inprivate"));
   if (inprivate.length > 1 || inprivate.some((arg) => arg !== "--inprivate")) throw fail();
-  // A normal dedicated browser must not be impersonated by guest/unsafe modes.
+  // 普通专用浏览器不能被访客或不安全模式冒充。
   const forbidden = ["--guest", "--headless", "--disable-web-security", "--no-sandbox"];
   if (browser.args.some((arg) => forbidden.some((flag) => arg === flag || arg.startsWith(flag + "=")))) throw fail();
   for (const prefix of ["--remote-debugging-address", "--remote-debugging-port", "--user-data-dir"]) {
@@ -255,7 +255,7 @@ export async function openRegisteredBrowserDiagnostic({ registrationRef, registr
       await connection.open(); return connection;
     });
     const transport = { cdp, close() { cdp.close(); } };
-    // Non-enumerable local-only capability for the explicit collector lock.
+    // 显式采集锁的不可枚举本机私有能力。
     Object.defineProperty(transport, 'localScope', {value:{profilePath:record.verified.profilePath,browserKey:record.key,
       registrationState:record.state,async currentRegistrationState(){
         const current=await jsonFile(join(root,`${registrationRef}.json`),d);

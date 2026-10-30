@@ -1,4 +1,4 @@
-// Module-load byte closure. A changed cached module requires a fresh process.
+// 模块加载时捕获的字节闭包；缓存模块变化后须使用全新进程。
 import { readFileSync } from 'node:fs';
 import { REVIEW_CODE_FILES } from './accountant-review-store.mjs';
 import { hash, stable } from './offline-material-adapters.mjs';
@@ -7,7 +7,7 @@ const files = [...REVIEW_CODE_FILES, 'offline-vat-history-context.mjs', 'offline
 const inventory = () => files.map(name => ({ name, sha256: hash(readFileSync(new URL(name, import.meta.url))) }));
 const loaded = inventory(), loadedDigest = hash(stable(loaded));
 let restartRequired = false;
-// Fail-closed only: observing a foreign worker manifest cannot grant or reset authority.
+// 仅允许失败关闭；观察外来 worker manifest 不会授予或重置权限。
 export function markOfflineVatHistoryCodeRestartRequired() { restartRequired = true; }
 export function assertOfflineVatHistoryCodeCurrent() {
   try { if (hash(stable(inventory())) !== loadedDigest) restartRequired = true; }

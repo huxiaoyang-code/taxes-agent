@@ -1,4 +1,4 @@
-// Entirely synthetic stores/CDP/socket. No private files or real browser.
+// 完全合成的存储/CDP/套接字。不使用私有文件或真实浏览器。
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {TaxDownloadInvoiceObserver} from '../server/tax-download-invoice-observer.mjs';

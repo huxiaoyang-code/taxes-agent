@@ -1,28 +1,28 @@
 import { createRequire } from 'node:module';
 
-// Offline, syntactic candidates only. No source evaluation, I/O, network, or replay.
-// Local dependency: Node's bundled Acorn, exposed explicitly with
-// `node --expose-internals ...`. No flag => fixed parser_unavailable result.
+// 仅作离线语法候选分析，不求值源码、不作 I/O、不联网、不重放。
+// 本机依赖为 Node 内置 Acorn，须显式使用
+// node --expose-internals；未提供参数时返回固定 parser_unavailable。
 let parse;
 try {
   ({ parse } = createRequire(import.meta.url)('internal/deps/acorn/acorn/dist/acorn'));
-} catch { /* Fail closed; never substitute a regex parser. */ }
+} catch { /* 失败关闭，绝不改用正则解析器。 */ }
 
 const LIMITS = Object.freeze({ sourceCharacters: 4_000_000, astNodes: 160_000, entries: 200, arguments: 12, keys: 32 });
-// Deliberately finite vocabulary: arbitrary ASCII names can themselves be secrets.
-// Add names/segments only after a human has verified their technical meaning.
+// 词表有意保持有限，因为任意 ASCII 名称本身也可能是秘密；
+// 只有人工核实技术含义后才能增加名称或路径段。
 const NAMES = new Set(`fetch axios request get post put delete head options GET POST HEAD OPTIONS method url path params query data body headers responseType response blob arrayBuffer text json then catch finally saveAs createObjectURL revokeObjectURL Blob URL document createElement appendChild removeChild click download href target rel router push replace resolve route routes name component children meta title label onClick handler methods mounted created setup exports export default window location open Object assign keys values map forEach filter find reduce length status statusCode success Response Error Data List Total PageNumber PageSize gzlx pageNum pageSize sbrqq sbrqz skssqq skssqz zfbz yzpzzlDm zsxmDmArray nssbrq ybtse gzlxDm zfrq sbuuid yzpzzlMc pzxh row record item detail details invoice invoices file files downloadFile exportFile exportExcel exportPdf getDetail getDetails queryDetail queryList list print report reports financial accounting DescribeSbmxcx2 cwbbsb cwbbsbDetail cwbb cx xz dc sbmxcx fpxx fpdm fphm kprqq kprqz response dataType contentType type filename fileName fileType fileId id sbzlDm sbzlmc sbuuid sbxh sbmxxh nsrsbh nsrmc skssq yzpzzl page current limit size result code message content disposition dispatch commit apply call bind addEventListener preventDefault stopPropagation navigateTo toString formData FormData set getAll submit form action`.split(/\s+/));
 const LABELS = new Set(['下载', '导出', '发票', '发票下载', '发票查询', '财务报表', '申报查询', '详情', '查看详情', '打印']);
 const ROOTS = new Set(['szzh', 'szc', 'kpfw', 'dppt']);
 const SEGMENTS = new Set(`api v1 v2 v3 szzh szc kpfw dppt invoice invoices download export file files report reports financial accounting query list detail details print sbmxcx cwbbsb cwbb fpxx cx xz dc get post DescribeSbmxcx2 getDetail getDetails queryDetail queryList downloadFile exportFile exportExcel exportPdf`.split(/\s+/));
 const METHODS = new Set(['GET', 'POST', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE']);
-// Verified public technical names/route segments supplied by the root reviewer.
-// This expands discovery only; it never permits a request.
+// 由主审查者提供的已核实公开技术名称和路由片段。
+// 这里只扩展发现范围，不授予任何请求权限。
 for (const name of `zhcx sjswszzh sbxx sbxxcx sbbdxz cwbbsbxxcx cwbbxxcxDetail nsrxxcx DescribeSbmxxqInit DescribeSbmxxqcx DescribeSbmxxqzfbTree DescribeFpCx DescribeFpqk DescribeNsrfpxx DescribeNsrsbxx`.split(' ')) {
   NAMES.add(name); SEGMENTS.add(name);
 }
-// Actual request metadata confirmed these technical tails and body keys only.
-// No unobserved prefix or value is inferred, and discovery grants no API access.
+// 实际请求元数据仅确认这些技术尾部片段及请求体键；
+// 不推断未观察前缀或值，发现也不授予 API 访问权限。
 for (const name of ['getCwbbzlList', 'queryZlbscjb', 'DescribeNsrjbxx']) {
   NAMES.add(name); SEGMENTS.add(name);
 }
@@ -51,11 +51,7 @@ function base(status) {
   };
 }
 
-/** Inspect only trusted, local source strings. Output contains no source excerpts,
- * arbitrary literals/names, parameter values, error messages, or source digest.
- * Links describe lexical syntax, not runtime reachability, authorization, or a
- * complete call graph. Dynamic aliases/member dispatch are deliberately unknown.
- */
+/** 只检查可信本机源码字符串。不输出源码片段、任意字面量/名称、参数值、错误文本或源码摘要。链接只描述词法语法，不代表运行时可达性、授权或完整调用图；动态别名及成员分派有意保留 unknown。 */
 export function inspectDownloadSource(source) {
   try { return inspectSource(source); }
   catch { return base('analysis_error'); }
@@ -73,8 +69,8 @@ function inspectSource(source) {
     catch { return base('parse_error'); }
   }
   const out = base('inspected');
-  // Internal candidates are bounded by astNodes. Select only after traversal so
-  // generic/minified bundle preambles cannot crowd out later download evidence.
+  // 内部候选数量受 astNodes 约束，遍历后再选择，避免通用或压缩包的
+  // 前导代码挤掉后面的下载证据。
   const add = (array, value) => { array.push(value); };
   const seenNames = new WeakSet();
   function checkedName(node, value) {
@@ -97,11 +93,11 @@ function inspectSource(source) {
       else if (p.type === 'ArrayPattern') for (const x of p.elements) patterns.push(x);
     }
   }
-  // Two passes allow forward lexical references without conflating shadowed names.
+  // 两遍遍历支持向前词法引用，不混淆被遮蔽的同名变量。
   while (stack.length) {
     const frame = stack.pop(), { node, parent } = frame;
     if (++out.counts.astNodes > LIMITS.astNodes) {
-      // Incomplete traversal cannot safely resolve bindings. Discard all findings.
+      // 遍历不完整时不能安全解析绑定，须丢弃全部发现。
       const closed = base('ast_limit'); closed.truncated = true; return closed;
     }
     let { scope, owner } = frame;
@@ -223,7 +219,7 @@ function inspectSource(source) {
       else if (value === 'content-disposition' || value === 'Content-Disposition') { shape = { index: i, kind: 'known_header_name' }; signals.add('content_disposition'); }
       else if (arg.type === 'ObjectExpression') {
         shape = { index: i, kind: 'object', ...objectShape(arg) };
-        // One level of request body/query keys, never their values.
+        // 只读取一层请求体/查询键，绝不读取其值。
         shape.objects = []; shape.methods = []; shape.paths = [];
         for (const p of arg.properties) {
           if (p.type !== 'Property' || (p.computed && p.key.type !== 'Literal')) continue;
@@ -260,7 +256,7 @@ function inspectSource(source) {
   const evidence = c => c.signals.length > 0 || c.arguments.some(a => a.kind === 'static_path' || a.paths?.length);
   const relevant = new Set(out.calls.filter(evidence).map(c => c.functionId).filter(Boolean));
   for (const p of out.paths) if (p.functionId) relevant.add(p.functionId);
-  // Bounded syntactic neighborhood, never an assertion of runtime reachability.
+  // 有界语法邻域，不证明运行时可达性。
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
     for (const l of out.links) {

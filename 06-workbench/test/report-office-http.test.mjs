@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-office-http-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
-// LOCAL-05 wire (Issue #45): real HTTP black-box acceptance for internal CSV / XLSX / PDF downloads.
-// This test starts THIS package's own server as a child process on a random loopback port with a
-// throwaway WORKBENCH_DATA_DIR. It never talks to an old backend, the tax portal or a real account set.
-// Every expected amount below is hand-calculated from the synthetic vouchers, not read back from the
-// exporter, and the exports are exercised through HTTP rather than by mocking buildOfficeExport.
+// LOCAL-05 传输（Issue #45）：对内部 CSV / XLSX / PDF 下载执行真实 HTTP 黑盒验收。
+// 本测试启动本包自身服务作为子进程，使用随机回环端口及
+// 一次性 WORKBENCH_DATA_DIR。绝不连接旧后端、税务门户或真实账套。
+// 下方每个预期金额均从合成凭证手算，不从
+// 导出器回读；通过 HTTP 覆盖导出，不模拟 buildOfficeExport。
 import assert from "node:assert/strict";
 import { test, before, after } from "node:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -20,29 +20,29 @@ import ExcelJS from "exceljs";
 
 const tempRoot = realpathSync(tmpdir());
 const directory = mkdtempSync(join(tempRoot, "wb-report-office-http-"));
-// Prove ownership of the temp directory before anything is written into or deleted from it.
+// 向临时目录写入或从中删除任何内容前，先证明拥有该目录。
 assert.equal(dirname(realpathSync(directory)), tempRoot, "test data dir must live directly in the OS temp root");
 process.env.WORKBENCH_DATA_DIR = directory;
 const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
 
-// --------------------------------------------------------------------------- synthetic books
+// --------------------------------------------------------------------------- 合成账簿
 const set = identityFixtureCreate(A, { name: "合成接线测试公司", start_period: "2026-01" });
 A.setOpeningBalances(set.id, [{ code: "1002", debit: 1000 }, { code: "3001", credit: 1000 }]);
 const posted = (period, summary, entries) => A.createVoucher(set.id, { period, status: "posted", summary, entries });
 posted("2026-01", "一月合成收入", [{ code: "1002", debit: 800 }, { code: "5001", credit: 800 }]);
 posted("2026-01", "一月合成费用", [{ code: "5602", debit: 300 }, { code: "1002", credit: 300 }]);
-// A draft voucher must never reach any export, and must not silently become a zero row either.
+// 草稿凭证不得进入任何导出，也不能静默变成零值行。
 A.createVoucher(set.id, { period: "2026-01", status: "draft", summary: "未过账不应出现", entries: [
   { code: "1002", debit: 5000 }, { code: "5001", credit: 5000 },
 ] });
 posted("2026-02", "二月合成收入", [{ code: "1002", debit: 400 }, { code: "5001", credit: 400 }]);
 posted("2026-02", "二月合成费用", [{ code: "5602", debit: 100 }, { code: "1002", credit: 100 }]);
-// Longer than the Excel single-cell / PDF single-field limit (32767), used for a real failure path.
+// 长度超过 Excel 单元格/PDF 单字段限制（32767），用于真实失败路径。
 const longName = "超长名称".repeat(9000);
 const longSet = identityFixtureCreate(A, { name: longName, start_period: "2026-01" });
 
-// Separate explicit synthetic enterprise identity for the narrow composite contract.
+// 为窄范围组合契约提供独立、明确的合成企业身份。
 const composite = identityFixtureCreate(A, { name: "合成复合附件公司", start_period: "2025-11" });
 A.setOpeningBalances(composite.id, [{ code: "1002", debit: 1000 }, { code: "3001", credit: 1000 }]);
 for (const [period, entries] of [
@@ -77,10 +77,10 @@ for (let i = 0; i < 100; i++) {
 }
 A.setOpeningBalances(extreme.id, extremeOpening);
 
-// Independent hand calculation from the vouchers above:
-//   2026-01: bank 1000 + 800 - 300 = 1500; revenue 800; expense 300; profit 500; cash change 500.
-//   2026-02: bank 1500 + 400 - 100 = 1800; revenue 400 (YTD 1200); expense 100 (YTD 400);
-//            profit 300 (YTD 800); cash change 300 (YTD 800); cash 1500 -> 1800.
+// 基于上方凭证的独立手算：
+// 2026-01：银行 1000 + 800 - 300 = 1500；收入 800；费用 300；利润 500；现金变动 500。
+// 2026-02：银行 1500 + 400 - 100 = 1800；收入 400（年累计 1200）；费用 100（年累计 400）；
+// 利润 300（年累计 800）；现金变动 300（年累计 800）；现金 1500 -> 1800。
 const EXPECTED = {
   jan: { bankClosing: 1500, revenue: 800, expense: 300, profit: 500, cashChange: 500, cashBegin: 1000, cashEnd: 1500 },
   feb: {
@@ -97,7 +97,7 @@ const snapshot = () => Object.fromEntries(db.prepare("SELECT name FROM sqlite_ma
 }));
 const beforeReads = snapshot();
 
-// --------------------------------------------------------------------------- child servers
+// --------------------------------------------------------------------------- 子进程服务
 function startServer(extraEnv = {}) {
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "../server/server.mjs")], {
     env: { ...process.env, PORT: "0", HOST: "127.0.0.1", WORKBENCH_DATA_DIR: directory, ...extraEnv },
@@ -128,7 +128,7 @@ function startServer(extraEnv = {}) {
 }
 async function stopQuietly(server) {
   if (!server) return;
-  try { await server.stop(); } catch { /* already gone; the exit assertion does not depend on it */ }
+  try { await server.stop(); } catch { /* 已不存在；退出断言不依赖于此。 */ }
 }
 
 let server, fontServer, base;
@@ -153,7 +153,7 @@ after(async () => {
   }
 });
 
-// --------------------------------------------------------------------------- helpers
+// --------------------------------------------------------------------------- 辅助函数
 const KINDS = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
 const FORMATS = {
   csv: {
@@ -213,8 +213,8 @@ async function expectJsonError(url, code, status) {
   return body;
 }
 
-// Independent PDF verification: inflate content streams, parse the embedded ToUnicode CMap and read
-// the real text operators, so page count and Chinese text do not rely on the buffer length alone.
+// 独立 PDF 验证：解压内容流、解析嵌入的 ToUnicode CMap 并读取
+// 真实文本操作符，使页数与中文文本验证不只依赖缓冲区长度。
 function inflateStreams(buffer) {
   const text = buffer.toString("latin1");
   const streams = [];
@@ -227,7 +227,7 @@ function inflateStreams(buffer) {
       try {
         streams.push(inflate(raw).toString("latin1"));
         break;
-      } catch { /* not a compressed stream */ }
+      } catch { /* 不是压缩流 */ }
     }
   }
   return streams;
@@ -320,7 +320,7 @@ function workbookText(worksheet) {
   return values.join("\n");
 }
 
-// --------------------------------------------------------------------------- CSV (old semantics kept)
+// --------------------------------------------------------------------------- CSV（保留原语义）
 test("CSV: five kinds keep the existing BOM, Chinese and row semantics through real HTTP", async () => {
   const expectedRows = {
     "trial-balance": `"1002","银行存款","debit",${EXPECTED.feb.bankOpening.toFixed(2)},0.00,${EXPECTED.feb.bankPeriodDebit.toFixed(2)},${EXPECTED.feb.bankPeriodCredit.toFixed(2)},${EXPECTED.feb.bankYtdDebit.toFixed(2)},${EXPECTED.feb.bankYtdCredit.toFixed(2)},${EXPECTED.feb.bankClosing.toFixed(2)},0.00`,
@@ -378,7 +378,7 @@ test("XLSX: five kinds are real workbooks, re-read by ExcelJS with hand-calculat
   }
 
   const cash = loaded.get("cash-flow-statement");
-  // YTD column covers 2026-01..2026-02: cash begin 1000, end 1800, change 800.
+  // 年累计列涵盖 2026-01..2026-02：现金期初 1000、期末 1800、变动 800。
   for (const [label, current, ytd] of [
     ["经营活动产生的现金流量净额", EXPECTED.feb.cashChange, EXPECTED.feb.cashChangeYtd],
     ["现金净增加额", EXPECTED.feb.cashChange, EXPECTED.feb.cashChangeYtd],
@@ -423,7 +423,7 @@ test("XLSX: five kinds are real workbooks, re-read by ExcelJS with hand-calculat
   assert.equal(summaryRows.filter((item) => item.text === "二月合成费用").length, 1, "ledger must list the posted payment once");
   const receipt = summaryRows.find((item) => item.text === "二月合成收入").row;
   cellNumber(ledger, receipt, 9, EXPECTED.feb.bankPeriodDebit, "二月收入 借方");
-  // Running balance: 1500 opening + 400 receipt = 1900, then -100 payment = 1800.
+  // 连续余额：期初 1500 + 收款 400 = 1900，再减付款 100 = 1800。
   cellNumber(ledger, receipt, 11, EXPECTED.feb.bankClosing + EXPECTED.feb.bankPeriodCredit, "二月收入 余额");
   const payment = summaryRows.find((item) => item.text === "二月合成费用").row;
   cellNumber(ledger, payment, 10, EXPECTED.feb.bankPeriodCredit, "二月费用 贷方");
@@ -455,7 +455,7 @@ test("PDF: five kinds are real PDFs with embedded Chinese text, page footers and
   }
 });
 
-// --------------------------------------------------------------------------- preview stays DTO
+// --------------------------------------------------------------------------- 预览仍为 DTO
 test("preview stays a JSON DTO and never produces an attachment", async () => {
   for (const kind of KINDS) {
     const response = await request(previewPath(kind));
@@ -468,14 +468,14 @@ test("preview stays a JSON DTO and never produces an attachment", async () => {
     assert.equal(report.scope.status, "posted");
   }
   const income = await (await request(previewPath("income-statement"))).json();
-  // Hand calculation, not the exporter: February profit 400 - 100 = 300, YTD 1200 - 400 = 800.
+  // 手算而非导出器计算：二月利润 400 - 100 = 300，年累计 1200 - 400 = 800。
   assert.equal(income.data.current["净利润"], EXPECTED.feb.profit);
   assert.equal(income.data.ytd["净利润"], EXPECTED.feb.profitYtd);
   const ledger = await (await request(previewPath("ledger"))).json();
   assert.equal(ledger.data.items.length, EXPECTED.feb.ledgerItems);
   assert.equal(ledger.data.opening.debit, EXPECTED.feb.bankOpening);
   assert.equal(ledger.data.closing.debit, EXPECTED.feb.bankClosing);
-  // Format is not a preview concern: office / unknown formats stay a strict 400 instead of a silent CSV DTO.
+  // 预览不处理格式：Office / 未知格式严格返回 400，不静默返回 CSV DTO。
   for (const format of ["xlsx", "pdf", "yaml", ""])
     await expectJsonError(`${previewPath("trial-balance")}&format=${format}`, "report_format_unsupported", 400);
 });
@@ -541,7 +541,7 @@ test("P2: legal extreme aggregate has the same exact .90 in real CSV/XLSX/PDF at
   }
 });
 
-// --------------------------------------------------------------------------- input validation unchanged
+// --------------------------------------------------------------------------- 输入校验保持不变
 test("input validation stays JSON with no attachment", async () => {
   const path = (kind, format, extra = {}, period = "2026-02", id = set.id) =>
     `/api/account-sets/${id}/reports/${kind}/export?${query(period, { format, ...extra })}`;
@@ -552,15 +552,15 @@ test("input validation stays JSON with no attachment", async () => {
   await expectJsonError(path("trial-balance", "csv", {}, "2026-02", 999999), "account_set_not_found", 404);
 });
 
-// --------------------------------------------------------------------------- generation failures
+// --------------------------------------------------------------------------- 生成失败
 test("generation failures return fixed JSON errors and never a partial attachment", async () => {
-  // Over-long field: rejected before any bytes are written (XLSX / PDF share the same limit).
+  // 超长字段：在写入任何字节之前拒绝（XLSX / PDF 共用同一限制）。
   const longUrl = `/api/account-sets/${longSet.id}/reports/trial-balance/export?${query("2026-01", { format: "xlsx" })}`;
   const tooLong = await expectJsonError(longUrl, "office_text_too_long", 422);
   assert.doesNotMatch(JSON.stringify(tooLong), /超长名称/, "raw over-long text must not be echoed back");
   assert.doesNotMatch(JSON.stringify(tooLong), /\.mjs|at .*\(/, "no stack trace or internal module path");
 
-  // Missing font: same running server, but a child process that cannot find an embeddable CJK font.
+  // 缺少字体：使用同一运行服务，但子进程找不到可嵌入的中日韩字体。
   try {
     fontServer = startServer({ REPORT_PDF_FONT: join(directory, "missing-font.ttf") });
     const fontBase = `http://127.0.0.1:${await fontServer.ready}`;

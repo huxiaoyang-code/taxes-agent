@@ -1,4 +1,4 @@
-// Deterministic national calculations. Regional values are deliberately not caller rates.
+// 全国性确定性计算；地区参数有意不接受调用者自选税率。
 import { parseMoney, formatCents } from './money.mjs';
 import { hash, stable, requireValue } from './offline-material-adapters.mjs';
 import { getAccountingRoles } from './accounting-profiles.mjs';
@@ -26,7 +26,7 @@ const businessBrackets = [[30000, 500], [90000, 1000], [300000, 2000], [500000, 
 const salaryBrackets = [[36000, 300], [144000, 1000], [300000, 2000], [420000, 2500], [660000, 3000], [960000, 3500], [null, 4500]];
 const stampRates = Object.freeze({ sale: 3, processing: 3, construction: 3, transport: 3, technology: 3, lease: 10, storage: 10, custody: 10, insurance: 10, loan: 0.5, property_transfer: 5, capital_books: 2.5 });
 
-/** Output rates follow the transaction, never an industry-wide default. */
+/** 销项税率由实际交易决定，不套用行业统一默认值。 */
 export function calculateAgencyOutputVat({ entity, category, net, date, invoiceKind, vatReliefWaived = entity.vatReliefWaived }) {
   const base = cents(net); requireValue(base >= 0n && /^202[67]-\d\d-\d\d$/.test(date), 'agency_vat_scope_unverified');
   requireValue(['ordinary', 'special', 'unissued'].includes(invoiceKind), 'agency_invoice_kind_missing');
@@ -65,8 +65,8 @@ export function calculateAgencyRentalPrice({entity,lease,amount,priceIncludesVat
   return {originalAmount:money(original),priceIncludesVat,net:money(net),tax:money(tax),gross:money(gross),relief:money(gross-net-tax),rateBasisPoints:statutory,actualRateBasisPoints:actual,simplifiedMethod:true,scenario,sources:src(['vat','vatRelief'])};
 }
 
-// No regional rules are preinstalled. This is a truthful registry, not a mechanism
-// that promotes arbitrary user-supplied rates or URLs into verified law.
+// 仅返回代码固定登记且来源可追溯的公开地区规则；企业、地区、期间及减免条件仍须核实。
+// 不能把任意用户税率或 URL 提升为已核实政策，规则扩展须经代码审查。
 export function listAgencyRegionalRules() { return listAgencyPublicRegionalRules(); }
 export function determineAgencySixTaxRelief({scope,entity,records}) {
   if(entity.vatStatus==='small'||entity.kind==='individual_business')return {eligible:true,basis:'2023年第12号：小规模或个体身份',sourceRefs:[]};
@@ -97,7 +97,7 @@ export function determineAgencySixTaxRelief({scope,entity,records}) {
   }
   return {eligible:null,reason:'一般纳税人小型微利六税两费资格缺对应有效汇算窗口/首次汇算事实；逾期或更正资料未核不得猜定'};
 }
-/** Official assessed amounts are original documents, distinct from an unverified regional-rate trial. */
+/** 官方核定税额属于原件资料，与未核实地区税率的试算区分。 */
 export function calculateAgencyContributionNotices({scope,entity,records}) {
   const notices=records.filter(r=>r.type==='contribution_notice'&&r.date.slice(0,7)<=scope.period), calculations=[],payments=[],issues=[];
   const seen=new Set(),seenLines=new Set();
@@ -125,7 +125,7 @@ export function calculateAgencyContributionNotices({scope,entity,records}) {
   }
   return {version:'agency-official-contribution/1',calculations,payments,issues,policyVerification:'official_assessment_notice',regionalRateVerification:'not_inferred_from_notice'};
 }
-/** Formula layer only. Supplied parameters never acquire official verification. */
+/** 仅为公式层；传入参数不会因此获得官方核实状态。 */
 export function calculateAgencyContributionArithmetic({ wages, parameters, payments = [] }) {
   requireValue(Array.isArray(wages) && Array.isArray(parameters?.components), 'agency_contribution_input_invalid');
   const calculations = [];
@@ -148,7 +148,7 @@ export function calculateAgencyDisabilityArithmetic({ months, disabledEmployment
   const shortage12 = positive(roundRatio(workers12 * ratio, 1000000n) - disabled12), gross = roundRatio(shortage12 * assessmentWage, 12000000n), band = disabled12 * 100n >= workers12 ? 5000 : 9000;
   return { version: 'agency-disability-arithmetic/1', averageEmployees: Number(workers12) / 12000000, averageWage: money(averageWage), wageCap: money(cap), assessmentWage: money(assessmentWage), gross: money(gross), reliefBasisPoints: band, due: money(rateAmount(gross, band)), policyVerification: 'regional_ratio_and_wage_unverified', authorizesExecution: false, submittable: false };
 }
-/** Current deductions/tax are derived. Only earlier periods use actual withholding evidence. */
+/** 本期扣除与税额由程序推导；只有历史期间使用实际扣缴证据。 */
 export function calculateAgencyPayrollArithmetic({ scope, payrollRecords, contributionArithmetic }) {
   requireValue(Array.isArray(payrollRecords) && contributionArithmetic?.version === 'agency-contribution-arithmetic/1', 'agency_payroll_arithmetic_input_invalid');
   const employees = [...new Set(payrollRecords.map(r => r.employeeId))], calculations = [];
@@ -197,7 +197,7 @@ export function calculateAgencyOfficialPayroll({scope,entity,records,official=ca
   }catch(error){if(!error.code)throw error;return {available:true,calculations:[],entries:[],issues:[issue(error.code,'工资原始扣除/历史银行实付及官方缴费核定单不足，不能由客户预制本期社公扣款或个税替代')]};}
 }
 
-/** Resident payments are grouped by person/category/project/month before applying per-time deductions. */
+/** 居民收入按人员、类别、项目和月份归集，再应用按次扣除。 */
 export function calculateAgencyOtherWithholding({ scope, records }) {
   const groups = new Map(), issues = [],settledExpenses=new Set();
   for (const r of records.filter(r => r.type === 'personal_payment' && r.date.slice(0, 7) <= scope.period)) {
@@ -236,7 +236,7 @@ export function calculateAgencyOtherWithholding({ scope, records }) {
   return { calculations, due: money(calculations.reduce((n, c) => n + cents(c.withholding), 0n)), issues, sources: src(['income', 'withholding','rentalWithholding']) };
 }
 
-/** 2026/2027 national prepayment ledger replay, per project and locality. */
+/** 按项目及地区重放 2026/2027 年全国预缴台账。 */
 export function calculateAgencyVatPrepayments({ scope, entity, records }) {
   const receipts = records.filter(r => r.type === 'construction_cash' || r.type === 'construction_tax_trigger').map(r=>({...r,prepaymentKind:'construction'})), subcontract = records.filter(r => r.type === 'subcontract_payment');
   const issues=[];
@@ -289,7 +289,7 @@ function regional(ruleId, entity, period,obligationId) {
   return rule ?? null;
 }
 
-/** Original vehicle invoice and qualified model evidence; never a caller-prepared tax. */
+/** 使用原始车辆发票及车型资格证据，不接收调用者预制税额。 */
 export function calculateAgencyVehicleAcquisition({entity,record:r,records=[]}){
   requireValue(r.type==='vehicle_acquisition'&&r.selfUse===true&&r.ownershipVerified===true&&r.businessUseConfirmed===true&&r.acquisitionMethod==='purchase'&&['car','tram','trailer','motorcycle'].includes(r.vehicleKind)&&typeof r.alreadyTaxed==='boolean'&&r.specialExemption==='none','agency_vehicle_acquisition_facts_missing');
   requireValue(typeof r.vin==='string'&&r.vin.length===17&&r.invoiceOriginalVerified===true&&r.invoiceNumber&&r.invoiceIssuedOn===r.date&&['paid','unpaid'].includes(r.settlement)&&['deductible','non_deductible'].includes(r.inputVatTreatment),'agency_vehicle_invoice_missing');
@@ -303,7 +303,7 @@ export function calculateAgencyVehicleAcquisition({entity,record:r,records=[]}){
   return {factId:r.id,vin:r.vin,base:money(base),invoiceGross:money(gross),invoiceVat:money(vat),normalTax:money(normal),relief:money(relief),due:money(due),deductibleInputVat:money(deductible?vat:0n),assetCost:money(assetCost),reason,sourceRefs:r.sourceRefs,sources:src(['vehiclePurchase','electricVehicle','electricVehicle2026'])};
 }
 
-/** Already established unions: statutory allocation is distinct from tax-office collection. */
+/** 对已建立工会的主体，法定经费分拨与税务代收分别处理。 */
 export function calculateAgencyUnionFees({scope,records,basis='payment'}){
   requireValue(['payment','service_accrual'].includes(basis),'agency_union_basis_invalid');
   const organizations=records.filter(r=>r.type==='union'&&r.date.slice(0,7)<=scope.period),calculations=[],issues=[],payments=records.filter(r=>r.type==='union_payment'&&r.date.slice(0,7)===scope.period);
@@ -315,7 +315,7 @@ export function calculateAgencyUnionFees({scope,records,basis='payment'}){
     if(!r.components.every(c=>['included','excluded'].includes(c.unionWageTreatment)&& (c.unionWageTreatment==='included'||c.exclusionReason))){issues.push(issue('union_wage_components_missing','按原工资组成核统计工资总额纳入/排除性质；个人税社公代扣不扣出基数，不能使用净薪或客户预制工资总额',r.id));continue;}
     const wage=r.components.filter(c=>c.unionWageTreatment==='included').reduce((n,c)=>n+cents(c.amount),0n);calculations.push({factId:r.id,employeeId:r.employeeId,use:r.use,jobId:r.jobId??null,organizationNumber:organization.organizationNumber,basis,benefitPeriod:basis==='service_accrual'?scope.period:null,paymentPeriod:r.paid===true?(r.paymentDate??r.date).slice(0,7):null,wages:money(wage),due:money(rateAmount(wage,200)),sourceRefs:[...r.sourceRefs,...organization.sourceRefs]});
   }
-  // One aggregate statutory base; deterministic cumulative differences distribute cents.
+  // 使用一个汇总法定基数；按确定性的累计差额分配金额到分。
   calculations.sort((a,b)=>String(a.employeeId).localeCompare(String(b.employeeId))||a.factId.localeCompare(b.factId));
   let running=0n,allocated=0n;for(const c of calculations){running+=cents(c.wages);const target=rateAmount(running,200);c.due=money(target-allocated);allocated=target;}
   for(const p of payments)if(p.organizationNumber!==organization.organizationNumber||!p.paymentReference||!p.bankAccountId||!/^20\d\d-\d\d$/.test(p.assessmentPeriod??'')||cents(p.amount)<0n)issues.push(issue('union_payment_evidence_missing','实拨须工会组织、所属期、银行流水及合法工会收入收据/税务代收凭证；返还不自动冲企业费用',p.id));
@@ -335,7 +335,7 @@ export function calculateAgencyOldPropertyAppreciation({record:r}){
   return {factId:r.id,propertyId:r.propertyId,projectId:r.projectId,income:money(income),landPaid:money(land),confirmedAppraisal:money(appraisal),relatedActuallyPaidTaxes:money(taxes),deduction:money(deduction),increment:money(increment),rateBasisPoints:rate,quickDeductionBasisPoints:quick,due:money(due),rounding:'法定速扣式合并后仅在最终税额舍入到分',sourceRefs:r.sourceRefs,sources:src(['landAppreciation','landAppreciation2026'])};
 }
 
-/** A tax assessment object is established by original scope evidence, never projectId alone. */
+/** 征税对象须由原始适用范围证据确立，不能仅凭 projectId。 */
 export function calculateAgencyLandAppreciationUnits({scope,records}) {
   const globalParts=new Map();
   const transfers=records.filter(r=>r.type==='property_disposal'&&r.date.slice(0,7)<=scope.period),units=records.filter(r=>r.type==='land_appreciation_unit'&&r.date.slice(0,7)<=scope.period),calculations=[],allocations=[],issues=[],interim=[],claimed=new Set();
@@ -388,8 +388,8 @@ export function calculateAgencyCulturalFee({scope,entity,accounting,records}){
     if(r.budgetAttribution!=='central'||r.budgetAttributionBasis!=='official_budget_classification_notice'||!r.budgetNoticeNumber){issues.push(issue('cultural_budget_or_local_relief_missing','法定3%初始计费额已算；预算归属须原认定，娱乐不得仅按企业中央属性猜中央收入；地方减征幅度另核，不假定减半/无减免',r.id));calculations.push({factId:r.id,status:'trial_only',base:money(base),normalFee:money(normal),due:null,sourceRefs:r.sourceRefs});continue;}
     calculations.push({factId:r.id,status:'calculated',base:money(base),gross:money(gross),publicationDeduction:money(deducted),normalFee:money(normal),due:null,budgetAttribution:'central',budgetNoticeNumber:r.budgetNoticeNumber,reason:'原预算归属为中央收入，2025—2027按全国规定减征50%；不将中央股东身份单独充作预算认定',sourceRefs:[...r.sourceRefs,...transactions.flatMap(t=>t.sourceRefs),...publication.flatMap(p=>records.find(e=>e.id===p.expenseFactId)?.sourceRefs??[])]});
   }
-  // Taxpayer-period and budget bucket are the assessment unit, not each Agent activity.
-  // Allocate rounded aggregate cents by deterministic cumulative differences.
+  // 计征单位是纳税人所属期和预算科目，不是每个 Agent 活动；
+  // 舍入后的汇总分金额按确定性的累计差额分配。
   const central=calculations.filter(c=>c.status==='calculated'&&c.budgetAttribution==='central').sort((a,b)=>a.factId.localeCompare(b.factId));
   let aggregateBase=0n,allocatedNormal=0n,allocatedDue=0n;
   for(const c of central){aggregateBase+=cents(c.base);const normal=rateAmount(aggregateBase,300),due=roundRatio(normal,2n);c.normalFee=money(normal-allocatedNormal);c.due=money(due-allocatedDue);c.rounding='纳税人同税期同预算收入先汇总3%计费、再减半，按稳定事实顺序累计差分分配到分';allocatedNormal=normal;allocatedDue=due;}
@@ -397,7 +397,7 @@ export function calculateAgencyCulturalFee({scope,entity,accounting,records}){
   return {calculations,issues,due:issues.length?null:knownCalculatedSubtotal,knownCalculatedSubtotal,allNotApplicable:calculations.length>0&&calculations.every(c=>c.status==='not_applicable'),pendingPeriodEnd:entity.vatPeriod==='quarterly'&&Number(scope.period.slice(5))%3!==0&&activities.some(r=>r.direction==='provided')};
 }
 
-/** accounting is produced by evaluateAgencyAccounting, not customer taxable income. */
+/** accounting 由 evaluateAgencyAccounting 生成，不是客户提供的应税所得。 */
 export function calculateAgencyObligations({ scope, entity, accounting, records, annual = false }) {
   const obligations = [], issues = [], payroll = [], entries = [];
   const current = records.filter(r => r.date?.slice(0, 7) <= scope.period && r.date?.slice(0, 4) === scope.period.slice(0, 4));
@@ -489,7 +489,7 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
         const actual=accounting.vatTransactions.filter(t=>r.saleFactIds.includes(t.factId)),ids=new Set(actual.map(t=>t.factId)),saleRows=r.saleFactIds.map(id=>records.find(s=>s.id===id));
         requireValue(r.saleFactIds.every(x=>ids.has(x))&&saleRows.every(s=>s?.type==='sale'&&s.businessIdentity?.documentNumber&&s.businessIdentity?.issuerKey)&&sum(actual,'net')===cents(r.salesExcludingVat),'agency_extended_original_sales_reconciliation_missing');
         requireValue(saleRows.every(s=>s.date.slice(0,7)===r.date.slice(0,7))&&actual.every(t=>t.date.slice(0,7)===r.date.slice(0,7)),'agency_extended_sales_tax_period_conflict');
-        // The supported branch consumes whole original sales, never caller-created tax allocations.
+        // 已支持分支消费完整原始销售记录，不接收调用者自制税额分配。
         const saleIdentity=s=>stable([s.businessIdentity.issuerKey,s.businessIdentity.documentNumber]),claimed=new Set(saleRows.map(saleIdentity));
         requireValue(claimed.size===saleRows.length,'agency_extended_original_sales_duplicate_identity');
         const competing=records.filter(x=>x!==r&&x.id!==r.id&&x.date.slice(0,7)<=scope.period&&x.type===r.type&&(id==='consumption'?x.taxStage==='domestic_production_sale':x.use==='sale')).some(x=>Array.isArray(x.saleFactIds)&&x.saleFactIds.some(id=>{const sale=records.find(s=>s.id===id);return sale?.businessIdentity&&claimed.has(saleIdentity(sale));}));
@@ -519,7 +519,7 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
     row.sources=calculations.flatMap(c=>c.sources);return row;
   };
   const exciseRows=periodRows.filter(r=>r.type==='excise_product'),excise=exciseRows.length?extended('consumption',exciseRows):null;
-  // An explicit statutory location is still a fact requiring evidence.
+  // 即使明确给出法定地点，它仍是需要证据支持的事实。
   const consumptionExcluded = answer('consumption')?.present === false&&!exciseRows.length;
   const consumptionDue=excise?.status==='calculated'||excise?.status==='not_applicable'?cents(excise.due):consumptionExcluded?0n:null;
   if (vatDue !== null && consumptionDue!==null) {
@@ -741,7 +741,7 @@ export function calculateAgencyObligations({ scope, entity, accounting, records,
   return { version: AGENCY_TAX_RULE_VERSION, scope, status: issues.length ? 'incomplete' : 'draft', obligations, payroll, entries, issues, paymentReconciliation: current.filter(r => r.type === 'tax_payment').map(r => ({ obligationId: r.obligationId, paidOn: r.date, assessmentPeriod: r.assessmentPeriod ?? null, assessmentYear: r.assessmentYear ?? null, amount: r.amount, paymentReference: r.paymentReference, projectId: r.projectId ?? null, localityKey: r.localityKey ?? null, sourceRefs: r.sourceRefs })), sixTaxRelief,taxableProfitWorkpaper: { accountingProfit: accounting.yearProfitBeforeTax, adjustments: taxAdjustments, profitBeforeLoss: money(beforeLoss), losses: lossWorkpaper, derivedTaxableBase: money(incomeBase), coverageVerified: incomeReady }, accountantApproval: 'pending', submittable: false, periodComplete: false };
 }
 
-/** Annual API requires replay of twelve separately covered raw periods. */
+/** 年度 API 按实际经营起月至 12 月的逐月原始期间覆盖重放，历史与期初仍由原生规则核验。 */
 export async function calculateAgencyAnnualAdjustments({ document }) {
   requireValue(document?.scope?.period?.endsWith('-12') && Array.isArray(document.records), 'agency_annual_input_invalid');
   const { replayAgencyFinancials } = await import('./agency-business-rules.mjs');

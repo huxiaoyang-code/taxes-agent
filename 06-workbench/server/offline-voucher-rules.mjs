@@ -1,4 +1,4 @@
-// Source-checked engineering rules, not accountant-approved production policy.
+// 有来源核查的工程规则，不是经会计批准的生产政策。
 import { getAccountingProfile, getAccountingRoles } from './accounting-profiles.mjs';
 import { requireValue } from './offline-material-adapters.mjs';
 
@@ -28,7 +28,7 @@ export const RULE_CATALOG = deepFreeze({
 export function candidateAccounts(profileId) {
   requireValue(profileId === 'small-2011-basic-v1', 'profile_unsupported');
   const profile = getAccountingProfile(profileId), roles = getAccountingRoles(profileId);
-  // These fixed mappings belong only to these rules; no name matching or suffix inference.
+  // 固定映射只属于这些规则，不按名称匹配或后缀推断。
   const accounts = { receivable: '1122', payable: '2202', prepayment: '1123', bank: '1002', vat: '2221', revenue: roles.mainRevenue, admin: roles.adminExpense };
   for (const code of Object.values(accounts)) requireValue(profile.coa.some(a => a.code === code), 'profile_account_missing');
   return { accounts, provenance: { profileId: profile.id, coaVersion: profile.coaVersion, roles: { mainRevenue: roles.mainRevenue, adminExpense: roles.adminExpense }, fixedRuleMappings: { receivable: '1122', payable: '2202', prepayment: '1123', bank: '1002', vat: '2221' }, sources: profile.sources } };

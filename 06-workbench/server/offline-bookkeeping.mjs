@@ -1,4 +1,4 @@
-// Pure draft entries. No DB, network, posting, period completion or ledger assertions.
+// 纯草稿分录，不访问数据库/网络、不过账、不宣告期间完成或账簿核实。
 import { fields, requirePlainJson, requireValue, hash, stable, validateScope } from './offline-material-adapters.mjs';
 import { assessAccountingReadiness, sameRef, sameBank } from './offline-accounting-readiness.mjs';
 import { candidateAccounts, createEntries, RULE_CATALOG, BOOKKEEPING_RULE_VERSION } from './offline-voucher-rules.mjs';
@@ -140,7 +140,7 @@ export function buildOfflineCandidates(input) {
     const conflicts = ready.replayIssues.filter(i => i.status === 'conflict' && (i.affectedDocIds?.includes(docId) || i.affectedInvoiceRefs?.some(ref => sameRef(ref, f.invoiceRef))));
     decisions.push({ subjectKey: `fact:${f.factId}`, businessKey: key, kind: f.kind, status: conflicts.length ? 'conflict' : 'needs_review', requirements: [missing(conflicts.length ? 'planning_conflict' : 'referenced_material_missing_or_rejected', f.invoiceRef ? 'invoiceRef' : 'bankRef', conflicts.length ? '对应原始来源存在同一身份多个版本冲突，请核对有效原始版本及更正依据' : '补充相同范围且通过原文摘要和映射重验的对应原始发票/银行材料；损坏来源不能由业务声明替代')], evidence: { businessFacts: [fact.source], sourceConflicts: conflicts }, authorizesExecution: false });
   }
-  // A collision never creates a second business ID or silently chooses one version.
+  // 冲突不能生成第二个业务 ID，也不能静默选择其中一个版本。
   for (const key of new Set(candidates.map(c => c.businessKey))) {
     if (candidates.filter(c => c.businessKey === key).length < 2) continue;
     for (const d of decisions.filter(d => d.businessKey === key)) { d.status = 'conflict'; d.requirements.push(missing('business_key_conflict', 'contractId', '同一业务出现多个候选，请提供有效合同及逐笔关系')); }

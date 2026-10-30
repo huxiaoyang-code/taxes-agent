@@ -1,6 +1,6 @@
-// Real stdio MCP -> production HTTP server -> Agent tools for the tax API catalog.
-// Synthetic temporary database and ephemeral loopback port only.
-// No tax endpoint, browser, credential, account data or private report copy is used.
+// 税局接口目录的真实链路：stdio MCP → 生产 HTTP 服务 → Agent 工具。
+// 只使用合成临时数据库和回环地址的临时端口。
+// 不使用真实税局端点、浏览器、凭据、账套数据或私有报告副本。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn } from 'node:child_process';

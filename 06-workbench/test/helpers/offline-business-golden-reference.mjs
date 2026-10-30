@@ -1,4 +1,4 @@
-// Independent decimal reference: never imports server, product money, or tax code.
+// 独立十进制参考实现：绝不导入服务端、产品金额或税费代码。
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';

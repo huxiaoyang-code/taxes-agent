@@ -34,8 +34,8 @@ export function childPath(root,name){
   if(typeof name!=='string'||!name||!/^[-a-zA-Z0-9_]{1,80}$/.test(name))fail('harness2_run_id_invalid');
   const path=resolve(root,name),rel=relative(root,path);if(rel.startsWith('..'+sep)||isAbsolute(rel))fail('harness2_path_invalid');return path;
 }
-// No credential/config discovery. A model run needs a separate, measured OS
-// runner; a temporary HOME is not a filesystem or network sandbox.
+// 不发现或读取凭据/配置。模型运行需要独立且经过实测的操作系统运行器；
+// 临时 HOME 并不构成文件系统或网络沙箱。
 export function cleanEnvironment(home){
   const env={};for(const name of ['SystemRoot','WINDIR','COMSPEC','PATH','PATHEXT','LANG'])if(process.env[name])env[name]=process.env[name];
   return {...env,HOME:home,USERPROFILE:home,TEMP:home,TMP:home,NODE_NO_WARNINGS:'1',PI_OFFLINE:'1'};

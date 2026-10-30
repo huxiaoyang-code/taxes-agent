@@ -2,8 +2,8 @@ import {IDENTITY_FIELDS,FILING_FIELDS,PASSIVE_RECIPES} from './tax-collection-sh
 import {FULL_FRAME_URL_SEMANTICS} from './tax-frame-url.mjs';
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v,keys)=>object(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
-// Allow subsets so historical evidence retains its original missing fields. The
-// expanded private business whitelist never fills or upgrades old projections.
+// 允许字段子集，使历史证据保留原始缺失字段；
+// 扩大的私有业务白名单不会为旧投影补值或升级。
 const scalarFields=(v,allowed)=>object(v)&&Object.keys(v).every(k=>allowed.includes(k)&&typeof v[k]==='string'&&v[k].length<=4096);
 const opaque=v=>typeof v==='string'&&v.length>0&&v.length<=256;
 const fail=()=>{throw new Error('tax_collection_evidence_invalid')};
@@ -52,8 +52,8 @@ export function validateEvidence(kind,v){
   }else fail();
   return v;
 }
-// Version 1 only bound Frame.url, so it remains readable historical evidence.
-// Never infer or fill a missing fragment proof from the browser's current URL.
+// 版本 1 仅绑定 Frame.url，因此保留为可读取的历史证据。
+// 绝不根据浏览器当前 URL 推断或补齐缺失的 fragment 证明。
 export function requireActiveSource(source){
   validateEvidence('source',source);
   if(source.version!==2||source.documentUrlSemantics!==FULL_FRAME_URL_SEMANTICS){

@@ -1,4 +1,4 @@
-// Public prior-only facade. Tax execution and the held DB live in a fresh Node worker.
+// 仅处理前期的公开外观层；税算及持有的数据库在全新 Node worker 内。
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
@@ -22,7 +22,7 @@ function checkRequest(request) {
     const descriptors = Object.getOwnPropertyDescriptors(request);
     requireValue(keys.every(k => Object.hasOwn(descriptors[k], 'value') && descriptors[k].enumerable));
     const version = descriptors.version.value, path = descriptors.priorInputPath.value;
-    // Reject illegal nested values before a recursive validator can touch a Proxy.
+    // 在递归校验器触碰 Proxy 之前，先拒绝非法嵌套值。
     requireValue(typeof version === 'string' && version === 'offline-vat-prior-request/1' && typeof path === 'string' && path.length > 0 && path.length <= 32768 && !path.includes('\0'));
     fields(request, ['version', 'priorInputPath']); requirePlainJson(request);
   } catch { throw Object.assign(new Error('prior_request_invalid'), { code: 'prior_request_invalid' }); }
@@ -34,7 +34,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function startWorker() {
-  // Never inherit Node preloads or a user's default accounting data directory.
+  // 绝不继承 Node 预加载项或用户默认会计数据目录。
   const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.NODE_PATH; delete env.WORKBENCH_DATA_DIR;
   const child = spawn(process.execPath, [fileURLToPath(new URL('./offline-vat-history-worker.mjs', import.meta.url))], { env, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   const ready = deferred(), exited = deferred();
@@ -72,14 +72,14 @@ async function stopWorker(state) {
   if (state.stopping) return state.stopping;
   state.stopping = (async () => {
     if (state.didExit) return;
-    try { if (state.child.connected) state.child.send({ version: 'offline-vat-prior-ipc/1', type: 'command', sequence: 0, command: 'close' }, () => {}); } catch { /* Kill below if IPC cannot close. */ }
+    try { if (state.child.connected) state.child.send({ version: 'offline-vat-prior-ipc/1', type: 'command', sequence: 0, command: 'close' }, () => {}); } catch { /* IPC 无法关闭时，在下方终止进程。 */ }
     let timer;
     try { await Promise.race([state.exited.promise, new Promise(ok => { timer = setTimeout(ok, 500); })]); } finally { clearTimeout(timer); }
     if (!state.didExit) {
-      try { state.child.kill('SIGTERM'); } catch { /* Escalate below. */ }
+      try { state.child.kill('SIGTERM'); } catch { /* 在下方升级为强制处理。 */ }
       try { await Promise.race([state.exited.promise, new Promise(ok => { timer = setTimeout(ok, 500); })]); } finally { clearTimeout(timer); }
     }
-    if (!state.didExit) { try { state.child.kill('SIGKILL'); } catch { /* Exit event still owns completion. */ } }
+    if (!state.didExit) { try { state.child.kill('SIGKILL'); } catch { /* 完成仍由实际 exit 事件决定。 */ } }
     await state.exited.promise;
   })();
   return state.stopping;
@@ -100,7 +100,7 @@ function validateReply(reply, binding) {
   return diagnostic(reply.status, reply.code, reply.result ?? {});
 }
 
-/** Relative API priorInputPath is resolved against process.cwd(). */
+/** API 中的相对 priorInputPath 以 process.cwd() 为基准解析。 */
 export async function openOfflineVatPriorContext(request) {
   let state;
   try {
@@ -121,7 +121,7 @@ export async function openOfflineVatPriorContext(request) {
   }
 }
 
-/** Serialized IPC; every call recomputes inside the original fresh worker/session. */
+/** 串行化 IPC；每次调用都在原始全新 worker/会话内重新计算。 */
 export async function assertOfflineVatPriorContextCurrent(receipt) {
   const state = receipts.get(receipt);
   if (!state) return diagnostic('blocked', 'prior_receipt_untrusted');
@@ -140,7 +140,7 @@ export async function assertOfflineVatPriorContextCurrent(receipt) {
   const next = state.queue.then(work, work); state.queue = next.catch(() => {}); return next;
 }
 
-/** Await actual worker exit; close also cancels an in-flight consume. */
+/** 等待 worker 实际退出；close 也会取消正在进行的 consume。 */
 export async function closeOfflineVatPriorContext(receipt) {
   const state = receipts.get(receipt);
   return state ? retire(state, 'prior_receipt_closed') : diagnostic('blocked', 'prior_receipt_untrusted');

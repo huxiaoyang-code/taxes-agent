@@ -8,8 +8,8 @@ const VERSION = '2011-17-original';
 const BS = 'cn-small-enterprise-2011-balance-sheet';
 const PL = 'cn-small-enterprise-2011-income-statement';
 const CF = 'cn-small-enterprise-2011-cash-flow';
-// Synthetic, explicit row coverage and independent hand-calculated expectations.
-// Do not generate expected totals from production formula definitions.
+// 合成数据、显式行覆盖及独立手算预期。
+// 不从生产公式定义生成预期合计。
 function report(count, columns, entries, periodType = 'monthly') {
   return {
     templateVersion: VERSION, periodType, period: periodType === 'annual' ? '2026' : '2026-02',
@@ -20,7 +20,7 @@ function report(count, columns, entries, periodType = 'monthly') {
   };
 }
 function balance() {
-  // Assets 2,050.03 = liabilities 450.02 + equity 1,600.01.
+  // 资产 2,050.03 = 负债 450.02 + 权益 1,600.01。
   return report(53, ['end', 'beginning'], {
     1: ['1000.01', '500.00'], 4: ['200.02', '0.00'], 9: ['400.00', '0.00'],
     10: ['100.00', '0.00'], 11: ['50.00', '0.00'], 12: ['200.00', '0.00'], 13: ['50.00', '0.00'],
