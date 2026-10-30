@@ -451,6 +451,8 @@ export function buildAgencyBookkeeping(document, accounting) {
 
 /** 固定顺序：业务 → 非所得税税费/减免 → 所得税；历史月份重放原始事实。 */
 export function replayAgencyFinancials(document, { annual = false } = {}) {
+  // 重放起月会先读取日期；缺件应返回业务错误，不能落入字符串.slice异常。
+  plain(document.entity, 'agency_entity_missing'); validateDate(document.entity.businessStartDate);
   if(annual){
     const taxStart=document.entity.businessStartDate.slice(0,7)>`${document.scope.period.slice(0,4)}-01`?document.entity.businessStartDate.slice(0,7):`${document.scope.period.slice(0,4)}-01`;
     if(document.entity.accountingReplayFrom&&document.entity.accountingReplayFrom>taxStart){

@@ -4,7 +4,7 @@ import {mkdtempSync,writeFileSync,readFileSync,readdirSync,existsSync} from 'nod
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {evaluateAgencyAccounting} from '../server/agency-business-rules.mjs';
+import {evaluateAgencyAccounting,replayAgencyFinancials} from '../server/agency-business-rules.mjs';
 import {callDirectFinanceTool} from '../server/direct-finance.mjs';
 import {withFinanceCall,readFinanceCall} from '../server/finance-call-chain.mjs';
 import {DIRECT_RECORD,RECORD_EXAMPLES,validateDirectInput} from '../server/direct-finance-contracts.mjs';
@@ -77,6 +77,35 @@ test('所有真实类型可发现，工资/车辆/义务清单有字段指导，
  await assert.rejects(callDirectFinanceTool('finance_record_contract',{recordType:'invented_unknown'}),{code:'finance_record_type_unknown'});
 });
 function makeInput(records=fixture()){const path=join(root,`original-${readdirSync(root).length}.json`);writeFileSync(path,JSON.stringify({synthetic:true,records}));return {scope,originals:[{id:'original',path}],records};}
+test('缺开业日期先返回结构化字段问题，原生月度/年度重放也不抛slice异常',async()=>{
+ const rows=fixture();rows[0].entity={...entity};delete rows[0].entity.businessStartDate;
+ const args=makeInput(rows),auditDir=join(root,'audit-missing-start-date');
+ await assert.rejects(withFinanceCall({tool:'finance_tax_calculate',args,auditDir},()=>callDirectFinanceTool('finance_tax_calculate',args)),error=>error.code==='finance_input_invalid'&&error.details.problems.some(p=>p.inputPointer==='/records/0/entity/businessStartDate'&&p.field==='arguments/records/0/entity/businessStartDate'));
+ assert(!readdirSync(join(auditDir,'artifacts')).some(id=>existsSync(join(auditDir,'artifacts',id,'workpaper.json'))));
+ for(const annual of [false,true])assert.throws(()=>replayAgencyFinancials({...document(rows),entity:rows[0].entity},{annual}),{code:'agency_date_invalid'});
+ for(const [field,value] of [['businessStartDate','2026-02-31'],['accountingReplayFrom','2026-13']])assert.throws(()=>validateDirectInput(DIRECT_RECORD,{...fixture()[0],entity:{...entity,[field]:value}}),error=>error.code==='finance_input_invalid'&&error.details.problems.some(p=>p.inputPointer===`/entity/${field}`));
+ for(const businessStartDate of ['2019-06-15','2025-12-01']){const original={...fixture()[0],entity:{...entity,businessStartDate,accountingReplayFrom:'2026-03'}};validateDirectInput(DIRECT_RECORD,original);assert.deepEqual(evaluateAgencyAccounting({...document(fixture()),entity:original.entity}).issues,[]);}
+ assert.equal(rows[0].entity.businessStartDate,undefined);
+});
+test('真实entity承接字段及tax_location分类合同可发现，三种所在地分类进入原生附加计算',async()=>{
+ const entityGuide=await callDirectFinanceTool('finance_record_contract',{recordType:'entity'}),locationGuide=await callDirectFinanceTool('finance_record_contract',{recordType:'tax_location'});
+ assert(entityGuide.fields['entity.businessStartDate']);assert(entityGuide.fields['entity.accountingReplayFrom']);assert(entityGuide.fields['entity.region']);assert(entityGuide.fields['entity.registrationNumber']);
+ assert(locationGuide.fields.classification.includes('county_town'));assert(locationGuide.fields.localityKey);assert.equal(locationGuide.examples.tax_location.classification,'city');
+ for(const [classification,due,rate] of [['city','35.70',700],['county_town','25.50',500],['other','5.10',100]]){
+  const rows=fixture();rows[0].entity={...entity,vatStatus:'small'};
+  const extra=(id,type,fields)=>({...structuredClone(RECORD_EXAMPLES[type]??{}),id,type,date:'2026-03-31',enterpriseKey:scope.enterpriseKey,originalRefs:[{originalId:'original',locator:`合成原件记录 ${id}`,extractionReason:'本回归的明确合成事实'}],...fields});
+  rows.push(extra('COVER','period_coverage',{period:'2026-03',complete:true,accountsCovered:true,unbilledSalesCovered:true,bankCovered:true}),extra('ACTIVITIES','obligation_inventory',{activities:{consumption:{present:false,reason:'合成商贸事实明确无消费税业务'}}}),extra('LOCATION','tax_location',{classification}));
+  const args=makeInput(rows),auditDir=join(root,`audit-location-${classification}`),result=await withFinanceCall({tool:'finance_tax_calculate',args,auditDir},()=>callDirectFinanceTool('finance_tax_calculate',{...args,obligationIds:['vat','urban_maintenance']}));
+  const native=JSON.parse(readFileSync(join(auditDir,'artifacts',result.evidence.callRef,'workpaper.json'),'utf8')),urban=native.obligations.find(o=>o.obligationId==='urban_maintenance');
+  assert.equal(native.obligations.find(o=>o.obligationId==='vat').due,'1020.00');assert.equal(urban.status,'calculated');assert.equal(urban.due,due);assert.equal(urban.calculations[0].rateBasisPoints,rate);
+ }
+});
+test('同一原单据多明细不能仅改id绕过判重，用原始行身份区分event',()=>{
+ const rows=fixture(),second=structuredClone(rows.find(r=>r.id==='P01'));second.id='P01-LINE-2';second.quantity='5';second.net='110.00';second.invoiceTax='14.30';second.gross='124.30';rows.push(second);
+ assert(evaluateAgencyAccounting(document(rows)).issues.some(i=>i.code==='agency_original_business_duplicate'));
+ second.businessIdentity.event='purchase:原始单据行2';assert.deepEqual(evaluateAgencyAccounting(document(rows)).issues,[]);
+ assert.equal(second.businessIdentity.documentNumber,'P01');
+});
 test('直接底稿实际重放；自动保存人读账本/原件/规则，模型只得受限投影',async()=>{
  const args=makeInput(),auditDir=join(root,'audit');let callId;
  const result=await withFinanceCall({tool:'finance_workpaper',args,auditDir},()=>callDirectFinanceTool('finance_workpaper',args));
