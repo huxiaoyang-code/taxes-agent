@@ -8,7 +8,7 @@ import {buildConfig} from '../../05-reconstruction/codex/hosts/claude-code/adapt
 import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
 import {TOOLS} from '../../05-reconstruction/codex/mcp/finance-mcp/tools.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
-import {parseArgs as parsePiArgs,buildLaunchSpec,MAIN_TOOLS} from '../../05-reconstruction/codex/hosts/pi/launcher.mjs';
+import {parseArgs as parsePiArgs,buildLaunchSpec,MAIN_TOOLS,DEFAULT_TOOL_MODIFIERS} from '../../05-reconstruction/codex/hosts/pi/launcher.mjs';
 const root=mkdtempSync(join(tmpdir(),'finance-hosts-')),options={nodePath:process.execPath,apiBase:'http://127.0.0.1:8787',databasePath:join(root,'synthetic.db'),outputDir:join(root,'claude')};
 const c=createContext(options);assert.equal(c.repoRoot,repoRoot);assert.equal(c.mcp.env.FINANCE_MCP_PROFILE,'direct');
 assert.deepEqual(toolsForProfile(undefined),toolsForProfile('direct'));assert.deepEqual(toolsForProfile('legacy'),TOOLS);assert.throws(()=>toolsForProfile(''),/finance_mcp_profile_invalid/);assert.throws(()=>toolsForProfile('all'),/finance_mcp_profile_invalid/);
@@ -39,6 +39,8 @@ for(const host of ['pi','dsh','zcode']){
     assert.throws(()=>buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',join(root,'not-installed'),'--check'])),/ENOENT/);
     const packageRoot=join(root,'synthetic-pi-package');mkdirSync(join(packageRoot,'dist/bundle'),{recursive:true});writeFileSync(join(packageRoot,'package.json'),JSON.stringify({name:'@earendil-works/pi-coding-agent',version:'1.1.0'}));writeFileSync(join(packageRoot,'dist/bundle/cli.js'),'throw Error("must not run synthetic CLI");');
     const spec=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot]));assert.equal(spec.env.FINANCE_MCP_PROFILE,'direct');assert.equal(spec.env.FINANCE_DATABASE_PATH,context.databasePath);assert.equal(spec.cwd,context.outputDir);assert.ok(spec.args.includes('builtin:mcp'));assert.ok(spec.args.includes('builtin:tool-search'));assert.ok(spec.args.includes(native.extensionPath));assert.equal(spec.args[spec.args.indexOf('--model')+1],'deepseek-flash');assert.equal(spec.args[spec.args.indexOf('--skill')+1],context.skillsDir);assert.ok(!spec.args.includes('--print'));
+    assert.equal(spec.args[spec.args.indexOf('--tools')+1],DEFAULT_TOOL_MODIFIERS.join(','));assert.ok(DEFAULT_TOOL_MODIFIERS.every(value=>value.startsWith('+')||value.startsWith('-')));
+    const task=join(root,'synthetic-task.txt');writeFileSync(task,'Synthetic no-model task');const subset=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot,'--task-file',task,'--tools','read,mcp__finance__finance_rules']));assert.equal(subset.args[subset.args.indexOf('--tools')+1],'read,mcp__finance__finance_rules');
     const check=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot,'--check']));assert.ok(check.args[0].endsWith('direct-pi-probe.mjs'));assert.equal(check.modelInvoked,false);assert.equal(existsSync(check.env.PI_CODING_AGENT_DIR),false);
   }
 }

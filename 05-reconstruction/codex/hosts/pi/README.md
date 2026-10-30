@@ -3,7 +3,9 @@
 本页当前入口采用中国化业务 Skill＋原生 MCP，默认 `FINANCE_MCP_PROFILE=direct`。Agent自主选择工具，后台完整自动记录；不要求来源/事实登记、Store或任务DAG。生成器可用 `--plugin-root <中国化fork的finance绝对目录>` 加载官方格式插件，用 `--audit-dir` 指定本机记录目录。
 
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
-当前使用 finance-direct.ts；start-pi.mjs --pi-root <官方Pi1.1.0包目录> --check 只检查加载和MCP，不调用模型。初始仅规则查询、Skill读取，其他工具通过原生tool_search按需加载；没有默认解析子Agent或Harness流程。
+当前使用 finance-direct.ts；start-pi.mjs --pi-root <官方Pi1.1.0包目录> --check 实测 CLI 参数解析、SDK 会话注册和原生 tool_search 激活，不调用模型。初始财税工具仅规则查询、Skill读取，其他业务工具通过原生tool_search按需加载；本地文件及代码工具范围保持既有配置。
+
+默认启动器使用 Pi 的 `+工具/-工具` 初始选择语法，保留延迟 MCP 工具注册，不预先暴露全部业务合同。显式 `--tools '<工具名,工具名>'`（须同时提供 `--task-file`）仍是该次任务的精确注册子集：要使用的业务工具须列入其中；工具搜索不能越过该子集加载工具。
 
 <details>
 <summary>改造前接入说明与历史实测（非当前默认流程）</summary>

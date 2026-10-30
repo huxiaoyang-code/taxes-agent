@@ -6,6 +6,8 @@ import {randomUUID} from 'node:crypto';
 
 const HELP='node start-pi.mjs --pi-root <absolute @earendil-works/pi-coding-agent package> [--check | --task-file <absolute task.txt> [--json] [--tools <explicit subset>]]\n默认启动官方 deepseek/deepseek-flash 交互主 Agent；--check 不调用模型。';
 export const MAIN_TOOLS=['read','write','edit',process.platform==='win32'?'powershell':'bash','tool_search','mcp__finance__finance_rules','mcp__finance__skills_read'];
+// Pi1.1.0将普通--tools列表同时用作注册白名单；modifier列表仅调整初始激活，保留deferred MCP注册。
+export const DEFAULT_TOOL_MODIFIERS=['-read','-bash','-edit','-write','-powershell',...MAIN_TOOLS.map(name=>'+'+name)];
 export function parseArgs(args){
   const options={};
   for(let i=0;i<args.length;i++){
@@ -30,7 +32,7 @@ export function buildLaunchSpec(config,workspace,options){
   const agentDir=join(workspace,options['--check']?'.pi-check-'+randomUUID():'.pi-agent');
   const env={...process.env,...config.mcpEnv,PI_CODING_AGENT_DIR:agentDir,PI_OFFLINE:'1'};
   if(options['--check'])return {command:config.nodePath,args:[join(config.repoRoot,'06-workbench/scripts/direct-pi-probe.mjs'),piRoot,'--agent-dir',agentDir],cwd:workspace,env,modelInvoked:false};
-  const args=[cli,'--offline','--no-session','--no-context-files','--no-extensions','--no-skills','--no-prompt-templates','-e','builtin:mcp','-e','builtin:tool-search','-e',config.extensionPath,'--skill',config.skillsDir,'--provider',config.provider,'--model',config.model,'--thinking','low','--tools',options['--tools']??MAIN_TOOLS.join(','),'--append-system-prompt',`你是本机财税主 Agent。按业务目标自主选择相关Skill和工具；用tool_search按需加载工具合同。核实企业、账套、期间与原件，直接调用财税业务工具，不维护Harness登记或DAG。工具后台自动记录调用。交付按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件，日常前三项，异常再深查。未知不填零，不得编造会计批准、申报或付款。模型固定官方deepseek/deepseek-flash，不跨服务回退。`];
+  const args=[cli,'--offline','--no-session','--no-context-files','--no-extensions','--no-skills','--no-prompt-templates','-e','builtin:mcp','-e','builtin:tool-search','-e',config.extensionPath,'--skill',config.skillsDir,'--provider',config.provider,'--model',config.model,'--thinking','low','--tools',options['--tools']??DEFAULT_TOOL_MODIFIERS.join(','),'--append-system-prompt',`你是本机财税主 Agent。按业务目标自主选择相关Skill和工具；用tool_search按需加载工具合同。核实企业、账套、期间与原件，直接调用财税业务工具，不维护Harness登记或DAG。工具后台自动记录调用。交付按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件，日常前三项，异常再深查。未知不填零，不得编造会计批准、申报或付款。模型固定官方deepseek/deepseek-flash，不跨服务回退。`];
   if(options['--task-file']){if(!statSync(options['--task-file']).isFile())throw Error('pi_task_file_required');if(options['--json'])args.push('--mode','json');args.push('--print',readFileSync(options['--task-file'],'utf8'));}
   return {command:config.nodePath,args,cwd:workspace,env,modelInvoked:'only after an explicit task or interactive input'};
 }
