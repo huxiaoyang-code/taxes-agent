@@ -97,14 +97,14 @@ async function callTool(name, args = {}) {
   const problems = validateArgs(spec.inputSchema, args);
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length) {
-    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems });
+    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems: name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems });
   }
   if (spec.status === "unavailable") {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
   if (DIRECT_TOOL_NAMES.has(name)) {
     try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
-    catch(error) { throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',error?.code==='finance_input_invalid'?error.details:undefined); }
+    catch(error) { throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----

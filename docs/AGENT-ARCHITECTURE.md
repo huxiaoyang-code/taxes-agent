@@ -26,7 +26,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 | 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`tool-profile.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
 | 原生业务 | `06-workbench/server/direct-finance.mjs`、`agency-business.mjs`、`accounting.mjs` | 已支持的底稿/税费/凭证/账簿/报表计算与受控写入 |
 
-默认 direct 仅暴露实际可用的直接业务工具与普通会计模型通道，不暴露 Harness 生命周期、原始税务占位或本机原值读取通道。`finance_rules` 提供规则范围及官方链接，`finance_record_contract` 提供具体业务类型的字段与完整示例，`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。
+默认 direct 仅暴露实际可用的直接业务工具与普通会计模型通道，不暴露 Harness 生命周期、原始税务占位或本机原值读取通道。`finance_rules` 提供规则范围及官方链接，`finance_record_contract` 按类型披露字段、已有示例及完整度，区分仅通用引用、已核字段和只能由原生生成的记录，不能据此假定所有类型都有完整示例。`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。`finance_tax_summary_calculate` 是独立条件试算：汇总输入逐值绑定原件JSON位置，完整结果另存summary产物；不放宽原完整底稿路径，也不把试算当作已核完整账、资格或实缴。模型仍自主选择工具，无新增登记流程。
 
 客户原件与 Agent 整理的业务记录必须区分。目录和字段示例不是客户事实；原件未提供的日期、资格、用途、收付关联不得猜填。工具返回缺件、条件受限或不支持时，保留实际状态，独立可核分支继续。
 

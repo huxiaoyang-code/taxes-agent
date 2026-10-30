@@ -9,6 +9,8 @@ import { validateDirectInput, DIRECT_RECORD, directRecordContract } from './dire
 import { currentFinanceCall, financeAuditDirectory, annotateFinanceCall } from './finance-call-chain.mjs';
 import { PROJECTION_NUMBER_LIMIT } from './finance-output-policy.mjs';
 import { resolveDirectFinanceTarget } from './direct-finance-target.mjs';
+import { callFinanceTaxSummaryCalculate } from './finance-summary.mjs';
+import { financeSummaryContract } from './finance-summary-contracts.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fail=(code,details)=>{throw Object.assign(new Error(code),{code,details});};
 const json=value=>JSON.stringify(value,null,2)+'\n';
@@ -74,7 +76,8 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args){
- if(name==='finance_record_contract')return directRecordContract(args.recordType);
+ if(name==='finance_tax_summary_calculate')return callFinanceTaxSummaryCalculate(args);
+ if(name==='finance_record_contract')return args.recordType==='tax_summary'?financeSummaryContract():directRecordContract(args.recordType);
  if(name==='finance_rules'){const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});return result;}
  if(name==='finance_workpaper'||name==='finance_tax_calculate'){
   const artifact=newArtifact(),session=loadInput(args,artifact),dbPath=args.dbPath??(args.target?process.env.FINANCE_DATABASE_PATH:undefined),workpaper=buildAgencyWorkpaper(session,{...(dbPath?{dbPath}:{})});

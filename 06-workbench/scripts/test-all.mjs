@@ -158,6 +158,8 @@ const steps = [
   { name: 'sol-pi-integration', file: join(WORKBENCH, 'test', 'sol-pi-integration.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-call-chain', file: join(WORKBENCH, 'test', 'finance-call-chain.test.mjs'), cwd: WORKBENCH },
   { name: 'direct-finance', file: join(WORKBENCH, 'test', 'direct-finance.test.mjs'), cwd: WORKBENCH },
+  { name: 'finance-summary', file: join(WORKBENCH, 'test', 'finance-summary.test.mjs'), cwd: WORKBENCH },
+  { name: 'finance-summary-integration', file: join(WORKBENCH, 'test', 'finance-summary-integration.test.mjs'), cwd: WORKBENCH },
   { name: 'pi-direct-disclosure', file: join(WORKBENCH, 'test', 'pi-direct-disclosure.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];

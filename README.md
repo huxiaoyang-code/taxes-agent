@@ -13,7 +13,7 @@
 
 ## 工具与结果
 
-`finance_rules` 查询实际规则与官方出处，`finance_record_contract` 按需披露业务字段，`finance_workpaper` / `finance_annual_workpaper` 生成本机完整底稿，`finance_tax_calculate` 调用既有税费计算；账套、凭证、查账和报表继续使用既有会计工具。未接入的税局、开票和正式申报不能因 Skill 或目录存在而称已完成。
+`finance_rules` 查询实际规则与官方出处，`finance_record_contract` 按需披露业务字段，`finance_workpaper` / `finance_annual_workpaper` 生成本机完整底稿，`finance_tax_calculate` 调用既有税费计算。独立的 `finance_tax_summary_calculate` 对有精确原件绑定的税务汇总作条件试算，合同用 `finance_record_contract(recordType=tax_summary)` 按需读取；其结果不证明完整账务、资格真实性或申报完成。账套、凭证、查账和报表继续使用既有会计工具。未接入的税局、开票和正式申报不能因 Skill 或目录存在而称已完成。
 
 每次 MCP 工具调用（包括参数拒绝）自动保存开始/结束、输入、结果或错误、本机范围及来源引用。结果通过 `_meta.financeCall.callId` 关联记录；正常业务无需模型维护 Store、requestFactId、版本摘要或计划。完整结果与人工核对页留在本机，模型输出仍遵守资料披露规则。
 
