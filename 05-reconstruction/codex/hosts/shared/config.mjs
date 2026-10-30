@@ -6,7 +6,7 @@ export const repoRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../../../
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 function absolute(value,label){if(typeof value!=='string'||!isAbsolute(value)||/[\0\r\n]/.test(value))fail('host_'+label+'_absolute_required');return resolve(value);}
 function existing(value,label,kind){const path=absolute(value,label);if(!existsSync(path)||!(kind==='file'?statSync(path).isFile():statSync(path).isDirectory()))fail('host_'+label+'_missing');return realpathSync(path);}
-export function createContext({nodePath,apiBase,databasePath,outputDir}){
+export function createContext({nodePath,apiBase,databasePath,outputDir,pluginRoot,auditDir}){
   nodePath=existing(nodePath,'node','file');
   const db=absolute(databasePath,'database'),out=absolute(outputDir,'output');
   if(existsSync(out))fail('host_output_must_be_new');
@@ -14,9 +14,12 @@ export function createContext({nodePath,apiBase,databasePath,outputDir}){
   if(typeof apiBase!=='string')fail('host_api_base_required');
   let url;try{url=new URL(apiBase);}catch{fail('host_api_base_invalid');}
   if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||!url.port)fail('host_api_base_loopback_required');
-  const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),skillsDir=join(repoRoot,'05-reconstruction/codex/skills');
-  const mcpEnv={FINANCE_MCP_PROFILE:'harness',FINANCE_API_BASE:url.origin,FINANCE_DATABASE_PATH:db,FINANCE_SKILLS_DIR:skillsDir};
-  return {repoRoot,nodePath,serverPath,skillsDir,apiBase:url.origin,databasePath:db,outputDir:out,mcpEnv,mcp:{command:nodePath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};
+  const plugin=pluginRoot===undefined?null:existing(pluginRoot,'plugin_root','directory');
+  if(plugin)existing(join(plugin,'.claude-plugin/plugin.json'),'plugin_manifest','file');
+  const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),skillsDir=plugin?existing(join(plugin,'skills'),'plugin_skills','directory'):join(repoRoot,'05-reconstruction/codex/skills');
+  const traceRoot=auditDir===undefined?join(out,'finance-call-records'):absolute(auditDir,'audit_directory');
+  const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:url.origin,FINANCE_DATABASE_PATH:db,FINANCE_SKILLS_DIR:skillsDir,FINANCE_AUDIT_DIR:traceRoot};
+  return {repoRoot,nodePath,serverPath,skillsDir,pluginRoot:plugin,auditDir:traceRoot,apiBase:url.origin,databasePath:db,outputDir:out,mcpEnv,mcp:{command:nodePath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};
 }
 export function writeBundle(context,bundle){
   if(!Array.isArray(bundle?.files)||!bundle.files.length)fail('host_files_required');

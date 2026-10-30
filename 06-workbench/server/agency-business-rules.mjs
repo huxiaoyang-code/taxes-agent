@@ -5,7 +5,7 @@ import { hash, stable, requireValue, requirePlainJson } from './offline-material
 import { cents, money, quantity, roundRatio, calculateAgencyOutputVat, splitAgencyOriginalPrice, calculateAgencyObligations, calculateAgencyContributionNotices, calculateAgencyOfficialPayroll, calculateAgencyRentalPrice,calculateAgencyVehicleAcquisition,calculateAgencyUnionFees,calculateAgencyOldPropertyAppreciation,determineAgencySixTaxRelief } from './agency-tax-rules.mjs';
 import { calculateAgencyExtendedTax } from './agency-extended-tax-rules.mjs';
 
-export const AGENCY_ACCOUNTING_RULE_VERSION = 'agency-business-accounting/1';
+export const AGENCY_ACCOUNTING_RULE_VERSION = 'agency-business-accounting/2';
 export const AGENCY_INDUSTRIES = Object.freeze(['service', 'trade', 'ecommerce', 'catering', 'manufacturing', 'construction', 'transport', 'rental_property']);
 export { AGENCY_ACCOUNTING_SOURCES } from './agency-rule-catalog.mjs';
 import { AGENCY_ACCOUNTING_SOURCES } from './agency-rule-catalog.mjs';
@@ -28,7 +28,7 @@ export function evaluateAgencyAccounting(document) {
   requireValue(Array.isArray(records) && records.length <= 20000, 'agency_records_invalid');
   const profile = getAccountingProfile(entity.profileId), roles = getAccountingRoles(entity.profileId);
   requireValue(profile.creationAllowed, 'agency_profile_unsupported');
-  const issues = [], vouchers = [], vatTransactions = [],assetCardDrafts=[],pendingAssetDisposals=[],sales = new Map(), lots = new Map(), jobs = new Map(), contracts = new Map(), receivables = new Map(), payables = new Map(), cashIdentities = new Set();
+  const issues = [], vouchers = [], vatTransactions = [], returnCostTrace = [],assetCardDrafts=[],pendingAssetDisposals=[],sales = new Map(), lots = new Map(), jobs = new Map(), contracts = new Map(), receivables = new Map(), payables = new Map(), cashIdentities = new Set();
   const officialContributions=calculateAgencyContributionNotices({scope,entity,records});
   issues.push(...officialContributions.issues);
   const officialPayroll=calculateAgencyOfficialPayroll({scope,entity,records,official:officialContributions});issues.push(...officialPayroll.issues);
@@ -52,11 +52,11 @@ export function evaluateAgencyAccounting(document) {
     for (const entry of entries) { const d = cents(entry.debit), c = cents(entry.credit); put(entry.code, d, c); if (period.slice(0, 4) === scope.period.slice(0, 4)) yearFlows.set(entry.code, (yearFlows.get(entry.code) ?? 0n) + d - c); }
   };
   const stock = (itemId, inventoryType) => { requireValue(typeof itemId === 'string' && itemId.length > 0 && ['raw', 'inventory'].includes(inventoryType), 'agency_item_invalid'); if (!lots.has(itemId)) lots.set(itemId, { itemId, inventoryType, layers: [] }); const s = lots.get(itemId); requireValue(s.inventoryType === inventoryType, 'agency_item_class_conflict'); return s; };
-  const receive = (r, count, cost, inventoryType, refs) => { positive(count, 'agency_quantity_zero'); requireValue(cost >= 0n, 'agency_stock_cost_negative'); stock(r.itemId, inventoryType).layers.push({ quantity: count, cost, sourceRefs: clone(refs) }); };
+  const receive = (r, count, cost, inventoryType, refs) => { positive(count, 'agency_quantity_zero'); requireValue(cost >= 0n, 'agency_stock_cost_negative'); stock(r.itemId, inventoryType).layers.push({ quantity: count, cost, sourceFactId:r.originFactId??r.id??null, sourceRefs: clone(refs) }); };
   const consume = (r, inventoryType) => {
     const s = stock(r.itemId, inventoryType), count = positive(quantity(r.quantity), 'agency_quantity_zero'); requireValue(s.layers.reduce((n, l) => n + l.quantity, 0n) >= count, 'agency_inventory_shortage');
     let left = count, cost = 0n; const allocations = [];
-    for (const layer of s.layers) { if (left === 0n) break; const taken = left < layer.quantity ? left : layer.quantity, part = taken === layer.quantity ? layer.cost : roundRatio(layer.cost * taken, layer.quantity); allocations.push({ quantity: taken.toString(), cost: money(part), sourceRefs: clone(layer.sourceRefs) }); layer.quantity -= taken; layer.cost -= part; left -= taken; cost += part; }
+    for (const layer of s.layers) { if (left === 0n) break; const taken = left < layer.quantity ? left : layer.quantity, part = taken === layer.quantity ? layer.cost : roundRatio(layer.cost * taken, layer.quantity); allocations.push({ quantity: taken.toString(), cost: money(part), sourceFactId:layer.sourceFactId, sourceRefs: clone(layer.sourceRefs) }); layer.quantity -= taken; layer.cost -= part; left -= taken; cost += part; }
     s.layers = s.layers.filter(l => l.quantity > 0n); return { cost, quantity: count, allocations };
   };
   const job = (id, kind = 'production') => { requireValue(typeof id === 'string' && id.length > 0, 'agency_job_missing'); if (!jobs.has(id)) jobs.set(id, { id, kind, cost: 0n, futureCost: 0n, elements: { material: 0n, labor: 0n, overhead: 0n }, sourceRefs: [] }); requireValue(jobs.get(id).kind === kind, 'agency_job_kind_conflict'); return jobs.get(id); };
@@ -160,11 +160,44 @@ export function evaluateAgencyAccounting(document) {
         case 'sale_return': {
           const original = sales.get(r.originalSaleId); requireValue(original && r.goodsReceived === true && r.originalInvoiceVerified === true, 'agency_return_original_missing');
           requireValue(Array.isArray(r.lines) && r.lines.length, 'agency_return_lines_missing'); let net = 0n, tax = 0n, cost = 0n;
-          for (const l of r.lines) { const originalLine = original.items[l.originalLine]; requireValue(originalLine, 'agency_return_line_invalid'); const q = positive(quantity(l.quantity), 'agency_quantity_zero'), oldReturned = BigInt(originalLine.returnedQuantity), originalQ = BigInt(originalLine.quantityUnits); requireValue(oldReturned + q <= originalQ, 'agency_return_quantity_exceeded'); const part = field => roundRatio(cents(originalLine[field]) * (oldReturned + q), originalQ) - roundRatio(cents(originalLine[field]) * oldReturned, originalQ); const n = part('net'), t = part('tax'), c = part('cost'); net += n; tax += t; cost += c; originalLine.returnedQuantity = (oldReturned + q).toString(); if (originalLine.itemId) receive({ itemId: originalLine.itemId }, q, c, 'inventory', [...r.sourceRefs, ...original.sourceRefs]); vatTransactions.push({ factId: r.id, date: r.date, net: money(-n), tax: money(-t), invoiceKind: r.invoiceKind, category: originalLine.vatCategory, sourceRefs: r.sourceRefs }); }
           requireValue(['refunded', 'receivable_reduction'].includes(r.settlement), 'agency_return_settlement_missing');
+          // 整笔先在副本上验证，坏的后续行、结算方式或超应收不能污染库存/VAT/已退数量。
+          const stagedItems=clone(original.items),pendingReceipts=[],pendingVat=[],pendingTrace=[];
+          for (const l of r.lines) {
+            const originalLine = stagedItems[l.originalLine]; requireValue(originalLine, 'agency_return_line_invalid');
+            const q = positive(quantity(l.quantity), 'agency_quantity_zero'), oldReturned = BigInt(originalLine.returnedQuantity), originalQ = BigInt(originalLine.quantityUnits);
+            requireValue(oldReturned + q <= originalQ, 'agency_return_quantity_exceeded');
+            const part = field => roundRatio(cents(originalLine[field]) * (oldReturned + q), originalQ) - roundRatio(cents(originalLine[field]) * oldReturned, originalQ);
+            const n=part('net'),t=part('tax'),mode=l.originalPurchaseId===undefined?'sale_line_proportion':'identified_purchase_lot';
+            requireValue(!originalLine.returnCostMode||originalLine.returnCostMode===mode,'agency_return_cost_basis_conflict');
+            let c=0n;const restored=[];
+            if(mode==='identified_purchase_lot'){
+              requireValue(typeof l.originalPurchaseId==='string'&&l.originalPurchaseId.length>0,'agency_return_purchase_reference_invalid');
+              const selected=originalLine.allocations.filter(a=>a.sourceFactId===l.originalPurchaseId);
+              requireValue(selected.length>0,'agency_return_purchase_not_in_original_sale');
+              requireValue(selected.reduce((s,a)=>s+BigInt(a.quantity)-BigInt(a.returnedQuantity??'0'),0n)>=q,'agency_return_purchase_quantity_exceeded');
+              let left=q;
+              for(const a of selected){if(!left)break;const originalQuantity=BigInt(a.quantity),already=BigInt(a.returnedQuantity??'0'),available=originalQuantity-already,taken=left<available?left:available;
+                if(!taken)continue;
+                const restoredCost=roundRatio(cents(a.cost)*(already+taken),originalQuantity)-roundRatio(cents(a.cost)*already,originalQuantity);
+                c+=restoredCost;a.returnedQuantity=(already+taken).toString();left-=taken;
+                restored.push({originalPurchaseId:l.originalPurchaseId,quantityUnits:taken.toString(),cost:money(restoredCost),sourceRefs:clone(a.sourceRefs)});
+              }
+            }else c=part('cost');
+            originalLine.returnCostMode=mode;net+=n;tax+=t;cost+=c;originalLine.returnedQuantity=(oldReturned+q).toString();
+            if(originalLine.itemId)pendingReceipts.push({record:{id:r.id,itemId:originalLine.itemId,...(mode==='identified_purchase_lot'?{originFactId:l.originalPurchaseId}:{})},quantity:q,cost:c});
+            pendingTrace.push({factId:r.id,originalSaleId:r.originalSaleId,originalLine:l.originalLine,mode,quantityUnits:q.toString(),cost:money(c),allocations:restored,sourceRefs:clone(r.sourceRefs)});
+            pendingVat.push({factId:r.id,date:r.date,net:money(-n),tax:money(-t),invoiceKind:r.invoiceKind,category:originalLine.vatCategory,sourceRefs:r.sourceRefs});
+          }
+          const open=receivables.get(r.originalSaleId)??original.net+original.tax-original.received;
+          if(r.settlement==='receivable_reduction')requireValue(open>=net+tax,'agency_return_exceeds_open_receivable');
           journal(r, 'return', [line('mainRevenue', net, 0n), ...(tax ? [line('tax', tax, 0n, '红字发票对应VAT')] : []), line(r.settlement === 'refunded' ? 'bank' : 'receivable', 0n, net + tax)], '销售退回关联原交付/原票，收入及税额冲回保留历史');
-          if (r.settlement === 'receivable_reduction') { const open = receivables.get(r.originalSaleId) ?? original.net + original.tax - original.received; requireValue(open >= net + tax, 'agency_return_exceeds_open_receivable'); receivables.set(r.originalSaleId, open - net - tax); }
-          if (cost) journal(r, 'return_cost', [line('inventory', cost, 0n), line('mainCost', 0n, cost)], '退货验收入库按原出库成本恢复，不按当前采购价'); break;
+          if (r.settlement === 'receivable_reduction')receivables.set(r.originalSaleId,open-net-tax);
+          if (cost) journal(r, 'return_cost', [line('inventory', cost, 0n), line('mainCost', 0n, cost)], '退货验收入库按原出库成本恢复，不按当前采购价');
+          original.items=stagedItems;
+          for(const row of pendingReceipts)receive(row.record,row.quantity,row.cost,'inventory',[...r.sourceRefs,...original.sourceRefs]);
+          returnCostTrace.push(...pendingTrace);vatTransactions.push(...pendingVat);
+          break;
         }
         case 'platform_settlement': {
           requireValue(Array.isArray(r.saleIds) && r.saleIds.length && new Set(r.saleIds).size === r.saleIds.length && r.saleIds.every(id => sales.has(id) && sales.get(id).settlement === 'platform'), 'agency_platform_orders_missing');
@@ -359,12 +392,12 @@ export function evaluateAgencyAccounting(document) {
   const taxMonths = Array.from({length:Number(scope.period.slice(5))},(_,i)=>`${scope.period.slice(0,4)}-${String(i+1).padStart(2,'0')}`).filter(m=>m>=taxYearFrom);
   const yearCoverageVerified = replayFrom <= taxYearFrom && taxMonths.every(m=>coverage.filter(r=>r.period===m&&r.complete===true&&r.accountsCovered===true&&r.unbilledSalesCovered===true&&r.bankCovered===true).length===1);
   const openingVat = records.find(r => r.type === 'opening_vat');
-  return { version: AGENCY_ACCOUNTING_RULE_VERSION, scope, profileId: profile.id, status: issues.length ? 'incomplete' : 'draft', vouchers: vouchers.filter(v => v.period === scope.period), historicalVouchers: vouchers.filter(v => v.period < scope.period), vatTransactions,assetCardDrafts,pendingAssetDisposals,issues,
+  return { version: AGENCY_ACCOUNTING_RULE_VERSION, scope, profileId: profile.id, status: issues.length ? 'incomplete' : 'draft', vouchers: vouchers.filter(v => v.period === scope.period), historicalVouchers: vouchers.filter(v => v.period < scope.period), vatTransactions,returnCostTrace,assetCardDrafts,pendingAssetDisposals,issues,
     inventory: [...lots.values()].map(s => ({ itemId: s.itemId, inventoryType: s.inventoryType, quantityUnits: s.layers.reduce((n, l) => n + l.quantity, 0n).toString(), cost: money(s.layers.reduce((n, l) => n + l.cost, 0n)), layers: s.layers.map(l => ({ quantityUnits: l.quantity.toString(), cost: money(l.cost), sourceRefs: l.sourceRefs })) })),
     contractState: [...contracts].map(([id, c]) => ({ contractId: id, revenue: money(c.revenue), billed: money(c.billed), sourceRefs: c.sourceRefs })),
     workInProgress: [...jobs.values()].map(j => ({ jobId: j.id, kind: j.kind, cost: money(j.cost), sourceRefs: j.sourceRefs })),
     replayFrom, yearRevenue: money(yearRevenue), yearProfitBeforeTax: money(profitBeforeTax), yearCoverageVerified, accountingCoverageVerified, openingVatVerified: openingVat?.declarationVerified === true, openingVatCredit: openingVat?.amount ?? null,
-    reportDraftInputs: { accounts: profileAccounts, amounts, incomeAmounts: flows },
+    reportDraftInputs: { accounts: profileAccounts, accountRoles:clone(accountCode), amounts, incomeAmounts: flows },
     reports: { balanceSheet: evaluateAccountingStatement(profile.id, { kind: 'balance-sheet', accounts: profileAccounts, amounts }), incomeStatement: evaluateAccountingStatement(profile.id, { kind: 'income-statement', accounts: profileAccounts, amounts: flows }) },
     sources: AGENCY_ACCOUNTING_SOURCES, submittable: false, periodComplete: false, authorizesExecution: false };
 }
@@ -418,6 +451,8 @@ export function buildAgencyBookkeeping(document, accounting) {
 
 /** 固定顺序：业务 → 非所得税税费/减免 → 所得税；历史月份重放原始事实。 */
 export function replayAgencyFinancials(document, { annual = false } = {}) {
+  // 重放起月会先读取日期；缺件应返回业务错误，不能落入字符串.slice异常。
+  plain(document.entity, 'agency_entity_missing'); validateDate(document.entity.businessStartDate);
   if(annual){
     const taxStart=document.entity.businessStartDate.slice(0,7)>`${document.scope.period.slice(0,4)}-01`?document.entity.businessStartDate.slice(0,7):`${document.scope.period.slice(0,4)}-01`;
     if(document.entity.accountingReplayFrom&&document.entity.accountingReplayFrom>taxStart){

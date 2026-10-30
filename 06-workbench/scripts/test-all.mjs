@@ -156,6 +156,11 @@ const steps = [
   { name: 'harness-tax-presentation', file: join(WORKBENCH, 'test', 'harness-tax-presentation.test.mjs'), cwd: WORKBENCH },
   { name: 'harness-local-tool-contract', file: join(WORKBENCH, 'test', 'harness-local-tool-contract.test.mjs'), cwd: WORKBENCH },
   { name: 'sol-pi-integration', file: join(WORKBENCH, 'test', 'sol-pi-integration.test.mjs'), cwd: WORKBENCH },
+  { name: 'finance-call-chain', file: join(WORKBENCH, 'test', 'finance-call-chain.test.mjs'), cwd: WORKBENCH },
+  { name: 'direct-finance', file: join(WORKBENCH, 'test', 'direct-finance.test.mjs'), cwd: WORKBENCH },
+  { name: 'finance-summary', file: join(WORKBENCH, 'test', 'finance-summary.test.mjs'), cwd: WORKBENCH },
+  { name: 'finance-summary-integration', file: join(WORKBENCH, 'test', 'finance-summary-integration.test.mjs'), cwd: WORKBENCH },
+  { name: 'pi-direct-disclosure', file: join(WORKBENCH, 'test', 'pi-direct-disclosure.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
@@ -165,7 +170,9 @@ for (const step of steps) {
     results.push({ name: step.name, status: 1 });
     continue;
   }
-  const r = spawnSync(process.execPath, [...(step.nodeArgs || []), step.file], { stdio: "inherit", cwd: step.cwd });
+  // 原MCP协议套件保留旧全量契约；新默认direct及拒绝由直接业务/宿主套件单独实测。
+  const env = step.cwd === MCP ? {...process.env, FINANCE_MCP_PROFILE:'legacy'} : process.env;
+  const r = spawnSync(process.execPath, [...(step.nodeArgs || []), step.file], { stdio: "inherit", cwd: step.cwd, env });
   if (r.error) console.error(`启动失败：${r.error.message}`);
   results.push({ name: step.name, status: r.status ?? 1 });
 }

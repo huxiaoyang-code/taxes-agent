@@ -4,7 +4,7 @@ import { join,dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpStdioClient } from './mcp-stdio-client.mjs';
 mkdirSync(resolve('.agent-runs'),{recursive:true});const here=dirname(fileURLToPath(import.meta.url)),root=mkdtempSync(resolve('.agent-runs/harness-mcp-'));
-const client=new McpStdioClient(join(here,'server.mjs'),{env:{NODE_NO_WARNINGS:'1'},timeoutMs:60000}).start();
+const client=new McpStdioClient(join(here,'server.mjs'),{env:{FINANCE_MCP_PROFILE:'harness',NODE_NO_WARNINGS:'1'},timeoutMs:60000}).start();
 // 将摘要引入前的原生断言保留为明确的兼容验证路径。
 const nativeCall=client.call.bind(client);client.call=(name,args={})=>nativeCall(name,{...args,...(name.startsWith('harness_')?{responseMode:'full'}:{})});
 try {

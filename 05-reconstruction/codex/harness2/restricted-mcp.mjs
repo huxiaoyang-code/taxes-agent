@@ -24,7 +24,8 @@ export async function serveResearchMcp(){
   const root=process.env.FINANCE_HARNESS2_SYNTHETIC_ROOT;if(!root||!isAbsolute(root))throw Error('harness2_explicit_synthetic_root_required');
   const {scope,version}=JSON.parse(readFileSync(join(root,'synthetic.json'),'utf8'));if(version!=='finance-harness2-synthetic/1'||scope.enterpriseKey!=='SYNTHETIC-HARNESS2-A')throw Error('harness2_synthetic_identity_required');
   const server=join(import.meta.dirname,'../mcp/finance-mcp/server.mjs');
-  const child=spawn(process.execPath,[server],{cwd:root,env:process.env,stdio:['pipe','pipe','pipe'],windowsHide:true,shell:false});
+  // 这是显式旧Harness研究入口，不继承日常direct默认工具面。
+  const child=spawn(process.execPath,[server],{cwd:root,env:{...process.env,FINANCE_MCP_PROFILE:'harness'},stdio:['pipe','pipe','pipe'],windowsHide:true,shell:false});
   const lists=new Set();let input='',output='';
   const send=value=>process.stdout.write(JSON.stringify(value)+'\n');
   process.stdin.setEncoding('utf8');process.stdin.on('data',text=>{

@@ -2,9 +2,10 @@
 /**
  * finance-mcp — 财税工作台 MCP Server（stdio）
  *
- * 工具契约见 tools.mjs；callTool 按真实职责分为三条路径：
+ * 工具契约见 tools.mjs；默认 direct 工具面直接调用业务，自动记录每次调用：
  *   - skills_list / skills_read：本进程读取本机 Skill 资源；
- *   - harness_*：本进程直接调用 06-workbench 的 Harness 运行时，再由固定适配器执行业务；
+ *   - finance_* 新业务工具：直接复用固定核算模块，输出模型受限摘要和本机人读底稿；
+ *   - harness_*：仅显式 harness/legacy 兼容工具面保留旧执行和历史恢复；
  *   - 其他工具：经 backend.mjs 转发 HTTP，普通财务工具走模型摘要通道，税务/目录走既有通道。
  * 原则：工具描述与调用结果必须真实——未实现的工具返回 isError，绝不伪装成功。
  *
@@ -26,8 +27,13 @@ import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 import {toolsForProfile} from './tool-profile.mjs';
+import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
+import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
+import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
+import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
+import {withFinanceCall,currentFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
 
-const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE;
+const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
 const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
 
@@ -92,10 +98,14 @@ async function callTool(name, args = {}) {
   const problems = validateArgs(spec.inputSchema, args);
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length) {
-    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems });
+    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems: name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems });
   }
   if (spec.status === "unavailable") {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
+  }
+  if (DIRECT_TOOL_NAMES.has(name)) {
+    try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
+    catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
@@ -213,8 +223,10 @@ rl.on("line", async (line) => {
   if (method === "ping") return ok(id, {});
   if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
   if (method === "tools/call") {
+    let callReference;
+    const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId}}}:result;
     try {
-      const result = await callTool(params?.name, params?.arguments || {});
+      const result = await withFinanceCall({tool:params?.name??'unknown',args:params?.arguments??{}},async()=>{callReference=currentFinanceCall();return await callTool(params?.name,params?.arguments??{});});
       if (isModelEnvelope(result)) {
         // 防御性重校：只把不过的固定失败码交给模型，绝不透传未校验对象。
         const checked = validateModelEnvelope(result);
@@ -224,15 +236,16 @@ rl.on("line", async (line) => {
           const conservative = transportFailureResult({
             ...failure, retriable: false, writeOutcome: "unknown", retryBlockedBy: "write_outcome_unknown",
           });
-          return ok(id, conservative);
+          return ok(id, withReference(conservative));
         }
-        return ok(id, envelopeResult(checked.envelope));
+        return ok(id, withReference(envelopeResult(checked.envelope)));
       }
-      return ok(id, { content: [{ type: "text", text: HARNESS_TOOL_NAMES.has(params?.name)?JSON.stringify(result):JSON.stringify(result, null, 2) }],...(HARNESS_TOOL_NAMES.has(params?.name)?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) });
+      return ok(id, withReference({ content: [{ type: "text", text: HARNESS_TOOL_NAMES.has(params?.name)?JSON.stringify(result):JSON.stringify(result, null, 2) }],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) }));
     } catch (e) {
-      if (e instanceof ModelTransportError) return ok(id, transportFailureResult(e.failure));
-      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, await harnessErrorResult(e,params?.name,params?.arguments));
-      return ok(id, errorResult(new ToolCallError("tool_error", "tool_error")));
+      if (e instanceof ModelTransportError) return ok(id, withReference(transportFailureResult(e.failure)));
+      if(e?.code==='finance_call_recording_failed')return ok(id,withReference({isError:true,content:[{type:'text',text:JSON.stringify({code:e.code,writeOutcome:'unknown',retryable:false,executionCompleted:e.executionCompleted===true})}]}));
+      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, withReference(await harnessErrorResult(e,params?.name,params?.arguments)));
+      return ok(id, withReference(errorResult(new ToolCallError("tool_error", "tool_error"))));
     }
   }
   if (method === "resources/list") {

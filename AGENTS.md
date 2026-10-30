@@ -2,7 +2,7 @@
 
 先读 [README.md](README.md)、[中文架构与调用链](docs/AGENT-ARCHITECTURE.md)和[代码索引](docs/CODE-INDEX.md)，再读任务相关源码与测试。实现方式遵循用户当前明确指示；能力以代码、工具契约及测试行为为准，不从文档标题或入口数量推断已完成。
 
-作为财税主 Agent 配置或接续运行时，先读[四宿主统一入口](05-reconstruction/codex/hosts/START-HERE.md)，核实宿主、模型、实际账库与授权范围，再加载现有 Harness Skill。
+作为财税主 Agent 配置或接续运行时，先读[四宿主统一入口](05-reconstruction/codex/hosts/START-HERE.md)，核实宿主、模型、实际账库与授权范围，再按需加载中国化业务 Skill。默认 direct MCP 直接执行业务并自动留痕，不要求 Agent 登记事实、维护任务 DAG 或回读技术状态。
 
 - 产品是面向中国财税开发的本机单用户 Agent，一名操作者可处理多家企业，每家企业一个账套；多企业批量处理不扩展为 SaaS、多租户或账户权限平台。
 - 当前需求、分工、依赖、未完项与验收证据放在 GitHub Issue / PR，不另建重复任务单、状态表或长交接。先确认成员身份、任务范围和文件所有权；共享文件改动先协调。

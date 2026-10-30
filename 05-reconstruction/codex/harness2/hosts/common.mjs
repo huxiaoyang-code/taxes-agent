@@ -64,7 +64,21 @@ export function prepare(options,host,buildConfig){
   }else if(options.mode==='run')fail('harness2_candidate_required');
   const timeoutMs=options.timeoutMs??(options.mode==='run'?null:30000);if(timeoutMs!==null&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>2147483647))fail('harness2_host_timeout_invalid');
   const maxOutputTokens=options.maxOutputTokens;if(maxOutputTokens!==undefined&&(!Number.isSafeInteger(maxOutputTokens)||maxOutputTokens<1))fail('harness2_host_output_limit_invalid');
-  writeBundle(context,buildConfig(context));
+  // 研究宿主保留原Harness实验合同；日常宿主默认direct不因此放宽。
+  const bundle=buildConfig(context);
+  const historicalConfig=value=>{
+    if(!value||typeof value!=='object')return;
+    for(const key of Object.keys(value)){
+      if(key==='FINANCE_MCP_PROFILE')value[key]='harness';
+      else if(key==='id'&&value[key]==='finance-direct-mcp')value[key]='finance-harness-mcp';
+      else historicalConfig(value[key]);
+    }
+  };
+  for(const file of bundle.files)if(['.mcp.json','.zcode/config.json','finance.cordis.patch.yml'].includes(file.path)){
+    const config=JSON.parse(file.content);historicalConfig(config);file.content=JSON.stringify(config,null,2)+'\n';
+  }
+  context.mcpEnv.FINANCE_MCP_PROFILE='harness';
+  writeBundle(context,bundle);
   const home=join(configDir,'home');mkdirSync(home);mkdirSync(join(home,'tmp'));
   const env={...systemEnv(),...context.mcpEnv,HOME:home,USERPROFILE:home,APPDATA:join(home,'appdata'),LOCALAPPDATA:join(home,'localappdata'),XDG_CONFIG_HOME:join(home,'config'),XDG_DATA_HOME:join(home,'data'),XDG_CACHE_HOME:join(home,'cache'),TMP:join(home,'tmp'),TEMP:join(home,'tmp'),TMPDIR:join(home,'tmp'),PATH:dirname(context.nodePath),NODE_NO_WARNINGS:'1'};
   if(process.env.FINANCE_HARNESS2_SUPERVISED==='1')env.FINANCE_HARNESS2_SUPERVISED='1';

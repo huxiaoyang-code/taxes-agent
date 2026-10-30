@@ -1,3 +1,13 @@
+# 当前直接业务接入
+
+本页当前入口采用中国化业务 Skill＋原生 MCP，默认 `FINANCE_MCP_PROFILE=direct`。Agent自主选择工具，后台完整自动记录；不要求来源/事实登记、Store或任务DAG。生成器可用 `--plugin-root <中国化fork的finance绝对目录>` 加载官方格式插件，用 `--audit-dir` 指定本机记录目录。
+
+接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
+当前生成 .zcode/config.json 与 AGENTS.md。打开生成目录或使用 zcode --cwd <生成目录> --mode build，核实finance实际连接来自本工作区；保持原生权限，不自动安装用户级解析角色。
+
+<details>
+<summary>改造前接入说明与历史实测（非当前默认流程）</summary>
+
 # ZCode 接入
 
 本适配为智谱官方 ZCode 生成原生工作区配置，复用同一个财税 stdio MCP 和中文 Harness Skill。它不加载 Pi 扩展，不提供新的税务或记账算法，也不配置模型、账号或密钥。
@@ -48,3 +58,5 @@ node 06-workbench/scripts/finance-host-config.mjs --host zcode --node 'D:/node.e
 - [官方 CLI 权限语义](https://github.com/zai-org/ZCode/blob/3c5b227649371507ddc4eb46ac5133afe6db1cab/apps/zcode-cli/docs/usage/05-permissions.md)
 - [官方个人 provider 配置读写结构](https://github.com/zai-org/ZCode/blob/3c5b227649371507ddc4eb46ac5133afe6db1cab/apps/zcode-cli/packages/provider-node/src/provider-config-file-codec.ts)
 - [官方模型选择选项结构](https://github.com/zai-org/ZCode/blob/3c5b227649371507ddc4eb46ac5133afe6db1cab/apps/zcode-cli/packages/shared/src/model-selection.ts)
+
+</details>

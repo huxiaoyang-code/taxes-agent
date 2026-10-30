@@ -1,3 +1,13 @@
+# 当前直接业务接入
+
+本页当前入口采用中国化业务 Skill＋原生 MCP，默认 `FINANCE_MCP_PROFILE=direct`。Agent自主选择工具，后台完整自动记录；不要求来源/事实登记、Store或任务DAG。生成器可用 `--plugin-root <中国化fork的finance绝对目录>` 加载官方格式插件，用 `--audit-dir` 指定本机记录目录。
+
+接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
+当前生成 .mcp.json、.claude/settings.json、CLAUDE.md；以 claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json 显式加载。只读工具建议自动允许，其余保留宿主审批；不安装额外角色。
+
+<details>
+<summary>改造前接入说明与历史实测（非当前默认流程）</summary>
+
 # Claude Code 接入
 
 本适配生成本机 stdio MCP 配置、中文 `CLAUDE.md`、权限建议和 `finance-parser` 子 Agent。复用 [Harness Skill](../../skills/harness/SKILL.md) 与原生财税模块；不加载 Pi 扩展。配置生成不调用模型，也不读取或安装模型凭据。
@@ -38,3 +48,5 @@ claude --model deepseek-flash --strict-mcp-config --mcp-config .mcp.json --setti
 该测试只开放 6 个元数据工具并关闭内置文件、shell、委派和联网工具，未使用跳过权限选项；正常交互配置仍按上文保留审批。Store 中任务与业务执行尝试均为 0。此次验证不覆盖解析子 Agent 的模型运行、凭证/期末/报税完整流程或准确率评估；原始执行与审查证据见 PR。
 
 依据：[官方 MCP](https://code.claude.com/docs/en/mcp)、[子 Agent 工具限制](https://code.claude.com/docs/en/sub-agents)、[设置](https://code.claude.com/docs/en/settings)。本机安装版本和实际运行范围在 PR 验证记录中列示；连接、配置解析和业务模型验收分别报告，不能由配置存在推断完整业务可用。
+
+</details>

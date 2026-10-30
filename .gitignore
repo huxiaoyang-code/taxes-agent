@@ -35,3 +35,5 @@ rea-chrome-*/
 # ---- 本地并发开发工作区与执行日志 ----
 .worktrees/
 .agent-runs/
+.finance-call-records/
+finance-call-records/

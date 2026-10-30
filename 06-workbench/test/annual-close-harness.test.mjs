@@ -135,7 +135,7 @@ async function integration() {
   const server = join(repo, '05-reconstruction/codex/mcp/finance-mcp/server.mjs'), trace = join(directory, 'mcp-calls.jsonl');
   let client;
   const start = async () => { client = new McpStdioClient(server, { cwd: repo, timeoutMs: 120000,
-    env: { NODE_NO_WARNINGS: '1', FINANCE_API_BASE: 'http://127.0.0.1:1', WORKBENCH_DATA_DIR: join(directory, 'forbidden-default') } }).start(); await client.initialize('annual-native-script-test'); };
+    env: { NODE_NO_WARNINGS: '1', FINANCE_MCP_PROFILE: 'harness', FINANCE_API_BASE: 'http://127.0.0.1:1', WORKBENCH_DATA_DIR: join(directory, 'forbidden-default') } }).start(); await client.initialize('annual-native-script-test'); };
   const call = async (name, args = {}, error = false) => {
     const result = await client.call(name, {...args,...(name.startsWith('harness_')?{responseMode:'full'}:{})}); appendFileSync(trace, JSON.stringify({ name, args, result }) + '\n');
     assert.equal(result.isError, error, result.text); return result.structured ?? result.data;

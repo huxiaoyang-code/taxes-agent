@@ -1,11 +1,11 @@
-# 期间与税务
+# 中国税费直接计算
 
-YYYY-MM 与 YYYY-Q1..4 含义不同，月结果不等于季度确认。offline.period_plan 返回真实执行条件与可用 manifest；batch.start/status/resume 复用现有批处理，requestFactId 选中的事实 value 包含 target、jobKey，start 另给 manifestPath/outputDir。已有安装/备份与恢复契约照常适用，不绕过缺依赖。
+按实际税种和任务用`finance_rules`取得适用主体、地区、期间、政策来源和限制，再调用`finance_tax_calculate`。原始业务整体底稿可用`finance_workpaper`，全年原件计算可用`finance_annual_workpaper`。税率与公式单点由工具维护，Skill不另抄一份。
 
-offline.vat_q2 仅计算既有历史/目标季度支持的 VAT 部分字段。依据资料调查税务属性、适用期、历史及业务事实；缺失则具体补件，不要求客户先算税额。以返回的计算范围和限制为准，不声称全税种、整期完成或可提交。
+月、季度、年度累计必须区分；规则支持期间不是法律生效期间。核税务身份、实际交易、抵扣及优惠资格、期初、原始日期和支付。福建漳州不自动确定城建地点分类或所有地方税费参数。
 
-`agency.workpaper` 复用已有月度会计/税费算法与缺项判断；`agency.annual-calculation` 在 YYYY 容器从完整原始月 sessions 调用 buildAgencyAnnualWorkpaper，保留原生 YYYY-12、年度调整和次年承接条件。月份缺口、scope冲突、原始资料/规则/实际账簿变化均须核查；不能只交月度汇总替代原始证据。结果中的 issues、accountantApproval、periodComplete/submittable 如实报告，年度算法计算不等于年度关账流程已接通。
+`accounting.vatTransactions`或凭证税额仅是交易/账面金额。法定应纳只取实际税费结果；计提须核实际会计结果；实缴须有银行或完税支持。原生`missing/unknown`和缺失due保留未知，不能以模型算出的数字填成工具已完成。原生显式0可如实引用，但未登记支付不证明现实从未付款。
 
-交易/凭证税额、应纳、计提、实缴、未缴分别报告：`accounting.vatTransactions[*].tax` 或凭证2221行只是该交易/原生草稿的税额，不能据此说依法应纳或已计提。应纳仅取同期间 `obligations[*].due`，计提仅取明确 `accountingAccrual`（草稿分录不等于已过账计提），实缴仅取 `paid` 并核缴款证据，差额仅取原生 `difference`，不凭凭证推未缴。原生paid原值（包括0/null）应忠实引为程序结果；只有字段缺失时不能补0。缺缴款证据既不能称现实已缴，也不能断言现实未缴或支付未发生；只能报告“证据未证实、工具未登记”。VAT status=missing且没有due时，应写“应纳未确定”，即使交易税额是3.00。`amountState.present=false`表示原字段不存在，显式null仍是null；都不能填0。字段、期间、单位、原pointer及当前性同时引用，不能把报表分值和元值混用。
+[税费核对](../../tax-filing/SKILL.md)及其按需参考覆盖一般VAT抵扣、小规模季度、所得税、工资个税、印花和[29项义务边界](../../tax-filing/references/supported-obligations.md)。有目录不等于全场景可算。
 
-全国电子税务局真实接入数为 0。本 Harness 不做登录、在线采集、申报提交或缴款。核算独立分支可以执行，税务不支持或证据不足分支保留具体阻塞。
+税局登录、在线采集、正式申报、缴款与开票未接通。输出账目、抵扣和申报依据，解释本期为何这样处理，不把本机核对升级为申报成功。

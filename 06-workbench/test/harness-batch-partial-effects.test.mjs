@@ -79,7 +79,7 @@ const batchStore=join(f.root,'batch-harness');await initHarness(batchStore,{...f
 await registerHarnessSource(batchStore,{sourceId:'raw',path:f.sourcePath,locator:'Synthetic original for explicit batch request',parsed:false,unrecognized:[],classification:'provided'});
 await registerHarnessFacts(batchStore,[fact('start',{target:f.target,jobKey:f.manifest.jobKey,manifestPath:f.manifestPath,outputDir:join(f.root,'batch-output')}),fact('status',{target:f.target,jobKey:f.manifest.jobKey}),fact('resume',{target:f.target,jobKey:f.manifest.jobKey,retry})]);
 await planHarness(batchStore,[task('start','batch.start','start'),task('status','batch.status','status'),task('resume','batch.resume','resume')]);
-const client=new McpStdioClient(resolve('../05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{env:{NODE_NO_WARNINGS:'1'},timeoutMs:120000}).start();
+const client=new McpStdioClient(resolve('../05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{env:{FINANCE_MCP_PROFILE:'harness',NODE_NO_WARNINGS:'1'},timeoutMs:120000}).start();
 const call=async(name,args={})=>{const r=await client.call(name,{storePath:batchStore,...args});assert.ok(!r.rpcError,r.text);assert.ok(r.structured,r.text);return r.structured;};
 const run=async(taskId,args={})=>{const t=(await inspectHarness(batchStore)).tasks.find(t=>t.taskId===taskId);return call('harness_run',{taskId,dependencyDigest:t.dependencyDigest,...args});};
 try{
@@ -107,7 +107,7 @@ async function verifyMcpEffects(f,report,expected){
  const retry={itemKey:'enterprise-a',period:'2026-01',stageKey:report.items[0].stages[0].stageKey,reason:'Synthetic retry preserves false versus unknown'};
  await registerHarnessFacts(storePath,[fact('status',{target:f.target,jobKey:f.manifest.jobKey}),fact('resume',{target:f.target,jobKey:f.manifest.jobKey,retry})]);
  await planHarness(storePath,[task('status','batch.status','status'),task('resume','batch.resume','resume')]);
- const client=new McpStdioClient(resolve('../05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{env:{NODE_NO_WARNINGS:'1'},timeoutMs:120000}).start();
+ const client=new McpStdioClient(resolve('../05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{env:{FINANCE_MCP_PROFILE:'harness',NODE_NO_WARNINGS:'1'},timeoutMs:120000}).start();
  const call=async(name,args)=>{const r=await client.call(name,{storePath,...args});assert.ok(!r.rpcError,r.text);assert.ok(r.structured,r.text);return r.structured;};
  const run=async(taskId,args)=>{const t=(await inspectHarness(storePath)).tasks.find(t=>t.taskId===taskId);return call('harness_run',{taskId,dependencyDigest:t.dependencyDigest,...args});};
  try{
