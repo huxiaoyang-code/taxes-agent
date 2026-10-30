@@ -3,7 +3,7 @@ import {readFileSync,writeFileSync,mkdirSync,lstatSync,realpathSync,openSync,clo
 import {resolve,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-import {FINANCE_SUMMARY_INPUT_SCHEMA} from './finance-summary-contracts.mjs';
+import {FINANCE_SUMMARY_INPUT_SCHEMA,isFinanceSummaryAmountPointer} from './finance-summary-contracts.mjs';
 import {calculateFinanceSummary,FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
 import {validateSchemaValue} from './harness-schema-validation.mjs';
 import {resolveDirectFinanceTarget} from './direct-finance-target.mjs';
@@ -14,7 +14,10 @@ import {centsToNumber} from './money.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const stable=v=>Array.isArray(v)?`[${v.map(stable).join(',')}]`:v&&typeof v==='object'?`{${Object.keys(v).sort().map(k=>`${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`:JSON.stringify(v);
 const encode=value=>Buffer.from(JSON.stringify(value,null,2)+'\n');
-const fail=code=>{throw Object.assign(Error(code),{code});};
+const diagnosticErrors=new WeakMap();
+const fail=(code,problems)=>{const error=Object.assign(Error(code),{code});if(problems?.length){const safe={version:'finance-summary-diagnostics/1',problems:problems.slice(0,20),omittedCount:Math.max(0,problems.length-20)};diagnosticErrors.set(error,safe);error.details={safeDiagnostics:structuredClone(safe)};}throw error;};
+// 只有本模块在已校验合同路径上构造的错误可透传；调用者伪造同名属性无效。
+export function getFinanceSummarySafeDiagnostics(error){const value=error&&typeof error==='object'?diagnosticErrors.get(error):undefined;return value?structuredClone(value):undefined;}
 const ownedSummaries=new Map();
 const escape=s=>s.replaceAll('~','~0').replaceAll('/','~1');
 function pointer(value,path){if(path==='')return value;if(typeof path!=='string'||!path.startsWith('/')||/~[^01]/.test(path))fail('finance_summary_pointer_invalid');let current=value;for(const raw of path.slice(1).split('/')){const key=raw.replaceAll('~1','/').replaceAll('~0','~');if(!current||typeof current!=='object'||!Object.hasOwn(current,key))fail('finance_summary_pointer_missing');current=current[key];}return current;}
@@ -27,10 +30,14 @@ function secureFile(path){
 }
 function transformed(value,transform='identity'){
  if(transform==='identity')return value;
- if(transform==='decimal'){if(typeof value!=='number'&&typeof value!=='string'||! /^-?\d+(\.\d{1,2})?$/.test(String(value)))fail('finance_summary_binding_transform_invalid');return money(cents(String(value)));}
+ if(transform==='decimal')return money(strictDecimalCents(value));
  if(transform==='period_type'){if(['month','monthly'].includes(value))return 'monthly';if(['quarter','quarterly'].includes(value))return 'quarterly';}
  if(transform==='boolean_eligibility'&&typeof value==='boolean')return value?'eligible':'ineligible';
  fail('finance_summary_binding_transform_invalid');
+}
+function strictDecimalCents(value){
+ if(typeof value!=='number'&&typeof value!=='string'||! /^-?\d+(\.\d{1,2})?$/.test(String(value))||typeof value==='number'&&!Number.isFinite(value))fail('finance_summary_binding_transform_invalid');
+ let result;try{result=cents(String(value));if(typeof value==='number'&&(!Number.isSafeInteger(Number(result))||centsToNumber(result)!==value))fail('finance_summary_binding_transform_invalid');}catch{fail('finance_summary_binding_transform_invalid');}return result;
 }
 const codeFiles=['finance-summary.mjs','finance-summary-contracts.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','agency-rule-catalog.mjs','money.mjs','direct-finance-target.mjs','finance-call-chain.mjs'];
 function codeSnapshot(){return codeFiles.map(name=>({kind:'code',...secureFile(fileURLToPath(new URL(`./${name}`,import.meta.url)))}));}
@@ -59,29 +66,35 @@ export async function callFinanceTaxSummaryCalculate(args,options={}){
  const sourceConditions=[];
  for(const o of args.originals){if(originals.has(o.id))fail('finance_summary_original_duplicate');const file=secureFile(o.path);totalBytes+=file.bytes.length;if(totalBytes>20*1024*1024)fail('finance_summary_source_limit');if(o.sha256&&o.sha256!==file.sha256)fail('finance_summary_source_digest_mismatch');let raw;try{raw=JSON.parse(file.bytes.toString('utf8').replace(/^\uFEFF/,''));}catch{fail('finance_summary_original_json_invalid');}if(typeof raw?.version==='string'&&/^(finance-|agency-)/.test(raw.version)||['native_engine','conditional_summary_engine'].includes(raw?.resultOrigin))fail('finance_summary_generated_result_not_original');const scoped=assertScope(raw,scope);if(!scoped)sourceConditions.push({code:'original_subject_association_unverified',state:'unverified',meaning:'原件未含可与现库核对的主体/账套标识；目标只读绑定不证明该资料属于目标企业。'});const entry={kind:'original',originalId:o.id,...file,raw};originals.set(o.id,entry);allFiles.push(entry);}
  const sourceRefs=[],inheritedConditions=[],inputLeaves=leaves(args.inputs),coverage=new Map();
+ const validInputPointers=new Set(['']);for(const leaf of inputLeaves){const parts=leaf.path.split('/');for(let i=2;i<=parts.length;i++)validInputPointers.add(parts.slice(0,i).join('/'));}
+ const problem=(inputPointer,reason,repairHint)=>({inputPointer,reason,repairHint});
  for(const [bindingIndex,b]of args.bindings.entries()){
+  if(!validInputPointers.has(b.inputPointer))fail('finance_summary_pointer_missing',[problem(`/bindings/${bindingIndex}/inputPointer`,'input_pointer_not_in_contract','use_declared_input_pointer')]);
   const inputValue=pointer(args.inputs,b.inputPointer);let actualValue,file,jsonPointer,sourceType='original',parent;
-  if(b.originalId){file=originals.get(b.originalId);if(!file)fail('finance_summary_original_unknown');jsonPointer=b.locator.jsonPointer;actualValue=pointer(file.raw,jsonPointer);assertPeriod(file.raw,scope,args.kind,b.inputPointer,args.inputs);
+  const readSourcePointer=(raw,path)=>{try{return pointer(raw,path);}catch(error){if(error.code==='finance_summary_pointer_missing'||error.code==='finance_summary_pointer_invalid')fail(error.code,[problem(b.inputPointer,'source_pointer_missing','locate_actual_source_field')]);throw error;}};
+  if(b.originalId){file=originals.get(b.originalId);if(!file)fail('finance_summary_original_unknown');jsonPointer=b.locator.jsonPointer;actualValue=readSourcePointer(file.raw,jsonPointer);assertPeriod(file.raw,scope,args.kind,b.inputPointer,args.inputs);
    const parts=jsonPointer.split('/');for(let i=1;i<parts.length;i++){const parentValue=pointer(file.raw,parts.slice(0,i).join('/'));if(parentValue&&typeof parentValue==='object'){assertScope(parentValue,scope);assertPeriod(parentValue,scope,args.kind,b.inputPointer,args.inputs);}}
   }else{
    const known=ownedSummaries.get(b.artifactRef);if(!known||Date.now()-known.createdAt>60*60*1000)fail('finance_summary_derived_reference_untrusted');
    if(['enterpriseKey','accountSetId','databaseInstanceId','period'].some(k=>known.scope[k]!==scope[k]))fail('finance_summary_derived_scope_conflict');
    if(known.codeDigest!==codeDigest)fail('finance_summary_derived_code_changed');file=secureFile(known.path);if(file.sha256!==known.sha256)fail('finance_summary_derived_digest_mismatch');parent=JSON.parse(file.bytes.toString('utf8'));if(parent.status!=='conditional_calculated')fail('finance_summary_derived_status_invalid');
-   if(!/^\/amounts\/[A-Za-z][A-Za-z0-9]*$|^\/scenarios\/\d+\/amounts\/[A-Za-z][A-Za-z0-9]*$/.test(b.resultPointer))fail('finance_summary_derived_value_rejected');jsonPointer=b.resultPointer;actualValue=pointer(parent,jsonPointer);sourceType='engine_derived';
+   if(!/^\/amounts\/[A-Za-z][A-Za-z0-9]*$|^\/scenarios\/\d+\/amounts\/[A-Za-z][A-Za-z0-9]*$/.test(b.resultPointer))fail('finance_summary_derived_value_rejected');jsonPointer=b.resultPointer;actualValue=readSourcePointer(parent,jsonPointer);sourceType='engine_derived';
    inheritedConditions.push(...parent.conditions,{code:'derived_summary_conditions_inherited',state:'unverified',meaning:'基数来自已核字节版本的条件试算，继承其全部未核条件；不升级为原始事实或已实缴。'});
    const scenarioMatch=/^\/scenarios\/(\d+)\//.exec(b.resultPointer);if(scenarioMatch){const scenario=parent.scenarios[Number(scenarioMatch[1])];inheritedConditions.push(...scenario.conditions.map(code=>({code:`inherited_scenario_${code}`,state:'unverified',meaning:`所用基数只在上游情景条件 ${code} 成立时有效，未升级为已审定事实。`})));}
    allFiles.push({kind:'derived_summary',...file});
    for(const original of known.originals){const current=secureFile(original.path);if(current.sha256!==original.sha256)fail('finance_summary_derived_source_changed');allFiles.push({kind:'inherited_original',...current});}
   }
-  const value=transformed(actualValue,b.transform);if(stable(value)!==stable(inputValue))fail('finance_summary_binding_value_mismatch');
   const matched=inputLeaves.filter(leaf=>b.inputPointer===''||leaf.path===b.inputPointer||leaf.path.startsWith(b.inputPointer+'/'));
-  if(!matched.length)fail('finance_summary_binding_empty');
-  if(b.transform&&b.transform!=='identity'&&matched.length!==1)fail('finance_summary_binding_transform_invalid');
-  for(const leaf of matched){if(coverage.has(leaf.path))fail('finance_summary_binding_ambiguous');coverage.set(leaf.path,bindingIndex);const suffix=leaf.path.slice(b.inputPointer.length),sourcePointer=jsonPointer+suffix,observed=suffix?pointer(actualValue,suffix):actualValue;
-   sourceRefs.push({sourceType,inputPointer:leaf.path,originalId:b.originalId??null,originalPath:file.path,path:file.path,sha256:file.sha256,jsonPointer:sourcePointer,locator:{jsonPointer:sourcePointer},actualValue:observed,inputValue:leaf.value,transform:b.transform??'identity',...(parent?{artifactRef:b.artifactRef,derivedFrom:parent.input.sourceRefs}:{} )});
+  if(!matched.length)fail('finance_summary_binding_empty',[problem(b.inputPointer,'source_binding_empty','bind_source_object_or_each_leaf')]);
+  const effectiveTransform=b.transform??(sourceType==='engine_derived'&&matched.some(leaf=>leaf.path===b.inputPointer)&&isFinanceSummaryAmountPointer(args.kind,b.inputPointer)?'decimal':'identity');
+  if(effectiveTransform!=='identity'&&(matched.length!==1||matched[0].path!==b.inputPointer))fail('finance_summary_binding_transform_invalid',[problem(b.inputPointer,'scalar_transform_required','bind_each_scalar_field')]);
+  let equal;try{equal=effectiveTransform==='decimal'?strictDecimalCents(actualValue)===strictDecimalCents(inputValue):stable(transformed(actualValue,effectiveTransform))===stable(inputValue);}catch(error){if(error.code==='finance_summary_binding_transform_invalid')fail(error.code,[problem(b.inputPointer,effectiveTransform==='decimal'?'strict_decimal_required':'declared_transform_required',effectiveTransform==='decimal'?'use_exact_decimal_number_or_string':'bind_supported_transform_from_source')]);throw error;}
+  if(!equal){let targetPointer=b.inputPointer;if(effectiveTransform==='identity')for(const leaf of matched){try{const value=pointer(actualValue,leaf.path.slice(b.inputPointer.length));if(stable(value)!==stable(leaf.value)){targetPointer=leaf.path;break;}}catch{targetPointer=leaf.path;break;}}fail('finance_summary_binding_value_mismatch',[problem(targetPointer,effectiveTransform==='decimal'?'exact_decimal_value_mismatch':'source_value_mismatch','bind_actual_source_value')]);}
+  for(const leaf of matched){if(coverage.has(leaf.path))fail('finance_summary_binding_ambiguous',[problem(leaf.path,'one_binding_per_input_required','use_one_unambiguous_source_binding')]);coverage.set(leaf.path,bindingIndex);const suffix=leaf.path.slice(b.inputPointer.length),sourcePointer=jsonPointer+suffix,observed=suffix?pointer(actualValue,suffix):actualValue;
+   sourceRefs.push({sourceType,inputPointer:leaf.path,originalId:b.originalId??null,originalPath:file.path,path:file.path,sha256:file.sha256,jsonPointer:sourcePointer,locator:{jsonPointer:sourcePointer},actualValue:observed,inputValue:leaf.value,transform:effectiveTransform,...(parent?{artifactRef:b.artifactRef,derivedFrom:parent.input.sourceRefs}:{} )});
   }
  }
- if(inputLeaves.some(leaf=>!coverage.has(leaf.path)))fail('finance_summary_input_source_missing');
+ const missing=inputLeaves.filter(leaf=>!coverage.has(leaf.path));if(missing.length)fail('finance_summary_input_source_missing',missing.map(leaf=>problem(leaf.path,'source_binding_required','bind_source_value_or_source_amount_array')));
  const native=calculateFinanceSummary(args.kind,args.inputs,scope),call=currentFinanceCall(),dir=join(call.auditDir,'artifacts',call.callId),artifact={id:call.callId,dir,ref:`finance-summary:${call.callId}`};
  const conditions=[...native.conditions,...sourceConditions,...inheritedConditions];native.conditions=[...new Map(conditions.map(c=>[c.code,c])).values()];
  for(const p of [join(call.auditDir,'artifacts'),dir]){try{if(lstatSync(p).isSymbolicLink())fail('finance_summary_artifact_path_invalid');}catch(error){if(error.code!=='ENOENT')throw error;}mkdirSync(p,{recursive:true,mode:0o700});}

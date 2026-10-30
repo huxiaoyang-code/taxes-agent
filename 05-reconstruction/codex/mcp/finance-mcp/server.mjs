@@ -29,6 +29,7 @@ import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 import {toolsForProfile} from './tool-profile.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
+import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
 import {withFinanceCall,currentFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
 
@@ -104,7 +105,7 @@ async function callTool(name, args = {}) {
   }
   if (DIRECT_TOOL_NAMES.has(name)) {
     try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
-    catch(error) { throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
+    catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----

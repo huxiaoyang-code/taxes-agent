@@ -15,6 +15,13 @@ export const FINANCE_SUMMARY_INPUTS={
  stamp_sale:{amountIncludingVat:amount,vatAmount:amount,separatelyStatedVat:bool,sixTaxRelief:eligibility,taxpayerCategory:status,reliefValidFrom:{type:'string',format:'calendar-date'},reliefValidThrough:{type:'string',format:'calendar-date'},ordinaryMovableSaleContract:bool},
 };
 export const FINANCE_SUMMARY_KINDS=Object.freeze(Object.keys(FINANCE_SUMMARY_INPUTS));
+// 仅合同声明的金额叶字段获得派生金额默认规范；人数、月份和枚举保持原类型。
+export function isFinanceSummaryAmountPointer(kind,pointer){
+ if(typeof pointer!=='string'||!pointer.startsWith('/')||/~[^01]/.test(pointer))return false;
+ let node={type:'object',properties:FINANCE_SUMMARY_INPUTS[kind]??{}};
+ for(const token of pointer.slice(1).split('/')){const key=token.replaceAll('~1','/').replaceAll('~0','~');if(node===amount){if(!/^(0|[1-9]\d*)$/.test(key))return false;node=decimal;}else if(node?.type==='array'){if(!/^(0|[1-9]\d*)$/.test(key))return false;node=node.items;}else if(node?.type==='object'&&Object.hasOwn(node.properties??{},key))node=node.properties[key];else return false;}
+ return node===amount||node===decimal;
+}
 export const FINANCE_SUMMARY_INPUT_SCHEMA={type:'object',additionalProperties:false,required:['target','originals','kind','inputs','bindings'],properties:{
  target:{type:'object',additionalProperties:false,required:['accountSetId','period'],properties:{accountSetId:{type:'integer',minimum:1},period:{type:'string',pattern:'^202[67]-(0[1-9]|1[0-2])$'}}},
  originals:{type:'array',minItems:1,maxItems:100,items:{type:'object',additionalProperties:false,required:['id','path'],properties:{id:text,path:text,sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}}}},
@@ -25,7 +32,7 @@ export const FINANCE_SUMMARY_INPUT_SCHEMA={type:'object',additionalProperties:fa
 export function financeSummaryContract(){return {version:'finance-summary-contract/1',recordType:'tax_summary',schema:FINANCE_SUMMARY_INPUT_SCHEMA,kinds:FINANCE_SUMMARY_KINDS,inputs:FINANCE_SUMMARY_INPUTS,statuses:['conditional_calculated','needs_inputs','unsupported'],guidance:[
  '这是有来源汇总条件试算；未核账、未核实缴、未核资格，不能代替正式底稿、生成凭证或提交申报。',
  'target只读绑定现有账套。每个inputs叶字段须由bindings精确定位JSON原件；空inputPointer可绑定整个相同对象。金额原件为number或十进制string均可，金额数组由固定引擎加总；不能把模型派生合计说成原件值。',
- 'bindings默认identity逐值一致；decimal仅规范十进制金额；period_type仅month/monthly、quarter/quarterly规范；boolean_eligibility仅true/false规范为eligible/ineligible，不证明法律资格。未定位或原值不一致即拒绝计算。',
+ '原件bindings默认identity，类型与值均严格一致。decimal对来源和输入两侧按最多两位小数严格转整数分比较，number/string同分值可匹配，不舍入三位小数。可信引擎派生金额在未显式指定transform且目标是合同金额叶字段时默认decimal，sourceRefs记录实际有效transform；显式identity仍严格。period_type仅month/monthly、quarter/quarterly规范；boolean_eligibility仅true/false规范为eligible/ineligible，不证明法律资格。未定位或原值不一致即拒绝计算。',
  '一般VAT以outputVat/certifiedInputVat有源汇总，或goodsSalesDocuments/goodsReturnDocuments/goodsPurchaseDocuments逐单据lines[{quantity,unitPrice}]与otherInputVatAmounts计算。货物分支另输出扣退货后salesExcludingVat/outputVat/certifiedInputVat，可作后续条件试算的受控派生来源。货物明细固定13%并按单据合并后舍入，原件未给priceIncludesVat时不含税价仅作未核条件。转出/期初留抵/预缴缺失时明确零值条件，不证明实际为零。普通境内分支；不计算跨境、特殊简易、免抵退及加计抵减。',
  '引擎派生金额可用bindings的artifactRef/resultPointer替代originalId/locator；仅接受本MCP进程实际签出且摘要未变的summary.json，须同账套/期间，复核代码与原件并继承条件；不能引用任意后台JSON或模型新写文件。',
  '六税两费已给资格窗口与整个月/季度完全不重叠时不减半；部分覆盖须有源分期基数并分别核算，当前返回unsupported；完整覆盖才按资格声明列条件减半。窗口缺失才保留资格未知的双情景，不用未知覆盖已有反证。',
