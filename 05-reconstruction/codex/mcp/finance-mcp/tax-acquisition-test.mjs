@@ -1,5 +1,5 @@
-// Real stdio MCP -> production HTTP server -> Agent tools. Synthetic isolated DB only.
-// The synthetic adapter is registered in a test child process, never via a production API/env hook.
+// 真实 stdio MCP → 生产 HTTP 服务 → Agent 工具；只用隔离的合成数据库。
+// 合成适配器仅在测试子进程登记，不通过生产 API 或环境变量钩子注入。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn } from 'node:child_process';

@@ -15,7 +15,7 @@ await test('frozen raw and independent literal expectation inventory', () => {
 for (const id of ['QG01', 'QG02']) await test(id + ' six actual monthly originals -> formal prepare/execute -> 6 vouchers/18 entries -> six unclosed as-of trials -> actual Q1/Q2', () => {
   const actual = child('execute', join(root, id), join(fixtures, 'raw', id)); outputs.set(id, actual);
   writeJson(join(root, id, 'actual-output.json'), actual);
-  // Expected literals first enter the test AFTER all product execution has ended.
+  // 所有产品执行结束后，预期字面量才首次进入测试。
   assertQuarterlyOutput(actual, json(join(fixtures, 'expected', id + '.json')), join(fixtures, 'raw', id));
 });
 if (outputs.size === 2 && !failed) {

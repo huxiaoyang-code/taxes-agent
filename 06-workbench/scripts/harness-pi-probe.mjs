@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Model-free verification against the actual installed Pi 1.1.0 loader and its
-// native MCP connection implementation. No auth/config/session files are read.
+// 不调用模型，验证实际安装的 Pi 1.1.0 加载器及其
+// 原生 MCP 连接实现。不读取认证、配置或会话文件。
 import assert from 'node:assert/strict';
 import { readFileSync, mkdirSync, mkdtempSync, createReadStream, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { resolve, join, dirname, isAbsolute } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-// The real registered parser tool launches this script in replay mode. It only
-// emits previously saved protocol bytes; it never creates a model runtime.
+// 实际注册的解析工具以重放模式启动此脚本。它只
+// 输出先前保存的协议字节，绝不创建模型运行时。
 if(process.argv.includes('--mode')&&process.env.FINANCE_HARNESS_REPLAY_SOURCE){
  const source=process.env.FINANCE_HARNESS_REPLAY_SOURCE,splitAt=Number(process.env.FINANCE_HARNESS_REPLAY_SPLIT_AT);let offset=0,splitDone=false;
  const send=bytes=>new Promise((ok,no)=>process.stdout.write(bytes,error=>error?no(error):ok()));
@@ -24,7 +24,7 @@ const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),extension=jo
 const agentDirFlag=process.argv.indexOf('--agent-dir');let agentDir;
 if(agentDirFlag>=0){
  const selected=process.argv[agentDirFlag+1];if(!selected||!isAbsolute(selected))throw Error('explicit_new_probe_agent_dir_required');
- agentDir=resolve(selected);mkdirSync(agentDir); // exclusive: never load an existing user's auth/config/session
+ agentDir=resolve(selected);mkdirSync(agentDir); // 独占创建：绝不加载现有用户的认证、配置或会话。
 }else{mkdirSync(join(repo,'06-workbench/.agent-runs'),{recursive:true});agentDir=mkdtempSync(join(repo,'06-workbench/.agent-runs/pi-model-free-'));}
 process.env.PI_CODING_AGENT_DIR=agentDir;
 const {loadExtensions}=await import(pathToFileURL(join(piRoot,'dist/core/extensions/loader.js')).href);
@@ -65,8 +65,8 @@ try {
  await connection.getClient();assert.equal(connection.state,'connected');assert.ok(connection.tools.some(t=>t.name==='harness_discover'));
  const discovery=await connection.callTool('harness_discover',{},{});assert.equal(discovery.isError,undefined);const payload=discovery.structuredContent;assert.deepEqual(payload.capabilities,[]);assert.ok(payload.domains.some(d=>d.domain==='offline'));const filtered=await connection.callTool('harness_discover',{domain:'offline'},{});assert.ok(filtered.structuredContent.capabilities.some(c=>c.capabilityId==='offline.vat_q2'));const selected=await connection.callTool('harness_discover',{capabilityId:'offline.vat_q2'},{});assert.equal(selected.structuredContent.contractAvailable,true);
  const skill=await connection.readResource('skill://harness/SKILL.md',{});assert.match(skill.contents[0].text,/原始资料/);
- // Reproduce the documented CLI extension selection: -ne, explicit built-in
- // mcp and tool-search, plus this extension. No silently injected defaults.
+ // 复现文档中的 CLI 扩展选择：-ne、显式指定内置
+ // mcp 和 tool-search，再加此扩展。不静默注入默认项。
  const {DefaultResourceLoader}=await import(pathToFileURL(join(piRoot,'dist/core/resource-loader.js')).href),{builtInExtensions}=await import(pathToFileURL(join(piRoot,'dist/extensions/index.js')).href),{SettingsManager}=await import(pathToFileURL(join(piRoot,'dist/core/settings-manager.js')).href),{SessionManager}=await import(pathToFileURL(join(piRoot,'dist/core/session-manager.js')).href),{AuthStorage}=await import(pathToFileURL(join(piRoot,'dist/core/auth-storage.js')).href),{ModelRuntime}=await import(pathToFileURL(join(piRoot,'dist/core/model-runtime.js')).href),{createAgentSession}=await import(pathToFileURL(join(piRoot,'dist/core/sdk.js')).href);
  const settingsManager=SettingsManager.inMemory(),extensionPaths=['builtin:mcp','builtin:tool-search',extension];
  const loader=new DefaultResourceLoader({cwd:repo,agentDir,settingsManager,noExtensions:true,noContextFiles:true,noSkills:true,noPromptTemplates:true,additionalExtensionPaths:extensionPaths,extensionFactories:builtInExtensions});await loader.reload();

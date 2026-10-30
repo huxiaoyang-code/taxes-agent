@@ -1,4 +1,4 @@
-// An explanatory preparation DAG, deliberately separate from #77 execution contracts.
+// 用于说明准备工作的 DAG，有意与 #77 执行合同区分。
 import { assessCompleteness } from './material-completeness.mjs';
 import { buildCustomerDataRequest } from './customer-data-request.mjs';
 import { fields, requirePlainJson, requireValue, hash, stable } from './offline-material-adapters.mjs';

@@ -1,4 +1,4 @@
-// Inspect one explicitly selected official page. No requests or page operations.
+// 检查一张明确选定的官方页面。不发送请求或执行页面操作。
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { openRegisteredBrowserDiagnostic } from '../server/tax-browser-diagnostic.mjs';
@@ -81,8 +81,8 @@ export async function inspectRegisteredPage({registrationRef, registrationRoot, 
           const bytes=Buffer.byteLength(content);if(bytes>1048576)throw new Error('size');
           totalBytes+=bytes;if(totalBytes>4194304)break;
           examinedCount++;
-          // Only a count leaves this process. A match is static-source evidence,
-          // never route authorization, and no unknown pathname is emitted.
+          // 只有计数离开此进程。匹配结果只是静态源码证据，
+          // 绝不授予路由权限，也不输出未知路径名。
           if(current.pathname!=='/'&&["'",'"','`'].some(q=>content.includes(q+current.pathname+q)))currentPathLiteralSourceCount++;
           for(const [path,recipe] of Object.entries(PASSIVE_RECIPES))
             if(["'",'"','`'].some(q=>content.includes(q+path+q)))codes.find(c=>c.resource===recipe.resource).sourceCount++;

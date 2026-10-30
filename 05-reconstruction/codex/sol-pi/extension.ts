@@ -1,5 +1,5 @@
-// Narrow finance-workbench adapter around the unmodified NVIDIA MIT factory.
-// See upstream-manifest.json for the immutable source and all original hashes.
+// 在未修改的 NVIDIA MIT factory 外增加窄范围财税工作台适配。
+// 不可变来源及全部原始哈希见 upstream-manifest.json。
 import {readFileSync,appendFileSync,existsSync,lstatSync} from 'node:fs';
 import {join,isAbsolute} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -24,8 +24,8 @@ export default function financeObservationPack(pi:ExtensionAPI){
         const context=scoped(ctx),messages=event.messages.filter(eligible),root=runtimeRoot(context);
         try{
           if(fatal)throw Error(fatal);
-          // The upstream factory fails open. Preflight persistence and verify again
-          // before every projection, preserving history and aborting on corruption.
+          // 上游 factory 失败时会放行；先预检持久化，并在每次投影前再次验证，
+          // 保留历史，发现损坏即终止。
           const expectedIds:string[]=[];
           for(const message of messages)if(isPureTextResult(message)){
             const observation=createObservation(message,root);if(!observation)continue;

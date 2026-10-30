@@ -1,5 +1,5 @@
-// Purely synthetic temp files, injected CDP and process observations. No real
-// registration, browser profile, evidence store, database or network is read.
+// 仅使用合成临时文件及注入的 CDP/进程观测。不读取真实
+// 登记、浏览器配置目录、证据存储、数据库或网络。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mkdtemp,mkdir,writeFile,readFile,rm,lstat,link,unlink} from 'node:fs/promises';

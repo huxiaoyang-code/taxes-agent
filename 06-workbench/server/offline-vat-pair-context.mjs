@@ -1,4 +1,4 @@
-// Opaque pair facade. Only the fixed fresh worker holds raw inputs, snapshots and the DB.
+// 不透明配对外观层；原始输入、快照及数据库仅由固定全新 worker 持有。
 import { resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
@@ -38,7 +38,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function startWorker(binding) {
-  // Never inherit Node preloads or a user's default accounting data directory.
+  // 绝不继承 Node 预加载项或用户默认会计数据目录。
   const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.NODE_PATH; delete env.WORKBENCH_DATA_DIR;
   const child = spawn(process.execPath, [fileURLToPath(new URL('./offline-vat-pair-worker.mjs', import.meta.url)), Buffer.from(JSON.stringify(binding)).toString('base64url')], { env, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   const ready = deferred(), exited = deferred();
@@ -77,14 +77,14 @@ async function stopWorker(state) {
   if (state.stopping) return state.stopping;
   state.stopping = (async () => {
     if (state.didExit) return;
-    try { if (state.child.connected) state.child.send({ version: 'offline-vat-pair-ipc/1', type: 'command', sequence: 0, command: 'close' }, () => {}); } catch { /* Kill below if IPC cannot close. */ }
+    try { if (state.child.connected) state.child.send({ version: 'offline-vat-pair-ipc/1', type: 'command', sequence: 0, command: 'close' }, () => {}); } catch { /* IPC 无法关闭时，在下方终止进程。 */ }
     let timer;
     try { await Promise.race([state.exited.promise, new Promise(ok => { timer = setTimeout(ok, 500); })]); } finally { clearTimeout(timer); }
     if (!state.didExit) {
-      try { state.child.kill('SIGTERM'); } catch { /* Escalate below. */ }
+      try { state.child.kill('SIGTERM'); } catch { /* 在下方升级为强制处理。 */ }
       try { await Promise.race([state.exited.promise, new Promise(ok => { timer = setTimeout(ok, 500); })]); } finally { clearTimeout(timer); }
     }
-    if (!state.didExit) { try { state.child.kill('SIGKILL'); } catch { /* Exit event still owns completion. */ } }
+    if (!state.didExit) { try { state.child.kill('SIGKILL'); } catch { /* 完成仍由实际 exit 事件决定。 */ } }
     await state.exited.promise;
   })();
   return state.stopping;
@@ -105,7 +105,7 @@ function validateReply(reply, binding) {
   return diagnostic(reply.status, reply.code, { ...(reply.result ?? {}), ...(reply.status === 'pair_bound_prior_q1_recomputed' ? { targetBinding: 'same_held_readonly_source' } : {}) });
 }
 
-/** API paths must be absolute. No caller-supplied DB/snapshot/receipt JSON is consumed. */
+/** API 路径必须为绝对路径；不接收调用者提供的数据库、快照或回执 JSON。 */
 export async function openOfflineVatPairContext(request) {
   let state;
   try {
@@ -126,7 +126,7 @@ export async function openOfflineVatPairContext(request) {
   }
 }
 
-/** Serialized IPC; every call recomputes inside the original fresh worker/session. */
+/** 串行化 IPC；每次调用都在原始全新 worker/会话内重新计算。 */
 export async function assertOfflineVatPairContextCurrent(receipt) {
   const state = receipts.get(receipt);
   if (!state) return diagnostic('blocked', 'pair_receipt_untrusted');
@@ -145,7 +145,7 @@ export async function assertOfflineVatPairContextCurrent(receipt) {
   const next = state.queue.then(work, work); state.queue = next.catch(() => {}); return next;
 }
 
-/** Await actual worker exit; close also cancels an in-flight consume. */
+/** 等待 worker 实际退出；close 也会取消正在进行的 consume。 */
 export async function closeOfflineVatPairContext(receipt) {
   const state = receipts.get(receipt);
   return state ? retire(state, 'pair_receipt_closed') : diagnostic('blocked', 'pair_receipt_untrusted');

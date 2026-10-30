@@ -1,4 +1,4 @@
-// Stateless facade: all financial execution happens in a fresh native bootstrap.
+// 无状态外观层：全部财务执行在全新的原生引导进程中进行。
 import { open, lstat, unlink } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,16 +54,16 @@ function ownMarkerExpected(result, publicationId) {
 }
 async function removeOwnMarker(directory,result,publicationId) {
   try { const marker=ownMarkerExpected(result,publicationId);await verifyOutputFile(directory,marker);await unlink(join(directory,marker.name)); }
-  catch { /* Only exact bytes and identity of this publication may be removed. */ }
+  catch { /* 只可移除与本次发布字节和身份精确一致的对象。 */ }
 }
 const publishedResults = new WeakMap();
 async function execute(request, binding, outputDirectory, publicationId) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (['NODE_OPTIONS', 'NODE_PATH', 'WORKBENCH_DATA_DIR'].includes(key.toUpperCase())) delete env[key];
   let child, timer, reply, endedResolve, closeInfo, exitInfo;
-  // Node on Windows can omit 'close' after a parent-initiated IPC disconnect.
-  // All stdio is ignored, so actual process exit owns cleanup in that case;
-  // spawn errors (which have no exit event) are settled by actual close.
+  // Windows 上的 Node 在父进程主动断开 IPC 后可能不触发 close。
+  // 此处忽略全部 stdio，因此在这种情况下由实际 exit 事件完成清理；
+  // 没有 exit 事件的 spawn 错误则由实际 close 事件收尾。
   const ended = new Promise(ok => { endedResolve = ok; });
   const result = new Promise((ok, no) => {
     child = spawn(process.execPath, [fileURLToPath(new URL('./accountant-review-q2-worker.mjs', import.meta.url)), Buffer.from(JSON.stringify(binding)).toString('base64url'), Buffer.from(JSON.stringify(request)).toString('base64url'), outputDirectory, publicationId], { env, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
@@ -82,7 +82,7 @@ async function execute(request, binding, outputDirectory, publicationId) {
   finally {
     clearTimeout(timer);
     if (!closeInfo && !exitInfo && child) {
-      try { child.kill('SIGKILL'); } catch { /* actual exit/close owns completion. */ }
+      try { child.kill('SIGKILL'); } catch { /* 由实际 exit/close 事件决定完成。 */ }
       await ended;
     }
   }
@@ -108,14 +108,14 @@ export async function runAccountantReviewQ2(request, outputDirectory) {
     publishedResults.set(completed,{directory:outputDirectory,publicationId,proof:structuredClone({manifest:reply.result.manifest,manifestSha256:reply.result.manifestSha256,outputFiles:reply.result.outputFiles})});
     return completed;
   } catch (e) {
-    // Invalidate only this worker's exact marker if the final parent code check fails.
+    // 父进程最终代码检查失败时，只使本 worker 的精确标记失效。
     if(typeof outputDirectory==='string') await removeOwnMarker(outputDirectory,published??e.publication,publicationId);
     const code = ['q2_request_invalid', 'review_q2_output_invalid', 'review_q2_publication_failed', 'review_q2_output_conflict', 'review_q2_context_stale', 'review_q2_input_or_publication_rejected', 'pair_scope_mismatch', 'pair_instance_mismatch', 'pair_profile_mismatch', 'pair_quarter_mismatch', 'pair_account_set_invalid', 'pair_previous_computation_forbidden', 'ledger_target_file_mismatch', 'q2_code_restart_required', 'q2_worker_timeout', 'q2_worker_unavailable'].includes(e?.code) ? e.code : 'q2_input_rejected';
     return diagnostic(code === 'q2_code_restart_required' ? 'restart_required' : 'blocked', code);
   }
 }
-// Only the actual successful return identity can invalidate its own publication.
-// Diagnostic JSON and its mutable public fields cannot restore or redirect this capability.
+// 只有实际成功返回所持有的身份，才能使其自身发布失效。
+// 诊断 JSON 及可变公开字段不能恢复或重定向此能力。
 export async function invalidateAccountantReviewQ2Output(result) {
   const state=publishedResults.get(result);
   if(!state) throw fail('review_q2_publication_untrusted');

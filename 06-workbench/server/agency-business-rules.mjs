@@ -1,4 +1,4 @@
-// Raw business facts -> auditable balanced drafts. No DB or network authority.
+// 原始业务事实 → 可审计、借贷平衡的草稿；不拥有数据库或网络权限。
 import { getAccountingProfile, getAccountingRoles } from './accounting-profiles.mjs';
 import { evaluateAccountingStatement } from './accounting-report-rules.mjs';
 import { hash, stable, requireValue, requirePlainJson } from './offline-material-adapters.mjs';
@@ -16,7 +16,7 @@ const dayInMonth = period => new Date(Date.UTC(Number(period.slice(0, 4)), Numbe
 const plain = (value, code) => requireValue(value && typeof value === 'object' && !Array.isArray(value), code);
 const validateDate = (value) => { requireValue(typeof value === 'string' && /^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value, 'agency_date_invalid'); return value; };
 
-/** All prior periods are replayed from facts; caller totals or posted flags grant no trust. */
+/** 全部历史期间均从事实重放；调用者提供的合计或 posted 标志不获得信任。 */
 export function evaluateAgencyAccounting(document) {
   requirePlainJson(document); plain(document.scope, 'agency_scope_invalid'); plain(document.entity, 'agency_entity_missing');
   const { scope, entity, records } = document;
@@ -82,7 +82,7 @@ export function evaluateAgencyAccounting(document) {
       switch (r.type) {
         case 'entity': case 'period_coverage': case 'obligation_inventory': case 'income_evidence': case 'prior_loss': case 'quarter_profile': case 'tax_location': case 'owner': case 'annual_employment': case 'contract': case 'opening_vat_prepayment': case 'opening_vat': case 'tax_payment': case 'property_asset': case 'land_asset': case 'vehicle': case 'vehicle_catalogue_entry': case 'excise_product': case 'extraction': case 'water_extraction': case 'pollutant_discharge': case 'farmland_use': case 'import_export': case 'advertising': case 'entertainment': case 'union': case 'union_payment': case 'personal_payment': case 'construction_cash': case 'construction_tax_trigger': case 'subcontract_payment': case 'contribution_parameters': case 'contribution_wage_history': case 'filing_context': case 'six_tax_relief_qualification': case 'contribution_notice': case 'contribution_payment': case 'disability_parameters': case 'tobacco_leaf_purchase': case 'foreign_port_vessel_entry': case 'rental_repair': case 'personal_rental_tax': case 'land_appreciation_unit': break;
         case 'property_acquisition': {
-          // Old holding clues remain metadata until an actual acquisition invoice exists.
+          // 在实际取得购入发票前，旧持有线索仅保留为元数据。
           if(!r.assetPurchaseInvoiceNumber)break;
           requireValue(r.assetUse==='under_construction'&&r.assetKind==='building'&&r.deliveryAcceptanceDocumentNumber&&r.deliveredOn&&validateDate(r.deliveredOn)<=r.date&&['paid','unpaid'].includes(r.settlement)&&r.inputVatTreatment==='non_deductible','agency_extended_property_acquisition_accounting_missing');
           const net=cents(r.priceExcludingVat),vat=cents(r.invoiceVat),gross=cents(r.invoiceGross);requireValue(net+vat===gross&&net>=0n&&vat>=0n,'agency_invoice_total_mismatch');
@@ -108,8 +108,8 @@ export function evaluateAgencyAccounting(document) {
           requireValue((balances.get('1601')??0n)>=cost&&-(balances.get('1602')??0n)>=depreciation,'agency_property_disposal_original_ledger_missing');
           requireValue(entity.vatStatus==='general'&&r.vatAssessmentMethod==='general'&&r.simplifiedElection===false,'agency_property_disposal_vat_method_or_differential_evidence_missing');
           for(const receipt of r.relatedTaxReceipts){validateDate(receipt.paidOn);if(receipt.paidOn.slice(0,7)>=replayFrom)requireValue(records.some(p=>p.type==='tax_payment'&&p.obligationId===receipt.obligationId&&p.propertyId===r.propertyId&&p.taxReceiptNumber===receipt.receiptNumber&&p.date===receipt.paidOn&&cents(p.amount)===cents(receipt.amount)&&p.paymentReference),'agency_property_disposal_tax_payment_reconciliation_missing');}
-          // Ordinary general-method sale is 9%; small/old-property simplified choices
-          // need their original-price differential vouchers and are not inferred here.
+          // 一般计税方法下普通销售适用 9%；小规模或老项目简易计税选择
+          // 需要原价差额凭证支持，此处不作推断。
           const output=calculateAgencyOutputVat({entity,category:'real_estate_lease',net:money(net),date:r.date,invoiceKind:r.invoiceKind});requireValue(cents(output.tax)===vat,'agency_property_disposal_vat_unverified');
           journal(r,'asset_disposal_remove',[line('1606',cost-depreciation,0n),...(depreciation?[line('1602',depreciation,0n)]:[]),line('1601',0n,cost)],'按原资产取得发票/累计折旧及原账核对转入固定资产清理，税务评估价值不代替账面净值');
           journal(r,'asset_disposal_sale',[line(r.settlement==='paid'?'bank':'receivable',gross,0n),line('1606',0n,net),...(vat?[line('tax',0n,vat)]:[])],'旧商业房原有偿转让价款，账面清理和土地增值税扣除基础分开');
@@ -339,7 +339,7 @@ export function evaluateAgencyAccounting(document) {
       }
     } catch (error) {
       if (!error.code) throw error;
-      // A single invalid business fact cannot leak a partial entry or consumed layer.
+      // 单个无效业务事实不能泄露部分分录或消耗存货层。
       const restore = (target, values) => { target.clear(); for (const [key, value] of values) target.set(key, value); };
       restore(lots, snapshot.lots); restore(jobs, snapshot.jobs); restore(sales, snapshot.sales); restore(contracts, snapshot.contracts); restore(receivables, snapshot.receivables); restore(payables, snapshot.payables); cashIdentities.clear(); snapshot.cashIdentities.forEach(x => cashIdentities.add(x)); restore(balances, snapshot.balances); restore(yearFlows, snapshot.yearFlows); vouchers.length = snapshot.count; vatTransactions.length = snapshot.vat;assetCardDrafts.length=snapshot.assetCards;pendingAssetDisposals.length=snapshot.disposals;
       issue(r, error.code ?? 'agency_business_rule_failure', '补充或核对该原始业务事实及规则适用条件，当前分支未生成分录');
@@ -369,7 +369,7 @@ export function evaluateAgencyAccounting(document) {
     sources: AGENCY_ACCOUNTING_SOURCES, submittable: false, periodComplete: false, authorizesExecution: false };
 }
 
-/** Add only program-derived, balanced rule journals; never a customer journal input. */
+/** 仅加入程序推导、借贷平衡的规则分录；不接收客户预制分录。 */
 export function applyAgencyDerivedJournals(accounting, journals) {
   const result = clone(accounting), profile = getAccountingProfile(result.profileId);
   const amounts = new Map(result.reportDraftInputs.amounts.map(a => [a.code, BigInt(a.netMinor)]));
@@ -390,7 +390,7 @@ export function applyAgencyDerivedJournals(accounting, journals) {
   return result;
 }
 
-/** The registered simple method is the statutory cash book; double-entry remains its internal reconciliation projection. */
+/** 已登记的简易方法采用法定现金账；复式分录仅用于内部核对投影。 */
 export function buildAgencyBookkeeping(document, accounting) {
   if(document.entity.kind!=='individual_business')return {method:'double_entry',internalProjection:false};
   const method=document.entity.bookkeepingMethod, rows=[],receipts=[],expenses=[],purchases=[],owners=[],otherCash=[];
@@ -406,7 +406,7 @@ export function buildAgencyBookkeeping(document, accounting) {
     else if(cash<0n&&(raw?.type==='expense'||raw?.type==='supplier_payment'&&facts.get(raw.relatedFactId)?.type==='expense'||raw?.type==='payroll'||voucher.derived?.kind==='payment'&&voucher.derived.obligationId!=='business_income'))category='operating_payment';
     else if(voucher.derived?.kind==='payment'&&voucher.derived.obligationId==='business_income')category='owner_income_tax';
     let income=cash>0n&&category==='business_receipt'?cash:0n,expense=cash<0n&&category==='operating_payment'?-cash:0n;
-    // Platform withholding is one bank movement; gross receipts and withheld fees are separately shown in the cash book.
+    // 平台扣款在银行中体现为一次资金变动；现金账分别列出收款总额与代扣费用。
     if(raw?.type==='platform_settlement'){income=cents(raw.orderReceipts)-cents(raw.refunds);expense=cents(raw.platformFee);}
     const row={period:voucher.period,date:voucher.date,category,receipt:money(income),expense:money(expense),purchase:money(category==='purchase_payment'?-cash:0n),actualCashChange:money(cash),sourceVoucherId:voucher.sourceVoucherId,sourceRefs:voucher.sourceRefs};
     rows.push(row);if(income){receipts.push(row);receipt+=income;}if(expense){expenses.push(row);operating+=expense;}if(category==='purchase_payment'){purchases.push(row);purchaseCash-=cash;}if(category.startsWith('owner_'))owners.push(row);else if(['other_cash','deposit'].includes(category))otherCash.push(row);
@@ -416,7 +416,7 @@ export function buildAgencyBookkeeping(document, accounting) {
   return {method,legalBasis:'个体工商户建账管理暂行办法第9条',statutoryProduct:method==='simple'?'简易收支账（经营收入/费用/购进/盘点/利润表）':'复式语义账簿内部会计核对底稿',internalProjection:method==='simple',projectionLimitation:method==='simple'?'同一账套复式凭证仅辅助核对，不作为复式制度法定报表；现金收付只记录一次':null,rows,receipts,expenses,purchases,ownerMovements:owners,otherCash,stocktake:{complete:stocktakeComplete,items:inventories},profitStatement:{cashBusinessReceipts:money(receipt),cashOperatingPayments:money(operating),cashPurchasePayments:money(purchaseCash),cashSurplusBeforeInventory:money(receipt-operating-purchaseCash),accrualOperatingProfit:accounting.yearProfitBeforeTax,accrualMinusCashSurplus:money(cents(accounting.yearProfitBeforeTax)-receipt+operating+purchaseCash),status:stocktakeComplete?'cash_book_with_accrual_reconciliation':'stocktake_pending',reason:'收付实现的简易账与查账经营所得权责发生差异分别列示；购进不是自动当期成本，期末盘点/存货成本另核'},accountantApproval:'pending',submittable:false,periodComplete:false};
 }
 
-/** Fixed order: business -> non-income taxes/relief -> income tax; historical months replay raw facts. */
+/** 固定顺序：业务 → 非所得税税费/减免 → 所得税；历史月份重放原始事实。 */
 export function replayAgencyFinancials(document, { annual = false } = {}) {
   if(annual){
     const taxStart=document.entity.businessStartDate.slice(0,7)>`${document.scope.period.slice(0,4)}-01`?document.entity.businessStartDate.slice(0,7):`${document.scope.period.slice(0,4)}-01`;
@@ -455,7 +455,7 @@ export function replayAgencyFinancials(document, { annual = false } = {}) {
       const entries = delta > 0n ? [{ ...row.entries[0], debit: money(delta) }, { ...row.entries[1], credit: money(delta) }] : [{ ...row.entries[0], debit: '0.00', credit: money(-delta) }, { ...row.entries[1], debit: money(-delta), credit: '0.00' }];
       income.push(journalFrom(row, month, entries));
     }
-    // A computed zero after a prior positive is a genuine reduction, not an absent rule branch.
+    // 前期为正、本期计算为零时属于真实减少，不是规则分支缺失。
     for (const id of ['corporate_income', 'business_income']) {
       const row = tax.obligations.find(o => o.obligationId === id && o.status === 'calculated');
       if (row && cents(row.due) === 0n && (cumulative.get(id) ?? 0n) > 0n) {

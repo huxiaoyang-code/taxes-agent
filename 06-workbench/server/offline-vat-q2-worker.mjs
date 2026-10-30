@@ -1,4 +1,4 @@
-// Validate the expected/initial/current byte closure before any financial import.
+// 导入任何财务模块前，验证 expected/initial/current 字节闭包。
 import { assertOfflineVatQ2CodeCurrent } from './offline-vat-q2-code.mjs';
 let session;
 const send = message => new Promise((ok, no) => {

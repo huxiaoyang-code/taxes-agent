@@ -1,5 +1,5 @@
-// Durable local orchestration metadata, never a ledger. Business writes belong
-// exclusively to fixed adapters and their existing audited domain operations.
+// 持久化本机编排元数据，不是账簿；业务写入
+// 只属于固定适配器及其已有受审计业务操作。
 import { mkdir, open, readdir, rename, unlink, lstat } from 'node:fs/promises';
 import { resolve, dirname, join, isAbsolute } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -35,7 +35,7 @@ export async function loadHarness(path) {
   const state = { info, meta, head: hash(meta), events: [], sources: new Map(), invalidatedSources:new Set(), invalidatedResults:new Set(), capabilityEpochs:new Map(), factEpochs:new Map(), facts: new Map(), tasks: [], attempts: [], feedbacks: [], requests: [], treatments: [] };
   const files = (await readdir(join(info.root, 'events'))).sort(); requireValue(files.length <= 10000, 'harness_store_limit');
   for (const name of files) {
-    // Uncommitted temporary files have no authority; retain them for diagnosis.
+    // 未提交的临时文件不具权威性，保留供诊断。
     if (/^pending-[a-f0-9-]+\.json$/.test(name)) continue;
     requireValue(/^\d{8}\.json$/.test(name), 'harness_journal_invalid');
     const e = await jsonFile(join(info.root, 'events', name)), { digest, ...body } = e;
@@ -76,8 +76,8 @@ export async function appendHarness(s, kind, data) {
 }
 export const withHarness = locked;
 
-// A dependency/code change must not hide an accountant rejection of the same
-// native operation. Read the retained receipt events, not only its latest view.
+// 依赖或代码变化不能隐藏会计对同一原生操作的驳回；
+// 须读取保留的回执事件，不能只看最新视图。
 export function operationWasRejected(s, operationId) {
   const versions=new Set(s.events.filter(e=>['result','reconcile'].includes(e.kind)&&e.data.receipt.operationId===operationId).map(e=>e.data.receipt.targetVersion));
   return s.feedbacks.some(f=>f.decision==='reject'&&versions.has(f.targetVersion));
@@ -101,8 +101,8 @@ const checkedFiles = async paths => {
 };
 export async function registerHarnessSource(path, source, currentView) {
   requireValue(source && idPattern.test(source.sourceId) && typeof source.locator === 'string' && source.locator.length > 0 && Array.isArray(source.unrecognized) && typeof source.classification === 'string', 'harness_source_invalid');
-  // Any file extension/layout is accepted. The host investigates and produces
-  // parser code and validation artifacts; this module does not execute that code.
+  // 接受任意扩展名或布局；宿主调查后产出解析代码和验证制品，
+  // 本模块不执行这些代码。
   const originals = await checkedFiles([source.path]), code = await checkedFiles(source.codePaths ?? []), validation = await checkedFiles(source.validationPaths ?? []);
   requireValue(!source.parsed || code.length > 0 && validation.length > 0, 'harness_parser_proof_required');
   const data = { sourceId: source.sourceId, locator: source.locator, originals, code, validation, parsed: source.parsed === true, unrecognized: source.unrecognized, classification: source.classification };
@@ -152,8 +152,8 @@ export async function sourceFreshness(s) {
 export async function harnessView(s, capabilities, externalByTask = new Map(), proofObservations = new Map()) {
   const fresh = await sourceFreshness(s), byId = new Map(s.tasks.map(t => [t.taskId, t])), views = new Map();
   for(const [sourceId,current] of fresh)if(current===false&&!s.invalidatedSources.has(sourceId))await appendHarness(s,'invalidate_source',{sourceId});
-  // Old events without codeTraceDigest remain readable and conservatively gain
-  // one new epoch. An observed bridge change/restore never revives old review.
+  // 没有 codeTraceDigest 的旧事件仍可读取，并保守推进一次新 epoch；
+  // 观察到桥接变化或恢复，都不会让旧复核重新生效。
   const currentCaps=[...capabilities.values()].map(c=>({capabilityId:c.capabilityId,codeDigest:c.codeDigest,codeTraceDigest:hash(c.traceReferences.filter(r=>r.kind==='code'))}));
   const changedCaps=currentCaps.filter(c=>{const prior=s.capabilityEpochs.get(c.capabilityId);return prior?.codeDigest!==c.codeDigest||prior?.codeTraceDigest!==c.codeTraceDigest;});
   if(changedCaps.length)await appendHarness(s,'capabilities',changedCaps);
@@ -165,8 +165,8 @@ export async function harnessView(s, capabilities, externalByTask = new Map(), p
     const treatmentId=s.facts.get(requestFactIdForTask(t))?.value?.treatmentId,treatment=treatmentId?s.treatments.find(x=>x.treatmentId===treatmentId):null;
     const external = externalByTask.get(t.taskId) ?? (t.externalDependencies ?? []).map(ref=>({...ref,current:false,reason:'harness_external_dependency_unchecked'}));
     const sourceIds = [...new Set([...facts.flatMap(f => f.sourceRefs),...(treatment?[treatment.draftSourceId]:[])])];
-    // Availability observations are blockers, never new business versions.
-    // A verified change still advances the durable invalidation/epoch markers.
+    // 可用性观察只形成阻塞，不生成新的业务版本。
+    // 已经核实的变化仍须推进持久失效标记及 epoch。
     const dependencyDigest = hash({ scope: s.meta.scope, task: t, capability: cap, capabilityEpoch:s.capabilityEpochs.get(t.capabilityId)?.epoch,facts:facts.map(f=>[f,s.factEpochs.get(f.factId)]),treatment:treatment?[treatment,treatmentCurrent.get(treatmentId)]:null,sources: sourceIds.map(id => [id, s.sources.get(id)?.sourceVersion, fresh.get(id)!==false,s.invalidatedSources.has(id)]), parents: parents.map(p => [p.taskId, p.dependencyDigest, p.receipt?.targetVersion ?? null, p.executionState, p.reviewState]),...(external.length?{external:external.map(({storePath,taskId,period,targetVersion,dependencyDigest,current,retryable})=>({storePath,taskId,period,targetVersion,dependencyDigest,current:retryable?true:current}))}:{} ) });
     const attempts = s.attempts.filter(a => a.taskId === t.taskId), last = attempts.at(-1), matching = attempts.filter(a => a.dependencyDigest === dependencyDigest).at(-1);
     const receipt = matching?.result ?? null;
@@ -186,7 +186,7 @@ export async function harnessView(s, capabilities, externalByTask = new Map(), p
     parents.filter(p => !(correction?.taskId===p.taskId&&correction.targetVersion===p.receipt?.targetVersion&&s.attempts.some(a=>a.taskId===p.taskId&&a.result?.targetVersion===correction.targetVersion&&a.result.executionState==='executed'))&&(p.executionState !== 'executed' || p.reviewState === 'rejected' || p.blockers.length)).forEach(p => blockers.push({ taskId: p.taskId, state: 'dependency_blocked', reason: p.executionState,...(p.blockers.length&&p.blockers.every(b=>b.retryable)?{retryable:true}:{}) }));
     if (cap.availability === 'unavailable') blockers.push({ state: 'unsupported', reason: 'capability_unavailable' });
     if (!capabilitySupportsScope(cap,s.meta.scope)) blockers.push({state:'unsupported',reason:'harness_capability_period_unsupported',period:s.meta.scope.period});
-    // An older interrupted write remains unresolved even if facts or rules changed.
+    // 即使事实或规则变化，较早中断写入仍须保留未解决状态。
     const sameRequest=s.attempts.filter(a=>a.effect==='write'&&a.capabilityId===t.capabilityId&&sameBusinessRequest(t.capabilityId,a.request,s.facts.get(requestFactIdForTask(t))?.value));
     const unresolved = [...attempts,...sameRequest].find(a => a.effect === 'write' && (!a.result || a.result.executionState === 'unknown'));
     if (unresolved) blockers.push({ state: 'unknown', reason: 'write_outcome_unknown', intentDigest: unresolved.intentDigest,originalTaskId:unresolved.taskId });
@@ -214,8 +214,8 @@ export async function recordHarnessFeedback(path, feedback, capabilities, curren
     return { status: 'recorded', decision: feedback.decision, correctWithExistingBusinessTools: feedback.decision === 'reject', publicRulePromoted: false,...continuation(await currentView(s),[feedback.taskId]) };
   });
 }
-// Project the existing DAG; this is advice for the host, never an execution or
-// approval. Changed upstream bindings do not silently retarget external Stores.
+// 投影已有 DAG；这只是给宿主的建议，不是执行或批准。
+// 上游绑定变化不能静默重定向外部 Store。
 export function continuation(view, roots) {
   const affected=new Set(roots);let size;
   do{size=affected.size;for(const t of view.tasks)if(t.dependsOn.some(id=>affected.has(id)))affected.add(t.taskId);}while(size!==affected.size);
@@ -243,8 +243,8 @@ export async function registerHarnessTreatment(path, treatment) {
   return locked(path, async s => {
     const source=s.sources.get(treatment.draftSourceId);requireValue(source?.parsed&&source.code.length>0&&source.validation.length>0,'harness_treatment_draft_proof_required');
     requireValue((await sourceFreshness(s)).get(treatment.draftSourceId)&&!s.invalidatedSources.has(treatment.draftSourceId),'harness_treatment_evidence_changed');
-    // Reuse the registered local evidence inventory. This checks binding and
-    // freshness only; it is not a policy interpretation or validation engine.
+    // 复用已登记的本机证据清单，仅检查绑定和当前性；
+    // 不解释政策，也不另建验证引擎。
     const inventory=[...source.originals,...source.code,...source.validation];
     requireValue(treatment.traceReferences.every(ref=>inventory.some(f=>f.path===ref.locator&&f.digest===ref.digest)),'harness_treatment_unregistered_evidence');
     const data={...treatment,draftSourceVersion:source.sourceVersion,scope:s.meta.scope,publicRuleState:'uncovered'};data.treatmentVersion=hash(data);

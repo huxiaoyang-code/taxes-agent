@@ -1,4 +1,4 @@
-// One code-owned policy directory. Candidate notices never activate formula code.
+// 唯一的代码维护政策目录；候选政策通知不会激活公式代码。
 import { createHash } from 'node:crypto';
 import { readFileSync, lstatSync, realpathSync, openSync, closeSync, writeSync, unlinkSync, fstatSync, fsyncSync } from 'node:fs';
 import { resolve, dirname, join, parse, relative, isAbsolute } from 'node:path';
@@ -89,7 +89,7 @@ const DATE = /^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const validDate = d => typeof d==='string'&&DATE.test(d)&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
 const supported = {from:'2026-01-01',through:'2027-12-31'};
 const allKinds = ['company','individual_business','sole_proprietor','partnership'];
-// This is a directory of existing fixed functions, not an expression language.
+// 此处仅登记已有固定函数，不提供表达式语言。
 const taxTopics = [
  ['vat','增值税',['sale','sale_return','service_complete','purchase','import_export','rental','construction_billing'],['vat','vatRelief'],'境内普通交易及已核进口分支；跨境/特殊差额仍有缺口'],
  ['vat_prepayment','增值税预缴',['construction_cash','construction_tax_trigger','rental','subcontract_payment'],['prepayment','prepaymentSurcharge'],'按原项目与预缴地、实际收付归集'],
@@ -167,7 +167,7 @@ export function listAgencyRules(filters={}){
 export function getAgencyRuleDetail(ruleId,revision='1'){const r=catalog().find(r=>r.ruleId===ruleId&&r.revision===revision);need(r,'agency_rule_revision_not_found');return {version:AGENCY_RULE_CATALOG_VERSION,catalogDigest:agencyRuleCatalogDigest(),rule:clone(r)};}
 export function assertAgencyRuleContext(obligationId,record,scope,entity){const r=taxRules.find(r=>r.obligationId===obligationId);need(r&&/^202[67]-(0[1-9]|1[0-2])$/.test(scope?.period),'agency_rule_implementation_period_unsupported');need(r.entityKinds.includes(entity?.kind),'agency_rule_entity_unsupported');need(record&&typeof record==='object','agency_rule_original_fact_missing');}
 const stateFor = s => s==='calculated'?'matched':s==='not_applicable'?'not_applicable':s==='uncovered'?'unsupported':s==='missing'||s==='unknown'?'missing':s==='pending_period_end'?'missing':'unsupported';
-/** Only actual workpaper results determine readiness; metadata listings never do. */
+/** 是否就绪只由真实工作底稿结果决定，不由元数据目录决定。 */
 export function resolveAgencyRuleTrace({scope,entity,records,obligations,accounting}){
  need(Array.isArray(obligations)&&Array.isArray(records),'agency_rule_calculation_result_required');
  const traces=obligations.map(o=>{const r=taxRules.find(r=>r.obligationId===o.obligationId);need(r,'agency_rule_obligation_not_registered');const types=r.triggers.recordTypes,triggerFacts=records.filter(f=>types.includes(f.type)&&f.date?.slice(0,7)<=scope.period),seen=(o.calculations??[]).flatMap(c=>c.regionalRuleId?[c.regionalRuleId]:[]),regionalRules=regionalDescriptors().filter(p=>seen.includes(p.id)),outside=!/^202[67]-/.test(scope.period),reason=o.reason??'实际计算未提供原因';let state=outside?'unsupported':stateFor(o.status);const ruleIds=[r.ruleId,...regionalRules.map(p=>p.ruleId)],conflicts=[];
@@ -179,8 +179,8 @@ export function resolveAgencyRuleTrace({scope,entity,records,obligations,account
 }
 export function getAgencyPolicyObservationSources(filters={}){const page=listAgencyRules(filters),ids=new Set(page.rules.map(r=>r.ruleId)),rows=catalog().filter(r=>ids.has(r.ruleId));return {version:'agency-policy-observation/1',automaticMonitoring:false,totalRules:page.total,offset:page.offset,limit:page.limit,nextOffset:page.nextOffset,sources:rows.flatMap(r=>(r.sources??[]).map(s=>({ruleId:r.ruleId,revision:r.revision,url:s.url,title:s.title,locator:s.locator??null,checkedOn:s.checkedOn??r.checkedOn??null,publishedOn:s.publishedOn??r.publishedOn??null,publicationDateStatus:s.publishedOn||r.publishedOn?'recorded':'not_recorded_in_baseline',effectiveFrom:s.from??r.legalEffective?.from??null,effectiveThrough:s.through??r.legalEffective?.through??null,verification:s.verification??r.evidenceForm??'source_form_recorded'})))};}
 
-// Append-only local candidate journal. It contains observations, never executable
-// formulas or active parameter overrides. Promotion requires a reviewed code PR.
+// 本机候选日志仅追加，保存观察结果，绝不包含可执行公式
+// 或生效参数覆盖；晋升规则必须经过代码 PR 审查。
 const POLICY_VERSION='agency-policy-candidates/1';
 const allowedKeys=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>keys.includes(k));
 export function validateAgencyPolicyCandidate(candidate){

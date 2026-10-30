@@ -1,4 +1,4 @@
-// Restricted OOXML reader. ZIP/XML grammar belongs to pinned libraries, never regex parsers.
+// 受限 OOXML 读取器；ZIP/XML 语法由固定依赖库处理，不用正则解析器。
 import { unzipSync, Unzip, UnzipInflate } from 'fflate';
 import { SaxesParser } from 'saxes';
 
@@ -13,7 +13,7 @@ const utf8 = bytes => new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 function unpack(bytes) {
   check(bytes.length > 0 && bytes.length <= MAX_FILE, 'xlsx_limit');
   const central = new Map(); let declared = 0;
-  // No inflate here: enumerate central metadata with the library, including duplicates.
+  // 此处不解压，使用依赖库列出中央目录元数据并保留重复项。
   unzipSync(bytes, { filter: f => {
     check(central.size < 100 && !central.has(f.name), 'xlsx_zip_invalid');
     check(typeof f.name === 'string' && f.name.length <= 240 && !f.name.startsWith('/') && !f.name.includes('\\') && !f.name.replace(/\/$/, '').split('/').some(x => x === '..' || x === '.' || x === ''), 'xlsx_zip_invalid');
@@ -187,11 +187,11 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     }
     const data = records.filter(r => r.rowNumber > mapping.headerRow).sort((a, b) => a.rowNumber - b.rowNumber); check(data.length > 0, 'xlsx_rows_missing');
     for (const r of data) for (const [key, col] of index) {
-      const type = r.types[col]; if (!type && r.cells[col] === undefined) continue; // Missing values reach the existing material adapter validation.
+      const type = r.types[col]; if (!type && r.cells[col] === undefined) continue; // 缺失值继续交给已有材料适配器校验。
       check(type, 'xlsx_cell_invalid');
       if (numericKeys.includes(key)) {
         check(type.type !== 'n' || ['0', '1', '2'].includes(type.format), 'xlsx_numeric_format_unsupported');
-        // Bank text-format options must never reinterpret an OOXML numeric cell.
+        // 银行文本格式选项绝不能重新解释 OOXML 数值单元格。
         if (strictNumericLexical && type.type === 'n') {
           const raw = r.cells[col];
           check(raw.trim() === raw && /^-?(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(raw), 'xlsx_cell_invalid');
@@ -206,6 +206,6 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
   }
 }
 
-// Numeric permissions belong to these fixed adapters, never to caller-controlled mapping.
+// 数值许可由固定适配器决定，不能由调用者可控制的映射决定。
 export const readInvoiceXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['net', 'tax', 'gross']);
 export const readBankXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['amount', 'balance'], true);

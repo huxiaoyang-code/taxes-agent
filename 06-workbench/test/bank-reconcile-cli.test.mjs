@@ -39,8 +39,8 @@ const baseDir = mkdtempSync(join(tmpdir(), "wb-bank-cli-"));
 const dbPath = join(baseDir, "workbench.db");
 
 process.on("exit", () => {
-  try { if (db) db.close(); } catch { /* ignore */ }
-  try { if (!process.env.KEEP_FIXTURES) rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* ignore */ }
+  try { if (db) db.close(); } catch { /* 忽略 */ }
+  try { if (!process.env.KEEP_FIXTURES) rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* 忽略 */ }
 });
 
 function run(args, { env = {} } = {}) {
@@ -695,7 +695,7 @@ test("真实 init-db 在文件预检后同 inode 填充旧 WAL 库：拒绝且�
   assert.equal(existsSync(target + "-shm"), false, "refusal must not create SHM");
   assert.deepEqual(fixtureFs.readdirSync(dir).sort(), ["donor.db", "late-hook.mjs", "workbench.db"],
     "no migration or backup directories created");
-  // SQL checks follow the sidecar assertions: this independent read can itself create WAL/SHM.
+  // SQL 检查在附属文件断言后执行：此独立读取自身可能创建 WAL/SHM。
   const check = new DatabaseSync(target, { readOnly: true });
   try {
     assert.deepEqual(check.prepare("SELECT id FROM existing_business").all().map(row => row.id), [991]);

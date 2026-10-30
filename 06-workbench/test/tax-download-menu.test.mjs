@@ -62,8 +62,8 @@ test('rejects unverified origins, credentials, unsafe ports, IDs, hashes and unk
     leaf('发票查询', '/szzh/query?SENTINEL_KEY=SENTINEL_VALUE'),
     leaf('发票查询', '/szzh/../query'),
   ]), NOW);
-  // The unknown ASCII resource is now retained only as a redacted structure;
-  // accepting its projection never verifies read-only semantics or navigation.
+  // 未知 ASCII 资源现在只作为脱敏结构保留；
+  // 接受其投影绝不表示已验证只读语义或导航。
   assert.equal(result.counts.blocked, 10);
   assert.equal(result.counts.allowed, 1);
   assert.equal(result.readOnlyVerified, false);

@@ -1,4 +1,4 @@
-// All materials and ledgers below are synthetic and isolated before importing DB modules.
+// 下方所有材料和账簿均为合成数据，并在导入数据库模块前隔离。
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
@@ -64,7 +64,7 @@ try {
   });
   await test('inline string and shared string workbooks preserve leading zero identity and text amounts', async () => {
     let b = await workbook({ shared: false, data: ['00001973100489', '2026-03-12', scope.enterpriseKey, 'SYNTHETIC-BUYER', '531.79', '5.32', '537.11', 'blue'] });
-    // ExcelJS document writer always shares strings; construct an explicit valid inline cell variant.
+    // ExcelJS 文档写入器始终共享字符串；构造显式有效的内联单元格变体。
     b = changePart(b, 'xl/worksheets/sheet2.xml', text => text.replace(/<c r="A4" t="s"><v>\d+<\/v><\/c>/, '<c r="A4" t="inlineStr"><is><t>00001973100489</t></is></c>'));
     write(join(root, 'actual-inline.xlsx'), b); const p = valid(readFileSync(join(root, 'actual-inline.xlsx'))); assert.equal(p.records[0].data.number, '00001973100489'); assert.equal(p.records[0].data.gross, '537.11');
     assert.match(strFromU8(unzipSync(b)['xl/worksheets/sheet2.xml']), /inlineStr/);
@@ -122,8 +122,8 @@ try {
   });
   await test('ZIP declared sizes, actual decompression, entry limits and cell dimensions bounded', async () => {
     const e = unzipSync(original); e['huge.xml'] = new Uint8Array(4 * 1024 * 1024 + 1); reject(Buffer.from(zipSync(e)), ['xlsx_limit']);
-    // Synthetic archive fault only: locate central signatures to lie about uncompressed size.
-    // Product never parses ZIP binary headers. This proves streaming bytes catch the lie.
+    // 仅针对合成归档注入故障：定位中央签名以伪报解压后大小。
+    // 产品绝不解析 ZIP 二进制头。此项证明流式字节可识别谎报。
     const lying = Buffer.from(zipSync({ ...unzipSync(original), 'inflated.bin': new Uint8Array(2 * 1024 * 1024).fill(65) }));
     let changed = false;
     for (let i = 0; i + 46 < lying.length; i++) if (lying.readUInt32LE(i) === 0x02014b50 && lying.subarray(i + 46, i + 46 + lying.readUInt16LE(i + 28)).toString() === 'inflated.bin') { lying.writeUInt32LE(1, i + 24); changed = true; break; }

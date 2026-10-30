@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Explicit source/dependency allowlist for the read-only Linux research mount.
+// 为只读 Linux 研究挂载显式列出源码和依赖白名单。
 import {mkdirSync,cpSync,existsSync,writeFileSync,lstatSync,readdirSync} from 'node:fs';
 import {resolve,join,isAbsolute,dirname} from 'node:path';
 import {treeDigest} from '../../05-reconstruction/codex/harness2/bridge.mjs';

@@ -1,4 +1,4 @@
-// W4b explicit activation: synthetic strict databases and real CLI children only.
+// W4b 显式激活：仅使用合成严格数据库及真实 CLI 子进程。
 import {assert,fs,join,resolve,DatabaseSync,randomUUID,pathToFileURL,ROOT,S,LB,AS,fresh,job,logical,hash,child,suite} from './local-batch-install.test.mjs';
 import {dirname} from 'node:path';
 import * as C from '../server/local-restore-control.mjs';
@@ -51,7 +51,7 @@ async function main(){
  });
  await suite('protection or commit-boundary failure rolls back exact pending target and retains artifacts',async()=>{
   const h=await fresh({version:3});try{const r=explicitRestore(h),plan=planFor(r.file),before=hash(r.file),outDir=join(h.dir,randomUUID());
-   // Real fsync failure after official backup creation: no DDL or ready survives.
+   // 正式备份创建后发生真实 fsync 失败：不得留下 DDL 或 ready 状态。
    const original=fs.fsyncSync;let count=0;fs.fsyncSync=(...a)=>{count++;if(count===1)throw Object.assign(Error('synthetic EIO'),{code:'EIO'});return original(...a);};
    let failed;try{failed=await RB.activateRestoreBatch({...r.args,plan,outDir});}finally{fs.fsyncSync=original;}
    assert.equal(failed.ok,false);assert.equal(hash(r.file),before);readDb(r.file,d=>{assert.equal(C.assertRestoreControl(d).row.write_state,'pending');assert.equal(d.prepare('SELECT MAX(version) v FROM schema_migrations').get().v,3);});assert.equal(fs.existsSync(outDir),true);

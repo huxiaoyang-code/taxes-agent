@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// LOCAL-08 independent acceptance for the finance output policy module.
+// LOCAL-08：对财务输出策略模块的独立验收。
 //
 // 只用合成内存对象：不建库、不设 WORKBENCH_DATA_DIR、不连旧后端、不读真实账套。
 // 每条预期值都是手算的常量，不从被测实现反推（不是镜像实现）。
@@ -1457,7 +1457,7 @@ await test('银行金额全份拒绝越界/非整数，提交证据独立保留�
  for(const amount of [NaN,Infinity,1.5,Number.MAX_SAFE_INTEGER,100000000000001,-100000000000001]){
   const bad={...base,result:{...base.result,totals:{...base.result.totals,inflowCents:amount}}};assert.throws(()=>policy.wrapQuery('bank_transactions',{accountSetId:1,value:bad}));
  }
- // An unsafe hidden aggregate also rejects the full summary/ref.
+ // 不安全的隐藏聚合值也会使整个摘要/引用被拒绝。
  assert.throws(()=>policy.wrapQuery('bank_transactions',{accountSetId:1,value:{...base,result:{...base.result,other:{closingCents:Number.MAX_SAFE_INTEGER}}}}));
  const write={accountSetId:1,result:{created:true,match:{matchId:7,entryId:8,accountSetId:1,status:'confirmed'},hidden:{amountCents:Number.MAX_SAFE_INTEGER}},evidence:{durability:'committed',performed:true,replayed:false}};
  const done=policy.wrapWrite('bank_confirm',{accountSetId:1,value:write});assert.equal(done.applied,true);assert.equal(done.localRef,null);assert.equal(done.needsLocalReview,true);assert.ok(done.refUnavailable);assertNoLeak(done,'bank failed money summary');

@@ -1,5 +1,5 @@
-// Public law is selected by place, tax period and facts, never by a caller rate.
-// Records describe the implemented conditions, not a claim to cover every relief.
+// 按地点、税款所属期和事实选择公开政策，不采用调用者传入的税率。
+// 记录只描述已实现的适用条件，不声称覆盖全部减免。
 const rule = (id, obligationId, region, from, url, title, locator, parameters, through = null) => ({ id, obligationId, region, from, through, source: { url, title, locator, from, ...(through ? { through } : {}) }, parameters });
 const rules = [
   rule('BJ-land-2007', 'urban_land', 'CN-11', '2007-01-01', 'https://www.beijing.gov.cn/gongkai/zfxxgk/zc/gz/202112/t20211217_2564210.html', '北京市实施城镇土地使用税暂行条例办法（2007修订）', '第3、4、7条；地段级别仍须地址/原税源原件核对', { annualPerSquareMetre: ['30.00','24.00','18.00','12.00','3.00','1.50'], filingMonths: [4,10] }),
@@ -7,8 +7,8 @@ const rules = [
   rule('BJ-deed-2021', 'deed', 'CN-11', '2021-09-01', 'https://www.beijing.gov.cn/zhengce/zhengcefagui/202107/t20210731_2453282.html', '北京市人大常委会关于北京市契税具体适用税率等有关事项的决定', '第一项；个人家庭住房优惠另依全国规定', { basisPoints: 300 }),
   rule('BJ-water-2024', 'water_resource', 'CN-11', '2024-12-01', 'https://www.beijing.gov.cn/zhengce/zhengcefagui/202504/W020250429560367922969.pdf', '京财税〔2025〕66号北京市水资源税办法及附表', '第5至18、30条及公报第10页；与全国2024年第28号同步实施，不以发布日期推迟', { surface: { public_supply:'1.4', agriculture_excess:'0.06', rural_drinking:'0.1', special:'153',other:'2' }, underground:{public_supply:'2.8',agriculture_excess:'0.08',rural_drinking:'0.2',self_supply:'3.8',special:'160',other:'3.8'}, generationPerKwh:'0.005',dewateringRecovery:'0.6',dewateringDischarge:'4.3',heatPumpRechargePerThousandM3:'0.8',publicNetworkLossBasisPoints:800 }),
 ];
-// Provincial basic business rates. Source forms are explicit; official execution
-// explanations prove only the basic rate, never every provincial relief branch.
+// 省级基础经营税率明确引用来源表式；官方执行解释
+// 只能证明基础税率，不能证明全部省级减免分支。
 const deed = [
   ['CN-12',300,'https://fg.taxation.cn/law_data_2021/Law_data2021/2021_dffg/2021_tjs/202212/t20221217_169051.html','天津市人大决定（税务出版社法规库全文）','original_decision'],
   ['CN-13',400,'https://www.hbrd.gov.cn/system/2021/08/04/100734420.shtml','河北省人大常委会契税决定','original_decision'],

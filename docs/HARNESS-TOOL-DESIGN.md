@@ -1,13 +1,15 @@
 # Harness 工具设计依据
 
-实现遵循 Anthropic 已公开的工具工程模式，并复用本项目原生财税与恢复能力。这里记录设计映射，不是任务状态或验收报告。
+Harness 在本仓库指“中国财税 Agent 的任务与证据运行层”：连接 Agent 的业务判断和本机确定性工具，保存事实、依赖、执行、复核及恢复记录。先读[中文架构与调用链](AGENT-ARCHITECTURE.md)，再用本文核对工具设计依据。
+
+实现借鉴 Anthropic 已公开的工具工程模式，并复用本项目原生财税与恢复能力。这里记录设计映射，不是任务状态或验收报告。日常业务 Harness 与默认关闭的 [Google Research Harness² 研究接入](HARNESS2-INTEGRATION.md)职责不同；[SoL-Pi](SOL-PI-INTEGRATION.md)是可选运行效率层，三者不互相替代。
 
 | 参考 | 本项目实现 |
 | --- | --- |
-| [Writing effective tools](https://www.anthropic.com/engineering/writing-tools-for-agents)：明确边界、有用返回、可操作错误、用实际任务评价 | 固定命名能力；共享 schema 与运行校验；具体字段诊断、当前事实绑定、可调用 nextSteps；stdio 和原生业务回归 |
-| [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)：易用参数和清楚的输入格式 | requestFactId 显式绑定持久请求；服务端返回事实值摘要，保留旧首事实兼容；拒绝不支持的prepare |
-| [Code execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp)：按需查工具定义、过滤大结果 | 轻量领域目录→domain/query/有界页→选中能力合同/Wiki；已有summary与定向receipt保留 |
-| [Define tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools) 与 [tool search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)：合同、例子及延迟披露 | 单份能力schema供发现和执行；Ajv draft-07完整校验，不默认填值/转换/删字段；Pi使用自身原生deferred工具，不冒称具有Claude API strict/defer_loading实现 |
+| [编写有效工具](https://www.anthropic.com/engineering/writing-tools-for-agents)：明确边界、有用返回、可操作错误、用实际任务评价 | 固定命名能力；共享结构合同（schema）与运行校验；具体字段诊断、当前事实绑定、可调用后续步骤（nextSteps）；标准输入输出和原生业务回归 |
+| [构建有效 Agent](https://www.anthropic.com/engineering/building-effective-agents)：易用参数和清楚的输入格式 | requestFactId 显式绑定持久请求；服务端返回事实值摘要，保留旧首事实兼容；拒绝不支持的准备阶段（prepare） |
+| [通过 MCP 执行代码](https://www.anthropic.com/engineering/code-execution-with-mcp)：按需查工具定义、过滤大结果 | 轻量领域目录→领域/关键词/有界分页→选中能力合同/规则说明；保留摘要（summary）与定向回执（receipt） |
+| [定义工具](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools)与[工具搜索](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)：合同、例子及延迟披露 | 单份能力结构合同供发现和执行；Ajv draft-07 完整校验，不默认填值/转换/删字段；Pi 使用自身原生延迟发现工具，不冒称具有 Claude API strict/defer_loading 实现 |
 | [financial-services](https://github.com/anthropics/financial-services)：Agent职责/产物、任务Skill与MCP连接器分工 | Harness Skill按资料/核算/期间/复核/恢复导航；Agent自行判断与构造有据业务请求；原生模块计算/执行，实际人审边界继续执行 |
 
 能力合同位于 server/harness-input-contracts.mjs；发现模块只投影它，运行时在新操作前验证。已有 write intent 或成功执行请求的 query/重放优先使用保存的原身份，新增输入 schema 不用于阻断这类历史查询；旧事实不因兼容读取变为已验证。旧版本 materials/review 等能力的 prepare 曾可能实际执行 mutator，却把 intent.effect 记为 read；这类历史现场尚未构造迁移恢复验收，不在本次兼容通过范围，不能据普通旧 execute/query 回归宣称其已可恢复。本次拒绝新调用继续产生这类 prepare，不在未复现条件下另造迁移机制。

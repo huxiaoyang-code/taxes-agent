@@ -1,4 +1,4 @@
-// Fixed adapter around the existing batch storage/runner. No alternate queue.
+// 在既有批处理存储和运行器外提供固定适配，不另建队列。
 import {batchPartialEffects,PARTIAL_EFFECTS_MEANING} from './harness-batch-effects.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, statSync } from 'node:fs';
@@ -50,7 +50,7 @@ try {
    const report=storage.readJobStatus(db,r.request.jobKey);lastReport=report;const proofDigest=await prove(report);process.stdout.write(JSON.stringify({status:report.status==='succeeded'?'executed':'blocked',applied:report.status==='succeeded',result,report,proofDigest,periodComplete:false,submittable:false,partialEffects:batchPartialEffects(report),partialEffectsMeaning:PARTIAL_EFFECTS_MEANING,code:report.items.find(i=>i.errorCode)?.errorCode??null}));
  }
  }catch(e){
- // A transport/proof failure is not evidence that no native effect occurred.
+ // 传输或证明读取失败，不能证明没有发生原生业务效果。
  if(started&&db&&requestContext)try{lastReport=storage.readJobStatus(db,requestContext.request.jobKey);}catch{}
  const observedEffects=batchPartialEffects(lastReport,{complete:false});
  const partialEffects=observedEffects===true?true:started||!lastReport?null:observedEffects;

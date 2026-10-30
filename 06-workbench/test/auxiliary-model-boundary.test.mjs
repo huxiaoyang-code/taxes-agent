@@ -12,7 +12,7 @@ const logs=[], originals={};for(const k of ['log','warn','error']){originals[k]=
 let checks=0;const ok=async(name,args,applied)=>{const r=await E.callModelTool(name,args);noLeak(r);assert.equal(r.ok,true,JSON.stringify(r));if(applied!==undefined)assert.equal(r.applied,applied);checks++;return r;};
 const mustReject=async(name,args)=>{const r=await E.callModelTool(name,args);assert.equal(r.ok,false);noLeak(r);checks++;return r;};
 try {
- // Real GL totals can exceed the model bound while the local ledger remains legal and exact.
+ // 实际总账合计可能超出模型上限，而本机账簿仍然合法且精确。
  for(const negative of [false,true]) {
   const set=h.makeSet('model-ledger-limit-'+(negative?'negative':'positive'));
   h.A.setOpeningBalances(set,[{code:'1122',...(negative?{credit:700000000000.07}:{debit:700000000000.07})},{code:'3001',...(negative?{debit:700000000000.07}:{credit:700000000000.07})}]);
@@ -37,7 +37,7 @@ try {
    const adapter=createFinanceModelAdapter({executeRaw:()=>value}),result=await adapter.callModelTool('auxiliary_ledger',{accountSetId:1});assert.equal(result.ok,false);assert.equal(result.localRef,undefined);noLeak(result);checks++;
   }
  }
- // Independent decimal expectation: 900000000000.01 + 999 * 0.01 = 900000000010.00.
+ // 独立十进制预期：900000000000.01 + 999 * 0.01 = 900000000010.00。
  const precisionRows=Array.from({length:1000},(_,i)=>({entryId:i+1,voucherId:1,lineNo:i+1,period:'2026-01',status:'posted',code:'1002',debit:i===0?900000000000.01:0.01,credit:0}));
  precisionRows.push({entryId:1001,voucherId:1,lineNo:1001,period:'2026-01',status:'posted',code:'3001',debit:0,credit:900000000010});
  const precisionDTO={accountSetId:1,items:precisionRows};
@@ -45,7 +45,7 @@ try {
  assert.equal(precision.summaryUnavailable,false);assert.deepEqual(precision.projection,{entryCount:1001,debit:900000000010,credit:900000000010});assert.equal(precision.projectionDropped,0);
  const preciseAdapter=createFinanceModelAdapter({executeRaw:()=>precisionDTO});
  const preciseEnvelope=await preciseAdapter.callModelTool('auxiliary_entries',{accountSetId:1});assert.equal(preciseEnvelope.ok,true);assert.equal(preciseEnvelope.projection.debit,900000000010);assert.equal(preciseEnvelope.projection.credit,900000000010);noLeak(preciseEnvelope);checks++;
- // Legal per-row values must fail closed when their total exceeds the model numeric bound or safe cents range.
+ // 每行合法的值在合计超出模型数值上限或安全分值范围时，必须保守拒绝。
  for(const amounts of [[600000000000,600000000000],Array(100).fill(999999999999.99)]) {
   const excessive={accountSetId:1,items:amounts.map((debit,i)=>({...precisionRows[0],entryId:i+1,lineNo:i+1,debit}))};
   const summary=summarizeQueryResult('auxiliary_entries',excessive);assert.equal(summary.summaryUnavailable,true);assert.deepEqual(summary.projection,{});

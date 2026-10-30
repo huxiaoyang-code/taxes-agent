@@ -1,4 +1,4 @@
-// Synthetic raw facts -> existing formal posting bridge. No expected entries as inputs.
+// 合成原始事实 -> 已有正式记账桥接。不将预期分录作为输入。
 import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';

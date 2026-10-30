@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 使用固定的合成测试身份，不依赖显示名称或生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-entry-test-mjs-' + (++identityFixtureSequence) });
 
@@ -69,7 +69,7 @@ async function startBackend() {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", WORKBENCH_DATA_DIR: dataDir },
   });
-  backend = proc; // Own the handle before startup can fail, so finally always reclaims it.
+  backend = proc; // 在启动可能失败前保存句柄，确保 finally 始终可以回收。
   let err = "";
   proc.stderr.on("data", (d) => { err += d.toString(); });
   const deadline = Date.now() + 20000;
@@ -77,7 +77,7 @@ async function startBackend() {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/meta`, { signal: AbortSignal.timeout(1500) });
       if (res.ok) break;
-    } catch { /* retry */ }
+    } catch { /* 重试 */ }
     if (Date.now() > deadline) throw new Error(`backend_not_ready: ${err.slice(0, 300)}`);
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -92,7 +92,7 @@ async function stopBackend() {
   const done = new Promise((resolve) => proc.once("exit", resolve));
   proc.kill();
   await Promise.race([done, new Promise((resolve) => setTimeout(resolve, 5000))]);
-  if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill("SIGKILL"); } catch { /* ignore */ } }
+  if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill("SIGKILL"); } catch { /* 忽略此处异常 */ } }
 }
 
 async function localRead(body) {
@@ -511,7 +511,7 @@ try {
         assert.deepEqual(objectMethod.error, { code: -32600, message: "invalid_request" });
         const unknown = await c.rpc(marker);
         assert.deepEqual(unknown.error, { code: -32601, message: "method_not_found" });
-        // Send JSON null directly, capture the response independently (id:null).
+        // 直接发送 JSON null，独立捕获响应（id:null）。
         const nullReply = new Promise((resolve, reject) => {
           let buffer = "";
           const timer = setTimeout(() => { c.child.stdout.off("data", onData); reject(new Error("null reply timeout")); }, 3000);
@@ -540,7 +540,7 @@ try {
   if (debugClient) await debugClient.close();
   if (fault) await new Promise((resolve) => fault.close(resolve));
   await stopBackend();
-  try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略此处异常 */ }
 }
 
 const failed = results.filter((ok) => !ok).length;

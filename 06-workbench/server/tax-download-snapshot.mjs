@@ -1,5 +1,5 @@
-// Explicit local administrator capability, never an HTTP/Agent/MCP tool.
-// Sources go directly to the guarded private page store, never the public result.
+// 显式本机管理员能力，不是 HTTP/Agent/MCP 工具。
+// 源码直接进入有守卫的私有页面存储，不进入公开结果。
 import {dirname,resolve} from 'node:path';
 import {TaxDownloadPageStore} from './tax-download-page.mjs';
 import {TaxCollectionStore,collectionLock} from './tax-collection-local.mjs';
@@ -16,10 +16,10 @@ const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const priority=url=>/vendor|chunk-vendors|polyfill|runtime|jquery|lodash|vue/i.test(new URL(url).pathname)?2:
   /cwbb|cwbbsb|financial|entry|app[.-]|main[.-]/i.test(new URL(url).pathname)?0:1;
 
-// CDP source proof: V8 v8-debugger-agent-impl.cc getScriptSource reads m_scripts /
-// m_cachedScripts; V8DebuggerScript::source reads retained JavaScriptCode(). This
-// deliberately never calls Page.getResourceContent (its loader may fetch).
-// Own setSkipAllPauses precedes enable; no breakpoint changes, pause or resume.
+// CDP 源码依据：V8 的 v8-debugger-agent-impl.cc 中 getScriptSource 读取 m_scripts /
+// m_cachedScripts；V8DebuggerScript::source 读取已保留的 JavaScriptCode()。
+// 有意不调用 Page.getResourceContent，因为其加载器可能发起网络取回。
+// 自有 setSkipAllPauses 先于 enable，不改断点、不暂停或恢复。
 export class TaxDownloadSnapshot{
   constructor(overrides={}){this.d={enabled:false,evidence:new TaxDownloadPageStore(),store:new TaxCollectionStore(),
     openDiagnostic:openRegisteredBrowserDiagnostic,acquireAdminGuard:acquireReadonlyAdminGuard,acquireLock:collectionLock,
@@ -59,16 +59,16 @@ export class TaxDownloadSnapshot{
       parent=await this.d.evidence.load(args.artifactRef);
       if(parent?.version!==1||!ref(parent.sourceRef,'taxsource')||!['invoice','financial_report'].includes(parent.target)
         ||parent.evidence!=='quarantined_unverified'||parent.consumable!==false||parent.navigation?.commandConfirmed!==true||parent.navigation?.normalNavigationOnly!==true)throw fail();
-      // Only registration/browser/target are used. No old source identity, recipe,
-      // document, TTL or menu value is a current-page permission.
+      // 只使用注册信息、浏览器和 target；旧来源身份、配方、
+      // 文档、TTL 或菜单值都不构成当前页面权限。
       source=await this.d.store.load(parent.sourceRef);await this.d.store.assertNotAbandoned(parent.sourceRef);
       if(!ref(source?.registrationRef,'taxr')||typeof source.registrationRoot!=='string'||!source.registrationRoot||!/^[a-f0-9]{64}$/.test(source.browserKey||'')
         ||typeof source.targetId!=='string'||!source.targetId||source.targetId.length>256)throw fail();
       phase='open';transport=await this.d.openDiagnostic({registrationRef:source.registrationRef,registrationRoot:source.registrationRoot},
         {registrationBase:dirname(resolve(source.registrationRoot))});await registration();
       version=await send('Browser.getVersion');
-      // Current independently checked browser build; unknown versions fail closed
-      // pending a new local protocol/source review, never an automatic fallback.
+      // 使用当前独立核验的浏览器构建；未知版本须失败关闭，
+      // 待本机重新审查协议与源码，不自动回退。
       if(version?.product!=='Edg/155.0.4283.62'||version.protocolVersion!=='1.3'||version.jsVersion!=='15.5.9.7')throw fail();
       const target=(await send('Target.getTargetInfo',{targetId:source.targetId}))?.targetInfo;
       if(target?.targetId!==source.targetId||target.type!=='page'||!official(target.url))throw fail();
@@ -83,7 +83,7 @@ export class TaxDownloadSnapshot{
       listen('Runtime.executionContextsCleared',invalidate);
       listen('Runtime.executionContextDestroyed',p=>{if(contexts.has(p.executionContextId)){contexts.delete(p.executionContextId);invalidate();}});
       listen('Inspector.detached',()=>{if(!detaching)invalidate();});
-      listen('Debugger.paused',invalidate); // Never resume or inspect call frames.
+      listen('Debugger.paused',invalidate); // 绝不恢复执行或检查调用帧。
       off.push(transport.cdp.on('Target.detachedFromTarget',p=>{if(p.sessionId===session&&!detaching)invalidate();}));
       off.push(transport.cdp.on('closed',()=>{if(!closing)invalidate();}));
       await send('Page.enable');document=await frame();await guard();
@@ -115,8 +115,8 @@ export class TaxDownloadSnapshot{
       phase='final_scope';await guard();ready=true;output.scopeStable=true;
     }catch{output.failureStep=phase;ready=false;assets.length=0;counts.captured=0;counts.bytes=0;}
     finally{
-      // No domain.disable: detach our session while listeners remain armed,
-      // then remove listeners, await the actual socket close, then exact CAS.
+      // 不调用 domain.disable；保持监听器启用并分离自有会话，
+      // 随后移除监听器，等待 socket 实际关闭，再执行精确 CAS。
       if(session)try{detaching=true;await send('Target.detachFromTarget',{sessionId:session});}catch{cleanupBad=true;}
       for(const remove of off)try{remove();}catch{cleanupBad=true;}
       if(transport)try{

@@ -1,5 +1,5 @@
 import { operationErrorEvidence } from './local-audit-coordinator.mjs';
-// finance-model-adapter.mjs — 普通财务工具的「模型边界适配层」（**未挂载到 HTTP / MCP**）。
+// finance-model-adapter.mjs — 普通财务工具的模型边界适配器；路由由调用方接线。
 //
 // 职责：把 agent-tools.mjs 的普通财务工具调用变成**模型通道信封**。
 //   - 注入 `executeRaw(name, args)`（生产环境由接线方注入真实的 `callAgentTool`），
@@ -10,8 +10,10 @@ import { operationErrorEvidence } from './local-audit-coordinator.mjs';
 //   - 未知工具、税务工具、未实现工具、未知/未实现 finance_query node 一律**不执行**，
 //     返回固定错误码；不通过禁用主要业务工具来“完成任务”。
 //
-// 边界之外（本模块不做，接线任务负责）：
-//   - 不挂 HTTP / Agent / MCP / CLI 路由，不签发/读取本机 channel；
+// 接线责任：finance-model-entry.mjs 注入真实业务执行与本机读取能力，
+// server.mjs 挂载 /agent/model-tools/ 路由；MCP backend.mjs 通过该路由取得模型信封。
+// 边界之外（本模块不做，由上述调用方负责）：
+//   - 不自行挂 HTTP / Agent / MCP / CLI 路由，不签发/读取本机 channel；
 //   - 不执行任何税务工具（tax_* 属既有税务链路，行为不变）；
 //   - 不复制 accounting.mjs 的任何算法，不改记账结果与返回结构。
 //
@@ -238,7 +240,7 @@ for (const nodeId of FINANCE_QUERY_AVAILABLE) {
 }
 
 // ---------------------------------------------------------------- 普通工具 → operation 映射
-// category：
+// 结果分类：
 //   static    —— 固定静态安全目录 / 只由入参计数派生，不执行 executeRaw；
 //   context   —— 合法全局操作（无 setId 时为明确 global scope，不伪造 setId）；
 //   node_query—— finance_query，operation 由已登记 nodeId 决定；

@@ -1,4 +1,4 @@
-// Local administrator discovery only; never an HTTP/Agent/MCP capability.
+// 仅供本机管理员发现，不是 HTTP/Agent/MCP 能力。
 import {dirname,resolve} from 'node:path';
 import {TaxDownloadPageStore} from './tax-download-page.mjs';
 import {TaxCollectionStore,collectionLock} from './tax-collection-local.mjs';

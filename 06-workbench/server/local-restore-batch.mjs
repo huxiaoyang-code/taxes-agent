@@ -1,4 +1,4 @@
-// Explicit restore intent and path binding. No default database, callbacks or SQL input.
+// 显式恢复意图及路径绑定，不使用默认数据库、不接收回调或 SQL 输入。
 import fs from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -17,7 +17,7 @@ export async function checkRestoreBatch(args={}) {
 export async function activateRestoreBatch(args={}) {
  const LB=await import('./local-backup.mjs');return LB.activateRestoreTarget(args);
 }
-/** Reject duplicate JSON object keys before JSON.parse can discard them. */
+/** 在 JSON.parse 丢弃重复对象键之前先拒绝它们。 */
 export function readRestorePlanFile(file) {
  const identity=plainRestorePath(file),text=fs.readFileSync(file,'utf8'),after=plainRestorePath(file);
  if(identity.dev!==after.dev||identity.ino!==after.ino||Buffer.byteLength(text)>4*1024*1024)fail('restore_plan_invalid');
@@ -32,7 +32,7 @@ export function readRestorePlanFile(file) {
  };
  value();ws();if(pos!==text.length)fail('restore_plan_invalid');return JSON.parse(text);
 }
-/** Read only: every existing job/input/report must occur exactly once. */
+/** 只读检查：每个已有作业、输入及报表都必须精确出现一次。 */
 export function validateRestorePlan(db,raw,{targetDir,backupDir,ledgerPath,outDir,activation}={}) {
  restoreCanonical(raw);
  if(!exact(raw,['version','targetInstanceId','jobs'])||raw.version!==1||raw.targetInstanceId!==assertRestoreControl(db).row.target_instance_id||!Array.isArray(raw.jobs))fail('restore_plan_invalid');
@@ -47,7 +47,7 @@ export function validateRestorePlan(db,raw,{targetDir,backupDir,ledgerPath,outDi
   const p=raw.jobs.find(j=>j.jobKey===job.job_key);
   if(!exact(p,['jobKey','outputRoot','inputs','reports'])||!Array.isArray(p.inputs)||!Array.isArray(p.reports))fail('restore_plan_invalid');
   const root=canonicalPath(p.outputRoot);
-  // Compare history as text only. Never stat, read or discover an old root.
+  // 历史仅按文本比较，不 stat、不读取、也不发现旧根目录。
   if(protectedRoots.some(r=>overlap(root,r))||jobs.some(j=>overlap(root,j.output_dir))||historicalSources.some(file=>inside(file,root))||roots.some(r=>overlap(root,r)))fail('restore_path_conflict');
   roots.push(root);
   let identity=null;
@@ -90,7 +90,7 @@ export function validateRestorePlan(db,raw,{targetDir,backupDir,ledgerPath,outDi
   }
   result.jobs.push(norm);
  }
- // Cross-job source/output aliases are checked after collecting every root.
+ // 收集全部根目录后检查跨作业的来源/输出别名。
  if(inputs.some(i=>i.source&&roots.some(r=>inside(i.source,r))))fail('restore_path_conflict');
  return {plan:result,planDigest:restoreHash(result),inputs,outputs};
 }
@@ -103,7 +103,7 @@ export function restorePlanRequirements(db) {
    return {stageId:s.id,stageKey:s.stage_key,status:s.status,attempt:s.attempt,artifact:a?{relativePath:a.relative_path,bytes:a.bytes,sha256:a.bytes_hash,kind:a.kind,format:a.format}:null};
   })}));
 }
-/** Known artifact only: no directory scan or old path fallback. */
+/** 只处理已知制品，不扫描目录，也不回退旧路径。 */
 export function restoredArtifactPresent(root,artifact) {
  try {
   plainRestorePath(root,{directory:true});

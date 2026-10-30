@@ -1,5 +1,5 @@
-// Capture native task evidence only. Independent assessment is not in the
-// candidate source stage and runs in a separate trusted namespace.
+// 仅采集原生任务证据。独立评估不在
+// 候选源码阶段内运行，而在另一个可信命名空间中运行。
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {inspectHarness} from '../server/harness-runtime.mjs';

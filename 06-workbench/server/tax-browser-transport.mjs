@@ -1,5 +1,5 @@
-// Selected launch/CDP primitives from PR #19, with private-profile verification.
-// No endpoint, process ID, profile path or browser response is returned by tools.
+// 从 PR #19 选取的启动/CDP 原语，并增加私有 profile 核验。
+// 工具不返回端点、进程 ID、profile 路径或浏览器响应。
 import { spawn, execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm, chmod, stat, readFile } from "node:fs/promises";
@@ -65,7 +65,7 @@ function runFile(executable, args, options = {}, execFileImpl = execFile) {
   });
 }
 
-// The ACL is set before Edge is launched and then read back, not merely assumed.
+// Edge 启动前设置 ACL 并读回核验，不仅凭假设放行。
 const PROFILE_ACL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $target = $env:TAX_BROWSER_PRIVATE_PROFILE
@@ -100,7 +100,7 @@ export async function createPrivateProfile() {
     if (!profile) return;
     try {
       const actual = await realpath(profile);
-      // Only this generated, direct child of the resolved OS temp directory.
+      // 仅允许本次生成、位于已解析操作系统临时目录下的直接子目录。
       if (actual !== profile || dirname(actual) !== root || !basename(actual).startsWith("youshu-tax-edge-")) {
         throw new Error("not-owned");
       }
@@ -154,7 +154,7 @@ export function spawnBrowserProcess({ exePath, profileDir, entryUrl, timeoutMs =
   let accept, reject, acceptExit;
   const exitPromise = new Promise((done) => { acceptExit = done; });
   const ready = new Promise((yes, no) => { accept = yes; reject = no; });
-  ready.catch(() => {}); // Launch may fail while the owning caller is still connecting.
+  ready.catch(() => {}); // 拥有者调用尚在连接时，启动也可能失败。
   const finish = (url, code) => {
     if (settled) return;
     settled = true; clearTimeout(timer); clearInterval(poll);
@@ -194,7 +194,7 @@ export function spawnBrowserProcess({ exePath, profileDir, entryUrl, timeoutMs =
       if (killing) return killing;
       killing = (async () => {
         if (exited || child.exitCode !== null && child.exitCode !== undefined) return;
-        // A failed spawn has no process to terminate.
+        // spawn 失败时没有进程可终止。
         if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return;
         if (process.platform === "win32") {
           try { await runFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {}, execFileImpl); } catch {}
@@ -282,7 +282,7 @@ export async function createDedicatedBrowserTransport({ createProfile = createPr
   const close = () => {
     if (!closing) closing = Promise.resolve().then(async () => {
       cdp?.close();
-      // Never remove a profile until its owned browser process has exited.
+      // 自有浏览器进程实际退出前，绝不移除 profile。
       await proc?.kill();
       await profile?.cleanup();
     }).catch((error) => { closing = null; throw error; });
@@ -297,7 +297,7 @@ export async function createDedicatedBrowserTransport({ createProfile = createPr
     proc.onExit(() => {
       exited = true;
       for (const callback of listeners) { try { callback(); } catch {} }
-      // Do not log private filesystem or browser failures. close() remains retryable by its owner.
+      // 不记录私有文件系统或浏览器失败原文；拥有者仍可重试 close()。
       void close().catch(() => {});
     });
     const endpoint = await proc.devtoolsUrl();
@@ -309,7 +309,7 @@ export async function createDedicatedBrowserTransport({ createProfile = createPr
     try { await close(); }
     catch {
       const failure = new TaxBrowserError("tax_browser_cleanup_failed");
-      // Kept only by the in-process owner, never enumerable or in tool details.
+      // 仅由进程内拥有者持有，不可枚举，也不放入工具 details。
       Object.defineProperty(failure, "retryCleanup", { value: close });
       throw failure;
     }

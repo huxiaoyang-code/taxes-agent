@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Real Pi loader/context projection/MCP path, no provider or credentials.
+// 实际 Pi 加载器、上下文投影及 MCP 路径，不涉及提供商或凭据。
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync,rmSync,readdirSync} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
@@ -17,8 +17,8 @@ if(!options.failureCase){
 }
 const selection=loadSolPi(resolveSolPi(options),{probe:true}),repo=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const archive=prepareArchive(selection),agentDir=join(archive,'isolated-agent');mkdirSync(agentDir);
-// A hostile existing global config in this isolated agent directory cannot
-// activate another mechanism: this bridge registers only the public factory.
+// 此隔离 Agent 目录中恶意的既有全局配置无法
+// 启用其他机制：此桥接仅注册公开工厂函数。
 writeFileSync(join(agentDir,'sol-pi.json'),JSON.stringify({version:1,actionFusion:true,observationPack:false,evidencePreservingReducer:true,onlineContextCompact:true}));
 process.env.PI_CODING_AGENT_DIR=agentDir;process.env.FINANCE_SOL_PI_ARCHIVE=archive;process.env.FINANCE_SOL_PI_FINGERPRINT=selection.fingerprint;
 const piImport=path=>import(pathToFileURL(join(selection.piRoot,'dist',path)).href);
@@ -37,7 +37,7 @@ try{
   assert.ok(tool('mcp__finance__harness_status'));
   const native=await tool('mcp__finance__harness_discover').execute('native',{},AbortSignal.timeout(15000));
   assert.ok(native.content.some(c=>c.type==='text'&&c.text.includes('capabilities')));
-  // These are actual Pi tool results, recorded without logging their payload.
+  // 这些是实际的 Pi 工具结果，记录时不写入其载荷。
   const nativeShape={contentTypes:native.content.map(c=>c.type),textBytes:Buffer.byteLength(native.content.filter(c=>c.type==='text').map(c=>c.text).join('\n')),hasStructuredContent:Object.hasOwn(native,'structuredContent'),detailsKeys:Object.keys(native.details??{})};
   const shell=tool(process.platform==='win32'?'powershell':'bash');assert.ok(shell);
   const shellResult=await shell.execute('native-shell',{command:process.platform==='win32'?"[Console]::Write(('中文🙂合成资料'+[Environment]::NewLine)*700)":"printf 'synthetic\\n'",timeout:10},AbortSignal.timeout(15000));
@@ -73,7 +73,7 @@ try{
   const nativeText=native.content.filter(c=>c.type==='text').map(c=>c.text).join('\n');
   assert.equal(transmitted.length,1);assert.equal(transmitted[0].content,nativeText);assert.equal(Object.hasOwn(transmitted[0],'structuredContent'),false);
   nativeShape.providerTextBytes=Buffer.byteLength(transmitted[0].content);nativeShape.structuredPayloadDuplicated=false;
-  // Missing observations are explicit failures; unchanged history remains recoverable.
+  // 缺少观测时明确失败；未改动的历史仍可恢复。
   const find=(dir)=>readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?find(join(dir,e.name)):[join(dir,e.name)]);
   const object=find(archive).find(path=>path.endsWith(id+'.txt'));assert.ok(object);
   const failureCase=options.failureCase??'missing';if(!['missing','corrupt','unwritable'].includes(failureCase))throw Error('sol_pi_probe_failure_case_invalid');

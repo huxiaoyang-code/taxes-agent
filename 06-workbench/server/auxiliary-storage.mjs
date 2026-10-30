@@ -1,6 +1,6 @@
 import { assertRestoreWritable } from './local-restore-control.mjs';
 import { hasActiveAuditExecution, withAuditSavepoint } from './local-audit-storage.mjs';
-// Optional aux1 component. Importing this module never opens or initializes a database.
+// 可选 aux1 组件；导入模块不打开或初始化数据库。
 import fs from 'node:fs';
 import { storedCents } from './money.mjs';
 import { resolve, dirname, basename } from 'node:path';
@@ -66,8 +66,8 @@ export function inspectAuxiliarySchema(db, coreVersion=5) {
  const problems=[];
  if(coreVersion!==5) problems.push({kind:'aux_core_unsupported'});
  if(JSON.stringify(explicit)!==JSON.stringify(expectedObjects)) problems.push({kind:'aux_structure_mismatch'});
- // Exact DDL fixes columns, defaults, PK/rowid, CHECK, FK actions and all index keys/collations/order.
- // Automatic indexes must also have the exact names/table ownership (no extra UNIQUE structures).
+ // 精确 DDL 固定字段、默认值、主键/rowid、CHECK、外键行为及全部索引键/排序规则/顺序。
+ // 自动索引名称与所属表也须精确一致，不允许额外 UNIQUE 结构。
  const auto=objects.filter(o=>o.sql===null).map(o=>o.name).sort();
  const wantAuto=['sqlite_autoindex_aux_entities_1','sqlite_autoindex_aux_receipts_1','sqlite_autoindex_aux_requirements_1'].sort();
  if(JSON.stringify(auto)!==JSON.stringify(wantAuto)) problems.push({kind:'aux_indexes_mismatch'});
@@ -106,7 +106,7 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
  try {
   try{LB.assertSupportedDatabaseConnection(db);}catch{fail(true,'aux_backup_failed');}
   (await import('./local-batch-storage.mjs')).assertBatchMaintenanceReady(db);
-  // The write reservation prevents committed source changes between the verified backup and DDL.
+  // 写入保留锁防止已验证备份与 DDL 之间出现已提交来源变化。
   const backup=await LB.createBackup({dbPath:path,outDir}); fail(!backup.ok,'aux_backup_failed');
   const verified=await LB.verifyBackup({backupDir:backup.backupDir});
   fail(!verified.ok || verified.status!=='ok' || verified.summary.snapshotSha256!==backup.backupMeta.snapshotSha256 || verified.manifest.source.file!==basename(path) || verified.manifest.structure.schemaVersion!==5,'aux_backup_invalid');
@@ -132,7 +132,7 @@ export function auxTransaction(db,fn) {
  catch(error) { try { if(nested) db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`); else if(db.isTransaction) db.exec('ROLLBACK'); else throw unknown(db); } catch { throw unknown(db); } throw error; }
 }
 export const auxFingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-/** Only explicitly configured auxiliary requirements can block a period close. */
+/** 只有显式配置的辅助核算要求才可以阻塞期间封账。 */
 export function auxiliaryCompletenessStep(db,setId,period) {
  assertAuxiliaryConnection(db); if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='aux_requirements'").get()) return null;
  assertAuxiliaryReady(db);

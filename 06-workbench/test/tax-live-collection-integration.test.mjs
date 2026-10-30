@@ -1,5 +1,5 @@
-// Synthetic local persistence and cross-checkout lock integration. No real registry,
-// browser profile, account data, credentials, or tax endpoints are accessed.
+// 合成本机持久化与跨检出目录锁集成。不访问真实注册表、
+// 浏览器配置目录、账套数据、凭据或税务端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, readFile, readdir, writeFile, rm, lstat} from 'node:fs/promises';
@@ -113,8 +113,8 @@ test('legacy sources remain exact read-only history and cannot acquire locks or 
   });
 });
 
-// Execute the real generated browser expression in a synthetic JS context. The
-// mock response uses streams, so URL checks surround the same read path as CDP.
+// 在合成 JS 上下文中执行实际生成的浏览器表达式。
+// 模拟响应使用流，因此 URL 检查包围与 CDP 相同的读取路径。
 async function activeScopeFixture(directory,mode){
   const origin='https://etax.fujian.chinatax.gov.cn:8443',frame={id:'synthetic-frame',loaderId:'synthetic-loader',url:origin+'/loginb/',urlFragment:'#/a?token='+PRIVATE};
   const initialUrl=fullFrameUrl(frame),sourceRecord={...source(),frameId:frame.id,loaderId:frame.loaderId,documentUrlDigest:frameUrlDigest(frame)};
@@ -203,7 +203,7 @@ test('real evidence store validates, stages, publishes and reloads exact source/
     assert.ok(checks.some(([kind,path])=>kind==='verifyFile'&&path.endsWith('.tmp')),'staging verification was not bypassed');
     assert.ok(checks.some(([kind,path])=>kind==='verifyFile'&&path.endsWith(sourceRef+'.json')),'published-file verification was not bypassed');
     assert.ok(checks.some(([kind])=>kind==='secureDirectory'));
-    // Synthetic business values stay in the private store; only random refs leave it.
+    // 合成业务值留在私有存储内；只有随机引用离开存储。
     safe({sourceRef,runRef});
   });
 });
@@ -342,7 +342,7 @@ async function observedSourceFixture(directory,{changeDuringWait=false,clearBefo
       store,acquireLock:(path,options)=>collectionLock(path,{...options,security:security()}),
       async wait(){
         if(changeDuringWait){
-          // Same frame/loader and final URL A, but data may cross an intermediate B.
+          // 相同 frame/loader 及最终 URL A，但数据可能经过中间 B。
           emit('Page.navigatedWithinDocument',{frameId:frame.id,url:origin+'/loginb/#/b'});
           emit('Page.navigatedWithinDocument',{frameId:frame.id,url:frame.url+frame.urlFragment});
         }

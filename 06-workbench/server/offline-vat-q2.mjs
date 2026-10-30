@@ -1,4 +1,4 @@
-// Stateless facade: all financial execution happens in a fresh native bootstrap.
+// 无状态外观层：全部财务执行在全新的原生引导进程中进行。
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
@@ -31,9 +31,9 @@ async function execute(request, binding) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (['NODE_OPTIONS', 'NODE_PATH', 'WORKBENCH_DATA_DIR'].includes(key.toUpperCase())) delete env[key];
   let child, timer, reply, endedResolve, closeInfo, exitInfo;
-  // Node on Windows can omit 'close' after a parent-initiated IPC disconnect.
-  // All stdio is ignored, so actual process exit owns cleanup in that case;
-  // spawn errors (which have no exit event) are settled by actual close.
+  // Windows 上的 Node 在父进程主动断开 IPC 后可能不触发 close。
+  // 此处忽略全部 stdio，因此在这种情况下由实际 exit 事件完成清理；
+  // 没有 exit 事件的 spawn 错误则由实际 close 事件收尾。
   const ended = new Promise(ok => { endedResolve = ok; });
   const result = new Promise((ok, no) => {
     child = spawn(process.execPath, [fileURLToPath(new URL('./offline-vat-q2-worker.mjs', import.meta.url)), Buffer.from(JSON.stringify(binding)).toString('base64url'), Buffer.from(JSON.stringify(request)).toString('base64url')], { env, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
@@ -51,7 +51,7 @@ async function execute(request, binding) {
   finally {
     clearTimeout(timer);
     if (!closeInfo && !exitInfo && child) {
-      try { child.kill('SIGKILL'); } catch { /* actual exit/close owns completion. */ }
+      try { child.kill('SIGKILL'); } catch { /* 由实际 exit/close 事件决定完成。 */ }
       await ended;
     }
   }
@@ -73,7 +73,7 @@ export async function runOfflineVatQ2(request) {
     return diagnostic(code === 'q2_code_restart_required' ? 'restart_required' : 'blocked', code);
   }
 }
-/** A comparison only. Even a guessed matching digest never grants authority. */
+/** 只作比较，即使猜中相同摘要也不授予权限。 */
 export async function checkOfflineVatQ2Current(request, expectedContentDigest) {
   const fresh = await runOfflineVatQ2(request);
   return { status: fresh.status === 'restart_required' ? 'restart_required' : typeof expectedContentDigest === 'string' && /^[a-f0-9]{64}$/.test(expectedContentDigest) && fresh.contentDigest === expectedContentDigest ? 'current' : 'stale', expectedContentDigest: typeof expectedContentDigest === 'string' ? expectedContentDigest : null, diagnostic: fresh, authorizesExecution: false };

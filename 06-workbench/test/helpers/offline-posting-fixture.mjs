@@ -1,4 +1,4 @@
-// Synthetic files only; no expected/golden artifacts are runtime inputs.
+// 仅使用合成文件；预期/黄金产物都不是运行时输入。
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';

@@ -146,7 +146,7 @@ try {
   await test('CLI wx/safe stdout and simulated lost output recover with a fresh process', async () => {
     const fresh=createPostingFixture(join(root,'cli')),r=await postingRequest(fresh),p=runOfflinePosting(r),file=join(fresh.dir,'posting.json'),out=join(fresh.dir,'receipt.json'); writeJson(file,executionRequest(r,p));
     const child=spawnSync(process.execPath,['scripts/offline-posting.mjs','--input',file,'--output',out],{encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1'},windowsHide:true}); assert.equal(child.status,0,child.stdout+child.stderr);assert.equal(child.signal,null);assert.equal(child.stderr,'');assert.match(child.stdout,/status=applied applied=true/);assert.equal(child.stdout.includes('SYNTHETIC'),false);assert.equal(child.stdout.includes(fresh.dbPath),false);
-    // The caller loses its response artifact after the actual commit; a new process proves it.
+    // 实际提交后调用者丢失响应产物；由新进程证明该状态。
     rmSync(out); const recovered=runOfflinePosting({...r,command:'query'});assert.equal(recovered.status,'recovered');assert.equal(recovered.evidence.operationId,p.operationId);
     writeFileSync(out,'KEEP');const repeat=spawnSync(process.execPath,['scripts/offline-posting.mjs','--input',file,'--output',out],{encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1'},windowsHide:true}); assert.equal(repeat.status,4);assert.equal(readFileSync(out,'utf8'),'KEEP');inspect(fresh,db=>assert.equal(db.prepare('SELECT COUNT(*) n FROM vouchers').get().n,1));
   });

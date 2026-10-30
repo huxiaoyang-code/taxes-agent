@@ -1,4 +1,4 @@
-// Native-only closure. This module must not import application code or the DB.
+// 只含原生依赖的闭包；本模块不得导入应用代码或数据库。
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -14,9 +14,9 @@ export const Q2_CODE_FILES = Object.freeze([
 ]);
 const inventory = () => Q2_CODE_FILES.map(name => ({ name, sha256: sha(readFileSync(new URL(name, import.meta.url))) }));
 let loaded = [], serialized = '', digest = '', retired = false;
-// Missing/unreadable initial bytes are also a permanent native-code failure.
-// Keep module evaluation native and nonthrowing so the worker can report a safe
-// restart diagnostic before it ever imports any financial application module.
+// 初始字节缺失或不可读，同样属于持久的原生代码故障。
+// 保持模块求值仅使用原生依赖且不抛出异常，便于 worker 在导入任何
+// 财务应用模块前返回安全的重启诊断。
 try { loaded = inventory(); serialized = JSON.stringify(loaded); digest = sha(serialized); }
 catch { retired = true; }
 export function markOfflineVatQ2CodeRestartRequired() { retired = true; }

@@ -1,4 +1,4 @@
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 使用固定的合成测试身份，不依赖显示名称或生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-period-test-mjs-' + (++identityFixtureSequence) });
 

@@ -1,5 +1,5 @@
-// Explicit local administrative normal navigation + passive, fixed schema capture.
-// Does not release, acquire or modify a reader lease, or click anything.
+// 显式的本机管理操作：正常导航及被动的固定 schema 采集。
+// 不释放、获取或修改读取租约，也不执行任何点击。
 import {dirname,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {openRegisteredBrowserDiagnostic,DEFAULT_REGISTRATION_ROOT} from '../server/tax-browser-diagnostic.mjs';
@@ -50,8 +50,8 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
     }else if(event.kind==='contexts_cleared'){
       const businessStarted=businessRequestHistory.some(request=>request.frameId===expectedFrame&&request.loaderId===expectedLoader
         &&request.ordinal<=event.businessRequestOrdinal);
-      // Live browser evidence confirms exactly two clears before the initial
-      // main-frame event. Never reuse this bootstrap allowance after data starts.
+      // 实时浏览器证据确认，首次主框架事件之前恰好有两次清空。
+      // 数据开始到达后，绝不复用此启动宽限。
       if(!initialFrameConsumed&&!businessStarted&&initialContextClearCount<2)initialContextClearCount++;else scopeRevision++;
     }else if(event.kind==='context_destroyed'){
       if(oldContextIds.has(event.contextId)&&!consumedOldContextIds.has(event.contextId))consumedOldContextIds.add(event.contextId);
@@ -104,7 +104,7 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
         resource:recipe.resource,frameId:p.frameId,loaderId:p.loaderId});}
       if(recipe)requests.set(p.requestId,{...recipe,localRecipe:recipe.localRecipe,frameId:p.frameId,loaderId:p.loaderId,
         requestTimestamp:p.timestamp,status:'request_observed',httpStatus:null});
-      else requests.delete(p.requestId); // A redirect cannot inherit a permitted recipe.
+      else requests.delete(p.requestId); // 重定向不能继承已获许可的操作配方。
     });
     listen('Network.responseReceived',p=>{
       if(!acceptNetworkEvents)return;
@@ -196,15 +196,15 @@ export async function observeTaxNavigation({registrationRef,registrationRoot,pag
         if(!frame||Object.hasOwn(frame,'parentId')||frame.id!==expectedFrame||frame.loaderId!==expectedLoader||scopeRevision!==0||connectionUnknown
           ||verifiedFrame?.documentUrlDigest&&frameUrlDigest(frame)!==verifiedFrame.documentUrlDigest)throw new Error('scope');
       }catch{cleanupFailed('final_scope');}
-      // The owned session detach removes its enabled domains. Runtime.disable
-      // itself can emit contextsCleared, so never disable domains separately.
+      // 自有会话分离时会移除其启用的域。Runtime.disable
+      // 自身也可能发出 contextsCleared，因此绝不单独禁用各域。
       detachRequested=true;
       try{await transport.cdp.send('Target.detachFromTarget',{sessionId:attached.sessionId},{timeoutMs:5000});}
       catch{cleanupFailed('detach');}
     }
     for(const off of remove)try{off()}catch{cleanupFailed('listeners');}
     if(scopeGuardArmed&&scopeRevision!==0||connectionUnknown)cleanupFailed('scope_event');
-    // Await the owned connection close before permitting another collector.
+    // 等待自有连接关闭后，才允许另一个采集器运行。
     try{if(transport)await transport.close();}catch{cleanupFailed('transport_close');}
     let lockRetained=lockAcquiring||attachUnknown;
     if(lock){if(terminationConfirmed&&!connectionUnknown&&scopeRevision===0)try{await lock.release()}catch{cleanupFailed('lock_release');lockRetained=true;}

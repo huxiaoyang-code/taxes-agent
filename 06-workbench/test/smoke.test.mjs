@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-smoke-test-mjs-' + (++identityFixtureSequence) });
 
@@ -323,6 +323,6 @@ try {
   // 等子进程真正退出后再删临时目录，避免端口/文件残留或连到旧进程。
   await childExit;
   if (!process.exitCode) {
-    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
   } else console.log(`Failed fixture retained: ${dataDir}`);
 }

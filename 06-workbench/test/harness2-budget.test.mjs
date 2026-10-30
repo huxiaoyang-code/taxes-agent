@@ -12,7 +12,7 @@ const config=name=>({socketPath:process.platform==='win32'?'\\\\.\\pipe\\harness
 const call=(socket,body,path='/v1/chat/completions')=>new Promise((ok,no)=>{const req=request({socketPath:socket,path,method:'POST',agent:false,headers:{'content-type':'application/json'}},res=>{let text='';res.on('data',b=>text+=b);res.on('end',()=>ok({status:res.statusCode,text}));});req.on('error',no);req.end(JSON.stringify(body));});
 const body={model:'deepseek-flash',messages:[{role:'user',content:'Synthetic only'}],max_tokens:100};
 
-// Explicit legacy/operator limits still work and cannot be reset on resume.
+// 显式的旧版/操作者限制仍有效，且恢复时不能重置。
 const c=config('resume'),gateway=createBudgetGateway(c);assert.throws(()=>createBudgetGateway(c),/ledger_in_use/);await gateway.listen();
 assert.equal((await call(c.socketPath,{...body,model:'other'})).status,400);assert.equal((await call(c.socketPath,body,'/evil')).status,404);
 assert.equal((await call(c.socketPath,{...body,max_tokens:-1})).status,400);
@@ -32,7 +32,7 @@ const a=config('anthropic');const protocols=createBudgetGateway(a);await protoco
 const message=await call(a.socketPath,{model:'deepseek-flash',system:[{type:'text',text:'Synthetic only'}],messages:[{role:'user',content:[{type:'text',text:'Synthetic task'}]}],max_tokens:5000,stream:true},'/anthropic/v1/messages');
 assert.equal(message.status,200);assert.match(message.text,/event: message_start/);assert.match(message.text,/"output_tokens":5/);assert.equal(protocols.ledger.events[1].outputTokenBound,2048);assert.equal((await call(a.socketPath,body)).status,429);await protocols.close();
 
-// Default relay is executor audit, not an implicit 64KiB/2K/call/cost gate.
+// 默认中继用于执行器审计，不隐含 64KiB/2K/调用次数/费用限制。
 const source=config('audit'),auditConfig={socketPath:source.socketPath,ledgerPath:source.ledgerPath,apiKey:source.apiKey};
 const seen=[];const large='合成 only '.repeat(16000),largeReply='synthetic response '.repeat(10000);
 const audit=createBudgetGateway({...auditConfig,transport:async value=>{seen.push(value);return {status:200,body:{id:'large-audit',model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:largeReply,reasoning_content:large},finish_reason:'stop'}],usage:{prompt_tokens:200000,completion_tokens:50000}}};}});
@@ -57,9 +57,9 @@ const transient=await call(safe.socketPath,body);assert.equal(transient.status,5
 assert.equal((await call(safe.socketPath,body)).status,200);assert.equal(auditErrors.ledger.calls,3);assert.equal(auditErrors.ledger.events[2].usageStatus,'known');await auditErrors.close();
 const resumedAudit=createBudgetGateway({...safe,transport:success});await resumedAudit.listen();assert.equal((await call(safe.socketPath,body)).status,200);assert.equal(resumedAudit.ledger.calls,4);await resumedAudit.close();assert.ok(!readFileSync(safe.ledgerPath,'utf8').includes(safe.apiKey));
 
-// A disconnected model client cancels the admitted upstream, including through
-// the sandbox forwarding handler. Test listeners use local Unix/pipe endpoints
-// so the fixture requires no TCP permission. Completed requests stay intact.
+// 模型客户端断开时，取消已准入的上游请求，包括经过
+// 沙箱转发处理器的请求。测试监听器使用本机 Unix/管道端点，
+// 因此测试样本无需 TCP 权限。已完成请求保持不变。
 const within=(promise,label)=>new Promise((ok,no)=>{const timer=setTimeout(()=>no(Error('synthetic_cancel_timeout:'+label)),3000);promise.then(value=>{clearTimeout(timer);ok(value);},error=>{clearTimeout(timer);no(error);});});
 for(const loopback of [false,true]){
   const source=config(loopback?'cancel-loopback':'cancel-direct');let entered,observedAbort,completedSignal,calls=0;

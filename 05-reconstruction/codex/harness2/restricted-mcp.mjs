@@ -1,4 +1,4 @@
-// Experiment-only protocol boundary. Product finance MCP is unchanged.
+// 仅供实验的协议边界；产品财税 MCP 保持原有实现。
 import {spawn} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {join,resolve,isAbsolute} from 'node:path';

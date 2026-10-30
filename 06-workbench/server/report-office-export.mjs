@@ -1,13 +1,13 @@
-// Internal report office exports (XLSX / PDF). This module only reformats the stable
-// report DTO produced by report-export.mjs; it never recalculates bookkeeping amounts
-// and never claims tax-filing readiness or verified completeness.
+// 内部办公格式报表导出（XLSX/PDF）。这里只重排 report-export.mjs
+// 生成的稳定 DTO，绝不重新计算账务金额，
+// 也不声称已达到税局申报条件或已核实完整性。
 //
-// IMPORTANT: report-export.mjs (and through it db.mjs) must NOT be imported at module
-// load time. db.mjs opens (and creates) the workbench database as an import side effect,
-// so a static import here would make a pure DTO renderer (buildReportDocument /
-// buildReportXlsx / buildReportPdf) open the default database or run migrations just by
-// being loaded. The dependency is therefore loaded lazily inside buildOfficeExport, the
-// only entry point that legitimately needs account-set validation and the DTO itself.
+// 重要：模块加载时不得导入 report-export.mjs（及其间接依赖 db.mjs）。
+// db.mjs 的导入副作用会打开或创建工作台数据库，
+// 若这里静态导入，纯 DTO 渲染器 buildReportDocument、
+// buildReportXlsx 或 buildReportPdf 仅被加载就会打开默认库或运行迁移。
+// 因此只在 buildOfficeExport 内延迟加载依赖，
+// 只有该入口实际需要账套校验及报表 DTO。
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import ExcelJS from "exceljs";
@@ -27,9 +27,9 @@ const PDF_MIME = "application/pdf";
 const PDF_FONT_ENV = "REPORT_PDF_FONT";
 const PDF_FONT_FAMILY_ENV = "REPORT_PDF_FONT_FAMILY";
 const MONEY_FORMAT = "#,##0.00";
-// Excel rejects (and silently repairs) string cells longer than 32767 characters.
-// PDF metadata is held to the same published single-field limit so both formats
-// describe exactly the same representable data instead of diverging.
+// Excel 会拒绝并静默修复超过 32767 字符的字符串单元格；
+// PDF 元数据采用相同的已公布单字段限制，保证两种格式
+// 描述相同且可表达的数据，避免结果分歧。
 export const MAX_TEXT_FIELD_LENGTH = 32767;
 const PDF_NUM_FORMAT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -59,7 +59,7 @@ const CASH_KEY_LABELS = {
 };
 const INCOME_STRONG = new Set(["营业利润", "利润总额", "净利润"]);
 // These two lines are already folded into 营业收入 / 营业成本 by the existing algorithm;
-// label them so a reader does not add them twice.
+// 明确标识这些行，避免读者重复相加。
 const INCOME_ROW_LABELS = {
   其他收入: "其他收入（已并入营业收入）",
   其他费用: "其他费用（已并入营业成本）",
@@ -82,7 +82,7 @@ function assertTextFieldLimit(value, field, extra = {}) {
 }
 
 function assertDocumentTextLimits(report, model) {
-  // Check named fields first so the reported location is the user-visible field.
+  // 先检查具名字段，使错误位置指向用户可见字段。
   assertTextFieldLimit(report.accountSet.name, "accountSet.name", { label: "账套名称" });
   assertTextFieldLimit(report.accountSet.accountingStandard, "accountSet.accountingStandard", { label: "会计准则" });
   assertTextFieldLimit(model.title, "title", { label: "报表标题" });
@@ -103,8 +103,8 @@ function assertDocumentTextLimits(report, model) {
     section.rows.forEach((row, rowIndex) => {
       row.cells.forEach((value, cellIndex) => {
         const column = section.columns[cellIndex];
-        // Numeric money cells are rendered as numbers; anything else becomes cell text and
-        // must satisfy the same single-cell limit.
+        // 金额数值单元格渲染为数字；其他值成为单元格文本，
+        // 须满足相同的单单元格长度限制。
         if (column?.kind === "money" && typeof value === "number") return;
         assertTextFieldLimit(value, `sections[${sectionIndex}].rows[${rowIndex}].cells[${cellIndex}]`, {
           row: rowIndex + 1,
@@ -122,8 +122,8 @@ function normalizedForDuplicateCheck(text) {
   return String(text ?? "").replace(/[\s\p{P}\p{S}]/gu, "");
 }
 
-// The DTO warnings already carry the authoritative limitation text. Drop end notes that
-// only restate a warning so the PDF does not end on a page of duplicated footnotes.
+// DTO 警告已有权威限制说明；仅重复警告的尾注应去掉，
+// 避免 PDF 最后一页全是重复脚注。
 function dedupeNotes(notes, warnings) {
   const warningTexts = warnings.map((warning) => normalizedForDuplicateCheck(warning.message)).filter(Boolean);
   const seen = new Set();
@@ -145,8 +145,8 @@ function periodEnd(period) {
   return `${period}-${String(last).padStart(2, "0")}`;
 }
 
-// The document model is deliberately independent of both renderers so the XLSX and PDF
-// outputs always describe identical rows, periods and money fields of the same DTO.
+// 文档模型有意独立于两个渲染器，保证 XLSX/PDF
+// 始终描述同一 DTO 的相同行、期间及金额字段。
 export function buildReportDocument(report) {
   if (!report || typeof report !== "object") fail("report_data_invalid", { field: "report" });
   const { kind } = report;
@@ -301,8 +301,8 @@ export function buildReportDocument(report) {
         strong: key === "经营活动产生的现金流量净额",
       })),
     });
-    // The DTO cash-flow warnings already carry these two limitations verbatim; keeping
-    // them as end notes only produced duplicated trailing pages in the rendered PDF.
+    // DTO 现金流警告已经逐字包含这两项限制，继续作为尾注
+    // 只会在渲染 PDF 中产生重复末页。
   } else if (kind === "trial-balance") {
     const columns = [
       { header: "科目编码", minPt: 50, flex: 12, width: 14, kind: "text" },
@@ -404,7 +404,7 @@ export function buildReportDocument(report) {
     columnCount,
     dto: report,
   };
-  // Reject anything a single Excel cell / PDF field cannot represent before writing bytes.
+  // 写出字节前，拒绝任何单个 Excel 单元格或 PDF 字段无法表达的值。
   assertDocumentTextLimits(report, model);
   return model;
 }
@@ -417,10 +417,10 @@ function balanceColumns() {
   ];
 }
 
-// ------------------------------------------------------------------ XLSX
+// ------------------------------------------------------------------ XLSX 导出
 
 function textCell(cell, value) {
-  // Always assign a string; ExcelJS stores it as a shared/inline string, never a formula.
+  // 始终设置为字符串；ExcelJS 将其存为共享/内联字符串，绝不当作公式。
   cell.value = String(value ?? "");
   cell.numFmt = "@";
 }
@@ -450,7 +450,7 @@ function displayWidth(text) {
   let width = 0;
   for (const char of String(text ?? "")) {
     const code = char.codePointAt(0);
-    // Conservative double-width estimate for CJK ranges; ASCII counts as one cell.
+    // 对中日韩字符保守估算双倍宽度，ASCII 按一格计算。
     width += code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe30 && code <= 0xfe6f) || (code >= 0xff00 && code <= 0xff60) || (code >= 0xffe0 && code <= 0xffe6)) ? 2 : 1;
   }
   return width;
@@ -486,7 +486,7 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
   let rowNumber = 0;
   const nextRow = () => ++rowNumber;
 
-  // Title
+  // 标题
   const titleRow = nextRow();
   worksheet.mergeCells(titleRow, 1, titleRow, maxColumns);
   const titleCell = worksheet.getCell(titleRow, 1);
@@ -495,7 +495,7 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
   worksheet.getRow(titleRow).height = 24;
 
-  // Subtitle
+  // 副标题
   const subtitleRow = nextRow();
   worksheet.mergeCells(subtitleRow, 1, subtitleRow, maxColumns);
   const subtitleCell = worksheet.getCell(subtitleRow, 1);
@@ -504,7 +504,7 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
   subtitleCell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   fitRowHeight(worksheet, subtitleRow, estimatedLines(model.subtitle, mergedWidth(1)));
 
-  // Metadata
+  // 元数据
   for (const [label, value] of model.meta) {
     const row = nextRow();
     const labelCell = worksheet.getCell(row, 1);
@@ -519,7 +519,7 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
     fitRowHeight(worksheet, row, Math.max(estimatedLines(label, widths[0] || 10), estimatedLines(value, mergedWidth(2))));
   }
 
-  // Limitations / warnings
+  // 限制与警告
   for (const warning of model.warnings) {
     const row = nextRow();
     const labelCell = worksheet.getCell(row, 1);
@@ -534,7 +534,7 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
     fitRowHeight(worksheet, row, Math.max(estimatedLines("限制", widths[0] || 10), estimatedLines(warning.message, mergedWidth(2))));
   }
 
-  nextRow(); // spacer
+  nextRow(); // 留白行
 
   let freezeRow = 0;
   let firstDetailHeaderRow = 0;
@@ -583,10 +583,10 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
       });
       fitRowHeight(worksheet, row, rowLines);
     }
-    nextRow(); // spacer between sections
+    nextRow(); // 段落间留白行
   }
 
-  // Footnotes
+  // 脚注
   for (const note of model.notes) {
     const row = nextRow();
     worksheet.mergeCells(row, 1, row, maxColumns);
@@ -616,7 +616,7 @@ export async function buildReportXlsx(report, document = buildReportDocument(rep
   return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
 }
 
-// ------------------------------------------------------------------ PDF
+// ------------------------------------------------------------------ PDF 导出
 
 function windowsFontCandidates() {
   const root = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
@@ -700,7 +700,7 @@ function wrapText(doc, text, width) {
         if (token.trim() === "") continue;
       }
       if (!current && doc.widthOfString(token) > width) {
-        // Hard-break a single oversized token without dropping any character.
+        // 单个 token 超长时强制换行，不丢失任何字符。
         for (const char of token) {
           if (current && doc.widthOfString(current + char) > width) {
             lines.push(current);
@@ -813,9 +813,9 @@ async function renderPdf(model, candidate) {
       state.y += 12;
     }
     state.y += 4;
-    // Two metadata pairs per row; label and value occupy separate horizontal bands.
-    // Each field is paginated line by line so one oversized value can never be drawn
-    // past the bottom margin, even when it needs more than a full page.
+    // 每行两组元数据；标签和值分别占独立水平区域。
+    // 每个字段逐行分页，确保超长值即使超过整页，
+    // 也不会画出底边距之外。
     const metaColWidth = (contentWidth - 12) / 2;
     const metaLabelWidth = 86;
     const metaValueWidth = metaColWidth - metaLabelWidth - 4;
@@ -863,8 +863,8 @@ async function renderPdf(model, candidate) {
     }
     state.y += 6;
     let y = state.y;
-    // Warnings box. When the full box cannot fit even on a fresh continuation page,
-    // fall back to flowing lines so no warning is clipped or silently dropped.
+    // 警告框即使在全新续页仍放不下时，
+    // 改为逐行流式布局，不裁切或静默丢弃警告。
     setText(7.6, "#7A4B00");
     const warningWidth = contentWidth - 16;
     const blocks = model.warnings.map((warning) => wrapText(doc, warning.message, warningWidth));
@@ -918,7 +918,7 @@ async function renderPdf(model, candidate) {
     const headerLines = section.columns.map((column, index) => wrapText(doc, column.header, widths[index] - padX * 2));
     const headerHeight = Math.max(...headerLines.map((lines) => lines.length)) * lineHeight + padY * 2;
     const titleHeight = section.title ? 15 : 0;
-    // Break before the section title so a title never ends up orphaned above a page break.
+    // 在节标题之前换页，避免标题孤立地留在分页线上方。
     if (state.y + titleHeight + headerHeight + lineHeight > bottomLimit) addPage(true);
     if (section.title) {
       setText(9.5, "#1F3864");
@@ -968,7 +968,7 @@ async function renderPdf(model, candidate) {
     const widths = layoutColumns(section.columns, contentWidth);
     drawSectionHeader(section, widths);
     if (!section.rows.length && reserve > 0 && state.y + reserve > bottomLimit) {
-      // A header-only final section must still leave room for the end notes on the same page.
+      // 最后一节即使只有表头，也须为同页尾注留出空间。
       addPage(true);
       drawSectionHeader(section, widths);
     }
@@ -983,8 +983,8 @@ async function renderPdf(model, candidate) {
       for (;;) {
         const remaining = cellLines.map((lines, index) => lines.slice(offsets[index]));
         if (remaining.every((lines) => lines.length === 0)) break;
-        // Reserve room for the end notes on the page where the final row finishes, so
-        // notes never spill onto a trailing page that contains nothing else.
+        // 在最后一行结束的页面上预留尾注空间，
+        // 防止尾注溢出到无其他内容的末页。
         const reserveNow = isFinalRow ? reserve : 0;
         const available = bottomLimit - reserveNow - state.y;
         const maxLines = Math.floor((available - padY * 2) / lineHeight);
@@ -1022,8 +1022,8 @@ async function renderPdf(model, candidate) {
     renderSection(section, index === model.sections.length - 1 ? noteReserve : 0);
   });
 
-  // Footnotes. They normally fit on the final content page thanks to the reservation
-  // above; a note longer than a full page still flows without clipping.
+  // 脚注通常因上方预留空间而放在最后内容页；
+  // 超过整页的单个脚注仍须连续排版，不能裁切。
   if (noteBlocks.length) {
     for (const lines of noteBlocks) {
       for (const line of lines) {
@@ -1036,7 +1036,7 @@ async function renderPdf(model, candidate) {
     }
   }
 
-  // Page footers with page number / total, applied after all pages exist.
+  // 全部页面生成后再加入页脚，包含页码和总页数。
   const range = doc.bufferedPageRange();
   for (let index = range.start; index < range.start + range.count; index++) {
     doc.switchToPage(index);
@@ -1087,18 +1087,18 @@ export async function buildReportPdf(report, document = buildReportDocument(repo
   });
 }
 
-// ------------------------------------------------------------- entry point
+// ------------------------------------------------------------- 导出入口
 
 /**
- * Build an internal report download in CSV, XLSX or PDF.
+ * 生成内部报表下载，支持 CSV、XLSX 或 PDF。
  * @returns {Promise<{filename:string,contentType:string,body:string|Buffer,report:object,font?:object}>}
  */
 export async function buildOfficeExport(setId, options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) fail("report_options_invalid");
   const format = options.format ?? "csv";
   if (!OFFICE_FORMATS.includes(format)) fail("report_format_unsupported", { supported: OFFICE_FORMATS });
-  // Reuse report-export.mjs for validation, scope checks, DTO building and CSV output.
-  // Loaded lazily (not at module scope) so importing this renderer stays database-free.
+  // 复用 report-export.mjs 的校验、范围检查、DTO 构造和 CSV 输出。
+  // 在函数内延迟加载，保证导入本渲染器时不访问数据库。
   const { buildReportExport } = await import("./report-export.mjs");
   const base = buildReportExport(setId, { ...options, format: "csv" });
   if (format === "csv") return base;

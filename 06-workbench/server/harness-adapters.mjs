@@ -1,5 +1,5 @@
-// Registration point for fixed implemented business functions. A declaration
-// never loads a model-provided path, supplies a tax algorithm, or grants support.
+// 固定已实现业务函数的注册点。声明不会加载模型提供的路径，
+// 不会提供税费算法，也不会自动授予业务支持。
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -116,9 +116,9 @@ export async function callHarnessAdapter({capabilityId,phase,scope,request,opera
   if(capabilityId==='offline.vat_q2') {
     validateTarget(scope,request.target);const doc=JSON.parse(readFileSync(request.targetInputPath,'utf8'));requireValue(doc.scope?.period===scope.period&&doc.scope?.enterpriseKey===scope.enterpriseKey&&String(doc.scope?.accountSetId)===String(scope.accountSetId)&&doc.scope?.currency===scope.currency,'harness_target_mismatch');
     const result=await runOfflineVatQ2(request);
-    // A blocked computation can still have a successfully captured ledger/input
-    // version. Compare that native binding before treating blocked as unavailable.
-    // Failure diagnostics without this proof remain temporarily unverifiable.
+    // 被阻塞的计算仍可能成功捕获账簿/输入版本；
+    // 先比较原生绑定，再决定 blocked 是否等于不可用。
+    // 没有此项证明的失败诊断，仍属暂时无法核验。
     const captured=value=>value?.targetBinding==='same_held_readonly_source'&&value.proof?.status==='current'&&typeof value.binding?.bindingDigest==='string';
     return captured(result)&&captured(priorResult)&&result.binding.bindingDigest!==priorResult.binding.bindingDigest?{...result,businessProofCurrent:false}:result;
   }

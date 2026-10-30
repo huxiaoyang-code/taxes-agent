@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-export-http-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
-// Synthetic accounts only. A fresh database and child-assigned port isolate every run.
+// 仅使用合成账套。全新数据库及子进程分配端口隔离每次运行。
 import assert from "node:assert/strict";
 import { test, before, after } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -88,7 +88,7 @@ after(async () => {
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
     if (closed) {
       try {
-        // A spawn failure emits error/close without exit; it must remain a failure.
+        // spawn 失败会发出 error/close，而没有 exit；必须仍判断为失败。
         await bounded(spawnError ? closed : Promise.all([exited, closed]), 10000, "HTTP server exit/close");
       } catch (error) {
         if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -122,7 +122,7 @@ async function expectError(url, code, status = 400, method = "GET") {
   return response;
 }
 
-// Independent RFC4180 reader for the actual downloaded bytes; no production CSV/DTO parser.
+// 用独立 RFC4180 读取器读取实际下载字节，不用生产 CSV/DTO 解析器。
 function csvRows(text) {
   const rows = []; let row = [], field = "", quoted = false;
   for (let i = text.charCodeAt(0) === 0xfeff ? 1 : 0; i < text.length; i++) {
@@ -163,7 +163,7 @@ for (const { id, profile } of metadataSets) {
     for (const expected of [["币种", "人民币(CNY)"], ["金额单位", "元"], ["报表", title], ["期间", "2026-01"], ["持久profile", profile]])
       assert.deepEqual(rows.filter(row => row[0] === expected[0]), [expected]);
     const row = (label, column = 0, length) => rows.find(item => item[column] === label && (length === undefined || item.length === length));
-    // Hand-calculated for both profiles: opening 1000, receipts 123.45, expenses 23.45.
+    // 两种配置均使用手算：期初 1000、收款 123.45、费用 23.45。
     if (kind === "balance-sheet") {
       assert.deepEqual(row("货币资金", 1), ["资产", "货币资金", "1000.00", "1100.00"]);
       assert.deepEqual(row("资产总计", 1), ["资产", "资产总计", "1000.00", "1100.00"]);
@@ -216,7 +216,7 @@ test("empty account set exports an internal report without inventing activity", 
 for (const [query, code] of [
   ["", "period_required"], ["period=2026-13", "period_invalid"], ["period=2026-1", "period_invalid"],
   ["period=2025-12", "period_before_start"], ["period=2026-03", "period_not_registered"],
-  // xlsx is a supported attachment format now, so the strict rejection case uses a genuinely unsupported one.
+  // 现在 xlsx 是受支持的附件格式，因此严格拒绝用例改用实际不支持的格式。
   ["period=2026-01&format=yaml", "report_format_unsupported"], ["period=2026-01&format=", "report_format_unsupported"],
 ]) test(`invalid request: ${code} (${query})`, () => expectError(path("trial-balance", query), code));
 
@@ -248,7 +248,7 @@ test("preview and CSV share monthly, YTD and closing balances without the old cu
   assert.equal(report.dataStatus.taxFilingReady, false);
   assert.equal(report.scope.status, "posted");
   const bank = report.data.lines.find((line) => line.code === "1002");
-  // Independent numbers: January 1000 opening + 200 receipt; February receipt 50.
+  // 独立数字：一月期初 1000 + 收款 200；二月收款 50。
   assert.equal(bank.opening_debit, 1200);
   assert.equal(bank.period_debit, 50);
   assert.equal(bank.ytd_debit, 250);
@@ -283,8 +283,8 @@ test("preview endpoint validates period and HTTP method just like download", asy
   await expectError(preview, "method_not_allowed", 405, "POST");
 });
 
-// Route contract: /export-data is a CSV-shaped JSON DTO only. Office formats belong to the download
-// route, so an unsupported format must stay a strict 400 instead of being silently rewritten to CSV.
+// 路由契约：/export-data 只返回 CSV 结构的 JSON DTO。Office 格式属于下载
+// 路由，因此不支持的格式必须严格返回 400，不能静默改写为 CSV。
 test("preview keeps the strict CSV DTO format contract and never becomes an attachment", async () => {
   const preview = (query) => path("trial-balance", query).replace("/export?", "/export-data?");
   for (const query of ["period=2026-01", "period=2026-01&format=csv"]) {
@@ -299,7 +299,7 @@ test("preview keeps the strict CSV DTO format contract and never becomes an atta
     await expectError(preview(`period=2026-01&format=${format}`), "report_format_unsupported");
 });
 
-// The download route does turn the format into a real attachment: XLSX must no longer be a stale 400.
+// 下载路由确实会生成实际格式的附件：XLSX 不应继续返回旧的 400。
 test("download route serves the office format as a real XLSX attachment", async () => {
   const response = await request(path("trial-balance", "period=2026-01&format=xlsx"));
   assert.equal(response.status, 200);

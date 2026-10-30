@@ -1,5 +1,5 @@
-// All model-facing names come from verified static source or explicitly confirmed
-// technical schema. Business field values remain in the private projection only.
+// 模型可见名称全部来自已核实静态来源或显式确认的
+// 技术 schema；业务字段值仅留在私有投影内。
 import {FILING_PERIOD_FIELDS} from './tax-filing-period.mjs';
 export const COLLECTION_FIELDS = Object.freeze(['Response','Data','data','userinfo','returnCode','code','Error','error',
   'user_id','user_type','reg_number','company_name','enterprise_type','taxpayerStatusCode',
@@ -43,7 +43,7 @@ export const PASSIVE_RECIPES=Object.freeze({
   '/mhzx/api/mh/mhsy/getUserInfo':Object.freeze({resource:'identity',method:'GET'}),
   '/xxzx/api/nsrxxzx/txzx/dbrw/v1/listNsrDbxx':Object.freeze({resource:'pending_tasks',method:'POST',body:{Jsqd:'01'}}),
   '/xxzx/api/nsrxxzx/txzx/wntj/v1/listWntj':Object.freeze({resource:'menu_recommendation',method:'POST'}),
-  // The verified non-old axios interceptor uppercases the first character of keys.
+  // 已核实的非旧版 axios 拦截器会将键的首字符大写。
   '/mhzx/api/mh/wddb/v1/wddbquerybbsmxx':Object.freeze({resource:'current_filing',method:'POST',body:{Csbz:''}}),
 });
 export function observedRecipe(request){

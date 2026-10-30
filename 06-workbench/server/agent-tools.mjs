@@ -43,7 +43,7 @@ export class ToolError extends Error {
   }
 }
 
-// Local auxiliary entry points accept data only; the domain owns all writes/transactions.
+// 本机辅助核算入口只接收数据；全部写入及事务由业务领域层负责。
 const AUX_FIELDS = Object.freeze({
   auxiliary_entities: ["kind"], auxiliary_entries: ["voucherId", "period"],
   auxiliary_ledger: ["period", "code", "groupBy"], auxiliary_party: ["entryId"],
@@ -105,7 +105,7 @@ function auxiliaryCall(name, raw) {
   return { accountSetId: args.accountSetId, result: value };
 }
 
-// Bank installation is only reached by an explicit local prepare action.
+// 只有显式的本机 prepare 操作才能进入银行组件安装。
 let bankInstallPromise;
 export async function prepareBankDraft(accountSetId, body) {
   new BankLocalDrafts().prepare(accountSetId, body);
@@ -321,7 +321,7 @@ export const taxGateway = new TaxGateway({
   accountSetExists: (id) => { A.getAccountSet(id); return true; },
 });
 export const taxAcquisition = new TaxAcquisition({ gateway: taxGateway, accounting: A });
-// Opens nothing until the explicit tax_browser_open tool is invoked.
+// 显式调用 tax_browser_open 前不打开任何对象。
 export const taxBrowserSessions = new FujianBrowserSessions();
 export const taxLiveCollection = new TaxLiveCollection();
 export const taxHistoryCollection = new TaxHistoryCollection();

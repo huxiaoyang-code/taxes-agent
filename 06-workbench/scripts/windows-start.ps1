@@ -1,74 +1,72 @@
 <#
 .SYNOPSIS
-  Start the local Youshu workbench from source with an explicit Node path, data
-  directory and port. Runs the runtime pre-check first.
+  从源码启动本机有数工作台，显式指定 Node 路径、数据
+  目录和端口。首先运行运行时预检。
 
 .DESCRIPTION
-  This script is compatible with Windows PowerShell 5.1 (it does not require
-  PowerShell 7 / pwsh). It never changes the machine PATH, registry, execution
-  policy or firewall.
+  此脚本兼容 Windows PowerShell 5.1（不要求
+  PowerShell 7 / pwsh）。绝不修改机器 PATH、注册表、执行
+  策略或防火墙。
 
-  It always binds HOST=127.0.0.1 (loopback only). PORT=0 asks the OS for a free
-  port; the actual port is printed by the server. Data is stored under the
-  explicit -DataDir; no default data directory is read.
+  始终绑定 HOST=127.0.0.1（仅回环）。PORT=0 让操作系统分配空闲
+  端口；实际端口由服务打印。数据存储于显式
+  -DataDir 中，不读取默认数据目录。
 
-  The runtime pre-check runs as a bounded child (real deadline, then kill and
-  reap) so a hanging probe cannot block the launcher forever. The probe scratch
-  directory defaults to `<this workbench>\tmp\windows-delivery`; pass
-  -ScratchRoot when the release directory is read-only or when a workspace path
-  is required.
+  运行时预检作为有时限的子进程运行（真实截止时间，到期终止并
+  回收），避免挂起探针永久阻塞启动器。探针临时
+  目录默认为 `<this workbench>\tmp\windows-delivery`；发布目录
+  只读或要求工作区路径时，传入 -ScratchRoot。
 
-  The service itself runs unbounded in normal foreground use. Only when
-  -MaxRunSeconds is given (verification use) is it stopped at the bound.
+  正常前台使用时服务自身不设运行时限。只有提供
+  -MaxRunSeconds（验证用途）时才在到期后停止。
 
-  Process ownership: this script starts exactly one service process, records its
-  id and prints one line `windows_start_service_pid=<pid>`. Stop only that id.
-  All stop paths (normal exit, -MaxRunSeconds bound, and exception) use only this
-  script's own System.Diagnostics.Process handle; nothing is stopped by process
-  name. Terminating this wrapper from outside can leave that service running;
-  that is why the id is printed (the wrapper cannot clean up after being
-  killed). If a stop cannot be verified, the script reports
-  `service_stop_failed` and `windows_start_residual_service_pid=<pid>` instead of
-  claiming success.
+  进程所有权：此脚本只启动一个服务进程，记录其
+  ID，并打印一行 `windows_start_service_pid=<pid>`。只能停止该 ID。
+  所有停止路径（正常退出、-MaxRunSeconds 到期及异常）只使用
+  本脚本自有的 System.Diagnostics.Process 句柄；绝不根据进程名
+  停止其他进程。从外部终止此包装器可能留下运行中的服务；
+  因此会打印 ID（包装器被终止后无法自行清理）。
+  无法验证停止时，脚本报告
+  `service_stop_failed` 及 `windows_start_residual_service_pid=<pid>`，
+  不宣称成功。
 
-  If your organization blocks local script execution, do not bypass the policy.
-  Use the equivalent manual steps instead (see docs/CODE-INDEX.md#windows):
+  如果组织禁止本机脚本执行，不得绕过策略。
+  改用等价手动步骤（见 docs/CODE-INDEX.md#windows）：
       $env:HOST = '127.0.0.1'
       $env:PORT = '0'
       $env:WORKBENCH_DATA_DIR = '<explicit data directory>'
       & '<node.exe>' '<release>\06-workbench\server\server.mjs'
 
 .PARAMETER NodePath
-  Full path to node.exe. Defaults to the first node.exe on PATH.
+  node.exe 的完整路径。默认使用 PATH 中的第一个 node.exe。
 
 .PARAMETER DataDir
-  Explicit workbench data directory (created by the server if missing).
-  Required. The script refuses a path that is an existing file.
+  显式工作台数据目录（缺失时由服务创建）。
+  必填。路径是已存在文件时脚本会拒绝。
 
 .PARAMETER Port
-  Loopback port, 0..65535. Default 0 (OS-assigned). 8787 is not assumed.
+  回环端口，0..65535。默认 0（操作系统分配），不假定为 8787。
 
 .PARAMETER MaxRunSeconds
-  Verification-only bound: stop this script's own child after N seconds and
-  exit 124. Default 0 = run until the service exits (normal use).
+  仅供验证的时限：N 秒后停止本脚本自有子进程并
+  以 124 退出。默认 0 = 运行到服务退出（正常用途）。
 
 .PARAMETER ScratchRoot
-  Optional, caller-authorized workspace directory dedicated to this run; used as
-  the base of the pre-check probe directory. Must be given as a full absolute
-  path: drive-qualified like `D:\dir` or a **complete UNC**
-  `\\server\share\dir` (both server and share required). Checked as-is
-  **before any normalization** outside the read-only release directory.
-  Relative, drive-relative (`C:foo`), root-relative (`\foo`), device paths
-  (`\\?\`, `//?/`) and incomplete UNC (`\\server`) values are rejected before
-  anything is created. Supplying the parameter with an empty or whitespace-only
-  value is rejected too, instead of silently falling back to the default base.
-  The base itself is never deleted; only the random probe
-  root this script creates inside it is removed, and only after the full
-  ancestor chain to the volume root, the realpath and the ownership manifest all
-  verify.
+  可选、经调用者授权且专用于本次运行的工作区目录，用作
+  预检探针目录的基目录。必须提供完整绝对路径：
+  带驱动器的 `D:\dir` 或完整 UNC
+  `\\server\share\dir`（必须同时有服务器和共享名）。在只读发布目录之外，
+  在任何规范化之前按原样检查。
+  相对、驱动器相对（`C:foo`）、根相对（`\foo`）、设备路径
+  （`\\?\`、`//?/`）及不完整 UNC（`\\server`）会在创建任何内容前拒绝。
+  参数值为空或纯空白时也会拒绝，
+  不会静默回退到默认基目录。
+  基目录本身绝不删除；只移除此脚本在其中创建的随机探针
+  根目录，并且必须先验证至卷根目录的完整
+  祖先链、真实路径和所有权清单。
 
 .PARAMETER Help
-  Print usage and exit 0. Also available as Get-Help .\windows-start.ps1.
+  打印用法并以 0 退出。也可使用 Get-Help .\windows-start.ps1。
 
 .EXAMPLE
   powershell -NoProfile -File scripts\windows-start.ps1 -NodePath C:\node.exe -DataDir D:\workbench-data -Port 0
@@ -104,8 +102,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Real bounds: the pre-check probe is killed and reaped after this, the service
-# stop path never waits without a limit.
+# 真实时限：预检探针到期后会被终止并回收；服务
+# 停止路径绝不无限等待。
 $PrecheckTimeoutMilliseconds = 30000
 $StopWaitMilliseconds = 5000
 
@@ -145,15 +143,15 @@ function Resolve-FullPath([string]$path, [string]$fallbackCode) {
   }
 }
 
-# Raw input check: only the string itself, no normalization. Only two shapes
-# count as "absolute" here, decided before isAbsolute / IsPathRooted:
-#   * drive absolute: C:\... or C:/...
-#   * complete UNC: \\server\share[...] (both server and share non-empty)
-# Rejects relative paths, drive-relative (`C:foo`), root-relative (`\foo`, `/foo`),
-# device paths (`\\?\`, `\\.\` and the `//?/`, `//./`, mixed-slash variants,
-# including `\\?\UNC\...`) and incomplete UNC (`\\server`, `\\server\`).
-# IsPathRooted alone would accept the last two and a later GetFullPath would
-# promote them, so they are refused by string test only. No network access here.
+# 检查原始输入：只检查字符串本身，不做规范化。此处只有两种形式
+# 被视为“绝对路径”，在 isAbsolute / IsPathRooted 之前决定：
+# * 驱动器绝对路径：C:\... 或 C:/...
+# * 完整 UNC：\\server\share[...]（服务器和共享名都不能为空）
+# 拒绝相对路径、驱动器相对路径（`C:foo`）、根相对路径（`\foo`、`/foo`）、
+# 设备路径（`\\?\`、`\\.\`，以及 `//?/`、`//./` 和混合斜杠变体，
+# 包括 `\\?\UNC\...`）和不完整 UNC（`\\server`、`\\server\`）。
+# 仅用 IsPathRooted 会接受后两种形式，后续 GetFullPath 又会将其
+# 补全，因此这里只用字符串检查拒绝。不访问网络。
 function Test-RawAbsolutePath([string]$path) {
   if ([string]::IsNullOrWhiteSpace($path)) { return $false }
   if ($path -ne $path.Trim()) { return $false }
@@ -167,8 +165,8 @@ function Test-RawAbsolutePath([string]$path) {
   return $false
 }
 
-# Bounded child: waits at most $timeoutMs, then kills and reaps. Never waits
-# without a limit and never leaves a child unreaped without reporting it.
+# 有时限的子进程：最多等待 $timeoutMs，再终止并回收。绝不
+# 无限等待；子进程未回收时必须报告，不能静默遗留。
 function Invoke-BoundedPrecheck([string]$exe, [string[]]$arguments, [int]$timeoutMs) {
   foreach ($item in (@($exe) + $arguments)) {
     if ($item -match '"') {
@@ -217,8 +215,8 @@ function Invoke-BoundedPrecheck([string]$exe, [string[]]$arguments, [int]$timeou
   return @{ started = $true; timedOut = $false; exited = $true; code = $exitCode; stdout = $stdout; stderr = $stderr; invalid = $null }
 }
 
-# Stop only the service process this script created, using its own .NET handle.
-# Never falls back to Stop-Process -Id / process-name matching (PID reuse risk).
+# 仅通过本脚本自有 .NET 句柄停止本脚本创建的服务进程。
+# 绝不回退到 Stop-Process -Id 或进程名匹配（存在 PID 复用风险）。
 function Stop-OwnedService($process, [int]$waitMs) {
   if ($null -eq $process) { return @{ stopped = $true; reason = "no_child" } }
   try {
@@ -246,15 +244,15 @@ if ([string]::IsNullOrWhiteSpace($DataDir)) {
   Fail "data_dir_required" 1
 }
 
-# Resolve to an absolute path without creating it. Never fall back to a default data dir.
+# 解析为绝对路径但不创建。绝不回退到默认数据目录。
 $fullDataDir = Resolve-FullPath $DataDir "data_dir_invalid"
 
-# -ScratchRoot must already be a **full absolute path before any normalization**:
-# relative / drive-relative (`C:foo`) / root-relative (`\foo`) inputs, device paths
-# and incomplete UNC are rejected here, so no scratch directory and no business DB
-# can be created from them. An explicitly supplied empty / whitespace-only value is
-# also rejected instead of silently falling back to the default scratch root: only
-# "parameter not supplied" means "use the default".
+# -ScratchRoot 在任何规范化之前都必须已经是完整绝对路径：
+# 此处拒绝相对/驱动器相对（`C:foo`）/根相对（`\foo`）输入、设备路径
+# 及不完整 UNC，因此这些输入不能创建任何临时目录或业务数据库。
+# 显式传入空值或纯空白值也会拒绝，
+# 不会静默回退到默认临时根目录；只有
+# “未提供参数”才表示“使用默认值”。
 $scratchRootProvided = $PSBoundParameters.ContainsKey('ScratchRoot')
 $fullScratchRoot = ""
 if ($scratchRootProvided) {
@@ -285,8 +283,8 @@ if ($fullScratchRoot -ne "") {
   $checkArguments += @("--scratch-root", $fullScratchRoot)
 }
 
-# Runtime / directory pre-check must finish before the service is started, so an
-# unsupported runtime is rejected before any data directory is created or migrated.
+# 服务启动前必须完成运行时/目录预检，因此不支持的
+# 运行时会在创建或迁移任何数据目录之前被拒绝。
 $precheck = Invoke-BoundedPrecheck $NodePath $checkArguments $PrecheckTimeoutMilliseconds
 if ($null -ne $precheck.invalid) {
   Fail ("runtime_check_invalid_argument:" + $precheck.invalid) 3
@@ -325,7 +323,7 @@ try {
   $env:PORT = [string]$Port
   $env:WORKBENCH_DATA_DIR = $fullDataDir
 
-  # Track our own child by handle. Only this handle/id is ever stopped.
+  # 通过句柄跟踪自有子进程。只停止此句柄/ID。
   $quoted = '"' + $serverScript.Replace('"', '\"') + '"'
   $child = Start-Process -FilePath $NodePath -ArgumentList $quoted -NoNewWindow -PassThru
   if ($null -eq $child) {
@@ -336,8 +334,8 @@ try {
     Write-Output ("windows_start_service_pid=" + $servicePid)
 
     if ($MaxRunSeconds -gt 0) {
-      # Verification-only path: stop only this child after the bound, and verify
-      # it really exited instead of assuming the kill worked.
+      # 仅供验证的路径：到期后只停止此子进程，并验证
+      # 它确实退出，不能假设终止操作已成功。
       $finished = $child.WaitForExit($MaxRunSeconds * 1000)
       if (-not $finished) {
         $stop = Stop-OwnedService $child $StopWaitMilliseconds
@@ -352,9 +350,9 @@ try {
         $exitCode = $child.ExitCode
       }
     } else {
-      # Normal foreground mode: the service owns the console lifetime; its exit
-      # code is propagated unchanged (Ctrl+C stops the service). This wait is
-      # intentionally unbounded - it is the service runtime, not a probe.
+      # 正常前台模式：服务拥有控制台生命周期；退出
+      # 码原样传递（Ctrl+C 停止服务）。此等待
+      # 刻意不设时限，因为这是服务运行过程，不是探针。
       $child.WaitForExit()
       $exitCode = $child.ExitCode
       if ($null -eq $exitCode) { $exitCode = 1 }
@@ -362,8 +360,8 @@ try {
   }
 } catch {
   [Console]::Error.WriteLine("windows_start_error: server_start_failed")
-  # Exception path also reclaims only our own handle; a stop that cannot be
-  # verified is reported as residual instead of being silently dropped.
+  # 异常路径也只回收自有句柄；无法验证的停止
+  # 应报告为残留，不得静默丢弃。
   $stop = Stop-OwnedService $child $StopWaitMilliseconds
   if (-not $stop.stopped) {
     [Console]::Error.WriteLine("windows_start_error: service_stop_failed")
@@ -377,8 +375,8 @@ try {
   Restore-Env "PORT" $previousPort
   Restore-Env "WORKBENCH_DATA_DIR" $previousDataDir
   if ($null -ne $child) {
-    # Release only the handle; this never signals the process. A residual pid
-    # printed above stays the single documented way to stop it.
+    # 只释放句柄，绝不向进程发送信号。上方打印的残留 PID
+    # 仍是文档中唯一用于停止该进程的途径。
     try { $child.Dispose() } catch { }
   }
 }

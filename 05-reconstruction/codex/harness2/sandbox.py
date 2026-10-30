@@ -119,8 +119,8 @@ class LinuxSandbox:
     def verify(self, canary: Path) -> dict:
         if not canary.is_file() or canary.is_relative_to(self.work):
             raise RuntimeError('harness2_external_canary_required')
-        # Canary path and its parent must not be mounted; no success boolean is
-        # accepted from configuration. Network tests happen in the real namespace.
+        # 探针路径及其父目录不得挂载；不接受配置中的成功布尔声明。
+        # 网络测试须在真实命名空间中执行。
         script = r'''import json, os, socket, sys
 p=sys.argv[1]
 assert not os.path.exists(p), 'external_canary_visible'

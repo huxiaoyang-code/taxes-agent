@@ -17,7 +17,7 @@ const yes = (doc, m) => { const result = validate(doc, m); assert.equal(result.v
 const no = (doc, m) => { const result = validate(doc, m); assert.equal(result.valid, false); assert.equal(result.authorizesExecution, false); assert.match(JSON.stringify(result.errors), /^\[\{"code":"offline_[a-z_]+"\}\]$/); };
 const line = () => ({ manifestId: 'manifest-1', inputVersion: 'v1', ledgerVersion: 'ledger-v1', ruleVersion: 'unverified-v1' });
 
-// Independent test arithmetic: neither calls the product parser nor uses a fixture as runtime input.
+// 独立测试算术：既不调用产品解析器，也不将测试样本作为运行时输入。
 function manualCents(value) {
   const negative = value.startsWith('-');
   const digits = value.replace('-', '').replace('.', '');
@@ -50,7 +50,7 @@ for (const name of names) {
     assert.deepEqual(entries, expected.expectedEntries);
     const balances = {};
     if (input.history.length) {
-      // The second consecutive quarter uses the independent Q2 expectation explicitly.
+      // 连续的第二季度显式使用独立 Q2 预期。
       const prior = read('expectations', '01-service-sale').expectedPreCloseTrialBalances;
       for (const [key, value] of Object.entries(prior)) balances[key] = manualCents(value);
     }
@@ -67,7 +67,7 @@ for (const name of names) {
       const sourceBase = input.facts.filter(f => f.type === 'sales' || name.startsWith('11')).reduce((sum, f) => sum + manualCents(f.amount), 0n);
       assert.equal(manualCents(arithmetic.base), sourceBase);
       const product = sourceBase * BigInt(arithmetic.numerator), divisor = BigInt(arithmetic.denominator);
-      // Independent quotient/remainder method versus the literal decimal derivation in fixtures.
+      // 独立的商/余数方法，对比测试样本中的字面十进制推导。
       const rounded = product / divisor + ((product % divisor) * 2n >= divisor ? 1n : 0n);
       assert.equal(decimal(rounded), arithmetic.roundedAmount);
     }

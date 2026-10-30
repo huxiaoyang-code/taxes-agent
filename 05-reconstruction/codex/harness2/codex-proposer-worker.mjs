@@ -1,5 +1,5 @@
-// Trusted outer-host bridge. It never runs inside the Pi candidate namespace.
-// Reuse the operator's Codex authentication/configuration; never copy credentials.
+// 可信外层宿主桥接；不会在 Pi 候选命名空间内运行。
+// 复用操作者本人的 Codex 认证与配置，绝不复制凭据。
 import {spawn} from 'node:child_process';
 import {mkdirSync,writeFileSync,readFileSync,existsSync,lstatSync,realpathSync} from 'node:fs';
 import {resolve,join,dirname,isAbsolute} from 'node:path';
@@ -49,8 +49,8 @@ export async function runCodexRequest(request,{signal}={}){
   }
   try{
     const version=await capture(['--version']);if(version.code!==0||reason)fail(reason?'codex_'+reason:'codex_version_failed');
-    // This command can contain configured env/header secrets. Project only names
-    // in memory, never persist or return its stdout/stderr.
+    // 此命令可能含配置的环境变量或请求头密钥；仅在内存提取名称，
+    // 绝不持久保存或返回其 stdout/stderr。
     const servers=await capture(['mcp','list','--json']);if(servers.code!==0||reason)fail(reason?'codex_'+reason:'codex_mcp_inventory_failed');
     let configured;try{configured=JSON.parse(servers.stdout);}catch{fail('codex_mcp_inventory_invalid');}
     if(!Array.isArray(configured)||configured.some(x=>typeof x.name!=='string'||!x.name))fail('codex_mcp_inventory_invalid');
@@ -59,9 +59,9 @@ export async function runCodexRequest(request,{signal}={}){
     const disabledFeatures=['shell_tool','apps','plugins','remote_plugin','browser_use','computer_use','multi_agent','view_image','workspace_dependencies','hooks','skill_mcp_dependency_install'];
     const configArgs=['--config','tools.web_search=false'];
     for(const feature of disabledFeatures)configArgs.push('--config',`features.${feature}=false`);
-    // A dynamic MCP entry may not exist in config.toml. Supplying enabled=false
-    // alone creates an invalid entry without a transport. A valid disabled stub
-    // never starts and avoids copying any original command/env/header secrets.
+    // 动态 MCP 条目可能不存在于 config.toml；仅设置 enabled=false
+    // 会生成缺少 transport 的无效条目。有效的禁用占位条目
+    // 不会启动，也避免复制原命令、环境变量或请求头中的密钥。
     const serverNames=[...new Set(configured.map(x=>x.name))].sort();
     for(const name of serverNames){const transport=configured.find(x=>x.name===name).transport.type;
       const stub=transport==='stdio'?`{command=${JSON.stringify(request.codexCli)},enabled=false}`:'{url="http://127.0.0.1:1",enabled=false}';
@@ -81,8 +81,8 @@ export async function runCodexRequest(request,{signal}={}){
     const fatalErrors=events.filter(x=>x.type==='turn.failed'||((x.type==='error'||x.item?.type==='error')&&!recoverable.has(x)));
     const terminal=events.findLast(x=>x.type==='turn.completed'),failed=fatalErrors.length>0;
     const unexpectedItemTypes=[...new Set(events.filter(x=>x.type?.startsWith('item.')&&!['agent_message','reasoning','todo_list'].includes(x.item?.type)&&!recoverable.has(x)).map(x=>typeof x.item?.type==='string'?x.item.type:'missing_type'))];
-    // Only recognized fixed-format diagnostics enter metadata; arbitrary error
-    // text (possibly including unrelated URLs/headers) stays in redacted logs.
+    // 只有已识别的固定格式诊断能进入元数据；任意错误文本
+    // （可能含无关 URL 或请求头）仅保留在脱敏日志中。
     const diagnostics=[...recoverable].map(x=>({eventType:x.type,itemType:x.item?.type??null,classification:'recoverable_transport',message:safeLog(x.type==='error'?x.message:x.item.message)}));
     const metadata={version:'finance-codex-result/1',label:request.label,status:reason??(result.code!==0?'process_failed':failed?'turn_failed':unexpectedItemTypes.length?'unexpected_tool_use':!terminal?'completion_missing':'completed'),exitCode:result.code,signal:result.signal,modelSelection:'inherited',actualModel:null,cliVersion:version.stdout.trim(),threadId:events.find(x=>x.type==='thread.started')?.thread_id??null,usage:terminal?.usage??null,unexpectedItemTypes,diagnostics,fatalErrorCount:fatalErrors.length,transportRecovered:false,actualBilledUsd:null,artifactDirectory:directory};
     const actual=events.find(x=>['thread.started','turn.started','turn.completed','session.created'].includes(x.type)&&typeof x.model==='string');if(actual)metadata.actualModel=actual.model;

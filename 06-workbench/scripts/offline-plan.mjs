@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Explicit local snapshots only. Output is always a newly created file.
+// 仅使用显式本机快照。输出始终为新创建的文件。
 import { readFile, realpath, stat, open, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,7 @@ export async function runCli(args) {
     const base = dirname(input.canonical), reports = [];
     for (const path of config.reports) {
       try { reports.push((await readJson(resolve(base, path))).value); }
-      catch { reports.push(null); } // One damaged snapshot cannot erase independent valid sources.
+      catch { reports.push(null); } // 一个损坏的快照不能抹掉其他独立有效来源。
     }
     let declaration = null;
     if (config.declaration !== null) { try { declaration = (await readJson(resolve(base, config.declaration))).value; } catch { declaration = {}; } }

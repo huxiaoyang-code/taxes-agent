@@ -454,7 +454,7 @@ export function assetCardPeriodStatus(db, card, period, money = cardMoney(card))
   const notApplicable = ["not_existed", "not_started", "invalid"].includes(expected.status);
   return {
     ...base,
-    // invalid / not_existed / not_started / ledger_pending / fully_depreciated / life_expired / no_amount_due
+    // 状态枚举：invalid / not_existed / not_started / ledger_pending / fully_depreciated / life_expired / no_amount_due
     status: expected.status,
     ...(notApplicable ? {} : { amountCents: 0n }),
     reason: expected.reason ?? expected.status,

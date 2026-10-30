@@ -171,8 +171,8 @@ result=run_mode(args.mode,task,1,base,adapter=adapter,prop=prop,work_dir=work,
 if not result.ok or result.fell_back or not all(run.delivered for run in result.rollouts.values()):
     raise RuntimeError('harness2_candidate_native_task_incomplete')
 pool=selection_pool(args.mode,1,result.rollouts,base)
-# k=1 has exactly one final. Use the original upstream single-final path;
-# do not spend an optimizer session pretending to compare one candidate.
+# k=1 恰好只有一个最终结果。使用上游原有的单结果路径；
+# 不为假装比较一个候选而消耗一次优化器会话。
 selection=trivial_selection(task,1,args.mode,pool,adapter=adapter,work_dir=work)
 if not selection.ok:
     raise RuntimeError('harness2_selection_incomplete')
@@ -184,8 +184,8 @@ library_entry=None
 if experience_status=='recorded':
     library_entry=library.add(task,result.trees[selection.chosen_label],experience=experience)
     if not library_entry:raise RuntimeError('harness2_experience_incomplete')
-# Only AFTER committed selection; independent local business evidence is never
-# sent back to the optimizer. No accountant feedback is synthesized.
+# 只在选择已提交之后执行；独立本机业务证据绝不
+# 发送回优化器。不合成会计反馈。
 assessment=adapter.score(pool[selection.chosen_label].run_dir,task)
 if not assessment or not assessment.get('pass'):
     raise RuntimeError('harness2_independent_assessment_incomplete')

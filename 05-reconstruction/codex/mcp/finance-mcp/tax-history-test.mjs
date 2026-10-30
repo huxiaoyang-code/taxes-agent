@@ -1,5 +1,5 @@
-// Real stdio -> synthetic HTTP -> Agent -> production history collector/store.
-// Browser CDP and platform ACL checks use synthetic fixtures only.
+// 真实 stdio → 合成 HTTP → Agent → 生产历史采集器及存储。
+// 浏览器 CDP 和平台 ACL 检查只使用合成 fixtures。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';

@@ -46,7 +46,7 @@ if(resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)) {
   console.log('auxiliary-storage PASS: install, backup binding, unknown combination zero DDL, cross-set/type/budget and parent mutation guards');
  } finally {db.close();console.log('auxiliary-storage database closed');}
 }
-/** Each child is owned by this invocation; settle only after close, never by an inferred PID. */
+/** 每个子进程均由本次调用拥有；只在 close 后确认结束，绝不推测 PID。 */
 export async function runChild(args,{env={},timeout=60000,cwd}={}) {
  const {spawn}=await import('node:child_process');
  return await new Promise((resolve,reject)=>{

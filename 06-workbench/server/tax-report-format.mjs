@@ -1,5 +1,5 @@
-// Original 2011 statutory layouts are references, NOT electronic-tax upload formats.
-// Pure functions: no database, credentials, network, registration or submission.
+// 原始 2011 年法定表式只作参考，不是电子税务局上传格式。
+// 纯函数：不访问数据库、凭据、网络，不登记或提交。
 const VERSION = '2011-17-original';
 const SOURCE = {
   title: '财政部关于印发《小企业会计准则》的通知及附录',
@@ -51,7 +51,7 @@ function reference(id, name, formNumber, names, columns, formulas) {
   return {
     id, name, formNumber, version: VERSION, kind: 'statutory_reference', accountingStandard: STANDARD,
     jurisdiction: 'CN', source: SOURCE, currency: 'CNY', unit: '元', amountScale: 2,
-    // This limit is an application validation limit, not a claimed tax-portal limit.
+    // 此限制属于应用校验限制，不声称是税局网站限制。
     maximumAbsoluteAmount: '999999999999.99', amountLimitScope: 'application',
     columns, rows: names.map((label, i) => ({ line: i + 1, label })), formulas,
     uploadCompatibility: 'unverified', uploadFormats: [], accountMapping: 'incomplete',
@@ -98,7 +98,7 @@ const isRecord = value => value !== null && typeof value === 'object' && !Array.
 const issue = (code, message, context = {}) => ({ code, message, ...context });
 const findTemplate = id => TEMPLATES.find(template => template.id === id);
 
-/** Serializable independent snapshots; callers cannot change trusted registry state. */
+/** 可序列化的独立快照；调用者不能改变可信注册表状态。 */
 export function listTaxReportTemplates() { return structuredClone(TEMPLATES); }
 
 function validPeriod(periodType, period) {
@@ -107,7 +107,7 @@ function validPeriod(periodType, period) {
   return periodType === 'monthly' && /^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(period);
 }
 
-/** Parse exact signed cents without rounding or floating point formula arithmetic. */
+/** 精确解析带符号分金额，不舍入，也不用浮点公式计算。 */
 function cents(value) {
   if (!['number', 'string'].includes(typeof value)) return null;
   if (typeof value === 'number' && !Number.isFinite(value)) return null;
@@ -119,11 +119,7 @@ function cents(value) {
   return text.startsWith('-') ? -result : result;
 }
 
-/**
- * Validates ONLY complete caller-supplied reference data, never reads an account set.
- * rows: [{line: 1, amounts: {end: '12.34', beginning: '0.00'}}]
- * columns: ordered IDs from template.columns[periodType]. templateVersion is required.
- */
+/** 仅校验调用者提供的完整参考数据，不读取账套。rows: [{line: 1, amounts: {end: '12.34', beginning: '0.00'}}]；columns 为 template.columns[periodType] 中有序 ID，必须提供 templateVersion。 */
 export function validateReferenceReport(templateId, report) {
   const errors = [];
   const result = () => ({ valid: errors.length === 0, templateId: typeof templateId === 'string' ? templateId : null,
@@ -146,7 +142,7 @@ export function validateReferenceReport(templateId, report) {
     errors.push(issue('columns_invalid', '金额列须按该期间类型的完整顺序提供'));
   }
   if (!Array.isArray(report.rows)) { errors.push(issue('rows_invalid', '必须显式提供全部行')); return result(); }
-  // Bound malformed requests; the reference has no optional or extension rows.
+  // 对畸形请求设置边界；参考表不包含可选行或扩展行。
   if (report.rows.length > template.rows.length) errors.push(issue('row_count_invalid', '行数超过该参考表范围'));
   const seen = new Set();
   const amounts = new Map();
@@ -184,7 +180,7 @@ export function validateReferenceReport(templateId, report) {
   return result();
 }
 
-/** Readiness is configuration-only; it does not attest that a set or mapping exists. */
+/** 就绪检查仅基于配置，不证明账套或映射实际存在。 */
 export function assessTaxReportReadiness(setId, options = {}) {
   const blockers = [];
   const add = (code, message) => blockers.push(issue(code, message));
@@ -208,7 +204,7 @@ export function assessTaxReportReadiness(setId, options = {}) {
   };
 }
 
-/** No caller-supplied flag or template can unlock a non-existent adapter. */
+/** 调用者的任何标志或模板都不能解锁尚不存在的适配器。 */
 export function buildTaxReportExport(setId, options = {}) {
   const details = assessTaxReportReadiness(setId, options);
   const error = new Error('tax_template_unverified: 尚无经过核实的税局上传模板及完整账套映射');

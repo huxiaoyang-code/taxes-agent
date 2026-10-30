@@ -32,7 +32,7 @@ def verify_upstream(root: Path) -> dict:
         actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
         if actual != entry["sha"]:
             raise RuntimeError("harness2_upstream_blob_changed:" + entry["path"])
-    # Reject injected Python modules rather than trusting a mutable provision marker.
+    # 拒绝注入的 Python 模块，不采信可修改的环境准备标记。
     allowed = {e["path"] for e in lock["files"] if e["path"].endswith(".py")}
     if any(str(p.relative_to(root)) not in allowed for p in root.rglob("*.py")):
         raise RuntimeError("harness2_unpinned_python_source")

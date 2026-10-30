@@ -20,7 +20,7 @@ export async function runCli(args) {
     handle = await open(output, 'wx', 0o600);
     await handle.writeFile(JSON.stringify({ publicationStatus: 'diagnostic_only', ...result }, null, 2) + '\n');
     await handle.sync(); await assertRequest();
-    // Fresh process, fresh actual pair, fresh Q1 and Q2 calculations after writing.
+    // 写入后使用全新进程、全新实际配对以及全新的 Q1 和 Q2 计算。
     if ((await checkOfflineVatQ2Current(value, result.contentDigest)).status !== 'current') throw new Error('publication_stale');
     await assertRequest();
     await handle.close(); handle = undefined;
@@ -29,9 +29,9 @@ export async function runCli(args) {
     if (handle) try {
       const failed = Buffer.from('{"publicationStatus":"failed","q2CalculationReady":false,"authorizesExecution":false,"submittable":false}\n');
       await handle.write(failed, 0, failed.length, 0); await handle.truncate(failed.length); await handle.sync();
-    } catch { /* No partial output can carry authority. */ }
+    } catch { /* 任何部分输出都不能承载授权效力。 */ }
     return { exitCode: 4, message: 'OFFLINE_VAT_Q2_REJECTED' };
-  } finally { try { await handle?.close(); } catch { /* Fixed public error. */ } }
+  } finally { try { await handle?.close(); } catch { /* 固定的公开错误。 */ } }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const result = await runCli(process.argv.slice(2)); process.stdout.write(result.message + '\n'); process.exitCode = result.exitCode;

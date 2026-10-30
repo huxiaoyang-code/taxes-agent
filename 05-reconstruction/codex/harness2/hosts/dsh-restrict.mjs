@@ -1,6 +1,6 @@
 import {EXPERIMENT_TOOLS} from './common.mjs';
 const maximum=new Set(EXPERIMENT_TOOLS.map(name=>'mcp__finance__'+name));
-// dsh's native agent-scoped tool filter, matching the pinned 0.2.1-rc.2 API.
+// dsh 原生 Agent 级工具过滤器，对齐固定的 0.2.1-rc.2 API。
 function restrict(ctx,config){
   const allowed=config.allowedToolNames;if(!Array.isArray(allowed)||!allowed.length||new Set(allowed).size!==allowed.length||allowed.some(name=>!maximum.has(name)))throw Error('harness2_dsh_tool_scope_required');const allow=new Set(allowed);
   ctx.tools.guard(exec=>allow.has(exec.name)?undefined:'Harness2 synthetic experiment scope denies this tool.');

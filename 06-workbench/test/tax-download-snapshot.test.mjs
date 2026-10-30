@@ -1,4 +1,4 @@
-// Synthetic only: no private files, actual browser, network or renderer code.
+// 仅用合成数据：不使用私有文件、真实浏览器、网络或渲染器代码。
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {TaxDownloadSnapshot} from '../server/tax-download-snapshot.mjs';

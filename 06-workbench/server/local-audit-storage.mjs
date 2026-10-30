@@ -4,7 +4,7 @@ import { assertWriteCommitFence } from './local-write-lock.mjs';
 import { assertAgencyCommitEvidence } from './agency-business-evidence.mjs';
 import { markBatchFailed as persistIncrementalImportFailure } from './import-storage.mjs';
 import { markBatchFailed as persistBankImportFailure } from './bank-storage.mjs';
-// Explicit-handle audit1/2 storage. No default database or import-time connection.
+// 使用显式句柄的 audit1/2 存储，不连接默认数据库，也不在导入时连接。
 import { DatabaseSync, constants as SQL } from 'node:sqlite';
 import fs from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
@@ -134,8 +134,8 @@ const V2_STEPS=Object.freeze([
 const tablesFor=v=>v===1?V1_TABLES:AUDIT_TABLES;
 const normalizeSql=s=>String(s??'').replace(/\s+/g,' ').trim().replace(/;$/,'');
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
-/** Complete actual facts, including implicit index collations, order, origin, FK and rowid. */
-/** SQL identifiers only: comments/literals and ordinary column names are not dependencies. */
+/** 完整实际结构事实，包括隐式索引排序规则、顺序、来源、外键及 rowid。 */
+/** 只识别 SQL 标识符：注释、字面量及普通字段名不是依赖。 */
 export function sqlReferencesNamespace(sql,prefix) {
  const raw=String(sql??'').match(/--[^\r\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[(?:\]\]|[^\]])*\]|[A-Za-z_][A-Za-z_0-9]*|[(),.;]/g)??[];
  const tokens=raw.filter(t=>!t.startsWith('--')&&!t.startsWith('/*')).map(t=>{
@@ -317,7 +317,7 @@ export async function installAuditSchema(db,{dbPath,outDir}={}) {
   }
   for(const sql of V2_STEPS)db.exec(sql);
   db.prepare('UPDATE audit_components SET version=2 WHERE component=?').run(AUDIT_COMPONENT);
-  // The active NULL captured under the verified source reservation is the only writable mapping.
+  // 在已验证来源保留锁内捕获的 active NULL，才是唯一可写映射。
   if(batchActive?.audit_instance_id===null) {
    const changed=db.prepare('UPDATE local_batch_database_instances SET audit_instance_id=? WHERE instance_id=? AND is_active=1 AND audit_instance_id IS NULL').run(currentAuditInstanceId(db),batchActive.instance_id);
    if(changed.changes!==1)throw fail('audit_schema_inconsistent');
@@ -332,7 +332,7 @@ export function openAuditDatabase(file,{readOnly=true}={}) {
  let db;try{db=new DatabaseSync(file,{readOnly});db.prepare('SELECT name FROM sqlite_master LIMIT 1').all();return db;}catch{try{db?.close();}catch{}throw fail('audit_database_invalid');}
 }
 
-/** Restore's fixed protected upgrade; no callback or general SQL authority. */
+/** 恢复使用的固定受保护升级，不接受回调或通用 SQL 权限。 */
 export function upgradeRestoreAuditSchema(db,{capability}={}) {
  assertPrivateRestoreCapability(db,capability);
  const s=inspectAuditSchema(db);if(s.state!=='not_installed')assertInstalledSchema(db);
@@ -348,8 +348,7 @@ export function upgradeRestoreAuditSchema(db,{capability}={}) {
  assertInstalledSchema(db);
 }
 
-/** Append-only activation anchor. Paths/plan contents stay in the local file;
- * only fixed technical IDs and digests enter audit storage. */
+/** 仅追加的激活锚点。路径及计划内容保留在本机文件中，审计存储只接收固定技术 ID 和摘要。 */
 export function recordRestoreActivation(db,{capability,request}={}) {
  assertPrivateRestoreCapability(db,capability);
  const r=normalizeBinding(db,{context:{action:'restore.activate',actor:'cli',operationId:'activate:'+request.targetInstanceId,attempt:1},scope:{kind:'database',value:null},request},{restoreCapability:capability});
@@ -371,7 +370,7 @@ function normalizeBinding(db,input,{requireScope=true,restoreCapability}={}) {
  input=JSON.parse(canonicalAuditJson(input));
  if(!input||typeof input!=='object'||Object.keys(input).sort().join(',')!=='context,request,scope')throw fail('audit_operation_invalid');
  const context=createOperationContext(input.context),scope=input.scope;
- // This internal path is reachable only from the fixed activation recorder.
+ // 此内部路径只能从固定激活记录器进入。
  if(restoreCapability!==undefined)assertPrivateRestoreCapability(db,restoreCapability);
  if(!scope||typeof scope!=='object'||Object.keys(scope).sort().join(',')!=='kind,value')throw fail('audit_operation_invalid');
  let value=scope.value;
@@ -387,7 +386,7 @@ function normalizeBinding(db,input,{requireScope=true,restoreCapability}={}) {
  const r={database_instance_id:(restoreCapability!==undefined?assertInstalledSchema(db):requireV2(db)).activeInstanceId,operation_id:context.operationId,attempt:context.attempt,binding_version:1,action:context.action,actor:context.actor,scope_kind:scope.kind,scope_token:auditCanonicalDigest(['audit-scope-v1',scope.kind,value]),targets_json:canonicalAuditJson(auditTargets(context)),parent_operation_id:context.parentOperationId??null,parent_attempt:context.parentAttempt??null,request_digest:auditCanonicalDigest(['audit-request-v1',context.action,input.request])};
  r.binding_digest=bindingOf(r);return r;
 }
-/** A receipt is a private, one-use object issued only after durable pending COMMIT. */
+/** 回执是私有一次性对象，仅在 pending 已持久 COMMIT 后签发。 */
 export function prepareOperation(db,input) {
  owner(db);const file=identity(db),r=normalizeBinding(db,input,{requireScope:false});
  try{db.exec('BEGIN IMMEDIATE');}catch(e){if(db.isTransaction){quarantine.add(db);return unknown();}return envelope(busy(e)?'audit_admission_busy':'audit_unavailable',{retryable:busy(e)});}
@@ -477,12 +476,12 @@ export function executePreparedChild(db,authorization,fn) {
  try{try{out=withAuditSavepoint(db,fn);spec=resultSpec(out,saved,claims);}catch(error){businessError=error;const mapped=classifyFailure(error);spec={state:mapped.outcome,resultCode:mapped.resultCode,reasonCode:mapped.reasonCode,targets:targetsOfRow(saved)};if(!['failed','rejected'].includes(spec.state))spec={state:'failed',resultCode:'internal_error',reasonCode:'internal_error',targets:targetsOfRow(saved)};}
  }finally{live.current=previousCurrent;}
  if(!businessError&&!['succeeded','no_change'].includes(spec.state))throw fail('audit_result_invalid');
- // Only the storage's fixed terminal writes are privileged, never the child callback.
+ // 只有存储层固定的终态写入具有特权，子回调没有特权。
  const result=permittedSql(db,(a,b)=>[SQL.SQLITE_INSERT,SQL.SQLITE_UPDATE].includes(a)&&['audit_events','audit_operations'].includes(b),()=>finish(db,saved,spec));
  if(businessError)throw businessError;return terminalEnvelope(result,false);
 }
 function identityFromLive(db,live){return permittedSql(db,(a,b)=>a===SQL.SQLITE_PRAGMA&&b==='database_list',()=>identity(db));}
-/** Fixed connection metadata read, including inside an audited body. No callback. */
+/** 固定连接元数据读取，也可在受审计业务体内使用；不接受回调。 */
 export function readAuditDatabasePath(db){return identityFromLive(db,activeOperations.get(db)).path;}
 export function executePreparedOperation(db,authorization,fn) {
  owner(db);const p=authorization&&typeof authorization==='object'?permissions.get(authorization):null;

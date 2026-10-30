@@ -1,4 +1,4 @@
-// One observed read-only filing query. Values and row instances stay private.
+// 单条已观察的只读申报查询；字段值及记录实例保持私有。
 import {createHash} from 'node:crypto';
 import {requireActiveSource,validateRecipe} from './tax-collection-contract.mjs';
 import {FULL_FRAME_URL_SEMANTICS} from './tax-frame-url.mjs';

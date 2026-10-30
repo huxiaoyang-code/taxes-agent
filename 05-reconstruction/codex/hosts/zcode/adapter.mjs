@@ -1,4 +1,4 @@
-// Native ZCode workspace configuration. Validation and writing belong to shared.
+// ZCode 原生工作区配置；校验和写入由 shared 负责。
 export function buildConfig(context) {
   const {mcp, skillsDir, databasePath, apiBase} = context;
   const config = {

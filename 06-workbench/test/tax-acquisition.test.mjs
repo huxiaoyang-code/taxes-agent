@@ -266,7 +266,7 @@ test('whitespace session alias cannot start a refresh or create a separate cover
   assert.equal(service.recordKeys.size, 1); deny = false;
   const cov = await service.coverage({ sessionId: args.sessionId, period });
   assert.equal(cov.resources.find((r) => r.resource === resource).sourceRef, first.sourceRef);
-  // A valid refresh still invalidates that result if scope verification fails.
+  // 作用域校验失败时，有效刷新仍会使该结果失效。
   deny = true;
   await assert.rejects(() => service.collect(args), code('tax_permission_denied')); deny = false;
   const after = await service.coverage({ sessionId: args.sessionId, period });
@@ -284,7 +284,7 @@ test('whitespace alias cannot bypass a concurrent acquisition operation token', 
   assert.equal(cov.resources.find((r) => r.resource === resource).sourceRef, result.sourceRef);
 });
 
-// Synthetic adapter keys stay inside the trusted adapter/gateway boundary.
+// 合成适配器键留在可信适配器/网关边界内。
 async function setupRecordRows(rows, { explicit = true, rowsPerPage = 1 } = {}) {
   const base = adapter();
   return setup({

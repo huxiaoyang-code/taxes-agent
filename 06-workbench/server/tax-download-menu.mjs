@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
-// Pure projection of one known-key, local menu cache. No requests or actions.
-// value is the raw JSON string returned by native Storage.prototype.getItem.
+// 仅投影一个已知键的本机菜单缓存，不请求或执行操作。
+// value 是原生 Storage.prototype.getItem 返回的原始 JSON 字符串。
 export function inspectDownloadMenuValue(value, now = Date.now()) {
   return projectDownloadMenuValue(value, now);
 }
@@ -18,8 +18,8 @@ function projectDownloadMenuValue(value, now, retainLocal) {
   let envelope;
   try { envelope = JSON.parse(value); } catch { return fail('invalid_menu'); }
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || Object.keys(envelope).sort().join(',') !== 'exp,val' || !Number.isFinite(envelope.exp) || !Array.isArray(envelope.val)) return fail('invalid_menu');
-  // Helper timestamp comparison only. Website getter/setter expiry semantics
-  // (including sentinel values) are unverified; this proves no auth or TTL.
+  // 仅辅助比较时间戳。网站 getter/setter 的过期语义
+  // （包括哨兵值）尚未核实，不能据此证明认证或 TTL。
   result.cacheFresh = !(now - 1 > envelope.exp);
   if (!result.cacheFresh) result.evidence = 'historical_menu_only';
   const segments = new Set(`szzh szc kpfw dppt zhcx sjswszzh spHandler sbxx sbxxcx sbbdxz cwbbsbxxcx cwbbxxcxDetail nsrxxcx detail api v1 v2 v3 invoice invoices download export file files report reports financial accounting query list details print sbmxcx cwbbsb cwbb fpxx cx xz dc getDetail getDetails queryDetail queryList downloadFile exportFile exportExcel exportPdf DescribeSbmxcx2 DescribeSbmxxqInit DescribeSbmxxqcx DescribeSbmxxqzfbTree DescribeFpCx DescribeFpqk DescribeNsrfpxx DescribeNsrsbxx loginb`.split(' '));
@@ -62,11 +62,11 @@ function projectDownloadMenuValue(value, now, retainLocal) {
     const service = item.yyfwqdz ?? '';
     if (typeof service !== 'string' || typeof item.cddz !== 'string' || service.length > 2048 || item.cddz.length > 2048) entry.blockedReason ??= 'missing_route';
     else try {
-      // Verified menu protocol concatenates first; URL resolution would otherwise
-      // discard a service prefix such as /szc when cddz starts with a slash.
+      // 已核实的菜单协议先拼接；否则 cddz 以斜杠开头时，
+      // URL 解析会丢弃 /szc 等服务前缀。
       const combined = service + item.cddz;
       const url = new URL(combined, 'https://etax.fujian.chinatax.gov.cn:8443/loginb/');
-      // Finite verified official host vocabulary; unknown origins never echo.
+      // 已核实官方主机词表保持有限，未知来源不回显。
       if (url.protocol !== 'https:' || !['etax.fujian.chinatax.gov.cn', 'fujian.chinatax.gov.cn', 'dppt.fujian.chinatax.gov.cn'].includes(url.hostname) || !['', '443', '8443'].includes(url.port) || url.username || url.password) entry.blockedReason ??= 'unsafe_origin';
       else {
         entry.origin = url.origin;
@@ -105,11 +105,11 @@ function projectDownloadMenuValue(value, now, retainLocal) {
   return result;
 }
 
-// Trusted local administrator capability, never expose as HTTP/Agent/MCP. Exact
-// observed URLs live only in this instance's closure, never in its projection or
-// JSON representation. Refs identify this snapshot, not stable menu identities.
-// Resolving is not authorization: root must separately verify fresh passive
-// source/scope and read-only semantics before sending an exact URL for navigation.
+// 可信本机管理员能力，绝不暴露为 HTTP/Agent/MCP。实际观察 URL
+// 只留在本实例闭包，不进入投影或 JSON 表示。
+// 引用只标识当前快照，不代表稳定菜单身份。
+// 解析不等于授权；父协调者须另行核实当前被动来源、范围及
+// 只读语义后，才能发送精确 URL 发起导航。
 export function createDownloadMenuLocalIndex(value, now = Date.now()) {
   const routes = new Map(), indexRef = randomBytes(24).toString('hex');
   const projection = projectDownloadMenuValue(value, now, (entry, local) => {
@@ -132,8 +132,8 @@ export function createDownloadMenuLocalIndex(value, now = Date.now()) {
   return Object.freeze(index);
 }
 
-// Fixed official scope, one native known-key read. Does not acquire/release any
-// live collection lock, navigate, access application state, or invoke handlers.
+// 固定官方范围，只做一次原生已知键读取；不取得或释放
+// 实时采集锁、不导航、不访问应用状态，也不调用处理器。
 export function passiveDownloadMenuScript() {
   return `(() => {
     const empty = status => ({schemaVersion:1,status,evidence:'passive_menu_only',cacheFresh:null,expirySemanticsVerified:false,expiryAssessment:'timestamp_heuristic_only',requestAuthorized:false,navigationAuthorized:false,readOnlyVerified:false,sourceObservationVerified:false,sourceKind:'known_key_menu_cache',entryAssociation:'ephemeral_projection_only',entries:[],counts:{nodes:0,matched:0,allowed:0,blocked:0,unknownPaths:0,omitted:0},truncated:false});

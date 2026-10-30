@@ -37,8 +37,8 @@ export function buildHostSpec({workspace,nodePath,packageRoot,apiBase,databasePa
     mkdirSync(spec.env.PI_CODING_AGENT_DIR);
     writeFileSync(join(spec.env.PI_CODING_AGENT_DIR,'settings.json'),JSON.stringify({retry:{enabled:false,maxRetries:0}}),{flag:'wx'});
     for(const value of [contextWindow,modelMaxTokens,...maxOutputTokens===undefined?[]:[maxOutputTokens]])if(!Number.isSafeInteger(value)||value<1)fail('harness2_model_capability_invalid');
-    // Capacity metadata follows the official model card. It is not a proxy
-    // admission limit; Pi's own provider decides the actual request options.
+    // 容量元数据遵循官方模型说明，并非代理准入限制；
+    // 实际请求选项由 Pi 自己的 provider 决定。
     writeFileSync(join(spec.env.PI_CODING_AGENT_DIR,'models.json'),JSON.stringify({providers:{deepseek:{baseUrl:modelBaseUrl,api:'openai-completions',apiKey:'sandbox-budget-relay',models:[{id:'deepseek-flash',name:'Official DeepSeek Flash via executor relay',reasoning:true,input:['text'],contextWindow,maxTokens:maxOutputTokens??modelMaxTokens}]}}}),{flag:'wx'});
     const promptAt=spec.args.indexOf('--append-system-prompt');
     if(promptAt===-1)spec.args.push('--append-system-prompt',candidateText);

@@ -57,5 +57,5 @@ dialog h3{margin:0 0 12px}
 dialog .row{margin-bottom:10px}
 @media print{.topbar,.tabs,.row,button{display:none!important}.card{border:0}}
 
-/* Local bank input and raw results remain in this page only. */
+/* 本机银行输入及原始结果仅留在本页面内。 */
 #tab-bank textarea{display:block;width:100%;box-sizing:border-box;font-family:monospace;margin:.5rem 0 1rem} .bank-output{white-space:pre-wrap;overflow-wrap:anywhere;max-height:30rem;overflow:auto} #tab-bank details{margin:1rem 0} #tab-bank table{margin:.75rem 0} #tab-bank input{max-width:16rem}

@@ -1,5 +1,5 @@
-// Evidence binding validates precise locations and declared derivation inputs.
-// It cannot prove that an Agent understood a document or a policy correctly.
+// 证据绑定校验精确位置与已声明的推导输入，
+// 不能证明 Agent 正确理解了原件或政策。
 import {readLocalFile} from './offline-material-store.mjs';
 import {createHash} from 'node:crypto';
 const fail=c=>{throw Object.assign(new Error(c),{code:c});};
@@ -30,7 +30,7 @@ export async function locatedBinding(bytes,binding,claimed){
  if(typeof loc.jsonPointer==='string'){actual=evidencePointer(JSON.parse(text),loc.jsonPointer);if(binding.quote!==undefined)check(binding.quote===JSON.stringify(actual),'harness_evidence_quote_mismatch');}
  else {check(Number.isSafeInteger(loc.startLine)&&loc.startLine>0&&Number.isSafeInteger(loc.endLine)&&loc.endLine>=loc.startLine,'harness_evidence_locator_invalid');const lines=text.split(/\r?\n/);check(loc.endLine<=lines.length,'harness_evidence_locator_invalid');let quote=lines.slice(loc.startLine-1,loc.endLine).join('\n');if(loc.startColumn!==undefined||loc.endColumn!==undefined){const points=[...quote];check(loc.startLine===loc.endLine&&Number.isSafeInteger(loc.startColumn)&&Number.isSafeInteger(loc.endColumn)&&loc.startColumn>0&&loc.endColumn>=loc.startColumn&&loc.endColumn<=points.length,'harness_evidence_locator_invalid');quote=points.slice(loc.startColumn-1,loc.endColumn).join('');}check(typeof binding.quote==='string'&&binding.quote===quote,'harness_evidence_quote_mismatch');actual=binding.format==='json'?JSON.parse(quote):quote;}
  if(binding.transform!==undefined){const maps={'tax-location-classification-v1':{'市区':'city','县城':'county_town','镇':'county_town','县城镇':'county_town','其他地区':'other',city:'city',county_town:'county_town',other:'other'},'tax-payment-document-kind-v1':{'税收完税证明':'tax_payment','银行税款扣缴回单':'tax_payment','税款缴款回单':'tax_payment',tax_payment:'tax_payment'},'tax-obligation-id-v1':{'企业所得税':'corporate_income','增值税':'vat',corporate_income:'corporate_income',vat:'vat'}};check(Object.hasOwn(maps,binding.transform),'harness_evidence_transform_invalid');const map=maps[binding.transform];check(Object.hasOwn(map,actual),'harness_evidence_value_mismatch');actual=map[actual];}
- // Decimal text can vary only by harmless representation, never by amount.
+ // 十进制文本只允许无害的表示差异，金额不能改变。
  if(binding.format==='decimal'){const decimal=v=>{check(typeof v==='string'||typeof v==='number','harness_evidence_value_mismatch');const s=String(v);check(/^-?\d+(?:\.\d{1,2})?$/.test(s),'harness_evidence_value_mismatch');const neg=s.startsWith('-'),parts=s.replace(/^-/,'').split('.');return (neg?-1n:1n)*(BigInt(parts[0])*100n+BigInt((parts[1]??'').padEnd(2,'0')));};check(decimal(actual)===decimal(claimed),'harness_evidence_value_mismatch');}
  else check(stable(actual)===stable(claimed),'harness_evidence_value_mismatch');
  return true;

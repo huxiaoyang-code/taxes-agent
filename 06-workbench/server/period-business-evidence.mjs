@@ -1,4 +1,4 @@
-// Fixed reject-only period admission fence. No callbacks, financial writes or journal.
+// 固定的仅拒绝式期间准入边界，不接收回调、不作财务写入、不另建日志。
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { scopedAccountingTargetSnapshot } from './agency-business-evidence.mjs';
@@ -23,6 +23,6 @@ export function assertPeriodAdmissionEvidence(db,options){
 }
 export function assertPeriodCommitEvidence(db){
  const c=context.getStore();if(!c)return;check(c.admitted,'period_admission_not_verified');identity(db,c);
- // The held accounting resources exclude other native writers. The authorized
- // operation itself changes its snapshot; it must not be compared to the old one.
+ // 持有的会计资源排除其他原生写入者；已授权操作本身
+ // 会改变快照，因此不能再拿它与旧快照比较。
 }

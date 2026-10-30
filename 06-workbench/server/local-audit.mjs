@@ -18,8 +18,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 
-// Result hashing is deliberately separate from the integer-only audit/event format.
-// Descriptors are inspected before reading values, including arrays; getters never run.
+// 结果哈希有意与仅支持整数的审计/事件格式分开。
+// 读取值前检查描述符，数组同样适用，绝不运行 getter。
 export function auditResultSnapshot(value) {
   const seen = new Set();
   const visit = (v, arraySlot = false) => {
@@ -724,7 +724,7 @@ export function runInTransaction(db, fn) {
   }
 }
 
-/** Canonical JSON for trusted, already validated requests. No coercion or Unicode rewriting. */
+/** 用于可信且已校验请求的规范 JSON，不做类型转换或 Unicode 重写。 */
 export function canonicalAuditJson(value) {
   const active = new Set();
   const encode = (v) => {

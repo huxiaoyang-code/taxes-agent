@@ -1,6 +1,6 @@
-// Annual evidence adapter. No default database imports, posting, formula engine,
-// task persistence or accountant-approval authority. The server binds the fixed
-// existing report/check functions to its already-open database in trusted code.
+// 年度证据适配器：不导入默认数据库，不过账、不含公式引擎，
+// 不持久化任务，也不拥有会计批准权限。服务端在可信代码中
+// 将已有固定报表与检查函数绑定到已经打开的数据库。
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { captureHarnessCode } from './harness-code.mjs';
@@ -23,8 +23,8 @@ const digest = value => createHash('sha256').update(JSON.stringify(canonical(val
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const copy = structuredClone;
 const months = year => Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
-// Reuse the Harness's fixed static dependency closure; unrelated source files
-// do not change this annual result. Hot edits still require a fresh worker.
+// 复用 Harness 的固定静态依赖闭包，无关源文件
+// 不改变年度结果；热编辑后仍须使用全新 worker。
 export const ANNUAL_CLOSE_CODE_ROOTS = Object.freeze(['./annual-close.mjs', './report-export.mjs', './period-end-controls.mjs']);
 const sourceCodeDigest = () => captureHarnessCode(ANNUAL_CLOSE_CODE_ROOTS).digest;
 const loadedSourceDigest = sourceCodeDigest();
@@ -38,15 +38,15 @@ function scopeOf(input, validation = false) {
   return { accountSetId, enterpriseKey, year };
 }
 
-// Fixed tables only. Inventory changes are part of the review version; absent
-// optional schemas are unknown, never proof that the enterprise has no activity.
+// 仅访问固定表。清单变化属于复核版本的一部分；可选 schema 缺失
+// 表示 unknown，不能证明企业没有相关业务。
 const INVENTORY_TABLES = ['asset_cards', 'asset_depreciation_runs', 'aux_entities', 'aux_requirements', 'aux_allocations', 'bank_accounts', 'bank_batches', 'bank_transactions', 'bank_matches', 'bank_reconcile_runs'];
 function readInventory(db, accountSetId) {
   return Object.fromEntries(INVENTORY_TABLES.map(table => {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) return [table, { availability: 'unknown', rows: [] }];
     const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name);
     if (!columns.includes('account_set_id')) return [table, { availability: 'unsupported_scope', rows: [] }];
-    // All columns/rows are hashed locally; only counts and digests leave this helper.
+    // 全部字段及行只在本机计算哈希；辅助函数仅输出数量和摘要。
     const rows = db.prepare(`SELECT * FROM ${table} WHERE account_set_id=?`).all(accountSetId).map(r => ({ ...r }));
     rows.sort((a, b) => JSON.stringify(canonical(a)).localeCompare(JSON.stringify(canonical(b))));
     return [table, { availability: 'present', count: rows.length, digest: digest(rows) }];
@@ -54,7 +54,7 @@ function readInventory(db, accountSetId) {
 }
 function reportView(report, scope, kind, period) {
   check(report?.accountSet?.id === scope.accountSetId && report.kind === kind && report.period === period && report.scope?.status === 'posted', 'annual_report_scope_mismatch');
-  // Keep the original report warnings, mapping status, and completeness markers.
+  // 保留原始报表警告、映射状态和完整性标记。
   return copy(report);
 }
 function planHints(snapshot, inventory) {
@@ -94,8 +94,7 @@ function nextYearBridge(yearEnd, nextReport) {
     limitations: ['same_book_balance_continuity_only', 'no_next_year_posting', 'tax_asset_auxiliary_rollforwards_not_confirmed'] };
 }
 
-/** Runtime-only factory. The MCP wire never accepts db handles, functions,
- * precomputed reports, completion flags, or fabricated execution receipts. */
+/** 仅在运行时构造。MCP 传输层不接受数据库句柄、函数、预制报表、完成标记或伪造执行回执。 */
 export function createAnnualCloseAdapter({ db, buildReportExport, periodEndCheck }) {
   check(db && typeof db.prepare === 'function' && typeof buildReportExport === 'function' && typeof periodEndCheck === 'function', 'annual_runtime_invalid');
   const runtimeFunctionDigest = digest({ report: buildReportExport.toString(), periodCheck: periodEndCheck.toString() });
@@ -184,7 +183,7 @@ export function createAnnualCloseAdapter({ db, buildReportExport, periodEndCheck
   } });
 }
 
-/** Public JSON comparison is diagnostic, never a current-version capability. */
+/** 公开 JSON 比较仅用于诊断，不代表当前版本能力。 */
 export function compareAnnualCloseReviews(previous, current) {
   check(previous?.version === ANNUAL_CLOSE_VERSION && current?.version === ANNUAL_CLOSE_VERSION, 'annual_review_version_invalid');
   for (const key of ['enterpriseKey', 'accountSetId', 'databaseInstanceId', 'year', 'currency']) check(previous.scope?.[key] === current.scope?.[key], 'annual_review_scope_mismatch');

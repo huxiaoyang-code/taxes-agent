@@ -10,9 +10,9 @@ export const registerHarnessFacts = (path,facts) => registerFacts(path,facts,cur
 export const discoverHarness = () => ({version:'finance-harness/1',stateAxes:HARNESS_STATE_AXES,capabilities:[...harnessCapabilities().values()],parsing:{formats:'host_investigates_without_extension_whitelist',execution:'host_tools_and_optional_subagents',requiredEvidence:['original_location','parser_code','validation','unrecognized_content']},onlineTaxConnected:false});
 export const planHarness = (path,tasks) => saveHarnessPlan(path,tasks,harnessCapabilities());
 export const feedbackHarness = (path,feedback) => recordHarnessFeedback(path,feedback,harnessCapabilities(),currentHarnessView);
-// Only errors emitted after successful reads/comparisons establish a change.
-// Keep read/transport failures, swallowed schema-inspection errors and
-// result_unverified out of this set: those still require a retry/query.
+// 只有在成功读取和比较后发出的错误，才能证明发生变化。
+// 读取/传输失败、被捕获的 schema 检查错误及 result_unverified
+// 都不进入此集合，它们仍需重试或查询。
 const proofChangedCodes=new Set([
   'harness_target_mismatch','harness_period_mismatch','harness_code_changed','harness_path_changed',
   'harness_instance_mismatch','harness_enterprise_mismatch','harness_schema_unsupported',
@@ -60,8 +60,8 @@ async function currentHarnessView(s, ancestors = [s.info.root]) {
     for (const ref of task.externalDependencies) {
       const observation = {...ref,current:false,reason:'harness_external_dependency_unavailable'};
       try {
-        // Reinspect the live Store and business proof; an exported receipt file
-        // alone cannot establish that a previous period is still current.
+        // 重新检查当前 Store 和业务证明；单独的导出回执文件
+        // 不能证明前期结果目前仍有效。
         const view = await inspectCurrent(ref.storePath,ancestors);
         requireValue(['enterpriseKey','accountSetId','databaseInstanceId','currency'].every(k=>view.scope[k]===s.meta.scope[k])&&view.scope.period===ref.period,'harness_external_scope_mismatch');
         const child = view.tasks.find(t=>t.taskId===ref.taskId);
@@ -111,9 +111,7 @@ async function recordQueryObservation(s,task,attempt,result,cap) {
   await appendHarness(s,'result',{intentDigest:event.digest,receipt});return receipt;
 }
 
-/** A business request comes from versioned facts. No external caller can register
- * a fabricated execution receipt or select an executable module/SQL statement.
- */
+/** 业务请求来自版本化事实。外部调用者不能登记伪造执行回执，也不能选择可执行模块或 SQL 语句。 */
 export async function runHarnessTask(path,{taskId,phase='execute',dependencyDigest,treatmentId}) {
   requireValue(['prepare','execute','query'].includes(phase),'harness_phase_invalid');
   return withHarness(path,async s=>{
@@ -125,9 +123,9 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
       const identityAttempts=s.attempts.filter(a=>a.effect==='write'&&a.capabilityId===task.capabilityId&&a.operationId===`agency-${requestValue?.batchId}`);
       requireValue(identityAttempts.every(a=>stable(a.request)===stable(requestValue)),'harness_agency_identity_changed');
     }
-    // Recover the original committed operation before eligibility for a NEW
-    // execution. Its own ledger effect can stale its upstream read/approval.
-    // Returning history neither writes again nor promotes that review to current.
+    // 判断是否可发起新执行前，先恢复原始已提交操作；
+    // 该操作自己的账簿影响也可能使上游读取或批准失效。
+    // 返回历史不再次写入，也不把历史复核提升为当前有效。
     const completed=sameRequest.filter(a=>a.result?.executionState==='executed').at(-1);
     if(phase==='execute'&&completed){
       if(task.capabilityId==='agency.posting')requireValue(stable(completed.request)===stable(requestValue),'harness_agency_identity_changed');
@@ -145,9 +143,9 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
       try{result=await callHarnessAdapter({...attempt,phase:'query',scope:s.meta.scope,priorResult:attempt.result?.actualImpact});}
       catch(e){result={status:'unknown',applied:'unknown',code:e.code??'harness_business_proof_unavailable',retryable:true};}
       const state=stateFor(cap,result,'execute'),known=attempt.result?.executionState==='executed',receipt=known&&unverifiable(result)?attempt.result:receiptFor(attempt,result,state);
-      // Resolve an interrupted original intent without replacing completed
-      // historical receipts. A current observation is an explicit new query,
-      // never another business execution or a copy of an old confirmation.
+      // 解决中断的原始意图，不替换已完成的历史回执；
+      // 当前观察是一次显式新查询，
+      // 绝不是再次执行业务，也不是复制旧确认。
       if(!attempt.result||attempt.result.executionState==='unknown')await appendHarness(s,'reconcile',{intentDigest:attempt.intentDigest,receipt});
       const currentBinding=state==='executed'&&result.evidenceCurrent!==false&&result.evidenceCurrent!==null&&result.confirmationCurrent!==false&&stable(attempt.request)===stable(requestValue)&&(task.capabilityId!=='agency.posting'||attempt.dependencyDigest===task.dependencyDigest)&&!operationWasRejected(s,attempt.operationId)&&!task.blockers.some(b=>!['write_outcome_unknown','existing_write_requires_review_before_new_execution'].includes(b.reason));
       const linked=currentBinding?await recordQueryObservation(s,task,attempt,result,cap):receipt;
@@ -181,8 +179,8 @@ export async function runHarnessTask(path,{taskId,phase='execute',dependencyDige
       if(task.capabilityId==='agency.posting')requireValue(preparation,'harness_prepare_required');
     }
     const intent={taskId,capabilityId:cap.capabilityId,effect:phase==='prepare'?'read':cap.effect,phase,dependencyDigest:task.dependencyDigest,operationId,ruleVersion:cap.ruleVersion,codeDigest:cap.codeDigest,request,prepared:(preparation??last)?.result?.actualImpact??null,...(boundTreatment?{treatmentId:boundTreatment.treatmentId,treatmentVersion:boundTreatment.treatmentVersion}:{})};
-    // Prepare for direct voucher APIs is metadata only; their actual validation
-    // runs in the authoritative module during execution.
+    // 直接凭证 API 的 prepare 仅处理元数据；权威业务模块
+    // 在实际执行时完成真正校验。
     const event=await appendHarness(s,'intent',intent);intent.intentDigest=event.digest;
     let result;
     try {result=phase==='prepare'&&task.capabilityId.startsWith('voucher.')?{status:'prepared',applied:false,validation:'domain_validation_at_execute'}:await callHarnessAdapter({...intent,scope:s.meta.scope});}

@@ -39,7 +39,7 @@ const readBody = (req) => new Promise((resolve, reject) => {
   req.on("error", reject);
 });
 
-// RFC 6266/5987: safe ASCII fallback plus the original Unicode download name.
+// RFC 6266/5987：安全的 ASCII 回退名，加原始 Unicode 下载文件名。
 function attachmentName(filename) {
   const name = String(filename).replace(/[\u0000-\u001f\u007f/\\]/g, "_");
   const ascii = name.replace(/[^\x20-\x7e]|[";]/g, "_");
@@ -52,7 +52,7 @@ const REPORT_INPUT_ERRORS = new Set([
 ]);
 const REPORT_NOT_FOUND_ERRORS = new Set(["account_set_not_found", "account_not_found"]);
 const REPORT_REJECTED_ERRORS = new Set(["report_data_invalid", "office_text_too_long"]);
-// Fixed product wording for format-level failures; internal font paths / stacks never reach the client.
+// 格式级失败使用固定产品文案，不将内部字体路径或堆栈返回客户端。
 const REPORT_FONT_ERRORS = {
   pdf_font_unavailable: "服务器缺少可嵌入的中文字体，暂时无法生成 PDF；请改用 CSV 或 Excel",
   pdf_font_glyph_missing: "当前中文字体缺少报表所需字符，无法生成 PDF；请改用 CSV 或 Excel",
@@ -62,7 +62,7 @@ function reportError(e) {
   if (REPORT_FONT_ERRORS[code]) return { status: 500, body: { error: code, message: REPORT_FONT_ERRORS[code], details: null } };
   if (REPORT_NOT_FOUND_ERRORS.has(code)) return { status: 404, body: { error: code, message: e.message, details: e.details ?? null } };
   if (code === "office_text_too_long") {
-    // Locate the offending field only: the over-long text itself is never echoed back.
+    // 只定位出错字段，绝不回显超长文本本身。
     const { field = null, length = null, limit = null } = e.details ?? {};
     return { status: 422, body: { error: code, message: e.message, details: { field, length, limit } } };
   }
@@ -183,11 +183,11 @@ async function api(req, res, url, m) {
     try {
       const id = +match[1], operation = match[2], accountSet = A.getAccountSet(id);
       const options = Object.fromEntries(["period", "region", "templateId", "templateVersion", "format"].map((key) => [key, url.searchParams.get(key)]));
-      // Account metadata is authoritative; query flags cannot claim a different standard or verified template.
+      // 账套元数据为权威依据，查询参数不能声明其他准则或已验证模板。
       options.accountingStandard = accountSet.accounting_standard;
       if (operation === "readiness") return json(res, 200, assessTaxReportReadiness(id, options));
       buildTaxReportExport(id, options);
-      // No upload adapter is verified. Never turn a future accidental return into a downloadable file.
+      // 尚无已验证上传适配器；不能把未来意外返回值变成可下载文件。
       return json(res, 422, { error: "tax_template_unverified", message: "税局申报格式尚未核实", details: null });
     } catch (e) {
       const code = e?.code || e?.message;
@@ -207,8 +207,8 @@ async function api(req, res, url, m) {
     }
     try {
       const preview = match[3] === "export-data";
-      // export-data stays a CSV-shaped JSON DTO and keeps the original strict format contract:
-      // only csv / absent is accepted, so office formats are never silently rewritten to CSV.
+      // export-data 保持 CSV 形状的 JSON DTO，保留原来的严格格式合同：
+      // 只接受 csv 或不传格式，不能静默把办公格式改写为 CSV。
       const requestedFormat = url.searchParams.get("format") ?? "csv";
       if (preview && requestedFormat !== "csv") {
         const error = new Error("report_format_unsupported");
@@ -216,13 +216,13 @@ async function api(req, res, url, m) {
         error.details = { supported: ["csv"] };
         throw error;
       }
-      // Only /export turns the requested format into a real attachment.
+      // 只有 /export 才会把请求格式转换为真实附件。
       const result = await buildOfficeExport(+match[1], {
         kind: match[2], period: url.searchParams.get("period"),
         format: preview ? "csv" : requestedFormat, code: url.searchParams.get("code"),
       });
       if (preview) return json(res, 200, result.report);
-      // Complete generation before sending headers: failures must remain JSON, never partial files.
+      // 生成完成后才发送响应头；失败仍须返回 JSON，不返回部分文件。
       const body = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, "utf8");
       res.writeHead(200, {
         "content-type": result.contentType, "content-length": body.length,
@@ -497,8 +497,8 @@ server.listen(PORT, HOST, () => {
   console.log(`Agent 工具入口:   http://127.0.0.1:${actualPort}/agent/tools/<name>`);
 });
 
-// Normal shutdown closes only browser processes owned by this backend.
-// Abrupt OS termination cannot guarantee cleanup and is not reported as such.
+// 正常关闭时，只关闭本后端拥有的浏览器进程。
+// 操作系统强制终止无法保证清理，不能声称已经清理。
 let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;

@@ -162,7 +162,7 @@ export function publishFile({ bytes, bytesHash, relativePath, outputDir }) {
   }
   const finalPath = resolve(root, relativePath);
   if (finalPath !== root && !finalPath.startsWith(root + sep)) {
-    try { unlinkSync(tempPath); } catch { /* ignore */ }
+    try { unlinkSync(tempPath); } catch { /* 忽略此处异常 */ }
     throw batchError("artifact_path_escape", { relativePath });
   }
   plainAncestor(dirname(finalPath));ensureDir(dirname(finalPath));plainRestorePath(dirname(finalPath),{directory:true});
@@ -170,13 +170,13 @@ export function publishFile({ bytes, bytesHash, relativePath, outputDir }) {
     plainRestorePath(finalPath);
     const existingHash = hashFile(finalPath);
     if (existingHash !== bytesHash) {
-      try { unlinkSync(tempPath); } catch { /* ignore */ }
+      try { unlinkSync(tempPath); } catch { /* 忽略此处异常 */ }
       throw batchError("output_conflict", { relativePath });
     }
-    try { unlinkSync(tempPath); } catch { /* ignore */ }
+    try { unlinkSync(tempPath); } catch { /* 忽略此处异常 */ }
     return { published: false, recovered: true, finalPath, bytesHash };
   }
-  // Exclusive publication cannot replace a file created by another writer.
+  // 独占发布不能替换其他写入者创建的文件。
   linkSync(tempPath,finalPath);unlinkSync(tempPath);plainRestorePath(finalPath);
   return { published: true, recovered: false, finalPath, bytesHash };
 }
@@ -368,8 +368,8 @@ export async function executeJob({
           }));
         }catch(error){
           const code=String(error?.code??'enterprise_binding_error').slice(0,120);itemReport.bindingBlocked=code;
-          // A binding failure cannot bypass verification of completed effects.
-          // Keep their evidence, mark drift for review, and never replay finance.
+          // 绑定失败不能跳过已完成效果的核验；
+          // 保留证据，将偏移标为待复核，绝不重放财务写入。
           itemReport.verified=verifyCompleted();
           itemReport.blockedStages=blockPendingStages({stages,errorCode:code});continue;
         }
@@ -444,8 +444,8 @@ export async function executeJob({
           let result;
           try {
             if(stage.stage_key.startsWith('harness:')){
-              // The domain worker acquires the existing accounting resources.
-              // Keep the persisted stage claim/job fence, release only item locks.
+              // 业务 worker 取得已有会计资源锁。
+              // 保留持久阶段认领和作业隔离栏，仅释放单项锁。
               releaseItemLocks(itemLocks);itemLocks=null;
               let bridge;
               try{bridge=actions.queryHarnessBatchTask(ctx,'execute');if(hooks?.afterHarnessEffect)hooks.afterHarnessEffect({stage:claim.stage,bridge});}
@@ -453,7 +453,7 @@ export async function executeJob({
               result=actions.checkpointHarnessBatchTask(ctx,bridge);
             }else result = actions.executeStage(ctx);
             if (result?.accountSetId && !currentItem.account_set_id) {
-              // The audited outer already persisted the resolved set and its lock.
+              // 受审计外层已持久化解析后的账套及其锁。
               bindingItem=storage.getItem(db,item.id);
             }
             itemReport.stages.push({ stageKey: stage.stage_key, period: stage.period, status: result?.status ?? STAGE_STATUS.SUCCEEDED, attempt: claim.attempt });
@@ -553,8 +553,8 @@ export async function executeJob({
       }
       renderTasks.push({ stage, spec, snapshot, allowSnapshotOnly, item: storage.getItem(db, stage.item_id) });
     }
-    // Round-robin by item so independent enterprises enter the first worker wave.
-    // Preserve each item's original report order and all existing claim/publish fences.
+    // 按单项轮转，使独立企业进入首轮 worker；
+    // 保留每项原有报表顺序及全部已有认领、发布隔离栏。
     const itemQueues=new Map();
     for(const task of renderTasks){const queue=itemQueues.get(task.stage.item_id)??[];queue.push(task);itemQueues.set(task.stage.item_id,queue);}
     const fairTasks=[];let offset=0;
@@ -665,8 +665,8 @@ async function renderAndPublish({ task, job, lock, jobResources, attempt, instan
 
   const claimedStage={...stage,attempt,input_hash:snapshotHash,status:undefined,outcome_hash:undefined,evidence_json:undefined};
   const assertCurrentEvidence=(artifact=existing,terminal=false)=>{
-    // Any late schema/binding drift is a report evidence conflict. It must not
-    // turn a source-completeness refusal into a retryable financial failure.
+    // 后期发现的 schema 或绑定漂移属于报表证据冲突，不能把
+    // 来源完整性拒绝转成可重试的财务失败。
     try{if(storage.effectiveOutputRoot(db,job)!==outputDir)throw Error();}catch{throw batchError('report_evidence_changed');}
     const rows=storage.verifyCurrentReportRows(db,{job,item,stage:terminal?{...claimedStage,status:STAGE_STATUS.SUCCEEDED}:claimedStage,snapshot,artifact});
     if(!rows.ok)throw batchError(rows.reason);
@@ -831,8 +831,8 @@ export { refreshStatuses, getJobByKey };
 /** 业务库连接（CLI 在动态 import 本模块后用于建立 / 校验批量结构）。 */
 export const database = db;
 
-// File rendering/publication stays outside SQLite. Only verified metadata steps
-// own short synchronous audit transactions; this does not claim cross-media atomicity.
+// 文件渲染和发布留在 SQLite 外部；只有已验证元数据步骤
+// 使用短同步审计事务，这不代表跨介质原子性。
 function auditedReportStep({db,job,item,stage,lock,attempt,phase},fn) {
  return runAuditedBatchStage(db,{action:'batch.stage',operationId:storage.stageAuditOperationId({...stage,attempt})+'.report-'+phase,scope:{kind:'account_set',value:item.account_set_id},context:{jobId:String(job.id),itemId:String(item.id),stageId:String(stage.id),period:stage.period},request:{stageId:stage.id,attempt,phase,inputHash:stage.input_hash}},[],()=>storage.withFencedTransaction(db,lock,()=>{storage.assertClaimedStage(db,{stageId:stage.id,instance:lock.instance,token:lock.token,attempt});fn();const owner=db.prepare('SELECT owner_instance,fencing_token,attempt FROM local_batch_stages WHERE id=?').get(stage.id);if(!owner||owner.owner_instance!==lock.instance||owner.fencing_token!==lock.token||owner.attempt!==attempt)throw batchError('fence_lost');return {phase};}));
 }

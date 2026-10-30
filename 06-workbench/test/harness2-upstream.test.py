@@ -138,8 +138,8 @@ with tempfile.TemporaryDirectory(prefix="harness2-core-") as directory:
         assert any(label.startswith("experience.") for label in prop.labels)
         assert adapter.score(rd, adapter.tasks()[0]) is None
 
-        # NO_ENTRY is the original prompt's explicit decision to store no lesson.
-        # Keep the recorded case above and its library intact in a separate tree.
+        # NO_ENTRY 是原提示词明确决定不保存经验的结果。
+        # 在独立目录树中完整保留上方记录的用例及其库。
         no_entry_work=root/(mode+'-no-entry');shutil.copytree(work,no_entry_work)
         no_entry_reply='<edits>\nNo reusable execution contrast is evidenced.\n</edits>\n\nNO_ENTRY'
         no_entry_prop=DeterministicProposer(reflection_reply=no_entry_reply)
@@ -157,8 +157,8 @@ with tempfile.TemporaryDirectory(prefix="harness2-core-") as directory:
         except CodexIntegrationError:pass
         else:raise AssertionError('malformed or absent reflection was accepted as NO_ENTRY')
 
-    # Exercise the real Google catch boundary: optimizer integration failures
-    # must escape rather than becoming baseline-backed candidate executions.
+    # 覆盖真实 Google 捕获边界：优化器集成失败
+    # 必须向外抛出，不能变成以基线兜底的候选执行。
     assert not issubclass(CodexIntegrationError,ProposerError)
     class FailedWorker:
         def __init__(self, protocol=False):

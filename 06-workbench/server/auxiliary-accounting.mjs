@@ -1,5 +1,5 @@
 import { runDomainOperation,copyDomainRequest } from './local-audit-coordinator.mjs';
-// Auxiliary tuples point to the real GL; no parallel journal or inferred party identities.
+// 辅助核算组合指向真实总账，不另建平行分录，也不推断往来身份。
 import { getAccountingProfile } from './accounting-profiles.mjs';
 import { assertPeriodMutable } from './period-end-controls.mjs';
 import { parseMoney, storedCents, centsToNumber } from './money.mjs';
@@ -51,7 +51,7 @@ function replaceAuxiliaryAllocationsBody(db,{accountSetId,entryId,openingCode,al
  const fingerprint=auxFingerprint({version:1,target,parts,reason}); const existing=db.prepare('SELECT * FROM aux_receipts WHERE account_set_id=? AND request_id=?').get(accountSetId,requestId); const before=allocationRows(db,accountSetId,target);
  if(existing) { fail(existing.fingerprint!==fingerprint,'aux_request_conflict'); const saved=JSON.parse(existing.result_json); fail(JSON.stringify(normalizedRows(before))!==JSON.stringify(parts)||saved.sourceFingerprint!==sourceFingerprint(row),'aux_replay_state_conflict'); return {...saved,status:'replayed'}; }
  mutable(db,accountSetId,row.period??set.start_period);
- // Auxiliary openings may have opposite-side customer balances: only their net plus the explicit remainder reconciles to GL.
+ // 辅助期初可含客户反向余额；只有其净额加显式未分配余额才能与总账核对。
  if(entryId!==undefined) { const d=parts.reduce((s,a)=>s+cents(a.debitCents),0n),c=parts.reduce((s,a)=>s+cents(a.creditCents),0n); fail(d>storedCents(row.debit)||c>storedCents(row.credit),'aux_allocation_exceeds_entry'); }
  for(const part of parts) for(const dim of dims) if(part[dim+'Id']!==null) { const entity=db.prepare('SELECT * FROM aux_entities WHERE id=?').get(part[dim+'Id']); fail(!entity||entity.account_set_id!==accountSetId||entity.kind!==dim||entity.active!==1,'aux_dimension_invalid'); }
  if(entryId!==undefined) db.prepare('DELETE FROM aux_allocations WHERE account_set_id=? AND entry_id=?').run(accountSetId,entryId); else db.prepare('DELETE FROM aux_allocations WHERE account_set_id=? AND opening_code=?').run(accountSetId,openingCode);

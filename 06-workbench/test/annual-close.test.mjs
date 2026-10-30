@@ -1,5 +1,5 @@
-// Synthetic ledger only. Expected annual amounts are hand-calculated below;
-// this suite verifies evidence adaptation, not missing tax/Harness business work.
+// 仅使用合成账簿。下方年度预期金额为手算结果；
+// 此套件验证证据适配，不验证尚缺的税费/Harness 业务工作。
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,7 +10,7 @@ const root = mkdtempSync(join(tempBase, 'annual-close-synthetic-'));
 const dataDir = join(root, 'data');
 mkdirSync(dataDir);
 process.env.WORKBENCH_DATA_DIR = dataDir;
-// Existing audit/backup guards require ordinary, non-alias temporary paths.
+// 现有审计/备份保护要求使用普通、非别名临时路径。
 process.env.TMP = root; process.env.TEMP = root;
 let db, failures = 0, passed = 0;
 async function test(name, fn) {
@@ -45,8 +45,8 @@ try {
   let original;
   await test('normal full year and history use actual annual reports with independent expected amounts', () => {
     original = adapter.inspect(scope);
-    // Prior opening 1000 + 200 - 40 = 1160. Annual sales=100*(1+...+12)=7800,
-    // expense=10*78=780, annual net=7020; final bank=1160+7020=8180.
+    // 以前期初 1000 + 200 - 40 = 1160。全年销售额=100*(1+...+12)=7800，
+    // 费用=10*78=780，全年净额=7020；最终银行余额=1160+7020=8180。
     assert.equal(original.annualNumbers.incomeStatementYtd['营业利润'], 7020);
     assert.equal(original.reports['income-statement'].data.current['营业利润'], 1080);
     assert.equal(original.annualNumbers.cashFlowYtd.cash.begin, 1160);
@@ -93,8 +93,8 @@ try {
     assert.equal(adapter.validate({ ...partialScope, expectedDigest: before.contentDigest }).status, 'stale');
   });
   await test('posted correction invalidates old evidence and reports actual before/after differences without reposting', () => {
-    // An additional supported correction JE costs 20: annual profit=7000,
-    // bank ending/next-year opening=8160. The read adapter does not post it.
+    // 额外一笔受支持的更正分录产生费用 20：全年利润=7000，
+    // 银行期末/次年期初=8160。只读适配器不进行记账。
     voucher(id, '2026-12', [e('5602', 20), e('1002', 0, 20)]);
     const count = db.prepare('SELECT COUNT(*) n FROM vouchers').get().n;
     const current = adapter.inspect(scope);
@@ -134,7 +134,7 @@ try {
   });
 } finally {
   db?.close();
-  // Only this process's mkdtemp-owned directory; no real databases are opened.
+  // 仅使用本进程通过 mkdtemp 拥有的目录；不打开真实数据库。
   const target = resolve(root);
   if (target.startsWith(tempBase + (process.platform === 'win32' ? '\\' : '/'))) rmSync(target, { recursive: true, force: true });
 }

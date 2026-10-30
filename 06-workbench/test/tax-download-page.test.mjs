@@ -1,4 +1,4 @@
-// Synthetic native-cache/CDP fixtures only. Never reads a private runtime directory.
+// 仅使用合成原生缓存/CDP 测试样本。绝不读取私有运行时目录。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';

@@ -12,14 +12,14 @@ export async function runCli(args) {
   try {
     const request = await readLocalFile(resolve(args[1]));
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.bytes).replace(/^\uFEFF/, ''));
-    // Preserve unknown fields so the API rejects them instead of silently dropping them.
+    // 保留未知字段，让 API 拒绝，而不是静默丢弃。
     if (typeof value?.priorInputPath === 'string') value.priorInputPath = resolve(dirname(request.canonicalPath), value.priorInputPath);
     const opened = await openOfflineVatPriorContext(value); receipt = opened.receipt;
     let result = receipt ? await assertOfflineVatPriorContextCurrent(receipt) : opened.diagnostic;
     if (hash((await readLocalFile(request.canonicalPath)).bytes) !== hash(request.bytes)) throw new Error('request_changed');
     const output = resolve(args[3]); await checkedPath(dirname(output), true);
     handle = await open(output, 'wx', 0o600);
-    // No serialized receipt/authority. A partial write is not a success marker.
+    // 不序列化回执或授权依据。部分写入不能作为成功标记。
     await handle.writeFile(JSON.stringify({ publicationStatus: 'diagnostic_only', ...result }, null, 2) + '\n');
     await handle.sync();
     if (hash((await readLocalFile(request.canonicalPath)).bytes) !== hash(request.bytes)) throw new Error('request_changed');
@@ -32,10 +32,10 @@ export async function runCli(args) {
       try {
         const failure = Buffer.from('{"publicationStatus":"failed","authorizesExecution":false}\n');
         await handle.write(failure, 0, failure.length, 0); await handle.truncate(failure.length); await handle.sync();
-      } catch { /* Partial output cannot be consumed as authority. */ }
+      } catch { /* 部分输出不能作为授权依据消费。 */ }
     }
     return { exitCode: 4, message: 'OFFLINE_VAT_HISTORY_REJECTED' };
-  } finally { try { await handle?.close(); } catch { /* Fixed public errors only. */ } finally { if (receipt) await closeOfflineVatPriorContext(receipt); } }
+  } finally { try { await handle?.close(); } catch { /* 只返回固定的公开错误。 */ } finally { if (receipt) await closeOfflineVatPriorContext(receipt); } }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const result = await runCli(process.argv.slice(2)); process.stdout.write(result.message + '\n'); process.exitCode = result.exitCode;

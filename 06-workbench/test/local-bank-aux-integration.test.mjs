@@ -72,12 +72,12 @@ if(!scenario){
  const expect1130=r=>{assert.equal(r.book.closingCents,112000);assert.equal(r.statement.closeCents,111000);assert.equal(r.adjusted.bookCents,113000);assert.equal(r.adjusted.bankCents,113000);assert.equal(r.adjusted.differenceCents,0);};
  try{
   db.exec('PRAGMA wal_autocheckpoint=0');
-  // A real WAL-committed row must be included in every installation snapshot.
+  // 每份安装快照必须包含真实 WAL 已提交行。
   const sets=[];
   for(const [key,profile,capital,expense] of [['small','small-2011-basic-v1','3001','5602'],['enterprise','enterprise-2019-general-basic-v1','4001','6602'],['legacy','legacy-small-coa-v1','3001','5602']]){
    let accountSetId;
    if(key==='legacy'){
-    // Historical persisted profile, never offered as a creatable user profile.
+    // 历史持久化配置，绝不作为可创建的用户配置提供。
     accountSetId=Number(db.prepare("INSERT INTO account_sets(name,start_period,created_at) VALUES('Synthetic legacy','2025-12',?)").run(new Date().toISOString()).lastInsertRowid);
     const {COA}=await import('../server/coa.mjs');for(const a of COA)db.prepare('INSERT INTO accounts(account_set_id,code,name,category,direction,contra,is_leaf) VALUES(?,?,?,?,?,?,1)').run(accountSetId,a.code,a.name,a.category,a.direction,a.contra?1:0);
    }else accountSetId=A.createAccountSet({name:'Synthetic '+key,start_period:'2025-12',profileId:profile,enterprise:{enterpriseKey:'BANK-AUX-'+key,enterpriseName:'Synthetic '+key}}).id;
@@ -148,7 +148,7 @@ if(!scenario){
    A.unpostVoucher(item.scope.accountSetId,item.vouchers[0].voucherId);assert.equal(B.refreshMatchStates(db,item.scope).invalidated.length,1);assert.equal(B.refreshMatchStates(db,item.scope).invalidated.length,0);assert.equal(B.listMatchesView(db,item.scope).matches.find(m=>m.matchId===r.match.matchId).status,'invalidated');
   }
   if(scenario==='aux-first'){
-   // Every negative starts from the real official aux-only pre-install snapshot.
+   // 每个反例都从真实正式的仅辅助核算安装前快照开始。
    const seed=join(beforeSecond,LB.SNAPSHOT_FILE);
    const negative=async(label,mutate,service)=>{const folder=join(root,'negative-'+label);fs.mkdirSync(folder);const path=join(folder,'workbench.db');fs.copyFileSync(seed,path);const c=new DatabaseSync(path);c.exec('PRAGMA foreign_keys=ON');try{if(mutate)mutate(c);const backupService=service?.(path,c)??LB;const before=rows(c),bytes=hash(path);await assert.rejects(S.ensureBankSchema(c,{dbPath:path,dataDir:folder,backupService}),e=>e.code==='migration_backup_failed'||e.code==='migration_backup_invalid'||e.code==='bank_schema_corrupt');assert.deepEqual(rows(c),before,label+' zero DDL/business');assert.equal(c.isTransaction,false);assert.equal(hash(path),bytes,label+' main bytes');}finally{c.close();}console.log('strict negative '+label);};
    const wrongDir=join(root,'wrong-source');fs.mkdirSync(wrongDir);const wrong=join(wrongDir,'workbench.db');fs.copyFileSync(seed,wrong);const w=new DatabaseSync(wrong);try{w.prepare("UPDATE account_sets SET name='different source content' WHERE id=1").run();}finally{w.close();}const wrongBackup=backup(wrong,'wrong-official');
@@ -158,7 +158,7 @@ if(!scenario){
     createBackup:({outDir})=>{const b=LB.createBackup({dbPath:path,outDir});assert.equal(b.ok,true);if(label==='false-verifier')return b;const m=JSON.parse(JSON.stringify(b.manifest));if(label==='missing')delete m.components;if(label==='duplicate')m.components.push(m.components[0]);if(label==='unknown-component')m.components.find(c=>c.name==='auxiliary').name='audit';if(label==='future-component')m.components.find(c=>c.name==='auxiliary').version=2;if(label==='stale-content')m.content.digest='0'.repeat(64);if(label==='fake-hash')m.snapshot.sha256='0'.repeat(64);fs.writeFileSync(join(b.backupDir,LB.MANIFEST_FILE),JSON.stringify(m));return {...b,manifest:m,backupMeta:{...b.backupMeta,snapshotSha256:m.snapshot.sha256}};},
     verifyBackup:({backupDir})=>{if(label==='false-verifier')return {ok:false,status:'corrupt'};const manifest=JSON.parse(fs.readFileSync(join(backupDir,LB.MANIFEST_FILE)));return {ok:true,status:'ok',manifest,summary:{snapshotBytes:manifest.snapshot.bytes,snapshotSha256:manifest.snapshot.sha256}};},assertBackupSourceConnection:()=>true
    }));
-   // Stale but fully valid official backup of the same source path is also refused.
+   // 同一源路径上过时但完全有效的正式备份也必须拒绝。
    await negative('stale-valid-official',null,(path,c)=>{const b=backup(path,'stale-official');c.prepare("UPDATE account_sets SET name='newer committed WAL' WHERE id=1").run();return {createBackup:()=>b,verifyBackup:LB.verifyBackup};});
   }
   console.log(scenario+' PASS: actual backups/verify/restore before and after both components; continued writes; DBs closed');

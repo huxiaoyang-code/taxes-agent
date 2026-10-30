@@ -1,4 +1,4 @@
-// Pure, local planning evidence. No accounting, filesystem, authority or receipts.
+// 纯本机规划证据，不记账、不访问文件系统、不授予权限、不生成回执。
 import { preflightMaterials } from './offline-materials.mjs';
 import { sourceBytes, MATERIAL_VERSION, fields, requirePlainJson, requireValue, identifier, validateScope, hash, stable } from './offline-material-adapters.mjs';
 
@@ -9,7 +9,7 @@ const text = v => requireValue(typeof v === 'string' && v.trim().length > 0 && v
 const enumValue = (v, values) => requireValue(values.includes(v), 'declaration_invalid');
 const unique = values => requireValue(new Set(values).size === values.length, 'declaration_invalid');
 
-// A declaration is a raw local JSON document, not a claim that its attachments were verified.
+// 声明只是原始本机 JSON 文档，不代表其附件已经核验。
 export function validateDeclaration(raw, scope) {
   requirePlainJson(raw);
   fields(raw, ['version', 'scope'], ['profile', 'businessScope', 'enterpriseEvidenceIds', 'evidence', 'applicability', 'coverage', 'bankAccounts', 'tax', 'opening', 'history', 'bankFacts', 'materials']);
@@ -47,7 +47,7 @@ export function validateDeclaration(raw, scope) {
     fields(b, ['bankAccountId', 'refId', 'nature', 'evidenceIds']); identifier(b.bankAccountId); text(b.refId);
     enumValue(b.nature, ['service_receipt', 'operating_payment', 'payroll', 'asset', 'unknown']); refs(b.evidenceIds);
   }
-  // Multiple statements for one bank ID are retained for conflict detection.
+  // 同一银行 ID 的多份对账单全部保留，以检测冲突。
   for (const m of raw.materials ?? []) { fields(m, ['area', 'format', 'evidenceIds']); enumValue(m.area, ['payroll', 'assets', 'opening', 'history']); text(m.format); refs(m.evidenceIds); }
   return raw;
 }

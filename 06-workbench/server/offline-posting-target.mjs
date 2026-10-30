@@ -1,4 +1,4 @@
-// Fixed one-request worker. All ledger mutations go through the public import domain.
+// 固定单请求 worker；全部账簿修改都经过公开导入业务层。
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, lstatSync, realpathSync, openSync, fstatSync, closeSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
@@ -73,7 +73,7 @@ function exactCents(value) {
   const [whole, fraction = ''] = s.split('.'), cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
   return cents <= 99999999999999n ? cents : null;
 }
-// Read-only proof assembled from the existing storage API and official audit query.
+// 只读证明由已有存储 API 及官方审计查询组装。
 function durableState(db, target, ids, options) {
   db.exec('BEGIN');
   try { const value = readDurableState(db, target, ids, options); db.exec('COMMIT'); return value; }
@@ -85,7 +85,7 @@ function readDurableState(db, target, ids, options) {
   catch { return { status: 'needs_local_review', code: 'posting_audit_unavailable', applied: 'unknown' }; }
   const batch = getBatch(db, ids.batchId), source = getVoucherSource(db, VAT_SOURCE_SYSTEM, target.enterpriseKey, ids.businessKey);
   if (operation.code === 'not_found') return !batch && !source ? { status: 'not_applied', code: 'posting_not_found', applied: false } : { status: 'needs_local_review', code: 'posting_unmatched_existing_source_or_batch', applied: 'unknown' };
-  // queryOperation deliberately omits request/action binding; read its persisted row without mutation.
+  // queryOperation 有意不含请求/动作绑定；这里只读其持久化记录，不作修改。
   const row = db.prepare('SELECT * FROM audit_operations WHERE database_instance_id=? AND operation_id=? AND attempt=1').get(target.databaseInstanceId, ids.operationId);
   if (!row || row.request_digest !== requestDigest(options) || row.action !== 'import.append' || row.actor !== 'cli' || row.scope_kind !== 'account_set' || JSON.parse(row.targets_json).accountSetId !== target.accountSetId || row.parent_operation_id !== null || db.prepare('SELECT COUNT(*) n FROM audit_operations WHERE database_instance_id=? AND operation_id=?').get(target.databaseInstanceId, ids.operationId).n !== 1) return { status: 'conflict', code: 'posting_semantic_conflict', applied: operation.ok === true ? true : 'unknown' };
   if (operation.durability !== 'committed' || operation.state === 'pending') return { status: 'needs_local_review', code: operation.code, applied: 'unknown' };
@@ -102,7 +102,7 @@ function readDurableState(db, target, ids, options) {
   }))) return { status: 'needs_local_review', code: 'posting_stored_entries_inconsistent', applied: 'unknown' };
   const link = links[0];
   if (!batch || batch.status !== 'completed' || batch.attempts !== 1 || batch.account_set_id !== target.accountSetId || batch.mode !== 'append' || batch.source_system !== VAT_SOURCE_SYSTEM || batch.enterprise_key !== target.enterpriseKey || !source || source.batch_id !== ids.batchId || source.account_set_id !== target.accountSetId || source.content_fingerprint !== wantedFingerprint || !source.voucher_fingerprint || !v || v.account_set_id !== target.accountSetId || v.status !== 'posted' || persistedVoucherFingerprint(v, entries) !== source.voucher_fingerprint || links.length !== 1 || link.source_voucher_id !== ids.businessKey || link.source_system !== VAT_SOURCE_SYSTEM || link.enterprise_key !== target.enterpriseKey || link.account_set_id !== target.accountSetId || link.voucher_id !== v.id || link.content_fingerprint !== wantedFingerprint || link.action !== 'created') return { status: 'needs_local_review', code: 'posting_ledger_evidence_inconsistent', applied: 'unknown' };
-  // Independently check the stored batch fingerprint against this exact single-voucher request.
+  // 独立核对保存的批次指纹是否匹配这一精确单凭证请求。
   const m = options.payload.account_set;
   const wantedBatch = hash(JSON.stringify({ mode: 'append', targetAccountSetId: target.accountSetId, source: options.source, meta: { name: m.name, taxpayer_type: '', accounting_standard: '', start_period: m.start_period }, accounts: [], opening_balances: [], vouchers: [{ sourceVoucherId: ids.businessKey, fingerprint: wantedFingerprint }] }));
   if (batch.content_fingerprint !== wantedBatch) return { status: 'needs_local_review', code: 'posting_batch_fingerprint_inconsistent', applied: 'unknown' };
@@ -118,8 +118,8 @@ async function handle(request) {
     const identity = hash(stable(['offline-posting/1', t.databaseInstanceId, t.enterpriseKey, t.accountSetId, request.selected.businessKey]));
     ids = { operationId: identity, batchId: identity, businessKey: request.selected.businessKey };
     common = { ...base(), ...ids, target: { ...t }, taskId: request.selected.taskId };
-    // Read durability before opening current materials. A missing/corrected original
-    // cannot erase a known commit or make a pending attempt safe to repeat.
+    // 打开当前材料前先读取持久化结果；原件缺失或更正
+    // 不能抹去已知提交，也不能使 pending 尝试可安全重复。
     let audit;
     try { audit = inspectAuditSchema(ro); requireValue(audit.ok, 'posting_audit_unavailable'); }
     catch (e) { historical = 'unknown'; throw e; }
@@ -152,7 +152,7 @@ async function handle(request) {
     requireValue(state.sourceBindingExists || c.confirmNewSourceBinding === true, 'posting_new_source_confirmation_required');
     await assertOfflineActionInputCurrent(session); assertCodeCurrent();
     requireValue(sameFile(initial, checkedFile(t.dbPath)) && sameFile(initial, fstatSync(fd)), 'posting_db_changed');
-    // This module can only execute as the fixed fresh worker. No prior cached db.mjs exists.
+    // 本模块只允许作为固定全新 worker 执行，不存在先前缓存的 db.mjs。
     process.env.WORKBENCH_DATA_DIR = dirname(t.dbPath);
     ({ db: writeDb } = await import('./db.mjs'));
     requireValue(sameFile(initial, checkedFile(t.dbPath)) && writeDb.prepare('PRAGMA database_list').get().file.toLowerCase() === t.dbPath.toLowerCase(), 'posting_db_changed');
@@ -178,8 +178,8 @@ async function handle(request) {
     const known = new Set(['posting_db_path_invalid','posting_db_alias','posting_db_invalid','posting_db_changed','posting_instance_mismatch','posting_schema_unsupported','posting_enterprise_binding_mismatch','posting_profile_unsupported','posting_account_semantics_unsupported','posting_account_not_leaf','posting_aux_unverified','posting_aux_required','posting_source_binding_mismatch','posting_scope_mismatch','posting_task_missing','posting_period_closed','posting_confirmation_stale','posting_new_source_confirmation_required','posting_policy_changed','posting_state_changed']);
     return { ...common, ...reject(historical === false ? known.has(error?.code) ? error.code : 'posting_input_or_target_rejected' : 'posting_current_inputs_unverified', { status: historical === false ? 'blocked' : 'needs_local_review', applied: historical }) };
   } finally {
-    // Resource cleanup cannot replace the known durable result with applied:false.
-    for (const close of [() => session?.close(), () => ro?.close(), () => writeDb?.close(), () => { if (fd !== undefined) closeSync(fd); }]) { try { close(); } catch { /* child exits; durability was already recorded */ } }
+    // 资源清理不能将已知持久结果替换为 applied:false。
+    for (const close of [() => session?.close(), () => ro?.close(), () => writeDb?.close(), () => { if (fd !== undefined) closeSync(fd); }]) { try { close(); } catch { /* 子进程退出；持久化结果已经记录 */ } }
   }
 }
 if (process.argv.length === 2 && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

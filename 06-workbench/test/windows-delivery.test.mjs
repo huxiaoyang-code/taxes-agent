@@ -69,8 +69,8 @@ const residuals = [];
 const expectedRefusalFixtures = [];
 const fixtureScope = new AsyncLocalStorage();
 
-// Finally blocks only request cleanup. The complete test (including assertions and
-// process shutdown) must succeed before any requested fixture is removed.
+// finally 块只请求清理。完整测试（包括断言和
+// 进程关闭）必须成功，才删除任何已请求的测试样本。
 function cleanupDecision(scope) {
   const reasons = [...scope.reasons];
   if (!scope.passed) reasons.push("test_failed_or_assertion_failed");
@@ -87,7 +87,7 @@ function test(name, body) {
         scope.passed = true;
       } finally {
         let reason = cleanupDecision(scope);
-        // Children before their parent: every registered nested manifest is checked.
+        // 子项先于父项：检查每份已登记的嵌套清单。
         for (const record of [...scope.records].sort((a, b) => b.root.length - a.root.length)) {
           const explicit = expectedRefusalFixtures.some((entry) => isInsideDir(record.root, entry.root));
           if (reason || explicit || !scope.requested.has(record)) {
@@ -99,7 +99,7 @@ function test(name, body) {
             if (!removal.ok) {
               cleanupFailures.push({ name, reason: removal.reason });
               recordExpectedRefusalFixture({ kind: `cleanup-refused-${name}`, root: record.root, reason: removal.reason });
-              // Never let a parent cleanup erase a nested fixture whose own guard refused.
+              // 父项清理绝不能抹掉被自身保护拒绝清理的嵌套测试样本。
               reason = `nested_cleanup_refused:${removal.reason}`;
             }
           }
@@ -245,7 +245,7 @@ function minimalEnv(extra = {}) {
   return env;
 }
 
-/** All child defaults are created in an independent, owned fixture before spawn. */
+/** spawn 前，在独立、自有测试样本中创建全部子进程默认值。 */
 function childEnvironment(root, extra = {}) {
   const dirs = {
     TEMP: join(root, "process-temp"), TMP: join(root, "process-temp"),
@@ -261,7 +261,7 @@ function childEnvironment(root, extra = {}) {
   return env;
 }
 
-/** Copy the launcher, runtime and delivery module together: default scratch stays inside fixture. */
+/** 同时复制启动器、运行时及交付模块：默认临时目录留在测试样本内。 */
 function copyChildTools(root) {
   const wb = join(root, "isolated-workbench");
   mkdirSync(join(wb, "scripts"), { recursive: true });
@@ -271,7 +271,7 @@ function copyChildTools(root) {
     copyFileSync(source, join(wb, "scripts", source.split(/[\\/]/).at(-1)));
   }
   copyFileSync(fileURLToPath(import.meta.url), join(wb, "test", "windows-delivery.test.mjs"));
-  // Negative launcher calls must never start a real service if their guards regress.
+  // 即使保护发生回归，启动器反例调用也绝不能启动真实服务。
   writeFileSync(join(wb, "server", "server.mjs"), 'throw new Error("negative_fixture_service_must_not_start");', "utf8");
   return wb;
 }
@@ -314,13 +314,13 @@ function spawnCapture(command, args, options = {}) {
     // 真实 deadline：先礼后兵；强杀后仍不 close 就在 KILL_GRACE_MS 后报“未回收”。
     timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill(); } catch { /* ignore */ }
+      try { child.kill(); } catch { /* 忽略 */ }
       graceTimer = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch { /* ignore */ }
+        try { child.kill("SIGKILL"); } catch { /* 忽略 */ }
         hangTimer = setTimeout(() => {
-          try { child.stdout?.destroy(); } catch { /* ignore */ }
-          try { child.stderr?.destroy(); } catch { /* ignore */ }
-          try { child.unref?.(); } catch { /* ignore */ }
+          try { child.stdout?.destroy(); } catch { /* 忽略 */ }
+          try { child.stderr?.destroy(); } catch { /* 忽略 */ }
+          try { child.unref?.(); } catch { /* 忽略 */ }
           finish({ code: null, signal: "SIGKILL", unreclaimed: true });
         }, KILL_GRACE_MS);
         hangTimer.unref?.();
@@ -332,14 +332,14 @@ function spawnCapture(command, args, options = {}) {
 
 async function capture(label, command, args, options = {}) {
   const childFixture = newScratch(`child-${safeLabel(label)}`);
-  // Queue only: test-scope finalization waits for all caller assertions as well.
+  // 只入队：测试范围的最终清理还要等待调用者全部断言完成。
   cleanupScratch(childFixture);
   const childState = trackChild(label);
   const wb = copyChildTools(childFixture.root);
   const childArgs = args.map((arg) => [RUNTIME_CHECK, DELIVERY_CHECK, START_SCRIPT].includes(arg)
     ? join(wb, "scripts", arg.split(/[\\/]/).at(-1)) : arg);
   const suppliedEnv = { ...(options.env ?? {}) };
-  // capture owns all fallback paths; explicit --data-dir / -DataDir arguments still target caller fixture.
+  // capture 拥有全部回退路径；显式 --data-dir / -DataDir 参数仍指向调用者测试样本。
   for (const key of ["TEMP", "TMP", "WINDOWS_DELIVERY_SCRATCH_ROOT"]) delete suppliedEnv[key];
   const explicitDataDir = suppliedEnv.WORKBENCH_DATA_DIR;
   delete suppliedEnv.WORKBENCH_DATA_DIR;
@@ -348,7 +348,7 @@ async function capture(label, command, args, options = {}) {
     assert.ok(isInsideDir(scratchBase(), explicitDataDir), "explicit server data must stay under suite fixture base");
     env.WORKBENCH_DATA_DIR = explicitDataDir;
   }
-  // Caller data directories intentionally belong to its own fixture; TEMP and fallback remain child-owned.
+  // 调用者数据目录刻意属于其自己的测试样本；TEMP 和回退目录仍由子进程拥有。
   const result = await spawnCapture(command, childArgs, { ...options, cwd: options.cwd ?? wb, env });
   childState.reclaimed = result.reclaimed === true;
   retainForChild(label, result);
@@ -396,11 +396,11 @@ async function startServer(dataDir, scratch) {
   const hardStop = async (label) => {
     stoppingRequested = true;
     if (childState.reclaimed) return { reclaimed: true };
-    try { child.kill(); } catch { /* ignore */ }
+    try { child.kill(); } catch { /* 忽略 */ }
     let done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
     if (!done) {
       fixtureScope.getStore().reasons.push(`${label}:stop_deadline_exceeded`);
-      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+      try { child.kill("SIGKILL"); } catch { /* 忽略 */ }
       done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
     }
     if (!done) residuals.push({ label, pid: child.pid ?? null, kind: "server" });
@@ -436,11 +436,11 @@ async function startServer(dataDir, scratch) {
       stopping = (async () => {
         stoppingRequested = true;
         if (childState.reclaimed) return exitPromise;
-        try { child.kill(); } catch { /* ignore */ }
+        try { child.kill(); } catch { /* 忽略 */ }
         let done = await Promise.race([exitPromise, delay(10000).then(() => null)]);
         if (!done) {
           fixtureScope.getStore().reasons.push("test-server:stop_deadline_exceeded");
-          try { child.kill("SIGKILL"); } catch { /* ignore */ }
+          try { child.kill("SIGKILL"); } catch { /* 忽略 */ }
           done = await Promise.race([exitPromise, delay(KILL_GRACE_MS).then(() => null)]);
         }
         if (!done) residuals.push({ label: "test-server", pid: child.pid ?? null, kind: "server" });
@@ -485,7 +485,7 @@ test("现场保留决策：调用方断言、失败、超时与回收未知阻�
     assert.equal(cleanupDecision({ ...ok, reasons: [reason] }), reason);
   }
   assert.match(cleanupDecision({ ...ok, passed: false, reasons: ["child:timed_out"] }), /child:timed_out.*test_failed_or_assertion_failed/);
-  // Exercise capture's actual result-to-retention mapping without starting a child.
+  // 不启动子进程，覆盖 capture 实际结果到保留状态的映射。
   for (const result of [
     { code: 0 }, { code: 2 }, { code: 0, timedOut: true },
     { code: null, unreclaimed: true }, { code: null, spawnError: "ENOENT" },
@@ -797,7 +797,7 @@ test("专属临时根：relative / drive-relative / root-relative 原始 base �
       assert.deepEqual(snapshotDir(fixture.root), before, `${item.name} 拒绝后父目录快照必须不变`);
     }
 
-    // Blank is tested against a fixture-local module copy in a fixture-local cwd.
+    // 在测试样本本机 cwd 中，使用测试样本内的模块副本测试空值。
     const blankWB = copyChildTools(fixture.root);
     const blankBefore = snapshotDir(fixture.root);
     const blank = await capture("guard-blank-base", NODE, ["--input-type=module", "-e", `
@@ -810,7 +810,7 @@ test("专属临时根：relative / drive-relative / root-relative 原始 base �
     assert.deepEqual(snapshotDir(fixture.root), blankBefore, "空白 base 拒绝后 fixture 不得出现新条目");
     assert.equal(existsSync(join(blankWB, "tmp")), false, "空白误退默认也只能写 fixture 副本，且应无写入");
 
-    // Real volume root goes through production's shared pure preflight, never createScratchRecord / FS.
+    // 真实卷根目录经过生产共享的纯预检，绝不进入 createScratchRecord / 文件系统。
     const volumeRoot = parse(fixture.root).root;
     assert.ok(volumeRoot.length > 0);
     assert.deepEqual(inspectScratchBasePath(volumeRoot), { ok: false, code: "scratch_root_is_filesystem_root" });
@@ -1149,7 +1149,7 @@ test("启动脚本：Windows PowerShell 5.1 下有界启动、跟踪 service pid
     // 正式路径下服务由包装器在 -MaxRunSeconds 到期时用自有句柄回收。
     if (child && !wrapperExited) {
       fixtureScope.getStore().reasons.push("wrapper_aborted_service_reclamation_unknown");
-      try { child.kill(); } catch { /* ignore */ }
+      try { child.kill(); } catch { /* 忽略 */ }
       const done = await Promise.race([delay(KILL_GRACE_MS).then(() => null), new Promise((resolveExit) => child.once("close", () => resolveExit({ reclaimed: true })))]);
       if (!done) residuals.push({ label: "powershell-wrapper", pid: child.pid ?? null, kind: "wrapper" });
       if (servicePid !== null) residuals.push({ label: "powershell-wrapper-service", pid: servicePid, kind: "service", reason: "wrapper_aborted_pid_recorded_not_force_killed" });
@@ -1229,7 +1229,7 @@ test("关键成功链：HTTP 导入两月、重启幂等、金额正确、运行
     const setId = await importTwoMonths(server);
     await assertAmounts(server, setId);
 
-    // Consistent backup while the service is running (committed WAL included).
+    // 服务运行期间制作一致备份（包括已提交 WAL）。
     const backupDir = join(scratch.root, "backups", "b1");
     mkdirSync(join(scratch.root, "backups"), { recursive: true });
     const backup = await capture("local-backup backup", NODE, [join(WORKBENCH, "scripts", "local-backup.mjs"), "backup", "--db", join(dataDir, "workbench.db"), "--out", backupDir], { timeoutMs: 120000 });
@@ -1254,7 +1254,7 @@ test("关键成功链：HTTP 导入两月、重启幂等、金额正确、运行
     assert.equal(firstStop.reclaimed, true, "first server must be reclaimed before restarting");
     server = null;
 
-    // Restart on the same data directory: batch identity and amounts survive.
+    // 在同一数据目录重启：批次身份及金额保持不变。
     server = await startServer(dataDir, scratch);
     const sets = await server.get("/api/account-sets");
     assert.equal(sets.json.length, 1);
@@ -1800,10 +1800,10 @@ test("启动脚本：relative / drive-relative / root-relative / 空白 / 设备
     // 普通文件当 DataDir：即使拒绝失效，服务也绝不会真的启动。
     const dataFile = join(scratch.root, "data-file");
     writeFileSync(dataFile, "keep-me", "utf8");
-    // Extract only the pure predicate AST; never dot-source or execute the launcher for UNC strings.
+    // 仅提取纯谓词 AST；绝不为 UNC 字符串点源加载或执行启动器。
     const pureCheck = join(scratch.root, "pure-path-check.ps1");
-    // Windows PowerShell 5.1 reads BOM-less scripts using the legacy system encoding.
-    // Emit a UTF-8 BOM so embedded Unicode launcher paths survive -File decoding.
+    // Windows PowerShell 5.1 使用旧系统编码读取无 BOM 脚本。
+    // 输出 UTF-8 BOM，使嵌入 Unicode 的启动器路径在 -File 解码后保持正确。
     writeFileSync(pureCheck, `\uFEFF
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('${START_SCRIPT.replace(/'/g, "''")}', [ref]$tokens, [ref]$errors)
@@ -1823,9 +1823,9 @@ foreach ($raw in @('\\\\server', '\\\\server\\', '\\/?.\\x', '\\/?\\x')) {
       { name: "relative", candidate: join(scratch.root, "candidate-relative") },
       { name: "drive-relative", candidate: join(scratch.root, "candidate-drive-relative") },
       { name: "root-relative", candidate: join(scratch.root, "candidate-root-relative") },
-      // Blank defaults are contained by capture's fixture-local launcher/runtime copies.
+      // 空默认值由 capture 在测试样本内的启动器/运行时副本限制范围。
       { name: "whitespace", raw: "   ", candidate: null },
-      // Device namespace points only at this fixture's candidate if validation regresses.
+      // 即使校验回归，设备命名空间也只指向此测试样本的候选。
       { name: "device-path", raw: `\\\\?\\${join(scratch.root, "candidate-device")}`, candidate: join(scratch.root, "candidate-device") },
     ];
     const device = cases.find((item) => item.name === "device-path");
@@ -1856,8 +1856,8 @@ foreach ($raw in @('\\\\server', '\\\\server\\', '\\/?.\\x', '\\/?\\x')) {
 });
 
 
-// Direct production entry points, with state-only ops for unknown close. No real
-// orphan is created to model a process that cannot be reclaimed.
+// 直接调用生产入口，用仅状态操作覆盖未知 close。不会为模拟
+// 无法回收的进程而创建真实孤儿进程。
 function lifecycleRun() {
   return {
     residual: [], logs: [], assertions: [],
@@ -1948,9 +1948,9 @@ test("生产生命周期纯：wrapper spawn error 非124与close未知均失败�
   }
 });
 
-// Manager static gate required before these two cases run. Each process has an
-// independent 1.5s self-exit bound, and the production finally must still observe
-// its real close. Expected failure preserves the entire caller manifest fixture.
+// 这两个用例运行前必须通过管理器静态检查。每个进程有
+// 独立的 1.5 秒自行退出时限，生产 finally 仍须观测
+// 其真实 close。预期失败时保留完整的调用者清单测试样本。
 test("生产生命周期真实故障：HTTP 503 与拒绝均回收 owned child 并保留完整根", async () => {
   for (const mode of ["status", "refused"]) {
     const record = newScratch(`production-http-${mode}`);
@@ -1975,7 +1975,7 @@ else console.log('http://127.0.0.1:'+p+'/');});`, "utf8");
       }), /start_script_http_failed|fetch failed/);
       assert.equal(state.reclaimed, true); assert.equal(run.residual.length, 0); assert.equal(run.logs.length, 1);
     } finally {
-      // Test harness also owns this handle: bounded safety on unexpected assertions.
+      // 测试框架也拥有此句柄：意外断言时仍提供有界保护。
       if (child && !state.reclaimed) await observeOwnedChild(child, { termMs: 2000, killMs: 2000 }).stop();
       recordExpectedRefusalFixture({ kind: "production-http-fault", root: record.root, reason: "expected_http_failure_full_fixture_retained" });
     }

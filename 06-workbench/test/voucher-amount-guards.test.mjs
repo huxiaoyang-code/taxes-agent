@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-voucher-amount-guards-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
 const identityFixtureImport = (A, payload, options = {}) => A.importAccountSet(payload, { enterprise: identityFixture(), ...options });
-// Synthetic temporary databases only; domain and actual REST/Agent entry points.
+// 仅使用合成临时数据库；覆盖领域及实际 REST/Agent 入口。
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,7 +21,7 @@ async function test(name, fn) {
   try { await fn(); results.push(true); console.log(`  ✓ ${name}`); }
   catch (error) { results.push(false); console.error(`  ✗ ${name}\n    ${error.stack}`); }
 }
-// Snapshot every stored column in every table, including sequence and unrelated data.
+// 对每张表的每个存储列做快照，包括序列和无关数据。
 function snapshot(connection) {
   return Object.fromEntries(connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({ name }) => {
     const rows = connection.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all();
@@ -30,8 +30,8 @@ function snapshot(connection) {
   }));
 }
 
-// Only these audited dynamic operations may append terminal audit rows.
-// Original snapshot() remains full for all static invalid-input assertions.
+// 只有这些经过审计的动态操作可以追加终态审计行。
+// 所有静态无效输入断言仍使用完整的原始 snapshot()。
 function assertAuditAppend(after,before,actions,message,state='failure') {
  const row=v=>typeof v==='string'?JSON.parse(v):v;
  const business=value=>Object.fromEntries(Object.entries(value).filter(([name])=>!['audit_events','audit_operations','local_batch_lock_epochs'].includes(name)).map(([name,rows])=>[name,name==='sqlite_sequence'?rows.filter(v=>row(v).name!=='audit_events'):rows]));
@@ -60,7 +60,7 @@ function assertAuditAppend(after,before,actions,message,state='failure') {
 }
 
 const pair = (amount = 100) => [{ code: '1002', debit: amount, credit: 0 }, { code: '1001', debit: 0, credit: amount }];
-// Invalid values on the unused side expose silent coercion even when both rows remain nonzero and balanced.
+// 未使用侧的无效值可揭示静默强制转换，即使两行仍为非零且借贷平衡。
 const unusedSide = (bad) => [{ code: '1002', debit: 100, credit: bad }, { code: '1001', debit: 0, credit: 100 }];
 const badAmounts = [
   ['garbage', 'bad-amount'], ['partial number', '12abc'], ['internal space', '1 000'],
@@ -109,7 +109,7 @@ try {
     await test(`check: ${label} on unused side`, () => assertCheck(A, setId, unusedSide(bad)));
     await test(`create atomicity: ${label} on unused side`, () => assertCreate(A, setId, unusedSide(bad)));
   }
-  // Nonzero coercions must also fail on the used side, where old balancing rules would accept them.
+  // 使用侧的非零强制转换也必须失败，旧平衡规则原本会接受这些值。
   for (const [label, bad] of [['boolean true', true], ['numeric array', [100]], ['exponent text', '1e2'], ['hex text', '0x64']]) {
     await test(`check: ${label} on used side`, () => assertCheck(A, setId, pair(bad)));
     await test(`create atomicity: ${label} on used side`, () => assertCreate(A, setId, pair(bad)));
@@ -210,7 +210,7 @@ try {
     const voucherPath = `/api/account-sets/${httpId}/vouchers`;
     const initial = await api(voucherPath, { period: '2026-01', entries: pair(7) });
     assert.equal(initial.status, 201);
-    // JSON cannot represent NaN/Infinity; their text spellings exercise the wire protocol instead.
+    // JSON 不能表示 NaN/Infinity；改用其文本拼写覆盖传输协议。
     for (const [label, bad] of badAmounts.filter(([, value]) => typeof value !== 'number' || Number.isFinite(value))) {
       await test(`REST rejects ${label} with complete database unchanged`, async () => {
         const before = snapshot(httpDb);
@@ -225,7 +225,7 @@ try {
           const check = await api('/agent/tools/voucher_check', { accountSetId: httpId, entries });
           const create = await api('/agent/tools/voucher_create', { accountSetId: httpId, period: '2026-03', entries });
           if (entries === 'not-array') {
-            // Agent argument validation rejects non-arrays before calling the domain layer.
+            // Agent 参数校验在调用领域层之前拒绝非数组。
             assert.equal(check.status, 400); assert.equal(check.data.error, 'entries_required');
             assert.equal(create.status, 400); assert.equal(create.data.error, 'entries_required');
           } else {

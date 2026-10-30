@@ -1,4 +1,4 @@
-// Pure identity rules shared by every creation entry. Display names are never keys.
+// 所有创建入口共享的纯身份规则；显示名称不能作为键。
 const CONTROL = /[\u0000-\u001F\u007F]/;
 const text = (raw) => raw == null ? "" : typeof raw === "string" ? raw.trim()
   : typeof raw === "number" && Number.isFinite(raw) ? String(raw) : null;

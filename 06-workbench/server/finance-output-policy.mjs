@@ -1,4 +1,4 @@
-// finance-output-policy.mjs — 模型输出 / 本机读取分道策略（独立模块，**尚未接线**）。
+// finance-output-policy.mjs — 模型输出与本机读取分道策略，由模型适配器和入口层接线。
 //
 // 目的：把现有普通财务工具（accounting.mjs 的结果、agent-tools.mjs 的工具返回）
 // 拆成两条通道，插件式地包一层，不复制任何业务算法、不改变记账结果：
@@ -30,7 +30,8 @@
 //     本模块只承诺“不触发访问器 getter、不顺着原型链取值、失败即安全拒绝”，不承诺零陷阱。
 //
 // 边界：本模块不做多用户 / 权限体系（本机单用户），不访问数据库、不发网络请求、
-// 不注册 HTTP / Agent / MCP / CLI 入口——接线由后续集成任务负责。
+// 不自行注册 HTTP / Agent / MCP / CLI 入口，当前接线由 finance-model-adapter.mjs、
+// finance-model-entry.mjs 及 server.mjs 负责。
 import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
 import { storedCents, centsToNumber } from "./money.mjs";
@@ -712,7 +713,7 @@ function reportMappingSummary(value) {
     diagnosticCount: listLen(diagnostics), diagnosticCounts };
 }
 
-// Auxiliary DTOs have fixed summaries; display values remain behind localRef.
+// 辅助核算 DTO 使用固定摘要；展示原值留在 localRef 之后。
 const AUX_KINDS = Object.freeze(["project", "department", "party"]);
 const AUX_TOTALS = Object.freeze(["opening", "debit", "credit", "closing", "debitBalance", "creditBalance"]);
 const auxEnum = (obj, key, allowed) => { const v = requireText(obj, key); if (!allowed.includes(v)) throw invalidSummary(key); return v; };
@@ -773,7 +774,7 @@ const auxiliaryWriteSpec = operation => ({ summary: value => auxiliaryWriteSumma
   } catch { return { applied: "unknown", reason: "unverified_result" }; }
 } });
 
-// Bank DTOs stay in finref. Only fixed states, counts and checked money leave here.
+// 银行 DTO 保留在 finref；这里只输出固定状态、计数及校验后的金额。
 const BANK_EVENTS = ["bank_account_registered","import_completed","import_pending_review","import_file_replay","match_invalidated","match_confirmed","match_cancelled","ambiguity_resolved","reconcile_computed","import_failed"];
 const bankToken=(v,key,allowed)=>{const x=requireText(v,key);if(!allowed.includes(x))throw invalidSummary(key);return x;};
 const bankCount=(v,key)=>{const n=requireNum(v,key);if(!Number.isSafeInteger(n)||n<0||n>PROJECTION_NUMBER_LIMIT)throw invalidSummary(key);return n;};
@@ -1291,8 +1292,8 @@ const WRITE_SPECS = dict({
   },
 });
 
-// A rejected DTO may still contain independently verifiable technical IDs. These
-// bounded paths use own data descriptors only; no business summary or getter runs.
+// 被拒绝的 DTO 仍可能含可独立核实的技术 ID。这些有界路径
+// 只读取自有数据描述符，不运行业务摘要或 getter。
 const WRITE_TECHNICAL_IDS = dict({
   bank_confirm:{matchId:["result","match","matchId"]}, bank_cancel:{matchId:["result","match","matchId"]}, bank_reconcile:{runId:["result","reconcileRunId"]}, bank_ambiguity_resolve:{ambiguityId:["result","ambiguity","ambiguityId"]},
   voucher_create: { voucherId: ["id"] },
@@ -1316,7 +1317,7 @@ function technicalWriteIds(operation, value) {
       for (let i = 0; i < path.length - 1; i++) parent = prop(at(parent), path[i]);
       const id = int(at(parent), path[path.length - 1]);
       if (id !== undefined) projection[key] = id;
-    } catch { /* A failed descriptor read must not hide other independently safe IDs. */ }
+    } catch { /* 单个描述符读取失败不能隐藏其他可独立证明安全的 ID。 */ }
   }
   return projection;
 }
@@ -1827,8 +1828,8 @@ export class FinanceOutputPolicy {
         if (stored.reason === null) stored = { ref: null, expiresAtIso: null, reason: classifyRawFailure(error) };
       }
     }
-    // Malformed committed DTOs cannot supply business detail, but own data IDs remain
-    // independently provable. Never traverse the rejected value or invoke accessors.
+    // 格式错误的已提交 DTO 不能提供业务明细，但自有数据 ID 仍可
+    // 独立证明；绝不遍历被拒绝值或调用访问器。
     if (stored.reason === "value_invalid" || stored.reason === "summary_unavailable") {
       projection = sanitizeProjection(technicalWriteIds(operation, value)).value;
     }

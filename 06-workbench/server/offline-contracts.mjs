@@ -1,12 +1,12 @@
-// OFFLINE-00 v1. Pure, fail-closed boundary; no files, database, clock, environment or network.
-// Validation does not establish material completeness, posting permission or accountant approval.
+// OFFLINE-00 v1：纯、失败关闭的边界；不访问文件、数据库、时钟、环境变量或网络。
+// 校验不证明材料完整、过账获准或会计批准。
 import { canonicalEnterpriseKey } from './enterprise-identity.mjs';
 
 export const OFFLINE_CONTRACT_VERSION = 'offline-close-loop/1';
 export const OFFLINE_KINDS = Object.freeze(['manifest', 'evidence', 'questionnaire', 'task-plan', 'data-request', 'voucher-candidate', 'tax-computation', 'review-bundle', 'review-decision']);
 export const FACT_STATES = Object.freeze(['known', 'zero', 'missing', 'unknown', 'conflict', 'unsupported', 'not_applicable']);
 export const FACT_TYPES = Object.freeze(['sales', 'service_expense', 'payroll', 'bank_activity', 'opening_balance', 'asset_purchase', 'inventory', 'non_deductible_expense_fact', 'business_scope']);
-// Normal supplementation requests can ask for source materials, never customer-made entries/tax.
+// 正常补件只能要求原始资料，不能要求客户预制分录或税额。
 export const OFFLINE_MATERIAL_IDS = Object.freeze([
   'invoice_csv', 'invoice_xlsx', 'invoice_json', 'invoice_pdf',
   'bank_statement_csv', 'bank_statement_xlsx', 'bank_statement_json', 'bank_signed_statement_pdf',
@@ -73,7 +73,7 @@ function evidence(doc) {
   fields(doc, [...BASE, 'category', 'format', 'locator', 'sourceLocation', 'coveragePeriod', 'sha256', 'documentDate', 'status']);
   choice(doc.category, ['invoice', 'bank_statement', 'contract', 'payroll', 'asset_register', 'inventory_record', 'opening_report', 'business_declaration', 'historical_return']);
   choice(doc.format, ['json', 'csv', 'xlsx', 'pdf']);
-  // Locator is an opaque local registry key. It is never a path or remote URL.
+  // locator 是本机注册表中的不透明键，不是路径或远程 URL。
   id(doc.locator); check(typeof doc.sha256 === 'string' && DIGEST.test(doc.sha256), 'fields');
   fields(doc.sourceLocation, ['sheet', 'row', 'field']);
   if (doc.sourceLocation.sheet !== null) text(doc.sourceLocation.sheet);
@@ -162,7 +162,7 @@ function taskPlan(doc, context) {
     if (['blocked_missing_data', 'blocked_conflict', 'blocked_unknown', 'unsupported', 'stale'].includes(task.state)) check(task.blockerCodes.length > 0, 'state');
     else check(task.blockerCodes.length === 0, 'state');
     if (['ready', 'completed'].includes(task.state)) {
-      // Completion requires an execution receipt, not a customer-controlled state flag.
+      // 完成必须有执行回执，不能依赖客户可控制的状态标志。
       check(task.state !== 'completed', 'state');
       check(task.dependencies.every(r => byId.get(r).state === 'completed' || byId.get(r).state === 'not_applicable'), 'state');
       check(task.factIds.every(r => ['known', 'zero', 'not_applicable'].includes(context.facts.find(f => f.factId === r).state)), 'state');
@@ -173,7 +173,7 @@ function taskPlan(doc, context) {
   const visiting = new Set(), visited = new Set();
   function visit(key) { check(!visiting.has(key), 'cycle'); if (visited.has(key)) return; visiting.add(key); byId.get(key).dependencies.forEach(visit); visiting.delete(key); visited.add(key); }
   doc.tasks.forEach(t => visit(t.taskId));
-  // Full-period readiness is deliberately not attested by a shape validator.
+  // 结构校验器有意不证明整个期间已经就绪。
   check(doc.periodStatus !== 'ready_for_review', 'state');
 }
 function dataRequest(doc, context) {
@@ -201,7 +201,7 @@ function voucher(doc, context) {
 function tax(doc, context) {
   fields(doc, [...BASE, 'taxType', 'status', 'ruleStatus', 'lineage', 'fields', 'blockerCodes']);
   check(doc.taxType === 'vat_small_scale', 'fields'); lineage(doc.lineage, context);
-  // This milestone has no accountant-approved, executable rule catalogue.
+  // 本里程碑没有经会计批准且可执行的规则目录。
   check(doc.status === 'blocked' && ['unknown', 'source_checked_accountant_pending', 'unsupported'].includes(doc.ruleStatus), 'rules');
   refs(doc.blockerCodes, 1); list(doc.fields, 1); unique(doc.fields.map(f => f?.fieldId));
   for (const field of doc.fields) { fields(field, ['fieldId', 'amount', 'state', 'factIds', 'voucherIds', 'adjustmentIds', 'evidenceRefs']); id(field.fieldId); check(field.amount === null && field.state === 'unknown', 'rules'); factRefs(field.factIds, context); refs(field.voucherIds); refs(field.adjustmentIds); evidenceRefs(field.evidenceRefs, context); }
@@ -214,7 +214,7 @@ function review(doc, context) {
   } else {
     fields(doc, [...BASE, 'bundleId', 'resultVersion', 'lineage', 'decision', 'reviewerRef', 'feedback']);
     id(doc.bundleId); id(doc.resultVersion); lineage(doc.lineage, context); id(doc.reviewerRef); choice(doc.decision, ['request_correction', 'reject', 'confirm']);
-    // #82 must supply the actual immutable bundle/current versions before confirm can be accepted.
+    // 接受 confirm 前，#82 必须提供实际不可变复核包及当前版本。
     check(doc.decision !== 'confirm', 'state');
     list(doc.feedback, doc.decision === 'confirm' ? 0 : 1);
     for (const item of doc.feedback) { fields(item, ['factId', 'reasonCode', 'comment']); factRefs([item.factId], context, 1); id(item.reasonCode); text(item.comment); }
@@ -222,12 +222,12 @@ function review(doc, context) {
   }
 }
 
-/** Accept only bounded JSON data, including when called from JS instead of a JSON parser. */
+/** 仅接受有界 JSON 数据，从 JS 直接调用时也一样。 */
 function plainData(value, seen = new Set(), depth = 0, budget = { count: 0 }) {
   check(depth <= 20 && ++budget.count <= 50000);
   if (value === null || typeof value === 'boolean') return;
   if (typeof value === 'string') { check(value.length <= 1000); return; }
-  // No numeric JSON values in this v1: amounts are exact decimal strings.
+  // 本 v1 不使用 JSON 数值金额，金额采用精确十进制字符串。
   check(typeof value === 'object' && (Array.isArray(value) || isObject(value)) && !seen.has(value));
   seen.add(value);
   check(Reflect.ownKeys(value).every(k => typeof k === 'string'));
@@ -240,7 +240,7 @@ function plainData(value, seen = new Set(), depth = 0, budget = { count: 0 }) {
   seen.delete(value);
 }
 
-/** Returns only fixed error codes. Never returns raw values, paths or customer identifiers. */
+/** 仅返回固定错误码，不返回原始值、路径或客户标识。 */
 export function validateOfflineContract(doc, options = {}) {
   try {
     fields(options, [], ['manifest']);

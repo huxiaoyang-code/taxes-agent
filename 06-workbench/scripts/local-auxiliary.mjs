@@ -5,7 +5,7 @@ import { join,dirname } from 'node:path';
 import { withRequestMetadata,operationErrorEvidence } from '../server/local-audit-coordinator.mjs';
 import { installBatchSchema } from '../server/local-batch-storage.mjs';
 import { installAuditSchema } from '../server/local-audit-storage.mjs';
-// Explicit local file/JSON interface. It never imports db.mjs or initializes an unknown target.
+// 显式的本机文件/JSON 接口。绝不导入 db.mjs 或初始化未知目标。
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { assertPlainPath, ensureAuxiliarySchema, assertAuxiliaryReady } from '../server/auxiliary-storage.mjs';

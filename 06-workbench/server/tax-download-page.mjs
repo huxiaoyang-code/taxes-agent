@@ -1,4 +1,4 @@
-// Local administrator exploration only. No HTTP/Agent/MCP registration or arbitrary address input.
+// 仅供本机管理员探索，不注册 HTTP/Agent/MCP，也不接受任意地址输入。
 import {randomBytes,createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {mkdir,lstat,realpath,open,readFile,link,unlink} from 'node:fs/promises';
@@ -14,7 +14,7 @@ import {canonical,exact,enterpriseOf,sameEnterprise,HISTORY_ORIGIN} from './tax-
 
 const PORTAL=HISTORY_ORIGIN+'/loginb/',ROOT=fileURLToPath(new URL('../../.agent-runs/tax-download-page-evidence/',import.meta.url));
 const WORKSPACE=fileURLToPath(new URL('../../',import.meta.url));
-// Exact query labels verified in the current menu by the local root operator.
+// 精确查询标签已由本机主操作者在当前菜单核实。
 const TARGETS=Object.freeze({invoice:'全量发票查询',financial_report:'财务报表申报信息查询'});
 const LABELS=Object.freeze({invoice_query:'发票查询',financial_filing_query:'财务报表申报信息查询',all_invoice_query:'全量发票查询',invoice_comprehensive_query:'发票综合查询',financial_report_query:'财务报表查询'});
 const ORIGINS=new Set([HISTORY_ORIGIN,'https://etax.fujian.chinatax.gov.cn','https://dppt.fujian.chinatax.gov.cn','https://dppt.fujian.chinatax.gov.cn:8443']);
@@ -51,7 +51,7 @@ function documentOf(frame,targetId){
     documentUrlSemantics:FULL_FRAME_URL_SEMANTICS,documentUrlDigest:digest(fullUrl)};
 }
 
-// Fixed native known-key read. Actual matched addresses remain local, never model output.
+// 固定原生已知键读取；实际匹配地址只留本机，不输出给模型。
 export function downloadPageMenuScript(){return `(()=>{
   if(location.href!==${JSON.stringify(PORTAL)})return {status:'scope_changed',settled:true};
   const getter=Object.getOwnPropertyDescriptor(Storage.prototype,'getItem')?.value;
@@ -100,15 +100,15 @@ function selectMenu(value,target,now,userinfo){
     const invoiceMenuHandler=target==='invoice'&&u.pathname.split('/').at(-1)==='spHandler'&&keys.length===1&&keys[0]==='cdlj';
     if(!/^\/(?:szzh|szc|kpfw|dppt)\//.test(u.pathname)&&!invoiceMenuHandler){reject('path_root');continue;}
     if(/%|(?:^|\/)\.\.(?:\/|$)/.test(combined.split(/[?#]/)[0])){reject('path_encoding_or_traversal');continue;}
-    // An official menu's query label can route through its login gateway.
-    // This authorizes normal navigation only; response sampling below retains
-    // the stricter authentication exclusion and never invokes a gateway API.
+    // 官方菜单的查询标签可能经过登录网关；
+    // 这里只允许普通导航。下方响应采样仍保持更严格的
+    // 认证排除约束，绝不调用网关 API。
     const classification=routeClass(u.href),financialMenuGateway=target==='financial_report'&&classification==='authentication'&&keys.length===0;
     if(writes.test(u.pathname)){reject('side_effect_route');continue;}
     if(classification!=='read_candidate'&&!financialMenuGateway){reject(classification==='authentication'?'authentication_route':classification==='side_effect'?'side_effect_route':'non_read_route');continue;}
     if(keys.some(k=>k!=='cdlj')||keys.length>1){reject('query_keys');continue;}
     if(keys.length){const destination=u.searchParams.get('cdlj');
-      // cdlj is an opaque menu value in some official entries, not a path to rebuild.
+      // 部分官方条目的 cdlj 是不透明菜单值，不能作为待重建路径。
       if(!destination||destination.length>2048||/[\s\\?#:\u0000-\u001f]/.test(destination)||/(?:^|\/)\.\.(?:\/|$)/.test(destination)){reject('destination_shape');continue;}
     }
     valid.push(u.href);
@@ -148,8 +148,8 @@ export class TaxDownloadPageStore{
     if(record?.version!==1||!sourceRef(record.sourceRef)||!Object.hasOwn(TARGETS,record.target)||!['observed','quarantined_unverified'].includes(record.evidence)
       ||record.consumable!==false||!Array.isArray(record.requests)||record.requests.length>96||!Array.isArray(record.assets)||record.assets.length>12)throw fail('storage_failed');
     await this.ready();const id=ref('taxdownloadpage'),folder=join(this.root,id);await mkdir(folder);await this.security.secureDirectory(folder);await this.security.verifyDirectory(folder);
-    // A manifest is published last. Incomplete directories remain private and
-    // cannot be loaded as evidence; never overwrite an older artifact.
+    // 最后才发布 manifest；未完成目录保持私有，
+    // 不能作为证据加载，也不覆盖旧制品。
     const assets=[];
     for(const asset of record.assets){if(typeof asset.text!=='string'||Buffer.byteLength(asset.text)>2097152)throw fail('storage_failed');
       const name=ref('taxasset')+'.quarantined.js';await this.write(folder,name,asset.text);assets.push({file:name,sha256:digest(asset.text),modelReadable:false,evidence:'static_candidate',
@@ -189,8 +189,8 @@ export class TaxDownloadPage{
       navEvent=null,navEvents=0,clearCount=0,navAttempted=0,navConfirmed=0,identityAttempted=0,identityPerformed=0,identityComplete=0,identityUnknown=0,identityNotPerformed=0,
       passive=false,menuDifference=null,labelMatchCounts=null,expiryDiagnostic=null,cleanupFailureStep=null,cleanupFailureKind=null,scopeVerificationFailureStep=null,
       beforeProjection=null,afterProjection=null,selectedMenu=null,navigationAcknowledged=false,sourceState='unverified',sourceRetired=null,step='none',output;
-    // A normal website redirect is a scope change, not an unfinished owned
-    // command. Only unconfirmed owned operations can retain this operation's lock.
+    // 网站正常重定向属于范围变化，不是尚未完成的自有命令；
+    // 只有尚未确认的自有操作才能保留本操作的锁。
     const eventUnknown=()=>{unexpected=true;};
     const timed=async(fn,ms,kind='work',owned=false)=>{
       const remaining=({work:90000,cleanup:120000,publish:180000}[kind])-(this.d.clock()-started);if(remaining<=0)throw Object.assign(fail('deadline'),{notDispatched:true});
@@ -270,8 +270,8 @@ export class TaxDownloadPage{
       listen('Page.frameDetached',p=>{if(p.frameId===source.frameId)eventUnknown();});
       remove.push(transport.cdp.on('Target.detachedFromTarget',p=>{if(p.sessionId===attached&&!detachRequested)eventUnknown();}));
       listen('Network.requestWillBeSent',p=>{
-        // The request id identifies a redirect chain, not an immutable hop.
-        // Even after sampling ends, a later hop invalidates its old provenance.
+        // 请求 ID 标识一条重定向链，不代表不可变的单跳请求；
+        // 即使采样已经结束，后续跳转也会使旧来源证明失效。
         const tracked=requests.has(p.requestId);if(tracked)requests.delete(p.requestId);
         if(p.redirectResponse&&(passive||tracked))counts.redirects++;
         if(!passive)return;if(++counts.requestEvents>2048){counts.truncated++;return;}
@@ -302,12 +302,12 @@ export class TaxDownloadPage{
       document=landing;mode='stable';unknown=false;navConfirmed++;await guard();
       const landingClass=routeClass(document.fullUrl),sameOrigin=new URL(document.fullUrl).origin===HISTORY_ORIGIN;
       const stableSameOrigin=landingClass==='read_candidate'&&sameOrigin;
-      // Unknown expiry semantics authorize this exact normal menu navigation
-      // only. Every resulting discovery remains quarantined, even after identity.
+      // 过期语义未知时，仅允许这一次精确的正常菜单导航；
+      // 即使身份已确认，所有后续发现仍保持隔离待核。
       const quarantine=true;
       phase='capture';let capturedBytes=0;
-      // Passive response reads are diagnostic. Stop them early instead of
-      // consuming the deadline reserved for a stable post-identity and teardown.
+      // 被动读取响应只作诊断，应提前停止，
+      // 不能消耗为稳定后置身份核验和清理预留的期限。
       const captureDeadline=Math.min(this.d.clock()+10000,started+45000);
       for(const [id,r] of requests){
         if(requests.get(id)!==r||r.frameId!==source.frameId||r.loaderId!==document.loaderId)continue;

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Local fixed entry; never online filing. Customer files are retained in place.
+// 固定本机入口；绝不在线申报。客户文件保留在原处。
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { loadAgencyMaterials, buildAgencyWorkpaper, prepareAgencyPosting, executeAgencyPosting, queryAgencyPosting,matchAgencyRules } from '../server/agency-business.mjs';

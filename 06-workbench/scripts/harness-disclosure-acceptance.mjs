@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Synthetic preparation and real Pi execution are separate commands. No API key
-// file is read or copied; run uses the operator's already authorized environment.
+// 合成资料准备与实际 Pi 执行分为不同命令。不读取或复制 API 密钥
+// 文件；run 使用操作者已获授权的环境变量。
 import {spawn,spawnSync} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,existsSync,appendFileSync,readdirSync} from 'node:fs';
 import {dirname,resolve,join} from 'node:path';

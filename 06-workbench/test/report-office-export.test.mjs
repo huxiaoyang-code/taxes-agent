@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-report-office-export-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
-// LOCAL-05a (Issue #45) acceptance for real XLSX / PDF internal report exports.
-// All amounts below are hand-calculated synthetic fixtures; no real account set or credential is used.
+// LOCAL-05a（Issue #45）：实际 XLSX / PDF 内部报表导出的验收。
+// 下方金额均为手算合成测试样本，不使用真实账套或凭据。
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +18,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'wb-office-export-'));
 process.env.WORKBENCH_DATA_DIR = dataDir;
 const qaDir = mkdtempSync(join(tmpdir(), 'wb-office-qa-'));
 console.log(`Office QA: ${qaDir}`);
-// Regenerate the whole QA directory so page counts and visual artifacts always match this run.
+// 重新生成整个 QA 目录，使页数及可视化产物始终与本次运行一致。
 
 mkdirSync(qaDir, { recursive: true });
 let db;
@@ -36,8 +36,8 @@ async function test(name, fn) {
 const e = (code, debit = 0, credit = 0, summary) => ({ code, debit, credit, summary });
 const MONEY = '#,##0.00';
 
-// Independent PDF text extraction: inflate PDFKit streams, parse the ToUnicode CMap and
-// read Tj/TJ glyph strings. This verifies real extractable text without reusing the exporter.
+// 独立 PDF 文本提取：解压 PDFKit 流、解析 ToUnicode CMap 并
+// 读取 Tj/TJ 字形字符串。不复用导出器，即可验证真实可提取文本。
 function inflateStreams(buffer) {
   const text = buffer.toString('latin1');
   const streams = [];
@@ -50,7 +50,7 @@ function inflateStreams(buffer) {
       try {
         streams.push(inflate(raw).toString('latin1'));
         break;
-      } catch { /* not a compressed stream */ }
+      } catch { /* 不是压缩流 */ }
     }
   }
   return streams;
@@ -190,7 +190,7 @@ try {
   voucher(s, "2026-02", [e("100201", 200), e("5001", 0, 200)]);
   voucher(s, "2026-02", [e("5602", 20), e("1002", 0, 20)]);
 
-  // ---------------------------------------------------------------- CSV compatibility
+  // ---------------------------------------------------------------- CSV 兼容性
   await test("CSV stays available through the office entry point and keeps its DTO", async () => {
     const file = await office(s, "trial-balance", "2026-02", "csv");
     assert.equal(file.filename, "trial-balance-1-2026-02.csv");
@@ -351,7 +351,7 @@ const ENTERPRISE_EXPECT = {
       voucher(id, "2026-01", [e("1601", 18.02), e("1002", 0, 30.03), e("1403", 12.01)]);
       const snapshot = () => JSON.stringify(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name}) => [name, db.prepare('SELECT * FROM "' + name + '" ORDER BY rowid').all()]));
       const before = snapshot();
-      // Constants are independent of production DTOs and of other formats.
+      // 常量独立于生产 DTO 及其他格式。
       for (const [period, checks] of [
         ["2025-11", [["经营活动净额", -120, -120], ["投资活动净额", -180, -180], ["筹资活动净额", 0, 0], ["现金净增加额", -300, -300], ["现金期初余额", 1000, 1000], ["现金期末余额", 700, 700], ["现金余额变动", -300, -300]]],
         ["2025-12", [["经营活动净额", 20, -100], ["投资活动净额", 30, -150], ["筹资活动净额", 0, 0], ["现金净增加额", 50, -250], ["现金期初余额", 700, 1000], ["现金期末余额", 750, 750], ["现金余额变动", 50, -250]]],
@@ -542,7 +542,7 @@ const ENTERPRISE_EXPECT = {
     save("b2-legacy-cash.pdf", cashPdf.body);
   });
 
-  // ---------------------------------------------------------------- XLSX structure and values
+  // ---------------------------------------------------------------- XLSX 结构与值
   await test("XLSX: five report kinds produce real workbooks with text, numeric cells and print setup", async () => {
     const expectations = [
       ["balance-sheet", "2026-01", "货币资金", 2, 1440, 1490],
@@ -788,7 +788,7 @@ const ENTERPRISE_EXPECT = {
     }
   });
 
-  // ---------------------------------------------------------------- PDF structure and text
+  // ---------------------------------------------------------------- PDF 结构与文本
   await test("PDF: five report kinds are real A4 PDFs with embedded Chinese font and extractable text", async () => {
     const kinds = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
     const titles = { "balance-sheet": "资产负债表", "income-statement": "利润表", "cash-flow-statement": "现金流量表", "trial-balance": "科目余额表", ledger: "明细账" };
@@ -990,10 +990,10 @@ const ENTERPRISE_EXPECT = {
     assert.deepEqual(A.listPeriods(s), before);
   });
 
-  // ---------------------------------------------------------------- import-side-effect isolation
+  // ---------------------------------------------------------------- 导入副作用隔离
   await test("pure DTO rendering never opens or creates a database in an isolated data dir", async () => {
-    // A separate Node process is required: this test file already imported db.mjs above, so any
-    // in-process check would be masked by the module cache and by the already-open temporary DB.
+    // 需要独立 Node 进程：此测试文件上方已导入 db.mjs，因此任何
+    // 进程内检查都会被模块缓存及已打开的临时数据库掩盖。
     const isolationRoot = join(tmpdir(), `wb-office-isolation-${process.pid}-${Date.now()}`);
     const isolationDataDir = join(isolationRoot, "data");
     const dtoTmpDir = mkdtempSync(join(tmpdir(), 'wb-office-dto-'));
@@ -1002,7 +1002,7 @@ const ENTERPRISE_EXPECT = {
     const defaultDataDir = join(process.cwd(), "data");
     const defaultDataDirExisted = existsSync(defaultDataDir);
     assert.equal(existsSync(isolationRoot), false, "the isolated data dir must not exist before the child starts");
-    // Reuse the same synthetic DTO the exporter consumes: no real book, only the stable schema.
+    // 复用导出器消费的同一合成 DTO：不含真实账簿，只有稳定 schema。
     writeFileSync(dtoPath, JSON.stringify(dto(s, "balance-sheet", "2026-01")), "utf8");
     const script = [
       `import { existsSync, readFileSync } from "node:fs";`,
@@ -1013,7 +1013,7 @@ const ENTERPRISE_EXPECT = {
       `const bail = (code) => { console.error(code); process.exit(2); };`,
       `if (process.env.WORKBENCH_DATA_DIR !== dataDir) bail("data_dir_env_not_applied");`,
       `if (existsSync(root) || existsSync(dataDir)) bail("isolation_root_pre_exists");`,
-      // Importing the renderer alone must not touch the filesystem or the database module.
+      // 单独导入渲染器不得访问文件系统或数据库模块。
       `const mod = await import(moduleUrl);`,
       `if (existsSync(root) || existsSync(dataDir)) bail("import_created_data_dir");`,
       `const report = JSON.parse(readFileSync(dtoPath, "utf8"));`,
@@ -1049,7 +1049,7 @@ const ENTERPRISE_EXPECT = {
     assert.equal(existsSync(defaultDataDir), defaultDataDirExisted, "pure DTO rendering must not fall back to the default 06-workbench/data directory");
   });
 
-  // ---------------------------------------------------------------- independent external PDF QA
+  // ---------------------------------------------------------------- 独立外部 PDF QA
   await test("external poppler PDF QA: page count matches and pages render to non-empty PNGs", async () => {
     if (!toolAvailable("pdfinfo") || !toolAvailable("pdftoppm")) {
       console.log("    SKIP poppler not found on PATH; internal structural/text checks above still ran");

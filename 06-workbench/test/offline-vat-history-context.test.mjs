@@ -135,7 +135,7 @@ try {
   });
   await test('a real Q2 voucher beyond snapshot cutoff does not stale Q1', async () => {
     const f = fixture(), p = await open(f);
-    // A separate child uses the existing core posting path rather than hand-writing entries.
+    // 独立子进程使用已有核心记账路径，不手写分录。
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `process.env.WORKBENCH_DATA_DIR=process.argv[1]; const {db}=await import(${JSON.stringify(pathToFileURL(join(wb, 'server/db.mjs')).href)}); const A=await import(${JSON.stringify(pathToFileURL(join(wb, 'server/accounting.mjs')).href)}); try {const id=Number(process.argv[2]); A.ensurePeriod(id,'2026-04'); const v=A.createVoucher(id,{period:'2026-04',date:'2026-04-12',summary:'synthetic Q2',entries:[{code:'1002',debit:'19.31',credit:'0.00'},{code:'3001',debit:'0.00',credit:'19.31'}]}); A.postVoucher(id,v.id);} finally {db.close();}`, dirname(f.dbPath), String(f.id)], { encoding: 'utf8', env: { ...process.env, TEMP: root, TMP: root, NODE_NO_WARNINGS: '1' } });
     assert.equal(child.status, 0, child.stderr); assert.equal((await current(p.receipt)).status, 'prior_q1_recomputed'); await close(p.receipt);
   });
@@ -143,7 +143,7 @@ try {
     for (const state of [false, null, 'unknown']) {
       const f = fixture(), path = join(f.dir, 'tax.json'), t = json(path); t.period.exclusions[0].state = state; write(path, t);
       const p = await open(f); assert.equal(p.receipt, null); assert.equal(p.diagnostic.status, 'blocked'); noAuthority(p.diagnostic);
-      // On Windows the held DB cannot be renamed: successful rename here proves the rejected open released its source.
+      // Windows 上持有中的数据库不能重命名：此处重命名成功证明被拒绝的打开已释放源。
       renameSync(f.dbPath, f.dbPath + '.released'); renameSync(f.dbPath + '.released', f.dbPath);
     }
   });

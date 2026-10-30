@@ -1,6 +1,20 @@
-# 本机财税工作台
+# 中国财税 Agent
 
-Node.js + SQLite 的本机单用户财税工作台，以 Agent / MCP 为主要工作入口，已有网页作为可选界面。面向一名操作者处理多家企业，每家企业一个账套。能力及限制以源码、工具契约和实际返回为准；入口存在不代表业务已实现。
+面向中国企业财务核算、税费计算与会计复核开发的本机 Agent 工程。主 Agent 理解业务目标、调查获准资料、发现能力和组织任务；Node.js + SQLite 本机工具负责确定性计算、账务执行、审计和恢复，已有网页作为可选界面。面向一名操作者处理多家企业，每家企业一个账套。
+
+业务入口、流程编排、交付结果和工具连接四层均已有实现。中国财税是建设方向，具体准则、地区、税种、期间及业务支持以当前源码、能力合同和实际返回为准；Skill、工具名称或配置存在不代表相应业务已完成。
+
+## 从哪里开始阅读
+
+| 想了解什么 | 阅读入口 |
+|---|---|
+| Agent 如何调用工具、编排任务、补件、更正与恢复 | [中文架构与调用链](docs/AGENT-ARCHITECTURE.md)（含流程图、时序图与合成调用示例） |
+| 某项业务对应哪些源码和测试 | [中文代码索引](docs/CODE-INDEX.md) |
+| 选择宿主、配置模型和账库、首次运行 | [四宿主统一入口](05-reconstruction/codex/hosts/START-HERE.md) |
+| 接手陌生企业、核查历史、形成财税顾问意见 | [企业接手与财税顾问技能包](docs/COMPANY-ADVISOR-SKILL.md) |
+| 工具合同、按需发现和回执设计的依据 | [Harness 工具设计依据](docs/HARNESS-TOOL-DESIGN.md) |
+
+建议先读架构图和一个只读调用示例，再按代码索引追踪具体模块。文件名、函数名、JSON 字段和错误码保留原名，中文解释帮助将文档与代码对应起来。
 
 ## 启动与验证
 
@@ -25,11 +39,7 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 
 [主 Agent 配置与首次运行](05-reconstruction/codex/hosts/START-HERE.md)是 Pi、Claude Code、dsh、ZCode 的统一入口：选择宿主、启动明确账库的后端、生成全新工作区、配置本人模型并检验合成流程。四者均可作为主体运行；解析子 Agent 按宿主单独核实。配置、原生连接、模型短流程与整账验收分别记录，详见[接入与实测范围](05-reconstruction/codex/hosts/README.md)。
 
-[Harness² 可选研究接入](docs/HARNESS2-INTEGRATION.md)固定 Google Research 原始源码，由本人 Codex 优化指引、Pi＋DeepSeek 等原生宿主执行，独立评估实际 Store/DB。优化和执行认证、模型与调用记录分开；原生探针、模拟传输、真实完整循环分别采证。默认关闭，候选只形成待审查制品，不覆盖全局配置或真实账套。
-
-优化 CLI 的 MCP 禁用仅支持已验证的 `stdio`、`streamable_http` transport 和字母/数字/下划线/短横线服务器名；未知类型或禁用复查失败会在优化调用前停止。优化器接入故障直接终止循环，不执行回退候选。
-
-反思可以按原版协议明确返回 `NO_ENTRY`，表示没有足够证据收录可复用经验；循环记录 `experience.status=no_entry`，不向 Library 写入假经验。流程跑通或收录经验均不等于已证明质量提升。
+可选研究层与日常业务 Harness 分开：[Harness²](docs/HARNESS2-INTEGRATION.md)研究指引优化，[SoL-Pi](docs/SOL-PI-INTEGRATION.md)提供 Pi 的 ObservationPack 接入；二者默认关闭，目前不允许组合。候选、经验或压缩结果都不增加财税权限，也不代替业务结果与会计审定。具体接入约束、失败处理和验证范围见各自文档。
 
 ## 目录
 
@@ -38,8 +48,9 @@ node 05-reconstruction/codex/mcp/finance-mcp/server.mjs
 | [06-workbench/server](06-workbench/server/) | HTTP、记账、报表及本机业务模块 |
 | [06-workbench/public](06-workbench/public/) | 网页 |
 | [06-workbench/scripts](06-workbench/scripts/) | CLI、运行和验证入口 |
-| [06-workbench/test](06-workbench/test/) | 回归测试、合成 fixtures 与独立预期 |
-| [05-reconstruction](05-reconstruction/) | MCP、运行时 Skills、catalog、导入示例与转换工具 |
+| [06-workbench/test](06-workbench/test/) | 回归测试、合成测试样本与独立预期 |
+| [05-reconstruction](05-reconstruction/) | MCP、宿主适配、运行时技能、能力目录、导入示例及研究接入；其中历史来源元数据不代表当前能力 |
+| [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) | 中国财税 Agent 定位、实际调用链、流程编排及后续扩展原则 |
 | [docs/CODE-INDEX.md](docs/CODE-INDEX.md) | 按任务定位源码、入口与测试 |
 | [企业接手与财税顾问技能包](docs/COMPANY-ADVISOR-SKILL.md) | Codex 接手历史、疑点复核、税费与现金规划；同事安装和使用入口 |
 

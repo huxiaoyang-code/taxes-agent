@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Native-only request handling; financial modules are loaded only in the fresh worker.
+// 仅处理原生请求；财务模块只在全新工作进程中加载。
 import { realpath, lstat, open } from 'node:fs/promises';
 import { dirname, resolve, join, parse, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,7 @@ export async function runCli(args) {
     if(result.status!=='complete_draft') return {exitCode:4,message:`ACCOUNTANT_REVIEW_Q2_REJECTED code=${result.code}`};
     return {exitCode:result.calculationReady?0:3,message:`ACCOUNTANT_REVIEW_Q2_WRITTEN status=complete_draft computation=${result.computationStatus}`};
   } catch {
-    if(result) try { await invalidateAccountantReviewQ2Output(result); } catch { /* Unknown/foreign markers are preserved. */ }
+    if(result) try { await invalidateAccountantReviewQ2Output(result); } catch { /* 保留未知或其他来源的标记。 */ }
     return {exitCode:4,message:'ACCOUNTANT_REVIEW_Q2_REJECTED'};
   }
 }

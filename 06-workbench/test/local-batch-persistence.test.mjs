@@ -2757,7 +2757,7 @@ await test("H7 跨路径：活动创建事实下核心首次打开另一个库�
     } finally { otherProbe.close(); }
   }
 
-  // 4) Unknown default import still rejects strict structure; it is not promised zero-write.
+  // 4) 未知默认导入仍拒绝非严格结构；不承诺零写入。
   const strictBefore=dbFingerprint(bDb),directoryBefore=readdirSync(bDir).sort();
   const readonly=new DatabaseSync(bDb,{readOnly:true});try{const LB=await import('../server/local-backup.mjs');assert.throws(()=>LB.assertSupportedDatabaseConnection(readonly),e=>e.code==='not_product_database');}finally{readonly.close();}
   assert.deepEqual(dbFingerprint(bDb),strictBefore);assert.deepEqual(readdirSync(bDir).sort(),directoryBefore);

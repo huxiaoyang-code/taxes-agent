@@ -19,7 +19,7 @@ export function testLedgerLiteral(){
   const changed=table.replaceAll('[^a-f0-9]','[^A-F0-9]');assert.notEqual(changed,table);d.exec('DROP TABLE restore_operations');d.exec(changed);
   for(const row of rows){const keys=Object.keys(row);d.prepare('INSERT INTO restore_operations('+keys.join(',')+') VALUES('+keys.map(()=>'?').join(',')+')').run(...Object.values(row));}
   for(const object of objects.filter(r=>r.type!=='table'))d.exec(object.sql);
-  // The digit-only digest obeys both CHECKs; only exact DDL semantics can detect the drift.
+  // 纯数字摘要满足两个 CHECK；只有精确 DDL 语义才能发现漂移。
   assert.equal(d.prepare('SELECT target_binding_digest FROM restore_operations').get().target_binding_digest,'1'.repeat(64));assert.equal(LR.inspectRestoreLedger(d).ok,false);assert.throws(()=>LR.getRestoreOperation(d,rows[0].operation_id),/restore_ledger_inconsistent/);
  }finally{d.close();console.log('literal ledger actualclose');}
  console.log('PASS ledger2 literal GLOB case drift rejected with otherwise legal bound row');
@@ -59,8 +59,8 @@ if(resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)){
    }finally{d.close();console.log('pending refresh DB actualclose');}
    assert.equal(fs.readFileSync(file).equals(before),true);assert.equal(hash(file),dbHash);assert.equal(hash(a.ledgerPath),ledger);assert.equal(hash(join(a.targetDir,'restore.json')),receipt);assert.equal(logical(h.db),source);assert.equal(hash(join(b.backupDir,LB.SNAPSHOT_FILE)),snapshot);for(const suffix of ['-wal','-shm','-journal'])assert.equal(fs.existsSync(file+suffix),false);
    assert.equal(LB.reconcileRestore(a).ok,true,'denied refresh leaves genuine restore reconciliation valid');
-   // Preserve existing aggregation and transaction behavior on an ordinary DB,
-   // and on a valid ready control contract (fixture-only activation).
+   // 在普通数据库，以及有效 ready 控制契约上，
+   // 保留既有聚合及事务行为（仅在测试样本中激活）。
    assert.equal(S.refreshStatuses(h.db,j.job.id),'pending');const item=S.listItems(h.db,j.job.id)[0],stage=S.listStages(h.db,item.id)[0];S.resetStage(h.db,{stageId:stage.id,status:'failed',errorCode:'synthetic_failure'});assert.equal(S.refreshStatuses(h.db,j.job.id),'failed');assert.equal(S.getItem(h.db,item.id).error_code,'synthetic_failure');
    const ready=restore(h,b),r=new DatabaseSync(ready.file);try{r.prepare("UPDATE restore_control_state SET write_state='ready',released_at=? WHERE singleton=1").run(new Date().toISOString());assert.doesNotThrow(()=>C.assertRestoreWritable(r));assert.equal(S.refreshStatuses(r,j.job.id),'pending');assert.equal(r.isTransaction,false);}finally{r.close();console.log('ready refresh fixture DB actualclose');}
   }finally{h.close();}

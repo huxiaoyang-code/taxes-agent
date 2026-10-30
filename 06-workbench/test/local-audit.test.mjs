@@ -1,5 +1,5 @@
-// LOCAL06 A coverage migrated to audit1 historical reads and W2a protocol closure.
-// Production no longer exposes unauthenticated fresh-install, append or nested execution.
+// LOCAL06 A 覆盖已迁移到 audit1 历史读取及 W2a 协议闭合。
+// 生产实现不再暴露未经认证的全新安装、追加或嵌套执行入口。
 import {assert,fs,join,DatabaseSync,ROOT,WORKBENCH,LS,LA,fresh,historyEvent,logical,child,suite,pathToFileURL} from './local-audit-install.test.mjs';
 await suite('import remains inert and read-only missing/non-SQLite database does not create default data',async()=>{
  const absent=join(ROOT,'never-created-data');const script=`await import(${JSON.stringify(pathToFileURL(join(WORKBENCH,'server/local-audit-storage.mjs')).href)});await import(${JSON.stringify(pathToFileURL(join(WORKBENCH,'server/local-audit-operation.mjs')).href)});`;

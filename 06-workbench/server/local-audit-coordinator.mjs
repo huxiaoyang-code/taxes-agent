@@ -1,7 +1,7 @@
 import { assertPeriodAdmissionEvidence, assertPeriodCommitEvidence } from './period-business-evidence.mjs';
 import { withDomainWrite, assertWriteCommitFence, withBatchStageResources } from './local-write-lock.mjs';
 import { assertAgencyAdmissionEvidence, assertAgencyCommitEvidence } from './agency-business-evidence.mjs';
-// Trusted synchronous domain coordinator. ALS carries correlation only, never authority.
+// 可信同步业务协调器；ALS 只携带关联信息，不携带权限。
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { types as nodeTypes } from 'node:util';
@@ -19,8 +19,8 @@ export function withRequestMetadata(value,fn) {
 }
 export function extractOperationMetadata(input,{operationId,actor='domain'}={}) {
  auditResultSnapshot(input);
- // Hash serialization intentionally omits undefined object values. Entry payloads
- // keep their original data keys so strict domain allowlists can still reject them.
+ // 哈希序列化有意省略对象中的 undefined 值；入口 payload
+ // 仍保留原始数据键，便于严格的业务白名单拒绝它们。
  const copy=cloneDomainData(input);
  if(!copy||typeof copy!=='object'||Array.isArray(copy))throw auditError('audit_operation_invalid');
  const embedded=copy.operationId;
@@ -31,10 +31,10 @@ export function extractOperationMetadata(input,{operationId,actor='domain'}={}) 
  const payload={...copy};delete payload.operationId;
  return {payload,metadata:{operationId:id,actor,explicit:embedded!==undefined||operationId!==undefined||metadata.getStore()?.explicit===true}};
 }
-// Validate original descriptors before reading any domain option. Only the bank's
-// two existing top-level cents projections may differ from strict S_result input.
-// Keep undefined keys and array holes in the execution copy: serialization is not
-// a substitute for the domain's own field validation.
+// 读取任何业务选项前先校验原始描述符；仅允许银行组件已有的
+// 两个顶层分金额投影区别于严格 S_result 输入。
+// 执行副本须保留 undefined 键及数组空位；序列化
+// 不能替代业务层自己的字段校验。
 export function copyDomainRequest(input,{bankStatementCents=false}={}) {
  if(!input||typeof input!=='object'||nodeTypes.isProxy(input)||Array.isArray(input))throw auditError('audit_result_invalid');
  const proto=Object.getPrototypeOf(input);
@@ -49,7 +49,7 @@ export function copyDomainRequest(input,{bankStatementCents=false}={}) {
  auditResultSnapshot(projected);
  return cloneDomainData(input);
 }
-// Caller must validate the full original graph before using this descriptor copy.
+// 调用者使用此描述符副本前，须先校验完整原始对象图。
 function cloneDomainData(value) {
   if(value===null||typeof value!=='object')return value;
   const descriptors=Object.getOwnPropertyDescriptors(value),array=Array.isArray(value),out=array?new Array(descriptors.length.value):Object.create(null);
@@ -68,7 +68,7 @@ export function readDomainOperationBinding(db) {
 }
 export function currentRequestMetadata() {return metadata.getStore()??null;}
 export function operationErrorEvidence(error) { return evidence.get(error)??null; }
-// Fixed bank transport projection; it cannot fabricate or accept proof metadata.
+// 固定银行传输投影，不能伪造或接收证明元数据。
 export function bankOperationFailure(error) {
  const safe=new Error('bank_local_operation_failed');safe.code='bank_local_operation_failed';
  const proof=evidence.get(error);if(proof)evidence.set(safe,proof);return safe;
@@ -97,7 +97,7 @@ export function runDomainOperation(db,options,fn) {
  assertImmutableDomainBinding(db,options);
  return withDomainWrite(db,options,()=>{assertPeriodAdmissionEvidence(db,options);return runDomainOperationBody(db,options,fn);});
 }
-// Admission reads which select an import target run under the same resources as execution.
+// 选择导入目标的准入读取，与执行使用相同资源锁。
 export function runDomainAdmission(db,options,admit) {
  auditResultDigest(options.request);
  assertImmutableDomainBinding(db,options);
@@ -108,8 +108,8 @@ export function runDomainAdmission(db,options,admit) {
  });
 }
 function assertImmutableDomainBinding(db,options) {
- // Existing immutable technical bindings may reject a conflict before *any* new
- // lock/epoch write. A match grants nothing: ordinary lock and audit admission follow.
+ // 已有不可变技术绑定可在任何新锁或 epoch 写入之前拒绝冲突；
+ // 匹配本身不授予权限，后续仍走常规锁及审计准入。
  if(frames.has(db))return;const operationId=metadata.getStore()?.operationId;if(!operationId)return;
  const exists=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_operations'").get();if(!exists)return;
  const row=db.prepare('SELECT action,scope_kind,scope_token,request_digest FROM audit_operations WHERE database_instance_id=(SELECT instance_id FROM audit_database_instances WHERE is_active=1) AND operation_id=? AND attempt=1').get(operationId);if(!row)return;
@@ -157,10 +157,10 @@ function runDomainOperationBody(db,options,fn) {
   throw envelopeError(terminal);
  }
  snapshots.set(`${terminal.receipt.databaseInstanceId}:${context.operationId}:1`,snapshot);
- if(invalidationsBefore!==null&&bankInvalidationCount(db,options)>invalidationsBefore)for(const listener of bankInvalidationListeners){try{listener(options.scope.value);}catch{/* publication failure cannot undo the committed domain fact */}}
+ if(invalidationsBefore!==null&&bankInvalidationCount(db,options)>invalidationsBefore)for(const listener of bankInvalidationListeners){try{listener(options.scope.value);}catch{/* 发布失败不能撤销已经提交的业务事实 */}}
  return value;
 }
-// A fixed stage plan is prepared before the outer transaction. No dynamic child tree.
+// 外层事务开始前准备固定阶段计划，不生成动态子操作树。
 export function runAuditedBatchStage(db,options,children,fn) {
  auditResultDigest(options.request);for(const child of children)auditResultDigest(child.request);
  return withBatchStageResources(db,options,children,()=>runAuditedBatchStageBody(db,options,children,fn));

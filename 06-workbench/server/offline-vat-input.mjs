@@ -1,4 +1,4 @@
-// Explicit input loader shared by VAT and accountant review; never imports the default DB.
+// VAT 和会计复核共享的显式输入加载器，不导入默认数据库。
 import { resolve, dirname, isAbsolute } from 'node:path';
 import { fields, requireValue, hash, sourceText, stable, validateScope } from './offline-material-adapters.mjs';
 import { preflightMaterials } from './offline-materials.mjs';
@@ -19,7 +19,7 @@ export async function assertVatInputSessionCurrent(session, rawInput, source, sn
   return structuredClone(state.inventory);
 }
 
-// File-backed raw inputs retain their private guard even when a caller omits the facade.
+// 基于文件的原始输入始终保留私有守卫，即使调用者省略外观层。
 export async function assertVatInputCurrent(rawInput, source, snapshot, session) {
   if (session !== undefined) return assertVatInputSessionCurrent(session, rawInput, source, snapshot);
   const state = rawSessions.get(rawInput);

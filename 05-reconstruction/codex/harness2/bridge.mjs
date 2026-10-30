@@ -26,8 +26,8 @@ export async function stopChild(child,{platform=process.platform,taskkill=spawnS
   if(platform==='win32'){
     if(child.exitCode===null&&child.signalCode===null){
       let result;try{result=taskkill(join(process.env.SystemRoot??'C:/Windows','System32/taskkill.exe'),['/pid',String(child.pid),'/T','/F'],{windowsHide:true,shell:false,stdio:'ignore',timeout:5000});}catch{}
-      // Windows sandbox may reject taskkill for an owned child. Terminate that
-      // directly owned process without claiming that an unobserved tree died.
+      // Windows 沙箱可能拒绝 taskkill 终止本进程拥有的子进程，此时直接终止
+      // 已确认归属的该进程，不据此声称未观察到的整棵进程树均已退出。
       if(result?.status!==0)try{child.kill('SIGKILL');}catch{}
       if(child.exitCode===null&&child.signalCode===null){
         const ended=await new Promise(ok=>{const timer=setTimeout(()=>{child.removeListener('exit',exit);ok(false);},2000);const exit=()=>{clearTimeout(timer);ok(true);};child.once('exit',exit);});
@@ -90,8 +90,8 @@ export async function dispatch(request,{signal}={}){
     }
     return existsSync(receipt)?JSON.parse(readFileSync(receipt,'utf8')):{status:'unknown',operationState:'unknown',resultCurrent:null,confirmationCurrent:null,recovery:'query_original_run_id',modelInvoked:false};
   }
-  // Model execution remains fail-closed outside the Linux candidate sandbox.
-  // Its relay serves the executor only; Codex optimization uses its own host.
+  // Linux 候选沙箱之外的模型执行始终按失败关闭处理。
+  // 中继仅服务执行者；Codex 优化使用其自身宿主。
   const modelRun=request.action==='execute'&&request.executionMode==='model';
   const timeoutMs=request.timeoutMs??(modelRun?null:30000);
   if(request.action==='execute'&&!['synthetic-native','model'].includes(request.executionMode))fail('harness2_isolated_metered_runner_required');
@@ -122,8 +122,8 @@ export async function dispatch(request,{signal}={}){
     const spec=buildHostSpec({workspace,nodePath:process.execPath,packageRoot:request.packageRoot,cliPath:request.cliPath,apiBase,databasePath:join(run,'synthetic/data/workbench.db'),candidateDir:candidate,taskFile,mcpServerPath:join(repo,'05-reconstruction/codex/harness2/restricted-mcp.mjs'),mcpEnv:{FINANCE_HARNESS2_SYNTHETIC_ROOT:join(run,'synthetic')},modelBaseUrl:process.env.FINANCE_HARNESS2_RELAY_BASE,...request.maxOutputTokens===undefined?{}:{maxOutputTokens:request.maxOutputTokens},mode:request.action==='execute'?(modelRun?'run':'synthetic-native'):'check',timeoutMs});
     const result=await boundedSpawn(spec,{timeoutMs,signal});
     const native=await nativeSummary(result.stdout);
-    // Native output stays inside the synthetic local experiment; it is never
-    // placed in the public receipt or optimizer experience context.
+    // 原生输出留在本机合成实验目录，绝不放入
+    // 公开回执或优化器的经验上下文。
     writeFileSync(join(run,'native.stdout'),result.stdout,{flag:'wx'});writeFileSync(join(run,'native.stderr'),result.stderr,{flag:'wx'});
     if(modelRun&&result.exitCode===0&&!result.reason){await boundedSpawn({command:process.execPath,args:[join(repo,'06-workbench/scripts/harness2-capture.mjs'),run],cwd:repo,env:cleanEnvironment(home)},{timeoutMs:30000,signal});}
     const artifact=request.action==='execute'&&existsSync(join(run,'deliverable.json'))?JSON.parse(readFileSync(join(run,'deliverable.json'),'utf8')):null;

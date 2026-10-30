@@ -1,4 +1,4 @@
-// Local CLI only. Raw script contents and URLs never enter stdout/stderr.
+// 仅供本机 CLI 使用。原始脚本内容及 URL 绝不进入 stdout/stderr。
 import {pathToFileURL} from 'node:url';
 import {TaxDownloadSnapshot} from '../server/tax-download-snapshot.mjs';
 export async function snapshotTaxDownloadPage(args,overrides={}){return new TaxDownloadSnapshot(overrides).capture(args);}

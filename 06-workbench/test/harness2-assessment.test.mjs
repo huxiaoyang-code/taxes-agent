@@ -1,4 +1,4 @@
-// Decision contract only; real Store/DB IO is exercised by the full model path.
+// 仅验证决策契约；完整模型路径覆盖真实 Store/数据库 IO。
 import assert from 'node:assert/strict';
 import {evaluateNativeEvidence} from '../scripts/harness2-assess.mjs';
 const scope={enterpriseKey:'SYNTHETIC-A',accountSetId:1,databaseInstanceId:'synthetic-instance',period:'2026-01',currency:'CNY'};

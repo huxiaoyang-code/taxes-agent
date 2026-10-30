@@ -1,4 +1,4 @@
-// Pure configuration builder; writing a new output directory belongs to shared.
+// 纯配置构造器；写入全新输出目录由 shared 负责。
 export function buildConfig(context) {
   const { mcp, skillsDir } = context;
   if (mcp?.env?.FINANCE_MCP_PROFILE !== 'harness') throw new Error('dsh_harness_profile_required');

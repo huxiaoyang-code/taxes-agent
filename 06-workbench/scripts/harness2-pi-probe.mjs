@@ -1,4 +1,4 @@
-// Actual Pi loader/MCP/tool-search first, then prove the live synthetic DB binding.
+// 先检查实际 Pi 加载器、MCP 和 tool-search，再证明实时合成数据库绑定。
 await import('./harness-pi-probe.mjs');
 const {pathToFileURL}=await import('node:url'),{join,dirname}=await import('node:path');
 const {readFileSync}=await import('node:fs'),{default:assert}=await import('node:assert/strict');

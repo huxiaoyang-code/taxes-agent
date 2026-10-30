@@ -104,10 +104,10 @@ export class McpStdioClient {
     if (!this.child || this.exited) return;
     const child = this.child;
     const done = new Promise((resolve) => child.once("exit", resolve));
-    try { child.stdin.end(); } catch { /* ignore */ }
+    try { child.stdin.end(); } catch { /* 忽略此处异常 */ }
     child.kill();
     const timer = new Promise((resolve) => setTimeout(resolve, 3000));
     await Promise.race([done, timer]);
-    if (!this.exited) { try { child.kill("SIGKILL"); } catch { /* ignore */ } }
+    if (!this.exited) { try { child.kill("SIGKILL"); } catch { /* 忽略此处异常 */ } }
   }
 }

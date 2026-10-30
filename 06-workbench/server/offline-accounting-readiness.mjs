@@ -1,4 +1,4 @@
-// Candidate admission only. Replays #78 and #79; never authorizes execution.
+// 仅作候选准入，重放 #78 和 #79，不授权执行。
 import { assessCompleteness, replayReports } from './material-completeness.mjs';
 import { planOffline } from './offline-task-planner.mjs';
 import { fields, requirePlainJson, requireValue, identifier, validateScope, stable, hash } from './offline-material-adapters.mjs';
@@ -48,8 +48,8 @@ export function parseAccountingFacts(source, scope) {
   return { facts, sourceVersion, fileSha256: source.fileSha256, rawContent: source.text };
 }
 
-// Only the specific old purchase-use gap may be resolved by new business facts.
-// It cannot turn other unknown, invalid, conflicting or missing evidence into ready.
+// 新业务事实只能解决具体的历史购入用途缺口；
+// 不能把其他未知、无效、冲突或缺失证据提升为 ready。
 export function assessAccountingReadiness(input) {
   const base = { scope: input.scope, reports: input.reports, declaration: input.declaration };
   const assessment = assessCompleteness(base), plan = planOffline(base), replay = replayReports(input.scope, input.reports);

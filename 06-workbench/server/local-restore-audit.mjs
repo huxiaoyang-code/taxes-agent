@@ -375,7 +375,7 @@ export function openRestoreLedger(path, { create = false, readOnly = false } = {
     ensureRestoreLedgerSchema(db);
     return db;
   } catch (e) {
-    try { db.close(); } catch { /* ignore */ }
+    try { db.close(); } catch { /* 忽略此处异常 */ }
     if (e && typeof e.code === "string" && e.code.startsWith("restore_")) throw e;
     throw fail("restore_ledger_invalid", { reason: "not_a_ledger" });
   }
@@ -812,7 +812,7 @@ export function restoreLedgerStats(db) {
   return { total, byStatus };
 }
 
-/** Explicit ledger1 upgrade, with an independent verified protection file. */
+/** 显式 ledger1 升级，须有独立核验的保护文件。 */
 export function upgradeRestoreLedger(path,{backupPath}={}){
  plainRestorePath(path);plainRestorePath(backupPath,{absent:true});
  if(!backupPath||path===backupPath)throw fail('restore_contract_required');

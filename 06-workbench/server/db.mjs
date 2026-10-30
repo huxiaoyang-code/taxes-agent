@@ -8,8 +8,8 @@ import { ensureImportSchema } from "./import-storage.mjs";
 import { assertOpenedDatabaseClaimsMatch } from "./database-open-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Explicit process-level read mode is used by the isolated annual worker.
-// It never creates a directory/database or invokes any installer/migration.
+// 隔离年度 worker 使用显式的进程级只读模式；
+// 此模式不创建目录/数据库，也不调用安装器或迁移。
 const DATABASE_MODE = process.env.WORKBENCH_DATABASE_MODE ?? 'readwrite';
 if (!['readwrite', 'readonly'].includes(DATABASE_MODE)) throw Object.assign(new Error('database_mode_invalid'), { code: 'database_mode_invalid' });
 const READ_ONLY = DATABASE_MODE === 'readonly';
@@ -32,8 +32,8 @@ export const db = READ_ONLY ? new DatabaseSync(DB_FILE, { readOnly: true }) : ne
 // 普通业务入口（本进程没有任何活动创建事实）行为与旧实现完全一致。
 try {
   assertOpenedDatabaseClaimsMatch(db, { dataDir: DATA_DIR, dbPath: DB_FILE });
-  // The path preflight used a different connection. Recheck the actual handle
-  // before WAL, core DDL or migrations if the file changed after preflight.
+  // 路径预检使用了另一条连接；若预检后文件发生变化，须在
+  // WAL、核心 DDL 或迁移前重新检查实际句柄。
   assertRestoreWritable(db);
 } catch (error) {
   try { db.close(); } catch { /* 拒绝后关闭失败不改变结论 */ }
@@ -43,9 +43,9 @@ try {
 if (READ_ONLY) {
   try {
     db.exec('PRAGMA query_only=ON; PRAGMA foreign_keys=ON');
-    // Require the complete current core DDL plus the v4 asset/v5 profile
-    // columns. A version row cannot substitute for missing columns: some
-    // business readers intentionally default absent values for old evidence.
+    // 要求完整的当前核心 DDL 以及 v4 资产、v5 profile 字段。
+    // 版本记录不能代替缺失字段，因为部分业务读取器
+    // 为了兼容旧证据，会有意对缺失值使用默认值。
     const required = {
       schema_migrations: ['version', 'applied_at', 'note'],
       account_sets: ['id', 'name', 'taxpayer_type', 'accounting_standard', 'start_period', 'created_at', 'accounting_profile_id'],
@@ -181,7 +181,7 @@ export const importSchema = READ_ONLY
   ? Object.freeze({ from: 5, to: 5, version: 5, migrated: false, readOnly: true })
   : ensureImportSchema(db, { dataDir: DATA_DIR });
 
-// Module readiness is awaited once; all accounting/import exports remain synchronous.
+// 模块就绪只等待一次；全部会计与导入导出函数仍保持同步。
 if (!READ_ONLY) try {
   const { installAuditSchema } = await import('./local-audit-storage.mjs');
   const { installBatchSchema } = await import('./local-batch-storage.mjs');

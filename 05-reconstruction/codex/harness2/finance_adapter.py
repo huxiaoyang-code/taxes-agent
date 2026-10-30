@@ -59,8 +59,8 @@ class FinanceSubstrate:
     def __init__(self, adapter: "FinanceAdapter"):
         self.adapter = adapter
         self.name = "finance-" + adapter.host
-        # This pin exposes SurfaceSpec but keeps prompt fragment registration
-        # private. Register DATA for the new surface, never replace its method.
+        # 固定版本公开 SurfaceSpec，但提示词片段注册仍为私有；
+        # 为新接口登记 DATA，绝不替换其方法。
         guidance = ("# Editable finance guidance surface\n"
             "Edit only context/harness/SKILL.md, tools.md or recovery.md. "
             "These UTF-8 files provide instructions only. Do not add code, hooks, "
@@ -98,8 +98,8 @@ class FinanceSubstrate:
 
     def read_trajectory(self, stream_path: Path, *, obs_trunc: int,
                         max_chars: int, args_trunc: int = 400) -> str:
-        # Only controlled receipts reach optimizer context. Raw host stderr and
-        # arbitrary free-text errors remain local, even for synthetic probes.
+        # 只有受控回执能进入优化器上下文；宿主原始 stderr 和任意
+        # 自由文本错误均留本机，合成探针也不例外。
         value = json.loads(stream_path.read_text(encoding="utf-8"))
         safe = {k: value.get(k) for k in ("status", "host", "operationState",
                 "resultCurrent", "confirmationCurrent", "reason", "modelInvoked", "nativeStatus", "innerErrorCount")}
@@ -129,8 +129,8 @@ class FinanceAdapter:
         self.execution_timeout_ms = execution_timeout_ms
         self.windows_bridge = str(node).lower().endswith('.exe')
         self.substrate = FinanceSubstrate(self)
-        # These are upstream improver CHANNELS, independent of solver HOSTS.
-        # Empty model ids cannot run and preflight never starts a model.
+        # 这些是上游改进器通道，与求解器宿主相互独立；
+        # 空模型 ID 不能运行，预检不会启动模型。
         self.spec = BenchSpec(name="synthetic-finance-" + host, runs_root=self.root / "runs",
             install_mode="workspace_agents_md", allow_subagents=False,
             prompts=BenchPrompts(work="Inspect a synthetic local finance task and preserve native receipts",
@@ -176,7 +176,7 @@ class FinanceAdapter:
             read_surface(harness_dir)
             request["candidateDir"] = convert(harness_dir)
         path = self.root / ("request-" + run_id + ".json")
-        # This is only an input envelope, not a receipt. Never store credentials.
+        # 这只是输入信封，不是回执；绝不保存凭据。
         path.write_text(json.dumps(request), encoding="utf-8")
         proc = subprocess.run([str(self.node), convert(self.repo / "06-workbench/scripts/harness2-bridge.mjs"),
             convert(path)], capture_output=True, text=True, encoding="utf-8", timeout=None if timeout is None else timeout + 20,
@@ -198,7 +198,7 @@ class FinanceAdapter:
         return self.root / "runs" / run_id
 
     def delivered(self, run_dir: Path) -> bool:
-        # Probe completion is never a business deliverable.
+        # 探针完成不能作为业务交付成果。
         path = run_dir / "receipt.json"
         return path.is_file() and json.loads(path.read_text()).get("status") == "native_task_executed"
 
@@ -228,6 +228,6 @@ class FinanceAdapter:
         if self.execution_mode not in ('synthetic-native','model'):
             return None
         result = self.bridge('assess', run_dir.name, run_dir / 'candidate')
-        # No heldout business corpus or model-quality claim follows from this
-        # narrow independent native period-inspection check.
+        # 此窄范围、独立的原生期间检查，不能证明留出业务语料效果，
+        # 也不能据此声称模型质量提升。
         return None if result.get('pass') is None else result

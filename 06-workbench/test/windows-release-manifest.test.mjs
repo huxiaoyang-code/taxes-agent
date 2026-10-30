@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Focused source-bundle tests. All fixtures (including refusals) are retained; no cleanup is attempted.
+// 聚焦源码包的测试。保留全部测试样本（包括拒绝用例），不尝试清理。
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -29,7 +29,7 @@ auditAncestors(root);
 assert(!fs.existsSync(root), "never reuse a fixture root");
 fs.mkdirSync(root, { recursive: true });
 auditAncestors(root);
-// Set the complete scope before importing delivery or any business-adjacent module.
+// 导入交付模块或任何业务相关模块之前，设置完整作用域。
 process.env.TEMP = join(root, "tmp");
 process.env.TMP = join(root, "tmp");
 process.env.WORKBENCH_DATA_DIR = join(root, "fallback-data");
@@ -44,8 +44,8 @@ const sha = (buffer) => createHash("sha256").update(buffer).digest("hex");
 const children = [];
 let sequence = 0;
 const next = (label) => join(root, `${++sequence}-${label}`);
-// Seed real, verified whitelist bytes inside our owned root. Source and cold destination are siblings,
-// so the default in-repository fixture obeys the same containment guard as an external fixture.
+// 在自有根目录内填入真实、已校验的白名单字节。源及空目标互为同级，
+// 因此默认仓库内测试样本与外部测试样本遵守相同的范围保护。
 const repositorySource = inspectReleaseBundle(REPO);
 const sourceRoot = join(root, "source");
 fs.mkdirSync(sourceRoot);
@@ -286,7 +286,7 @@ test("persistent manifest bytes are frozen across inspection and copying; manife
 
 test("new nested server source is dynamically included; a stale list cannot omit it", () => {
   const fixture = cloneCold("dynamic");
-  // Future development is an unmanifested build tree; published bundles cannot silently gain files.
+  // 未来开发是无清单构建树；已发布包不能静默新增文件。
   fs.renameSync(fixture.manifestPath, next("dynamic-build-manifest-held"));
   const before = inspectReleaseBundle(fixture.destRoot);
   const extra = "06-workbench/server/future-component/new-file.mjs";

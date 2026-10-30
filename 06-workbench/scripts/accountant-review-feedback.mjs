@@ -15,12 +15,12 @@ export async function runCli(args) {
   }
   try {
     const outputPath = resolve(options.output), storePath = resolve(options.store);
-    // Canonical parents reject aliases; no output may create a lock/receipt/artifact inside the store.
+    // 规范化父目录拒绝别名；任何输出都不得在存储目录内创建锁、回执或产物。
     await checkedPath(dirname(outputPath), true);
     const r = relative(storePath, outputPath);
     if (r === '' || r.split(/[\\/]/)[0] !== '..' && !isAbsolute(r)) throw new Error('output_inside_store');
     try { await checkedPath(storePath, true); } catch (e) { if (e.code !== 'ENOENT') throw e; await checkedPath(dirname(storePath), true); }
-    // Reserve first: EEXIST must not accompany an already committed mutation.
+    // 先预留输出：不能在变更已提交后才报 EEXIST。
     output = await open(outputPath, 'wx', 0o600);
     await output.writeFile('{"status":"operation_in_progress_or_interrupted","authorizesExecution":false}\n'); await output.sync();
     let result;

@@ -1,4 +1,4 @@
-// Native-only bootstrap: compare the parent's pre-spawn closure before application imports.
+// 原生依赖引导：应用导入前先比较父进程在启动子进程前捕获的闭包。
 import { assertOfflineVatPairCodeCurrent } from './offline-vat-pair-code.mjs';
 let session, digest, closed = false, queue = Promise.resolve(), application;
 const send = message => new Promise((ok, no) => {
@@ -106,8 +106,8 @@ function diagnoseTarget(priorAdmitted, priorEnterprise) {
   for (const area of VAT_EXCLUSIONS) if (!facts.period.exclusions.some(f => f.area === area)) issue('tax_exclusion_missing', area, 'missing');
   if (facts.enterprise.form !== 'enterprise') issue('tax_enterprise_form_' + (facts.enterprise.form === 'unknown' ? 'unknown' : 'unsupported'), 'taxFacts.enterprise.form', facts.enterprise.form === 'unknown' ? 'unknown' : 'unsupported');
   if (facts.enterprise.establishedOn === null) issue('tax_establishment_unknown', 'taxFacts.enterprise.establishedOn', 'unknown');
-  // Physical same-source binding does not resolve contradictory enterprise facts.
-  // Unknown is still unknown; only two explicit different values are a conflict.
+  // 物理同来源绑定不能解决企业事实互相矛盾的问题。
+  // unknown 仍为 unknown，只有两个明确不同的值才构成 conflict。
   if (facts.enterprise.form !== 'unknown' && priorEnterprise.form !== 'unknown' && facts.enterprise.form !== priorEnterprise.form) issue('cross_quarter_enterprise_form_conflict', 'taxFacts.enterprise.form', 'conflict');
   if (facts.enterprise.establishedOn !== null && priorEnterprise.establishedOn !== null && facts.enterprise.establishedOn !== priorEnterprise.establishedOn) issue('cross_quarter_establishment_date_conflict', 'taxFacts.enterprise.establishedOn', 'conflict');
   for (const f of facts.invoices) {

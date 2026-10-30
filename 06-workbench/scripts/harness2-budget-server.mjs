@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The operator starts this outside bwrap, with their own key already in env.
-// No key is written to argv, config, ledger, console or the candidate namespace.
+// 操作者在 bwrap 外启动此服务，本人密钥预先放在环境变量中。
+// 密钥不写入 argv、配置、账本、控制台或候选命名空间。
 import {readFileSync} from 'node:fs';
 import {createBudgetGateway} from '../../05-reconstruction/codex/harness2/budget-gateway.mjs';
 const config=JSON.parse(readFileSync(process.argv[2],'utf8'));

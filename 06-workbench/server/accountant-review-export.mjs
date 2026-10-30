@@ -1,4 +1,4 @@
-// Local, exclusive multi-file publication. Only a last complete manifest marks success.
+// 本机独占发布多个文件；只有最后写入完整 manifest 才标记成功。
 import ExcelJS from 'exceljs';
 import { mkdir, open, unlink } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -21,7 +21,7 @@ export async function buildAccountantReviewWorkbook(bundle, { inputSession } = {
   await assertAccountantReviewCurrent(bundle, inputSession);
   return { ...workbook, localFiles };
 }
-// Display-only: accepts public data and inventory; grants no publication capability.
+// 仅供展示：接收公开数据和清单，不授予发布能力。
 export async function renderAccountantReviewDiagnosticWorkbook(bundle, localFiles = []) {
   const book = new ExcelJS.Workbook(); book.creator = '本机会计复核草稿';
   const diagnostics = [];
@@ -113,10 +113,10 @@ async function writeExclusive(path, bytes) {
 }
 export async function exportAccountantReview(bundle, outputDirectory, { inputSession } = {}) {
   await assertAccountantReviewCurrent(bundle, inputSession);
-  // Render before creating the directory. No partial publication from rendering failures.
+  // 建目录前先渲染，防止渲染失败留下部分发布成果。
   const workbook = await buildAccountantReviewWorkbook(bundle, { inputSession });
   const directory = resolve(outputDirectory);
-  await mkdir(directory, { mode: 0o700 }); // EEXIST is always an error, even for an empty directory.
+  await mkdir(directory, { mode: 0o700 }); // EEXIST 始终视为错误，即使现有目录为空。
   const json = Buffer.from(JSON.stringify(bundle, null, 2) + '\n', 'utf8');
   const files = [{ name: 'bundle.json', bytes: json }, { name: 'workpaper.xlsx', bytes: workbook.bytes }];
   for (const f of files) await writeExclusive(join(directory, f.name), f.bytes);
@@ -125,8 +125,8 @@ export async function exportAccountantReview(bundle, outputDirectory, { inputSes
     bundleDigest: bundle.contentDigest, freshness: inputFiles.length ? 'actual_files_store_and_private_ledger_rechecked_before_publication' : 'in_memory_raw_input_and_private_ledger_only',
     files: files.map(f => ({ name: f.name, sha256: hash(f.bytes), bytes: f.bytes.length })), inputFiles, displayDiagnostics: workbook.diagnostics,
     meaning: 'local_file_completeness_only_not_authentication_or_accountant_approval' };
-  // An error after file writes preserves the diagnostic directory without a success marker.
-  // Remove only our own manifest if its write/sync/close fails; never delete an existing file.
+  // 写文件后发生错误时保留诊断目录，不留下成功标记。
+  // manifest 写入、同步或关闭失败时，只移除本次自有文件，不删除既有文件。
   let owned = false;
   try {
     const handle = await open(join(directory, 'manifest.json'), 'wx', 0o600); owned = true;

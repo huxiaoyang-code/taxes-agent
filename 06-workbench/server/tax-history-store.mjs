@@ -1,4 +1,4 @@
-// Fixed canonical private stores. No arbitrary path is accepted by tools.
+// 固定规范私有存储；工具不接受任意路径。
 import {execFile} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {mkdir,realpath,lstat,open,readFile,unlink,link} from 'node:fs/promises';

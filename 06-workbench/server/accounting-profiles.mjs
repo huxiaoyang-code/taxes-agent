@@ -645,8 +645,8 @@ defineProfile({
   roles: ENTERPRISE_ROLES,
 });
 
-// Independent semantic chart. Numbers are engineering references, not a claim
-// that the complete 1997 appendix or its original official numbering was found.
+// 独立语义科目表；编号是工程引用，不代表已找到
+// 完整的 1997 年附录或其原始官方编号。
 defineProfile({
   id: "individual-bookkeeping-semantic-v1", declaredStandard: "个体工商户会计制度", creationAllowed: true, legacy: false,
   coaVersion: "individual-semantic-coa-v1", reportMappingVersion: "individual-official-form-workpaper-v1",

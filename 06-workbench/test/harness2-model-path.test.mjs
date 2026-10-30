@@ -1,5 +1,5 @@
-// Explicit Linux-only integration: real Pi CLI + MCP + Google core, scripted
-// Separate scripted Codex CLI and DS execution transport. No paid model call.
+// 显式的 Linux 专用集成：真实 Pi CLI、MCP、Google 核心及脚本驱动。
+// 分离的脚本化 Codex CLI 与 DS 执行传输。不调用付费模型。
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {join,resolve} from 'node:path';

@@ -1,4 +1,4 @@
-// Explicit local discovery only. No default database import or schema writes.
+// 只做显式本机范围发现；不导入默认数据库，也不写数据库结构。
 import { DatabaseSync } from 'node:sqlite';
 import { checkedPath } from './offline-material-store.mjs';
 import { requireValue } from './harness-store.mjs';

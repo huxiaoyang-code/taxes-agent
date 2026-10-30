@@ -1,4 +1,4 @@
-// Real outer worker with a scripted CLI, never a model/provider credential.
+// 实际外层工作进程配合脚本化 CLI，绝不使用模型/提供商凭据。
 import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,readFileSync,readdirSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';

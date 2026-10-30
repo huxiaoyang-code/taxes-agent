@@ -1,4 +1,4 @@
-// Full draft-07 JSON Schema validation; values are never defaulted, coerced or removed.
+// 完整 draft-07 JSON Schema 校验；不补默认值、不转换类型、不删除输入值。
 import Ajv from 'ajv';
 const ajv=new Ajv({allErrors:true,strictSchema:true,strictTypes:false,strictTuples:false,strictRequired:false,allowUnionTypes:true,ownProperties:true,useDefaults:false,coerceTypes:false,removeAdditional:false,verbose:false});
 ajv.addFormat('calendar-date',{type:'string',validate:value=>{if(!/^20\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value))return false;const d=new Date(value+'T00:00:00Z');return !Number.isNaN(d.valueOf())&&d.toISOString().slice(0,10)===value;}});

@@ -1,4 +1,4 @@
-// Synthetic originals -> public OFFLINE-03B formal posting -> an existing target DB.
+// 合成原件 -> 公开 OFFLINE-03B 正式记账 -> 已有目标数据库。
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -16,7 +16,7 @@ export async function createQ2Fixture(directory, options = {}) {
   directory = resolve(directory);
   const f = createHistoryFixture(directory, { amounts: options.priorAmounts ?? [options.priorAmount ?? '509873.00'], post: false });
   const q2 = join(directory, 'q2'); mkdirSync(q2);
-  // Derive independent raw evidence with actual April dates, never shift Q2 into Q1.
+  // 用实际四月日期推导独立原始证据，绝不把 Q2 移到 Q1。
   const transform = value => Array.isArray(value) ? value.map(transform) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, transform(v)])) : typeof value === 'string' ? value.replaceAll('2026-Q1', '2026-Q2').replaceAll('2026-01-13', '2026-04-17').replaceAll('2026-03', '2026-06').replaceAll('2026-01', '2026-04').replaceAll('1001', '2001') : value;
   for (const name of readdirSync(f.dir).filter(n => /\.(json|csv)$/.test(n) && n !== 'request.json')) {
     if (name.endsWith('.json')) writeJson(join(q2, name), transform(readJson(join(f.dir, name))));
@@ -52,7 +52,7 @@ export async function createQ2Fixture(directory, options = {}) {
   if (options.establishedOn) {
     const path = join(f.dir, 'tax.json'), tax = readJson(path); tax.enterprise.establishedOn = options.establishedOn; writeJson(path, tax);
   }
-  // Opening months must already exist before the read-only consumer runs.
+  // 只读消费者运行前，期初月份必须已存在。
   const setup = spawnSync(process.execPath, ['--input-type=module', '-e', `process.env.WORKBENCH_DATA_DIR=process.argv[1];const {db}=await import(${JSON.stringify(new URL('../../server/db.mjs',import.meta.url).href)});const A=await import(${JSON.stringify(new URL('../../server/accounting.mjs',import.meta.url).href)});try{for(const p of ['2026-04','2026-05','2026-06'])A.ensurePeriod(Number(process.argv[2]),p);}finally{db.close();}`, dirname(f.dbPath), String(f.id)], {encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1',TEMP:directory,TMP:directory}});
   assert.equal(setup.status,0,setup.stderr);
   const db = new DatabaseSync(f.dbPath, {readOnly:true});
@@ -77,16 +77,16 @@ export async function createQ2Fixture(directory, options = {}) {
   f.requestPath = join(directory, 'q2-request.json'); writeJson(f.requestPath, f.request); return f;
 }
 
-// Test setup only: produce a real empty append through the public domain entry,
-// rather than manufacturing a supposedly harmless result_json in a fixture.
+// 仅准备测试：通过公开领域入口产生真实的空追加，
+// 不在测试样本中制造所谓无害的 result_json。
 export function createPublicNoopBatch(f, { otherEnterprise = false } = {}) {
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', `process.env.WORKBENCH_DATA_DIR=process.argv[1];const {db}=await import(${JSON.stringify(new URL('../../server/db.mjs',import.meta.url).href)});const A=await import(${JSON.stringify(new URL('../../server/accounting.mjs',import.meta.url).href)});const IM=await import(${JSON.stringify(new URL('../../server/import-incremental.mjs',import.meta.url).href)});try{let id=Number(process.argv[2]),key=process.argv[3];if(process.argv[4]==='other'){key+='-OTHER';id=A.createAccountSet({name:key,start_period:'2026-01',profileId:'small-2011-basic-v1',enterprise:{enterpriseKey:key}}).id;}const batchId='public-empty-'+id;const result=IM.importIncremental({dryRun:false,confirmNewBinding:true,accountSetId:id,batchId,source:{system:'offline-bookkeeping-candidates-v1',enterpriseKey:key},payload:{account_set:{name:key,start_period:'2026-01',profileId:'small-2011-basic-v1'},vouchers:[]}});process.stdout.write(JSON.stringify({result,id,key,batchId}));}finally{db.close();}`, dirname(f.dbPath), String(f.id), f.key, otherEnterprise ? 'other' : 'same'], {encoding:'utf8',env:{...process.env,NODE_NO_WARNINGS:'1',TEMP:f.directory,TMP:f.directory}});
   assert.equal(child.status, 0, child.stderr); assert.equal(child.signal, null);
   const value = JSON.parse(child.stdout); assert.equal(value.result.status, 'applied', JSON.stringify(value)); return value;
 }
 
-// Rebuild real payloads from original candidates, then use a new public batch.
-// No expected test entries or expected tax numbers are used as import input.
+// 从原始候选重建真实载荷，再使用新的公开批次。
+// 不将预期测试分录或预期税额作为导入输入。
 export async function createPublicDedupBatch(f, quarters = ['target']) {
   const vouchers = [];
   for (const quarter of quarters) {

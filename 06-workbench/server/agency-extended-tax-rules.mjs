@@ -1,4 +1,4 @@
-// Deterministic additions share the original material/audit/replay pipeline.
+// 新增确定性规则复用原有材料、审计和重放链路。
 import { parseMoney, formatCents } from './money.mjs';
 import { requireValue } from './offline-material-adapters.mjs';
 import { selectAgencyRegionalRule } from './agency-regional-rules.mjs';
@@ -22,8 +22,7 @@ function landTaxStart(r){
   if(r.acquisitionKind==='existing_building_purchase'){original(r,['buildingDeliveryDocumentNumber','buildingDeliveredOn']);return followingMonth(r.buildingDeliveredOn);}
   requireValue(false,'agency_extended_land_acquisition_start_unverified');
 }
-/** Facts are extracted from rights, invoices, permits and product specifications.
- * No accepted field is a customer-created tax amount or customer selected rate. */
+/** 事实从权属、发票、许可和产品规格提取；不接收客户预制税额或客户选择的税率。 */
 export function calculateAgencyExtendedTax({obligationId,record:r,scope,entity,sixTaxRelief=null,sixTaxReliefByPeriod=null}) {
   assertAgencyRuleContext(obligationId,r,scope,entity);
   requireValue(Object.hasOwn(AGENCY_EXTENDED_TAX_SOURCES,obligationId),'agency_extended_tax_uncovered');

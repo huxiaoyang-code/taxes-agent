@@ -397,7 +397,7 @@ try {
       assert.equal(report.complete, false);
       assert.equal(report.diagnostic, "legacy_profile_compatibility");
     } finally {
-      try { fixture.conn.close(); } catch { /* ignore */ }
+      try { fixture.conn.close(); } catch { /* 忽略 */ }
       if(process.env.WORKBENCH_TEST_KEEP_FIXTURES!=='1')rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
@@ -430,7 +430,7 @@ try {
         ["企业会计准则", "小企业会计准则", "某地方历史准则"], "原 accounting_standard 字符串必须保留");
       assert.deepEqual(snapshot(fixture.conn), before, "业务行 / 指纹 / 来源批次不得被迁移改写");
     } finally {
-      try { fixture.conn.close(); } catch { /* ignore */ }
+      try { fixture.conn.close(); } catch { /* 忽略 */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
@@ -499,7 +499,7 @@ try {
           "企业会计准则");
       } finally { conn.close(); }
     } finally {
-      try { fixture.conn.close(); } catch { /* ignore */ }
+      try { fixture.conn.close(); } catch { /* 忽略 */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
@@ -539,7 +539,7 @@ try {
       assert.ok(columnNames(conn, "asset_cards").includes("ledger_status"), "v3 升级仍需补齐 v4 列");
       assert.deepEqual(snapshot(conn), before);
     } finally {
-      try { conn.close(); } catch { /* ignore */ }
+      try { conn.close(); } catch { /* 忽略 */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
@@ -573,7 +573,7 @@ try {
       assert.equal(columnNames(fixture.conn, "account_sets").includes("accounting_profile_id"), true);
       assert.deepEqual(snapshot(fixture.conn), before);
     } finally {
-      try { fixture.conn.close(); } catch { /* ignore */ }
+      try { fixture.conn.close(); } catch { /* 忽略 */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
@@ -607,7 +607,7 @@ try {
         assert.equal(JSON.stringify(details).includes("future-profile-v9"), false, `${label} 不得回显原始 profile`);
       }
     } finally {
-      try { fixture.conn.close(); } catch { /* ignore */ }
+      try { fixture.conn.close(); } catch { /* 忽略 */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
@@ -619,6 +619,6 @@ try {
   console.error("测试初始化失败：", error);
   process.exitCode = 1;
 } finally {
-  try { productDb?.close(); } catch { /* ignore */ }
-  try { rmSync(productDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+  try { productDb?.close(); } catch { /* 忽略 */ }
+  try { rmSync(productDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略 */ }
 }

@@ -1,5 +1,5 @@
-// Runs INSIDE bwrap. The only network reachable is this loopback relay to the
-// experiment's one Unix budget socket. No credential is present in this process.
+// 在 bwrap 内运行。唯一可达的网络是本回环中继，连接
+// 本次实验唯一的 Unix 预算套接字。此进程不持有凭据。
 import {createServer,request as httpRequest} from 'node:http';
 import {readFileSync,existsSync,lstatSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';

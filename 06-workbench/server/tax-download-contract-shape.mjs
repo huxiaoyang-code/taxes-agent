@@ -1,9 +1,9 @@
 import { createRequire } from 'node:module';
 
-// Pure local syntax inspection: no evaluation, I/O, requests or source excerpts.
+// 纯本机语法检查，不求值、不作 I/O、不发请求、不输出源码片段。
 let parse;
 try { ({ parse } = createRequire(import.meta.url)('internal/deps/acorn/acorn/dist/acorn')); }
-catch { /* An unavailable parser cannot be replaced by a regex approximation. */ }
+catch { /* 解析器不可用时，不能用正则近似替代。 */ }
 
 const LIMITS = Object.freeze({ sourceCharacters: 4_000_000, astNodes: 160_000,
   outputs: 32, objectKeys: 32, queryFields: 16, keyCharacters: 40, routeCharacters: 240, routeSegments: 10, segmentCharacters: 40 });
@@ -12,7 +12,7 @@ const CREDENTIAL = /(?:password|passwd|pwd|secret|token|authorization|credential
 const ACTION = /(?:submit|delete|remove|update|insert|create|save|commit|pay|payment|cancel|revoke|withdraw|logout|login|signin|sso|tpass|auth|declare|filing|申报|缴款)/i;
 const ID_SHAPE = /(?:[0-9]{6,}|[a-f0-9]{16,}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
 const placeholders = () => Array.from({ length: 7 }, (_, i) => ({ name: `field_${i + 1}`, observedBodyKeyBound: false }));
-// Exactly 32 fixed diagnostic scalar leaves. Nothing is named from the source.
+// 严格固定为 32 个诊断标量叶字段，不从源码动态命名。
 const diagnostics = () => ({ body: { intersectionHistogram: Array(8).fill(0),
   maximumIntersection: 0, maximumCandidateCount: 0, keyCountMin: 0, keyCountMax: 0, exactCaseIntersectionMax: 0,
   rejectedAtMaximum: { spread: false, computed: false, methodOrAccessor: false,
@@ -162,14 +162,11 @@ function resolveDiagnostic(node, output) {
   if (!objectKeys(properties.get('query'))) rejected.queryShape++;
 }
 
-/** Caller supplies an already localized component string and the seven actual
- * observed body KEY NAMES, never values. Names are emitted only after complete,
- * case-insensitive bijection with a unique direct object shape. Router findings
- * are limited syntax candidates, never live routes or authorized operations. */
+/** 调用者提供已定位的组件字符串及七个实际观察到的请求体键名，绝不提供值。只有与唯一直接对象结构构成忽略大小写的完整一一对应后才输出名称。路由发现仅为有限语法候选，不代表实时路由或获准操作。 */
 export function inspectDownloadContractShape(source, observedBodyKeys) {
   try {
-    // Observation provenance is supplied by the trusted local caller. Safe DTO
-    // key metadata is independent of whether this component binds the DTO.
+    // 观察来源由可信本机调用者提供；安全 DTO 的键元数据
+    // 不依赖当前组件是否绑定该 DTO。
     if (!Array.isArray(observedBodyKeys) || observedBodyKeys.length !== 7) return base('invalid_observed_keys');
     const normalized = new Set();
     for (const key of observedBodyKeys) {
@@ -218,7 +215,7 @@ function inspect(source, observedBodyKeys) {
       bodyDiagnostic(node, observed, exact, out.diagnostics.body);
       const keys = objectKeys(node);
       if (keys?.length === 7 && keys.every(key => observed.has(key.toLowerCase()))) {
-        // Keep only enough matches to prove ambiguity, not arbitrary source data.
+        // 仅保留足以证明歧义的匹配，不保留任意源码数据。
         out.bodyCandidateCount++; if (matches.length < 2) matches.push(keys);
       }
     }
@@ -230,9 +227,9 @@ function inspect(source, observedBodyKeys) {
           ? property.key.name : literal(property.key), property.value]));
         const path = literal(properties.get('path')), queryKeys = objectKeys(properties.get('query'));
         if (routeSafe(path)) {
-          // A safe literal syntax candidate does not authorize navigation. The
-          // independently incomplete query schema must not hide that candidate
-          // or leak any query names/values from a rejected object shape.
+          // 安全的字面量语法候选不授权导航；独立且不完整的
+          // 查询 schema 不能隐藏该候选，
+          // 也不能泄露被拒绝对象结构中的查询名称或值。
           if (routes.length < LIMITS.outputs) routes.push({ candidate: { path, queryKeys: queryKeys ?? [],
             staticQueryObjectBound: queryKeys !== null, querySchemaComplete: queryKeys !== null,
             navigationTemplateAuthorized: false }, queryNode: properties.get('query'), context });
@@ -252,8 +249,8 @@ function inspect(source, observedBodyKeys) {
     out.bodyFields = matches[0].map(name => ({ name, observedBodyKeyBound: true }));
     out.bodyShapeBound = true;
   }
-  // At most 32 field/key/path names altogether, including observed DTO metadata
-  // and fixed placeholders. Diagnostic scalars have their separate fixed shape.
+  // 字段、键和路径名称合计最多 32 个，包括已观察 DTO 元数据
+  // 及固定占位项；诊断标量另有独立固定结构。
   let remaining = LIMITS.outputs - out.bodyFields.length - observedBodyKeys.length;
   const selected = [];
   for (const internal of routes) {

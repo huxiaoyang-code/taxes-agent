@@ -1,4 +1,4 @@
-// Synthetic raw blueprints only. Core writes are confined to a fresh child process.
+// 仅使用合成原始蓝图。核心写入限制在全新子进程内。
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';

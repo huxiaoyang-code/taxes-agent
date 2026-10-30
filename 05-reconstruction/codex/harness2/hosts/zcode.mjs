@@ -11,13 +11,13 @@ export function buildHostSpec(options){
   const builtin=resolve(dirname(options.cliPath),'../config/provider/zcode-builtin.json');
   if(!existsSync(builtin)||!statSync(builtin).isFile())fail('harness2_zcode_builtin_provider_missing');
   p.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=builtin;
-  // The app's native codec stores API keys in its provider file. The executor
-  // relay owns operator credentials, so this file contains only a placeholder.
+  // 应用原生编解码器将 API 密钥存于 provider 文件。操作者凭据由执行中继持有，
+  // 因此此文件只写入占位值。
   let endpoint=modelEndpoint(options.modelBaseUrl??(options.mode==='check'?'http://127.0.0.1:9/v1':undefined),'chat');
   if(options.mode==='run')endpoint=requireGateway(endpoint,'chat');
   const providerPath=join(p.home,'provider.json'),providerId='harness2-deepseek-local';
-  // Match the pinned native codec's stable field order. Otherwise it rewrites
-  // the file under its lock and may recover to an empty registry on lock failure.
+  // 匹配固定版本原生编解码器的稳定字段顺序，否则它会持锁重写文件，
+  // 并可能在锁失败后恢复为空注册表。
   writeFileSync(providerPath,JSON.stringify({schemaVersion:1,config:{providerConfigRules:{providerRules:[{providerId,providerName:'Harness2 synthetic executor relay',enabled:true,config:{group:'standard-personal',access:{type:'api-key',apiKey:'synthetic-harness2-placeholder'},api:{type:'openai-chat-completions',baseUrl:endpoint},personalModelIds:['deepseek-flash']}}]},modelConfigRules:{providerModelRules:[{modelId:'deepseek-flash',config:{enabled:true,...p.maxOutputTokens===undefined?{}:{optionSpecs:{maxOutputTokens:{max:p.maxOutputTokens,map:'{"max_tokens":maxOutputTokens}'}}}},providerId}],manualProviderModelRules:[]},defaultModelSelection:{providerId,modelId:'deepseek-flash',options:{}}}}),{flag:'wx'});
   p.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=providerPath;
   return runnerSpec(p,{mode:options.mode,protocol:'zcode-app-server',providerId,allowedTools:p.allowedToolNames,task:options.mode==='run'?p.candidateText+'\n'+p.task:undefined,probe:'native-app-server-session-mcp'});

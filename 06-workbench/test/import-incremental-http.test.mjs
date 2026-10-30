@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-import-incremental-http-test-mjs-' + (++identityFixtureSequence) });
 
@@ -497,7 +497,7 @@ try {
         assert.equal(sets.data.length, 1, "不得新建第二个账套");
       } finally {
         if (srv) await srv.stop();
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
       }
     });
 
@@ -538,7 +538,7 @@ try {
           "新建批次首调 applied 与批次查询的逐张 DTO 必须一致");
       } finally {
         if (srv) await srv.stop();
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
       }
     });
 
@@ -590,7 +590,7 @@ try {
         assert.equal(vouchers.data.length, 1, "重启后回放不得新增凭证");
       } finally {
         if (srv) await srv.stop();
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
       }
     });
     await testAsync("HTTP create 仅期初：合法 API 改期初后同批回放 409，恢复并重启后回放 200", async () => {
@@ -649,12 +649,12 @@ try {
         assert.equal(sets.data.length, 1, "不得新建第二个账套");
       } finally {
         if (srv) await srv.stop();
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
       }
     });
   } finally {
     if (server) await server.stop();
-    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
   }
 
   const failed = results.filter(([ok]) => !ok).length;

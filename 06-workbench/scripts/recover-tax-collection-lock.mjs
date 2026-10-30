@@ -1,5 +1,5 @@
-// Explicit local administration for one abandoned authorized-navigation lock.
-// Does not alter the legacy reader registration, claim or quarantine, or kill anything.
+// 针对一个已遗弃的授权导航锁执行显式本机管理操作。
+// 不修改旧读取器登记、声明或隔离状态，也不终止任何进程。
 import {execFile} from 'node:child_process';
 import {dirname,resolve,join} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -12,8 +12,8 @@ import {fullFrameUrl} from '../server/tax-frame-url.mjs';
 import {pageReference} from './inventory-tax-browser.mjs';
 
 const PORTAL='https://etax.fujian.chinatax.gov.cn:8443/loginb/';
-// Immutable, private snapshots in the already guarded, ignored evidence root.
-// Diagnostic mode never calls this writer or creates its directory.
+// 在已有保护且被 Git 忽略的证据根目录中保存不可变私有快照。
+// 诊断模式绝不调用此写入器或创建其目录。
 async function privateAudit(value){
   const store=new TaxCollectionStore();await store.ready();
   const file=join(store.root,'navigation_recovery_'+randomBytes(24).toString('hex')+'.json');
@@ -114,14 +114,14 @@ export async function recoverTaxCollectionLock(args={},overrides={}){
     };
     phase='reload';startedAt=Date.now();reloadSent=true;
     await cdp.send('Page.reload',{},opts);
-    // Pre-seal documents are quarantined, never consumed. Only the final exact
-    // portal document survives two quiet reads; subsequent scope events fail.
+    // 封存前的文档只隔离，绝不消费。只有最终完全匹配的
+    // 门户文档通过两次安静读取后才保留；之后发生作用域事件即失败。
     phase='wait';await d.wait(12000);
     phase='verify_scope';newDocument=await verifiedDocument();const settledRevision=revision;
     await d.wait(500);const second=await verifiedDocument();
     if(revision!==settledRevision||JSON.stringify(newDocument)!==JSON.stringify(second))throw Error('unstable');
     loaderChanged=true;sealed=true;await audit('final_portal_observed');
-    // Capture a final guarded reader for cleanup without opening another realm.
+    // 捕获最终受保护的读取器供清理使用，不另开执行域。
     finalGuard=async()=>{
       if(revision!==settledRevision||JSON.stringify(await verifiedDocument())!==JSON.stringify(newDocument)||unexpected)throw Error('scope');
     };
@@ -146,8 +146,8 @@ export async function recoverTaxCollectionLock(args={},overrides={}){
         await closeGuard();await audit('released');finalResult.status='recovered';finalResult.phase='complete';
       }catch{cleanupConfirmed=false;finalResult.status='recovery_failed';finalResult.phase='release_validation';}
     }
-    // Unknown operation state preserves its persistent recovery exclusion. The
-    // OS guard is transient, but remains held through exact recovery close/CAS.
+    // 操作状态未知时保留其持久恢复排他状态。
+    // 操作系统保护是临时的，但会一直持有到精确恢复关闭/CAS 完成。
     try{await closeGuard();}catch{cleanupConfirmed=false;if(finalResult){finalResult.status='recovery_failed';finalResult.phase='admin_cleanup';}}
     if(recoveryRetained||recoveryAcquiring)try{await audit('retained');}catch{auditConfirmed=false;}
     if(finalResult){finalResult.cleanupConfirmed=cleanupConfirmed&&!adminGuardUnconfirmed;

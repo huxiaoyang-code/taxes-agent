@@ -1,4 +1,4 @@
-// Fully synthetic CDP/store: never opens a browser or private file.
+// 完全合成的 CDP/存储：绝不打开浏览器或私有文件。
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {TaxDownloadFinancialPassive} from '../server/tax-download-financial-passive.mjs';

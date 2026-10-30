@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-server-local-boundary-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });

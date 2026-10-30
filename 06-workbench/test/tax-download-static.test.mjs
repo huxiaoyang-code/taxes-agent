@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { inspectDownloadSource } from '../server/tax-download-static.mjs';
 
-// All sources are synthetic; never load private captured JS or tax data here.
+// 所有来源均为合成数据；此处绝不加载私有采集的 JS 或税务数据。
 const inspect = source => {
   const result = inspectDownloadSource(source);
   assert.equal(result.status, 'inspected');
@@ -165,7 +165,7 @@ test('verified public technical route segments are retained without arbitrary se
 });
 
 test('observed technical names and case-sensitive keys survive without leaking business sentinels', () => {
-  // All prefixes and values below are synthetic, not actual endpoint contracts.
+  // 下方所有前缀和值均为合成数据，不是实际端点契约。
   const secret = 'SENTINEL_OBSERVED_BUSINESS_VALUE';
   const unknown = 'SENTINEL_UNKNOWN_TECHNICAL_PREFIX';
   const result = inspect(`function getCwbbzlList(){return fetch('/szzh/getCwbbzlList');}

@@ -43,7 +43,7 @@ const A = await import("../server/accounting.mjs");
 const B = await import("../server/bank-reconciliation.mjs");
 
 process.on("exit", () => {
-  try { db.close(); } catch { /* ignore */ }
+  try { db.close(); } catch { /* 忽略 */ }
   if (!process.env.KEEP_FIXTURES) rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -242,8 +242,8 @@ function countIn(conn, sql, ...args) {
 }
 
 function createLegacySchema(conn) {
-  // Official complete core fixture: retain every failure injection below, but do
-  // not let a shape-only fake bypass the real snapshot/source-content gate.
+  // 正式完整核心测试样本：保留下方全部故障注入，但不能
+  // 让仅有结构的假对象绕过真实快照/源内容检查。
   const seed = new DatabaseSync(join(coreFixture.backupDir, LB.SNAPSHOT_FILE), { readOnly: true });
   try {
     conn.exec("PRAGMA foreign_keys=OFF");
@@ -1328,7 +1328,7 @@ function bankRowCounts(conn) {
   ]));
 }
 
-/** Real official backups; individual callers still inject their original failure. */
+/** 真实正式备份；各调用者仍注入其原有故障。 */
 function realBackupService(_file) { return LB; }
 
 /** 造一个「已迁移好银行组件」的独立临时库（最小真实账务结构 + 1002 叶子科目 + 1 个账套）。 */
@@ -2010,8 +2010,8 @@ test("安装 COMMIT 真实失败（DELETE journal 读事务）：确认回滚后
     assert.equal(retried.migrated, true);
     assert.equal(S.bankSchemaContract(conn).ok, true, "重试后组件结构必须完整");
   } finally {
-    try { conn.close(); } catch { /* ignore */ }
-    try { reader.close(); } catch { /* ignore */ }
+    try { conn.close(); } catch { /* 忽略 */ }
+    try { reader.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2070,9 +2070,9 @@ test("仅注入 ROLLBACK 抛错（单点注入，不是实测磁盘故障）：�
     const retried = await S.ensureBankSchema(conn, { dbPath: file, backupService: realBackupService(file) });
     assert.equal(retried.migrated, true, "恢复后重装必须成功（不是复用未知连接）");
   } finally {
-    try { conn.exec = realExec; } catch { /* ignore */ }
-    try { conn.close(); } catch { /* ignore */ }
-    try { reader.close(); } catch { /* ignore */ }
+    try { conn.exec = realExec; } catch { /* 忽略 */ }
+    try { conn.close(); } catch { /* 忽略 */ }
+    try { reader.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2211,8 +2211,8 @@ test("嵌套 SAVEPOINT 回滚失败：不提交半成品，区分已确认整体
     assert.equal(S.recoverBankConnectionState(conn).transactionState, "clean");
     assert.equal(auditCount(), before, "确认回滚后所有未提交写入必须消失");
   } finally {
-    try { conn.exec = realExec; } catch { /* ignore */ }
-    try { conn.close(); } catch { /* ignore */ }
+    try { conn.exec = realExec; } catch { /* 忽略 */ }
+    try { conn.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2273,8 +2273,8 @@ test("导入失败审计：回滚未确认时如实标记未留痕，未知连�
     assert.equal(batch.status, "completed");
     assert.equal(Number(conn.prepare(`SELECT COUNT(*) AS n FROM bank_transactions WHERE account_set_id=1 AND bank_account_id='BANK-AUDIT'`).get().n), 1);
   } finally {
-    try { conn.close(); } catch { /* ignore */ }
-    try { reader.close(); } catch { /* ignore */ }
+    try { conn.close(); } catch { /* 忽略 */ }
+    try { reader.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2333,7 +2333,7 @@ test("新库 + 创建回执 + 调用方外层事务：拒绝安装但不提交 /
       accountSetId: 1, bankAccountId: "BANK-OUTER", sourceId: "src-1", glAccountCode: "1002",
     }).created, true, "结束后健康银行操作必须恢复");
   } finally {
-    try { conn.close(); } catch { /* ignore */ }
+    try { conn.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2368,7 +2368,7 @@ test("现库安装 + 调用方外层事务：冲突先于备份 / DDL 与回执�
     assert.equal(migrated.migrated, true, "调用方结束后现库安装必须恢复");
     assert.equal(S.bankSchemaContract(conn).ok, true);
   } finally {
-    try { conn.close(); } catch { /* ignore */ }
+    try { conn.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2405,8 +2405,8 @@ test("BEGIN / SAVEPOINT 没建立起来：不冒充已回滚、不拉黑连接�
     assert.equal(conn.isTransaction, false);
     assert.equal(S.bankConnectionState(conn).writable, true);
   } finally {
-    try { conn.exec = realExec; } catch { /* ignore */ }
-    try { conn.close(); } catch { /* ignore */ }
+    try { conn.exec = realExec; } catch { /* 忽略 */ }
+    try { conn.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -2443,12 +2443,12 @@ test("导入失败审计不写进调用方事务：如实标记未留痕，调�
     assert.equal(S.getBatch(conn, { accountSetId: 1, bankAccountId: "BANK-OUTER-AUDIT", batchId: "OUTER-AUDIT-1" }).status,
       "completed");
   } finally {
-    try { conn.close(); } catch { /* ignore */ }
+    try { conn.close(); } catch { /* 忽略 */ }
     if (!process.env.KEEP_FIXTURES) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
-// Creation ownership regressions: use only this suite's exclusive fixture root.
+// 创建所有权回归：仅使用本套件独占的测试样本根目录。
 test("fresh 回执字段篡改、克隆和跨路径均拒绝，不退化为现库安装", async () => {
   for (const mutation of ["path", "kind", "extra", "clone", "other-path"]) {
     const dir = mkdtempSync(join(tmpdir(), "bank-receipt-"));

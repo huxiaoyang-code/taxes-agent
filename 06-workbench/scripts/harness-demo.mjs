@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Preparation/assessment only. This script never invokes a model and never
-// manufactures an Agent trace. Run Pi separately after explicit user permission.
+// 仅准备或评估。此脚本绝不调用模型，也绝不
+// 伪造 Agent 轨迹。须经用户明确许可后另行运行 Pi。
 import { mkdirSync, writeFileSync, readdirSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,8 +10,8 @@ const [command,path]=process.argv.slice(2),root=path&&resolve(path);
 if(command==='prepare'&&root) {
   if(existsSync(root))throw new Error('demo_directory_must_be_new');mkdirSync(root,{recursive:true});
   const fixture=createPostingFixture(join(root,'fixture-engine')),originals=join(root,'customer-originals');mkdirSync(originals);
-  // Remove every pre-normalized business input. The independent Agent sees only
-  // newly authored originals plus the explicit local database identity.
+  // 移除全部预先规范化的业务输入。独立 Agent 只能看到
+  // 新编制的原件以及明确的本机数据库身份。
   for(const name of readdirSync(fixture.dir))if(/\.(json|csv|xlsx)$/.test(name))unlinkSync(join(fixture.dir,name));
   writeFileSync(join(originals,'客户原始资料.unfamiliar'),`【合成客户寄来的业务说明，不是模板】\n企业：${fixture.key}；2026年1月新设，2026-Q1；小企业会计准则；小规模季度申报。\n3月24日已完成普通主营咨询服务，合同 SYN-CONSULT-24，当日验收并取得索款权；截至季末未收款。\n普通发票号 310024；销方为本企业；购方 SYN-BUYER。\n票面排版如下（单位人民币元）：\n    总价  1,246.17\n    其中税额  12.34\n    不含税价  1,233.83\n此项为境内普通主营服务，只有一次履约，不含资产、工程或工资。\n另一张采购收据暂缺实际用途及受益期，票面总价279.68，税8.15，未付款。不得猜用途。\n负责人声明本季度无其他业务、工资、资产或银行账户；会计税务属性确认仍待核验。\n`);
   const target={dbPath:fixture.dbPath,databaseInstanceId:fixture.instanceId,enterpriseKey:fixture.key,accountSetId:fixture.id};

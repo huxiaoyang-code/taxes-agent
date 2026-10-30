@@ -1,4 +1,4 @@
-// Synthetic original documents only. Monetary expectations below are independent hand calculations.
+// 仅使用合成原始文档。下方金额预期来自独立手算。
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -365,7 +365,7 @@ try {
   await test('一般VAT预缴抵减与两地城建：VAT2000/已预1000，预缴地5%50+总部7%70=120；下期不重复抵',()=>{
     const e={...entity,industry:'service',vatStatus:'general'},rows=[...nationalFacts('2026-01'),coverage('2026-01'),coverage('2026-02'),fact('VATOPEN','opening_vat',{asOfPeriod:'2026-01',declarationVerified:true,amount:'0.00'}),{...workFact('service_complete','33333.33','1'),id:'JAN-SALE'}, {...workFact('service_complete','8333.33','1'),id:'FEB-SALE',date:'2026-02-10',businessIdentity:{issuerKey:'CUSTOMER',documentNumber:'FEB-VAT',event:'service_complete'}},fact('FILING','filing_context',{assessmentPeriod:'2026-01',declaredOn:'2026-02-15'}),fact('NEW-NO-HALF','six_tax_relief_qualification',{basis:'new_enterprise_before_first_final',noFirstFinalYet:true,asOfDate:'2026-01-31',staffAtSnapshot:'301',assetsAtSnapshot:'100000.00',restrictedIndustry:false}),fact('PREPAID','tax_payment',{obligationId:'vat_prepayment',amount:'1000.00',assessmentPeriod:'2026-01',projectId:'PROJECT',localityKey:'SITE',receiptIssuer:'SYNTHETIC-TAX',prepaymentReceiptNumber:'PRE-001',taxReceiptVerified:true,paymentReference:'BANK-PRE-001'}),fact('SITE-LOCATION','tax_location',{localityKey:'SITE',classification:'county_town'})];
     const qualification=rows.find(r=>r.id==='NEW-NO-HALF');Object.assign(qualification,{snapshotAsOf:'2026-01-31',staffCount:301,assetsOriginalAmount:'100000.00'});
-    // Qualification is an original assessment snapshot, deliberately outside small-micro conditions.
+    // 资格是原始评估快照，刻意设置为不满足小型微利条件。
     const a=evaluateAgencyAccounting(document(rows,{entity:e})),tax=calculateAgencyObligations({scope,entity:e,accounting:a,records:rows});const v=tax.obligations.find(o=>o.obligationId==='vat');assert.equal(v.taxBeforePrepayment,'2000.00');assert.equal(v.due,'1000.00');assert.equal(tax.sixTaxRelief.eligible,false);assert.equal(tax.obligations.find(o=>o.obligationId==='urban_maintenance').due,'120.00');
     const next=calculateAgencyObligations({scope:{...scope,period:'2026-02'},entity:e,accounting:evaluateAgencyAccounting(document(rows,{entity:e,scope:{...scope,period:'2026-02'}})),records:rows});assert.equal(next.obligations.find(o=>o.obligationId==='vat').due,'500.00');assert.equal(next.obligations.find(o=>o.obligationId==='vat').prepaymentCredit,'0.00');
   });
@@ -604,8 +604,8 @@ try {
     const eu=extended('customs',importFact({date:'2026-03-10',originCountry:'FR',manufacturerLegalName:'ELVIR',manufacturerIdentityDocumentNumber:'ELVIR-ORIGINAL'}),{scope:{...scope,period:'2026-03'}});assert.equal(eu.ordinaryCustomsDuty,'800.00');assert.equal(eu.countervailingDuty,'1120.00');assert.equal(eu.importVat,'1549.60');assert.throws(()=>extended('customs',importFact({originCountry:'FR',manufacturerLegalName:'ELVIR',manufacturerIdentityDocumentNumber:'ELVIR-ORIGINAL'})),e=>e.code==='agency_extended_customs_eu_dairy_guarantee_reassessment_required');
   });
   await test('实际地区选择遇同槽冲突不取首项，计算原问题真实传到目录conflict；有效国家义务与地区参数保留组合来源',async()=>{
-    // A broken future code revision is represented by a temporary module fixture.
-    // The active registry is never mutated and no caller can activate a fixture.
+    // 用临时模块测试样本表示未来损坏的代码修订。
+    // 绝不修改活动注册表，任何调用者都不能激活测试样本。
     const copyModule=(name,replacements={},tail='')=>{const sourceUrl=new URL(`../server/${name}`,import.meta.url),path=join(root,`fixture-${name}`);let code=readFileSync(sourceUrl,'utf8').replace(/(from\s*|import\s*\()\s*(['"])(\.\/[^'"\n]+\.mjs)\2/g,(all,prefix,quote,spec)=>`${prefix}${quote}${replacements[spec]??new URL(spec,sourceUrl).href}${quote}`);writeFileSync(path,code+tail);return pathToFileURL(path).href;};
     const regional=copyModule('agency-regional-rules.mjs',{},'\nrules.push(structuredClone(rules[0]));\n'),extendedModule=copyModule('agency-extended-tax-rules.mjs',{'./agency-regional-rules.mjs':regional}),taxModule=copyModule('agency-tax-rules.mjs',{'./agency-extended-tax-rules.mjs':extendedModule}),broken=await import(taxModule),rows=[...nationalFacts('2026-01'),coverage('2026-01'),landFact()],accounting=evaluateAgencyAccounting(document(rows,{entity:{...entity,region:'CN-11'}})),calculated=broken.calculateAgencyObligations({scope,entity:{...entity,region:'CN-11'},records:rows,accounting}),land=calculated.obligations.find(o=>o.obligationId==='urban_land');assert(land.issues.some(i=>i.code==='agency_regional_rule_conflict'));assert.equal(land.due,undefined);assert.equal(resolveAgencyRuleTrace({scope,entity,records:rows,obligations:calculated.obligations,accounting}).trace.find(t=>t.ruleId==='agency.tax.urban_land').state,'conflict');
   });
@@ -631,8 +631,8 @@ try {
     for(const [id,create]of [['consumption',exciseSaleFact],['resource',resourceSaleFact]]){
       const rows=[...reviewedSales(),create()],d=document(rows),a=evaluateAgencyAccounting(d),first=calculateAgencyObligations({scope,entity,records:rows,accounting:a});assert.equal(first.obligations.find(o=>o.obligationId===id).due,id==='consumption'?'500.00':'300.00');
       for(const extra of [create('SAME-MONTH'),create('NEXT-MONTH',{date:'2026-02-10'})]){const all=[...rows,extra],p=extra.date.slice(0,7),sc={...scope,period:p},tax=calculateAgencyObligations({scope:sc,entity,records:all,accounting:evaluateAgencyAccounting(document(all,{scope:sc}))}),o=tax.obligations.find(o=>o.obligationId===id);assert.equal(o.due,undefined);assert(o.issues.some(i=>i.code=== (p==='2026-01'?'agency_extended_same_tax_sale_duplicate_claim':'agency_extended_sales_tax_period_conflict')));assert(!tax.entries.some(e=>e.obligationId===id));assert.equal(resolveAgencyRuleTrace({scope:sc,entity,records:all,obligations:tax.obligations,accounting:a}).trace.find(t=>t.ruleId===`agency.tax.${id}`).state,'conflict');}
-      // Different taxes do not share a consumption key. This assertion tests attribution isolation only,
-      // and does not establish that one product legally belongs to both selected tax categories.
+      // 不同税种不共用消费键。此断言只验证归属隔离，
+      // 不代表同一产品在法律上同时属于所选的两种税目。
       const other=id==='consumption'?resourceSaleFact():exciseSaleFact(),all=[...rows,other],tax=calculateAgencyObligations({scope,entity,records:all,accounting:evaluateAgencyAccounting(document(all))});assert(!tax.obligations.flatMap(o=>o.issues??[]).some(i=>i.code==='agency_extended_same_tax_sale_duplicate_claim'));
       const alias=sale('ALIAS-SALE',{businessIdentity:{...rows.find(r=>r.id==='REVIEW-SALE').businessIdentity},lines:[{itemId:'PRODUCT',quantity:'1',unitPrice:'10000.00',priceIncludesVat:false,vatCategory:'goods'}]}),aliasClaim=create('ALIAS-CLAIM',{saleFactIds:['ALIAS-SALE']}),aliased=[...rows,alias,aliasClaim],aliasTax=calculateAgencyObligations({scope,entity,records:aliased,accounting:{...a,vatTransactions:[...a.vatTransactions,{...a.vatTransactions[0],factId:alias.id}]}});assert(aliasTax.obligations.find(o=>o.obligationId===id).issues.some(i=>i.code==='agency_extended_same_tax_sale_duplicate_claim'));
     }

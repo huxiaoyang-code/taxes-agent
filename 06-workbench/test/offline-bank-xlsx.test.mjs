@@ -1,4 +1,4 @@
-// Synthetic originals only. No ledger imports, prepared accounting entries or expected product inputs.
+// 仅使用合成原件。不导入账簿，不准备会计分录或预期产品输入。
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate';

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed synthetic test identities, independent of display names and production defaults.
+// 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-entry-test-mjs-' + (++identityFixtureSequence) });
 const identityFixtureCreate = (A, options) => A.createAccountSet({ enterprise: identityFixture(), ...options });
@@ -43,7 +43,7 @@ const logBuffer = [];
 for (const level of ["log", "error", "warn"]) {
   const original = console[level].bind(console);
   console[level] = (...args) => {
-    try { logBuffer.push(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")); } catch { /* ignore */ }
+    try { logBuffer.push(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")); } catch { /* 忽略 */ }
     original(...args);
   };
 }
@@ -746,5 +746,5 @@ await test("14. 所有信封与捕获日志都不含合成敏感标记", async (
 
 const failed = results.filter((ok) => !ok).length;
 console.log(`\n${results.length - failed}/${results.length} 通过\n`);
-try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
+try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略 */ }
 process.exitCode = failed ? 1 : 0;

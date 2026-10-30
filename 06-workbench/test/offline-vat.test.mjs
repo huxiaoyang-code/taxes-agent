@@ -217,7 +217,7 @@ try {
     const stale = calc(f); blocked(stale); assert.equal(stale.comparison.status, 'stale_previous_new_version');
     const independent = fixture(['300124.00']); post(independent); const p = calc(independent);
     assert.equal(cell(p, 15).value, '9003.72'); assert.equal(cell(p, 16).value, '6002.48'); assert.equal(cell(p, 22).value, '3001.24');
-    assert.notEqual(p.scope.accountSetId, old.scope.accountSetId); // This is not an existing-book correction/receipt chain.
+    assert.notEqual(p.scope.accountSetId, old.scope.accountSetId); // 这不是已有账簿的更正/回执链。
   });
   await test('rules are recursively frozen and clones do not contaminate next invocation; legal and form dates differ', () => {
     assert.throws(() => { VAT_RULE_REGISTRY.sources.relief.effectiveFrom = '2027-01-01'; }, TypeError);

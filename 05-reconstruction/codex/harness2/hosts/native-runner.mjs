@@ -38,7 +38,7 @@ export function inspectEvent(value){
   function visit(v){
     if(!v||typeof v!=='object')return;
     if(v.isError===true||v.is_error===true||v.success===false||(v.id!==undefined&&v.error)||['error','failed','failure','blocked','rejected','cancelled'].includes(v.status))failures.push({status:v.status??'error',code:typeof v.error==='string'?v.error:typeof v.code==='string'?v.code:'native_tool_error'});
-    // MCP text content frequently holds the actual business envelope beneath success:true.
+    // MCP text 内容往往在 success:true 之下包含真正的业务信封。
     if(v.type==='text'&&typeof v.text==='string'){try{visit(JSON.parse(v.text));}catch{}}
     for(const [k,x] of Object.entries(v))if(k!=='text'&&x&&typeof x==='object'){if(Array.isArray(x))x.forEach(visit);else visit(x);}
   }
@@ -66,7 +66,7 @@ export async function runPlan(plan,{env=process.env,emit=value=>process.stdout.w
     if(plan.mode!=='run')return;
     try{const event=JSON.parse(line);events++;const innerErrors=inspectEvent(event);failures+=innerErrors.length;emit({type:'native_event',host:plan.host,event,innerErrors});}catch{emit({type:'native_text',host:plan.host,text:line});}
   }});
-  // Raw diagnostics are local only; no key-bearing environment or model requests are logged.
+  // 原始诊断仅留本机；不记录含密钥的环境变量或模型请求。
   if(result.stderr)process.stderr.write(result.stderr);
   if(plan.mode==='check'){
     emit({type:'native_probe',host:plan.host,stdout:result.stdout,probe:plan.probe,modelInvoked:false});

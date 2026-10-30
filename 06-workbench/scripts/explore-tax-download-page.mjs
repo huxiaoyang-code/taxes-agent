@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fixed local administrator CLI. Importing or asking for help never opens a browser.
+// 固定的本机管理员 CLI；导入模块或请求帮助均不会打开浏览器。
 import {pathToFileURL} from 'node:url';
 import {TaxDownloadPage} from '../server/tax-download-page.mjs';
 

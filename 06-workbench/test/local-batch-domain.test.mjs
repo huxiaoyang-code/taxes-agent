@@ -137,7 +137,7 @@ async function boundaries(A,S,R,db){
   const key='NORMALIZED-'+index,set=create(key),operationId='normalized-'+randomUUID(),options={dryRun:false,accountSetId:index===1?String(set.id):set.id,source:{system:'boundary',enterpriseKey:key},payload:imported(key),batchId:key,confirmNewBinding:true,...extra};if(index===2){delete options.accountSetId;options.account_set_id=String(set.id);}
   const first=C.withRequestMetadata({operationId,actor:'domain'},()=>I.importIncremental(options));assert.equal(first.ok,true);const count=db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(set.id).n;const repeated=C.withRequestMetadata({operationId,actor:'domain'},()=>I.importIncremental(options));assert.deepEqual(repeated,first);assert.equal(db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(set.id).n,count);const operation=db.prepare('SELECT action,scope_kind,targets_json FROM audit_operations WHERE operation_id=?').get(operationId);assert.equal(operation.action,'import.append');assert.equal(operation.scope_kind,'account_set');assert.equal(JSON.parse(operation.targets_json).accountSetId,set.id);
  }
- // Public aliases share static rejection before even a management epoch write.
+ // 公开别名共用静态拒绝检查，甚至在管理 epoch 写入之前就拒绝。
  for(const [index,extra] of [{},{mode:' append '},{account_set_id:'alias'}].entries()){
   const key='STATIC-ALIASED-'+index,set=create(key),options={dryRun:false,accountSetId:String(set.id),source:{system:'boundary',enterpriseKey:key},payload:{account_set:{name:key,start_period:'2026-01'},accounts:[{code:'560201',name:'非法明细',category:'损益',direction:'credit'}]},batchId:key,confirmNewBinding:true,...extra};if(index===2){delete options.accountSetId;options.account_set_id=String(set.id);}
   const snapshot=()=>JSON.stringify(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,db.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()])),before=snapshot(),changes=db.prepare('SELECT total_changes() n').get().n;
@@ -148,8 +148,8 @@ async function boundaries(A,S,R,db){
  const lossKey='LOSS-IMPORT',loss=create(lossKey);let removed=false;
  const lossResult=await run(lossKey,loss,[{period:'2026-01',imports:[{batchId:lossKey,mode:'append',confirmNewBinding:true,payload:imported(lossKey)}]}],{afterImportCommit(){const lock=S.listLocks(db).find(l=>l.resource_key===`account-set:${loss.id}`);assert.ok(lock);S.releaseLock(db,{resourceKey:lock.resource_key,instance:lock.owner_instance,token:lock.fencing_token});removed=true;}});
  assert.equal(removed,true);assert.equal(lossResult.status,'needs_review');assert.equal(db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(loss.id).n,0);assert.equal(db.prepare('SELECT COUNT(*) n FROM import_voucher_sources WHERE account_set_id=?').get(loss.id).n,0);assert.equal(db.prepare("SELECT COUNT(*) n FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.status='succeeded'").get(loss.id).n,0);
- // Inject actual SQL AFTER the parent's terminal UPDATE and BEFORE its COMMIT.
- // The original authorizer and real SQLite transaction remain in force.
+ // 在父项终态 UPDATE 之后、COMMIT 之前注入实际 SQL。
+ // 原始授权器及真实 SQLite 事务仍生效。
  const lateKey='LOSS-LATE',late=create(lateKey);const v=S.validateManifest({schemaVersion:1,jobKey:lateKey,concurrency:1,items:[{itemKey:lateKey,source:{system:'boundary',enterpriseKey:lateKey},accountSetId:late.id,periods:[{period:'2026-01',imports:[{batchId:lateKey,mode:'append',confirmNewBinding:true,payload:imported(lateKey)}]}]}]});assert.equal(v.ok,true);const json=S.canonicalJson(v.manifest),plan=S.buildPlan({manifest:v.manifest,manifestDir:root});const saved=S.createJob(db,{manifest:v.manifest,manifestJson:json,manifestHash:S.sha256(json),...plan,outputDir:join(root,'boundaries')});const stage=db.prepare('SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.job_id=?').get(saved.job.id),target='stage:'+stage.id+':1';
  const originalPrepare=db.prepare,rawPrepare=originalPrepare.bind(db);let lateInjected=false;
  db.prepare=function(sql){const statement=rawPrepare(sql);if(!String(sql).startsWith('UPDATE audit_operations SET state='))return statement;return new Proxy(statement,{get(object,property){if(property==='run')return (...args)=>{const result=object.run(...args);if(!lateInjected&&args[0]==='succeeded'&&args[5]===target){lateInjected=true;rawPrepare('UPDATE local_batch_lock_epochs SET last_token=last_token+1 WHERE resource_key=?').run(`account-set:${late.id}`);rawPrepare('UPDATE local_batch_locks SET fencing_token=fencing_token+1 WHERE resource_key=?').run(`account-set:${late.id}`);}return result;};const value=Reflect.get(object,property,object);return typeof value==='function'?value.bind(object):value;}});};
@@ -174,7 +174,7 @@ async function boundaries(A,S,R,db){
   };
   const result=await run(key,set,periods,mode==='artifact'?{afterArtifactPublish:mutate}:{beforeArtifactPublish:mutate});assert.equal(changed,true,mode);assert.equal(result.status,'needs_review',mode+JSON.stringify(result));assert.equal(db.prepare("SELECT COUNT(*) n FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'report:%' AND s.status='succeeded'").get(set.id).n,0);reportCases.push({mode,result:result.results});
  }
- // True year-end chain with the established profit rule, not a synthetic balance rewrite.
+ // 采用既定利润规则的真实年末链，不是合成余额重写。
  const yearKey='YEAR-CROSS',year=create(yearKey,'2026-12');A.setOpeningBalances(year.id,[{code:'1002',debit:10000},{code:'3001',credit:10000}]);
  const periods=['2026-12','2027-01'].map((period,index)=>({period,imports:[{batchId:yearKey+'-'+period,mode:'append',confirmNewBinding:true,payload:{...imported(yearKey,period,index?1250:1700),account_set:{name:yearKey,start_period:'2026-12'}}}],post:{vouchers:[{sourceVoucherId:yearKey+'-'+period}]},depreciation:true,carryforward:{yearEnd:index===0},periodCheck:true,close:true,reports:[{kind:'income-statement',formats:['csv']},{kind:'balance-sheet',formats:['csv']}]}));
  const crossed=await run(yearKey,year,periods);assert.equal(crossed.status,'succeeded');assert.equal(A.incomeStatement(year.id,'2026-12').current['净利润'],1700);assert.equal(A.incomeStatement(year.id,'2027-01').ytd['净利润'],1250);assert.equal(A.balanceSheet(year.id,'2027-01').totals.equity,12950);
@@ -321,8 +321,8 @@ async function reportPublicationBoundary(A,S,R,db,mode){
    if(mode==='old-publishing')db.prepare("UPDATE local_batch_artifacts SET status='publishing' WHERE id=?").run(oldArtifact.id);
    if(mode.startsWith('rerender-'))db.prepare("UPDATE local_batch_artifacts SET status='invalid' WHERE id=?").run(oldArtifact.id);
    if(mode==='old-csv-snapshot'){const csv='new mutable CSV from later snapshot';db.prepare('UPDATE local_batch_snapshots SET csv_text=?,csv_hash=? WHERE item_id=?').run(csv,S.sha256(csv),oldReport.item_id);}
-   // This targeted .all snapshot read occurs inside publishLocked, after the
-   // cached artifact and initial exists/hash check. Mutate real rows/files here.
+   // 这次定向 .all 快照读取发生于 publishLocked 内，在
+   // 缓存产物及首次 exists/hash 检查之后。在此修改真实行/文件。
    const prepare=db.prepare;
    db.prepare=function(sql){const stmt=prepare.call(db,sql);if(!String(sql).startsWith('SELECT * FROM local_batch_snapshots WHERE item_id=? AND period=? AND kind=?'))return stmt;return new Proxy(stmt,{get(object,property){if(property==='all')return (...args)=>{if(!injected&&mode.startsWith('recover-'))mutate();return object.all(...args);};const value=Reflect.get(object,property,object);return typeof value==='function'?value.bind(object):value;}});};
    try{result=await R.resumeJob({jobKey:key,hooks:{beforeArtifactPublish(){if(mode==='rerender-valid')injected=true;else if(mode.startsWith('rerender-'))mutate();else assert.fail('recovery must not rerender or republish');}}});}finally{db.prepare=prepare;}
@@ -386,7 +386,7 @@ async function sourceCompleteness(A,S,R,db){
  const before=finance(set);assert.equal((await run(key+'-replay',set,source,[importPeriod(key,p)])).status,'succeeded');assert.equal(finance(set),before,'same batch replay stays read-only');
  const dedup=key+'-dedup';assert.equal((await run(dedup,set,source,[importPeriod(dedup,p)])).status,'succeeded');assert.equal(I.getImportBatch(dedup).batch.result.vouchersCreated,0);assert.equal(I.getImportBatch(dedup).batch.result.vouchersDeduplicated,2);assert.equal((await R.resumeJob({jobKey:dedup})).status,'succeeded');assert.equal(db.prepare('SELECT COUNT(*) n FROM vouchers WHERE account_set_id=?').get(set.id).n,2);
  const empty=key+'-empty';assert.equal((await run(empty,set,source,[importPeriod(empty,{account_set:p.account_set,vouchers:[]})])).status,'succeeded');assert.equal((await R.resumeJob({jobKey:empty})).status,'succeeded');assert.equal(I.getImportBatch(empty).voucherCount,0);
- // Older persisted results have counts only; saved bytes + checkpoint are sufficient.
+ // 旧持久化结果只有计数；已保存字节及检查点已足够。
  const old=I.getImportBatch(key).batch.result;delete old.sourceTrace;db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(old),key);const legacyStage=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id WHERE i.account_set_id=? AND s.stage_key LIKE 'import:%' ORDER BY s.id LIMIT 1").get(set.id),legacyItem=db.prepare('SELECT * FROM local_batch_items WHERE id=?').get(legacyStage.item_id);assert.equal(B.verifyStageEvidence({stage:legacyStage,item:legacyItem}).ok,true,'legacy import checkpoint proves complete identities');assert.equal(I.getImportBatch(key).voucherCount,2);
  const future={dryRun:false,mode:'append',accountSetId:set.id,source,batchId:key+'-future',confirmNewBinding:true,payload:payload(key,'2026-02')};assert.equal(I.importIncremental(future).ok,true);
  const second={...future,batchId:key+'-other-system',source:{system:'r5-other',enterpriseKey:key},payload:payload(key+'-other',period,2)};assert.equal(I.importIncremental(second).ok,true);
@@ -394,7 +394,7 @@ async function sourceCompleteness(A,S,R,db){
  const stable=finance(set);assert.equal((await run(key+'-scoped-report',set,{system:'report-reader',enterpriseKey:key},[{period,reports:[{kind:'income-statement',formats:['csv']}]}])).status,'succeeded');assert.equal(finance(set),stable);assert.equal(A.incomeStatement(set.id,period).current['净利润'],37.02);
  assert.equal(B.verifyReportSourceEvidence({item:{account_set_id:set.id,enterprise_key:key,source_system:'reader'},period}).ok,true);
  const manualKey='R5-manual',manual=create(manualKey);A.createVoucher(manual.id,{period,voucher_date:period+'-03',number:1,status:'posted',entries:[{code:'1002',debit:4.56},{code:'5001',credit:4.56}]});assert.equal((await run(manualKey,manual,{system:'reader',enterpriseKey:manualKey},[{period,reports:[{kind:'income-statement',formats:['csv']}]}])).status,'succeeded');
- // Genuine upgrade: strip old result extensions BEFORE any local input/checkpoint.
+ // 真实升级：在任何本机输入/检查点之前剥离旧结果扩展。
  for(const mode of ['valid','missing-link','missing-source','bad-fingerprint']){
   const legacyKey='R6-first-create-'+mode,legacySource={system:'r6-create',enterpriseKey:legacyKey},legacyRequest={dryRun:false,mode:'create',source:legacySource,batchId:legacyKey,payload:payload(legacyKey)};
   const created=I.importIncremental(legacyRequest);assert.equal(created.ok,true);const legacySet={id:created.accountSetId};
@@ -420,7 +420,7 @@ async function sourceCompleteness(A,S,R,db){
   if(mode==='raw-deleted')mutations['both-all'](rawSet);else{const result=I.getImportBatch(rawKey).batch.result;delete result.sourceTrace;db.prepare('UPDATE import_batches SET result_json=? WHERE batch_id=?').run(JSON.stringify(result),rawKey);assert.equal(I.getImportBatch(rawKey).voucherCount,2,'legacy raw batch remains independently queryable');}
   const unchanged=finance(rawSet);assert.equal((await run(rawKey+'-report',rawSet,{system:'reader',enterpriseKey:rawKey},[{period,reports:[{kind:'income-statement',formats:['csv']}]}])).status,'needs_review',mode+' cannot infer missing source identities');assert.equal(finance(rawSet),unchanged);assert.equal(A.incomeStatement(rawSet.id,period).current['净利润'],18.51);console.log('PASS R5 '+mode+' report review without source repair');
  }
- // R9: scope is established from actual vouchers before excluding future tuples.
+ // R9：先从实际凭证建立作用域，再排除未来元组。
  const outputFiles=(dir=out)=>existsSync(dir)?readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?outputFiles(join(dir,e.name)):[{file:join(dir,e.name),hash:S.sha256(readFileSync(join(dir,e.name)))}]).sort((a,b)=>a.file.localeCompare(b.file)):[];
  const r9Cases=['raw-both','raw-link','raw-source','raw-period','raw-missing-voucher','raw-wrong-book','saved-period','saved-input-period','checkpoint-period','legacy-checkpoint-period'];
  for(const mode of r9Cases){
@@ -445,15 +445,15 @@ async function sourceCompleteness(A,S,R,db){
   const expectedSources=input?I.expectedImportSources(JSON.parse(Buffer.from(input.content).toString('utf8')),target.id,record).sources:undefined,checkpointTrace=evidence?.sourceTrace.map(t=>({...t,period:evidence.vouchers.find(v=>v.sourceVoucherId===t.sourceVoucherId)?.period}));
   const bad=I.verifyImportBatchSources(k,{...scope,expectedSources,checkpointTrace});assert.deepEqual(bad,{ok:false,reason:'import_source_trace_changed'},mode+' direct verifier');assert.deepEqual(B.verifyReportSourceEvidence({item,period}),bad,mode+' report verifier');
   const oldFinance=finance(target),otherFinance=moved&&finance(moved),oldInputs=input&&{...input},oldStage=stage&&{...stage},oldFiles=outputFiles(),oldArtifacts=db.prepare('SELECT * FROM local_batch_artifacts ORDER BY id').all();
-  // Preserve the strict startup schema: inject saved-byte corruption only at
-  // the real publish window, after the new report job has passed admission.
+  // 保留严格的启动 schema：仅在真实发布窗口注入已保存字节损坏，
+  // 此时新报告作业已经通过准入。
   if(inputOriginal)db.prepare('UPDATE local_batch_inputs SET content=?,source_hash=? WHERE input_key=?').run(inputOriginal.content,inputOriginal.source_hash,inputOriginal.input_key);
   const job=k+'-report',report=await run(job,target,{system:'reader',enterpriseKey:k},[{period,reports:[{kind:'income-statement',formats:['csv']}]}],changeInput?{beforeArtifactPublish:changeInput}:{});
   assert.equal(report.status,'needs_review',mode+' actual report-only runner');const reportStages=db.prepare("SELECT s.* FROM local_batch_stages s JOIN local_batch_items i ON i.id=s.item_id JOIN local_batch_jobs j ON j.id=i.job_id WHERE j.job_key=? AND s.stage_key LIKE 'report:%'").all(job);assert.equal(reportStages.length,1);assert.equal(reportStages[0].status,'needs_review');assert.equal(reportStages[0].error_code,'report_evidence_changed');
   assert.deepEqual(db.prepare('SELECT * FROM local_batch_artifacts ORDER BY id').all(),oldArtifacts,'no new artifact or repaired historical artifact');assert.deepEqual(outputFiles(),oldFiles,'no externally published file, previous bytes retained');assert.equal(finance(target),oldFinance,'no source/finance repair or replay');if(moved)assert.equal(finance(moved),otherFinance,'no repair of moved actual voucher');if(input)assert.deepEqual({...db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(input.input_key)},oldInputs);if(stage)assert.deepEqual({...S.getStage(db,stage.id)},oldStage,'successful original checkpoint is untouched');
   writeFileSync(join(root,k+'-result.json'),JSON.stringify({mode,direct:bad,report,reportStages,originalCheckpoint:oldStage,originalInput:inputOriginal,tamperedInput:inputOriginal&&oldInputs},null,2));
-  // Only a fully successful test restores its own saved-input fixture so later
-  // independent cases retain the schema contract. Failed scenes remain intact.
+  // 只有测试完全成功，才恢复其自己的已保存输入测试样本，让后续
+  // 独立用例保持 schema 契约。失败现场保持原样。
   if(inputOriginal){db.prepare('UPDATE local_batch_inputs SET content=?,source_hash=? WHERE input_key=?').run(inputOriginal.content,inputOriginal.source_hash,inputOriginal.input_key);assert.deepEqual({...db.prepare('SELECT * FROM local_batch_inputs WHERE input_key=?').get(inputOriginal.input_key)},{...inputOriginal});}
   console.log('PASS R9 '+mode+' actual scope before filtering / report-only needs_review / no publication or replay');
  }

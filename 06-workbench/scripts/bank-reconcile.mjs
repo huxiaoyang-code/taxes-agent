@@ -196,7 +196,7 @@ function openExplicitDatabase(rawPath) {
       throw new CliError("db_not_workbench", "该文件不是本产品账务库（缺少账务核心表）", { missing });
     }
   } catch (e) {
-    try { if (db) db.close(); } catch { /* ignore */ }
+    try { if (db) db.close(); } catch { /* 忽略 */ }
     if (e instanceof CliError) throw e;
     // 非 SQLite 文件 / 损坏文件：不输出驱动原始堆栈，统一按「不是本产品账务库」处理。
     throw new CliError("db_not_workbench", "该文件不是本产品账务库（无法读取 SQLite 结构）", { dbPath: abs });
@@ -690,7 +690,7 @@ function yuan(cents) {
   return IMPORT.formatCents(cents);
 }
 
-// ------------------------------------------------------------------ main
+// ------------------------------------------------------------------ 主入口
 async function main(argv) {
   const { flags, positional } = parseArgs(argv);
   if (flags.help === true || flags.h === true) {
