@@ -188,3 +188,5 @@
 - `06-workbench/server/quarter-review.mjs`：中文 HTML 复核入口和类型明确的账表数据包、实际调用及初读结构关联。
 - `06-workbench/server/direct-finance-details.mjs`：本进程底稿的固定分页业务投影；范围、版本和时效校验，继续独立于正式写账。
 - `06-workbench/test/quarter-review.test.mjs`：净价/含税参数语义错映、原值拒绝、边界读取、现金流拆分、真实临时账库月度报表及投影引用负例。
+
+- 季度已知缺件呈现：`06-workbench/server/quarter-review.mjs` 独立于参数映射收集同范围可信核算问题，生成主复核项及“已知缺件及影响”；`06-workbench/test/quarter-review.test.mjs` 覆盖无字段映射、历史问题保留、跨企业/篡改回执排除、影响金额未知和首页展示。
