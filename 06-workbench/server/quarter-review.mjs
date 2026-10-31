@@ -139,7 +139,7 @@ export async function buildQuarterReview({target,dbPath=process.env.FINANCE_DATA
  checks.push({label:'业务原件完整性与规则适用',status:'待人工复核',reason:'逐值匹配及账表勾稽无法证明资料真实完整，也不能替代字段含义和规则适用判断。'});
  checks.push({label:'现金流分类政策确认',status:cashFlow.classificationPolicy.status,reason:cashFlow.classificationPolicy.reason});
  if(omitted)checks.push({label:'后台记录覆盖',status:'未完成',reason:'调用记录超过本次扫描上限。'});
- const bundle={version:'chinese-quarter-review/1',generatedAt:new Date().toISOString(),...snapshot,evidenceGroups:groups,businessIssues,cashFlow,checks,sheets:makeSheets(snapshot,groups,cashFlow,checks,businessIssues),review:{approved:false,submittable:false,unresolved:checks.filter(c=>c.status!=='通过').length}};
+ const bundle={...snapshot,version:'chinese-quarter-review/1',snapshotVersion:snapshot.version,generatedAt:new Date().toISOString(),evidenceGroups:groups,businessIssues,cashFlow,checks,sheets:makeSheets(snapshot,groups,cashFlow,checks,businessIssues),review:{approved:false,submittable:false,unresolved:checks.filter(c=>c.status!=='通过').length}};
  const root=directory(outputDir),folder=join(root,new Date().toISOString().replace(/[-:.]/g,'')+'_'+randomUUID());mkdirSync(folder);
  const bundleRef=join(folder,'账表数据.json'),reportRef=join(folder,'季度账务复核.html'),bundleData=Buffer.from(JSON.stringify(bundle,null,2)+'\n'),bundleSha256=sha(bundleData),bundleBytes=bundleData.length;writeFileSync(bundleRef,bundleData,{flag:'wx',mode:0o600});writeFileSync(reportRef,renderQuarterReview(bundle),{flag:'wx',mode:0o600});
  annotateFinanceCall({scope:binding.scope,configuredTarget:{databasePath:binding.dbPath,accountSetId:target.accountSetId},artifactRefs:[reportRef,bundleRef],codeDigest:sha(readFileSync(fileURLToPath(import.meta.url)))});
