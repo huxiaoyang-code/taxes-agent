@@ -3,6 +3,8 @@ import { FINANCE_SUMMARY_INPUT_SCHEMA } from '../../../../06-workbench/server/fi
 const str={type:'string',minLength:1};
 const spec=(name,description,properties={},required=[],extra={})=>({name,description,status:'available',origin:'local',inputSchema:{type:'object',additionalProperties:false,properties,required,...extra},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false,idempotentHint:true}});
 export const DIRECT_TOOLS=[
+ spec('finance_workpaper_details','按需分页读取本服务进程签发底稿的固定业务投影：逐笔凭证草稿、库存层和退货成本。校验原件、工件版本及目标账套，不读取任意文件，不自动记账。',{target:MATERIAL_PROPERTIES.target,artifactRef:str,section:{enum:['vouchers','inventory','return_costs']},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}},['target','artifactRef','section']),
+ spec('finance_quarter_review','从实际账库同一只读快照生成中文完整季度账表及参数复核报告，包含科目余额、利润、资产负债、现金流和原件表头映射；不记账、不认定人工批准。',{target:{type:'object',additionalProperties:false,required:['accountSetId','period'],properties:{accountSetId:{type:'integer',minimum:1},period:{type:'string',pattern:'^202[67]-(03|06|09|12)$'}}}},['target']),
  { ...spec('finance_tax_summary_calculate','依据精确来源绑定的税务汇总数据进行独立条件试算；先用finance_record_contract(recordType=tax_summary)读取支持分支和字段。不证明完整账务、资格真实性或申报完成。'),inputSchema:FINANCE_SUMMARY_INPUT_SCHEMA },
  spec('finance_record_contract','按需发现所有现有原生类型、已核字段和规则引用；明确示例/字段披露完整度，不把无示例说成算法不支持。',{recordType:{type:'string',pattern:'^[a-z][a-z0-9_]{0,79}$'}}),
  spec('finance_rules','查询实际规则目录、有效期、适用条件和官方出处；目录存在不等于客户适用。',{ruleId:str,revision:str,filters:{type:'object',additionalProperties:false,properties:{obligationId:str,kind:str,region:str,entityKind:str,from:str,through:str,offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}}}}),

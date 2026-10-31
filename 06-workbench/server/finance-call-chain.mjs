@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile, readFile, readdir, lstat, realpath } from 'node:fs/promises';
 import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {captureBusinessEvidence,summaryBusinessEvidence} from './business-evidence.mjs';
 
 const context = new AsyncLocalStorage();
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -113,7 +114,17 @@ export async function withFinanceCall(options, fn) {
   const beginRef = await save(join(directory,'begin.json'), begin);
   const reference = Object.freeze({callId, auditDir:root, recordPath:directory, metadata:{}});
   let value, error, completed = false;
-  try { value = await context.run(reference, fn); completed = true; }
+  try { value = await context.run(reference, async()=>{
+    if(typeof options.validate==='function')await options.validate();
+    const businessEvidence=options.args?.businessEvidence??(options.tool==='finance_tax_summary_calculate'?summaryBusinessEvidence(options.args):undefined);
+    if(businessEvidence!==undefined){
+      const evidence=captureBusinessEvidence(options.args,businessEvidence);
+      reference.metadata.businessEvidence=await save(join(directory,'business-evidence.json'),snapshot(evidence));
+      annotateFinanceCall({sources:[...evidence.mappings,...evidence.cashFlowAllocations].flatMap(m=>m.sources).flatMap(s=>[s,...(s.dependencies??[])]).map(s=>({path:s.path,locator:s.location??s.locator,sha256:s.sha256,bytes:s.bytes}))});
+      if(evidence.valueMismatches)throw Object.assign(Error('原件值与实际业务参数不一致，请核对字段或转换方式。'),{code:'finance_evidence_value_mismatch'});
+    }
+    return fn();
+  }); completed = true; }
   catch (caught) { error = caught; }
   try {
     const output = await save(join(directory, error ? 'error.json' : 'result.json'), error ? errorInfo(error) : snapshot(value));

@@ -11,6 +11,7 @@ import { PROJECTION_NUMBER_LIMIT } from './finance-output-policy.mjs';
 import { resolveDirectFinanceTarget } from './direct-finance-target.mjs';
 import { callFinanceTaxSummaryCalculate } from './finance-summary.mjs';
 import { financeSummaryContract } from './finance-summary-contracts.mjs';
+import {registerWorkpaperDetails,workpaperDetails} from './direct-finance-details.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fail=(code,details)=>{throw Object.assign(new Error(code),{code,details});};
 const json=value=>JSON.stringify(value,null,2)+'\n';
@@ -60,9 +61,10 @@ function humanReport(w,artifact,{annual=false,ruleSelection}={}){
  out.push('','## 待核与缺件','',...(w.issues??[]).map(i=>`- ${cell(i.code)}：${cell(i.request??i.reason)}（业务 ${cell(i.factId)}）`),'','## 深入核查：调用和输入原件','',`- 调用：${artifact.id}`,'- 完整原生结果：[workpaper.json](workpaper.json)','- 原件/适配输入/代码快照索引：[evidence-index.json](evidence-index.json)','- 文件摘要只证明对应字节版本，不能证明原件真实性或模型语义判断正确。');
  writeFileSync(join(artifact.dir,'review.md'),out.join('\n')+'\n',{flag:'wx'});
 }
-function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,codeDigest}={}){
+function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,codeDigest,records=[]}={}){
  const a=workpaper.accounting??{},full=save(artifact,'workpaper.json',workpaper),issues=workpaper.issues??[];
  const allRules=(ruleSelection??workpaper.ruleSelection)?.trace??[],actualCodeDigest=codeDigest??workpaper.codeDigest??null;
+ registerWorkpaperDetails({workpaper,artifact,descriptor:full,records,annual});
  humanReport(workpaper,artifact,{annual,ruleSelection});
  if(ruleSelection)save(artifact,'adapter-result.json',{version:'finance-native-adaptation/1',nativeResultRef:full.artifactRef,nativeContentDigest:workpaper.contentDigest??null,nativeContentDigestScope:'native_workpaper_without_contentDigest_property',ruleSelection,codeDigest:actualCodeDigest});
  annotateFinanceCall({scope:workpaper.scope,ruleVersion:workpaper.ruleVersion??null,codeDigest:actualCodeDigest,catalogDigest:workpaper.ruleCatalogDigest??null,artifactRefs:[full.artifactRef,`${artifact.ref}/review.md`,`${artifact.ref}/evidence-index.json`]});
@@ -76,12 +78,14 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args){
+ if(name==='finance_workpaper_details')return workpaperDetails(args);
+ if(name==='finance_quarter_review'){const {buildQuarterReview}=await import('./quarter-review.mjs');return buildQuarterReview({target:args.target});}
  if(name==='finance_tax_summary_calculate')return callFinanceTaxSummaryCalculate(args);
  if(name==='finance_record_contract')return args.recordType==='tax_summary'?financeSummaryContract():directRecordContract(args.recordType);
  if(name==='finance_rules'){const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});return result;}
  if(name==='finance_workpaper'||name==='finance_tax_calculate'){
   const artifact=newArtifact(),session=loadInput(args,artifact),dbPath=args.dbPath??(args.target?process.env.FINANCE_DATABASE_PATH:undefined),workpaper=buildAgencyWorkpaper(session,{...(dbPath?{dbPath}:{})});
-  return workpaperSummary(workpaper,artifact,name==='finance_tax_calculate'?args.obligationIds:undefined);
+  return workpaperSummary(workpaper,artifact,name==='finance_tax_calculate'?args.obligationIds:undefined,{records:readAgencySession(session).records});
  }
  if(name==='finance_annual_workpaper'){
   const artifact=newArtifact(),sessions=args.manifestPaths.map((manifestPath,index)=>{const child={...artifact,dir:join(artifact.dir,`month-${index}`)};mkdirSync(child.dir);return loadInput({manifestPath},child);});
@@ -90,7 +94,7 @@ export async function callDirectFinanceTool(name,args){
   const ruleSelection=resolveAgencyRuleTrace({scope:result.scope,entity:documents[0].entity,records,obligations:result.obligations,accounting:result.accounting}),codeDigests=[...new Set(result.dependencies.filter(d=>d.codeDigest).map(d=>d.codeDigest))];
   const index=sessions.flatMap((_,i)=>JSON.parse(readFileSync(join(artifact.dir,`month-${i}`,'evidence-index.json'),'utf8')).files.map(f=>({...f,snapshot:`month-${i}/${f.snapshot}`})));
   save(artifact,'evidence-index.json',{version:'finance-evidence-index/1',files:index});
-  const summary=workpaperSummary(result,artifact,undefined,{annual:true,ruleSelection,codeDigest:codeDigests.length===1?codeDigests[0]:null});return {...summary,version:'finance-annual-result/1',status:result.status,period:readAgencySession(sessions[0]).scope.period.slice(0,4),annualCalculation:{status:result.status,yearEndAdjustmentsPresent:result.yearEndAdjustments!==undefined,nextYearCarryPresent:result.nextYearCarryState!==undefined}};
+  const summary=workpaperSummary(result,artifact,undefined,{annual:true,ruleSelection,codeDigest:codeDigests.length===1?codeDigests[0]:null,records});return {...summary,version:'finance-annual-result/1',status:result.status,period:readAgencySession(sessions[0]).scope.period.slice(0,4),annualCalculation:{status:result.status,yearEndAdjustmentsPresent:result.yearEndAdjustments!==undefined,nextYearCarryPresent:result.nextYearCarryState!==undefined}};
  }
  fail('finance_direct_tool_unknown');
 }
