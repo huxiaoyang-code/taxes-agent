@@ -178,3 +178,13 @@
 
 - Pi 可选 ObservationPack 接入默认 `off`：[使用与固定依赖](SOL-PI-INTEGRATION.md)、[独立入口](../06-workbench/scripts/sol-pi-run.mjs)、[选择/验证/启动接口](../05-reconstruction/codex/sol-pi/runtime.mjs)、[官方 factory 窄适配](../05-reconstruction/codex/sol-pi/extension.ts)。只允许 Pi，其他机制与 Harness² 组合明确拒绝。
 - 从仓库根运行 `node 06-workbench/test/sol-pi-integration.test.mjs` 验证默认与拒绝合同；准备文档指定的完整锁工具目录后，运行 `node 06-workbench/scripts/sol-pi-probe.mjs --tool-root <绝对工具目录> --archive-root <绝对合成归档目录> --account-set-id synthetic_account`。探针使用实际 Pi/MCP/官方扩展，不调用模型，不代替业务或收益验收。
+
+
+### 季度中文复核包
+
+- `06-workbench/server/business-evidence.mjs`：调用前原件结构及可信参数语义捕获、原值转换核对、汇总既有绑定自动复用；限制目录、链接、格式和读取总量。
+- `06-workbench/server/quarter-review-worker.mjs`：独立只读进程，以一致事务导出真实月度账表和结转前重建口径。
+- `06-workbench/server/quarter-cash-flow.mjs`：小企业22行现金流格式、逐凭证原件分类分配及未知/重复/不足校验；政策未确认单独保留。
+- `06-workbench/server/quarter-review.mjs`：中文 HTML 复核入口和类型明确的账表数据包、实际调用及初读结构关联。
+- `06-workbench/server/direct-finance-details.mjs`：本进程底稿的固定分页业务投影；范围、版本和时效校验，继续独立于正式写账。
+- `06-workbench/test/quarter-review.test.mjs`：净价/含税参数语义错映、原值拒绝、边界读取、现金流拆分、真实临时账库月度报表及投影引用负例。

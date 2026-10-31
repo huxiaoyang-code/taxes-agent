@@ -161,6 +161,8 @@ const steps = [
   { name: 'finance-summary', file: join(WORKBENCH, 'test', 'finance-summary.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-summary-integration', file: join(WORKBENCH, 'test', 'finance-summary-integration.test.mjs'), cwd: WORKBENCH },
   { name: 'pi-direct-disclosure', file: join(WORKBENCH, 'test', 'pi-direct-disclosure.test.mjs'), cwd: WORKBENCH },
+  { name: 'quarter-host', file: join(WORKBENCH, 'test', 'quarter-host.test.mjs'), cwd: WORKBENCH },
+  { name: 'quarter-review', file: join(WORKBENCH, 'test', 'quarter-review.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {
