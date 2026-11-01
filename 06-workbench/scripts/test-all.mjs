@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-mcp");
 const steps = [
+  { name: 'finance-review-card', file: join(WORKBENCH, 'test', 'finance-review-card.test.mjs'), cwd: WORKBENCH },
+  { name: 'finance-calculation', file: join(WORKBENCH, 'test', 'finance-calculation.test.mjs'), cwd: WORKBENCH },
   { name: 'harness2-boundary', file: join(WORKBENCH, 'test', 'harness2-boundary.test.mjs'), cwd: WORKBENCH },
   { name: 'harness2-budget', file: join(WORKBENCH, 'test', 'harness2-budget.test.mjs'), cwd: WORKBENCH },
   { name: 'harness2-hosts', file: join(WORKBENCH, 'test', 'harness2-hosts.test.mjs'), cwd: WORKBENCH },
@@ -161,6 +163,8 @@ const steps = [
   { name: 'finance-summary', file: join(WORKBENCH, 'test', 'finance-summary.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-summary-integration', file: join(WORKBENCH, 'test', 'finance-summary-integration.test.mjs'), cwd: WORKBENCH },
   { name: 'pi-direct-disclosure', file: join(WORKBENCH, 'test', 'pi-direct-disclosure.test.mjs'), cwd: WORKBENCH },
+  { name: 'quarter-host', file: join(WORKBENCH, 'test', 'quarter-host.test.mjs'), cwd: WORKBENCH },
+  { name: 'quarter-review', file: join(WORKBENCH, 'test', 'quarter-review.test.mjs'), cwd: WORKBENCH },
 ];
 const results = [];
 for (const step of steps) {

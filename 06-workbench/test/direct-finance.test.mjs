@@ -12,6 +12,7 @@ import {DIRECT_TOOLS} from '../../05-reconstruction/codex/mcp/finance-mcp/direct
 import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
 import {resolveDirectFinanceTarget} from '../server/direct-finance-target.mjs';
 import {currentFinanceCall} from '../server/finance-call-chain.mjs';
+import {captureBusinessEvidence} from '../server/business-evidence.mjs';
 import {hash,stable} from '../server/offline-material-adapters.mjs';
 const root=mkdtempSync(join(tmpdir(),'direct-finance-synthetic-'));
 const scope={enterpriseKey:'SYNTHETIC-DIRECT',accountSetId:1,databaseInstanceId:'synthetic-db',period:'2026-03',currency:'CNY'};
@@ -128,7 +129,15 @@ test('target后台只读绑定真实两企业，不向模型披露企业键或�
  const dbPath=join(dataDir,'workbench.db'),previous=process.env.FINANCE_DATABASE_PATH;process.env.FINANCE_DATABASE_PATH=dbPath;
  try{for(const set of [a,b]){const rows=fixture().map(({enterpriseKey,...record})=>record),base=makeInput(rows),args={target:{accountSetId:set.id,period:'2026-03'},originals:base.originals,records:rows};validateDirectInput(DIRECT_TOOLS.find(t=>t.name==='finance_workpaper').inputSchema,args);
   const auditDir=join(root,`target-audit-${set.id}`),result=await withFinanceCall({tool:'finance_workpaper',args,auditDir},()=>callDirectFinanceTool('finance_workpaper',args));assert.equal(result.ledgerAmounts.inventory,26200);assert(!JSON.stringify(result).includes('PRIVATE-ENTERPRISE'));assert(!JSON.stringify(result).includes('PRIVATE-CUSTOMER'));
-  const native=JSON.parse(readFileSync(join(auditDir,'artifacts',result.evidence.callRef,'workpaper.json'),'utf8'));assert.equal(native.scope.accountSetId,set.id);assert.equal(native.scope.enterpriseKey,set.id===a.id?'PRIVATE-ENTERPRISE-A':'PRIVATE-ENTERPRISE-B');}
+  const native=JSON.parse(readFileSync(join(auditDir,'artifacts',result.evidence.callRef,'workpaper.json'),'utf8'));assert.equal(native.scope.accountSetId,set.id);assert.equal(native.scope.enterpriseKey,set.id===a.id?'PRIVATE-ENTERPRISE-A':'PRIVATE-ENTERPRISE-B');
+  const voucherIndex=native.accounting.vouchers.findIndex(v=>v.entries.some(e=>e.code==='5401'));assert(voucherIndex>=0);const entryIndex=native.accounting.vouchers[voucherIndex].entries.findIndex(e=>e.code==='5401'),amount=Number(native.accounting.vouchers[voucherIndex].entries[entryIndex].debit),source={calculation:{artifactRef:result.vouchers.detailRef,voucherIndex,entryIndex,field:'debit'}},binding={businessLabel:'原生先进先出成本结转',method:'引用实际计算的对应成本分录',mappings:[{inputPointer:'/entries/0/debit',parameterLabel:'成本',transform:'identity',sources:[source]}]},voucherArgs={accountSetId:set.id,period:'2026-03',entries:[{code:'5401',debit:amount,credit:0}]};
+  const captured=captureBusinessEvidence(voucherArgs,binding);assert.equal(captured.valueMismatches,0);assert.equal(captured.mappings[0].sources[0].kind,'native_calculation');assert.equal(captured.mappings[0].sources[0].calculation.callId,result.evidence.callRef);assert(captured.mappings[0].sources[0].fileName.includes('非原件'));
+  assert.throws(()=>captureBusinessEvidence({...voucherArgs,accountSetId:set.id===a.id?b.id:a.id},binding),{code:'finance_details_scope_conflict'});assert.throws(()=>captureBusinessEvidence(voucherArgs,{...binding,mappings:[{...binding.mappings[0],sources:[{calculation:{...source.calculation,artifactRef:'finance-artifact:forged/workpaper.json'}}]}]}),{code:'finance_details_reference_untrusted'});
+  let executed=false;await assert.rejects(withFinanceCall({tool:'voucher_create',args:{...voucherArgs,entries:[{code:'5401',debit:amount+1,credit:0}],businessEvidence:binding},auditDir:join(root,'derived-mismatch-'+set.id)},()=>{executed=true;}),{code:'finance_evidence_value_mismatch'});assert.equal(executed,false);
+  const returns=await callDirectFinanceTool('finance_workpaper_details',{target:args.target,artifactRef:result.vouchers.detailRef,section:'return_costs'});assert.equal(returns.rows[0].allocations[0].sourceRecordIndex,rows.findIndex(r=>r.id==='P01'));
+  const originalBytes=readFileSync(args.originals[0].path);writeFileSync(args.originals[0].path,'changed');assert.throws(()=>captureBusinessEvidence(voucherArgs,binding),{code:'finance_details_source_changed'});writeFileSync(args.originals[0].path,originalBytes);
+  const nativePath=join(auditDir,'artifacts',result.evidence.callRef,'workpaper.json'),nativeBytes=readFileSync(nativePath);writeFileSync(nativePath,'changed');assert.throws(()=>captureBusinessEvidence(voucherArgs,binding),{code:'finance_details_artifact_changed'});writeFileSync(nativePath,nativeBytes);
+ }
   const bad=makeInput();await assert.rejects(withFinanceCall({tool:'finance_workpaper',args:bad,auditDir:join(root,'bad-target')},()=>callDirectFinanceTool('finance_workpaper',{target:{accountSetId:b.id,period:'2026-03'},originals:bad.originals,records:bad.records})),{code:'finance_record_scope_conflict'});
   assert.throws(()=>resolveDirectFinanceTarget({accountSetId:99999,period:'2026-03'}),{code:'finance_target_account_set_missing'});
   const schema=DIRECT_TOOLS.find(t=>t.name==='finance_workpaper').inputSchema;assert.throws(()=>validateDirectInput(schema,{target:{accountSetId:a.id,period:'2026-03'},...bad}));
@@ -209,6 +218,6 @@ test('实际MCP默认直接连接，工具校验拒绝也自动留下调用记�
  const run=spawnSync(process.execPath,[server],{input:requests.map(r=>JSON.stringify(r)).join('\n')+'\n',encoding:'utf8',env:{...process.env,FINANCE_AUDIT_DIR:auditDir,FINANCE_MCP_PROFILE:'direct'},timeout:30000});
  assert.equal(run.status,0,run.stderr);const responses=run.stdout.trim().split('\n').map(line=>JSON.parse(line));
  assert(!responses.find(r=>r.id===1).result.tools.some(t=>t.name.startsWith('harness_')));
- assert(responses.find(r=>r.id===2).result._meta.financeCall.callId);assert.equal(responses.find(r=>r.id===3).result.isError,true);
+ assert(responses.find(r=>r.id===2).result._meta.financeCall.callId);assert.equal(responses.find(r=>r.id===3).result.isError,true);assert(responses.find(r=>r.id===3).result._meta.financeCall.callId);
  assert.equal(readdirSync(auditDir).filter(name=>/^\d{8}T/.test(name)).length,2);
 });

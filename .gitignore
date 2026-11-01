@@ -37,3 +37,7 @@ rea-chrome-*/
 .agent-runs/
 .finance-call-records/
 finance-call-records/
+
+# Python本机编译缓存，不属于业务资料或验收结果
+__pycache__/
+*.pyc

@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
-import { TOOL_BY_NAME, validateArgs, ToolCallError } from "./tools.mjs";
+import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES } from "./tools.mjs";
 import { HARNESS_TOOL_NAMES } from './tools.mjs';
 import {validateFact} from '../../../../06-workbench/server/harness-contract.mjs';
 import {factEvidenceError} from '../../../../06-workbench/server/harness-fact-evidence.mjs';
@@ -31,7 +31,8 @@ import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
 import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
-import {withFinanceCall,currentFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
+import {withFinanceCall,currentFinanceCall,annotateFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
+import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
 
 const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
@@ -89,7 +90,7 @@ function readPathTexts(args) {
   return texts;
 }
 
-async function callTool(name, args = {}) {
+function preflightTool(name,args={}) {
   const spec = TOOL_BY_NAME.get(name);
   if (!spec) throw new ToolCallError("unknown_tool", "unknown_tool");
   if (!EXPOSED_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
@@ -103,6 +104,12 @@ async function callTool(name, args = {}) {
   if (spec.status === "unavailable") {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
+  return spec;
+}
+async function callTool(name, args = {}) {
+  const spec=preflightTool(name,args);
+  // 字段映射已经由最外层记录器在执行前实读；原业务工具不接收审计元数据。
+  if(Object.hasOwn(args,'businessEvidence')){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
   if (DIRECT_TOOL_NAMES.has(name)) {
     try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
     catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
@@ -223,10 +230,23 @@ rl.on("line", async (line) => {
   if (method === "ping") return ok(id, {});
   if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
   if (method === "tools/call") {
-    let callReference;
+    let callReference, observedTarget, observationStartedAt;
     const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId}}}:result;
     try {
-      const result = await withFinanceCall({tool:params?.name??'unknown',args:params?.arguments??{}},async()=>{callReference=currentFinanceCall();return await callTool(params?.name,params?.arguments??{});});
+      const result = await withFinanceCall({tool:params?.name??'unknown',args:params?.arguments??{},validate:()=>{
+        callReference=currentFinanceCall();preflightTool(params?.name,params?.arguments??{});
+        const args=params?.arguments??{};
+        if(MODEL_PLAIN_TOOL_NAMES.includes(params?.name)&&process.env.FINANCE_DATABASE_PATH&&Number.isSafeInteger(args.accountSetId)&&/^202[67]-\d{2}$/.test(args.period??'')){
+          try{observationStartedAt=new Date().toISOString();observedTarget=resolveDirectFinanceTarget({accountSetId:args.accountSetId,period:args.period});}catch{/* 无法观察身份时不升级为已核范围。 */}
+        }
+      }},async()=>{
+        const result=await callTool(params?.name,params?.arguments??{});
+        if(observedTarget){try{const after=resolveDirectFinanceTarget({accountSetId:observedTarget.scope.accountSetId,period:observedTarget.scope.period});
+          const operationId=currentFinanceCall()?.metadata.nativeOperationId;
+          if(params.name==='voucher_create'&&(!params.arguments.operationId||params.arguments.operationId===operationId)&&JSON.stringify(after.scope)===JSON.stringify(observedTarget.scope)&&nativeVoucherObservation(after,{operationId,voucherId:result?.projection?.voucherId,startedAt:observationStartedAt}))annotateFinanceCall({scope:after.scope,nativeOperationId:operationId,configuredTarget:{databasePath:after.dbPath,accountSetId:after.scope.accountSetId,period:after.scope.period,bindingOrigin:'native_voucher_operation_and_database_identity'}});
+        }catch{/* 写入结果不因留证不足被改成可安全重试；报告会保持身份未核。 */}}
+        return result;
+      });
       if (isModelEnvelope(result)) {
         // 防御性重校：只把不过的固定失败码交给模型，绝不透传未校验对象。
         const checked = validateModelEnvelope(result);

@@ -1,0 +1,26 @@
+{
+  "datasetId": "zhangzhou-quarter-ledger-2026q1-v1",
+  "synthetic": true,
+  "createdOn": "2026-10-31",
+  "source": "明确授权的新完整季度人工构造事实；不是原企业资料或旧题金标的增补",
+  "publicDir": "public",
+  "maintenanceOnly": true,
+  "noOfficialIdentity": "无税号、银行账号、真实签章或虚构官方发票号码",
+  "license": "未指定独立通用开源许可证；新增合成资料供本仓库开发复核，未复制第三方财务数据或重新许可法律原文",
+  "publicFiles": {
+    "业务委托.md": "17d208eb5891b369f19d8ceaf8705c51f466a9f55f2fd4fd33ab2b844229c951",
+    "企业资料.json": "b664ae7468982ad6041168dde4a633d047e2c477c54592ca466593ef8641822d",
+    "借款申请资料.json": "0ba17a56693f76b92ac8b7316c1d03b93a8057bcc77c57aea78436a1b57abb9c",
+    "合同台账.csv": "6d66e2513b943ded49e400a05a5f6ec830c167c8830f112a05881c5a4f3f2330",
+    "员工工资.csv": "517fa5bbfab829cefceb4e978f724c459bf9d78ac8bab78a0073593931527a2b",
+    "固定资产.csv": "d1b0c6316e083bcf7a65727c3ecf3019e2dc792dff03fcf177b9acb7ba3c8104",
+    "收付核销.csv": "575f19d8f7cb6341a2758e90f79d4e41006e46829dc486a16b48e81ebc416c02",
+    "期初存货.csv": "768ae27e1c4792dc787216d594248190cf6bee4e4df235ed27770a4006b460a4",
+    "期初科目余额.csv": "c27c89359bd42d2944b48817213a6cdffc7f7ca60a0dc9744ec606c483fda388",
+    "税费与资格.json": "3516c0c5a51fb54f740e4a7dd44e0b014f0136269331983811044ab168a1c8fb",
+    "规则依据.json": "63fb761dc01a969f65ac74b67ae007ce66a67b5f979c54f44996c624e4881225",
+    "购销明细.csv": "36421943b36358d7103d5e16c5f90384a8da344fe4f68c4acc104c68be861cc0",
+    "费用单据.csv": "96a713c73cc5027914ff0602a435b3d29f73f9b8920df2c5e02319dd89fcb17b",
+    "银行流水.csv": "9553e60bf9705cd8709fcecc72e3b7f8947c60348f64df84030465db5c5d96c0"
+  }
+}
