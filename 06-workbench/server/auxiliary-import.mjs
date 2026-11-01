@@ -1,5 +1,5 @@
 // aux-import/v1 附录仅含数据；此处不打开或迁移数据库。
-import { assertAuxiliaryReady, auxError, auxFingerprint } from './auxiliary-storage.mjs';
+import { assertAuxiliaryReady, auxError, auxFingerprint, signedAllocationFits } from './auxiliary-storage.mjs';
 import { createAuxiliaryEntity, replaceAuxiliaryAllocations } from './auxiliary-accounting.mjs';
 import { persistedVoucherFingerprint } from './import-storage.mjs';
 import { getAccountingProfile } from './accounting-profiles.mjs';
@@ -43,8 +43,8 @@ function unique(items, select) {
 }
 function amount(value) {
   fail(value !== undefined && !['number', 'string'].includes(typeof value));
-  const parsed = parseMoney(value);
-  fail(!parsed.ok || parsed.subCent || parsed.cents < 0n, 'aux_amount_invalid');
+  const parsed = parseMoney(value,{allowNegative:true});
+  fail(!parsed.ok || parsed.subCent, 'aux_amount_invalid');
   return Number(parsed.cents);
 }
 function allocations(value, entities) {
@@ -58,7 +58,7 @@ function allocations(value, entities) {
     }
     fail(dims.every(d => part[d + 'Ref'] === null), 'aux_dimension_required');
     part.debitCents = amount(item.debit); part.creditCents = amount(item.credit);
-    fail((part.debitCents > 0) === (part.creditCents > 0), 'aux_side_invalid');
+    fail((part.debitCents !== 0) === (part.creditCents !== 0), 'aux_side_invalid');
     return part;
   }).sort((a, b) => json(a).localeCompare(json(b)));
   unique(result, p => json(dims.map(d => p[d + 'Ref'])));
@@ -89,7 +89,7 @@ export function parseAuxiliaryAppendix(raw) {
   unique(entries, e => json([e.sourceVoucherId, e.sourceEntryId]));
   const openings = array(raw.openings, 1000).map(item => {
     object(item, ['openingCode', 'allocations']);
-    return { openingCode: text(item.openingCode), allocations: allocations(item.allocations, refs) };
+    const parts=allocations(item.allocations,refs);fail(parts.some(p=>p.debitCents<0||p.creditCents<0),'aux_opening_negative');return {openingCode:text(item.openingCode),allocations:parts};
   }).sort((a, b) => a.openingCode.localeCompare(b.openingCode));
   unique(openings, e => e.openingCode);
   return { version: 1, requestId: text(raw.requestId), reason: text(raw.reason), entities, entries, openings };
@@ -225,7 +225,7 @@ export function processAuxiliaryAppendix(db, appendix, ctx, { apply = false } = 
     }
     const debit = assignment.allocations.reduce((s, p) => s + BigInt(p.debitCents), 0n);
     const credit = assignment.allocations.reduce((s, p) => s + BigInt(p.creditCents), 0n);
-    fail(debit > storedCents(row.debit) || credit > storedCents(row.credit), 'aux_allocation_exceeds_entry');
+    fail(!signedAllocationFits(storedCents(row.debit),assignment.allocations.map(p=>p.debitCents))||!signedAllocationFits(storedCents(row.credit),assignment.allocations.map(p=>p.creditCents)), 'aux_allocation_exceeds_entry');
     mutable(db, ctx.accountSetId, item.voucher.period);
     const mapping = { mapKey, mapTarget, result: { entryId: actualEntryId, proof }, saved: !!saved };
     mappings.push(mapping);

@@ -153,7 +153,8 @@ const BACKEND_TOOLS = [
     obj({
       accountSetId: ACCOUNT_SET_ID,
       period: PERIOD,
-      voucher_date: { type: "string", description: "凭证日期 YYYY-MM-DD，缺省为期间首日" },
+      correctionOf: {type:"string",pattern:"^[a-f0-9-]{36}$",description:"前次入账尝试ID；后台核对账库及企业作用域。"},
+      voucher_date: { type: "string", description: "凭证日期 YYYY-MM-DD；缺失保留待审，禁止猜测为期间首日" },
       summary: { type: "string" },
       word: { type: "string", description: "凭证字，缺省 记" },
       number: { type: "integer", description: "凭证号，缺省自动取号" },
@@ -418,7 +419,9 @@ const withModelNote = (tool) => (MODEL_PLAIN_TOOL_SET.has(tool.name)
   : tool);
 
 export const TOOLS = [...DIRECT_TOOLS, ...HARNESS_TOOLS, ...LOCAL_TOOLS, ...CATALOG_TOOLS, ...BACKEND_TOOLS, ...TAX_TOOLS, ...PLACEHOLDER_TOOLS]
-  .map(withModelNote).map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema?.properties,operationId:{type:'string',description:'Stable local operation ID; preserve before a write and reuse only for the identical request.'}}}}):t)
+  .map(withModelNote).map(t=>["voucher_create","voucher_post"].includes(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,correctionOf:{type:"string",pattern:"^[a-f0-9-]{36}$",description:"前次尝试ID，作用域由后台核验。"}}}}):t)
+  .map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema?.properties,operationId:{type:'string',description:'Stable local operation ID; preserve before a write and reuse only for the identical request.'}}}}):t)
+  .map(t=>["voucher_create","voucher_post"].includes(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,correctionOf:{type:"string",pattern:"^[a-f0-9-]{36}$",description:"前次尝试ID，作用域由后台核验。"}}}}):t)
   .map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)||DIRECT_TOOLS.some(d=>d.name===t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,businessEvidence:{...BUSINESS_EVIDENCE_SCHEMA,description:'业务原件字段如何成为本次参数：中文表头/位置、处理方法与规则选择。调用前自动实读留证，不是事后审计日志。'}}}}):t);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

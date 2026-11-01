@@ -117,11 +117,12 @@ export async function withFinanceCall(options, fn) {
   try { value = await context.run(reference, async()=>{
     if(typeof options.validate==='function')await options.validate();
     const businessEvidence=options.args?.businessEvidence??(options.tool==='finance_tax_summary_calculate'?summaryBusinessEvidence(options.args):undefined);
-    if(businessEvidence!==undefined){
+    // 凭证由领域写入边界核对，post 的映射针对已存草稿字段；不能在运输层猜字段。
+    if(businessEvidence!==undefined&&options.tool!=='voucher_post'){
       const evidence=captureBusinessEvidence(options.args,businessEvidence);
       reference.metadata.businessEvidence=await save(join(directory,'business-evidence.json'),snapshot(evidence));
       annotateFinanceCall({sources:[...evidence.mappings,...evidence.cashFlowAllocations].flatMap(m=>m.sources).flatMap(s=>[s,...(s.dependencies??[])]).map(s=>({path:s.path,locator:s.location??s.locator,sha256:s.sha256,bytes:s.bytes}))});
-      if(evidence.valueMismatches)throw Object.assign(Error('原件值与实际业务参数不一致，请核对字段或转换方式。'),{code:'finance_evidence_value_mismatch'});
+      if(evidence.valueMismatches&&!options.nativeVoucherGuard)throw Object.assign(Error('原件值与实际业务参数不一致，请核对字段或转换方式。'),{code:'finance_evidence_value_mismatch'});
     }
     return fn();
   }); completed = true; }

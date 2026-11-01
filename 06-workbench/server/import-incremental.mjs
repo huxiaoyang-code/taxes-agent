@@ -1095,13 +1095,15 @@ function runIncrementalImport(options = {}, {admissionOnly=false,staticOnly=fals
       }
       const created = A.createVoucher(accountSetId, {
         period: v.period,
-        voucher_date: v.date || `${v.period}-01`,
+        voucher_date: v.date,
         word: v.word,
         number,
         summary: v.summary,
         kind: "normal",
         status: "posted",
         entries: v.entries,
+        businessEvidence:v.businessEvidence,
+        amountInputEntries:v.amountInputEntries,
       });
       insertVoucherSource(db, {
         sourceSystem: source.value.system,

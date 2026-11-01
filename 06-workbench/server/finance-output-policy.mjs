@@ -759,7 +759,8 @@ function auxiliaryWriteSummary(operation, value) {
     const rows = requireArray(r, "allocations");
     for (const row of rows) {
       for (const key of ["projectId", "departmentId", "partyId"]) if (prop(row,key) !== null) requirePositiveInt(row,key);
-      auxCount(row,"debitCents"); auxCount(row,"creditCents");
+      const debit=requireNum(row,"debitCents"),credit=requireNum(row,"creditCents");
+      if(![debit,credit].every(n=>Number.isSafeInteger(n)&&Math.abs(n)<=99999999999999)||(debit!==0)===(credit!==0)||(opening!==undefined&&(debit<0||credit<0)))throw invalidSummary("allocationAmount");
     }
     out.allocationCount = rows.length;
   } else {
@@ -794,10 +795,10 @@ function bankSummary(operation,value) {
  if(operation==="bank_transactions") {const rows=requireArray(r,"transactions"),t=requireRecord(r,"totals");return {pageCount:rows.length,matched:bankCount(t,"matched"),unmatched:bankCount(t,"unmatched"),inflow:bankMoney(requireNum(t,"inflowCents")),outflow:bankMoney(requireNum(t,"outflowCents")),invalidated:requireArray(r,"invalidations").length};}
  if(operation==="bank_ambiguities")return {pageCount:requireArray(r,"ambiguities").length,pending:bankCount(r,"pending")};
  if(operation==="bank_ambiguity_resolve") {const a=requireRecord(r,"ambiguity");return {resolved:requireBoolean(r,"resolved"),idempotent:requireBoolean(r,"idempotent"),ambiguityId:bankId(a,"ambiguityId"),decision:bankToken(a,"decision",["same","distinct"])};}
- if(operation==="bank_candidates") {const rows=requireArray(r,"candidates"),g=requireRecord(r,"groupMatch");return {candidateCount:rows.length,selection:bankToken(r,"selection",["already_matched","single","requires_manual_choice","none"]),groupSupported:requireBoolean(g,"supported"),groupPairCount:requireArray(g,"pairs").length,partyStates:bankParty(rows)};}
+ if(operation==="bank_candidates") {const rows=requireArray(r,"candidates"),g=requireRecord(r,"groupMatch");return {candidateCount:rows.length,selection:bankToken(r,"selection",["already_matched","single","requires_manual_choice","none"]),groupSupported:requireBoolean(g,"supported"),groupPairCount:requireArray(g,"pairs").length,partyStates:bankParty(rows),...(requireArray(r,"skipped").some(x=>prop(x,"code")==="red_entry_cash_evidence_required")?{redEntryPendingCount:requireArray(r,"skipped").filter(x=>prop(x,"code")==="red_entry_cash_evidence_required").length}:{})};}
  if(operation==="bank_confirm"||operation==="bank_cancel") {const m=requireRecord(r,"match");return { ...(operation==="bank_confirm"?{created:requireBoolean(r,"created")}:{cancelled:requireBoolean(r,"cancelled"),idempotent:requireBoolean(r,"idempotent")}),matchId:bankId(m,"matchId"),entryId:bankId(m,"entryId"),status:bankToken(m,"status",["confirmed","cancelled","invalidated"])};}
  if(operation==="bank_matches") {const rows=requireArray(r,"matches");return {pageCount:rows.length,statusCounts:bankStates(rows,"status",["confirmed","cancelled","invalidated"]),invalidated:requireArray(r,"invalidations").length,partyStates:bankParty(rows)};}
- if(operation==="bank_reconcile") {const st=requireRecord(r,"statement"),b=requireRecord(r,"book"),a=requireRecord(r,"adjusted"),o=requireRecord(r,"outstanding"),t=requireRecord(o,"totals");const out={runId:bankId(r,"reconcileRunId"),period:requirePeriod(r,"period"),status:bankToken(r,"status",["reconciled","pending_review","incomplete"]),bookClosing:bankMoney(requireNum(b,"closingCents")),statementClosing:bankMoney(requireNum(st,"closeCents")),statementDifference:bankMoney(requireNum(st,"differenceCents")),adjustedBook:bankMoney(requireNum(a,"bookCents")),adjustedBank:bankMoney(requireNum(a,"bankCents")),difference:bankMoney(requireNum(a,"differenceCents")),issueCount:requireArray(r,"issues").length};for(const [key,short]of [["bookReceivedBankMissing","bookReceived"],["bookPaidBankMissing","bookPaid"],["bankReceivedBookMissing","bankReceived"],["bankPaidBookMissing","bankPaid"]]){out[short]={count:requireArray(o,key).length,total:bankMoney(requireNum(t,key+"Cents"))};}return out;}
+ if(operation==="bank_reconcile") {const st=requireRecord(r,"statement"),b=requireRecord(r,"book"),a=requireRecord(r,"adjusted"),o=requireRecord(r,"outstanding"),t=requireRecord(o,"totals");const out={runId:bankId(r,"reconcileRunId"),period:requirePeriod(r,"period"),status:bankToken(r,"status",["reconciled","pending_review","incomplete"]),bookClosing:bankMoney(requireNum(b,"closingCents")),statementClosing:bankMoney(requireNum(st,"closeCents")),statementDifference:bankMoney(requireNum(st,"differenceCents")),adjustedBook:bankMoney(requireNum(a,"bookCents")),adjustedBank:bankMoney(requireNum(a,"bankCents")),difference:bankMoney(requireNum(a,"differenceCents")),issueCount:requireArray(r,"issues").length,...(prop(b,"redEntryPendingCount")>0?{redEntryPendingCount:bankCount(b,"redEntryPendingCount")}:{})};for(const [key,short]of [["bookReceivedBankMissing","bookReceived"],["bookPaidBankMissing","bookPaid"],["bankReceivedBookMissing","bankReceived"],["bankPaidBookMissing","bankPaid"]]){out[short]={count:requireArray(o,key).length,total:bankMoney(requireNum(t,key+"Cents"))};}return out;}
  if(operation==="bank_status") {const b=requireRecord(r,"batches"),t=requireRecord(r,"transactions"),m=requireRecord(r,"matches"),a=requireRecord(r,"ambiguities");const last=prop(r,"lastReconcileStatus");if(last!==null&&!["reconciled","pending_review","incomplete"].includes(last))throw invalidSummary("last_status");return {batches:bankCount(b,"total"),completed:bankCount(b,"completed"),pendingReview:bankCount(b,"pendingReview"),failed:bankCount(b,"failed"),itemsTruncated:requireBoolean(b,"itemsTruncated"),transactions:bankCount(t,"total"),matched:bankCount(t,"matched"),unmatched:bankCount(t,"unmatched"),confirmed:bankCount(m,"confirmed"),cancelled:bankCount(m,"cancelled"),invalidated:bankCount(m,"invalidated"),pending:bankCount(a,"pending"),lastStatus:last??"none"};}
  if(operation==="bank_audit"){const rows=requireArray(r,"events");return {pageCount:rows.length,eventCounts:bankStates(rows,"eventType",BANK_EVENTS)};}
  throw invalidSummary("bank_operation");
@@ -1441,6 +1442,7 @@ const ERROR_CODES = dict({
   bank_local_install_failed: "bank",
   bank_local_state_unknown: "bank",
   bank_local_operation_failed: "bank",
+  red_entry_cash_evidence_required: "bank",
   aux_account_reallocation_required: "auxiliary",
   aux_active_invalid: "auxiliary",
   aux_allocation_corrupt: "auxiliary",
@@ -1505,6 +1507,8 @@ const ERROR_CODES = dict({
   aux_request_id_required: "auxiliary",
   aux_requirement_invalid: "auxiliary",
   aux_side_invalid: "auxiliary",
+  aux_opening_negative: "auxiliary",
+  aux_signed_upgrade_required: "auxiliary",
   aux_structure_invalid: "auxiliary",
   aux_structure_mismatch: "auxiliary",
   aux_target_invalid: "auxiliary",
@@ -1518,6 +1522,10 @@ const ERROR_CODES = dict({
   period_before_start: "period",
   voucher_not_found: "voucher",
   voucher_invalid: "voucher",
+  posting_correction_required: "voucher",
+  posting_needs_review: "voucher",
+  posting_record_unavailable: "voucher",
+  posting_record_finish_failed: "voucher",
   voucher_id_required: "voucher",
   account_set_id_required: "account_set",
   account_set_id_invalid: "account_set",

@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { syntheticPostingTool } from "../../../../06-workbench/test/helpers/synthetic-posting-evidence.mjs";
 import { McpStdioClient } from "./mcp-stdio-client.mjs";
 import { MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES, TOOLS, validateArgs } from "./tools.mjs";
 
@@ -56,6 +57,11 @@ function freePort() {
 }
 
 const dataDir = mkdtempSync(join(tmpdir(), "mcp-model-entry-"));
+// 此历史兼容套件明确使用 legacy；默认 direct 另由 posting-guard-mcp.test.mjs 验证。
+process.env.FINANCE_MCP_PROFILE="legacy";
+process.env.FINANCE_SOURCE_ROOT=join(dataDir,"synthetic-originals");
+const originalMcpCall=McpStdioClient.prototype.call;
+McpStdioClient.prototype.call=function(name,args){return originalMcpCall.call(this,name,syntheticPostingTool(name,args,process.env.FINANCE_SOURCE_ROOT));};
 let backend = null;
 let client = null;
 let fault = null;
@@ -153,7 +159,7 @@ try {
       assert.match(tool.description, /localRef|摘要|投影/, `${name} 应明确摘要 / 本机引用语义`);
     }
     const ctx = tools.find((t) => t.name === "account_context");
-    assert.deepEqual(Object.keys(ctx.inputSchema.properties).sort(), ["accountSetId", "limit", "offset", "operationId"]);
+    assert.deepEqual(Object.keys(ctx.inputSchema.properties).sort(), ["accountSetId", "businessEvidence", "limit", "offset", "operationId"]);
     assert.equal(ctx.inputSchema.properties.operationId.type,"string");
     assert.equal((ctx.inputSchema.required??[]).includes("operationId"),false);
     for(const operationId of ['stable-id-1','UUID:01.abc_2'])assert.deepEqual(validateArgs(ctx.inputSchema,{operationId}),[]);

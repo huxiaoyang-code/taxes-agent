@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {syntheticPostingTool} from './helpers/synthetic-posting-evidence.mjs';
 // 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-finance-model-adapter-test-mjs-' + (++identityFixtureSequence) });
@@ -74,7 +75,9 @@ const { db: auditDb } = await import("../server/db.mjs");
 let ownedPolicy;
 try {
 const { operationErrorEvidence } = await import("../server/local-audit-coordinator.mjs");
-const { callAgentTool, AGENT_TOOL_NAMES } = await import("../server/agent-tools.mjs");
+const { callAgentTool: rawCallAgentTool, AGENT_TOOL_NAMES } = await import("../server/agent-tools.mjs");
+process.env.FINANCE_SOURCE_ROOT=resolve(dataDir,"synthetic-originals");
+const callAgentTool=(name,args)=>rawCallAgentTool(name,syntheticPostingTool(name,args,process.env.FINANCE_SOURCE_ROOT));
 const { COA } = await import("../server/coa.mjs");
 const ADAPTER = await import("../server/finance-model-adapter.mjs");
 const { FinanceOutputPolicy, OUTPUT_POLICY_VERSION } = await import("../server/finance-output-policy.mjs");

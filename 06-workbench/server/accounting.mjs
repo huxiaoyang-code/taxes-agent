@@ -1,3 +1,6 @@
+import {parseImportAmount} from './import-amount.mjs';
+export {parseImportAmount};
+import { withPostingAttempt, inspectPosting, restorePostingResult, registerPostingDatabase } from './posting-evidence-guard.mjs';
 import { randomUUID as demoOperationId } from 'node:crypto';
 import { lockCreatedAccountSet,acquireWriteResources,releaseWriteResources,withWriteResources } from './local-write-lock.mjs';
 import { types as nodeTypes } from "node:util";
@@ -462,7 +465,7 @@ export function periodStatus(setId, period) {
 // ---------------------------------------------------------------- 凭证
 // 直接凭证仅接受普通十进制文本；导入的货币前缀/千分位语法仍由导入解析器负责。
 function parseVoucherAmount(raw) {
-  const parsed = parseMoney(raw, { label: "金额", maxCents: MONEY_MAX_CENTS });
+  const parsed = parseMoney(raw, { label: "金额", maxCents: MONEY_MAX_CENTS, allowNegative: true });
   if (!parsed.ok) return { ok: false, error: parsed.error };
   // 非零但不足一分（ 0.001 / 1e-7 ）必须拒绝：不能静默舍成 0 后仍当成合法金额入库。
   if (parsed.subCent) {
@@ -490,7 +493,7 @@ function normalizeVoucher(setId, entries = []) {
     if (!credit.ok) errors.push(`第${i + 1}行贷方${credit.error}`);
     const d = debit.ok ? debit.cents : 0n, c = credit.ok ? credit.cents : 0n;
     dList.push(d); cList.push(c);
-    if (d > 0n && c > 0n) errors.push(`第${i + 1}行借贷不能同时有值`);
+    if (d !== 0n && c !== 0n) errors.push(`第${i + 1}行借贷不能同时有值`);
     if (d === 0n && c === 0n) errors.push(`第${i + 1}行金额不能为 0`);
     const rawCode = e.code;
     const code = rawCode ? String(rawCode) : "";
@@ -575,7 +578,16 @@ function validateVoucherCreation(setId, v = {}, { touches = null } = {}) {
   }
   return {period,entries};
 }
+const DERIVED_POSTING = Symbol('内部派生入账依据');
 function createVoucherBody(setId,v={},options={}) {
+  return withPostingAttempt(db,setId,'voucher.create.internal',v,()=>{
+    validateVoucherCreation(setId,v,options);
+    const guard=inspectPosting(db,setId,v,{formal:v.status==='posted',derived:options[DERIVED_POSTING]??null});
+    const result=createVoucherStored(setId,v,options);
+    return guard.status==='needs_review'?{...result,postingGuard:{...guard,nextAction:'human_review'}}:result;
+  });
+}
+function createVoucherStored(setId,v={},options={}) {
  const {period,entries}=validateVoucherCreation(setId,v,options);
   return withSavepoint(() => {
     ensurePeriodBody(setId, period);
@@ -586,7 +598,7 @@ function createVoucherBody(setId,v={},options={}) {
     const info = run(
       `INSERT INTO vouchers (account_set_id, period, voucher_date, word, number, summary, status, kind, created_at)
        VALUES (?,?,?,?,?,?,?,?,?)`,
-      setId, period, v.voucher_date || `${period}-01`, word, number, v.summary || "", status, kind, now()
+      setId, period, v.voucher_date ?? "", word, number, v.summary || "", status, kind, now()
     );
     const vid = Number(info.lastInsertRowid);
     const ins = db.prepare(
@@ -780,7 +792,7 @@ function assertDepreciationRunsCurrent(setId, v) {
   throw err;
 }
 
-function postVoucherBody(setId, id) {
+function postVoucherBody(setId, id, options={}) {
   // 先读原始行 + 分录做校验，再看 hydrate 合计：即使库里金额已被损坏，也必须先给 voucher_invalid。
   const raw = row(`SELECT * FROM vouchers WHERE account_set_id=? AND id=?`, setId, id);
   if (!raw) throw new Error("voucher_not_found");
@@ -792,6 +804,7 @@ function postVoucherBody(setId, id) {
   );
   const chk = checkVoucher(setId, entries);
   if (!chk.ok) { const e = new Error("voucher_invalid"); e.details = chk; throw e; }
+  inspectPosting(db,setId,{...raw,entries,businessEvidence:options.businessEvidence},{formal:true,voucherId:id});
   // 先给「旧草稿是否仍符合卡片当前定义」与金额诊断（重过账会把累计推过可计提额），
   // 再给期间依赖顺序：三者都是只读断言，失败时全库不变。
   assertDepreciationRunsCurrent(setId, { id: raw.id, kind: raw.kind, period: raw.period });
@@ -1599,7 +1612,7 @@ function carryForwardProfitBody(setId, period, { yearEnd = false, retainHistory 
         voucher = createVoucherBody(setId, {
           period: p, voucher_date: lastDay(p), summary: "结转本期损益",
           kind: "carryforward", status: "posted", entries,
-        });
+        },{[DERIVED_POSTING]:{code:"period_profit_carryforward",dateRule:"经校验期间的月末日",source:"本账套已过账损益科目余额",period:p}});
       }
     }
 
@@ -1632,7 +1645,7 @@ function carryForwardProfitBody(setId, period, { yearEnd = false, retainHistory 
         yearEndVoucher = createVoucherBody(setId, {
           period: p, voucher_date: lastDay(p), summary: "结转本年利润",
           kind: "carryforward", status: "posted", entries: es,
-        });
+        },{[DERIVED_POSTING]:{code:"year_profit_carryforward",dateRule:"经校验期间的月末日",source:"本账套本年利润科目余额",period:p}});
       }
     }
     return {
@@ -2018,7 +2031,7 @@ function generateDepreciationBody(setId, period) {
     const voucher = createVoucherBody(setId, {
       period: p, voucher_date: lastDay(p), summary: "计提折旧与摊销",
       kind: "depreciation", status: "posted", entries,
-    }, { touches: { profit: true } });
+    }, { touches: { profit: true }, [DERIVED_POSTING]:{code:"asset_depreciation",dateRule:"经校验期间的月末日",source:"当前资产卡片及累计计提记录",period:p} });
     const ins = db.prepare(
       `INSERT INTO asset_depreciation_runs (account_set_id, asset_id, period, amount, voucher_id, created_at)
        VALUES (?,?,?,?,?,?)`
@@ -2046,6 +2059,7 @@ export function legacyCashFlowStatement(setId, period) {
   };
   const names = new Map(listAccounts(setId).map((a) => [a.code, a.name]));
   const bucket = { operating: new Map(), investing: new Map(), financing: new Map() };
+  const redUnknown = [];
   const addBucket = (cat, code, cents) => bucket[cat].set(code, (bucket[cat].get(code) || 0n) + cents);
 
   for (const v of rows(
@@ -2059,6 +2073,7 @@ export function legacyCashFlowStatement(setId, period) {
       if (isCash(e.code)) cashDelta += debit - credit;
       else others.push({ code: e.code, mag: (debit < 0n ? -debit : debit) + (credit < 0n ? -credit : credit) });
     }
+    if(es.some(e=>storedCents(e.debit)<0n||storedCents(e.credit)<0n)&&es.some(e=>isCash(e.code)&&(storedCents(e.debit)!==0n||storedCents(e.credit)!==0n))){redUnknown.push({voucherId:v.id,direction:"adjustment",category:"unknown",reason:"red-voucher-cash-evidence-required",value:centsToNumber(cashDelta)});continue;}
     if (cashDelta === 0n) continue;
     const othersMag = others.reduce((s, e) => s + e.mag, 0n);
     if (othersMag === 0n) continue;
@@ -2106,6 +2121,7 @@ export function legacyCashFlowStatement(setId, period) {
 
   return {
     period, method: "直接法（按对方科目分类）",
+    unknown:redUnknown, classificationComplete:redUnknown.length===0,
     operating, investing, financing,
     totals: {
       operating: n(opTCents), investing: n(inTCents), financing: n(fiTCents), net_increase: n(netCents),
@@ -2142,8 +2158,8 @@ export function cashFlowStatement(setId, period) {
       accountingContext: context,
       reportStatus,
       diagnostics: reportStatus.diagnostics,
-      unknown: [],
-      classificationComplete: true,
+      unknown: data.unknown,
+      classificationComplete: data.classificationComplete,
     };
   }
   if (!/^\d{4}-\d{2}$/.test(String(period || ""))) throw new Error("period_invalid");
@@ -2185,6 +2201,13 @@ export function cashFlowStatement(setId, period) {
       if (credit !== 0n) {
         creditCounterparties.set(entry.code, (creditCounterparties.get(entry.code) ?? 0n) + credit);
       }
+    }
+    // 红字是原借/贷方向的有符号更正，不证明本期真实现金收付方向。
+    // 现金余额照实累计；没有逐笔收付证据时不使用非负配对区间或绝对值猜分类。
+    if (entries.some(e=>storedCents(e.debit)<0n||storedCents(e.credit)<0n)
+        && entries.some(e=>isCash(e.code)&&(storedCents(e.debit)!==0n||storedCents(e.credit)!==0n))) {
+      unknown.push({voucherId:voucher.id,direction:"adjustment",category:"unknown",reason:"red-voucher-cash-evidence-required",value:centsToNumber(inflow-outflow)});
+      continue;
     }
     if (inflow === 0n && outflow === 0n) continue;
     const totalOf = (map) => [...map.values()].reduce((sum, value) => sum + value, 0n);
@@ -2461,50 +2484,9 @@ const DIRECTIONS = { 借: "debit", debit: "debit", d: "debit", 借方: "debit", 
 
 // 金额上限与统一十进制规则由 money.mjs 提供（12 位整数 + 2 位小数，超过按超界拒绝）。
 // 允许的金额文本：可带前导 ¥/￥、正负号、千分位与小数；不含内部空白、指数、单位。
-const AMOUNT_TEXT_RE = /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/;
-const CURRENCY_PREFIX_RE = /^[¥￥]\s*/;
 const ACCOUNT_CATEGORIES = ["资产", "负债", "权益", "成本", "损益"];
 
-/**
- * 严格金额解析（先核对原始类型/数值范围/符号，再归一化到 2 位小数）。
- * - 只允许 number / string / null / undefined；对象、数组、布尔一律拒绝，
- *   不允许 String([100]) 之类被强制成 "100" 或 "[object Object]"。
- * - 有限 number 直接采用；number 型 NaN/Infinity 拒绝。
- * - 空白/缺失（""/undefined/null）按 0 处理，这是允许的输入格式。
- * - 文本必须匹配 AMOUNT_TEXT_RE；垃圾文本、部分可解析文本一律拒绝，不再按 0 吞掉。
- * - 先判断原始数值的绝对值是否超界、是否带负号，再 r2；不允许超界原值/极小负值
- *   因舍入被接受。
- * 返回 { ok: true, value, rawValue, negative } 或 { ok: false, error }。
- */
-export function parseImportAmount(raw) {
-  if (raw === undefined || raw === null) return { ok: true, value: 0, rawValue: 0, negative: false, subCent: false };
-  if (typeof raw === "number") {
-    if (!Number.isFinite(raw)) return { ok: false, error: "金额必须是有限数字（不允许 NaN/Infinity）" };
-    return finishImportAmount(String(raw), raw);
-  }
-  if (typeof raw !== "string") {
-    return { ok: false, error: `金额类型非法（只允许数字或文本）：${fmtRaw(raw)}` };
-  }
-  const text = raw.trim();
-  if (text === "") return { ok: true, value: 0, rawValue: 0, negative: false, subCent: false };
-  const body = text.replace(CURRENCY_PREFIX_RE, "").trim();
-  if (!AMOUNT_TEXT_RE.test(body)) return { ok: false, error: `金额文本非法：${text}` };
-  const normalized = body.replace(/,/g, "");
-  return finishImportAmount(normalized, Number(normalized), text);
-}
-function finishImportAmount(normalized, rawValue, source = normalized) {
-  const parsed = parseMoney(normalized, { allowNegative: true, label: "金额" });
-  if (!parsed.ok) {
-    if (parsed.code === "money_over_limit") return { ok: false, error: `金额超界（绝对值上限 ${MONEY_MAX_TEXT}）：${source}` };
-    if (parsed.code === "money_not_finite") return { ok: false, error: "金额必须是有限数字（不允许 NaN/Infinity）" };
-    return { ok: false, error: `金额文本非法：${source}` };
-  }
-  // 负号按原值判定（-0.001 也必须报“不能为负”，不能因舍入成 0 被接受）。
-  const negative = /^-/.test(normalized) && /[1-9]/.test(normalized);
-  return { ok: true, value: centsToNumber(parsed.cents), rawValue, negative, subCent: parsed.subCent };
-}
-
-// 凭证日期：仅接受 YYYY-MM-DD 的真实日历日期；空白表示缺省为期间首日。
+// 凭证日期：仅接受 YYYY-MM-DD 的真实日历日期；空白保留未知，正式入账不得猜测。
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 function parseImportDate(raw) {
   if (raw === undefined || raw === null) return { ok: true, value: "" };
@@ -2921,7 +2903,7 @@ export function normalizeImportPayload(payload = {}, context = null) {
     }
     const dateValue = distinctDates.size ? [...distinctDates][0] : "";
     if (!dateHasError && dateValue && period && dateValue.slice(0, 7) !== period) {
-      warnings.push(`凭证第 ${line} 张（${label}）日期 ${dateValue} 与期间 ${period} 不在同一月份`);
+      errors.push(`凭证第 ${line} 张（${label}）日期 ${dateValue} 与期间 ${period} 不在同一月份`);
     }
 
     // 分录：非数组要报形状错误，不能当空数组吞掉。
@@ -2953,9 +2935,7 @@ export function normalizeImportPayload(payload = {}, context = null) {
       if (!d.ok) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借方金额非法：${fmtRaw(e.debit)}（${d.error}）`); entryHasError = true; }
       if (!c.ok) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行贷方金额非法：${fmtRaw(e.credit)}（${c.error}）`); entryHasError = true; }
       if (!d.ok || !c.ok) return;
-      if (d.negative) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借方不能为负：${fmtRaw(e.debit)}`); entryHasError = true; }
-      if (c.negative) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行贷方不能为负：${fmtRaw(e.credit)}`); entryHasError = true; }
-      if (d.value > 0 && c.value > 0) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借贷不能同时有值`); entryHasError = true; }
+      if (d.value !== 0 && c.value !== 0) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行借贷不能同时有值`); entryHasError = true; }
       if (d.value === 0 && c.value === 0) { errors.push(`凭证第 ${line} 张（${label}）第 ${eline} 行金额不能为 0`); entryHasError = true; }
       vdValues.push(d.value); vcValues.push(c.value);
       let eSummary = esumT.ok ? esumT.value : "";
@@ -2967,7 +2947,7 @@ export function normalizeImportPayload(payload = {}, context = null) {
     if (!entryHasError && vdCents !== vcCents) errors.push(`凭证第 ${line} 张（${label}）借贷不平：借 ${vd} / 贷 ${vc}`);
     normalizedVouchers.push({
       period: period || (periodT.ok ? periodT.value : ""), date: dateValue,
-      word, number, summary: summaryT.ok ? summaryT.value : "", entries: normalizedEntries,
+      word, number, summary: summaryT.ok ? summaryT.value : "", entries: normalizedEntries, amountInputEntries:v.entries, ...(v.businessEvidence!==undefined?{businessEvidence:v.businessEvidence}:{}),
     });
   });
 
@@ -3053,8 +3033,8 @@ function importAccountSetBody(payload = {}, { dryRun = false, enterprise, profil
     let vcount = 0;
     for (const v of n.vouchers) {
       createVoucherBody(set.id, {
-        period: v.period, voucher_date: v.date || `${v.period}-01`, word: v.word,
-        number: v.number, summary: v.summary, kind: "normal", status: "posted", entries: v.entries,
+        period: v.period, voucher_date: v.date, word: v.word,
+        number: v.number, summary: v.summary, kind: "normal", status: "posted", entries: v.entries, amountInputEntries:v.amountInputEntries, businessEvidence:v.businessEvidence,
       });
       vcount++;
     }
@@ -3072,6 +3052,7 @@ function importAccountSetBody(payload = {}, { dryRun = false, enterprise, profil
 const setScope=id=>({kind:'account_set',value:id});
 const resultId=(type,id)=>Number.isSafeInteger(id)&&id>0?[{type,id}]:[];
 function accountingWrite(action,args,body,{scope=setScope(args[0]),refs=()=>[],rebuild,classify,targets}={}) {
+ registerPostingDatabase(db);
  return runDomainOperation(db,{action,scope,request:args,refs,rebuild,classify,targets},()=>body(...args));
 }
 export function createAccountSet(...args) {return accountingWrite('account_set.create',args,createAccountSetBody,{scope:{kind:'database',value:null},refs:v=>resultId('account_set',v.id),targets:v=>({accountSetId:v.id}),rebuild:r=>getAccountSet(r.resultRefs.find(x=>x.type==='account_set').id)});}
@@ -3081,9 +3062,9 @@ export function addAccount(...args) {return accountingWrite('account.create',arg
 export function setOpeningBalances(...args) {const input=admissionInput(args);if(!admissionBinding('opening.replace'))preflightInput(input,validateOpeningInput);return accountingWrite('opening.replace',args,setOpeningBalancesBody,{refs:()=>resultId('account_set',args[0]),rebuild:()=>getOpeningBalances(args[0])});}
 export function ensurePeriod(...args) {return accountingWrite('period.ensure',args,ensurePeriodBody,{rebuild:()=>row('SELECT period,status FROM periods WHERE account_set_id=? AND period=?',...args)});}
 export function setPeriodStatus(...args) {return accountingWrite(args[2]==='closed'?'period.close':'period.reopen',args,setPeriodStatusBody,{rebuild:()=>row('SELECT period,status FROM periods WHERE account_set_id=? AND period=?',args[0],args[1])});}
-export function createVoucher(...args) {const input=admissionInput(args);const action=input.value[1]?.status==='posted'?'voucher.create_posted':'voucher.create';if(!admissionBinding(action))preflightInput(input,validateVoucherCreation);return accountingWrite(args[1]?.status==='posted'?'voucher.create_posted':'voucher.create',args,createVoucherBody,{refs:v=>resultId('voucher',v.id),targets:v=>({voucherId:v.id,period:v.period}),rebuild:r=>getVoucher(args[0],r.resultRefs.find(x=>x.type==='voucher').id)});}
-export function postVoucher(...args) {let unchanged=false;return accountingWrite('voucher.post',args,(...a)=>{unchanged=row('SELECT status FROM vouchers WHERE account_set_id=? AND id=?',...a)?.status==='posted';return postVoucherBody(...a);},{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),classify:()=>unchanged?'no_change':'succeeded',rebuild:()=>getVoucher(...args)});}
-export function unpostVoucher(...args) {return accountingWrite('voucher.unpost',args,unpostVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>getVoucher(...args)});}
+export function createVoucher(...args) {return withPostingAttempt(db,args[0],'voucher.create',args[1],()=>{const input=admissionInput(args);const action=input.value[1]?.status==='posted'?'voucher.create_posted':'voucher.create';if(!admissionBinding(action))preflightInput(input,validateVoucherCreation);return accountingWrite(args[1]?.status==='posted'?'voucher.create_posted':'voucher.create',args,createVoucherBody,{refs:v=>resultId('voucher',v.id),targets:v=>({voucherId:v.id,period:v.period}),rebuild:r=>{const id=r.resultRefs.find(x=>x.type==='voucher').id;return restorePostingResult(db,args[0],id,()=>getVoucher(args[0],id));}});});}
+export function postVoucher(...args) {return withPostingAttempt(db,args[0],'voucher.post',{voucherId:args[1],options:args[2]},()=>{let unchanged=false;return accountingWrite('voucher.post',args,(...a)=>{unchanged=row('SELECT status FROM vouchers WHERE account_set_id=? AND id=?',a[0],a[1])?.status==='posted';return postVoucherBody(...a);},{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),classify:()=>unchanged?'no_change':'succeeded',rebuild:()=>getVoucher(args[0],args[1])});});}
+export function unpostVoucher(...args) {return accountingWrite('voucher.unpost',args,unpostVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>getVoucher(args[0],args[1])});}
 export function deleteVoucher(...args) {return accountingWrite('voucher.delete',args,deleteVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>({deleted:args[1]})});}
 export function carryForwardProfit(...args) {return accountingWrite('profit.carry_forward',args,carryForwardProfitBody,{refs:v=>[...resultId('voucher',v?.voucher?.id),...resultId('year_end_voucher',v?.yearEndVoucher?.id),...(v?.supersededVoucherIds??[]).map(id=>({type:'superseded_voucher',id}))]});}
 export function addAssetCard(...args) {const input=admissionInput(args);if(!admissionBinding('asset.create'))preflightInput(input,validateAssetCreation);return accountingWrite('asset.create',args,addAssetCardBody,{refs:v=>resultId('asset_card',v.id),rebuild:r=>listAssetCards(args[0]).find(v=>v.id===r.resultRefs.find(x=>x.type==='asset_card').id)});}

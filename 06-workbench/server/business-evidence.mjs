@@ -80,11 +80,11 @@ function trustedParameter(args,pointer){
  const leaf=pointer.split('/').at(-1).replaceAll('~1','/').replaceAll('~0','~');
  return {label:PARAMETER_LABELS[leaf]??'工具字段含义尚未中文登记，需查看实际字段定义',field:pointer,origin:PARAMETER_LABELS[leaf]?'fixed_tool_contract':'unknown'};
 }
-export function captureBusinessEvidence(args,evidence,{sourceRoot=process.env.FINANCE_SOURCE_ROOT}={}){
+export function captureBusinessEvidence(args,evidence,{sourceRoot=process.env.FINANCE_SOURCE_ROOT,calculationContext}={}){
  const errors=validateSchemaValue(BUSINESS_EVIDENCE_SCHEMA,evidence);if(errors.length)fail('finance_evidence_invalid','业务字段映射缺少必要信息或结构不正确。');
  const fileCache=new Map();if(evidence.mappings.reduce((n,m)=>n+m.sources.length,0)+(evidence.cashFlowAllocations??[]).reduce((n,m)=>n+m.sources.length,0)>2000)fail('finance_evidence_source_limit','本次字段映射数量过多，请按实际业务拆分。');
  const mappings=evidence.mappings.map(mapping=>{
-  const sources=mapping.sources.map(source=>source.calculation?captureWorkpaperAmount(args.target??{accountSetId:args.accountSetId,period:args.period},source.calculation):captureEvidenceSource(source,{sourceRoot,fileCache})),actual=readEvidencePointer(args,mapping.inputPointer);let valueMatched=null;
+  const sources=mapping.sources.map(source=>source.calculation?captureWorkpaperAmount(args.target??{accountSetId:args.accountSetId,period:args.period},source.calculation,calculationContext):captureEvidenceSource(source,{sourceRoot,fileCache})),actual=readEvidencePointer(args,mapping.inputPointer);let valueMatched=null;
   if(mapping.transform==='identity'){if(sources.length!==1)fail('finance_evidence_transform_invalid','直接取值必须唯一定位一个原始值。');valueMatched=same(actual,sources[0].selectedValue);}
   else if(mapping.transform!=='selection'){
    const values=sources.map(s=>decimal(s.selectedValue)),target=decimal(actual);if(values.some(v=>!v)||!target)fail('finance_evidence_numeric_required','计算转换必须使用明确的十进制数值。');

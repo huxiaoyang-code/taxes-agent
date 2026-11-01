@@ -1,3 +1,4 @@
+import {committedPostingEvidence} from './posting-evidence-index.mjs';
 // 中文季度复核包：真实账库快照与调用前的字段映射并列，技术轨迹留在后台。
 import {execFileSync} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,lstatSync,realpathSync,readdirSync} from 'node:fs';
@@ -66,6 +67,15 @@ async function evidenceFor(snapshot,auditDir,dbPath){
   const accepted=record.status==='returned'&&record.output?.ok!==false&&record.sourceCurrentness==='unchanged'&&evidence.captureStage==='before_business_execution'&&evidence.valueMismatches===0;
   const voucherBound=record.tool==='voucher_create'&&Number.isSafeInteger(voucherId)&&actual.length>0&&actual[0].period===args.period&&sameEntries(inputEntries,actual);
   groups.push({callId:record.callId,tool:record.tool,startedAt:record.begin.startedAt,accepted,businessStatus:problems.length?'底稿未完成，见已知缺件及影响':null,executionState:accepted?'已返回，来源版本一致':'执行或来源需要核查',voucherId:voucherBound?voucherId:null,businessReference:voucherBound?voucherLabel(actual[0]):`${observed.period} 未入账计算`,voucherCoverage:voucherBound?voucherCoverage(actual,evidence):null,voucherBinding:voucherBound?'凭证编号、期间和分录金额与实际账库一致；来源覆盖另逐字段检查':'尚无与当前账库一致的凭证绑定',evidence,engineRules:record.output?.rules??null,result:record.output});
+ }
+ // post/HTTP/领域入口同样由原生守卫采集；不要求模型事后重填执行日志。
+ for(const record of committedPostingEvidence(dbPath,snapshot.scope)){
+  const actual=snapshot.entries.filter(e=>e.voucher_id===record.voucherId);
+  if(!actual.length||!snapshot.periods.includes(actual[0].period)||actual[0].period!==record.content.period||actual[0].voucher_date!==record.content.voucher_date||!sameEntries(record.content.entries,actual))continue;
+  // 同一字段证据在MCP外层和领域层都采集时只展示一次；后续不同版本仍单独保留。
+  const evidenceKey=e=>JSON.stringify({method:e.method,mappings:e.mappings,rules:e.rules,cashFlowAllocations:e.cashFlowAllocations},(key,value)=>['materialReads','capturedAt'].includes(key)?undefined:value);
+  if(groups.some(g=>g.voucherId===record.voucherId&&evidenceKey(g.evidence)===evidenceKey(record.evidence)))continue;
+  groups.push({callId:'posting:'+record.attemptId,tool:'voucher_post',startedAt:record.startedAt,accepted:record.unchanged&&record.evidence.valueMismatches===0,businessStatus:null,executionState:record.unchanged?'原生提交已核对，来源版本一致':'原件版本已改变或待核',voucherId:record.voucherId,businessReference:voucherLabel(actual[0]),voucherCoverage:voucherCoverage(actual,record.evidence),voucherBinding:'原生审计已提交；企业、凭证日期、期间和分录与当前账库一致',evidence:record.evidence,engineRules:null,result:{operationId:record.operationId,attemptId:record.attemptId}});
  }
  return {groups:groups.sort((a,b)=>a.startedAt.localeCompare(b.startedAt)),businessIssues:businessIssues.sort((a,b)=>a.startedAt.localeCompare(b.startedAt)),omitted:index.omitted};
 }

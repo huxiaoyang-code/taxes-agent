@@ -452,7 +452,9 @@ const HANDLERS = dict({
     const period = requirePeriod(args);
     return A.createVoucher(setId, {
       period,
-      voucher_date: str(args.voucher_date) || `${period}-01`,
+      voucher_date: args.voucher_date,
+      businessEvidence: args.businessEvidence,
+      correctionOf: args.correctionOf,
       word: args.word,
       number: args.number,
       summary: args.summary,
@@ -550,7 +552,7 @@ const HANDLERS = dict({
   // ---- 凭证状态流转 ----
   voucher_post: (args) => {
     const setId = requireAccountSetId(args);
-    return A.postVoucher(setId, requireVoucherId(args));
+    return A.postVoucher(setId, requireVoucherId(args), {businessEvidence:args.businessEvidence,correctionOf:args.correctionOf});
   },
   voucher_unpost: (args) => {
     const setId = requireAccountSetId(args);

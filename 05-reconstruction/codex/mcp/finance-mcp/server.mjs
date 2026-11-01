@@ -109,7 +109,7 @@ function preflightTool(name,args={}) {
 async function callTool(name, args = {}) {
   const spec=preflightTool(name,args);
   // 字段映射已经由最外层记录器在执行前实读；原业务工具不接收审计元数据。
-  if(Object.hasOwn(args,'businessEvidence')){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
+  if(Object.hasOwn(args,'businessEvidence')&&!['voucher_create','voucher_post'].includes(name)){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
   if (DIRECT_TOOL_NAMES.has(name)) {
     try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
     catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
@@ -233,7 +233,7 @@ rl.on("line", async (line) => {
     let callReference, observedTarget, observationStartedAt;
     const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId}}}:result;
     try {
-      const result = await withFinanceCall({tool:params?.name??'unknown',args:params?.arguments??{},validate:()=>{
+      const result = await withFinanceCall({tool:params?.name??'unknown',nativeVoucherGuard:['voucher_create','voucher_post'].includes(params?.name),args:params?.arguments??{},validate:()=>{
         callReference=currentFinanceCall();preflightTool(params?.name,params?.arguments??{});
         const args=params?.arguments??{};
         if(MODEL_PLAIN_TOOL_NAMES.includes(params?.name)&&process.env.FINANCE_DATABASE_PATH&&Number.isSafeInteger(args.accountSetId)&&/^202[67]-\d{2}$/.test(args.period??'')){
