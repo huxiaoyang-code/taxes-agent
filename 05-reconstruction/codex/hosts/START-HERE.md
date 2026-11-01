@@ -14,7 +14,7 @@
 node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对路径>' --api-base 'http://127.0.0.1:<实际端口>' --database '<明确账库绝对路径>' --plugin-root '<中国化fork/finance绝对路径>' --audit-dir '<本机调用记录绝对目录>' --out '<已存在父目录/全新工作区>'
 ```
 
-`--host` 为 `pi | claude-code | dsh | zcode`。`--plugin-root` 可省略，届时使用本仓库已迁移的业务 Skill；提供时校验真实插件清单和 skills 目录。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。
+`--host` 为 `pi | claude-code | dsh | zcode`。`--plugin-root` 可省略，届时使用本仓库已迁移的业务 Skill；提供时校验真实插件清单和 skills 目录。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。需要脚本处理原件时加`--source-root <获准原件绝对目录>`，Python计算再加`--python <实际python.exe绝对路径>`；这两个可选值写入MCP环境，JavaScript无需Python。也可按宿主机制给MCP进程配置`FINANCE_SOURCE_ROOT`与`FINANCE_PYTHON_PATH`。
 
 | 宿主 | 生成文件 | 在新工作区启动 |
 |---|---|---|
@@ -27,7 +27,7 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对�
 
 ## 开展业务
 
-按目标加载相关 Skill，从真实账库核实企业、账套、期间和币种，选择直接工具；按需用 `finance_rules` 查规则与出处、`finance_record_contract` 查具体字段。原件解释及适用判断由 Agent 完成，确定性计算由既有业务模块执行。未知、冲突、缺件和不支持均保留，不能编造内部字段消除问题。
+按目标加载相关 Skill，从真实账库核实企业、账套、期间和币种，选择直接工具；按需用 `finance_rules` 查规则与出处、`finance_record_contract` 查具体字段。原件解释、适用判断及计算载体由 Agent 选择，可使用Python、表格、JavaScript或既有业务模块。finance_calculation_run记录实际脚本执行与独立派生文件；正式入账继续使用原生写入能力。未知、冲突、缺件和不支持均保留，不能编造内部字段消除问题。
 
 正常输出顺序：**账本金额→凭证/计算结果→规则依据→工具调用→输入与原件**。日常前三项，异常再展开后两项，后台自动记录始终完整。实际写入遵守现有原生权限、人审、期间和防重复控制；结果未知先查询原操作，不换身份重复写账。真实申报、开票和缴款仍以实际工具能力为准。
 
@@ -36,3 +36,5 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对�
 每次调用获得 `_meta.financeCall.callId`，本机记录保存在 `FINANCE_AUDIT_DIR`；完整底稿位于本机结果索引，不要求模型反复读取 JSON 指针。记录不完整、来源变化、业务失败和模型自行推导分别报告；哈希匹配不代表业务正确。
 
 旧 Harness 只在明确历史兼容任务中选择 `FINANCE_MCP_PROFILE=harness`，不会被新工作区自动加载。详细调用链与记录语义见[架构说明](../../../docs/AGENT-ARCHITECTURE.md)。
+
+通用脚本合同、实际输入格式、输出索引及权限边界见[自主计算](../skills/harness/references/calculation.md)。脚本按当前用户权限执行，非安全沙箱；只运行已授权脚本，不改原件、账库或读取凭据。工具注解不把它标为只读，宿主既有审批策略继续适用。

@@ -19,6 +19,7 @@ description: 按业务直接调用本机中国财税工具，核对账目、税�
 |---|---|
 | 账簿、科目、报表 | 实际`finance_query`、`ledger_query`等工具合同；[核算](references/accounting.md) |
 | 原始业务与字段 | `finance_record_contract`；[原件与整理输入](references/agency-input.md) |
+| 自主计算及独立账表 | `finance_calculation_run`或宿主表格/计算器；[计算记录与交付](references/calculation.md) |
 | 业务底稿 | `finance_workpaper`；[直接适配](references/adapters.md) |
 | 税费、规则与地区限制 | `finance_tax_calculate`、`finance_rules`；[税务](references/tax.md) |
 | 全年原件计算 | `finance_annual_workpaper`；[年度核对](../annual-close/SKILL.md) |

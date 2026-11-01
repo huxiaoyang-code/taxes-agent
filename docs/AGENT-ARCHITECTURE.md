@@ -9,6 +9,9 @@ flowchart TD
   U[业务目标与获准原件] --> A[Pi / Claude Code / dsh / ZCode]
   S[按需加载中国化 Skill] --> A
   A --> M[原生 MCP：具体业务工具与输入合同]
+  A --> C[Python / 表格 / 既有计算器]
+  M --> G[通用脚本实际执行与自动记录]
+  G --> P[独立派生账表和计算记录索引]
   M --> B[本机会计、税费、报表与对账模块]
   B --> D[账库与完整业务底稿]
   M --> R[自动保存调用输入、结果、错误与证据索引]
@@ -22,7 +25,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 | 入口 | 实现 | 职责 |
 |---|---|---|
-| Skill 与宿主 | `05-reconstruction/codex/skills/`、`hosts/`、Pi `finance-direct.ts` | 业务方法与按需披露，不重复维护税率或替代工具计算 |
+| Skill 与宿主 | `05-reconstruction/codex/skills/`、`hosts/`、Pi `finance-direct.ts` | 业务方法与按需披露，选择计算载体与业务方法，明确规则来源和适用性 |
 | 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`tool-profile.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
 | 原生业务 | `06-workbench/server/direct-finance.mjs`、`agency-business.mjs`、`accounting.mjs` | 已支持的底稿/税费/凭证/账簿/报表计算与受控写入 |
 
@@ -83,3 +86,14 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 季度报告另行采集同一账库实例、企业、账套与期间的可信核算回执中的未完成状态及 `review.issues`，不以是否提供 `businessEvidence` 为前提。HTML 在总览后直接展开“已知缺件及影响”，工作簿保留同名表，核对项明确需要处理；库存不足等事项的成本、利润和计税基础影响金额保持未知，不补零或代算。传输返回与业务完成分开，历史问题不会仅因后一次调用返回而自动消除，也不据历史问题断言现账必然漏记。该层只呈现已记录问题，不调整业务规则、原件、账簿或执行顺序。
 
 未完成事项表示工具处理状态，不能推断企业未认证、无扣除资格或原件一定缺失；需要区分资料事实、字段表达限制与真实缺件。有已知未解决事项时，报告将账内利润等结果标为暂列、尚不可定稿，影响金额仍为未知。
+
+
+## 模型自主计算与执行记录
+
+`finance_calculation_run`在正常direct工具面可发现，由`direct-finance.mjs`分派至`finance-calculation.mjs`，无需账套、HTTP后端或完整底稿。Agent自主选Python、JavaScript、表格或已有计算器，专用引擎的业务字段条件仅约束其自身。通用入口接受脚本、自由参数与获准原件引用，不为比例拆分/重分类新增财务schema；正式写账仍使用既有受控能力。
+
+运行器在`FINANCE_AUDIT_DIR/calculations/<runId>/`保存请求、脚本、实际输入、来源文件字节和结构、运行时版本及摘要、stdout/stderr、时间、文件输出索引与失败。每次新版本独立保存，`rerunOf`只关联同目录中真实旧记录且核对旧脚本/输入摘要；不构成不可篡改日志或完整环境锁定。结束核对来源文件、副本、脚本与输入变化。所有路径快照统一为source_snapshot（输入文件快照，来源性质待核）；路径授权及哈希不证明原件，派生文件再次作为输入也不升级其来源性质。CSV默认首行、JSON根结构以及可选精确locator分别标明；没有解析的复杂格式仅保存字节，不声称已读表头。
+
+结果身份为`derived_calculation`、业务状态为`unreviewed`，可独立交付，不是`finance_quarter_review`快照。中文业务账表、规则、参数和缺件影响由脚本或宿主表格产出；自动HTML只叫计算记录与文件索引，不能充当完成的业务报告。原生季度报告及其专用导出保留为可选路径。
+
+脚本使用明确程序和参数，禁用shell字符串，精简子进程环境，不传模型凭据或账库路径。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../05-reconstruction/codex/skills/harness/references/calculation.md)。

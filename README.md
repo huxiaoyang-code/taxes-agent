@@ -1,6 +1,6 @@
 # 中国财税 Agent
 
-按 Anthropic 官方知识工作插件的 Skill、连接器与原生 MCP 格式组织中国财税业务。Agent 调查资料、判断处理路径并自主选用工具；本机后端负责确定性计算、受控记账和自动调用记录，不替 Agent 建立事实登记或任务 DAG。
+按 Anthropic 官方知识工作插件的 Skill、连接器与原生 MCP 格式组织中国财税业务。Agent 调查资料、判断处理路径并自主选用工具；本机后端提供可选的专用计算、通用脚本执行记录、受控记账和自动调用记录，不替 Agent 建立事实登记或任务 DAG。
 
 默认 MCP 工具面为 `direct`。旧 Harness 仅以显式 `FINANCE_MCP_PROFILE=harness` 保留历史兼容，不是日常前置流程；`legacy` 是旧全量工具面的显式兼容入口。
 
@@ -12,6 +12,8 @@
 | 复用官方格式的中国化财务插件 | [中国化 fork](https://github.com/huxiaoyang-code/knowledge-work-plugins)；配置生成器可用 `--plugin-root` 指向其 `finance` 目录 |
 
 ## 工具与结果
+
+模型可自主选Python、JavaScript、表格或已有计算器。`finance_calculation_run`通过正常direct MCP执行获授权的本机脚本，保存输入文件快照（来源性质待核）、实际输入/脚本/输出/错误/版本，返回计算记录索引和独立派生文件路径。中文业务底稿和账表由脚本或表格生成，不必伪装原生季度快照；记录页不代表完整财税报告。配置、合同与权限边界见[通用计算](05-reconstruction/codex/skills/harness/references/calculation.md)。
 
 `finance_rules` 查询实际规则与官方出处，`finance_record_contract` 按需披露业务字段，`finance_workpaper` / `finance_annual_workpaper` 生成本机完整底稿，`finance_tax_calculate` 调用既有税费计算。独立的 `finance_tax_summary_calculate` 对有精确原件绑定的税务汇总作条件试算，合同用 `finance_record_contract(recordType=tax_summary)` 按需读取；其结果不证明完整账务、资格真实性或申报完成。账套、凭证、查账和报表继续使用既有会计工具。未接入的税局、开票和正式申报不能因 Skill 或目录存在而称已完成。
 

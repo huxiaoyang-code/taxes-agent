@@ -4,7 +4,7 @@
 
 ## 当前 direct 默认调用链
 
-日常路径为业务 Skill→MCP→原生业务工具，完整记录自动产生；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
+日常路径为业务 Skill→模型选择Python、表格或既有业务工具；MCP中的脚本运行与原生业务调用自动记录；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
 
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
@@ -190,3 +190,12 @@
 - `06-workbench/test/quarter-review.test.mjs`：净价/含税参数语义错映、原值拒绝、边界读取、现金流拆分、真实临时账库月度报表及投影引用负例。
 
 - 季度已知缺件呈现：`06-workbench/server/quarter-review.mjs` 独立于参数映射收集同范围可信核算问题，生成主复核项及“已知缺件及影响”；`06-workbench/test/quarter-review.test.mjs` 覆盖无字段映射、历史问题保留、跨企业/篡改回执排除、影响金额未知和首页展示。
+
+
+### 通用计算执行与独立派生账表
+
+- `06-workbench/server/finance-calculation.mjs`：自由Python/JavaScript脚本的实际执行、版本输入及中性来源快照、错误/时间/输出文件索引；中文计算记录页，不新增财务引擎或业务schema。
+- `05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`与`06-workbench/server/direct-finance.mjs`：正常direct发现及调用；非只读工具注解，配置支持可选`--source-root`、`--python`。
+- `06-workbench/scripts/quarter-host.mjs`：通用脚本参数历史期不当作写账期间，实际凭证期间保护保留。
+- `06-workbench/test/finance-calculation.test.mjs`：无账套/HTTP的真实stdio比例计算、Python中文产物、未知保留、结构留证、失败/超时、版本追加、边界拒绝及宿主注解。
+- 业务方法与合同：`05-reconstruction/codex/skills/harness/references/calculation.md`；脚本输出是独立派生账表，原生季度导出不是唯一产物路径。
