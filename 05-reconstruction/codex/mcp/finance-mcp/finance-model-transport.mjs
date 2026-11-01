@@ -110,7 +110,7 @@ const PROJ_MAX_STRING = 40;
 const ENVELOPE_KEYS = new Set([
   "ok", "outputPolicy", "adapter", "channel", "operation", "operationCategory", "accountSetId",
   "accountSetIdSource", "tool", "scope", "nodeId", "projection", "projectionDropped", "localRef",
-  "refPersistence", "refExpiresAt", "refUnavailable", "applied", "appliedReason", "needsLocalReview",
+  "refPersistence", "refExpiresAt", "refUnavailable", "applied", "appliedReason", "needsLocalReview", "postingGuard", "nextAction",
   "rawValuesIncluded", "error", "rawErrorIncluded", "catalog",
 ]);
 /** 即使将来有人放宽未知字段，这些名字也永远不允许出现（它们正是原文泄漏面）。 */
@@ -342,6 +342,7 @@ const ERROR_CATEGORY_BY_CODE = Object.freeze({
   bank_local_install_failed: "bank",
   bank_local_state_unknown: "bank",
   bank_local_operation_failed: "bank",
+  red_entry_cash_evidence_required: "bank",
   aux_account_reallocation_required: "auxiliary",
   aux_active_invalid: "auxiliary",
   aux_allocation_corrupt: "auxiliary",
@@ -406,6 +407,8 @@ const ERROR_CATEGORY_BY_CODE = Object.freeze({
   aux_request_id_required: "auxiliary",
   aux_requirement_invalid: "auxiliary",
   aux_side_invalid: "auxiliary",
+  aux_opening_negative: "auxiliary",
+  aux_signed_upgrade_required: "auxiliary",
   aux_structure_invalid: "auxiliary",
   aux_structure_mismatch: "auxiliary",
   aux_target_invalid: "auxiliary",
@@ -419,6 +422,10 @@ const ERROR_CATEGORY_BY_CODE = Object.freeze({
   period_before_start: "period",
   voucher_not_found: "voucher",
   voucher_invalid: "voucher",
+  posting_correction_required: "voucher",
+  posting_needs_review: "voucher",
+  posting_record_unavailable: "voucher",
+  posting_record_finish_failed: "voucher",
   voucher_id_required: "voucher",
   account_set_id_required: "account_set",
   account_set_id_invalid: "account_set",
@@ -674,12 +681,19 @@ function allowedValue(value, builtin, registry) {
 }
 
 /** 写结果三态：applied 只允许 true / false / "unknown"；未知或未应用必须标记复核与固定原因。 */
+const postingCodes=new Set(['voucher_date_missing','voucher_date_invalid','voucher_date_period_mismatch','voucher_invalid','source_value_mismatch','source_binding_missing','source_selection_unverified','source_evidence_missing','source_definition_invalid','source_unavailable','correction_scope_invalid','normalization_input_mismatch','source_configuration_missing','source_version_changed','calculation_source_unavailable']);
+const postingGuidance=new Set(['后台未配置受信审计目录，请先核对工具配置；这不代表企业缺少原件。','计算结果或其原始资料版本已经变化，请重新核验来源后再提交。','尚不能定位可信的已签发计算结果，请核对计算引用与后台配置。','请依据原件更正所列字段；不要自行修改日期或金额来通过校验。','候选已保留，需补充可核依据或由本机操作者复核。']);
+function validPostingGuard(data) {
+ const g=prop(data,'postingGuard');if(!isPlainObject(g)||Object.keys(g).some(k=>!['status','nextAction','attemptId','issues','guidance'].includes(k)))return false;
+ const action=g.status==='correction_required'?'correct_input':g.status==='needs_review'?'human_review':null;
+ return action&&(!own(g,'guidance')||postingGuidance.has(g.guidance))&&g.nextAction===action&&prop(data,'nextAction')===action&&/^[a-f0-9-]{36}$/.test(g.attemptId)&&Array.isArray(g.issues)&&g.issues.length>0&&g.issues.length<=256&&g.issues.every(i=>isPlainObject(i)&&Object.keys(i).every(k=>['code','field','severity'].includes(k))&&postingCodes.has(i.code)&&/^\/(?:voucher_date|period|businessEvidence|correctionOf|entries(?:\/\d+(?:\/(?:debit|credit|code))?)?)$/.test(i.field)&&['error','review'].includes(i.severity));
+}
 function validateStatusFields(data) {
   const applied = prop(data, "applied");
   if (applied !== true && applied !== false && applied !== "unknown") return false;
   const needsLocalReview = prop(data, "needsLocalReview");
   if (typeof needsLocalReview !== "boolean") return false;
-  if (applied !== true && needsLocalReview !== true) return false;
+  if (applied !== true && needsLocalReview !== true && !(applied===false&&prop(data,'ok')===false&&validPostingGuard(data)&&prop(data,'nextAction')==='correct_input')) return false;
   if (applied === true && needsLocalReview === true) {
     const unavailable = prop(data, "refUnavailable");
     if (prop(data, "localRef") !== null || prop(data, "refPersistence") !== "none"
@@ -895,6 +909,8 @@ function validateEnvelopeInner(data, registries) {
     if (writeLike && !hasStatus) return invalid("envelope_status_invalid");
   }
 
+  if(own(data,'postingGuard')&&(!writeLike||ok||prop(data,'applied')!==false||!validPostingGuard(data)))return invalid('envelope_unexpected_field');
+  if(own(data,'nextAction')&&!own(data,'postingGuard')&&!(writeLike&&!ok&&prop(data,'applied')==='unknown'&&prop(data,'nextAction')==='query_original_operation'))return invalid('envelope_unexpected_field');
   // ⑧ projection / projectionDropped：**每个出现的键都独立校验**，不依赖伴随键。
   if (hasProjection && !validProjection(prop(data, "projection"))) return invalid("envelope_projection_invalid");
   if (hasDropped) {

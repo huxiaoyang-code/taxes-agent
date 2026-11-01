@@ -893,6 +893,7 @@ export function evaluateMatch(db, match) {
   } catch (e) {
     return { ok: false, reason: "entry_amount_unreadable", details: { entryId: Number(row.entry_id), errorCode: e.code ?? null } };
   }
+  if(debitCents<0n||creditCents<0n)return {ok:false,reason:'red_entry_cash_evidence_required',details:{entryId:Number(row.entry_id)}};
   if (debitCents !== BigInt(snapshot.debitCents) || creditCents !== BigInt(snapshot.creditCents)) {
     return {
       ok: false, reason: "entry_amount_changed",
@@ -1073,7 +1074,7 @@ function listCandidatesBody(db, options = {}) {
       periodDateConsistent: String(row.period) === periodOf(row.voucher_date),
     };
     if (!direction) {
-      skipped.push({ voucherId: Number(row.voucher_id), entryId: Number(row.entry_id), code: "entry_amount_ambiguous" });
+      skipped.push({ voucherId: Number(row.voucher_id), entryId: Number(row.entry_id), code: debitCents<0n||creditCents<0n?"red_entry_cash_evidence_required":"entry_amount_ambiguous" });
       continue;
     }
     if (!item.periodDateConsistent) {
@@ -1208,7 +1209,7 @@ function confirmMatchBody(db, options = {}) {
           ? DIRECTIONS.OUTFLOW
           : null;
       if (!direction) {
-        throw bankError("entry_amount_ambiguous", "分录借贷方向不明确，拒绝匹配", { voucherId, entryId });
+        throw bankError(entry.debitCents<0n||entry.creditCents<0n?"red_entry_cash_evidence_required":"entry_amount_ambiguous", "红字更正与实际退款不能仅凭负号判断；需核对原凭证和真实收付，拒绝自动匹配", { voucherId, entryId });
       }
       const amount = direction === DIRECTIONS.INFLOW ? entry.debitCents : entry.creditCents;
       if (direction !== txn.direction || amount !== BigInt(txn.amount_cents)) {
@@ -1629,6 +1630,7 @@ function reconcileBankBody(db, options = {}) {
   const periodMismatch = [];
   let bookNet = 0n;
   const bookEntries = [];
+  const bookRedEntriesPending = [];
   for (const row of entryRows) {
     const debit = moneyCents(row.debit, "voucher_entries.debit");
     const credit = moneyCents(row.credit, "voucher_entries.credit");
@@ -1646,6 +1648,13 @@ function reconcileBankBody(db, options = {}) {
         voucherId: Number(row.voucher_id), period: row.period, voucherDate: row.voucher_date,
         entryId: Number(row.entry_id),
       });
+    }
+    if(debit<0n||credit<0n) {
+      // 原借贷栏及符号保留；不把会计更正冒充一笔反向银行流水。
+      const red={voucherId:Number(row.voucher_id),entryId:Number(row.entry_id),lineNo:Number(row.line_no),period:row.period,voucherDate:row.voucher_date,debitCents:centsNumber(debit),creditCents:centsNumber(credit),netCents:centsNumber(debit-credit),reason:'red_entry_cash_evidence_required'};
+      bookRedEntriesPending.push(red);
+      issues.push({code:'red_entry_cash_evidence_required',severity:'pending',message:'红字银行分录已计入账面余额，实际收付及与原凭证的更正关系待核，未计入四类未达项。',details:red});
+      continue;
     }
     bookEntries.push({
       voucherId: Number(row.voucher_id),
@@ -1857,12 +1866,14 @@ function reconcileBankBody(db, options = {}) {
       openingText: formatCents(bookOpening),
       netText: formatCents(bookNet),
       closingText: formatCents(bookClose),
-      postedEntryCount: bookEntries.length,
+      postedEntryCount: bookEntries.length+bookRedEntriesPending.length,
+      redEntryPendingCount:bookRedEntriesPending.length,
       // 截止日两侧都已发生并被人工确认的银行分录数（跨日未发生的匹配不计入已核销）。
       matchedEntryCount: new Set(bookEntries
         .filter((e) => settledEntryIds.has(e.entryId)).map((e) => e.entryId)).size,
     },
     outstanding: {
+      bookRedEntriesPending,
       bookReceivedBankMissing,
       bookPaidBankMissing,
       bankReceivedBookMissing,

@@ -19,6 +19,7 @@ export function buildQuarterCashFlow(snapshot,evidenceGroups){
   const values=new Map([...items.keys()].map(k=>[k,0n])),transactions=[],unknown=[];let internal=0n;
   const ids=[...new Set(snapshot.entries.filter(e=>e.period===period&&e.status==='posted').map(e=>e.voucher_id))];
   for(const id of ids){const entries=snapshot.entries.filter(e=>e.voucher_id===id),cash=entries.filter(e=>cashCode(e.code));if(!cash.length)continue;const incoming=sum(cash,'debit'),outgoing=sum(cash,'credit');
+   if(entries.some(e=>storedCents(e.debit)<0n||storedCents(e.credit)<0n)){unknown.push({voucherId:id,date:entries[0].voucher_date,summary:entries[0].voucher_summary,incoming:money(incoming),outgoing:money(outgoing),reason:'红字表示原方向冲销，须按真实收付款证据另核分类，不能按绝对值猜测收付。'});continue;}
    if(entries.every(e=>cashCode(e.code))&&incoming===outgoing){internal+=incoming;transactions.push({voucherId:id,date:entries[0].voucher_date,summary:entries[0].voucher_summary,item:'现金账户内部划转（不计入现金流量）',incoming:money(incoming),outgoing:money(outgoing),status:'internal'});continue;}
    const groups=byVoucher.get(id)??[],unique=new Map(groups.map(g=>[JSON.stringify(g.evidence.cashFlowAllocations),g]));let reason=null,group;
    if(unique.size!==1)reason=unique.size?'同一凭证存在相互冲突的现金流分类':'缺少与本凭证绑定的原件及现金流项目选择';else group=[...unique.values()][0];

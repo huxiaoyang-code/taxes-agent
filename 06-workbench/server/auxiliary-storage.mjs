@@ -1,12 +1,12 @@
 import { assertRestoreWritable } from './local-restore-control.mjs';
 import { hasActiveAuditExecution, withAuditSavepoint } from './local-audit-storage.mjs';
-// 可选 aux1 组件；导入模块不打开或初始化数据库。
+// 可选辅助核算组件；保留 v1 读取，v2 支持有符号分配；导入模块不打开或初始化数据库。
 import fs from 'node:fs';
 import { storedCents } from './money.mjs';
 import { resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
-export const AUX_SCHEMA_VERSION = 1;
+export const AUX_SCHEMA_VERSION = 2;
 export const AUX_TABLES = Object.freeze(['aux_component_migrations','aux_entities','aux_allocations','aux_receipts','aux_operations','aux_requirements'].sort());
 export function auxError(code) { const error = new Error(code); error.code = code; return error; }
 const quarantined = new WeakSet();
@@ -28,7 +28,7 @@ const allocationValidation = `
  OR NEW.credit_cents+COALESCE((SELECT SUM(credit_cents) FROM aux_allocations WHERE entry_id=NEW.entry_id),0) > (SELECT ROUND(credit*100) FROM voucher_entries WHERE id=NEW.entry_id))
  THEN RAISE(ABORT,'aux_allocation_exceeds_entry') END;
  ${mutableSql('NEW')}`;
-const definitions = [
+const legacyDefinitions = [
  `CREATE TABLE aux_component_migrations (version INTEGER PRIMARY KEY CHECK(version=1), applied_at TEXT NOT NULL, backup_sha256 TEXT NOT NULL, backup_bytes INTEGER NOT NULL CHECK(backup_bytes>0))`,
  `CREATE TABLE aux_entities (id INTEGER PRIMARY KEY AUTOINCREMENT, account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE RESTRICT, kind TEXT NOT NULL CHECK(kind IN ('project','department','party')), code TEXT NOT NULL, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), UNIQUE(account_set_id,kind,code))`,
  `CREATE TABLE aux_allocations (id INTEGER PRIMARY KEY AUTOINCREMENT, account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE RESTRICT, code TEXT NOT NULL, entry_id INTEGER REFERENCES voucher_entries(id) ON DELETE RESTRICT, opening_code TEXT, project_id INTEGER REFERENCES aux_entities(id) ON DELETE RESTRICT, department_id INTEGER REFERENCES aux_entities(id) ON DELETE RESTRICT, party_id INTEGER REFERENCES aux_entities(id) ON DELETE RESTRICT, debit_cents INTEGER NOT NULL CHECK(typeof(debit_cents)='integer' AND debit_cents>=0 AND debit_cents<=99999999999999), credit_cents INTEGER NOT NULL CHECK(typeof(credit_cents)='integer' AND credit_cents>=0 AND credit_cents<=99999999999999), CHECK((entry_id IS NOT NULL AND opening_code IS NULL) OR (entry_id IS NULL AND opening_code IS NOT NULL AND opening_code=code)), CHECK((debit_cents>0 AND credit_cents=0) OR (credit_cents>0 AND debit_cents=0)), CHECK(project_id IS NOT NULL OR department_id IS NOT NULL OR party_id IS NOT NULL), FOREIGN KEY(account_set_id,code) REFERENCES accounts(account_set_id,code) ON DELETE RESTRICT, FOREIGN KEY(account_set_id,opening_code) REFERENCES opening_balances(account_set_id,code) ON DELETE RESTRICT)`,
@@ -53,10 +53,26 @@ const definitions = [
  `CREATE TRIGGER aux_operations_insert BEFORE INSERT ON aux_operations WHEN EXISTS(SELECT 1 FROM aux_operations WHERE id=NEW.id) BEGIN SELECT RAISE(ABORT,'aux_history_immutable'); END`,
  ...['aux_receipts','aux_operations'].flatMap(table => ['UPDATE','DELETE'].map(action => `CREATE TRIGGER ${table}_${action.toLowerCase()} BEFORE ${action} ON ${table} BEGIN SELECT RAISE(ABORT,'aux_history_immutable'); END`)),
 ];
+// v1 的完整 DDL 保留用于旧账库及备份验证；v2 只扩展分录辅助分配的符号。
+const signedBudget = ['debit','credit'].map(side => {
+ const target=`(SELECT ROUND(${side}*100) FROM voucher_entries WHERE id=NEW.entry_id)`;
+ const total=`(NEW.${side}_cents+COALESCE((SELECT SUM(${side}_cents) FROM aux_allocations WHERE entry_id=NEW.entry_id),0))`;
+ return `(NEW.${side}_cents<>0 AND (${target}=0 OR (NEW.${side}_cents<0)<>(${target}<0))) OR (${target}>=0 AND (${total}<0 OR ${total}>${target})) OR (${target}<0 AND (${total}>0 OR ${total}<${target}))`;
+}).join(' OR ');
+const signedValidation=allocationValidation.replace(/NEW\.debit_cents[\s\S]*?(?=\n THEN RAISE)/, `(${signedBudget}))`);
+const definitions=legacyDefinitions.map(sql=>sql
+ .replace('CHECK(version=1), applied_at','CHECK(version IN (1,2)), applied_at')
+ .replaceAll('debit_cents>=0 AND debit_cents<=99999999999999','debit_cents>=-99999999999999 AND debit_cents<=99999999999999')
+ .replaceAll('credit_cents>=0 AND credit_cents<=99999999999999','credit_cents>=-99999999999999 AND credit_cents<=99999999999999')
+ .replace('CHECK((debit_cents>0 AND credit_cents=0) OR (credit_cents>0 AND debit_cents=0))','CHECK((debit_cents<>0 AND credit_cents=0) OR (credit_cents<>0 AND debit_cents=0)), CHECK(entry_id IS NOT NULL OR (debit_cents>=0 AND credit_cents>=0))')
+ .replace(allocationValidation,signedValidation));
+export const AUX_V1_DDL = Object.freeze(legacyDefinitions);
 export const AUX_DDL = Object.freeze(definitions);
 const normalize = sql => String(sql).replace(/\s+/g,' ').trim().replace(/;$/,'');
 const expectedObjects = definitions.map(sql => ({name: /^CREATE (?:TABLE|INDEX|TRIGGER) (\w+)/.exec(sql)[1], sql:normalize(sql)})).sort((a,b)=>a.name.localeCompare(b.name));
-export const AUX_COMPONENT_STRUCTURE = Object.freeze({name:'auxiliary',version:1, ddl:expectedObjects});
+const legacyObjects=legacyDefinitions.map(sql=>({name:/^CREATE (?:TABLE|INDEX|TRIGGER) (\w+)/.exec(sql)[1],sql:normalize(sql)})).sort((a,b)=>a.name.localeCompare(b.name));
+export const AUX_COMPONENT_STRUCTURE = Object.freeze({name:'auxiliary',version:2, ddl:expectedObjects});
+export function auxiliaryComponentContract(version) { if(![1,2].includes(version))throw auxError('aux_version_invalid');return {name:'auxiliary',version,tables:AUX_TABLES,structure:version===2?AUX_COMPONENT_STRUCTURE:{name:'auxiliary',version:1,ddl:legacyObjects}}; }
 export function auxiliarySchemaFacts(db) {
  assertAuxiliaryConnection(db); return db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY name").all().filter(r => r.name.startsWith('aux_') || r.name.startsWith('idx_aux_') || AUX_TABLES.includes(r.tbl_name) || /\baux_[a-z_]+\b/i.test(r.sql??''));
 }
@@ -65,7 +81,8 @@ export function inspectAuxiliarySchema(db, coreVersion=5) {
  const explicit=objects.filter(o=>o.sql!==null).map(o=>({name:o.name,sql:normalize(o.sql)})).sort((a,b)=>a.name.localeCompare(b.name));
  const problems=[];
  if(coreVersion!==5) problems.push({kind:'aux_core_unsupported'});
- if(JSON.stringify(explicit)!==JSON.stringify(expectedObjects)) problems.push({kind:'aux_structure_mismatch'});
+ const schemaVersion=JSON.stringify(explicit)===JSON.stringify(expectedObjects)?2:JSON.stringify(explicit)===JSON.stringify(legacyObjects)?1:null;
+ if(!schemaVersion) problems.push({kind:'aux_structure_mismatch'});
  // 精确 DDL 固定字段、默认值、主键/rowid、CHECK、外键行为及全部索引键/排序规则/顺序。
  // 自动索引名称与所属表也须精确一致，不允许额外 UNIQUE 结构。
  const auto=objects.filter(o=>o.sql===null).map(o=>o.name).sort();
@@ -73,15 +90,16 @@ export function inspectAuxiliarySchema(db, coreVersion=5) {
  if(JSON.stringify(auto)!==JSON.stringify(wantAuto)) problems.push({kind:'aux_indexes_mismatch'});
  if(!problems.length) {
   const rows=db.prepare('SELECT * FROM aux_component_migrations').all();
-  if(rows.length!==1 || rows[0].version!==1 || !/^[a-f0-9]{64}$/.test(rows[0].backup_sha256) || !Number.isSafeInteger(rows[0].backup_bytes) || rows[0].backup_bytes<=0 || Number.isNaN(Date.parse(rows[0].applied_at))) problems.push({kind:'aux_version_invalid'});
+  const versions=rows.map(r=>r.version).sort();
+  if(!(schemaVersion===1?JSON.stringify(versions)==='[1]':['[2]','[1,2]'].includes(JSON.stringify(versions)))||rows.some(r=>!/^[a-f0-9]{64}$/.test(r.backup_sha256)||!Number.isSafeInteger(r.backup_bytes)||r.backup_bytes<=0||Number.isNaN(Date.parse(r.applied_at))))problems.push({kind:'aux_version_invalid'});
   const invalid=db.prepare(`SELECT COUNT(*) n FROM aux_allocations a LEFT JOIN voucher_entries e ON e.id=a.entry_id LEFT JOIN vouchers v ON v.id=e.voucher_id WHERE
     (a.entry_id IS NOT NULL AND (v.account_set_id IS NOT a.account_set_id OR e.code IS NOT a.code))
     OR EXISTS(SELECT 1 FROM aux_entities d WHERE (d.id=a.project_id AND (d.kind!='project' OR d.account_set_id!=a.account_set_id)) OR (d.id=a.department_id AND (d.kind!='department' OR d.account_set_id!=a.account_set_id)) OR (d.id=a.party_id AND (d.kind!='party' OR d.account_set_id!=a.account_set_id)))`).get().n;
-  const over=db.prepare(`SELECT a.entry_id FROM aux_allocations a JOIN voucher_entries e ON e.id=a.entry_id GROUP BY a.entry_id HAVING SUM(a.debit_cents)>ROUND(e.debit*100) OR SUM(a.credit_cents)>ROUND(e.credit*100)`).all();
+  const over=db.prepare(`SELECT a.entry_id FROM aux_allocations a JOIN voucher_entries e ON e.id=a.entry_id GROUP BY a.entry_id HAVING (ROUND(e.debit*100)>=0 AND (SUM(a.debit_cents)<0 OR SUM(a.debit_cents)>ROUND(e.debit*100))) OR (ROUND(e.debit*100)<0 AND (SUM(a.debit_cents)>0 OR SUM(a.debit_cents)<ROUND(e.debit*100))) OR (ROUND(e.credit*100)>=0 AND (SUM(a.credit_cents)<0 OR SUM(a.credit_cents)>ROUND(e.credit*100))) OR (ROUND(e.credit*100)<0 AND (SUM(a.credit_cents)>0 OR SUM(a.credit_cents)<ROUND(e.credit*100))) OR SUM(CASE WHEN a.debit_cents<>0 AND (a.debit_cents<0)<>(e.debit<0) OR a.credit_cents<>0 AND (a.credit_cents<0)<>(e.credit<0) THEN 1 ELSE 0 END)>0`).all();
   if(invalid||over.length)problems.push({kind:'aux_allocation_invalid'});
 
  }
- return {present:true,version:1,name:'auxiliary',problems,tables:AUX_TABLES,objects};
+ return {present:true,version:schemaVersion,name:'auxiliary',problems,tables:AUX_TABLES,objects};
 }
 export function assertAuxiliaryReady(db) { assertAuxiliaryConnection(db); const check=inspectAuxiliarySchema(db, db.prepare('SELECT MAX(version) v FROM schema_migrations').get()?.v); fail(!check.present,'aux_not_installed'); fail(check.problems.length,'aux_structure_invalid'); }
 export function assertPlainPath(file) {
@@ -101,7 +119,7 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
  const LB=await import('./local-backup.mjs');
  if(state.present&&state.problems.length)throw auxError('aux_structure_invalid');
  await (await import('./local-batch-storage.mjs')).installBatchSchema(db,{dbPath:path,outDir:resolve(dirname(path),'batch-'+randomUUID())});
- if(state.present) { fail(state.problems.length,'aux_structure_invalid'); LB.assertSupportedDatabaseConnection(db); return {status:'already_installed',version:1}; }
+ if(state.present&&state.version===2) { LB.assertSupportedDatabaseConnection(db); return {status:'already_installed',version:2}; }
  try { db.exec('BEGIN IMMEDIATE'); } catch(error) { if(db.isTransaction)throw unknown(db); throw error; }
  try {
   try{LB.assertSupportedDatabaseConnection(db);}catch{fail(true,'aux_backup_failed');}
@@ -110,12 +128,24 @@ export async function ensureAuxiliarySchema(db,{dbPath,outDir}={}) {
   const backup=await LB.createBackup({dbPath:path,outDir}); fail(!backup.ok,'aux_backup_failed');
   const verified=await LB.verifyBackup({backupDir:backup.backupDir});
   fail(!verified.ok || verified.status!=='ok' || verified.summary.snapshotSha256!==backup.backupMeta.snapshotSha256 || verified.manifest.source.file!==basename(path) || verified.manifest.structure.schemaVersion!==5,'aux_backup_invalid');
-  try {LB.assertInstallableComponentSet(verified.manifest,'auxiliary');} catch {fail(true,'aux_component_unsupported');}
+  try {if(!state.present)LB.assertInstallableComponentSet(verified.manifest,'auxiliary');else fail(verified.manifest.components.find(c=>c.name==='auxiliary')?.version!==1,'aux_component_unsupported');} catch {fail(true,'aux_component_unsupported');}
   LB.assertBackupSourceConnection(db,verified.manifest);
   const after=fs.statSync(assertPlainPath(path),{bigint:true}); fail(before.dev!==after.dev||before.ino!==after.ino,'aux_database_replaced');
-  for(const sql of AUX_DDL) db.exec(sql);
-  db.prepare('INSERT INTO aux_component_migrations VALUES(1,?,?,?)').run(new Date().toISOString(),backup.backupMeta.snapshotSha256,backup.backupMeta.snapshotBytes);
-  assertAuxiliaryReady(db); db.exec('COMMIT'); return {status:'installed',version:1,backupDir:backup.backupDir};
+  if(state.present) {
+   // 同一写事务内重建受影响的两张表；旧 ID、迁移记录和分配原值不变。
+   const allocationRows=db.prepare('SELECT * FROM aux_allocations ORDER BY id').all(), migrations=db.prepare('SELECT * FROM aux_component_migrations ORDER BY version').all();
+   const sequence=db.prepare("SELECT seq FROM sqlite_sequence WHERE name='aux_allocations'").get()?.seq;
+   for(const object of state.objects.filter(o=>o.type==='trigger'))db.exec(`DROP TRIGGER ${object.name}`);
+   db.exec('DROP TABLE aux_allocations');db.exec('DROP TABLE aux_component_migrations');
+   for(const sql of AUX_DDL.filter(sql=>/^CREATE TABLE (aux_allocations|aux_component_migrations) /.test(sql)||/^CREATE INDEX idx_aux_/.test(sql)))db.exec(sql);
+   const insert=db.prepare('INSERT INTO aux_allocations(id,account_set_id,code,entry_id,opening_code,project_id,department_id,party_id,debit_cents,credit_cents) VALUES(?,?,?,?,?,?,?,?,?,?)');
+   for(const row of allocationRows)insert.run(row.id,row.account_set_id,row.code,row.entry_id,row.opening_code,row.project_id,row.department_id,row.party_id,row.debit_cents,row.credit_cents);
+   if(sequence!==undefined){db.prepare("DELETE FROM sqlite_sequence WHERE name='aux_allocations'").run();db.prepare('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)').run('aux_allocations',sequence);}
+   for(const row of migrations)db.prepare('INSERT INTO aux_component_migrations VALUES(?,?,?,?)').run(row.version,row.applied_at,row.backup_sha256,row.backup_bytes);
+   for(const sql of AUX_DDL.filter(sql=>sql.startsWith('CREATE TRIGGER ')))db.exec(sql);
+  }else for(const sql of AUX_DDL) db.exec(sql);
+  db.prepare('INSERT INTO aux_component_migrations VALUES(2,?,?,?)').run(new Date().toISOString(),backup.backupMeta.snapshotSha256,backup.backupMeta.snapshotBytes);
+  assertAuxiliaryReady(db); db.exec('COMMIT'); return {status:state.present?'upgraded':'installed',version:2,backupDir:backup.backupDir};
  } catch(error) {
   try { if(db.isTransaction) db.exec('ROLLBACK'); else throw unknown(db); } catch { throw unknown(db); }
   throw error;
@@ -130,6 +160,11 @@ export function auxTransaction(db,fn) {
  try { db.exec(nested?`SAVEPOINT ${name}`:'BEGIN IMMEDIATE'); } catch(error) { if(nested||db.isTransaction)throw unknown(db); throw error; }
  try { const result=fn(); db.exec(nested?`RELEASE ${name}`:'COMMIT'); return result && typeof result==='object' ? {...result, ...(nested && result.status==='applied'?{status:'staged'}:{}), durability:nested?'pending_outer_commit':'committed'} : result; }
  catch(error) { try { if(nested) db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`); else if(db.isTransaction) db.exec('ROLLBACK'); else throw unknown(db); } catch { throw unknown(db); } throw error; }
+}
+// 分配保留原借贷栏及符号：逐项同号，合计不能越过来源金额。
+export function signedAllocationFits(target, parts) {
+ const values=parts.map(BigInt), t=BigInt(target), total=values.reduce((a,b)=>a+b,0n);
+ return values.every(v=>v===0n||(t!==0n&&(v<0n)===(t<0n))) && (t>=0n?total>=0n&&total<=t:total<=0n&&total>=t);
 }
 export const auxFingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** 只有显式配置的辅助核算要求才可以阻塞期间封账。 */

@@ -1,3 +1,4 @@
+import { postingFailureProjection } from './posting-evidence-guard.mjs';
 import { operationErrorEvidence } from './local-audit-coordinator.mjs';
 // finance-model-adapter.mjs — 普通财务工具的模型边界适配器；路由由调用方接线。
 //
@@ -618,6 +619,7 @@ function failureFromError(error, context = {}) {
     : undefined;
   const result=envelopeFromSafeError(safeErrorProjection(error,registered?{operation:registered}:{}),context);
   const audit=operationErrorEvidence(error);if(audit){result.applied=audit.applied;result.needsLocalReview=audit.applied===true?audit.needsLocalReview:true;if(audit.applied===true){delete result.appliedReason;result.localRef=null;result.refPersistence='none';result.refUnavailable='summary_unavailable';}}
+  const posting=postingFailureProjection(error);if(posting)Object.assign(result,posting);
   return result;
 }
 

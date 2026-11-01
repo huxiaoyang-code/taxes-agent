@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {syntheticVoucherEvidence,syntheticPostingTool} from './helpers/synthetic-posting-evidence.mjs';
 // 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-accounting-period-integrity-test-mjs-' + (++identityFixtureSequence) });
@@ -27,6 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const dataDir = mkdtempSync(join(tmpdir(), "wb-period-integrity-"));
 process.env.WORKBENCH_DATA_DIR = dataDir;
+const sourceRoot=join(dataDir,'合成原件');process.env.FINANCE_SOURCE_ROOT=sourceRoot;
 
 let db, A, M, C, S;
 const results = [];
@@ -91,7 +93,10 @@ const opening = (setId) => [e("1002", 1000), e("3001", 0, 1000)];
 
 try {
   ({ db } = await import("../server/db.mjs"));
-  A = await import("../server/accounting.mjs");
+  const rawA=await import('../server/accounting.mjs');
+  // 本套件的有效金额场景补齐明确合成来源；非法分录原样送入生产守卫，不改输入或断言。
+  const fixture=(id,input)=>rawA.checkVoucher(id,input.entries).ok?syntheticVoucherEvidence(input,sourceRoot):input;
+  A={...rawA,createVoucher:(id,input)=>rawA.createVoucher(id,fixture(id,input)),importAccountSet:(payload,options)=>{syntheticPostingTool('legacy_book_import',{payload},sourceRoot);return rawA.importAccountSet(payload,options);}};
   M = await import("../server/money.mjs");
   C = await import("../server/period-end-controls.mjs");
   S = await import("../server/import-storage.mjs");
@@ -118,7 +123,9 @@ try {
     const s = newSet("精度-合计");
     const entries = Array.from({ length: 1000 }, () => e("1002", 0.1));
     entries.push(e("1001", 0, 100));
-    const voucher = A.createVoucher(s, { period: "2026-01", entries });
+    // 千行合计草稿保留缺来源待核；不以超出字段映射上限的伪证据绕过正式入账保护。
+    const voucher = rawA.createVoucher(s, { period: "2026-01", voucher_date:"2026-01-15", entries });
+    assert.equal(voucher.postingGuard.status,"needs_review");
     assert.equal(voucher.total_debit, 100);
     assert.equal(voucher.total_credit, 100);
   });

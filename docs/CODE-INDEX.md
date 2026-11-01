@@ -201,3 +201,16 @@
 - 业务方法与合同：`05-reconstruction/codex/skills/harness/references/calculation.md`；脚本输出是独立派生账表，原生季度导出不是唯一产物路径。
 
 - 固定账务卡片：`06-workbench/server/finance-review-card.mjs` 的 `buildFinanceReviewCard` / `renderFinanceReviewCard`，明确季度JSON适配、独立流水/盘点比对、固定中文模板与按需追溯；由 `finance-calculation.mjs` 执行后自动生成并关联版本。测试 `06-workbench/test/finance-review-card.test.mjs` 覆盖真实执行、缺值/异常值、季度月份、越界路径、独立来源、重复汇总、税费点击和打印。
+
+
+### 正式入账证据保护与红字
+
+- `06-workbench/server/posting-evidence-guard.mjs`：校验前留证、真实日期及来源核对、候选版本绑定、本机审核、确定性纠正与结果未知分流。
+- `06-workbench/server/posting-evidence-index.mjs`：把已提交、同企业且匹配当前账簿的原生证据接入季度复核，保留来源版本状态。
+- `06-workbench/server/accounting.mjs`：所有凭证写入边界、按符号红字计算、私有折旧/结转依据、舍入前金额保留、现金流待核。
+- `06-workbench/scripts/review-posting.mjs`：仅交互的本机审阅；输出绑定版本的 `approvedOperationId`，不直接入账。
+- `06-workbench/test/posting-evidence-guard.test.mjs`：真实临时库、日期/数额/来源错误、审批边界、导入回滚、归一化、同操作重放、日志失败、红字财报手算。
+- `06-workbench/test/posting-guard-mcp.test.mjs`：默认 direct 的真实 MCP → HTTP → 领域纠正/待审/补证及关联链。
+- `06-workbench/test/helpers/synthetic-posting-evidence.mjs`：旧回归夹具显式生成合成原件并走同一生产守卫，不绕过保护或自动审批。
+
+- `06-workbench/server/import-amount.mjs`：导入专用金额语法共用解析，保留原字符串与符号，普通凭证不据此放宽。

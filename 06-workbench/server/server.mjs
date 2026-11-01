@@ -170,7 +170,7 @@ async function api(req, res, url, m) {
     const id = +match[1], vid = +match[2], op = match[3];
     if (m === "GET" && !op) return json(res, 200, A.getVoucher(id, vid));
     if (m === "DELETE" && !op) return json(res, 200, A.deleteVoucher(id, vid));
-    if (m === "POST" && op === "post") return json(res, 200, A.postVoucher(id, vid));
+    if (m === "POST" && op === "post") return json(res, 200, A.postVoucher(id, vid, await readBody(req)));
     if (m === "POST" && op === "unpost") return json(res, 200, A.unpostVoucher(id, vid));
   }
   if (p === "/api/tax-report-templates" || (match = p.match(/^\/api\/account-sets\/(\d+)\/tax-reports\/(readiness|export)$/))) {

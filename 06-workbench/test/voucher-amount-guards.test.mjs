@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {syntheticVoucherEvidence,syntheticPostingTool} from './helpers/synthetic-posting-evidence.mjs';
 // 固定的合成测试身份，不依赖显示名及生产默认值。
 let identityFixtureSequence = 0;
 const identityFixture = () => ({ enterpriseKey: 'SYNTHETIC-voucher-amount-guards-test-mjs-' + (++identityFixtureSequence) });
@@ -15,6 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'voucher-amount-'));
 process.env.WORKBENCH_DATA_DIR = dataDir;
+const sourceRoot=join(dataDir,'合成原件');process.env.FINANCE_SOURCE_ROOT=sourceRoot;
 const results = [];
 let db;
 async function test(name, fn) {
@@ -101,7 +103,10 @@ async function deadline(promise, ms, label) {
 }
 try {
   ({ db } = await import('../server/db.mjs'));
-  const A = await import('../server/accounting.mjs');
+  const rawA=await import('../server/accounting.mjs');
+  // 本套件的有效金额场景补齐明确合成来源；非法分录原样送入生产守卫，不改输入或断言。
+  const fixture=(id,input)=>rawA.checkVoucher(id,input.entries).ok?syntheticVoucherEvidence(input,sourceRoot):input;
+  const A={...rawA,createVoucher:(id,input)=>rawA.createVoucher(id,fixture(id,input)),importAccountSet:(payload,options)=>{syntheticPostingTool('legacy_book_import',{payload},sourceRoot);return rawA.importAccountSet(payload,options);}};
   const setId = identityFixtureCreate(A, { name: 'synthetic voucher guards', start_period: '2026-01' }).id;
   A.setOpeningBalances(setId, [{ code: '1002', debit: 1000 }, { code: '3001', credit: 1000 }]);
   A.createVoucher(setId, { period: '2026-01', status: 'posted', summary: 'existing content sentinel', entries: pair(7) });
@@ -155,7 +160,9 @@ try {
     entries.push({ code: '1001', credit: 100 });
     const check = A.checkVoucher(setId, entries);
     assert.equal(check.ok, true, JSON.stringify(check.errors)); assert.equal(check.total_debit, 100);
-    const voucher = A.createVoucher(setId, { period: '2026-01', entries });
+    // 本例仅验千行草稿精确合计；不伪造超出400字段合同的完整来源，生产守卫保留待核。
+    const voucher = rawA.createVoucher(setId, { period: '2026-01', voucher_date:'2026-01-15', entries });
+    assert.equal(voucher.postingGuard.status,'needs_review');
     assert.equal(voucher.entries.length, 1001); assert.equal(voucher.total_debit, 100); assert.equal(voucher.total_credit, 100);
   });
   await test('direct posted and draft-to-post remain operational', () => {
@@ -202,6 +209,7 @@ try {
     const base = await deadline(ready, 10000, 'HTTP startup timeout');
     httpDb = new DatabaseSync(join(httpDataDir, 'workbench.db'), { readOnly: true });
     const api = async (path, body, method = 'POST') => {
+      if(method==='POST'&&(/^\/api\/account-sets\/\d+\/vouchers$/.test(path)||path==='/agent/tools/voucher_create')&&rawA.checkVoucher(setId,body?.entries).ok)body=syntheticVoucherEvidence(body,sourceRoot);
       const response = await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000) });
       return { status: response.status, data: await response.json() };
     };

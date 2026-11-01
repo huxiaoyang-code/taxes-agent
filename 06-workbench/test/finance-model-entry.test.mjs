@@ -57,8 +57,12 @@ async function test(name, fn) {
 // ---------------------------------------------------------------- 隔离临时库 + 动态 import
 const dataDir = mkdtempSync(join(tmpdir(), "wb-model-entry-"));
 process.env.WORKBENCH_DATA_DIR = dataDir;
-const A = await import("../server/accounting.mjs");
-const { callAgentTool } = await import("../server/agent-tools.mjs");
+const {syntheticVoucherEvidence,syntheticPostingTool}=await import('./helpers/synthetic-posting-evidence.mjs');
+const sourceRoot=join(dataDir,'原件');process.env.FINANCE_SOURCE_ROOT=sourceRoot;
+const rawA=await import("../server/accounting.mjs");
+const A={...rawA,createVoucher:(id,input)=>rawA.createVoucher(id,syntheticVoucherEvidence(input,sourceRoot))};
+const {callAgentTool:rawCallAgentTool}=await import("../server/agent-tools.mjs");
+const callAgentTool=(name,args)=>rawCallAgentTool(name,syntheticPostingTool(name,args,sourceRoot));
 const ENTRY = await import("../server/finance-model-entry.mjs");
 const { createFinanceModelEntry } = ENTRY;
 const { FINANCE_QUERY_AVAILABLE, PLAIN_MODEL_TOOLS } = await import("../server/finance-model-adapter.mjs");

@@ -47,7 +47,7 @@ import { randomUUID } from 'node:crypto';
 import { inspectAuditSchema, auditComponentContract, auditSchemaFacts, AUDIT_TABLES } from './local-audit-storage.mjs';
 import { AUDIT_COMPONENT } from './local-audit.mjs';
 import { LOCAL_BATCH_COMPONENT, LOCAL_BATCH_TABLES, inspectBatchSchema, batchComponentContract, batchSchemaFacts } from './local-batch-storage.mjs';
-import { AUX_TABLES, AUX_COMPONENT_STRUCTURE, inspectAuxiliarySchema } from './auxiliary-storage.mjs';
+import { AUX_TABLES, AUX_COMPONENT_STRUCTURE, auxiliaryComponentContract, inspectAuxiliarySchema } from './auxiliary-storage.mjs';
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -831,7 +831,7 @@ const COMPONENT_REGISTRY = Object.freeze({
  'restore-control':Object.freeze({name:'restore-control',version:1,tables:RESTORE_CONTROL_TABLES,structure:RESTORE_CONTROL_SQL}),
   get 'local-batch'(){return Object.freeze({name:LOCAL_BATCH_COMPONENT,version:3,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2,3]}})},
   get 'business-audit'(){return Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}})},
-  get auxiliary() { return Object.freeze({name: "auxiliary", version: 1, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}); },
+  get auxiliary() { return Object.freeze({name: "auxiliary", version: 2, tables: AUX_TABLES, structure: AUX_COMPONENT_STRUCTURE}); },
   bank: Object.freeze({
     name: BANK_COMPONENT_STRUCTURE.name,
     version: BANK_COMPONENT_STRUCTURE.version,
@@ -1634,7 +1634,7 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
   }
   if (structure.auxiliary.present) {
     const auxiliary = structure.auxiliary;
-    components.push({ name: 'auxiliary', version: 1, tables: [...AUX_TABLES],
+    components.push({ name: 'auxiliary', version: auxiliary.version, tables: [...AUX_TABLES],
       structureDigest: sha256Text(JSON.stringify(auxiliary.objects)),
       contentDigest: componentContentDigest(auxiliary, content),
       rows: AUX_TABLES.reduce((sum, table) => sum + content.tables[table].rows, 0) });
@@ -1797,7 +1797,7 @@ function validateManifest(manifest) {
     for (const entry of manifest.components) {
       if (!isPlainObject(entry)) return { code: "manifest_invalid", details: { field: "components" } };
       if (!isNonEmptyString(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
-      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : entry.name===LOCAL_BATCH_COMPONENT && ([1,2,3].includes(entry.version)) ? batchComponentContract(entry.version) : COMPONENT_REGISTRY[entry.name];
+      const contract = entry.name===AUDIT_COMPONENT && (entry.version===1||entry.version===2) ? auditComponentContract(entry.version) : entry.name===LOCAL_BATCH_COMPONENT && ([1,2,3].includes(entry.version)) ? batchComponentContract(entry.version) : entry.name==='auxiliary'&&[1,2].includes(entry.version)?auxiliaryComponentContract(entry.version):COMPONENT_REGISTRY[entry.name];
       if (!contract) return { code: "component_unsupported", details: { component: entry.name } };
       if (seen.has(entry.name)) return { code: "manifest_invalid", details: { field: "components.name" } };
       seen.add(entry.name);
@@ -2216,7 +2216,7 @@ export function assertInstallableComponentSet(manifest,target) {
  if(!Array.isArray(entries)||entries.some(e=>e.name===target||!COMPONENT_REGISTRY[e.name]))throw expected('component_unsupported');
  const seen=new Set();
  for(const e of entries){if(seen.has(e.name))throw expected('component_unsupported');seen.add(e.name);
-  const contract=e.name===AUDIT_COMPONENT?auditComponentContract(e.version):e.name===LOCAL_BATCH_COMPONENT?batchComponentContract(e.version):COMPONENT_REGISTRY[e.name];
+  const contract=e.name===AUDIT_COMPONENT?auditComponentContract(e.version):e.name===LOCAL_BATCH_COMPONENT?batchComponentContract(e.version):e.name==='auxiliary'?auxiliaryComponentContract(e.version):COMPONENT_REGISTRY[e.name];
   if(e.version!==contract.version||JSON.stringify(e.tables)!==JSON.stringify(contract.tables))throw expected('component_unsupported');
  }
  if(entries.some(e=>e.name==='auxiliary')&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');

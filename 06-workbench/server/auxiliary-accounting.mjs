@@ -3,14 +3,14 @@ import { runDomainOperation,copyDomainRequest } from './local-audit-coordinator.
 import { getAccountingProfile } from './accounting-profiles.mjs';
 import { assertPeriodMutable } from './period-end-controls.mjs';
 import { parseMoney, storedCents, centsToNumber } from './money.mjs';
-import { assertAuxiliaryReady, auxError, auxTransaction, auxFingerprint } from './auxiliary-storage.mjs';
+import { assertAuxiliaryReady, auxError, auxTransaction, auxFingerprint, signedAllocationFits } from './auxiliary-storage.mjs';
 const fail=(bad,code)=>{if(bad)throw auxError(code);};
 const dims=['project','department','party'];
 function text(value,code,max=200) { fail(typeof value!=='string'||!value.trim()||value.length>max||/[\x00-\x1f]/.test(value),code); return value.trim(); }
 function id(value) { fail(!Number.isSafeInteger(value)||value<1,'aux_id_invalid'); return value; }
 function context(db,setId) { assertAuxiliaryReady(db); id(setId); const set=db.prepare('SELECT * FROM account_sets WHERE id=?').get(setId); fail(!set,'account_set_not_found'); getAccountingProfile(set.accounting_profile_id); return set; }
 function mutable(db,setId,period) { fail(db.prepare("SELECT 1 FROM periods WHERE account_set_id=? AND period=? AND status='closed'").get(setId,period),'aux_period_closed'); assertPeriodMutable(db,setId,period,{operation:'auxiliary_edit'}); }
-function amount(value) { const r=parseMoney(value); fail(!r.ok||r.subCent,'aux_amount_invalid'); return Number(r.cents); }
+function amount(value) { const r=parseMoney(value,{allowNegative:true}); fail(!r.ok||r.subCent,'aux_amount_invalid'); return Number(r.cents); }
 const cents=v=>BigInt(v);
 const sourceFingerprint=row=>auxFingerprint({accountSetId:row.account_set_id,entryId:row.id??null,voucherId:row.voucher_id??null,lineNo:row.line_no??null,code:row.code,period:row.period??null,debit:row.debit,credit:row.credit});
 function targetRow(db,setId,target) {
@@ -47,12 +47,13 @@ function replaceAuxiliaryAllocationsBody(db,{accountSetId,entryId,openingCode,al
  const target=entryId===undefined?{openingCode:text(openingCode,'aux_opening_code_required')}:{entryId:id(entryId)}; const row=targetRow(db,accountSetId,target);
  const seen=new Set(); const parts=allocations.map(a=>{ fail(!a||typeof a!=='object','aux_allocation_invalid'); const part={}; for(const dim of dims) { const value=a[dim+'Id']; part[dim+'Id']=value===undefined||value===null?null:id(value); }
  fail(dims.every(d=>part[d+'Id']===null),'aux_dimension_required'); const key=JSON.stringify(part); fail(seen.has(key),'aux_tuple_duplicate'); seen.add(key);
- part.debitCents=amount(a.debit); part.creditCents=amount(a.credit); fail((part.debitCents>0)===(part.creditCents>0),'aux_side_invalid'); return part; }).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+ part.debitCents=amount(a.debit); part.creditCents=amount(a.credit); fail((part.debitCents!==0)===(part.creditCents!==0),'aux_side_invalid'); return part; }).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+ if(parts.some(p=>p.debitCents<0||p.creditCents<0))fail(db.prepare('SELECT MAX(version) version FROM aux_component_migrations').get().version<2,'aux_signed_upgrade_required');
  const fingerprint=auxFingerprint({version:1,target,parts,reason}); const existing=db.prepare('SELECT * FROM aux_receipts WHERE account_set_id=? AND request_id=?').get(accountSetId,requestId); const before=allocationRows(db,accountSetId,target);
  if(existing) { fail(existing.fingerprint!==fingerprint,'aux_request_conflict'); const saved=JSON.parse(existing.result_json); fail(JSON.stringify(normalizedRows(before))!==JSON.stringify(parts)||saved.sourceFingerprint!==sourceFingerprint(row),'aux_replay_state_conflict'); return {...saved,status:'replayed'}; }
  mutable(db,accountSetId,row.period??set.start_period);
  // 辅助期初可含客户反向余额；只有其净额加显式未分配余额才能与总账核对。
- if(entryId!==undefined) { const d=parts.reduce((s,a)=>s+cents(a.debitCents),0n),c=parts.reduce((s,a)=>s+cents(a.creditCents),0n); fail(d>storedCents(row.debit)||c>storedCents(row.credit),'aux_allocation_exceeds_entry'); }
+ if(entryId!==undefined) { fail(!signedAllocationFits(storedCents(row.debit),parts.map(a=>a.debitCents))||!signedAllocationFits(storedCents(row.credit),parts.map(a=>a.creditCents)),'aux_allocation_exceeds_entry'); }else fail(parts.some(a=>a.debitCents<0||a.creditCents<0),'aux_opening_negative');
  for(const part of parts) for(const dim of dims) if(part[dim+'Id']!==null) { const entity=db.prepare('SELECT * FROM aux_entities WHERE id=?').get(part[dim+'Id']); fail(!entity||entity.account_set_id!==accountSetId||entity.kind!==dim||entity.active!==1,'aux_dimension_invalid'); }
  if(entryId!==undefined) db.prepare('DELETE FROM aux_allocations WHERE account_set_id=? AND entry_id=?').run(accountSetId,entryId); else db.prepare('DELETE FROM aux_allocations WHERE account_set_id=? AND opening_code=?').run(accountSetId,openingCode);
  const ins=db.prepare('INSERT INTO aux_allocations(account_set_id,code,entry_id,opening_code,project_id,department_id,party_id,debit_cents,credit_cents) VALUES(?,?,?,?,?,?,?,?,?)');
@@ -76,7 +77,7 @@ function facts(db,setId,through) {
   if(remainder!==0n)result.push({code:opening.code,period:null,source:{openingCode:opening.code},projectId:null,departmentId:null,partyId:null,debitCents:remainder>0n?remainder:0n,creditCents:remainder<0n?-remainder:0n});
  }
  const entries=db.prepare(`SELECT e.*,v.period FROM voucher_entries e JOIN vouchers v ON v.id=e.voucher_id WHERE v.account_set_id=? AND v.status='posted' AND v.period<=? ORDER BY v.period,v.id,e.line_no,e.id`).all(setId,through);
- for(const e of entries) { const parts=allocationRows(db,setId,{entryId:e.id}); let d=storedCents(e.debit),c=storedCents(e.credit); for(const p of parts) {d-=cents(p.debit_cents);c-=cents(p.credit_cents); result.push({code:e.code,period:e.period,source:{entryId:e.id,voucherId:e.voucher_id,lineNo:e.line_no},...tuple(p)}); } fail(d<0n||c<0n,'aux_allocation_corrupt'); if(d!==0n||c!==0n) result.push({code:e.code,period:e.period,source:{entryId:e.id,voucherId:e.voucher_id,lineNo:e.line_no},projectId:null,departmentId:null,partyId:null,debitCents:d,creditCents:c}); }
+ for(const e of entries) { const parts=allocationRows(db,setId,{entryId:e.id}); let d=storedCents(e.debit),c=storedCents(e.credit); for(const p of parts) {d-=cents(p.debit_cents);c-=cents(p.credit_cents); result.push({code:e.code,period:e.period,source:{entryId:e.id,voucherId:e.voucher_id,lineNo:e.line_no},...tuple(p)}); } fail(!signedAllocationFits(storedCents(e.debit),parts.map(p=>p.debit_cents))||!signedAllocationFits(storedCents(e.credit),parts.map(p=>p.credit_cents)),'aux_allocation_corrupt'); if(d!==0n||c!==0n) result.push({code:e.code,period:e.period,source:{entryId:e.id,voucherId:e.voucher_id,lineNo:e.line_no},projectId:null,departmentId:null,partyId:null,debitCents:d,creditCents:c}); }
  return result;
 }
 export function auxiliaryLedger(db,{accountSetId,period,code,groupBy=dims}={}) {

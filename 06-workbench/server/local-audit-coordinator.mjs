@@ -67,10 +67,13 @@ export function readDomainOperationBinding(db) {
  return {action:row.action,scope:{kind:row.scope_kind,value:row.scope_kind==='database'?null:JSON.parse(row.targets_json).accountSetId}};
 }
 export function currentRequestMetadata() {return metadata.getStore()??null;}
+export function currentDomainOperationMetadata(db) {return frames.get(db)?.operation??metadata.getStore()??null;}
 export function operationErrorEvidence(error) { return evidence.get(error)??null; }
+// 写入之后辅助证据落盘失败，结果不能误报为未执行或鼓励新操作重试。
+export function markOperationOutcomeUnknown(error,operation=metadata.getStore()) { evidence.set(error,Object.freeze({operationId:operation?.operationId??null,attempt:operation?.attempt??1,applied:'unknown',durability:'unknown',needsLocalReview:true,receipt:null})); }
 // 固定银行传输投影，不能伪造或接收证明元数据。
 export function bankOperationFailure(error) {
- const safe=new Error('bank_local_operation_failed');safe.code='bank_local_operation_failed';
+ const code=error?.code==='red_entry_cash_evidence_required'?'red_entry_cash_evidence_required':'bank_local_operation_failed';const safe=new Error(code);safe.code=code;
  const proof=evidence.get(error);if(proof)evidence.set(safe,proof);return safe;
 }
 
@@ -123,7 +126,7 @@ function runDomainOperationBody(db,options,fn) {
   if(outer.children) {
    const child=outer.children.find(c=>!c.used&&c.options.action===options.action&&auditResultDigest(c.options.request)===auditResultDigest(options.request));
    if(!child)throw auditError('audit_authorization_invalid');child.used=true;
-   let result;const terminal=executePreparedChild(db,child.authorization,()=>{frames.set(db,{action:options.action,scope:options.scope});try{result=fn();return specification(options,result);}finally{frames.set(db,outer);}});
+   let result;const terminal=executePreparedChild(db,child.authorization,()=>{frames.set(db,{action:options.action,scope:options.scope,operation:child.context});try{result=fn();return specification(options,result);}finally{frames.set(db,outer);}});
    if(!terminal.ok)throw envelopeError(terminal);return result;
   }
   if(!combinations[outer.action]?.has(options.action))throw auditError('audit_transaction_conflict');
@@ -146,7 +149,7 @@ function runDomainOperationBody(db,options,fn) {
  const invalidationsBefore=bankInvalidationCount(db,options);
  let value,businessError,snapshot;
  const terminal=executePreparedOperation(db,prepared.authorization,()=>{
-  frames.set(db,{action:options.action,scope:options.scope});
+  frames.set(db,{action:options.action,scope:options.scope,operation:context});
   try {value=fn();assertAgencyCommitEvidence(db);assertPeriodCommitEvidence(db);assertWriteCommitFence(db);snapshot=auditResultSnapshot(value);return specification(options,value);}
   catch(error){businessError=error;throw error;}
   finally{frames.delete(db);}
@@ -175,11 +178,11 @@ function runAuditedBatchStageBody(db,options,children,fn) {
   if(!saved||auditResultDigest(restore(saved))!==prepared.receipt.resultDigest)throw envelopeError({...prepared,code:'audit_result_unavailable',needsReview:true});
   return restore(saved);
  }
- const preparedChildren=children.map((c,i)=>{const preparedChild=prepareOperation(db,{context:{operationId:`${operationId}.c${i+1}`,actor,action:c.action,parentOperationId:operationId,parentAttempt:1,attempt:1,...(c.scope.kind==='account_set'?{accountSetId:c.scope.value}:{})},scope:c.scope,request:{domainRequestDigest:auditResultDigest(c.request)}});if(!preparedChild.authorization)throw envelopeError(preparedChild);return {options:c,authorization:preparedChild.authorization,used:false};});
+ const preparedChildren=children.map((c,i)=>{const childContext={operationId:`${operationId}.c${i+1}`,actor,action:c.action,parentOperationId:operationId,parentAttempt:context.attempt,attempt:1,...(c.scope.kind==='account_set'?{accountSetId:c.scope.value}:{})};const preparedChild=prepareOperation(db,{context:childContext,scope:c.scope,request:{domainRequestDigest:auditResultDigest(c.request)}});if(!preparedChild.authorization)throw envelopeError(preparedChild);return {options:c,context:childContext,authorization:preparedChild.authorization,used:false};});
  bindPreparedChildren(db,prepared.authorization,preparedChildren.map(c=>c.authorization));
  let value,error;
  const terminal=executePreparedOperation(db,prepared.authorization,()=>{
-  frames.set(db,{action:'batch.stage',scope:options.scope,children:preparedChildren});
+  frames.set(db,{action:'batch.stage',scope:options.scope,operation:context,children:preparedChildren});
   try {value=fn();assertWriteCommitFence(db);if(preparedChildren.some(c=>!c.used))throw auditError('audit_authorization_invalid');return specification(options,value);}
   catch(e){error=e;throw e;}finally{frames.delete(db);}
  });
