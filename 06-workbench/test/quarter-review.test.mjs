@@ -10,6 +10,8 @@ import {registerWorkpaperDetails,workpaperDetails} from '../server/direct-financ
 import {createHash,randomUUID} from 'node:crypto';
 import {resolveDirectFinanceTarget as resolveTarget,nativeVoucherObservation} from '../server/direct-finance-target.mjs';
 import {buildQuarterReview,renderQuarterReview} from '../server/quarter-review.mjs';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 const root=mkdtempSync(join(tmpdir(),'quarter-review-synthetic-')); const originals=join(root,'originals');mkdirSync(originals);process.env.FINANCE_SOURCE_ROOT=originals;
 const path=join(originals,'合同.csv');writeFileSync(path,'合同编号,不含税金额（元）,税额（元）,价税合计（元）\n合同一,100000,13000,113000\n');
 const mapping=(column='不含税金额（元）')=>({inputPointer:'/inputs/amountIncludingVat',parameterLabel:'净价',transform:'identity',sources:[{path,row:2,column}]});
@@ -79,6 +81,13 @@ test('实际临时账库一致快照产生中文四表，月度不是累计，�
  assert.throws(()=>workpaperDetails({...request,artifactRef:'finance-artifact:forged/workpaper.json'}),{code:'finance_details_reference_untrusted'});assert.throws(()=>workpaperDetails({...request,target:{accountSetId:id,period:'2026-02'}}),{code:'finance_details_scope_conflict'});assert.throws(()=>workpaperDetails({...request,limit:51}),{code:'finance_details_page_invalid'});
  writeFileSync(detailPath,'篡改');assert.throws(()=>workpaperDetails(request),{code:'finance_details_artifact_changed'});writeFileSync(detailPath,content);const originalNow=Date.now;try{Date.now=()=>originalNow()+3600001;assert.throws(()=>workpaperDetails(request),{code:'finance_details_reference_expired'});}finally{Date.now=originalNow;}
  const emptyId=A.createAccountSet({enterprise:{enterpriseKey:'SYNTHETIC-EMPTY-QUARTER'},name:'空账',start_period:'2026-01'}).id,emptyReport=JSON.parse(readFileSync((await buildQuarterReview({target:{accountSetId:emptyId,period:'2026-03'},auditDir:join(root,'empty-audit'),outputDir:join(root,'reports')})).bundleRef,'utf8'));assert.equal(emptyReport.checks.find(c=>c.label==='业务凭证字段映射覆盖').status,'无法判断');
+ // Q2 本季无分录时，前季调账仍改变本季期初和累计报表，摘要须随实际交付变化。
+ const digestId=A.createAccountSet({enterprise:{enterpriseKey:'SYNTHETIC-DIGEST'},name:'摘要回归',start_period:'2026-01',accounting_standard:'小企业会计准则'}).id;
+ for(const period of ['2026-04','2026-05','2026-06'])A.ensurePeriod(digestId,period);
+ const readSnapshot=()=>JSON.parse(execFileSync(process.execPath,[fileURLToPath(new URL('../server/quarter-review-worker.mjs',import.meta.url)),join(data,'workbench.db'),String(digestId),'2026-06'],{encoding:'utf8',windowsHide:true}));
+ const before=readSnapshot();assert.equal(readSnapshot().snapshotDigest,before.snapshotDigest,'同一业务状态重复读取摘要稳定');
+ A.createVoucher(digestId,{period:'2026-03',status:'posted',entries:[{code:'1002',debit:100,credit:0},{code:'5001',debit:0,credit:100}]});const after=readSnapshot();
+ assert.equal(after.entries.length,0);assert.equal(before.months[2].reports['income-statement'].data.ytd['营业收入'],0);assert.equal(after.months[2].reports['income-statement'].data.ytd['营业收入'],100);assert.equal(after.months[0].reports['trial-balance'].data.lines.find(r=>r.code==='1002').opening_debit,100);assert.notEqual(after.snapshotDigest,before.snapshotDigest);
  }finally{db.close();}
 });
 

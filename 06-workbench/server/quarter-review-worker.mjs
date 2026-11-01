@@ -32,7 +32,10 @@ try{
   return {period,status:state.status,reports,preClose,preCloseMeaning:'同一账簿版本剔除本月已过账损益结转后的重建余额',carryVoucherIds:[...new Set(carry.map(e=>e.voucher_id))]};
  });
  const journal={accountSet,accounts,openings,entries,assets,months:months.map(m=>({period:m.period,status:m.status}))};
- const snapshotDigest=createHash('sha256').update(JSON.stringify(journal)).digest('hex');
- process.stdout.write(JSON.stringify({version:'quarter-ledger-snapshot/1',capturedAt:new Date().toISOString(),snapshotDigest,scope:{accountSetId:id,enterpriseKey:enterprise,databaseInstanceId:instance,period:endPeriod,currency:'CNY'},periods,...journal,months}));
+ const scope={accountSetId:id,enterpriseKey:enterprise,databaseInstanceId:instance,period:endPeriod,currency:'CNY'};
+ // 报表包含前期影响的期初及累计金额；摘要必须覆盖实际交付，而非仅本季分录。
+ const snapshot={version:'quarter-ledger-snapshot/1',scope,periods,...journal,months};
+ const snapshotDigest=createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+ process.stdout.write(JSON.stringify({...snapshot,capturedAt:new Date().toISOString(),snapshotDigest}));
  db.exec('ROLLBACK');
 }finally{db.close();}

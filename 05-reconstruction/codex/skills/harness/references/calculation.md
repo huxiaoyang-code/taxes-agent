@@ -42,7 +42,7 @@ fs.writeFileSync(input.outputDir + '/计算底稿.json', JSON.stringify({分配�
 
 返回`outputs`中的文件都是`derived_calculation`，可独立交付；不能冒充原件、已入账数据或`finance_quarter_review`真实账库快照。需要原生账库报告时另选该工具及`quarter-export`，它们不是通用计算的唯一交付路径。
 
-`reviewPath`打开的是“计算记录与文件索引”，用于查看输入、结构、脚本版本、错误和输出路径；不是自动完成的财税报告。面向业务的中文账表、方法、规则与缺件影响由脚本或表格形成实际文件，单独核对后交付。执行完成仍为`businessStatus:unreviewed`，不代表已核、已入账或已申报。
+未指定`reviewCard`时，`reviewPath`打开“计算记录与文件索引”；指定且成功时打开系统固定中文账务卡片。业务计算仍由脚本/表格完成，最终卡片由后台取数渲染，模型不另写一份重复报告。执行完成仍为`businessStatus:unreviewed`，不代表已核、已入账或已申报。
 
 本机每次新目录保存完整请求、脚本、实际输入、来源文件字节及结构位置、运行时/记录器摘要与版本、开始结束时间、stdout/stderr、输出文件摘要和中文索引。CSV无locator时仅默认展示首行；JSON展示根结构；复杂格式没有locator时仅保存原字节并明确结构未解析。来源文件与副本、脚本和输入结束时做摘要比较，失败及变化都保留；哈希不是真实性、不可篡改或业务正确证明。
 
@@ -51,3 +51,21 @@ fs.writeFileSync(input.outputDir + '/计算底稿.json', JSON.stringify({分配�
 单原件上限8MiB、每次原件合计20MiB，64个来源；输出最多64个文件/20MiB，stdout和stderr各最多1MiB；超限保留失败。超时只针对直接子进程，不是后代进程或内存限制。结果路径与日志留本机，业务原文不自动在MCP返回中展开。
 
 工具对所有获准路径统一记录为`source_snapshot`：输入文件快照，来源性质待核。路径获准、读取成功或哈希相同均不能把派生文件升级成原件；再次计算上次输出时仍保留中性输入快照，原件真实性及来源性质需依据业务材料另行判断。
+
+## 固定账务复核卡片（可选交付，不是做账前置）
+
+调用增加 `reviewCard:{format:"quarter-ledger/v1",dataPath:"账务.json",bankSourceIndex:1,findingsSourceIndex:2,cashSourceIndex:3}`。后三个下标均可省略，指本次 `sources` 的零基索引；`dataPath` 必须是本次 `outputDir` 下已索引的相对 JSON 文件，禁止绝对路径、回退和链接。它只适配以下明确结构，不承诺自动理解任意 JSON、CSV 或 XLSX，不约束模型选用的会计计算工具。
+
+- `meta:{company,period:"YYYY-MM-DD 至 YYYY-MM-DD"}`：任意完整自然季度，同一年；公司为输入声明，系统不据此证明主体归属。
+- `accounts:[{code,name}]`、`opening:{科目编码:{debit,credit}}`：季度期初；`balances:{月份数字字符串:{dr:{科目编码:数值},cr:{科目编码:数值},closing:{科目编码:{debit,credit}}}}`：每月发生与期末。科目有下级时，上级仅为目录，不可提供非零预汇总金额，避免重复累计；未知或缺值保持未提供。
+- 可选 `vouchers:[{no,date,summary,sources:[输入引用文本],lines:[{code,debit,credit}]}]`；有凭证时核对各科目发生额，无凭证则未核，不猜配。
+- 可选 `income:[{item,byMonth:{"4":数值,"5":数值,"6":数值},total}]`；`byMonth` 存在时优先且缺月不回退，第一季度兼容 `jan/feb/mar`。`balance_sheet:[{item,begin,end}]` 中 `begin` 固定是年初余额、`end` 为本季末，与科目表季度期初不同；`cashflow:[{item,amount}]` 为季度累计。标题行可给 `heading:true`，未知金额为 `null`。
+- 可选 `tax_rows:[{name,code?,opening,accrued,paid,closing,basis?}]`：期初未缴、本期计提/代扣、本期缴纳、期末未缴分别保留，不能把全部科目贷方等同净计提。
+
+金额必须为有限 JSON 数值（人民币元，最多两位小数）或 `null`，不把字符串强转数字。结构不支持、路径不符和非法数值记录卡片失败，不修改原计算结果。
+
+银行只独立读取 `bankSourceIndex` 的已捕获 UTF-8 Markdown 快照，要求唯一表头：`交易日期|回单号|对方户名|用途摘要|收入|支出|交易后余额|关联单据`。初始余额可写 `YYYY年M月D日期初余额100.00元`；按账务期间过滤交易，期初无法确定就未提供。当前比对 `1002` 银行科目余额与指定流水；多账户分别核对仍需后续适配，主体、账户归属及材料完整性均待核，不因为差额零就宣称银行认证。模型结果中的 `bank_month.statement` 不作独立对照。
+
+现金账面取 `1001`；`cashSourceIndex` 可指定 `{periodEnd:"YYYY-MM-DD",countedAmount:数值}` 的独立盘点输入，期间必须与季末一致。显示具体差额，盘点真实性仍待核；无输入不补零。`findingsSourceIndex` 可指定 `{findings:[{severity, finding}]}`，显示为外部复核记录，不能冒充系统自动发现。
+
+后台在实际执行与输入校验后自动生成 `card/card.json`、固定中文 HTML；只交付一个 `reviewPath`。成功返回 `reviewCard.status:"generated"` 以及模板版本、数据/渲染器/spec/HTML完整摘要，并关联实际runId/callId；失败返回 `reviewCard.status:"failed"` 和真实错误，`reviewPath`回退技术索引，不能声称卡片已生成。脚本`status`与卡片状态分开，始终`businessStatus:"unreviewed"`。规则、参数、原字段和调用记录保留后台，点击金额按需查看；缺少逐格凭证/规则映射明确列为未提供。打印保留金额及待核事项。

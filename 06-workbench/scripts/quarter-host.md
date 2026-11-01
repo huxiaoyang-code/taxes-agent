@@ -1,6 +1,6 @@
 # 完整季度业务入口
 
-这是普通业务委托的轻量资料/工具入口，不运行Pi，不创建记账计划、答案分录或任务DAG。业务Agent自主调查原件、选择工具和整理输入；已支持的成本、税费、折旧与结转使用原生业务工具。程序自测只用临时目录；与PR后独立业务执行分开记录。
+这是普通业务委托的轻量资料/工具入口，不运行Pi，不创建记账计划、答案分录或任务DAG。业务Agent自主调查原件、选择工具和整理输入；成本、税费、折旧与结转可选原生工具，也可自主使用有依据的Python/JavaScript/表格计算。程序自测只用临时目录；与PR后独立业务执行分开记录。
 
 ## 准备中性工作目录
 
@@ -36,17 +36,19 @@ node 06-workbench/scripts/quarter-session.mjs --workspace '<业务目录>'
 
 ## 读取原件与调用映射
 
-业务资料须通过`document/read`或以下等价入口读取，而不是用任意shell读取。CSV以实际首行表头和行号分页；JSON可选明确字段，XLSX需工作表/表头，复杂格式拒绝时不得宣称解析成功。读取自动保留文件字节版本、原结构、返回范围及内容摘要，不让Agent手工登记。参数调用另由`businessEvidence`保存中文参数、来源表头/值、转换及规则采用理由；初读与传参两个时点分别核查。
+`document/read`或以下入口可自动记录资料初读；Agent也可按获准范围使用其他读取工具，但未经过该入口的读取不能声称已有同样初读记录。CSV以实际首行表头和行号分页；JSON可选明确字段，XLSX需工作表/表头，复杂格式拒绝时不得宣称解析成功。读取自动保留文件字节版本、原结构、返回范围及内容摘要，不让Agent手工登记。参数调用另由`businessEvidence`保存中文参数、来源表头/值、转换及规则采用理由；初读与传参两个时点分别核查。
 
 ```powershell
 node 06-workbench/scripts/quarter-read.mjs --workspace '<业务目录>' --file '购销明细.csv' --offset 0 --limit 50
 ```
 
-整理CSV为工具输入允许，不能用任意模型脚本代替已支持的成本、税率、折旧或结转计算，再称原生引擎整账通过。`finance_workpaper`计算底稿与实际过账分开；需要原生逐笔草稿/FIFO时按需查询`finance_workpaper_details`。输出保留模型通道摘要，不开放任意后台JSON读取。
+可整理CSV、使用自主脚本或表格核算；独立派生结果须如实标记，不能称为原生引擎整账通过。`finance_workpaper`计算底稿与实际过账分开；需要原生逐笔草稿/FIFO时按需查询`finance_workpaper_details`。输出保留模型通道摘要，不开放任意后台JSON读取。
 
 ## 报告与工作簿
 
-按正常合同调用`finance_quarter_review`，例如`target:{accountSetId,period:'2026-03'}`，原生账库在一致时点生成三月和季度账表、HTML与机器bundle。完整科目余额、利润、资产负债、现金流量及中文映射状态都要核对；缺项和未分类不补零或用差额造分录。只有取到本次原生`bundleRef`后才导出工作簿：
+优先通过`finance_calculation_run`的可选`reviewCard`声明交付固定中文卡片，明确支持的数据格式见[自主计算合同](../../05-reconstruction/codex/skills/harness/references/calculation.md)。最终卡片由后台取数，不要求模型自写重复报告；这不是做账或专用工具的前置。
+
+需要原生账库快照时可选按正常合同调用`finance_quarter_review`，例如`target:{accountSetId,period:'2026-03'}`，原生账库在一致时点生成三月和季度账表、HTML与机器bundle。完整科目余额、利润、资产负债、现金流量及中文映射状态都要核对；缺项和未分类不补零或用差额造分录。以下原生导出路径需要本次原生`bundleRef`；自主脚本/表格生成的独立工作簿无需先取得此引用：
 
 ```powershell
 & '<Codex bundled Node绝对路径>' 06-workbench/scripts/quarter-export.mjs --workspace '<业务目录>' --bundle '<本次账表数据.json>' --output-dir '<业务目录/输出/全新产出子目录>'

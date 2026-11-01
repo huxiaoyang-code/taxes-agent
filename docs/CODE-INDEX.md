@@ -199,3 +199,5 @@
 - `06-workbench/scripts/quarter-host.mjs`：通用脚本参数历史期不当作写账期间，实际凭证期间保护保留。
 - `06-workbench/test/finance-calculation.test.mjs`：无账套/HTTP的真实stdio比例计算、Python中文产物、未知保留、结构留证、失败/超时、版本追加、边界拒绝及宿主注解。
 - 业务方法与合同：`05-reconstruction/codex/skills/harness/references/calculation.md`；脚本输出是独立派生账表，原生季度导出不是唯一产物路径。
+
+- 固定账务卡片：`06-workbench/server/finance-review-card.mjs` 的 `buildFinanceReviewCard` / `renderFinanceReviewCard`，明确季度JSON适配、独立流水/盘点比对、固定中文模板与按需追溯；由 `finance-calculation.mjs` 执行后自动生成并关联版本。测试 `06-workbench/test/finance-review-card.test.mjs` 覆盖真实执行、缺值/异常值、季度月份、越界路径、独立来源、重复汇总、税费点击和打印。
