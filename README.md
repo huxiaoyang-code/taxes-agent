@@ -1,47 +1,32 @@
 # 中国财税 Agent
 
-按 Anthropic 官方知识工作插件的 Skill、连接器与原生 MCP 格式组织中国财税业务。Agent 调查资料、判断处理路径并自主选用工具；本机后端提供可选的专用计算、通用脚本执行记录、受控记账和自动调用记录，不替 Agent 建立事实登记或任务 DAG。
+在本机协助会计整理资料、做账、对账、核算税费和编制报表，一名操作者可管理多家企业，每家企业独立账套。
 
-默认 MCP 工具面为 `direct`。旧 Harness 仅以显式 `FINANCE_MCP_PROFILE=harness` 保留历史兼容，不是日常前置流程；`legacy` 是旧全量工具面的显式兼容入口。
+## 能做什么
 
-| 需要做什么 | 入口 |
-|---|---|
-| 安装、明确账库、选择 Pi / Claude Code / dsh / ZCode | [主 Agent 接入](05-reconstruction/codex/hosts/START-HERE.md) |
-| 了解业务与证据调用链 | [中文架构](docs/AGENT-ARCHITECTURE.md) |
-| 找业务源码与测试 | [代码索引](docs/CODE-INDEX.md) |
-| 官方格式的中国化财务插件与维护 | [plugins/finance](plugins/finance/README.md)；十个中文 Skill、共享参考、MCP 配置与许可证和后端同仓库维护 |
-| 做账前整理与核对 | [账前核对](plugins/finance/skills/prebook-review/SKILL.md)；接续上期账、核本期资料、问询补件后交接做账 |
+| 能力 | 处理内容 | 交付结果 |
+|---|---|---|
+| 账前核对 | 接续上期账，核对采购、收货、发票、付款、资金和库存 | 中文核对报告、老板问询清单、做账交接资料 |
+| 建账与做账 | 导入期初和旧账，编制凭证，审核后入账，处理折旧与月末损益结转 | 凭证、账簿、期末处理结果 |
+| 对账与查账 | 核对银行流水、往来和科目余额，查询总账与明细账 | 对账结果、差额和待查事项 |
+| 税费核算 | 按资料和适用条件计算税费，核对规则依据 | 税费底稿、条件试算、缺件说明 |
+| 财务报表 | 编制资产负债表、利润表、现金流量表，复核账表与期间差异 | 中文账务复核报告、报表及明细附件 |
+| 专项计算 | 按业务需要用脚本或表格完成计算，保留公式和来源 | 专项账表、计算底稿与执行记录 |
 
-## 工具与结果
+## 两条常用流程
 
-`finance_prebook_review`独立处理账前资料：接续上期依据，核对本期采购／收货／发票／付款、资金与库存，按一般纳税人或小规模分支进行增值税条件试算，输出中文报告、问题和交接资料。通过`finance_record_contract(recordType=prebook)`发现实际输入及老板回复合同；Agent将基础资料适配到JSON并保留原件绑定，客户无需先做本期账。补件后重算，旧回复不冒充新版本确认；其他税费继续按现有工具与资料处理。该流程不写正式账，实际使用及合成演示见[输入与工具](plugins/finance/skills/prebook-review/references/input-and-tools.md)。
+**本期还没做账：** 上期及本期资料 → 账前核对与问询 → 补件重算 → 交接做账。
 
-模型可自主选Python、JavaScript、表格或已有计算器。`finance_calculation_run`通过正常direct MCP执行获授权的本机脚本，保存输入文件快照（来源性质待核）、实际输入/脚本/输出/错误/版本，返回计算记录索引和独立派生文件路径。中文业务底稿和账表由脚本或表格生成；可选`reviewCard`将明确格式的季度账务自动取数为固定中文卡片，模型不另写最终报告。不必伪装原生季度快照，计算记录索引也不代表完整财税报告。配置、合同与权限边界见[通用计算](05-reconstruction/codex/skills/harness/references/calculation.md)。
+客户提供原始资料，Agent 整理和核对；账前内置税务测算覆盖一般纳税人与小规模纳税人的增值税条件试算。
 
-`finance_rules` 查询实际规则与官方出处，`finance_record_contract` 按需披露业务字段，`finance_workpaper` / `finance_annual_workpaper` 生成本机完整底稿，`finance_tax_calculate` 调用既有税费计算。独立的 `finance_tax_summary_calculate` 对有精确原件绑定的税务汇总作条件试算，合同用 `finance_record_contract(recordType=tax_summary)` 按需读取；其结果不证明完整账务、资格真实性或申报完成。账套、凭证、查账和报表继续使用既有会计工具。未接入的税局、开票和正式申报不能因 Skill 或目录存在而称已完成。
+**做账：** 业务资料 → 凭证草稿与核对 → 人工审核后入账 → 账簿、报表与期末复核。
 
-每次 MCP 工具调用（包括参数拒绝）自动保存开始/结束、输入、结果或错误、本机范围及来源引用。结果通过 `_meta.financeCall.callId` 关联记录；正常业务无需模型维护 Store、requestFactId、版本摘要或计划。完整结果与人工核对页留在本机，模型输出仍遵守资料披露规则。
+结果先看金额和异常，再查看凭证、计算与规则依据；原件和完整处理记录保存在本机。
 
-交付顺序固定为 **账本金额 → 凭证/计算结果 → 规则依据 → 工具调用 → 输入与原件**。主卡片先展示余额、银行流水、现金与报表，凭证及规则按金额展开，技术记录深入查看；完整后台记录始终保存。原件缺失保留未知，哈希核验不代表原件真实、业务正确或真人审定。
+## 怎么用
 
-## 启动与验证
+- [业务技能](plugins/finance/README.md)：按账前、凭证、对账、税费、报表等任务选择入口。
+- [选择应用](05-reconstruction/codex/hosts/README.md)：使用 Pi、Claude Code、dsh 或 ZCode 发起任务，共用同一本机财税能力。
+- [配置与启动](05-reconstruction/codex/hosts/START-HERE.md)：连接本机后端、明确账库和资料目录。
 
-```powershell
-cd 06-workbench
-npm ci
-npm start
-```
-
-一次 clone 已包含中文业务插件与本机后端；四宿主配置生成器默认选用 `plugins/finance/skills`，无需第二个仓库。不提供外部插件路径选项。旧 `05-reconstruction/codex/skills` 保留专用与历史兼容入口，不是 direct 默认技能源。
-
-MCP 由宿主启动 `05-reconstruction/codex/mcp/finance-mcp/server.mjs`，通过 `FINANCE_API_BASE` 连接明确的本机后端。配置生成器只写入全新工作区，不修改全局模型凭据或真实账库。
-
-```powershell
-node --test plugins/finance/tests/structure.test.mjs
-node 06-workbench/test/finance-host-config.test.mjs
-node 06-workbench/test/host-dsh.test.mjs
-node 06-workbench/test/host-zcode.test.mjs
-node --test 06-workbench/test/finance-call-chain.test.mjs
-```
-
-以上只使用合成数据，不调用模型。完整套件见 `06-workbench/scripts/test-all.mjs`；Pi 模型测试按改造审查和 PR 后的明确任务执行。产品是一名本机操作者处理多家企业，每家企业一个账套，具体地区、税种、期间和业务范围以实际计算合同与结果为准。
+当前提供本机账税处理与复核，未接入正式申报、缴款或开票；具体税种、期间和准则范围见[业务说明](plugins/finance/README.md)。开发与维护见[中文架构](docs/AGENT-ARCHITECTURE.md)、[代码索引](docs/CODE-INDEX.md)和 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)。

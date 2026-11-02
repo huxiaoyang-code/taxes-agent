@@ -1,42 +1,51 @@
-# 主 Agent 接入
+# 配置与启动财税 Agent
 
-默认使用中国化业务 Skill 与 `direct` 财税 MCP。Agent 自主调查、选路和核对；工具后台自动记录调用，不要求先登记来源、事实、Store 或任务 DAG。
+通过 Pi、Claude Code、dsh 或 ZCode 交代财税任务，Agent 使用本机后端完成账前核对、做账、对账、税费计算和报表复核。四种应用共用同一套[业务技能](../../../plugins/finance/README.md)，按已有使用习惯[选择应用](README.md)即可。
 
-## 准备明确的本机后端
+## 1. 启动本机后端
 
-在 `06-workbench` 安装依赖并按 [Windows 运行说明](../../../docs/CODE-INDEX.md#windows)启动明确数据目录。记录实际端口、Node 路径和 `workbench.db` 路径；新空库不代表已完成企业建账。凭据留在本人可信环境，不写到配置或任务文本。
-
-## 生成一个新宿主工作区
-
-在仓库根运行，替换全部占位值：
+安装 Node 和所选应用，并配置本人的模型服务。Windows 下从仓库根进入工作台，替换命令中的占位路径：
 
 ```powershell
-node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对路径>' --api-base 'http://127.0.0.1:<实际端口>' --database '<明确账库绝对路径>' --audit-dir '<本机调用记录绝对目录>' --out '<已存在父目录/全新工作区>'
+cd 06-workbench
+npm ci
+powershell -NoProfile -File scripts\windows-start.ps1 -NodePath '<node.exe绝对路径>' -DataDir '<明确数据目录绝对路径>' -Port 0
 ```
 
-`--host` 为 `pi | claude-code | dsh | zcode`。默认从本仓库 `plugins/finance/skills` 加载十个中文业务 Skill 和共享参考，一次 clone 即包含插件与后端。生成器校验同仓库插件清单和 skills 目录；旧 `--plugin-root` 参数不再支持。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。需要账前核对或脚本处理原件时加`--source-root <获准原件绝对目录>`，Python计算再加`--python <实际python.exe绝对路径>`；这两个可选值写入MCP环境，JavaScript无需Python。也可按宿主机制给MCP进程配置`FINANCE_SOURCE_ROOT`与`FINANCE_PYTHON_PATH`。
+保持此终端运行，记录服务打印的实际端口。账库位于指定数据目录的 `workbench.db`；新空库需要先建账或导入。运行要求见 [Windows 运行说明](../../../docs/CODE-INDEX.md#windows)；脚本受执行策略限制时，按[启动脚本](../../../06-workbench/scripts/windows-start.ps1)开头的手动步骤运行。
 
-| 宿主 | 生成文件 | 在新工作区启动 |
-|---|---|---|
-| Pi | `start-pi.mjs`、`pi-host.json`、`AGENTS.md` | `node start-pi.mjs --pi-root '<官方Pi 1.1.0包目录>'` |
-| Claude Code | `.mcp.json`、`.claude/settings.json`、`CLAUDE.md` | `claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json` |
-| dsh | `finance.cordis.patch.yml`、`AGENTS.md` | 使用本人模型 overlay，运行 `dsh --profile headless --patch ./finance.cordis.patch.yml --patch ./model.cordis.patch.yml '<明确任务>'` |
-| ZCode | `.zcode/config.json`、`AGENTS.md` | `zcode --cwd '<生成目录>' --mode build` |
+## 2. 生成应用工作区
 
-模型配置见各宿主 README。配置或协议检查通过不等于实际模型业务已验收。Pi `--check` 只加载真实扩展并核对 MCP 工具，不调用模型。
+另开终端，在仓库根运行。选择实际账库和全新的输出目录，输出父目录须已存在：
 
-## 开展业务
+```powershell
+node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝对路径>' --api-base 'http://127.0.0.1:<实际端口>' --database '<数据目录绝对路径>/workbench.db' --source-root '<获准原件绝对目录>' --out '<已存在父目录绝对路径/全新工作区>'
+```
 
-做账前核对进销项、采购库存和实际资金时，按需加载同仓库 `prebook-review/SKILL.md`，用`finance_record_contract(recordType=prebook)`取得合同，再调用`finance_prebook_review`。该读算入口不要求已有本期账簿；客户只交基础资料，Agent负责有来源的适配与补件重算。报告及交接资料保存在独立运行目录，正式做账仍走原有工具。原件、适配输入和回复文件均须在`FINANCE_SOURCE_ROOT`内，不能以对话中粘贴真实账套替代本机处理。
+- `--host` 可选 `pi`、`claude-code`、`dsh` 或 `zcode`。
+- `--source-root` 指定已有原件目录；账前核对和处理原件的脚本需要它。适配输入及回复文件也放在该目录内。
+- 需要运行 Python 计算时，加 `--python '<python.exe绝对路径>'`；JavaScript 计算无需此项。
+- 处理记录默认保存在新工作区的 `finance-call-records`，可用 `--audit-dir '<绝对目录>'` 改位置。
 
-按目标加载相关 Skill，从真实账库核实企业、账套、期间和币种，选择直接工具；按需用 `finance_rules` 查规则与出处、`finance_record_contract` 查具体字段。原件解释、适用判断及计算载体由 Agent 选择，可使用Python、表格、JavaScript或既有业务模块。finance_calculation_run记录实际脚本执行与独立派生文件；正式入账继续使用原生写入能力。未知、冲突、缺件和不支持均保留，不能编造内部字段消除问题。
+生成器使用本仓库技能，不覆盖已有工作区、不启动模型，也不创建账套。
 
-正常输出顺序：**账本金额→凭证/计算结果→规则依据→工具调用→输入与原件**。日常前三项，异常再展开后两项，后台自动记录始终完整。实际写入遵守现有原生权限、人审、期间和防重复控制；结果未知先查询原操作，不换身份重复写账。真实申报、开票和缴款仍以实际工具能力为准。
+## 3. 在新工作区启动应用
 
-## 自动记录与恢复
+| 应用 | 启动命令 |
+|---|---|
+| [Pi](pi/README.md) | `node start-pi.mjs --pi-root '<官方Pi 1.1.0包绝对目录>'` |
+| [Claude Code](claude-code/README.md) | `claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json` |
+| [dsh](dsh/README.md) | `dsh --profile headless --patch ./finance.cordis.patch.yml --patch ./model.cordis.patch.yml '<明确任务>'` |
+| [ZCode](zcode/README.md) | `zcode --cwd '<生成目录绝对路径>' --mode build` |
 
-每次调用获得 `_meta.financeCall.callId`，本机记录保存在 `FINANCE_AUDIT_DIR`；完整底稿位于本机结果索引，不要求模型反复读取 JSON 指针。记录不完整、来源变化、业务失败和模型自行推导分别报告；哈希匹配不代表业务正确。
+dsh 的 `model.cordis.patch.yml` 需按其说明另行配置；各应用的模型设置见上表链接。Pi 可先在启动命令末尾加 `--check` 检查连接，此检查不调用模型。
 
-旧 `05-reconstruction/codex/skills` 保留八个专用/兼容技能。显式 `FINANCE_MCP_PROFILE=harness` 或 `legacy` 的 MCP 固定读取此旧目录，direct 固定读取中文插件。无需配置 `FINANCE_SKILLS_DIR`；遗留值只能等于当前 profile 的内置绝对根，否则启动拒绝。新工作区不会自动加载旧 Harness。详细调用链与记录语义见[架构说明](../../../docs/AGENT-ARCHITECTURE.md)。
+## 4. 开始一项业务
 
-通用脚本合同、实际输入格式、输出索引及权限边界见[自主计算](../skills/harness/references/calculation.md)。脚本按当前用户权限执行，非安全沙箱；只运行已授权脚本，不改原件、账库或读取凭据。工具注解不把它标为只读，宿主既有审批策略继续适用。
+向 Agent 明确企业、账套、期间、资料目录和任务，例如：
+
+> 核对这家企业本月的采购、收货、发票、流水和库存，接续上期余额，列出差异与需要向老板补问的事项。
+
+Agent 按需读取[账前核对](../../../plugins/finance/skills/prebook-review/SKILL.md)等技能，整理原始资料，选择工具并生成报告；做账任务则核实目标账套，编制凭证并按实际审核结果入账。
+
+先看报告里的金额、异常和缺件，再核对凭证、计算与依据。资料补齐后重新处理；写入结果不明时，先查原操作状态再继续。真实资料仅在授权范围内处理，模型服务凭据保留在本人的可信配置中。

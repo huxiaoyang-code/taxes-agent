@@ -1,50 +1,53 @@
 # 中国财税插件
 
-基于 Anthropic 官方 finance 插件中国化改编，并适配 small-business 的单据处理、资金核验与差异清单方法，沿用插件清单、业务 Skill、连接类别和工作底稿格式。Agent自主判断并选择Python、表格公式或已有计算器；系统记录实际读取、计算和产物，本机中国财税后端还提供可选计算器与账务操作，不要求手工事实登记或运行时任务图。来源和许可见 [SOURCES.md](SOURCES.md) 与 [LICENSE](LICENSE)。
+让 Agent 按中国企业的会计与税务业务处理资料，完成账前核对、凭证编制、对账、报表、税费和内控复核，交付可检查的账表、底稿与问题清单。
+
+## 按业务选择技能
+
+| 业务 | 能做什么 |
+|---|---|
+| [账前整理与核对](skills/prebook-review/SKILL.md) | 接续上期账，核对采购、收货、发票、收付款与库存，列出问询及补件事项 |
+| [凭证编制](skills/journal-entry/SKILL.md) | 按采购销售、费用、资产、工资等业务编制分录草稿，核对科目与计算支持 |
+| [账目核对](skills/reconciliation/SKILL.md) | 比对总账、往来、银行、库存和资产资料，定位差异 |
+| [财务报表](skills/financial-statements/SKILL.md) | 按适用准则编制资产负债表、利润表和现金流量表，核对账表关系 |
+| [差异分析](skills/variance-analysis/SKILL.md) | 比较期间或预算，拆分价格、数量、结构、跨期等影响，保留待调查原因 |
+| [税费复核](skills/tax-review/SKILL.md) | 核对增值税、所得税、工资个税、印花税等适用条件，形成税费底稿与依据 |
+| [内控复核](skills/internal-control-review/SKILL.md) | 对收入、采购付款、凭证和期末处理取样检查，列异常及整改建议 |
+| [凭证编制参考](skills/journal-entry-prep/SKILL.md) | 为计提、摊销、折旧、工资、收入和存货处理补充资料要求与复核要点 |
+| [月结与年度核对](skills/close-management/SKILL.md) | 按资料及账务依赖安排工作先后，梳理期末处理和未决事项 |
+| [财务与内控复核支持](skills/audit-support/SKILL.md) | 为会计复核、内部检查或外部审计整理样本、证据及问题底稿 |
+
+可直接用中文说明任务，例如“核对本月采购、发票和流水，列出要问老板的问题”。安装到 Claude Code 后，也可使用 `/finance:prebook-review`、`/finance:journal-entry` 等技能命令；表中最后三项由 Agent 在相关任务中按需读取。
+
+## 账前核对：资料到做账交接
+
+上期及本期资料 → 核对与问询 → 收到解释或补件 → 重新核对 → 交接做账。
+
+客户提供基础资料，Agent 负责整理。结果包含资金和库存差异、采购与票款关联、增值税条件试算、老板问询清单及交接资料。补件后重算，保留仍待核实的问题。
+
+账前内置税务测算仅覆盖一般纳税人与小规模纳税人的增值税；其他税费使用税费复核能力。交接资料供后续编制凭证使用，正式入账仍须审核。资料要求与合成演示见[账前输入说明](skills/prebook-review/references/input-and-tools.md)。
+
+## 做账与复核：资料到凭证、账簿和报表
+
+明确企业、账套、期间及适用准则后，按业务编制凭证、核对账目，审核后入账，再处理折旧、结转和报表。也可依据已有资料用脚本或表格生成独立账表，保留公式、来源及采用状态。
+
+账期复核先展示科目余额、银行和现金、税费及三张报表，再按需查看凭证、计算与规则依据。按支持格式整理的账表可生成固定中文复核卡片，明细作为附件；使用方法见[完整账期与中文复核交付](skills/shared/references/quarter-review.md)。
+
+原生账库季度复核包目前支持 2026—2027 年自然季度的小企业会计准则账套。税费计算按已实现分支、地区、期间和资料条件使用，具体见[税费范围](skills/tax-review/references/supported-obligations.md)。本插件提供核算与复核支持，尚未接入正式申报、缴款或开票。
 
 ## 安装与连接
 
-在本 taxes-agent 仓库根执行，本地 marketplace 原位加载本仓库插件：
+插件与本机后端在同一仓库。Pi、Claude Code、dsh 和 ZCode 的配置及启动见[统一入口](../../05-reconstruction/codex/hosts/START-HERE.md)。
+
+Claude Code 也可在仓库根安装本地插件：
 
 ```sh
 claude plugin marketplace add .
 claude plugin install finance@taxes-agent
 ```
 
-本插件与后端统一维护于 [taxes-agent](https://github.com/huxiaoyang-code/taxes-agent) 的 `plugins/finance`，一次 clone 即包含全部源码。先按 [四宿主统一入口](../../05-reconstruction/codex/hosts/START-HERE.md) 或 [连接说明](CONNECTORS.md)配置明确的本机后端、账库和记录目录。Pi、Claude Code、dsh、ZCode 的宿主生成器固定使用本插件，不接受外部插件路径。Claude 使用上面的本地 marketplace 原位加载；`TAXES_AGENT_ROOT` 指向同一仓库 clone。MCP 服务固定读取所属仓库的业务技能，不从插件缓存或环境变量指定的其他目录加载。配置文件存在不代表已连接；核对实际工具和目标。
+使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。
 
-## 业务入口
+## 来源与许可
 
-| 入口 | 用途 |
-|---|---|
-| `/finance:prebook-review` | 做账前接续上期账，核对本期采购库存、进销项和实际资金，列问题、补件重算并交接做账 |
-| `/finance:journal-entry` | 凭证草稿、支持计算和科目核对 |
-| `/finance:reconciliation` | 总账、往来、银行、库存及资产差异 |
-| `/finance:financial-statements` | 中国适用准则报表及期间比较 |
-| `/finance:variance-analysis` | 金额差异、业务驱动及待调查项 |
-| `/finance:internal-control-review` | 中国企业内控资料取样与异常核对 |
-| `/finance:tax-review` | 增值税抵扣、季度小规模、所得税、工资个税、印花及其他税费依据 |
-
-名称遵守实际Skill frontmatter；`journal-entry-prep`、`close-management`、`audit-support`按相关任务自动读取。原`sox-testing`已改为`internal-control-review`，不声称SOX为中国企业普遍义务。
-
-## 核对方式
-
-### 账前资料核对
-
-“本期还没做账，先核对发票、采购和流水”“把要问老板的事列出来”“资料补齐后再算一下”进入 [账前整理与核对](skills/prebook-review/SKILL.md)。一般纳税人与小规模均按本期身份分别处理；客户提供基础资料，Agent 读取并整理为真实工具合同，客户无需预制凭证或最终税额。
-
-账前入口接续上期余额，核本期采购／收货／发票／付款、实际银行和现金，输出独立的中文报告、问题清单和交接资料。内置税务测算为一般／小规模增值税条件试算，其他税费继续由原有税费能力按资料处理；条件、未知和未解决事项随结果交付。老板解释与独立证据分别保存，补件后重新核对；不把回复当作会计审核。输入方法和可运行的合成演示见 [输入与工具](skills/prebook-review/references/input-and-tools.md)。
-
-### 既有做账与完整账期复核
-
-先明确企业、账套、期间、币种和业务，再选择需要的Skill与工具。月结日历与依赖是可调整业务参考，不强制编排。已有数据不足时列具体缺件；可支持部分照常核对，不能把独立模型计算冒充原生引擎已完成。
-
-完整账期默认交付一个系统按固定 Spec 自动取数生成的中文账务复核卡片，先看科目余额、银行和现金、税费及三张报表。凭证、规则与采用参数按需查看，调用链及输入原件保留在后台；模型不另写最终 HTML 或三份重复索引。记录未接通或失败如实说明，见 [报告顺序](skills/shared/references/reporting.md)。本版本提供本机账税核对和申报依据；不进行税局登录、正式申报、缴款或开票。
-
-完整季度业务见[完整账期与中文复核交付](skills/shared/references/quarter-review.md)。客户提供中文原始业务资料，读取时留原表结构、调用时留参数与规则映射；模型自主计算账簿和报表，保留公式或配套脚本，按已支持的输出合同由系统生成固定卡片，工作簿作为明细附件；已有真实账库时也可选原生报表导出，无需原生bundle才能交付。固定卡片只支持明确的数据合同，不自动理解任意文件。工具未完成、未核或未分类的事项保留实际状态，不能把执行成功、勾稽相符或模型计算升级为完整账务验收。
-
-中国会计与税务依据按需读取已核官方资料或可选规则服务，区分《小企业会计准则》与《企业会计准则》；公式实现可自主选择，规则未解决保持未解决。福建漳州是当前业务起点，具体地点、税务资格和地区参数须来自实际证据；地名不能替代市区分类或优惠资格。后端义务目录及限制见 [税费范围](skills/tax-review/references/supported-obligations.md)。
-
-## 无模型验证
-
-在仓库根运行 `node --test plugins/finance/tests/structure.test.mjs`，检查插件结构、许可摘要、固定上游与中文 fork 来源、业务引用、报告顺序，以及同仓库真实29项税费义务和已引用工具合同；默认实际 MCP 逐份读取全部技能与参考。测试不依赖第二仓库、`TAXES_AGENT_ROOT` 环境变量或历史 Git 对象，已纳入 `06-workbench/scripts/test-all.mjs`。仅使用合成配置和临时目录，不调用Pi或任何模型。
+基于 Anthropic 官方 finance 插件中国化改编，并适配 small-business 的单据处理与核对方法。来源和修改记录见 [SOURCES.md](SOURCES.md)，许可见 [LICENSE](LICENSE)。
