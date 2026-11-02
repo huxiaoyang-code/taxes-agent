@@ -1,6 +1,6 @@
 # 当前多宿主接入
 
-默认使用 direct 中国财税 MCP 和按需业务 Skill；生成器支持 Pi、Claude Code、dsh、ZCode，也支持 `--plugin-root` 指向中国化 fork 的 finance 插件。全部使用直接业务工具，不要求 Agent 登记来源、事实或计划；输入、结果和操作链由后台自动记录。
+默认使用 direct 中国财税 MCP 和按需业务 Skill；生成器支持 Pi、Claude Code、dsh、ZCode，固定使用同仓库 `plugins/finance/skills`，不提供外部插件路径。全部使用直接业务工具，不要求 Agent 登记来源、事实或计划；输入、结果和操作链由后台自动记录。
 
 从 [统一入口](START-HERE.md) 开始。正常报告先展示账本金额、凭证/计算、规则依据；工具调用、输入与原件按需深查，完整记录始终保留。`FINANCE_AUDIT_DIR` 为本机记录目录，生成器默认工作区内 finance-call-records。凭据不进入日志或模型，完整业务结果不绕过既有资料投影政策。
 
@@ -30,7 +30,7 @@ node 06-workbench/scripts/finance-host-config.mjs --host claude-code --node 'D:\
 
 ## 工具与状态边界
 
-生成的环境明确设置 `FINANCE_MCP_PROFILE=harness`、`FINANCE_API_BASE`、`FINANCE_DATABASE_PATH`、`FINANCE_SKILLS_DIR`。`harness` profile 的 `tools/list` 只公布 Harness 生命周期工具与 `skills_list`/`skills_read`；猜名字直接调用其他工具也会在业务处理前被拒绝。未设置 profile 的既有客户端保持原工具面，未知 profile 拒绝启动。
+生成的环境明确设置 `FINANCE_MCP_PROFILE=harness`、`FINANCE_API_BASE`、`FINANCE_DATABASE_PATH`、`FINANCE_SKILLS_DIR`。`harness` profile 的 `tools/list` 只公布 Harness 生命周期工具与 `skills_list`/`skills_read`；猜名字直接调用其他工具也会在业务处理前被拒绝。此处描述当时的历史配置；当前未设置 profile 默认 direct，旧全量工具面须显式 legacy，未知 profile 拒绝启动。
 
 该 profile 仍包含可修改元数据及执行业务的 Harness 工具，不是只读权限或会计批准。宿主保留自身审批；不使用跳过权限选项，不自动允许全部 `harness_*`。首次创建/导入账套不在此工具面中，应经已授权的现有导入流程完成后再核实持续核算目标。
 

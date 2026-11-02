@@ -4,11 +4,11 @@
 #
 #   codex mcp add finance \
 #     --env FINANCE_API_BASE=http://127.0.0.1:8787 \
-#     --env FINANCE_SKILLS_DIR=D:/有数云fork/05-reconstruction/codex/skills \
 #     -- "D:\\node.exe" "D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"
 #
 # 下面是与 `codex mcp add` 生成一致的配置，供手工合并到 %USERPROFILE%\.codex\config.toml。
 # Windows 下 command 建议用绝对路径（node 不在 Codex 的 PATH 里）。
+# 技能源固定为该 server 所属仓库的 plugins/finance/skills，不配置外部技能目录。
 
 [mcp_servers.finance]
 command = 'D:\node.exe'
@@ -16,4 +16,3 @@ args = ["D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"]
 
 [mcp_servers.finance.env]
 FINANCE_API_BASE = "http://127.0.0.1:8787"
-FINANCE_SKILLS_DIR = "D:/有数云fork/05-reconstruction/codex/skills"

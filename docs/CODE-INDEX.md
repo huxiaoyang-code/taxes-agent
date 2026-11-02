@@ -6,10 +6,11 @@
 
 日常路径为业务 Skill→模型选择Python、表格或既有业务工具；MCP中的脚本运行与原生业务调用自动记录；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
 
+- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含九个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
 - 每次工具调用记录与本机核查：`06-workbench/server/finance-call-chain.mjs`；测试 `test/finance-call-chain.test.mjs`。
-- 直接宿主入口：`hosts/shared/config.mjs`、四宿主 adapter、`pi/finance-direct.ts`；生成器支持 `--plugin-root`、`--audit-dir`。
+- 直接宿主入口：`hosts/shared/config.mjs`、四宿主 adapter、`pi/finance-direct.ts`；生成器默认 `plugins/finance/skills`，不支持外部插件路径；支持 `--audit-dir`；`quarter-workspace.mjs` 同样默认同仓库插件。
 - 验证：`06-workbench/test/finance-host-config.test.mjs`、`host-dsh.test.mjs`、`host-zcode.test.mjs`；`scripts/direct-pi-probe.mjs`仅无模型程序加载。
 - 人读顺序：账本金额→凭证/计算结果→规则依据→工具调用→输入与原件；日常前三项、异常按需深查，完整记录不裁剪。
 
@@ -149,7 +150,7 @@
 - 历史 Harness 验证：[harness-contract](../06-workbench/test/harness-contract.test.mjs)、[harness-lifecycle](../06-workbench/test/harness-lifecycle.test.mjs)、[harness-mcp](../05-reconstruction/codex/mcp/finance-mcp/harness-test.mjs)、[历史无模型原生MCP探针](../06-workbench/scripts/harness-pi-probe.mjs)。[Pi 扩展说明](../05-reconstruction/codex/pi/README.md)保留历史流程；陌生合成资料演示准备从 `06-workbench` 运行 `node scripts/harness-demo.mjs prepare <全新绝对目录>`，不调用模型，也不构成 Agent 演示。历史模型复现仍须获当次测试授权并保留模型/MCP/解析与业务回执；`assess` 仅核查真实账务结果，解析委派是否等价需单独核实。当前 direct 接入及无模型检查使用[统一入口](../05-reconstruction/codex/hosts/START-HERE.md)与[Pi 宿主说明](../05-reconstruction/codex/hosts/pi/README.md)。
 
 - stdio 分派：[server.mjs](../05-reconstruction/codex/mcp/finance-mcp/server.mjs) 的 `callTool`、`listSkillFiles`、`readSkill`，协议入口 `tools/list`、`tools/call`、`resources/list`、`resources/read`。
-- 工具契约：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs) 的 `TOOLS`、`TOOL_BY_NAME`、`validateArgs`；HTTP 适配：[backend.mjs](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)；配置示例：[config.toml](../05-reconstruction/codex/config.toml)。客户端配置使用本机实际 Node / 脚本绝对路径，按需设置 `FINANCE_API_BASE`、`FINANCE_SKILLS_DIR`。
+- 工具契约：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs) 的 `TOOLS`、`TOOL_BY_NAME`、`validateArgs`；HTTP 适配：[backend.mjs](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)；配置示例：[config.toml](../05-reconstruction/codex/config.toml)。客户端配置使用本机实际 Node / 脚本绝对路径，按实际后端设置 `FINANCE_API_BASE`；技能固定在该服务所属仓库，不设置外部技能目录。
 - 运行资源：[catalog.json](../05-reconstruction/catalog.json)、[skills](../05-reconstruction/codex/skills/)；通过 `skills_list` / `skills_read` 或 MCP resources 读取，Skill 相对引用保留在同目录树。`catalog.source_bundle` 是历史来源元数据。
 - MCP 测试：[contract-test](../05-reconstruction/codex/mcp/finance-mcp/contract-test.mjs)、[workflow-test](../05-reconstruction/codex/mcp/finance-mcp/workflow-test.mjs)、[tax-contract-test](../05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs)。
 - 合成旧账示例：[legacy-book](../05-reconstruction/examples/legacy-book/)；导入脚本：[import-demo.mjs](../05-reconstruction/codex/mcp/finance-mcp/import-demo.mjs)。工作台启动后，从仓库根运行 `node 05-reconstruction/codex/mcp/finance-mcp/import-demo.mjs`（会向所配置的后端写入示例账套，只用于测试后端）。

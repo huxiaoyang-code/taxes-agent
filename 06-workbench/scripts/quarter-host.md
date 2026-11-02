@@ -7,8 +7,10 @@
 操作者指定获准公开业务资料和全新目录。维护记录单独保存人工构造和版本信息，不复制到客户资料目录；不得复制私有oracle、金标、历史答案或维护脚本。
 
 ```powershell
-node 06-workbench/scripts/quarter-workspace.mjs --materials '<公开中文资料目录>' --workspace '<全新业务目录>' --plugin-root '<中国化finance插件目录>' --maintenance-dir '<独立维护目录>' --product-head '<PR后的精确后端SHA>' --plugin-head '<PR后的精确插件SHA>'
+node 06-workbench/scripts/quarter-workspace.mjs --materials '<公开中文资料目录>' --workspace '<全新业务目录>' --maintenance-dir '<独立维护目录>' --product-head '<PR后的精确主仓库SHA>'
 ```
+
+插件固定为所选主仓库的 `plugins/finance`，与后端共用同一提交，`--product-head` 锁定这份 clone。不支持 `--plugin-root`、`--plugin-head` 或旧工作区中的插件路径/独立版本字段；旧配置须重新生成到全新工作区，历史产物保持原处。
 
 该操作只复制原件和宿主配置，不初始化账套、过账或计算答案。原件不改；账库、调用记录、原件读取记录、报告和输出均位于本次隔离目录。指定SHA时要求库已提交且干净。没有给版本锁的程序开发自测会如实记录dirty状态，不能冒充PR后版本。
 

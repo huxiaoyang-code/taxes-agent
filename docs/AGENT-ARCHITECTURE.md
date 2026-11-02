@@ -25,7 +25,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 | 入口 | 实现 | 职责 |
 |---|---|---|
-| Skill 与宿主 | `05-reconstruction/codex/skills/`、`hosts/`、Pi `finance-direct.ts` | 业务方法与按需披露，选择计算载体与业务方法，明确规则来源和适用性 |
+| Skill 与宿主 | `plugins/finance/skills/`、`05-reconstruction/codex/hosts/`、Pi `finance-direct.ts` | 业务方法与按需披露，选择计算载体与业务方法，明确规则来源和适用性 |
 | 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`tool-profile.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
 | 原生业务 | `06-workbench/server/direct-finance.mjs`、`agency-business.mjs`、`accounting.mjs` | 已支持的底稿/税费/凭证/账簿/报表计算与受控写入 |
 
@@ -60,9 +60,13 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 宿主与渐进披露
 
-`finance-host-config.mjs` 生成全新工作区，默认 profile=direct；`--plugin-root` 可选用中国化 fork 的 finance 插件，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
+`finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 
 ## 历史兼容与验证
+
+九个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+
+旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 
 旧 Harness 源码、回执和回归保留为显式 `FINANCE_MCP_PROFILE=harness`；旧全量工具面须显式选 `legacy`。研究用 Harness² / SoL-Pi 默认关闭，不构成新日常业务依赖。历史元数据模型测试不能替代 direct 业务验收。
 

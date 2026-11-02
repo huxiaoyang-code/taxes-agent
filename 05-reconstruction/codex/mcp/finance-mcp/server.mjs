@@ -15,7 +15,7 @@
 import { createInterface } from "node:readline";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES } from "./tools.mjs";
@@ -41,7 +41,13 @@ const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
 const CATALOG = JSON.parse(readFileSync(join(RECON, "catalog.json"), "utf8"));
-const SKILLS_DIR = process.env.FINANCE_SKILLS_DIR || join(RECON, "codex", "skills");
+// 技能源固定在服务所属仓库，历史工具面仅选择仓库内专用目录。
+const SKILLS_DIR = ACTIVE_PROFILE === "direct"
+  ? join(RECON, "..", "plugins", "finance", "skills")
+  : join(RECON, "codex", "skills");
+if (process.env.FINANCE_SKILLS_DIR !== undefined && (!isAbsolute(process.env.FINANCE_SKILLS_DIR) || resolve(process.env.FINANCE_SKILLS_DIR) !== resolve(SKILLS_DIR))) {
+  throw new Error("finance_external_skills_not_supported");
+}
 
 const SERVER = { name: "finance-mcp", version: "0.2.0" };
 const PROTOCOL = "2025-06-18";
@@ -116,7 +122,12 @@ async function callTool(name, args = {}) {
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
-  if (name === "skills_list") return { files: listSkillFiles(), labels: CATALOG.skill_files };
+  if (name === "skills_list") {
+    const files = listSkillFiles();
+    // 标签来自当前profile可读文档，不混入另一技能根的名称。
+    const labels = Object.fromEntries(files.map(file => [file, readSkill(file).match(/^#\s+(.+)$/m)?.[1]?.trim() || file]));
+    return { files, labels };
+  }
   if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
   if (HARNESS_TOOL_NAMES.has(name)) {
     try {

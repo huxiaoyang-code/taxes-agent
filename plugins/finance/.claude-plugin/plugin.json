@@ -1,0 +1,8 @@
+{
+  "name": "finance",
+  "version": "2.0.0",
+  "description": "中国企业凭证、账目核对、报表、税费依据和内控复核；直接连接本机中国财税工具并自动保存可索引调用记录。",
+  "author": {
+    "name": "huxiaoyang-code / 中国财税插件贡献者"
+  }
+}

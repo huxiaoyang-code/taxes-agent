@@ -11,10 +11,10 @@
 在仓库根运行，替换全部占位值：
 
 ```powershell
-node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对路径>' --api-base 'http://127.0.0.1:<实际端口>' --database '<明确账库绝对路径>' --plugin-root '<中国化fork/finance绝对路径>' --audit-dir '<本机调用记录绝对目录>' --out '<已存在父目录/全新工作区>'
+node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对路径>' --api-base 'http://127.0.0.1:<实际端口>' --database '<明确账库绝对路径>' --audit-dir '<本机调用记录绝对目录>' --out '<已存在父目录/全新工作区>'
 ```
 
-`--host` 为 `pi | claude-code | dsh | zcode`。`--plugin-root` 可省略，届时使用本仓库已迁移的业务 Skill；提供时校验真实插件清单和 skills 目录。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。需要脚本处理原件时加`--source-root <获准原件绝对目录>`，Python计算再加`--python <实际python.exe绝对路径>`；这两个可选值写入MCP环境，JavaScript无需Python。也可按宿主机制给MCP进程配置`FINANCE_SOURCE_ROOT`与`FINANCE_PYTHON_PATH`。
+`--host` 为 `pi | claude-code | dsh | zcode`。默认从本仓库 `plugins/finance/skills` 加载九个中文业务 Skill 和共享参考，一次 clone 即包含插件与后端。生成器校验同仓库插件清单和 skills 目录；旧 `--plugin-root` 参数不再支持。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。需要脚本处理原件时加`--source-root <获准原件绝对目录>`，Python计算再加`--python <实际python.exe绝对路径>`；这两个可选值写入MCP环境，JavaScript无需Python。也可按宿主机制给MCP进程配置`FINANCE_SOURCE_ROOT`与`FINANCE_PYTHON_PATH`。
 
 | 宿主 | 生成文件 | 在新工作区启动 |
 |---|---|---|
@@ -35,6 +35,6 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对�
 
 每次调用获得 `_meta.financeCall.callId`，本机记录保存在 `FINANCE_AUDIT_DIR`；完整底稿位于本机结果索引，不要求模型反复读取 JSON 指针。记录不完整、来源变化、业务失败和模型自行推导分别报告；哈希匹配不代表业务正确。
 
-旧 Harness 只在明确历史兼容任务中选择 `FINANCE_MCP_PROFILE=harness`，不会被新工作区自动加载。详细调用链与记录语义见[架构说明](../../../docs/AGENT-ARCHITECTURE.md)。
+旧 `05-reconstruction/codex/skills` 保留八个专用/兼容技能。显式 `FINANCE_MCP_PROFILE=harness` 或 `legacy` 的 MCP 固定读取此旧目录，direct 固定读取中文插件。无需配置 `FINANCE_SKILLS_DIR`；遗留值只能等于当前 profile 的内置绝对根，否则启动拒绝。新工作区不会自动加载旧 Harness。详细调用链与记录语义见[架构说明](../../../docs/AGENT-ARCHITECTURE.md)。
 
 通用脚本合同、实际输入格式、输出索引及权限边界见[自主计算](../skills/harness/references/calculation.md)。脚本按当前用户权限执行，非安全沙箱；只运行已授权脚本，不改原件、账库或读取凭据。工具注解不把它标为只读，宿主既有审批策略继续适用。

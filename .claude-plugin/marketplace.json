@@ -1,0 +1,13 @@
+{
+  "name": "taxes-agent",
+  "owner": {
+    "name": "huxiaoyang-code"
+  },
+  "plugins": [
+    {
+      "name": "finance",
+      "source": "./plugins/finance",
+      "description": "中国企业凭证、账目核对、报表、税费依据和内控复核。"
+    }
+  ]
+}

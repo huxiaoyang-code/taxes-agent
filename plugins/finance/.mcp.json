@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "finance": {
+      "command": "node",
+      "args": [
+        "${TAXES_AGENT_ROOT}/05-reconstruction/codex/mcp/finance-mcp/server.mjs"
+      ],
+      "env": {
+        "FINANCE_MCP_PROFILE": "direct",
+        "FINANCE_DATABASE_PATH": "${FINANCE_DATABASE_PATH}",
+        "FINANCE_AUDIT_DIR": "${FINANCE_AUDIT_DIR}",
+        "FINANCE_API_BASE": "${FINANCE_API_BASE}"
+      }
+    }
+  }
+}
