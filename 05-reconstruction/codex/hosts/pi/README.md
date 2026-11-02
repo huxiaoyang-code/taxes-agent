@@ -39,7 +39,7 @@ node ./start-pi.mjs --pi-root '<官方 Pi 包绝对目录>' --task-file '<明确
 
 实际 6 次工具调用包括原生 `tool_search`，以及发现合同、初始化 Store、登记合成原件、登记金额事实、查询状态。原生 journal 中金额字符串为 `452.19`，证据 `kind=original`、原件第 2 行、quote、空字符串 `valuePath` 及保存原件的 SHA-256 均核对成功；任务与业务执行 attempts 均为 0。此次任务预先明确了正确的标量绑定合同，不能据此与其他宿主的首次绑定错误比较准确率。
 
-该短流程只验证新主 Agent 入口、原生工具搜索、官方模型与财税 MCP 的有限元数据协作。解析子 Agent 未在本次模型运行中调用；凭证、期间核算、真实人审、申报与付款仍未验证。请求数、输出和超时限制来自本次临时网关，不是默认启动器的统一预算产品能力。四宿主合计请求和原始证据范围见[接入实测](../README.md#官方-deepseek-实测)及 PR。
+该短流程只验证新主 Agent 入口、原生工具搜索、官方模型与财税 MCP 的有限元数据协作。解析子 Agent 未在本次模型运行中调用；凭证、期间核算、真实人审、申报与付款仍未验证。请求数、输出和超时限制来自本次临时网关，不是默认启动器的统一预算产品能力。四宿主合计请求和原始证据范围见[接入实测](https://github.com/huxiaoyang-code/taxes-agent/blob/a786d6aba86e5285110e4e3e0999d54fb857cb70/05-reconstruction/codex/hosts/README.md#官方-deepseek-实测)及 PR。
 
 ## 可选 SoL-Pi
 
