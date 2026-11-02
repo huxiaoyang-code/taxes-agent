@@ -14,7 +14,7 @@
 node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对路径>' --api-base 'http://127.0.0.1:<实际端口>' --database '<明确账库绝对路径>' --audit-dir '<本机调用记录绝对目录>' --out '<已存在父目录/全新工作区>'
 ```
 
-`--host` 为 `pi | claude-code | dsh | zcode`。默认从本仓库 `plugins/finance/skills` 加载九个中文业务 Skill 和共享参考，一次 clone 即包含插件与后端。生成器校验同仓库插件清单和 skills 目录；旧 `--plugin-root` 参数不再支持。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。需要脚本处理原件时加`--source-root <获准原件绝对目录>`，Python计算再加`--python <实际python.exe绝对路径>`；这两个可选值写入MCP环境，JavaScript无需Python。也可按宿主机制给MCP进程配置`FINANCE_SOURCE_ROOT`与`FINANCE_PYTHON_PATH`。
+`--host` 为 `pi | claude-code | dsh | zcode`。默认从本仓库 `plugins/finance/skills` 加载十个中文业务 Skill 和共享参考，一次 clone 即包含插件与后端。生成器校验同仓库插件清单和 skills 目录；旧 `--plugin-root` 参数不再支持。`--audit-dir` 可省略，默认工作区的 `finance-call-records`。生成不启动模型、不建账、不覆盖旧目录或全局配置。需要账前核对或脚本处理原件时加`--source-root <获准原件绝对目录>`，Python计算再加`--python <实际python.exe绝对路径>`；这两个可选值写入MCP环境，JavaScript无需Python。也可按宿主机制给MCP进程配置`FINANCE_SOURCE_ROOT`与`FINANCE_PYTHON_PATH`。
 
 | 宿主 | 生成文件 | 在新工作区启动 |
 |---|---|---|
@@ -26,6 +26,8 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<Node绝对�
 模型配置见各宿主 README。配置或协议检查通过不等于实际模型业务已验收。Pi `--check` 只加载真实扩展并核对 MCP 工具，不调用模型。
 
 ## 开展业务
+
+做账前核对进销项、采购库存和实际资金时，按需加载同仓库 `prebook-review/SKILL.md`，用`finance_record_contract(recordType=prebook)`取得合同，再调用`finance_prebook_review`。该读算入口不要求已有本期账簿；客户只交基础资料，Agent负责有来源的适配与补件重算。报告及交接资料保存在独立运行目录，正式做账仍走原有工具。原件、适配输入和回复文件均须在`FINANCE_SOURCE_ROOT`内，不能以对话中粘贴真实账套替代本机处理。
 
 按目标加载相关 Skill，从真实账库核实企业、账套、期间和币种，选择直接工具；按需用 `finance_rules` 查规则与出处、`finance_record_contract` 查具体字段。原件解释、适用判断及计算载体由 Agent 选择，可使用Python、表格、JavaScript或既有业务模块。finance_calculation_run记录实际脚本执行与独立派生文件；正式入账继续使用原生写入能力。未知、冲突、缺件和不支持均保留，不能编造内部字段消除问题。
 

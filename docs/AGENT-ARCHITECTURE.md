@@ -33,6 +33,18 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 客户原件与 Agent 整理的业务记录必须区分。目录和字段示例不是客户事实；原件未提供的日期、资格、用途、收付关联不得猜填。工具返回缺件、条件受限或不支持时，保留实际状态，独立可核分支继续。
 
+## 账前资料核对与做账交接
+
+`plugins/finance/skills/prebook-review` 将 small-business 的单据整理、采购收货匹配、资金起点、异常问询与报告方法适配到同仓库后端。它与既有做账流程共享资料来源和规则能力，但不要求本期账已完成，也不创建正式凭证或账库。
+
+`finance_record_contract(recordType=prebook)` 披露 `finance-prebook-contract/1`，`finance_prebook_review({inputPath,repliesPath?})` 读取 `FINANCE_SOURCE_ROOT` 内的适配输入与原件。输入是 Agent／采集器对客户基础资料的整理：企业期间、一般／小规模身份、覆盖声明、上期结转、本期采购收货、销售与税务发票、资金和库存。JSON／CSV 原件逐值绑定由后端核验；有限 `valueMap` 翻译原始分类，内部记录 ID 无需原件自带，`declarations` 分别记录提供者说明或操作者映射，业务关联／分类声明仍需核实。金额和日期不能靠声明代替原件。未绑定或不支持的内容保留缺口；表格、PDF 等宿主提取件不得冒称已由该后端独立解析原件。
+
+核对适配器在 `finance-prebook.mjs` 进行去重、显式业务关联、数量金额及资金衔接检查。一般纳税人和小规模增值税复用 `finance-summary-engine.mjs` 的条件计算，保留规则、条件和未知；销售范围不足不由开票合计替代。首版 VAT 税负按条件应纳／不含税销售额列示，不代表其他税种或实缴已核。其他税费继续使用现有独立工具。
+
+问题使用稳定标识，老板回复绑定输入摘要及问题，作为声明保留，不修改事实或关闭证据缺口；补件更正后重算，旧回复失效。运行保存 `prebook.json`、中文 `review.html`、`handoff.json` 与 `evidence-index.json`，完整记录使用既有调用记录机制。模型投影仅返回固定核对摘要、状态和引用，原始字段／老板说明留在本机。交接资料用于后续按既有业务合同整理消费，不是凭证导入格式，`ready_for_bookkeeping_review` 不等于会计审定、正式入账或申报。源字节对应也不证明业务真实性。
+
+两条流程为“上期及本期资料 → 账前核对／问询 → 补件重算 → 交接资料”和“业务资料 → 凭证／账簿／报表 → 原有复核及写账控制”。账前使用独立报告，不复用完整季度 `quarter-ledger/v1` 伪装月度账前结果。合成演示通过真实 MCP 覆盖两类纳税人及补件循环，入口见插件参考。
+
 ## 自动调用记录
 
 `finance-call-chain.mjs` 在最外层包裹每次 MCP 工具调用，记录参数拒绝、业务错误及成功返回。每次调用在 `FINANCE_AUDIT_DIR/<callId>/` 独立保存：
@@ -64,7 +76,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 历史兼容与验证
 
-九个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+十个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
 
 旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 

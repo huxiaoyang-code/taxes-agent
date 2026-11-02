@@ -7,6 +7,7 @@
 | ERP/中国财税 | `~~erp` | 本机 taxes-agent 的 finance MCP，profile为`direct`；账套、凭证、查询、报表和已支持税费 |
 | 规则与税费 | `~~tax tools` | 同一finance MCP的`finance_rules`、`finance_tax_calculate`、`finance_tax_summary_calculate`、`finance_record_contract` |
 | 业务底稿 | `~~workpapers` | 可选`finance_workpaper`、`finance_annual_workpaper`；模型也可自主计算 |
+| 账前核对 | `~~workpapers` | `finance_prebook_review`读取本机适配资料，生成采购库存／资金差异、一般或小规模增值税条件试算、问询和交接资料 |
 | 自主计算记录 | `~~workpapers` | `finance_calculation_run`执行Python/JavaScript并留证；按可选`reviewCard`合同自动生成固定中文账务复核卡片 |
 | 完整季度账目 | `~~erp` / `~~workpapers` | 可选`finance_quarter_review`读取真实账库；也可由Python/表格直接交付完整派生账表。草稿/FIFO可按`finance_workpaper_details`分页查询 |
 | 文档/表格 | `~~documents` / `~~spreadsheets` | 按宿主实际解析/表格工具及本次授权使用；模型可直接生成含公式工作簿或配套计算脚本 |
@@ -20,6 +21,7 @@
 
 ## 按任务选择工具
 
+- 做账前整理资料用`finance_record_contract(recordType=prebook)`读取实际输入／回复合同，再用`finance_prebook_review`核对。设置获准的`FINANCE_SOURCE_ROOT`，原始文件、适配输入和回复均在该根内；不要求本期已有账库。见[账前输入](skills/prebook-review/references/input-and-tools.md)。
 - 已有账库任务用`account_context`核实账套，`finance_query`或`ledger_query`取实际账簿。
 - `finance_record_contract`按需要取得某种业务记录合同；可选`finance_workpaper`计算原件支持的业务，不先做元数据编排。
 - 按需用`finance_rules`或已核官方资料取得中国规则、来源、期间和限制；可选`finance_tax_calculate`，缺件保留原生状态。工具字段缺口不证明企业事实缺失。

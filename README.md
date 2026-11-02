@@ -9,9 +9,12 @@
 | 安装、明确账库、选择 Pi / Claude Code / dsh / ZCode | [主 Agent 接入](05-reconstruction/codex/hosts/START-HERE.md) |
 | 了解业务与证据调用链 | [中文架构](docs/AGENT-ARCHITECTURE.md) |
 | 找业务源码与测试 | [代码索引](docs/CODE-INDEX.md) |
-| 官方格式的中国化财务插件与维护 | [plugins/finance](plugins/finance/README.md)；九个中文 Skill、共享参考、MCP 配置与许可证和后端同仓库维护 |
+| 官方格式的中国化财务插件与维护 | [plugins/finance](plugins/finance/README.md)；十个中文 Skill、共享参考、MCP 配置与许可证和后端同仓库维护 |
+| 做账前整理与核对 | [账前核对](plugins/finance/skills/prebook-review/SKILL.md)；接续上期账、核本期资料、问询补件后交接做账 |
 
 ## 工具与结果
+
+`finance_prebook_review`独立处理账前资料：接续上期依据，核对本期采购／收货／发票／付款、资金与库存，按一般纳税人或小规模分支进行增值税条件试算，输出中文报告、问题和交接资料。通过`finance_record_contract(recordType=prebook)`发现实际输入及老板回复合同；Agent将基础资料适配到JSON并保留原件绑定，客户无需先做本期账。补件后重算，旧回复不冒充新版本确认；其他税费继续按现有工具与资料处理。该流程不写正式账，实际使用及合成演示见[输入与工具](plugins/finance/skills/prebook-review/references/input-and-tools.md)。
 
 模型可自主选Python、JavaScript、表格或已有计算器。`finance_calculation_run`通过正常direct MCP执行获授权的本机脚本，保存输入文件快照（来源性质待核）、实际输入/脚本/输出/错误/版本，返回计算记录索引和独立派生文件路径。中文业务底稿和账表由脚本或表格生成；可选`reviewCard`将明确格式的季度账务自动取数为固定中文卡片，模型不另写最终报告。不必伪装原生季度快照，计算记录索引也不代表完整财税报告。配置、合同与权限边界见[通用计算](05-reconstruction/codex/skills/harness/references/calculation.md)。
 
