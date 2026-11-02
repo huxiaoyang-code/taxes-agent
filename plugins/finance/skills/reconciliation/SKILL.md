@@ -8,6 +8,8 @@ argument-hint: "<账户或业务对象> [期间]"
 
 由 Anthropic 官方同名 Skill 中国化改编，见 [来源](../../SOURCES.md)。连接类别见 [CONNECTORS.md](../shared/references/connectors.md)。
 
+本期尚未做账、需要接续上期余额核对进销项／采购／资金并向老板补件时，使用 [账前整理与核对](../prebook-review/SKILL.md)。本技能继续处理已有账簿的账户及余额核对。
+
 ## 工作流程
 
 ### 1. 确定同口径资料

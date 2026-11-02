@@ -1,6 +1,6 @@
 # 中国财税插件
 
-基于 Anthropic 官方 finance 插件中国化改编，沿用插件清单、业务 Skill、连接类别和工作底稿格式。Agent自主判断并选择Python、表格公式或已有计算器；系统记录实际读取、计算和产物，本机中国财税后端还提供可选计算器与账务操作，不要求手工事实登记或运行时任务图。来源和许可见 [SOURCES.md](SOURCES.md) 与 [LICENSE](LICENSE)。
+基于 Anthropic 官方 finance 插件中国化改编，并适配 small-business 的单据处理、资金核验与差异清单方法，沿用插件清单、业务 Skill、连接类别和工作底稿格式。Agent自主判断并选择Python、表格公式或已有计算器；系统记录实际读取、计算和产物，本机中国财税后端还提供可选计算器与账务操作，不要求手工事实登记或运行时任务图。来源和许可见 [SOURCES.md](SOURCES.md) 与 [LICENSE](LICENSE)。
 
 ## 安装与连接
 
@@ -17,6 +17,7 @@ claude plugin install finance@taxes-agent
 
 | 入口 | 用途 |
 |---|---|
+| `/finance:prebook-review` | 做账前接续上期账，核对本期采购库存、进销项和实际资金，列问题、补件重算并交接做账 |
 | `/finance:journal-entry` | 凭证草稿、支持计算和科目核对 |
 | `/finance:reconciliation` | 总账、往来、银行、库存及资产差异 |
 | `/finance:financial-statements` | 中国适用准则报表及期间比较 |
@@ -27,6 +28,14 @@ claude plugin install finance@taxes-agent
 名称遵守实际Skill frontmatter；`journal-entry-prep`、`close-management`、`audit-support`按相关任务自动读取。原`sox-testing`已改为`internal-control-review`，不声称SOX为中国企业普遍义务。
 
 ## 核对方式
+
+### 账前资料核对
+
+“本期还没做账，先核对发票、采购和流水”“把要问老板的事列出来”“资料补齐后再算一下”进入 [账前整理与核对](skills/prebook-review/SKILL.md)。一般纳税人与小规模均按本期身份分别处理；客户提供基础资料，Agent 读取并整理为真实工具合同，客户无需预制凭证或最终税额。
+
+账前入口接续上期余额，核本期采购／收货／发票／付款、实际银行和现金，输出独立的中文报告、问题清单和交接资料。内置税务测算为一般／小规模增值税条件试算，其他税费继续由原有税费能力按资料处理；条件、未知和未解决事项随结果交付。老板解释与独立证据分别保存，补件后重新核对；不把回复当作会计审核。输入方法和可运行的合成演示见 [输入与工具](skills/prebook-review/references/input-and-tools.md)。
+
+### 既有做账与完整账期复核
 
 先明确企业、账套、期间、币种和业务，再选择需要的Skill与工具。月结日历与依赖是可调整业务参考，不强制编排。已有数据不足时列具体缺件；可支持部分照常核对，不能把独立模型计算冒充原生引擎已完成。
 

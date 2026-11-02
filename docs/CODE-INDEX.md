@@ -6,9 +6,11 @@
 
 日常路径为业务 Skill→模型选择Python、表格或既有业务工具；MCP中的脚本运行与原生业务调用自动记录；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
 
-- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含九个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
+- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
+- 独立账前核对：`plugins/finance/skills/prebook-review/SKILL.md`；后端 `06-workbench/server/finance-prebook-contracts.mjs`、`finance-prebook-evidence.mjs`、`finance-prebook.mjs`。`finance_prebook_review`核对上期及本期基础资料、一般／小规模VAT条件试算、老板声明与补件重算，不写正式账；`finance_record_contract(recordType=prebook)`披露实际输入及回复合同。
+- 账前合成演示：`plugins/finance/skills/prebook-review/scripts/demo.mjs`，调用真实MCP执行缺票→回复→补件重算和小规模非零税额；插件 `tests/structure.test.mjs`核验同一路径和技能可读。原始资料映射、状态与交接范围见该技能的`references/input-and-tools.md`。
 - 每次工具调用记录与本机核查：`06-workbench/server/finance-call-chain.mjs`；测试 `test/finance-call-chain.test.mjs`。
 - 直接宿主入口：`hosts/shared/config.mjs`、四宿主 adapter、`pi/finance-direct.ts`；生成器默认 `plugins/finance/skills`，不支持外部插件路径；支持 `--audit-dir`；`quarter-workspace.mjs` 同样默认同仓库插件。
 - 验证：`06-workbench/test/finance-host-config.test.mjs`、`host-dsh.test.mjs`、`host-zcode.test.mjs`；`scripts/direct-pi-probe.mjs`仅无模型程序加载。

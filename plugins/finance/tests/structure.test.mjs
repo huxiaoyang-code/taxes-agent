@@ -12,10 +12,10 @@ const walk=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()
 const skillFiles=walk(skills).filter(p=>p.endsWith(`${sep}SKILL.md`));
 const markdown=walk(skills).filter(p=>p.endsWith('.md'));
 const backend=repo;
-const expected=['audit-support','close-management','financial-statements','internal-control-review','journal-entry','journal-entry-prep','reconciliation','tax-review','variance-analysis'];
+const expected=['audit-support','close-management','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-review','variance-analysis'];
 const localLinks=p=>[...read(p).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(m=>m[1]).filter(x=>!/^https?:|^mailto:|^#/.test(x)).map(x=>resolve(dirname(p),x.split('#')[0]));
 
-test('all upstream finance roles and Chinese tax review remain discoverable with matching frontmatter',()=>{
+test('既有财税与新增账前技能可发现，名称匹配实际frontmatter',()=>{
  const names=skillFiles.map(p=>{const s=read(p),m=s.match(/^---\r?\n([\s\S]*?)\r?\n---/);assert.ok(m,`frontmatter ${p}`);const name=m[1].match(/^name:\s*(.+)$/m)?.[1];assert.equal(name,dirname(p).split(sep).at(-1));assert.ok(m[1].match(/^description:\s*\S.+$/m));assert.ok(s.includes('报告顺序')||s.includes('报告'));assert.ok(!/harness_(?:source_register|facts_register|plan|run|status)/.test(s));return name;});
  assert.deepEqual(names.sort(),expected);
  for(const name of ['audit-support','close-management','journal-entry-prep'])assert.match(read(join(skills,name,'SKILL.md')),/user-invocable: false/);
@@ -56,7 +56,50 @@ test('上游许可原文与迁入来源完整，普通clone无需旧仓库Git对
  assert.equal(createHash('sha256').update(license).digest('hex'),'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30');
  const sources=read(join(finance,'SOURCES.md'));
  for(const sha of ['2574e29377c7173d0cecffef29a6ecbd7f8ccb5d','de879f81f2963547b5d92fc6d4d9db1b4487ea08','f8b0ea50bf0aa9318d2efe8abfab16a1a330ae24'])assert.ok(sources.includes(sha));
+ assert.ok(sources.includes('84d8efdb6e80e2b26898e5c3109d13eddde97761'));
  assert.match(sources,/2026-10-30修改/);assert.match(sources,/huxiaoyang-code\/taxes-agent/);
+});
+
+test('账前合成资料经真实MCP完成问询、回复、补件重算与两类纳税人测算', {timeout:60000},async()=>{
+ const {runPrebookDemo}=await import('../skills/prebook-review/scripts/demo.mjs');
+ const scratch=mkdtempSync(join(tmpdir(),'finance-cn-prebook-demo-'));
+ const {runs}=await runPrebookDemo(join(scratch,'synthetic-run'));
+ assert.equal(runs.length,4);
+ const [missing,statement,supplemented,small]=runs;
+ assert.equal(missing.projection.status,'needs_inputs');
+ assert.ok(missing.result.issues.some(issue=>issue.code==='purchase_invoice_missing'));
+ assert.equal(statement.projection.responses.recorded,1);
+ assert.equal(statement.projection.status,'needs_inputs','老板说明不能替代发票证据');
+ assert.notEqual(supplemented.projection.inputDigest,missing.projection.inputDigest);
+ assert.equal(supplemented.projection.responses.stale,1);
+ assert.equal(supplemented.projection.status,'ready_for_bookkeeping_review');
+ assert.equal(supplemented.projection.tax.status,'conditional_calculated');
+ // 独立手算：销项1300－进项650－上期留抵100=550；期初10000+收11300－付5650=15650。
+ assert.equal(supplemented.projection.tax.amounts.due,550);
+ assert.equal(supplemented.result.funds[0].calculatedClosing,'15650.00');
+ assert.equal(supplemented.result.funds[0].difference,'0.00');
+ // 小规模合成普通销售40万元超过该季度阈值，已声明减征条件：40万×1%=4000。
+ assert.equal(small.projection.status,'ready_for_bookkeeping_review');
+ assert.equal(small.projection.tax.amounts.due,4000);
+ assert.equal(small.projection.taxpayerType,'small');
+ for(const run of runs){
+  assert.equal(run.projection.review.posted,false);
+  assert.equal(run.projection.review.submittable,false);
+  const handoff=JSON.parse(read(join(run.directory,'handoff.json')));
+  assert.equal(handoff.inputDigest,run.projection.inputDigest);
+  assert.ok(handoff.sourceRefs.length>0);
+  assert.ok(handoff.sourceRefs.some(ref=>ref.column==='金额'&&ref.csvRow===2),'实际读取中文CSV金额及物理行定位');
+  const prepared=JSON.parse(read(run.inputPath));
+  assert.ok(prepared.bindings.some(binding=>binding.column==='收支'&&binding.valueMap?.收入==='inflow'),'原始中文枚举采用明确映射');
+  assert.equal(prepared.bindings.some(binding=>/^\/bankTransactions\/\d+\/id$/.test(binding.inputPointer)),false,'内部ID不要求客户原件提供');
+  assert.equal(existsSync(run.reviewPath),true);
+  const projection=JSON.stringify(run.projection);
+  for(const privateText of ['demo-supplier','demo-customer','合成演示老板','发票稍后补交'])assert.equal(projection.includes(privateText),false);
+ }
+ const contract=JSON.parse(read(join(scratch,'synthetic-run','实际输入合同.json')));
+ assert.equal(contract.recordType,'prebook');
+ assert.equal(contract.tool,'finance_prebook_review');
+ assert.equal(existsSync(join(scratch,'synthetic-run','未打开账库.db')),false);
 });
 
 test('Chinese obligation guide matches all current native tax tools and limits',async()=>{
