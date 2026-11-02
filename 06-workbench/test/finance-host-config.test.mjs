@@ -10,7 +10,7 @@ import {TOOLS} from '../../05-reconstruction/codex/mcp/finance-mcp/tools.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {parseArgs as parsePiArgs,buildLaunchSpec,MAIN_TOOLS,DEFAULT_TOOL_MODIFIERS} from '../../05-reconstruction/codex/hosts/pi/launcher.mjs';
 const root=mkdtempSync(join(tmpdir(),'finance-hosts-')),options={nodePath:process.execPath,apiBase:'http://127.0.0.1:8787',databasePath:join(root,'synthetic.db'),outputDir:join(root,'claude')};
-const c=createContext(options);assert.equal(c.repoRoot,repoRoot);assert.equal(c.mcp.env.FINANCE_MCP_PROFILE,'direct');
+const c=createContext(options);assert.equal(c.repoRoot,repoRoot);assert.equal(Object.hasOwn(c,'pluginRoot'),false);assert.equal(c.skillsDir,join(repoRoot,'plugins/finance/skills'));assert.equal(Object.hasOwn(c.mcpEnv,'FINANCE_SKILLS_DIR'),false);assert.equal(c.mcp.env.FINANCE_MCP_PROFILE,'direct');
 assert.deepEqual(toolsForProfile(undefined),toolsForProfile('direct'));assert.deepEqual(toolsForProfile('legacy'),TOOLS);assert.throws(()=>toolsForProfile(''),/finance_mcp_profile_invalid/);assert.throws(()=>toolsForProfile('all'),/finance_mcp_profile_invalid/);
 for(const change of [{nodePath:'node'},{databasePath:'relative.db'},{outputDir:root},{apiBase:'https://example.com'},{apiBase:'http://127.0.0.1:8787/private'},{apiBase:'http://user:pass@localhost:8787'},{pluginRoot:root},{auditDir:'relative'}])assert.throws(()=>createContext({...options,...change}));
 assert.throws(()=>writeBundle(c,{files:[{path:'../escape',content:'x'}]}),/host_file_invalid/);assert.equal(existsSync(c.outputDir),false);
@@ -21,9 +21,22 @@ assert.ok(!permissions.allow.includes('mcp__finance__*'));assert.equal([...permi
 assert.deepEqual(new Set([...permissions.allow,...permissions.ask]),new Set(toolsForProfile('direct').map(t=>'mcp__finance__'+t.name)));
 for(const tool of toolsForProfile('direct').filter(t=>t.annotations?.readOnlyHint!==true))assert.ok(permissions.ask.includes('mcp__finance__'+tool.name));
 assert.equal(bundle.files.some(f=>f.path.startsWith('.claude/agents/')),false);
-const plugin=join(root,'synthetic-plugin');mkdirSync(join(plugin,'.claude-plugin'),{recursive:true});mkdirSync(join(plugin,'skills'));writeFileSync(join(plugin,'.claude-plugin/plugin.json'),JSON.stringify({name:'synthetic-cn'}));
-const pluginContext=createContext({...options,outputDir:join(root,'plugin-host'),pluginRoot:plugin,auditDir:join(root,'explicit-local-records')});
-assert.equal(pluginContext.skillsDir,join(plugin,'skills'));assert.equal(pluginContext.mcpEnv.FINANCE_AUDIT_DIR,join(root,'explicit-local-records'));assert.equal(existsSync(pluginContext.auditDir),false);
+// 四宿主真实CLI均固定同仓库技能，旧外部参数明确拒绝。
+for(const host of ['pi','claude-code','dsh','zcode']){
+ const out=join(root,'cli-'+host),expected=join(repoRoot,'plugins/finance/skills');
+ const args=[join(repoRoot,'06-workbench/scripts/finance-host-config.mjs'),'--host',host,'--node',process.execPath,'--api-base',options.apiBase,'--database',options.databasePath,'--out',out];
+ const run=spawnSync(process.execPath,args,{encoding:'utf8',windowsHide:true,timeout:15000});assert.equal(run.status,0,run.stderr);
+ const file=host==='pi'?'pi-host.json':host==='claude-code'?'.mcp.json':host==='dsh'?'finance.cordis.patch.yml':'.zcode/config.json';
+ const config=JSON.parse(readFileSync(join(out,file),'utf8'));
+ const server=host==='pi'?{env:config.mcpEnv}:host==='claude-code'?config.mcpServers.finance:host==='dsh'?config.flatMap(p=>p.insert??[]).find(p=>p.id==='finance-direct-mcp').config:config.mcp.servers.finance;
+ assert.equal(Object.hasOwn(server.env,'FINANCE_SKILLS_DIR'),false);
+ if(host==='pi')assert.equal(config.skillsDir,expected);
+ if(host==='claude-code')assert.ok(readFileSync(join(out,'CLAUDE.md'),'utf8').includes(expected));
+ if(host==='dsh')assert.deepEqual(config.find(p=>p.id==='skill-filesystem').config.customSkillDirs,[expected]);
+ if(host==='zcode')assert.deepEqual(config.skills.roots,[expected]);
+ const rejected=spawnSync(process.execPath,[...args,'--plugin-root',root],{encoding:'utf8',windowsHide:true,timeout:15000});assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/host_arguments_invalid/);
+ assert.equal(existsSync(options.databasePath),false);
+}
 for(const host of ['pi','dsh','zcode']){
   const {buildConfig:build}=await import(`../../05-reconstruction/codex/hosts/${host}/adapter.mjs`);
   const context=createContext({...options,outputDir:join(root,host)}),output=writeBundle(context,build(context));assert.ok(output.files.length>0);
@@ -48,15 +61,24 @@ for(const args of [[],['--pi-root','relative'],['--pi-root',root,'--check','--js
 assert.equal(parsePiArgs(['--help'])['--help'],true);
 const server=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs');
 for(const profile of [undefined,'direct','harness','legacy']){
-  const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
+  const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
   try{
     await client.initialize();const names=(await client.rpc('tools/list')).result.tools.map(t=>t.name);assert.deepEqual(new Set(names),new Set(toolsForProfile(profile).map(t=>t.name)));
     assert.equal((await client.call('synthetic_unknown_tool')).isError,true);
     const legacy=profile==='harness'||profile==='legacy';assert.equal((await client.call('harness_discover')).isError,!legacy);
     assert.equal((await client.call('finance_rules',{})).isError,profile==='harness');
-    assert.equal((await client.call('skills_list',{})).isError,false);assert.ok((await client.rpc('resources/list')).result.resources.length>0);
+    const listed=await client.call('skills_list',{});assert.equal(listed.isError,false);assert.deepEqual(Object.keys(listed.data.labels).sort(),[...listed.data.files].sort());
+    const resource=legacy?'harness/SKILL.md':'tax-review/SKILL.md';assert.ok(listed.data.files.includes(resource));assert.equal((await client.call('skills_read',{resource})).isError,false);
+    assert.equal(listed.data.files.includes(legacy?'tax-review/SKILL.md':'harness/SKILL.md'),false);
+    assert.ok((await client.rpc('resources/list')).result.resources.some(r=>r.uri==='skill://'+resource));
     if(!legacy)assert.equal(names.some(name=>name.startsWith('harness_')),false);
   }finally{await client.close();}
 }
+// 环境变量只能断言同一内置根，不能选用外部、相对或越界目录。
+for(const value of [root,'plugins/finance/skills',join(repoRoot,'plugins/finance/../other/skills')]){
+ const rejected=spawnSync(process.execPath,[server],{env:{...process.env,FINANCE_MCP_PROFILE:'direct',FINANCE_SKILLS_DIR:value},encoding:'utf8',windowsHide:true,timeout:30000});assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/finance_external_skills_not_supported/);
+}
+const sameRootClient=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SKILLS_DIR:join(repoRoot,'plugins/finance/skills'),FINANCE_AUDIT_DIR:join(root,'same-root-records')},timeoutMs:30000}).start();
+try{await sameRootClient.initialize();assert.equal((await sameRootClient.call('skills_read',{resource:'tax-review/SKILL.md'})).isError,false);}finally{await sameRootClient.close();}
 const invalid=spawnSync(process.execPath,[server],{env:{...process.env,FINANCE_MCP_PROFILE:'bad'},encoding:'utf8',timeout:30000,windowsHide:true});assert.notEqual(invalid.status,0);assert.match(invalid.stderr,/finance_mcp_profile_invalid/);
-console.log(JSON.stringify({status:'passed',root,modelInvoked:false,checks:['four direct host configurations','native lazy MCP tools and no workflow orchestration','plugin-root and local audit directory','Claude read-only permissions','explicit legacy profiles','real stdio business rules and errors','no ledger created']}));
+console.log(JSON.stringify({status:'passed',root,modelInvoked:false,checks:['four direct host configurations','native lazy MCP tools and no workflow orchestration','single repository skills and rejected external roots','Claude read-only permissions','explicit legacy profiles','real stdio business rules and errors','no ledger created']}));

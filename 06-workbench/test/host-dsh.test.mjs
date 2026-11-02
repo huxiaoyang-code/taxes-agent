@@ -7,7 +7,7 @@ const context = {
   databasePath: '/synthetic/data/book.db', outputDir: '/synthetic/generated',
   mcp: { command: '/synthetic/bin/node', args: ['/synthetic/product/server.mjs'], cwd: '/synthetic/product', env: {
     FINANCE_MCP_PROFILE: 'direct', FINANCE_API_BASE: 'http://127.0.0.1:19876',
-    FINANCE_DATABASE_PATH: '/synthetic/data/book.db', FINANCE_SKILLS_DIR: '/synthetic/product/skills',
+    FINANCE_DATABASE_PATH: '/synthetic/data/book.db',
   } },
 };
 const original = structuredClone(context), result = buildConfig(context);

@@ -9,7 +9,7 @@
 | 安装、明确账库、选择 Pi / Claude Code / dsh / ZCode | [主 Agent 接入](05-reconstruction/codex/hosts/START-HERE.md) |
 | 了解业务与证据调用链 | [中文架构](docs/AGENT-ARCHITECTURE.md) |
 | 找业务源码与测试 | [代码索引](docs/CODE-INDEX.md) |
-| 复用官方格式的中国化财务插件 | [中国化 fork](https://github.com/huxiaoyang-code/knowledge-work-plugins)；配置生成器可用 `--plugin-root` 指向其 `finance` 目录 |
+| 官方格式的中国化财务插件与维护 | [plugins/finance](plugins/finance/README.md)；九个中文 Skill、共享参考、MCP 配置与许可证和后端同仓库维护 |
 
 ## 工具与结果
 
@@ -29,9 +29,12 @@ npm ci
 npm start
 ```
 
+一次 clone 已包含中文业务插件与本机后端；四宿主配置生成器默认选用 `plugins/finance/skills`，无需第二个仓库。不提供外部插件路径选项。旧 `05-reconstruction/codex/skills` 保留专用与历史兼容入口，不是 direct 默认技能源。
+
 MCP 由宿主启动 `05-reconstruction/codex/mcp/finance-mcp/server.mjs`，通过 `FINANCE_API_BASE` 连接明确的本机后端。配置生成器只写入全新工作区，不修改全局模型凭据或真实账库。
 
 ```powershell
+node --test plugins/finance/tests/structure.test.mjs
 node 06-workbench/test/finance-host-config.test.mjs
 node 06-workbench/test/host-dsh.test.mjs
 node 06-workbench/test/host-zcode.test.mjs

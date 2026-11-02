@@ -10,7 +10,7 @@ import {prepareQuarterWorkspace,loadQuarterWorkspace,openQuarterHost,PRODUCT_ROO
 import {withFinanceCall,annotateFinanceCall} from '../server/finance-call-chain.mjs';
 test('bundled artifact-tool真实导出全部中文原生账表、分页预览与数值保真',{timeout:120000},async()=>{
  const dependencies=join(homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies'),node=join(dependencies,'node/bin/node.exe'),python=join(dependencies,'python/python.exe');assert.ok(existsSync(node),'需要明确已安装的bundled运行时，不能以跳过冒充导出通过');
- const root=mkdtempSync(join(tmpdir(),'quarter-export-')),source=join(root,'public'),pluginRoot=join(root,'plugin','finance');mkdirSync(source);mkdirSync(join(pluginRoot,'.claude-plugin'),{recursive:true});mkdirSync(join(pluginRoot,'skills'));writeFileSync(join(pluginRoot,'.claude-plugin','plugin.json'),JSON.stringify({name:'finance',version:'0.0.0'}));writeFileSync(join(source,'业务委托.md'),'请复核季度账目和报表。');const prepared=prepareQuarterWorkspace({materialsDir:source,workspace:join(root,'账务复核'),pluginRoot,maintenanceDir:join(root,'maintenance')});
+ const root=mkdtempSync(join(tmpdir(),'quarter-export-')),source=join(root,'public');mkdirSync(source);writeFileSync(join(source,'业务委托.md'),'请复核季度账目和报表。');const prepared=prepareQuarterWorkspace({materialsDir:source,workspace:join(root,'账务复核'),maintenanceDir:join(root,'maintenance')});
  const report=join(prepared.workspace,'报表','原生数据');mkdirSync(report,{recursive:true});const sheets=[
  {name:'季度核对',columns:['事项','结果'],columnTypes:['text','mixed'],rows:[['借贷平衡','待核对'],['资料说明','原件字段与结果分别保存'],['期末净利润',null],['客户说明','']]},
  {name:'科目余额表',columns:['期间','科目编码','科目名称','借方发生（元）','贷方发生（元）','期末余额（元）'],columnTypes:['text','text','text','money','money','money'],rows:[['2026-01','1002','银行存款',1200.5,200,1000.5],['2026-02','1002','银行存款',10,0,1010.5],['2026-03','1002','银行存款',0,20,990.5]]},
@@ -31,8 +31,8 @@ test('bundled artifact-tool真实导出全部中文原生账表、分页预览�
 
 test('真实季度生成器经正常MCP回执绑定后可导出artifact工作簿',{timeout:180000},async()=>{
  const dependencies=join(homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies'),node=join(dependencies,'node/bin/node.exe'),python=join(dependencies,'python/python.exe');assert(existsSync(node));
- const root=mkdtempSync(join(tmpdir(),'quarter-export-producer-')),source=join(root,'public'),pluginRoot=join(root,'plugin','finance');mkdirSync(source);mkdirSync(join(pluginRoot,'.claude-plugin'),{recursive:true});mkdirSync(join(pluginRoot,'skills'));writeFileSync(join(pluginRoot,'.claude-plugin','plugin.json'),JSON.stringify({name:'finance',version:'0.0.0'}));writeFileSync(join(source,'业务委托.md'),'请查看第一季度账表。');
- const prepared=prepareQuarterWorkspace({materialsDir:source,workspace:join(root,'账务复核'),pluginRoot,maintenanceDir:join(root,'maintenance')}),config=loadQuarterWorkspace(prepared.workspace),host=await openQuarterHost(config);let produced;
+ const root=mkdtempSync(join(tmpdir(),'quarter-export-producer-')),source=join(root,'public');mkdirSync(source);writeFileSync(join(source,'业务委托.md'),'请查看第一季度账表。');
+ const prepared=prepareQuarterWorkspace({materialsDir:source,workspace:join(root,'账务复核'),maintenanceDir:join(root,'maintenance')}),config=loadQuarterWorkspace(prepared.workspace),host=await openQuarterHost(config);let produced;
  const value=result=>{assert.notEqual(result.isError,true,JSON.stringify(result));return result.structuredContent??JSON.parse(result.content[0].text);};
  try{
   assert.equal(value(await host.call('account_set_create',{name:'导出链路程序核对',start_period:'2026-01',enterprise:{enterpriseKey:'SYNTHETIC-EXPORT-PRODUCER'},profileId:'small-2011-basic-v1'})).ok,true);

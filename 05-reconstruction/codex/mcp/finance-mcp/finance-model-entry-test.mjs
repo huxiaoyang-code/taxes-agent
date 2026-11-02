@@ -494,25 +494,19 @@ try {
 
   await test("11. narrow resource and protocol errors are fixed and process stays alive", async () => {
     const marker = "SYNTHETIC_INTERNAL_PATH_MARKER";
-    const file = join(dataDir, marker); writeFileSync(file, "synthetic fixture");
-    const dir = join(dataDir, "skills"); mkdirSync(dir); mkdirSync(join(dir, "folder.md"));
-    for (const skillsDir of [file, dir]) {
-      const c = new McpStdioClient(join(here, "server.mjs"), { env: { FINANCE_API_BASE: base, FINANCE_SKILLS_DIR: skillsDir } }).start();
+    for (const resource of ['missing-SYNTHETIC_INTERNAL_PATH_MARKER.md', 'harness']) {
+      const c = new McpStdioClient(join(here, "server.mjs"), { env: { FINANCE_API_BASE: base, FINANCE_MCP_PROFILE:'legacy', FINANCE_SKILLS_DIR:undefined } }).start();
       try {
         await c.initialize("resource-fixed-error");
-        if (skillsDir === file) {
-          const list = await c.call("skills_list", {});
-          assert.equal(list.data.error, "skill_not_found");
-          const resources = await c.rpc("resources/list");
-          assert.deepEqual(resources.error, { code: -32002, message: "skill_not_found" });
-          assertNoTransportSecret(JSON.stringify([list, resources]), "resource errors");
-          assert.equal(JSON.stringify([list, resources]).includes(marker), false);
-        } else {
-          const read = await c.call("skills_read", { resource: "folder.md" });
-          assert.equal(read.data.error, "skill_not_found");
-          const readRpc = await c.rpc("resources/read", { uri: "skill://folder.md" });
-          assert.deepEqual(readRpc.error, { code: -32002, message: "skill_not_found" });
-        }
+        const list = await c.call("skills_list", {});
+        assert.equal(list.isError, false);
+        assert.ok(list.data.files.includes('harness/SKILL.md'));
+        const read = await c.call("skills_read", { resource });
+        assert.equal(read.data.error, "skill_not_found");
+        const readRpc = await c.rpc("resources/read", { uri: `skill://${resource}` });
+        assert.deepEqual(readRpc.error, { code: -32002, message: "skill_not_found" });
+        assertNoTransportSecret(JSON.stringify([read, readRpc]), "resource errors");
+        assert.equal(JSON.stringify([read, readRpc]).includes(marker), false);
         const objectMethod = await c.rpc({ synthetic: marker });
         assert.deepEqual(objectMethod.error, { code: -32600, message: "invalid_request" });
         const unknown = await c.rpc(marker);

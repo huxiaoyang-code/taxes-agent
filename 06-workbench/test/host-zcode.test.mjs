@@ -7,8 +7,8 @@ import {buildConfig} from '../../05-reconstruction/codex/hosts/zcode/adapter.mjs
 import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 const repoRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),outputDir=mkdtempSync(join(tmpdir(),'finance-zcode-synthetic-'));
-const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),databasePath=join(outputDir,'synthetic-unopened.db'),skillsDir=join(repoRoot,'05-reconstruction/codex/skills');
-const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:'http://127.0.0.1:49999',FINANCE_DATABASE_PATH:databasePath,FINANCE_SKILLS_DIR:skillsDir,FINANCE_AUDIT_DIR:join(outputDir,'records')};
+const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),databasePath=join(outputDir,'synthetic-unopened.db'),skillsDir=join(repoRoot,'plugins/finance/skills');
+const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:'http://127.0.0.1:49999',FINANCE_DATABASE_PATH:databasePath,FINANCE_AUDIT_DIR:join(outputDir,'records')};
 const context={repoRoot,nodePath:process.execPath,serverPath,skillsDir,apiBase:mcpEnv.FINANCE_API_BASE,databasePath,outputDir,auditDir:mcpEnv.FINANCE_AUDIT_DIR,mcpEnv,mcp:{command:process.execPath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};
 const before=JSON.stringify(context),bundle=buildConfig(context);assert.equal(JSON.stringify(context),before);
 const file=path=>bundle.files.find(f=>f.path===path)?.content,config=JSON.parse(file('.zcode/config.json'));
