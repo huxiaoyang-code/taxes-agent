@@ -5,6 +5,8 @@
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
 当前生成 .mcp.json、.claude/settings.json、CLAUDE.md；以 claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json 显式加载。只读工具建议自动允许，其余保留宿主审批；不安装额外角色。
 
+整期目标先读 `tax-period/SKILL.md`。共享短路由写入原生项目指引 `CLAUDE.md`，正文通过 `skills_read` 读取；单项请求直接选相关技能。项目指引生成成功不等于模型已读，需实际会话确认读取与后续工具结果。
+
 <details>
 <summary>改造前接入说明与历史实测（非当前默认流程）</summary>
 

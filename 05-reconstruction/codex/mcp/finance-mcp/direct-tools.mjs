@@ -2,9 +2,11 @@ import { MATERIAL_PROPERTIES, MATERIAL_CHOICE } from '../../../../06-workbench/s
 import { FINANCE_SUMMARY_INPUT_SCHEMA } from '../../../../06-workbench/server/finance-summary-contracts.mjs';
 import { CALCULATION_SCHEMA } from '../../../../06-workbench/server/finance-calculation.mjs';
 import { PREBOOK_TOOL_SCHEMA } from '../../../../06-workbench/server/finance-prebook-contracts.mjs';
+import { FINANCE_PERIOD_REVIEW_SCHEMA } from '../../../../06-workbench/server/finance-period-review-contracts.mjs';
 const str={type:'string',minLength:1};
 const spec=(name,description,properties={},required=[],extra={})=>({name,description,status:'available',origin:'local',inputSchema:{type:'object',additionalProperties:false,properties,required,...extra},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false,idempotentHint:true}});
 export const DIRECT_TOOLS=[
+ {...spec('finance_period_review','只读复核已保存的局部结果和未决代码，供整期任务补件或中断后接续；不返回原文、金额或路径，不宣称整期完成。target从现库核身份，只纳入同实例/企业/账套/期间记录；callIds显式选择或offset/limit分页扫描并披露遗漏。未建库时仅用互斥unboundCalls.callIds逐条核查，主体身份保持未核。历史问题不会因后一次调用返回而自动消除。'),inputSchema:FINANCE_PERIOD_REVIEW_SCHEMA},
  {...spec('finance_prebook_review','核对上期账与本期采购、库存、进销项和实际资金，生成老板问询、补件重算及独立交接资料。覆盖一般纳税人及小规模普通VAT条件试算；先读取finance_record_contract(recordType=prebook)。inputPath/repliesPath为FINANCE_SOURCE_ROOT内本机文件，不写正式账或登录税局。'),inputSchema:PREBOOK_TOOL_SCHEMA},
  {name:'finance_calculation_run',description:'运行获授权的本机Python或JavaScript计算并自动保存实际脚本、输入文件快照（来源性质待核）、输出、失败及中文计算记录页；独立派生结果，无需账套或原生季度bundle。script接收输入JSON路径（Python sys.argv[1]，JavaScript process.argv[2]），其中含parameters、sources[].snapshotPath、outputDir；结果文件写outputDir。Python需FINANCE_PYTHON_PATH绝对路径，输入文件需FINANCE_SOURCE_ROOT。按当前用户权限执行，不是安全沙箱，不能用来改原件/账库或读取凭据；仅运行已获授权脚本。规则与缺件写notes，不将执行成功当业务已核。可选reviewCard将本次outputs内quarter-ledger/v1明确格式账务JSON自动渲染为固定中文卡片；reviewPath指成功卡片，reviewCard失败独立报告。',status:'available',origin:'local',inputSchema:CALCULATION_SCHEMA,annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:true,idempotentHint:false}},
  spec('finance_workpaper_details','按需分页读取本服务进程签发底稿的固定业务投影：逐笔凭证草稿、库存层和退货成本。校验原件、工件版本及目标账套，不读取任意文件，不自动记账。',{target:MATERIAL_PROPERTIES.target,artifactRef:str,section:{enum:['vouchers','inventory','return_costs']},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}},['target','artifactRef','section']),

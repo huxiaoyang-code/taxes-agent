@@ -74,9 +74,19 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 
+## 整期任务入口与接续
+
+`tax-period/SKILL.md` 处理“完成本期账税/申报准备、接上次补件继续”的整期目标，五阶段表按实际资料和产物选择起点；单项税额、凭证或查询直接进入相应技能。它复用既有账前、凭证、对账、税费、报表技能，按需读取合法税费方案、租赁三口径及税后现金分支，不引入事实登记或任务 DAG。交付前先核真实扣除、优惠、亏损及法定选择的可行性，再区分本期/全年/合同全周期、永久减税/递延；不能按目标税负造成本或改既定事实。
+
+`hosts/shared/task-routing.mjs` 提供四宿主同一短路由。Pi 的 `--append-system-prompt` 与 MCP 描述、Claude 的 `CLAUDE.md`、ZCode 的 `AGENTS.md`、dsh 的显式 `start-dsh.mjs` 任务前缀分别接入已知入口；dsh 不添加未经核实的提示配置 API。Pi 保留原生 tool-search、skills_read 初始可用和其余工具 deferred 注册。配置和提示装配的静态测试不证明模型已读 Skill；实际模型调用轨迹和业务产物另行验收。
+
+`skills_list` 保留 files/labels 并从实际 frontmatter 提供 entries 元数据；`finance_period_review` 只读检查已有调用记录的固定投影。有账套按配置账库实际身份核同企业、账套、期间，分页披露覆盖与遗漏；未建库可显式指定 `unboundCalls.callIds` 逐条复查账前/计算执行记录，但 `scopeVerified=false`，不据此确认企业或汇总整期。来源变化、记录不完整、历史未决及未知均保留；调用 returned、摘要匹配和模型自述不等于业务完成，不因新调用成功关闭旧问题，也不新建任务状态库。
+
+该工具仅识别已实现的结果形状；当前年度 `finance-annual-result/1` 保持未识别记录，未实现年度专门解析和自动恢复完成判断。整期入口仍要求季度/年度所需月份和税种覆盖检查；年度产物按实际年度工具结果与获准本机资料核查，不能将月度记录或缺少年度投影当全年已完成。
+
 ## 历史兼容与验证
 
-十个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+十一个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
 
 旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 

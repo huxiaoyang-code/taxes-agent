@@ -79,6 +79,7 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args){
+ if(name==='finance_period_review'){const {reviewFinancePeriod}=await import('./finance-period-review.mjs');return reviewFinancePeriod(args);}
  if(name==='finance_prebook_review'){const {runPrebookReview}=await import('./finance-prebook.mjs');return runPrebookReview(args);}
  if(name==='finance_calculation_run'){const {runFinanceCalculation}=await import('./finance-calculation.mjs');return runFinanceCalculation(args);}
  if(name==='finance_workpaper_details')return workpaperDetails(args);

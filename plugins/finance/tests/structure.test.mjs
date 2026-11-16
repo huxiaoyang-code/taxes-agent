@@ -12,10 +12,10 @@ const walk=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()
 const skillFiles=walk(skills).filter(p=>p.endsWith(`${sep}SKILL.md`));
 const markdown=walk(skills).filter(p=>p.endsWith('.md'));
 const backend=repo;
-const expected=['audit-support','close-management','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-review','variance-analysis'];
+const expected=['audit-support','close-management','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-period','tax-review','variance-analysis'];
 const localLinks=p=>[...read(p).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(m=>m[1]).filter(x=>!/^https?:|^mailto:|^#/.test(x)).map(x=>resolve(dirname(p),x.split('#')[0]));
 
-test('既有财税与新增账前技能可发现，名称匹配实际frontmatter',()=>{
+test('既有财税与整期入口可发现，名称匹配实际frontmatter',()=>{
  const names=skillFiles.map(p=>{const s=read(p),m=s.match(/^---\r?\n([\s\S]*?)\r?\n---/);assert.ok(m,`frontmatter ${p}`);const name=m[1].match(/^name:\s*(.+)$/m)?.[1];assert.equal(name,dirname(p).split(sep).at(-1));assert.ok(m[1].match(/^description:\s*\S.+$/m));assert.ok(s.includes('报告顺序')||s.includes('报告'));assert.ok(!/harness_(?:source_register|facts_register|plan|run|status)/.test(s));return name;});
  assert.deepEqual(names.sort(),expected);
  for(const name of ['audit-support','close-management','journal-entry-prep'])assert.match(read(join(skills,name,'SKILL.md')),/user-invocable: false/);
@@ -132,6 +132,11 @@ test('every business document is actually readable through restricted MCP skills
  try{
   await client.initialize('finance-cn-skill-reference-test');
   const listed=await client.call('skills_list',{});assert.deepEqual(listed.data.files.sort(),markdown.map(p=>relative(skills,p).replaceAll('\\','/')).sort());assert.deepEqual(Object.keys(listed.data.labels).sort(),listed.data.files);
+  assert.deepEqual(listed.data.entries.map(e=>e.resource).sort(),expected.map(name=>name+'/SKILL.md').sort());
+  for(const entry of listed.data.entries){
+   const content=read(join(skills,entry.resource)),frontmatter=content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
+   assert.equal(entry.metadataState,'valid');assert.equal(entry.name,frontmatter.match(/^name:\s*(.+)$/m)[1]);assert.equal(entry.description,frontmatter.match(/^description:\s*(.+)$/m)[1]);
+  }
   assert.equal(Object.keys(listed.data.labels).some(p=>p.startsWith('harness/')),false);
   for(const p of markdown){const resource=relative(skills,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});assert.equal(r.isError,false,`${resource}: ${r.text}`);assert.equal(r.data?.markdown,read(p),`${resource} did not return actual document`);}
   const blocked=await client.call('skills_read',{resource:'../../finance/.mcp.json'});assert.equal(blocked.isError,true,'file boundary must remain restricted');

@@ -6,7 +6,10 @@
 
 日常路径为业务 Skill→模型选择Python、表格或既有业务工具；MCP中的脚本运行与原生业务调用自动记录；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
 
-- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
+- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十一个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
+- 整期入口：[tax-period/SKILL.md](../plugins/finance/skills/tax-period/SKILL.md)，按实际产物选五阶段并复用既有专项技能；合法方案、租赁口径和税后现金参考在同目录 references。单项任务不强制整期流程。
+- 共享宿主路由：`05-reconstruction/codex/hosts/shared/task-routing.mjs`；Pi 启动提示、Claude CLAUDE.md、ZCode AGENTS.md、dsh `hosts/dsh/launcher.mjs` 生成的显式任务包装共用，静态装配与模型实际读取分别验收。
+- 接续投影：`06-workbench/server/finance-period-review-contracts.mjs`、`finance-period-review.mjs` 与 direct MCP 注册；同范围固定只读投影、分页覆盖、未知及未决保留，未绑定记录分支不确认企业或整期状态。发现元数据：`05-reconstruction/codex/mcp/finance-mcp/skill-metadata.mjs` 解析实际 frontmatter，`skills_list.entries` 保留有效性状态。
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
 - 独立账前核对：`plugins/finance/skills/prebook-review/SKILL.md`；后端 `06-workbench/server/finance-prebook-contracts.mjs`、`finance-prebook-evidence.mjs`、`finance-prebook.mjs`。`finance_prebook_review`核对上期及本期基础资料、一般／小规模VAT条件试算、老板声明与补件重算，不写正式账；`finance_record_contract(recordType=prebook)`披露实际输入及回复合同。

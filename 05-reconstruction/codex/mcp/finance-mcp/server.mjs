@@ -33,6 +33,8 @@ import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
 import {withFinanceCall,currentFinanceCall,annotateFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
+import {skillMetadata} from './skill-metadata.mjs';
+import {directRecovery} from './direct-recovery.mjs';
 
 const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
@@ -117,7 +119,7 @@ async function callTool(name, args = {}) {
   // 字段映射已经由最外层记录器在执行前实读；原业务工具不接收审计元数据。
   if(Object.hasOwn(args,'businessEvidence')&&!['voucher_create','voucher_post'].includes(name)){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
   if (DIRECT_TOOL_NAMES.has(name)) {
-    try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
+    try { validateDirectInput(spec.inputSchema,args); const result=await callDirectFinanceTool(name,args),nextSteps=directRecovery(name,{status:result?.status});return nextSteps.length?{...result,nextSteps}:result; }
     catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
   }
 
@@ -126,7 +128,8 @@ async function callTool(name, args = {}) {
     const files = listSkillFiles();
     // 标签来自当前profile可读文档，不混入另一技能根的名称。
     const labels = Object.fromEntries(files.map(file => [file, readSkill(file).match(/^#\s+(.+)$/m)?.[1]?.trim() || file]));
-    return { files, labels };
+    const entries=files.filter(file=>/(?:^|\/)SKILL\.md$/.test(file)).map(file=>skillMetadata(file,readSkill(file)));
+    return { files, labels, entries };
   }
   if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
   if (HARNESS_TOOL_NAMES.has(name)) {
@@ -190,6 +193,7 @@ function errorResult(e) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
 }
 async function harnessErrorResult(e,name,args){
+  if(DIRECT_TOOL_NAMES.has(name)){const nextSteps=directRecovery(name,{code:e?.code});if(nextSteps.length)return errorResult(new ToolCallError(e.code,e.message,{...(e.details??{}),nextSteps}));}
   if(!HARNESS_TOOL_NAMES.has(name)||!args?.storePath||!e?.details||args.responseMode==='full')return errorResult(e);
   const native={status:'failed',code:e.code??'harness_operation_failed',blockers:e.details.evidenceIssues??e.details.problems??e.details.blockers??[],details:e.details,...(e.details.contractIssues?{contractIssues:e.details.contractIssues}:{}),nextSteps:e.details.contract?[{action:'inspect_selected_contract_and_repair_indicated_fields',...e.details.contract,hint:e.details.hint}]:[{action:e.code==='harness_phase_unsupported'?'choose_supported_phase':'resolve_indicated_facts_or_evidence',tool:e.code==='harness_phase_unsupported'?'harness_discover':'harness_facts_register',...(e.details.capabilityId?{capabilityId:e.details.capabilityId}:{}),hint:e.details.hint??'Resolve the specific field/source problems above; preserve unknown original writes and use query before retry.'}]};
   try{const payload=await summarizeHarnessReceipt(args.storePath,name,native);return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload,isError:true};}

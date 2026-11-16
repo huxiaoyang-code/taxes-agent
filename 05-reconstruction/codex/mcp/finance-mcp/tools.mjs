@@ -377,7 +377,7 @@ const CATALOG_TOOLS = [
 /** 纯本地工具（不经后端）。 */
 const LOCAL_TOOLS = [
   available("finance_query_catalog", "列出财务查询能力的安全静态目录：可用 / 未实现 / 本地扩展 nodeId 与计数（代码常量，无业务数据）。", obj({}), "local"),
-  available("skills_list", "查找可用财税业务规则(Skill)文件。", obj({}), "local"),
+  available("skills_list", "按需发现财税业务Skill入口及真实frontmatter名称、描述和资源路径；保留文件/标签目录，正文用skills_read读取。", obj({}), "local"),
   available("skills_read", "读取业务规则(Skill) Markdown 正文。",
     obj({ resource: { type: "string", description: "Skill 相对路径，例如 bookkeeping/SKILL.md" } }, ["resource"]), "local"),
 ];
