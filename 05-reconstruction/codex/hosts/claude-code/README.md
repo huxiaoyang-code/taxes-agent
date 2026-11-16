@@ -5,6 +5,10 @@
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
 当前生成 .mcp.json、.claude/settings.json、CLAUDE.md；以 claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json 显式加载。只读工具建议自动允许，其余保留宿主审批；不安装额外角色。
 
+已有账套改用 [企业记忆绑定入口](../BUSINESS-MEMORY.md)：生成目录内先 `node start-business-session.mjs --account-set-id <实际ID> --period 2026-11 --prepare-only`，再 `node start-claude.mjs --claude-cli '<实际exe或JS入口绝对路径>'`。正常启动自动准备，`--check` 严格只读；恢复只接受本工作区已绑定的 `--resume <UUID>`。SessionStart 的 startup/resume/clear/compact 从同一只读服务注入摘要，UserPromptSubmit 守卫拒绝错误恢复目标。项目 settings 和启动进程环境同时关闭 auto memory，不改全局设置、不复制企业口径到 CLAUDE.md、不读原生 memory/transcript。
+
+生成配置和独立 Node hook 进程测试不等于真实 Claude 生命周期；真实 2.1.309 触发及模型业务轨迹须另记。直接执行原始 claude 命令不自动准备记忆，也缺少启动进程环境层的隔离保证。
+
 整期目标先读 `tax-period/SKILL.md`。共享短路由写入原生项目指引 `CLAUDE.md`，正文通过 `skills_read` 读取；单项请求直接选相关技能。项目指引生成成功不等于模型已读，需实际会话确认读取与后续工具结果。
 
 <details>

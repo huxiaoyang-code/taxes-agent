@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { buildConfig } from '../../05-reconstruction/codex/hosts/dsh/adapter.mjs';
 import {PERIOD_TASK_ROUTING} from '../../05-reconstruction/codex/hosts/shared/task-routing.mjs';
+import {BUSINESS_MEMORY_ROUTING} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import {mkdtempSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -48,7 +49,7 @@ const launched=spawnSync(process.execPath,[join(scratch,'start-dsh.mjs'),'--dsh-
 assert.equal(launched.status,0,launched.stderr);const argv=JSON.parse(launched.stdout.trim());
 assert.deepEqual(argv.slice(0,3),['--profile','headless','--patch']);assert.equal(argv[4],'--patch');
 assert.equal(argv[3],join(scratch,'finance.cordis.patch.yml'));assert.equal(argv[5],join(scratch,'model.cordis.patch.yml'));
-assert.equal(argv.at(-1),PERIOD_TASK_ROUTING+'\n\n本次任务：\n'+task);assert.equal(argv.length,7);
+assert.ok(argv.at(-1).startsWith(PERIOD_TASK_ROUTING+'\n\n'+BUSINESS_MEMORY_ROUTING));assert.ok(argv.at(-1).endsWith('\n\n本次任务：\n'+task));assert.equal(argv.length,7);
 for(const args of [[],['--dsh-cli','relative'],['--dsh-cli',cli],['--dsh-cli',cli,'--task','one','--task-file',cli],['--dsh-cli',cli,'--task-file','relative']])assert.throws(()=>parseArgs(args));
 assert.equal(parseArgs(['--help'])['--help'],true);
 const taskFile=join(scratch,'任务.txt');writeFileSync(taskFile,task,'utf8');

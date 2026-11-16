@@ -74,6 +74,24 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 
+## 企业历史口径与方法记忆
+
+已有账套的正常启动链为配置生成→`start-business-session.mjs` 绑定实际账库/企业/账套/本期/来源/记录目录→`prepareBusinessMemory` 初始化→`readCompanyContext` 只读摘要→按本次业务读 `readBusinessMethod`→按需 `searchBusinessCases`。生成器不选第一家账套、不建库、不预填企业方案；`--prepare-only` 会写索引及绑定，`--check` 只读已有绑定。每个宿主工作区固定一家企业的账套与本期，换企业或跨期新建工作区；同一实际账套的方法/案例能跨工作区及不同获准来源/记录根延续，实际 DB 身份变化会拒绝旧会话绑定。
+
+`business-memory-storage.mjs` 将企业主题、不可覆盖的方法版本和可重建案例索引保存在实际 SQLite，纳入组件迁移、只读检查及备份恢复；`business-memory-bootstrap.mjs` 从现库配置、历史凭证/分录、期间、资产、导入来源及已有计算记录建立目录，不复制账务数据库或重算所有财务数字。已过账/封账、草稿、失败、执行未审及非历史期分开；金额不能证明完整算法。`ledger_fact`、`observed_history`、`operator_decision` 与候选分开，方法保留适用范围、取数、日期/金额、去重、转换、科目、执行版本、依据及缺口。账面事实与来源当前性分别披露；已知 changed/missing 阻断依赖方法，当前授权根不可访问的 unavailable 不当作已变，也不能冒称已重新核验。换目录或重新准备不能洗掉已知来源失效。
+
+正常 MCP 原生写入成功后后台同步企业目录；已绑定会话的 `finance_calculation_run` 自动核实实际scope，待完整调用记录落盘再同步，方法脚本执行同样留下可接续案例。未绑定计算保持未知；同步失败不把已执行结果改成可重复执行。读取通过 `live_readonly` 当前快照判断具体方法/对象/来源，不在读取时迁移、暗写索引或重算财务结果。缓存 stale 与业务方法失效分开；显式prepare用于初始化或主动维护，不要求Agent登记事实、维护技术状态或任务DAG。
+
+`business-memory.mjs` 的直接 MCP 入口为 `finance_memory_prepare`、`finance_company_context`、`finance_method_read`、`finance_case_search`、`finance_memory_propose` 和 `finance_method_run`，继续固定模型投影、分页、显式target、实际账库隔离与自动调用记录。稳定 `objectRef` 区分同主题的不同对象，`objectScope=account_set|business_object` 及本机JSON `matchConditions` 给出机器适用条件；context/readMethod传本期sources，只披露 matched/not_matched/unresolved，执行时重新匹配。任何非空自由scope/conditions仍未决，即使另有typed match也不能忽略；解释放notes，确定性资产/结转使用结构化account_set。
+
+对象匹配实际字节SHA在方法记录中固定，并交计算器校验实际采用的snapshot；匹配A1不能在取数时改用A2。采用不符拒绝子脚本执行该版本，后置来源/版本变化或可能副作用保留unknown并核原执行。原生business_object当前仅支持finance_tax_summary_calculate的originals分支：全部actual originals来自已匹配路径并强制SHA，bindings仅指这些originalId，不支持artifactRef派生分支；其他原生对象方法在context/read披露nativeObjectBinding=not_supported、executable=false。账套级native原路径不变，不把对象匹配能力泛化到全部原生工具。
+
+模型只能保存候选；本机 `review-business-method.mjs` 的真实交互审阅展示受影响版本，新增选择并保留理由、生效/终止期、replacementPolicy/replaces。同一主题/对象在目标期间只采用最新revision，回溯或有限区间之外仍按旧选择范围判断。执行只用保存的methodRef、本期参数和来源；current_parameters不能以旧default补本期金额/日期/数量，constant必须采用保存值、caller异值拒绝，缺保存值保持不可执行。支持的VAT/季度等原生安全业务结果及产物索引继续可读；凭证人审、期间、防重复、来源及实际账库控制不放宽。readonly进程拒绝全部记忆写路径；版本不可独立改删，整账删除仅沿原生控制级联所属记忆。
+
+四宿主共用 `hosts/shared/business-session.mjs` 的读取协议。Claude 的 SessionStart startup/resume/clear/compact 通过 exec-form command hook 读同一摘要并输出 additionalContext；仅另存最小宿主session身份以核resume，不读取transcript或原生memory，不保存财务方法副本。UserPromptSubmit 在模型请求前拒绝未知或错账套恢复。工作区设置 `autoMemoryEnabled:false`，启动进程同时设置 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`，不改用户全局配置；CLAUDE.md只存加载规则。Pi 启动系统提示与 dsh 明确任务前缀装配摘要；ZCode 按 AGENTS.md 规则首读工具，没有声称原生生命周期自动注入。后台业务同步四宿主共用；其他宿主会话内按业务需要重新读当前方法/案例，不假设宿主自动注入。
+
+业务 Skill 的[企业记忆参考](../plugins/finance/skills/shared/references/business-memory.md)和[宿主操作/逐点验收说明](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)列明摘要→方法→案例/依据及R01–R14命令入口。[阳性现场脚本](../06-workbench/scripts/business-memory-acceptance.mjs) prepare生成两企业历史与本期新资料，check核源码哈希和现场且只读；它不执行本期模型业务，合成TTY不代表真人批准。真实 SQLite/MCP、独立 Node hook进程、实际Claude事件和模型业务分别验收；配置或模拟不能代替生命周期和整账结果，记忆不证明政策正确、会计批准或申报完成。
+
 ## 整期任务入口与接续
 
 `tax-period/SKILL.md` 处理“完成本期账税/申报准备、接上次补件继续”的整期目标，五阶段表按实际资料和产物选择起点；单项税额、凭证或查询直接进入相应技能。它复用既有账前、凭证、对账、税费、报表技能，按需读取合法税费方案、租赁三口径及税后现金分支，不引入事实登记或任务 DAG。交付前先核真实扣除、优惠、亏损及法定选择的可行性，再区分本期/全年/合同全周期、永久减税/递延；不能按目标税负造成本或改既定事实。

@@ -1,6 +1,7 @@
 import {existsSync, statSync, realpathSync, mkdirSync, writeFileSync} from 'node:fs';
 import {isAbsolute, resolve, dirname, join, relative, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {businessSessionFiles} from './business-session.mjs';
 
 export const repoRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../../../..');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
@@ -19,19 +20,20 @@ export function createContext({nodePath,apiBase,databasePath,outputDir,auditDir,
   existing(join(plugin,'.claude-plugin/plugin.json'),'plugin_manifest','file');
   const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),skillsDir=existing(join(plugin,'skills'),'plugin_skills','directory');
   const traceRoot=auditDir===undefined?join(out,'finance-call-records'):absolute(auditDir,'audit_directory');
-  const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:url.origin,FINANCE_DATABASE_PATH:db,FINANCE_AUDIT_DIR:traceRoot};
+  const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:url.origin,FINANCE_DATABASE_PATH:db,FINANCE_AUDIT_DIR:traceRoot,FINANCE_BUSINESS_SESSION:join(out,'.finance/business-session.json')};
   if(sourceRoot!==undefined)mcpEnv.FINANCE_SOURCE_ROOT=existing(sourceRoot,'source_root','directory');
   if(pythonPath!==undefined)mcpEnv.FINANCE_PYTHON_PATH=existing(pythonPath,'python','file');
   return {repoRoot,nodePath,serverPath,skillsDir,auditDir:traceRoot,apiBase:url.origin,databasePath:db,outputDir:out,mcpEnv,mcp:{command:nodePath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};
 }
 export function writeBundle(context,bundle){
   if(!Array.isArray(bundle?.files)||!bundle.files.length)fail('host_files_required');
+  const files=[...bundle.files,...(bundle.host?businessSessionFiles({...context,host:bundle.host}):[])];
   const names=new Set();
-  for(const file of bundle.files){
+  for(const file of files){
     if(typeof file.path!=='string'||!file.path||isAbsolute(file.path)||file.path.includes('\\')||file.path.split('/').some(p=>!p||p==='.'||p==='..')||/[\0\r\n:]/.test(file.path)||typeof file.content!=='string')fail('host_file_invalid');
     const path=resolve(context.outputDir,file.path),rel=relative(context.outputDir,path);if(rel.startsWith('..'+sep)||isAbsolute(rel)||names.has(path.toLowerCase()))fail('host_file_invalid');names.add(path.toLowerCase());
   }
   mkdirSync(context.outputDir); // 仅允许全新独占输出，绝不合并到用户配置。
-  for(const file of bundle.files){const path=join(context.outputDir,file.path);mkdirSync(dirname(path),{recursive:true});writeFileSync(path,file.content,{encoding:'utf8',flag:'wx'});}
-  return {outputDir:context.outputDir,files:bundle.files.map(f=>f.path),notes:bundle.notes??[],modelInvoked:false};
+  for(const file of files){const path=join(context.outputDir,file.path);mkdirSync(dirname(path),{recursive:true});writeFileSync(path,file.content,{encoding:'utf8',flag:'wx'});}
+  return {outputDir:context.outputDir,files:files.map(f=>f.path),notes:bundle.notes??[],modelInvoked:false};
 }

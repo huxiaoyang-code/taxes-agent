@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {PERIOD_TASK_ROUTING} from '../shared/task-routing.mjs';
+import {BUSINESS_MEMORY_ROUTING,renderBusinessContext,sessionPath,prepareBoundBusinessSession,readBoundBusinessContext} from '../shared/business-session.mjs';
 
 const HELP='node start-pi.mjs --pi-root <absolute @earendil-works/pi-coding-agent package> [--check | --task-file <absolute task.txt> [--json] [--tools <explicit subset>]]\n默认启动官方 deepseek/deepseek-flash 交互主 Agent；--check 不调用模型。';
 export const MAIN_TOOLS=['read','write','edit',process.platform==='win32'?'powershell':'bash','tool_search','mcp__finance__finance_rules','mcp__finance__skills_read'];
@@ -25,7 +26,7 @@ export function parseArgs(args){
   if(options['--tools'])for(const tool of options['--tools'].split(','))if(!MAIN_TOOLS.includes(tool)&&!/^mcp__finance__(?!harness_)[a-z][a-z0-9_]*$/.test(tool))throw Error('pi_tool_subset_invalid');
   return options;
 }
-export function buildLaunchSpec(config,workspace,options){
+export function buildLaunchSpec(config,workspace,options,businessContext){
   for(const path of [config.repoRoot,config.nodePath,config.extensionPath,config.skillsDir])if(!isAbsolute(path)||!existsSync(path))throw Error('pi_generated_path_missing');
   if(config.version!=='finance-pi-host/1'||config.provider!=='deepseek'||config.model!=='deepseek-flash'||config.mcpEnv?.FINANCE_MCP_PROFILE!=='direct')throw Error('pi_host_config_invalid');
   const piRoot=resolve(options['--pi-root']),pkg=JSON.parse(readFileSync(join(piRoot,'package.json'),'utf8')),cli=join(piRoot,'dist/bundle/cli.js');
@@ -34,12 +35,15 @@ export function buildLaunchSpec(config,workspace,options){
   const env={...process.env,...config.mcpEnv,PI_CODING_AGENT_DIR:agentDir,PI_OFFLINE:'1'};
   if(options['--check'])return {command:config.nodePath,args:[join(config.repoRoot,'06-workbench/scripts/direct-pi-probe.mjs'),piRoot,'--agent-dir',agentDir],cwd:workspace,env,modelInvoked:false};
   const args=[cli,'--offline','--no-session','--no-context-files','--no-extensions','--no-skills','--no-prompt-templates','-e','builtin:mcp','-e','builtin:tool-search','-e',config.extensionPath,'--skill',config.skillsDir,'--provider',config.provider,'--model',config.model,'--thinking','low','--tools',options['--tools']??DEFAULT_TOOL_MODIFIERS.join(','),'--append-system-prompt',`你是本机财税主 Agent。${PERIOD_TASK_ROUTING}按上述入口选择相关Skill和工具；用tool_search按需加载工具合同。核实企业、账套、期间与原件，直接调用财税业务工具，不维护Harness登记或DAG。工具后台自动记录调用。自主选Python、表格或既有计算器；finance_calculation_run可记录实际脚本并索引独立派生账表，不是安全沙箱。交付按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件，日常前三项，异常再深查。未知不填零，不得编造会计批准、申报或付款。模型固定官方deepseek/deepseek-flash，不跨服务回退。`];
+  args[args.indexOf('--append-system-prompt')+1]+='\n\n'+BUSINESS_MEMORY_ROUTING+(businessContext?'\n\n'+renderBusinessContext(businessContext):'\n未绑定企业记忆；先明确实际账库、账套及期间，通过start-business-session.mjs绑定。未建账的账前任务可继续，不伪建企业。');
   if(options['--task-file']){if(!statSync(options['--task-file']).isFile())throw Error('pi_task_file_required');if(options['--json'])args.push('--mode','json');args.push('--print',readFileSync(options['--task-file'],'utf8'));}
   return {command:config.nodePath,args,cwd:workspace,env,modelInvoked:'only after an explicit task or interactive input'};
 }
-export async function runPi(configUrl,args){
+export async function runPi(configUrl,args,bound){
   const options=parseArgs(args);if(options['--help']){console.log(HELP);return;}
-  const configPath=fileURLToPath(configUrl),workspace=dirname(configPath),config=JSON.parse(readFileSync(configPath,'utf8')),spec=buildLaunchSpec(config,workspace,options);
+  const configPath=fileURLToPath(configUrl),workspace=dirname(configPath),config=JSON.parse(readFileSync(configPath,'utf8'));
+  if(!bound&&existsSync(sessionPath(workspace)))bound=options['--check']?await readBoundBusinessContext(workspace):await prepareBoundBusinessSession(workspace);
+  const spec=buildLaunchSpec(config,workspace,options,bound?.context);
   // 此隔离目录从空目录开始：禁止预置凭据、会话或用户设置。
   if(!options['--check'])mkdirSync(spec.env.PI_CODING_AGENT_DIR,{recursive:true});
   const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:spec.env,windowsHide:true,shell:false,stdio:'inherit'});

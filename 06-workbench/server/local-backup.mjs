@@ -48,6 +48,7 @@ import { inspectAuditSchema, auditComponentContract, auditSchemaFacts, AUDIT_TAB
 import { AUDIT_COMPONENT } from './local-audit.mjs';
 import { LOCAL_BATCH_COMPONENT, LOCAL_BATCH_TABLES, inspectBatchSchema, batchComponentContract, batchSchemaFacts } from './local-batch-storage.mjs';
 import { AUX_TABLES, AUX_COMPONENT_STRUCTURE, auxiliaryComponentContract, inspectAuxiliarySchema } from './auxiliary-storage.mjs';
+import { BUSINESS_MEMORY_COMPONENT, BUSINESS_MEMORY_TABLES, businessMemoryComponentContract, businessMemorySchemaFacts, inspectBusinessMemorySchema } from './business-memory-storage.mjs';
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -828,6 +829,7 @@ function describeContent(conn, tables) {
  * 注册表里的 v1 契约才被当成受支持组件。
  */
 const COMPONENT_REGISTRY = Object.freeze({
+ get 'business-memory'(){return businessMemoryComponentContract(1)},
  'restore-control':Object.freeze({name:'restore-control',version:1,tables:RESTORE_CONTROL_TABLES,structure:RESTORE_CONTROL_SQL}),
   get 'local-batch'(){return Object.freeze({name:LOCAL_BATCH_COMPONENT,version:3,tables:LOCAL_BATCH_TABLES,structure:{versions:[1,2,3]}})},
   get 'business-audit'(){return Object.freeze({name:AUDIT_COMPONENT,version:2,tables:AUDIT_TABLES,structure:{versions:[1,2]}})},
@@ -1577,6 +1579,7 @@ function inspectStructure(conn, { notProductCode }) {
   // 可选组件：任何 `bank_*` 表出现就按已登记 v1 契约完整校验；旧的无组件库不受影响。
   const component = inspectComponent(conn, tables);
   const auxiliary = inspectAuxiliarySchema(conn, version);
+  const memory = inspectBusinessMemorySchema(conn, version);
   const audit=inspectAuditSchema(conn);
   const batch=inspectBatchSchema(conn);
   const control=inspectRestoreControl(conn);
@@ -1585,8 +1588,9 @@ function inspectStructure(conn, { notProductCode }) {
     : structure;
   const migrations = migrationRecordProblems(conn, version);
   const problems = [
-    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !audit.present.includes(table) && !batch.present.includes(table) && !control.present.includes(table)), effectiveStructure),
+    ...structureProblems(conn, tables.filter(table => (!auxiliary.present || !AUX_TABLES.includes(table)) && !memory.present.includes(table) && !audit.present.includes(table) && !batch.present.includes(table) && !control.present.includes(table)), effectiveStructure),
     ...auxiliary.problems,
+    ...memory.problems,
     ...(control.state==='not_installed'||control.ok?[]:[{kind:'restore_control_invalid'}]),
     ...(audit.state==='not_installed'||audit.ok?[]:[{kind:'audit_structure_or_content_invalid'}]),
     ...(batch.state==='not_installed'||batch.ok?[]:[{kind:'batch_structure_or_content_invalid'}]),
@@ -1601,7 +1605,7 @@ function inspectStructure(conn, { notProductCode }) {
       problems: problems.slice(0, MAX_DETAIL_ITEMS),
     });
   }
-  return { version, tables, migrations: migrations.versions, component, auxiliary, audit, batch, control };
+  return { version, tables, migrations: migrations.versions, component, auxiliary, memory, audit, batch, control };
 }
 
 /**
@@ -1638,6 +1642,12 @@ function inspectDatabase(conn, { notProductCode = "not_product_database" } = {})
       structureDigest: sha256Text(JSON.stringify(auxiliary.objects)),
       contentDigest: componentContentDigest(auxiliary, content),
       rows: AUX_TABLES.reduce((sum, table) => sum + content.tables[table].rows, 0) });
+  }
+  if (structure.memory.ok) {
+    const tables=BUSINESS_MEMORY_TABLES;
+    components.push({name:BUSINESS_MEMORY_COMPONENT,version:1,tables:[...tables],
+      structureDigest:sha256Text(JSON.stringify(businessMemorySchemaFacts(conn))),
+      contentDigest:componentContentDigest({tables},content),rows:tables.reduce((sum,t)=>sum+content.tables[t].rows,0)});
   }
   if (structure.audit.ok) {
     const audit=structure.audit, tables=auditComponentContract(audit.version).tables;
@@ -2219,7 +2229,7 @@ export function assertInstallableComponentSet(manifest,target) {
   const contract=e.name===AUDIT_COMPONENT?auditComponentContract(e.version):e.name===LOCAL_BATCH_COMPONENT?batchComponentContract(e.version):e.name==='auxiliary'?auxiliaryComponentContract(e.version):COMPONENT_REGISTRY[e.name];
   if(e.version!==contract.version||JSON.stringify(e.tables)!==JSON.stringify(contract.tables))throw expected('component_unsupported');
  }
- if(entries.some(e=>e.name==='auxiliary')&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');
+ if(entries.some(e=>['auxiliary',BUSINESS_MEMORY_COMPONENT].includes(e.name))&&manifest.structure?.schemaVersion!==5)throw expected('component_unsupported');
  return true;
 }
 // 恢复发布和业务数据库属于不同的事务领域。

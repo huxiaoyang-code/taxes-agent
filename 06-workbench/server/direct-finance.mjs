@@ -78,7 +78,10 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   review:{accountantApproval:workpaper.accountantApproval??'pending',submittable:workpaper.submittable??false,periodComplete:workpaper.periodComplete??false,issueCount:issues.length,issues:issues.map(i=>({code:i.code,state:i.state??'missing'}))},
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
-export async function callDirectFinanceTool(name,args){
+export async function callDirectFinanceTool(name,args,options={}){
+ if(['finance_memory_prepare','finance_company_context','finance_method_read','finance_case_search','finance_memory_propose','finance_method_run'].includes(name)){
+  const memory=await import('./business-memory.mjs'),entry={finance_memory_prepare:'prepareBusinessMemory',finance_company_context:'readCompanyContext',finance_method_read:'readBusinessMethod',finance_case_search:'searchBusinessCases',finance_memory_propose:'proposeBusinessMethod',finance_method_run:'runBusinessMethod'}[name];return memory[entry](args,options);
+ }
  if(name==='finance_period_review'){const {reviewFinancePeriod}=await import('./finance-period-review.mjs');return reviewFinancePeriod(args);}
  if(name==='finance_prebook_review'){const {runPrebookReview}=await import('./finance-prebook.mjs');return runPrebookReview(args);}
  if(name==='finance_calculation_run'){const {runFinanceCalculation}=await import('./finance-calculation.mjs');return runFinanceCalculation(args);}
