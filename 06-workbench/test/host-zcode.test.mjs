@@ -7,6 +7,7 @@ import {buildConfig} from '../../05-reconstruction/codex/hosts/zcode/adapter.mjs
 import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {PERIOD_TASK_ROUTING} from '../../05-reconstruction/codex/hosts/shared/task-routing.mjs';
+import {BUSINESS_MEMORY_ROUTING} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 const repoRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),outputDir=mkdtempSync(join(tmpdir(),'finance-zcode-synthetic-'));
 const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),databasePath=join(outputDir,'synthetic-unopened.db'),skillsDir=join(repoRoot,'plugins/finance/skills');
 const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:'http://127.0.0.1:49999',FINANCE_DATABASE_PATH:databasePath,FINANCE_AUDIT_DIR:join(outputDir,'records')};
@@ -16,6 +17,7 @@ const file=path=>bundle.files.find(f=>f.path===path)?.content,config=JSON.parse(
 assert.deepEqual(config.mcp.servers.finance,{type:'stdio',...context.mcp,enabled:true,timeoutMs:180000});assert.equal(config.permission.mode,'build');assert.deepEqual(config.skills.roots,[skillsDir]);assert.equal(config.model,undefined);
 assert.equal(bundle.files.some(f=>f.path.includes('/agents/')),false);assert.match(file('AGENTS.md'),/账本金额→凭证\/计算结果→规则依据→工具调用→输入与原件/);
 assert.ok(file('AGENTS.md').includes(PERIOD_TASK_ROUTING));
+assert.ok(file('AGENTS.md').includes(BUSINESS_MEMORY_ROUTING));assert(BUSINESS_MEMORY_ROUTING.includes('finance_baseline_read'));
 const native=config.mcp.servers.finance,client=new McpStdioClient(native.args[0],{cwd:native.cwd,env:{...native.env,NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
 try{
   await client.initialize('zcode-config-protocol-probe');const listed=(await client.rpc('tools/list')).result.tools;
@@ -24,6 +26,7 @@ try{
   const rules=await client.call('finance_rules',{});assert.equal(rules.isError,false,rules.text);
   assert.equal((await client.call('skills_list',{})).isError,false);
   const skills=await client.call('skills_list',{});assert.equal(skills.data.entries.find(e=>e.name==='tax-period').resource,'tax-period/SKILL.md');
+  assert.equal(skills.data.entries.find(e=>e.name==='company-baseline').resource,'company-baseline/SKILL.md');assert.equal((await client.call('skills_read',{resource:'company-baseline/SKILL.md'})).isError,false);
   assert.equal((await client.call('skills_read',{resource:'tax-period/SKILL.md'})).isError,false);
   assert.equal((await client.call('skills_read',{resource:'tax-period/references/planning-cash.md'})).isError,false);
   const rejected=await client.call('finance_workpaper',{unexpected:true});assert.equal(rejected.isError,true);

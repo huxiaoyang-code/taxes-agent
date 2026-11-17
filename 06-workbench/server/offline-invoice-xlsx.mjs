@@ -102,7 +102,7 @@ const cellPosition = a => {
 const a1 = column => { let s = ''; for (let n = column; n; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
 const simpleString = n => { check(n && n.children.every(c => c.name === 't') && n.children.length === 1); const t = n.children[0]; check(!t.children.length && t.text.length <= 4096, 'xlsx_limit'); check(!/_x[0-9A-Fa-f]{4}_/.test(t.text), 'xlsx_string_escape_unsupported'); return t.text; };
 
-function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false) {
+function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false, structureOnly = false) {
   try {
     const entries = unpack(bytes);
     for (const [name, content] of entries) if (name.endsWith('.rels')) {
@@ -129,7 +129,7 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     tree(wb, MAIN, ['workbook', 'fileVersion', 'workbookPr', 'bookViews', 'workbookView', 'sheets', 'sheet', 'calcPr']); check(wb.name === 'workbook');
     const rels = relations(entries.get('xl/_rels/workbook.xml.rels'), 'xl/');
     const sheets = one(wb, 'sheets').children; check(sheets.every(s => s.name === 'sheet') && new Set(sheets.map(s => s.attrs.name)).size === sheets.length && new Set(sheets.map(s => s.attrs.sheetId)).size === sheets.length && new Set(sheets.map(s => s.attrs[`{${DOCREL}}id`])).size === sheets.length);
-    const matches = sheets.filter(s => s.attrs.name === mapping.sheet); check(matches.length === 1, 'xlsx_sheet_missing');
+    const matches = structureOnly ? sheets.filter((s,i) => i === mapping.sheetIndex) : sheets.filter(s => s.attrs.name === mapping.sheet); check(matches.length === 1, 'xlsx_sheet_missing');
     const selected = matches[0]; check(!selected.attrs.state || selected.attrs.state === 'visible', 'xlsx_structure_unsupported');
     const sheetRel = rels.get(selected.attrs[`{${DOCREL}}id`]); check(sheetRel?.type === DOCREL + '/worksheet');
     const related = type => { const found = [...rels.values()].filter(r => r.type === DOCREL + '/' + type); check(found.length <= 1); return found[0] && entries.get(found[0].path); };
@@ -179,6 +179,8 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
       }
       records.push({ rowNumber, cells: Array.from({ length: cells.length }, (_, i) => cells[i] ?? ''), types });
     }
+    // 仅供本机受限字段适配器使用；仍执行上方完整安全解析与公式拒绝，模型投影由调用方负责。
+    if (structureOnly) return {sheetIndex:mapping.sheetIndex,sheetCount:sheets.length,rows:records};
     const header = records.find(r => r.rowNumber === mapping.headerRow); check(header, 'xlsx_header_missing');
     const index = new Map();
     for (const [key, label] of Object.entries(mapping.columns)) {
@@ -209,3 +211,7 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
 // 数值许可由固定适配器决定，不能由调用者可控制的映射决定。
 export const readInvoiceXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['net', 'tax', 'gross']);
 export const readBankXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['amount', 'balance'], true);
+export const readXlsxStructure = (bytes, {sheetIndex=0}={}) => {
+  check(Number.isSafeInteger(sheetIndex) && sheetIndex>=0 && sheetIndex<8,'xlsx_limit');
+  return readMappedXlsx(bytes,{sheetIndex},[],false,true);
+};

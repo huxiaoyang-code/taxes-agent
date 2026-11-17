@@ -5,7 +5,7 @@
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
 当前生成 .zcode/config.json 与 AGENTS.md。打开生成目录或使用 zcode --cwd <生成目录> --mode build，核实finance实际连接来自本工作区；保持原生权限，不自动安装用户级解析角色。
 
-已有账套先按 [企业记忆绑定入口](../BUSINESS-MEMORY.md) 绑定；使用 `node start-business-session.mjs -- --zcode-cli '<实际exe或JS入口>'` 自动准备并固定生成工作区。ZCode 的 AGENTS.md 要求先调用 `finance_company_context`，再按实际方法编号分层读取；本项目没有假设未经核实的 ZCode 启动提示API或原生clear/compact hook。是否真正读摘要看实际工具轨迹，生成配置或准备成功不能代替模型采纳验收。
+已有账套先按 [企业记忆绑定入口](../BUSINESS-MEMORY.md) 绑定；使用 `node start-business-session.mjs -- --zcode-cli '<实际exe或JS入口>'` 准备目录并固定工作区。ZCode 的 AGENTS.md 要求先调用 `finance_baseline_read`，无有效版或需修订时按 `company-baseline/SKILL.md` 实读材料、提炼保存；同条件沿用，明细及旧方法按需读。目录准备不等于业务基线ready。本项目未假设未经核实的 ZCode 启动提示API或原生clear/compact hook。是否真正读基线看实际工具轨迹，生成配置或准备成功不能代替模型采纳验收。
 
 整期目标先读 `tax-period/SKILL.md`。共享短路由写入 ZCode 已支持的工作区 `AGENTS.md`，技能根保持同仓库目录；单项请求直接选相关技能。原生配置可解析及 MCP 可读不等于模型已读或业务通过。
 

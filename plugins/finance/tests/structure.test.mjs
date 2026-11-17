@@ -12,7 +12,7 @@ const walk=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()
 const skillFiles=walk(skills).filter(p=>p.endsWith(`${sep}SKILL.md`));
 const markdown=walk(skills).filter(p=>p.endsWith('.md'));
 const backend=repo;
-const expected=['audit-support','close-management','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-period','tax-review','variance-analysis'];
+const expected=['audit-support','close-management','company-baseline','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-period','tax-review','variance-analysis'];
 const localLinks=p=>[...read(p).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(m=>m[1]).filter(x=>!/^https?:|^mailto:|^#/.test(x)).map(x=>resolve(dirname(p),x.split('#')[0]));
 
 test('既有财税与整期入口可发现，名称匹配实际frontmatter',()=>{
@@ -123,6 +123,19 @@ test('documented fixed-card example is accepted by the discoverable optional MCP
  assert.ok(!schema.required.includes('reviewCard'),'fixed presentation must not become a prerequisite for calculation');
  assert.deepEqual(validateSchemaValue(schema.properties.reviewCard,example.reviewCard),[],'the exact documented example must match the backend');
  for(const field of ['bankSourceIndex','findingsSourceIndex','cashSourceIndex'])assert.deepEqual(validateSchemaValue(schema.properties.reviewCard,{...example.reviewCard,[field]:2}),[],field);
+});
+
+test('基线生成与本期计算示例符合真实合同，入口可由业务技能发现',async()=>{
+ const {DIRECT_TOOLS}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs')));
+ const {validateSchemaValue}=await import(pathToFileURL(join(backend,'06-workbench/server/harness-schema-validation.mjs')));
+ const reference=read(join(skills,'company-baseline/references/materials-and-save.md'));
+ const examples=[...reference.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
+ const schema=DIRECT_TOOLS.find(t=>t.name==='finance_baseline_materials')?.inputSchema;
+ assert.ok(schema,'真实材料工具须可发现，不能只写生成说明');
+ assert(examples.some(example=>example.extractKnownFields===true),'首次生成须有直接抽取入口');
+ assert(examples.some(example=>example.section==='calculation'),'已有基线须有安全计算结构入口');
+ for(const example of examples)assert.deepEqual(validateSchemaValue(schema,example),[]);
+ for(const name of ['tax-period','journal-entry','tax-review'])assert.ok(localLinks(join(skills,name,'SKILL.md')).includes(join(skills,'company-baseline','SKILL.md')),name+'缺少真实生成入口');
 });
 
 test('every business document is actually readable through restricted MCP skills_read', {timeout:30000},async()=>{

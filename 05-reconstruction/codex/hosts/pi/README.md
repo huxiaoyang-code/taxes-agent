@@ -5,7 +5,7 @@
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
 当前使用 finance-direct.ts；start-pi.mjs --pi-root <官方Pi1.1.0包目录> --check 实测 CLI 参数解析、SDK 会话注册和原生 tool_search 激活，不调用模型。初始财税工具仅规则查询、Skill读取，其他业务工具通过原生tool_search按需加载；本地文件及代码工具范围保持既有配置。
 
-已有账套从 [企业记忆绑定入口](../BUSINESS-MEMORY.md) 启动：`node start-business-session.mjs --account-set-id <实际ID> --period 2026-11 -- --pi-root '<官方包绝对目录>'`。启动自动准备历史目录并把同一只读摘要追加到系统提示，随后按需加载方法/案例，保留 tool-search 和 deferred 工具。已绑定工作区直接运行 start-pi 也会准备；`start-pi --check` 仅只读核绑定并运行原有无模型连接检查。未提供 Pi 原生 clear/compact hook；正常MCP写入/已绑定计算由后台同步，Agent按本次业务读live方法/对象/来源状态，不维护刷新任务；不能把 Claude 的生命周期注入算到 Pi。
+已有账套从 [企业记忆绑定入口](../BUSINESS-MEMORY.md) 启动：`node start-business-session.mjs --account-set-id <实际ID> --period 2026-11 -- --pi-root '<官方包绝对目录>'`。启动准备历史目录并把同一只读短基线追加到系统提示；无有效基线或需修订时按 `company-baseline/SKILL.md` 调查生成，目录准备不是生成完成。同条件沿用，明细及旧方法／案例／脚本按需读，保留 tool-search 和 deferred 工具。已绑定工作区直接运行 start-pi 也会准备；`start-pi --check` 仅只读核绑定并运行原有无模型连接检查。未提供 Pi 原生 clear/compact hook；会话内按需重读 `finance_baseline_read`，不能把 Claude 的生命周期注入算到 Pi。
 
 默认启动器使用 Pi 的 `+工具/-工具` 初始选择语法，保留延迟 MCP 工具注册，不预先暴露全部业务合同。显式 `--tools '<工具名,工具名>'`（须同时提供 `--task-file`）仍是该次任务的精确注册子集：要使用的业务工具须列入其中；工具搜索不能越过该子集加载工具。
 

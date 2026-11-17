@@ -91,7 +91,7 @@ function callRecords(scope, options, diagnostics) {
    if (begin.value.tool === 'finance_method_run' && output.value?.execution?.kind !== 'script') continue;
    const sources=[...(begin.value.sources ?? []),...(end.loadedSources ?? [])].map(s => ({path:s.path ?? null,expectedSha256:s.sha256 ?? null,...safeFileState(s,options)}));
    const baseSha256=businessMemoryDigest({begin:begin.sha256,end,output:output.sha256,input:input.sha256});
-   found.push({callId:id,recordRoot:root,tool:begin.value.tool,scope:end.scope,period:end.scope.period,status:end.status,businessOutcome:end.businessOutcome,executionCompleted:end.executionCompleted === true,sources,artifactRefs:end.metadata?.artifactRefs ?? [],input:input.value,output:output.value,ref:'call:'+id,baseSha256,sha256:businessMemoryDigest({record:baseSha256,sources:accessIndependent(sources)})});
+   found.push({callId:id,recordRoot:root,tool:begin.value.tool,scope:end.scope,period:end.scope.period,status:end.status,businessOutcome:end.businessOutcome,executionCompleted:end.executionCompleted === true,sources,artifactRefs:end.metadata?.artifactRefs ?? [],financeCalculationContext:end.metadata?.financeCalculationContext??null,configuredTarget:end.metadata?.configuredTarget??null,input:input.value,output:output.value,ref:'call:'+id,baseSha256,sha256:businessMemoryDigest({record:baseSha256,sources:accessIndependent(sources)})});
   } catch { diagnostics.push('call_record_incomplete'); }
  }
  return found;
@@ -173,7 +173,13 @@ function calculationRecord(call, options, db, scope) {
   }
   if (r.input) {
    const input=checkedFile(dir,'input.json',r.input,{json:true});
-   if (!equal(input.value,{parameters:request.value.parameters ?? {},sources:r.sources.map((s,index)=>({index,snapshotPath:s.snapshotPath,sha256:s.sha256,locator:s.locator})),outputDir:join(dir,'outputs')})) return null;
+   const expected={parameters:request.value.parameters ?? {},sources:r.sources.map((s,index)=>({index,snapshotPath:s.snapshotPath,sha256:s.sha256,locator:s.locator})),outputDir:join(dir,'outputs')};
+   if(r.financeContext!==undefined){
+    const context=r.financeContext,proof=call.financeCalculationContext;
+    if(!context||Object.keys(context).sort().join(',')!=='auditDir,dbPath,sessionPath,sourceRoot'||!isAbsolute(context.dbPath)||!isAbsolute(context.auditDir)||!['sourceRoot','sessionPath'].every(k=>context[k]===''||typeof context[k]==='string'&&isAbsolute(context[k]))||proof?.version!=='finance-calculation-context/1'||proof.origin!=='configured_backend_paths'||proof.sha256!==sha(Buffer.from(JSON.stringify(context,null,2)+'\n'))||call.configuredTarget?.databasePath&&resolve(call.configuredTarget.databasePath)!==resolve(context.dbPath))return null;
+    expected.financeContext=context;
+   }
+   if (!equal(input.value,expected)) return null;
   } else if (r.status === 'executed') return null;
   if (r.status === 'executed' && (r.execution?.exitCode !== 0 || r.execution.reason || !Array.isArray(r.executionFileChecks) || ![scriptName,'input.json'].every(name=>r.executionFileChecks.some(c=>c.file === name && c.unchanged === true)) || !Array.isArray(r.sourceChecks) || !r.sources.every(s=>r.sourceChecks.some(c=>c.path === s.path && c.sourceUnchanged === true && c.snapshotUnchanged === true)))) return null;
   if (method && r.status === 'executed') assertRecordedObjectSources(method,r);

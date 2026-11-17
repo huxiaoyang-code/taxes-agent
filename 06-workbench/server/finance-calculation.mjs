@@ -99,6 +99,13 @@ export async function runFinanceCalculation(args,options={}){
   annotateFinanceCall({sources:record.sources.map(s=>({path:s.path,sha256:s.sha256,bytes:s.bytes,locator:'calculation_source_snapshot'}))});
   // 实际脚本输入只给副本位置；来源路径与完整结构留在独立记录中。
   const input={parameters:args.parameters??{},sources:record.sources.map((s,index)=>({index,snapshotPath:s.snapshotPath,sha256:s.sha256,locator:s.locator})),outputDir};
+  // 只在本机执行输入提供父进程已配置的只读取数位置；不从parameters取得，也不回传模型或继承凭据环境。
+  const databasePath=options.dbPath??process.env.FINANCE_DATABASE_PATH;
+  if(typeof databasePath==='string'&&isAbsolute(databasePath)){
+   const financeContext={dbPath:resolve(databasePath),sourceRoot:sourceRoot??'',auditDir:options.auditDir??call?.auditDir??financeAuditDirectory(),sessionPath:options.sessionPath??process.env.FINANCE_BUSINESS_SESSION??''};
+   input.financeContext=financeContext;record.financeContext=financeContext;
+   annotateFinanceCall({financeCalculationContext:{version:'finance-calculation-context/1',origin:'configured_backend_paths',sha256:sha(json(financeContext))}});
+  }
   record.input=save(join(dir,'input.json'),json(input));
   const program=args.engine==='javascript'?process.execPath:options.pythonPath??process.env.FINANCE_PYTHON_PATH;
   if(!program||!isAbsolute(program))fail('finance_calculation_python_path_required');

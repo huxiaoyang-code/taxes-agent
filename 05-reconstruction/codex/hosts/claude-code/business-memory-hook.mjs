@@ -1,4 +1,5 @@
-// SessionStart 的企业内容读取严格只读；仅另存最小宿主会话身份，绝不读 transcript 或原生 memory。
+// SessionStart 不改业务库、索引或原件；企业读取另按标准调用记录保存安全观察。
+// 会话侧仅另存最小身份，绝不读 transcript 或原生 memory。
 import {existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -37,7 +38,7 @@ export async function handleClaudeHook(workspace,input,mode='--claude-hook'){
  if(['resume','compact','fork'].includes(input.source))assertClaudeSessionBinding(workspace,input.session_id,session);
  else if(input.source==='startup'&&process.env.FINANCE_CLAUDE_LAUNCH_ID&&input.session_id!==process.env.FINANCE_CLAUDE_LAUNCH_ID)fail('claude_business_launch_id_mismatch');
  const {context}=await readBoundBusinessContext(workspace);
- // 唯一宿主侧写入：不含方法/案例内容，只把生命周期新ID绑定实际scope供下次resume核对。
+ // 会话侧只保存新ID与实际scope，不含基线/方法/案例；读取的安全观察另由标准调用记录留痕。
  if(['startup','clear'].includes(input.source))rememberClaudeSession(workspace,input.session_id,session);
  return {hookSpecificOutput:{hookEventName:'SessionStart',additionalContext:renderBusinessContext(context)}};
 }
@@ -47,7 +48,7 @@ export async function runClaudeHook(workspace,mode){
   let input;try{input=JSON.parse(body);}catch{fail('claude_business_hook_input_invalid');}
   console.log(JSON.stringify(await handleClaudeHook(workspace,input,mode)));
  }catch(error){
-  const code=/^(?:host_business_|claude_business_|finance_target_|finance_memory_|business_memory_)[A-Za-z0-9_]+$/.test(error.code??'')?error.code:'claude_business_context_unavailable';
+  const code=/^(?:host_business_|claude_business_|finance_target_|finance_baseline_|business_baseline_|finance_memory_|business_memory_)[A-Za-z0-9_]+$/.test(error.code??'')?error.code:'claude_business_context_unavailable';
   // SessionStart本身不能靠退出码阻止会话；UserPromptSubmit守卫在模型请求前另作同样验证并exit2。
   console.log(JSON.stringify({continue:false,stopReason:'企业记忆绑定校验失败：'+code,systemMessage:'先在本工作区核对实际账库、账套和期间；禁止沿用其他企业会话。',...(mode==='--claude-hook'?{hookSpecificOutput:{hookEventName:'SessionStart',additionalContext:'企业记忆加载失败；当前企业上下文未获核实。禁止使用旧会话中的企业口径；请停止本次业务并核对绑定。错误码：'+code}}:{})}));
   if(mode==='--claude-guard')process.exitCode=2;

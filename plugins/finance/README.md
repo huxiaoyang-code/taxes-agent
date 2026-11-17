@@ -7,6 +7,7 @@
 | 业务 | 能做什么 |
 |---|---|
 | [整期账税与申报准备](skills/tax-period/SKILL.md) | “完成本期账税”“接上次补件继续”的默认整期入口；按实际产物选择阶段，接续资料、收入成本、税费方案及交付 |
+| [企业短基线生成](skills/company-baseline/SKILL.md) | 从实际账套、代表性历史、合同／底稿和申报导出提炼少量可沿用的做账原则；首次缺失或原则变化时调查、保存再回读 |
 | [账前整理与核对](skills/prebook-review/SKILL.md) | 接续上期账，核对采购、收货、发票、收付款与库存，列出问询及补件事项 |
 | [凭证编制](skills/journal-entry/SKILL.md) | 按采购销售、费用、资产、工资等业务编制分录草稿，核对科目与计算支持 |
 | [账目核对](skills/reconciliation/SKILL.md) | 比对总账、往来、银行、库存和资产资料，定位差异 |
@@ -21,6 +22,8 @@
 可直接用中文说明任务，例如“核对本月采购、发票和流水，列出要问老板的问题”。安装到 Claude Code 后，也可使用 `/finance:prebook-review`、`/finance:journal-entry` 等技能命令；表中最后三项由 Agent 在相关任务中按需读取。
 
 “完成这家企业本期账税”“把本季申报准备好”“接上次补件继续”先读 `tax-period/SKILL.md`，再按目标加载已有专项技能；单项税额、凭证或查询直接进入对应技能。整期交付前主动检查真实扣除、优惠、亏损及法定选择，比较本期、全年和合同全周期的税额及现金影响，区分减税与递延。补件接续以同范围实际产物和来源版本为据，`finance_period_review` 只复查已有调用记录，不把模型说完成或新一次调用成功当整期通过。
+
+已有账套先读 `finance_baseline_read`：短正文包含特定企业／有效期及最多8条、600个Unicode字符的做账原则，重要未决最多3项。没有有效版或需修订时进入基线生成技能，由 Agent 实读资料、调查、提炼并保存；不要求用户先写方案、填内部 JSON 或挑脚本。目录 prepare 不等于生成完成。同条件沿用，普通新凭证不追加基线；明细余额、当前合同进度和旧方法／案例／脚本按需读，不常驻注入。税负参考分应纳／实缴及本期／累计，不作本期倒挤目标。
 
 ## 账前核对：资料到做账交接
 
@@ -53,4 +56,4 @@ claude plugin install finance@taxes-agent
 
 ## 来源与许可
 
-基于 Anthropic 官方 finance 插件中国化改编，并适配 small-business 的单据处理与核对方法。来源和修改记录见 [SOURCES.md](SOURCES.md)，许可见 [LICENSE](LICENSE)。
+既有技能基于 Anthropic 官方 finance 插件中国化改编，并适配 small-business 的单据处理与核对方法；企业基线生成是本项目新增技能。来源和修改记录见 [SOURCES.md](SOURCES.md)，许可见 [LICENSE](LICENSE)。

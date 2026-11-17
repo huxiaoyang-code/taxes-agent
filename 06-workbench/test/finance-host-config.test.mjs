@@ -10,6 +10,7 @@ import {TOOLS} from '../../05-reconstruction/codex/mcp/finance-mcp/tools.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {parseArgs as parsePiArgs,buildLaunchSpec,MAIN_TOOLS,DEFAULT_TOOL_MODIFIERS} from '../../05-reconstruction/codex/hosts/pi/launcher.mjs';
 import {PERIOD_TASK_ROUTING} from '../../05-reconstruction/codex/hosts/shared/task-routing.mjs';
+import {BUSINESS_MEMORY_ROUTING} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import financeDirect from '../../05-reconstruction/codex/pi/finance-direct.ts';
 const root=mkdtempSync(join(tmpdir(),'finance-hosts-')),options={nodePath:process.execPath,apiBase:'http://127.0.0.1:8787',databasePath:join(root,'synthetic.db'),outputDir:join(root,'claude')};
 const c=createContext(options);assert.equal(c.repoRoot,repoRoot);assert.equal(Object.hasOwn(c,'pluginRoot'),false);assert.equal(c.skillsDir,join(repoRoot,'plugins/finance/skills'));assert.equal(Object.hasOwn(c.mcpEnv,'FINANCE_SKILLS_DIR'),false);assert.equal(c.mcp.env.FINANCE_MCP_PROFILE,'direct');
@@ -62,6 +63,9 @@ for(const host of ['pi','dsh','zcode']){
     const spec=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot]));assert.equal(spec.env.FINANCE_MCP_PROFILE,'direct');assert.equal(spec.env.FINANCE_DATABASE_PATH,context.databasePath);assert.equal(spec.cwd,context.outputDir);assert.ok(spec.args.includes('builtin:mcp'));assert.ok(spec.args.includes('builtin:tool-search'));assert.ok(spec.args.includes(native.extensionPath));assert.equal(spec.args[spec.args.indexOf('--model')+1],'deepseek-flash');assert.equal(spec.args[spec.args.indexOf('--skill')+1],context.skillsDir);assert.ok(!spec.args.includes('--print'));
     assert.equal(spec.args[spec.args.indexOf('--tools')+1],DEFAULT_TOOL_MODIFIERS.join(','));assert.ok(DEFAULT_TOOL_MODIFIERS.every(value=>value.startsWith('+')||value.startsWith('-')));
     assert.ok(spec.args[spec.args.indexOf('--append-system-prompt')+1].includes(PERIOD_TASK_ROUTING));
+    const baseline={version:'finance-business-baseline/1',status:'ready',shortText:'仅合成宿主投影，不是企业业务预期。',unresolved:[],methods:['PRIVATE-METHOD-CATALOG'],oldVersions:['PRIVATE-OLD-VERSION']};
+    const boundSpec=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot]),baseline),system=boundSpec.args[boundSpec.args.indexOf('--append-system-prompt')+1];
+    assert(system.includes(baseline.shortText));assert.equal(system.split(BUSINESS_MEMORY_ROUTING).length-1,1);assert(!system.includes('PRIVATE-'),'Pi不能序列化方法目录或旧基线');
     const task=join(root,'synthetic-task.txt');writeFileSync(task,'Synthetic no-model task');const subset=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot,'--task-file',task,'--tools','read,mcp__finance__finance_rules']));assert.equal(subset.args[subset.args.indexOf('--tools')+1],'read,mcp__finance__finance_rules');
     const check=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot,'--check']));assert.ok(check.args[0].endsWith('direct-pi-probe.mjs'));assert.equal(check.modelInvoked,false);assert.equal(existsSync(check.env.PI_CODING_AGENT_DIR),false);
   }
@@ -78,7 +82,7 @@ for(const profile of [undefined,'direct','harness','legacy']){
     assert.equal((await client.call('finance_rules',{})).isError,profile==='harness');
     const listed=await client.call('skills_list',{});assert.equal(listed.isError,false);assert.deepEqual(Object.keys(listed.data.labels).sort(),[...listed.data.files].sort());
     const resource=legacy?'harness/SKILL.md':'tax-period/SKILL.md';assert.ok(listed.data.files.includes(resource));assert.equal((await client.call('skills_read',{resource})).isError,false);
-    if(!legacy){const entry=listed.data.entries.find(e=>e.resource===resource);assert.equal(entry.name,'tax-period');assert.equal(entry.metadataState,'valid');assert.equal((await client.call('skills_read',{resource:'tax-period/references/planning-cash.md'})).isError,false);}
+    if(!legacy){const entry=listed.data.entries.find(e=>e.resource===resource);assert.equal(entry.name,'tax-period');assert.equal(entry.metadataState,'valid');assert.equal((await client.call('skills_read',{resource:'tax-period/references/planning-cash.md'})).isError,false);assert.equal(listed.data.entries.find(e=>e.name==='company-baseline').resource,'company-baseline/SKILL.md');assert.equal((await client.call('skills_read',{resource:'company-baseline/SKILL.md'})).isError,false);}
     assert.equal(listed.data.files.includes(legacy?'tax-review/SKILL.md':'harness/SKILL.md'),false);
     assert.ok((await client.rpc('resources/list')).result.resources.some(r=>r.uri==='skill://'+resource));
     if(!legacy)assert.equal(names.some(name=>name.startsWith('harness_')),false);

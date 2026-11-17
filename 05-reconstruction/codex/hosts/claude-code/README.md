@@ -5,7 +5,9 @@
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
 当前生成 .mcp.json、.claude/settings.json、CLAUDE.md；以 claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json 显式加载。只读工具建议自动允许，其余保留宿主审批；不安装额外角色。
 
-已有账套改用 [企业记忆绑定入口](../BUSINESS-MEMORY.md)：生成目录内先 `node start-business-session.mjs --account-set-id <实际ID> --period 2026-11 --prepare-only`，再 `node start-claude.mjs --claude-cli '<实际exe或JS入口绝对路径>'`。正常启动自动准备，`--check` 严格只读；恢复只接受本工作区已绑定的 `--resume <UUID>`。SessionStart 的 startup/resume/clear/compact 从同一只读服务注入摘要，UserPromptSubmit 守卫拒绝错误恢复目标。项目 settings 和启动进程环境同时关闭 auto memory，不改全局设置、不复制企业口径到 CLAUDE.md、不读原生 memory/transcript。
+交互使用前，按 Claude 原生流程信任已核工作区；非交互验收应预先配置隔离客户端的工作区信任与必要的精确工具授权。未信任时项目允许规则可能被忽略，`skills_read`／`skills_list` 的 `permission_denied` 表示宿主许可未就绪，不能当作材料缺失或基线完成。默认产品不自动信任、不改用户全局配置、不授予财务审批；沿用用户已明确授权的同一业务范围，不重复询问。CLI 的第三方模型提示本身不等于服务失败，须核实际官方服务来源及调用结果。
+
+已有账套改用 [企业记忆绑定入口](../BUSINESS-MEMORY.md)：生成目录内先 `node start-business-session.mjs --account-set-id <实际ID> --period 2026-11 --prepare-only`，再 `node start-claude.mjs --claude-cli '<实际exe或JS入口绝对路径>'`。正常启动准备目录，目录准备不生成业务原则。`--check` 与 hook 不改账库／索引／原件，允许标准审计文件记录安全来源观察。SessionStart 的 startup/resume/clear/compact 从同一 `finance_baseline_read` 服务注入短基线，无有效版或需修订时按 `company-baseline/SKILL.md` 调查生成。同条件沿用，明细及旧方法按需读，企业记忆与必要入口合计不超过1000个Unicode字符。恢复只接受本工作区已绑定的 `--resume <UUID>`，UserPromptSubmit 守卫拒绝错误目标。项目 settings 和启动进程同时关闭 auto memory，不改全局设置、不复制企业口径到 CLAUDE.md、不读原生 memory/transcript。
 
 生成配置和独立 Node hook 进程测试不等于真实 Claude 生命周期；真实 2.1.309 触发及模型业务轨迹须另记。直接执行原始 claude 命令不自动准备记忆，也缺少启动进程环境层的隔离保证。
 

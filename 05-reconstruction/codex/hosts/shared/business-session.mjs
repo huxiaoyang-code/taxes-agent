@@ -1,4 +1,4 @@
-// 宿主绑定与企业记忆装配。生成配置、显式准备、只读检查分开；不猜首个账套。
+// 宿主绑定与短业务基线装配。目录准备不等于生成基线；读取不猜账套、不改业务库/索引/原件，另记录安全观察。
 import {existsSync,lstatSync,realpathSync,readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {isAbsolute,resolve,dirname,join} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
@@ -6,7 +6,7 @@ import {resolveDirectFinanceTarget} from '../../../../06-workbench/server/direct
 
 export const SESSION_VERSION='finance-business-session/1';
 export const HOST_VERSION='finance-business-host/1';
-export const BUSINESS_MEMORY_ROUTING='企业历史口径按摘要→业务方法→相关案例/依据逐层读取。已绑定会话先读 finance_company_context({target:{accountSetId,period}})，按当前任务选 finance_method_read，再按需 finance_case_search；不把全部历史或原件塞入初始上下文。候选历史不是操作者决定，执行只引用实际保存的 methodRef；变更先建议并由本机操作者审阅。企业口径只存本机账库，不写入 CLAUDE.md、AGENTS.md 或宿主原生 MEMORY.md。';
+export const BUSINESS_MEMORY_ROUTING='企业处理先读 finance_baseline_read({target:{accountSetId,period}})。ready处理本期前，用 skills_read({resource:"company-baseline/references/materials-and-save.md"}) 读本机取数合同。同条件沿用，普通新凭证不换版。生成/修订先用 skills_read({resource:"company-baseline/SKILL.md"})，保存后回读。明细按需；口径只存账库，不写原生记忆。';
 const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'../../../..');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const samePath=(a,b)=>typeof a==='string'&&typeof b==='string'&&resolve(a).toLowerCase()===resolve(b).toLowerCase();
@@ -37,8 +37,8 @@ export function loadBoundBusinessSession(workspace){
  return {config,session,path,target,options:actualOptions(config)};
 }
 export async function readBoundBusinessContext(workspace){
- const bound=loadBoundBusinessSession(workspace),{readCompanyContext}=await import('../../../../06-workbench/server/business-memory.mjs');
- const context=await readCompanyContext({target:bound.target},bound.options);
+ const bound=loadBoundBusinessSession(workspace),{readBusinessBaseline}=await import('../../../../06-workbench/server/business-baseline.mjs');
+ const context=await readBusinessBaseline({target:bound.target},bound.options);
  return {...bound,context};
 }
 export async function prepareBoundBusinessSession(workspace,target){
@@ -59,7 +59,17 @@ export async function prepareBoundBusinessSession(workspace,target){
  return {...await readBoundBusinessContext(workspace),prepared};
 }
 export function renderBusinessContext(context){
- return '本机企业记忆摘要（只读固定投影；历史不等于政策正确或本期完成）：\n'+JSON.stringify(context)+'\n\n'+BUSINESS_MEMORY_ROUTING+'\n摘要来自当前只读快照；正常已授权MCP写入及已绑定计算由后台同步历史。缓存stale只表示索引差异，不等于方法失效；按具体方法生效期、本期对象匹配和来源状态处理。prepare仅用于初始化或主动维护，无需Agent维护技术刷新状态。\n判断口径连续性，先比较留存方法、实际脚本/执行版本与取数定义，再区分各期输入版本变化。历史凭证和科目路径只证明入账金额/科目；algorithm_unknown不能推出全额确认或方法不同。缺旧期对应版本原件/计算证据时，不用已变更的本期原件回算旧期作差异结论，缺口标未核。已证实同版本可说明沿用；证据不足既不推断不同也不硬称相同。交付解释须与实际方法版本及证据状态一致。';
+ const states={needs_generation:'待生成',ready:'可按适用条件沿用',needs_review:'待核相关原则',stale:'来源失效，待核相关原则',outside_effective_period:'超出有效期，待核适用范围'};
+ if(context?.version!=='finance-business-baseline/1'||!Object.hasOwn(states,context.status)||typeof context.shortText!=='string'||Array.from(context.shortText).length>600||!Array.isArray(context.unresolved)||context.unresolved.length>3)fail('host_business_baseline_projection_invalid');
+ const gaps={materials_missing:'资料待补',owner_unverified:'材料主体待核',historical_conflict:'历史口径冲突',policy_unverified:'政策适用待核',tax_history_missing:'历史税费资料待补',tax_basis_incomplete:'税负口径待核',source_changed:'来源已修改',source_missing:'来源缺失',source_unavailable:'来源当前不可访问',outside_effective_period:'有效期待核',scope_conflict:'适用范围冲突',unsupported_material:'材料格式或语义待核',historical_evidence_missing:'历史依据待补'};
+ const kinds={accounting_standard:'准则',enterprise_class:'企业分类',business_classification:'业务归类',inventory_cost:'存货计价',revenue_period:'收入',expense_period:'费用',vat_output_period:'销项',vat_input_period:'进项',income_tax_period:'所得税期间',cost_treatment:'费用与资产',tax_choice:'税务选择'};
+ const label=(map,key)=>Object.hasOwn(map,key)?map[key]:undefined;
+ const pending=context.unresolved.map(item=>(label(gaps,item?.code)??'事项待核')+(label(kinds,item?.kind)?'（'+label(kinds,item.kind)+'）':'')).join('；')||'无';
+ // 只装配后端固定短正文；不序列化方法目录、证据明细、自由说明或历史版本。
+ const text='企业短业务基线（只读）：'+states[context.status]+'\n'+(context.shortText||'尚无可用短原则；先按company-baseline/SKILL.md核资料，不把未知清单当完成。')+'\n重要待核：'+pending+'。基线不证明本期完成。';
+ // 静态加载规则与动态正文合计限长；Claude项目规则、Pi/dsh提示均只装配一次该规则。
+ if(Array.from(text+'\n\n'+BUSINESS_MEMORY_ROUTING).length>1000)fail('host_business_baseline_context_too_large');
+ return text;
 }
 export function businessSessionFiles(context){
  const runtime=pathToFileURL(join(context.repoRoot,'05-reconstruction/codex/hosts/shared/business-session.mjs')).href;
@@ -87,11 +97,11 @@ export function parseBusinessArgs(args){
 }
 export async function runBusinessSession(workspaceUrl,args){
  const options=parseBusinessArgs(args),workspace=fileURLToPath(workspaceUrl);
- if(options['--help']){console.log('node start-business-session.mjs [--account-set-id <实际账套ID> --period YYYY-MM] [--prepare-only | --check | -- <宿主启动参数>]\n--prepare-only 显式绑定并更新索引，不启动模型；--check 仅只读检查已有绑定；正常启动自动prepare。一个工作区固定一家账套及本期，换企业/期间生成新工作区。');return;}
+ if(options['--help']){console.log('node start-business-session.mjs [--account-set-id <实际账套ID> --period YYYY-MM] [--prepare-only | --check | -- <宿主启动参数>]\n--prepare-only 显式绑定并更新历史目录，不生成业务基线、不启动模型；--check 仅只读检查已有绑定和短基线；正常启动自动准备目录，再由Agent按company-baseline技能生成所缺基线。一个工作区固定一家账套及本期，换企业/期间生成新工作区。');return;}
  if(options['--check']){
   const bound=await readBoundBusinessContext(workspace);
   if(options.target&&(options.target.accountSetId!==bound.target.accountSetId||options.target.period!==bound.target.period))fail('host_business_binding_mismatch');
-  console.log(JSON.stringify({status:'checked',scope:bound.session.scope,context:bound.context,modelInvoked:false,readOnly:true},null,2));return;
+  console.log(JSON.stringify({status:'checked',scope:bound.session.scope,baselineStatus:bound.context.status,context:bound.context,modelInvoked:false,readOnly:true},null,2));return;
  }
  const hostName=loadBusinessHost(workspace).host;
  if(!options['--prepare-only']&&hostName==='claude-code'){
@@ -100,7 +110,7 @@ export async function runBusinessSession(workspaceUrl,args){
   if(nativeOptions['--resume'])buildClaudeLaunchSpec(workspace,nativeOptions);
  }
  const bound=await prepareBoundBusinessSession(workspace,options.target);
- if(options['--prepare-only']){console.log(JSON.stringify({status:'prepared',scope:bound.session.scope,prepared:bound.prepared,context:bound.context,modelInvoked:false,readOnly:false},null,2));return;}
+ if(options['--prepare-only']){console.log(JSON.stringify({status:'prepared',scope:bound.session.scope,baselineStatus:bound.context.status,prepared:bound.prepared,context:bound.context,modelInvoked:false,readOnly:false},null,2));return;}
  const host=bound.config.host;
  if(host==='pi'){const {runPi}=await import('../pi/launcher.mjs');await runPi(pathToFileURL(join(workspace,'pi-host.json')),options.hostArgs,bound);}
  else if(host==='dsh'){const {runDsh}=await import('../dsh/launcher.mjs');await runDsh(bound.config.nodePath,workspaceUrl,options.hostArgs,bound);}

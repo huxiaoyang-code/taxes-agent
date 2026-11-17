@@ -173,6 +173,8 @@ const steps = [
   { name: 'quarter-review', file: join(WORKBENCH, 'test', 'quarter-review.test.mjs'), cwd: WORKBENCH },
   // 企业历史口径/方法记忆：持久组件、真实MCP执行、宿主绑定与独立合成E2E。
   ...['business-memory-storage','business-memory-domain','business-memory-hosts','business-memory-e2e'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH})),
+  // 短业务基线：受限来源/税负合同与独立冷启动程序链；真实模型阳性另用验收脚本。
+  ...['business-baseline','business-baseline-adapters','business-baseline-feedback','business-baseline-e2e'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH})),
   {name:'host-claude-argv',file:join(WORKBENCH,'test','host-claude-argv.test.mjs'),cwd:WORKBENCH},
 ];
 const results = [];

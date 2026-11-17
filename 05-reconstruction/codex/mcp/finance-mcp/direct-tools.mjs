@@ -4,9 +4,15 @@ import { CALCULATION_SCHEMA } from '../../../../06-workbench/server/finance-calc
 import { PREBOOK_TOOL_SCHEMA } from '../../../../06-workbench/server/finance-prebook-contracts.mjs';
 import { FINANCE_PERIOD_REVIEW_SCHEMA } from '../../../../06-workbench/server/finance-period-review-contracts.mjs';
 import { BUSINESS_MEMORY_SCHEMAS } from '../../../../06-workbench/server/business-memory-contracts.mjs';
+import { BUSINESS_BASELINE_SCHEMAS } from '../../../../06-workbench/server/business-baseline-contracts.mjs';
 const str={type:'string',minLength:1};
 const spec=(name,description,properties={},required=[],extra={})=>({name,description,status:'available',origin:'local',inputSchema:{type:'object',additionalProperties:false,properties,required,...extra},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false,idempotentHint:true}});
 export const DIRECT_TOOLS=[
+ ...[
+  ['finance_baseline_read','只读加载实际企业账套、本期适用的短业务基线；baselineRef/revision/shortText是当前期视图，headRevision是包含未来版本的全局并发头，保存时用作expectedRevision。固定shortText（最多8条、600个Unicode字符）、版本状态、最多3项待核及coverage。unselectedPrincipleBranches按具体kind/value/when/分摊条件提示已支持未选分支，basis/complete标明依据范围；不是自动必选清单。无基线明确needs_generation，来源失效不冒充ready；不写账、不批准凭证。'],
+  ['finance_baseline_materials','通常target配extractKnownFields:true，从获准目录有界提取当前主体已核字段；每批至多12文件，sourceDiscovery.next继续批次、pagination.next展开本批。生成原则看overview实际supportRef；计算阶段用section:calculation读取calculationSchema，按实际objectRef/枚举/逐对象字段类型识别对象，period是YYYY-MM、date是YYYY-MM-DD，未列字段不可当0或默认月份。结构与本机reader默认objects一致，不含原值/算法。明确非overview且无引用时自动同scope读取；显式extractKnownFields:false则material_reference_required并给可执行next。仅target旧inventory/显式originals/原明细接口兼容，逐值核主体/SHA，原值留本机。'],
+ ].map(([name,description])=>({...spec(name,description),inputSchema:BUSINESS_BASELINE_SCHEMAS[name]})),
+ {...spec('finance_baseline_save','Agent从显式合并材料的overview自主选principles:[{supportRef}]保存；兼容typed原则及evidenceRefs。expectedRevision取最新headRevision；成功与幂等均以savedVersion确认实际写入/命中版本及适用期，applicableToTarget说明本期是否适用；baselineRef/revision/shortText仍是当前期视图，未来版不因当前ref未变而重存或跨期读取。materialRefs必须真实完成、同实际范围/会话且当前SHA一致，短supportRef只认该闭包实际返回的候选，仍沿原历史/范围/有效期核验。最多8条/600字符，税负只来自所传材料，遗漏独立显示coverage并保持needs_review，不暗收之前所有调用。不接受自由正文、verified或人审身份，不放宽凭证审批；同原则证据幂等，只读拒绝。'),inputSchema:BUSINESS_BASELINE_SCHEMAS.finance_baseline_save,annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false,idempotentHint:true}},
  ...[
   ['finance_company_context','只读加载现库绑定企业、本期的企业方法摘要和可用不可变版本；首次由启动器建立历史索引。可传本期sources，在本机按结构化条件匹配多合同对象，返回稳定objectRef及matched/not_matched/unresolved；缺少对象依据不得猜选。原企业名、原科目码、原文和脚本仅留本机。按摘要→finance_method_read→finance_case_search渐进读取，读路径不暗写。'],
   ['finance_method_read','只读指定methodRef方法版本，披露实际取数日期语义、净价/含税选择、去重键、分摊方式、科目角色、执行版本、历史依据和缺口；原值仅在本机审阅。p0等inputRef可在finance_method_run.parameters中传入本期资料；历史观察与模型候选不自动等于操作者选择。'],

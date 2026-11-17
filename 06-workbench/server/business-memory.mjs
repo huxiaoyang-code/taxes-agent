@@ -56,7 +56,9 @@ export function assertBusinessSessionToolTarget(name,args,options={}){
  const scopes=[args?.target,args?.scope,args].filter(value=>value&&typeof value==='object');
  for(const scope of scopes){
   const historicalRead=options.allowHistoricalPeriod===true&&period(scope.period)&&scope.period<expected.period;
-  if(scope.accountSetId!==undefined&&scope.accountSetId!==expected.accountSetId||scope.enterpriseKey!==undefined&&scope.enterpriseKey!==expected.enterpriseKey||scope.databaseInstanceId!==undefined&&scope.databaseInstanceId!==expected.databaseInstanceId||scope.period!==undefined&&scope.period!==expected.period&&!historicalRead)fail('finance_memory_session_conflict');
+  // 旧工具允许十进制字符串ID；只规范化比较值，不改调用参数或会话绑定。
+  const accountSetId=typeof scope.accountSetId==='string'&&/^\d+$/.test(scope.accountSetId)?Number(scope.accountSetId):scope.accountSetId;
+  if(scope.accountSetId!==undefined&&(!Number.isSafeInteger(accountSetId)||accountSetId<=0||accountSetId!==expected.accountSetId)||scope.enterpriseKey!==undefined&&scope.enterpriseKey!==expected.enterpriseKey||scope.databaseInstanceId!==undefined&&scope.databaseInstanceId!==expected.databaseInstanceId||scope.period!==undefined&&scope.period!==expected.period&&!historicalRead)fail('finance_memory_session_conflict');
  }
  if(['voucher_post','voucher_unpost','voucher_delete'].includes(name)&&args.voucherId!==undefined){
   const connection=new DatabaseSync(options.dbPath??process.env.FINANCE_DATABASE_PATH??session.databasePath,{readOnly:true});
@@ -162,7 +164,7 @@ async function currentObservation(args,opts,connection,binding,storage){
  const observation=await observed(args,opts);
  // 所有不可变版本都参与生效期覆盖判断；读取分页不改变选择语义。
  const methods=[];let page;do{page=storage.listBusinessMemoryMethods(connection,binding.scope,{limit:100,offset:methods.length});methods.push(...page.items);}while(methods.length<page.total);
- observation.storedMethods=methods;observation.cachedEvidenceCases=new Map();
+ observation.storedMethods=methods.filter(m=>m.topic!=='business_baseline');observation.cachedEvidenceCases=new Map();
  for(const method of methods)for(const e of list(method.evidenceRefs))if(e.caseRef&&!observation.cachedEvidenceCases.has(e.caseRef))observation.cachedEvidenceCases.set(e.caseRef,storage.getBusinessMemoryCase(connection,binding.scope,e.caseRef));
  return observation;
 }
@@ -190,7 +192,7 @@ export async function readCompanyContext(args,options={}){
 export async function readBusinessMethod(args,options={}){
  validate('finance_method_read',args);
  return withMemory(args,options,false,async(connection,binding,storage,opts)=>{
-  const method=storage.getBusinessMemoryMethod(connection,binding.scope,args.methodRef);if(!method)fail('finance_memory_method_missing');
+  const method=storage.getBusinessMemoryMethod(connection,binding.scope,args.methodRef);if(!method||method.topic==='business_baseline')fail('finance_memory_method_missing');
   if(args.objectRef&&args.objectRef!==businessObjectRef(binding.scope,method.objectKey))fail('finance_memory_object_conflict');
   const observation=await currentObservation(args,opts,connection,binding,storage),state=methodState(method,observation,opts,args.target.period);
   const recordedRun=method.definition?.calculationOrigin?.runId??(method.topic==='calculation'?method.objectKey:null);
@@ -349,7 +351,7 @@ export async function runBusinessMethod(args,options={}){
  if(!currentFinanceCall())return withFinanceCall({tool:'finance_method_run',args,auditDir:configured(options).auditDir},()=>runBusinessMethod(args,options));
  validate('finance_method_run',args);
  return withMemory(args,options,true,async(connection,binding,storage,opts)=>{
-  const method=storage.getBusinessMemoryMethod(connection,binding.scope,args.methodRef);if(!method)fail('finance_memory_method_missing');
+  const method=storage.getBusinessMemoryMethod(connection,binding.scope,args.methodRef);if(!method||method.topic==='business_baseline')fail('finance_memory_method_missing');
   if(args.objectRef&&args.objectRef!==businessObjectRef(binding.scope,method.objectKey))fail('finance_memory_object_conflict');
   const observation=await currentObservation(args,opts,connection,binding,storage),state=methodState(method,observation,opts,args.target.period);
   if(!state.executable)fail(state.status==='stale'?'finance_memory_method_stale':state.status==='candidate'?'finance_memory_local_selection_required':state.constantValueMissing?'finance_memory_constant_value_missing':state.nativeObjectBinding==='not_supported'?'finance_memory_native_object_binding_unsupported':state.applicability.matchStatus==='not_matched'?'finance_memory_object_mismatch':state.applicability.matchStatus==='unresolved'?'finance_memory_applicability_unresolved':'finance_memory_method_not_executable');
@@ -393,7 +395,7 @@ export async function runBusinessMethod(args,options={}){
 export async function readBusinessMethodLocally(args,options={}){
  validate('finance_method_read',args);
  return withMemory(args,options,false,async(connection,binding,storage,opts)=>{
-  const method=storage.getBusinessMemoryMethod(connection,binding.scope,args.methodRef);if(!method)fail('finance_memory_method_missing');
+  const method=storage.getBusinessMemoryMethod(connection,binding.scope,args.methodRef);if(!method||method.topic==='business_baseline')fail('finance_memory_method_missing');
   const observation=await currentObservation(args,opts,connection,binding,storage),topicVersions=observation.storedMethods.filter(m=>m.topic===method.topic&&m.objectKey===method.objectKey),topicRevision=Math.max(...topicVersions.map(m=>m.revision));return {scope:binding.scope,method,state:methodState(method,observation,opts,args.target.period),reviewDigest:sha(method),topicRevision,selections:topicVersions.filter(m=>m.authority==='operator_decision')};
  });
 }

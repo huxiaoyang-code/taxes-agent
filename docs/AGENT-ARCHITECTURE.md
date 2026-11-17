@@ -1,6 +1,6 @@
 # 中国财税 Agent：直接业务调用与自动记录
 
-业务 Skill 采用 Anthropic 官方插件的任务说明、输入资料、处理步骤、检查清单与输出格式。中国税会算法、账库与调用记录属于本项目后端实现；上游方法不是中国税法依据或准确率背书。
+既有业务 Skill 采用 Anthropic 官方插件的任务说明、输入资料、处理步骤、检查清单与输出格式；企业基线生成是本项目新增入口。中国税会算法、账库与调用记录属于本项目后端实现；上游方法不是中国税法依据或准确率背书。
 
 ## 正常调用链
 
@@ -74,11 +74,27 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 
-## 企业历史口径与方法记忆
+## 企业短业务基线与按需方法记忆
 
-已有账套的正常启动链为配置生成→`start-business-session.mjs` 绑定实际账库/企业/账套/本期/来源/记录目录→`prepareBusinessMemory` 初始化→`readCompanyContext` 只读摘要→按本次业务读 `readBusinessMethod`→按需 `searchBusinessCases`。生成器不选第一家账套、不建库、不预填企业方案；`--prepare-only` 会写索引及绑定，`--check` 只读已有绑定。每个宿主工作区固定一家企业的账套与本期，换企业或跨期新建工作区；同一实际账套的方法/案例能跨工作区及不同获准来源/记录根延续，实际 DB 身份变化会拒绝旧会话绑定。
+已有账套的正常启动链为配置生成→`start-business-session.mjs` 绑定实际账库／企业／账套／本期／来源及记录目录→准备历史目录→`readBusinessBaseline` 读短原则。无有效版或需修订时，Agent 读取 [company-baseline](../plugins/finance/skills/company-baseline/SKILL.md)，通过 `readBaselineMaterials` 实读账套配置、代表性历史、合同／已有底稿／历史申报导出，调查后用 `saveBusinessBaseline` 保存并再次读取，再处理本期。材料读取不依赖旧方法或脚本，不要求用户先写企业方案或内部 JSON。生成器只生成；`--prepare-only` 的 `prepared` 只是技术目录，输出另列真实 `baselineStatus`，不能宣称业务原则 `ready`。`--check` 不改账库／索引／原件、不迁移刷新；direct／宿主基线读取仍经 `withFinanceCall` 自动记录安全来源观察，允许标准审计文件写入。
 
-`business-memory-storage.mjs` 将企业主题、不可覆盖的方法版本和可重建案例索引保存在实际 SQLite，纳入组件迁移、只读检查及备份恢复；`business-memory-bootstrap.mjs` 从现库配置、历史凭证/分录、期间、资产、导入来源及已有计算记录建立目录，不复制账务数据库或重算所有财务数字。已过账/封账、草稿、失败、执行未审及非历史期分开；金额不能证明完整算法。`ledger_fact`、`observed_history`、`operator_decision` 与候选分开，方法保留适用范围、取数、日期/金额、去重、转换、科目、执行版本、依据及缺口。账面事实与来源当前性分别披露；已知 changed/missing 阻断依赖方法，当前授权根不可访问的 unavailable 不当作已变，也不能冒称已重新核验。换目录或重新准备不能洗掉已知来源失效。
+`business-baseline.mjs` 与 `business-baseline-contracts.mjs` 提供上述服务及受限业务语义合同，direct MCP 为 `finance_baseline_read`、`finance_baseline_materials`、`finance_baseline_save`。短正文包含特定企业及有效范围信息，最多8条原则／600个Unicode字符，重要未决最多3项；原件、版本、适用范围和缺口留在本机记录与账库，模型不能靠自由原文、自称核实或人审扩大投影。原则包括资料支持的准则、主营／其他收入及费用用途归类、成本计价、税会所属期、当期／分期／资本化边界、关键税务选择及少量可比税负；行业标签不能代替具体业务归类。税负分税种、应纳／实缴、所属期／缴款期、本期／累计且税额阶段须与源字段相符；增值税按合计同口径税额除以合计可比销售额加权，所得税累计单列，未知不补零。历史区间不用于倒挤本期业务。
+
+`business-baseline-materials.mjs` 从现库及 JSON／CSV／受控 XLSX 读取。正常入口 `{target,extractKnownFields:true}` 不传 originals／materialRefs，有界发现当前范围已核主体且有已知语义的原件，每批最多12份；`sourceDiscovery.next.arguments` 的真实 `sourceCursor` 继承前批材料及已返回候选，旁路计数与所选来源的 `coverage.sourceOwners` 分开。无抽取标志时仍可读 `sourceInventory` 并显式选原件／字段。`business-baseline-projection.mjs` 负责紧凑 overview、短 `supportRef`、独立 `coverage` 及真实续页，同时把MCP文本／structured双份封装约束在12KB UTF8内；结构／facts／tax／coverage按需通过同一 MCP 读取，不依赖宿主原生文件读取。原主体／业务号／金额／日期不回显；实际分组依原件上下文／同行及跨源同业务引用，caller group 不能拼证。历史算法须有真实关联，不凭金额／科目相同认定；VAT 模板仍只覆盖有依据的预收并提前开票同类租赁。完整快照留本机，不新增明细台账。
+
+游标路径已继承前批闭包；另行独立读取的相关 `materialRefs` 须显式合并，后端核同 scope、当前SHA及原读取记录，形成新单个材料引用和统一支持／税费／覆盖。保存可用自主选定的 `principles:[{supportRef}]`，只在该闭包中还原真实已返回候选的完整证据，不自动全选、不接受人审自证。机器事实不因明细页未展开而从保存中丢失。普通分页和发现批次均沿当前返回的真实 next，实际页长可能收缩，不能手算 offset。`coverage` 区分未选字段、未完分页、歧义／不支持、税费未包含等情况，不受最多3项未决截断。`unselectedPrincipleBranches` 按语义条件反馈未选分支及比较依据／完整性，兼容的种类摘要不能证明分支齐全；限定同条件的受益期分摊同义去重，未选仅提示，不强制全选或统一待核。旧版只读可核的保留依据子集，不暗写迁移。目录旁路不成为已选来源缺口，保存回读须核重要业务分支与税负。
+
+历史支持核实际关联分录，不用整张凭证合计替代；`allocationBasis:monthly_equal` 只在真实支持依据成立时返回／保存，不从一般期间政策预设月等额。仅累计VAT而无法形成受支持的可比区间时保留税负缺口，不静默 `ready`。
+
+已有有效基线的本期计算直接读 `materials({target,section:"calculation"})`，不重走生成。按需 `calculationSchema` 与 `resolveBaselineCalculationFacts` 默认对象分组／字段集一致，只返回不透明对象引用、受限枚举／布尔及真实字段类型／格式；`date` 与 `period` 分别为日日期和月期间，金额／数量／单价／日期原值不回显。明确非 overview 且无引用时从授权范围实读已知字段；显式关闭抽取则给 `material_reference_required` 和恢复 next，不再用 inventory 冒充目标结构。旧 `{target}` inventory 保留。
+
+材料返回的 `calculationReader` 指向本机取数桥。`finance_calculation_run` 父进程在本机 `input.json` 装配实际 `financeContext`；JavaScript 用真实材料引用、范围及预期 reader SHA 取规范事实，不接受 caller 上下文或宿主原生读文件／凭据环境。桥核实际记录、主体／实例／期间及当前来源，仅在子脚本本机返回原值。脚本按真实任务对象、字段类型／期间粒度和短原则计算，无匹配对象／必要输入停相关分支，不以历史金额、默认月数或0兜底；有对象但本期条件未成可有据暂不确认，计划日不冒充实际事件，可选字段空不全局待核。reader 与来源摘要保留在派生底稿，原值及本机上下文不经 MCP、stdout 或产物回读送给模型；模型仅获执行及产物入口。计算器仍不是操作系统沙箱，正式写账控制独立。
+
+同条件沿用，普通新凭证不追加基线；长期原则变化才保存新版本，旧版留档不重复注入。来源修订、已缺失、当前不可访问、超有效期、实际冲突与政策变化分别处理，只核受影响规则，不通过换根／prepare洗掉失效。每个宿主工作区固定一家企业账套和本期，换企业或期间新建工作区；实际 DB 身份变化拒绝旧绑定。余额、当前合同进度、明细和具体算法／脚本仍从原账／原工具按需读，不另建台账、事实登记或任务 DAG。
+
+短基线回执的 `baselineRef/revision/shortText` 保持目标期间的当前视图；`headRevision` 是同账套基线主题包含未来版本的并发头，保存的 `expectedRevision` 取此值。保存成功与幂等均返回 `savedVersion`，列明实际写入或命中的 `baselineRef/revision/effectiveFrom`、可选 `effectiveTo` 及 `applicableToTarget`；未来版不提前替换当前视图，进入对应月份的新绑定会话后再正常召回。这些版本元数据不进入常驻短文，不改变候选性质或凭证审批权限。
+
+旧方法／案例能力继续按需可用。`business-memory-storage.mjs` 将企业主题、不可覆盖的方法版本和可重建案例索引保存在实际 SQLite，纳入组件迁移、只读检查及备份恢复；`business-memory-bootstrap.mjs` 从现库配置、历史凭证/分录、期间、资产、导入来源及已有计算记录建立目录，不复制账务数据库或重算所有财务数字。已过账/封账、草稿、失败、执行未审及非历史期分开；金额不能证明完整算法。`ledger_fact`、`observed_history`、`operator_decision` 与候选分开，方法保留适用范围、取数、日期/金额、去重、转换、科目、执行版本、依据及缺口。账面事实与来源当前性分别披露；已知 changed/missing 阻断依赖方法，当前授权根不可访问的 unavailable 不当作已变，也不能冒称已重新核验。换目录或重新准备不能洗掉已知来源失效。
 
 正常 MCP 原生写入成功后后台同步企业目录；已绑定会话的 `finance_calculation_run` 自动核实实际scope，待完整调用记录落盘再同步，方法脚本执行同样留下可接续案例。未绑定计算保持未知；同步失败不把已执行结果改成可重复执行。读取通过 `live_readonly` 当前快照判断具体方法/对象/来源，不在读取时迁移、暗写索引或重算财务结果。缓存 stale 与业务方法失效分开；显式prepare用于初始化或主动维护，不要求Agent登记事实、维护技术状态或任务DAG。
 
@@ -88,9 +104,13 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 模型只能保存候选；本机 `review-business-method.mjs` 的真实交互审阅展示受影响版本，新增选择并保留理由、生效/终止期、replacementPolicy/replaces。同一主题/对象在目标期间只采用最新revision，回溯或有限区间之外仍按旧选择范围判断。执行只用保存的methodRef、本期参数和来源；current_parameters不能以旧default补本期金额/日期/数量，constant必须采用保存值、caller异值拒绝，缺保存值保持不可执行。支持的VAT/季度等原生安全业务结果及产物索引继续可读；凭证人审、期间、防重复、来源及实际账库控制不放宽。readonly进程拒绝全部记忆写路径；版本不可独立改删，整账删除仅沿原生控制级联所属记忆。
 
-四宿主共用 `hosts/shared/business-session.mjs` 的读取协议。Claude 的 SessionStart startup/resume/clear/compact 通过 exec-form command hook 读同一摘要并输出 additionalContext；仅另存最小宿主session身份以核resume，不读取transcript或原生memory，不保存财务方法副本。UserPromptSubmit 在模型请求前拒绝未知或错账套恢复。工作区设置 `autoMemoryEnabled:false`，启动进程同时设置 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`，不改用户全局配置；CLAUDE.md只存加载规则。Pi 启动系统提示与 dsh 明确任务前缀装配摘要；ZCode 按 AGENTS.md 规则首读工具，没有声称原生生命周期自动注入。后台业务同步四宿主共用；其他宿主会话内按业务需要重新读当前方法/案例，不假设宿主自动注入。
+四宿主共用 `hosts/shared/business-session.mjs` 的短基线读取协议，`renderBusinessContext` 只装配白名单状态和 `shortText`；动态企业内容与必要加载规则合计不超过1000个Unicode字符，不序列化旧方法目录或历史版本。Claude 的 SessionStart startup/resume/clear/compact 通过 exec-form command hook 读同一短服务并输出 additionalContext；会话侧仅另存最小session身份以核resume，企业读取另按标准调用机制记录安全观察，不读取transcript或原生memory，不保存财务方法副本。UserPromptSubmit 在模型请求前拒绝未知或错账套恢复。工作区设置 `autoMemoryEnabled:false`，启动进程同时设置 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`，不改用户全局配置；CLAUDE.md只存加载规则。Pi 启动系统提示与 dsh 明确任务前缀装配短基线；ZCode 按 AGENTS.md 规则首读 `finance_baseline_read`，没有声称原生生命周期自动注入。后台业务同步四宿主共用，会话内按需重读短基线或相关历史，不假设其他宿主自动注入。
 
-业务 Skill 的[企业记忆参考](../plugins/finance/skills/shared/references/business-memory.md)和[宿主操作/逐点验收说明](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)列明摘要→方法→案例/依据及R01–R14命令入口。[阳性现场脚本](../06-workbench/scripts/business-memory-acceptance.mjs) prepare生成两企业历史与本期新资料，check核源码哈希和现场且只读；它不执行本期模型业务，合成TTY不代表真人批准。真实 SQLite/MCP、独立 Node hook进程、实际Claude事件和模型业务分别验收；配置或模拟不能代替生命周期和整账结果，记忆不证明政策正确、会计批准或申报完成。
+业务 Skill 的[企业记忆参考](../plugins/finance/skills/shared/references/business-memory.md)和[宿主操作／冷启动验收说明](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)区分生成短原则、同条件沿用和按需方法／案例。冷启动模型只得到合成账库、原资料和自然业务目标，不预喂预期答案、已选方法／脚本或测试源码；需实际调查、保存、回读，重启或compact后处理新一期同类业务。旧 [business-memory-acceptance.mjs](../06-workbench/scripts/business-memory-acceptance.mjs) 预置方法及模拟选择，仅保留旧方法接续验收，不能替代无预设基线生成。真实 SQLite/MCP、独立 Node hook进程、实际Claude事件和模型业务分别验收；配置或模拟不能代替原则质量、生命周期和本期结果，基线不证明政策正确、人审或申报完成。
+
+纵向跨月验收由三个入口分工：[business-baseline-longitudinal-fixture.mjs](../06-workbench/test/helpers/business-baseline-longitudinal-fixture.mjs) 生成同一合成账套的历史、分期原件、独立预期与标记人工回复，未发布资料和预期不交给模型；[business-baseline-longitudinal-acceptance.mjs](../06-workbench/scripts/business-baseline-longitudinal-acceptance.mjs) 以 `prepare/check/publish-*` 管理冻结、月份工作区及资料发布，不启动模型或代选原则。流程覆盖7、8月历史提炼、9月新会话召回与应用、沟通确认新增或变化口径并按生效期保存、10月新会话连续使用。沟通可由操作者或 Agent 发起，核对真实交流与资料关联，不要求 Agent 自主发现。
+
+[business-baseline-longitudinal-assessment.mjs](../06-workbench/scripts/business-baseline-longitudinal-assessment.mjs) 的 `template/inspect/assess` 用于事后只读核查运行轨迹、产物与版本，另写验收者报告。按冻结分母分别评价知识召回与正确应用，并核误用、历史重学、数值及版本连续性；召回不等于应用。准备完成、hook 注入或进程成功不能代替业务结论，具体结果以当次真实证据和独立语义审查为准。
 
 ## 整期任务入口与接续
 
@@ -104,7 +124,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 历史兼容与验证
 
-十一个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
 
 旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 
@@ -140,7 +160,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 结果身份为`derived_calculation`、业务状态为`unreviewed`，可独立交付，不是`finance_quarter_review`快照。中文业务账表、规则、参数和缺件影响由脚本或宿主表格产出；自动HTML只叫计算记录与文件索引，不能充当完成的业务报告。原生季度报告及其专用导出保留为可选路径。
 
-脚本使用明确程序和参数，禁用shell字符串，精简子进程环境，不传模型凭据或账库路径。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../05-reconstruction/codex/skills/harness/references/calculation.md)。
+脚本使用明确程序和参数，禁用shell字符串；子进程环境不继承模型凭据或 `FINANCE_*`。已配置实际账库时，父进程把可信 `dbPath/sourceRoot/auditDir/sessionPath` 写入本机 `input.financeContext` 供只读取数，caller parameters 不能覆盖，该上下文不经 MCP 回传。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../05-reconstruction/codex/skills/harness/references/calculation.md)。
 
 ## 固定账务卡片交付层
 

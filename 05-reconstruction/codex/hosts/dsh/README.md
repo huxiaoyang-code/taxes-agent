@@ -5,7 +5,7 @@
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
 当前finance.cordis.patch.yml绑定direct MCP和选定技能目录；Session-log额外上传及OTel关闭，模型overlay由操作者按本人服务配置。以 --patch 显式加载，不修改全局配置或安装额外角色。
 
-已有账套先通过 [企业记忆绑定入口](../BUSINESS-MEMORY.md) 明确实际ID/本期。`node start-business-session.mjs -- --dsh-cli '<实际JS入口>' --task '<明确任务>'` 自动准备，并把同一只读企业摘要及渐进读取规则放到任务前。已绑定工作区的 start-dsh 也会准备。dsh 尚无本项目已验证的生命周期 hook，后续任务新启动或显式读记忆工具；配置/合成CLI测试不冒充真实dsh模型已经读取。
+已有账套先通过 [企业记忆绑定入口](../BUSINESS-MEMORY.md) 明确实际ID/本期。`node start-business-session.mjs -- --dsh-cli '<实际JS入口>' --task '<明确任务>'` 准备目录，并把同一只读短基线与必要生成入口放到任务前；无有效版或需修订才按 `company-baseline/SKILL.md` 调查生成。目录准备不等于生成完成，同条件沿用，新凭证不追加；明细与旧方法按需读。已绑定工作区的 start-dsh 也会准备。dsh 尚无本项目已验证的生命周期 hook，后续任务新启动或显式读 `finance_baseline_read`；配置／合成CLI测试不冒充真实dsh模型已经读取。
 
 整期目标先读 `tax-period/SKILL.md`。生成的 `start-dsh.mjs` 将共享短路由置于明确任务文本前，再调用已有 CLI 的 `--profile headless --patch <finance> --patch <model> <任务>`，不假定存在 prompt 配置字段。先按下方模型设置准备本人 `model.cordis.patch.yml`，在生成目录运行 `node ./start-dsh.mjs --dsh-cli '<dsh包JS bin绝对路径>' --task '完成本期账税'`；可加 `--model-patch <已有覆盖层绝对路径>`。单项任务仍带同一边界说明。AGENTS.md 同时保留供显式阅读；直接执行原始 dsh 命令会绕过包装。程序测试仅证明包装转交的参数、技能目录及真实 MCP 读取，不声称本次运行了真实 dsh 模型。
 

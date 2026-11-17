@@ -183,7 +183,7 @@ function appendVersion(db,scope,input) {
  db.prepare('INSERT INTO business_memory_versions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(methodRef,scope.accountSetId,scope.enterpriseKey,scope.databaseInstanceId,topic,objectKey,revision,effectiveFrom,effectiveTo ?? null,authority,encoded,sha(encoded),createdAt);
  return content;
 }
-export const appendBusinessMemoryMethodVersion = (db,scope,input) => transaction(db,scope,() => appendVersion(db,scope,input));
+export const appendBusinessMemoryMethodVersion = (db,scope,input,{verify}={}) => transaction(db,scope,() => appendVersion(db,scope,input),verify);
 export function replaceBusinessMemoryIndex(db,scope,{fingerprint,cases,methods=[],summary,sourceState},{verify}={}) {
  fail(!digest(fingerprint) || !Array.isArray(cases),'finance_memory_index_invalid');
  return transaction(db,scope,() => {
