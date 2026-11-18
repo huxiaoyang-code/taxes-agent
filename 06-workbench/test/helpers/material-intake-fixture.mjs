@@ -1,14 +1,17 @@
 // 混合原件综合夹具：账库只装准则/科目，历史分录、合同和申报数字均来自原始格式文件。
 import assert from 'node:assert/strict';
 import {copyFileSync,existsSync,mkdirSync,mkdtempSync,readFileSync,readdirSync,writeFileSync} from 'node:fs';
-import {join,resolve,isAbsolute} from 'node:path';
+import {join,resolve,isAbsolute,basename} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {McpStdioClient} from '../../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
+import {createContext,writeBundle} from '../../../05-reconstruction/codex/hosts/shared/config.mjs';
+import {buildConfig} from '../../../05-reconstruction/codex/hosts/zcode/adapter.mjs';
+import {prepareBoundBusinessSession} from '../../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import {BASELINE_REPO_ROOT,BASELINE_WORKBENCH_ROOT,hashBaseline,readBaselineJson,writeBaselineJson} from './business-baseline-fixture.mjs';
 
-export const MATERIAL_INTAKE_VERSION='synthetic-material-intake/2';
+export const MATERIAL_INTAKE_VERSION='synthetic-material-intake/3';
 export const MATERIAL_HUMAN_REPLY='【合成人工确认，仅用于程序验收】首次库存发出计价自2026-10采用先进先出法，9月没有领用。其他历史租赁、维保口径继续沿用。本回复不是会计审批或申报授权。';
 export const MATERIAL_INTAKE_EXPECTED=Object.freeze({
   historicalVat:{weightedRatio:0.02,minimumRatio:0.018,maximumRatio:0.021},
@@ -38,15 +41,32 @@ export function createMaterialIntakeFixture(requestedRoot){
 }
 
 export function publishMaterialIntakePacket(f,stage){
-  assert(['september','confirmation','october','auxiliary'].includes(stage));assert(!f.published.includes(stage));
+  assert(['recovery','september','confirmation','october','auxiliary'].includes(stage));assert(!f.published.includes(stage));
   const from=join(f.reviewer,'packets',stage),to=join(f.sourceRoot,stage);assert(existsSync(from)&&!existsSync(to));mkdirSync(to);
   for(const path of readdirSync(from)){const source=join(from,path),target=join(to,path);copyFileSync(source,target);for(const[key,current]of Object.entries(f.files))if(resolve(current)===resolve(source)){assert.equal(hashBaseline(readFileSync(target)),f.originalHashes[key]);f.files[key]=target;}}
   f.published.push(stage);writeBaselineJson(join(f.root,'fixture.json'),f);return to;
 }
 
-export async function startMaterialIntakeMcp(f,{sourceRoot=f.sourceRoot,readOnly=false}={}){
-  const client=new McpStdioClient(join(BASELINE_REPO_ROOT,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:BASELINE_WORKBENCH_ROOT,timeoutMs:60000,env:{WORKBENCH_DATA_DIR:f.data,FINANCE_DATABASE_PATH:f.dbPath,FINANCE_SOURCE_ROOT:sourceRoot,FINANCE_AUDIT_DIR:f.auditDir,FINANCE_BUSINESS_SESSION:'',WORKBENCH_DATABASE_MODE:readOnly?'readonly':'readwrite',FINANCE_MCP_PROFILE:'direct',FINANCE_PYTHON_PATH:f.pythonPath,FINANCE_API_BASE:'http://127.0.0.1:1',NODE_NO_WARNINGS:'1'}}).start();
+export async function prepareMaterialIntakeSession(f,period='2026-09'){
+  const workspace=join(f.root,'workspace-'+period);
+  if(!existsSync(workspace)){const context=createContext({nodePath:process.execPath,apiBase:'http://127.0.0.1:1',databasePath:f.dbPath,sourceRoot:f.sourceRoot,auditDir:f.auditDir,pythonPath:f.pythonPath,outputDir:workspace});writeBundle(context,buildConfig(context));}
+  const bound=await prepareBoundBusinessSession(workspace,{accountSetId:f.accountSetId,period});assert.equal(bound.session.scope.accountSetId,f.accountSetId);assert.equal(bound.session.scope.period,period);return bound.path;
+}
+
+export async function startMaterialIntakeMcp(f,{sourceRoot=f.sourceRoot,readOnly=false,bound=false,period='2026-09'}={}){
+  const sessionPath=bound?await prepareMaterialIntakeSession(f,period):'';
+  const client=new McpStdioClient(join(BASELINE_REPO_ROOT,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:BASELINE_WORKBENCH_ROOT,timeoutMs:60000,env:{WORKBENCH_DATA_DIR:f.data,FINANCE_DATABASE_PATH:f.dbPath,FINANCE_SOURCE_ROOT:sourceRoot,FINANCE_AUDIT_DIR:f.auditDir,FINANCE_BUSINESS_SESSION:sessionPath,WORKBENCH_DATABASE_MODE:readOnly?'readonly':'readwrite',FINANCE_MCP_PROFILE:'direct',FINANCE_PYTHON_PATH:f.pythonPath,FINANCE_API_BASE:'http://127.0.0.1:1',NODE_NO_WARNINGS:'1'}}).start();
   await client.initialize('synthetic-material-intake-acceptance');return client;
+}
+
+// 独立试用只授权合同、税表及失败导出；原BIFF参照、脚本和预期均在授权根之外。
+export async function prepareMaterialRecoveryTrial(requestedRoot){
+  const reference=createMaterialIntakeFixture(),root=requestedRoot??mkdtempSync(join(tmpdir(),'material-recovery-trial-'));assert(isAbsolute(root)&&existsSync(root)&&readdirSync(root).length===0,'独立试用需要全新合成目录');
+  const seeded=spawnSync(process.execPath,[fileURLToPath(import.meta.url),'--seed',root],{cwd:BASELINE_WORKBENCH_ROOT,encoding:'utf8',windowsHide:true,timeout:60000,env:{...process.env,NODE_NO_WARNINGS:'1',FINANCE_BUSINESS_SESSION:'',WORKBENCH_DATABASE_MODE:'readwrite'}});assert.equal(seeded.status,0,seeded.stderr+'\n'+seeded.stdout);
+  const f=readBaselineJson(join(root,'fixture.json'));f.pythonPath=reference.pythonPath;
+  for(const key of['oldLease','maintenance','tax','fallbackHistory']){const target=join(f.sourceRoot,basename(reference.files[key]));copyFileSync(reference.files[key],target);assert.equal(hashBaseline(readFileSync(target)),reference.originalHashes[key]);}
+  const sessionPath=await prepareMaterialIntakeSession(f),descriptor={version:'material-recovery-trial/1',serverPath:join(BASELINE_REPO_ROOT,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),cwd:BASELINE_WORKBENCH_ROOT,target:materialTarget(f),environment:{WORKBENCH_DATA_DIR:f.data,FINANCE_DATABASE_PATH:f.dbPath,FINANCE_SOURCE_ROOT:f.sourceRoot,FINANCE_AUDIT_DIR:f.auditDir,FINANCE_BUSINESS_SESSION:sessionPath,FINANCE_PYTHON_PATH:f.pythonPath,FINANCE_MCP_PROFILE:'direct',WORKBENCH_DATABASE_MODE:'readwrite',FINANCE_API_BASE:'http://127.0.0.1:1',NODE_NO_WARNINGS:'1'},modelInvoked:false,businessToolsInvoked:false,containsMappingOrOracle:false};
+  const connectionPath=join(f.root,'recovery-connection.json');writeBaselineJson(connectionPath,descriptor);return{connectionPath,...descriptor,privateOraclePath:reference.expectedPath};
 }
 
 const cell=(row,column,sheetIndex=0)=>({sheetIndex,row,column,headerRows:[1]});
@@ -106,4 +126,5 @@ async function seed(root){
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   if(process.argv[2]==='--seed')await seed(process.argv[3]);
   else if(process.argv[2]==='--prepare'){const f=createMaterialIntakeFixture(process.argv[3]);console.log(JSON.stringify({root:f.root,dbPath:f.dbPath,sourceRoot:f.sourceRoot,auditDir:f.auditDir,accountSetId:f.accountSetId,pythonPath:f.pythonPath,modelInvoked:false,oracleInsideSourceRoot:false}));}
+  else if(process.argv[2]==='--prepare-recovery'){const{privateOraclePath,...connection}=await prepareMaterialRecoveryTrial(process.argv[3]);console.log(JSON.stringify(connection,null,2));}
 }

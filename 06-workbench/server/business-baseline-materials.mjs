@@ -8,7 +8,7 @@ import {registeredMaterialIdentity,materialPartyContext,matchMaterialParty} from
 import {getAccountingRoles,getAccountingProfile} from './accounting-profiles.mjs';
 import {parseMoney,formatCents} from './money.mjs';
 import {businessMemoryDigest} from './business-memory-storage.mjs';
-import {BASELINE_FACT_VALUES,BASELINE_ALIASES,BASELINE_DATE_FIELDS,BASELINE_PERIOD_FIELDS,BASELINE_AMOUNT_FIELDS,BASELINE_QUANTITY_FIELDS} from './business-baseline-contracts.mjs';
+import {BASELINE_FIELDS,BASELINE_FACT_VALUES,BASELINE_ALIASES,BASELINE_DATE_FIELDS,BASELINE_PERIOD_FIELDS,BASELINE_AMOUNT_FIELDS,BASELINE_QUANTITY_FIELDS} from './business-baseline-contracts.mjs';
 
 const fail=code=>{throw Object.assign(Error(code),{code});};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -163,9 +163,19 @@ function sourceFiles(root){
  const walk=(dir,depth)=>{const generated=generatedRecordFiles(dir,base,technical);for(const entry of readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){if(generated.has(entry.name)&&entry.isFile()&&!entry.isSymbolicLink()){generatedFilesExcluded++;continue;}if(++visited>2000)fail('finance_baseline_material_limit');const path=join(dir,entry.name);if(entry.isSymbolicLink())continue;if(entry.isDirectory()){if(depth<4)walk(path,depth+1);else truncated=true;}else if(entry.isFile()){const format=extname(entry.name).slice(1).toLowerCase();if(['json','csv','xlsx','xls','pdf','docx','txt','md','png','jpg','jpeg','tif','tiff','bmp','webp'].includes(format))paths.push(path);else {const label=['pdf','docx','txt','md','xls'].includes(format)?format:'other';unsupported[label]=(unsupported[label]??0)+1;}}}};walk(base,0);return {paths,unsupported,truncated,generatedFilesExcluded,technicalScanLimited:technical.limited};
 }
 const sourceReference=(root,path)=>'bs:'+digest([resolve(root),relative(resolve(root),path)]);
+function materialReadFailure(error,original,opts){
+ const candidate=typeof error.code==='string'?error.code:'';
+ const dependency=/^material_document_dependency_missing:(xlrd|openpyxl|fitz|docx|PIL)$/.exec(candidate);
+ const code=dependency?'material_document_dependency_missing_'+dependency[1].toLowerCase():/^(?:finance_baseline_|material_document_|ocr_|xlsx_)[a-z0-9_]+$/.test(candidate)?candidate:['ENOENT','EACCES','EPERM'].includes(candidate)?'finance_baseline_source_unavailable':'material_document_read_failed';
+ return {code,stage:'read',recoverable:!/(?:source_(?:changed|forbidden|unavailable)|generated_not_original|formula|cell_error|external_link|active_content|macro|encrypted|scope|owner)/.test(code),originalId:original.id,originalRef:original.originalRef??sourceReference(opts.sourceRoot,original.path)};
+}
+export function resolveBaselineSourceReferences(originals,opts){
+ if(!originals.some(o=>o.originalRef))return originals;
+ const files=sourceFiles(opts.sourceRoot),map=new Map(files.paths.map(path=>[sourceReference(opts.sourceRoot,path),path]));
+ return originals.map(o=>{if(!o.originalRef)return o;const path=map.get(o.originalRef);if(!path)fail('finance_baseline_original_missing');return {...o,path};});
+}
 function resolveOriginalReferences(args,opts){
- if(!(args.originals??[]).some(o=>o.originalRef))return args;const files=sourceFiles(opts.sourceRoot),map=new Map(files.paths.map(path=>[sourceReference(opts.sourceRoot,path),path]));
- return {...args,originals:args.originals.map(o=>{if(!o.originalRef)return o;const path=map.get(o.originalRef);if(!path)fail('finance_baseline_original_missing');return {...o,path};})};
+ return {...args,originals:resolveBaselineSourceReferences(args.originals??[],opts)};
 }
 export function discoverBaselineSourceInventory(db,scope,args,opts){
  if(typeof opts.sourceRoot!=='string'||!isAbsolute(opts.sourceRoot))return {projection:{status:'source_root_unconfigured',items:[],pagination:{offset:0,limit:args.limit??20,total:0,nextOffset:null}},sources:[]};
@@ -175,8 +185,10 @@ export function discoverBaselineSourceInventory(db,scope,args,opts){
   try{const st=lstatSync(path);if(st.size>5*1024*1024||bytes+st.size>20*1024*1024){items.push({...base,ownerStatus:'unverified',status:'size_limit'});continue;}bytes+=st.size;
    const loaded=loadOriginal({id:'inventory',path},scope,accountSet,opts,new Map()),structure=loaded.structure;
    const fields=[...(structure.fields??[]),...(structure.columns??[]),...(structure.sheets??[]).flatMap(s=>s.headers)];
-   items.push({...base,ownerStatus:loaded.owner?'verified':'unverified',status:loaded.document.status==='read'?'inspectable':loaded.document.status,readState:loaded.document.readState,diagnostics:loaded.document.diagnostics?.map(d=>({code:d.code})),identity:loaded.identitySummary,next:{tool:'finance_baseline_materials',arguments:{target:{accountSetId:scope.accountSetId,period:scope.period},originals:[{id:'source',originalRef:base.originalRef}],section:'structure'}},availableFields:[...new Set(fields.flatMap(f=>f.suggestedFields??[]))].slice(0,16)});sources.push({path:loaded.path,sha256:loaded.sha256,bytes:loaded.bytes});
-  }catch(error){items.push({...base,ownerStatus:error.code==='finance_baseline_source_scope_conflict'?'other_scope':'unverified',status:error.code==='finance_baseline_generated_not_original'?'generated_not_original':'unsupported_or_unverified'});}
+   const diagnostics=loaded.document.diagnostics?.map(d=>loaded.document.readState==='read'?{code:d.code}:materialReadFailure(d,{id:'source',originalRef:base.originalRef,path},opts));
+   const readingFailed=['unsupported','needs_runtime'].includes(loaded.document.readState),next=readingFailed&&diagnostics?.some(d=>d.recoverable)?{tool:'finance_record_contract',arguments:{recordType:'baseline_adaptation'}}:{tool:'finance_baseline_materials',arguments:{target:{accountSetId:scope.accountSetId,period:scope.period},originals:[{id:'source',originalRef:base.originalRef}],section:'structure'}};
+   items.push({...base,ownerStatus:loaded.owner?'verified':'unverified',status:loaded.document.status==='read'?'inspectable':loaded.document.status,readState:loaded.document.readState,diagnostics,identity:loaded.identitySummary,next,availableFields:[...new Set(fields.flatMap(f=>f.suggestedFields??[]))].slice(0,16)});sources.push({path:loaded.path,sha256:loaded.sha256,bytes:loaded.bytes});
+  }catch(error){const diagnostic=materialReadFailure(error,{id:'source',originalRef:base.originalRef,path},opts);items.push({...base,ownerStatus:error.code==='finance_baseline_source_scope_conflict'?'other_scope':'unverified',status:error.code==='finance_baseline_generated_not_original'?'generated_not_original':'unsupported_or_unverified',diagnostics:[diagnostic],...(diagnostic.recoverable?{next:{tool:'finance_record_contract',arguments:{recordType:'baseline_adaptation'}}}:{})});}
  }
  return {projection:{status:'available',items,pagination:{offset,limit,total:files.paths.length,nextOffset:offset+limit<files.paths.length?offset+limit:null},unsupportedFormats:files.unsupported,depthTruncated:files.truncated,generatedFilesExcluded:files.generatedFilesExcluded,technicalScanLimited:files.technicalScanLimited},sources};
 }
@@ -241,7 +253,16 @@ function slicedValue(value,slice){
  let result=value.slice(start+slice.after.length);if(slice.before){const end=result.indexOf(slice.before);if(end<0)fail('finance_baseline_text_slice_invalid');result=result.slice(0,end);}return result.trim().replace(/^[：:=\s]+/u,'').trim();
 }
 
-function select(original,selection,scope,accountSet,opts){
+function interpretationFailure(selection,selectionIndex,reason){
+ const code='finance_baseline_interpretation_invalid',error=Object.assign(Error(code),{code});
+ // 只披露实际请求序号和当前字段的固定候选；原值、调用者解释及输入值都不回显。
+ if(Number.isSafeInteger(selectionIndex)&&selectionIndex>=0&&BASELINE_FIELDS.includes(selection.field)){
+  const allowedValues=Object.hasOwn(BASELINE_FACT_VALUES,selection.field)?[...BASELINE_FACT_VALUES[selection.field]]:selection.field==='creates_asset'?[true,false]:[];
+  error.details={interpretation:{selectionIndex,field:selection.field,reason,allowedValues}};
+ }
+ throw error;
+}
+function select(original,selection,scope,accountSet,opts,selectionIndex){
  const captured=selectRaw(original,selection.locator,opts);captured.value=slicedValue(captured.value,selection.valueSlice);if(!scalar(captured.value))fail('finance_baseline_scalar_required');
  if(captured.hint&&captured.hint!==selection.field&&!selection.interpretation)return {gap:'unsupported_material'};
  if(BASELINE_AMOUNT_FIELDS.includes(selection.field))for(const context of captured.contexts){if(!context||typeof context!=='object'||Array.isArray(context))continue;
@@ -252,16 +273,29 @@ function select(original,selection,scope,accountSet,opts){
  const identity=capturedOwner(original,captured,selection,scope,accountSet,opts);if(!identity.matched)return {gap:'owner_unverified'};
  // 可定位行的主体/期间上下文与文件总范围一起保留；后续不会把一行绑定成别的公司。
  let value=normalizeBaselineValue(selection.field,captured.value);
- if(selection.interpretation){if(!(Object.hasOwn(BASELINE_FACT_VALUES,selection.field)||selection.field==='creates_asset'))fail('finance_baseline_interpretation_invalid');const interpreted=normalizeBaselineValue(selection.field,selection.interpretation.value);if(interpreted===undefined||value!==undefined&&value!==interpreted)fail('finance_baseline_interpretation_invalid');value=interpreted;}
+ if(selection.interpretation){
+  if(!(Object.hasOwn(BASELINE_FACT_VALUES,selection.field)||selection.field==='creates_asset'))interpretationFailure(selection,selectionIndex,'field_not_interpretable');
+  const interpreted=normalizeBaselineValue(selection.field,selection.interpretation.value);
+  if(interpreted===undefined)interpretationFailure(selection,selectionIndex,'invalid_enum');
+  if(value!==undefined&&value!==interpreted)interpretationFailure(selection,selectionIndex,'source_value_conflict');
+  value=interpreted;
+ }
  if(value===undefined)return {gap:'unsupported_material'};
  const contextBusinessKinds=[...new Set([...captured.contexts.flatMap(c=>c&&typeof c==='object'&&!Array.isArray(c)?Object.entries(c).filter(([k])=>suggest(k)==='business_kind').map(([,v])=>normalizeBaselineValue('business_kind',v)).filter(Boolean):[]),...(/租金|租赁/.test(captured.key)?['lease']:[])])];
  const source={kind:'file',path:original.path,sha256:original.sha256,bytes:original.bytes,originalId:original.id,locator:captured.locator,contextPath:captured.contextPath,rootIdentity:baselineDirectoryIdentity(opts.sourceRoot),extractor:original.document.extractor,identity:{role:identity.role,roleAuthority:identity.roleAuthority??'source_labels',basis:identity.basis,taxIdAvailability:identity.taxIdAvailability,...(identity.invoiceDirection?{invoiceDirection:identity.invoiceDirection}:{})},...(selection.valueSlice?{valueSlice:selection.valueSlice}:{}),...(selection.interpretation?{interpretation:{kind:'model_interpretation',...selection.interpretation}}:{}),...(captured.semantics?{semantics:captured.semantics}:{}),...(contextBusinessKinds.length?{contextBusinessKinds}:{})};
  return {value:fact(scope,selection.field,value,source,{id:selection.id,group:digest([original.path,captured.contextPath])})};
 }
+function historicalRole(accountSet,captures){
+ const role=captures.code?roleFunction(accountSet.accounting_profile_id)(String(captures.code.value)):'unknown';
+ if(role!=='unknown'||!captures.accountName)return role;
+ const names={'主营业务收入':'main_income','其他业务收入':'other_income','主营业务成本':'main_cost','管理费用':'management_expense','销售费用':'sales_expense','财务费用':'finance_expense','应交税费':'tax_payable'};
+ return Object.entries(names).find(([name])=>String(captures.accountName.value).startsWith(name))?.[1]??'unknown';
+}
 function historicalObservations(originals,mappings,scope,accountSet,opts,diagnostics){
  const out=[];
  for(const mapping of mappings??[]){
   const original=originals.get(mapping.originalId);if(!original)fail('finance_baseline_original_missing');
+  if(['unsupported','needs_runtime'].includes(original.document.readState))continue;
   const captures=Object.fromEntries(['period','date','businessReference','code','accountName','debit','credit'].filter(key=>mapping[key]).map(key=>[key,selectRaw(original,mapping[key],opts)]));
   const anchor=captures.businessReference;
   const recordContext=Object.values(captures).every(c=>anchor.locator.row!==undefined?c.locator.row===anchor.locator.row&&(c.locator.sheetIndex??0)===(anchor.locator.sheetIndex??0):anchor.locator.jsonPointer!==undefined?c.contextPath===anchor.contextPath:c.locator.page===anchor.locator.page);
@@ -271,13 +305,65 @@ function historicalObservations(originals,mappings,scope,accountSet,opts,diagnos
   const period=normalizeBaselineValue('period_start',captures.period.value),date=captures.date?normalizeBaselineValue('invoice_date',captures.date.value):null,reference=normalizeBaselineValue('business_reference',anchor.value);
   const debit=normalizeBaselineValue('amount_net',captures.debit.value),credit=normalizeBaselineValue('amount_net',captures.credit.value);
   if(!period||period>=scope.period||captures.date&&(!date||date.slice(0,7)!==period)||!reference||debit===undefined||credit===undefined||debit>0&&credit>0)fail('finance_baseline_historical_row_invalid');
-  let role=captures.code?roleFunction(accountSet.accounting_profile_id)(String(captures.code.value)):'unknown';
-  const names={'主营业务收入':'main_income','其他业务收入':'other_income','主营业务成本':'main_cost','管理费用':'management_expense','销售费用':'sales_expense','财务费用':'finance_expense','应交税费':'tax_payable'};
-  if(role==='unknown'&&captures.accountName)role=Object.entries(names).find(([name])=>String(captures.accountName.value).startsWith(name))?.[1]??'unknown';
+  const role=historicalRole(accountSet,captures);
   if(role==='unknown')diagnostics.push({code:'historical_account_unmapped',originalId:original.id});
   const source={kind:'file',path:original.path,sha256:original.sha256,bytes:original.bytes,originalId:original.id,locator:anchor.locator,contextPath:anchor.contextPath,rootIdentity:baselineDirectoryIdentity(opts.sourceRoot),extractor:original.document.extractor,observation:'source_history_not_ledger_posting',entryLocators:Object.fromEntries(Object.entries(captures).map(([key,c])=>[key,c.locator]))};
   out.push(fact(scope,'business_reference',reference,source,{id:mapping.id+'_reference'}));
   out.push(fact(scope,'historical_posting',{period,date,dateGranularity:date?'day':'month',status:'observed_history',kind:'source_observation',entries:[{role,debit,credit}]},source,{id:mapping.id}));
+ }
+ return out;
+}
+const adaptationFields=['period','date','businessReference','code','accountName','debit','credit'];
+function adaptationContext(locator){
+ if(locator.row!==undefined)return digest(['row',locator.sheet??null,locator.sheetIndex??0,locator.row]);
+ if(locator.jsonPointer!==undefined)return digest(['json',locator.jsonPointer.slice(0,locator.jsonPointer.lastIndexOf('/'))]);
+ return digest(['line',locator.page,locator.line]);
+}
+function normalizedAdaptationValue(key,value){
+ const field={period:'period_start',date:'invoice_date',businessReference:'business_reference',debit:'amount_net',credit:'amount_net'}[key];
+ return field?normalizeBaselineValue(field,value):typeof value==='string'||typeof value==='number'?String(value).normalize('NFKC').replace(/\s/g,''):undefined;
+}
+function adaptedHistoricalObservations(adaptation,files,scope,accountSet,opts,diagnostics){
+ const out=[],observations=new Map();
+ for(const row of adaptation?.rows??[]){
+  const original=files.find(f=>f.path===adaptation.sources.find(s=>s.index===row.sourceIndex)?.path),originalId=original?.id,originalRef=adaptation.sources.find(s=>s.index===row.sourceIndex)?.originalRef;
+  const observationRef='ao:'+digest([original?.sha256,row.businessReference.locator]);
+  const reject=(code,recoverable=true)=>diagnostics.push({code,stage:'adaptation',recoverable,originalId,originalRef,observationRef});
+  if(!original){reject('adaptation_source_unavailable');continue;}
+  if((original.document.diagnostics??[]).some(d=>/(?:external_link|active_content|macro|encrypted|source_forbidden|scope_conflict)/.test(d.code??''))){reject('adaptation_reading_restricted',false);continue;}
+  const captures=Object.fromEntries(adaptationFields.filter(k=>row[k]).map(k=>[k,row[k]]));
+  captures.ownerName=row.owner.name;if(row.owner.taxId)captures.ownerTaxId=row.owner.taxId;
+  const context=adaptationContext(row.businessReference.locator);
+  if(Object.values(captures).some(c=>adaptationContext(c.locator)!==context)){reject('adaptation_context_conflict');continue;}
+  const identity=matchMaterialParty({role:'enterprise',name:row.owner.name.value,taxId:row.owner.taxId?.value},accountSet);
+  if(!identity.matched||identity.conflict){reject('adaptation_owner_unverified');continue;}
+  const period=normalizedAdaptationValue('period',row.period.value),date=row.date?normalizedAdaptationValue('date',row.date.value):null,reference=normalizedAdaptationValue('businessReference',row.businessReference.value),debit=normalizedAdaptationValue('debit',row.debit.value),credit=normalizedAdaptationValue('credit',row.credit.value);
+  if(!period||period>=scope.period||row.date&&(!date||date.slice(0,7)!==period)||!reference||debit===undefined||credit===undefined||debit>0&&credit>0){reject('adaptation_row_invalid');continue;}
+  let verified=0,mismatch=false,formula=false,identityConflict=false,locatorUnverified=false;
+  // 能由原读取器实读的位置必须相符；不支持的位置仍是脚本观察，绝不标成原件直接核验。
+  for(const [key,captured]of Object.entries(captures))try{
+   const actual=readMaterialValue(original.document,captured.locator);
+   if(['formula_unverified','cell_error'].includes(actual.valueState)){formula=true;break;}
+   const parties=materialPartyContext(actual.contexts,accountSet);
+   if(parties.conflict||parties.hasIdentity&&!parties.matched){identityConflict=true;break;}
+   try{ownerStatus(actual.contexts,scope,accountSet);}catch(error){if(error.code==='finance_baseline_source_scope_conflict'){identityConflict=true;break;}throw error;}
+   const observed=normalizedAdaptationValue(key,actual.value),claimed=normalizedAdaptationValue(key,captured.value);
+   if(observed!==undefined){if(observed!==claimed){mismatch=true;break;}verified++;}
+   else if(actual.value!==captured.value){mismatch=true;break;}
+  }catch{if(original.document.readState==='read'){locatorUnverified=true;break;}/* 真正读取障碍仍保留脚本观察。 */}
+  if(locatorUnverified){reject('adaptation_locator_unverified');continue;}
+  if(formula){reject('adaptation_formula_unverified');continue;}
+  if(identityConflict){reject('adaptation_owner_unverified',false);continue;}
+  if(mismatch){reject('adaptation_value_mismatch');continue;}
+  const role=historicalRole(accountSet,captures);
+  if(role==='unknown')reject('historical_account_unmapped');
+  const physicalKey=digest([original.sha256,context]),value={period,date,dateGranularity:date?'day':'month',status:'observed_history',kind:'script_observation',entries:[{role,debit,credit}]};
+  if(observations.has(physicalKey)){if(digest(observations.get(physicalKey))!==digest({reference,value}))fail('finance_baseline_adaptation_observation_conflict');reject('adaptation_duplicate_observation');continue;}
+  observations.set(physicalKey,{reference,value});
+  const source={kind:'file',path:original.path,sha256:original.sha256,bytes:original.bytes,originalId:original.id,originalRef,locator:row.businessReference.locator,contextPath:'adapted:'+context,rootIdentity:baselineDirectoryIdentity(opts.sourceRoot),observation:'recorded_script_history_not_native_or_ledger_posting',entryLocators:Object.fromEntries(Object.entries(captures).map(([key,c])=>[key,c.locator])),adaptation:{...adaptation.provenance,rowId:row.id,physicalKey,sourceIndex:row.sourceIndex,nativeValueChecks:{matched:verified,total:Object.keys(captures).length}},identity:{role:'enterprise',basis:identity.basis,taxIdAvailability:identity.taxIdAvailability,authority:'script_observation_not_native_verification'}};
+  const observed=(field,value,id)=>({...fact(scope,field,value,source,{id}),verification:'local_execution_observation',semanticAuthority:'script_history_observation_not_human_approval'});
+  out.push(observed('business_reference',reference,row.id+'_reference'));
+  out.push(observed('historical_posting',value,row.id));
  }
  return out;
 }
@@ -307,6 +393,9 @@ function linkObservedHistory(facts,scope){
   const linked=references.filter(r=>r.value===own.value),source={...posting.source,relations:linked.map(r=>({businessRef:r.factRef,entryIndices:[0]}))};
   return {...posting,source,linkedBusinessRefs:linked.map(r=>r.factRef),factRef:'bf:'+digest({owner:ownerTuple(scope),field:posting.field,value:posting.value,source})};
  });
+}
+function adaptationBusinessDiagnostics(facts){
+ return facts.filter(posting=>posting.field==='historical_posting'&&posting.source.adaptation&&!facts.some(f=>f.field==='business_reference'&&f.source.kind==='file'&&!f.source.adaptation&&f.source.sha256!==posting.source.sha256&&posting.linkedBusinessRefs?.includes(f.factRef))).map(posting=>({code:'adaptation_business_unverified',stage:'adaptation',recoverable:true,originalId:posting.source.originalId,originalRef:posting.source.originalRef,observationRef:'ao:'+posting.source.adaptation.physicalKey}));
 }
 function knownSelectors(original){
  const out=[],diagnostics=[];let truncated=false;const add=(field,locator)=>{if(out.length>=400){truncated=true;return;}out.push({id:'auto_'+digest([original.id,field,locator]).slice(0,24),field,originalId:original.id,locator});};
@@ -412,33 +501,63 @@ export function captureBaselineMaterials(db,scope,args,opts){
  args=resolveOriginalReferences(args,opts);
  if(args.extractKnownFields&&(args.selections??[]).length)fail('finance_baseline_input_invalid');
  const read=ledger(db,scope,args),cache=new Map(),files=[],facts=[...read.facts],gaps=[],coverage=[],diagnostics=[];let totalBytes=0;
- for(const original of args.originals??[]){const loaded=loadOriginal(original,scope,read.accountSet,opts,cache);totalBytes+=loaded.bytes;if(totalBytes>20*1024*1024)fail('finance_baseline_material_limit');files.push(loaded);}
+ const originals=[...(args.originals??[])];
+ for(const source of opts.adaptation?.sources??[])if(!originals.some(o=>resolve(o.path)===resolve(source.path)))originals.push({id:'adapted_'+source.index,path:source.path,originalRef:source.originalRef,sha256:source.sha256});
+ for(const original of originals){
+  let loaded;
+  try{loaded=loadOriginal(original,scope,read.accountSet,opts,cache);}
+  catch(error){
+   // 只恢复读取器故障；路径越界、原件变化、身份和输入错误仍沿原边界拒绝。
+   if(!/^(?:material_document_|xlsx_|ocr_)/.test(error.code??'')||/(?:source_(?:changed|forbidden)|formula)/.test(error.code))throw error;
+   const bytes=baselineBytes(original.path,opts.sourceRoot),diagnostic=materialReadFailure(error,original,opts),document={readState:'unsupported',status:'unsupported',tables:[],blocks:[],diagnostics:[diagnostic]};
+   loaded={...original,path:resolve(original.path),sha256:sha(bytes),bytes:bytes.length,format:extname(original.path).slice(1).toLowerCase(),owner:false,rows:[],sheets:[],locations:new Map(),document,structure:{readState:'unsupported',fields:[],columns:[],sheets:[],readDiagnostics:[diagnostic]}};cache.set(original.id,loaded);
+  }
+  totalBytes+=loaded.bytes;if(totalBytes>20*1024*1024)fail('finance_baseline_material_limit');files.push(loaded);
+  if(loaded.document.readState!=='read')for(const error of loaded.document.diagnostics??[])diagnostics.push(materialReadFailure(error,original,opts));
+ }
  facts.push(...historicalObservations(cache,args.historicalRows,scope,read.accountSet,opts,diagnostics));
- const ids=new Set();for(const s of args.selections??[]){if(ids.has(s.id))fail('finance_baseline_selection_duplicate');ids.add(s.id);const original=cache.get(s.originalId);if(!original)fail('finance_baseline_original_missing');const captured=select(original,s,scope,read.accountSet,opts);if(captured.gap)gaps.push(captured.gap);else facts.push(captured.value);}
+ facts.push(...adaptedHistoricalObservations(opts.adaptation,files,scope,read.accountSet,opts,diagnostics));
+ const ids=new Set();for(const [selectionIndex,s]of (args.selections??[]).entries()){if(ids.has(s.id))fail('finance_baseline_selection_duplicate');ids.add(s.id);const original=cache.get(s.originalId);if(!original)fail('finance_baseline_original_missing');if(['unsupported','needs_runtime'].includes(original.document.readState))continue;const captured=select(original,s,scope,read.accountSet,opts,selectionIndex);if(captured.gap)gaps.push(captured.gap);else facts.push(captured.value);}
  for(const original of files){const known=knownFacts(original,scope,read.accountSet,opts);diagnostics.push(...known.diagnostics);if(args.extractKnownFields){facts.push(...known.facts);gaps.push(...known.gaps);}
   const readLocations=new Set(facts.filter(f=>f.source.kind==='file'&&f.source.path===original.path).map(f=>digest([f.field,f.source.locator]))),unselected=known.facts.filter(f=>!readLocations.has(digest([f.field,f.source.locator])));
   coverage.push({path:original.path,originalId:original.id,availableCount:known.availableCount,readCount:facts.filter(f=>f.source.kind==='file'&&f.source.path===original.path).length,knownLocations:known.facts.map(f=>({field:f.field,locationDigest:digest([f.field,f.source.locator])})),unselectedLocationCount:unselected.length,knownFieldsNotSelected:[...new Set(unselected.map(f=>f.field))]});}
  for(const original of files)if(sha(baselineBytes(original.path,opts.sourceRoot))!==original.sha256)fail('finance_baseline_source_changed');
  const linkedFacts=linkHistory(db,scope,linkObservedHistory(documentBusinessContexts(facts,files,diagnostics,scope),scope),opts),taxBurden=buildBaselineTaxBurden(linkedFacts);gaps.push(...taxBurden.gaps);
+ diagnostics.push(...adaptationBusinessDiagnostics(linkedFacts));
  const snapshot={scope,facts:linkedFacts,files:files.map(f=>({id:f.id,path:f.path,sha256:f.sha256,bytes:f.bytes,format:f.format,owner:f.owner,readState:f.document.readState,extractor:f.document.extractor})),pagination:read.pagination,taxBurden,gaps:[...new Set(gaps)]};
  return {...snapshot,snapshotDigest:digest(snapshot),coverage,diagnostics,structures:files.map(f=>({path:f.path,originalId:f.id,sha256:f.sha256,bytes:f.bytes,format:f.format,ownerStatus:f.owner?'verified':'unverified',...f.structure}))};
 }
 // 只合并显式读取的快照；caller别名不作业务身份，凭证关系仍保留真实分行和原生记录版本。
+function sameHistoricalObservationValue(left,right){
+ return left.period===right.period&&left.status===right.status&&(!left.date||!right.date||left.date===right.date)&&digest(left.entries)===digest(right.entries);
+}
 export function mergeBaselineMaterialSnapshots(parts){
  if(!parts.length||parts.length>12)fail('finance_baseline_material_merge_limit');const scope=parts[0].scope;
  if(parts.some(p=>digest(p.scope)!==digest(scope)))fail('finance_baseline_scope_conflict');
  const aliases=new Map(),facts=[],physical=new Map(),vouchers=new Map(),files=new Map();
+ const adaptedPositions=new Set(parts.flatMap(p=>p.facts.filter(f=>f.source.adaptation).map(f=>f.source.adaptation.physicalKey)));
  for(const p of parts){for(const file of p.files){if(files.has(file.path)&&files.get(file.path).sha256!==file.sha256)fail('finance_baseline_material_changed');files.set(file.path,files.get(file.path)??file);}
   for(const f of p.facts){if(f.source.kind==='ledger_voucher'){const key=digest([f.source.voucherId,f.source.sha256]);if(!vouchers.has(key))vouchers.set(key,[]);vouchers.get(key).push(f);continue;}
-   const {originalId,...source}=f.source,key=digest({field:f.field,value:f.value,source});let canonical=physical.get(key);if(!canonical){canonical=f;physical.set(key,f);facts.push(f);}aliases.set(f.factRef,canonical.factRef);
+   const {originalId,...source}=f.source,nativeHistory=source.kind==='file'&&source.observation==='source_history_not_ledger_posting'&&['business_reference','historical_posting'].includes(f.field);
+   const nativePosition=nativeHistory?digest([source.sha256,adaptationContext(source.locator)]):null,observation=source.adaptation?.physicalKey??(adaptedPositions.has(nativePosition)?nativePosition:null),key=observation?digest({field:f.field,physicalObservation:observation}):digest({field:f.field,value:f.value,source});let canonical=physical.get(key);
+   // 同物理行的业务号须一致；历史分录比较实际已知值，不把来源性质或缺日当成业务冲突。
+   if(canonical&&observation&&!(f.field==='historical_posting'?sameHistoricalObservationValue(canonical.value,f.value):digest(canonical.value)===digest(f.value)))fail('finance_baseline_adaptation_observation_conflict');
+   // 原生事实优先；先前脚本引用保留别名，后续仍由既有历史关联重连。
+   if(canonical?.source.adaptation&&nativeHistory){const previous=canonical;canonical=f;physical.set(key,f);facts[facts.indexOf(previous)]=f;aliases.set(previous.factRef,f.factRef);}
+   if(!canonical){canonical=f;physical.set(key,f);facts.push(f);}aliases.set(f.factRef,canonical.factRef);
   }
  }
  for(const values of vouchers.values()){const first=values[0],relations=[...new Map(values.flatMap(f=>f.source.relations??[]).map(r=>({...r,businessRef:aliases.get(r.businessRef)??r.businessRef})).map(r=>[digest(r),r])).values()],source={...first.source};if(relations.length)source.relations=relations;else delete source.relations;
   const merged={...first,source,...(relations.length?{linkedBusinessRefs:[...new Set(relations.map(r=>r.businessRef))]}:{})};merged.factRef='bf:'+digest({owner:ownerTuple(scope),field:merged.field,value:merged.value,source});for(const f of values)aliases.set(f.factRef,merged.factRef);facts.push(merged);
  }
+ // 原件历史和独立业务原件可以分别适配后显式合并；按真实业务号重连，旧事实引用沿别名接续。
+ const linked=linkObservedHistory(facts,scope);
+ for(let i=0;i<facts.length;i++)if(facts[i].factRef!==linked[i].factRef)aliases.set(facts[i].factRef,linked[i].factRef);
+ facts.splice(0,facts.length,...linked);
+ for(const [alias,ref]of aliases)if(aliases.has(ref))aliases.set(alias,aliases.get(ref));
  for(const part of parts)for(const [alias,ref]of Object.entries(part.factAliases??{}))if(!aliases.has(alias))aliases.set(alias,aliases.get(ref)??ref);
  if(files.size>128||facts.length>1000||[...files.values()].reduce((n,f)=>n+f.bytes,0)>20*1024*1024)fail('finance_baseline_material_merge_limit');
  const structures=[...new Map(parts.flatMap(p=>p.structures).map(s=>[s.path,s])).values()],coverage=structures.map(s=>{const records=parts.flatMap(p=>p.coverage??[]).filter(c=>c.path===s.path),knownLocations=[...new Map(records.flatMap(c=>c.knownLocations??[]).map(v=>[v.locationDigest,v])).values()],readFacts=facts.filter(f=>f.source.kind==='file'&&f.source.path===s.path),read=new Set(readFacts.map(f=>digest([f.field,f.source.locator]))),unselected=knownLocations.filter(f=>!read.has(f.locationDigest));return {path:s.path,originalId:s.originalId,availableCount:knownLocations.length,readCount:readFacts.length,knownLocations,unselectedLocationCount:unselected.length,knownFieldsNotSelected:[...new Set(unselected.map(f=>f.field))]};});
  const taxBurden=buildBaselineTaxBurden(facts),snapshot={scope,facts,files:[...files.values()],pagination:parts[0].pagination,taxBurden,gaps:[...new Set([...parts.flatMap(p=>p.gaps),...taxBurden.gaps])]};
- return {...snapshot,snapshotDigest:digest(snapshot),structures,coverage,diagnostics:parts.flatMap(p=>p.diagnostics??[]),factAliases:Object.fromEntries(aliases)};
+ return {...snapshot,snapshotDigest:digest(snapshot),structures,coverage,diagnostics:[...parts.flatMap(p=>p.diagnostics??[]).filter(d=>d.code!=='adaptation_business_unverified'),...adaptationBusinessDiagnostics(facts)],factAliases:Object.fromEntries(aliases)};
 }

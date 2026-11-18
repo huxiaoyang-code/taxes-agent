@@ -34,7 +34,7 @@ import {validateDirectInput} from '../../../../06-workbench/server/direct-financ
 import {withFinanceCall,currentFinanceCall,annotateFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
 import {skillMetadata} from './skill-metadata.mjs';
-import {directRecovery} from './direct-recovery.mjs';
+import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
 import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
@@ -109,7 +109,8 @@ function preflightTool(name,args={}) {
   const problems = validateArgs(spec.inputSchema, args);
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length) {
-    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems: name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems });
+    const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,validateSchemaValue(spec.inputSchema,args)):undefined;
+    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, ...(diagnostics??{problems:name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems}) });
   }
   if (spec.status === "unavailable") {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
@@ -129,8 +130,15 @@ async function callTool(name, args = {}, executionOptions={}) {
       if(isModelEnvelope(nativeResult)){const checked=validateModelEnvelope(nativeResult);if(!checked.ok)throw new ToolCallError('finance_memory_native_result_unconfirmed','finance_memory_native_result_unconfirmed');return checked.envelope;}
       // 此值刚从上方真实工具合同/固定投影分派返回；方法包装复用相同可见结果。
       return retainDirectMethodProjection(nativeName,nativeResult);
-    }}),nextSteps=directRecovery(name,{status:result?.status});return nextSteps.length?{...result,nextSteps}:result; }
-    catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
+    }});
+    // 材料页已计算 text/structured/_meta 整包预算；不在此追加或覆盖其真实导航。
+    if(name.startsWith('finance_baseline_')||Array.isArray(result?.nextSteps))return result;
+    const nextSteps=directRecovery(name,{status:result?.status,code:result?.error?.code});return nextSteps.length?{...result,nextSteps}:result; }
+    catch(error) {
+      const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;
+      const details=safeDiagnostics?{safeDiagnostics}:name==='finance_baseline_materials'&&error?.code==='finance_baseline_interpretation_invalid'?directInterpretationDiagnostics(error.details?.interpretation):name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,error.details?.problems):error.details:undefined;
+      throw new ToolCallError(DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directErrorCode(error?.code):/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',details);
+    }
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
@@ -244,7 +252,7 @@ function errorResult(e) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
 }
 async function harnessErrorResult(e,name,args){
-  if(DIRECT_TOOL_NAMES.has(name)){const nextSteps=directRecovery(name,{code:e?.code});if(nextSteps.length)return errorResult(new ToolCallError(e.code,e.message,{...(e.details??{}),nextSteps}));}
+  if(DIRECT_TOOL_NAMES.has(name)){const nextSteps=directRecovery(name,{code:e?.code,args});if(nextSteps.length)return errorResult(new ToolCallError(e.code,e.message,{...(e.details??{}),nextSteps}));}
   if(!HARNESS_TOOL_NAMES.has(name)||!args?.storePath||!e?.details||args.responseMode==='full')return errorResult(e);
   const native={status:'failed',code:e.code??'harness_operation_failed',blockers:e.details.evidenceIssues??e.details.problems??e.details.blockers??[],details:e.details,...(e.details.contractIssues?{contractIssues:e.details.contractIssues}:{}),nextSteps:e.details.contract?[{action:'inspect_selected_contract_and_repair_indicated_fields',...e.details.contract,hint:e.details.hint}]:[{action:e.code==='harness_phase_unsupported'?'choose_supported_phase':'resolve_indicated_facts_or_evidence',tool:e.code==='harness_phase_unsupported'?'harness_discover':'harness_facts_register',...(e.details.capabilityId?{capabilityId:e.details.capabilityId}:{}),hint:e.details.hint??'Resolve the specific field/source problems above; preserve unknown original writes and use query before retry.'}]};
   try{const payload=await summarizeHarnessReceipt(args.storePath,name,native);return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload,isError:true};}

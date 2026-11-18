@@ -12,6 +12,7 @@ import {baselineBytes,baselineInside,baselineDirectoryAvailable,baselineDirector
 import {projectBaselineMaterials,baselineCoverage,baselineSupportRef,baselineBranchSelection,fitBaselineBranchResponse,baselineCalculationSchema} from './business-baseline-projection.mjs';
 import {assertAuditSchema} from './local-audit-storage.mjs';
 import {inspectRestoreControl,readRestoreActivation,assertRestoreOpenPath} from './local-restore-control.mjs';
+import {loadBaselineAdaptation} from './baseline-material-adaptation.mjs';
 
 const fail=code=>{throw Object.assign(Error(code),{code});};
 const digest=storage.businessMemoryDigest;
@@ -39,7 +40,7 @@ function selectedVersion(db,scope){const all=versions(db,scope);return {all,curr
 const savedVersionView=(version,period)=>({baselineRef:version.methodRef,revision:version.revision,effectiveFrom:version.effectiveFrom,...(version.effectiveTo?{effectiveTo:version.effectiveTo}:{}),applicableToTarget:version.effectiveFrom<=period&&(!version.effectiveTo||version.effectiveTo>=period)});
 const sourceKey=source=>digest(source);
 function factStates(db,definition,opts){
- const cache=new Map(),roots=new Map(),out=new Map(),rootFacts=root=>{if(!roots.has(root))roots.set(root,{available:baselineDirectoryAvailable(root),identity:baselineDirectoryIdentity(root),created:financeCallCreatedDirectory(root)});return roots.get(root);};
+ const cache=new Map(),artifacts=new Map(),roots=new Map(),out=new Map(),rootFacts=root=>{if(!roots.has(root))roots.set(root,{available:baselineDirectoryAvailable(root),identity:baselineDirectoryIdentity(root),created:financeCallCreatedDirectory(root)});return roots.get(root);};
  // 目录身份只辅助区分ENOENT；已有文件仍按实际SHA核对，不把目录inode当作业务真实性。
  const missingState=(root,expected,error)=>{const current=rootFacts(root);return error.code==='ENOENT'&&current.available&&!current.created&&typeof expected==='string'&&expected===current.identity?'missing':'unavailable';};for(const f of list(definition.facts)){
   const s=f.source,key=sourceKey(s);let state=cache.get(key);
@@ -47,6 +48,16 @@ function factStates(db,definition,opts){
    if(s.kind==='file'){
     if(!rootFacts(opts.sourceRoot).available||!baselineInside(opts.sourceRoot,s.path))state='unavailable';
     else try{state=sha(baselineBytes(s.path,opts.sourceRoot))===s.sha256?'current':'changed';}catch(error){state=missingState(opts.sourceRoot,s.rootIdentity,error);}
+    if(state==='current'&&s.adaptation)for(const file of s.adaptation.artifacts){
+     const root=s.adaptation.recordRoot,key=digest([root,file]);let current=artifacts.get(key);
+     if(!current){try{current=baselineInside(root,file.path)&&sha(baselineBytes(file.path,root,{max:20*1024*1024}))===file.sha256?'current':'changed';}catch(error){current=missingState(root,s.adaptation.recordRootIdentity,error);}artifacts.set(key,current);}
+     if(current!=='current'){state=current;break;}
+    }
+    if(state==='current'&&s.adaptation)for(const file of s.adaptation.sourceDependencies){
+     const key=digest([opts.sourceRoot,file]);let current=artifacts.get(key);
+     if(!current){try{current=baselineInside(opts.sourceRoot,file.path)&&sha(baselineBytes(file.path,opts.sourceRoot))===file.sha256?'current':'changed';}catch(error){current=missingState(opts.sourceRoot,s.rootIdentity,error);}artifacts.set(key,current);}
+     if(current!=='current'){state=current;break;}
+    }
    }else {const actual=baselineLedgerFact(db,definition.scope,s);state=actual===null?'missing':actual===s.sha256?'current':'changed';
     if(state==='current')for(const relation of s.relations??[]){
      const op=db.prepare('SELECT state FROM audit_operations WHERE database_instance_id=? AND operation_id=? AND attempt=?').get(definition.scope.databaseInstanceId,relation.operationId,relation.attempt);
@@ -95,9 +106,9 @@ function historicalExpenseText(p,facts){
  const fs=list(facts).filter(f=>list(p.evidenceRefs).includes(f.factRef)),labels={management_expense:'管理费用',sales_expense:'销售费用',finance_expense:'财务费用'},roles=new Set();
  for(const g of groupFacts(fs,p.when)){
   if(field(g,'creates_asset')!==false)continue;const refs=g.filter(f=>f.field==='business_reference').map(f=>f.factRef);
-  for(const h of fs.filter(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&f.linkedBusinessRefs?.some(ref=>refs.includes(ref))))for(const entry of businessEntries(h,refs))if(Object.hasOwn(labels,entry.role)&&entry.debit-entry.credit>0)roles.add(entry.role);
+  for(const h of fs.filter(f=>usableHistoricalEvidence(f,fs,refs)&&f.linkedBusinessRefs?.some(ref=>refs.includes(ref))))for(const entry of businessEntries(h,refs))if(Object.hasOwn(labels,entry.role)&&entry.debit-entry.credit>0)roles.add(entry.role);
  }
- return roles.size===1?`沿已核历史${labels[[...roles][0]]}归集，用途变化另核`:null;
+ return roles.size===1?`沿${fs.some(f=>f.source.adaptation)?'有出处历史':'已核历史'}${labels[[...roles][0]]}归集，用途变化另核`:null;
 }
 function ruleText(p,facts){const condition=p.when==='account_set'?'':BASELINE_LABELS[p.when]+'：',monthly=p.allocationBasis==='monthly_equal'?p.kind==='revenue_period'?'整月均匀服务按月等额确认':['expense_period','cost_treatment'].includes(p.kind)?'整月均匀受益的非资产服务按月等额分摊':null:null;return condition+(historicalExpenseText(p,facts)??monthly??BASELINE_LABELS[p.value]);}
 export function renderBusinessBaseline(definition,scope,{principles=definition.principles,taxBurden=definition.taxBurden}={}){
@@ -116,7 +127,7 @@ function view(db,scope,target,opts){
  const d=current.definition,instances=baselineInstances(db,scope);if(d.interfaceVersion!==BASELINE_INTERFACE||d.scope.enterpriseKey!==scope.enterpriseKey||d.scope.accountSetId!==scope.accountSetId||!instances.has(d.scope.databaseInstanceId))fail('finance_baseline_record_invalid');
  const states=preserveRecordedInvalidation({...d,baselineRef:current.methodRef,instanceLineage:[...instances]},factStates(db,d,opts),scope),bad=refs=>refs.some(ref=>states.get(ref)!=='current');
  annotateFinanceCall({businessBaselineObservation:{baselineRef:current.methodRef,states:[...states].map(([factRef,state])=>({factRef,state}))}});
- const proofCurrent=p=>{const fs=d.facts.filter(f=>p.evidenceRefs.includes(f.factRef));return (p.kind!=='accounting_standard'&&!['checked_historical_inference','source_history_inference'].includes(p.authority)||supportedPrinciple(p,fs,scope))&&(p.allocationBasis!=='monthly_equal'||monthlyEqualBasis(p,fs));};
+ const proofCurrent=p=>{const fs=d.facts.filter(f=>p.evidenceRefs.includes(f.factRef));return (p.kind!=='accounting_standard'&&!['checked_historical_inference','source_history_inference','adapted_history_inference'].includes(p.authority)||supportedPrinciple(p,fs,scope))&&(p.allocationBasis!=='monthly_equal'||monthlyEqualBasis(p,fs));};
  const affected=d.principles.filter(p=>bad(p.evidenceRefs)||!choiceCurrent(p,d.facts,scope.period)||!proofCurrent(p)),usable=d.principles.filter(p=>!bad(p.evidenceRefs)&&choiceCurrent(p,d.facts,scope.period)&&proofCurrent(p));
  const tax={...d.taxBurden,summaries:d.taxBurden.summaries.filter(t=>!bad(t.evidenceRefs))};
  const changed=[...states.values()].some(s=>s==='changed'||s==='missing'),unavailable=[...states.values()].some(s=>s==='unavailable');
@@ -142,18 +153,18 @@ export async function readBaselineMaterials(args,options={}){
  if(!currentFinanceCall())return withFinanceCall({tool:'finance_baseline_materials',args,auditDir:opts.auditDir},()=>readBaselineMaterials(args,opts));
  const binding=scopeBinding(args,opts),db=new DatabaseSync(binding.dbPath,{readOnly:true});
  try{storage.assertBusinessMemoryScope(db,binding.scope);db.exec('BEGIN');
-  const detail=args.section&&args.section!=='overview'&&args.section!=='structure',unbound=!(args.originals??[]).length&&!(args.materialRefs??[]).length;
+  const detail=args.section&&args.section!=='overview'&&args.section!=='structure',unbound=!(args.originals??[]).length&&!(args.materialRefs??[]).length&&!args.adaptation;
   if(detail&&unbound&&!args.sourceCursor&&args.extractKnownFields===false){db.exec('COMMIT');return {version:'finance-baseline-materials/1',target:args.target,scopeVerified:true,section:args.section,status:'material_reference_required',next:{tool:'finance_baseline_materials',arguments:{target:args.target,extractKnownFields:true,section:args.section}}};}
   if(detail&&unbound&&args.extractKnownFields!==false)args={...args,extractKnownFields:true};
-  if(args.sourceCursor&&(!args.extractKnownFields||(args.originals??[]).length||(args.materialRefs??[]).length||args.selections?.length||args.historicalRows?.length))fail('finance_baseline_input_invalid');
+  if(args.sourceCursor&&(!args.extractKnownFields||(args.originals??[]).length||(args.materialRefs??[]).length||args.selections?.length||args.historicalRows?.length||args.adaptation))fail('finance_baseline_input_invalid');
   let actualArgs=args,discovery=null,cursorSnapshot=null;
-  if(args.extractKnownFields&&!(args.originals??[]).length&&!(args.materialRefs??[]).length){
+  if(args.extractKnownFields&&!(args.originals??[]).length&&!(args.materialRefs??[]).length&&!args.adaptation){
    cursorSnapshot=args.sourceCursor?await materialSnapshot(args.sourceCursor,args,db,binding,opts):null;if(args.sourceCursor&&!cursorSnapshot.sourceDiscoveryState)fail('finance_baseline_discovery_cursor_invalid');
    discovery=discoverBaselineKnownSources(db,binding.scope,opts,cursorSnapshot?.sourceDiscoveryState);actualArgs={...args,originals:discovery.originals};
   }
   const parents=cursorSnapshot?[cursorSnapshot]:[];for(const ref of args.materialRefs??[])parents.push(await materialSnapshot(ref,args,db,binding,opts));
-  const fresh=(actualArgs.originals??[]).length||!parents.length?leafMaterialRequest(actualArgs):null,requests=flatMaterialRequests([...parents,...(fresh?[{requests:[fresh]}]:[])]);
-  const snapshot=mergeBaselineMaterialSnapshots([...parents,...(fresh?[captureBaselineMaterials(db,binding.scope,fresh,opts)]:[])]),inventory=!discovery&&!(args.originals??[]).length&&!parents.length?discoverBaselineSourceInventory(db,binding.scope,args,opts):null;db.exec('COMMIT');snapshot.requests=requests;
+  const fresh=(actualArgs.originals??[]).length||actualArgs.adaptation||!parents.length?leafMaterialRequest(actualArgs):null,requests=flatMaterialRequests([...parents,...(fresh?[{requests:[fresh]}]:[])]);
+  const snapshot=mergeBaselineMaterialSnapshots([...parents,...(fresh?[await captureMaterialRequest(db,binding,fresh,opts)]:[])]),inventory=!discovery&&!(args.originals??[]).length&&!parents.length&&!args.adaptation?discoverBaselineSourceInventory(db,binding.scope,args,opts):null;db.exec('COMMIT');snapshot.requests=requests;
   const discoveryState=discovery?.state??(parents.length===1&&!fresh?parents[0].sourceDiscoveryState:null);if(discoveryState)snapshot.sourceDiscoveryState=discoveryState;
   const catalog=principleSupport(snapshot.facts,binding.scope).map(p=>({...p,supportRef:baselineSupportRef(binding.scope,p)})),inherited=[];
   for(const parent of parents)for(const candidate of parent.supportSelections??[]){const p={...candidate,evidenceRefs:candidate.evidenceRefs.map(ref=>snapshot.factAliases[ref]??ref)},fs=p.evidenceRefs.map(ref=>snapshot.facts.find(f=>f.factRef===ref));if(fs.every(Boolean)&&supportedPrinciple(p,fs,binding.scope)&&(!p.allocationBasis||monthlyEqualBasis(p,fs)))inherited.push(p);}
@@ -176,8 +187,14 @@ function businessEntries(posting,businessRefs){
  const indices=new Set(list(posting.source.relations).filter(r=>businessRefs.includes(r.businessRef)).flatMap(r=>list(r.entryIndices)).filter(i=>Number.isSafeInteger(i)&&i>=0));
  return posting.value.entries.filter((entry,index)=>indices.has(index));
 }
+function usableHistoricalEvidence(posting,facts,businessRefs){
+ if(posting.field!=='historical_posting'||!['posted','observed_history'].includes(posting.value.status))return false;
+ if(!posting.source.adaptation)return true;
+ // 脚本行只作观察；独立原件中直接核读的同一实际业务号必须在本原则证据内。
+ return facts.some(f=>f.field==='business_reference'&&f.source.kind==='file'&&!f.source.adaptation&&f.verification==='source_value_bound'&&f.source.sha256!==posting.source.sha256&&businessRefs.includes(f.factRef)&&posting.linkedBusinessRefs?.includes(f.factRef));
+}
 function historySupports(fs,role,amount,{start,end,minimumPeriods=1,date:exactDate,businessRefs=[]}={}){
- const matches=fs.filter(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&(!start||f.value.period>=start.slice(0,7))&&(!end||f.value.period<=end.slice(0,7))&&(!exactDate||(f.value.date?.slice(0,7)??f.value.period)===exactDate.slice(0,7))).filter(f=>{
+ const matches=fs.filter(f=>usableHistoricalEvidence(f,fs,businessRefs)&&(!start||f.value.period>=start.slice(0,7))&&(!end||f.value.period<=end.slice(0,7))&&(!exactDate||(f.value.date?.slice(0,7)??f.value.period)===exactDate.slice(0,7))).filter(f=>{
   if(!businessRefs.length||!f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref)))return false;
   const n=businessEntries(f,businessRefs).filter(e=>role==='income'?['main_income','other_income'].includes(e.role):e.role===role).reduce((n,e)=>n+(role==='income'||role==='main_income'||role==='tax_payable'?e.credit-e.debit:e.debit-e.credit),0);
   return Math.abs(n-amount)<0.011;
@@ -205,7 +222,7 @@ function supportedPrinciple(p,fs,scope){
  for(const g of groupFacts(fs,p.when)){
   const span=interval(g),amount=field(g,'amount_net'),even=field(g,'service_pattern')==='even_service',businessRefs=g.filter(f=>f.field==='business_reference').map(f=>f.factRef);
   if(p.kind==='business_classification'&&p.when!=='account_set'){
-   const linked=fs.filter(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref)));
+   const linked=fs.filter(f=>usableHistoricalEvidence(f,fs,businessRefs)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref)));
    if(['main_income','other_income'].includes(p.value)&&linked.some(f=>businessEntries(f,businessRefs).some(e=>e.role===p.value&&e.credit-e.debit>0))&&!linked.some(f=>businessEntries(f,businessRefs).some(e=>['main_income','other_income'].includes(e.role)&&e.role!==p.value&&e.credit-e.debit>0)))return true;
    if(p.value==='actual_use_expense'&&field(g,'creates_asset')===false&&linked.some(f=>businessEntries(f,businessRefs).some(e=>['management_expense','sales_expense','finance_expense'].includes(e.role)&&e.debit-e.credit>0)))return true;
   }
@@ -219,9 +236,12 @@ function supportedPrinciple(p,fs,scope){
   }
   if(p.kind==='vat_input_period'&&p.value==='confirmation_period'){
    const confirmed=field(g,'confirmation_date'),tax=field(g,'amount_tax');
-   if(confirmed&&tax>0&&fs.some(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&f.value.period===confirmed.slice(0,7)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref))&&businessEntries(f,businessRefs).some(e=>e.role==='tax_payable'&&Math.abs(e.debit-e.credit-tax)<0.011)))return true;
+   if(confirmed&&tax>0&&fs.some(f=>usableHistoricalEvidence(f,fs,businessRefs)&&f.value.period===confirmed.slice(0,7)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref))&&businessEntries(f,businessRefs).some(e=>e.role==='tax_payable'&&Math.abs(e.debit-e.credit-tax)<0.011)))return true;
   }
  }return false;
+}
+function principleAuthority(kind,value,facts){
+ return facts.some(f=>f.field===kind&&f.value===value&&!f.source.interpretation)?'source_bound_policy':facts.some(f=>f.field==='historical_posting'&&f.source.adaptation)?'adapted_history_inference':facts.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference';
 }
 function principleSupport(facts,scope){
  const support=[],historical=facts.filter(f=>f.field==='historical_posting'),assets=facts.filter(f=>f.field==='asset_configuration');
@@ -232,7 +252,7 @@ function principleSupport(facts,scope){
   for(const when of ['fixed_asset','intangible_asset'])candidates.push({when,fs:assets});
   for(const {when,fs}of candidates){if(!fs.length)continue;const p={kind,value,when};if(supportedPrinciple(p,fs,scope)&&!support.some(s=>s.kind===kind&&s.value===value&&s.when===when)){
    const monthly=monthlyEqualBasis(p,fs);let proof=[...fs];for(const f of fs){const reduced=proof.filter(v=>v.factRef!==f.factRef);if(supportedPrinciple(p,reduced,scope)&&(!monthly||monthlyEqualBasis(p,reduced)))proof=reduced;}
-   if(proof.length<=40)support.push({...p,...(monthly?{allocationBasis:'monthly_equal'}:{}),evidenceRefs:proof.map(f=>f.factRef),authority:proof.some(f=>f.field===kind&&f.value===value&&!f.source.interpretation)?'source_bound_policy':proof.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference'});
+   if(proof.length<=40)support.push({...p,...(monthly?{allocationBasis:'monthly_equal'}:{}),evidenceRefs:proof.map(f=>f.factRef),authority:principleAuthority(kind,value,proof)});
   }}
  }return support.slice(0,24);
 }
@@ -242,7 +262,7 @@ function validatePrinciples(principles,facts,scope){
   if(!supportedPrinciple(p,fs,scope))fail('finance_baseline_principle_unsupported');
   const monthly=monthlyEqualBasis(p,fs);if(p.allocationBasis==='monthly_equal'&&!monthly)fail('finance_baseline_principle_unsupported');if(monthly)p.allocationBasis='monthly_equal';
   if(out.some(prior=>prior.kind===p.kind&&prior.when===p.when&&prior.value!==p.value&&!(p.kind==='business_classification'&&[prior.value,p.value].includes('actual_use_expense'))))fail('finance_baseline_principle_conflict');
-  if(!out.some(prior=>prior.kind===p.kind&&prior.when===p.when&&prior.value===p.value))out.push({...p,authority:fs.some(f=>f.field===p.kind&&f.value===p.value&&!f.source.interpretation)?'source_bound_policy':fs.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference'});
+  if(!out.some(prior=>prior.kind===p.kind&&prior.when===p.when&&prior.value===p.value))out.push({...p,authority:principleAuthority(p.kind,p.value,fs)});
  }
  return out.sort((a,b)=>a.kind.localeCompare(b.kind)||a.when.localeCompare(b.when));
 }
@@ -256,11 +276,16 @@ async function materialSnapshot(reference,args,db,binding,opts){
  if(stored.snapshotDigest!==reference.snapshotDigest||!same(stored.scope,binding.scope))fail('finance_baseline_material_record_invalid');
  const requests=stored.requests??[leafMaterialRequest(record.input)];if(!Array.isArray(requests)||!requests.length||requests.length>12)fail('finance_baseline_material_record_invalid');
  for(const request of requests){validate('finance_baseline_materials',request);if(request.materialRefs||request.sourceCursor||!same(request.target,args.target))fail('finance_baseline_material_record_invalid');}
- const snapshot=mergeBaselineMaterialSnapshots(requests.map(request=>captureBaselineMaterials(db,binding.scope,request,opts)));
+ const parts=[];for(const request of requests)parts.push(await captureMaterialRequest(db,binding,request,opts));
+ const snapshot=mergeBaselineMaterialSnapshots(parts);
  if(snapshot.snapshotDigest!==reference.snapshotDigest)fail('finance_baseline_material_changed');
  return {...snapshot,requests,supportSelections:list(stored.supportSelections),...(stored.sourceDiscoveryState?{sourceDiscoveryState:stored.sourceDiscoveryState}:{})};
 }
-function leafMaterialRequest(args){return {target:args.target,...(args.originals?{originals:args.originals}:{}),...(args.selections?{selections:args.selections}:{}),...(args.historicalRows?{historicalRows:args.historicalRows}:{}),...(args.extractKnownFields?{extractKnownFields:true}:{}),...(args.historyOffset!==undefined?{historyOffset:args.historyOffset}:{}),...(args.historyLimit!==undefined?{historyLimit:args.historyLimit}:{})};}
+async function captureMaterialRequest(db,binding,args,opts){
+ const adaptation=args.adaptation?await loadBaselineAdaptation(args.adaptation,binding.scope,{...opts,dbPath:binding.dbPath}):undefined;
+ return captureBaselineMaterials(db,binding.scope,args,{...opts,adaptation});
+}
+function leafMaterialRequest(args){return {target:args.target,...(args.originals?{originals:args.originals}:{}),...(args.selections?{selections:args.selections}:{}),...(args.historicalRows?{historicalRows:args.historicalRows}:{}),...(args.adaptation?{adaptation:args.adaptation}:{}),...(args.extractKnownFields?{extractKnownFields:true}:{}),...(args.historyOffset!==undefined?{historyOffset:args.historyOffset}:{}),...(args.historyLimit!==undefined?{historyLimit:args.historyLimit}:{})};}
 function flatMaterialRequests(snapshots){const requests=[...new Map(snapshots.flatMap(s=>s.requests).map(r=>[digest(r),r])).values()];if(requests.length>12)fail('finance_baseline_material_merge_limit');return requests;}
 // 规范对象只有一个分组器；模型侧结构与本机resolver默认事实集共用它，原值只留本机。
 function calculationObjects(facts,scope,{factRefs,factAliases={}}={}){

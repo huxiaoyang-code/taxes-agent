@@ -82,6 +82,10 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `business-baseline-materials.mjs` 从现库及通用原件读取器读取。`material-document.mjs` 对JSON／CSV／XLS／XLSX／PDF／文本／DOCX与图像保留原件SHA、位置及实际提取器；Python与Windows OCR按实有能力执行，结构与安全标签可在未知字段、主体未核时先披露，原值留本机。`finance_record_contract(recordType:"baseline")` 给字段需求，Agent用显式定位及受限语义解释适配；`historicalRows` 将原件历史分录保留为来源观察，不导入正式账、不升级为DB已过账。账前 `bindings[].locator` 复用同一读取器，派生件不洗成原件。
 
+材料失败按实际范围恢复。请求校验返回安全字段位置与修正提示；单来源失败保留其他成功事实和税费依据，`sourceFailures` 给摘要及指向既有 `coverage` 的真实续页，诊断区分 `code/stage/recoverable/originalRef`。Agent据当前 `tools/list` 和回执修参数、调查结构或选择本机脚本，不把工具未读入写成客户没提供，也不重建一套工作流。需要脚本恢复历史时才调用 `finance_record_contract(recordType:"baseline_adaptation")` 展开完整产物schema；失败回执不制造缺标题或脚本的计算调用。
+
+恢复沿既有 `finance_calculation_run` 执行：`sources:[{originalRef}]` 解析为获准来源并保留实际字节快照，脚本仅从本机 `input.sources[].snapshotPath` 读取，生成少量有定位的历史观察。`baseline-material-adaptation.mjs` 接收 `finance_baseline_materials` 的 `adaptation:{callId,output:"baseline-history.json"}`，核真实已绑定scope、完整成功执行、脚本／输入／产物／来源的版本，再经现有 `materialRefs` 与独立读取材料合并。产物是脚本观察，不是原生已核值或已过账；每行身份与字段须同一原件记录，最多40行，只有不同原件SHA、同实际业务号及直接核实条件共证才支持历史推断。同物理行重叠引用不双计，矛盾、无共证及既有准入限制不因运行成功消失。保存后沿用短原则，普通新月不重跑历史适配；变更只影响依赖证据的规则。
+
 基线标题随实际已有结论显示；只有配置时 `coverage.configurationOnly:true`／`generationBasis:configuration_only` 并保持 `needs_review`，不能宣称归集、成本或历史基线已生成；仅再有税负参考时 `generationBasis:configuration_and_tax_reference`／`businessPrinciplesMissing:true`，有效税负保留，缺业务原则仍 `needs_review`，只补受影响规则。普通表格按实际行；单一真实业务号可关联同原件跨页字段，多号保持歧义。购销双方按角色与受信登记主体匹配，没登记税号不猜。
 
 已知字段自动通道保持兼容。正常入口 `{target,extractKnownFields:true}` 不传 originals／materialRefs，有界发现当前范围已核主体且有已知语义的原件，每批最多12份；`sourceDiscovery.next.arguments` 的真实 `sourceCursor` 继承前批材料及已返回候选，旁路计数与所选来源的 `coverage.sourceOwners` 分开。无抽取标志时仍可读 `sourceInventory` 并显式选原件／字段。`business-baseline-projection.mjs` 负责紧凑 overview、短 `supportRef`、独立 `coverage` 及真实续页，同时把MCP文本／structured双份封装约束在12KB UTF8内；结构／facts／tax／coverage按需通过同一 MCP 读取，不依赖宿主原生文件读取。原主体／业务号／金额／日期不回显；实际分组依原件上下文／同行及跨源同业务引用，caller group 不能拼证。历史算法须有真实关联，不凭金额／科目相同认定；VAT 模板仍只覆盖有依据的预收并提前开票同类租赁。完整快照留本机，不新增明细台账。

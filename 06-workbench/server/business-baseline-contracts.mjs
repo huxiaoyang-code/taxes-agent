@@ -47,6 +47,17 @@ export const BASELINE_LOCATOR_SCHEMA = {type:'object',additionalProperties:false
 const locator=BASELINE_LOCATOR_SCHEMA;
 export const BASELINE_OWNER_SCHEMA={type:'object',additionalProperties:false,required:['role','name'],properties:{role:{enum:['enterprise','buyer','seller']},name:locator,taxId:locator}};
 
+// 自编脚本仅提交少量有原件位置的历史观察；规范政策和已过账身份不在此合同内。
+const adaptationLocator={oneOf:[
+ {type:'object',additionalProperties:false,required:['jsonPointer'],properties:{jsonPointer:{type:'string',minLength:1,maxLength:1024,pattern:'^/(?:[^~]|~[01])*$'}}},
+ {type:'object',additionalProperties:false,required:['row','column'],properties:{row:locator.properties.row,column:{type:'integer',minimum:1,maximum:256},sheetIndex:locator.properties.sheetIndex}},
+ {type:'object',additionalProperties:false,required:['page','line'],properties:{page:locator.properties.page,line:locator.properties.line,start:locator.properties.start,end:locator.properties.end}},
+]};
+const adaptationValue={type:'object',additionalProperties:false,required:['value','locator'],properties:{value:{anyOf:[{type:'string',maxLength:2000},{type:'number'},{type:'null'}]},locator:{$ref:'#/$defs/locator'}}};
+const adaptationCell={$ref:'#/$defs/value'};
+export const BASELINE_ADAPTATION_SCHEMA={type:'object',additionalProperties:false,required:['version','rows'],properties:{version:{const:'finance-baseline-history-adaptation/1'},rows:{type:'array',minItems:1,maxItems:40,items:{type:'object',additionalProperties:false,required:['id','sourceIndex','period','businessReference','debit','credit','owner'],properties:{id,sourceIndex:{type:'integer',minimum:0,maximum:63},period:adaptationCell,date:adaptationCell,businessReference:adaptationCell,code:adaptationCell,accountName:adaptationCell,debit:adaptationCell,credit:adaptationCell,owner:{type:'object',additionalProperties:false,required:['name'],properties:{name:adaptationCell,taxId:adaptationCell}}}}}},$defs:{locator:adaptationLocator,value:adaptationValue}};
+export const BASELINE_ADAPTATION_REF_SCHEMA={type:'object',additionalProperties:false,required:['callId','output'],properties:{callId:{type:'string',pattern:'^\\d{8}T\\d{9}Z_[a-f0-9-]{36}$'},output:{const:'baseline-history.json'}}};
+
 const interpretation={type:'object',additionalProperties:false,required:['value','reason'],properties:{value:{anyOf:[{type:'string',maxLength:100},{type:'boolean'}]},reason:{type:'string',minLength:1,maxLength:1000}}};
 const page = {offset:{type:'integer',minimum:0,maximum:100000},limit:{type:'integer',minimum:1,maximum:50}};
 const gap = {type:'object',additionalProperties:false,required:['code'],properties:{code:{enum:BASELINE_GAPS},kind:{enum:Object.keys(BASELINE_VALUES)}}};
@@ -59,6 +70,7 @@ export const BUSINESS_BASELINE_SCHEMAS = Object.freeze({
   originals:{type:'array',maxItems:32,items:{type:'object',additionalProperties:false,required:['id'],oneOf:[{required:['path']},{required:['originalRef']}],properties:{id,path:text,originalRef:{type:'string',pattern:'^bs:[a-f0-9]{64}$'},sha256:digest,owner:locator,ownerIdentity:BASELINE_OWNER_SCHEMA,structureOffset:{type:'integer',minimum:0,maximum:1000000},pageOffset:{type:'integer',minimum:0,maximum:10000},maxPages:{type:'integer',minimum:1,maximum:40}}}},
   selections:{type:'array',maxItems:400,items:{type:'object',additionalProperties:false,required:['id','field','originalId','locator'],properties:{id,field:{enum:BASELINE_FIELDS},originalId:id,group:id,locator,ownerIdentity:BASELINE_OWNER_SCHEMA,valueSlice,interpretation}}},
   historicalRows:{type:'array',maxItems:400,items:{type:'object',additionalProperties:false,required:['id','originalId','period','businessReference','debit','credit'],properties:{id,originalId:id,period:locator,date:locator,businessReference:locator,code:locator,accountName:locator,debit:locator,credit:locator,ownerIdentity:BASELINE_OWNER_SCHEMA}}},
+  adaptation:BASELINE_ADAPTATION_REF_SCHEMA,
   extractKnownFields:{type:'boolean'},materialRefs:BASELINE_MATERIAL_REFS_SCHEMA,sourceCursor:BASELINE_MATERIAL_REFS_SCHEMA.items,
   section:{enum:['overview','structure','facts','tax','coverage','calculation']},historyOffset:{type:'integer',minimum:0,maximum:100000},historyLimit:{type:'integer',minimum:1,maximum:50},
   ...page,
@@ -74,8 +86,18 @@ export const BUSINESS_BASELINE_SCHEMAS = Object.freeze({
 export function baselineMaterialContract(){return {
  version:'finance-baseline-material-contract/1',recordType:'baseline',tool:'finance_baseline_materials',
  requirements:{principles:'会计准则、业务归集、成本方法、税会所属期和有效选择按证据范围提炼；只有配置不算历史基线已生成。',history:'历史只在原件中时用historicalRows定位实际业务号、期间和分录；只形成来源观察，不导入账库或声称已过账。',tax:'历史税负需税种、应纳/实缴、所属/缴款期、本期/累计、税额阶段及可比税额和分母。',missing:'工具未读入、缺少映射与客户未提供分别报告。'},
- mapping:{fields:BASELINE_FIELDS,locator:BASELINE_LOCATOR_SCHEMA,ownerIdentity:BASELINE_OWNER_SCHEMA,interpretation:'仅受限枚举/布尔的模型解释，必须有原值位置和reason；金额、日期、业务号不能由解释覆写。',historicalRows:BUSINESS_BASELINE_SCHEMAS.finance_baseline_materials.properties.historicalRows.items},
- workflow:['无材料引用时用section:structure列出原件，再按sourceInventory.items[].next读不透明originalRef对应的结构。','按实际fieldRef/页行/表格位置选择字段，不依赖固定表头词典；原值在本机读取，结构分页沿真实next继续。','主体未核时先看identity.registeredNameAvailable与reason；registered_identity_missing表示账库受信主体名/税号尚无登记，source_owner_unmatched才表示已有登记但原件匹配未成。先核实已有企业绑定，不在空名单上反复换表头；显示账套名和opaque enterpriseKey不自证税号或登记名称。','把归属核实、来源观察、模型解释和人工确认分开；单一真实业务号可关联同原件跨页字段，多业务保持歧义。','selections/historicalRows保存的是读取与映射方式，原件SHA、提取器和实际位置随事实留存；正常计算仍复用现有工具。'],
+ mapping:{fields:BASELINE_FIELDS,locator:{modes:['{fieldRef}：使用结构真实返回的md/bl不透明引用','{jsonPointer}：原件JSON位置','{row,column,sheetIndex?,sheet?,headerRows?}：行列从1起，表序号从0起','{page,line,start?,end?}：页行从1起，字符区间从0起且end不含'],valueSlice:'可选{after,before?}确定性取值；完整类型、范围及互斥规则沿当前工具schema。'},ownerIdentity:{required:['role','name'],role:['enterprise','buyer','seller'],name:'locator',taxId:'optional locator'},interpretation:'仅受限枚举/布尔的模型解释，必须有原值位置和reason；金额、日期、业务号不能由解释覆写。',historicalRows:{required:['id','originalId','period','businessReference','debit','credit'],optional:['date','code','accountName','ownerIdentity'],values:'除id/originalId及ownerIdentity外均为locator；缺日日期保留月粒度，同一实际记录的字段不得跨行拼接。'}},
+ adaptation:{meaning:'内置读取确有障碍时可用已有本机脚本产生有出处的历史观察；不填自报原值，不升级为已过账或人审。',next:{tool:'finance_record_contract',arguments:{recordType:'baseline_adaptation'}}},
+ workflow:['section:structure列原件，沿sourceInventory.items[].next读取originalRef结构；分页跟真实next。','用fieldRef/页行/表格位置映射，原值只在本机读取；语义解释与人工确认分开。','identity.reason为registered_identity_missing时先核企业绑定；source_owner_unmatched为已有登记但匹配未成。账套显示名或enterpriseKey不自证税号。','单一真实业务号可关联同原件跨页字段，多业务保持歧义；SHA、提取器和原件位置随事实保存。'],
+ example:{meaning:'仅调用格式；账套和期间换成实际绑定',tool:'finance_baseline_materials',arguments:{target:{accountSetId:1,period:'2026-09'},section:'structure'}},
+};}
+
+export function baselineAdaptationContract(){return {
+ version:'finance-baseline-adaptation-contract/1',recordType:'baseline_adaptation',tool:'finance_baseline_materials',
+ reference:BASELINE_ADAPTATION_REF_SCHEMA,outputSchema:BASELINE_ADAPTATION_SCHEMA,
+ execution:'finance_calculation_run用sources:[{originalRef}]；从input.sources[].snapshotPath读，所选行写input.outputDir/baseline-history.json。接收传_meta.financeCall.callId；须有真实账套/本期绑定及成功回执。',
+ scope:'全部字段含企业身份须同表同行/同JSON父记录/同文本行。缺日日期保留月粒度，不拼企业或业务。',
+ authority:'仅脚本观察；须不同SHA的直接核读原件共证同业务，才可保存为adapted_history_inference。无共证待核；安全限制及已知原值/主体冲突不能绕过。',
 };}
 
 // 中文业务别名是固定词典，不接受调用者任意 valueMap 把无关原文解释成政策。

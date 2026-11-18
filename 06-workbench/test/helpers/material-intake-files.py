@@ -114,6 +114,13 @@ book.save(str(historical_path))
 with historical_path.open("ab") as stream:
     stream.write(b"\x00")
 
+# 同一历史样本的旧系统 CSV 导出，扩展名为 XLS；内置 BIFF 读取应失败，由受信脚本适配。
+with file("recovery", "fallbackHistory", "Legacy history export.xls").open("w", encoding="utf-8", newline="") as stream:
+    writer = csv.writer(stream)
+    writer.writerow(columns)
+    for values in rows:
+        writer.writerow([owner["companyName"], *values])
+
 tax = openpyxl.Workbook()
 ws = tax.active
 ws.title = "申报汇总"
