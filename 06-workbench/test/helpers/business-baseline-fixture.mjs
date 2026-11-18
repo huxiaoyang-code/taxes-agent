@@ -160,15 +160,6 @@ export async function startBaselineMcp(f,{sourceRoot=f.sourceRoot,auditDir=f.aud
   await client.initialize('independent-business-baseline-cold-start');return client;
 }
 
-export function appendBaselineCurrentVoucher(f){
-  const result=spawnSync(process.execPath,[fileURLToPath(import.meta.url),'--append-current',f.root],{cwd:BASELINE_WORKBENCH_ROOT,encoding:'utf8',windowsHide:true,timeout:30000,env:{...process.env,WORKBENCH_DATA_DIR:f.data,FINANCE_DATABASE_PATH:f.dbPath,FINANCE_SOURCE_ROOT:f.sourceRoot,FINANCE_AUDIT_DIR:f.auditDir,FINANCE_BUSINESS_SESSION:'',WORKBENCH_DATABASE_MODE:'readwrite',NODE_NO_WARNINGS:'1'}});
-  assert.equal(result.status,0,result.stderr+'\n'+result.stdout);return JSON.parse(result.stdout);
-}
-
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)&&process.argv[2]==='--seed'){
   const root=process.argv[3];if(!root||!isAbsolute(root))throw Error('baseline_fixture_absolute_root_required');await seedBaseline(root,{collisionOnly:process.argv[4]==='--collision-only',combinedVoucher:process.argv[4]==='--combined-voucher'});console.log(JSON.stringify({status:'cold_raw_fixture_created',root,modelInvoked:false,baselinePrewritten:false,methodPreselected:false,scriptPrewritten:false}));
-}
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)&&process.argv[2]==='--append-current'){
-  const f=readBaselineJson(join(process.argv[3],'fixture.json')),{db}=await import('../../server/db.mjs'),A=await import('../../server/accounting.mjs');
-  try{const v=A.createVoucher(f.a,syntheticVoucherEvidence({period:'2026-07',voucher_date:'2026-07-20',number:101,status:'draft',summary:'新增本期维修业务草稿',entries:[{code:'1122',debit:123},{code:'600101',credit:123}]},join(f.sourceRoot,'a','本期凭证原件')));console.log(JSON.stringify({id:v.id,period:'2026-07',status:v.status}));}finally{db.close();}
 }

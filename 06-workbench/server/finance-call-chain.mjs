@@ -2,16 +2,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile, readFile, readdir, lstat, realpath } from 'node:fs/promises';
-import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
+import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {captureBusinessEvidence,summaryBusinessEvidence} from './business-evidence.mjs';
 
 const context = new AsyncLocalStorage();
 // 结构接收工具由领域先核准路径和范围，再登记实际来源。
-const domainManagedSources = new Set(['finance_baseline_read','finance_baseline_materials','finance_baseline_save','finance_prebook_review']);
+const domainManagedSources = new Set(['finance_baseline_materials','finance_prebook_review']);
 export const hasDomainManagedSources=tool=>domainManagedSources.has(tool);
-// 只保存记录器本次实际新建的子树；不从调用参数或可注释metadata接收，嵌套调用继承同一进入前事实。
-const createdDirectories = new WeakMap();
 const sha = value => createHash('sha256').update(value).digest('hex');
 const encode = value => JSON.stringify(value, null, 2) + '\n';
 const secretKey = /(?:password|authorization|api[_-]?key|token|credential|secret|cookie)/i;
@@ -42,11 +40,10 @@ export function financeAuditDirectory(auditDir) {
   return resolve(value);
 }
 export const resolveFinanceAuditDir = financeAuditDirectory;
-async function rootDirectory(value,created) {
+async function rootDirectory(value) {
   const root = financeAuditDirectory(value);
   await checkParents(root, true);
-  const firstCreated=await mkdir(root, {recursive:true, mode:0o700});
-  if(firstCreated)created?.push(resolve(firstCreated));
+  await mkdir(root, {recursive:true, mode:0o700});
   await checkParents(root);
   const stat = await lstat(root);
   if (!stat.isDirectory() || stat.isSymbolicLink() || (await realpath(root)).toLowerCase() !== root.toLowerCase())
@@ -94,13 +91,9 @@ const scopeOf = options => snapshot(options.scope ?? options.args?.scope ?? opti
 let recorderDigest;
 async function recorderVersion() { return recorderDigest ??= sha(await readFile(fileURLToPath(import.meta.url))); }
 export function currentFinanceCall() { return context.getStore() ?? null; }
-export function financeCallCreatedDirectory(path) {
-  if(typeof path!=='string'||!isAbsolute(path))return false;
-  return (createdDirectories.get(context.getStore())??[]).some(root=>{const part=relative(root,resolve(path));return part===''||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../')&&!part.startsWith('..\\');});
-}
 export function annotateFinanceCall(values) {
   const active=context.getStore();if(!active)return false;
-  for(const key of ['scope','ruleVersion','codeDigest','catalogDigest','artifactRefs','nativeOperationId','configuredTarget','businessBaselineMaterials','businessBaselineObservation','financeCalculationContext'])if(values?.[key]!==undefined)active.metadata[key]=snapshot(values[key]);
+  for(const key of ['scope','ruleVersion','codeDigest','catalogDigest','artifactRefs','nativeOperationId','configuredTarget','businessBaselineMaterials','financeCalculationContext'])if(values?.[key]!==undefined)active.metadata[key]=snapshot(values[key]);
   if(Array.isArray(values?.sources)){
     const rows=[...(active.metadata.sources??[]),...values.sources.map(source=>({...snapshot(source),observedAt:new Date().toISOString(),observationStage:'native_loaded'}))];
     const unique=new Map();
@@ -112,11 +105,9 @@ export function annotateFinanceCall(values) {
 
 export async function withFinanceCall(options, fn) {
   if (!options || typeof options.tool !== 'string' || typeof fn !== 'function') throw Error('finance_call_arguments_invalid');
-  const created=[...(createdDirectories.get(context.getStore())??[])];
-  const root = await rootDirectory(options.auditDir,created), callId = `${new Date().toISOString().replace(/[-:.]/g,'')}_${randomUUID()}`;
+  const root = await rootDirectory(options.auditDir), callId = `${new Date().toISOString().replace(/[-:.]/g,'')}_${randomUUID()}`;
   const directory = join(root, callId);
   await mkdir(directory, {mode:0o700});
-  created.push(directory);
   const descriptors = sourceDescriptors(options), sources = await sourceState(descriptors), startedAt = new Date().toISOString(), start = performance.now();
   const input = await save(join(directory,'input.json'), snapshot(options.args ?? {}));
   const initialScope=scopeOf(options);
@@ -126,7 +117,6 @@ export async function withFinanceCall(options, fn) {
     evidenceMeaning:'本机文件与调用记录可核验；不证明原件真实、业务判断正确或已获人审。'};
   const beginRef = await save(join(directory,'begin.json'), begin);
   const reference = Object.freeze({callId, auditDir:root, recordPath:directory, metadata:{}});
-  createdDirectories.set(reference,Object.freeze(created));
   let value, error, completed = false;
   try { value = await context.run(reference, async()=>{
     if(typeof options.validate==='function')await options.validate();

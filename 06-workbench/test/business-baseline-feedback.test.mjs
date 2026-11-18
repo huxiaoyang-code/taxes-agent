@@ -1,46 +1,18 @@
-// 聚焦覆盖分支与计算结构；只用新建合成现场，模型侧仅消费正常MCP安全投影。
+// 聚焦材料分页与计算结构；只用新建合成现场，模型侧仅消费正常MCP安全投影。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {DatabaseSync} from 'node:sqlite';
-import {createBaselineFixture,startBaselineMcp,baselineTarget,baselineLogicalSnapshot} from './helpers/business-baseline-fixture.mjs';
-import {readColdBaselineMaterials,readBaselineSection,fixtureSourceArgs,materialReference} from './helpers/business-baseline-test-inputs.mjs';
+import {createBaselineFixture,startBaselineMcp,baselineTarget} from './helpers/business-baseline-fixture.mjs';
+import {readBaselineSection,fixtureSourceArgs,materialReference} from './helpers/business-baseline-test-inputs.mjs';
 import {resolveBaselineCalculationFacts} from '../server/business-baseline.mjs';
-import {baselineBranchSelection,fitBaselineBranchResponse} from '../server/business-baseline-projection.mjs';
-import {appendBusinessMemoryMethodVersion} from '../server/business-memory-storage.mjs';
 import {BASELINE_DATE_FIELDS,BASELINE_PERIOD_FIELDS,BASELINE_AMOUNT_FIELDS,BASELINE_QUANTITY_FIELDS,BASELINE_FACT_VALUES} from '../server/business-baseline-contracts.mjs';
 
-const tuple=p=>({kind:p.kind,value:p.value,when:p.when,...(p.allocationBasis?{allocationBasis:p.allocationBasis}:{})});
-const missingRepair={kind:'business_classification',value:'actual_use_expense',when:'repair'};
-test('语义覆盖按值/条件/分摊基准，只有同条件月等额受益期表述等价',()=>{
- const supports=[missingRepair,{...missingRepair,when:'maintenance'},{kind:'cost_treatment',value:'expense_current',when:'repair'},{kind:'cost_treatment',value:'allocate_benefit_period',when:'maintenance',allocationBasis:'monthly_equal'},{kind:'expense_period',value:'benefit_period',when:'maintenance',allocationBasis:'monthly_equal'}];
- const selected=[supports[1],supports[2],supports[4]],coverage=baselineBranchSelection(supports,selected);assert.deepEqual(coverage.items,[missingRepair]);assert.equal(coverage.omittedCount,0);
- assert(baselineBranchSelection(supports,[supports[1],supports[2],{...supports[4],when:'repair'}]).items.some(p=>p.when==='maintenance'&&p.value==='benefit_period'));
- assert(baselineBranchSelection(supports,[supports[1],supports[2],{kind:'expense_period',value:'benefit_period',when:'maintenance'}]).items.some(p=>p.allocationBasis==='monthly_equal'),'泛受益期不冒充已核按月等额');
- const many=Array.from({length:9},(_,i)=>({kind:'business_classification',value:'actual_use_expense',when:['repair','maintenance','lease','service','goods','inventory','fixed_asset','intangible_asset','account_set'][i]}));const bounded=baselineBranchSelection(many,[]);assert.equal(bounded.items.length,4);assert.equal(bounded.omittedCount,5);
-});
-
-test('实际MCP分支反馈与同一取数桥计算结构，旧只读覆盖不冒充完整',{timeout:180000},async t=>{
+test('实际MCP材料分页与同一取数桥计算结构',{timeout:180000},async t=>{
  const f=createBaselineFixture(),target=baselineTarget(f),client=await startBaselineMcp(f),options={dbPath:f.dbPath,sourceRoot:f.sourceRoot,auditDir:f.auditDir,sessionPath:''};
  const wireSizes=[];
  const call=async(name,args)=>{const rpc=await client.rpc('tools/call',{name,arguments:name==='finance_baseline_materials'&&args.originals?fixtureSourceArgs(client,args):args});assert(!rpc.error);assert(!rpc.result.isError,JSON.stringify(rpc.result));const size=Buffer.byteLength(JSON.stringify(rpc.result,null,2));assert(size<=12288,'完整MCP结果 '+size);wireSizes.push(size);return rpc.result.structuredContent;};
  try{
-  let material,firstSaved,completeSaved;
-  await t.test('保存提示遗漏的repair用途分支，等价分摊不重复，ready/短文不受提示强制',async()=>{
-   material=await readColdBaselineMaterials(client,target);const selected=material.principleSupport.filter(p=>!(p.kind==='business_classification'&&p.value==='actual_use_expense'&&p.when==='repair')&&!(p.kind==='cost_treatment'&&p.value==='allocate_benefit_period'&&p.when==='maintenance'));
-   const args={target,materialRefs:material.materialRefs,expectedRevision:0,effectiveFrom:'2026-07',principles:selected.map(p=>({supportRef:p.supportRef}))};firstSaved=await call('finance_baseline_save',args);assert.equal(firstSaved.status,'ready');assert.deepEqual(firstSaved.coverage.supportedKindsNotSelected,[]);assert.deepEqual(firstSaved.coverage.unselectedPrincipleBranches.items,[missingRepair]);assert.equal(firstSaved.coverage.unselectedPrincipleBranches.basis,'material_catalog');assert.equal(firstSaved.coverage.unselectedPrincipleBranches.complete,true);assert.equal(firstSaved.coverage.unselectedPrincipleBranches.omittedCount,0);
-   const before=baselineLogicalSnapshot(f.dbPath),read=await call('finance_baseline_read',{target});assert.equal(read.shortText,firstSaved.shortText);assert.equal(read.status,'ready');assert.deepEqual(read.coverage.unselectedPrincipleBranches.items,[missingRepair]);assert.equal(read.coverage.unselectedPrincipleBranches.basis,'saved_material_catalog');assert.equal(baselineLogicalSnapshot(f.dbPath),before);assert(Array.from(read.shortText).length<=600);assert(read.shortText.split('\n').length<=9);
-   const repair=material.principleSupport.find(p=>p.kind==='business_classification'&&p.value==='actual_use_expense'&&p.when==='repair');assert(repair);completeSaved=await call('finance_baseline_save',{...args,expectedRevision:1,principles:[...args.principles,{supportRef:repair.supportRef}]});assert.equal(completeSaved.status,'ready');assert.deepEqual(completeSaved.coverage.unselectedPrincipleBranches.items,[]);
-   const worst={...firstSaved,shortText:'企'.repeat(600),coverage:{...firstSaved.coverage,unselectedPrincipleBranches:baselineBranchSelection(Array.from({length:24},(_,i)=>({...missingRepair,when:'branch_'+i})),[])}};const fitted=fitBaselineBranchResponse(worst,'20261117T000000000Z_00000000-0000-4000-8000-000000000000');assert.equal(fitted.shortText,worst.shortText);const raw={content:[{type:'text',text:JSON.stringify(fitted,null,2)}],structuredContent:fitted,_meta:{financeCall:{callId:'20261117T000000000Z_00000000-0000-4000-8000-000000000000'}}};assert(Buffer.byteLength(JSON.stringify(raw,null,2))<=12288);
-  });
-  await t.test('模拟旧V1不可变记录只读按retained当前事实给partial分支，不回填SQL',async()=>{
-   const db=new DatabaseSync(f.dbPath);let legacy;try{
-    const old=JSON.parse(db.prepare("SELECT content_json FROM business_memory_versions WHERE account_set_id=? AND topic='business_baseline' AND revision=1").get(target.accountSetId).content_json),definition=structuredClone(old.definition);delete definition.coverage.unselectedPrincipleBranches;
-    legacy=appendBusinessMemoryMethodVersion(db,f.scopeA,{topic:'business_baseline',objectKey:'account-set',effectiveFrom:definition.effectiveFrom,authority:'candidate',definition,evidenceRefs:definition.facts.map(f=>({ref:f.factRef,sha256:f.source.sha256})),expectedRevision:2});
-   }finally{db.close();}
-   const before=baselineLogicalSnapshot(f.dbPath),read=await call('finance_baseline_read',{target});assert.equal(read.baselineRef,legacy.methodRef);assert.equal(read.status,'ready');assert.equal(read.shortText,firstSaved.shortText);assert.deepEqual(read.coverage.unselectedPrincipleBranches.items,[missingRepair]);assert.equal(read.coverage.unselectedPrincipleBranches.basis,'retained_current_evidence_subset');assert.equal(read.coverage.unselectedPrincipleBranches.complete,false);assert.equal(baselineLogicalSnapshot(f.dbPath),before);
-  });
   await t.test('无引用明细只投影账库，工具不会提取旁边的原件',async()=>{
    for(const section of ['facts','coverage','calculation']){
     const result=await call('finance_baseline_materials',{target,section,limit:1});
@@ -50,7 +22,7 @@ test('实际MCP分支反馈与同一取数桥计算结构，旧只读覆盖不�
    }
    const rejected=await client.call('finance_baseline_materials',{target,section:'calculation',extractKnownFields:false});
    assert(rejected.isError);assert.match(rejected.text,/invalid_arguments/);
-   const overview=await call('finance_baseline_materials',{target});assert.equal(overview.coverage.sourceCount,0);assert.equal(overview.section,'overview');
+   const overview=await call('finance_baseline_materials',{target});assert.equal(overview.coverage.sourceCount,0);assert.equal(overview.section,'overview');assert(!Object.hasOwn(overview,'baseline'));
   });
   await t.test('A/B每个objectRef与resolver默认字段集/语义类型一致，无原值、period不伪装date',async()=>{
    const zeroPath=join(f.sourceRoot,'zero-fields.json');writeFileSync(zeroPath,JSON.stringify({enterpriseKey:f.scopeB.enterpriseKey,业务类别:'存货',期初数量:0,期初单价:0,本月领用数量:0,所属期起:'2026-07',所属期止:'2026-07',验收日:null}));
@@ -85,6 +57,6 @@ test('实际MCP分支反馈与同一取数桥计算结构，旧只读覆盖不�
     assert(pages>1);assert.equal(last.coverage.sourceCount,13);assert.equal(last.coverage.sourceOwners.agentIdentityMatched,13);assert.equal(objects.size,13);const actual=await resolveBaselineCalculationFacts({target,materialRefs:[materialReference(last)],expectedReaderSha256:last.calculationReader.sha256},{...options,sourceRoot:dir});assert.equal(actual.objects.length,13);for(const object of actual.objects)assert.deepEqual(Object.keys(objects.get(object.objectRef).fields).sort(),Object.keys(object.values).sort());assert(actual.objects.some(o=>o.values.issue_quantity===0));
    }finally{await wideClient.close();}
   });
-  t.diagnostic('完整MCP反馈/结构最大 '+Math.max(...wireSizes)+' 字节');
+  t.diagnostic('完整MCP材料结构最大 '+Math.max(...wireSizes)+' 字节');
  }finally{await client.close();}
 });

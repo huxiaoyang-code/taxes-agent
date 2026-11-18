@@ -1,16 +1,16 @@
-// SessionStart 不改业务库、索引或原件；企业读取另按标准调用记录保存安全观察。
-// 会话侧仅另存最小身份，绝不读 transcript 或原生 memory。
-import {existsSync,mkdirSync,writeFileSync} from 'node:fs';
+// 保留 Claude 会话与实际账套的绑定校验，记忆由原生 Auto Memory 加载。
+import {existsSync,lstatSync,mkdirSync,writeFileSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {readBoundBusinessContext,loadBoundBusinessSession,readHostJson,assertSameScope,renderBusinessContext} from '../shared/business-session.mjs';
+import {loadBoundBusinessSession,loadBusinessHost,readHostJson,sessionPath,assertSameScope} from '../shared/business-session.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 export function claudeBusinessHooks(nodePath,workspace){
  const command=mode=>({type:'command',command:nodePath,args:[join(workspace,'business-memory-context.mjs'),mode],timeout:20});
  return {SessionStart:[{matcher:'startup|resume|clear|compact|fork',hooks:[command('--claude-hook')]}],UserPromptSubmit:[{hooks:[{...command('--claude-guard'),onFailure:'block'}]}]};
 }
 const validSessionId=id=>typeof id==='string'&&/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id);
-function bindingPath(workspace,id){if(!validSessionId(id))fail('claude_business_session_id_invalid');return join(workspace,'.finance/claude-session-bindings',createHash('sha256').update(id).digest('hex')+'.json');}
+const bindingsDirectory=workspace=>join(workspace,'.finance/claude-session-bindings');
+function bindingPath(workspace,id){if(!validSessionId(id))fail('claude_business_session_id_invalid');return join(bindingsDirectory(workspace),createHash('sha256').update(id).digest('hex')+'.json');}
 export function assertClaudeSessionBinding(workspace,id,session){
  const path=bindingPath(workspace,id);if(!existsSync(path))fail('claude_business_resume_unbound');
  const prior=readHostJson(path);
@@ -23,7 +23,7 @@ function rememberClaudeSession(workspace,id,session){
  const path=bindingPath(workspace,id);
  if(existsSync(path))return assertClaudeSessionBinding(workspace,id,session);
  const value={version:'finance-claude-session-binding/1',sessionId:id,workspace:resolve(workspace),databasePath:session.databasePath,scope:session.scope,sourceRoot:session.sourceRoot,auditDir:session.auditDir};
- mkdirSync(join(workspace,'.finance/claude-session-bindings'),{recursive:true});
+ mkdirSync(bindingsDirectory(workspace),{recursive:true});
  try{writeFileSync(path,JSON.stringify(value,null,2)+'\n',{encoding:'utf8',flag:'wx',mode:0o600});}catch(error){if(error.code!=='EEXIST')throw error;assertClaudeSessionBinding(workspace,id,session);}
  return value;
 }
@@ -32,15 +32,18 @@ function validateInput(workspace,input,event){
 }
 export async function handleClaudeHook(workspace,input,mode='--claude-hook'){
  const guard=mode==='--claude-guard';validateInput(workspace,input,guard?'UserPromptSubmit':'SessionStart');
+ if(!guard&&!['startup','resume','clear','compact','fork'].includes(input.source))fail('claude_business_hook_source_invalid');
+ // 原生未绑定工作区支持账前核对；受控启动及已有账套会话继续校验绑定。
+ if(!process.env.FINANCE_CLAUDE_LAUNCH_ID&&!lstatSync(sessionPath(workspace),{throwIfNoEntry:false})&&!lstatSync(bindingsDirectory(workspace),{throwIfNoEntry:false})){
+  if(loadBusinessHost(workspace).host!=='claude-code')fail('host_business_config_invalid');
+  return {};
+ }
  const {session}=loadBoundBusinessSession(workspace);
  if(guard){assertClaudeSessionBinding(workspace,input.session_id,session);return {};}
- if(!['startup','resume','clear','compact','fork'].includes(input.source))fail('claude_business_hook_source_invalid');
  if(['resume','compact','fork'].includes(input.source))assertClaudeSessionBinding(workspace,input.session_id,session);
  else if(input.source==='startup'&&process.env.FINANCE_CLAUDE_LAUNCH_ID&&input.session_id!==process.env.FINANCE_CLAUDE_LAUNCH_ID)fail('claude_business_launch_id_mismatch');
- const {context}=await readBoundBusinessContext(workspace);
- // 会话侧只保存新ID与实际scope，不含基线/方法/案例；读取的安全观察另由标准调用记录留痕。
  if(['startup','clear'].includes(input.source))rememberClaudeSession(workspace,input.session_id,session);
- return {hookSpecificOutput:{hookEventName:'SessionStart',additionalContext:renderBusinessContext(context)}};
+ return {};
 }
 export async function runClaudeHook(workspace,mode){
  try{
@@ -48,9 +51,9 @@ export async function runClaudeHook(workspace,mode){
   let input;try{input=JSON.parse(body);}catch{fail('claude_business_hook_input_invalid');}
   console.log(JSON.stringify(await handleClaudeHook(workspace,input,mode)));
  }catch(error){
-  const code=/^(?:host_business_|claude_business_|finance_target_|finance_baseline_|business_baseline_|finance_memory_|business_memory_)[A-Za-z0-9_]+$/.test(error.code??'')?error.code:'claude_business_context_unavailable';
+  const code=/^(?:host_business_|claude_business_|finance_target_)[A-Za-z0-9_]+$/.test(error.code??'')?error.code:'claude_business_context_unavailable';
   // SessionStart本身不能靠退出码阻止会话；UserPromptSubmit守卫在模型请求前另作同样验证并exit2。
-  console.log(JSON.stringify({continue:false,stopReason:'企业记忆绑定校验失败：'+code,systemMessage:'先在本工作区核对实际账库、账套和期间；禁止沿用其他企业会话。',...(mode==='--claude-hook'?{hookSpecificOutput:{hookEventName:'SessionStart',additionalContext:'企业记忆加载失败；当前企业上下文未获核实。禁止使用旧会话中的企业口径；请停止本次业务并核对绑定。错误码：'+code}}:{})}));
+  console.log(JSON.stringify({continue:false,stopReason:'账套会话绑定校验失败：'+code,systemMessage:'先在本工作区核对实际账库、账套和期间。'}));
   if(mode==='--claude-guard')process.exitCode=2;
  }
 }

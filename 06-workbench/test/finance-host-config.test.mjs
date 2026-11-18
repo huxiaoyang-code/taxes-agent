@@ -63,9 +63,9 @@ for(const host of ['pi','dsh','zcode']){
     const spec=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot]));assert.equal(spec.env.FINANCE_MCP_PROFILE,'direct');assert.equal(spec.env.FINANCE_DATABASE_PATH,context.databasePath);assert.equal(spec.cwd,context.outputDir);assert.ok(spec.args.includes('builtin:mcp'));assert.ok(spec.args.includes('builtin:tool-search'));assert.ok(spec.args.includes(native.extensionPath));assert.equal(spec.args[spec.args.indexOf('--model')+1],'deepseek-flash');assert.equal(spec.args[spec.args.indexOf('--skill')+1],context.skillsDir);assert.ok(!spec.args.includes('--print'));
     assert.equal(spec.args[spec.args.indexOf('--tools')+1],DEFAULT_TOOL_MODIFIERS.join(','));assert.ok(DEFAULT_TOOL_MODIFIERS.every(value=>value.startsWith('+')||value.startsWith('-')));
     assert.ok(spec.args[spec.args.indexOf('--append-system-prompt')+1].includes(PERIOD_TASK_ROUTING));
-    const baseline={version:'finance-business-baseline/1',status:'ready',shortText:'仅合成宿主投影，不是企业业务预期。',unresolved:[],methods:['PRIVATE-METHOD-CATALOG'],oldVersions:['PRIVATE-OLD-VERSION']};
-    const boundSpec=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot]),baseline),system=boundSpec.args[boundSpec.args.indexOf('--append-system-prompt')+1];
-    assert(system.includes(baseline.shortText));assert.equal(system.split(BUSINESS_MEMORY_ROUTING).length-1,1);assert(!system.includes('PRIVATE-'),'Pi不能序列化方法目录或旧基线');
+    const memoryPath=join(root,'MEMORY.md');writeFileSync(memoryPath,'PRIVATE-SYNTHETIC-MEMORY');
+    const boundSpec=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot]),memoryPath),system=boundSpec.args[boundSpec.args.indexOf('--append-system-prompt')+1];
+    assert(system.includes(memoryPath));assert.equal(system.split(BUSINESS_MEMORY_ROUTING).length-1,1);assert(!system.includes('PRIVATE-SYNTHETIC-MEMORY'),'Pi 只传文件路径，由宿主按需读取正文');
     const task=join(root,'synthetic-task.txt');writeFileSync(task,'Synthetic no-model task');const subset=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot,'--task-file',task,'--tools','read,mcp__finance__finance_rules']));assert.equal(subset.args[subset.args.indexOf('--tools')+1],'read,mcp__finance__finance_rules');
     const check=buildLaunchSpec(native,context.outputDir,parsePiArgs(['--pi-root',packageRoot,'--check']));assert.ok(check.args[0].endsWith('direct-pi-probe.mjs'));assert.equal(check.modelInvoked,false);assert.equal(existsSync(check.env.PI_CODING_AGENT_DIR),false);
   }

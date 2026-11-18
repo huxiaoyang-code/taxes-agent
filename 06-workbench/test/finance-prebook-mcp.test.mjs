@@ -11,7 +11,12 @@ const root=mkdtempSync(join(tmpdir(),'prebook-mcp-synthetic-')),audit=join(root,
 test('direct MCP可发现账前合同，真实调用不触碰账库、异常有自动记录',{timeout:30000},async()=>{
  const client=new McpStdioClient(fileURLToPath(new URL('../../05-reconstruction/codex/mcp/finance-mcp/server.mjs',import.meta.url)),{cwd:root,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SOURCE_ROOT:root,FINANCE_AUDIT_DIR:audit,FINANCE_DATABASE_PATH:sentinel,FINANCE_API_BASE:'http://127.0.0.1:1'}}).start();
  try{await client.initialize();const tools=(await client.rpc('tools/list')).result.tools;
-  for(const name of ['finance_baseline_read','finance_baseline_materials','finance_baseline_save','finance_prebook_review'])assert.equal(Object.hasOwn(tools.find(t=>t.name===name).inputSchema.properties,'businessEvidence'),false);
+  for(const name of ['finance_baseline_materials','finance_prebook_review'])assert.equal(Object.hasOwn(tools.find(t=>t.name===name).inputSchema.properties,'businessEvidence'),false);
+  for(const name of ['finance_baseline_read','finance_baseline_save']){
+   assert(!tools.some(tool=>tool.name===name));
+   const removed=await client.call(name,{target:{accountSetId:1,period:'2026-03'}});
+   assert(removed.isError,removed.text);assert.equal(removed.data.error,'unknown_tool');
+  }
   assert(Object.hasOwn(tools.find(t=>t.name==='finance_calculation_run').inputSchema.properties,'businessEvidence'));
   const contract=await client.call('finance_record_contract',{recordType:'prebook'});assert.equal(contract.isError,false);assert.equal(contract.data.inputSchema.properties.version.const,'finance-prebook-input/2');assert.equal(contract.data.inputSchema.properties.facts.properties.taxpayer.properties.vatStatus.enum.join(','),'general,small,unknown');
   const input=writePrebookFixture(root,prebookFacts(),'normal');const response=await client.call('finance_prebook_review',{inputPath:input.inputPath});assert.equal(response.isError,false,response.text);assert.equal(response.data.tax.amounts.due,1200);assert(readFileSync(response.data.evidence.reviewPath,'utf8').includes('账前资料核对'));assert.equal(readFileSync(sentinel,'utf8'),'SYNTHETIC NO DATABASE ACCESS');
@@ -22,7 +27,7 @@ test('direct MCP可发现账前合同，真实调用不触碰账库、异常有�
   const rejectedCall=invalid.result._meta.financeCall.callId,begin=JSON.parse(readFileSync(join(audit,rejectedCall,'begin.json'),'utf8'));
   assert.deepEqual(begin.sources,[]);
   const legacyBinding={businessLabel:'合成旁路',method:'不应运行',mappings:[{inputPointer:'/target',parameterLabel:'合成目标',transform:'identity',sources:[{path:outside,jsonPointer:''}]}]};
-  const forbidden=await client.rpc('tools/call',{name:'finance_baseline_read',arguments:{target:{accountSetId:1,period:'2026-03'},businessEvidence:legacyBinding}});
+  const forbidden=await client.rpc('tools/call',{name:'finance_baseline_materials',arguments:{target:{accountSetId:1,period:'2026-03'},businessEvidence:legacyBinding}});
   assert.equal(forbidden.result.isError,true);assert.equal(forbidden.result.structuredContent.error,'invalid_arguments');
   const forbiddenId=forbidden.result._meta.financeCall.callId,forbiddenEnd=JSON.parse(readFileSync(join(audit,forbiddenId,'end.json'),'utf8'));
   assert.deepEqual(forbiddenEnd.loadedSources,[]);assert(!Object.hasOwn(forbiddenEnd.metadata,'businessEvidence'));

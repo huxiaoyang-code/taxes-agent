@@ -80,8 +80,8 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args,options={}){
- if(['finance_baseline_read','finance_baseline_materials','finance_baseline_save'].includes(name)){
-  const baseline=await import('./business-baseline.mjs'),entry={finance_baseline_read:'readBusinessBaseline',finance_baseline_materials:'readBaselineMaterials',finance_baseline_save:'saveBusinessBaseline'}[name];return baseline[entry](args,options);
+ if(name==='finance_baseline_materials'){
+  const {readBaselineMaterials}=await import('./business-baseline.mjs');return readBaselineMaterials(args,options);
  }
  if(['finance_memory_prepare','finance_company_context','finance_method_read','finance_case_search','finance_memory_propose','finance_method_run'].includes(name)){
   const memory=await import('./business-memory.mjs'),entry={finance_memory_prepare:'prepareBusinessMemory',finance_company_context:'readCompanyContext',finance_method_read:'readBusinessMethod',finance_case_search:'searchBusinessCases',finance_memory_propose:'proposeBusinessMethod',finance_method_run:'runBusinessMethod'}[name];return memory[entry](args,options);

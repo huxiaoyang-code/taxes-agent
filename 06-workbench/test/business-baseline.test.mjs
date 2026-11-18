@@ -1,24 +1,18 @@
 // 后端合同与隐私负例：全部账库、原件及调用记录均在临时目录合成。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,renameSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,renameSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join,resolve,relative,isAbsolute} from 'node:path';
-import {randomUUID} from 'node:crypto';
-import {fileURLToPath} from 'node:url';
-import {DatabaseSync} from 'node:sqlite';
+import {join} from 'node:path';
 import * as Backend from '../server/business-baseline.mjs';
 import {readBackendBaselinePages} from './helpers/business-baseline-backend-pages.mjs';
-import {fixtureObservationRequest} from './helpers/business-baseline-test-inputs.mjs';
 import {readFinanceCall} from '../server/finance-call-chain.mjs';
 import {syntheticVoucherEvidence} from './helpers/synthetic-posting-evidence.mjs';
-import {BUSINESS_MEMORY_DDL,inspectBusinessMemorySchema} from '../server/business-memory-storage.mjs';
-import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n');
 const B={...Backend,readBaselineMaterials:readBackendBaselinePages};
 const logical=db=>JSON.stringify(db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY name").all().map(r=>r.type==='table'?[r,db.prepare('SELECT * FROM "'+r.name.replaceAll('"','""')+'"').all()]:r));
-test('短基线的实际源值、税义、版本、只读与原生关系',{timeout:120000},async t=>{
+test('材料观察的实际源值、税义、只读与业务关联',{timeout:120000},async t=>{
  const root=mkdtempSync(join(tmpdir(),'baseline-backend-')),data=join(root,'data'),sourceRoot=join(root,'sources'),auditDir=join(root,'calls');mkdirSync(data);mkdirSync(sourceRoot);
  Object.assign(process.env,{WORKBENCH_DATA_DIR:data,FINANCE_SOURCE_ROOT:sourceRoot,FINANCE_AUDIT_DIR:auditDir,FINANCE_BUSINESS_SESSION:''});delete process.env.WORKBENCH_DATABASE_MODE;
  const {db}=await import('../server/db.mjs'),A=await import('../server/accounting.mjs');
@@ -44,10 +38,10 @@ test('短基线的实际源值、税义、版本、只读与原生关系',{timeo
  for(let i=0;i<3;i++)for(const [field,key]of Object.entries({tax_type:'taxType',tax_measure:'measure',tax_stage:'stage',period_basis:'basis',accumulation:'accumulation',period_start:'periodStart',period_end:'periodEnd',tax_amount:'taxAmount',sales_ex_vat:'sales'}))add('vat'+i+'_'+field,field,'/returns/'+i+'/'+key,'vat'+i);
  for(const [field,key]of Object.entries({tax_type:'taxType',tax_measure:'measure',tax_stage:'stage',period_basis:'basis',accumulation:'accumulation',period_start:'periodStart',period_end:'periodEnd',tax_amount:'减免后累计应纳税额',revenue:'累计营业收入'}))add('cit_'+field,field,'/cit/'+key,'cit');
  const request={target,originals:[{id:'contract',path}],selections,limit:50};
- let material,saved,saveArgs;
+ let material;
  try{
-  await t.test('未生成读取不建组件，材料观察不修改现库且不投影原文',async()=>{
-   const before=logical(db),view=await B.readBusinessBaseline({target},options);assert.equal(view.status,'needs_generation');assert.equal(view.shortText,'');
+  await t.test('材料观察不建组件、不修改现库且不投影原文',async()=>{
+   const before=logical(db);
    const discovered=await B.readBaselineMaterials({target,originals:request.originals,limit:50},options);
    assert(discovered.facts.some(f=>f.field==='service_start'&&f.semanticAuthority==='agent_observation'&&f.valueState==='local_only'));
    assert.equal(logical(db),before);assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='business_memory_versions'").get(),undefined);
@@ -63,89 +57,56 @@ test('短基线的实际源值、税义、版本、只读与原生关系',{timeo
    const snapshot=JSON.parse(readFileSync(join(record.recordPath,artifact.file))),vat=snapshot.taxBurden.summaries.find(r=>r.taxType==='vat'),cit=snapshot.taxBurden.summaries.find(r=>r.taxType==='cit');
    assert.equal(vat.taxAmount,5960);assert.equal(vat.denominator,300000);assert.equal(vat.weightedRatio,5960/300000);assert.notEqual(vat.weightedRatio,0.02);assert.equal(cit.taxAmount,3000);assert.equal(cit.weightedRatio,0.005);
    const safe=JSON.stringify(material);for(const secret of ['LEASE-A-APR','2026-04-01','"taxAmount":','"denominator":','"originalCost":','"debit":','"credit":'])assert(!safe.includes(secret),secret);
-   saveArgs={target,materialRefs:[{materialRef:material.materialRef,snapshotDigest:material.snapshotDigest}],expectedRevision:0,effectiveFrom:'2026-07',principles:material.principleSupport.filter(p=>['accounting_standard','inventory_cost'].includes(p.kind)||p.kind==='revenue_period'&&p.when==='lease'&&p.value==='service_period').map(p=>({supportRef:p.supportRef}))};
-   saved=await B.saveBusinessBaseline(saveArgs,options);assert.equal(saved.status,'ready');assert.match(saved.shortText,/企业会计准则/);assert.match(saved.shortText,/整月均匀服务按月等额确认/);assert.match(saved.shortText,/1\.99%/);assert.match(saved.shortText,/0\.50%/);assert(Array.from(saved.shortText).length<=600);assert(saved.shortText.split('\n').length<=9);
-   assert(inspectBusinessMemorySchema(db).ok);assert(BUSINESS_MEMORY_DDL.every(sql=>!sql.includes('baseline')),'已安装DDL-v1不为基线改写');
   });
-  await t.test('幂等、旧方法隔离和只读写入拒绝',async()=>{
-   const repeated=await B.saveBusinessBaseline({...saveArgs,expectedRevision:1},options);assert.equal(repeated.changed,false);assert.equal(repeated.revision,1);assert.equal(repeated.baselineRef,saved.baselineRef);
-   await assert.rejects(B.saveBusinessBaseline(saveArgs,options),{code:'finance_baseline_revision_conflict'});
-   await assert.rejects(B.saveBusinessBaseline({...saveArgs,expectedRevision:1},{...options,readOnly:true}),{code:'finance_baseline_readonly'});
-   const M=await import('../server/business-memory.mjs');assert(!(await M.readCompanyContext({target},options)).methods.some(m=>m.methodRef===saved.baselineRef));
-   await assert.rejects(M.readBusinessMethod({target,methodRef:saved.baselineRef},options),{code:'finance_memory_method_missing'});
-   await assert.rejects(M.runBusinessMethod({target,methodRef:saved.baselineRef},options),{code:'finance_memory_method_missing'});
-   const before=logical(db);await B.readBusinessBaseline({target},{...options,readOnly:true});assert.equal(logical(db),before);
-  });
-  await t.test('仅材料读取先发现changed，换两根仍保留；跨audit观察不挪材料ref或计算器底稿',async()=>{
-   const before=logical(db),unavailable=join(root,'material-unavailable'),otherAudit=join(root,'material-other-audit'),lastAudit=join(root,'material-last-audit');for(const dir of [unavailable,otherAudit,lastAudit])mkdirSync(dir);
-   for(const discoveryAudit of [auditDir,otherAudit]){
+  await t.test('材料快照在各自记录根可取数，原件及依据变更会拒绝旧引用',async()=>{
+   const before=logical(db);
+   const otherAudit=join(root,'other-audit');
+   for(const callDirectory of [auditDir,otherAudit]){
+    const isolated={...options,auditDir:callDirectory};
+    const observed=await B.readBaselineMaterials(request,isolated);
+    const ref={materialRef:observed.materialRef,snapshotDigest:observed.snapshotDigest};
+    const call=await readFinanceCall({auditDir:callDirectory,callId:ref.materialRef});
+    assert.equal(call.integrity,'verified');
+    assert.equal(call.recordPath,join(callDirectory,ref.materialRef));
+    const snapshot=JSON.parse(readFileSync(join(call.recordPath,call.end.metadata.businessBaselineMaterials.file)));
+    const proof=snapshot.facts.find(f=>f.source.kind==='ledger_voucher'&&f.source.relations?.length)?.source.relations[0].files[0].path;
+    assert(proof,'同业务原生分录须留有实际来源关系');
+    const readerArgs={target,materialRefs:[ref],expectedReaderSha256:observed.calculationReader.sha256};
+    const read=()=>B.resolveBaselineCalculationFacts(readerArgs,{...isolated,readOnly:true});
+    assert((await read()).objects.length);
+    for(const file of [path,proof]){
+     const missing=file+'.synthetic-absent';
+     renameSync(file,missing);
+     try{await assert.rejects(read(),{code:'finance_baseline_material_changed'});}
+     finally{renameSync(missing,file);}
+     assert((await read()).objects.length);
+    }
     json(path,{...raw,costMethod:'先进先出法'});
-    const discoveryOptions={...options,auditDir:discoveryAudit};
-    const observation=fixtureObservationRequest({target,originals:[{id:'changed',path}]},discoveryOptions);
-    const material=await Backend.readBaselineMaterials(observation,discoveryOptions);assert.equal(material.baseline.status,'stale');assert.equal(material.baseline.baselineRef,saved.baselineRef);
-    const call=await readFinanceCall({auditDir:discoveryAudit,callId:material.materialRef});assert.equal(call.integrity,'verified');assert.equal(call.recordPath,join(discoveryAudit,material.materialRef));assert.equal(call.end.metadata.businessBaselineMaterials.file,'baseline-materials.json');
-    // 只做materials觀察，没有先调用read来创建changed记录；实际材料ref仍能在原audit根消费。
-    const local=await B.resolveBaselineCalculationFacts({target,materialRefs:[{materialRef:material.materialRef,snapshotDigest:material.snapshotDigest}],expectedReaderSha256:material.calculationReader.sha256},{...options,auditDir:discoveryAudit});assert(local.objects.length);
-    const stale=await B.readBusinessBaseline({target},{...options,sourceRoot:unavailable,auditDir:lastAudit});assert.equal(stale.status,'stale');assert(stale.unresolved.some(g=>g.code==='source_changed'));assert.equal(stale.baselineRef,saved.baselineRef);
-    json(path,raw);assert.equal((await B.readBusinessBaseline({target},options)).status,'ready');
+    try{await assert.rejects(read(),{code:'finance_baseline_material_changed'});}
+    finally{json(path,raw);}
    }
-   assert.equal(logical(db),before);
+   assert.equal(logical(db),before,'取数及拒绝失效材料均保持账库和索引只读');
   });
-  await t.test('资料/历史整根不可达与单件缺失区分，真实MCP先重建共享根后二读仍未挂载',{timeout:60000},async()=>{
-   const before=logical(db),recordRoot=join(data,'posting-attempts');
-   const absent=async(source,run)=>{
-    const full=resolve(source),preserved=full+'.unmounted-'+randomUUID(),recreated=full+'.reader-created-'+randomUUID();
-    // 每次移动前核实绝对源/目标均在本测试合成根内，不递归删除或覆盖任何成果。
-    for(const path of [full,preserved,recreated]){const part=relative(resolve(root),path);assert(part&&!isAbsolute(part)&&part!=='..'&&!part.startsWith('..\\')&&!part.startsWith('../'));}
-    assert(existsSync(full));assert(!existsSync(preserved));assert(!existsSync(recreated));renameSync(full,preserved);
-    try{return await run();}finally{if(existsSync(full))renameSync(full,recreated);renameSync(preserved,full);}
-   };
-   const ready=async()=>{const value=await B.readBusinessBaseline({target},options);assert.equal(value.status,'ready');assert.equal(value.baselineRef,saved.baselineRef);};
-   const unavailable=value=>{assert.equal(value.status,'needs_review');assert(value.unresolved.some(g=>g.code==='source_unavailable'));assert(!value.unresolved.some(g=>g.code==='source_missing'));};
-   await ready();
-   for(const directory of [sourceRoot,recordRoot]){await absent(directory,async()=>{unavailable(await B.readBusinessBaseline({target},options));unavailable(await B.readBusinessBaseline({target},options));});await ready();}
-   const call=await readFinanceCall({auditDir,callId:material.materialRef}),snapshot=JSON.parse(readFileSync(join(call.recordPath,call.end.metadata.businessBaselineMaterials.file))),proof=snapshot.facts.find(f=>f.source.kind==='ledger_voucher').source.relations[0].files[0].path;
-   for(const file of [path,proof]){await absent(file,async()=>{const value=await B.readBusinessBaseline({target},options);assert.equal(value.status,'stale');assert(value.unresolved.some(g=>g.code==='source_missing'));});await ready();}
-   // 只有原根不可达时才为unavailable；确证changed/missing后不可因整根不可访问洗掉既有观察。
-   json(path,{...raw,costMethod:'先进先出法'});assert.equal((await B.readBusinessBaseline({target},options)).status,'stale');await absent(sourceRoot,async()=>{const value=await B.readBusinessBaseline({target},options);assert.equal(value.status,'stale');assert(value.unresolved.some(g=>g.code==='source_changed'));});json(path,raw);await ready();
-   await absent(path,async()=>{assert((await B.readBusinessBaseline({target},options)).unresolved.some(g=>g.code==='source_missing'));await absent(sourceRoot,async()=>{const value=await B.readBusinessBaseline({target},options);assert.equal(value.status,'stale');assert(value.unresolved.some(g=>g.code==='source_missing'));});});await ready();
-   // 真实stdio的外层记录器先mkdir；固定观察根内层必须继承该事实，下一独立调用也不能认新空根为原根。
-   for(const shared of [sourceRoot,recordRoot]){
-    const client=new McpStdioClient(fileURLToPath(new URL('../../05-reconstruction/codex/mcp/finance-mcp/server.mjs',import.meta.url)),{cwd:root,env:{...process.env,FINANCE_MCP_PROFILE:'direct',FINANCE_DATABASE_PATH:dbPath,FINANCE_SOURCE_ROOT:sourceRoot,FINANCE_AUDIT_DIR:shared,FINANCE_API_BASE:'http://127.0.0.1:1',FINANCE_BUSINESS_SESSION:'',NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
-    try{await client.initialize('synthetic-shared-root');const read=async()=>{const result=await client.call('finance_baseline_read',{target});assert.equal(result.isError,false,result.text);return result.data;};assert.equal((await read()).status,'ready');await absent(shared,async()=>{unavailable(await read());assert(existsSync(shared),'外层记录器确实重建了空根');unavailable(await read());});assert.equal((await read()).status,'ready');}finally{await client.close();}
-   }
-   assert.equal(logical(db),before,'根可达观察不得修改实际账库或索引');
-  });
-  await t.test('错账套、非日期观察、矛盾计税阶段与伪造材料引用均不获ready',async()=>{
+  await t.test('错账套、非日期观察、矛盾计税阶段与伪造材料引用被识别',async()=>{
    const changedOwner={...request,target:{accountSetId:b,period:'2026-07'}};await assert.rejects(B.readBaselineMaterials(changedOwner,options),{code:'finance_baseline_source_scope_conflict'});
    const wrongDate=await B.readBaselineMaterials({...request,selections:[{id:'wrongdate',field:'confirmation_date',originalId:'contract',group:'x',locator:{jsonPointer:'/contract/合同编号'}}]},options);
    assert(wrongDate.gaps.includes('unsupported_material'));assert(!wrongDate.facts.some(f=>f.field==='confirmation_date'));
    json(path,{...raw,cit:{...raw.cit,stage:'实缴'}});
    const wrong=await B.readBaselineMaterials(request,options);assert(wrong.taxBurden.gaps.includes('tax_basis_incomplete'));assert(!wrong.taxBurden.summaries.some(s=>s.taxType==='cit'));
    json(path,raw);
-   await assert.rejects(B.saveBusinessBaseline({...saveArgs,materialRefs:[{materialRef:material.materialRef,snapshotDigest:'0'.repeat(64)}],expectedRevision:1},options),{code:'finance_baseline_material_record_invalid'});
-   await assert.rejects(B.saveBusinessBaseline({...saveArgs,principles:[{kind:'tax_choice',value:'vat_standard',evidenceRefs:[material.facts.find(f=>f.field==='taxpayer_type').factRef]}],expectedRevision:1},options),{code:'finance_baseline_principle_unsupported'});
+   await assert.rejects(Backend.readBaselineMaterials({target,materialRefs:[{materialRef:material.materialRef,snapshotDigest:'0'.repeat(64)}]},options),{code:'finance_baseline_material_record_invalid'});
+   assert(!wrong.principleSupport.some(p=>p.kind==='tax_choice'&&p.value==='vat_standard'),'单凭纳税人类型不能证明业务适用的计税选择');
   });
-  await t.test('旧文件准则不能借另一value的现库准则事实背书，正确typed仍按实际准则保存',async()=>{
+  await t.test('旧文件准则与现库准则不同，材料概览采用实际账套准则',async()=>{
    const key='SYNTHETIC-STANDARD-TRUTH',id=A.createAccountSet({name:'合成准则同值约束',profileId:'enterprise-2019-general-basic-v1',start_period:'2026-01',enterprise:{enterpriseKey:key}}).id,target={accountSetId:id,period:'2026-07'},oldPath=join(sourceRoot,'old-standard.json'),taxPath=join(sourceRoot,'standard-tax.json');json(oldPath,{enterpriseKey:key,会计准则:'小企业会计准则'});json(taxPath,{enterpriseKey:key,returns:raw.returns,cit:raw.cit});
-   const m=await B.readBaselineMaterials({target,originals:[{id:'old',path:oldPath},{id:'tax',path:taxPath}]},options),ledger=m.facts.find(f=>f.field==='accounting_standard'&&f.source.kind==='ledger_configuration'),old=m.facts.find(f=>f.field==='accounting_standard'&&f.source.kind==='file'),materialRefs=[{materialRef:m.materialRef,snapshotDigest:m.snapshotDigest}];assert.equal(ledger.value,'enterprise');assert.equal(old.value,'small_enterprise');assert(!m.principleSupport.some(p=>p.kind==='accounting_standard'&&p.value==='small_enterprise'));
-   const before=logical(db);await assert.rejects(B.saveBusinessBaseline({target,materialRefs,expectedRevision:0,effectiveFrom:'2026-07',principles:[{kind:'accounting_standard',value:'small_enterprise',evidenceRefs:[ledger.factRef,old.factRef]}]},options),{code:'finance_baseline_principle_unsupported'});assert.equal(logical(db),before,'错准则组合不能新增版本或改SQL');
-   const saved=await B.saveBusinessBaseline({target,materialRefs,expectedRevision:0,effectiveFrom:'2026-07',principles:[{kind:'accounting_standard',value:'enterprise',evidenceRefs:[ledger.factRef]}]},options);assert.equal(saved.status,'needs_review');assert.equal(saved.coverage.businessPrinciplesMissing,true);assert.equal(saved.coverage.generationBasis,'configuration_and_tax_reference');assert(saved.unresolved.some(g=>g.code==='historical_evidence_missing'));assert.match(saved.shortText,/企业会计准则/);assert(!saved.shortText.includes('小企业会计准则'));assert.equal((await B.readBusinessBaseline({target},options)).status,'needs_review');
+   const m=await B.readBaselineMaterials({target,originals:[{id:'old',path:oldPath},{id:'tax',path:taxPath}]},options),ledger=m.facts.find(f=>f.field==='accounting_standard'&&f.source.kind==='ledger_configuration'),old=m.facts.find(f=>f.field==='accounting_standard'&&f.source.kind==='file');assert.equal(ledger.value,'enterprise');assert.equal(old.value,'small_enterprise');assert(!m.principleSupport.some(p=>p.kind==='accounting_standard'&&p.value==='small_enterprise'));
+   assert(m.principleSupport.some(p=>p.kind==='accounting_standard'&&p.value==='enterprise'));
   });
-  await t.test('来源修订阻断旧版，换根/prepare不能恢复ready，仍保留无影响的现库准则',async()=>{
-   json(path,{...raw,costMethod:'先进先出法'});await assert.rejects(B.saveBusinessBaseline({...saveArgs,expectedRevision:1},options),{code:'finance_baseline_material_changed'});
-   const changedAudit=join(root,'changed-audit');mkdirSync(changedAudit);const stale=await B.readBusinessBaseline({target},{...options,auditDir:changedAudit});assert.equal(stale.status,'stale');assert.match(stale.shortText,/企业会计准则/);assert(!stale.shortText.includes('月末一次加权平均'));
-   const elsewhere=join(root,'elsewhere');mkdirSync(elsewhere);const unverified=await B.readBusinessBaseline({target},{...options,auditDir:changedAudit,sourceRoot:elsewhere});assert.equal(unverified.status,'stale');assert(unverified.unresolved.some(g=>g.code==='source_changed'));
-   await (await import('../server/business-memory.mjs')).prepareBusinessMemory({target},options);assert.equal((await B.readBusinessBaseline({target},options)).status,'stale');
-   json(path,raw);
-  });
-  await t.test('资产原价和历史同额关系不能仅凭caller选择冒充支持',async()=>{
+  await t.test('缺少合同编号时同额历史不能证明业务归属',async()=>{
    const standalone=await B.readBaselineMaterials({target},options);assert(!standalone.principleSupport.some(p=>p.kind==='revenue_period'));assert.equal(standalone.taxBurden.missing,true);
    const withoutReference=await B.readBaselineMaterials({...request,selections:request.selections.filter(s=>s.field!=='business_reference')},options);assert(!withoutReference.principleSupport.some(p=>p.kind==='revenue_period'&&p.value==='service_period'));
    const evidenceRefs=withoutReference.facts.filter(f=>f.field==='historical_posting'||f.source.originalId==='contract'&&['business_kind','service_pattern','service_start','service_end','amount_net'].includes(f.field)).map(f=>f.factRef);
    assert(evidenceRefs.length>4,'缺合同编号的材料仍保有其他真实取数观察');
-   const unlinkedArgs={...saveArgs,materialRefs:[{materialRef:withoutReference.materialRef,snapshotDigest:withoutReference.snapshotDigest}],expectedRevision:1,principles:[{kind:'revenue_period',value:'service_period',when:'lease',evidenceRefs}]};
-   await assert.rejects(B.saveBusinessBaseline(unlinkedArgs,options),{code:'finance_baseline_principle_unsupported'});
   });
   await t.test('非规范金额观察保持缺口，独立税务观察不会被后台拼合',async()=>{
    for(const suffix of ['美元','万元','含税']){
@@ -181,16 +142,14 @@ test('短基线的实际源值、税义、版本、只读与原生关系',{timeo
    const selections=Object.entries({business_reference:'合同编号',business_kind:'业务类别',service_pattern:'提供方式',service_start:'服务开始日',service_end:'服务结束日',amount_net:'净租金'}).map(([field,key],i)=>({id:'combined'+i,field,originalId:'onlylease',locator:{jsonPointer:'/'+key}}));
    const m=await B.readBaselineMaterials({target,originals:[{id:'onlylease',path:lease}],selections,limit:50},options);
    assert(!m.principleSupport.some(p=>p.when==='lease'&&['revenue_period','business_classification'].includes(p.kind)));
-   const evidenceRefs=m.facts.filter(f=>f.source.kind==='file'||f.field==='historical_posting').map(f=>f.factRef);for(const p of [{kind:'revenue_period',value:'service_period'},{kind:'business_classification',value:'main_income'}])await assert.rejects(B.saveBusinessBaseline({target,materialRefs:[{materialRef:m.materialRef,snapshotDigest:m.snapshotDigest}],expectedRevision:1,effectiveFrom:'2026-07',principles:[{...p,when:'lease',evidenceRefs}]},options),{code:'finance_baseline_principle_unsupported'});
   });
   await t.test('宽泛直接政策不能自带按月等额；仅累计VAT必须明确缺口',async()=>{
    const direct=join(sourceRoot,'generic-policy.json');json(direct,{enterpriseKey:'PRIVATE-A',业务类别:'租赁',revenue_period:'服务所属期'});
    const m=await B.readBaselineMaterials({target,originals:[{id:'generic',path:direct}],selections:[{id:'generic_kind',field:'business_kind',originalId:'generic',locator:{jsonPointer:'/业务类别'}},{id:'generic_policy',field:'revenue_period',originalId:'generic',locator:{jsonPointer:'/revenue_period'}}]},options),p=m.principleSupport.find(p=>p.kind==='revenue_period');assert(p);assert.equal(p.allocationBasis,undefined);
-   await assert.rejects(B.saveBusinessBaseline({target,materialRefs:[{materialRef:m.materialRef,snapshotDigest:m.snapshotDigest}],expectedRevision:1,effectiveFrom:'2026-07',principles:[{kind:p.kind,value:p.value,when:p.when,allocationBasis:'monthly_equal',evidenceRefs:m.facts.filter(f=>f.source.kind==='file').map(f=>f.factRef)}]},options),{code:'finance_baseline_principle_unsupported'});
    json(path,{...raw,returns:raw.returns.map(r=>({...r,accumulation:'累计',periodStart:'2026-01'}))});const cum=await B.readBaselineMaterials({...request,selections:request.selections.filter(s=>s.id.startsWith('vat'))},options);assert.equal(cum.taxBurden.summaries.length,0);assert.equal(cum.taxBurden.missing,true);assert(cum.taxBurden.gaps.includes('tax_basis_incomplete'));
-   const standard=cum.facts.find(f=>f.field==='accounting_standard'),saved=await B.saveBusinessBaseline({target,materialRefs:[{materialRef:cum.materialRef,snapshotDigest:cum.snapshotDigest}],expectedRevision:1,effectiveFrom:'2026-07',principles:[{kind:'accounting_standard',value:'enterprise',evidenceRefs:[standard.factRef]}]},options);assert.equal(saved.status,'needs_review');assert(saved.unresolved.some(g=>g.code==='tax_basis_incomplete'));json(path,raw);
+   json(path,raw);
   });
-  await t.test('单税种范围可ready；本期空验收日不冒认预计日，也不污染已核历史原则',async()=>{
+  await t.test('单税种材料可取数，本期空验收日不冒认预计日',async()=>{
    const key='SYNTHETIC-NULL-ACCEPTANCE',id=A.createAccountSet({name:'合成小企业维修',profileId:'small-2011-basic-v1',start_period:'2026-01',enterprise:{enterpriseKey:key}}).id,target={accountSetId:id,period:'2026-07'},workPath=join(sourceRoot,'null-acceptance.json'),taxPath=join(sourceRoot,'single-tax.json');
    const work={enterpriseKey:key,业务性质:'一次性设备维修',业务类别:'维修',提供方式:'一次完工',costMethod:'先进先出法',工单:[
     {工单:'NULL-APR-COMPLETE',客户签收验收日:'2026-04-25',净价:4000},
@@ -208,13 +167,12 @@ test('短基线的实际源值、税义、版本、只读与原生关系',{timeo
    assert(unfinished);assert.equal(unfinished.values.delivery_date,undefined);assert.equal(finished.values.delivery_date,'2026-07-25');assert(!JSON.stringify(local).includes('2026-08-04'),'预计验收日期未被取数桥误当已发生验收');
    const call=await readFinanceCall({auditDir,callId:m.materialRef}),snapshot=JSON.parse(readFileSync(join(call.recordPath,call.end.metadata.businessBaselineMaterials.file)));
    assert(snapshot.facts.filter(fact=>fact.field==='delivery_date').every(fact=>fact.value!=='2026-08-04'));
-   const principles=m.principleSupport.filter(p=>['accounting_standard','inventory_cost','revenue_period'].includes(p.kind)).map(p=>({supportRef:p.supportRef})),saved=await B.saveBusinessBaseline({target,materialRefs:[{materialRef:m.materialRef,snapshotDigest:m.snapshotDigest}],expectedRevision:0,effectiveFrom:'2026-07',principles},options);assert.equal(saved.status,'ready');assert(!saved.unresolved.length);assert.equal(saved.coverage.taxHistory.cit.status,'not_in_supplied_materials');assert.match(saved.shortText,/交付验收期/);assert(!saved.shortText.includes('所得税截至'));
-   for(const [index,file]of [workPath,taxPath].entries())assert.deepEqual(readFileSync(file),bytes[index],'读取与保存不改原件bytes');
+   for(const [index,file]of [workPath,taxPath].entries())assert.deepEqual(readFileSync(file),bytes[index],'材料读取与取数不改原件字节');
    json(workPath,{...work,工单:work.工单.map((w,i)=>i===3?{...w,客户签收验收日:'预计2026-08-04'}:w)});const invalid=await B.readBaselineMaterials({target,originals},options);assert(invalid.gaps.includes('unsupported_material'));writeFileSync(workPath,bytes[0]);
    // 已实际提供的所得税表只有实缴列可用，不能靠另一税的有效summary掩盖应纳口径不完整。
    const partial={...tax,cit:{taxType:'企业所得税',measure:'应纳',stage:'减免后应纳',basis:'所属期',accumulation:'累计',periodStart:'2026-01',periodEnd:'2026-06',累计实际已预缴:2500,累计营业收入:600000}};json(taxPath,partial);
    const taxSelections=selections.filter(s=>!s.id.startsWith('lease_')&&s.id!=='cost').map(s=>({...s,originalId:'vat'}));
-   const incomplete=await B.readBaselineMaterials({target,originals:originals.filter(o=>o.id==='vat'),selections:taxSelections},options);assert.equal(incomplete.taxBurden.missing,false);assert.equal(incomplete.coverage.taxHistory.cit.status,'incomplete');const reviewed=await B.saveBusinessBaseline({target,materialRefs:[{materialRef:incomplete.materialRef,snapshotDigest:incomplete.snapshotDigest}],expectedRevision:1,effectiveFrom:'2026-07',principles:incomplete.principleSupport.filter(p=>p.kind==='accounting_standard').map(p=>({supportRef:p.supportRef}))},options);assert.equal(reviewed.status,'needs_review');assert(reviewed.unresolved.some(g=>g.code==='tax_basis_incomplete'));
+   const incomplete=await B.readBaselineMaterials({target,originals:originals.filter(o=>o.id==='vat'),selections:taxSelections},options);assert.equal(incomplete.taxBurden.missing,false);assert.equal(incomplete.coverage.taxHistory.cit.status,'incomplete');assert(incomplete.taxBurden.gaps.includes('tax_basis_incomplete'));
    json(taxPath,{...tax,returns:tax.returns.map((r,i)=>i===0?{...r,taxAmount:null}:r)});const nullTax=await B.readBaselineMaterials({target,originals},options);assert(nullTax.gaps.includes('tax_basis_incomplete'),'税额空值不能当普通可选日期忽略');
   });
  }finally{db.close();}

@@ -1,11 +1,11 @@
-// 独立宿主解析实际合成原件，正常 MCP 收观察并形成短基线，验证跨月沿用。
+// 独立宿主解析合成原件，验证 MCP 观察、按需取数与合成计算。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {readFinanceCall,listFinanceCalls} from '../server/finance-call-chain.mjs';
-import {readBaselineSection,saveFromActualSupports} from './helpers/business-baseline-test-inputs.mjs';
+import {readBaselineSection} from './helpers/business-baseline-test-inputs.mjs';
 import {hashBaseline,readBaselineJson,writeBaselineJson} from './helpers/business-baseline-fixture.mjs';
 import {createMaterialIntakeFixture,startMaterialIntakeMcp,publishMaterialIntakePacket,
   prepareMaterialObservations,materialTarget,materialReference,MATERIAL_INTAKE_EXPECTED as EXPECTED} from './helpers/material-intake-fixture.mjs';
@@ -16,8 +16,6 @@ function readDatabase(f,read){
   const db=new DatabaseSync(f.dbPath,{readOnly:true});
   try{return read(db);}finally{db.close();}
 }
-const rows=f=>readDatabase(f,db=>db.prepare("SELECT name FROM sqlite_master WHERE name='business_memory_versions'").get()
-  ?db.prepare("SELECT * FROM business_memory_versions WHERE topic='business_baseline' ORDER BY revision").all():[]);
 const voucherCount=f=>readDatabase(f,db=>db.prepare('SELECT COUNT(*) n FROM vouchers').get().n);
 const safeCanaries=f=>[f.owner.companyName,f.owner.enterpriseKey,'MI-LEASE-JUL','MI-MAINT-JUL','SYNTHETIC-TAX-SELLER',
   '合成采购客户有限公司','合成供应服务有限公司',f.sourceRoot];
@@ -45,28 +43,27 @@ const currentCalculationScript=`import fs from 'node:fs';
 const input=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),p=input.parameters,reader=p.reader;
 const local=await(await import(reader.moduleUrl))[reader.exportName]({target:p.target,materialRefs:p.materialRefs,expectedReaderSha256:reader.sha256},input.financeContext);
 if(!local.scopeVerified||local.version!==reader.version)throw Error('material_scope_not_verified');
-const baseline=p.baseline,period=p.target.period;
-if(!baseline.shortText.includes('其他业务')||!baseline.shortText.includes('管理费用')||!baseline.shortText.includes('按月等额'))throw Error('baseline_not_applied');
+const period=p.target.period;
 const idx=s=>Number(s.slice(0,4))*12+Number(s.slice(5,7))-1,pi=idx(period),round=n=>Math.round(n*100)/100,objects=local.objects.map(o=>({...o,...o.values}));
 const allocated=o=>{const first=idx(o.service_start),last=idx(o.service_end),months=last-first+1,elapsed=Math.max(0,Math.min(months,pi-first+1));return{period:pi>=first&&pi<=last?round(o.amount_net/months):0,cumulative:round(o.amount_net*elapsed/months),remaining:round(o.amount_net*(months-elapsed)/months)};};
 const contracts=objects.filter(o=>o.business_kind==='lease'&&Number.isFinite(o.amount_net)).map(o=>({ref:o.objectRef,start:o.service_start,end:o.service_end,...allocated(o),vatSales:o.invoice_date?.slice(0,7)===period?o.amount_net:0}));
 const maintenance=objects.filter(o=>o.business_kind==='maintenance'&&Number.isFinite(o.amount_net)).map(o=>({...allocated(o),inputVat:o.confirmation_date?.slice(0,7)===period?o.amount_tax:0}));
 const currentStock=objects.filter(o=>o.business_kind==='inventory'&&o.period_start===period&&Number.isFinite(o.issue_quantity));if(currentStock.length!==1)throw Error('current_stock_unmatched');
-const stock=currentStock[0],fifo=baseline.shortText.includes('先进先出');if(stock.issue_quantity>0&&!fifo)throw Error('inventory_policy_not_recalled');
+const stock=currentStock[0],fifo=p.inventoryMethod==='fifo';if(stock.issue_quantity>0&&!fifo)throw Error('inventory_policy_missing');
 const issueCost=stock.issue_quantity===0?0:Math.min(stock.issue_quantity,stock.opening_quantity)*stock.opening_unit_price+Math.max(0,stock.issue_quantity-stock.opening_quantity)*stock.receipt_unit_price;
 const inventory={opening:stock.opening_quantity,receipt:stock.receipt_quantity,issue:stock.issue_quantity,issueCost,closing:stock.opening_quantity+stock.receipt_quantity-stock.issue_quantity,closingAmount:stock.opening_quantity*stock.opening_unit_price+stock.receipt_quantity*stock.receipt_unit_price-issueCost,method:fifo?'fifo':null};
-const sum=(list,key)=>list.reduce((n,o)=>n+o[key],0),result={period,baselineRef:baseline.baselineRef,classifications:{lease:'other_income',maintenance:'management_expense'},contracts,leaseRevenue:sum(contracts,'period'),cumulativeLeaseRevenue:sum(contracts,'cumulative'),remainingLeaseRevenue:sum(contracts,'remaining'),vatSales:sum(contracts,'vatSales'),maintenanceExpense:sum(maintenance,'period'),maintenanceCumulative:sum(maintenance,'cumulative'),maintenanceRemaining:sum(maintenance,'remaining'),inputVat:sum(maintenance,'inputVat'),inventory,taxReference:{fromBaseline:baseline.shortText.includes('2.00%'),target:false},reader:local.reader,sourceDigests:local.sourceDigests,origin:'test_authored_adapter_not_autonomous_model'};
+const sum=(list,key)=>list.reduce((n,o)=>n+o[key],0),result={period,classifications:{lease:'other_income',maintenance:'management_expense'},contracts,leaseRevenue:sum(contracts,'period'),cumulativeLeaseRevenue:sum(contracts,'cumulative'),remainingLeaseRevenue:sum(contracts,'remaining'),vatSales:sum(contracts,'vatSales'),maintenanceExpense:sum(maintenance,'period'),maintenanceCumulative:sum(maintenance,'cumulative'),maintenanceRemaining:sum(maintenance,'remaining'),inputVat:sum(maintenance,'inputVat'),inventory,reader:local.reader,sourceDigests:local.sourceDigests,origin:'test_authored_adapter_not_autonomous_model'};
 fs.writeFileSync(input.outputDir+'/本月材料计算结果.json',JSON.stringify(result,null,2));`;
 
-async function calculateMonth(client,f,materials,baseline,period){
-  const called=ok(await client.call('finance_calculation_run',{title:period+'合成材料连续处理',engine:'javascript',sources:[],script:currentCalculationScript,parameters:{target:materialTarget(f,period),materialRefs:materials.materialRefs,reader:materials.calculationReader,baseline},notes:['本脚本由验收者编写，仅验证材料接口、基线消费及连续计算，不证明模型自主归纳。']}));
+async function calculateMonth(client,f,materials,period,inventoryMethod=null){
+  const called=ok(await client.call('finance_calculation_run',{title:period+'合成材料连续处理',engine:'javascript',sources:[],script:currentCalculationScript,parameters:{target:materialTarget(f,period),materialRefs:materials.materialRefs,reader:materials.calculationReader,inventoryMethod},notes:['脚本与口径由合成测试提供，仅验证材料接口与连续计算。']}));
   assert.equal(called.status,'executed');const path=join(f.auditDir,'calculations',called.runId,'outputs','本月材料计算结果.json'),result=JSON.parse(readFileSync(path));
   const expected=period==='2026-09'?EXPECTED.september:EXPECTED.october;
   for(const key of ['leaseRevenue','cumulativeLeaseRevenue','remainingLeaseRevenue','vatSales','maintenanceExpense','maintenanceCumulative','maintenanceRemaining','inputVat'])assert.equal(result[key],expected[key],period+':'+key);
   for(const[key,name]of Object.entries({opening:'stockOpening',receipt:'stockReceipt',issue:'stockIssue',closing:'stockClosing',closingAmount:'stockClosingAmount'}))assert.equal(result.inventory[key],expected[name],period+':inventory.'+key);
   if(period==='2026-10'){assert.equal(result.inventory.issueCost,expected.stockIssueCost);assert.equal(result.inventory.method,'fifo');assert.equal(result.contracts.find(c=>c.start==='2026-07-01').period,0,'到期旧合同不继续确认');}
   else assert.equal(result.inventory.method,null,'9月不能提前选10月的计价政策');
-  assert.equal(result.taxReference.fromBaseline,true);assert.equal(result.taxReference.target,false);return{runId:called.runId,path,sha256:hashBaseline(readFileSync(path)),result};
+  return{runId:called.runId,path,sha256:hashBaseline(readFileSync(path)),result};
 }
 
 async function prebookConsumer(client,f,inputPath){
@@ -84,7 +81,7 @@ async function prebookConsumer(client,f,inputPath){
   return{status:response.status,indexPath,indexSha256:hashBaseline(readFileSync(indexPath)),boundValues:expectedBindings.length};
 }
 
-test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨月沿用短基线',{timeout:360000},async()=>{
+test('宿主直接解析误标编码的旧 XLS，经 MCP 供实际取数及合成计算',{timeout:360000},async()=>{
   const f=createMaterialIntakeFixture(process.env.MATERIAL_INTAKE_E2E_ROOT);
   const report={version:'material-intake-program-acceptance/2',root:f.root,status:'running',modelInvoked:false,
     hostExtractionByTestProgram:true,formalPostingInvoked:false,maximumWholeMcpBytes:0,checks:[],startedAt:new Date().toISOString()};
@@ -95,7 +92,7 @@ test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨�
   };
   let client;
   try{
-    assert.equal(voucherCount(f),0);assert.equal(rows(f).length,0);
+    assert.equal(voucherCount(f),0);
     const host=await check('宿主用同一份旧 BIFF 原件字节对照默认编码与实际中文',()=>{
       for(const key of ['historyJuly','historyAugust'])assert.equal(readFileSync(f.files[key]).subarray(0,4).toString('hex'),'09000400');
       const result=prepareMaterialObservations(f,'history');
@@ -128,15 +125,13 @@ test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨�
     });
     const taxAndBasis=await readMaterials(client,f,request(f,host.basisPath),report);
     assert.equal(taxAndBasis.coverage.taxHistory.vat.status,'included');
-    const started=await check('仅有账套配置时如实标记历史未完成',async()=>{
+    await check('仅查询账套配置时保留历史资料缺口',async()=>{
       const material=await readMaterials(client,f,{target:materialTarget(f)},report);
       assert.equal(material.coverage.sourceCount,0);
-      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),material)));
-      assert.equal(saved.status,'needs_review');assert.equal(saved.coverage.configurationOnly,true);
-      assert(!saved.shortText.includes('归类及成本'));
-      return saved;
+      assert.equal(material.coverage.configurationOnly,true);
+      assert.equal(material.coverage.taxHistory.vat.status,'not_in_supplied_materials');
     });
-    const history=await check('有限历史观察需要独立同业务依据，实际保存已采用的口径和税负',async()=>{
+    await check('有限历史观察需要独立同业务依据，显式合并保留税负',async()=>{
       const alone=await readMaterials(client,f,request(f,host.artifactPath),report);
       assert(!alone.principleSupport.some(p=>['business_classification','revenue_period','expense_period'].includes(p.kind)));
       const merged=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(taxAndBasis),materialReference(alone)],limit:1},report);
@@ -158,20 +153,13 @@ test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨�
         assert(principle,kind+'/'+when);
         assert.equal(principle.authority,'agent_history_inference');
       }
-      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),material,{expectedRevision:started.headRevision})));
-      assert.equal(saved.status,'ready');assert(saved.shortText.includes('2.00%'));assert(Array.from(saved.shortText).length<=600);
-      const definition=JSON.parse(rows(f).at(-1).content_json).definition;
-      const retained=definition.facts.filter(fact=>fact.field==='historical_posting');
-      assert(retained.length>0&&retained.every(fact=>observed.some(value=>value.factRef===fact.factRef)));
       assert.equal(voucherCount(f),0);
       const calls=await listFinanceCalls({auditDir:f.auditDir,limit:1000});
       assert(calls.calls.every(call=>call.tool!=='finance_calculation_run'),'提取阶段不调用财税脚本工具');
-      report.historicalSelection={observations:observed.length,referencedByBaseline:retained.length,baselineRef:saved.baselineRef};
-      return{material,saved};
+      report.historicalSelection={observations:observed.length,materialRef:material.materialRef};
     });
-    const beforeSeptember=JSON.stringify(rows(f));
     publishMaterialIntakePacket(f,'september');
-    await check('两种发票布局的宿主观察进入基线对象和账前来源索引',async()=>{
+    await check('两种发票布局的宿主观察进入计算对象和账前来源索引',async()=>{
       const invoices=prepareMaterialObservations(f,'invoices');
       const material=await readMaterials(client,f,request(f,invoices.artifactPath),report);
       const snap=await materialSnapshot(f,material);
@@ -184,35 +172,24 @@ test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨�
       assert.equal(calculation.calculationSchema.objects.filter(object=>['amount_net','amount_tax','amount_gross','invoice_date'].every(field=>Object.hasOwn(object.fields,field))).length,2);
       report.prebook=await prebookConsumer(client,f,invoices.prebookPath);
     });
-    const september=await check('9月用本期观察及既有短基线实际计算，保持版本',async()=>{
+    const september=await check('9月用本期观察和经核合同资料实际计算',async()=>{
       const fresh=prepareMaterialObservations(f,'september');
       const calculation=await readMaterials(client,f,{...request(f,fresh.artifactPath),materialRefs:taxAndBasis.materialRefs,section:'calculation'},report);
-      const baseline=ok(await client.call('finance_baseline_read',{target:materialTarget(f)}));
-      assert.equal(baseline.baselineRef,history.saved.baselineRef);
-      const result=await calculateMonth(client,f,calculation,baseline,'2026-09');
-      assert.equal(JSON.stringify(rows(f)),beforeSeptember);
-      return result;
+      return calculateMonth(client,f,calculation,'2026-09');
     });
     report.september=september;
     publishMaterialIntakePacket(f,'confirmation');
-    const future=await check('合成确认只追加10月生效版本，9月仍读原版',async()=>{
+    const inventoryMethod=await check('实际提交的10月合成计价选择可取材',async()=>{
       const declared=prepareMaterialObservations(f,'confirmation');
-      const merged=await readMaterials(client,f,{...request(f,declared.artifactPath),materialRefs:history.material.materialRefs},report);
-      const oldRows=rows(f);
-      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),merged,{expectedRevision:history.saved.headRevision,effectiveFrom:'2026-10'})));
-      assert.equal(saved.changed,true);assert.equal(saved.savedVersion.effectiveFrom,'2026-10');assert.equal(saved.savedVersion.applicableToTarget,false);
-      assert.equal(saved.baselineRef,history.saved.baselineRef);assert.equal(rows(f).length,oldRows.length+1);
-      assert.deepEqual(rows(f).slice(0,oldRows.length),oldRows);
-      assert.equal(ok(await client.call('finance_baseline_read',{target:materialTarget(f)})).baselineRef,history.saved.baselineRef);
-      return saved.savedVersion;
+      const material=await readMaterials(client,f,request(f,declared.artifactPath),report);
+      const method=material.principleSupport.find(item=>item.kind==='inventory_cost');
+      assert.equal(method?.value,'fifo');
+      return method.value;
     });
-    report.humanConfirmation={path:f.humanReplyPath,synthetic:true,futureVersion:future};
+    report.humanConfirmation={path:f.humanReplyPath,synthetic:true,inventoryMethod};
     publishMaterialIntakePacket(f,'october');
-    const beforeOctober=JSON.stringify(rows(f));
     await client.close();client=await startMaterialIntakeMcp(f,{bound:true,period:'2026-10'});
-    report.october=await check('10月全新会话读回新旧口径，承接9月结存并计算',async()=>{
-      const baseline=ok(await client.call('finance_baseline_read',{target:materialTarget(f,'2026-10')}));
-      assert.equal(baseline.baselineRef,future.baselineRef);assert(baseline.shortText.includes('先进先出'));
+    report.october=await check('10月用现场材料承接9月结存并计算',async()=>{
       const current=prepareMaterialObservations(f,'october','2026-10');
       const priorBasis=readBaselineJson(host.basisPath);
       priorBasis.target=materialTarget(f,'2026-10');
@@ -222,20 +199,17 @@ test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨�
       writeBaselineJson(existingContracts,priorBasis);
       const carry=await readMaterials(client,f,request(f,existingContracts,'2026-10'),report);
       const calculation=await readMaterials(client,f,{...request(f,current.artifactPath,'2026-10'),materialRefs:carry.materialRefs,section:'calculation'},report);
-      const result=await calculateMonth(client,f,calculation,baseline,'2026-10');
+      const result=await calculateMonth(client,f,calculation,'2026-10',inventoryMethod);
       assert.equal(result.result.inventory.opening,september.result.inventory.closing);
       assert.equal(result.result.maintenanceCumulative,september.result.maintenanceCumulative+result.result.maintenanceExpense);
-      assert.equal(JSON.stringify(rows(f)),beforeOctober);
       assert(!readBaselineJson(current.artifactPath).originals.some(original=>/history/i.test(original.id)));
-      return result;
-    });
-    await check('来源变更使依赖的已存原则失效，现场原件可恢复',async()=>{
-      const original=readFileSync(f.files.historyAugust);
+      // 原件变化后，计算引用的原快照不可重用。
+      const original=readFileSync(f.files.oldLease);
       try{
-        writeFileSync(f.files.historyAugust,Buffer.concat([original,Buffer.from('SYNTHETIC_SOURCE_CHANGED')]));
-        const stale=ok(await client.call('finance_baseline_read',{target:materialTarget(f,'2026-10')}));
-        assert.equal(stale.status,'stale');assert(stale.unresolved.some(item=>item.code==='source_changed'));
-      }finally{writeFileSync(f.files.historyAugust,original);}
+        writeFileSync(f.files.oldLease,Buffer.concat([original,Buffer.from('SYNTHETIC_SOURCE_CHANGED')]));
+        rejected(await client.call('finance_baseline_materials',{target:materialTarget(f,'2026-10'),materialRefs:calculation.materialRefs,section:'calculation'}),/finance_baseline_material_changed/);
+      }finally{writeFileSync(f.files.oldLease,original);}
+      return result;
     });
     assert.equal(voucherCount(f),0);
     for(const [key,path]of Object.entries(f.files))assert.equal(hashBaseline(readFileSync(path)),f.originalHashes[key],key+' 原件保持原样');

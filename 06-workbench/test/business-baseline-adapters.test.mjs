@@ -37,7 +37,7 @@ async function rejectCall(client,name,args,code){
  return result.data;
 }
 
-test('宿主观察经真实HTTP/MCP接收、取数与渐进保存',{timeout:120000},async t=>{
+test('宿主观察经真实HTTP/MCP接收与按需取数',{timeout:120000},async t=>{
  const root=mkdtempSync(join(process.env.BASELINE_ADAPTER_TEST_PARENT??tmpdir(),'baseline-host-adapters-'));
  const data=join(root,'data'),sourceRoot=join(root,'sources'),auditDir=join(root,'calls');
  mkdirSync(data);mkdirSync(sourceRoot);
@@ -72,7 +72,7 @@ test('宿主观察经真实HTTP/MCP接收、取数与渐进保存',{timeout:1200
    assert.throws(()=>readXlsxStructure(formula),{code:'xlsx_formula_unsupported'});
    assert.throws(()=>readInvoiceXlsx(formula,{sheet:sheetName,headerRow:1,columns:{net:'净额'}}),{code:'xlsx_formula_unsupported'});
   });
-  await t.test('实际HTTP共享同一观察入口、授权与保存边界',async()=>{
+  await t.test('实际HTTP共享同一观察入口及授权边界',async()=>{
    const child=spawn(process.execPath,[fileURLToPath(new URL('../server/server.mjs',import.meta.url))],{
     env:{...process.env,PORT:'0',HOST:'127.0.0.1',NODE_NO_WARNINGS:'1'},windowsHide:true,stdio:['ignore','pipe','pipe'],
    });
@@ -93,14 +93,13 @@ test('宿主观察经真实HTTP/MCP接收、取数与渐进保存',{timeout:1200
      const response=await fetch(base+'/api/business-baseline/'+action,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)});
      return {status:response.status,data:await response.json()};
     };
-    const initial=await post('read',{target});assert.equal(initial.status,200);assert.equal(initial.data.status,'needs_generation');
+    for(const action of ['read','save']){
+     const removed=await post(action,{target});
+     assert.equal(removed.status,404);assert.equal(removed.data.error,'not_found');
+    }
     const outside=await post('materials',{target,inputPath:path});assert.equal(outside.status,400);assert.equal(outside.data.error,'finance_baseline_observations_path_invalid');
     const material=await post('materials',artifact());assert.equal(material.status,200);assert.equal(material.data.semanticAuthority,'agent_observation');safe(material);
     const inventory=material.data.principleSupport.find(p=>p.kind==='inventory_cost');assert.equal(inventory.value,'fifo');
-    const saved=await post('save',{target,materialRefs:[reference(material.data)],expectedRevision:0,effectiveFrom:target.period,principles:[{supportRef:inventory.supportRef}]});
-    assert.equal(saved.status,200);assert.equal(saved.data.status,'needs_review');assert(saved.data.unresolved.some(g=>g.code==='tax_history_missing'));
-    const rejected=await post('save',{target,shortText:'PRIVATE_伪造常驻正文'});
-    assert.equal(rejected.status,400);assert.equal(rejected.data.error,'finance_baseline_input_invalid');safe(rejected);
    }finally{child.kill();await exited;}
   });
   await t.test('MCP仍可从真实材料引用取本机规范对象，拒绝旧读取和篡改',async()=>{
@@ -132,7 +131,7 @@ test('宿主观察经真实HTTP/MCP接收、取数与渐进保存',{timeout:1200
     writeFileSync(path,'changed');await rejectCall(client,materialTool,{target,materialRefs:[reference(material)]},'finance_baseline_material_changed');writeFileSync(path,bytes);
    }finally{await client.close();}
   });
-  await t.test('同根原件与派生产物隔离，显式选证的跨页闭包可保存',async()=>{
+  await t.test('同根原件与派生产物隔离，跨页材料引用可继续读取税负',async()=>{
    const key='SYNTHETIC-OBSERVATION-CLOSURE',scopeTarget={accountSetId:account(key),period:'2026-07'},sameRoot=join(root,'same-root');
    mkdirSync(sameRoot);
    // 普通客户文件可以恰好叫 baseline-materials.json。
@@ -172,10 +171,10 @@ test('宿主观察经真实HTTP/MCP接收、取数与渐进保存',{timeout:1200
     for(let i=0;i<5;i++){
      assert(facts.pagination.next);facts=await call(client,materialTool,facts.pagination.next.arguments);assert.equal(facts.snapshotDigest,snapshotDigest);
     }
-    const save={target:scopeTarget,materialRefs:[reference(facts)],expectedRevision:0,effectiveFrom:scopeTarget.period,principles:[{supportRef:inventory.supportRef}]};
-    await rejectCall(client,'finance_baseline_save',{...save,principles:[{supportRef:'bp:'+'0'.repeat(64)}]},'finance_baseline_support_not_returned');
-    const saved=await call(client,'finance_baseline_save',save);
-    assert.equal(saved.status,'ready');assert.match(saved.shortText,/先进先出/);assert.match(saved.shortText,/1\.99%/);assert.match(saved.shortText,/0\.50%/);
+    const tax=await call(client,materialTool,{target:scopeTarget,materialRefs:[reference(facts)],section:'tax',limit:50});
+    assert.equal(tax.snapshotDigest,snapshotDigest);
+    assert.equal(tax.taxBurden.summaries.find(item=>item.taxType==='vat').weightedRatio,5960/300000);
+    assert.equal(tax.taxBurden.summaries.find(item=>item.taxType==='cit').weightedRatio,3000/600000);
     const copied=writeFixtureObservations(sameRoot,{target:scopeTarget,originals:[{id:'generated',path:packet('other',[]).inputPath,owner:jsonOwner(key)}]});
     await rejectCall(client,materialTool,copied,'finance_baseline_generated_not_original');
     assert.equal(readFileSync(originalPath,'utf8'),JSON.stringify(original));

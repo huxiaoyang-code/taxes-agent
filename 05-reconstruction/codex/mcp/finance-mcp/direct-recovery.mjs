@@ -1,7 +1,6 @@
 // 恢复导航只取固定工具与文档，不读取原件、异常正文或自由 recordType。
 import {BASELINE_FACT_VALUES,BASELINE_FIELDS} from '../../../../06-workbench/server/business-baseline-contracts.mjs';
-const baselineTools=new Set(['finance_baseline_materials','finance_baseline_save','finance_baseline_read']);
-export const DIRECT_MATERIAL_DIAGNOSTIC_TOOLS=new Set([...baselineTools,'finance_prebook_review','finance_calculation_run']);
+export const DIRECT_MATERIAL_DIAGNOSTIC_TOOLS=new Set(['finance_baseline_materials','finance_prebook_review','finance_calculation_run']);
 const baselineContract=()=>[{code:'inspect_baseline_observation_contract',tool:'finance_record_contract',arguments:{recordType:'baseline'}}];
 const schemaHints={required:['required field','补齐该字段；业务事实须来自实际材料。'],additionalProperties:['only declared properties','删除未声明字段，按当前工具 schema 重试。'],type:['declared type','按 schema 使用声明类型，不自动转换原值。'],enum:['declared enum','选用当前 schema 声明的枚举。'],const:['declared constant','使用 schema 声明的固定标识。']};
 // 路径只保留 schema 中声明的键与数组序号；未知键可能就是姓名、税号，不能回显。
@@ -45,9 +44,9 @@ export function directRecovery(name,{code,status,args}={}){
  if(name==='finance_baseline_materials'&&code==='finance_baseline_interpretation_invalid')return baselineContract().map(step=>({...step,hint:'按 details.interpretation 找到观察产物中 records 的字段，核对原件位置和允许枚举，修正本机产物后重试。'}));
  if(typeof code==='string'&&(code.startsWith('finance_target_')||code==='finance_period_review_scope_conflict'||code==='finance_period_review_scope_unverified'))
   return [{code:'verify_configured_database_identity_and_selected_calls_locally',tool:'finance_period_review',skill:'audit-support/SKILL.md'}];
- if(baselineTools.has(name)){
-  if(/commit_unknown|revision_conflict|restore_unverified|readonly|source_(?:changed|forbidden)|material_changed|generated_not_original|owner|scope|finance_memory_/.test(code??''))return [{code:'verify_original_scope_permission_and_outcome',action:'inspect_existing_local_binding_and_call_before_retry',hint:'先核实实际账套、权限、原件 SHA 和原调用终态，再决定补充本机观察或重试。'}];
-  if(['invalid_arguments','finance_input_invalid'].includes(code)||/^finance_baseline_(?:observations_|input_|locator_|original_missing|field_|principle_|evidence_missing|support_not_returned|effective_period_invalid)/.test(code??'')){
+ if(name==='finance_baseline_materials'){
+  if(/source_(?:changed|forbidden)|material_changed|generated_not_original|owner|scope|finance_memory_/.test(code??''))return [{code:'verify_original_scope_permission_and_outcome',action:'inspect_existing_local_binding_and_call_before_retry',hint:'先核实实际账套、权限、原件 SHA 和原调用终态，再决定补充本机观察或重试。'}];
+  if(['invalid_arguments','finance_input_invalid'].includes(code)||/^finance_baseline_(?:observations_|input_|locator_|original_missing|field_)/.test(code??'')){
    return baselineContract().map(step=>({...step,hint:'按当前合同核对参数及获准目录。用宿主读取原件后写入本机观察产物，并传 inputPath。保留已成功的材料引用。'}));
   }
   return [];

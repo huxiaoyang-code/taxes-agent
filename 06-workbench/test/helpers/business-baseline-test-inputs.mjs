@@ -139,31 +139,6 @@ export function baselineMaterialRequest(f,name='a',{includeTax=true}={}){
   return {target:baselineTarget(f,name),originals,selections,limit:50};
 }
 
-export function manualBaselineSave(f,materials,name='a',{expectedRevision=0,effectiveFrom='2026-07',effectiveTo='2026-12'}={}){
-  assert(materials.materialRef&&materials.snapshotDigest,'必须来自一次真实materials调用');
-  const facts=materials.facts;
-  const originalByTemplate={inventory_cost:'cost',repair:'repairs',lease_:'lease',daily_:'daily',maintenance_:'maintenance',asset_:'asset',vat0_:'vat',choice_:'taxChoice'};
-  const refs=template=>facts.filter(fact=>fact.source.originalId===name+'_'+originalByTemplate[template]).map(fact=>fact.factRef);
-  const standard=facts.filter(fact=>fact.field==='accounting_standard'&&fact.source.kind==='ledger_configuration').map(fact=>fact.factRef);
-  const principle=(kind,value,when,keys=[],history=false)=>{const sourceRefs=keys.flatMap(refs),ledger=history?facts.filter(x=>x.field==='historical_posting'&&x.linkedBusinessRefs?.some(ref=>sourceRefs.includes(ref))).map(x=>x.factRef):[];return {kind,value,when,evidenceRefs:[...new Set([...sourceRefs,...ledger])]};};
-  const principles=[{kind:'accounting_standard',value:name==='a'?'enterprise':'small_enterprise',when:'account_set',evidenceRefs:standard},principle('inventory_cost',name==='a'?'periodic_weighted_average':'fifo','inventory',['inventory_cost'])];
-  if(name==='a')principles.push(
-    principle('business_classification','main_income','repair',['repair'],true),
-    principle('business_classification','other_income','lease',['lease_'],true),
-    principle('business_classification','actual_use_expense','repair',['daily_'],true),
-    principle('revenue_period','service_period','lease',['lease_'],true),
-    principle('expense_period','benefit_period','maintenance',['maintenance_'],true),
-    principle('cost_treatment','expense_current','repair',['daily_'],true),
-    {...principle('cost_treatment','capitalize_then_depreciate','fixed_asset',['asset_'],true),evidenceRefs:[...refs('asset_'),...facts.filter(x=>x.field==='asset_configuration').map(x=>x.factRef)]},
-    principle('vat_output_period','advance_invoice_period','lease',['lease_','vat0_'],true),
-    principle('vat_input_period','confirmation_period','maintenance',['maintenance_','vat0_'],true),
-    principle('income_tax_period','contract_due','lease',['choice_','lease_'],true),
-    principle('tax_choice','vat_standard','lease',['choice_']),
-  );
-  else principles.push(principle('revenue_period','delivery_acceptance','repair',['repair'],true));
-  return {target:baselineTarget(f,name),materialRefs:materials.materialRefs??[{materialRef:materials.materialRef,snapshotDigest:materials.snapshotDigest}],expectedRevision,effectiveFrom,effectiveTo,principles,...(name==='b'?{unresolved:[{code:'tax_history_missing',kind:'income_tax_period'}]}:{})};
-}
-
 export const materialReference=value=>({materialRef:value.materialRef,snapshotDigest:value.snapshotDigest});
 
 // 量测真实MCP双份包装及元数据，不能仅量领域对象或principleSupport的一部分。
@@ -208,17 +183,7 @@ export async function readColdBaselineMaterials(client,target,{section='overview
   const observed=await readBaselineSection(client,fixtureSourceArgs(client,{target,originals,section,limit}));
   assert.equal(observed.coverage.sourceOwners.agentIdentityMatched,originals.length);
   assert.equal(observed.coverage.sourceOwners.unverified,0);
-  return {...observed,allResponses:observed.responses,generationPath:'host_extraction_material_reference_actual_support_refs'};
-}
-
-// 这是程序选取器而非模型推理：只依据实际返回的候选去重，不从独立预期制造typed答案。
-export function saveFromActualSupports(target,materials,{expectedRevision=0,effectiveFrom=target.period,effectiveTo='2026-12',unresolved}={}){
-  const supports=[...new Map(materials.principleSupport.map(p=>[[p.kind,p.value,p.when,p.allocationBasis??''].join(':'),p])).values()];
-  // 同时返回的费用受益期与cost_treatment分摊候选重复表达相同条件，保留费用所属期原则。
-  const selected=supports.filter(p=>!(p.kind==='cost_treatment'&&p.value==='allocate_benefit_period'&&p.allocationBasis==='monthly_equal'&&supports.some(s=>s.kind==='expense_period'&&s.value==='benefit_period'&&s.when===p.when&&s.allocationBasis==='monthly_equal')));
-  for(const p of selected){assert.match(p.supportRef,/^bp:[a-f0-9]{64}$/);assert(!selected.some(q=>q!==p&&q.kind===p.kind&&q.when===p.when&&q.value!==p.value&&p.kind!=='business_classification'),'冲突候选须先调查，不能机械全选');}
-  assert(selected.length&&selected.length<=24);
-  return {target,materialRefs:materials.materialRefs??[materialReference(materials)],expectedRevision,effectiveFrom,effectiveTo,principles:selected.map(p=>({supportRef:p.supportRef})),...(unresolved?{unresolved}:{})};
+  return {...observed,allResponses:observed.responses};
 }
 
 export async function discoverBaselineCalculationMaterials(client,target){return readColdBaselineMaterials(client,target,{section:'calculation',limit:3});}

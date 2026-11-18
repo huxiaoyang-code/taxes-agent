@@ -89,11 +89,11 @@ async function api(req, res, url, m) {
   const p = url.pathname;
   let match;
 
-  if ((match=p.match(/^\/api\/business-baseline\/(read|materials|save)$/))) {
+  if (p === "/api/business-baseline/materials") {
     if(m!=="POST")return json(res,405,{error:'method_not_allowed'});
     if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'json_content_type_required'});
     try {
-      const args=await readBody(req),name='finance_baseline_'+match[1];
+      const args=await readBody(req),name='finance_baseline_materials';
       const {withFinanceCall}=await import('./finance-call-chain.mjs'),{callDirectFinanceTool}=await import('./direct-finance.mjs');
       return json(res,200,await withFinanceCall({tool:name,args},()=>callDirectFinanceTool(name,args)));
     }catch(error){const code=/^(finance_baseline_|finance_memory_|finance_target_)[a-z_]+$/.test(error?.code??'')?error.code:'finance_baseline_call_failed';return json(res,/conflict|changed|readonly|unknown/.test(code)?409:400,{error:code});}

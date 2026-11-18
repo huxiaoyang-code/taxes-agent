@@ -54,9 +54,9 @@ for(const args of [[],['--dsh-cli','relative'],['--dsh-cli',cli],['--dsh-cli',cl
 assert.equal(parseArgs(['--help'])['--help'],true);
 const taskFile=join(scratch,'任务.txt');writeFileSync(taskFile,task,'utf8');
 const spec=buildLaunchSpec(process.execPath,scratch,parseArgs(['--dsh-cli',cli,'--task-file',taskFile]));assert.equal(spec.args.at(-1),argv.at(-1));
-const baseline={version:'finance-business-baseline/1',status:'ready',shortText:'仅合成宿主投影，不是企业业务预期。',unresolved:[],methods:['PRIVATE-METHOD-CATALOG'],oldVersions:['PRIVATE-OLD-VERSION']};
-const boundPrompt=buildLaunchSpec(process.execPath,scratch,parseArgs(['--dsh-cli',cli,'--task-file',taskFile]),baseline).args.at(-1);
-assert(boundPrompt.includes(baseline.shortText));assert.equal(boundPrompt.split(BUSINESS_MEMORY_ROUTING).length-1,1,'短基线加载规则只装配一次');assert(!boundPrompt.includes('PRIVATE-'));
+const memoryPath=join(scratch,'MEMORY.md');writeFileSync(memoryPath,'PRIVATE-SYNTHETIC-MEMORY');
+const boundPrompt=buildLaunchSpec(process.execPath,scratch,parseArgs(['--dsh-cli',cli,'--task-file',taskFile]),memoryPath).args.at(-1);
+assert(boundPrompt.includes(memoryPath));assert.equal(boundPrompt.split(BUSINESS_MEMORY_ROUTING).length-1,1,'记忆文件指引只装配一次');assert(!boundPrompt.includes('PRIVATE-SYNTHETIC-MEMORY'));
 assert.throws(()=>buildLaunchSpec(process.execPath,scratch,parseArgs(['--dsh-cli',cli,'--task',task,'--model-patch',join(scratch,'missing.yml')])) ,/dsh_launch_file_missing/);
 const failedCli=join(scratch,'synthetic-failure.mjs');writeFileSync(failedCli,'process.exit(17);','utf8');
 const failed=spawnSync(process.execPath,[join(scratch,'start-dsh.mjs'),'--dsh-cli',failedCli,'--task',task],{encoding:'utf8',windowsHide:true,timeout:15000});assert.equal(failed.status,17,'wrapper must preserve a failed CLI exit');

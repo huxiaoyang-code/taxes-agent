@@ -8,6 +8,7 @@ import {loadBoundBusinessSession,prepareBoundBusinessSession,readHostJson,sessio
 import {assertClaudeSessionBinding,claudeBusinessHooks} from './business-memory-hook.mjs';
 
 const fail=code=>{throw Object.assign(new Error(code),{code});};
+const MEMORY_ENV=new Set(['CLAUDE_CODE_DISABLE_AUTO_MEMORY','CLAUDE_CODE_AUTO_MEMORY_PATH']);
 const FLAGS=new Set(['-p','--print','--verbose','--include-hook-events','--no-session-persistence','--init-only']);
 const VALUES=new Set(['--model','--effort','--output-format','--input-format','--max-turns','--max-budget-usd','--tools','--allowedTools','--disallowedTools','--debug-file']);
 export function parseClaudeArgs(args){
@@ -34,23 +35,27 @@ export function parseClaudeArgs(args){
  return options;
 }
 export function buildClaudeLaunchSpec(workspace,options){
- const {config,session}=loadBoundBusinessSession(workspace),cli=options['--claude-cli'];
+ const {config,session,memoryDirectory,memoryPath}=loadBoundBusinessSession(workspace),cli=options['--claude-cli'];
  if(!existsSync(cli)||!statSync(cli).isFile()||!/\.(?:exe|mjs|cjs|js)$/i.test(cli))fail('claude_executable_or_js_required');
- const settings=join(workspace,'.claude/settings.json'),mcp=join(workspace,'.mcp.json'),native=readHostJson(settings);
- if(native.autoMemoryEnabled!==false||native.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY!=='1'||JSON.stringify(native.hooks)!==JSON.stringify(claudeBusinessHooks(config.nodePath,workspace)))fail('claude_business_hooks_required');
+ const mcp=join(workspace,'.mcp.json'),native=readHostJson(join(workspace,'.claude/settings.json'));
+ if(Object.keys(native.env??{}).some(key=>MEMORY_ENV.has(key.toUpperCase())))fail('claude_native_memory_workspace_regeneration_required');
+ if(native.autoMemoryEnabled!==false||JSON.stringify(native.hooks)!==JSON.stringify(claudeBusinessHooks(config.nodePath,workspace)))fail('claude_business_hooks_required');
  const sessionId=options['--resume']??randomUUID();
  if(options['--resume'])assertClaudeSessionBinding(workspace,sessionId,session);
+ // 只给本次原生进程指定账套记忆目录，权限和会话守卫从项目设置加载。
+ const settings=JSON.stringify({autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
  // 原生--allowedTools等选项是variadic，提示词必须在明确的选项终止符之后。
  const args=['--strict-mcp-config','--mcp-config',mcp,'--settings',settings,'--setting-sources','project',...(options['--resume']?['--resume',sessionId]:['--session-id',sessionId]),...options.extra,...(options.prompt===undefined?[]:['--',options.prompt])];
- const env={...process.env,...config.mcpEnv,FINANCE_BUSINESS_SESSION:sessionPath(workspace),FINANCE_CLAUDE_LAUNCH_ID:sessionId,CLAUDE_CODE_DISABLE_AUTO_MEMORY:'1'};
- return {command:/\.exe$/i.test(cli)?cli:config.nodePath,args:/\.exe$/i.test(cli)?args:[cli,...args],cwd:workspace,env,scope:session.scope,sessionId,modelInvoked:options['--check']?false:'only after an explicit task or interactive input'};
+ const env={...process.env,...config.mcpEnv,FINANCE_BUSINESS_SESSION:sessionPath(workspace),FINANCE_CLAUDE_LAUNCH_ID:sessionId};
+ for(const key of Object.keys(env))if(MEMORY_ENV.has(key.toUpperCase()))delete env[key];
+ return {command:/\.exe$/i.test(cli)?cli:config.nodePath,args:/\.exe$/i.test(cli)?args:[cli,...args],cwd:workspace,env,scope:session.scope,sessionId,memoryPath,modelInvoked:options['--check']?false:'only after an explicit task or interactive input'};
 }
 export async function runClaude(workspaceUrl,args,bound){
  const options=parseClaudeArgs(args),workspace=fileURLToPath(workspaceUrl);
- if(options['--help']){console.log('node start-claude.mjs --claude-cli <Claude 2.1.309 exe或JS绝对路径> [--resume <本工作区已绑定UUID>] [--check | -- <受支持Claude参数>]\n先用start-business-session绑定账户；常规启动自动prepare，--check只读。MCP、settings、工作目录和auto memory隔离不能从额外参数覆盖。');return;}
+ if(options['--help']){console.log('node start-claude.mjs --claude-cli <Claude 2.1.309 exe或JS绝对路径> [--resume <本工作区已绑定UUID>] [--check | -- <受支持Claude参数>]\n先用start-business-session绑定账套；--check只读检查账套及其原生记忆路径。工作目录、记忆目录和MCP由启动器固定。');return;}
  // 先拒绝不受支持的参数和错误恢复目标，避免为拒绝的任务更新记忆。
  let spec=buildClaudeLaunchSpec(workspace,options);
- if(options['--check']){console.log(JSON.stringify({status:'checked',scope:spec.scope,sessionId:spec.sessionId,autoMemoryEnabled:false,modelInvoked:false,readOnly:true},null,2));return;}
+ if(options['--check']){console.log(JSON.stringify({status:'checked',scope:spec.scope,sessionId:spec.sessionId,memoryPath:spec.memoryPath,autoMemoryEnabled:true,modelInvoked:false,readOnly:true},null,2));return;}
  if(!bound)await prepareBoundBusinessSession(workspace);
  spec=buildClaudeLaunchSpec(workspace,options);
  const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:spec.env,windowsHide:true,shell:false,stdio:'inherit'});
