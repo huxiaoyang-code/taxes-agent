@@ -144,8 +144,15 @@ test('B01/B04/B05 大批量完整MCP预算、正常续页与显式合并，不�
     const details=record(await readBaselineSection(client,{target,materialRefs:late.materialRefs,section:'facts',limit:7}));
     const observedFacts=details.facts.filter(x=>x.source.kind==='file'&&x.semanticAuthority==='agent_observation').length;
     assert(observedFacts>=109,'预算回归必须有至少109个实际文件观察');assert(details.pages.length>12,'正常详情页实际超过12次，不能误吃源闭包限制');
-    const joined=record(await readBaselineSection(client,{target,materialRefs:[...early.materialRefs,...details.materialRefs],section:'overview',limit:50}));assert.equal(joined.materialRefs.length,1);assert.equal(joined.coverage.taxHistory.vat.status,'included');assert.equal(joined.coverage.taxHistory.cit.status,'included');assert(joined.principleSupport.some(p=>p.kind===earlySupport.kind&&p.value===earlySupport.value&&p.when===earlySupport.when),'后读大材料不能吞掉早期支持');
+    const joined=record(await readBaselineSection(client,{target,materialRefs:[...early.materialRefs,...details.materialRefs],section:'overview',limit:50}));assert.equal(joined.materialRefs.length,1);assert.equal(joined.coverage.taxHistory.vat.status,'included');assert.equal(joined.coverage.taxHistory.cit.status,'included');
+    const joinedSupport=joined.principleSupport.find(p=>p.kind===earlySupport.kind&&p.value===earlySupport.value&&p.when===earlySupport.when);
+    assert(joinedSupport,'后读大材料不能吞掉早期支持');
+    assert.equal(joinedSupport.allocationBasis,earlySupport.allocationBasis,'合并保持租赁口径');
     const joinedRaw=await localMaterials(f,joined);assert.deepEqual(joinedRaw.taxBurden.summaries,earlyRaw.taxBurden.summaries,'overview摘要与保存全事实使用相同税源，不按展示页截断');
+    const joinedFactRefs=new Set(joinedRaw.facts.map(f=>f.factRef));
+    for(const fact of earlyRaw.facts){
+      assert(joinedFactRefs.has(joinedRaw.factAliases[fact.factRef]??fact.factRef),'合并保留早期事实或可解析的引用');
+    }
     const alias=record(await readBaselineSection(client,{target,originals:[{id:'same_vat_different_caller_id',path:f.files.a.vat}],section:'overview',limit:50}));
     const aliasRaw=await localMaterials(f,alias);
     assert.equal(aliasRaw.taxBurden.summaries.find(s=>s.taxType==='vat').periodCount,3);
@@ -162,7 +169,8 @@ test('B01/B04/B05 大批量完整MCP预算、正常续页与显式合并，不�
     const final=record(await readBaselineSection(client,{target,materialRefs:duplicate.materialRefs,section:'overview',limit:50}));
     rejected(await client.call('finance_baseline_materials',{target:baselineTarget(f,'b'),materialRefs:final.materialRefs,section:'overview'}),/finance_baseline_(?:scope_conflict|material_record_invalid)/);
     const original=readFileSync(bulkPath);try{writeBaselineJson(bulkPath,{...JSON.parse(original),备注:'来源版本已修订'});rejected(await client.call('finance_baseline_materials',{target,materialRefs:final.materialRefs,section:'overview'}),/finance_baseline_(?:material_changed|source_changed)/);}finally{writeFileSync(bulkPath,original);}
-    assert(final.principleSupport.some(p=>p.supportRef===earlySupport.supportRef));
+    // 合并可为同一口径选出新的证据组合，同一合并结果重读时支持引用保持一致。
+    assert(final.principleSupport.some(p=>p.supportRef===joinedSupport.supportRef));
     readOnlyClient=await startBaselineMcp(f,{readOnly:true});
     const readOnly=record(await readBaselineSection(readOnlyClient,{target,materialRefs:final.materialRefs,section:'overview',limit:50}));assert.equal(readOnly.snapshotDigest,final.snapshotDigest);
     // 真正不同的申报数不能为预算而择低/洗平；冲突资料只在这个独立现场中构造。
