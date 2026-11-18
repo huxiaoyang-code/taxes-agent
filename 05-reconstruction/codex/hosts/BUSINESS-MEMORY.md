@@ -22,18 +22,13 @@ node ./business-memory-context.mjs --check
 
 ## 从账和原资料生成
 
-Agent 先用 `finance_baseline_read({target:{accountSetId,period}})`。无有效版或需修订时，通过 `skills_read({resource:"company-baseline/SKILL.md"})` 进入 [基线生成技能](../../../plugins/finance/skills/company-baseline/SKILL.md)：
+先用 `finance_baseline_read({target:{accountSetId,period}})`。无有效版或需修订时，进入[基线生成技能](../../../plugins/finance/skills/company-baseline/SKILL.md)。工作区 `.finance/business-session.json` 给实际 `sourceRoot` 和 `auditDir`。Agent 用宿主已有的文件或脚本权限读取代表性历史、合同及申报资料，按 `finance_record_contract({recordType:"baseline"})` 披露的合同准备带来源的本机 JSON。在审计根的 `agent-materials` 中保存整理件，持实际文件路径调用 `finance_baseline_materials`。账库内的配置和历史也可直接查询。使用方式见[材料与保存合同](../../../plugins/finance/skills/company-baseline/references/materials-and-save.md)。
 
-1. 优先 `finance_baseline_materials({target,extractKnownFields:true})` 有界发现并批读当前企业已核主体／已知语义原件，连同实际账套配置及代表性历史形成支持。
-2. 看紧凑 overview 的支持、税费及独立 `coverage`；原样跟当前返回的 `pagination.next.arguments`／`sourceDiscovery.next.arguments`，实际页长可收缩，不手算 offset。未读相关页先补调查，不称客户缺资料；发现旁路不成为已选来源的主体缺口。
-3. 游标已继承前批闭包；另行独立读取的相关材料须显式合并成单ref，再自主选重要 `supportRef` 保存，不自动全选、不只留最后一个子集。后端核来源／范围并还原真实证据。
-4. 回读按 `kind/value/when/allocationBasis` 核重要业务分支及税负，不只看种类已出现；同条件同处理可去重，分支提示不要求全选或一概待核。漏字段／页／引用应继续修正，不在报告里另列后宣布完成。
+看实际候选、税负和未读必要续页。分件提交时显式合并相关 `materialRefs`，再选适用的 `supportRef` 保存并回读。对照重要的 `kind/value/when/allocationBasis` 及已核税负。字节摘要、位置和主体匹配形成可追溯证据，整理值保留观察属性。旧 XLS 等原件的读取方法和编码由 Agent 在本机确定。
 
-材料工具直接读已有 SQLite 和获准导出；需要指定范围／字段时，仍可不带抽取标志读 `sourceInventory`，沿真实 `originalRef`、`fieldRef` 或表格数字行列补查，不依赖宿主 Read／Bash、旧 `methodRef`、预选脚本或预写基线。Agent 整理参数，不要求用户填内部 JSON 或写企业方案。行业标签不替代具体归类，不凭金额猜算法；真实分组依原件上下文／同行及同业务关系，不依 caller group。只读投影不扩大原件披露权限，不用宿主 Read／OCR／SQL／脚本绕过边界。详细定位、税负及保存参数见 [材料与保存合同](../../../plugins/finance/skills/company-baseline/references/materials-and-save.md)。
+已有有效基线时，只准备本期所需观察或复用当前材料引用，按 `section:"calculation"` 查安全结构。若调用 `finance_calculation_run` 核算，可用当前 `calculationReader` 在本机消费这些整理值并留下派生底稿。原件读取和提取先由宿主完成。缺少必要字段时保留影响及未核范围。
 
-已有有效基线时直接 `finance_baseline_materials({target,section:"calculation"})` 看安全 `calculationSchema`，不重走生成或回读探针产物；结构与本机 resolver 同对象／字段集，只含受限枚举、字段类型和日期／月份格式。经 `finance_calculation_run` 的 JavaScript 消费真实材料引用／SHA及 `calculationReader`，按实际对象和期间粒度计算；无任务对象／必要输入停相关分支，不用历史金额、默认月数或0兜底。有对象而本期条件未成可有据暂不确认，可选字段空不全局待核。父进程装配 `input.financeContext`，不要求模型读原件或猜私有路径。规范原值只在本机计算并写派生底稿，保留 reader／来源摘要，不 stdout 或回读给模型；MCP 只返回执行状态及产物引用，执行成功不等于会计审定。
-
-只记录有依据且能指导处理的结论。可以少于5条，不凑数；关键事实仍未知时明确生成未完成，不能把“准则未知、税期未知”排成清单宣称 `ready`。税负分税种、应纳／实缴、所属期／缴款期、本期／累计及可比口径；增值税按合计同口径税额除以合计可比销售额加权，不平均百分比，所得税累计单列。仅有累计VAT而无法形成可比区间时保留缺口，不静默 `ready`；缺资料不补零。历史区间是调查参考，不是本期倒挤目标。
+短基线记录真实可执行原则，条数取决于现有依据。税负按税种、应纳／实缴、所属期／缴款期、本期／累计及税额阶段保留可比范围。增值税按合计同口径税额除以合计可比销售额加权，所得税累计单列。缺项留未知，历史区间用于调查。
 
 ## 状态、沿用和换版
 

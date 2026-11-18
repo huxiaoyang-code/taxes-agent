@@ -9,7 +9,9 @@ flowchart TD
   U[业务目标与获准原件] --> A[Pi / Claude Code / dsh / ZCode]
   S[按需加载中国化 Skill] --> A
   A --> M[原生 MCP：具体业务工具与输入合同]
-  A --> C[Python / 表格 / 既有计算器]
+  A --> C[宿主已授权文件及脚本能力]
+  C --> O[本机整理件及原件引用]
+  O --> M
   M --> G[通用脚本实际执行与自动记录]
   G --> P[独立派生账表和计算记录索引]
   M --> B[本机会计、税费、报表与对账模块]
@@ -37,7 +39,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `plugins/finance/skills/prebook-review` 将 small-business 的单据整理、采购收货匹配、资金起点、异常问询与报告方法适配到同仓库后端。它与既有做账流程共享资料来源和规则能力，但不要求本期账已完成，也不创建正式凭证或账库。
 
-`finance_record_contract(recordType=prebook)` 披露 `finance-prebook-contract/1`，`finance_prebook_review({inputPath,repliesPath?})` 读取 `FINANCE_SOURCE_ROOT` 内的适配输入与原件。输入是 Agent／采集器对客户基础资料的整理：企业期间、一般／小规模身份、覆盖声明、上期结转、本期采购收货、销售与税务发票、资金和库存。JSON／CSV 原件逐值绑定由后端核验；有限 `valueMap` 翻译原始分类，内部记录 ID 无需原件自带，`declarations` 分别记录提供者说明或操作者映射，业务关联／分类声明仍需核实。金额和日期不能靠声明代替原件。未绑定或不支持的内容保留缺口；表格、PDF 等宿主提取件不得冒称已由该后端独立解析原件。
+`finance_record_contract(recordType=prebook)` 披露当前账前合同。Agent 在获准的本机宿主读取原件，按实际来源、期间、身份、库存和业务语义组织 `finance-prebook-input/2`。整理件和回复文件写入审计根的 `agent-materials`。 `finance_prebook_review({inputPath,repliesPath?})` 接整理件路径，核实际原件 SHA、观察值与 `facts` 的绑定、声明的主体和期间。 `observedValue` 及原位置记为 Agent 观察。未绑定或不支持的内容保留具体缺口。 `valueMap` 用于合同允许的有限语义映射，`declarations` 记录提供者说明或操作者映射。
 
 核对适配器在 `finance-prebook.mjs` 进行去重、显式业务关联、数量金额及资金衔接检查。一般纳税人和小规模增值税复用 `finance-summary-engine.mjs` 的条件计算，保留规则、条件和未知；销售范围不足不由开票合计替代。首版 VAT 税负按条件应纳／不含税销售额列示，不代表其他税种或实缴已核。其他税费继续使用现有独立工具。
 
@@ -76,29 +78,17 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 企业短业务基线与按需方法记忆
 
-已有账套的正常启动链为配置生成→`start-business-session.mjs` 绑定实际账库／企业／账套／本期／来源及记录目录→准备历史目录→`readBusinessBaseline` 读短原则。无有效版或需修订时，Agent 读取 [company-baseline](../plugins/finance/skills/company-baseline/SKILL.md)，通过 `readBaselineMaterials` 实读账套配置、代表性历史、合同／已有底稿／历史申报导出，调查后用 `saveBusinessBaseline` 保存并再次读取，再处理本期。材料读取不依赖旧方法或脚本，不要求用户先写企业方案或内部 JSON。生成器只生成；`--prepare-only` 的 `prepared` 只是技术目录，输出另列真实 `baselineStatus`，不能宣称业务原则 `ready`。`--check` 不改账库／索引／原件、不迁移刷新；direct／宿主基线读取仍经 `withFinanceCall` 自动记录安全来源观察，允许标准审计文件写入。
+已有账套的正常启动链为配置生成→`start-business-session.mjs` 绑定实际账库／企业／账套／本期／来源及记录目录→准备历史目录→`readBusinessBaseline` 读短原则。无有效版或需修订时，Agent 读取 [company-baseline](../plugins/finance/skills/company-baseline/SKILL.md)，核实际账套和历史，并由宿主读取代表性历史、合同／已有底稿及历史申报导出，调查后用 `saveBusinessBaseline` 保存并再次读取，再处理本期。材料读取不依赖旧方法或脚本，不要求用户先写企业方案或内部 JSON。生成器只生成；`--prepare-only` 的 `prepared` 只是技术目录，输出另列真实 `baselineStatus`，不能宣称业务原则 `ready`。`--check` 不改账库／索引／原件、不迁移刷新；direct／宿主基线读取仍经 `withFinanceCall` 自动记录安全来源观察，允许标准审计文件写入。
 
 `business-baseline.mjs` 与 `business-baseline-contracts.mjs` 提供上述服务及受限业务语义合同，direct MCP 为 `finance_baseline_read`、`finance_baseline_materials`、`finance_baseline_save`。短正文包含特定企业及有效范围信息，最多8条原则／600个Unicode字符，重要未决最多3项；原件、版本、适用范围和缺口留在本机记录与账库，模型不能靠自由原文、自称核实或人审扩大投影。原则包括资料支持的准则、主营／其他收入及费用用途归类、成本计价、税会所属期、当期／分期／资本化边界、关键税务选择及少量可比税负；行业标签不能代替具体业务归类。税负分税种、应纳／实缴、所属期／缴款期、本期／累计且税额阶段须与源字段相符；增值税按合计同口径税额除以合计可比销售额加权，所得税累计单列，未知不补零。历史区间不用于倒挤本期业务。
 
-`business-baseline-materials.mjs` 从现库及通用原件读取器读取。`material-document.mjs` 对JSON／CSV／XLS／XLSX／PDF／文本／DOCX与图像保留原件SHA、位置及实际提取器；Python与Windows OCR按实有能力执行，结构与安全标签可在未知字段、主体未核时先披露，原值留本机。`finance_record_contract(recordType:"baseline")` 给字段需求，Agent用显式定位及受限语义解释适配；`historicalRows` 将原件历史分录保留为来源观察，不导入正式账、不升级为DB已过账。账前 `bindings[].locator` 复用同一读取器，派生件不洗成原件。
+基线服务使用来自实际 SQLite 的账套配置、资产和历史。文件数据由 Agent 在获准的宿主中解析，提取少量带主体、业务、原位置和 SHA-256 的观察。 `finance_record_contract(recordType:"baseline")` 返回产物合同，Agent 将 `finance-baseline-observations/1` 写入 `FINANCE_AUDIT_DIR/agent-materials`，通过 `finance_baseline_materials({target,inputPath})` 交付文件引用。无文件输入时可查账套现有依据。
 
-材料失败按实际范围恢复。请求校验返回安全字段位置与修正提示；单来源失败保留其他成功事实和税费依据，`sourceFailures` 给摘要及指向既有 `coverage` 的真实续页，诊断区分 `code/stage/recoverable/originalRef`。Agent据当前 `tools/list` 和回执修参数、调查结构或选择本机脚本，不把工具未读入写成客户没提供，也不重建一套工作流。需要脚本恢复历史时才调用 `finance_record_contract(recordType:"baseline_adaptation")` 展开完整产物schema；失败回执不制造缺标题或脚本的计算调用。
+`business-baseline-materials.mjs` 接收宿主观察并绑定真实账套；按实际原件允许路径和字节摘要核版本。来自原件的值标记为 Agent 观察。不同的原件和同一实际业务可以共证历史推断，事实和来源冲突按现有控制保留。原始数据留在本机。工具对事实、候选、税负、覆盖和本机计算结构提供有界投影及真实续页。另行获得的 `materialRefs` 须按实际范围显式合并。 `finance_baseline_save` 从实际候选及相关有效期保存业务原则与依据。
 
-恢复沿既有 `finance_calculation_run` 执行：`sources:[{originalRef}]` 解析为获准来源并保留实际字节快照，脚本仅从本机 `input.sources[].snapshotPath` 读取，生成少量有定位的历史观察。`baseline-material-adaptation.mjs` 接收 `finance_baseline_materials` 的 `adaptation:{callId,output:"baseline-history.json"}`，核真实已绑定scope、完整成功执行、脚本／输入／产物／来源的版本，再经现有 `materialRefs` 与独立读取材料合并。产物是脚本观察，不是原生已核值或已过账；每行身份与字段须同一原件记录，最多40行，只有不同原件SHA、同实际业务号及直接核实条件共证才支持历史推断。同物理行重叠引用不双计，矛盾、无共证及既有准入限制不因运行成功消失。保存后沿用短原则，普通新月不重跑历史适配；变更只影响依赖证据的规则。
+只有配置时，`coverage.configurationOnly:true`／`generationBasis:configuration_only` 表明仅有实际账套设置。仅再有可比税负而缺业务原则时，保留 `generationBasis:configuration_and_tax_reference` 和待核状态。已有适用短基线时，直接沿用规则并按实际授权在宿主读取本期新材料。 `section:"calculation"` 投影已接收观察的对象和必要字段；`calculationReader` 可由既有本机计算器在核算步骤消费，按原真实范围检查调用、来源、reader 版本与字段可用性。日日期、月期间和规范金额留在本机。 `finance_calculation_run` 根据实际观察和用途记录派生计算。
 
-基线标题随实际已有结论显示；只有配置时 `coverage.configurationOnly:true`／`generationBasis:configuration_only` 并保持 `needs_review`，不能宣称归集、成本或历史基线已生成；仅再有税负参考时 `generationBasis:configuration_and_tax_reference`／`businessPrinciplesMissing:true`，有效税负保留，缺业务原则仍 `needs_review`，只补受影响规则。普通表格按实际行；单一真实业务号可关联同原件跨页字段，多号保持歧义。购销双方按角色与受信登记主体匹配，没登记税号不猜。
-
-已知字段自动通道保持兼容。正常入口 `{target,extractKnownFields:true}` 不传 originals／materialRefs，有界发现当前范围已核主体且有已知语义的原件，每批最多12份；`sourceDiscovery.next.arguments` 的真实 `sourceCursor` 继承前批材料及已返回候选，旁路计数与所选来源的 `coverage.sourceOwners` 分开。无抽取标志时仍可读 `sourceInventory` 并显式选原件／字段。`business-baseline-projection.mjs` 负责紧凑 overview、短 `supportRef`、独立 `coverage` 及真实续页，同时把MCP文本／structured双份封装约束在12KB UTF8内；结构／facts／tax／coverage按需通过同一 MCP 读取，不依赖宿主原生文件读取。原主体／业务号／金额／日期不回显；实际分组依原件上下文／同行及跨源同业务引用，caller group 不能拼证。历史算法须有真实关联，不凭金额／科目相同认定；VAT 模板仍只覆盖有依据的预收并提前开票同类租赁。完整快照留本机，不新增明细台账。
-
-游标路径已继承前批闭包；另行独立读取的相关 `materialRefs` 须显式合并，后端核同 scope、当前SHA及原读取记录，形成新单个材料引用和统一支持／税费／覆盖。保存可用自主选定的 `principles:[{supportRef}]`，只在该闭包中还原真实已返回候选的完整证据，不自动全选、不接受人审自证。机器事实不因明细页未展开而从保存中丢失。普通分页和发现批次均沿当前返回的真实 next，实际页长可能收缩，不能手算 offset。`coverage` 区分未选字段、未完分页、歧义／不支持、税费未包含等情况，不受最多3项未决截断。`unselectedPrincipleBranches` 按语义条件反馈未选分支及比较依据／完整性，兼容的种类摘要不能证明分支齐全；限定同条件的受益期分摊同义去重，未选仅提示，不强制全选或统一待核。旧版只读可核的保留依据子集，不暗写迁移。目录旁路不成为已选来源缺口，保存回读须核重要业务分支与税负。
-
-历史支持核实际关联分录，不用整张凭证合计替代；`allocationBasis:monthly_equal` 只在真实支持依据成立时返回／保存，不从一般期间政策预设月等额。仅累计VAT而无法形成受支持的可比区间时保留税负缺口，不静默 `ready`。
-
-已有有效基线的本期计算直接读 `materials({target,section:"calculation"})`，不重走生成。按需 `calculationSchema` 与 `resolveBaselineCalculationFacts` 默认对象分组／字段集一致，只返回不透明对象引用、受限枚举／布尔及真实字段类型／格式；`date` 与 `period` 分别为日日期和月期间，金额／数量／单价／日期原值不回显。明确非 overview 且无引用时从授权范围实读已知字段；显式关闭抽取则给 `material_reference_required` 和恢复 next，不再用 inventory 冒充目标结构。旧 `{target}` inventory 保留。
-
-材料返回的 `calculationReader` 指向本机取数桥。`finance_calculation_run` 父进程在本机 `input.json` 装配实际 `financeContext`；JavaScript 用真实材料引用、范围及预期 reader SHA 取规范事实，不接受 caller 上下文或宿主原生读文件／凭据环境。桥核实际记录、主体／实例／期间及当前来源，仅在子脚本本机返回原值。脚本按真实任务对象、字段类型／期间粒度和短原则计算，无匹配对象／必要输入停相关分支，不以历史金额、默认月数或0兜底；有对象但本期条件未成可有据暂不确认，计划日不冒充实际事件，可选字段空不全局待核。reader 与来源摘要保留在派生底稿，原值及本机上下文不经 MCP、stdout 或产物回读送给模型；模型仅获执行及产物入口。计算器仍不是操作系统沙箱，正式写账控制独立。
-
-同条件沿用，普通新凭证不追加基线；长期原则变化才保存新版本，旧版留档不重复注入。来源修订、已缺失、当前不可访问、超有效期、实际冲突与政策变化分别处理，只核受影响规则，不通过换根／prepare洗掉失效。每个宿主工作区固定一家企业账套和本期，换企业或期间新建工作区；实际 DB 身份变化拒绝旧绑定。余额、当前合同进度、明细和具体算法／脚本仍从原账／原工具按需读，不另建台账、事实登记或任务 DAG。
+来源修订、缺失、不可访问、冲突或超期时，调查受影响原则。普通新增凭证及金额按既有业务留痕，长期原则或有效选择变化时保存新版本。每个工作区固定一家企业账套和本期。账库身份变化拒绝旧绑定。
 
 短基线回执的 `baselineRef/revision/shortText` 保持目标期间的当前视图；`headRevision` 是同账套基线主题包含未来版本的并发头，保存的 `expectedRevision` 取此值。保存成功与幂等均返回 `savedVersion`，列明实际写入或命中的 `baselineRef/revision/effectiveFrom`、可选 `effectiveTo` 及 `applicableToTarget`；未来版不提前替换当前视图，进入对应月份的新绑定会话后再正常召回。这些版本元数据不进入常驻短文，不改变候选性质或凭证审批权限。
 

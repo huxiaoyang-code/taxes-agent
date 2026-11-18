@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import {captureBusinessEvidence,summaryBusinessEvidence} from './business-evidence.mjs';
 
 const context = new AsyncLocalStorage();
+// 结构接收工具由领域先核准路径和范围，再登记实际来源。
+const domainManagedSources = new Set(['finance_baseline_read','finance_baseline_materials','finance_baseline_save','finance_prebook_review']);
+export const hasDomainManagedSources=tool=>domainManagedSources.has(tool);
 // 只保存记录器本次实际新建的子树；不从调用参数或可注释metadata接收，嵌套调用继承同一进入前事实。
 const createdDirectories = new WeakMap();
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -69,6 +72,7 @@ async function load(path) {
   return readFile(path);
 }
 function sourceDescriptors(options) {
+  if(hasDomainManagedSources(options.tool))return [];
   const found = [...(Array.isArray(options.sources) ? options.sources : [])];
   for (const key of ['manifestPath','inputPath','sourcePath']) if (typeof options.args?.[key] === 'string') found.push({path:options.args[key], locator:key});
   for (const path of Array.isArray(options.args?.manifestPaths)?options.args.manifestPaths:[]) if(typeof path==='string')found.push({path,locator:'annual_manifest'});
@@ -128,7 +132,7 @@ export async function withFinanceCall(options, fn) {
     if(typeof options.validate==='function')await options.validate();
     const businessEvidence=options.args?.businessEvidence??(options.tool==='finance_tax_summary_calculate'?summaryBusinessEvidence(options.args):undefined);
     // 凭证由领域写入边界核对，post 的映射针对已存草稿字段；不能在运输层猜字段。
-    if(businessEvidence!==undefined&&options.tool!=='voucher_post'){
+    if(businessEvidence!==undefined&&options.tool!=='voucher_post'&&!hasDomainManagedSources(options.tool)){
       const evidence=captureBusinessEvidence(options.args,businessEvidence);
       reference.metadata.businessEvidence=await save(join(directory,'business-evidence.json'),snapshot(evidence));
       annotateFinanceCall({sources:[...evidence.mappings,...evidence.cashFlowAllocations].flatMap(m=>m.sources).flatMap(s=>[s,...(s.dependencies??[])]).map(s=>({path:s.path,locator:s.location??s.locator,sha256:s.sha256,bytes:s.bytes}))});

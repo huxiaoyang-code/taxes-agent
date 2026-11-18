@@ -10,34 +10,22 @@
 
 ## 正常生成路径
 
-1. 用实际 `target:{accountSetId,period}` 调用 `finance_baseline_read`，再优先调用 `finance_baseline_materials({target,extractKnownFields:true})`，不传 `originals`／`materialRefs`。工具从授权根有界发现当前 scope 已核主体且有已知语义的原件；陌生结构先走[通用原件适配](material-adaptation.md)，XLS／PDF／图片等实际读取能力及运行时状态由通用读取器披露，每批最多12份，物化真实读取；不要求已有方法、脚本或企业方案，不替 Agent 选择全部原则。
-2. 看 `sourceDiscovery` 的 `selectedCount`／`remainingCount`、扫描边界及 `bypassed` 分类。按当前返回的 `sourceDiscovery.next.arguments` 继续，内含真实 `sourceCursor:{materialRef,snapshotDigest}`，继承已读材料闭包和已返回候选，不手抄前批引用或猜游标。普通候选余页走 `pagination.next.arguments`；实际返回 limit 可小于请求值，不能手算 offset，末页也不证明此前跳过页已读。主体、SHA、原件语义和历史关系仍由后端核验，不能用 target 自认归属。
-3. 查看短 `principleSupport`、税费汇总及独立 `coverage`，按实际 `pagination.next.arguments` 完成本次需要的 overview 余页，不换查询套旧 offset。税摘要另有 `taxBurden.pagination.next` 时同样直接执行；覆盖诊断用 `section:"coverage"`，需要定位才读 `"structure"`／`"facts"`。`coverage.taxHistory` 的 `included`／`incomplete`／`not_in_supplied_materials` 分别核已包含、材料不齐及未带入；未选字段、范围未覆盖、歧义／不支持按原因补读。机器抽取事实不因明细页未展开丢失，不机械遍历全部 facts。宿主截断／另存说明输出未完整消费，应缩小范围或MCP续页完成，保持本路径不依赖原生文件读取；不能把投影读取受限写成客户缺资料。
-4. 游标后批已继承前批闭包，使用当前返回的 `materialRef`／`snapshotDigest`，不重复累加同快照的分页引用。另有独立读取用于结论、税费或必要缺口时，显式传相关 `materialRefs:[{materialRef,snapshotDigest}]` 给 `finance_baseline_materials` 合并；仅同 scope、当前 SHA 可核的实际读取能合并。返回新单ref及统一支持／税费／覆盖。最多12个实际叶读取请求，不层层合并绕限；过多零碎读取可按原件批量重读，不能删税费引用凑上限。
-5. 在当前完整材料结果里选择本次重要且条件适用的 `supportRef`，用 `finance_baseline_save` 保存；再用 `finance_baseline_read` 对照，确认所选原则和已核税负确实进入短文。引用遗漏／未完成调查导致的丢失要补读、合并并修正，不能在报告里另列税负后宣布基线完成。
+1. 确认实际 `target:{accountSetId,period}`，用宿主读获准原件并准备[本机观察文件](material-adaptation.md)。当前 `finance_record_contract({recordType:"baseline"}).inputSchema` 给出产物的字段及类型。首次接手也可用不带 `inputPath` 的 `finance_baseline_materials` 取得现有账库内的依据。
+2. 将实际观察写入审计根 `agent-materials` 的 JSON 文件，向 `finance_baseline_materials({target,inputPath})` 提交。沿 `pagination.next.arguments` 查询必要候选和覆盖。实际页长以回执为准。税负有 `taxBurden.pagination.next` 时，沿回执展开；诊断用 `section:"coverage"`，只在需要具体引用时读 `"facts"`。`valueState:local_only` 表示值保留在本机。
+3. 审查 `coverage.taxHistory` 的 `included`、`incomplete`、`not_in_supplied_materials`，结合实际已处理资料核缺口。用已观察到的主体、单位、期间、业务条件和同业务关联保留可核口径。资料已给但未成功提取时说明实读障碍。金额、日期及税额阶段以原件为据。
+4. 分开的独立整理件用同一账套和期间的 `materialRefs:[{materialRef,snapshotDigest}]` 显式合并，核统一支持、覆盖和税负。同一分页链使用最后成功一页的引用。保留已被有效基线引用的整理件，新增月份写新文件。缺了实际所需的历史、租赁或申报证据时按需补齐。
+5. 对当前完整范围选本次重要且适用的 `supportRef`，用 `finance_baseline_save` 保存后回读。验证重要分支和已核税负确实进入持久短文。
 
-下面只示正常入口形状，`target` 必须来自实际绑定；不让用户预填路径、selector、企业算法或预期答案：
+提交参数示例如下。路径使用实际生成的整理件绝对地址。
 
 ```json
 {
   "target": {"accountSetId": 1, "period": "2026-11"},
-  "extractKnownFields": true
+  "inputPath": "<审计根>/agent-materials/基线观察.json"
 }
 ```
 
-## 覆盖缺口决定下一步
-
-| 返回的实际情况 | 继续动作 |
-|---|---|
-| 已提示字段但未选、相关页未取，或相关读取尚未合并 | 本次调查未完成，补读／续页／合并；不写成客户缺资料或待人审 |
-| `sourceDiscovery.bypassed` 有主体未核／别家／无已知字段项 | 旁路项不同于所选来源；按 `coverage.sourceOwners` 和实际 `gaps` 判断所用材料，不把目录总量转成 `owner_unverified` |
-| `scanLimited`、`uninspectedCount` 或 `depthTruncated` 表示发现有界 | 依本次任务核未检范围，必要时按已知原件定位补查；不声称已查全，也不把边界直接写成企业政策未知 |
-| `valueState:local_only` | 原值已在本机读取，模型不回显；可用短支持判断，实际计算走下方取数桥，不当作缺件或零 |
-| 同一对象的字段组不齐、尚无原生历史关联 | 补真实 `business_reference`、业务性质、履约方式、起止／验收、相关金额／税点／资产边界及对应历史；按判断选择必要字段，不因只选开票／金额就认定无方法 |
-| 仅账套配置，`coverage.configurationOnly:true` | 已知会计准则可保留，历史基线尚未生成；补读历史，不填不存在的归集或成本方法 |
-| 工具明确歧义、不支持、来源冲突，补查后仍无依据或需要操作者作真实业务决定 | 保留准确范围和影响，说明还缺什么及下一动作；独立可核分支继续，不猜值、不绕过投影 |
-
-需要指定范围或补定位时，旧通道仍可用：`finance_baseline_materials({target})` 给 `sourceInventory`，按 `availableFields`／主体状态选择真实 `originalRef`，显式 `originals` 配 `extractKnownFields:true` 批读；目录也原样跟 `pagination.next.arguments`。低层 JSON 用实际 `fieldRef`，表格用已披露的数字行列／工作表。计价核 `inventory_cost`，行业标签不替代归类或计价；分类／期间支持核实际关联分录，整凭证合计不证明算法。`allocationBasis:monthly_equal` 只由实际支持产生，不能由 caller 自加。`group` 只是备注，分组依原件上下文／同行及跨源同业务引用。XLS／PDF／图片等走[原件适配](material-adaptation.md)，通用读取器与本机OCR保留原值和来源。`unsupported`／`needs_runtime`表示读取或环境限制，不能当客户没给资料；同一文件普通单元格可读，公式缓存不可当已核事实。特殊转换可用已授权的 `finance_calculation_run` 保留脚本与来源，派生文件不洗成独立原件。
+文件身份、金额、税额口径或字段解码不确定时，留相关缺口和影响。来源变更时核受影响的规则；仅有配置时保留准则和历史未完成。 `coverage` 表示工具实际接收的范围，调查原件是否还有必要资料应由 Agent 在本机完成。
 
 ## 保存前核对与回读
 
@@ -55,18 +43,19 @@
 
 ## 按短基线处理本期的本机取数
 
-已有有效短基线且条件未变时，直接读本期安全计算结构，无须重走生成或遍历全部原则／facts：
+已有有效短基线且条件未变时，从本期原件准备需要的新观察，再取安全计算结构。已有仍适用的本期材料引用可直接传入。
 
 ```json
 {
   "target": {"accountSetId": 1, "period": "2026-11"},
+  "inputPath": "<审计根>/agent-materials/本期观察.json",
   "section": "calculation"
 }
 ```
 
 `calculationSchema.objects` 与本机 resolver 默认对象／字段集一致：`objectRef` 为不透明引用，`semanticValues` 只含受限业务枚举／布尔；`fields` 是当前对象真实规范字段名→语义类型的 map，`fieldPresence:"available"`，未列字段为 `not_available_in_bound_object`。`fieldTypes` 集中给 `jsonType/format/granularity`，不表示每个对象都有全部字段；金额、数量、单价或日期原值不回显。按实际枚举、字段组和任务范围匹配对象，不自造业务 kind 或凭相近对象代选。按返回类型／粒度区分 `date:YYYY-MM-DD` 与 `period:YYYY-MM`，不把月份默认变成月初日判日级覆盖。任务明示应处理却无匹配对象、必要字段或期间类型不明时，停相关计算，不拿历史金额、默认月数或无输入时的0兜底。已匹配对象而本期确认条件尚未成立，可按已核规则有据暂不确认并说明实际事件或证据缺口；不把计划日当实际事件，不强补所有 optional 字段或全局降基线。零结果须有实际对象和规则／条件依据。
 
-沿当前 `pagination.next.arguments`／`sourceDiscovery.next.arguments` 取所需结构，使用返回的真实材料引用和 reader。明确非 overview 且无引用时会从授权范围实读已知字段；若显式 `extractKnownFields:false` 返回 `material_reference_required`，执行其恢复 next，不把 inventory 当事实结构。无 section 的旧 inventory／显式原件通道仍可按需补查。结构用于编写实际计算，不另写探针再尝试回读派生产物给模型。
+沿当前 `pagination.next.arguments` 取需要的结构，使用返回的真实 `materialRefs` 和 `calculationReader`。结构描述已提交的观察。需补新原件时先在宿主本机提取，再提交新的整理件。
 
 用正常 `finance_calculation_run` 运行 JavaScript，将 `target`、完整 `reader:calculationReader`、`materialRefs:[{materialRef,snapshotDigest}]` 及可选 `factRefs` 放进 `parameters`；不机械展开 facts 抄hash。脚本按本次对象、实际合同条件及已读短原则计算，在本机核匹配范围、输入完整性和结果，缺口写入底稿；不能用猜测兜成数值。经桥取数可用 `sources:[]`，其他直接文件输入仍按计算器原合同提供。
 

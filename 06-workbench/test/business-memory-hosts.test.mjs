@@ -10,6 +10,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {createContext,writeBundle,repoRoot} from '../../05-reconstruction/codex/hosts/shared/config.mjs';
 import {parseBusinessArgs,loadBoundBusinessSession,BUSINESS_MEMORY_ROUTING,renderBusinessContext} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import {parseClaudeArgs,buildClaudeLaunchSpec} from '../../05-reconstruction/codex/hosts/claude-code/launcher.mjs';
+import {fixtureObservationRequest,materialReference} from './helpers/business-baseline-test-inputs.mjs';
 const scratchArg=process.argv[2]==='--prepare'?process.argv[3]:undefined;
 if(scratchArg&&(!isAbsolute(scratchArg)||existsSync(scratchArg)))throw Error('new_absolute_synthetic_root_required');
 const root=scratchArg??mkdtempSync(join(tmpdir(),'business-memory-hosts-'));if(scratchArg)mkdirSync(root);
@@ -42,6 +43,7 @@ for(const host of ['pi','claude-code','dsh','zcode']){
  const next=run(context.outputDir,['--account-set-id',String(companyA),'--period','2026-03','--prepare-only']);assert.notEqual(next.status,0);assert.match(next.stderr,/host_business_binding_immutable/);
  assert.equal(ok(run(context.outputDir,['--check'],'business-memory-context.mjs')).readOnly,true);
  const text=readFileSync(join(context.outputDir,host==='claude-code'?'CLAUDE.md':'AGENTS.md'),'utf8');assert(text.includes(BUSINESS_MEMORY_ROUTING));assert(!text.includes('SYNTHETIC-HOST-A'),'项目指引不复制企业口径');
+ assert(BUSINESS_MEMORY_ROUTING.includes('.finance/business-session.json')&&BUSINESS_MEMORY_ROUTING.includes('agent-materials'),'启动即引导宿主自主取材并指向真实会话绑定');
 }
 const claude=workspaces['claude-code'],contextScript=join(claude,'business-memory-context.mjs');
 const settings=JSON.parse(readFileSync(join(claude,'.claude/settings.json')));assert.equal(settings.autoMemoryEnabled,false);assert.equal(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,'1');
@@ -71,10 +73,11 @@ writeFileSync(baselineOriginal,JSON.stringify({enterpriseKey:'SYNTHETIC-HOST-A',
 writeFileSync(join(sources,'other-enterprise-policy.json'),JSON.stringify({enterpriseKey:'SYNTHETIC-HOST-B',costMethod:'个别计价法'}));
 writeFileSync(join(sources,'unbound-policy.json'),JSON.stringify({costMethod:'个别计价法'}));
 const {readBaselineMaterials,saveBusinessBaseline}=await import('../server/business-baseline.mjs'),baselineOptions={dbPath,sourceRoot:sources,auditDir:join(root,'baseline-records')};
-const material=await readBaselineMaterials({target:targets.a,extractKnownFields:true},baselineOptions);
-assert.equal(material.coverage.sourceCount,1);assert.deepEqual(material.coverage.sourceOwners,{checked:1,unverified:0});assert.deepEqual(material.gaps,[]);
-assert(material.sourceDiscovery.bypassed.other_scope>=1);assert(material.sourceDiscovery.bypassed.owner_unverified>=1,'目录旁路主体未核不能污染所选快照');
-assert.equal(material.sourceDiscovery.remainingCount,0);
+const emptyMaterial=await readBaselineMaterials({target:targets.a},baselineOptions);
+assert.equal(emptyMaterial.coverage.sourceCount,0,'仅查询不发现或读取源目录');
+const observed=fixtureObservationRequest({target:targets.a,originals:[{id:'host-policy',path:baselineOriginal}]},baselineOptions);
+const material=await readBaselineMaterials(observed,baselineOptions);
+assert.equal(material.coverage.sourceCount,1);assert.deepEqual(material.coverage.sourceOwners,{checked:0,agentIdentityMatched:1,unverified:0});assert.deepEqual(material.gaps,[]);
 let merged=await readBaselineMaterials({target:targets.a,materialRefs:[{materialRef:material.materialRef,snapshotDigest:material.snapshotDigest}],section:'overview',limit:1},baselineOptions);
 const returnedSupports=new Map();let supportPages=0;
 while(true){
@@ -93,7 +96,7 @@ for(const field of ['applicable','exempt','due','taxAmount'])assert.equal(Object
 assert(!savedBaseline.shortText.includes('增值税'),'CIT-only短文不能生成VAT参考或零值');
 const afterBaseline=sha(dbPath);
 // 已有短版直接读取同一范围的安全计算结构，不把目录页误认成业务字段。
-let calculationView=await readBaselineMaterials({target:targets.a,section:'calculation'},baselineOptions),calculationPages=0;
+let calculationView=await readBaselineMaterials({target:targets.a,materialRefs:[materialReference(material)],section:'calculation'},baselineOptions),calculationPages=0;
 const calculationObjects=[];
 while(true){
  assert.equal(calculationView.section,'calculation');assert.equal(Object.hasOwn(calculationView,'sourceInventory'),false);

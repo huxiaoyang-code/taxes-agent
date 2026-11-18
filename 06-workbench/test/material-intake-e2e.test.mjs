@@ -1,79 +1,44 @@
-// 混合原件→正常MCP显式适配→短基线/账前复用→跨月计算。程序映射不代表模型自主准确率。
-// 显式验收：node --test test/material-intake-e2e.test.mjs；需Python的xlrd/xlwt/openpyxl/PyMuPDF/python-docx/Pillow及本机Windows OCR。
-// 不挂入仅Node即可运行的默认套件；缺运行时明确失败，不能skip后称OCR已验证。
+// 独立宿主解析实际合成原件，正常 MCP 收观察并形成短基线，验证跨月沿用。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
-import {dirname,join,resolve} from 'node:path';
+import {dirname,join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {readFinanceCall} from '../server/finance-call-chain.mjs';
-import {readMaterialDocument,readMaterialValue} from '../server/material-document.mjs';
-import {callBaselineMaterials,readBaselineSection,saveFromActualSupports} from './helpers/business-baseline-test-inputs.mjs';
-import {hashBaseline,writeBaselineJson} from './helpers/business-baseline-fixture.mjs';
-import {createMaterialIntakeFixture,startMaterialIntakeMcp,publishMaterialIntakePacket,historicalMaterialRequest,currentMaterialRequest,choiceMaterialRequest,invoiceMaterialRequests,materialTarget,materialReference,MATERIAL_INTAKE_EXPECTED as EXPECTED} from './helpers/material-intake-fixture.mjs';
+import {readFinanceCall,listFinanceCalls} from '../server/finance-call-chain.mjs';
+import {readBaselineSection,saveFromActualSupports} from './helpers/business-baseline-test-inputs.mjs';
+import {hashBaseline,readBaselineJson,writeBaselineJson} from './helpers/business-baseline-fixture.mjs';
+import {createMaterialIntakeFixture,startMaterialIntakeMcp,publishMaterialIntakePacket,
+  prepareMaterialObservations,materialTarget,materialReference,MATERIAL_INTAKE_EXPECTED as EXPECTED} from './helpers/material-intake-fixture.mjs';
 
 const ok=response=>{assert.equal(response.isError,false,response.text);assert(response.data,response.text);return response.data;};
 const rejected=(response,pattern)=>{assert.equal(response.isError,true,response.text);assert.match(response.text,pattern);};
-const rows=f=>{const db=new DatabaseSync(f.dbPath,{readOnly:true});try{return db.prepare("SELECT name FROM sqlite_master WHERE name='business_memory_versions'").get()?db.prepare("SELECT * FROM business_memory_versions WHERE topic='business_baseline' ORDER BY revision").all():[];}finally{db.close();}};
-const voucherCount=f=>{const db=new DatabaseSync(f.dbPath,{readOnly:true});try{return db.prepare('SELECT COUNT(*) n FROM vouchers').get().n;}finally{db.close();}};
-const safeCanaries=f=>[f.owner.companyName,f.owner.enterpriseKey,'SYNTHETIC-TAX-SELLER','SYNTHETIC-TAX-CUSTOMER','SYNTHETIC-TAX-VENDOR','SYNTHETIC-TAX-BUYER','合成采购客户有限公司','合成供应服务有限公司','纯中文合成测试有限公司','张三','李四','91350100123456789X','LOCAL_ONLY_PRIVATE_SENTINEL','53791.26','AMOUNT 6300.00'];
-const pdfStructureLabels=['Entity','Contract','Activity','Pattern','Service From','Service Through'];
-
-function checkProjection(f,material,report){
-  for(const response of material.responses){const output=JSON.stringify(response.raw);for(const canary of safeCanaries(f))assert(!output.includes(canary),'正常材料投影泄露原件值：'+canary);report.maximumWholeMcpBytes=Math.max(report.maximumWholeMcpBytes,response.prettyBytes);}
-  return material;
+function readDatabase(f,read){
+  const db=new DatabaseSync(f.dbPath,{readOnly:true});
+  try{return read(db);}finally{db.close();}
 }
+const rows=f=>readDatabase(f,db=>db.prepare("SELECT name FROM sqlite_master WHERE name='business_memory_versions'").get()
+  ?db.prepare("SELECT * FROM business_memory_versions WHERE topic='business_baseline' ORDER BY revision").all():[]);
+const voucherCount=f=>readDatabase(f,db=>db.prepare('SELECT COUNT(*) n FROM vouchers').get().n);
+const safeCanaries=f=>[f.owner.companyName,f.owner.enterpriseKey,'MI-LEASE-JUL','MI-MAINT-JUL','SYNTHETIC-TAX-SELLER',
+  '合成采购客户有限公司','合成供应服务有限公司',f.sourceRoot];
+const request=(f,inputPath,period='2026-09')=>({target:materialTarget(f,period),inputPath,section:'overview',limit:50});
+
 async function materialSnapshot(f,material){
   const call=await readFinanceCall({auditDir:f.auditDir,callId:material.materialRef});assert.equal(call.integrity,'verified');
-  const artifact=call.end.metadata.businessBaselineMaterials,path=join(f.auditDir,material.materialRef,artifact.file),bytes=readFileSync(path);assert.equal(hashBaseline(bytes),artifact.sha256);const snapshot=JSON.parse(bytes);assert.equal(snapshot.snapshotDigest,material.snapshotDigest);return snapshot;
-}
-async function readMaterials(client,f,args,report){return checkProjection(f,await readBaselineSection(client,args),report);}
-
-// 结构调查只翻到本次需要的位置；不把未读数据位置称为已审，也不反复投影所有数据单元格。
-async function readStructurePreview(client,f,args,report,enough=fields=>fields.length>0){
-  const pages=[],responses=[],seen=new Set();let next=args;
-  while(next){const key=JSON.stringify(next);assert(!seen.has(key),'结构next不得循环');seen.add(key);const response=await callBaselineMaterials(client,next);checkProjection(f,{responses:[response]},report);responses.push(response);pages.push(response.data);if(enough(pages.flatMap(page=>page.fields??[])))break;next=response.data.pagination?.next?.arguments;assert(pages.length<=100,'结构调查须按实际next有界推进');}
-  const last=pages.at(-1);return{...last,pages,responses,fields:pages.flatMap(page=>page.fields??[]),documents:pages.flatMap(page=>page.documents??[]),allPositionsRead:last.pagination.nextOffset===null};
+  const artifact=call.end.metadata.businessBaselineMaterials,path=join(f.auditDir,material.materialRef,artifact.file),bytes=readFileSync(path);
+  assert.equal(hashBaseline(bytes),artifact.sha256);
+  const snapshot=JSON.parse(bytes);assert.equal(snapshot.snapshotDigest,material.snapshotDigest);
+  return snapshot;
 }
 
-async function discoverOriginals(client,f,report){
-  const discovery=await readMaterials(client,f,{target:materialTarget(f),extractKnownFields:true,section:'overview',limit:50},report),step=discovery.nextSteps.find(item=>item.arguments?.section==='structure');
-  assert(step,'发现入口须为未知表头/主体未核原件给出可执行的结构调查路径');
-  const inventory=await readMaterials(client,f,step.arguments,report),references=new Map(),previews=[],formats=[];
-  for(const item of inventory.items){assert.equal(item.next?.tool,'finance_baseline_materials');assert.equal(item.next.arguments.originals[0].originalRef,item.originalRef);const enough=fields=>['xls','xlsx'].includes(item.format)?fields.some(field=>field.position?.row>=2):item.format==='pdf'?pdfStructureLabels.every(label=>fields.some(field=>field.label===label&&field.locator?.fieldRef)):fields.length>0,structure=await readStructurePreview(client,f,item.next.arguments,report,enough),snapshot=await materialSnapshot(f,structure);assert.equal(snapshot.files.length,1);references.set(resolve(snapshot.files[0].path),item.originalRef);previews.push(structure);formats.push(item.format);}
-  assert(formats.includes('xls')&&formats.includes('pdf')&&formats.includes('xlsx'),'正常发现必须覆盖混合原件，而非预先转换JSON');return{references,previews};
-}
-function fromDiscovered(args,references){return{...args,originals:args.originals.map(({path,...original})=>{const originalRef=references.get(resolve(path));assert(originalRef,'原件须先经正常结构入口发现：'+path);return{...original,originalRef};})};}
-
-// 此恢复脚本由验收者编写，只读执行器提供的真实快照；独立预期不进入脚本或输入。
-const historyAdaptationScript=String.raw`import csv,json,sys
-from pathlib import Path
-input=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-if len(input['sources'])!=1 or not input.get('financeContext',{}).get('sessionPath'):
-    raise ValueError('bound_source_snapshot_required')
-source=input['sources'][0]
-with Path(source['snapshotPath']).open(encoding='utf-8-sig',newline='') as stream:
-    table=list(csv.reader(stream))
-headers=table[0]
-def captured(label,row):
-    column=headers.index(label)+1
-    return {'value':table[row-1][column-1],'locator':{'sheetIndex':0,'row':row,'column':column}}
-rows=[]
-for row in input['parameters']['selectedRows']:
-    if not isinstance(row,int) or row<2 or row>len(table):
-        raise ValueError('selected_history_row_missing')
-    value={'id':'recovered_'+str(row),'sourceIndex':source['index'],'owner':{'name':captured('核算单位',row)}}
-    for key,label in [('period','发生月份'),('date','入账日'),('businessReference','关联单号'),('code','账目编码'),('accountName','账目名称'),('debit','借记数'),('credit','贷记数')]:
-        value[key]=captured(label,row)
-    rows.append(value)
-Path(input['outputDir'],'baseline-history.json').write_text(json.dumps({'version':'finance-baseline-history-adaptation/1','rows':rows},ensure_ascii=False,indent=2),encoding='utf-8')
-`;
-
-async function executeHistoryAdaptation(client,f,originalRef,selectedRows,report){
-  const rpc=await client.rpc('tools/call',{name:'finance_calculation_run',arguments:{title:'合成旧系统导出的本机历史适配',engine:'python',sources:[{originalRef}],script:historyAdaptationScript,parameters:{selectedRows},notes:['验收者脚本，只证明失败原件经受信执行进入材料观察；不代表模型自主适配准确率。']}});assert.equal(rpc.error,undefined);const raw=rpc.result,data=JSON.parse(raw.content.find(item=>item.type==='text').text);assert.equal(raw.isError===true,false,JSON.stringify(data));assert.equal(data.status,'executed');assert.equal(data.kind,'derived_calculation');checkProjection(f,{responses:[{raw,prettyBytes:Buffer.byteLength(JSON.stringify(raw,null,2))}]},report);
-  const callId=raw._meta?.financeCall?.callId;assert(callId,'必须采用真实计算器回执的callId');const call=await readFinanceCall({auditDir:f.auditDir,callId});assert.equal(call.integrity,'verified');assert.equal(call.end.scopeState,'observed');assert.equal(call.end.scope.period,'2026-09');
-  const input=JSON.parse(readFileSync(join(dirname(data.recordPath),'input.json')));assert.equal(input.sources.length,1);assert(input.financeContext.sessionPath);assert.equal(hashBaseline(readFileSync(input.sources[0].snapshotPath)),f.originalHashes.fallbackHistory);assert.equal(input.sources[0].sha256,f.originalHashes.fallbackHistory);
-  return{adaptation:{callId,output:'baseline-history.json'},runId:data.runId,recordPath:data.recordPath,origin:'test_authored_adapter_not_autonomous_model'};
+async function readMaterials(client,f,args,report){
+  const material=await readBaselineSection(client,args);
+  for(const response of material.responses){
+    const output=JSON.stringify(response.raw);
+    for(const canary of safeCanaries(f))assert(!output.includes(canary),'财税回执不应披露本机原值');
+    report.maximumWholeMcpBytes=Math.max(report.maximumWholeMcpBytes,response.prettyBytes);
+  }
+  return material;
 }
 
 const currentCalculationScript=`import fs from 'node:fs';
@@ -104,107 +69,182 @@ async function calculateMonth(client,f,materials,baseline,period){
   assert.equal(result.taxReference.fromBaseline,true);assert.equal(result.taxReference.target,false);return{runId:called.runId,path,sha256:hashBaseline(readFileSync(path)),result};
 }
 
-async function prebookConsumer(client,f){
-  const facts={scope:{enterpriseKey:f.owner.enterpriseKey,period:'2026-09',periodType:'monthly',currency:'CNY'},taxpayer:{vatStatus:'general'},coverage:Object.fromEntries(['sales','invoices','purchases','receipts','bankTransactions','inventory'].map(key=>[key,'partial'])),invoices:[{id:'sale',businessId:'MI-LEASE-SEP',invoiceNumber:'MI-SALES-SEP',direction:'sale',date:'2026-09-01',counterpartyId:'合成采购客户有限公司',netAmount:'60000.00',taxAmount:'5400.00',grossAmount:'65400.00',status:'valid'},{id:'purchase',invoiceNumber:'MI-PURCHASE-SEP',direction:'purchase',date:'2026-09-13',counterpartyId:'合成供应服务有限公司',netAmount:'5000.00',taxAmount:'300.00',grossAmount:'5300.00',status:'valid'}]};
-  const originals=[{id:'sale',path:f.files.saleInvoice,scope:{enterpriseKey:f.owner.enterpriseKey,from:'2026-09-01',through:'2026-09-30'}},{id:'purchase',path:f.files.purchaseInvoice,scope:{enterpriseKey:f.owner.enterpriseKey,from:'2026-09-01',through:'2026-09-30'}}],bindings=[];
-  const add=(index,field,locator,transform='identity')=>bindings.push({inputPointer:'/invoices/'+index+'/'+field,originalId:index?'purchase':'sale',locator,transform});
-  for(const[field,column]of Object.entries({invoiceNumber:5,date:6,counterpartyId:3,netAmount:7,taxAmount:8,grossAmount:9}))add(0,field,{sheetIndex:0,row:2,column,headerRows:[1]},/Amount$/.test(field)?'decimal':'identity');
-  for(const[field,row]of Object.entries({invoiceNumber:5,date:6,counterpartyId:1,netAmount:7,taxAmount:8,grossAmount:9}))add(1,field,{sheetIndex:0,row,column:2},/Amount$/.test(field)?'decimal':'identity');
-  const input={version:'finance-prebook-input/1',facts,originals,bindings},inputPath=join(f.sourceRoot,'账前适配输入.json');writeBaselineJson(inputPath,input);
-  const response=ok(await client.call('finance_prebook_review',{inputPath}));assert.equal(response.status,'needs_inputs','仅两份发票不能声称资料完整或已可正式做账');
-  const indexPath=join(dirname(response.evidence.reviewPath),'evidence-index.json'),evidence=JSON.parse(readFileSync(indexPath));
-  for(const binding of bindings){const actual=evidence.bindings.find(row=>row.inputPointer===binding.inputPointer);assert(actual,'账前消费者须实际采用该原件位置：'+binding.inputPointer);assert(actual.extractor,'保留真实提取器');assert(actual.locator,'保留位置');}
-  return{status:response.status,indexPath,indexSha256:hashBaseline(readFileSync(indexPath)),boundValues:bindings.length};
+async function prebookConsumer(client,f,inputPath){
+  const expectedBindings=readBaselineJson(inputPath).bindings;
+  const response=ok(await client.call('finance_prebook_review',{inputPath}));
+  assert.equal(response.status,'needs_inputs','仅两份发票不能声称资料齐全');
+  const indexPath=join(dirname(response.evidence.reviewPath),'evidence-index.json'),evidence=readBaselineJson(indexPath);
+  for(const binding of expectedBindings){
+    const actual=evidence.bindings.find(row=>row.inputPointer===binding.inputPointer);
+    assert(actual,'账前结果须保存实际原件位置');
+    assert.deepEqual(actual.locator,binding.locator);
+    assert.equal(actual.sourceType,'agent_observation');
+    assert.equal(actual.sha256,f.originalHashes[binding.originalId]);
+  }
+  return{status:response.status,indexPath,indexSha256:hashBaseline(readFileSync(indexPath)),boundValues:expectedBindings.length};
 }
 
-test('混合原件真实接入、历史提炼与9→人工确认→10月连续复用',{timeout:360000},async()=>{
-  const f=createMaterialIntakeFixture(process.env.MATERIAL_INTAKE_E2E_ROOT),report={version:'material-intake-program-acceptance/1',root:f.root,status:'running',modelInvoked:false,programAuthoredMappings:true,formalPostingInvoked:false,maximumWholeMcpBytes:0,checks:[],startedAt:new Date().toISOString()},check=async(name,fn)=>{const started=Date.now();try{const value=await fn();report.checks.push({name,status:'passed',durationMs:Date.now()-started});return value;}catch(error){report.checks.push({name,status:'failed',durationMs:Date.now()-started,error:error.message});throw error;}};
+test('宿主直接解析误标编码的旧 XLS，再由正常 MCP 生成和跨月沿用短基线',{timeout:360000},async()=>{
+  const f=createMaterialIntakeFixture(process.env.MATERIAL_INTAKE_E2E_ROOT);
+  const report={version:'material-intake-program-acceptance/2',root:f.root,status:'running',modelInvoked:false,
+    hostExtractionByTestProgram:true,formalPostingInvoked:false,maximumWholeMcpBytes:0,checks:[],startedAt:new Date().toISOString()};
+  const check=async(name,fn)=>{
+    const started=Date.now();
+    try{const value=await fn();report.checks.push({name,status:'passed',durationMs:Date.now()-started});return value;}
+    catch(error){report.checks.push({name,status:'failed',durationMs:Date.now()-started,error:error.message});throw error;}
+  };
   let client;
   try{
-    assert.equal(voucherCount(f),0);assert.equal(rows(f).length,0);assert.equal(readFileSync(f.files.historicalEntries).subarray(0,8).toString('hex'),'d0cf11e0a1b11ae1','历史文件必须是真实BIFF XLS');
-    client=await startMaterialIntakeMcp(f,{bound:true});const tools=(await client.rpc('tools/list')).result.tools,materialTool=tools.find(t=>t.name==='finance_baseline_materials');assert(materialTool.inputSchema.properties.historicalRows);assert(materialTool.inputSchema.properties.adaptation);assert(materialTool.inputSchema.properties.selections.items.properties.interpretation);assert(materialTool.inputSchema.properties.originals.items.properties.ownerIdentity);assert(ok(await client.call('finance_record_contract',{recordType:'prebook'})).inputSchema.properties.bindings.items.properties.locator);
-    const discovered=await check('正常发现→工具next→originalRef→结构调查，不依赖预知文件路径',()=>discoverOriginals(client,f,report)),references=discovered.references;
-    const request=fromDiscovered(historicalMaterialRequest(f),references);
-    const selectedHistoryRows=[...new Set(f.relevantHistoricalRows)].sort((a,b)=>a-b);assert(selectedHistoryRows.length>0&&selectedHistoryRows.length<f.historicalRowCount);
-    request.historicalRows=request.historicalRows.filter(row=>selectedHistoryRows.includes(row.businessReference.row));assert.equal(request.historicalRows.length,selectedHistoryRows.length);
-    const configured=await check('只有账套配置时如实标记未完成，不显示虚假归类成本',async()=>{
-      const material=await readMaterials(client,f,{target:materialTarget(f),originals:[{id:'configuration',path:f.files.configurationNote}],section:'overview'},report),saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),material)));
-      assert.equal(saved.status,'needs_review');assert.equal(saved.coverage.configurationOnly,true);assert(!saved.shortText.includes('归类及成本'));assert(saved.unresolved.some(g=>g.code==='historical_evidence_missing'));
-      const taxOnly=await readMaterials(client,f,{...request,originals:request.originals.filter(original=>original.id==='tax'),selections:request.selections.filter(selection=>selection.originalId==='tax'),historicalRows:[]},report),withTax=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),taxOnly,{expectedRevision:saved.headRevision})));assert.equal(withTax.status,'needs_review');assert.equal(withTax.coverage.businessPrinciplesMissing,true);assert.equal(withTax.coverage.generationBasis,'configuration_and_tax_reference');assert(withTax.shortText.includes('2.00%'),'真实税负参考仍应保留可用');assert(!withTax.shortText.includes('归类及成本'));return withTax;
+    assert.equal(voucherCount(f),0);assert.equal(rows(f).length,0);
+    const host=await check('宿主用同一份旧 BIFF 原件字节对照默认编码与实际中文',()=>{
+      for(const key of ['historyJuly','historyAugust'])assert.equal(readFileSync(f.files[key]).subarray(0,4).toString('hex'),'09000400');
+      const result=prepareMaterialObservations(f,'history');
+      for(const file of result.legacyFiles){
+        assert.equal(file.declared,'cp1252');assert.equal(file.chosen,'gbk');assert.equal(file.firstReadMatched,false);
+        assert(file.selectedRows.length>0&&file.selectedRows.length<file.availableRows);
+      }
+      assert.deepEqual(result.balanceHeaders.namedHeaders,['科目','期初','期末','折旧']);
+      assert.equal(result.balanceHeaders.firstReadMatched,false);
+      return result;
     });
-    await check('未知表头/原件页行先可见，完整原值留本机',async()=>{
-      const fields=discovered.previews.flatMap(preview=>preview.fields),documents=discovered.previews.flatMap(preview=>preview.documents);
-      for(const format of['xls','pdf','xlsx'])assert(documents.some(document=>document.format===format&&document.readState==='read'),'实际MCP文档须已读取：'+format);
-      const xlsDocument=documents.find(document=>document.format==='xls'),xlsWarning=xlsDocument.diagnostics.find(item=>item.code==='xls_parser_warning');assert.deepEqual(xlsWarning,{code:'xls_parser_warning',severity:'warning'});report.xlsWarning={...xlsWarning,readState:xlsDocument.readState};
-      for(const preview of discovered.previews.filter(item=>item.documents.some(document=>document.format==='pdf')))for(const label of pdfStructureLabels)assert(preview.fields.some(field=>field.label===label&&field.locator?.fieldRef&&Number.isInteger(field.position?.page)&&Number.isInteger(field.position?.line)&&Number.isInteger(field.position?.start)&&field.position.end>field.position.start),'每份PDF须公开安全字段标签及对应值定位：'+label);
-      for(const label of['核算单位','发生月份','入账日','关联单号','账目编码','账目名称','借记数','贷记数'])assert(fields.some(field=>field.label===label),'供Agent映射的实际原列名应可见：'+label);assert(fields.some(field=>field.locator||field.fieldRef));report.structureInspection=discovered.previews.map(preview=>({formats:[...new Set(preview.documents.map(document=>document.format))],readStates:[...new Set(preview.documents.map(document=>document.readState))],positionsReturned:preview.fields.length,allPositionsRead:preview.allPositionsRead}));
+    report.hostExtraction=host;
+    client=await startMaterialIntakeMcp(f,{bound:true});
+    await check('实际工具表只接受整理件路径，旧内置读取和适配参数退出',async()=>{
+      const tools=(await client.rpc('tools/list')).result.tools;
+      const material=tools.find(tool=>tool.name==='finance_baseline_materials').inputSchema.properties;
+      assert(material.inputPath);
+      for(const key of ['originals','selections','extractKnownFields','historicalRows','sourceCursor','adaptation'])assert.equal(material[key],undefined);
+      assert(!material.section.enum.includes('structure'));
+      const source=tools.find(tool=>tool.name==='finance_calculation_run').inputSchema.properties.sources;
+      assert.equal(source.items.properties.originalRef,undefined);
+      const contract=ok(await client.call('finance_record_contract',{recordType:'baseline'}));
+      assert.equal(contract.inputSchema.properties.version.const,'finance-baseline-observations/1');
+      const prebook=ok(await client.call('finance_record_contract',{recordType:'prebook'}));
+      assert.equal(prebook.inputSchema.properties.version.const,'finance-prebook-input/2');
+      rejected(await client.call('finance_baseline_materials',{target:materialTarget(f),extractKnownFields:true}),/invalid_arguments/);
+      rejected(await client.call('finance_baseline_materials',{target:materialTarget(f),inputPath:f.files.historyJuly}),/finance_baseline_/);
+      const obsolete=await client.call('finance_record_contract',{recordType:'baseline_adaptation'});
+      assert(obsolete.isError||!obsolete.data?.outputSchema,'旧适配合同不得可用');
     });
-    await check('BIFF历史分录与PDF合同形成真实处理依据，WMF税表形成税负参考',async()=>{
-      const material=await readMaterials(client,f,request,report),snapshot=await materialSnapshot(f,material),observed=snapshot.facts.filter(fact=>fact.field==='historical_posting');
-      assert.equal(observed.length,selectedHistoryRows.length);assert.deepEqual(observed.map(fact=>fact.source.locator.row).sort((a,b)=>a-b),selectedHistoryRows,'历史观察必须精确来自所选原件行，不能附带未选行');assert(observed.every(fact=>fact.source.kind==='file'&&resolve(fact.source.path)===resolve(f.files.historicalEntries)&&fact.source.sha256===f.originalHashes.historicalEntries&&fact.value.status==='observed_history'));assert(observed.every(fact=>fact.source.extractor&&fact.source.locator&&fact.source.entryLocators&&Object.values(fact.source.entryLocators).every(locator=>locator.row===fact.source.locator.row&&(locator.sheetIndex??0)===(fact.source.locator.sheetIndex??0))));
-      const contractReferences=new Set(snapshot.facts.filter(fact=>fact.field==='business_reference'&&fact.source.kind==='file'&&[f.files.oldLease,f.files.maintenance].some(path=>resolve(path)===resolve(fact.source.path))).map(fact=>fact.factRef));assert(observed.every(fact=>fact.linkedBusinessRefs?.some(ref=>contractReferences.has(ref))),'所选历史行必须关联实际合同原件');report.historicalSelection={availableRows:f.historicalRowCount,selectedRows:selectedHistoryRows,observedRows:observed.map(fact=>fact.source.locator.row)};assert(snapshot.facts.some(fact=>fact.source.interpretation?.kind==='model_interpretation'),'业务解释须与原件观察区分');
-      const vat=snapshot.taxBurden.summaries.find(row=>row.taxType==='vat');assert.equal(vat.weightedRatio,EXPECTED.historicalVat.weightedRatio);assert(vat.evidenceRefs.every(ref=>snapshot.facts.find(fact=>fact.factRef===ref)?.source.path===f.files.tax));
-      for(const[kind,value,when]of [['business_classification','other_income','lease'],['business_classification','actual_use_expense','maintenance'],['revenue_period','service_period','lease'],['expense_period','benefit_period','maintenance']])assert(material.principleSupport.some(p=>p.kind===kind&&p.value===value&&p.when===when),kind+':'+value+'须有原件历史支持');
+    const taxAndBasis=await readMaterials(client,f,request(f,host.basisPath),report);
+    assert.equal(taxAndBasis.coverage.taxHistory.vat.status,'included');
+    const started=await check('仅有账套配置时如实标记历史未完成',async()=>{
+      const material=await readMaterials(client,f,{target:materialTarget(f)},report);
+      assert.equal(material.coverage.sourceCount,0);
+      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),material)));
+      assert.equal(saved.status,'needs_review');assert.equal(saved.coverage.configurationOnly,true);
+      assert(!saved.shortText.includes('归类及成本'));
+      return saved;
+    });
+    const history=await check('有限历史观察需要独立同业务依据，实际保存已采用的口径和税负',async()=>{
+      const alone=await readMaterials(client,f,request(f,host.artifactPath),report);
+      assert(!alone.principleSupport.some(p=>['business_classification','revenue_period','expense_period'].includes(p.kind)));
+      const merged=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(taxAndBasis),materialReference(alone)],limit:1},report);
+      const material=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(merged),materialReference(alone)],limit:50},report);
+      const snapshot=await materialSnapshot(f,material),observed=snapshot.facts.filter(fact=>fact.field==='historical_posting');
+      const expectedMap=new Map(host.legacyFiles.flatMap(file=>file.selectedRows.map(row=>[f.files[file.key]+'#'+row,f.originalHashes[file.key]])));
+      assert.equal(observed.length,expectedMap.size,'重叠引用不得双计同一原始行');
+      const separateBasis=new Set(snapshot.facts.filter(fact=>fact.field==='business_reference'&&[f.files.oldLease,f.files.maintenance].includes(fact.source.path)).map(fact=>fact.factRef));
+      for(const fact of observed){
+        assert.equal(fact.verification,'agent_observation');
+        assert.equal(fact.value.status,'observed_history');
+        assert.equal(fact.source.sha256,expectedMap.get(fact.source.path+'#'+fact.source.locator.row));
+        assert(fact.linkedBusinessRefs.some(ref=>separateBasis.has(ref)));
+      }
+      assert.equal(snapshot.taxBurden.summaries.find(s=>s.taxType==='vat').weightedRatio,EXPECTED.historicalVat.weightedRatio);
+      for(const [kind,value,when]of [['business_classification','other_income','lease'],['business_classification','actual_use_expense','maintenance'],
+        ['revenue_period','service_period','lease'],['expense_period','benefit_period','maintenance']]){
+        const principle=material.principleSupport.find(p=>p.kind===kind&&p.value===value&&p.when===when);
+        assert(principle,kind+'/'+when);
+        assert.equal(principle.authority,'agent_history_inference');
+      }
+      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),material,{expectedRevision:started.headRevision})));
+      assert.equal(saved.status,'ready');assert(saved.shortText.includes('2.00%'));assert(Array.from(saved.shortText).length<=600);
+      const definition=JSON.parse(rows(f).at(-1).content_json).definition;
+      const retained=definition.facts.filter(fact=>fact.field==='historical_posting');
+      assert(retained.length>0&&retained.every(fact=>observed.some(value=>value.factRef===fact.factRef)));
       assert.equal(voucherCount(f),0);
+      const calls=await listFinanceCalls({auditDir:f.auditDir,limit:1000});
+      assert(calls.calls.every(call=>call.tool!=='finance_calculation_run'),'提取阶段不调用财税脚本工具');
+      report.historicalSelection={observations:observed.length,referencedByBaseline:retained.length,baselineRef:saved.baselineRef};
+      return{material,saved};
     });
-    const contractRequest={...request,originals:request.originals.filter(original=>original.id!=='journal'),historicalRows:[]};
-    const history=await check('读取失败保留正常材料，经受信脚本与独立原件共证恢复并保存',async()=>{
-      publishMaterialIntakePacket(f,'recovery');const inventory=await readMaterials(client,f,{target:materialTarget(f),section:'structure'},report),known=new Set(references.values()),added=inventory.items.filter(item=>!known.has(item.originalRef));assert.equal(added.length,1,'失败原件须从正常发现新增引用取得');const originalRef=added[0].originalRef;assert.match(originalRef,/^bs:[a-f0-9]{64}$/);assert.equal(added[0].format,'xls');
-      const normal=await readMaterials(client,f,{...contractRequest,originals:[...contractRequest.originals,{id:'legacy_export',originalRef}]},report),normalSnapshot=await materialSnapshot(f,normal);assert(normalSnapshot.facts.some(fact=>fact.source.kind==='file'&&fact.source.path===f.files.oldLease));assert.equal(normalSnapshot.taxBurden.summaries.find(row=>row.taxType==='vat').weightedRatio,EXPECTED.historicalVat.weightedRatio,'单份失败不能吞掉已读税负');
-      const failurePage=normal.pages.find(page=>page.sourceFailures?.items?.some(item=>item.originalRef===originalRef));assert(failurePage,'正常回执须披露失败来源及可执行调查入口');const coverage=await readMaterials(client,f,failurePage.sourceFailures.next.arguments,report),failure=coverage.details.find(item=>item.originalRef===originalRef&&item.recoverable===true);assert(failure&&typeof failure.code==='string'&&typeof failure.stage==='string');const next=normal.pages.flatMap(page=>page.nextSteps).find(step=>step.tool==='finance_record_contract'&&step.arguments?.recordType==='baseline_adaptation');assert(next,'失败后须导航真实适配合同');const contract=ok(await client.call(next.tool,next.arguments));assert.equal(contract.outputSchema.properties.version.const,'finance-baseline-history-adaptation/1');assert.equal(contract.outputSchema.properties.rows.maxItems,40);
-      const execution=await executeHistoryAdaptation(client,f,originalRef,selectedHistoryRows,report),adapted=await readMaterials(client,f,{target:materialTarget(f),adaptation:execution.adaptation,section:'overview',limit:50},report),alone=await materialSnapshot(f,adapted);assert.equal(alone.facts.filter(fact=>fact.field==='historical_posting').length,selectedHistoryRows.length);assert(adapted.principleSupport.every(principle=>['accounting_standard','enterprise_class'].includes(principle.kind)),'脚本观察没有独立同业务原件共证时，不得自证业务原则');
-      const combined=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(normal),materialReference(adapted)],section:'overview',limit:50},report),material=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(combined),materialReference(adapted)],section:'overview',limit:50},report),snapshot=await materialSnapshot(f,material),observed=snapshot.facts.filter(fact=>fact.field==='historical_posting');assert.equal(observed.length,selectedHistoryRows.length,'重叠闭包中的同一原件行不能双计');assert.deepEqual(observed.map(fact=>fact.source.locator.row).sort((a,b)=>a-b),selectedHistoryRows);assert(observed.every(fact=>fact.value.kind==='script_observation'&&fact.source.adaptation?.callId===execution.adaptation.callId&&fact.source.sha256===f.originalHashes.fallbackHistory&&resolve(fact.source.path)===resolve(f.files.fallbackHistory)));
-      for(const[kind,value,when]of [['business_classification','other_income','lease'],['business_classification','actual_use_expense','maintenance'],['revenue_period','service_period','lease'],['expense_period','benefit_period','maintenance']])assert(material.principleSupport.some(principle=>principle.kind===kind&&principle.value===value&&principle.when===when),'恢复后须保留真实支持的业务原则：'+kind+':'+when);
-      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),material,{expectedRevision:configured.headRevision})));assert.equal(saved.status,'ready');assert(saved.shortText.includes('管理费用'));assert(saved.shortText.includes('按月等额'));assert(saved.shortText.includes('2.00%'));assert(Array.from(saved.shortText).length<=600);assert(saved.shortText.split('\n').filter(line=>/^\d+\./.test(line)).length<=8);assert.equal(saved.coverage.historyEvidence.ledgerPostings,0);assert.equal(saved.coverage.historyEvidence.sourceObservations,selectedHistoryRows.length);
-      const definition=JSON.parse(rows(f).at(-1).content_json).definition,usedHistory=definition.facts.filter(fact=>fact.field==='historical_posting');assert(usedHistory.length>0&&usedHistory.every(fact=>fact.source.adaptation?.callId===execution.adaptation.callId),'实际保存必须采用恢复证据，不能由BIFF历史兜底');assert(!definition.facts.some(fact=>fact.source.kind==='file'&&fact.source.path===f.files.historicalEntries));report.recovery={...execution,originalRef,failure,selectedRows:selectedHistoryRows,observationCount:observed.length,withoutIndependentEvidence:'business_principles_not_supported',savedBaselineRef:saved.baselineRef};return{material,saved,snapshot};
-    });
-    const beforeSeptember=JSON.stringify(rows(f));publishMaterialIntakePacket(f,'september');
-    await check('两种发票布局按购销角色归属，同一原件可供账前复用',async()=>{
-      for(const[index,args]of invoiceMaterialRequests(f).entries()){
-        const structure=await readStructurePreview(client,f,{target:args.target,originals:args.originals,section:'structure',limit:50},report,fields=>fields.some(field=>index?field.position?.row===10&&field.position.column===1:field.position?.row===2&&field.position.column>=4));
-        for(const[row,column,label]of index?[[9,1,'含税总计'],[10,1,'业务说明']]:[[1,1,'销货人称谓'],[1,3,'购买方称谓']])assert(structure.fields.some(field=>field.position?.sheetIndex===0&&field.position.row===row&&field.position.column===column&&field.label===label&&field.locator?.fieldRef),'发票字段须经正常next公开安全原标签：'+label);
-        const material=await readMaterials(client,f,args,report),snapshot=await materialSnapshot(f,material),facts=snapshot.facts.filter(row=>row.source.path===args.originals[0].path);assert(facts.length>=4);assert(facts.every(row=>row.source.identity.role===(index?'buyer':'seller')));assert(facts.every(row=>row.source.identity.taxIdAvailability==='not_registered'),'无登记税号时必须如实说明名称匹配');assert.equal(facts.find(row=>row.field==='amount_net').value,index?5000:60000);assert.equal(material.coverage.sourceOwners.unverified,0);
-        const calculation=await readMaterials(client,f,{target:args.target,materialRefs:[materialReference(material)],section:'calculation',limit:50},report);assert(calculation.calculationSchema.objects.some(object=>['amount_net','amount_tax','amount_gross','invoice_date'].every(field=>Object.hasOwn(object.fields,field))),'发票字段须形成同一可消费对象，不能只证明零散值能解析');
+    const beforeSeptember=JSON.stringify(rows(f));
+    publishMaterialIntakePacket(f,'september');
+    await check('两种发票布局的宿主观察进入基线对象和账前来源索引',async()=>{
+      const invoices=prepareMaterialObservations(f,'invoices');
+      const material=await readMaterials(client,f,request(f,invoices.artifactPath),report);
+      const snap=await materialSnapshot(f,material);
+      for(const [key,role,amount]of [['saleInvoice','seller',60000],['purchaseInvoice','buyer',5000]]){
+        const facts=snap.facts.filter(fact=>fact.source.path===f.files[key]);
+        assert.equal(facts.find(fact=>fact.field==='amount_net').value,amount);
+        assert(facts.every(fact=>fact.source.identity.role===role&&fact.verification==='agent_observation'));
       }
-      report.prebook=await prebookConsumer(client,f);
+      const calculation=await readMaterials(client,f,{target:materialTarget(f),materialRefs:material.materialRefs,section:'calculation'},report);
+      assert.equal(calculation.calculationSchema.objects.filter(object=>['amount_net','amount_tax','amount_gross','invoice_date'].every(field=>Object.hasOwn(object.fields,field))).length,2);
+      report.prebook=await prebookConsumer(client,f,invoices.prebookPath);
     });
-    const september=await check('9月新材料真实取数并消费短基线，不新增普通月份版本',async()=>{
-      const fresh=await readMaterials(client,f,currentMaterialRequest(f,'2026-09'),report),merged=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(history.material),materialReference(fresh)],section:'calculation',limit:50},report),baseline=ok(await client.call('finance_baseline_read',{target:materialTarget(f)}));assert.equal(baseline.baselineRef,history.saved.baselineRef);const result=await calculateMonth(client,f,merged,baseline,'2026-09');assert.equal(JSON.stringify(rows(f)),beforeSeptember);return result;
-    });report.september=september;
-    publishMaterialIntakePacket(f,'confirmation');const oldRows=rows(f);const future=await check('标记合成人工确认后只追加10月生效版本，9月视图不变',async()=>{
-      const choice=await readMaterials(client,f,choiceMaterialRequest(f),report),merged=await readMaterials(client,f,{target:materialTarget(f),materialRefs:[materialReference(history.material),materialReference(choice)],section:'overview',limit:50},report),save=saveFromActualSupports(materialTarget(f),merged,{expectedRevision:history.saved.headRevision,effectiveFrom:'2026-10'}),saved=ok(await client.call('finance_baseline_save',save));
-      assert.equal(saved.changed,true);assert.equal(saved.savedVersion.effectiveFrom,'2026-10');assert.equal(saved.savedVersion.applicableToTarget,false);assert.equal(saved.baselineRef,history.saved.baselineRef);assert.equal(rows(f).length,oldRows.length+1);assert.deepEqual(rows(f).slice(0,oldRows.length),oldRows);assert.equal(ok(await client.call('finance_baseline_read',{target:materialTarget(f)})).baselineRef,history.saved.baselineRef);return saved.savedVersion;
-    });report.humanConfirmation={path:f.humanReplyPath,synthetic:true,futureVersion:future};
-    publishMaterialIntakePacket(f,'october');const beforeOctober=JSON.stringify(rows(f));await client.close();client=await startMaterialIntakeMcp(f,{bound:true,period:'2026-10'});
-    report.october=await check('全新MCP连接10月召回新旧原则并连续计算',async()=>{
-      const baseline=ok(await client.call('finance_baseline_read',{target:materialTarget(f,'2026-10')}));assert.equal(baseline.baselineRef,future.baselineRef);assert(baseline.shortText.includes('先进先出'));const currentHistory=await readMaterials(client,f,{...contractRequest,target:materialTarget(f,'2026-10')},report),fresh=await readMaterials(client,f,currentMaterialRequest(f,'2026-10'),report),merged=await readMaterials(client,f,{target:materialTarget(f,'2026-10'),materialRefs:[materialReference(currentHistory),materialReference(fresh)],section:'calculation',limit:50},report),result=await calculateMonth(client,f,merged,baseline,'2026-10');assert.equal(result.result.inventory.opening,september.result.inventory.closing);assert.equal(result.result.maintenanceCumulative,september.result.maintenanceCumulative+result.result.maintenanceExpense);assert.equal(JSON.stringify(rows(f)),beforeOctober);report.recovery.reusedWithoutRerunningHistoricalAdapter=true;return result;
+    const september=await check('9月用本期观察及既有短基线实际计算，保持版本',async()=>{
+      const fresh=prepareMaterialObservations(f,'september');
+      const calculation=await readMaterials(client,f,{...request(f,fresh.artifactPath),materialRefs:taxAndBasis.materialRefs,section:'calculation'},report);
+      const baseline=ok(await client.call('finance_baseline_read',{target:materialTarget(f)}));
+      assert.equal(baseline.baselineRef,history.saved.baselineRef);
+      const result=await calculateMonth(client,f,calculation,baseline,'2026-09');
+      assert.equal(JSON.stringify(rows(f)),beforeSeptember);
+      return result;
     });
-    publishMaterialIntakePacket(f,'auxiliary');await check('实际图片与扫描PDF OCR，DOCX/文本及未知格式如实披露',async()=>{
-      const files=['image','scannedPdf','docx','text','markdown','unknownWorkbook','dynamicJson'],previews=[];for(const id of files){const args={target:materialTarget(f,'2026-10'),originals:[{id,path:f.files[id]}],section:'structure',limit:50};previews.push(id==='dynamicJson'?await readMaterials(client,f,args,report):await readStructurePreview(client,f,args,report,id==='unknownWorkbook'?fields=>fields.some(field=>field.position?.sheetIndex===1&&field.position.row===1&&field.position.column===2):undefined));}const fields=previews.flatMap(preview=>preview.fields);assert(fields.some(field=>field.originalId==='unknownWorkbook'&&(field.locator||field.fieldRef)),'未知字段不能在结构发现前被白名单挡掉');
-      const documents=previews.flatMap(preview=>preview.pages.flatMap(page=>page.documents??[])),ocr=[];
-      for(const key of['image','scannedPdf']){
-        const doc=readMaterialDocument({path:f.files[key],sourceRoot:f.sourceRoot,pythonPath:f.pythonPath});assert.equal(doc.status,'read');assert(/ocr/.test(doc.extractor.mode));assert.equal(doc.extractor.ocr?.id,'windows-media-ocr');assert(doc.extractor.ocr.version);assert(doc.extractor.ocr.language);
-        const observations={};
-        for(const[label,expectedDigits]of[['AMOUNT','630000'],['DATE','20260831']]){
-          const matches=doc.blocks.filter(block=>block.text.startsWith(label+' '));assert.equal(matches.length,1,'实际OCR须保留唯一标签行：'+label);const block=matches[0],locator={page:block.page,line:block.line};
-          assert.equal((block.text.slice(label.length).match(/[0-9]/g)??[]).join(''),expectedDigits,'实际OCR须保留完整数字序列（含末尾00）：'+label);
-          assert(Number.isInteger(block.page)&&block.page>0&&Number.isInteger(block.line)&&block.line>0);assert(Array.isArray(block.bbox)&&block.bbox.length===4&&block.bbox.every(value=>Number.isFinite(value)&&value>=0)&&block.bbox[2]>block.bbox[0]&&block.bbox[3]>block.bbox[1],'OCR须保留有效原件BBox');
-          assert.equal(block.origin,'ocr');assert.equal(block.verification,'ocr_extraction_unreviewed');assert(doc.diagnostics.some(item=>item.code==='ocr_text_requires_review'&&item.page===block.page));assert.equal(readMaterialValue(doc,locator).value,block.text,'本机定位必须逐字重放真实OCR文本，不替换标点或恢复金额');
-          observations[label]={text:block.text,digits:expectedDigits,locator,bbox:block.bbox,valueVerified:false};
-        }
-        assert(documents.some(item=>item.originalId===key&&/ocr/.test(item.extractor?.mode??'')));ocr.push({kind:key,extractor:doc.extractor,observations,numericRecoveryApplied:false,canUseAsCalculationValue:false,limitation:'保留真实OCR标点差异；金额及日期尚未核准，不能声称6300.00可直接计算。'});
-      }
-      report.ocr=ocr;
-      const inventory=await readMaterials(client,f,{target:materialTarget(f,'2026-10')},report);assert((inventory.sourceInventory?.unsupportedFormats?.other??0)>0||inventory.pages.some(page=>(page.sourceInventory?.unsupportedFormats?.other??0)>0),'不支持的实际文件应披露格式状态，不能说用户未提供');
+    report.september=september;
+    publishMaterialIntakePacket(f,'confirmation');
+    const future=await check('合成确认只追加10月生效版本，9月仍读原版',async()=>{
+      const declared=prepareMaterialObservations(f,'confirmation');
+      const merged=await readMaterials(client,f,{...request(f,declared.artifactPath),materialRefs:history.material.materialRefs},report);
+      const oldRows=rows(f);
+      const saved=ok(await client.call('finance_baseline_save',saveFromActualSupports(materialTarget(f),merged,{expectedRevision:history.saved.headRevision,effectiveFrom:'2026-10'})));
+      assert.equal(saved.changed,true);assert.equal(saved.savedVersion.effectiveFrom,'2026-10');assert.equal(saved.savedVersion.applicableToTarget,false);
+      assert.equal(saved.baselineRef,history.saved.baselineRef);assert.equal(rows(f).length,oldRows.length+1);
+      assert.deepEqual(rows(f).slice(0,oldRows.length),oldRows);
+      assert.equal(ok(await client.call('finance_baseline_read',{target:materialTarget(f)})).baselineRef,history.saved.baselineRef);
+      return saved.savedVersion;
     });
-    await check('错主体、伪派生原件及已变证据不能通过正常入口',async()=>{
-      const wrongPath=join(f.sourceRoot,'另一主体的原始表.csv');writeFileSync(wrongPath,'企业名称,业务类别,不含税金额\n另一家合成企业,租赁,99999.00\n');const mismatch=await client.call('finance_baseline_materials',{target:materialTarget(f,'2026-10'),originals:[{id:'wrong',path:wrongPath,ownerIdentity:{role:'enterprise',name:{row:2,column:1,headerRows:[1]}}}],selections:[{id:'wrong_amount',originalId:'wrong',field:'amount_net',locator:{row:2,column:3,headerRows:[1]}}]});if(mismatch.isError)assert.match(mismatch.text,/finance_baseline_/);else assert(mismatch.data.gaps.includes('owner_unverified')||mismatch.data.coverage.sourceOwners.unverified>0);assert(!JSON.stringify(mismatch).includes('另一家合成企业'));
-      const crossed=structuredClone(request);crossed.target=materialTarget(f,'2026-10');crossed.historicalRows=[structuredClone(request.historicalRows.find(row=>row.debit.row===10))];crossed.historicalRows[0].debit={...crossed.historicalRows[0].debit,row:14};rejected(await client.call('finance_baseline_materials',crossed),/finance_baseline_historical_context_conflict/);
-      const monthOnly=structuredClone(request);monthOnly.target=materialTarget(f,'2026-10');monthOnly.historicalRows=[structuredClone(request.historicalRows.find(row=>row.debit.row===10))];delete monthOnly.historicalRows[0].date;const monthMaterial=await readMaterials(client,f,monthOnly,report),monthSnapshot=await materialSnapshot(f,monthMaterial),monthObservation=monthSnapshot.facts.find(fact=>fact.field==='historical_posting');assert(monthObservation);assert.equal(monthObservation.value.date,null,'没有日期的月度观察不得伪造月初日');assert.equal(monthObservation.value.dateGranularity,'month');assert.equal(monthObservation.value.period,'2026-07');report.monthOnlyObservation={checkedLocally:true,date:null,dateGranularity:'month'};
-      const forged=join(f.sourceRoot,'伪造的提取结果.json');writeBaselineJson(forged,{version:'finance-material-extraction/1',enterpriseKey:f.owner.enterpriseKey,companyName:f.owner.companyName,业务类别:'inventory',存货计价方法:'先进先出法',originalSha256:'0'.repeat(64)});rejected(await client.call('finance_baseline_materials',{target:materialTarget(f,'2026-10'),originals:[{id:'forged',path:forged}],extractKnownFields:true}),/finance_baseline_generated_not_original/);
-      const original=readFileSync(f.files.fallbackHistory);try{writeFileSync(f.files.fallbackHistory,Buffer.concat([original,Buffer.from('SYNTHETIC_SOURCE_CHANGED')]));const stale=ok(await client.call('finance_baseline_read',{target:materialTarget(f,'2026-10')}));assert.equal(stale.status,'stale');assert(stale.unresolved.some(item=>item.code==='source_changed'));}finally{writeFileSync(f.files.fallbackHistory,original);}
+    report.humanConfirmation={path:f.humanReplyPath,synthetic:true,futureVersion:future};
+    publishMaterialIntakePacket(f,'october');
+    const beforeOctober=JSON.stringify(rows(f));
+    await client.close();client=await startMaterialIntakeMcp(f,{bound:true,period:'2026-10'});
+    report.october=await check('10月全新会话读回新旧口径，承接9月结存并计算',async()=>{
+      const baseline=ok(await client.call('finance_baseline_read',{target:materialTarget(f,'2026-10')}));
+      assert.equal(baseline.baselineRef,future.baselineRef);assert(baseline.shortText.includes('先进先出'));
+      const current=prepareMaterialObservations(f,'october','2026-10');
+      const priorBasis=readBaselineJson(host.basisPath);
+      priorBasis.target=materialTarget(f,'2026-10');
+      priorBasis.originals=priorBasis.originals.filter(file=>file.id!=='tax');
+      priorBasis.records=priorBasis.records.filter(record=>record.originalId!=='tax');
+      const existingContracts=join(dirname(current.artifactPath),'carried-contracts.json');
+      writeBaselineJson(existingContracts,priorBasis);
+      const carry=await readMaterials(client,f,request(f,existingContracts,'2026-10'),report);
+      const calculation=await readMaterials(client,f,{...request(f,current.artifactPath,'2026-10'),materialRefs:carry.materialRefs,section:'calculation'},report);
+      const result=await calculateMonth(client,f,calculation,baseline,'2026-10');
+      assert.equal(result.result.inventory.opening,september.result.inventory.closing);
+      assert.equal(result.result.maintenanceCumulative,september.result.maintenanceCumulative+result.result.maintenanceExpense);
+      assert.equal(JSON.stringify(rows(f)),beforeOctober);
+      assert(!readBaselineJson(current.artifactPath).originals.some(original=>/history/i.test(original.id)));
+      return result;
     });
-    assert.equal(voucherCount(f),0,'材料观察及基线不得偷偷导入历史凭证');for(const[key,path]of Object.entries(f.files))assert.equal(hashBaseline(readFileSync(path)),f.originalHashes[key],key+'原件被改变');report.status='passed';
+    await check('来源变更使依赖的已存原则失效，现场原件可恢复',async()=>{
+      const original=readFileSync(f.files.historyAugust);
+      try{
+        writeFileSync(f.files.historyAugust,Buffer.concat([original,Buffer.from('SYNTHETIC_SOURCE_CHANGED')]));
+        const stale=ok(await client.call('finance_baseline_read',{target:materialTarget(f,'2026-10')}));
+        assert.equal(stale.status,'stale');assert(stale.unresolved.some(item=>item.code==='source_changed'));
+      }finally{writeFileSync(f.files.historyAugust,original);}
+    });
+    assert.equal(voucherCount(f),0);
+    for(const [key,path]of Object.entries(f.files))assert.equal(hashBaseline(readFileSync(path)),f.originalHashes[key],key+' 原件保持原样');
+    report.status='passed';
   }catch(error){report.status='failed';report.error=error.stack;throw error;}
-  finally{await client?.close();report.finishedAt=new Date().toISOString();report.unverified=['程序以显式映射验证接入与连续消费，不代表实际模型自主识别准确率。','所有数据均为合成，真实案例由用户另行实测；未正式记账、结账、申报。'];const path=join(f.root,'材料接入综合验收结果.json');writeBaselineJson(path,report);console.log(JSON.stringify({report:path,status:report.status,checks:report.checks.length,modelInvoked:false}));}
+  finally{
+    await client?.close();report.finishedAt=new Date().toISOString();
+    report.unverified=['本用例以测试编写的宿主脚本验证读取、接收及业务消费','真实账套、正式记账、申报及模型自主识别不在程序验收内'];
+    const path=join(f.root,'材料接入综合验收结果.json');writeBaselineJson(path,report);
+    console.log(JSON.stringify({report:path,status:report.status,checks:report.checks.length,modelInvoked:false}));
+  }
 });

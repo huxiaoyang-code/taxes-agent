@@ -13,6 +13,7 @@
 import { TAX_TOOLS } from "./tax-tools.mjs";
 import { DIRECT_TOOLS } from './direct-tools.mjs';
 import { BUSINESS_EVIDENCE_SCHEMA } from '../../../../06-workbench/server/business-evidence.mjs';
+import { hasDomainManagedSources } from '../../../../06-workbench/server/finance-call-chain.mjs';
 const harnessText={type:'string'},object={type:'object'},array={type:'array'};
 const harnessId={type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'},harnessDigest={type:'string',pattern:'^[a-f0-9]{64}$'},harnessRequiredText={type:'string',minLength:1,maxLength:32768,description:'去除首尾空白后非空；不得包含 NUL 字符。'},harnessPeriod={type:'string',pattern:'^20\\d\\d(?:-(0[1-9]|1[0-2]|Q[1-4]))?$'};
 const harnessIds={type:'array',items:harnessId,maxItems:10000};
@@ -422,7 +423,7 @@ export const TOOLS = [...DIRECT_TOOLS, ...HARNESS_TOOLS, ...LOCAL_TOOLS, ...CATA
   .map(withModelNote).map(t=>["voucher_create","voucher_post"].includes(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,correctionOf:{type:"string",pattern:"^[a-f0-9-]{36}$",description:"前次尝试ID，作用域由后台核验。"}}}}):t)
   .map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema?.properties,operationId:{type:'string',description:'Stable local operation ID; preserve before a write and reuse only for the identical request.'}}}}):t)
   .map(t=>["voucher_create","voucher_post"].includes(t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,correctionOf:{type:"string",pattern:"^[a-f0-9-]{36}$",description:"前次尝试ID，作用域由后台核验。"}}}}):t)
-  .map(t=>MODEL_PLAIN_TOOL_SET.has(t.name)||DIRECT_TOOLS.some(d=>d.name===t.name)?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,businessEvidence:{...BUSINESS_EVIDENCE_SCHEMA,description:'业务原件字段如何成为本次参数：中文表头/位置、处理方法与规则选择。调用前自动实读留证，不是事后审计日志。'}}}}):t);
+  .map(t=>!hasDomainManagedSources(t.name)&&(MODEL_PLAIN_TOOL_SET.has(t.name)||DIRECT_TOOLS.some(d=>d.name===t.name))?({...t,inputSchema:{...t.inputSchema,properties:{...t.inputSchema.properties,businessEvidence:{...BUSINESS_EVIDENCE_SCHEMA,description:'业务原件字段如何成为本次参数：中文表头/位置、处理方法与规则选择。调用前自动实读留证，不是事后审计日志。'}}}}):t);
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 /** 本地自己处理、不转发后端的工具（仅资源类；普通财务工具已固定走模型通道）。 */

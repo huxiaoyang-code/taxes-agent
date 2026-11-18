@@ -1,18 +1,18 @@
 // 四宿主共用的短业务基线。模型提炼受限原则，后端核对实际来源及版本；不授予人审或写账权限。
 import {DatabaseSync} from 'node:sqlite';
-import {join,dirname,resolve} from 'node:path';
+import {join,dirname,resolve,basename,extname} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {writeFileSync,readFileSync,readdirSync,lstatSync} from 'node:fs';
 import {validateSchemaValue} from './harness-schema-validation.mjs';
 import {resolveBusinessMemoryTarget} from './business-memory.mjs';
 import {currentFinanceCall,withFinanceCall,annotateFinanceCall,financeAuditDirectory,readFinanceCall,financeCallCreatedDirectory} from './finance-call-chain.mjs';
 import * as storage from './business-memory-storage.mjs';
-import {BASELINE_INTERFACE,BASELINE_TOPIC,BASELINE_VALUES,BASELINE_LABELS,BASELINE_FACT_VALUES,BASELINE_DATE_FIELDS,BASELINE_PERIOD_FIELDS,BASELINE_AMOUNT_FIELDS,BASELINE_QUANTITY_FIELDS,BUSINESS_BASELINE_SCHEMAS} from './business-baseline-contracts.mjs';
-import {baselineBytes,baselineInside,baselineDirectoryAvailable,baselineDirectoryIdentity,captureBaselineMaterials,mergeBaselineMaterialSnapshots,baselineLedgerFact,buildBaselineTaxBurden,groupBaselineMaterialFacts,baselineScalarMaterialFacts,discoverBaselineSourceInventory,discoverBaselineKnownSources,baselineDiscoveryProjection} from './business-baseline-materials.mjs';
+import {AGENT_MATERIALS_SUBDIRECTORY,baselineHostObservationNext,BASELINE_INTERFACE,BASELINE_TOPIC,BASELINE_VALUES,BASELINE_LABELS,BASELINE_FACT_VALUES,BASELINE_DATE_FIELDS,BASELINE_PERIOD_FIELDS,BASELINE_AMOUNT_FIELDS,BASELINE_QUANTITY_FIELDS,BUSINESS_BASELINE_SCHEMAS} from './business-baseline-contracts.mjs';
+import {baselineBytes,baselineInside,baselineDirectoryAvailable,baselineDirectoryIdentity,captureBaselineMaterials,mergeBaselineMaterialSnapshots,baselineLedgerFact,buildBaselineTaxBurden,groupBaselineMaterialFacts,baselineScalarMaterialFacts,baselineSnapshotDigest,materialRegistryDigest} from './business-baseline-materials.mjs';
 import {projectBaselineMaterials,baselineCoverage,baselineSupportRef,baselineBranchSelection,fitBaselineBranchResponse,baselineCalculationSchema} from './business-baseline-projection.mjs';
 import {assertAuditSchema} from './local-audit-storage.mjs';
 import {inspectRestoreControl,readRestoreActivation,assertRestoreOpenPath} from './local-restore-control.mjs';
-import {loadBaselineAdaptation} from './baseline-material-adaptation.mjs';
+import {registeredMaterialIdentity} from './material-identity.mjs';
 
 const fail=code=>{throw Object.assign(Error(code),{code});};
 const digest=storage.businessMemoryDigest;
@@ -23,7 +23,7 @@ const same=(a,b)=>storage.canonicalBusinessMemory(a)===storage.canonicalBusiness
 const owner=scope=>[scope.databaseInstanceId,scope.enterpriseKey,scope.accountSetId];
 const BASELINE_READER_SHA256=sha(readFileSync(new URL(import.meta.url)));
 const calculationReader=()=>({moduleUrl:import.meta.url,sha256:BASELINE_READER_SHA256,exportName:'resolveBaselineCalculationFacts',version:'finance-baseline-calculation-facts/1',values:'local_calculation_only_not_model_projection'});
-function configured(options={}){return {...options,dbPath:options.dbPath??process.env.FINANCE_DATABASE_PATH,sourceRoot:options.sourceRoot??process.env.FINANCE_SOURCE_ROOT,auditDir:options.auditDir??currentFinanceCall()?.auditDir??financeAuditDirectory(),pythonPath:options.materialRuntime?.pythonPath??options.pythonPath??process.env.FINANCE_PYTHON_PATH,pythonUserBase:options.materialRuntime?.pythonUserBase??options.pythonUserBase};}
+function configured(options={}){return {...options,dbPath:options.dbPath??process.env.FINANCE_DATABASE_PATH,sourceRoot:options.sourceRoot??process.env.FINANCE_SOURCE_ROOT,auditDir:options.auditDir??currentFinanceCall()?.auditDir??financeAuditDirectory()};}
 function validate(name,args){if(validateSchemaValue(BUSINESS_BASELINE_SCHEMAS[name],args).length)fail('finance_baseline_input_invalid');}
 function writable(options){if(options.readOnly||process.env.WORKBENCH_DATABASE_MODE==='readonly')fail('finance_baseline_readonly');}
 function scopeBinding(args,options){const binding=resolveBusinessMemoryTarget(args.target,options);assertRestoreOpenPath(binding.dbPath);annotateFinanceCall({scope:binding.scope,configuredTarget:{databasePath:binding.dbPath,accountSetId:binding.scope.accountSetId,period:binding.scope.period,bindingOrigin:binding.bindingOrigin}});return binding;}
@@ -39,8 +39,13 @@ function versions(db,scope){if(!checkComponent(db))return [];const allowed=basel
 function selectedVersion(db,scope){const all=versions(db,scope);return {all,current:all.find(v=>v.effectiveFrom<=scope.period&&(!v.effectiveTo||v.effectiveTo>=scope.period))??null};}
 const savedVersionView=(version,period)=>({baselineRef:version.methodRef,revision:version.revision,effectiveFrom:version.effectiveFrom,...(version.effectiveTo?{effectiveTo:version.effectiveTo}:{}),applicableToTarget:version.effectiveFrom<=period&&(!version.effectiveTo||version.effectiveTo>=period)});
 const sourceKey=source=>digest(source);
+function agentArtifactCurrent(artifact){
+ return basename(artifact.root)===AGENT_MATERIALS_SUBDIRECTORY&&extname(artifact.path).toLowerCase()==='.json'&&
+  sha(baselineBytes(artifact.path,artifact.root))===artifact.sha256;
+}
 function factStates(db,definition,opts){
  const cache=new Map(),artifacts=new Map(),roots=new Map(),out=new Map(),rootFacts=root=>{if(!roots.has(root))roots.set(root,{available:baselineDirectoryAvailable(root),identity:baselineDirectoryIdentity(root),created:financeCallCreatedDirectory(root)});return roots.get(root);};
+ let registryDigest;
  // 目录身份只辅助区分ENOENT；已有文件仍按实际SHA核对，不把目录inode当作业务真实性。
  const missingState=(root,expected,error)=>{const current=rootFacts(root);return error.code==='ENOENT'&&current.available&&!current.created&&typeof expected==='string'&&expected===current.identity?'missing':'unavailable';};for(const f of list(definition.facts)){
   const s=f.source,key=sourceKey(s);let state=cache.get(key);
@@ -48,6 +53,19 @@ function factStates(db,definition,opts){
    if(s.kind==='file'){
     if(!rootFacts(opts.sourceRoot).available||!baselineInside(opts.sourceRoot,s.path))state='unavailable';
     else try{state=sha(baselineBytes(s.path,opts.sourceRoot))===s.sha256?'current':'changed';}catch(error){state=missingState(opts.sourceRoot,s.rootIdentity,error);}
+    if(state==='current'&&s.registryDigest){
+     registryDigest??=materialRegistryDigest(registeredMaterialIdentity(db,definition.scope));
+     if(registryDigest!==s.registryDigest)state='changed';
+    }
+    if(state==='current'&&s.agentArtifact){
+     const artifact=s.agentArtifact,key=digest(artifact);let current=artifacts.get(key);
+     if(!current){
+      try{current=agentArtifactCurrent(artifact)?'current':'changed';}
+      catch(error){current=missingState(artifact.root,artifact.rootIdentity,error);}
+      artifacts.set(key,current);
+     }
+     state=current;
+    }
     if(state==='current'&&s.adaptation)for(const file of s.adaptation.artifacts){
      const root=s.adaptation.recordRoot,key=digest([root,file]);let current=artifacts.get(key);
      if(!current){try{current=baselineInside(root,file.path)&&sha(baselineBytes(file.path,root,{max:20*1024*1024}))===file.sha256?'current':'changed';}catch(error){current=missingState(root,s.adaptation.recordRootIdentity,error);}artifacts.set(key,current);}
@@ -108,7 +126,7 @@ function historicalExpenseText(p,facts){
   if(field(g,'creates_asset')!==false)continue;const refs=g.filter(f=>f.field==='business_reference').map(f=>f.factRef);
   for(const h of fs.filter(f=>usableHistoricalEvidence(f,fs,refs)&&f.linkedBusinessRefs?.some(ref=>refs.includes(ref))))for(const entry of businessEntries(h,refs))if(Object.hasOwn(labels,entry.role)&&entry.debit-entry.credit>0)roles.add(entry.role);
  }
- return roles.size===1?`沿${fs.some(f=>f.source.adaptation)?'有出处历史':'已核历史'}${labels[[...roles][0]]}归集，用途变化另核`:null;
+ return roles.size===1?`沿${fs.some(f=>f.source.adaptation||f.source.agentArtifact)?'有出处历史':'已核历史'}${labels[[...roles][0]]}归集，用途变化另核`:null;
 }
 function ruleText(p,facts){const condition=p.when==='account_set'?'':BASELINE_LABELS[p.when]+'：',monthly=p.allocationBasis==='monthly_equal'?p.kind==='revenue_period'?'整月均匀服务按月等额确认':['expense_period','cost_treatment'].includes(p.kind)?'整月均匀受益的非资产服务按月等额分摊':null:null;return condition+(historicalExpenseText(p,facts)??monthly??BASELINE_LABELS[p.value]);}
 export function renderBusinessBaseline(definition,scope,{principles=definition.principles,taxBurden=definition.taxBurden}={}){
@@ -122,12 +140,12 @@ export function renderBusinessBaseline(definition,scope,{principles=definition.p
 }
 function view(db,scope,target,opts){
  const base={version:'finance-business-baseline/1',target,scopeVerified:true,headRevision:0,revision:0,baselineRef:null,shortText:'',unresolved:[],authorizesPosting:false,modelBoundary:{mode:'fixed_business_projection',rawValues:'local_only'}};
- const {all,current}=selectedVersion(db,scope);if(!all.length)return {...base,status:'needs_generation',nextSteps:[{tool:'finance_baseline_materials'}]};
- const latest=all[0];base.headRevision=latest.revision;if(!current)return {...base,status:'outside_effective_period',revision:latest.revision,baselineRef:latest.methodRef,unresolved:[{code:'outside_effective_period'}],nextSteps:[{tool:'finance_baseline_materials'}]};
+ const {all,current}=selectedVersion(db,scope);if(!all.length)return {...base,status:'needs_generation',nextSteps:[baselineHostObservationNext()]};
+ const latest=all[0];base.headRevision=latest.revision;if(!current)return {...base,status:'outside_effective_period',revision:latest.revision,baselineRef:latest.methodRef,unresolved:[{code:'outside_effective_period'}],nextSteps:[baselineHostObservationNext()]};
  const d=current.definition,instances=baselineInstances(db,scope);if(d.interfaceVersion!==BASELINE_INTERFACE||d.scope.enterpriseKey!==scope.enterpriseKey||d.scope.accountSetId!==scope.accountSetId||!instances.has(d.scope.databaseInstanceId))fail('finance_baseline_record_invalid');
  const states=preserveRecordedInvalidation({...d,baselineRef:current.methodRef,instanceLineage:[...instances]},factStates(db,d,opts),scope),bad=refs=>refs.some(ref=>states.get(ref)!=='current');
  annotateFinanceCall({businessBaselineObservation:{baselineRef:current.methodRef,states:[...states].map(([factRef,state])=>({factRef,state}))}});
- const proofCurrent=p=>{const fs=d.facts.filter(f=>p.evidenceRefs.includes(f.factRef));return (p.kind!=='accounting_standard'&&!['checked_historical_inference','source_history_inference','adapted_history_inference'].includes(p.authority)||supportedPrinciple(p,fs,scope))&&(p.allocationBasis!=='monthly_equal'||monthlyEqualBasis(p,fs));};
+ const proofCurrent=p=>{const fs=d.facts.filter(f=>p.evidenceRefs.includes(f.factRef));return (p.kind!=='accounting_standard'&&!['checked_historical_inference','source_history_inference','adapted_history_inference','agent_history_inference','agent_policy_observation'].includes(p.authority)||supportedPrinciple(p,fs,scope))&&(p.allocationBasis!=='monthly_equal'||monthlyEqualBasis(p,fs));};
  const affected=d.principles.filter(p=>bad(p.evidenceRefs)||!choiceCurrent(p,d.facts,scope.period)||!proofCurrent(p)),usable=d.principles.filter(p=>!bad(p.evidenceRefs)&&choiceCurrent(p,d.facts,scope.period)&&proofCurrent(p));
  const tax={...d.taxBurden,summaries:d.taxBurden.summaries.filter(t=>!bad(t.evidenceRefs))};
  const changed=[...states.values()].some(s=>s==='changed'||s==='missing'),unavailable=[...states.values()].some(s=>s==='unavailable');
@@ -136,7 +154,7 @@ function view(db,scope,target,opts){
  const status=changed?'stale':unavailable||unresolved.length?'needs_review':'ready';
  const storedBranches=d.coverage?.unselectedPrincipleBranches,branches=storedBranches?{...storedBranches,basis:'saved_material_catalog'}:baselineBranchSelection(principleSupport(d.facts.filter(f=>states.get(f.factRef)==='current'),scope),d.principles,{basis:'retained_current_evidence_subset',complete:false});
  const coverage={...(d.coverage??{}),configurationOnly,businessPrinciplesMissing,generationBasis:configurationOnly?'configuration_only':businessPrinciplesMissing?'configuration_and_tax_reference':'sources_and_history',...(d.coverage?.taxHistory?{taxHistory:Object.fromEntries(['vat','cit'].map(kind=>[kind,{status:tax.summaries.some(t=>t.taxType===kind)?'included':d.taxBurden.summaries.some(t=>t.taxType===kind)?'source_not_current':d.coverage.taxHistory[kind].status}]))}:{}),unselectedPrincipleBranches:branches};
- return fitBaselineBranchResponse({...base,status,revision:current.revision,baselineRef:current.methodRef,shortText:renderBusinessBaseline(d,scope,{principles:usable,taxBurden:tax}),unresolved,coverage,nextSteps:status==='ready'?[]:[{tool:'finance_baseline_materials'}]},currentFinanceCall()?.callId);
+ return fitBaselineBranchResponse({...base,status,revision:current.revision,baselineRef:current.methodRef,shortText:renderBusinessBaseline(d,scope,{principles:usable,taxBurden:tax}),unresolved,coverage,nextSteps:status==='ready'?[]:[baselineHostObservationNext()]},currentFinanceCall()?.callId);
 }
 export async function readBusinessBaseline(args,options={}){
  validate('finance_baseline_read',args);const opts=configured(options);
@@ -153,28 +171,28 @@ export async function readBaselineMaterials(args,options={}){
  if(!currentFinanceCall())return withFinanceCall({tool:'finance_baseline_materials',args,auditDir:opts.auditDir},()=>readBaselineMaterials(args,opts));
  const binding=scopeBinding(args,opts),db=new DatabaseSync(binding.dbPath,{readOnly:true});
  try{storage.assertBusinessMemoryScope(db,binding.scope);db.exec('BEGIN');
-  const detail=args.section&&args.section!=='overview'&&args.section!=='structure',unbound=!(args.originals??[]).length&&!(args.materialRefs??[]).length&&!args.adaptation;
-  if(detail&&unbound&&!args.sourceCursor&&args.extractKnownFields===false){db.exec('COMMIT');return {version:'finance-baseline-materials/1',target:args.target,scopeVerified:true,section:args.section,status:'material_reference_required',next:{tool:'finance_baseline_materials',arguments:{target:args.target,extractKnownFields:true,section:args.section}}};}
-  if(detail&&unbound&&args.extractKnownFields!==false)args={...args,extractKnownFields:true};
-  if(args.sourceCursor&&(!args.extractKnownFields||(args.originals??[]).length||(args.materialRefs??[]).length||args.selections?.length||args.historicalRows?.length||args.adaptation))fail('finance_baseline_input_invalid');
-  let actualArgs=args,discovery=null,cursorSnapshot=null;
-  if(args.extractKnownFields&&!(args.originals??[]).length&&!(args.materialRefs??[]).length&&!args.adaptation){
-   cursorSnapshot=args.sourceCursor?await materialSnapshot(args.sourceCursor,args,db,binding,opts):null;if(args.sourceCursor&&!cursorSnapshot.sourceDiscoveryState)fail('finance_baseline_discovery_cursor_invalid');
-   discovery=discoverBaselineKnownSources(db,binding.scope,opts,cursorSnapshot?.sourceDiscoveryState);actualArgs={...args,originals:discovery.originals};
-  }
-  const parents=cursorSnapshot?[cursorSnapshot]:[];for(const ref of args.materialRefs??[])parents.push(await materialSnapshot(ref,args,db,binding,opts));
-  const fresh=(actualArgs.originals??[]).length||actualArgs.adaptation||!parents.length?leafMaterialRequest(actualArgs):null,requests=flatMaterialRequests([...parents,...(fresh?[{requests:[fresh]}]:[])]);
-  const snapshot=mergeBaselineMaterialSnapshots([...parents,...(fresh?[await captureMaterialRequest(db,binding,fresh,opts)]:[])]),inventory=!discovery&&!(args.originals??[]).length&&!parents.length&&!args.adaptation?discoverBaselineSourceInventory(db,binding.scope,args,opts):null;db.exec('COMMIT');snapshot.requests=requests;
-  const discoveryState=discovery?.state??(parents.length===1&&!fresh?parents[0].sourceDiscoveryState:null);if(discoveryState)snapshot.sourceDiscoveryState=discoveryState;
+  const parents=[];
+  for(const ref of args.materialRefs??[])parents.push(await materialSnapshot(ref,args,db,binding,opts));
+  const request=args.inputPath||!parents.length?leafMaterialRequest(args):null;
+  const fresh=request?{...captureBaselineMaterials(db,binding.scope,request,{...opts,dbPath:binding.dbPath}),requests:[request]}:null;
+  const parts=fresh?[...parents,fresh]:parents;
+  const snapshot=mergeBaselineMaterialSnapshots(parts);
+  snapshot.requests=flatMaterialRequests(parts);
+  db.exec('COMMIT');
   const catalog=principleSupport(snapshot.facts,binding.scope).map(p=>({...p,supportRef:baselineSupportRef(binding.scope,p)})),inherited=[];
   for(const parent of parents)for(const candidate of parent.supportSelections??[]){const p={...candidate,evidenceRefs:candidate.evidenceRefs.map(ref=>snapshot.factAliases[ref]??ref)},fs=p.evidenceRefs.map(ref=>snapshot.facts.find(f=>f.factRef===ref));if(fs.every(Boolean)&&supportedPrinciple(p,fs,binding.scope)&&(!p.allocationBasis||monthlyEqualBasis(p,fs)))inherited.push(p);}
   // 材料工具发现基线失效同样是可信观察；跨audit根时复用既有read在固定受信根留痕，材料ref仍留外层原调用根。
-  const current=await readBusinessBaseline({target:args.target},opts),base={version:'finance-baseline-materials/1',target:args.target,scopeVerified:true,materialRef:currentFinanceCall().callId,snapshotDigest:snapshot.snapshotDigest,calculationReader:calculationReader(),baseline:{status:current.status,revision:current.revision,baselineRef:current.baselineRef},semanticAuthority:'source_observation_not_human_approval',modelBoundary:{mode:'fixed_business_projection',rawValues:'local_only'}};
+  const current=await readBusinessBaseline({target:args.target},opts),base={version:'finance-baseline-materials/1',target:args.target,scopeVerified:true,materialRef:currentFinanceCall().callId,snapshotDigest:snapshot.snapshotDigest,calculationReader:calculationReader(),baseline:{status:current.status,revision:current.revision,baselineRef:current.baselineRef},semanticAuthority:snapshot.artifacts.length?'agent_observation':'source_observation_not_human_approval',modelBoundary:{mode:'fixed_business_projection',rawValues:'local_only'}};
   const calculationSchema=args.section==='calculation'?baselineCalculationSchema(calculationObjects(snapshot.facts,binding.scope,{factAliases:snapshot.factAliases})):null;
-  const projection=projectBaselineMaterials({base,snapshot,supports:catalog,args,inventory,discovery:discoveryState?baselineDiscoveryProjection(discoveryState):null,calculationSchema}),returned=new Set((projection.principleSupport??[]).map(p=>p.supportRef));
+  const projection=projectBaselineMaterials({base,snapshot,supports:catalog,args,calculationSchema}),returned=new Set((projection.principleSupport??[]).map(p=>p.supportRef));
   snapshot.supportSelections=[...new Map([...inherited,...catalog.filter(p=>returned.has(p.supportRef))].map(p=>[p.supportRef,p])).values()];snapshot.supportCatalog=catalog;
-  annotateFinanceCall({sources:[...snapshot.files,...(inventory?.sources??[]),...(discovery?.state.scannedSources??[])].map(f=>({path:f.path,sha256:f.sha256,bytes:f.bytes,locator:'baseline_original'}))});
-  const bytes=Buffer.from(JSON.stringify({version:'finance-baseline-materials-snapshot/1',...snapshot},null,2)+'\n'),artifact={file:'baseline-materials.json',sha256:sha(bytes),bytes:bytes.length,snapshotDigest:snapshot.snapshotDigest};
+  annotateFinanceCall({sources:[
+   ...snapshot.files.map(f=>({path:f.path,sha256:f.sha256,bytes:f.bytes,locator:'baseline_original_digest'})),
+   ...snapshot.artifacts.map(f=>({path:f.path,sha256:f.sha256,bytes:f.bytes,locator:'baseline_host_observations'})),
+  ]});
+  const bytes=Buffer.from(JSON.stringify({version:'finance-baseline-materials-snapshot/2',...snapshot},null,2)+'\n');
+  if(bytes.length>20*1024*1024)fail('finance_baseline_material_limit');
+  const artifact={file:'baseline-materials.json',sha256:sha(bytes),bytes:bytes.length,snapshotDigest:snapshot.snapshotDigest};
   writeFileSync(join(currentFinanceCall().recordPath,artifact.file),bytes,{flag:'wx',mode:0o600});annotateFinanceCall({businessBaselineMaterials:artifact});
   return projection;
  }finally{db.close();}
@@ -189,9 +207,11 @@ function businessEntries(posting,businessRefs){
 }
 function usableHistoricalEvidence(posting,facts,businessRefs){
  if(posting.field!=='historical_posting'||!['posted','observed_history'].includes(posting.value.status))return false;
- if(!posting.source.adaptation)return true;
- // 脚本行只作观察；独立原件中直接核读的同一实际业务号必须在本原则证据内。
- return facts.some(f=>f.field==='business_reference'&&f.source.kind==='file'&&!f.source.adaptation&&f.verification==='source_value_bound'&&f.source.sha256!==posting.source.sha256&&businessRefs.includes(f.factRef)&&posting.linkedBusinessRefs?.includes(f.factRef));
+ if(!posting.source.agentArtifact&&!posting.source.adaptation)return true;
+ // 原件历史观察需要另一份独立业务原件的业务号作为共证。
+ return facts.some(f=>f.field==='business_reference'&&f.source.kind==='file'&&!f.source.adaptation&&!f.source.agentHistoryPosition&&
+  (f.verification==='source_value_bound'||posting.source.agentArtifact&&f.verification==='agent_observation')&&
+  f.source.sha256!==posting.source.sha256&&businessRefs.includes(f.factRef)&&posting.linkedBusinessRefs?.includes(f.factRef));
 }
 function historySupports(fs,role,amount,{start,end,minimumPeriods=1,date:exactDate,businessRefs=[]}={}){
  const matches=fs.filter(f=>usableHistoricalEvidence(f,fs,businessRefs)&&(!start||f.value.period>=start.slice(0,7))&&(!end||f.value.period<=end.slice(0,7))&&(!exactDate||(f.value.date?.slice(0,7)??f.value.period)===exactDate.slice(0,7))).filter(f=>{
@@ -241,7 +261,11 @@ function supportedPrinciple(p,fs,scope){
  }return false;
 }
 function principleAuthority(kind,value,facts){
- return facts.some(f=>f.field===kind&&f.value===value&&!f.source.interpretation)?'source_bound_policy':facts.some(f=>f.field==='historical_posting'&&f.source.adaptation)?'adapted_history_inference':facts.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference';
+ const direct=facts.find(f=>f.field===kind&&f.value===value&&!f.source.interpretation);
+ if(direct)return direct.source.agentArtifact?'agent_policy_observation':'source_bound_policy';
+ if(facts.some(f=>f.source.agentArtifact))return 'agent_history_inference';
+ if(facts.some(f=>f.field==='historical_posting'&&f.source.adaptation))return 'adapted_history_inference';
+ return facts.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference';
 }
 function principleSupport(facts,scope){
  const support=[],historical=facts.filter(f=>f.field==='historical_posting'),assets=facts.filter(f=>f.field==='asset_configuration');
@@ -267,25 +291,46 @@ function validatePrinciples(principles,facts,scope){
  return out.sort((a,b)=>a.kind.localeCompare(b.kind)||a.when.localeCompare(b.when));
 }
 async function materialSnapshot(reference,args,db,binding,opts){
- let record;try{record=await readFinanceCall({auditDir:opts.auditDir,callId:reference.materialRef});}catch{fail('finance_baseline_material_record_invalid');}
- if(record.tool!=='finance_baseline_materials'||record.integrity!=='verified'||record.status!=='returned'||record.end?.scopeState!=='observed'||!same(record.end.scope,binding.scope)||record.output?.materialRef!==reference.materialRef||record.output?.snapshotDigest!==reference.snapshotDigest)fail('finance_baseline_material_record_invalid');
- if(!same(record.input.target,args.target))fail('finance_baseline_scope_conflict');validate('finance_baseline_materials',record.input);
+ let record;
+ try{record=await readFinanceCall({auditDir:opts.auditDir,callId:reference.materialRef});}
+ catch{fail('finance_baseline_material_record_invalid');}
+ const verified=record.tool==='finance_baseline_materials'&&record.integrity==='verified'&&record.status==='returned'&&
+  record.end?.scopeState==='observed'&&same(record.end.scope,binding.scope)&&record.output?.materialRef===reference.materialRef&&
+  record.output?.snapshotDigest===reference.snapshotDigest;
+ if(!verified)fail('finance_baseline_material_record_invalid');
+ if(!same(record.input.target,args.target))fail('finance_baseline_scope_conflict');
  const artifact=record.end.metadata?.businessBaselineMaterials;
- if(artifact?.file!=='baseline-materials.json'||artifact.snapshotDigest!==reference.snapshotDigest||!Number.isSafeInteger(artifact.bytes)||artifact.bytes<=0||artifact.bytes>20*1024*1024)fail('finance_baseline_material_record_invalid');
- let stored;try{const bytes=baselineBytes(join(record.recordPath,artifact.file),opts.auditDir,{max:20*1024*1024});if(bytes.length!==artifact.bytes||sha(bytes)!==artifact.sha256)fail('finance_baseline_material_record_invalid');stored=JSON.parse(bytes);}catch{fail('finance_baseline_material_record_invalid');}
- if(stored.snapshotDigest!==reference.snapshotDigest||!same(stored.scope,binding.scope))fail('finance_baseline_material_record_invalid');
- const requests=stored.requests??[leafMaterialRequest(record.input)];if(!Array.isArray(requests)||!requests.length||requests.length>12)fail('finance_baseline_material_record_invalid');
- for(const request of requests){validate('finance_baseline_materials',request);if(request.materialRefs||request.sourceCursor||!same(request.target,args.target))fail('finance_baseline_material_record_invalid');}
- const parts=[];for(const request of requests)parts.push(await captureMaterialRequest(db,binding,request,opts));
- const snapshot=mergeBaselineMaterialSnapshots(parts);
- if(snapshot.snapshotDigest!==reference.snapshotDigest)fail('finance_baseline_material_changed');
- return {...snapshot,requests,supportSelections:list(stored.supportSelections),...(stored.sourceDiscoveryState?{sourceDiscoveryState:stored.sourceDiscoveryState}:{})};
+ if(artifact?.file!=='baseline-materials.json'||artifact.snapshotDigest!==reference.snapshotDigest||
+    !Number.isSafeInteger(artifact.bytes)||artifact.bytes<=0||artifact.bytes>20*1024*1024)fail('finance_baseline_material_record_invalid');
+ let stored;
+ try{
+  const bytes=baselineBytes(join(record.recordPath,artifact.file),opts.auditDir,{max:20*1024*1024});
+  if(bytes.length!==artifact.bytes||sha(bytes)!==artifact.sha256)fail('finance_baseline_material_record_invalid');
+  stored=JSON.parse(bytes);
+ }catch{fail('finance_baseline_material_record_invalid');}
+ if(!['finance-baseline-materials-snapshot/1','finance-baseline-materials-snapshot/2'].includes(stored.version)||
+    stored.snapshotDigest!==reference.snapshotDigest||!same(stored.scope,binding.scope)||
+    !Array.isArray(stored.facts)||!Array.isArray(stored.files)||baselineSnapshotDigest(stored)!==reference.snapshotDigest)fail('finance_baseline_material_record_invalid');
+ const requests=stored.requests??[leafMaterialRequest(record.input)];
+ if(!Array.isArray(requests)||!requests.length||requests.length>12||
+    requests.some(request=>!request||request.materialRefs||request.sourceCursor||!same(request.target,args.target)))fail('finance_baseline_material_record_invalid');
+ // 已留痕的旧快照和新产物快照均用当前字节及账库事实核对，接续时不重复解析原件。
+ try{
+  const changedAtEnd=new Set(list(record.end.sourceChanges).map(source=>source.path));
+  for(const file of stored.files){
+   if(changedAtEnd.has(file.path)||sha(baselineBytes(file.path,opts.sourceRoot))!==file.sha256)fail('finance_baseline_material_changed');
+  }
+  for(const source of list(stored.artifacts)){
+   if(changedAtEnd.has(source.path)||!agentArtifactCurrent(source))fail('finance_baseline_material_changed');
+  }
+  if([...factStates(db,stored,opts).values()].some(state=>state!=='current'))fail('finance_baseline_material_changed');
+ }catch{fail('finance_baseline_material_changed');}
+ return {...stored,requests,supportSelections:list(stored.supportSelections)};
 }
-async function captureMaterialRequest(db,binding,args,opts){
- const adaptation=args.adaptation?await loadBaselineAdaptation(args.adaptation,binding.scope,{...opts,dbPath:binding.dbPath}):undefined;
- return captureBaselineMaterials(db,binding.scope,args,{...opts,adaptation});
+function leafMaterialRequest(args){
+ return {target:args.target,...(args.inputPath?{inputPath:args.inputPath}:{}),
+  ...(args.historyOffset!==undefined?{historyOffset:args.historyOffset}:{}),...(args.historyLimit!==undefined?{historyLimit:args.historyLimit}:{})};
 }
-function leafMaterialRequest(args){return {target:args.target,...(args.originals?{originals:args.originals}:{}),...(args.selections?{selections:args.selections}:{}),...(args.historicalRows?{historicalRows:args.historicalRows}:{}),...(args.adaptation?{adaptation:args.adaptation}:{}),...(args.extractKnownFields?{extractKnownFields:true}:{}),...(args.historyOffset!==undefined?{historyOffset:args.historyOffset}:{}),...(args.historyLimit!==undefined?{historyLimit:args.historyLimit}:{})};}
 function flatMaterialRequests(snapshots){const requests=[...new Map(snapshots.flatMap(s=>s.requests).map(r=>[digest(r),r])).values()];if(requests.length>12)fail('finance_baseline_material_merge_limit');return requests;}
 // 规范对象只有一个分组器；模型侧结构与本机resolver默认事实集共用它，原值只留本机。
 function calculationObjects(facts,scope,{factRefs,factAliases={}}={}){
@@ -320,7 +365,7 @@ export async function saveBusinessBaseline(args,options={}){
   if(taxBurden.rows.some(r=>r.through>=binding.scope.period))fail('finance_baseline_tax_history_not_prior');
   const unresolved=fixedGaps([...(args.unresolved??[]),...(coverage.businessPrinciplesMissing?[{code:'historical_evidence_missing'}]:[]),...snapshots.flatMap(s=>s.gaps).map(code=>({code})),...taxBurden.gaps.map(code=>({code})),...(Object.values(coverage.taxHistory).some(t=>t.status==='incomplete')?[{code:'tax_basis_incomplete'}]:[]),...(taxBurden.missing?[{code:'tax_history_missing'}]:[])]);
   const used=new Set([...principles.flatMap(p=>p.evidenceRefs),...taxBurden.summaries.flatMap(t=>t.evidenceRefs)]);
-  const definition={interfaceVersion:BASELINE_INTERFACE,scope:binding.scope,effectiveFrom:args.effectiveFrom,...(args.effectiveTo?{effectiveTo:args.effectiveTo}:{}),principles,taxBurden,unresolved,coverage,facts:facts.filter(f=>used.has(f.factRef)),materialRefs:args.materialRefs,observationRoots:[opts.auditDir],semanticAuthority:'checked_sources_and_inferences_not_human_approval'};
+  const definition={interfaceVersion:BASELINE_INTERFACE,scope:binding.scope,effectiveFrom:args.effectiveFrom,...(args.effectiveTo?{effectiveTo:args.effectiveTo}:{}),principles,taxBurden,unresolved,coverage,facts:facts.filter(f=>used.has(f.factRef)),materialRefs:args.materialRefs,observationRoots:[opts.auditDir],semanticAuthority:merged.artifacts.length?'agent_observation_and_ledger_evidence':'checked_sources_and_inferences_not_human_approval'};
   renderBusinessBaseline(definition,binding.scope);
   // 对实际原则/适用期/证据版本取摘要，调用ID或普通新增凭证不会无条件换版。
   const signature=digest({effectiveFrom:definition.effectiveFrom,effectiveTo:definition.effectiveTo,principles,taxBurden,unresolved,facts:definition.facts});definition.signature=signature;

@@ -88,9 +88,9 @@ test('账前合成资料经真实MCP完成问询、回复、补件重算与两�
   const handoff=JSON.parse(read(join(run.directory,'handoff.json')));
   assert.equal(handoff.inputDigest,run.projection.inputDigest);
   assert.ok(handoff.sourceRefs.length>0);
-  assert.ok(handoff.sourceRefs.some(ref=>ref.column==='金额'&&ref.csvRow===2),'实际读取中文CSV金额及物理行定位');
+  assert.ok(handoff.sourceRefs.some(ref=>ref.sourceType==='agent_observation'&&ref.locator?.row===2&&ref.locator?.column===3),'宿主提交实际中文CSV金额列及原物理行');
   const prepared=JSON.parse(read(run.inputPath));
-  assert.ok(prepared.bindings.some(binding=>binding.column==='收支'&&binding.valueMap?.收入==='inflow'),'原始中文枚举采用明确映射');
+  assert.ok(prepared.bindings.some(binding=>binding.locator?.column===2&&binding.valueMap?.收入==='inflow'),'原始中文枚举采用明确映射');
   assert.equal(prepared.bindings.some(binding=>/^\/bankTransactions\/\d+\/id$/.test(binding.inputPointer)),false,'内部ID不要求客户原件提供');
   assert.equal(existsSync(run.reviewPath),true);
   const projection=JSON.stringify(run.projection);
@@ -132,7 +132,7 @@ test('基线生成与本期计算示例符合真实合同，入口可由业务�
  const examples=[...reference.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
  const schema=DIRECT_TOOLS.find(t=>t.name==='finance_baseline_materials')?.inputSchema;
  assert.ok(schema,'真实材料工具须可发现，不能只写生成说明');
- assert(examples.some(example=>example.extractKnownFields===true),'首次生成须有直接抽取入口');
+ assert(examples.some(example=>typeof example.inputPath==='string'&&(example.section??'overview')==='overview'),'首次生成须提交实际宿主整理件');
  assert(examples.some(example=>example.section==='calculation'),'已有基线须有安全计算结构入口');
  for(const example of examples)assert.deepEqual(validateSchemaValue(schema,example),[]);
  for(const name of ['tax-period','journal-entry','tax-review'])assert.ok(localLinks(join(skills,name,'SKILL.md')).includes(join(skills,'company-baseline','SKILL.md')),name+'缺少真实生成入口');

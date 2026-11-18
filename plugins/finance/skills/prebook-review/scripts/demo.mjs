@@ -2,7 +2,9 @@
 import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
 import {dirname,resolve,join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
+import {createHash} from 'node:crypto';
 import {McpStdioClient} from '../../../../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
+import {parseBankCsv} from '../../../../../06-workbench/server/bank-import.mjs';
 
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../../../../..');
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n',{flag:'wx'});
@@ -44,7 +46,8 @@ export function smallFacts(){
 }
 
 export function writeDemoInput(root,label,facts){
- const source=join(root,`${label}-合成原件.json`),inputPath=join(root,`${label}-适配输入.json`);
+ const prepared=join(root,'运行记录','agent-materials');mkdirSync(prepared,{recursive:true});
+ const source=join(root,`${label}-合成原件.json`),inputPath=join(prepared,`${label}-适配输入.json`);
  const bankPath=join(root,`${label}-中文银行流水.csv`),originalId=`demo-${label}`,bankId=`bank-${label}`;
  const otherFacts=structuredClone(facts);delete otherFacts.bankTransactions;
  // 其余合成资料集中为JSON；流水保持中文表头，不要求客户提供内部记录ID或枚举。
@@ -52,16 +55,24 @@ export function writeDemoInput(root,label,facts){
  const csvCell=value=>`"${String(value).replaceAll('"','""')}"`;
  const csv=[['日期','收支','金额','对方','账户','用途'],...facts.bankTransactions.map(row=>[row.date,row.direction==='inflow'?'收入':'支出',row.amount,row.counterpartyId,row.accountId,'经营收支'])].map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';
  writeFileSync(bankPath,csv,{flag:'wx'});
- const bindings=Object.keys(otherFacts).map(key=>({inputPointer:`/${key}`,originalId,jsonPointer:`/facts/${key}`}));
- for(const [i,row] of facts.bankTransactions.entries()){
+ // 原件由本机演示脚本自主读取，业务工具接收已整理的值及位置。
+ const sourceBytes=readFileSync(source),bankBytes=readFileSync(bankPath);
+ const observed=JSON.parse(sourceBytes.toString('utf8')),bank=parseBankCsv(bankBytes.toString('utf8'));
+ if(!bank.ok)throw Error('合成银行流水解析失败');
+ const bindings=Object.entries(observed.facts).map(([key,value])=>({inputPointer:`/${key}`,originalId,locator:{jsonPointer:`/facts/${key}`},observedValue:value}));
+ for(const [i,row] of bank.rows.entries()){
   const columns={date:'日期',direction:'收支',amount:'金额',counterpartyId:'对方',accountId:'账户',category:'用途'};
-  for(const [key,column] of Object.entries(columns))bindings.push({inputPointer:`/bankTransactions/${i}/${key}`,originalId:bankId,csvRow:i+2,column,...(key==='amount'?{transform:'decimal'}:key==='direction'?{valueMap:{收入:'inflow',支出:'outflow'}}:key==='category'?{valueMap:{经营收支:'business'}}:{})});
-  bindings.push({inputPointer:`/bankTransactions/${i}/businessId`,originalId,jsonPointer:`/业务关联/${i}/业务单据`});
+  for(const [key,label] of Object.entries(columns)){
+   const column=bank.headers.indexOf(label)+1;
+   bindings.push({inputPointer:`/bankTransactions/${i}/${key}`,originalId:bankId,locator:{row:row.lineNumber,column},observedValue:row.cells[column-1],...(key==='amount'?{transform:'decimal'}:key==='direction'?{valueMap:{收入:'inflow',支出:'outflow'}}:key==='category'?{valueMap:{经营收支:'business'}}:{})});
+  }
+  bindings.push({inputPointer:`/bankTransactions/${i}/businessId`,originalId,locator:{jsonPointer:`/业务关联/${i}/业务单据`},observedValue:observed.业务关联[i].业务单据});
  }
  const scope={enterpriseKey:facts.scope.enterpriseKey,from:facts.opening.asOf,through:'2026-03-31'};
+ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
  json(inputPath,{
-  version:'finance-prebook-input/1',facts,
-  originals:[{id:originalId,path:source,scope},{id:bankId,path:bankPath,scope}],bindings,
+  version:'finance-prebook-input/2',facts,
+  originals:[{id:originalId,path:source,sha256:sha(sourceBytes),scope},{id:bankId,path:bankPath,sha256:sha(bankBytes),scope}],bindings,
  });
  return inputPath;
 }
@@ -98,7 +109,7 @@ export async function runPrebookDemo(outputDirectory){
   const first=await run('一般纳税人：缺进项票',firstInput);
   const question=first.result.issues.find(issue=>issue.code==='purchase_invoice_missing');
   if(!question)throw new Error('合成缺票资料未产生预期问询。');
-  const repliesPath=join(root,'老板回复-合成.json');
+  const repliesPath=join(audit,'agent-materials','老板回复-合成.json');
   json(repliesPath,{version:'finance-prebook-replies/1',enterpriseKey:missing.scope.enterpriseKey,period:missing.scope.period,inputDigest:first.projection.inputDigest,responses:[{issueId:question.issueId,statement:'演示说明：这笔采购已经收货付款，发票稍后补交。',respondent:'合成演示老板',respondedAt:'2026-04-01T01:00:00.000Z'}]});
   await run('一般纳税人：只有老板说明，仍待补票',firstInput,repliesPath);
   const supplemented=writeDemoInput(root,'一般纳税人-补件',generalFacts());

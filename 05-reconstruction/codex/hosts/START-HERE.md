@@ -23,9 +23,9 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝
 ```
 
 - `--host` 可选 `pi`、`claude-code`、`dsh` 或 `zcode`。
-- `--source-root` 指定已有原件目录；账前核对和处理原件的脚本需要它。适配输入及回复文件也放在该目录内。
+- `--source-root` 指定已有获准原件目录。Agent 在宿主中使用已有文件或脚本权限读取。
 - 需要运行 Python 计算时，加 `--python '<python.exe绝对路径>'`；JavaScript 计算无需此项。
-- 处理记录默认保存在新工作区的 `finance-call-records`，可用 `--audit-dir '<绝对目录>'` 改位置。
+- 处理记录默认保存在新工作区的 `finance-call-records`，可用 `--audit-dir '<绝对目录>'` 改位置。由 Agent 生成的基线观察、账前整理件及回复写在审计根下的 `agent-materials`。
 
 生成器使用本仓库技能，不覆盖已有工作区、不启动模型，也不创建账套。
 
@@ -59,6 +59,6 @@ dsh 的 `model.cordis.patch.yml` 需按其说明另行配置；各应用的模�
 
 整期目标先读 [tax-period](../../../plugins/finance/skills/tax-period/SKILL.md)，再选择本次需要的阶段及账前、做账、对账、税费、报表分支；单项查询和试算使用对应技能。四宿主共用同一短路由：Pi 启动系统提示、Claude 的 `CLAUDE.md`、ZCode 的 `AGENTS.md`、dsh 显式启动包装的任务文本。dsh 包装要求操作者配置实际 `model.cordis.patch.yml`，可用 `--model-patch` 指定已有覆盖层；直接调用 dsh 时须自行带上同一入口指引。配置生成和提示装配不证明模型已经读取或正确执行技能，业务验收须查看实际工具轨迹及产物。
 
-Agent 整理原始资料，选择工具并生成报告；做账任务核实目标账套，编制凭证并按实际审核结果入账。企业先读 `finance_baseline_read` 的短原则，无有效版本或需修订则先生成。具体余额、合同进度、算法和脚本仍查原账／原工具；需要旧方法目录才读 `finance_company_context`，再按实际引用读 `finance_method_read` 或 `finance_case_search`。接续仍核同范围实际账表、底稿、来源版本及 `finance_period_review`，不能沿用上次模型自述完成。
+Agent 用宿主直接读取原始资料，按业务合同整理并提交本机文件引用，选择工具并生成报告；做账任务核实目标账套，编制凭证并按实际审核结果入账。企业先读 `finance_baseline_read` 的短原则，无有效版本或需修订则先生成。具体余额、合同进度、算法和脚本仍查原账／原工具；需要旧方法目录才读 `finance_company_context`，再按实际引用读 `finance_method_read` 或 `finance_case_search`。接续仍核同范围实际账表、底稿、来源版本及 `finance_period_review`，不能沿用上次模型自述完成。
 
 先看报告里的金额、异常和缺件，再核对凭证、计算与依据。资料补齐后重新处理；写入结果不明时，先查原操作状态再继续。真实资料仅在授权范围内处理，模型服务凭据保留在本人的可信配置中。

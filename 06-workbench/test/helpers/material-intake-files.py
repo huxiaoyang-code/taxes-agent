@@ -1,15 +1,13 @@
 """生成材料接入验收的原始混合文件；只处理调用方新建的合成目录。"""
-import json
 import csv
+import json
+import struct
 import sys
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
 import fitz
 import openpyxl
-import xlwt
-from docx import Document
-from PIL import Image, ImageDraw, ImageFont
 
 
 request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -84,9 +82,21 @@ pdf_lines(file("history", "oldLease", "Historical lease contract.pdf"), [
 ])
 pdf_lines(file("history", "maintenance", "Historical maintenance contract.pdf"), [maintenance])
 
-# BIFF 分录是历史原件观察，不导入正式账库，且原件没有基线或方法字段。
-book = xlwt.Workbook()
-sheet = book.add_sheet("Prior entries")
+# 最早期的 BIFF XLS 使用本地单字节文本记录，允许实际复现字节与声明编码不符。
+def write_legacy_xls(path, rows, declared_code_page=1252):
+    def record(record_type, body=b""):
+        return struct.pack("<HH", record_type, len(body)) + body
+
+    workbook = [record(0x0009, struct.pack("<HH", 2, 0x0010))]
+    workbook.append(record(0x0042, struct.pack("<H", declared_code_page)))
+    for row, cells in enumerate(rows):
+        for column, value in enumerate(cells):
+            raw_text = str(value).encode("gbk")
+            workbook.append(record(0x0004, struct.pack("<HH3sB", row, column, b"\0\0\0", len(raw_text)) + raw_text))
+    workbook.append(record(0x000A))
+    path.write_bytes(b"".join(workbook))
+
+
 columns = ["核算单位", "发生月份", "入账日", "关联单号", "账目编码", "账目名称", "借记数", "贷记数"]
 rows = [
     ["2026-07", "2026-07-01", "MI-LEASE-JUL", "1002", "银行存款", 32700, 0],
@@ -103,23 +113,15 @@ for period in ["2026-07", "2026-08"]:
         [period, period + "-28", "MI-MAINT-JUL", "660201", "管理系统运维费", 1000, 0],
         [period, period + "-28", "MI-MAINT-JUL", "112301", "预付运维服务", 0, 1000],
     ])
-for column, value in enumerate(columns):
-    sheet.write(0, column, value)
-for row, values in enumerate(rows, 1):
-    for column, value in enumerate([owner["companyName"], *values]):
-        sheet.write(row, column, value)
-historical_path = file("history", "historicalEntries", "Prior journal export.xls")
-book.save(str(historical_path))
-# 真实触发 xlrd 非整扇区警告，验证告警不污染 JSON 协议；工作簿内容不变。
-with historical_path.open("ab") as stream:
-    stream.write(b"\x00")
+for month, key in [(7, "historyJuly"), (8, "historyAugust")]:
+    period = f"2026-{month:02d}"
+    entries = [[owner["companyName"], *row] for row in rows if row[0] == period]
+    write_legacy_xls(file("history", key, f"{month}.xls"), [columns, *entries])
 
-# 同一历史样本的旧系统 CSV 导出，扩展名为 XLS；内置 BIFF 读取应失败，由受信脚本适配。
-with file("recovery", "fallbackHistory", "Legacy history export.xls").open("w", encoding="utf-8", newline="") as stream:
-    writer = csv.writer(stream)
-    writer.writerow(columns)
-    for values in rows:
-        writer.writerow([owner["companyName"], *values])
+write_legacy_xls(file("history", "oldAssets", "旧系统固定资产清单.xls"), [
+    ["核算单位", "科目", "期初", "期末", "折旧"],
+    [owner["companyName"], "固定资产", "12000.00", "11500.00", "500.00"],
+])
 
 tax = openpyxl.Workbook()
 ws = tax.active
@@ -171,15 +173,10 @@ ws.append(["核算单位", "业务领域", "区间从", "区间至", "期初件�
 ws.append([owner["companyName"], "维修备件库存", "2026-09", "2026-09", 0, 0, 10, 100, 0])
 stock.save(file("september", "stockSeptember", "September first stock.xlsx"))
 
-choice = xlwt.Workbook()
-ws = choice.add_sheet("Operator choice")
-for row, values in enumerate([
+write_legacy_xls(file("confirmation", "inventoryChoice", "Synthetic operator confirmed choice.xls"), [
     ["核算单位", "适用业务", "首次计价决定", "执行起点"],
     [owner["companyName"], "维修备件库存", "先进先出法", "2026-10-01"],
-]):
-    for column, value in enumerate(values):
-        ws.write(row, column, value)
-choice.save(str(file("confirmation", "inventoryChoice", "Synthetic operator confirmed choice.xls")))
+], declared_code_page=936)
 
 pdf_lines(file("october", "newLeaseOctober", "October new lease.pdf"), [lease("MI-LEASE-OCT", "2026-10-01", "2027-03-31", "120000.00", "10800.00")])
 stock = openpyxl.Workbook()
@@ -188,38 +185,6 @@ ws.append(["核算单位", "业务领域", "区间从", "区间至", "期初件�
 ws.append([owner["companyName"], "维修备件库存", "2026-10", "2026-10", 10, 100, 10, 200, 15])
 stock.save(file("october", "stockOctober", "October stock movement.xlsx"))
 
-font_path = Path("C:/Windows/Fonts/arial.ttf")
-font = ImageFont.truetype(str(font_path), 52) if font_path.exists() else ImageFont.load_default(size=52)
-image = Image.new("RGB", (1500, 420), "white")
-draw = ImageDraw.Draw(image)
-for i, line in enumerate(["MATERIAL INTAKE", "AMOUNT 6300.00", "DATE 2026-08-31"]):
-    draw.text((40, 35 + i * 110), line, fill="black", font=font)
-png = file("auxiliary", "image", "Scanned receipt.png")
-image.save(png)
-scan = fitz.open()
-page = scan.new_page(width=750, height=210)
-page.insert_image(page.rect, filename=str(png))
-scan.save(file("auxiliary", "scannedPdf", "Scanned receipt.pdf"))
-scan.close()
-
-document = Document()
-document.add_paragraph("Material intake operator notes")
-table = document.add_table(rows=0, cols=2)
-for label, value in [("Document source", "Synthetic local evidence"), ("Special memo", "LOCAL_ONLY_PRIVATE_SENTINEL")]:
-    cells = table.add_row().cells
-    cells[0].text, cells[1].text = label, value
-document.save(file("auxiliary", "docx", "Unfamiliar note.docx"))
-unknown = openpyxl.Workbook()
-ws = unknown.active
-ws.append(["随附事项", "单位或对方", "观察值"])
-ws.append(["日常服务", "纯中文合成测试有限公司", "53791.26"])
-people = unknown.create_sheet("无表头数据")
-people.append(["张三", "李四"])
-unknown.save(file("auxiliary", "unknownWorkbook", "Unfamiliar fields and private values.xlsx"))
-file("auxiliary", "dynamicJson", "Dynamic personal keys.json").write_text(json.dumps({"companyName": owner["companyName"], "客户": {"张三": {"纳税人识别号": "91350100123456789X", "备注": "LOCAL_ONLY_PRIVATE_SENTINEL"}, "李四": {"金额": "53791.26"}}}, ensure_ascii=False), encoding="utf-8")
-file("auxiliary", "text", "Unknown text fields.txt").write_text("Custom business label: LOCAL_ONLY_PRIVATE_SENTINEL\nAMOUNT 6300.00\n", encoding="utf-8")
-file("auxiliary", "markdown", "Material notes.md").write_text("# Material intake\nCustom label: LOCAL_ONLY_PRIVATE_SENTINEL\n", encoding="utf-8")
-file("auxiliary", "unsupported", "Opaque source.binary").write_bytes(b"SYNTHETIC_OPAQUE_BYTES")
-relevant_rows = [index + 2 for index, row in enumerate(rows) if row[3] in ["605101", "660201", "222101", "222102"]]
-(driver / "mixed-files.json").write_text(json.dumps({"files": files, "historicalRowCount": len(rows), "relevantHistoricalRows": relevant_rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+summary = {"files": files, "historicalRowCount": len(rows)}
+(driver / "mixed-files.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 print(json.dumps({"status": "synthetic_mixed_originals_created", "files": len(files)}, ensure_ascii=False))

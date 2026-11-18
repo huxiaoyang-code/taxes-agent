@@ -1,4 +1,4 @@
-import {baselineMaterialContract,baselineAdaptationContract} from './business-baseline-contracts.mjs';
+import {baselineMaterialContract} from './business-baseline-contracts.mjs';
 // 直接业务适配：复用固定中国核算模块，不经过 Harness 的事实、任务或依赖图。
 import { mkdirSync, writeFileSync, readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { resolve, dirname, join, isAbsolute } from 'node:path';
@@ -92,7 +92,7 @@ export async function callDirectFinanceTool(name,args,options={}){
  if(name==='finance_workpaper_details')return workpaperDetails(args);
  if(name==='finance_quarter_review'){const {buildQuarterReview}=await import('./quarter-review.mjs');return buildQuarterReview({target:args.target});}
  if(name==='finance_tax_summary_calculate')return callFinanceTaxSummaryCalculate(args);
- if(name==='finance_record_contract')return args.recordType==='baseline'?baselineMaterialContract():args.recordType==='baseline_adaptation'?baselineAdaptationContract():args.recordType==='prebook'?prebookContract():args.recordType==='tax_summary'?financeSummaryContract():directRecordContract(args.recordType);
+ if(name==='finance_record_contract')return args.recordType==='baseline'?baselineMaterialContract():args.recordType==='prebook'?prebookContract():args.recordType==='tax_summary'?financeSummaryContract():directRecordContract(args.recordType);
  if(name==='finance_rules'){const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});return result;}
  if(name==='finance_workpaper'||name==='finance_tax_calculate'){
   const artifact=newArtifact(),session=loadInput(args,artifact),dbPath=args.dbPath??(args.target?process.env.FINANCE_DATABASE_PATH:undefined),workpaper=buildAgencyWorkpaper(session,{...(dbPath?{dbPath}:{})});

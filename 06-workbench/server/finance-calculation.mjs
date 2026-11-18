@@ -12,7 +12,7 @@ import {REVIEW_CARD_SCHEMA,buildFinanceReviewCard,renderFinanceReviewCard} from 
 const text={type:'string',minLength:1,maxLength:8000};
 export const CALCULATION_SCHEMA={type:'object',additionalProperties:false,required:['title','engine','script','sources'],properties:{
  title:text,engine:{enum:['python','javascript']},script:{type:'string',minLength:1,maxLength:200000},
- sources:{type:'array',maxItems:64,items:{type:'object',additionalProperties:false,oneOf:[{required:['path']},{required:['originalRef']}],properties:{path:text,originalRef:{type:'string',pattern:'^bs:[a-f0-9]{64}$'},locator:{type:'object',additionalProperties:false,properties:{jsonPointer:{type:'string'},row:{type:'integer',minimum:1},column:{anyOf:[text,{type:'integer',minimum:1}]},headerRows:{type:'array',maxItems:8,items:{type:'integer',minimum:1}},sheet:text}}}}},
+ sources:{type:'array',maxItems:64,items:{type:'object',additionalProperties:false,required:['path'],properties:{path:text,locator:{type:'object',additionalProperties:false,properties:{jsonPointer:{type:'string'},row:{type:'integer',minimum:1},column:{anyOf:[text,{type:'integer',minimum:1}]},headerRows:{type:'array',maxItems:8,items:{type:'integer',minimum:1}},sheet:text}}}}},
  parameters:{type:'object'},notes:{type:'array',maxItems:40,items:text},rerunOf:{type:'string',pattern:'^[a-f0-9-]{36}$'},timeoutMs:{type:'integer',minimum:100,maximum:60000},reviewCard:REVIEW_CARD_SCHEMA
 }};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -57,12 +57,10 @@ function humanReview(record){
 export async function runFinanceCalculation(args,options={}){
  if(validateSchemaValue(CALCULATION_SCHEMA,args).length)fail('finance_calculation_input_invalid');
  const sourceRoot=options.sourceRoot??process.env.FINANCE_SOURCE_ROOT;
- // 仅有原件不透明引用时按需加载适配器，避免基础计算合同与业务记忆合同互相初始化。
- const adoptedSources=args.sources.some(source=>source.originalRef)?(await import('./business-baseline-materials.mjs')).resolveBaselineSourceReferences(args.sources,{sourceRoot}):args.sources;
  // 方法执行器传入匹配时实读的字节版本；不是模型可填写的脚本参数。
  const expectedSources=new Map();
  for(const expected of options.expectedSourceVersions??[]){
-  if(!Number.isInteger(expected.sourceIndex)||expected.sourceIndex<0||!adoptedSources[expected.sourceIndex]||typeof expected.path!=='string'||!isAbsolute(expected.path)||resolve(adoptedSources[expected.sourceIndex].path)!==resolve(expected.path)||!/^[a-f0-9]{64}$/.test(expected.sha256)||expectedSources.has(expected.sourceIndex))fail('finance_calculation_method_source_binding_invalid');
+  if(!Number.isInteger(expected.sourceIndex)||expected.sourceIndex<0||!args.sources[expected.sourceIndex]||typeof expected.path!=='string'||!isAbsolute(expected.path)||resolve(args.sources[expected.sourceIndex].path)!==resolve(expected.path)||!/^[a-f0-9]{64}$/.test(expected.sha256)||expectedSources.has(expected.sourceIndex))fail('finance_calculation_method_source_binding_invalid');
   expectedSources.set(expected.sourceIndex,expected);
  }
  const call=currentFinanceCall(),root=join(options.auditDir??call?.auditDir??financeAuditDirectory(),'calculations');plainPath(root,{missing:true});mkdirSync(root,{recursive:true});
@@ -78,12 +76,12 @@ export async function runFinanceCalculation(args,options={}){
  try{
   let total=0;
   if(args.sources.length&&(!sourceRoot||!isAbsolute(sourceRoot)))fail('finance_calculation_source_root_required');
-  for(const [index,source] of adoptedSources.entries()){
+  for(const [index,source] of args.sources.entries()){
    const path=resolve(source.path);if(!isAbsolute(source.path)||!inside(resolve(sourceRoot),path))fail('finance_calculation_source_forbidden');
    const bytes=fileBytes(path);total+=bytes.length;if(total>20*1024*1024)fail('finance_calculation_source_limit');
    const extension=extname(path).toLowerCase(),snapshotPath=join(dir,'sources',String(index)+extension);save(snapshotPath,bytes);
    let structure={status:'unparsed',note:'仅保存字节快照；结构由脚本解析，未声称读取表头。'};
-   const captured={kind:'source_snapshot',path,snapshotPath,sha256:sha(bytes),bytes:bytes.length,locator:source.locator??null,...(source.originalRef?{originalRef:source.originalRef}:{}),structure};record.sources.push(captured);
+   const captured={kind:'source_snapshot',path,snapshotPath,sha256:sha(bytes),bytes:bytes.length,locator:source.locator??null,structure};record.sources.push(captured);
    const expected=expectedSources.get(index);
    if(expected){
     const matched=captured.sha256===expected.sha256;record.methodSourceVersionChecks.push({sourceIndex:index,path,expectedSha256:expected.sha256,adoptedSha256:captured.sha256,matched});
@@ -106,11 +104,6 @@ export async function runFinanceCalculation(args,options={}){
   const databasePath=options.dbPath??process.env.FINANCE_DATABASE_PATH;
   if(typeof databasePath==='string'&&isAbsolute(databasePath)){
    const financeContext={dbPath:resolve(databasePath),sourceRoot:sourceRoot??'',auditDir:options.auditDir??call?.auditDir??financeAuditDirectory(),sessionPath:options.sessionPath??process.env.FINANCE_BUSINESS_SESSION??''};
-   // 只为原件读取器传递已配置的解释器与Python用户包根；不恢复脚本的ambient环境或模型凭据。
-   const pythonPath=options.pythonPath??process.env.FINANCE_PYTHON_PATH;
-   const pythonUserBase=typeof process.env.PYTHONUSERBASE==='string'&&isAbsolute(process.env.PYTHONUSERBASE)?process.env.PYTHONUSERBASE:process.platform==='win32'&&typeof process.env.APPDATA==='string'&&isAbsolute(process.env.APPDATA)?join(process.env.APPDATA,'Python'):undefined;
-   const materialRuntime={...(typeof pythonPath==='string'&&isAbsolute(pythonPath)?{pythonPath}:{}),...(pythonUserBase?{pythonUserBase}:{})};
-   if(Object.keys(materialRuntime).length)financeContext.materialRuntime=materialRuntime;
    input.financeContext=financeContext;record.financeContext=financeContext;
    annotateFinanceCall({financeCalculationContext:{version:'finance-calculation-context/1',origin:'configured_backend_paths',sha256:sha(json(financeContext))}});
   }

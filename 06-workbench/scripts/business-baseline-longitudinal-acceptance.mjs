@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // 纵向原生验收的资料/工作区管理；不启动模型、不代选原则、不生成业务算法或正式凭证。
 import assert from 'node:assert/strict';
-import {mkdirSync,readFileSync,writeFileSync,existsSync,readdirSync} from 'node:fs';
-import {join,resolve,relative,isAbsolute} from 'node:path';
+import {mkdirSync,readFileSync,writeFileSync,existsSync} from 'node:fs';
+import {join,resolve,relative,isAbsolute,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {createContext,writeBundle} from '../../05-reconstruction/codex/hosts/shared/config.mjs';
@@ -14,7 +14,7 @@ import {readBaselineSection} from '../test/helpers/business-baseline-test-inputs
 import {LONGITUDINAL_VERSION,BASELINE_REPO_ROOT,createLongitudinalFixture,assertLongitudinalCold,publishLongitudinalPacket,hashBaseline,readBaselineJson,writeBaselineJson} from '../test/helpers/business-baseline-longitudinal-fixture.mjs';
 
 const VERSION='native-business-baseline-longitudinal/1';
-const RUNTIME_FILES=['06-workbench/test/helpers/business-baseline-longitudinal-fixture.mjs','06-workbench/scripts/business-baseline-longitudinal-acceptance.mjs'];
+const RUNTIME_FILES=['06-workbench/test/helpers/business-baseline-longitudinal-fixture.mjs','06-workbench/test/helpers/business-baseline-test-inputs.mjs','06-workbench/scripts/business-baseline-longitudinal-acceptance.mjs'];
 const unicode=text=>Array.from(text).length;
 const inside=(root,path)=>{const r=relative(resolve(root),resolve(path));assert(r&&!isAbsolute(r)&&r!=='..'&&!r.startsWith('..\\')&&!r.startsWith('../'),'longitudinal_path_must_remain_in_synthetic_root');return resolve(path);};
 const manifestOf=root=>readBaselineJson(join(root,'longitudinal-fixture.json'));
@@ -32,7 +32,7 @@ function assertIntegrity(m){
 }
 function taskTexts(f){
   const scope=`合成企业账套 ${f.a}`;
-  const boundary='只处理本机合成资料，不正式记账、结账或申报。不得读取reviewer-only、driver、独立预期、测试源码或其他验收轨迹，不预填企业规则或脚本。';
+  const boundary='只处理本机合成资料，不正式记账、结账或申报。取材料时用已授权的宿主文件或脚本能力，整理件按 Skill 合同放进当前审计根的 agent-materials。不得读取reviewer-only、driver、独立预期、测试源码或其他验收轨迹，不预填企业规则或脚本。';
   const recall=period=>`这是独立的新会话，接续${scope}、${period}。请仅从真实账库的企业短基线召回本期适用的已知原则，说明适用条件、版本、生效期间与重要缺口。先完成这一步并停止，不取原件、不重新调查历史，不做本期计算。${boundary}\n`;
   const work=period=>`继续本会话处理${scope}、${period}已发布的本期资料与仍在行合同。先沿用从账库召回的适用知识，再按需用正常业务工具核本期事实，不重翻7、8月历史去重新生成已知结论。核租赁、维保及库存本期金额、期间累计与剩余；区别已结束合同、已处理税额及未发生业务，不把缺匹配写成默认零。涉及需要企业选择而尚未确定的长期口径时，先明确询问并暂停，先交付可核部分，不自行作默认选择。请用工具留下“${period.slice(5)}月业务结果.json”及可核底稿，结果包含period、baselineRef、accountingStandard、classifications、contracts、maintenance、inventory、taxReference、reader/sourceDigests或等效实际取数引用。contracts逐合同给serviceStart/serviceEnd、periodRevenue/cumulativeRevenue/remainingRevenue/periodVatSales；maintenance给periodExpense/cumulativeExpense/remainingPrepayment/periodInputVat；inventory给期初、购入、领用、结存的数量和金额；说明实际采用的科目归集及适用原则。字段值来自实际处理，不限定计算工具或脚本。${boundary}\n`;
   return {history:`首次接手${scope}，当前绑定2026-09。现仅有7、8月原账及已发布历史原件，请按现有企业基线入口调查代表性分录、合同和申报资料，提炼并实际保存从本期起适用的短原则，回读核实版本、范围与缺口。不要处理尚未发布的本期或未来业务，完成后停止。${boundary}\n`,septemberRecall:recall('2026-09'),septemberWork:work('2026-09'),septemberReply:readFileSync(f.replyPath,'utf8').trim()+'\n请将新增口径按明确的生效期间持久保存，保留其他已核知识，不污染已处理期间。继续完成9月能核的底稿，实际保存后回读并说明本期与未来适用版本；本次口径确认不等于正式凭证审批。\n'+boundary+'\n',octoberRecall:recall('2026-10'),octoberWork:work('2026-10')};
@@ -83,10 +83,19 @@ export async function publishOctober(root){
 export async function selfCheckLongitudinal(root,sourceManifestPath){
   const report={version:'longitudinal-technical-preparation-check/1',root,startedAt:new Date().toISOString(),modelInvoked:false,baselineConstructedByTest:false,syntheticHumanQuestionFabricated:false,status:'running',checks:[]};let client;
   try{
-    await prepareLongitudinalFixture(root,sourceManifestPath,{technicalOnly:true});report.checks.push('prepare');let m=manifestOf(root);const f=fixtureOf(m),before=baselineLogicalSnapshot(m.databasePath);client=await startBaselineMcp(f);
-    const history=await readBaselineSection(client,{target:m.targets.history,extractKnownFields:true,section:'overview',limit:50});assert.equal(history.sourceDiscovery.remainingCount,0);assert(history.principleSupport.some(p=>p.kind==='revenue_period'&&p.when==='lease'&&p.allocationBasis==='monthly_equal'));assert(history.principleSupport.some(p=>p.kind==='expense_period'&&p.when==='maintenance'&&p.allocationBasis==='monthly_equal'));assert(!history.principleSupport.some(p=>p.kind==='inventory_cost'));assert.equal(history.taxBurden.summaries.find(s=>s.taxType==='vat').weightedRatio,0.02);report.checks.push('history_actual_materials_no_future_policy');
-    await publishSeptember(root);const september=await readBaselineSection(client,{target:m.targets.september,section:'calculation',limit:50});assert.equal(september.sourceDiscovery.remainingCount,0);assert(september.calculationSchema.objects.some(o=>o.fields.issue_quantity==='quantity'));assert(!existsSync(join(m.sourceRoot,'october')));report.checks.push('september_publication_and_binding');
-    await publishOctober(root);const october=await readBaselineSection(client,{target:m.targets.october,section:'calculation',limit:50});assert.equal(october.sourceDiscovery.remainingCount,0);assert.equal(baselineVersions(m).length,0);assert.equal(baselineLogicalSnapshot(m.databasePath),before);report.checks.push('october_publication_no_baseline_or_human_forgery');await checkLongitudinalFixture(root);report.status='passed';report.unverified=['真实问询/暂停/用户回复、实际保存及新会话召回由独立原生整链验，不由此技术检查替代。'];
+    await prepareLongitudinalFixture(root,sourceManifestPath,{technicalOnly:true});report.checks.push('prepare');const m=manifestOf(root),f=fixtureOf(m),before=baselineLogicalSnapshot(m.databasePath);client=await startBaselineMcp(f);
+    const observePublished=async(stage,section)=>{
+      const directory=join(m.sourceRoot,stage);
+      const originals=stateOf(m).published[stage].files.filter(({path})=>dirname(path)===directory)
+        .map(({path},index)=>({id:stage+'_'+index,path}));
+      assert(originals.length>0);
+      const observed=await readBaselineSection(client,{target:m.targets[stage],originals,section,limit:50});
+      assert.equal(observed.coverage.sourceOwners.agentIdentityMatched,originals.length);
+      return observed;
+    };
+    const history=await observePublished('history','overview');assert(history.principleSupport.some(p=>p.kind==='revenue_period'&&p.when==='lease'&&p.allocationBasis==='monthly_equal'));assert(history.principleSupport.some(p=>p.kind==='expense_period'&&p.when==='maintenance'&&p.allocationBasis==='monthly_equal'));assert(!history.principleSupport.some(p=>p.kind==='inventory_cost'));assert.equal(history.taxBurden.summaries.find(s=>s.taxType==='vat').weightedRatio,0.02);report.checks.push('history_actual_materials_no_future_policy');
+    await publishSeptember(root);const september=await observePublished('september','calculation');assert(september.calculationSchema.objects.some(o=>o.fields.issue_quantity==='quantity'));assert(!existsSync(join(m.sourceRoot,'october')));report.checks.push('september_publication_and_binding');
+    await publishOctober(root);const october=await observePublished('october','calculation');assert(october.calculationSchema.objects.some(o=>o.fields.issue_quantity==='quantity'));assert.equal(baselineVersions(m).length,0);assert.equal(baselineLogicalSnapshot(m.databasePath),before);report.checks.push('october_publication_no_baseline_or_human_forgery');await checkLongitudinalFixture(root);report.status='passed';report.unverified=['真实问询/暂停/用户回复、实际保存及新会话召回由独立原生整链验，不由此技术检查替代。'];
   }catch(error){report.status='failed';report.error=error.stack;throw error;}finally{await client?.close();report.finishedAt=new Date().toISOString();if(existsSync(root))writeBaselineJson(join(root,'技术准备链结果.json'),report);console.log(JSON.stringify(report));}return report;
 }
 

@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {readFileSync} from 'node:fs';
 import {PREBOOK_INPUT_SCHEMA,PREBOOK_REPLIES_SCHEMA,PREBOOK_TOOL_SCHEMA} from './finance-prebook-contracts.mjs';
 import {validateSchemaValue} from './harness-schema-validation.mjs';
-import {readSource,parseJson,bindEvidence,digest,stable,reject} from './finance-prebook-evidence.mjs';
+import {readPreparedSource,parseJson,bindEvidence,digest,stable,reject} from './finance-prebook-evidence.mjs';
 import {cents,money,quantity,calculateAgencyOutputVat} from './agency-tax-rules.mjs';
 import {calculateFinanceSummary,FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
 import {currentFinanceCall,withFinanceCall,annotateFinanceCall} from './finance-call-chain.mjs';
@@ -15,9 +15,12 @@ import {PROJECTION_NUMBER_LIMIT} from './finance-output-policy.mjs';
 const arrays=['purchases','receipts','sales','invoices','bankTransactions','fundsAccounts','inventoryCounts'];
 const own=(o,k)=>Object.hasOwn(o??{},k);
 const sum=(rows,key)=>rows.reduce((total,row)=>total+cents(row[key]),0n);
-const check=(schema,value)=>{if(validateSchemaValue(schema,value).length)reject('finance_prebook_input_invalid');};
+function check(schema,value,code='finance_prebook_input_invalid'){
+ const problems=validateSchemaValue(schema,value);
+ if(problems.length)throw Object.assign(Error(code),{code,details:{problems}});
+}
 // 固定模块加载时的计算与规则版本；长驻MCP不能让旧逻辑配上新文件摘要。
-const codePaths=['finance-prebook.mjs','finance-prebook-evidence.mjs','finance-prebook-contracts.mjs','material-document.mjs','material-document-reader.py','material-document-ocr.ps1','business-baseline-contracts.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','agency-rule-catalog.mjs','agency-extended-tax-rules.mjs','agency-regional-rules.mjs','money.mjs','offline-material-adapters.mjs','accounting-profiles.mjs','bank-import.mjs','harness-schema-validation.mjs','finance-output-policy.mjs','finance-call-chain.mjs','../package-lock.json'];
+const codePaths=['finance-prebook.mjs','finance-prebook-evidence.mjs','finance-prebook-contracts.mjs','business-baseline-contracts.mjs','business-baseline-materials.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','agency-rule-catalog.mjs','agency-extended-tax-rules.mjs','agency-regional-rules.mjs','money.mjs','offline-material-adapters.mjs','accounting-profiles.mjs','harness-schema-validation.mjs','finance-output-policy.mjs','finance-call-chain.mjs','../package-lock.json'];
 const codeSnapshot=()=>codePaths.map(name=>{const path=fileURLToPath(new URL(name,import.meta.url)),bytes=readFileSync(path);return {path,bytes,sha256:digest(bytes),kind:'code'};});
 const loadedCode=codeSnapshot();
 function periodBounds(scope){const [year,month]=scope.period.split('-').map(Number);if(scope.periodType==='quarterly'&&month%3!==0)reject('finance_prebook_quarter_not_ended');const startMonth=scope.periodType==='quarterly'?month-2:month,from=`${year}-${String(startMonth).padStart(2,'0')}-01`,through=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10),prior=new Date(Date.UTC(year,startMonth-1,0)).toISOString().slice(0,10);return {from,through,prior};}
@@ -159,8 +162,8 @@ function renderReview(result){
  const states={ready_for_bookkeeping_review:'可交会计继续整理做账',needs_inputs:'待补件或核实',unsupported:'需转独立税务处理',conditional_calculated:'条件试算，待会计复核'};
  const labels={outputVat:'销项税额',certifiedInputVat:'条件可抵扣进项',availableCredit:'可用抵扣额',dueBeforePrepayment:'预缴抵减前应纳额',prepaymentUsed:'本期使用预缴',due:'本期条件应纳额',carryCredit:'期末留抵',unusedPrepayment:'未使用预缴',salesExcludingVat:'不含税销售额',specialInvoiceVat:'专票税额',threshold:'起征点比较金额',ordinaryTax:'普通销售税额'};
  const units=value=>{if(value===null)return '未知';let n=BigInt(value);const sign=n<0n?'-':'';if(n<0n)n=-n;return sign+`${n/1000000n}.${String(n%1000000n).padStart(6,'0')}`.replace(/\.?0+$/,'');};
- const refs=result.sourceRefs.map(r=>({field:r.inputPointer,original:r.originalId,location:r.csvEmpty?'CSV表头后无数据行':r.locator?JSON.stringify(r.locator):r.jsonPointer??`CSV行${r.csvRow}，列${r.column}`,sha256:r.sha256}));
- const body=[`<h1>账前资料核对</h1><p>企业：${escape(result.scope.enterpriseKey)}；期间：${escape(result.bounds.from)} 至 ${escape(result.bounds.through)}；${escape(states[result.status])}。金额单位：人民币元。</p><p>未记账、未申报。老板说明、原件值核对和会计审核分别保留。资料齐备状态只表示可交会计继续处理，不表示真实性或税务资格已审定。</p>`,
+ const refs=result.sourceRefs.map(r=>({field:r.inputPointer,original:r.originalId,location:own(r.locator,'headerRow')?`Agent观察为空表，表头行 ${r.locator.headerRow}`:JSON.stringify(r.locator),sha256:r.sha256}));
+ const body=[`<h1>账前资料核对</h1><p>${escape(result.scope.enterpriseKey)}，${escape(result.bounds.from)} 至 ${escape(result.bounds.through)}。${escape(states[result.status])}。金额单位为人民币元。</p><p>原件字段来自 Agent 本机观察。来源索引核对字节摘要，供会计复核位置、观察值及适用条件。正式记账与申报需依各自审定流程。</p>`,
  '<h2>资金核对</h2>',table(['账户','类别','期初','收入','支出','计算期末','实际期末','差额'],result.funds.map(r=>[r.accountId,r.kind==='cash'?'现金':'银行',r.opening,r.inflows,r.outflows,r.calculatedClosing,r.actualClosing,r.difference])),
  '<h2>采购、发票和付款关联</h2>',`<p>已去重 ${result.deduplicated.length} 条；按显式业务编号关联。</p>`,table(['采购单','业务','发票','收货','付款'],result.relations.map(r=>[r.purchaseIds.join('、'),r.businessId,r.invoiceIds.join('、'),r.receiptIds.join('、'),r.paymentIds.join('、')])),
  '<h2>上期往来与本期收付</h2>',table(['类型','上期业务','上期余额','本期收付','剩余余额','流水'],result.priorSettlements.map(r=>[r.kind==='payables'?'应付':'应收',r.businessId,r.openingAmount,r.settledAmount,r.remainingAmount,r.paymentIds.join('、')])),
@@ -174,24 +177,34 @@ function renderReview(result){
  '<h2>老板说明</h2>',table(['问题','回复人','时间','说明','有效状态'],result.responses.map(r=>[r.issueId,r.respondent,r.respondedAt,r.statement,r.state==='stale'?'资料已变更，旧回复失效':r.state==='unknown_issue'?'问题不在本版':'声明已记录，非审核批准'])),
  '<h2>税务规则依据</h2>',table(['来源','定位','地址'],(result.tax.rules??[]).map(r=>[r.title,r.locator,r.url])),
  '<h2>交接与深入核查</h2><p>handoff.json 是业务整理资料，由现有做账流程按其合同继续处理；不是凭证导入或入账批准。</p><p><a href="prebook.json">完整核对结果</a> · <a href="handoff.json">交接资料</a> · <a href="evidence-index.json">原件索引</a></p>',
- `<p>资料版本：${escape(result.inputDigest)}；来源哈希只证明字节对应，不证明业务真实性。</p><details><summary>字段与原件定位</summary>${table(['字段','原件','原件位置','摘要'],refs.map(r=>[r.field,r.original,r.location,r.sha256]))}</details>`];
+ `<p>资料版本 ${escape(result.inputDigest)}。</p><details><summary>Agent 观察的原件位置</summary>${table(['字段','原件','原件位置','摘要'],refs.map(r=>[r.field,r.original,r.location,r.sha256]))}</details>`];
  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>账前资料核对</title><style>body{font:16px system-ui;max-width:1100px;margin:32px auto;padding:16px;color:#172333}table{border-collapse:collapse;width:100%;margin:16px 0}td,th{border:1px solid #ccd5df;padding:9px;text-align:left;overflow-wrap:anywhere}h1,h2{color:#204a70}</style>${body.join('\n')}</html>`;
 }
 export async function runPrebookReview(args,options={}){
  if(!currentFinanceCall())return withFinanceCall({tool:'finance_prebook_review',args,auditDir:options.auditDir},()=>runPrebookReview(args,options));
  check(PREBOOK_TOOL_SCHEMA,args);
- const inputSource=readSource(args.inputPath),input=parseJson(inputSource);check(PREBOOK_INPUT_SCHEMA,input);
- const evidence=bindEvidence(input,options),code=codeSnapshot();if(code.some((file,index)=>file.sha256!==loadedCode[index].sha256))reject('finance_prebook_runtime_code_changed');
+ const call=currentFinanceCall(),auditDir=call.auditDir;
+ const inputSource=readPreparedSource(args.inputPath,auditDir),input=parseJson(inputSource);
+ if(input?.version==='finance-prebook-input/1')reject('finance_prebook_prepared_version_required');
+ check(PREBOOK_INPUT_SCHEMA,input,'finance_prebook_prepared_input_invalid');
+ const evidence=bindEvidence(input,{sourceRoot:options.sourceRoot??process.env.FINANCE_SOURCE_ROOT,auditDir}),code=codeSnapshot();if(code.some((file,index)=>file.sha256!==loadedCode[index].sha256))reject('finance_prebook_runtime_code_changed');
  const inputDigest=digest({facts:input.facts,bindings:input.bindings,declarations:input.declarations??[],sources:evidence.files.map(s=>({id:s.id,sha256:s.sha256,scope:s.scope})),code:code.map(s=>s.sha256)});
  const result={version:'finance-prebook-result/1',inputDigest,...inspectPrebookFacts(input.facts,evidence),responses:[]};let replySource;
- if(args.repliesPath){replySource=readSource(args.repliesPath);const replies=parseJson(replySource);check(PREBOOK_REPLIES_SCHEMA,replies);if(replies.enterpriseKey!==result.scope.enterpriseKey||replies.period!==result.scope.period)reject('finance_prebook_reply_scope_conflict');const ids=new Set();for(const reply of replies.responses){if(ids.has(reply.issueId))reject('finance_prebook_reply_duplicate');ids.add(reply.issueId);const issue=result.issues.find(i=>i.issueId===reply.issueId),state=replies.inputDigest!==inputDigest?'stale':!issue?'unknown_issue':'statement_recorded';result.responses.push({...reply,state});if(state==='statement_recorded')issue.ownerStatement={...reply,meaning:'老板声明，仍需补证或业务核实'};}}
- const call=currentFinanceCall(),runId=call.callId??randomUUID(),dir=join(call.auditDir,'prebook',runId);
+ if(args.repliesPath){replySource=readPreparedSource(args.repliesPath,auditDir);const replies=parseJson(replySource);check(PREBOOK_REPLIES_SCHEMA,replies,'finance_prebook_prepared_reply_invalid');if(replies.enterpriseKey!==result.scope.enterpriseKey||replies.period!==result.scope.period)reject('finance_prebook_reply_scope_conflict');const ids=new Set();for(const reply of replies.responses){if(ids.has(reply.issueId))reject('finance_prebook_reply_duplicate');ids.add(reply.issueId);const issue=result.issues.find(i=>i.issueId===reply.issueId),state=replies.inputDigest!==inputDigest?'stale':!issue?'unknown_issue':'statement_recorded';result.responses.push({...reply,state});if(state==='statement_recorded')issue.ownerStatement={...reply,meaning:'老板声明，仍需补证或业务核实'};}}
+ const runId=call.callId??randomUUID(),dir=join(auditDir,'prebook',runId);
  for(let p=resolve(dir);;p=dirname(p)){try{if(lstatSync(p).isSymbolicLink())reject('finance_prebook_output_path_invalid');}catch(error){if(error.code!=='ENOENT')throw error;}if(dirname(p)===p)break;}mkdirSync(dir,{recursive:true});
  const files=[{...inputSource,kind:'prepared_input'},...evidence.files.map(s=>({...s,kind:'original'})),...(replySource?[{...replySource,kind:'owner_statement'}]:[]),...code],index=[];
  mkdirSync(join(dir,'evidence'));
- for(const [i,file] of files.entries()){const snapshot=`evidence/${i}.blob`;writeFileSync(join(dir,snapshot),file.bytes,{flag:'wx'});index.push({path:file.path,snapshot,sha256:file.sha256,bytes:file.bytes.length,kind:file.kind});}
+ for(const [i,file] of files.entries()){
+  const entry={path:file.path,sha256:file.sha256,bytes:file.kind==='original'?file.bytes:file.bytes.length,kind:file.kind};
+  if(file.kind!=='original'){
+   entry.snapshot=`evidence/${i}.blob`;
+   writeFileSync(join(dir,entry.snapshot),file.bytes,{flag:'wx',mode:0o600});
+  }
+  index.push(entry);
+ }
  const save=(name,value)=>writeFileSync(join(dir,name),JSON.stringify(value,null,2)+'\n',{flag:'wx'});
- save('prebook.json',result);save('evidence-index.json',{version:'finance-prebook-evidence/1',files:index,bindings:evidence.sourceRefs});
+ save('prebook.json',result);save('evidence-index.json',{version:'finance-prebook-evidence/2',files:index,bindings:evidence.sourceRefs});
  save('handoff.json',{version:'finance-prebook-handoff/1',scope:result.scope,inputDigest,status:result.status,meaning:'业务整理资料；由现有做账流程按其输入合同继续处理，不是凭证导入文件。',facts:input.facts,sourceRefs:evidence.sourceRefs,declarations:result.declarations,internalIds:result.internalIds,records:result.records,ownerStatements:result.responses,unresolvedIssues:result.issues,taxConditions:result.tax.conditions??[],review:result.review});
  writeFileSync(join(dir,'review.html'),renderReview(result),{flag:'wx'});
  const artifactRef=`finance-prebook:${runId}`;annotateFinanceCall({scope:result.scope,businessOutcome:result.status,ruleVersion:FINANCE_SUMMARY_RULE_VERSION,sources:files.filter(f=>f.kind!=='code').map(f=>({path:f.path,sha256:f.sha256})),artifactRefs:[`${artifactRef}/prebook.json`,`${artifactRef}/handoff.json`,`${artifactRef}/review.html`]});

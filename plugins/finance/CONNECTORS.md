@@ -21,7 +21,7 @@
 
 ## 按任务选择工具
 
-- 做账前整理资料用`finance_record_contract(recordType=prebook)`读取实际输入／回复合同，再用`finance_prebook_review`核对。设置获准的`FINANCE_SOURCE_ROOT`，原始文件、适配输入和回复均在该根内；不要求本期已有账库。见[账前输入](skills/prebook-review/references/input-and-tools.md)。
+- 做账前整理资料用`finance_record_contract(recordType=prebook)`读取实际输入／回复合同，再用`finance_prebook_review`核对。原件在获准的 `FINANCE_SOURCE_ROOT` 内，由宿主读取。整理件和回复使用审计根 `agent-materials`。账前核对可在建账前完成。见[账前输入](skills/prebook-review/references/input-and-tools.md)。
 - 已有账库任务用`account_context`核实账套，`finance_query`或`ledger_query`取实际账簿。
 - `finance_record_contract`按需要取得某种业务记录合同；可选`finance_workpaper`计算原件支持的业务，不先做元数据编排。
 - 按需用`finance_rules`或已核官方资料取得中国规则、来源、期间和限制；可选`finance_tax_calculate`，缺件保留原生状态。工具字段缺口不证明企业事实缺失。

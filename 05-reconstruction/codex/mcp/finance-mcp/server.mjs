@@ -30,8 +30,10 @@ import {toolsForProfile} from './tool-profile.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
 import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
+import {PREBOOK_INPUT_SCHEMA,PREBOOK_REPLIES_SCHEMA} from '../../../../06-workbench/server/finance-prebook-contracts.mjs';
+import {BASELINE_OBSERVATIONS_SCHEMA} from '../../../../06-workbench/server/business-baseline-contracts.mjs';
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
-import {withFinanceCall,currentFinanceCall,annotateFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
+import {withFinanceCall,currentFinanceCall,annotateFinanceCall,hasDomainManagedSources} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
 import {skillMetadata} from './skill-metadata.mjs';
 import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
@@ -107,9 +109,10 @@ function preflightTool(name,args={}) {
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
+  const domainProblems=hasDomainManagedSources(name)?validateSchemaValue(spec.inputSchema,args):undefined;
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
-  if (problems.length) {
-    const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,validateSchemaValue(spec.inputSchema,args)):undefined;
+  if (problems.length||domainProblems?.length) {
+    const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args)):undefined;
     throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, ...(diagnostics??{problems:name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems}) });
   }
   if (spec.status === "unavailable") {
@@ -123,7 +126,7 @@ function preflightTool(name,args={}) {
 async function callTool(name, args = {}, executionOptions={}) {
   const spec=preflightTool(name,args);
   // 字段映射已经由最外层记录器在执行前实读；原业务工具不接收审计元数据。
-  if(Object.hasOwn(args,'businessEvidence')&&!['voucher_create','voucher_post'].includes(name)){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
+  if(Object.hasOwn(args,'businessEvidence')&&!hasDomainManagedSources(name)&&!['voucher_create','voucher_post'].includes(name)){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
   if (DIRECT_TOOL_NAMES.has(name)) {
     try { validateDirectInput(spec.inputSchema,args); const result=await callDirectFinanceTool(name,args,{invokeNativeTool:async(nativeName,nativeArgs,expectedScope)=>{
       const {result:nativeResult}=await executeRecordedTool(nativeName,nativeArgs,undefined,{expectedScope});
@@ -136,7 +139,12 @@ async function callTool(name, args = {}, executionOptions={}) {
     const nextSteps=directRecovery(name,{status:result?.status,code:result?.error?.code});return nextSteps.length?{...result,nextSteps}:result; }
     catch(error) {
       const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;
-      const details=safeDiagnostics?{safeDiagnostics}:name==='finance_baseline_materials'&&error?.code==='finance_baseline_interpretation_invalid'?directInterpretationDiagnostics(error.details?.interpretation):name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,error.details?.problems):error.details:undefined;
+      let details=safeDiagnostics?{safeDiagnostics}:undefined;
+      if(name==='finance_baseline_materials'&&error?.code==='finance_baseline_interpretation_invalid')details=directInterpretationDiagnostics(error.details?.interpretation);
+      if(name==='finance_baseline_materials'&&error?.code==='finance_baseline_observations_input_invalid')details=directSchemaDiagnostics(BASELINE_OBSERVATIONS_SCHEMA,error.details?.problems,'input');
+      if(name==='finance_prebook_review'&&error?.code==='finance_prebook_prepared_input_invalid')details=directSchemaDiagnostics(PREBOOK_INPUT_SCHEMA,error.details?.problems,'input');
+      if(name==='finance_prebook_review'&&error?.code==='finance_prebook_prepared_reply_invalid')details=directSchemaDiagnostics(PREBOOK_REPLIES_SCHEMA,error.details?.problems,'replies');
+      if(name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid')details=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,error.details?.problems):error.details;
       throw new ToolCallError(DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directErrorCode(error?.code):/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',details);
     }
   }
@@ -321,7 +329,9 @@ rl.on("line", async (line) => {
         }
         return ok(id, withReference(envelopeResult(checked.envelope)));
       }
-      return ok(id, withReference({ content: [{ type: "text", text: HARNESS_TOOL_NAMES.has(params?.name)?JSON.stringify(result):JSON.stringify(result, null, 2) }],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) }));
+      const compactContract=params?.name==='finance_record_contract'&&['baseline','prebook'].includes(params?.arguments?.recordType);
+      const text=HARNESS_TOOL_NAMES.has(params?.name)||compactContract?JSON.stringify(result):JSON.stringify(result,null,2);
+      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{})}));
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, withReference(transportFailureResult(e.failure)));
       if(e?.code==='finance_call_recording_failed')return ok(id,withReference({isError:true,content:[{type:'text',text:JSON.stringify({code:e.code,writeOutcome:'unknown',retryable:false,executionCompleted:e.executionCompleted===true})}]}));

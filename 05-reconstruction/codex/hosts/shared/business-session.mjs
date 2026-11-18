@@ -6,7 +6,7 @@ import {resolveDirectFinanceTarget} from '../../../../06-workbench/server/direct
 
 export const SESSION_VERSION='finance-business-session/1';
 export const HOST_VERSION='finance-business-host/1';
-export const BUSINESS_MEMORY_ROUTING='企业处理先读 finance_baseline_read({target:{accountSetId,period}})。ready处理本期前，用 skills_read({resource:"company-baseline/references/materials-and-save.md"}) 读本机取数合同。同条件沿用，普通新凭证不换版。生成/修订先用 skills_read({resource:"company-baseline/SKILL.md"})，保存后回读。明细按需；口径只存账库，不写原生记忆。';
+export const BUSINESS_MEMORY_ROUTING='先调 finance_baseline_read 核短基线，同条件沿用。生成或修订读 company-baseline/SKILL.md，本期取数读其 references/materials-and-save.md。按 .finance/business-session.json 或 .finance/host.json 核原件根及审计根。用已获准的宿主文件或脚本能力读原件，把结果写入审计根 agent-materials，再提交给财税工具。保存后回读，口径存账库。';
 const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'../../../..');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const samePath=(a,b)=>typeof a==='string'&&typeof b==='string'&&resolve(a).toLowerCase()===resolve(b).toLowerCase();
