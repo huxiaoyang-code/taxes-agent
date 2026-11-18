@@ -8,7 +8,7 @@ import {resolveBusinessMemoryTarget} from './business-memory.mjs';
 import {currentFinanceCall,withFinanceCall,annotateFinanceCall,financeAuditDirectory,readFinanceCall,financeCallCreatedDirectory} from './finance-call-chain.mjs';
 import * as storage from './business-memory-storage.mjs';
 import {BASELINE_INTERFACE,BASELINE_TOPIC,BASELINE_VALUES,BASELINE_LABELS,BASELINE_FACT_VALUES,BASELINE_DATE_FIELDS,BASELINE_PERIOD_FIELDS,BASELINE_AMOUNT_FIELDS,BASELINE_QUANTITY_FIELDS,BUSINESS_BASELINE_SCHEMAS} from './business-baseline-contracts.mjs';
-import {baselineBytes,baselineInside,baselineDirectoryAvailable,baselineDirectoryIdentity,captureBaselineMaterials,mergeBaselineMaterialSnapshots,baselineLedgerFact,buildBaselineTaxBurden,groupBaselineMaterialFacts,discoverBaselineSourceInventory,discoverBaselineKnownSources,baselineDiscoveryProjection} from './business-baseline-materials.mjs';
+import {baselineBytes,baselineInside,baselineDirectoryAvailable,baselineDirectoryIdentity,captureBaselineMaterials,mergeBaselineMaterialSnapshots,baselineLedgerFact,buildBaselineTaxBurden,groupBaselineMaterialFacts,baselineScalarMaterialFacts,discoverBaselineSourceInventory,discoverBaselineKnownSources,baselineDiscoveryProjection} from './business-baseline-materials.mjs';
 import {projectBaselineMaterials,baselineCoverage,baselineSupportRef,baselineBranchSelection,fitBaselineBranchResponse,baselineCalculationSchema} from './business-baseline-projection.mjs';
 import {assertAuditSchema} from './local-audit-storage.mjs';
 import {inspectRestoreControl,readRestoreActivation,assertRestoreOpenPath} from './local-restore-control.mjs';
@@ -22,7 +22,7 @@ const same=(a,b)=>storage.canonicalBusinessMemory(a)===storage.canonicalBusiness
 const owner=scope=>[scope.databaseInstanceId,scope.enterpriseKey,scope.accountSetId];
 const BASELINE_READER_SHA256=sha(readFileSync(new URL(import.meta.url)));
 const calculationReader=()=>({moduleUrl:import.meta.url,sha256:BASELINE_READER_SHA256,exportName:'resolveBaselineCalculationFacts',version:'finance-baseline-calculation-facts/1',values:'local_calculation_only_not_model_projection'});
-function configured(options={}){return {...options,dbPath:options.dbPath??process.env.FINANCE_DATABASE_PATH,sourceRoot:options.sourceRoot??process.env.FINANCE_SOURCE_ROOT,auditDir:options.auditDir??currentFinanceCall()?.auditDir??financeAuditDirectory()};}
+function configured(options={}){return {...options,dbPath:options.dbPath??process.env.FINANCE_DATABASE_PATH,sourceRoot:options.sourceRoot??process.env.FINANCE_SOURCE_ROOT,auditDir:options.auditDir??currentFinanceCall()?.auditDir??financeAuditDirectory(),pythonPath:options.materialRuntime?.pythonPath??options.pythonPath??process.env.FINANCE_PYTHON_PATH,pythonUserBase:options.materialRuntime?.pythonUserBase??options.pythonUserBase};}
 function validate(name,args){if(validateSchemaValue(BUSINESS_BASELINE_SCHEMAS[name],args).length)fail('finance_baseline_input_invalid');}
 function writable(options){if(options.readOnly||process.env.WORKBENCH_DATABASE_MODE==='readonly')fail('finance_baseline_readonly');}
 function scopeBinding(args,options){const binding=resolveBusinessMemoryTarget(args.target,options);assertRestoreOpenPath(binding.dbPath);annotateFinanceCall({scope:binding.scope,configuredTarget:{databasePath:binding.dbPath,accountSetId:binding.scope.accountSetId,period:binding.scope.period,bindingOrigin:binding.bindingOrigin}});return binding;}
@@ -95,15 +95,15 @@ function historicalExpenseText(p,facts){
  const fs=list(facts).filter(f=>list(p.evidenceRefs).includes(f.factRef)),labels={management_expense:'管理费用',sales_expense:'销售费用',finance_expense:'财务费用'},roles=new Set();
  for(const g of groupFacts(fs,p.when)){
   if(field(g,'creates_asset')!==false)continue;const refs=g.filter(f=>f.field==='business_reference').map(f=>f.factRef);
-  for(const h of fs.filter(f=>f.field==='historical_posting'&&f.value.status==='posted'&&f.linkedBusinessRefs?.some(ref=>refs.includes(ref))))for(const entry of businessEntries(h,refs))if(Object.hasOwn(labels,entry.role)&&entry.debit-entry.credit>0)roles.add(entry.role);
+  for(const h of fs.filter(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&f.linkedBusinessRefs?.some(ref=>refs.includes(ref))))for(const entry of businessEntries(h,refs))if(Object.hasOwn(labels,entry.role)&&entry.debit-entry.credit>0)roles.add(entry.role);
  }
  return roles.size===1?`沿已核历史${labels[[...roles][0]]}归集，用途变化另核`:null;
 }
 function ruleText(p,facts){const condition=p.when==='account_set'?'':BASELINE_LABELS[p.when]+'：',monthly=p.allocationBasis==='monthly_equal'?p.kind==='revenue_period'?'整月均匀服务按月等额确认':['expense_period','cost_treatment'].includes(p.kind)?'整月均匀受益的非资产服务按月等额分摊':null:null;return condition+(historicalExpenseText(p,facts)??monthly??BASELINE_LABELS[p.value]);}
 export function renderBusinessBaseline(definition,scope,{principles=definition.principles,taxBurden=definition.taxBurden}={}){
  const groups=[['accounting_standard','enterprise_class','business_classification','inventory_cost'],['revenue_period'],['expense_period','cost_treatment'],['vat_output_period'],['vat_input_period'],['income_tax_period'],['tax_choice']];
- const names=['准则、归类及成本','收入','费用与资产边界','销项所属期','进项所属期','所得税计税收入所属期','有效税务选择'];
- const lines=[];groups.forEach((kinds,i)=>{const ps=principles.filter(p=>kinds.includes(p.kind));if(ps.length)lines.push(names[i]+'：'+ps.map(p=>ruleText(p,definition.facts)).join('；'));});
+ const names=['准则','收入','费用与资产边界','销项所属期','进项所属期','所得税计税收入所属期','有效税务选择'];
+ const lines=[];groups.forEach((kinds,i)=>{const ps=principles.filter(p=>kinds.includes(p.kind));if(ps.length){const first=i===0?[ps.some(p=>p.kind==='accounting_standard')?'准则':null,ps.some(p=>p.kind==='enterprise_class')?'企业类型':null,ps.some(p=>p.kind==='business_classification')?'业务归类':null,ps.some(p=>p.kind==='inventory_cost')?'成本计价':null].filter(Boolean).join('、'):names[i];lines.push(first+'：'+ps.map(p=>ruleText(p,definition.facts)).join('；'));}});
  const history=taxText(taxBurden);if(history)lines.push('税负参考：'+history);
  const applicable=`账套${scope.accountSetId}；适用${definition.effectiveFrom}${definition.effectiveTo?'至'+definition.effectiveTo:'起'}。`;
  const shortText=lines.length?applicable+'\n'+lines.map((t,i)=>`${i+1}. ${t}。`).join('\n'):'';
@@ -116,14 +116,15 @@ function view(db,scope,target,opts){
  const d=current.definition,instances=baselineInstances(db,scope);if(d.interfaceVersion!==BASELINE_INTERFACE||d.scope.enterpriseKey!==scope.enterpriseKey||d.scope.accountSetId!==scope.accountSetId||!instances.has(d.scope.databaseInstanceId))fail('finance_baseline_record_invalid');
  const states=preserveRecordedInvalidation({...d,baselineRef:current.methodRef,instanceLineage:[...instances]},factStates(db,d,opts),scope),bad=refs=>refs.some(ref=>states.get(ref)!=='current');
  annotateFinanceCall({businessBaselineObservation:{baselineRef:current.methodRef,states:[...states].map(([factRef,state])=>({factRef,state}))}});
- const proofCurrent=p=>{const fs=d.facts.filter(f=>p.evidenceRefs.includes(f.factRef));return (p.kind!=='accounting_standard'&&p.authority!=='checked_historical_inference'||supportedPrinciple(p,fs,scope))&&(p.allocationBasis!=='monthly_equal'||monthlyEqualBasis(p,fs));};
+ const proofCurrent=p=>{const fs=d.facts.filter(f=>p.evidenceRefs.includes(f.factRef));return (p.kind!=='accounting_standard'&&!['checked_historical_inference','source_history_inference'].includes(p.authority)||supportedPrinciple(p,fs,scope))&&(p.allocationBasis!=='monthly_equal'||monthlyEqualBasis(p,fs));};
  const affected=d.principles.filter(p=>bad(p.evidenceRefs)||!choiceCurrent(p,d.facts,scope.period)||!proofCurrent(p)),usable=d.principles.filter(p=>!bad(p.evidenceRefs)&&choiceCurrent(p,d.facts,scope.period)&&proofCurrent(p));
  const tax={...d.taxBurden,summaries:d.taxBurden.summaries.filter(t=>!bad(t.evidenceRefs))};
  const changed=[...states.values()].some(s=>s==='changed'||s==='missing'),unavailable=[...states.values()].some(s=>s==='unavailable');
- const unresolved=fixedGaps([...d.unresolved,...affected.map(p=>({code:!choiceCurrent(p,d.facts,scope.period)?'outside_effective_period':p.evidenceRefs.some(r=>states.get(r)==='changed')?'source_changed':p.evidenceRefs.some(r=>states.get(r)==='missing')?'source_missing':bad(p.evidenceRefs)?'source_unavailable':p.kind==='accounting_standard'?'policy_unverified':'historical_evidence_missing',kind:p.kind})),...(!affected.length&&changed?[{code:[...states.values()].includes('changed')?'source_changed':'source_missing'}]:unavailable&&!affected.length?[{code:'source_unavailable'}]:[])]);
+ const businessPrinciplesMissing=!d.principles.some(p=>!['accounting_standard','enterprise_class'].includes(p.kind)),configurationOnly=businessPrinciplesMissing&&!d.taxBurden.summaries.length;
+ const unresolved=fixedGaps([...d.unresolved,...(businessPrinciplesMissing?[{code:'historical_evidence_missing'}]:[]),...affected.map(p=>({code:!choiceCurrent(p,d.facts,scope.period)?'outside_effective_period':p.evidenceRefs.some(r=>states.get(r)==='changed')?'source_changed':p.evidenceRefs.some(r=>states.get(r)==='missing')?'source_missing':bad(p.evidenceRefs)?'source_unavailable':p.kind==='accounting_standard'?'policy_unverified':'historical_evidence_missing',kind:p.kind})),...(!affected.length&&changed?[{code:[...states.values()].includes('changed')?'source_changed':'source_missing'}]:unavailable&&!affected.length?[{code:'source_unavailable'}]:[])]);
  const status=changed?'stale':unavailable||unresolved.length?'needs_review':'ready';
  const storedBranches=d.coverage?.unselectedPrincipleBranches,branches=storedBranches?{...storedBranches,basis:'saved_material_catalog'}:baselineBranchSelection(principleSupport(d.facts.filter(f=>states.get(f.factRef)==='current'),scope),d.principles,{basis:'retained_current_evidence_subset',complete:false});
- const coverage={...(d.coverage??{}),...(d.coverage?.taxHistory?{taxHistory:Object.fromEntries(['vat','cit'].map(kind=>[kind,{status:tax.summaries.some(t=>t.taxType===kind)?'included':d.taxBurden.summaries.some(t=>t.taxType===kind)?'source_not_current':d.coverage.taxHistory[kind].status}]))}:{}),unselectedPrincipleBranches:branches};
+ const coverage={...(d.coverage??{}),configurationOnly,businessPrinciplesMissing,generationBasis:configurationOnly?'configuration_only':businessPrinciplesMissing?'configuration_and_tax_reference':'sources_and_history',...(d.coverage?.taxHistory?{taxHistory:Object.fromEntries(['vat','cit'].map(kind=>[kind,{status:tax.summaries.some(t=>t.taxType===kind)?'included':d.taxBurden.summaries.some(t=>t.taxType===kind)?'source_not_current':d.coverage.taxHistory[kind].status}]))}:{}),unselectedPrincipleBranches:branches};
  return fitBaselineBranchResponse({...base,status,revision:current.revision,baselineRef:current.methodRef,shortText:renderBusinessBaseline(d,scope,{principles:usable,taxBurden:tax}),unresolved,coverage,nextSteps:status==='ready'?[]:[{tool:'finance_baseline_materials'}]},currentFinanceCall()?.callId);
 }
 export async function readBusinessBaseline(args,options={}){
@@ -141,10 +142,10 @@ export async function readBaselineMaterials(args,options={}){
  if(!currentFinanceCall())return withFinanceCall({tool:'finance_baseline_materials',args,auditDir:opts.auditDir},()=>readBaselineMaterials(args,opts));
  const binding=scopeBinding(args,opts),db=new DatabaseSync(binding.dbPath,{readOnly:true});
  try{storage.assertBusinessMemoryScope(db,binding.scope);db.exec('BEGIN');
-  const detail=args.section&&args.section!=='overview',unbound=!(args.originals??[]).length&&!(args.materialRefs??[]).length;
+  const detail=args.section&&args.section!=='overview'&&args.section!=='structure',unbound=!(args.originals??[]).length&&!(args.materialRefs??[]).length;
   if(detail&&unbound&&!args.sourceCursor&&args.extractKnownFields===false){db.exec('COMMIT');return {version:'finance-baseline-materials/1',target:args.target,scopeVerified:true,section:args.section,status:'material_reference_required',next:{tool:'finance_baseline_materials',arguments:{target:args.target,extractKnownFields:true,section:args.section}}};}
   if(detail&&unbound&&args.extractKnownFields!==false)args={...args,extractKnownFields:true};
-  if(args.sourceCursor&&(!args.extractKnownFields||(args.originals??[]).length||(args.materialRefs??[]).length||args.selections?.length))fail('finance_baseline_input_invalid');
+  if(args.sourceCursor&&(!args.extractKnownFields||(args.originals??[]).length||(args.materialRefs??[]).length||args.selections?.length||args.historicalRows?.length))fail('finance_baseline_input_invalid');
   let actualArgs=args,discovery=null,cursorSnapshot=null;
   if(args.extractKnownFields&&!(args.originals??[]).length&&!(args.materialRefs??[]).length){
    cursorSnapshot=args.sourceCursor?await materialSnapshot(args.sourceCursor,args,db,binding,opts):null;if(args.sourceCursor&&!cursorSnapshot.sourceDiscoveryState)fail('finance_baseline_discovery_cursor_invalid');
@@ -168,7 +169,7 @@ export async function readBaselineMaterials(args,options={}){
  }finally{db.close();}
 }
 function requireFactEvidence(principle,factMap){const fs=principle.evidenceRefs.map(ref=>factMap.get(ref));if(fs.some(f=>!f))fail('finance_baseline_evidence_missing');return fs;}
-function groupFacts(fs,when){return [...groupBaselineMaterialFacts(fs).values()].filter(g=>g.some(f=>f.field==='business_kind'&&f.value===when)&&!g.some((f,i)=>g.slice(0,i).some(other=>f.field===other.field&&!same(f.value,other.value))));}
+function groupFacts(fs,when){return [...groupBaselineMaterialFacts(fs).values()].filter(g=>{const scalars=baselineScalarMaterialFacts(g);return scalars.some(f=>f.field==='business_kind'&&f.value===when)&&!scalars.some((f,i)=>scalars.slice(0,i).some(other=>f.field===other.field&&!same(f.value,other.value)));});}
 const field=(fs,key)=>fs.find(f=>f.field===key)?.value;
 function interval(fs){const start=field(fs,'service_start'),end=field(fs,'service_end');if(!start||!end||start>end)return null;const last=new Date(Date.UTC(Number(end.slice(0,4)),Number(end.slice(5,7)),0)).toISOString().slice(0,10);if(!start.endsWith('-01')||end!==last)return null;const months=(Number(end.slice(0,4))-Number(start.slice(0,4)))*12+Number(end.slice(5,7))-Number(start.slice(5,7))+1;return {start,end,months};}
 function businessEntries(posting,businessRefs){
@@ -176,7 +177,7 @@ function businessEntries(posting,businessRefs){
  return posting.value.entries.filter((entry,index)=>indices.has(index));
 }
 function historySupports(fs,role,amount,{start,end,minimumPeriods=1,date:exactDate,businessRefs=[]}={}){
- const matches=fs.filter(f=>f.field==='historical_posting'&&f.value.status==='posted'&&(!start||f.value.period>=start.slice(0,7))&&(!end||f.value.period<=end.slice(0,7))&&(!exactDate||f.value.date.slice(0,7)===exactDate.slice(0,7))).filter(f=>{
+ const matches=fs.filter(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&(!start||f.value.period>=start.slice(0,7))&&(!end||f.value.period<=end.slice(0,7))&&(!exactDate||(f.value.date?.slice(0,7)??f.value.period)===exactDate.slice(0,7))).filter(f=>{
   if(!businessRefs.length||!f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref)))return false;
   const n=businessEntries(f,businessRefs).filter(e=>role==='income'?['main_income','other_income'].includes(e.role):e.role===role).reduce((n,e)=>n+(role==='income'||role==='main_income'||role==='tax_payable'?e.credit-e.debit:e.debit-e.credit),0);
   return Math.abs(n-amount)<0.011;
@@ -190,7 +191,7 @@ function supportedPrinciple(p,fs,scope){
  if(!BASELINE_VALUES[p.kind]?.includes(p.value))fail('finance_baseline_principle_invalid');
  if(p.kind==='accounting_standard'&&p.when!=='account_set'||p.kind==='enterprise_class'&&p.when!=='account_set'||p.kind==='inventory_cost'&&!['account_set','inventory'].includes(p.when))return false;
  if(!['accounting_standard','enterprise_class','inventory_cost'].includes(p.kind)&&fs.filter(f=>f.field===p.kind).some(f=>f.source.contextBusinessKinds?.length&&!f.source.contextBusinessKinds.includes(p.when)))return false;
- const direct=fs.some(f=>f.field===p.kind&&f.value===p.value);
+ const direct=fs.some(f=>f.field===p.kind&&f.value===p.value&&!f.source.interpretation);
  if(p.kind==='accounting_standard')return fs.some(f=>f.field===p.kind&&f.value===p.value&&f.source.kind==='ledger_configuration');
  if(p.kind==='tax_choice'){
   if(!direct)return false;return choiceCurrent(p,fs,scope.period)&&(p.when==='account_set'||groupFacts(fs,p.when).some(g=>g.some(f=>f.field==='tax_choice'&&f.value===p.value)));
@@ -204,7 +205,7 @@ function supportedPrinciple(p,fs,scope){
  for(const g of groupFacts(fs,p.when)){
   const span=interval(g),amount=field(g,'amount_net'),even=field(g,'service_pattern')==='even_service',businessRefs=g.filter(f=>f.field==='business_reference').map(f=>f.factRef);
   if(p.kind==='business_classification'&&p.when!=='account_set'){
-   const linked=fs.filter(f=>f.field==='historical_posting'&&f.value.status==='posted'&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref)));
+   const linked=fs.filter(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref)));
    if(['main_income','other_income'].includes(p.value)&&linked.some(f=>businessEntries(f,businessRefs).some(e=>e.role===p.value&&e.credit-e.debit>0))&&!linked.some(f=>businessEntries(f,businessRefs).some(e=>['main_income','other_income'].includes(e.role)&&e.role!==p.value&&e.credit-e.debit>0)))return true;
    if(p.value==='actual_use_expense'&&field(g,'creates_asset')===false&&linked.some(f=>businessEntries(f,businessRefs).some(e=>['management_expense','sales_expense','finance_expense'].includes(e.role)&&e.debit-e.credit>0)))return true;
   }
@@ -218,7 +219,7 @@ function supportedPrinciple(p,fs,scope){
   }
   if(p.kind==='vat_input_period'&&p.value==='confirmation_period'){
    const confirmed=field(g,'confirmation_date'),tax=field(g,'amount_tax');
-   if(confirmed&&tax>0&&fs.some(f=>f.field==='historical_posting'&&f.value.status==='posted'&&f.value.period===confirmed.slice(0,7)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref))&&businessEntries(f,businessRefs).some(e=>e.role==='tax_payable'&&Math.abs(e.debit-e.credit-tax)<0.011)))return true;
+   if(confirmed&&tax>0&&fs.some(f=>f.field==='historical_posting'&&['posted','observed_history'].includes(f.value.status)&&f.value.period===confirmed.slice(0,7)&&f.linkedBusinessRefs?.some(ref=>businessRefs.includes(ref))&&businessEntries(f,businessRefs).some(e=>e.role==='tax_payable'&&Math.abs(e.debit-e.credit-tax)<0.011)))return true;
   }
  }return false;
 }
@@ -227,11 +228,11 @@ function principleSupport(facts,scope){
  for(const [kind,values]of Object.entries(BASELINE_VALUES))for(const value of values){
   const direct=facts.filter(f=>f.field===kind&&f.value===value),groups=[...groupBaselineMaterialFacts(facts).values()];
   const candidates=[{when:'account_set',fs:[...direct,...facts.filter(f=>['choice_valid_from','choice_valid_through'].includes(f.field))]}];
-  for(const fs of groups){const when=field(fs,'business_kind'),refs=fs.filter(f=>f.field==='business_reference').map(f=>f.factRef);if(when)candidates.push({when,fs:[...fs,...historical.filter(h=>h.linkedBusinessRefs?.some(ref=>refs.includes(ref)))]});}
+  for(const fs of groups){const when=field(fs,'business_kind'),refs=fs.filter(f=>f.field==='business_reference').map(f=>f.factRef);if(when)candidates.push({when,fs:[...new Map([...fs,...historical.filter(h=>h.linkedBusinessRefs?.some(ref=>refs.includes(ref)))].map(f=>[f.factRef,f])).values()]});}
   for(const when of ['fixed_asset','intangible_asset'])candidates.push({when,fs:assets});
   for(const {when,fs}of candidates){if(!fs.length)continue;const p={kind,value,when};if(supportedPrinciple(p,fs,scope)&&!support.some(s=>s.kind===kind&&s.value===value&&s.when===when)){
    const monthly=monthlyEqualBasis(p,fs);let proof=[...fs];for(const f of fs){const reduced=proof.filter(v=>v.factRef!==f.factRef);if(supportedPrinciple(p,reduced,scope)&&(!monthly||monthlyEqualBasis(p,reduced)))proof=reduced;}
-   if(proof.length<=40)support.push({...p,...(monthly?{allocationBasis:'monthly_equal'}:{}),evidenceRefs:proof.map(f=>f.factRef),authority:proof.some(f=>f.field===kind&&f.value===value)?'source_bound_policy':'checked_historical_inference'});
+   if(proof.length<=40)support.push({...p,...(monthly?{allocationBasis:'monthly_equal'}:{}),evidenceRefs:proof.map(f=>f.factRef),authority:proof.some(f=>f.field===kind&&f.value===value&&!f.source.interpretation)?'source_bound_policy':proof.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference'});
   }}
  }return support.slice(0,24);
 }
@@ -241,7 +242,7 @@ function validatePrinciples(principles,facts,scope){
   if(!supportedPrinciple(p,fs,scope))fail('finance_baseline_principle_unsupported');
   const monthly=monthlyEqualBasis(p,fs);if(p.allocationBasis==='monthly_equal'&&!monthly)fail('finance_baseline_principle_unsupported');if(monthly)p.allocationBasis='monthly_equal';
   if(out.some(prior=>prior.kind===p.kind&&prior.when===p.when&&prior.value!==p.value&&!(p.kind==='business_classification'&&[prior.value,p.value].includes('actual_use_expense'))))fail('finance_baseline_principle_conflict');
-  if(!out.some(prior=>prior.kind===p.kind&&prior.when===p.when&&prior.value===p.value))out.push({...p,authority:fs.some(f=>f.field===p.kind&&f.value===p.value)?'source_bound_policy':'checked_historical_inference'});
+  if(!out.some(prior=>prior.kind===p.kind&&prior.when===p.when&&prior.value===p.value))out.push({...p,authority:fs.some(f=>f.field===p.kind&&f.value===p.value&&!f.source.interpretation)?'source_bound_policy':fs.some(f=>f.field==='historical_posting'&&f.value.status==='observed_history')?'source_history_inference':'checked_historical_inference'});
  }
  return out.sort((a,b)=>a.kind.localeCompare(b.kind)||a.when.localeCompare(b.when));
 }
@@ -259,14 +260,14 @@ async function materialSnapshot(reference,args,db,binding,opts){
  if(snapshot.snapshotDigest!==reference.snapshotDigest)fail('finance_baseline_material_changed');
  return {...snapshot,requests,supportSelections:list(stored.supportSelections),...(stored.sourceDiscoveryState?{sourceDiscoveryState:stored.sourceDiscoveryState}:{})};
 }
-function leafMaterialRequest(args){return {target:args.target,...(args.originals?{originals:args.originals}:{}),...(args.selections?{selections:args.selections}:{}),...(args.extractKnownFields?{extractKnownFields:true}:{}),...(args.historyOffset!==undefined?{historyOffset:args.historyOffset}:{}),...(args.historyLimit!==undefined?{historyLimit:args.historyLimit}:{})};}
+function leafMaterialRequest(args){return {target:args.target,...(args.originals?{originals:args.originals}:{}),...(args.selections?{selections:args.selections}:{}),...(args.historicalRows?{historicalRows:args.historicalRows}:{}),...(args.extractKnownFields?{extractKnownFields:true}:{}),...(args.historyOffset!==undefined?{historyOffset:args.historyOffset}:{}),...(args.historyLimit!==undefined?{historyLimit:args.historyLimit}:{})};}
 function flatMaterialRequests(snapshots){const requests=[...new Map(snapshots.flatMap(s=>s.requests).map(r=>[digest(r),r])).values()];if(requests.length>12)fail('finance_baseline_material_merge_limit');return requests;}
 // 规范对象只有一个分组器；模型侧结构与本机resolver默认事实集共用它，原值只留本机。
 function calculationObjects(facts,scope,{factRefs,factAliases={}}={}){
- const requested=new Set((factRefs??facts.filter(f=>f.source.kind==='file'&&f.field!=='business_reference').map(f=>f.factRef)).map(ref=>factAliases[ref]??ref));
- if([...requested].some(ref=>!facts.some(f=>f.factRef===ref&&f.source.kind==='file'&&f.field!=='business_reference')))fail('finance_baseline_reader_fact_invalid');
+ const scalarFiles=baselineScalarMaterialFacts(facts).filter(f=>f.source.kind==='file'&&f.field!=='business_reference'),requested=new Set((factRefs??scalarFiles.map(f=>f.factRef)).map(ref=>factAliases[ref]??ref));
+ if([...requested].some(ref=>!scalarFiles.some(f=>f.factRef===ref)))fail('finance_baseline_reader_fact_invalid');
  const allowed=new Set([...Object.keys(BASELINE_FACT_VALUES),...BASELINE_DATE_FIELDS,...BASELINE_PERIOD_FIELDS,...BASELINE_AMOUNT_FIELDS,...BASELINE_QUANTITY_FIELDS,'creates_asset']),objects=[];
- for(const [key,fs]of groupBaselineMaterialFacts(facts)){const values={},evidenceRefs=[];for(const f of fs){if(!requested.has(f.factRef)||!allowed.has(f.field))continue;if(Object.hasOwn(values,f.field)&&!same(values[f.field],f.value))fail('finance_baseline_reader_fact_conflict');values[f.field]=f.value;evidenceRefs.push(f.factRef);}if(evidenceRefs.length)objects.push({objectRef:'bg:'+digest([owner(scope),key]),values,evidenceRefs});}
+ for(const [key,fs]of groupBaselineMaterialFacts(facts)){const values={},evidenceRefs=[];for(const f of fs){if(!requested.has(f.factRef)||!allowed.has(f.field))continue;if(Object.hasOwn(values,f.field)&&!same(values[f.field],f.value))fail('finance_baseline_reader_fact_conflict');values[f.field]=f.value;evidenceRefs.push(f.factRef);}if(evidenceRefs.length)objects.push({objectRef:'bg:'+digest([owner(scope),key]),values,evidenceRefs,sourceIdentity:[...new Map(fs.filter(f=>f.source.identity).map(f=>[digest(f.source.identity),f.source.identity])).values()]});}
  return objects;
 }
 // 本机计算器取数桥：不注册MCP原值工具；业务脚本只能消费真实已读且当前仍一致的规范事实。
@@ -292,7 +293,7 @@ export async function saveBusinessBaseline(args,options={}){
   const requested=args.principles.map(p=>{if(p.supportRef){const selected=allowed.get(p.supportRef);if(!selected)fail('finance_baseline_support_not_returned');const {supportRef,authority,...value}=selected;return {...value,evidenceRefs:value.evidenceRefs.map(ref=>merged.factAliases[ref]??ref)};}return {...p,evidenceRefs:p.evidenceRefs.map(ref=>merged.factAliases[ref]??ref)};});
   const principles=validatePrinciples(requested,facts,binding.scope),taxBurden=buildBaselineTaxBurden(facts),coverage=baselineCoverage({...merged,requests},principleSupport(facts,binding.scope),principles);
   if(taxBurden.rows.some(r=>r.through>=binding.scope.period))fail('finance_baseline_tax_history_not_prior');
-  const unresolved=fixedGaps([...(args.unresolved??[]),...snapshots.flatMap(s=>s.gaps).map(code=>({code})),...taxBurden.gaps.map(code=>({code})),...(Object.values(coverage.taxHistory).some(t=>t.status==='incomplete')?[{code:'tax_basis_incomplete'}]:[]),...(taxBurden.missing?[{code:'tax_history_missing'}]:[])]);
+  const unresolved=fixedGaps([...(args.unresolved??[]),...(coverage.businessPrinciplesMissing?[{code:'historical_evidence_missing'}]:[]),...snapshots.flatMap(s=>s.gaps).map(code=>({code})),...taxBurden.gaps.map(code=>({code})),...(Object.values(coverage.taxHistory).some(t=>t.status==='incomplete')?[{code:'tax_basis_incomplete'}]:[]),...(taxBurden.missing?[{code:'tax_history_missing'}]:[])]);
   const used=new Set([...principles.flatMap(p=>p.evidenceRefs),...taxBurden.summaries.flatMap(t=>t.evidenceRefs)]);
   const definition={interfaceVersion:BASELINE_INTERFACE,scope:binding.scope,effectiveFrom:args.effectiveFrom,...(args.effectiveTo?{effectiveTo:args.effectiveTo}:{}),principles,taxBurden,unresolved,coverage,facts:facts.filter(f=>used.has(f.factRef)),materialRefs:args.materialRefs,observationRoots:[opts.auditDir],semanticAuthority:'checked_sources_and_inferences_not_human_approval'};
   renderBusinessBaseline(definition,binding.scope);

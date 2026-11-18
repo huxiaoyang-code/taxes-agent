@@ -103,6 +103,11 @@ export async function runFinanceCalculation(args,options={}){
   const databasePath=options.dbPath??process.env.FINANCE_DATABASE_PATH;
   if(typeof databasePath==='string'&&isAbsolute(databasePath)){
    const financeContext={dbPath:resolve(databasePath),sourceRoot:sourceRoot??'',auditDir:options.auditDir??call?.auditDir??financeAuditDirectory(),sessionPath:options.sessionPath??process.env.FINANCE_BUSINESS_SESSION??''};
+   // 只为原件读取器传递已配置的解释器与Python用户包根；不恢复脚本的ambient环境或模型凭据。
+   const pythonPath=options.pythonPath??process.env.FINANCE_PYTHON_PATH;
+   const pythonUserBase=typeof process.env.PYTHONUSERBASE==='string'&&isAbsolute(process.env.PYTHONUSERBASE)?process.env.PYTHONUSERBASE:process.platform==='win32'&&typeof process.env.APPDATA==='string'&&isAbsolute(process.env.APPDATA)?join(process.env.APPDATA,'Python'):undefined;
+   const materialRuntime={...(typeof pythonPath==='string'&&isAbsolute(pythonPath)?{pythonPath}:{}),...(pythonUserBase?{pythonUserBase}:{})};
+   if(Object.keys(materialRuntime).length)financeContext.materialRuntime=materialRuntime;
    input.financeContext=financeContext;record.financeContext=financeContext;
    annotateFinanceCall({financeCalculationContext:{version:'finance-calculation-context/1',origin:'configured_backend_paths',sha256:sha(json(financeContext))}});
   }

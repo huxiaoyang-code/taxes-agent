@@ -30,10 +30,12 @@ test('基线 XLSX/CSV 结构发现不泄漏表名或原值，原解析器继续�
    const selected=await readBaselineMaterials({target,originals:[{id:'x',path}],selections:[{id:'cost',field:'inventory_cost',originalId:'x',locator:{sheetIndex:0,row:2,column:2}}]},options);assert.equal(selected.facts.find(f=>f.id==='cost').value,'fifo');
    const csv=join(sourceRoot,'cost.csv');writeFileSync(csv,'enterpriseKey,costMethod,PRIVATE_PERSON\nPRIVATE-ADAPTER,先进先出法,LOCAL_ONLY\n');const parsed=await readBaselineMaterials({target,originals:[{id:'c',path:csv}],selections:[{id:'cost',field:'inventory_cost',originalId:'c',locator:{row:2,column:2}}]},options);assert.equal(parsed.facts.find(f=>f.id==='cost').value,'fifo');assert(!JSON.stringify(parsed).includes('PRIVATE_PERSON'));
   });
-  await t.test('缓存公式不能经结构发现绕过旧解析器',async()=>{
+  await t.test('通用结构保留未核公式位置，普通单元格可用且不能采信公式缓存',async()=>{
    sheet.getCell('C2').value={formula:'12345+0.67',result:12345.67};const formula=Buffer.from(await workbook.xlsx.writeBuffer()),formulaPath=join(sourceRoot,'formula.xlsx');writeFileSync(formulaPath,formula);
    assert.throws(()=>readXlsxStructure(formula),{code:'xlsx_formula_unsupported'});assert.throws(()=>readInvoiceXlsx(formula,{sheet:sheet.name,headerRow:1,columns:{net:'amount_net'}}),{code:'xlsx_formula_unsupported'});
-   await assert.rejects(readBaselineMaterials({target,originals:[{id:'f',path:formulaPath}]},options),{code:'xlsx_formula_unsupported'});
+   const structure=await readBaselineMaterials({target,originals:[{id:'f',path:formulaPath}]},options);assert(structure.fields.some(field=>field.valueState==='formula_unverified'&&field.position?.row===2&&field.position.column===3));
+   const ordinary=await readBaselineMaterials({target,originals:[{id:'f',path:formulaPath}],selections:[{id:'ordinary_cost',originalId:'f',field:'inventory_cost',locator:{sheetIndex:0,row:2,column:2}}]},options);assert.equal(ordinary.facts.find(fact=>fact.id==='ordinary_cost').value,'fifo');
+   await assert.rejects(readBaselineMaterials({target,originals:[{id:'f',path:formulaPath}],selections:[{id:'unverified_amount',originalId:'f',field:'amount_net',locator:{sheetIndex:0,row:2,column:3}}]},options),{code:'xlsx_formula_unsupported'});
   });
   await t.test('真实 HTTP 共享固定投影、材料记录及保存保护',async()=>{
    const base=await new Promise((resolve,reject)=>{
@@ -52,7 +54,9 @@ test('基线 XLSX/CSV 结构发现不泄漏表名或原值，原解析器继续�
    const client=new McpStdioClient(fileURLToPath(new URL('../../05-reconstruction/codex/mcp/finance-mcp/server.mjs',import.meta.url)),{cwd:root,env:{...process.env,FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:'http://127.0.0.1:1',NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
    try{
     await client.initialize();const call=async(name,args)=>{const result=await client.call(name,args);assert.equal(result.isError,false,result.text);return result.data;};
-    const inventory=await call('finance_baseline_materials',{target,limit:50}),item=inventory.sourceInventory.items.find(i=>i.format==='xlsx'&&i.status==='inspectable');assert(item?.originalRef);assert(!JSON.stringify(inventory.sourceInventory).includes('private.xlsx'));
+    let inventory=await call('finance_baseline_materials',{target,limit:50}),item=inventory.sourceInventory.items.find(i=>i.format==='xlsx'&&i.status==='inspectable');
+    for(let page=0;!item&&inventory.pagination.next;page++){assert(page<50,'inventory续页必须有界');assert.equal(inventory.pagination.next.tool,'finance_baseline_materials');inventory=await call(inventory.pagination.next.tool,inventory.pagination.next.arguments);item=inventory.sourceInventory.items.find(i=>i.format==='xlsx'&&i.status==='inspectable');}
+    assert(item?.originalRef);assert(!JSON.stringify(inventory.sourceInventory).includes('private.xlsx'));
     const discovered=await call('finance_baseline_materials',{target,originals:[{id:'selected',originalRef:item.originalRef}]});const header=discovered.fields.find(h=>h.suggestedFields.includes('amount_net'));
     const materials=await call('finance_baseline_materials',{target,originals:[{id:'selected',originalRef:item.originalRef}],selections:[{id:'amount',field:'amount_net',originalId:'selected',locator:{sheetIndex:0,row:header.row+1,column:header.column}}]});
     const args={target,materialRefs:[{materialRef:materials.materialRef,snapshotDigest:materials.snapshotDigest}],expectedReaderSha256:materials.calculationReader.sha256};

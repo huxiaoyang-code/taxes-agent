@@ -3,7 +3,8 @@ import {createHash} from 'node:crypto';
 import {readFileSync,lstatSync,realpathSync,openSync,fstatSync,closeSync,readdirSync,opendirSync} from 'node:fs';
 import {resolve,relative,isAbsolute,dirname,basename,extname,join} from 'node:path';
 import {captureEvidenceSource,parseEvidenceCsv,readEvidencePointer} from './business-evidence.mjs';
-import {readXlsxStructure} from './offline-invoice-xlsx.mjs';
+import {readMaterialDocument,readMaterialValue,projectMaterialDocument} from './material-document.mjs';
+import {registeredMaterialIdentity,materialPartyContext,matchMaterialParty} from './material-identity.mjs';
 import {getAccountingRoles,getAccountingProfile} from './accounting-profiles.mjs';
 import {parseMoney,formatCents} from './money.mjs';
 import {businessMemoryDigest} from './business-memory-storage.mjs';
@@ -36,7 +37,7 @@ function date(value){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(val
 export function normalizeBaselineValue(field,value){
  if(BASELINE_FACT_VALUES[field])return BASELINE_FACT_VALUES[field].includes(value)?value:BASELINE_ALIASES[field]?.[value];
  if(BASELINE_DATE_FIELDS.includes(field))return date(value);
- if(BASELINE_PERIOD_FIELDS.includes(field))return month(value)?value:undefined;
+ if(BASELINE_PERIOD_FIELDS.includes(field))return month(value)?value:date(value)?.slice(0,7);
  if(BASELINE_AMOUNT_FIELDS.includes(field)){if(!['number','string'].includes(typeof value)||!/^\d{1,12}(\.\d{1,2})?$/.test(String(value)))return undefined;const n=Number(value);return Number.isFinite(n)&&n<=1e12?n:undefined;}
  if(BASELINE_QUANTITY_FIELDS.includes(field)){if(!['number','string'].includes(typeof value)||!/^\d{1,9}$/.test(String(value)))return undefined;return Number(value);}
  if(field==='creates_asset')return value===true||['是','形成或改良资产'].includes(value)?true:value===false||['否','不形成或改良固定资产','不形成或改良资产'].includes(value)?false:undefined;
@@ -45,7 +46,8 @@ export function normalizeBaselineValue(field,value){
 const ownerKeys=['enterpriseKey','enterprise_key','企业标识'];
 const nameKeys=['companyName','company_name','企业名称','公司名称'];
 function ownerStatus(contexts,scope,accountSet,explicit){
- let found=false,strong=false;const registered=accountSet.registeredNames??[],conflicting=accountSet.conflictingNames??[];
+ const parties=materialPartyContext(contexts,accountSet);if(parties.conflict)fail('finance_baseline_source_scope_conflict');
+ let found=parties.matched===true,strong=false;if(parties.invoiceParties&&!found)return false;const registered=accountSet.registeredNames??[],conflicting=accountSet.conflictingNames??[];
  for(const item of contexts){if(!item||typeof item!=='object'||Array.isArray(item))continue;
   for(const key of ownerKeys)if(Object.hasOwn(item,key)){if(item[key]!==scope.enterpriseKey)fail('finance_baseline_source_scope_conflict');found=true;strong=true;}
   for(const key of nameKeys)if(Object.hasOwn(item,key)){if(conflicting.includes(item[key])||!registered.includes(item[key])&&!(strong&&item[key]===accountSet.name))fail('finance_baseline_source_scope_conflict');found=true;}
@@ -54,10 +56,8 @@ function ownerStatus(contexts,scope,accountSet,explicit){
  if(explicit!==undefined){if(explicit!==scope.enterpriseKey&&!registered.includes(explicit)&&!(strong&&explicit===accountSet.name)||conflicting.includes(explicit))fail('finance_baseline_source_scope_conflict');found=true;}
  return found;
 }
-function registeredAccountSet(db,scope){
- const set=db.prepare('SELECT * FROM account_sets WHERE id=?').get(scope.accountSetId),registered=db.prepare('SELECT enterprise_key,enterprise_name FROM import_enterprise_account_sets UNION SELECT enterprise_key,enterprise_name FROM import_source_bindings').all();
- return {...set,registeredNames:[...new Set(registered.filter(r=>r.enterprise_key===scope.enterpriseKey&&r.enterprise_name).map(r=>r.enterprise_name))],conflictingNames:[...new Set(registered.filter(r=>r.enterprise_key!==scope.enterpriseKey&&r.enterprise_name).map(r=>r.enterprise_name))]};
-}
+const registeredAccountSet=registeredMaterialIdentity;
+
 function jsonContexts(data,pointer){const out=[data,data?.scope,data?.company];let item=data;for(const raw of pointer===''?[]:pointer.slice(1).split('/')){item=item?.[raw.replaceAll('~1','/').replaceAll('~0','~')];if(item&&typeof item==='object'){out.push(item,item.scope,item.company);}}return out;}
 const roleNames={cash:'cash',bank:'bank',receivable:'receivable',payable:'payable',inventory:'inventory',mainRevenue:'main_income',otherRevenue:'other_income',mainCost:'main_cost',otherCost:'main_cost',fixedAsset:'fixed_asset',accumulatedDepreciation:'accumulated_depreciation',intangibleAsset:'intangible_asset',accumulatedAmortization:'accumulated_amortization',salesExpense:'sales_expense',managementExpense:'management_expense',adminExpense:'management_expense',defaultDepreciationExpense:'management_expense',financeExpense:'finance_expense',taxPayable:'tax_payable',currentProfit:'current_profit',currentYearProfit:'current_profit',profitDistribution:'retained_profit'};
 function roleFunction(profile){const roles={...getAccountingRoles(profile)},trustedNames={'应交税费':'taxPayable','库存现金':'cash','银行存款':'bank','应收账款':'receivable','应付账款':'payable','库存商品':'inventory','原材料':'inventory'};for(const a of getAccountingProfile(profile).coa)if(trustedNames[a.name])roles[trustedNames[a.name]+a.code]=a.code;
@@ -107,19 +107,33 @@ function jsonStructure(data,hash,locations){const out=[];let walked=0;const walk
 function csvRecord(rows,locator){const headers=rows[(locator.headerRows??[1]).at(-1)-1],row=rows[locator.row-1];if(!headers||!row)fail('finance_baseline_locator_missing');return Object.fromEntries(headers.map((h,i)=>[h,row[i]]));}
 function loadOriginal(original,scope,accountSet,opts,cache){
  if(cache.has(original.id))fail('finance_baseline_original_duplicate');
- const bytes=baselineBytes(original.path,opts.sourceRoot),hash=sha(bytes);if(original.sha256&&original.sha256!==hash)fail('finance_baseline_source_changed');
- const format=extname(original.path).slice(1).toLowerCase(),locations=new Map();let data,rows,sheets,structure={fields:[]};
- if(format==='json'){try{data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes).replace(/^\uFEFF/,''));}catch{fail('finance_baseline_json_invalid');}
-  if(/^(finance-|business-baseline)/.test(data?.version??'')||generatedMaterialSnapshot(data))fail('finance_baseline_generated_not_original');structure=jsonStructure(data,hash,locations);}
- else if(format==='csv'){rows=parseEvidenceCsv(new TextDecoder('utf-8',{fatal:true}).decode(bytes));structure={columns:(rows[0]??[]).map((name,index)=>({column:index+1,suggestedFields:suggest(name)?[suggest(name)]:[],...([...ownerKeys,...nameKeys].includes(name)?{meaning:'enterprise_identity'}:{})})),rowCount:Math.max(0,rows.length-1)};}
- else if(format==='xlsx'){
-  const first=readXlsxStructure(bytes);if(first.sheetCount>8)fail('finance_baseline_material_limit');sheets=[first];for(let i=1;i<first.sheetCount;i++)sheets.push(readXlsxStructure(bytes,{sheetIndex:i}));
+ const document=readMaterialDocument({path:original.path,sourceRoot:opts.sourceRoot,expectedSha256:original.sha256,pythonPath:opts.pythonPath??process.env.FINANCE_PYTHON_PATH,pythonUserBase:opts.pythonUserBase,pageOffset:original.pageOffset??0,maxPages:original.maxPages??40});
+ const {sha256:hash,bytes}=document.source,format=document.format,data=document.data,locations=new Map(document.locations??[]);
+ if(data&&(/^(finance-|business-baseline)/.test(data.version??'')||generatedMaterialSnapshot(data)))fail('finance_baseline_generated_not_original');
+ let structure={fields:[]},rows,sheets;
+ if(format==='json')structure=jsonStructure(data,hash,locations);
+ else if(format==='csv'){
+  rows=document.tables[0]?.rows.map(r=>r.cells)??[];
+  structure={columns:(rows[0]??[]).map((name,index)=>({column:index+1,suggestedFields:suggest(name)?[suggest(name)]:[],...([...ownerKeys,...nameKeys].includes(name)?{meaning:'enterprise_identity'}:{})})),rowCount:Math.max(0,rows.length-1)};
+ }else if(['xls','xlsx'].includes(format)){
+  sheets=document.tables;
   structure={sheets:sheets.map(s=>({sheetIndex:s.sheetIndex,rowCount:s.rows.length,headers:s.rows.slice(0,8).flatMap(r=>r.cells.flatMap((value,i)=>suggest(value)||[...ownerKeys,...nameKeys].includes(value)?[{row:r.rowNumber,column:i+1,suggestedFields:suggest(value)?[suggest(value)]:[],...([...ownerKeys,...nameKeys].includes(value)?{meaning:'enterprise_identity'}:{})}]:[]))}))};
- }else fail('finance_baseline_material_unsupported');
- const partial={...original,path:resolve(original.path),sha256:hash,bytes:bytes.length,format,data,rows,sheets,locations,evidenceCache:new Map([[resolve(original.path),bytes]])};
+ }
+ const projected=projectMaterialDocument(document,{offset:original.structureOffset??0,limit:400}),publicOriginal={...original,path:undefined,originalRef:sourceReference(opts.sourceRoot,original.path)};
+ structure.documentFields=projected.fields??projected.locations??projected.items??[];
+ structure.readState=document.readState;structure.extractor=document.extractor;structure.documentPagination=projected.pagination;
+ if(projected.pagination?.nextOffset!==null)structure.structureNext={tool:'finance_baseline_materials',arguments:{target:{accountSetId:scope.accountSetId,period:scope.period},originals:[{...publicOriginal,structureOffset:projected.pagination.nextOffset}],section:'structure'}};
+ if(document.nextPageOffset!==undefined)structure.pageNext={tool:'finance_baseline_materials',arguments:{target:{accountSetId:scope.accountSetId,period:scope.period},originals:[{...publicOriginal,pageOffset:document.nextPageOffset,structureOffset:0}],section:'structure'}};
+ structure.readDiagnostics=document.diagnostics;
+ const partial={...original,path:resolve(original.path),sha256:hash,bytes,format,data,rows,sheets,locations,document,evidenceCache:new Map()};
  let explicit;if(original.owner)explicit=selectRaw(partial,original.owner,opts).value;
- const owner=ownerStatus(data?[data,data.scope,data.company]:[],scope,accountSet,explicit);
- const result={...partial,explicit,owner,structure};cache.set(original.id,result);return result;
+ let identityResult;
+ if(original.ownerIdentity)identityResult=explicitIdentity(partial,original.ownerIdentity,accountSet,opts);
+ const contexts=data?[data,data.scope,data.company]:document.tables.flatMap(s=>{const header=s.rows[0]?.cells??[];return s.rows.slice(1).map(r=>Object.fromEntries(header.map((h,i)=>[h,r.cells[i]])));});
+ let owner=false;try{owner=identityResult?.matched??ownerStatus(contexts,scope,accountSet,explicit);}catch(error){if(error.code!=='finance_baseline_source_scope_conflict')throw error;}
+ const detected=identityResult??materialPartyContext(contexts,accountSet);
+ structure.identity={matched:owner,registeredNameAvailable:accountSet.registeredNames.length>0,...(!owner?{reason:accountSet.registeredNames.length||(accountSet.registeredTaxIds??[]).length?'source_owner_unmatched':'registered_identity_missing'}:{}),role:detected.role??'enterprise',roleAuthority:detected.roleAuthority??'source_labels',basis:detected.basis??'source_identity',taxIdAvailability:(accountSet.registeredTaxIds??[]).length?'registered':'not_registered',...(detected.invoiceDirection?{invoiceDirection:detected.invoiceDirection}:{})};
+ const result={...partial,explicit,owner,identityResult,identitySummary:structure.identity,structure};cache.set(original.id,result);return result;
 }
 // 只排除逐文件核实的自写技术记录；同一call目录中的其他客户文件仍进入普通发现队列。
 function generatedRecordFiles(dir,root,budget){
@@ -146,7 +160,7 @@ function sourceFiles(root){
  if(typeof root!=='string'||!isAbsolute(root))return {paths:[],unsupported:{},truncated:false,generatedFilesExcluded:0,technicalScanLimited:false};const base=resolve(root);
  for(let p=base;;p=dirname(p)){if(lstatSync(p).isSymbolicLink()||realpathSync(p).toLowerCase()!==p.toLowerCase())fail('finance_baseline_source_forbidden');if(p===dirname(p))break;}
  if(!lstatSync(base).isDirectory())fail('finance_baseline_source_forbidden');const paths=[],unsupported={},technical={records:0,bytes:0,limited:false};let visited=0,truncated=false,generatedFilesExcluded=0;
- const walk=(dir,depth)=>{const generated=generatedRecordFiles(dir,base,technical);for(const entry of readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){if(generated.has(entry.name)&&entry.isFile()&&!entry.isSymbolicLink()){generatedFilesExcluded++;continue;}if(++visited>2000)fail('finance_baseline_material_limit');const path=join(dir,entry.name);if(entry.isSymbolicLink())continue;if(entry.isDirectory()){if(depth<4)walk(path,depth+1);else truncated=true;}else if(entry.isFile()){const format=extname(entry.name).slice(1).toLowerCase();if(['json','csv','xlsx'].includes(format))paths.push(path);else {const label=['pdf','docx','txt','md','xls'].includes(format)?format:'other';unsupported[label]=(unsupported[label]??0)+1;}}}};walk(base,0);return {paths,unsupported,truncated,generatedFilesExcluded,technicalScanLimited:technical.limited};
+ const walk=(dir,depth)=>{const generated=generatedRecordFiles(dir,base,technical);for(const entry of readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){if(generated.has(entry.name)&&entry.isFile()&&!entry.isSymbolicLink()){generatedFilesExcluded++;continue;}if(++visited>2000)fail('finance_baseline_material_limit');const path=join(dir,entry.name);if(entry.isSymbolicLink())continue;if(entry.isDirectory()){if(depth<4)walk(path,depth+1);else truncated=true;}else if(entry.isFile()){const format=extname(entry.name).slice(1).toLowerCase();if(['json','csv','xlsx','xls','pdf','docx','txt','md','png','jpg','jpeg','tif','tiff','bmp','webp'].includes(format))paths.push(path);else {const label=['pdf','docx','txt','md','xls'].includes(format)?format:'other';unsupported[label]=(unsupported[label]??0)+1;}}}};walk(base,0);return {paths,unsupported,truncated,generatedFilesExcluded,technicalScanLimited:technical.limited};
 }
 const sourceReference=(root,path)=>'bs:'+digest([resolve(root),relative(resolve(root),path)]);
 function resolveOriginalReferences(args,opts){
@@ -161,7 +175,7 @@ export function discoverBaselineSourceInventory(db,scope,args,opts){
   try{const st=lstatSync(path);if(st.size>5*1024*1024||bytes+st.size>20*1024*1024){items.push({...base,ownerStatus:'unverified',status:'size_limit'});continue;}bytes+=st.size;
    const loaded=loadOriginal({id:'inventory',path},scope,accountSet,opts,new Map()),structure=loaded.structure;
    const fields=[...(structure.fields??[]),...(structure.columns??[]),...(structure.sheets??[]).flatMap(s=>s.headers)];
-   items.push({...base,ownerStatus:loaded.owner?'verified':'unverified',status:'inspectable',availableFields:[...new Set(fields.flatMap(f=>f.suggestedFields??[]))].slice(0,16)});sources.push({path:loaded.path,sha256:loaded.sha256,bytes:loaded.bytes});
+   items.push({...base,ownerStatus:loaded.owner?'verified':'unverified',status:loaded.document.status==='read'?'inspectable':loaded.document.status,readState:loaded.document.readState,diagnostics:loaded.document.diagnostics?.map(d=>({code:d.code})),identity:loaded.identitySummary,next:{tool:'finance_baseline_materials',arguments:{target:{accountSetId:scope.accountSetId,period:scope.period},originals:[{id:'source',originalRef:base.originalRef}],section:'structure'}},availableFields:[...new Set(fields.flatMap(f=>f.suggestedFields??[]))].slice(0,16)});sources.push({path:loaded.path,sha256:loaded.sha256,bytes:loaded.bytes});
   }catch(error){items.push({...base,ownerStatus:error.code==='finance_baseline_source_scope_conflict'?'other_scope':'unverified',status:error.code==='finance_baseline_generated_not_original'?'generated_not_original':'unsupported_or_unverified'});}
  }
  return {projection:{status:'available',items,pagination:{offset,limit,total:files.paths.length,nextOffset:offset+limit<files.paths.length?offset+limit:null},unsupportedFormats:files.unsupported,depthTruncated:files.truncated,generatedFilesExcluded:files.generatedFilesExcluded,technicalScanLimited:files.technicalScanLimited},sources};
@@ -181,6 +195,7 @@ export function discoverBaselineKnownSources(db,scope,opts,previous){
    scannedCount++;try{
     const stat=lstatSync(path);if(stat.size>5*1024*1024||totalBytes+stat.size>20*1024*1024){bypassed.size_limit++;continue;}const bytes=baselineBytes(path,root);totalBytes+=bytes.length;scannedSources.push({path,sha256:sha(bytes),bytes:bytes.length});
     const id='discovered_'+digest([root,path]).slice(0,24),loaded=loadOriginal({id,path},scope,accountSet,opts,new Map()),known=knownFacts(loaded,scope,accountSet,opts);
+    if(['unsupported','needs_runtime'].includes(loaded.document.status)){const reason=loaded.document.status==='needs_runtime'?'runtime_unavailable':'unsupported';bypassed[reason]=(bypassed[reason]??0)+1;continue;}
     if(!known.availableCount){bypassed.no_known_fields++;continue;}
     if(!loaded.owner&&(known.gaps.includes('scope_conflict')||known.gaps.includes('owner_unverified')||!known.facts.length)){bypassed[known.gaps.includes('scope_conflict')?'other_scope':'owner_unverified']++;continue;}
     eligible.push({id,path,sha256:loaded.sha256});
@@ -193,43 +208,124 @@ export function discoverBaselineKnownSources(db,scope,opts,previous){
 }
 export const baselineDiscoveryProjection=state=>({mode:'authorized_scope_known_fields',scannedCount:state.scannedCount,selectedCount:state.lastBatchCount,eligibleCount:state.eligible.length,remainingCount:state.eligible.length-state.nextIndex,uninspectedCount:state.depthTruncated?null:state.uninspectedCount,scanLimited:state.depthTruncated||state.uninspectedCount>0||state.bypassed.size_limit>0||state.technicalScanLimited===true,bypassed:state.bypassed,unsupportedFormats:state.unsupportedFormats,depthTruncated:state.depthTruncated,generatedFilesExcluded:state.generatedFilesExcluded??0,technicalScanLimited:state.technicalScanLimited===true,scanLimits:{files:128,bytes:20*1024*1024,batchFiles:12,technicalRecords:2000,technicalBytes:64*1024*1024}});
 function selectRaw(original,requested,opts){
- const locator=requested.fieldRef?original.locations.get(requested.fieldRef):requested;if(!locator)fail('finance_baseline_locator_missing');
- if(original.format==='xlsx'){
-  const sheet=original.sheets[locator.sheetIndex??0],r=sheet?.rows.find(r=>r.rowNumber===locator.row),headers=sheet?.rows.find(r=>r.rowNumber===(locator.headerRows??[1]).at(-1));
-  const column=typeof locator.column==='number'?locator.column-1:headers?.cells.findIndex(c=>c===locator.column);if(!r||column<0||column===undefined||column>=r.cells.length)fail('finance_baseline_locator_missing');
-  const type=r.types[column];if(type?.type==='n'&&!['0','1','2'].includes(type.format))fail('finance_baseline_xlsx_format_unsupported');
-  return {value:r.cells[column],locator:{sheetIndex:sheet.sheetIndex,row:r.rowNumber,column:column+1,headerRows:locator.headerRows??[1]},contextPath:`sheet:${sheet.sheetIndex}/row:${r.rowNumber}`,contexts:headers?[Object.fromEntries(headers.cells.map((h,i)=>[h,r.cells[i]]))]:[],hint:suggest(headers?.cells[column]),semantics:taxSourceSemantics[headers?.cells[column]],key:headers?.cells[column]};
- }
- const captured=captureEvidenceSource({path:original.path,...locator},{sourceRoot:opts.sourceRoot,fileCache:original.evidenceCache});if(captured.sha256!==original.sha256)fail('finance_baseline_source_changed');
- const key=original.format==='json'?locator.jsonPointer.split('/').at(-1).replaceAll('~1','/').replaceAll('~0','~'):original.rows[(locator.headerRows??[1]).at(-1)-1][captured.column-1];
- return {value:captured.selectedValue,locator:original.format==='json'?{jsonPointer:locator.jsonPointer}:{row:locator.row,column:captured.column,headerRows:captured.headerRows},contextPath:original.format==='json'?locator.jsonPointer.slice(0,locator.jsonPointer.lastIndexOf('/')):`row:${locator.row}`,contexts:original.format==='json'?jsonContexts(original.data,locator.jsonPointer):[csvRecord(original.rows,locator)],hint:suggest(key),semantics:taxSourceSemantics[key],key};
+ const locator=requested.fieldRef?.startsWith('bl:')?original.locations.get(requested.fieldRef):requested;
+ if(!locator)fail('finance_baseline_locator_missing');
+ const {valueSlice,...actualLocator}=locator;const captured=readMaterialValue(original.document,actualLocator);if(captured.valueState==='formula_unverified')fail('xlsx_formula_unsupported');if(captured.valueState==='cell_error')fail('finance_baseline_cell_error');const actual={...captured.locator,...(valueSlice?{valueSlice}:{})};captured.value=slicedValue(captured.value,valueSlice);
+ let key=captured.key;
+ if(!key&&original.format==='json')key=actual.jsonPointer?.split('/').at(-1).replaceAll('~1','/').replaceAll('~0','~');
+ if(!key&&actual.row){const sheet=original.document.tables.find(s=>s.sheetIndex===(actual.sheetIndex??0));const headers=sheet?.rows.find(r=>r.rowNumber===(actual.headerRows??[1]).at(-1));key=headers?.cells[(actual.column??1)-1];}
+ return {...captured,contextPath:actual.jsonPointer!==undefined?actual.jsonPointer.slice(0,actual.jsonPointer.lastIndexOf('/')):actual.row?`sheet:${actual.sheetIndex??0}/row:${actual.row}`:`page:${actual.page}/line:${actual.line}`,hint:suggest(key),semantics:taxSourceSemantics[key],key};
 }
+function explicitIdentity(original,mapping,accountSet,opts){
+ const name=selectRaw(original,mapping.name,opts),taxId=mapping.taxId?selectRaw(original,mapping.taxId,opts):null;
+ const result=matchMaterialParty({role:mapping.role,name:name.value,taxId:taxId?.value},accountSet);
+ return {...result,roleAuthority:'model_interpretation',identityContext:name.contextPath,locators:{name:name.locator,...(taxId?{taxId:taxId.locator}:{})}};
+}
+function capturedOwner(original,captured,selection,scope,accountSet,opts){
+ const row=materialPartyContext(captured.contexts,accountSet);
+ if(row.conflict)fail('finance_baseline_source_scope_conflict');
+ if(row.matched)return row;
+ // 某一行出现明确购销方而双方均不属本账套，文件其他行的归属不能替它背书。
+ if(row.invoiceParties)return row;
+ if(selection.ownerIdentity)return explicitIdentity(original,selection.ownerIdentity,accountSet,opts);
+ if(original.identityResult){
+  const owner=original.identityResult;
+  const keyValue=original.document.tables.length>0&&original.document.tables.every(t=>t.rows.every(r=>r.cells.length<=2));
+  return !keyValue&&owner.identityContext.startsWith('sheet:')&&owner.identityContext!==captured.contextPath?{...owner,matched:false}:owner;
+ }
+ return {matched:ownerStatus(captured.contexts,scope,accountSet,original.explicit),role:'enterprise',basis:captured.contexts.some(c=>c&&typeof c==='object'&&ownerKeys.some(k=>c[k]===scope.enterpriseKey))?'enterprise_key':'registered_name',taxIdAvailability:(accountSet.registeredTaxIds??[]).length?'registered':'not_registered'};
+}
+function slicedValue(value,slice){
+ if(!slice)return value;if(typeof value!=='string')fail('finance_baseline_text_slice_invalid');
+ const start=value.indexOf(slice.after);if(start<0||value.indexOf(slice.after,start+slice.after.length)>=0)fail('finance_baseline_text_slice_invalid');
+ let result=value.slice(start+slice.after.length);if(slice.before){const end=result.indexOf(slice.before);if(end<0)fail('finance_baseline_text_slice_invalid');result=result.slice(0,end);}return result.trim().replace(/^[：:=\s]+/u,'').trim();
+}
+
 function select(original,selection,scope,accountSet,opts){
- const captured=selectRaw(original,selection.locator,opts);if(!scalar(captured.value))fail('finance_baseline_scalar_required');
- if(captured.hint!==selection.field)return {gap:'unsupported_material'};
+ const captured=selectRaw(original,selection.locator,opts);captured.value=slicedValue(captured.value,selection.valueSlice);if(!scalar(captured.value))fail('finance_baseline_scalar_required');
+ if(captured.hint&&captured.hint!==selection.field&&!selection.interpretation)return {gap:'unsupported_material'};
  if(BASELINE_AMOUNT_FIELDS.includes(selection.field))for(const context of captured.contexts){if(!context||typeof context!=='object'||Array.isArray(context))continue;
   for(const key of ['currency','币种','记账币种'])if(Object.hasOwn(context,key)&&!['CNY','RMB','人民币','人民币元'].includes(context[key]))return {gap:'unsupported_material'};
   for(const key of ['amountUnit','unit','金额单位'])if(Object.hasOwn(context,key)&&!['yuan','元','人民币元','CNY','RMB'].includes(context[key]))return {gap:'unsupported_material'};
   if(['sales_ex_vat','revenue'].includes(selection.field))for(const key of ['amountBasis','priceBasis','金额口径','销售额口径'])if(Object.hasOwn(context,key)&&!['tax_exclusive','不含税','不含税金额','不含税销售额'].includes(context[key]))return {gap:'unsupported_material'};
  }
- if(!ownerStatus(captured.contexts,scope,accountSet,original.explicit))return {gap:'owner_unverified'};
+ const identity=capturedOwner(original,captured,selection,scope,accountSet,opts);if(!identity.matched)return {gap:'owner_unverified'};
  // 可定位行的主体/期间上下文与文件总范围一起保留；后续不会把一行绑定成别的公司。
- const value=normalizeBaselineValue(selection.field,captured.value);if(value===undefined)return {gap:'unsupported_material'};
+ let value=normalizeBaselineValue(selection.field,captured.value);
+ if(selection.interpretation){if(!(Object.hasOwn(BASELINE_FACT_VALUES,selection.field)||selection.field==='creates_asset'))fail('finance_baseline_interpretation_invalid');const interpreted=normalizeBaselineValue(selection.field,selection.interpretation.value);if(interpreted===undefined||value!==undefined&&value!==interpreted)fail('finance_baseline_interpretation_invalid');value=interpreted;}
+ if(value===undefined)return {gap:'unsupported_material'};
  const contextBusinessKinds=[...new Set([...captured.contexts.flatMap(c=>c&&typeof c==='object'&&!Array.isArray(c)?Object.entries(c).filter(([k])=>suggest(k)==='business_kind').map(([,v])=>normalizeBaselineValue('business_kind',v)).filter(Boolean):[]),...(/租金|租赁/.test(captured.key)?['lease']:[])])];
- const source={kind:'file',path:original.path,sha256:original.sha256,bytes:original.bytes,originalId:original.id,locator:captured.locator,contextPath:captured.contextPath,rootIdentity:baselineDirectoryIdentity(opts.sourceRoot),...(captured.semantics?{semantics:captured.semantics}:{}),...(contextBusinessKinds.length?{contextBusinessKinds}:{})};
+ const source={kind:'file',path:original.path,sha256:original.sha256,bytes:original.bytes,originalId:original.id,locator:captured.locator,contextPath:captured.contextPath,rootIdentity:baselineDirectoryIdentity(opts.sourceRoot),extractor:original.document.extractor,identity:{role:identity.role,roleAuthority:identity.roleAuthority??'source_labels',basis:identity.basis,taxIdAvailability:identity.taxIdAvailability,...(identity.invoiceDirection?{invoiceDirection:identity.invoiceDirection}:{})},...(selection.valueSlice?{valueSlice:selection.valueSlice}:{}),...(selection.interpretation?{interpretation:{kind:'model_interpretation',...selection.interpretation}}:{}),...(captured.semantics?{semantics:captured.semantics}:{}),...(contextBusinessKinds.length?{contextBusinessKinds}:{})};
  return {value:fact(scope,selection.field,value,source,{id:selection.id,group:digest([original.path,captured.contextPath])})};
+}
+function historicalObservations(originals,mappings,scope,accountSet,opts,diagnostics){
+ const out=[];
+ for(const mapping of mappings??[]){
+  const original=originals.get(mapping.originalId);if(!original)fail('finance_baseline_original_missing');
+  const captures=Object.fromEntries(['period','date','businessReference','code','accountName','debit','credit'].filter(key=>mapping[key]).map(key=>[key,selectRaw(original,mapping[key],opts)]));
+  const anchor=captures.businessReference;
+  const recordContext=Object.values(captures).every(c=>anchor.locator.row!==undefined?c.locator.row===anchor.locator.row&&(c.locator.sheetIndex??0)===(anchor.locator.sheetIndex??0):anchor.locator.jsonPointer!==undefined?c.contextPath===anchor.contextPath:c.locator.page===anchor.locator.page);
+  if(!recordContext)fail('finance_baseline_historical_context_conflict');
+  if(anchor.locator.page!==undefined&&Object.values(captures).some(c=>c.locator.line!==anchor.locator.line)){const refs=new Set(original.document.blocks.filter(b=>b.page===anchor.locator.page).flatMap(b=>{const pair=/^\s*([^:：]+)[:：]\s*(.+?)\s*$/.exec(b.text);return pair&&suggest(pair[1].trim())==='business_reference'?[normalizeBaselineValue('business_reference',pair[2])]:[];}).filter(Boolean));if(refs.size!==1||!refs.has(anchor.value))fail('finance_baseline_historical_context_conflict');}
+  const identity=capturedOwner(original,anchor,mapping,scope,accountSet,opts);if(!identity.matched)fail('finance_baseline_historical_owner_unverified');
+  const period=normalizeBaselineValue('period_start',captures.period.value),date=captures.date?normalizeBaselineValue('invoice_date',captures.date.value):null,reference=normalizeBaselineValue('business_reference',anchor.value);
+  const debit=normalizeBaselineValue('amount_net',captures.debit.value),credit=normalizeBaselineValue('amount_net',captures.credit.value);
+  if(!period||period>=scope.period||captures.date&&(!date||date.slice(0,7)!==period)||!reference||debit===undefined||credit===undefined||debit>0&&credit>0)fail('finance_baseline_historical_row_invalid');
+  let role=captures.code?roleFunction(accountSet.accounting_profile_id)(String(captures.code.value)):'unknown';
+  const names={'主营业务收入':'main_income','其他业务收入':'other_income','主营业务成本':'main_cost','管理费用':'management_expense','销售费用':'sales_expense','财务费用':'finance_expense','应交税费':'tax_payable'};
+  if(role==='unknown'&&captures.accountName)role=Object.entries(names).find(([name])=>String(captures.accountName.value).startsWith(name))?.[1]??'unknown';
+  if(role==='unknown')diagnostics.push({code:'historical_account_unmapped',originalId:original.id});
+  const source={kind:'file',path:original.path,sha256:original.sha256,bytes:original.bytes,originalId:original.id,locator:anchor.locator,contextPath:anchor.contextPath,rootIdentity:baselineDirectoryIdentity(opts.sourceRoot),extractor:original.document.extractor,observation:'source_history_not_ledger_posting',entryLocators:Object.fromEntries(Object.entries(captures).map(([key,c])=>[key,c.locator]))};
+  out.push(fact(scope,'business_reference',reference,source,{id:mapping.id+'_reference'}));
+  out.push(fact(scope,'historical_posting',{period,date,dateGranularity:date?'day':'month',status:'observed_history',kind:'source_observation',entries:[{role,debit,credit}]},source,{id:mapping.id}));
+ }
+ return out;
+}
+function documentBusinessContexts(facts,originals,diagnostics,scope){
+ const contexts=new Map();
+ for(const original of originals){
+  const keyValue=original.document.tables.length>0&&original.document.tables.every(t=>t.rows.every(r=>r.cells.length<=2));
+  if(!original.document.blocks.length&&!keyValue)continue;
+  const references=facts.filter(f=>f.source.path===original.path&&f.field==='business_reference'),values=new Set(references.map(f=>f.value));
+  // 原件中可识别的其他业务号也参与歧义判断，不能只选一个锚点来隐藏同页第二份业务。
+  for(const table of original.document.tables)for(const row of table.rows)if(row.cells.length===2&&suggest(row.cells[0])==='business_reference'){const value=normalizeBaselineValue('business_reference',row.cells[1]);if(value)values.add(value);}
+  for(const block of original.document.blocks){const pair=/^\s*([^:：]+)[:：]\s*(.+?)\s*$/.exec(block.text);if(pair&&suggest(pair[1].trim())==='business_reference'){const value=normalizeBaselineValue('business_reference',pair[2]);if(value)values.add(value);}}
+  if(values.size!==1){if(values.size>1)diagnostics.push({code:'ambiguous_business_context',originalId:original.id});continue;}
+  contexts.set(original.path,{contextPath:'document:'+digest([...values][0]),relation:{kind:'single_source_business_reference',anchorLocators:references.map(f=>f.source.locator)}});
+ }
+ return facts.map(f=>{
+  const context=contexts.get(f.source.path);if(!context||f.source.kind!=='file')return f;
+  const source={...f.source,contextPath:context.contextPath,businessContext:context.relation};
+  return {...f,source,group:digest([f.source.path,context.contextPath]),factRef:'bf:'+digest({owner:ownerTuple(scope),field:f.field,value:f.value,source})};
+ });
+}
+function linkObservedHistory(facts,scope){
+ const references=facts.filter(f=>f.field==='business_reference'&&f.source.kind==='file');
+ return facts.map(posting=>{
+  if(posting.field!=='historical_posting'||posting.value.status!=='observed_history')return posting;
+  const own=references.find(r=>r.source.path===posting.source.path&&r.source.contextPath===posting.source.contextPath);if(!own)return posting;
+  const linked=references.filter(r=>r.value===own.value),source={...posting.source,relations:linked.map(r=>({businessRef:r.factRef,entryIndices:[0]}))};
+  return {...posting,source,linkedBusinessRefs:linked.map(r=>r.factRef),factRef:'bf:'+digest({owner:ownerTuple(scope),field:posting.field,value:posting.value,source})};
+ });
 }
 function knownSelectors(original){
  const out=[],diagnostics=[];let truncated=false;const add=(field,locator)=>{if(out.length>=400){truncated=true;return;}out.push({id:'auto_'+digest([original.id,field,locator]).slice(0,24),field,originalId:original.id,locator});};
  if(original.format==='json')for(const f of original.structure.fields)for(const field of f.suggestedFields??[])add(field,f.locator);
  if(original.format==='csv')for(let row=2;row<=original.rows.length;row++)for(const c of original.structure.columns)for(const field of c.suggestedFields??[])add(field,{row,column:c.column});
- if(original.format==='xlsx')for(const sheet of original.structure.sheets){const headers=[...new Set(sheet.headers.map(h=>h.row))];if(headers.length!==1){diagnostics.push({code:'ambiguous_header',originalId:original.id});continue;}for(const row of original.sheets[sheet.sheetIndex].rows.filter(r=>r.rowNumber>headers[0]))for(const header of sheet.headers)for(const field of header.suggestedFields??[])add(field,{sheetIndex:sheet.sheetIndex,row:row.rowNumber,column:header.column,headerRows:[headers[0]]});}
+ if(['xls','xlsx'].includes(original.format))for(const sheet of original.structure.sheets){const headers=[...new Set(sheet.headers.map(h=>h.row))];if(headers.length!==1){diagnostics.push({code:'ambiguous_header',originalId:original.id});continue;}for(const row of original.sheets[sheet.sheetIndex].rows.filter(r=>r.rowNumber>headers[0]))for(const header of sheet.headers)for(const field of header.suggestedFields??[])add(field,{sheetIndex:sheet.sheetIndex,row:row.rowNumber,column:header.column,headerRows:[headers[0]]});}
  if(truncated)diagnostics.push({code:'known_field_limit',originalId:original.id});return {selectors:out,diagnostics,truncated};
 }
 function knownFacts(original,scope,accountSet,opts){
  const generated=knownSelectors(original),groups=new Map(),diagnostics=[...generated.diagnostics],gaps=[];
- for(const s of generated.selectors){const raw=selectRaw(original,s.locator,opts),key=raw.contextPath+'\0'+s.field;let captured;try{captured=select(original,s,scope,accountSet,opts);}catch(error){if(error.code==='finance_baseline_source_scope_conflict')captured={gap:'scope_conflict'};else throw error;}
-  if(!groups.has(key))groups.set(key,[]);groups.get(key).push({s,raw,...captured});}
+ for(const s of generated.selectors){
+  let raw,captured;
+  try{raw=selectRaw(original,s.locator,opts);captured=select(original,s,scope,accountSet,opts);}
+  catch(error){
+   if(['xlsx_formula_unsupported','finance_baseline_cell_error'].includes(error.code)){diagnostics.push({code:error.code==='xlsx_formula_unsupported'?'formula_unverified':'cell_error',originalId:original.id,field:s.field});continue;}
+   if(error.code==='finance_baseline_source_scope_conflict'){raw??={value:null,contextPath:'scope_conflict',contexts:[]};captured={gap:'scope_conflict'};}else throw error;
+  }
+  const key=raw.contextPath+'\0'+s.field;if(!groups.has(key))groups.set(key,[]);groups.get(key).push({s,raw,...captured});}
+
  const chosen=[];
  for(const candidates of groups.values()){
   const field=candidates[0].s.field,usable=candidates.filter(c=>c.value),eligible=usable.filter(c=>{
@@ -247,6 +343,8 @@ function knownFacts(original,scope,accountSet,opts){
  if(generated.truncated)gaps.push('unsupported_material');return {facts:chosen,diagnostics,gaps:[...new Set(gaps)],availableCount:generated.selectors.length};
 }
 const inheritedFields=new Set(['business_kind','service_pattern','tax_type','tax_measure','tax_stage','period_basis','accumulation']);
+// 同一业务可以有多条历史分录事件；只有规范标量字段参与单值冲突和计算字段选择。
+export const baselineScalarMaterialFacts=facts=>facts.filter(f=>f.field!=='historical_posting');
 export function groupBaselineMaterialFacts(facts){
  const files=facts.filter(f=>f.source.kind==='file'),contexts=new Map();for(const f of files)contexts.set(digest([f.source.path,f.source.contextPath]),{path:f.source.path,context:f.source.contextPath});
  const groups=new Map();for(const [key,anchor]of contexts){
@@ -257,7 +355,7 @@ export function groupBaselineMaterialFacts(facts){
 }
 export function buildBaselineTaxBurden(facts){
  const rows=[],gaps=[];for(const [group,fs]of groupBaselineMaterialFacts(facts)){
-  if(!fs.some(f=>f.field==='tax_type')||!fs.some(f=>f.field==='tax_amount'))continue;const fields=new Map();let duplicate=false;for(const f of fs){if(fields.has(f.field)&&fields.get(f.field).value!==f.value)duplicate=true;fields.set(f.field,f);}
+  if(!fs.some(f=>f.field==='tax_type')||!fs.some(f=>f.field==='tax_amount'))continue;const fields=new Map();let duplicate=false;for(const f of baselineScalarMaterialFacts(fs)){if(fields.has(f.field)&&fields.get(f.field).value!==f.value)duplicate=true;fields.set(f.field,f);}
   const needed=['tax_type','tax_measure','tax_stage','period_basis','accumulation','period_start','period_end','tax_amount'],missing=needed.filter(k=>!fields.has(k));
   if(duplicate||missing.length){gaps.push('tax_basis_incomplete');continue;}
   const get=k=>fields.get(k)?.value,denominatorField=get('tax_type')==='vat'?'sales_ex_vat':'revenue';
@@ -315,13 +413,14 @@ export function captureBaselineMaterials(db,scope,args,opts){
  if(args.extractKnownFields&&(args.selections??[]).length)fail('finance_baseline_input_invalid');
  const read=ledger(db,scope,args),cache=new Map(),files=[],facts=[...read.facts],gaps=[],coverage=[],diagnostics=[];let totalBytes=0;
  for(const original of args.originals??[]){const loaded=loadOriginal(original,scope,read.accountSet,opts,cache);totalBytes+=loaded.bytes;if(totalBytes>20*1024*1024)fail('finance_baseline_material_limit');files.push(loaded);}
+ facts.push(...historicalObservations(cache,args.historicalRows,scope,read.accountSet,opts,diagnostics));
  const ids=new Set();for(const s of args.selections??[]){if(ids.has(s.id))fail('finance_baseline_selection_duplicate');ids.add(s.id);const original=cache.get(s.originalId);if(!original)fail('finance_baseline_original_missing');const captured=select(original,s,scope,read.accountSet,opts);if(captured.gap)gaps.push(captured.gap);else facts.push(captured.value);}
  for(const original of files){const known=knownFacts(original,scope,read.accountSet,opts);diagnostics.push(...known.diagnostics);if(args.extractKnownFields){facts.push(...known.facts);gaps.push(...known.gaps);}
   const readLocations=new Set(facts.filter(f=>f.source.kind==='file'&&f.source.path===original.path).map(f=>digest([f.field,f.source.locator]))),unselected=known.facts.filter(f=>!readLocations.has(digest([f.field,f.source.locator])));
   coverage.push({path:original.path,originalId:original.id,availableCount:known.availableCount,readCount:facts.filter(f=>f.source.kind==='file'&&f.source.path===original.path).length,knownLocations:known.facts.map(f=>({field:f.field,locationDigest:digest([f.field,f.source.locator])})),unselectedLocationCount:unselected.length,knownFieldsNotSelected:[...new Set(unselected.map(f=>f.field))]});}
  for(const original of files)if(sha(baselineBytes(original.path,opts.sourceRoot))!==original.sha256)fail('finance_baseline_source_changed');
- const linkedFacts=linkHistory(db,scope,facts,opts),taxBurden=buildBaselineTaxBurden(linkedFacts);gaps.push(...taxBurden.gaps);
- const snapshot={scope,facts:linkedFacts,files:files.map(f=>({id:f.id,path:f.path,sha256:f.sha256,bytes:f.bytes,format:f.format,owner:f.owner})),pagination:read.pagination,taxBurden,gaps:[...new Set(gaps)]};
+ const linkedFacts=linkHistory(db,scope,linkObservedHistory(documentBusinessContexts(facts,files,diagnostics,scope),scope),opts),taxBurden=buildBaselineTaxBurden(linkedFacts);gaps.push(...taxBurden.gaps);
+ const snapshot={scope,facts:linkedFacts,files:files.map(f=>({id:f.id,path:f.path,sha256:f.sha256,bytes:f.bytes,format:f.format,owner:f.owner,readState:f.document.readState,extractor:f.document.extractor})),pagination:read.pagination,taxBurden,gaps:[...new Set(gaps)]};
  return {...snapshot,snapshotDigest:digest(snapshot),coverage,diagnostics,structures:files.map(f=>({path:f.path,originalId:f.id,sha256:f.sha256,bytes:f.bytes,format:f.format,ownerStatus:f.owner?'verified':'unverified',...f.structure}))};
 }
 // 只合并显式读取的快照；caller别名不作业务身份，凭证关系仍保留真实分行和原生记录版本。

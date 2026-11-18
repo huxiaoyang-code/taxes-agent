@@ -4,6 +4,7 @@ import {resolve,dirname,isAbsolute,relative,extname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {parseBankCsv} from './bank-import.mjs';
 import {cents} from './agency-tax-rules.mjs';
+import {readMaterialDocument,readMaterialValue} from './material-document.mjs';
 export const digest=value=>createHash('sha256').update(typeof value==='string'||Buffer.isBuffer(value)?value:stable(value)).digest('hex');
 export const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:value&&typeof value==='object'?`{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`:JSON.stringify(value);
 export const reject=code=>{throw Object.assign(new Error(code),{code});};
@@ -25,21 +26,27 @@ function normalize(value,transform){
  if(transform==='decimal'){if(!['string','number'].includes(typeof value)||! /^-?\d{1,12}(\.\d{1,2})?$/.test(String(value)))reject('finance_prebook_decimal_invalid');return cents(String(value)).toString();}
  if(transform==='boolean'){if(value===true||value==='true')return true;if(value===false||value==='false')return false;reject('finance_prebook_boolean_invalid');}return value;
 }
-export function bindEvidence(input){
+export function bindEvidence(input,options={}){
  const sources=new Map(),files=[];const scope=input.facts.scope;let totalBytes=0;
  for(const original of input.originals){
   if(sources.has(original.id))reject('finance_prebook_original_id_duplicate');
   if(original.scope.enterpriseKey!==scope.enterpriseKey||original.scope.from>original.scope.through)reject('finance_prebook_original_scope_conflict');
   const source=readSource(original.path);totalBytes+=source.bytes.length;if(totalBytes>20*1024*1024)reject('finance_prebook_source_limit');if(original.sha256&&original.sha256!==source.sha256)reject('finance_prebook_original_changed');
-  let data,csv;if(extname(source.path).toLowerCase()==='.csv'){csv=parseBankCsv(source.bytes.toString('utf8'));if(!csv.ok||new Set(csv.headers).size!==csv.headers.length)reject('finance_prebook_csv_invalid');}
-  else{data=parseJson(source);if(typeof data.version==='string'&&/^(finance-|agency-)/.test(data.version)||['native_engine','conditional_summary_engine'].includes(data.resultOrigin))reject('finance_prebook_generated_not_original');const actual=data.scope;if(actual?.enterpriseKey!==undefined&&actual.enterpriseKey!==scope.enterpriseKey)reject('finance_prebook_original_scope_conflict');}
-  const loaded={...source,data,csv,scope:original.scope,id:original.id};sources.set(original.id,loaded);files.push(loaded);
+  let data,csv,document;const extension=extname(source.path).toLowerCase();if(extension==='.csv'){csv=parseBankCsv(source.bytes.toString('utf8'));if(!csv.ok||new Set(csv.headers).size!==csv.headers.length)reject('finance_prebook_csv_invalid');}
+  else if(extension==='.json'){data=parseJson(source);if(typeof data.version==='string'&&/^(finance-|agency-)/.test(data.version)||['native_engine','conditional_summary_engine'].includes(data.resultOrigin))reject('finance_prebook_generated_not_original');const actual=data.scope;if(actual?.enterpriseKey!==undefined&&actual.enterpriseKey!==scope.enterpriseKey)reject('finance_prebook_original_scope_conflict');}
+  else{document=readMaterialDocument({path:source.path,sourceRoot:process.env.FINANCE_SOURCE_ROOT,expectedSha256:source.sha256,pythonPath:options.materialRuntime?.pythonPath??options.pythonPath??process.env.FINANCE_PYTHON_PATH,pythonUserBase:options.materialRuntime?.pythonUserBase??options.pythonUserBase});if(!['read','partial'].includes(document.status))reject('finance_prebook_material_'+document.status);}
+  const loaded={...source,data,csv,document,scope:original.scope,id:original.id};sources.set(original.id,loaded);files.push(loaded);
  }
  const bound=new Map();
  for(const binding of input.bindings){
   const source=sources.get(binding.originalId);if(!source)reject('finance_prebook_original_missing');
-  const target=pointer(input.facts,binding.inputPointer),emptySet=binding.transform==='empty_set',emptyCsv=emptySet&&source.csv&&binding.csvRow===undefined&&binding.column===undefined;let actual;
-  if(emptyCsv){if(binding.jsonPointer!==undefined||source.csv.rows.length)reject('finance_prebook_empty_set_invalid');actual=[];}
+  const target=pointer(input.facts,binding.inputPointer),emptySet=binding.transform==='empty_set',emptyCsv=emptySet&&source.csv&&binding.csvRow===undefined&&binding.column===undefined&&!binding.locator;let actual,documentCapture;
+  if(binding.locator){
+   if(binding.jsonPointer!==undefined||binding.csvRow!==undefined||binding.column!==undefined)reject('finance_prebook_locator_conflict');
+   source.document??=readMaterialDocument({path:source.path,sourceRoot:process.env.FINANCE_SOURCE_ROOT,expectedSha256:source.sha256,pythonPath:options.materialRuntime?.pythonPath??options.pythonPath??process.env.FINANCE_PYTHON_PATH,pythonUserBase:options.materialRuntime?.pythonUserBase??options.pythonUserBase});
+   const {valueSlice,...locator}=binding.locator;documentCapture=readMaterialValue(source.document,locator);if(documentCapture.valueState==='formula_unverified')reject('xlsx_formula_unsupported');if(documentCapture.valueState==='cell_error')reject('finance_prebook_cell_error');actual=documentCapture.value;
+   if(valueSlice){if(typeof actual!=='string')reject('finance_prebook_text_slice_invalid');const at=actual.indexOf(valueSlice.after);if(at<0||actual.indexOf(valueSlice.after,at+valueSlice.after.length)>=0)reject('finance_prebook_text_slice_invalid');actual=actual.slice(at+valueSlice.after.length);if(valueSlice.before){const end=actual.indexOf(valueSlice.before);if(end<0)reject('finance_prebook_text_slice_invalid');actual=actual.slice(0,end);}actual=actual.trim().replace(/^[：:=\s]+/u,'').trim();documentCapture.locator={...documentCapture.locator,valueSlice};}
+  }else if(emptyCsv){if(binding.jsonPointer!==undefined||source.csv.rows.length)reject('finance_prebook_empty_set_invalid');actual=[];}
   else if(source.csv){if(binding.jsonPointer!==undefined||binding.csvRow===undefined||!binding.column)reject('finance_prebook_csv_locator_required');const row=source.csv.rows.find(row=>row.lineNumber===binding.csvRow),index=source.csv.headers.indexOf(binding.column);if(!row||index<0)reject('finance_prebook_csv_locator_missing');actual=row.cells[index];}
   else{if(binding.jsonPointer===undefined||binding.csvRow!==undefined||binding.column!==undefined)reject('finance_prebook_json_locator_required');actual=pointer(source.data,binding.jsonPointer);}
   // 除值相等外还核对定位路径的主体/日期上下文；不能从另一企业同金额行抄值。
@@ -48,7 +55,8 @@ export function bindEvidence(input){
   if(targetDate&&(targetDate<source.scope.from||targetDate>source.scope.through))reject('finance_prebook_source_period_conflict');
   if(binding.inputPointer.startsWith('/opening')&&!['/opening/inputVatTransferOut','/opening/prepaidVat'].includes(binding.inputPointer)&&openingCutoff&&(openingCutoff<source.scope.from||openingCutoff>source.scope.through))reject('finance_prebook_source_period_conflict');
   const inspectContext=value=>{if(!value||typeof value!=='object')return;if(value.enterpriseKey!==undefined&&value.enterpriseKey!==scope.enterpriseKey||value.scope?.enterpriseKey!==undefined&&value.scope.enterpriseKey!==scope.enterpriseKey)reject('finance_prebook_original_scope_conflict');const p=value.period??value.scope?.period;if(typeof p==='string'&&/^\d{4}-\d{2}$/.test(p)&&!((p>=first&&p<=scope.period)||(opening&&p===prior)))reject('finance_prebook_source_period_conflict');for(const key of ['date','asOf','openingDate','closingDate'])if(typeof value[key]==='string'&&(value[key]<source.scope.from||value[key]>source.scope.through))reject('finance_prebook_source_period_conflict');for(const key of ['date','asOf']){if(targetDate&&typeof value[key]==='string'&&value[key]!==targetDate)reject('finance_prebook_source_period_conflict');if(binding.inputPointer.startsWith('/opening/')&&!['/opening/inputVatTransferOut','/opening/prepaidVat'].includes(binding.inputPointer)&&typeof value[key]==='string'&&value[key]!==openingCutoff)reject('finance_prebook_source_period_conflict');}};
-  if(source.csv){if(!emptyCsv){const row=source.csv.rows.find(r=>r.lineNumber===binding.csvRow);inspectContext(Object.fromEntries(source.csv.headers.map((h,i)=>[h,row.cells[i]])));}}
+  if(documentCapture){for(const context of documentCapture.contexts??[])inspectContext(context);}
+  else if(source.csv){if(!emptyCsv){const row=source.csv.rows.find(r=>r.lineNumber===binding.csvRow);inspectContext(Object.fromEntries(source.csv.headers.map((h,i)=>[h,row.cells[i]])));}}
   else{inspectContext(source.data);let context=source.data;for(const raw of binding.jsonPointer.split('/').slice(1)){context=context?.[raw.replaceAll('~1','/').replaceAll('~0','~')];inspectContext(context);}const walk=value=>{inspectContext(value);if(value&&typeof value==='object')for(const child of Object.values(value))walk(child);};walk(actual);}
   if(emptySet){
    const collection=binding.inputPointer.slice(1),priorCollection=/^opening\/(receivables|payables|inventory)$/.test(collection),currentCollection=['purchases','receipts','sales','invoices','bankTransactions','fundsAccounts','inventoryCounts'].includes(collection),coverageKey={fundsAccounts:'bankTransactions',inventoryCounts:'inventory'}[collection]??collection;
@@ -60,7 +68,7 @@ export function bindEvidence(input){
   }
   if(binding.valueMap){if(!/^\/(taxpayer\/[^/]+|coverage\/[^/]+|(?:sales|invoices|bankTransactions)\/\d+\/(?:direction|status|invoiceKind|deductionStatus|category|vatCategory))$/.test(binding.inputPointer)||typeof actual!=='string'||!Object.hasOwn(binding.valueMap,actual))reject('finance_prebook_value_map_invalid');actual=binding.valueMap[actual];}
   if(stable(normalize(target,binding.transform))!==stable(normalize(actual,binding.transform)))reject('finance_prebook_source_value_mismatch');
-  for(const leaf of leaves(target,binding.inputPointer)){const ref={originalId:source.id,path:source.path,sha256:source.sha256,scope:source.scope,inputPointer:leaf.path,...(emptyCsv?{csvEmpty:true}:source.csv?{csvRow:binding.csvRow,column:binding.column}:{jsonPointer:binding.jsonPointer+leaf.path.slice(binding.inputPointer.length)}),transform:binding.transform??'identity',...(binding.valueMap?{valueMap:binding.valueMap}:{} )};if(bound.has(leaf.path))reject('finance_prebook_binding_overlap');bound.set(leaf.path,ref);}
+  for(const leaf of leaves(target,binding.inputPointer)){const ref={originalId:source.id,path:source.path,sha256:source.sha256,scope:source.scope,inputPointer:leaf.path,...(documentCapture?{locator:documentCapture.locator,extractor:source.document.extractor,sourceType:'source_extraction'}:emptyCsv?{csvEmpty:true}:source.csv?{csvRow:binding.csvRow,column:binding.column}:{jsonPointer:binding.jsonPointer+leaf.path.slice(binding.inputPointer.length)}),transform:binding.transform??'identity',...(binding.valueMap?{valueMap:binding.valueMap}:{} )};if(bound.has(leaf.path))reject('finance_prebook_binding_overlap');bound.set(leaf.path,ref);}
  }
  const declarations=[];
  for(const declaration of input.declarations??[]){const path=declaration.inputPointer;pointer(input.facts,path);if(!/^\/(scope\/[^/]+|taxpayer\/[^/]+|coverage\/[^/]+|(?:purchases|receipts|sales|invoices|bankTransactions|fundsAccounts|inventoryCounts)\/\d+\/(?:businessId|accountId|itemId|kind|category|status|direction|invoiceKind|deductionStatus|vatCategory)|opening\/(?:receivables|payables)\/\d+\/businessId|opening\/inventory\/\d+\/itemId)$/.test(path)||bound.has(path)||declarations.some(d=>d.inputPointer===path))reject('finance_prebook_declaration_invalid');declarations.push({...declaration,value:pointer(input.facts,path),sourceType:declaration.kind});}

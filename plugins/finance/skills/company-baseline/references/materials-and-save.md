@@ -10,7 +10,7 @@
 
 ## 正常生成路径
 
-1. 用实际 `target:{accountSetId,period}` 调用 `finance_baseline_read`，再优先调用 `finance_baseline_materials({target,extractKnownFields:true})`，不传 `originals`／`materialRefs`。工具从授权根有界发现当前 scope 已核主体且有已知语义的 JSON／CSV／受控 XLSX，每批最多12份，物化真实读取；不要求已有方法、脚本或企业方案，不替 Agent 选择全部原则。
+1. 用实际 `target:{accountSetId,period}` 调用 `finance_baseline_read`，再优先调用 `finance_baseline_materials({target,extractKnownFields:true})`，不传 `originals`／`materialRefs`。工具从授权根有界发现当前 scope 已核主体且有已知语义的原件；陌生结构先走[通用原件适配](material-adaptation.md)，XLS／PDF／图片等实际读取能力及运行时状态由通用读取器披露，每批最多12份，物化真实读取；不要求已有方法、脚本或企业方案，不替 Agent 选择全部原则。
 2. 看 `sourceDiscovery` 的 `selectedCount`／`remainingCount`、扫描边界及 `bypassed` 分类。按当前返回的 `sourceDiscovery.next.arguments` 继续，内含真实 `sourceCursor:{materialRef,snapshotDigest}`，继承已读材料闭包和已返回候选，不手抄前批引用或猜游标。普通候选余页走 `pagination.next.arguments`；实际返回 limit 可小于请求值，不能手算 offset，末页也不证明此前跳过页已读。主体、SHA、原件语义和历史关系仍由后端核验，不能用 target 自认归属。
 3. 查看短 `principleSupport`、税费汇总及独立 `coverage`，按实际 `pagination.next.arguments` 完成本次需要的 overview 余页，不换查询套旧 offset。税摘要另有 `taxBurden.pagination.next` 时同样直接执行；覆盖诊断用 `section:"coverage"`，需要定位才读 `"structure"`／`"facts"`。`coverage.taxHistory` 的 `included`／`incomplete`／`not_in_supplied_materials` 分别核已包含、材料不齐及未带入；未选字段、范围未覆盖、歧义／不支持按原因补读。机器抽取事实不因明细页未展开丢失，不机械遍历全部 facts。宿主截断／另存说明输出未完整消费，应缩小范围或MCP续页完成，保持本路径不依赖原生文件读取；不能把投影读取受限写成客户缺资料。
 4. 游标后批已继承前批闭包，使用当前返回的 `materialRef`／`snapshotDigest`，不重复累加同快照的分页引用。另有独立读取用于结论、税费或必要缺口时，显式传相关 `materialRefs:[{materialRef,snapshotDigest}]` 给 `finance_baseline_materials` 合并；仅同 scope、当前 SHA 可核的实际读取能合并。返回新单ref及统一支持／税费／覆盖。最多12个实际叶读取请求，不层层合并绕限；过多零碎读取可按原件批量重读，不能删税费引用凑上限。
@@ -34,9 +34,10 @@
 | `scanLimited`、`uninspectedCount` 或 `depthTruncated` 表示发现有界 | 依本次任务核未检范围，必要时按已知原件定位补查；不声称已查全，也不把边界直接写成企业政策未知 |
 | `valueState:local_only` | 原值已在本机读取，模型不回显；可用短支持判断，实际计算走下方取数桥，不当作缺件或零 |
 | 同一对象的字段组不齐、尚无原生历史关联 | 补真实 `business_reference`、业务性质、履约方式、起止／验收、相关金额／税点／资产边界及对应历史；按判断选择必要字段，不因只选开票／金额就认定无方法 |
+| 仅账套配置，`coverage.configurationOnly:true` | 已知会计准则可保留，历史基线尚未生成；补读历史，不填不存在的归集或成本方法 |
 | 工具明确歧义、不支持、来源冲突，补查后仍无依据或需要操作者作真实业务决定 | 保留准确范围和影响，说明还缺什么及下一动作；独立可核分支继续，不猜值、不绕过投影 |
 
-需要指定范围或补定位时，旧通道仍可用：`finance_baseline_materials({target})` 给 `sourceInventory`，按 `availableFields`／主体状态选择真实 `originalRef`，显式 `originals` 配 `extractKnownFields:true` 批读；目录也原样跟 `pagination.next.arguments`。低层 JSON 用实际 `fieldRef`，表格用已披露的数字行列／工作表。计价核 `inventory_cost`，行业标签不替代归类或计价；分类／期间支持核实际关联分录，整凭证合计不证明算法。`allocationBasis:monthly_equal` 只由实际支持产生，不能由 caller 自加。`group` 只是备注，分组依原件上下文／同行及跨源同业务引用。PDF／图片等不支持材料走获准本机可信核验／导出，不用宿主 Read／OCR／SQL／脚本绕过隐私边界。
+需要指定范围或补定位时，旧通道仍可用：`finance_baseline_materials({target})` 给 `sourceInventory`，按 `availableFields`／主体状态选择真实 `originalRef`，显式 `originals` 配 `extractKnownFields:true` 批读；目录也原样跟 `pagination.next.arguments`。低层 JSON 用实际 `fieldRef`，表格用已披露的数字行列／工作表。计价核 `inventory_cost`，行业标签不替代归类或计价；分类／期间支持核实际关联分录，整凭证合计不证明算法。`allocationBasis:monthly_equal` 只由实际支持产生，不能由 caller 自加。`group` 只是备注，分组依原件上下文／同行及跨源同业务引用。XLS／PDF／图片等走[原件适配](material-adaptation.md)，通用读取器与本机OCR保留原值和来源。`unsupported`／`needs_runtime`表示读取或环境限制，不能当客户没给资料；同一文件普通单元格可读，公式缓存不可当已核事实。特殊转换可用已授权的 `finance_calculation_run` 保留脚本与来源，派生文件不洗成独立原件。
 
 ## 保存前核对与回读
 

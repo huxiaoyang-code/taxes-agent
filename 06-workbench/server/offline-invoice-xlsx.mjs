@@ -88,8 +88,10 @@ function relations(bytes, base) {
     const path = r.attrs.Target.startsWith('/') ? r.attrs.Target.slice(1) : base + r.attrs.Target;
     check(!path.includes('\\') && !path.includes(':') && !path.includes('?') && !path.includes('#') && !path.split('/').some(p => p === '..' || p === '.' || p === ''), 'xlsx_external_link_unsupported');
     check(!/externalLink|hyperlink|oleObject/i.test(r.attrs.Type), 'xlsx_external_link_unsupported');
-    const allowedTypes = [DOCREL + '/officeDocument', DOCREL + '/worksheet', DOCREL + '/styles', DOCREL + '/sharedStrings', DOCREL + '/theme', DOCREL + '/extended-properties', REL + '/metadata/core-properties'];
+    const allowedTypes = [DOCREL + '/officeDocument', DOCREL + '/worksheet', DOCREL + '/styles', DOCREL + '/sharedStrings', DOCREL + '/theme', DOCREL + '/extended-properties', REL + '/metadata/core-properties', REL + '/metadata/thumbnail'];
     check(allowedTypes.includes(r.attrs.Type), 'xlsx_structure_unsupported');
+    // 缩略图不参与取数，也不解码；只兼容标准元数据位置，不能借此增加外部或任意附件。
+    if (r.attrs.Type === REL + '/metadata/thumbnail') check(['docProps/thumbnail.wmf', 'docProps/thumbnail.emf', 'docProps/thumbnail.jpeg', 'docProps/thumbnail.jpg', 'docProps/thumbnail.png'].includes(path));
     out.set(r.attrs.Id, { type: r.attrs.Type, path });
   }
   return out;
@@ -118,13 +120,16 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     const allowedContentTypes = ['application/xml', 'application/vnd.openxmlformats-package.relationships+xml', 'application/vnd.openxmlformats-package.core-properties+xml', ...['spreadsheetml.sheet.main', 'spreadsheetml.worksheet', 'spreadsheetml.styles', 'spreadsheetml.sharedStrings', 'theme', 'extended-properties'].map(t => 'application/vnd.openxmlformats-officedocument.' + t + '+xml')];
     const contentKeys = new Set();
     for (const n of types.children) {
-      check(allowedContentTypes.includes(n.attrs.ContentType) || n.name === 'Default' && n.attrs.Extension === 'vml' && n.attrs.ContentType === 'application/vnd.openxmlformats-officedocument.vmlDrawing' && ![...entries.keys()].some(name => name.endsWith('.vml')), 'xlsx_structure_unsupported');
+      const thumbnailTypes = { wmf: ['image/x-wmf', 'image/wmf'], emf: ['image/x-emf', 'image/emf'], jpeg: ['image/jpeg'], jpg: ['image/jpeg'], png: ['image/png'] };
+      const thumbnailExtension = n.name === 'Override' ? n.attrs.PartName?.split('.').at(-1) : n.attrs.Extension;
+      const thumbnailType = thumbnailTypes[thumbnailExtension]?.includes(n.attrs.ContentType) && (n.name === 'Override' ? n.attrs.PartName === '/docProps/thumbnail.' + thumbnailExtension : [...entries.keys()].filter(name => name.endsWith('.' + thumbnailExtension)).every(name => name === 'docProps/thumbnail.' + thumbnailExtension));
+      check(allowedContentTypes.includes(n.attrs.ContentType) || thumbnailType || n.name === 'Default' && n.attrs.Extension === 'vml' && n.attrs.ContentType === 'application/vnd.openxmlformats-officedocument.vmlDrawing' && ![...entries.keys()].some(name => name.endsWith('.vml')), 'xlsx_structure_unsupported');
       check(Object.keys(n.attrs).every(k => ['ContentType', n.name === 'Override' ? 'PartName' : 'Extension'].includes(k)));
       if (n.name === 'Override') check(n.attrs.PartName?.startsWith('/') && entries.has(n.attrs.PartName.slice(1)), 'xlsx_part_missing');
       const key = n.name === 'Override' ? n.attrs.PartName : n.attrs.Extension;
       check(key && !contentKeys.has(n.name + ':' + key)); contentKeys.add(n.name + ':' + key);
     }
-    check([...entries.keys()].every(name => name.endsWith('/') || ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/sharedStrings.xml', 'docProps/core.xml', 'docProps/app.xml'].includes(name) || /^xl\/(?:worksheets\/sheet\d+|theme\/theme\d+)\.xml$/.test(name)), 'xlsx_structure_unsupported');
+    check([...entries.keys()].every(name => name.endsWith('/') || ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/sharedStrings.xml', 'docProps/core.xml', 'docProps/app.xml'].includes(name) || /^docProps\/thumbnail\.(?:wmf|emf|jpeg|jpg|png)$/.test(name) || /^xl\/(?:worksheets\/sheet\d+|theme\/theme\d+)\.xml$/.test(name)), 'xlsx_structure_unsupported');
     const wb = xml(entries.get('xl/workbook.xml'));
     tree(wb, MAIN, ['workbook', 'fileVersion', 'workbookPr', 'bookViews', 'workbookView', 'sheets', 'sheet', 'calcPr']); check(wb.name === 'workbook');
     const rels = relations(entries.get('xl/_rels/workbook.xml.rels'), 'xl/');

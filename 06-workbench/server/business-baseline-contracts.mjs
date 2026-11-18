@@ -42,7 +42,12 @@ export const BASELINE_LABELS = Object.freeze({
 const text = {type:'string',minLength:1,maxLength:2000};
 const id = {type:'string',pattern:'^[A-Za-z][A-Za-z0-9_-]{0,63}$'};
 const digest = {type:'string',pattern:'^[a-f0-9]{64}$'};
-const locator = {type:'object',additionalProperties:false,properties:{fieldRef:{type:'string',pattern:'^bl:[a-f0-9]{64}$'},jsonPointer:{type:'string',maxLength:1024,pattern:'^(|/.*)$'},row:{type:'integer',minimum:1,maximum:10000},column:{anyOf:[text,{type:'integer',minimum:1,maximum:200}]},sheet:text,sheetIndex:{type:'integer',minimum:0,maximum:7},headerRows:{type:'array',minItems:1,maxItems:8,uniqueItems:true,items:{type:'integer',minimum:1,maximum:10000}}},oneOf:[{required:['fieldRef']},{required:['jsonPointer']},{required:['row','column']}]};
+const valueSlice={type:'object',additionalProperties:false,required:['after'],properties:{after:{type:'string',minLength:1,maxLength:200},before:{type:'string',minLength:1,maxLength:200}}};
+export const BASELINE_LOCATOR_SCHEMA = {type:'object',additionalProperties:false,properties:{valueSlice,start:{type:'integer',minimum:0,maximum:2000000},end:{type:'integer',minimum:1,maximum:2000000},fieldRef:{type:'string',pattern:'^(bl|md):[a-f0-9]{64}$'},jsonPointer:{type:'string',maxLength:1024,pattern:'^(|/.*)$'},row:{type:'integer',minimum:1,maximum:10000},column:{anyOf:[text,{type:'integer',minimum:1,maximum:256}]},sheet:text,sheetIndex:{type:'integer',minimum:0,maximum:63},headerRows:{type:'array',minItems:1,maxItems:8,uniqueItems:true,items:{type:'integer',minimum:1,maximum:10000}},page:{type:'integer',minimum:1,maximum:10000},line:{type:'integer',minimum:1,maximum:10000}},oneOf:[{required:['fieldRef']},{required:['jsonPointer']},{required:['row','column']},{required:['page','line']}]};
+const locator=BASELINE_LOCATOR_SCHEMA;
+export const BASELINE_OWNER_SCHEMA={type:'object',additionalProperties:false,required:['role','name'],properties:{role:{enum:['enterprise','buyer','seller']},name:locator,taxId:locator}};
+
+const interpretation={type:'object',additionalProperties:false,required:['value','reason'],properties:{value:{anyOf:[{type:'string',maxLength:100},{type:'boolean'}]},reason:{type:'string',minLength:1,maxLength:1000}}};
 const page = {offset:{type:'integer',minimum:0,maximum:100000},limit:{type:'integer',minimum:1,maximum:50}};
 const gap = {type:'object',additionalProperties:false,required:['code'],properties:{code:{enum:BASELINE_GAPS},kind:{enum:Object.keys(BASELINE_VALUES)}}};
 const common = (properties,required=[])=>({type:'object',additionalProperties:false,required:['target',...required],properties:{target:MEMORY_TARGET_SCHEMA,...properties}});
@@ -51,8 +56,9 @@ const typedPrinciple={type:'object',additionalProperties:false,required:['kind',
 export const BUSINESS_BASELINE_SCHEMAS = Object.freeze({
  finance_baseline_read: common({}),
  finance_baseline_materials: common({
-  originals:{type:'array',maxItems:32,items:{type:'object',additionalProperties:false,required:['id'],oneOf:[{required:['path']},{required:['originalRef']}],properties:{id,path:text,originalRef:{type:'string',pattern:'^bs:[a-f0-9]{64}$'},sha256:digest,owner:locator}}},
-  selections:{type:'array',maxItems:400,items:{type:'object',additionalProperties:false,required:['id','field','originalId','locator'],properties:{id,field:{enum:BASELINE_FIELDS},originalId:id,group:id,locator}}},
+  originals:{type:'array',maxItems:32,items:{type:'object',additionalProperties:false,required:['id'],oneOf:[{required:['path']},{required:['originalRef']}],properties:{id,path:text,originalRef:{type:'string',pattern:'^bs:[a-f0-9]{64}$'},sha256:digest,owner:locator,ownerIdentity:BASELINE_OWNER_SCHEMA,structureOffset:{type:'integer',minimum:0,maximum:1000000},pageOffset:{type:'integer',minimum:0,maximum:10000},maxPages:{type:'integer',minimum:1,maximum:40}}}},
+  selections:{type:'array',maxItems:400,items:{type:'object',additionalProperties:false,required:['id','field','originalId','locator'],properties:{id,field:{enum:BASELINE_FIELDS},originalId:id,group:id,locator,ownerIdentity:BASELINE_OWNER_SCHEMA,valueSlice,interpretation}}},
+  historicalRows:{type:'array',maxItems:400,items:{type:'object',additionalProperties:false,required:['id','originalId','period','businessReference','debit','credit'],properties:{id,originalId:id,period:locator,date:locator,businessReference:locator,code:locator,accountName:locator,debit:locator,credit:locator,ownerIdentity:BASELINE_OWNER_SCHEMA}}},
   extractKnownFields:{type:'boolean'},materialRefs:BASELINE_MATERIAL_REFS_SCHEMA,sourceCursor:BASELINE_MATERIAL_REFS_SCHEMA.items,
   section:{enum:['overview','structure','facts','tax','coverage','calculation']},historyOffset:{type:'integer',minimum:0,maximum:100000},historyLimit:{type:'integer',minimum:1,maximum:50},
   ...page,
@@ -64,6 +70,13 @@ export const BUSINESS_BASELINE_SCHEMAS = Object.freeze({
   unresolved:{type:'array',maxItems:3,uniqueItems:true,items:gap},
  },['materialRefs','expectedRevision','effectiveFrom','principles']),
 });
+
+export function baselineMaterialContract(){return {
+ version:'finance-baseline-material-contract/1',recordType:'baseline',tool:'finance_baseline_materials',
+ requirements:{principles:'会计准则、业务归集、成本方法、税会所属期和有效选择按证据范围提炼；只有配置不算历史基线已生成。',history:'历史只在原件中时用historicalRows定位实际业务号、期间和分录；只形成来源观察，不导入账库或声称已过账。',tax:'历史税负需税种、应纳/实缴、所属/缴款期、本期/累计、税额阶段及可比税额和分母。',missing:'工具未读入、缺少映射与客户未提供分别报告。'},
+ mapping:{fields:BASELINE_FIELDS,locator:BASELINE_LOCATOR_SCHEMA,ownerIdentity:BASELINE_OWNER_SCHEMA,interpretation:'仅受限枚举/布尔的模型解释，必须有原值位置和reason；金额、日期、业务号不能由解释覆写。',historicalRows:BUSINESS_BASELINE_SCHEMAS.finance_baseline_materials.properties.historicalRows.items},
+ workflow:['无材料引用时用section:structure列出原件，再按sourceInventory.items[].next读不透明originalRef对应的结构。','按实际fieldRef/页行/表格位置选择字段，不依赖固定表头词典；原值在本机读取，结构分页沿真实next继续。','主体未核时先看identity.registeredNameAvailable与reason；registered_identity_missing表示账库受信主体名/税号尚无登记，source_owner_unmatched才表示已有登记但原件匹配未成。先核实已有企业绑定，不在空名单上反复换表头；显示账套名和opaque enterpriseKey不自证税号或登记名称。','把归属核实、来源观察、模型解释和人工确认分开；单一真实业务号可关联同原件跨页字段，多业务保持歧义。','selections/historicalRows保存的是读取与映射方式，原件SHA、提取器和实际位置随事实留存；正常计算仍复用现有工具。'],
+};}
 
 // 中文业务别名是固定词典，不接受调用者任意 valueMap 把无关原文解释成政策。
 export const BASELINE_ALIASES = Object.freeze({

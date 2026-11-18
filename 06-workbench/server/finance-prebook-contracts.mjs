@@ -1,4 +1,5 @@
 // 账前资料合同：业务事实与原件绑定分开；不要求预制凭证或最终税额。
+import {BASELINE_LOCATOR_SCHEMA} from './business-baseline-contracts.mjs';
 const text={type:'string',minLength:1,maxLength:200};
 const amount={type:'string',pattern:'^-?\\d{1,12}(\\.\\d{1,2})?$'};
 const quantity={type:'string',pattern:'^(0|[1-9]\\d{0,9})(\\.\\d{1,6})?$'};
@@ -23,14 +24,14 @@ export const PREBOOK_FACTS_SCHEMA=obj({
 export const PREBOOK_INPUT_SCHEMA=obj({
  version:{const:'finance-prebook-input/1'},facts:PREBOOK_FACTS_SCHEMA,
  originals:rows(obj({id:text,path:text,sha256:{type:'string',pattern:'^[a-f0-9]{64}$'},scope:obj({enterpriseKey:text,from:date,through:date},['enterpriseKey','from','through'])},['id','path','scope'])),
- bindings:rows(obj({inputPointer:{type:'string',maxLength:500},originalId:text,jsonPointer:{type:'string',maxLength:500},csvRow:{type:'integer',minimum:2},column:text,transform:{enum:['identity','decimal','boolean','empty_set']},valueMap:{type:'object',maxProperties:20,additionalProperties:{anyOf:[{type:'string'},{type:'boolean'}]}}},['inputPointer','originalId'])),
+ bindings:rows(obj({inputPointer:{type:'string',maxLength:500},originalId:text,jsonPointer:{type:'string',maxLength:500},csvRow:{type:'integer',minimum:2},column:text,locator:BASELINE_LOCATOR_SCHEMA,transform:{enum:['identity','decimal','boolean','empty_set']},valueMap:{type:'object',maxProperties:20,additionalProperties:{anyOf:[{type:'string'},{type:'boolean'}]}}},['inputPointer','originalId'])),
  declarations:rows(obj({inputPointer:{type:'string',maxLength:500},kind:{enum:['provider_statement','operator_mapping']},reason:{type:'string',minLength:1,maxLength:2000},declaredBy:text,declaredAt:{type:'string',format:'utc-timestamp'}},['inputPointer','kind','reason','declaredBy','declaredAt'])),
 },['version','facts','originals','bindings']);
 export const PREBOOK_REPLIES_SCHEMA=obj({version:{const:'finance-prebook-replies/1'},enterpriseKey:text,period:text,inputDigest:{type:'string',pattern:'^[a-f0-9]{64}$'},responses:rows(obj({issueId:{type:'string',pattern:'^pbi-[a-f0-9]{20}$'},statement:{type:'string',minLength:1,maxLength:4000},respondent:text,respondedAt:{type:'string',format:'utc-timestamp'}},['issueId','statement','respondent','respondedAt']))},['version','enterpriseKey','period','inputDigest','responses']);
 export const PREBOOK_TOOL_SCHEMA=obj({inputPath:{type:'string',minLength:1},repliesPath:{type:'string',minLength:1}},['inputPath']);
 export function prebookContract(){return {version:'finance-prebook-contract/1',recordType:'prebook',tool:'finance_prebook_review',schema:PREBOOK_TOOL_SCHEMA,inputSchema:PREBOOK_INPUT_SCHEMA,repliesSchema:PREBOOK_REPLIES_SCHEMA,statuses:['ready_for_bookkeeping_review','needs_inputs','unsupported'],guidance:[
  'inputPath为Agent/采集器整理的JSON，facts不冒称客户原件；原件保持原位置。所有文件须在FINANCE_SOURCE_ROOT内，使用绝对路径。',
- 'originals每项声明企业与覆盖起止日；JSON中的scope如存在也须一致。bindings按facts内JSON Pointer绑定原件JSON Pointer，或CSV物理数据行csvRow（表头为第1行）及column。整对象/数组绑定须值完全一致，decimal仅严格转整数分，boolean仅true/false。没有原件绑定的事实列待补证，不能标可交接。',
+ 'originals每项声明企业与覆盖起止日；JSON中的scope如存在也须一致。bindings可用locator绑定通用读取器的md:fieldRef、工作表行列或PDF/文本page+line及start/end；原件SHA、提取器版本和位置保留。旧jsonPointer/csvRow+column继续可用。金额与日期仍取原值，不因Agent生成JSON就成为原件。整对象/数组绑定须值完全一致，decimal仅严格转整数分，boolean仅true/false。没有原件绑定的事实列待补证，不能标可交接。',
  '内部记录id无需客户原件，系统身份与金额事实分开。分类可通过binding.valueMap明确翻译原件枚举（仅类别字段，不能改金额/日期/票号/对方）；declarations仅承载scope、coverage、taxpayer和业务分类/关联的提供者说明或操作者映射。此类声明不冒充原件事实；关联或抵扣等声明仍要求业务核实。',
  '覆盖范围complete是有来源的提供者声明，不证明真实业务完整；空数组也必须有来源。empty_set仅将原件明确的无记录说明或零数据行CSV绑定到指定空集合，不能将金额零或声明直接变为空集合；本期须完整期间覆盖，上期须覆盖结转日。季度period使用季度末月，opening.asOf和资金openingDate为期间开始前一天。',
  'sales覆盖已开票及未开票销售；invoiceKind为原业务开票性质，不能仅凭税局发票推定销售完整。一般VAT优先使用原件taxAmount，缺少时可用有来源netAmount及vatCategory调用现有原生交易税额函数派生，保留计算轨迹与分类条件；分类也缺失则needs_inputs，不要求客户算最终税。eligible进项是有来源抵扣声明，仍待会计核实。',
