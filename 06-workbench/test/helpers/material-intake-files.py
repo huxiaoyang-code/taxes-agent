@@ -108,7 +108,11 @@ for column, value in enumerate(columns):
 for row, values in enumerate(rows, 1):
     for column, value in enumerate([owner["companyName"], *values]):
         sheet.write(row, column, value)
-book.save(str(file("history", "historicalEntries", "Prior journal export.xls")))
+historical_path = file("history", "historicalEntries", "Prior journal export.xls")
+book.save(str(historical_path))
+# 真实触发 xlrd 非整扇区警告，验证告警不污染 JSON 协议；工作簿内容不变。
+with historical_path.open("ab") as stream:
+    stream.write(b"\x00")
 
 tax = openpyxl.Workbook()
 ws = tax.active

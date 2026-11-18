@@ -1,6 +1,7 @@
 """只读提取本机原件；输入和原值只经本机管道传递，不连接网络。"""
 
 import base64
+import contextlib
 import datetime
 import importlib.metadata
 import importlib.util
@@ -22,6 +23,17 @@ MAX_OCR_BYTES = 6 * 1024 * 1024
 
 class DocumentError(Exception):
     pass
+
+
+class ParserOutput(io.TextIOBase):
+    """只记解析器是否产生额外文本，不保留原文、路径或业务值。"""
+
+    def __init__(self):
+        self.has_output = False
+
+    def write(self, text):
+        self.has_output = self.has_output or bool(text.strip())
+        return len(text)
 
 
 def version(name):
@@ -74,7 +86,7 @@ def inspect_zip(data, spreadsheet=False):
                         raise DocumentError("material_document_external_link")
 
 
-def main(request):
+def main(request, parser_output):
     if request.get("operation") == "capabilities":
         packages = {key: (version(package) if importlib.util.find_spec(module) else None) for key, module, package in [
             ("xls", "xlrd", "xlrd"), ("xlsx", "openpyxl", "openpyxl"),
@@ -127,7 +139,7 @@ def main(request):
     if fmt == "xls":
         require("xlrd")
         import xlrd
-        book = xlrd.open_workbook(file_contents=data, on_demand=True)
+        book = xlrd.open_workbook(file_contents=data, on_demand=True, logfile=parser_output)
         if book.nsheets > 32:
             raise DocumentError("material_document_limit")
         for index in range(book.nsheets):
@@ -270,12 +282,21 @@ def main(request):
     return result
 
 
+parser_output = ParserOutput()
+request = {}
 try:
     request = json.loads(sys.stdin.buffer.read(8 * 1024 * 1024))
-    response = main(request)
+    # 普通解析器的诊断不进入协议输出；最后只在恢复的stdout写一份完整JSON。
+    with contextlib.redirect_stdout(parser_output), contextlib.redirect_stderr(parser_output):
+        response = main(request, parser_output)
 except DocumentError as error:
     response = {"status": "needs_runtime" if "dependency_missing" in str(error) else "unsupported", "error": str(error)}
 except Exception:
     # 不把解析库异常中的原文、文件路径或身份字段写入MCP/日志。
     response = {"status": "unsupported", "error": "material_document_parse_failed"}
+if parser_output.has_output and response.get("status") in ("read", "partial", "available"):
+    response.setdefault("diagnostics", []).append({
+        "code": "xls_parser_warning" if request.get("format") == "xls" else "material_document_parser_warning",
+        "severity": "warning",
+    })
 sys.stdout.write(json.dumps(response, ensure_ascii=False, allow_nan=False))
