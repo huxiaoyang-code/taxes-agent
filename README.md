@@ -38,7 +38,7 @@ node ./start-business-session.mjs --account-set-id '<实际账套ID>' --period 2
 node ./start-business-session.mjs --check
 ```
 
-1. **首次接手。** 按[各宿主的启动命令](05-reconstruction/codex/hosts/START-HERE.md#3-绑定已有账套并启动)进入会话，请 Agent 核对账套和相关历史依据，把可沿用的做账口径写入 `memoryPath` 指向的本机 `MEMORY.md`。每条写明适用条件、生效月份和依据出处。
+1. **首次接手。** 按[各宿主的启动命令](05-reconstruction/codex/hosts/START-HERE.md#3-绑定已有账套并启动)进入会话，请 Agent 核对账套和相关历史依据，按[账套记忆格式](plugins/finance/skills/company-baseline/SKILL.md#memorymd-格式)将已确认、可跨月沿用的口径写入 `memoryPath` 指向的本机 `MEMORY.md`。
 2. **查看记忆。** 会计可按 `memoryPath` 打开文件。Claude Code 经启动器使用原生 Auto Memory，Pi、dsh 和 ZCode 按绑定路径用宿主文件工具读写。
 3. **接着做下月。** 用同一账库和账套生成新工作区，指定下月原件目录，把 `--period` 改为下月。新工作区沿用同一份记忆。本期余额、业务金额和进项抵扣仍按本期资料核对。有新口径时，确认生效月份后更新对应条目。
 
