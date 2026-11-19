@@ -1,6 +1,6 @@
 # 中国财税 Agent：直接业务调用与自动记录
 
-业务 Skill 采用 Anthropic 官方插件的任务说明、输入资料、处理步骤、检查清单与输出格式。中国税会算法、账库与调用记录属于本项目后端实现；上游方法不是中国税法依据或准确率背书。
+既有业务 Skill 采用 Anthropic 官方插件的任务说明、输入资料、处理步骤、检查清单与输出格式；账套口径由各宿主读写同一份本机 Markdown。中国税会算法、账库与调用记录属于本项目后端实现；上游方法不是中国税法依据或准确率背书。
 
 ## 正常调用链
 
@@ -9,7 +9,9 @@ flowchart TD
   U[业务目标与获准原件] --> A[Pi / Claude Code / dsh / ZCode]
   S[按需加载中国化 Skill] --> A
   A --> M[原生 MCP：具体业务工具与输入合同]
-  A --> C[Python / 表格 / 既有计算器]
+  A --> C[宿主已授权文件及脚本能力]
+  C --> O[本机整理件及原件引用]
+  O --> M
   M --> G[通用脚本实际执行与自动记录]
   G --> P[独立派生账表和计算记录索引]
   M --> B[本机会计、税费、报表与对账模块]
@@ -37,7 +39,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `plugins/finance/skills/prebook-review` 将 small-business 的单据整理、采购收货匹配、资金起点、异常问询与报告方法适配到同仓库后端。它与既有做账流程共享资料来源和规则能力，但不要求本期账已完成，也不创建正式凭证或账库。
 
-`finance_record_contract(recordType=prebook)` 披露 `finance-prebook-contract/1`，`finance_prebook_review({inputPath,repliesPath?})` 读取 `FINANCE_SOURCE_ROOT` 内的适配输入与原件。输入是 Agent／采集器对客户基础资料的整理：企业期间、一般／小规模身份、覆盖声明、上期结转、本期采购收货、销售与税务发票、资金和库存。JSON／CSV 原件逐值绑定由后端核验；有限 `valueMap` 翻译原始分类，内部记录 ID 无需原件自带，`declarations` 分别记录提供者说明或操作者映射，业务关联／分类声明仍需核实。金额和日期不能靠声明代替原件。未绑定或不支持的内容保留缺口；表格、PDF 等宿主提取件不得冒称已由该后端独立解析原件。
+`finance_record_contract(recordType=prebook)` 披露当前账前合同。Agent 在获准的本机宿主读取原件，按实际来源、期间、身份、库存和业务语义组织 `finance-prebook-input/2`。整理件和回复文件写入审计根的 `agent-materials`。 `finance_prebook_review({inputPath,repliesPath?})` 接整理件路径，核实际原件 SHA、观察值与 `facts` 的绑定、声明的主体和期间。 `observedValue` 及原位置记为 Agent 观察。未绑定或不支持的内容保留具体缺口。 `valueMap` 用于合同允许的有限语义映射，`declarations` 记录提供者说明或操作者映射。
 
 核对适配器在 `finance-prebook.mjs` 进行去重、显式业务关联、数量金额及资金衔接检查。一般纳税人和小规模增值税复用 `finance-summary-engine.mjs` 的条件计算，保留规则、条件和未知；销售范围不足不由开票合计替代。首版 VAT 税负按条件应纳／不含税销售额列示，不代表其他税种或实缴已核。其他税费继续使用现有独立工具。
 
@@ -74,9 +76,43 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 `finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 
+## 账套记忆
+
+`start-business-session.mjs` 从实际账库验证企业、账套和本期并写入工作区绑定。它按账库文件名、实例和账套定位 `<账库目录>/.finance-memory/<账库文件名>/<databaseInstanceId>/<accountSetId>/MEMORY.md`。绑定中的 `memoryPath` 跨月稳定，异名账库副本、其他实例和账套各用自己的目录。`--check` 核实已绑定范围和路径。`--prepare-only` 只准备目录和会话绑定，口径文件由实际使用的宿主管理。详见[宿主手册](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)。
+
+Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher.mjs)使用原生 `--settings` 指定 `autoMemoryDirectory`，由 Claude 加载和维护文件。SessionStart 和 UserPromptSubmit hook 负责会话身份及恢复校验。Pi 与 dsh 在启动提示告知绑定路径，ZCode 按工作区 `AGENTS.md` 的指引读取绑定。各宿主使用本机文件工具读写同一份记忆。 [Claude Code 官方记忆文档](https://code.claude.com/docs/en/memory#storage-location)
+
+[账套记忆技能](../plugins/finance/skills/company-baseline/SKILL.md)只记录可跨月使用的少量口径、适用期和出处索引。首次按相关历史和必要原件提炼结论，有变化才写相应行。已生效的 Markdown 供业务参考，具体账务审批按原有业务权限执行。
+
+## 既有材料取数、方法与案例
+
+需要结构化取数的任务可用 `finance_record_contract(recordType:"baseline")` 准备本机观察，按实际需求使用 `finance_baseline_materials` 的 `section:"tax"` 或 `section:"calculation"`。既有计算器利用材料回执的 `calculationReader` 验证范围、来源和版本后在本机取规范值，通过 `finance_calculation_run` 留下结果与来源。 [按需取数参考](../plugins/finance/skills/company-baseline/references/materials-and-save.md)
+
+旧方法／案例能力继续按需可用。`business-memory-storage.mjs` 将企业主题、不可覆盖的方法版本和可重建案例索引保存在实际 SQLite，纳入组件迁移、账库只读检查及备份恢复；`business-memory-bootstrap.mjs` 从现库配置、历史凭证/分录、期间、资产、导入来源及已有计算记录建立目录，不复制账务数据库或重算所有财务数字。已过账/封账、草稿、失败、执行未审及非历史期分开；金额不能证明完整算法。`ledger_fact`、`observed_history`、`operator_decision` 与候选分开，方法保留适用范围、取数、日期/金额、去重、转换、科目、执行版本、依据及缺口。账面事实与来源当前性分别披露；已知 changed/missing 阻断依赖方法，当前授权根不可访问的 unavailable 不当作已变，也不能冒称已重新核验。换目录或重新准备不能洗掉已知来源失效。
+
+正常 MCP 原生写入成功后后台同步企业目录；已绑定会话的 `finance_calculation_run` 自动核实实际scope，待完整调用记录落盘再同步，方法脚本执行同样留下可接续案例。未绑定计算保持未知；同步失败不把已执行结果改成可重复执行。读取通过 `live_readonly` 当前快照判断具体方法/对象/来源，不在读取时迁移、暗写索引或重算财务结果。缓存 stale 与业务方法失效分开；显式prepare用于初始化或主动维护，不要求Agent登记事实、维护技术状态或任务DAG。
+
+`business-memory.mjs` 的直接 MCP 入口为 `finance_memory_prepare`、`finance_company_context`、`finance_method_read`、`finance_case_search`、`finance_memory_propose` 和 `finance_method_run`，继续固定模型投影、分页、显式target、实际账库隔离与自动调用记录。稳定 `objectRef` 区分同主题的不同对象，`objectScope=account_set|business_object` 及本机JSON `matchConditions` 给出机器适用条件；context/readMethod传本期sources，只披露 matched/not_matched/unresolved，执行时重新匹配。任何非空自由scope/conditions仍未决，即使另有typed match也不能忽略；解释放notes，确定性资产/结转使用结构化account_set。
+
+对象匹配实际字节SHA在方法记录中固定，并交计算器校验实际采用的snapshot；匹配A1不能在取数时改用A2。采用不符拒绝子脚本执行该版本，后置来源/版本变化或可能副作用保留unknown并核原执行。原生business_object当前仅支持finance_tax_summary_calculate的originals分支：全部actual originals来自已匹配路径并强制SHA，bindings仅指这些originalId，不支持artifactRef派生分支；其他原生对象方法在context/read披露nativeObjectBinding=not_supported、executable=false。账套级native原路径不变，不把对象匹配能力泛化到全部原生工具。
+
+模型只能保存候选；本机 `review-business-method.mjs` 的真实交互审阅展示受影响版本，新增选择并保留理由、生效/终止期、replacementPolicy/replaces。同一主题/对象在目标期间只采用最新revision，回溯或有限区间之外仍按旧选择范围判断。执行只用保存的methodRef、本期参数和来源；current_parameters不能以旧default补本期金额/日期/数量，constant必须采用保存值、caller异值拒绝，缺保存值保持不可执行。支持的VAT/季度等原生安全业务结果及产物索引继续可读；凭证人审、期间、防重复、来源及实际账库控制不放宽。readonly 进程拒绝账库方法写路径；版本不可独立改删，整账删除仅沿原生控制级联所属记忆。
+
+[企业历史参考](../plugins/finance/skills/shared/references/business-memory.md)详述已选方法及来源核查。Markdown 记忆的验收应核四宿主是否定位同一账套文件、Claude 是否由原生载入，以及后续月份的实际应用。
+
+## 整期任务入口与接续
+
+`tax-period/SKILL.md` 处理“完成本期账税/申报准备、接上次补件继续”的整期目标，五阶段表按实际资料和产物选择起点；单项税额、凭证或查询直接进入相应技能。它复用既有账前、凭证、对账、税费、报表技能，按需读取合法税费方案、租赁三口径及税后现金分支，不引入事实登记或任务 DAG。交付前先核真实扣除、优惠、亏损及法定选择的可行性，再区分本期/全年/合同全周期、永久减税/递延；不能按目标税负造成本或改既定事实。
+
+`hosts/shared/task-routing.mjs` 提供四宿主同一短路由。Pi 的 `--append-system-prompt` 与 MCP 描述、Claude 的 `CLAUDE.md`、ZCode 的 `AGENTS.md`、dsh 的显式 `start-dsh.mjs` 任务前缀分别接入已知入口；dsh 不添加未经核实的提示配置 API。Pi 保留原生 tool-search、skills_read 初始可用和其余工具 deferred 注册。配置和提示装配的静态测试不证明模型已读 Skill；实际模型调用轨迹和业务产物另行验收。
+
+`skills_list` 保留 files/labels 并从实际 frontmatter 提供 entries 元数据；`finance_period_review` 只读检查已有调用记录的固定投影。有账套按配置账库实际身份核同企业、账套、期间，分页披露覆盖与遗漏；未建库可显式指定 `unboundCalls.callIds` 逐条复查账前/计算执行记录，但 `scopeVerified=false`，不据此确认企业或汇总整期。来源变化、记录不完整、历史未决及未知均保留；调用 returned、摘要匹配和模型自述不等于业务完成，不因新调用成功关闭旧问题，也不新建任务状态库。
+
+该工具仅识别已实现的结果形状；当前年度 `finance-annual-result/1` 保持未识别记录，未实现年度专门解析和自动恢复完成判断。整期入口仍要求季度/年度所需月份和税种覆盖检查；年度产物按实际年度工具结果与获准本机资料核查，不能将月度记录或缺少年度投影当全年已完成。
+
 ## 历史兼容与验证
 
-十个中国化业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
 
 旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 
@@ -112,7 +148,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 结果身份为`derived_calculation`、业务状态为`unreviewed`，可独立交付，不是`finance_quarter_review`快照。中文业务账表、规则、参数和缺件影响由脚本或宿主表格产出；自动HTML只叫计算记录与文件索引，不能充当完成的业务报告。原生季度报告及其专用导出保留为可选路径。
 
-脚本使用明确程序和参数，禁用shell字符串，精简子进程环境，不传模型凭据或账库路径。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../05-reconstruction/codex/skills/harness/references/calculation.md)。
+脚本使用明确程序和参数，禁用shell字符串；子进程环境不继承模型凭据或 `FINANCE_*`。已配置实际账库时，父进程把可信 `dbPath/sourceRoot/auditDir/sessionPath` 写入本机 `input.financeContext` 供只读取数，caller parameters 不能覆盖，该上下文不经 MCP 回传。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../05-reconstruction/codex/skills/harness/references/calculation.md)。
 
 ## 固定账务卡片交付层
 

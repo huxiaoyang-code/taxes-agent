@@ -54,9 +54,16 @@ function humanReview(record){
  return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>'+escape(record.title)+'</title><style>body{font:16px/1.7 sans-serif;max-width:1000px;margin:40px auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:8px}</style><h1>'+escape(record.title)+'</h1><h2>计算记录与文件索引</h2><p>本页是执行记录，业务账表请打开下列输出文件；不是完整财税报告。独立派生计算；'+(record.status==='executed'?'脚本执行完成':'执行失败或记录需要核查')+'。执行成功不代表业务已核、税法适用正确、已入账或已申报。未给事实保留未知；脚本规则、参数及缺件说明由编写者声明，尚待复核。</p><h2>计算结果文件</h2><ul>'+record.outputs.map(o=>'<li><a href="outputs/'+o.path.split('/').map(encodeURIComponent).join('/')+'">'+escape(o.path)+'</a>（派生文件；'+o.bytes+' 字节）</li>').join('')+'</ul><h2>方法、规则及缺件声明</h2><pre>'+escape(json(record.notes))+'</pre><h2>实际参数</h2><pre>'+escape(json(record.parameters))+'</pre><h2>输入文件结构与选取位置</h2>'+record.sources.map(s=>'<h3>'+escape(s.path)+'</h3><pre>'+escape(json({sha256:s.sha256,structure:s.structure,locator:s.locator,meaning:'输入文件快照，来源性质待核；路径授权及哈希不证明原件真实性或参数语义正确'}))+'</pre>').join('')+'<h2>执行记录</h2><p>本机可信脚本按当前用户权限执行；目录约定、超时和环境精简不是安全沙箱。未记录绕过本工具的宿主调用。计时限制仅针对直接子进程，不能约束其创建的后代进程或内存。</p><pre>'+escape(json({runId:record.runId,reviewCard:record.reviewCard,rerunOf:record.rerunOf,status:record.status,error:record.error,runtime:record.runtime,execution:record.execution,sourceChecks:record.sourceChecks,executionFileChecks:record.executionFileChecks}))+'</pre><p><a href="request.json">完整请求</a> · <a href="script.'+(record.engine==='python'?'py':'mjs')+'">版本化脚本</a> · <a href="input.json">实际执行输入</a> · <a href="stdout.txt">标准输出</a> · <a href="stderr.txt">错误输出</a> · <a href="record.json">完整记录</a></p></html>';
 }
 
-export async function runFinanceCalculation(args){
+export async function runFinanceCalculation(args,options={}){
  if(validateSchemaValue(CALCULATION_SCHEMA,args).length)fail('finance_calculation_input_invalid');
- const call=currentFinanceCall(),root=join(call?.auditDir??financeAuditDirectory(),'calculations');plainPath(root,{missing:true});mkdirSync(root,{recursive:true});
+ const sourceRoot=options.sourceRoot??process.env.FINANCE_SOURCE_ROOT;
+ // 方法执行器传入匹配时实读的字节版本；不是模型可填写的脚本参数。
+ const expectedSources=new Map();
+ for(const expected of options.expectedSourceVersions??[]){
+  if(!Number.isInteger(expected.sourceIndex)||expected.sourceIndex<0||!args.sources[expected.sourceIndex]||typeof expected.path!=='string'||!isAbsolute(expected.path)||resolve(args.sources[expected.sourceIndex].path)!==resolve(expected.path)||!/^[a-f0-9]{64}$/.test(expected.sha256)||expectedSources.has(expected.sourceIndex))fail('finance_calculation_method_source_binding_invalid');
+  expectedSources.set(expected.sourceIndex,expected);
+ }
+ const call=currentFinanceCall(),root=join(options.auditDir??call?.auditDir??financeAuditDirectory(),'calculations');plainPath(root,{missing:true});mkdirSync(root,{recursive:true});
  let parent=null;
  if(args.rerunOf){const p=join(root,args.rerunOf,'record.json');let bytes;try{bytes=fileBytes(p);}catch{fail('finance_calculation_previous_missing');}const previous=JSON.parse(bytes);if(previous.runId!==args.rerunOf||previous.version!=='finance-calculation/1')fail('finance_calculation_previous_invalid');
   for(const [name,expected]of [['request.json',previous.request],['script.'+(previous.engine==='python'?'py':'mjs'),previous.script],...(previous.input?[['input.json',previous.input]]:[])])if(sha(fileBytes(join(dirname(p),name)))!==expected?.sha256)fail('finance_calculation_previous_changed');
@@ -64,16 +71,22 @@ export async function runFinanceCalculation(args){
  }
  const runId=randomUUID(),dir=join(root,runId),working=join(dir,'working'),outputDir=join(dir,'outputs');mkdirSync(dir);mkdirSync(working);mkdirSync(outputDir);mkdirSync(join(dir,'sources'));
  const scriptName='script.'+(args.engine==='python'?'py':'mjs');const request=save(join(dir,'request.json'),json(args)),script=save(join(dir,scriptName),args.script);
- const record={version:'finance-calculation/1',kind:'derived_calculation',runId,callId:call?.callId??null,title:args.title,engine:args.engine,rerunOf:parent,parameters:args.parameters??{},notes:args.notes??[],request,script,recorderSha256:sha(readFileSync(fileURLToPath(import.meta.url))),startedAt:new Date().toISOString(),status:'failed',sources:[],outputs:[],sourceChecks:[]};
+ const record={version:'finance-calculation/1',kind:'derived_calculation',runId,callId:call?.callId??null,title:args.title,engine:args.engine,rerunOf:parent,parameters:args.parameters??{},notes:args.notes??[],request,script,recorderSha256:sha(readFileSync(fileURLToPath(import.meta.url))),startedAt:new Date().toISOString(),status:'failed',sources:[],outputs:[],sourceChecks:[],methodSourceVersionChecks:[]};
  save(join(dir,'begin.json'),json(record));
  try{
-  let total=0;const sourceRoot=process.env.FINANCE_SOURCE_ROOT;
+  let total=0;
   if(args.sources.length&&(!sourceRoot||!isAbsolute(sourceRoot)))fail('finance_calculation_source_root_required');
   for(const [index,source] of args.sources.entries()){
    const path=resolve(source.path);if(!isAbsolute(source.path)||!inside(resolve(sourceRoot),path))fail('finance_calculation_source_forbidden');
    const bytes=fileBytes(path);total+=bytes.length;if(total>20*1024*1024)fail('finance_calculation_source_limit');
    const extension=extname(path).toLowerCase(),snapshotPath=join(dir,'sources',String(index)+extension);save(snapshotPath,bytes);
    let structure={status:'unparsed',note:'仅保存字节快照；结构由脚本解析，未声称读取表头。'};
+   const captured={kind:'source_snapshot',path,snapshotPath,sha256:sha(bytes),bytes:bytes.length,locator:source.locator??null,structure};record.sources.push(captured);
+   const expected=expectedSources.get(index);
+   if(expected){
+    const matched=captured.sha256===expected.sha256;record.methodSourceVersionChecks.push({sourceIndex:index,path,expectedSha256:expected.sha256,adoptedSha256:captured.sha256,matched});
+    if(!matched)fail('finance_calculation_method_source_changed');
+   }
    if(source.locator)structure=captureEvidenceSource({path,...source.locator},{sourceRoot,fileCache:new Map([[path,bytes]])});
    else if(extension==='.csv'||extension==='.json'){
     // 自动摘要失败不是计算门槛；其他编码/复杂结构由获授权脚本选择解析方法。
@@ -82,13 +95,20 @@ export async function runFinanceCalculation(args){
      else{const value=JSON.parse(decoded);structure={format:'json',keys:value&&typeof value==='object'?Object.keys(value):[],meaning:'根结构，具体字段由脚本选择。'};}
     }catch{structure={status:'unparsed',note:'自动结构摘要未完成；已保存原字节，由脚本按实际编码/结构处理，未声称读取表头。'};}
    }
-   record.sources.push({kind:'source_snapshot',path,snapshotPath,sha256:sha(bytes),bytes:bytes.length,locator:source.locator??null,structure});
+   captured.structure=structure;
   }
   annotateFinanceCall({sources:record.sources.map(s=>({path:s.path,sha256:s.sha256,bytes:s.bytes,locator:'calculation_source_snapshot'}))});
   // 实际脚本输入只给副本位置；来源路径与完整结构留在独立记录中。
   const input={parameters:args.parameters??{},sources:record.sources.map((s,index)=>({index,snapshotPath:s.snapshotPath,sha256:s.sha256,locator:s.locator})),outputDir};
+  // 只在本机执行输入提供父进程已配置的只读取数位置；不从parameters取得，也不回传模型或继承凭据环境。
+  const databasePath=options.dbPath??process.env.FINANCE_DATABASE_PATH;
+  if(typeof databasePath==='string'&&isAbsolute(databasePath)){
+   const financeContext={dbPath:resolve(databasePath),sourceRoot:sourceRoot??'',auditDir:options.auditDir??call?.auditDir??financeAuditDirectory(),sessionPath:options.sessionPath??process.env.FINANCE_BUSINESS_SESSION??''};
+   input.financeContext=financeContext;record.financeContext=financeContext;
+   annotateFinanceCall({financeCalculationContext:{version:'finance-calculation-context/1',origin:'configured_backend_paths',sha256:sha(json(financeContext))}});
+  }
   record.input=save(join(dir,'input.json'),json(input));
-  const program=args.engine==='javascript'?process.execPath:process.env.FINANCE_PYTHON_PATH;
+  const program=args.engine==='javascript'?process.execPath:options.pythonPath??process.env.FINANCE_PYTHON_PATH;
   if(!program||!isAbsolute(program))fail('finance_calculation_python_path_required');
   const executable=fileBytes(program,150*1024*1024);record.runtime={program,executableSha256:sha(executable)};
   const env=childEnvironment(working),version=await execute(program,['--version'],{cwd:working,env,timeoutMs:5000});
@@ -102,7 +122,7 @@ export async function runFinanceCalculation(args){
  }catch(error){record.error={code:error.code??'finance_calculation_failed',message:String(error.message)};}
  // 执行失败也保留输入文件快照、错误和已有输出；来源变化只报告，绝不回写来源文件。
  for(const source of record.sources){try{record.sourceChecks.push({path:source.path,sourceUnchanged:sha(fileBytes(source.path))===source.sha256,snapshotUnchanged:sha(fileBytes(source.snapshotPath))===source.sha256});}catch{record.sourceChecks.push({path:source.path,sourceUnchanged:null,snapshotUnchanged:null});}}
- if(record.sourceChecks.some(s=>s.sourceUnchanged!==true||s.snapshotUnchanged!==true)){record.status='failed';record.error={code:'finance_calculation_source_changed'};}
+ if(record.sourceChecks.some(s=>s.sourceUnchanged!==true||s.snapshotUnchanged!==true)){record.status='failed';if(record.error?.code!=='finance_calculation_method_source_changed')record.error={code:'finance_calculation_source_changed'};}
  record.executionFileChecks=[];
  for(const [name,expected]of [[scriptName,record.script],...(record.input?[['input.json',record.input]]:[])]){let unchanged=false;try{unchanged=sha(fileBytes(join(dir,name)))===expected.sha256;}catch{}record.executionFileChecks.push({file:name,unchanged});}
  if(record.executionFileChecks.some(s=>!s.unchanged)){record.status='failed';record.error={code:'finance_calculation_execution_input_changed'};}

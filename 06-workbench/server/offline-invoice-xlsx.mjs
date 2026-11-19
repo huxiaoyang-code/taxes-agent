@@ -88,8 +88,10 @@ function relations(bytes, base) {
     const path = r.attrs.Target.startsWith('/') ? r.attrs.Target.slice(1) : base + r.attrs.Target;
     check(!path.includes('\\') && !path.includes(':') && !path.includes('?') && !path.includes('#') && !path.split('/').some(p => p === '..' || p === '.' || p === ''), 'xlsx_external_link_unsupported');
     check(!/externalLink|hyperlink|oleObject/i.test(r.attrs.Type), 'xlsx_external_link_unsupported');
-    const allowedTypes = [DOCREL + '/officeDocument', DOCREL + '/worksheet', DOCREL + '/styles', DOCREL + '/sharedStrings', DOCREL + '/theme', DOCREL + '/extended-properties', REL + '/metadata/core-properties'];
+    const allowedTypes = [DOCREL + '/officeDocument', DOCREL + '/worksheet', DOCREL + '/styles', DOCREL + '/sharedStrings', DOCREL + '/theme', DOCREL + '/extended-properties', REL + '/metadata/core-properties', REL + '/metadata/thumbnail'];
     check(allowedTypes.includes(r.attrs.Type), 'xlsx_structure_unsupported');
+    // 缩略图不参与取数，也不解码；只兼容标准元数据位置，不能借此增加外部或任意附件。
+    if (r.attrs.Type === REL + '/metadata/thumbnail') check(['docProps/thumbnail.wmf', 'docProps/thumbnail.emf', 'docProps/thumbnail.jpeg', 'docProps/thumbnail.jpg', 'docProps/thumbnail.png'].includes(path));
     out.set(r.attrs.Id, { type: r.attrs.Type, path });
   }
   return out;
@@ -102,7 +104,7 @@ const cellPosition = a => {
 const a1 = column => { let s = ''; for (let n = column; n; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
 const simpleString = n => { check(n && n.children.every(c => c.name === 't') && n.children.length === 1); const t = n.children[0]; check(!t.children.length && t.text.length <= 4096, 'xlsx_limit'); check(!/_x[0-9A-Fa-f]{4}_/.test(t.text), 'xlsx_string_escape_unsupported'); return t.text; };
 
-function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false) {
+function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false, structureOnly = false) {
   try {
     const entries = unpack(bytes);
     for (const [name, content] of entries) if (name.endsWith('.rels')) {
@@ -118,18 +120,21 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     const allowedContentTypes = ['application/xml', 'application/vnd.openxmlformats-package.relationships+xml', 'application/vnd.openxmlformats-package.core-properties+xml', ...['spreadsheetml.sheet.main', 'spreadsheetml.worksheet', 'spreadsheetml.styles', 'spreadsheetml.sharedStrings', 'theme', 'extended-properties'].map(t => 'application/vnd.openxmlformats-officedocument.' + t + '+xml')];
     const contentKeys = new Set();
     for (const n of types.children) {
-      check(allowedContentTypes.includes(n.attrs.ContentType) || n.name === 'Default' && n.attrs.Extension === 'vml' && n.attrs.ContentType === 'application/vnd.openxmlformats-officedocument.vmlDrawing' && ![...entries.keys()].some(name => name.endsWith('.vml')), 'xlsx_structure_unsupported');
+      const thumbnailTypes = { wmf: ['image/x-wmf', 'image/wmf'], emf: ['image/x-emf', 'image/emf'], jpeg: ['image/jpeg'], jpg: ['image/jpeg'], png: ['image/png'] };
+      const thumbnailExtension = n.name === 'Override' ? n.attrs.PartName?.split('.').at(-1) : n.attrs.Extension;
+      const thumbnailType = thumbnailTypes[thumbnailExtension]?.includes(n.attrs.ContentType) && (n.name === 'Override' ? n.attrs.PartName === '/docProps/thumbnail.' + thumbnailExtension : [...entries.keys()].filter(name => name.endsWith('.' + thumbnailExtension)).every(name => name === 'docProps/thumbnail.' + thumbnailExtension));
+      check(allowedContentTypes.includes(n.attrs.ContentType) || thumbnailType || n.name === 'Default' && n.attrs.Extension === 'vml' && n.attrs.ContentType === 'application/vnd.openxmlformats-officedocument.vmlDrawing' && ![...entries.keys()].some(name => name.endsWith('.vml')), 'xlsx_structure_unsupported');
       check(Object.keys(n.attrs).every(k => ['ContentType', n.name === 'Override' ? 'PartName' : 'Extension'].includes(k)));
       if (n.name === 'Override') check(n.attrs.PartName?.startsWith('/') && entries.has(n.attrs.PartName.slice(1)), 'xlsx_part_missing');
       const key = n.name === 'Override' ? n.attrs.PartName : n.attrs.Extension;
       check(key && !contentKeys.has(n.name + ':' + key)); contentKeys.add(n.name + ':' + key);
     }
-    check([...entries.keys()].every(name => name.endsWith('/') || ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/sharedStrings.xml', 'docProps/core.xml', 'docProps/app.xml'].includes(name) || /^xl\/(?:worksheets\/sheet\d+|theme\/theme\d+)\.xml$/.test(name)), 'xlsx_structure_unsupported');
+    check([...entries.keys()].every(name => name.endsWith('/') || ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/sharedStrings.xml', 'docProps/core.xml', 'docProps/app.xml'].includes(name) || /^docProps\/thumbnail\.(?:wmf|emf|jpeg|jpg|png)$/.test(name) || /^xl\/(?:worksheets\/sheet\d+|theme\/theme\d+)\.xml$/.test(name)), 'xlsx_structure_unsupported');
     const wb = xml(entries.get('xl/workbook.xml'));
     tree(wb, MAIN, ['workbook', 'fileVersion', 'workbookPr', 'bookViews', 'workbookView', 'sheets', 'sheet', 'calcPr']); check(wb.name === 'workbook');
     const rels = relations(entries.get('xl/_rels/workbook.xml.rels'), 'xl/');
     const sheets = one(wb, 'sheets').children; check(sheets.every(s => s.name === 'sheet') && new Set(sheets.map(s => s.attrs.name)).size === sheets.length && new Set(sheets.map(s => s.attrs.sheetId)).size === sheets.length && new Set(sheets.map(s => s.attrs[`{${DOCREL}}id`])).size === sheets.length);
-    const matches = sheets.filter(s => s.attrs.name === mapping.sheet); check(matches.length === 1, 'xlsx_sheet_missing');
+    const matches = structureOnly ? sheets.filter((s,i) => i === mapping.sheetIndex) : sheets.filter(s => s.attrs.name === mapping.sheet); check(matches.length === 1, 'xlsx_sheet_missing');
     const selected = matches[0]; check(!selected.attrs.state || selected.attrs.state === 'visible', 'xlsx_structure_unsupported');
     const sheetRel = rels.get(selected.attrs[`{${DOCREL}}id`]); check(sheetRel?.type === DOCREL + '/worksheet');
     const related = type => { const found = [...rels.values()].filter(r => r.type === DOCREL + '/' + type); check(found.length <= 1); return found[0] && entries.get(found[0].path); };
@@ -179,6 +184,8 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
       }
       records.push({ rowNumber, cells: Array.from({ length: cells.length }, (_, i) => cells[i] ?? ''), types });
     }
+    // 仅供本机受限字段适配器使用；仍执行上方完整安全解析与公式拒绝，模型投影由调用方负责。
+    if (structureOnly) return {sheetIndex:mapping.sheetIndex,sheetCount:sheets.length,rows:records};
     const header = records.find(r => r.rowNumber === mapping.headerRow); check(header, 'xlsx_header_missing');
     const index = new Map();
     for (const [key, label] of Object.entries(mapping.columns)) {
@@ -209,3 +216,7 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
 // 数值许可由固定适配器决定，不能由调用者可控制的映射决定。
 export const readInvoiceXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['net', 'tax', 'gross']);
 export const readBankXlsx = (bytes, mapping) => readMappedXlsx(bytes, mapping, ['amount', 'balance'], true);
+export const readXlsxStructure = (bytes, {sheetIndex=0}={}) => {
+  check(Number.isSafeInteger(sheetIndex) && sheetIndex>=0 && sheetIndex<8,'xlsx_limit');
+  return readMappedXlsx(bytes,{sheetIndex},[],false,true);
+};

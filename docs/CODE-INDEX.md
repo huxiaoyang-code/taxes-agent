@@ -4,9 +4,24 @@
 
 ## 当前 direct 默认调用链
 
-日常路径为业务 Skill→模型选择Python、表格或既有业务工具；MCP中的脚本运行与原生业务调用自动记录；下方 Harness 编排条目仅供显式历史兼容与源码调查，不是新任务前置流程。
+日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。
 
-- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
+- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十二个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
+- 账套口径：[账套记忆 Skill](../plugins/finance/skills/company-baseline/SKILL.md)及[宿主手册](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)。每个账套一份本机 `MEMORY.md`，同条件跨月沿用；有新口径或冲突才核相关依据，按适用期编辑有关行。
+- 宿主原件读取：[原件读取参考](../plugins/finance/skills/company-baseline/references/material-adaptation.md)。账前 `finance-prebook-input/2` 接收带实际原件位置的 `observedValue`，既有计算流程需要结构化取数时可按合同使用 `finance_baseline_materials`。
+- 合成资料适配：[material-intake-e2e.test.mjs](../06-workbench/test/material-intake-e2e.test.mjs) 提供混合格式资料、旧 XLS GBK 对照与结构化材料入口的验证参考。
+- 既有材料结合与分页：[business-baseline-materials.mjs](../06-workbench/server/business-baseline-materials.mjs) 按实际账套和原件出处接收本机观察，[business-baseline-projection.mjs](../06-workbench/server/business-baseline-projection.mjs) 按工具合同给出分页和按需税负或计算投影。
+
+- 规范事实本机取数：[business-baseline.mjs](../06-workbench/server/business-baseline.mjs) 的 `resolveBaselineCalculationFacts`，入口／SHA／格式由 materials 的 `calculationReader` 披露，不注册原值 MCP；[finance-calculation.mjs](../06-workbench/server/finance-calculation.mjs) 父进程装配本机 `input.financeContext`。JS 子脚本按真实材料引用／scope／SHA 取规范值并计算，reader／来源摘要写派生底稿，MCP 只给执行与产物引用，不能回显原值／本机上下文给模型。
+- 整期入口：[tax-period/SKILL.md](../plugins/finance/skills/tax-period/SKILL.md)，按实际产物选五阶段并复用既有专项技能；合法方案、租赁口径和税后现金参考在同目录 references。单项任务不强制整期流程。
+- 共享宿主路由：`05-reconstruction/codex/hosts/shared/task-routing.mjs`；Pi 启动提示、Claude CLAUDE.md、ZCode AGENTS.md、dsh `hosts/dsh/launcher.mjs` 生成的显式任务包装共用，静态装配与模型实际读取分别验收。
+- 企业方法记忆：`06-workbench/server/business-memory-storage.mjs`（不可变版本/案例、组件迁移、只读/备份恢复、整账级联）、`business-memory-bootstrap.mjs`（初始化及live只读来源观察）、`business-memory-contracts.mjs`（objectScope/JSON匹配及参数合同）、`business-memory.mjs`（摘要/方法/案例/候选/按版本执行、对象匹配及有效区间）、`06-workbench/scripts/review-business-method.mjs`（本机TTY选择，展示受影响版本，不接受模型自批）。direct MCP工具名与实际合同见 `direct-tools.mjs`，企业scope由 `direct-finance-target.mjs` 从实际DB推导。
+- 企业历史自动接续：`05-reconstruction/codex/mcp/finance-mcp/server.mjs` 的 `executeRecordedTool` 核已绑定普通计算scope、原生写成功同步，以及完整计算/方法执行记录落盘后的后台同步；`06-workbench/server/finance-direct-method-result.mjs` 保留原生VAT/季度等安全业务结果/产物。读取的cache差异不当作业务失效，跨获准来源/记录根保留不可访问旧依据，known changed/missing仍阻断。
+- 方法适用/取数边界：`business-memory.mjs` 的 `matchingState` 不忽略额外自由scope/conditions，`parametersFor` 固定constant保存值，`bindNativeObjectSources` 仅为原生summary originals分支绑定已匹配路径/SHA/原件ID；其他native business_object明确not_supported。`finance-calculation.mjs` 按后端expectedSourceVersions核实际snapshot，版本不符不向子脚本放行；方法记录保留matchedSources，计算记录保留methodSourceVersionChecks，后置变化/未知副作用核原执行。资产/结转方法的结构化account_set与解释notes见bootstrap。
+- 账套绑定：[business-session.mjs](../05-reconstruction/codex/hosts/shared/business-session.mjs) 校验实际账库、账套、本期，绑定中的 `memoryPath` 由账库文件、实例和账套确定。Claude [启动器](../05-reconstruction/codex/hosts/claude-code/launcher.mjs) 传原生 `autoMemoryDirectory`，[hook](../05-reconstruction/codex/hosts/claude-code/business-memory-hook.mjs) 仅管理会话身份绑定。Pi、dsh、ZCode 使用各自的文件工具。
+- 按需方法与案例：[业务参考](../plugins/finance/skills/shared/references/business-memory.md)；[business-memory-acceptance.mjs](../06-workbench/scripts/business-memory-acceptance.mjs) 验证已选方法接续。
+- 相关验证：[账库方法存储](../06-workbench/test/business-memory-storage.test.mjs)、[账库方法端到端](../06-workbench/test/business-memory-e2e.test.mjs)、[Claude argv](../06-workbench/test/host-claude-argv.test.mjs)。宿主参数配置与模型实际原生读写分别验证。
+- 接续投影：`06-workbench/server/finance-period-review-contracts.mjs`、`finance-period-review.mjs` 与 direct MCP 注册；同范围固定只读投影、分页覆盖、未知及未决保留，未绑定记录分支不确认企业或整期状态。发现元数据：`05-reconstruction/codex/mcp/finance-mcp/skill-metadata.mjs` 解析实际 frontmatter，`skills_list.entries` 保留有效性状态。
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
 - 独立账前核对：`plugins/finance/skills/prebook-review/SKILL.md`；后端 `06-workbench/server/finance-prebook-contracts.mjs`、`finance-prebook-evidence.mjs`、`finance-prebook.mjs`。`finance_prebook_review`核对上期及本期基础资料、一般／小规模VAT条件试算、老板声明与补件重算，不写正式账；`finance_record_contract(recordType=prebook)`披露实际输入及回复合同。

@@ -23,29 +23,42 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝
 ```
 
 - `--host` 可选 `pi`、`claude-code`、`dsh` 或 `zcode`。
-- `--source-root` 指定已有原件目录；账前核对和处理原件的脚本需要它。适配输入及回复文件也放在该目录内。
+- `--source-root` 指定已有获准原件目录。Agent 在宿主中使用已有文件或脚本权限读取。
 - 需要运行 Python 计算时，加 `--python '<python.exe绝对路径>'`；JavaScript 计算无需此项。
-- 处理记录默认保存在新工作区的 `finance-call-records`，可用 `--audit-dir '<绝对目录>'` 改位置。
+- 处理记录默认保存在新工作区的 `finance-call-records`，可用 `--audit-dir '<绝对目录>'` 改位置。由 Agent 生成的账前整理件及回复写在审计根下的 `agent-materials`。
 
 生成器使用本仓库技能，不覆盖已有工作区、不启动模型，也不创建账套。
 
-## 3. 在新工作区启动应用
+## 3. 绑定已有账套并启动
+
+在新工作区指定实际账套及本期。以前生成的工作区需按当前代码重新生成，以更新启动设置和任务提示。
+
+```powershell
+node ./start-business-session.mjs --account-set-id <实际账套ID> --period 2026-11 --prepare-only
+node ./start-business-session.mjs --check
+```
+
+`--prepare-only` 准备本机会话绑定，`--check` 只读核实绑定及记忆路径。每个工作区固定实际账库、企业、账套和本期，换月份用新工作区，同一账套跨月指向同一份 `MEMORY.md`。详见[账套记忆](BUSINESS-MEMORY.md)。
+
+Claude Code 通过原生 Auto Memory 使用已绑定账套的 `MEMORY.md`。Pi、dsh 和 ZCode 使用宿主文件工具读取绑定里的 `memoryPath`。首次接手或有新口径时，按[账套记忆技能](../../../plugins/finance/skills/company-baseline/SKILL.md)核实际账和相关资料，再编辑有变化的条目。
 
 | 应用 | 启动命令 |
 |---|---|
-| [Pi](pi/README.md) | `node start-pi.mjs --pi-root '<官方Pi 1.1.0包绝对目录>'` |
-| [Claude Code](claude-code/README.md) | `claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json` |
-| [dsh](dsh/README.md) | `dsh --profile headless --patch ./finance.cordis.patch.yml --patch ./model.cordis.patch.yml '<明确任务>'` |
-| [ZCode](zcode/README.md) | `zcode --cwd '<生成目录绝对路径>' --mode build` |
+| [Pi](pi/README.md) | `node ./start-business-session.mjs -- --pi-root '<官方Pi 1.1.0包绝对目录>'` |
+| [Claude Code](claude-code/README.md) | `node ./start-business-session.mjs -- --claude-cli '<Claude exe或JS入口绝对路径>'` |
+| [dsh](dsh/README.md) | `node ./start-business-session.mjs -- --dsh-cli '<dsh包JS bin绝对路径>' --task '<明确任务>'` |
+| [ZCode](zcode/README.md) | `node ./start-business-session.mjs -- --zcode-cli '<ZCode exe或JS入口绝对路径>'` |
 
-dsh 的 `model.cordis.patch.yml` 需按其说明另行配置；各应用的模型设置见上表链接。Pi 可先在启动命令末尾加 `--check` 检查连接，此检查不调用模型。
+dsh 的 `model.cordis.patch.yml` 需按其说明另行配置；各应用的模型设置见上表链接。Pi 原有 `node start-pi.mjs --pi-root '<官方包绝对目录>' --check` 检查连接，不调用模型。尚未建账的账前核对可使用原有未绑定入口，不能为了读取企业历史伪建账套；已知账套的正常业务通过上述绑定入口启动。
 
 ## 4. 开始一项业务
 
 向 Agent 明确企业、账套、期间、资料目录和任务，例如：
 
-> 核对这家企业本月的采购、收货、发票、流水和库存，接续上期余额，列出差异与需要向老板补问的事项。
+> 完成这家企业本期账税与申报准备，核对本期采购、收货、发票、流水及库存，接续上期余额；资料不足时先完成可核部分，列出影响和补件后接续入口。
 
-Agent 按需读取[账前核对](../../../plugins/finance/skills/prebook-review/SKILL.md)等技能，整理原始资料，选择工具并生成报告；做账任务则核实目标账套，编制凭证并按实际审核结果入账。
+整期目标先读 [tax-period](../../../plugins/finance/skills/tax-period/SKILL.md)，再选择本次需要的阶段及账前、做账、对账、税费、报表分支；单项查询和试算使用对应技能。四宿主共用同一短路由：Pi 启动系统提示、Claude 的 `CLAUDE.md`、ZCode 的 `AGENTS.md`、dsh 显式启动包装的任务文本。dsh 包装要求操作者配置实际 `model.cordis.patch.yml`，可用 `--model-patch` 指定已有覆盖层；直接调用 dsh 时须自行带上同一入口指引。配置生成和提示装配不证明模型已经读取或正确执行技能，业务验收须查看实际工具轨迹及产物。
+
+Agent 用宿主直接读取原始资料，按业务合同整理并提交本机文件引用。做账任务按当前有效口径取本期余额、合同进度及其他输入，编制凭证并按实际审核结果入账。需要查旧方法时使用 `finance_company_context`，再按实际引用读 `finance_method_read` 或 `finance_case_search`。整期接续使用 `finance_period_review` 核同范围实际账表、底稿和来源版本。
 
 先看报告里的金额、异常和缺件，再核对凭证、计算与依据。资料补齐后重新处理；写入结果不明时，先查原操作状态再继续。真实资料仅在授权范围内处理，模型服务凭据保留在本人的可信配置中。

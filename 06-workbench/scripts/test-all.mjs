@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-mcp");
 const steps = [
+  { name: 'finance-period-review', file: join(WORKBENCH, 'test', 'finance-period-review.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
+  { name: 'tax-period-rental', file: join(WORKBENCH, 'test', 'tax-period-rental.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook', file: join(WORKBENCH, 'test', 'finance-prebook.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook-mcp', file: join(WORKBENCH, 'test', 'finance-prebook-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-plugin', file: join(WORKBENCH, '..', 'plugins', 'finance', 'tests', 'structure.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
@@ -169,6 +171,11 @@ const steps = [
   { name: 'pi-direct-disclosure', file: join(WORKBENCH, 'test', 'pi-direct-disclosure.test.mjs'), cwd: WORKBENCH },
   { name: 'quarter-host', file: join(WORKBENCH, 'test', 'quarter-host.test.mjs'), cwd: WORKBENCH },
   { name: 'quarter-review', file: join(WORKBENCH, 'test', 'quarter-review.test.mjs'), cwd: WORKBENCH },
+  // 企业历史口径/方法记忆：持久组件、真实MCP执行、宿主绑定与独立合成E2E。
+  ...['business-memory-storage','business-memory-domain','business-memory-hosts','business-memory-e2e'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH})),
+  // 短业务基线：受限来源/税负合同与独立冷启动程序链；真实模型阳性另用验收脚本。
+  ...['business-baseline','business-baseline-adapters','business-baseline-feedback','business-baseline-e2e'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH})),
+  {name:'host-claude-argv',file:join(WORKBENCH,'test','host-claude-argv.test.mjs'),cwd:WORKBENCH},
 ];
 const results = [];
 for (const step of steps) {

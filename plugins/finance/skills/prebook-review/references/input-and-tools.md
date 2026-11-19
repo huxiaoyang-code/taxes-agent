@@ -1,15 +1,15 @@
 # 账前输入与工具
 
-客户提供基础资料，Agent 或未来采集器负责适配。当前后端接收有来源绑定的 JSON；CSV、Excel、PDF、照片先由宿主实际可用的读取工具提取，保留原表头、页／表／行、金额单位和转换说明。当前原生逐值校验只支持 JSON、CSV，不能宣称后端直接解析任意工作簿或扫描件。后者的提取件要标明是整理资料，真实性与提取准确性另核。
+客户提供基础资料，Agent 用已有宿主能力本机读取，核实版本、主体、期间及字段语义后，按合同整理。原件保留原位，观察与实读依据留在获准的本机范围。
 
 ## 使用顺序
 
-1. 核实本次获准的资料目录，并为 MCP 配置 `FINANCE_SOURCE_ROOT`。宿主生成器已有 `--source-root` 选项；不是授权读取全部磁盘。原件、适配输入和回复文件均须位于该根内。
+1. 核实本次获准的资料目录，并为 MCP 配置 `FINANCE_SOURCE_ROOT`。从当前会话或工作区配置确认已获准的原件根和审计根。Agent 在宿主直接读取；整理件和回复文件置于审计根 `agent-materials`。
 2. 调用 `finance_record_contract`，参数 `{"recordType":"prebook"}`。读取返回的 `inputSchema`、`repliesSchema` 和说明，不要求客户制作这些内部字段。
-3. 按本次资料生成适配输入，调用 `finance_prebook_review`：
+3. 从已读取的资料生成带引用的 JSON 整理件，调用 `finance_prebook_review`：
 
 ```json
-{"inputPath":"<获准目录内的账前输入绝对路径>"}
+{"inputPath":"<审计根>/agent-materials/账前观察.json"}
 ```
 
 4. 在本机打开工具实际返回的 `review.html`，按问题向老板核实。若有回复文件，再次调用：
@@ -24,7 +24,7 @@
 
 ## 资料与字段对应
 
-输入外层为 `version: "finance-prebook-input/1"`，业务字段在 `facts`，原件列表在 `originals`，字段映射在 `bindings`。金额是人民币元的十进制字符串，最多两位小数；数量是非负十进制字符串，最多六位小数。不要以 `0` 代替未提供。
+输入外层为 `version: "finance-prebook-input/2"`，业务字段在 `facts`，原件列表在 `originals`，字段映射在 `bindings`。金额是人民币元的十进制字符串，最多两位小数；数量是非负十进制字符串，最多六位小数。不要以 `0` 代替未提供。
 
 | 客户资料 | `facts` 中对应部分 | 关键含义 |
 |---|---|---|
@@ -45,16 +45,16 @@
 
 ## 来源绑定
 
-每个 `originals` 项目包含 `id`、绝对 `path`、`scope: {enterpriseKey,from,through}`，可带 SHA-256。来源声明的企业／期间须与实际内容相符。
+每个 `originals` 条目含 `id`、获准原件绝对 `path`、实际 `sha256` 及 `scope:{enterpriseKey,from,through}`。主体、起止日及观察只采用实际原件依据。工具核本机原件字节摘要。
 
-每个 `bindings` 项目通过 `inputPointer` 定位 **`facts` 内部**字段，`originalId` 指向一个来源：
+每个 `bindings` 条目以 `inputPointer` 指向 **`facts` 内部**字段，`originalId` 指向原件。将宿主实读的 `observedValue` 连同 `locator` 写进整理件。在实际可用时附 `observedContext`，记录观察对应的企业、期间及日期上下文。结构以 `inputSchema` 为准。
 
-- JSON 原件用 `jsonPointer`；原值完全一致时可绑定整个对象或数组。
-- CSV 原件用 `csvRow` 与 `column`；表头为物理第 1 行，数据从第 2 行开始，列名取真实表头。
-- 默认 `identity`；需要明确类型规范时使用合同允许的 `decimal` 或 `boolean`，不执行自由公式。分类枚举可用有限的 `valueMap` 将原件的“收入／支出”等翻译为合同值，不能用映射改金额、日期、票号或相对方。
-- `empty_set` 只用于指定的业务集合及上期库存／应收／应付空数组：JSON 指针或 CSV 行列可定位原始“无记录”，上期往来也接受“无往来”，库存也接受“无库存”。真正只有表头、零数据行的 CSV 可省略行列定位绑定整个空表，来源索引保留 `csvEmpty: true`。本期资料须声明 `complete` 且来源覆盖整期，上期来源须覆盖结转日；零金额、零净余额、自由说明、操作者声明都不能变成空集合。
+- JSON 用实际 `{jsonPointer}`。值完全对应时可定位对象或集合。
+- 表格用 `{row,column,sheetIndex?}`。数据按实际从 1 起的行列编号，`sheetIndex` 从 0 起。文档或 OCR 文字用 `{page,line,start?,end?}`。
+- 默认 `identity`。按合同使用固定的 `decimal`、`boolean`，或用受限 `valueMap` 翻译语义枚举。金额、日期、票号和相对方取实际值。
+- `empty_set` 只用于有依据为空的指定集合。可用原件明列的「无记录」等真实值。实际只有表头无数据行时，提交 `{headerRow,sheetIndex?}`、`observedValue:[]` 及 `transform:"empty_set"`。本期须覆盖整期并声明 `complete`，上期来源须覆盖结转日。零净额或自由说明不足以证明集合为空。
 
-例如，`inputPointer: "/fundsAccounts/0/closingBalance"` 表示第一个账户的期末余额。不要把来源指针误写成 `/facts/...`。未绑定事实或未得到工具核实的事实继续列待补证，散落文件数量不能替代完整性检查。
+例如 `inputPointer:"/fundsAccounts/0/closingBalance"` 表示第一个账户期末余额。按实际来源留缺口。后端核整理件中的观察和目标字段相符，索引按 `sourceType:"agent_observation"` 追溯位置。字节摘要用于版本核查，实读值与人工批准依实际证据确认。
 
 内部记录 `id`（包括上期应收／应付）由适配器生成，不要求客户原件自带。`declarations` 可按合同记录主体／期间、覆盖、身份及业务分类／关联的提供者说明或操作者映射，包含说明人、时间与理由；它们明确标记为声明，不冒充原件取数。分类或关联只靠声明时仍保留待核事项，上期往来 `businessId`、库存 `itemId` 也适用。客户原始银行表没有 `businessId` 时，先记录现有证据与映射，不能为了通过核对在“原件”里补造该字段。
 
@@ -89,4 +89,4 @@ node plugins/finance/skills/prebook-review/scripts/demo.mjs '<已存在父目录
 
 此演示的已开票销售带原始交易税额，不表示所有输入都必须有税额。未开票业务可使用上述净额＋`vatCategory` 路径，后端自行派生并留痕；该路径的非零及缺类别用例由后端账前测试覆盖。
 
-该演示把其他虚构基础资料集中在 JSON 中，银行流水保留“日期、收支、金额、对方、账户、用途”的普通中文 CSV 表头，并通过行列定位和明确枚举映射核验；内部记录 ID 不要求出现在客户原件。实际客户仍可提供原有 CSV、Excel、PDF 等资料。模型只收到固定摘要和生成报告路径，本机报告保留明细；测试未证明任意原始文件均能自动识别。
+演示将虚构银行流水保留为 CSV，由测试侧按真实行列生成观察及受限枚举映射。其他虚构资料按实际 JSON 位置提交。产出的账前索引记录观察、原件版本及位置。

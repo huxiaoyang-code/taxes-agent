@@ -14,6 +14,7 @@ import { listAccountingProfiles } from "./accounting-profiles.mjs";
 import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions, AUXILIARY_ACTION_TO_TOOL, prepareBankDraft } from "./agent-tools.mjs";
 import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
+import { db } from './db.mjs';
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
 import { BANK_ACTION_TO_TOOL, bankLocalDrafts, BankDraftError } from "./bank-local-drafts.mjs";
@@ -87,6 +88,16 @@ const AUX_IMPORT_CODES = new Set("aux_import_busy aux_import_failed account_set_
 async function api(req, res, url, m) {
   const p = url.pathname;
   let match;
+
+  if (p === "/api/business-baseline/materials") {
+    if(m!=="POST")return json(res,405,{error:'method_not_allowed'});
+    if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{error:'json_content_type_required'});
+    try {
+      const args=await readBody(req),name='finance_baseline_materials';
+      const {withFinanceCall}=await import('./finance-call-chain.mjs'),{callDirectFinanceTool}=await import('./direct-finance.mjs');
+      return json(res,200,await withFinanceCall({tool:name,args},()=>callDirectFinanceTool(name,args)));
+    }catch(error){const code=/^(finance_baseline_|finance_memory_|finance_target_)[a-z_]+$/.test(error?.code??'')?error.code:'finance_baseline_call_failed';return json(res,/conflict|changed|readonly|unknown/.test(code)?409:400,{error:code});}
+  }
 
   if ((match = p.match(/^\/api\/account-sets\/(\d+)\/(bank-drafts(?:\/(approve-import|revoke))?|bank\/([^/]+))$/))) {
     if(m!=="POST") return json(res,405,{error:"method_not_allowed"});
@@ -392,6 +403,16 @@ async function api(req, res, url, m) {
     try { body = await readBody(req); } catch { return json(res, 400, { error: "request_body_invalid" }); }
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
       return json(res, 400, { error: "request_body_invalid" });
+    }
+    if(['x-workbench-expected-database-instance','x-workbench-expected-enterprise-key','x-workbench-expected-account-set'].some(key=>req.headers[key]!==undefined)){
+      // 方法来自某个真实账库版本；HTTP地址和相同整数账套ID不足以证明当前后端身份。
+      let matched=false;
+      try{
+        const instance=decodeURIComponent(req.headers['x-workbench-expected-database-instance']),enterprise=decodeURIComponent(req.headers['x-workbench-expected-enterprise-key']),id=Number(req.headers['x-workbench-expected-account-set']);
+        const active=db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').all(),binding=db.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(id);
+        matched=Number.isSafeInteger(id)&&id>0&&body.accountSetId===id&&active.length===1&&active[0].instance_id===instance&&binding?.enterprise_key===enterprise;
+      }catch{/* 不回显请求头或真实企业身份。 */}
+      if(!matched)return json(res,409,{error:'finance_method_backend_identity_mismatch'});
     }
     try {
       if(name.startsWith('bank_')&&body?.draftRef){try{res.setHeader('X-Workbench-Operation-Id',bankLocalDrafts.operationIdFor(body.accountSetId,body.draftRef,name));}catch(error){if(!(error instanceof BankDraftError))throw error;}}

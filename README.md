@@ -17,7 +17,7 @@
 
 **本期还没做账：** 上期及本期资料 → 账前核对与问询 → 补件重算 → 交接做账。
 
-客户提供原始资料，Agent 整理和核对；账前内置税务测算覆盖一般纳税人与小规模纳税人的增值税条件试算。
+客户提供原始资料，Agent 在获准的本机宿主中读取并整理，财税工具接收有来源的整理结果。账前可做一般纳税人与小规模纳税人的增值税条件试算。
 
 **做账：** 业务资料 → 凭证草稿与核对 → 人工审核后入账 → 账簿、报表与期末复核。
 
@@ -28,5 +28,20 @@
 - [业务技能](plugins/finance/README.md)：按账前、凭证、对账、税费、报表等任务选择入口。
 - [选择应用](05-reconstruction/codex/hosts/README.md)：使用 Pi、Claude Code、dsh 或 ZCode 发起任务，共用同一本机财税能力。
 - [配置与启动](05-reconstruction/codex/hosts/START-HERE.md)：连接本机后端、明确账库和资料目录。
+
+## 账套记忆与跨月接续
+
+已有账套按[配置与启动](05-reconstruction/codex/hosts/START-HERE.md)生成工作区。在生成的目录运行下列命令，绑定本期并查看记忆路径。
+
+```powershell
+node ./start-business-session.mjs --account-set-id '<实际账套ID>' --period 2026-09 --prepare-only
+node ./start-business-session.mjs --check
+```
+
+1. **首次接手。** 按[各宿主的启动命令](05-reconstruction/codex/hosts/START-HERE.md#3-绑定已有账套并启动)进入会话，请 Agent 核对账套和相关历史依据，把可沿用的做账口径写入 `memoryPath` 指向的本机 `MEMORY.md`。每条写明适用条件、生效月份和依据出处。
+2. **查看记忆。** 会计可按 `memoryPath` 打开文件。Claude Code 经启动器使用原生 Auto Memory，Pi、dsh 和 ZCode 按绑定路径用宿主文件工具读写。
+3. **接着做下月。** 用同一账库和账套生成新工作区，指定下月原件目录，把 `--period` 改为下月。新工作区沿用同一份记忆。本期余额、业务金额和进项抵扣仍按本期资料核对。有新口径时，确认生效月份后更新对应条目。
+
+绑定检查、记忆文件位置和备份说明见[账套记忆指南](05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)。
 
 当前提供本机账税处理与复核，未接入正式申报、缴款或开票；具体税种、期间和准则范围见[业务说明](plugins/finance/README.md)。开发与维护见[中文架构](docs/AGENT-ARCHITECTURE.md)、[代码索引](docs/CODE-INDEX.md)和 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)。

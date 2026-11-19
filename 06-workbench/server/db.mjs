@@ -63,6 +63,10 @@ if (READ_ONLY) {
     const { inspectAuditSchema } = await import('./local-audit-storage.mjs');
     const { inspectBatchSchema } = await import('./local-batch-storage.mjs');
     if (!inspectAuditSchema(db).ok || !inspectBatchSchema(db).ok) throw Object.assign(new Error('readonly_database_not_ready'), { code: 'readonly_database_not_ready' });
+    // 企业记忆是可选的版本组件；已安装时须核验真实结构与内容，读取不触发安装或修复。
+    const { inspectBusinessMemorySchema } = await import('./business-memory-storage.mjs');
+    const memory = inspectBusinessMemorySchema(db);
+    if (memory.state !== 'not_installed' && !memory.ok) throw Object.assign(new Error('readonly_database_not_ready'), { code: 'readonly_database_not_ready' });
     if (db.prepare('PRAGMA journal_mode').get().journal_mode !== 'wal') throw Object.assign(new Error('readonly_database_wal_required'), { code: 'readonly_database_wal_required' });
   } catch (error) {
     try { db.close(); } catch {}

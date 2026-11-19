@@ -3,7 +3,17 @@
 本页当前入口采用中国化业务 Skill＋原生 MCP，默认 `FINANCE_MCP_PROFILE=direct`。Agent自主选择工具，后台完整自动记录；不要求来源/事实登记、Store或任务DAG。生成器固定使用同仓库 `plugins/finance/skills`，无需第二次 clone，不接受外部插件路径；用 `--audit-dir` 指定本机记录目录。
 
 接入步骤以 [统一入口](../START-HERE.md) 为准；工具结果按账本金额→凭证/计算结果→规则依据→工具调用→输入与原件展示，日常前三项、异常再展开后两项。真实写入仍遵守现有工具约束；配置、无模型协议检查和实际模型业务验收分别记录。
-当前生成 .mcp.json、.claude/settings.json、CLAUDE.md；以 claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json 显式加载。只读工具建议自动允许，其余保留宿主审批；不安装额外角色。
+生成配置包含 `.mcp.json`、`.claude/settings.json`、`CLAUDE.md` 和本机启动器。只读工具按项目配置允许，其余保留宿主审批。
+
+交互使用前，按 Claude 原生流程信任已核工作区；非交互验收应预先配置隔离客户端的工作区信任与必要的精确工具授权。未信任时项目允许规则可能被忽略，`skills_read`／`skills_list` 的 `permission_denied` 表示宿主许可未就绪，应先核对宿主许可。默认产品不自动信任、不改用户全局配置、不授予财务审批；沿用用户已明确授权的同一业务范围，不重复询问。CLI 的第三方模型提示本身不等于服务失败，须核实际官方服务来源及调用结果。
+
+已有账套按[账套记忆](../BUSINESS-MEMORY.md)绑定，再运行 `node start-claude.mjs --claude-cli '<实际 exe 或 JS 入口绝对路径>'`。启动器通过原生 `--settings` 指定本账套的 `autoMemoryDirectory`，由 Claude Code 加载和维护 `MEMORY.md`。恢复只接受本工作区已绑定的 `--resume <UUID>`。 [Claude Code 官方记忆文档](https://code.claude.com/docs/en/memory#storage-location)
+
+在生成目录通过受控启动器使用账套记忆。配置及参数检查可核对目标目录，具体原生加载按使用的 CLI 版本和实际会话验证。
+
+尚未建账时，在新生成的未绑定工作区运行 `claude --strict-mcp-config --mcp-config .mcp.json --settings .claude/settings.json`，直接发起账前核对。该启动方式保持 Auto Memory 关闭。
+
+整期目标先读 `tax-period/SKILL.md`。共享短路由写入原生项目指引 `CLAUDE.md`，正文通过 `skills_read` 读取；单项请求直接选相关技能。项目指引生成成功不等于模型已读，需实际会话确认读取与后续工具结果。
 
 <details>
 <summary>改造前接入说明与历史实测（非当前默认流程）</summary>

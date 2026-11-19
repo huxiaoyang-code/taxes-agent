@@ -71,7 +71,7 @@ function modelFailure(code, forWrite) {
  * 把 MCP 工具调用翻译成后端 HTTP 调用。
  * 普通财务工具返回**已校验的纯数据信封**；税务 / 目录工具返回既有原始 DTO。
  */
-export async function callBackend(name, args, catalog) {
+export async function callBackend(name, args, catalog, options={}) {
   const modelMode = isModelTool(name);
   const forWrite = modelMode && MODEL_WRITE_TOOLS.has(name);
 
@@ -94,6 +94,12 @@ export async function callBackend(name, args, catalog) {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        // 仅本机方法执行器注入实际现库身份；不从模型参数推导此凭据/范围。
+        ...(modelMode&&options.expectedScope?{
+          'X-Workbench-Expected-Database-Instance':encodeURIComponent(options.expectedScope.databaseInstanceId),
+          'X-Workbench-Expected-Enterprise-Key':encodeURIComponent(options.expectedScope.enterpriseKey),
+          'X-Workbench-Expected-Account-Set':String(options.expectedScope.accountSetId),
+        }:{}),
         ...(args?.operationId?{"X-Workbench-Operation-Id":args.operationId}:{}),
         ...(API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {}),
       },

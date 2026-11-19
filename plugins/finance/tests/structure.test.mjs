@@ -12,10 +12,10 @@ const walk=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()
 const skillFiles=walk(skills).filter(p=>p.endsWith(`${sep}SKILL.md`));
 const markdown=walk(skills).filter(p=>p.endsWith('.md'));
 const backend=repo;
-const expected=['audit-support','close-management','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-review','variance-analysis'];
+const expected=['audit-support','close-management','company-baseline','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-period','tax-review','variance-analysis'];
 const localLinks=p=>[...read(p).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(m=>m[1]).filter(x=>!/^https?:|^mailto:|^#/.test(x)).map(x=>resolve(dirname(p),x.split('#')[0]));
 
-test('既有财税与新增账前技能可发现，名称匹配实际frontmatter',()=>{
+test('既有财税与整期入口可发现，名称匹配实际frontmatter',()=>{
  const names=skillFiles.map(p=>{const s=read(p),m=s.match(/^---\r?\n([\s\S]*?)\r?\n---/);assert.ok(m,`frontmatter ${p}`);const name=m[1].match(/^name:\s*(.+)$/m)?.[1];assert.equal(name,dirname(p).split(sep).at(-1));assert.ok(m[1].match(/^description:\s*\S.+$/m));assert.ok(s.includes('报告顺序')||s.includes('报告'));assert.ok(!/harness_(?:source_register|facts_register|plan|run|status)/.test(s));return name;});
  assert.deepEqual(names.sort(),expected);
  for(const name of ['audit-support','close-management','journal-entry-prep'])assert.match(read(join(skills,name,'SKILL.md')),/user-invocable: false/);
@@ -88,9 +88,9 @@ test('账前合成资料经真实MCP完成问询、回复、补件重算与两�
   const handoff=JSON.parse(read(join(run.directory,'handoff.json')));
   assert.equal(handoff.inputDigest,run.projection.inputDigest);
   assert.ok(handoff.sourceRefs.length>0);
-  assert.ok(handoff.sourceRefs.some(ref=>ref.column==='金额'&&ref.csvRow===2),'实际读取中文CSV金额及物理行定位');
+  assert.ok(handoff.sourceRefs.some(ref=>ref.sourceType==='agent_observation'&&ref.locator?.row===2&&ref.locator?.column===3),'宿主提交实际中文CSV金额列及原物理行');
   const prepared=JSON.parse(read(run.inputPath));
-  assert.ok(prepared.bindings.some(binding=>binding.column==='收支'&&binding.valueMap?.收入==='inflow'),'原始中文枚举采用明确映射');
+  assert.ok(prepared.bindings.some(binding=>binding.locator?.column===2&&binding.valueMap?.收入==='inflow'),'原始中文枚举采用明确映射');
   assert.equal(prepared.bindings.some(binding=>/^\/bankTransactions\/\d+\/id$/.test(binding.inputPointer)),false,'内部ID不要求客户原件提供');
   assert.equal(existsSync(run.reviewPath),true);
   const projection=JSON.stringify(run.projection);
@@ -125,6 +125,19 @@ test('documented fixed-card example is accepted by the discoverable optional MCP
  for(const field of ['bankSourceIndex','findingsSourceIndex','cashSourceIndex'])assert.deepEqual(validateSchemaValue(schema.properties.reviewCard,{...example.reviewCard,[field]:2}),[],field);
 });
 
+test('基线生成与本期计算示例符合真实合同，入口可由业务技能发现',async()=>{
+ const {DIRECT_TOOLS}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs')));
+ const {validateSchemaValue}=await import(pathToFileURL(join(backend,'06-workbench/server/harness-schema-validation.mjs')));
+ const reference=read(join(skills,'company-baseline/references/materials-and-save.md'));
+ const examples=[...reference.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
+ const schema=DIRECT_TOOLS.find(t=>t.name==='finance_baseline_materials')?.inputSchema;
+ assert.ok(schema,'真实材料工具须可发现，不能只写生成说明');
+ assert(examples.some(example=>typeof example.inputPath==='string'&&(example.section??'overview')==='overview'),'首次生成须提交实际宿主整理件');
+ assert(examples.some(example=>example.section==='calculation'),'已有基线须有安全计算结构入口');
+ for(const example of examples)assert.deepEqual(validateSchemaValue(schema,example),[]);
+ for(const name of ['tax-period','journal-entry','tax-review'])assert.ok(localLinks(join(skills,name,'SKILL.md')).includes(join(skills,'company-baseline','SKILL.md')),name+'缺少真实生成入口');
+});
+
 test('every business document is actually readable through restricted MCP skills_read', {timeout:30000},async()=>{
  const {McpStdioClient}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs')));
  const scratch=mkdtempSync(join(tmpdir(),'finance-cn-skills-'));
@@ -132,6 +145,11 @@ test('every business document is actually readable through restricted MCP skills
  try{
   await client.initialize('finance-cn-skill-reference-test');
   const listed=await client.call('skills_list',{});assert.deepEqual(listed.data.files.sort(),markdown.map(p=>relative(skills,p).replaceAll('\\','/')).sort());assert.deepEqual(Object.keys(listed.data.labels).sort(),listed.data.files);
+  assert.deepEqual(listed.data.entries.map(e=>e.resource).sort(),expected.map(name=>name+'/SKILL.md').sort());
+  for(const entry of listed.data.entries){
+   const content=read(join(skills,entry.resource)),frontmatter=content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
+   assert.equal(entry.metadataState,'valid');assert.equal(entry.name,frontmatter.match(/^name:\s*(.+)$/m)[1]);assert.equal(entry.description,frontmatter.match(/^description:\s*(.+)$/m)[1]);
+  }
   assert.equal(Object.keys(listed.data.labels).some(p=>p.startsWith('harness/')),false);
   for(const p of markdown){const resource=relative(skills,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});assert.equal(r.isError,false,`${resource}: ${r.text}`);assert.equal(r.data?.markdown,read(p),`${resource} did not return actual document`);}
   const blocked=await client.call('skills_read',{resource:'../../finance/.mcp.json'});assert.equal(blocked.isError,true,'file boundary must remain restricted');

@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import {captureBusinessEvidence,summaryBusinessEvidence} from './business-evidence.mjs';
 
 const context = new AsyncLocalStorage();
+// 结构接收工具由领域先核准路径和范围，再登记实际来源。
+const domainManagedSources = new Set(['finance_baseline_materials','finance_prebook_review']);
+export const hasDomainManagedSources=tool=>domainManagedSources.has(tool);
 const sha = value => createHash('sha256').update(value).digest('hex');
 const encode = value => JSON.stringify(value, null, 2) + '\n';
 const secretKey = /(?:password|authorization|api[_-]?key|token|credential|secret|cookie)/i;
@@ -66,6 +69,7 @@ async function load(path) {
   return readFile(path);
 }
 function sourceDescriptors(options) {
+  if(hasDomainManagedSources(options.tool))return [];
   const found = [...(Array.isArray(options.sources) ? options.sources : [])];
   for (const key of ['manifestPath','inputPath','sourcePath']) if (typeof options.args?.[key] === 'string') found.push({path:options.args[key], locator:key});
   for (const path of Array.isArray(options.args?.manifestPaths)?options.args.manifestPaths:[]) if(typeof path==='string')found.push({path,locator:'annual_manifest'});
@@ -89,7 +93,7 @@ async function recorderVersion() { return recorderDigest ??= sha(await readFile(
 export function currentFinanceCall() { return context.getStore() ?? null; }
 export function annotateFinanceCall(values) {
   const active=context.getStore();if(!active)return false;
-  for(const key of ['scope','ruleVersion','codeDigest','catalogDigest','artifactRefs','nativeOperationId','configuredTarget'])if(values?.[key]!==undefined)active.metadata[key]=snapshot(values[key]);
+  for(const key of ['scope','ruleVersion','codeDigest','catalogDigest','artifactRefs','nativeOperationId','configuredTarget','businessBaselineMaterials','financeCalculationContext'])if(values?.[key]!==undefined)active.metadata[key]=snapshot(values[key]);
   if(Array.isArray(values?.sources)){
     const rows=[...(active.metadata.sources??[]),...values.sources.map(source=>({...snapshot(source),observedAt:new Date().toISOString(),observationStage:'native_loaded'}))];
     const unique=new Map();
@@ -118,7 +122,7 @@ export async function withFinanceCall(options, fn) {
     if(typeof options.validate==='function')await options.validate();
     const businessEvidence=options.args?.businessEvidence??(options.tool==='finance_tax_summary_calculate'?summaryBusinessEvidence(options.args):undefined);
     // 凭证由领域写入边界核对，post 的映射针对已存草稿字段；不能在运输层猜字段。
-    if(businessEvidence!==undefined&&options.tool!=='voucher_post'){
+    if(businessEvidence!==undefined&&options.tool!=='voucher_post'&&!hasDomainManagedSources(options.tool)){
       const evidence=captureBusinessEvidence(options.args,businessEvidence);
       reference.metadata.businessEvidence=await save(join(directory,'business-evidence.json'),snapshot(evidence));
       annotateFinanceCall({sources:[...evidence.mappings,...evidence.cashFlowAllocations].flatMap(m=>m.sources).flatMap(s=>[s,...(s.dependencies??[])]).map(s=>({path:s.path,locator:s.location??s.locator,sha256:s.sha256,bytes:s.bytes}))});

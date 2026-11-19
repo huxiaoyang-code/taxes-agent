@@ -4,6 +4,7 @@
 *.db-wal
 *.db-shm
 *.sqlite
+.finance-memory/
 
 # ---- 依赖 ----
 node_modules/

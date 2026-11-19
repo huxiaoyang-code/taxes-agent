@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
-import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES } from "./tools.mjs";
+import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES } from "./tools.mjs";
 import { HARNESS_TOOL_NAMES } from './tools.mjs';
 import {validateFact} from '../../../../06-workbench/server/harness-contract.mjs';
 import {factEvidenceError} from '../../../../06-workbench/server/harness-fact-evidence.mjs';
@@ -30,9 +30,15 @@ import {toolsForProfile} from './tool-profile.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
 import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
+import {PREBOOK_INPUT_SCHEMA,PREBOOK_REPLIES_SCHEMA} from '../../../../06-workbench/server/finance-prebook-contracts.mjs';
+import {BASELINE_OBSERVATIONS_SCHEMA} from '../../../../06-workbench/server/business-baseline-contracts.mjs';
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
-import {withFinanceCall,currentFinanceCall,annotateFinanceCall} from '../../../../06-workbench/server/finance-call-chain.mjs';
+import {withFinanceCall,currentFinanceCall,annotateFinanceCall,hasDomainManagedSources} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
+import {skillMetadata} from './skill-metadata.mjs';
+import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
+import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
+import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
 const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
@@ -103,22 +109,44 @@ function preflightTool(name,args={}) {
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
+  const domainProblems=hasDomainManagedSources(name)?validateSchemaValue(spec.inputSchema,args):undefined;
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
-  if (problems.length) {
-    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, problems: name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems });
+  if (problems.length||domainProblems?.length) {
+    const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args)):undefined;
+    throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, ...(diagnostics??{problems:name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems}) });
   }
   if (spec.status === "unavailable") {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
+  const memoryScopeTools=new Set(['finance_memory_prepare','finance_company_context','finance_method_read','finance_case_search','finance_memory_propose','finance_method_run']);
+  const allowHistoricalPeriod=!memoryScopeTools.has(name)&&!MODEL_WRITE_TOOL_NAMES.includes(name)&&(MODEL_PLAIN_TOOL_NAMES.includes(name)||spec.annotations?.readOnlyHint===true);
+  try{assertBusinessSessionToolTarget(name,args,{allowHistoricalPeriod});}catch(error){throw new ToolCallError(/^finance_memory_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_memory_session_invalid','finance_memory_session_invalid');}
   return spec;
 }
-async function callTool(name, args = {}) {
+async function callTool(name, args = {}, executionOptions={}) {
   const spec=preflightTool(name,args);
   // 字段映射已经由最外层记录器在执行前实读；原业务工具不接收审计元数据。
-  if(Object.hasOwn(args,'businessEvidence')&&!['voucher_create','voucher_post'].includes(name)){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
+  if(Object.hasOwn(args,'businessEvidence')&&!hasDomainManagedSources(name)&&!['voucher_create','voucher_post'].includes(name)){const {businessEvidence,...businessArgs}=args;args=businessArgs;}
   if (DIRECT_TOOL_NAMES.has(name)) {
-    try { validateDirectInput(spec.inputSchema,args); return await callDirectFinanceTool(name,args); }
-    catch(error) { const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;throw new ToolCallError(/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',safeDiagnostics?{safeDiagnostics}:name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid'?error.details:undefined); }
+    try { validateDirectInput(spec.inputSchema,args); const result=await callDirectFinanceTool(name,args,{invokeNativeTool:async(nativeName,nativeArgs,expectedScope)=>{
+      const {result:nativeResult}=await executeRecordedTool(nativeName,nativeArgs,undefined,{expectedScope});
+      if(isModelEnvelope(nativeResult)){const checked=validateModelEnvelope(nativeResult);if(!checked.ok)throw new ToolCallError('finance_memory_native_result_unconfirmed','finance_memory_native_result_unconfirmed');return checked.envelope;}
+      // 此值刚从上方真实工具合同/固定投影分派返回；方法包装复用相同可见结果。
+      return retainDirectMethodProjection(nativeName,nativeResult);
+    }});
+    // 材料页已计算 text/structured/_meta 整包预算；不在此追加或覆盖其真实导航。
+    if(name.startsWith('finance_baseline_')||Array.isArray(result?.nextSteps))return result;
+    const nextSteps=directRecovery(name,{status:result?.status,code:result?.error?.code});return nextSteps.length?{...result,nextSteps}:result; }
+    catch(error) {
+      const safeDiagnostics=name==='finance_tax_summary_calculate'?getFinanceSummarySafeDiagnostics(error):undefined;
+      let details=safeDiagnostics?{safeDiagnostics}:undefined;
+      if(name==='finance_baseline_materials'&&error?.code==='finance_baseline_interpretation_invalid')details=directInterpretationDiagnostics(error.details?.interpretation);
+      if(name==='finance_baseline_materials'&&error?.code==='finance_baseline_observations_input_invalid')details=directSchemaDiagnostics(BASELINE_OBSERVATIONS_SCHEMA,error.details?.problems,'input');
+      if(name==='finance_prebook_review'&&error?.code==='finance_prebook_prepared_input_invalid')details=directSchemaDiagnostics(PREBOOK_INPUT_SCHEMA,error.details?.problems,'input');
+      if(name==='finance_prebook_review'&&error?.code==='finance_prebook_prepared_reply_invalid')details=directSchemaDiagnostics(PREBOOK_REPLIES_SCHEMA,error.details?.problems,'replies');
+      if(name!=='finance_tax_summary_calculate'&&error?.code==='finance_input_invalid')details=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,error.details?.problems):error.details;
+      throw new ToolCallError(DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directErrorCode(error?.code):/^(finance|agency)_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_direct_call_failed','finance_direct_call_failed',details);
+    }
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
@@ -126,7 +154,8 @@ async function callTool(name, args = {}) {
     const files = listSkillFiles();
     // 标签来自当前profile可读文档，不混入另一技能根的名称。
     const labels = Object.fromEntries(files.map(file => [file, readSkill(file).match(/^#\s+(.+)$/m)?.[1]?.trim() || file]));
-    return { files, labels };
+    const entries=files.filter(file=>/(?:^|\/)SKILL\.md$/.test(file)).map(file=>skillMetadata(file,readSkill(file)));
+    return { files, labels, entries };
   }
   if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
   if (HARNESS_TOOL_NAMES.has(name)) {
@@ -168,12 +197,53 @@ async function callTool(name, args = {}) {
   }
 
   // 普通财务工具 → 固定模型通道（返回已校验信封）；税务 / 目录 → 既有原始通道。
-  const result = await callBackend(name, payload, CATALOG);
+  const result = await callBackend(name, payload, CATALOG, executionOptions);
   // 后端明确回报未实现时，同样升级为工具错误，避免“成功返回 not_implemented”。
   if (result && typeof result === "object" && result.not_implemented === true) {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
   return result;
+}
+
+// 方法内的原生调用与普通 tools/call 共用入口，不能因外层工具名改变而略过凭证留证/身份核查。
+async function executeRecordedTool(name,args={},onReference,executionOptions={}){
+ let reference,observedTarget,observationStartedAt,calculationSessionBinding;
+ const result=await withFinanceCall({tool:name,nativeVoucherGuard:['voucher_create','voucher_post'].includes(name),args,validate:()=>{
+  reference=currentFinanceCall();onReference?.(reference);preflightTool(name,args);
+  if(name==='finance_calculation_run')calculationSessionBinding=resolveBusinessSessionBinding();
+  if(MODEL_PLAIN_TOOL_NAMES.includes(name)&&process.env.FINANCE_DATABASE_PATH&&Number.isSafeInteger(args.accountSetId)&&/^202[67]-\d{2}$/.test(args.period??'')){
+   try{observationStartedAt=new Date().toISOString();observedTarget=resolveDirectFinanceTarget({accountSetId:args.accountSetId,period:args.period});}catch{/* 无法观察身份时不升级为已核范围。 */}
+  }
+ }},async()=>{
+  const value=await callTool(name,args,executionOptions);
+  if(calculationSessionBinding){try{
+   const after=resolveBusinessSessionBinding();
+   if(after&&JSON.stringify(after.scope)===JSON.stringify(calculationSessionBinding.scope))annotateFinanceCall({scope:after.scope,configuredTarget:{databasePath:after.dbPath,accountSetId:after.scope.accountSetId,period:after.scope.period,bindingOrigin:'existing_database_identity'}});
+   else calculationSessionBinding=null;
+  }catch{calculationSessionBinding=null;}}
+  if(observedTarget){try{
+   const after=resolveDirectFinanceTarget({accountSetId:observedTarget.scope.accountSetId,period:observedTarget.scope.period}),operationId=currentFinanceCall()?.metadata.nativeOperationId;
+   if(name==='voucher_create'&&(!args.operationId||args.operationId===operationId)&&JSON.stringify(after.scope)===JSON.stringify(observedTarget.scope)&&nativeVoucherObservation(after,{operationId,voucherId:value?.projection?.voucherId,startedAt:observationStartedAt}))annotateFinanceCall({scope:after.scope,nativeOperationId:operationId,configuredTarget:{databasePath:after.dbPath,accountSetId:after.scope.accountSetId,period:after.scope.period,bindingOrigin:'native_voucher_operation_and_database_identity'}});
+  }catch{/* 写入结果不因留证不足变成可安全重试。 */}}
+  if(MODEL_WRITE_TOOL_NAMES.includes(name)&&value?.ok===true&&value.applied===true){
+   // 已获准的原生写入自动刷新对应企业目录；同步失败不改写已发生的原生结果。
+   try{
+    const {refreshBusinessMemoryAfterNativeWrite}=await import('../../../../06-workbench/server/business-memory.mjs'),refresh=await refreshBusinessMemoryAfterNativeWrite(args);if(refresh)annotateFinanceCall({businessMemoryRefresh:refresh});
+   }catch{annotateFinanceCall({businessMemoryRefresh:{status:'refresh_required'}});}
+  }
+  return value;
+ });
+ let memoryRefresh;
+ const completedCalculation=name==='finance_calculation_run'&&result?.status==='executed'&&calculationSessionBinding;
+ const completedMethod=name==='finance_method_run'&&result?.status==='executed'&&result?.execution?.kind==='script';
+ if(completedCalculation||completedMethod){
+  // end.json已经完整落盘后才扫描本次生产记录；索引失败不改变脚本已执行的结果。
+  try{
+   const target=completedCalculation?{accountSetId:calculationSessionBinding.scope.accountSetId,period:calculationSessionBinding.scope.period}:args.target;
+   await prepareBusinessMemory({target});memoryRefresh={status:'refreshed',executionRetryable:false};
+  }catch{memoryRefresh={status:'refresh_required',executionRetryable:false};}
+ }
+ return {result,reference,memoryRefresh};
 }
 
 // ------------------------------------------------------------------ 协议传输
@@ -190,6 +260,7 @@ function errorResult(e) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
 }
 async function harnessErrorResult(e,name,args){
+  if(DIRECT_TOOL_NAMES.has(name)){const nextSteps=directRecovery(name,{code:e?.code,args});if(nextSteps.length)return errorResult(new ToolCallError(e.code,e.message,{...(e.details??{}),nextSteps}));}
   if(!HARNESS_TOOL_NAMES.has(name)||!args?.storePath||!e?.details||args.responseMode==='full')return errorResult(e);
   const native={status:'failed',code:e.code??'harness_operation_failed',blockers:e.details.evidenceIssues??e.details.problems??e.details.blockers??[],details:e.details,...(e.details.contractIssues?{contractIssues:e.details.contractIssues}:{}),nextSteps:e.details.contract?[{action:'inspect_selected_contract_and_repair_indicated_fields',...e.details.contract,hint:e.details.hint}]:[{action:e.code==='harness_phase_unsupported'?'choose_supported_phase':'resolve_indicated_facts_or_evidence',tool:e.code==='harness_phase_unsupported'?'harness_discover':'harness_facts_register',...(e.details.capabilityId?{capabilityId:e.details.capabilityId}:{}),hint:e.details.hint??'Resolve the specific field/source problems above; preserve unknown original writes and use query before retry.'}]};
   try{const payload=await summarizeHarnessReceipt(args.storePath,name,native);return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload,isError:true};}
@@ -241,23 +312,10 @@ rl.on("line", async (line) => {
   if (method === "ping") return ok(id, {});
   if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
   if (method === "tools/call") {
-    let callReference, observedTarget, observationStartedAt;
-    const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId}}}:result;
+    let callReference,memoryRefresh;
+    const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId},...(memoryRefresh?{financeMemory:memoryRefresh}:{})}}:result;
     try {
-      const result = await withFinanceCall({tool:params?.name??'unknown',nativeVoucherGuard:['voucher_create','voucher_post'].includes(params?.name),args:params?.arguments??{},validate:()=>{
-        callReference=currentFinanceCall();preflightTool(params?.name,params?.arguments??{});
-        const args=params?.arguments??{};
-        if(MODEL_PLAIN_TOOL_NAMES.includes(params?.name)&&process.env.FINANCE_DATABASE_PATH&&Number.isSafeInteger(args.accountSetId)&&/^202[67]-\d{2}$/.test(args.period??'')){
-          try{observationStartedAt=new Date().toISOString();observedTarget=resolveDirectFinanceTarget({accountSetId:args.accountSetId,period:args.period});}catch{/* 无法观察身份时不升级为已核范围。 */}
-        }
-      }},async()=>{
-        const result=await callTool(params?.name,params?.arguments??{});
-        if(observedTarget){try{const after=resolveDirectFinanceTarget({accountSetId:observedTarget.scope.accountSetId,period:observedTarget.scope.period});
-          const operationId=currentFinanceCall()?.metadata.nativeOperationId;
-          if(params.name==='voucher_create'&&(!params.arguments.operationId||params.arguments.operationId===operationId)&&JSON.stringify(after.scope)===JSON.stringify(observedTarget.scope)&&nativeVoucherObservation(after,{operationId,voucherId:result?.projection?.voucherId,startedAt:observationStartedAt}))annotateFinanceCall({scope:after.scope,nativeOperationId:operationId,configuredTarget:{databasePath:after.dbPath,accountSetId:after.scope.accountSetId,period:after.scope.period,bindingOrigin:'native_voucher_operation_and_database_identity'}});
-        }catch{/* 写入结果不因留证不足被改成可安全重试；报告会保持身份未核。 */}}
-        return result;
-      });
+      const executed=await executeRecordedTool(params?.name??'unknown',params?.arguments??{},reference=>{callReference=reference;}),result=executed.result;memoryRefresh=executed.memoryRefresh;
       if (isModelEnvelope(result)) {
         // 防御性重校：只把不过的固定失败码交给模型，绝不透传未校验对象。
         const checked = validateModelEnvelope(result);
@@ -271,7 +329,9 @@ rl.on("line", async (line) => {
         }
         return ok(id, withReference(envelopeResult(checked.envelope)));
       }
-      return ok(id, withReference({ content: [{ type: "text", text: HARNESS_TOOL_NAMES.has(params?.name)?JSON.stringify(result):JSON.stringify(result, null, 2) }],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{}) }));
+      const compactContract=params?.name==='finance_record_contract'&&['baseline','prebook'].includes(params?.arguments?.recordType);
+      const text=HARNESS_TOOL_NAMES.has(params?.name)||compactContract?JSON.stringify(result):JSON.stringify(result,null,2);
+      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{})}));
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, withReference(transportFailureResult(e.failure)));
       if(e?.code==='finance_call_recording_failed')return ok(id,withReference({isError:true,content:[{type:'text',text:JSON.stringify({code:e.code,writeOutcome:'unknown',retryable:false,executionCompleted:e.executionCompleted===true})}]}));

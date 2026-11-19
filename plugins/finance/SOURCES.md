@@ -1,5 +1,7 @@
 # 来源、许可与中国化修改
 
+2026-11-17新增：`company-baseline` 为本项目原创业务入口，从实际账套、代表性历史、合同／已有底稿／历史申报导出调查并提炼短原则，保存后用于本期；不是 Anthropic 官方税务实践或中国税法背书。同步整期、凭证、税费及四宿主的生成／沿用入口，旧方法、案例和脚本仍按需使用。
+
 上游：[anthropics/knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins/tree/2574e29377c7173d0cecffef29a6ecbd7f8ccb5d)，固定提交`2574e29377c7173d0cecffef29a6ecbd7f8ccb5d`，原finance插件版本1.3.0。原中国化 fork 为[huxiaoyang-code/knowledge-work-plugins](https://github.com/huxiaoyang-code/knowledge-work-plugins)，仅作为历史来源；后续插件与后端统一在 [huxiaoyang-code/taxes-agent](https://github.com/huxiaoyang-code/taxes-agent) 的 `plugins/finance` 维护。本项目不代表Anthropic对中国财税规则或结果背书。
 
 2026-10-30修改：改编原8个finance Skill的触发描述、业务工作流、模板和复核方法；将`sox-testing`更名`internal-control-review`；替换美国ASC/GAAP、工资税及SOX默认适用表述，改用实际中国会计准则和已核中国规则；新增税费核对与按需参考。保留月结日历及依赖作为可调整指导，不建立运行时DAG。连接配置改为本机中国财税MCP，移除未配置和不相关的上游服务器。报告改为金额、凭证/计算、规则优先，调用和原件可深入索引。
@@ -17,3 +19,5 @@
 2026-11-02账前适配：新增 `prebook-review`，采用 [Anthropic small-business 1.35.1](https://github.com/anthropics/knowledge-work-plugins/tree/84d8efdb6e80e2b26898e5c3109d13eddde97761/small-business) 的工作方法，固定上游提交 `84d8efdb6e80e2b26898e5c3109d13eddde97761`。核验用本地 fork 提交 `01f6af59c30e3b98fc2d4a1711440ec5ef696c0f` 的 `small-business` 与该固定提交无差异。改编来源为 `small-business/skills/{ap-processor,month-end-prep,cash-flow-snapshot,report-builder,inventory-planner}/SKILL.md`，以及这些目录中的 `reference/intake_and_extraction.md`、`matching_and_exceptions.md`、`gotchas.md`、`report_spec.md`、`close-packet-format.md`、`data_sources.md` 等按需参考。
 
 保留单据去重、采购收货匹配、有日期资金起点、明确资料缺口和指标来源的工作方法；改为中国一般纳税人与小规模的账前核对及补件交接，使用同仓库真实 direct MCP 和后端合同。原版月结对本期已记账数据的依赖改为上期账与本期基础资料；中国增值税条件试算、回复版本绑定和报告为本项目实现，不归为上游已有能力。未迁入美国税务公式、补货预测、采购下单、催收、付款、工资执行和定时报告，也不声称完整移植上游 44 项技能。沿用同一 Apache-2.0 LICENSE 原文；所采用 small-business 路径无额外 NOTICE。
+
+2026-11-16整期入口：新增本项目 `tax-period`，按五阶段选择既有技能与实际 direct 工具，保留单项请求边界及自主计算。`references/planning-cash.md` 适配仓库 `05-reconstruction/codex/skills/taxes-company-advisor/references/planning-cash.md` 的合法方案、税后现金与公私资金方法；原参考及许可保留。补充真实扣除/优惠/亏损/法定选择、减税与递延、本期/全年/合同全周期及租赁三口径区分。旧参考的政策核查日期只是历史线索，不代表本次验证，也未复制成默认税率。共享宿主路由、接续投影和中国业务限制是本项目实现，不属于 Anthropic 上游能力。
