@@ -7,7 +7,7 @@ import {assertRestoreOpenPath} from '../../../../06-workbench/server/local-resto
 
 export const SESSION_VERSION='finance-business-session/1';
 export const HOST_VERSION='finance-business-host/1';
-export const BUSINESS_MEMORY_ROUTING='确认账套和月份后，使用 .finance/business-session.json 的 memoryPath 所指的 MEMORY.md，沿用本期适用的口径。只有缺少口径或处理方式发生变化时，才按 company-baseline/SKILL.md 查依据并更新相关一条。';
+export const BUSINESS_MEMORY_ROUTING='确认账套和月份后，使用 .finance/business-session.json 的 memoryPath 所指的 MEMORY.md，沿用本期适用的口径。首次建立、补充或变更口径、用户要求精简时，按 company-baseline/SKILL.md 核对依据，按统一格式保存并读回。';
 const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'../../../..');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const samePath=(a,b)=>typeof a==='string'&&typeof b==='string'&&resolve(a).toLowerCase()===resolve(b).toLowerCase();

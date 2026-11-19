@@ -7,7 +7,7 @@
 日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。
 
 - 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十二个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
-- 账套口径：[账套记忆 Skill](../plugins/finance/skills/company-baseline/SKILL.md)及[宿主手册](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)。每个账套一份本机 `MEMORY.md`，同条件跨月沿用；有新口径或冲突才核相关依据，按适用期编辑有关行。
+- 账套口径与格式：[账套记忆 Skill](../plugins/finance/skills/company-baseline/SKILL.md)及[宿主手册](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)。每个账套一份本机 `MEMORY.md`，按已确认口径和适用期填写统一结构，修改后读回验证。
 - 宿主原件读取：[原件读取参考](../plugins/finance/skills/company-baseline/references/material-adaptation.md)。账前 `finance-prebook-input/2` 接收带实际原件位置的 `observedValue`，既有计算流程需要结构化取数时可按合同使用 `finance_baseline_materials`。
 - 合成资料适配：[material-intake-e2e.test.mjs](../06-workbench/test/material-intake-e2e.test.mjs) 提供混合格式资料、旧 XLS GBK 对照与结构化材料入口的验证参考。
 - 既有材料结合与分页：[business-baseline-materials.mjs](../06-workbench/server/business-baseline-materials.mjs) 按实际账套和原件出处接收本机观察，[business-baseline-projection.mjs](../06-workbench/server/business-baseline-projection.mjs) 按工具合同给出分页和按需税负或计算投影。

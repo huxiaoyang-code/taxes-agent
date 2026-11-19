@@ -82,7 +82,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher.mjs)使用原生 `--settings` 指定 `autoMemoryDirectory`，由 Claude 加载和维护文件。SessionStart 和 UserPromptSubmit hook 负责会话身份及恢复校验。Pi 与 dsh 在启动提示告知绑定路径，ZCode 按工作区 `AGENTS.md` 的指引读取绑定。各宿主使用本机文件工具读写同一份记忆。 [Claude Code 官方记忆文档](https://code.claude.com/docs/en/memory#storage-location)
 
-[账套记忆技能](../plugins/finance/skills/company-baseline/SKILL.md)只记录可跨月使用的少量口径、适用期和出处索引。首次按相关历史和必要原件提炼结论，有变化才写相应行。已生效的 Markdown 供业务参考，具体账务审批按原有业务权限执行。
+[账套记忆技能](../plugins/finance/skills/company-baseline/SKILL.md)规定同一份 Markdown 结构和写后读回检查。条目按该账套已确认、跨月适用且会影响做账决定的标准筛选，必要时注明适用期。本期判断、缺件和证据明细在当期说明或底稿记录。具体账务审批按原有业务权限执行。
 
 ## 既有材料取数、方法与案例
 
