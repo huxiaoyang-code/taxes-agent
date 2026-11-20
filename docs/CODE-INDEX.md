@@ -4,6 +4,8 @@
 
 ## 当前 direct 默认调用链
 
+- 月度进项方案的来源合同、按决策日取数及跨月计算依次见 [vat-planning-contracts.mjs](../06-workbench/server/vat-planning-contracts.mjs)、[vat-planning-evidence.mjs](../06-workbench/server/vat-planning-evidence.mjs) 和 [vat-planning.mjs](../06-workbench/server/vat-planning.mjs)。实际 stdio 入口的合成回归见 [vat-planning-mcp.test.mjs](../06-workbench/test/vat-planning-mcp.test.mjs)。
+
 日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。
 
 - 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十二个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。

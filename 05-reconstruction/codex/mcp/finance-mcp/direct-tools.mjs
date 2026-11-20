@@ -7,7 +7,9 @@ import { BUSINESS_MEMORY_SCHEMAS } from '../../../../06-workbench/server/busines
 import { BUSINESS_BASELINE_SCHEMAS } from '../../../../06-workbench/server/business-baseline-contracts.mjs';
 const str={type:'string',minLength:1};
 const spec=(name,description,properties={},required=[],extra={})=>({name,description,status:'available',origin:'local',inputSchema:{type:'object',additionalProperties:false,properties,required,...extra},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false,idempotentHint:true}});
+import {VAT_PLANNING_SCHEMA} from '../../../../06-workbench/server/vat-planning-contracts.mjs';
 export const DIRECT_TOOLS=[
+ {...spec('finance_vat_plan','一般计税月结进项方案。按决策日从原件取候选、已确认及留抵；按逐票自选月份多次比较基准、当前现金、年度与跨年结果。先读 finance_record_contract(recordType=vat_planning)。'),inputSchema:VAT_PLANNING_SCHEMA},
  {...spec('finance_baseline_materials','按需查询账库及已接收的本机观察。由宿主读取确有需要的原件，按 finance_record_contract(recordType=baseline) 交付本机 inputPath，或复用实际 materialRefs。section:calculation 供既有计算器取数，section:tax 供历史税负对照，分页沿实际 next。'),inputSchema:BUSINESS_BASELINE_SCHEMAS.finance_baseline_materials},
  ...[
   ['finance_company_context','只读加载现库绑定企业、本期的企业方法摘要和可用不可变版本；需初始化时通过 finance_memory_prepare 建立历史索引。可传本期sources，在本机按结构化条件匹配多合同对象，返回稳定objectRef及matched/not_matched/unresolved；缺少对象依据不得猜选。原企业名、原科目码、原文和脚本仅留本机。按摘要→finance_method_read→finance_case_search渐进读取，读路径不暗写。'],
