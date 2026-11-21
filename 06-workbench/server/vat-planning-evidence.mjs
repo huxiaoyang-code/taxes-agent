@@ -6,13 +6,13 @@ import {baselineBytes,isGeneratedMaterialPath,baselineInside} from './business-b
 import {registeredMaterialIdentity,matchMaterialParty} from './material-identity.mjs';
 import {readXlsxStructure} from './offline-invoice-xlsx.mjs';
 import {readPreparedSource,parseJson,pointer,digest} from './finance-prebook-evidence.mjs';
-import {VAT_INPUT_SCHEMA,VAT_FIELDS} from './vat-planning-contracts.mjs';
+import {VAT_INPUT_SCHEMA,VAT_FIELDS,VAT_NUMERIC_FIELDS} from './vat-planning-contracts.mjs';
 import {validateSchemaValue} from './harness-schema-validation.mjs';
 import {annotateFinanceCall,currentFinanceCall} from './finance-call-chain.mjs';
 
 export const fail=code=>{throw Object.assign(Error(code),{code});};
 export const isMonth=v=>typeof v==='string'&&/^20\d\d-(0[1-9]|1[0-2])$/.test(v);
-const dateFields=new Set(['period','knownAt','issueDate','receipt','operationDate','taxPeriod','eligibleFrom','eligibleThrough']);
+const dateFields=new Set(['period','knownAt','issueDate','receipt','operationDate','taxPeriod','eligibleFrom','eligibleThrough','effectiveThrough','paymentDate','taxPointDate','billingDate']);
 function canonicalDate(value){
  const text=String(value);
  if(/^20\d{2}(0[1-9]|1[0-2])$/.test(text))return text.slice(0,4)+'-'+text.slice(4);
@@ -23,7 +23,7 @@ function canonicalDate(value){
  if(!Number.isFinite(Date.parse(day))||new Date(day).toISOString().slice(0,10)!==day)fail('finance_vat_known_date_required');
  return m[4]?day+' '+m[4]+':'+m[5]+(m[6]?':'+m[6]+(m[7]??''):''):day;
 }
-function cutoff(value){
+export function cutoff(value){
  if(isMonth(value)){
   const [year,month]=value.split('-').map(Number);
   return new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);
@@ -48,7 +48,7 @@ function sheetView(bytes,sheetIndex){
    if(monthOnly)return iso.slice(0,7);
    return type.format==='22'||format.includes(':')||!Number.isInteger(serial)?iso.slice(0,19).replace('T',' '):iso.slice(0,10);
   }
-  if(type?.type==='n'&&(!['outputVat','prepaidVat','inputVatTransferOut','taxAmount','carryCredit'].includes(field)||!['0','1','2'].includes(type.format)))fail('finance_vat_cell_format_unsupported');
+  if(type?.type==='n'&&(!VAT_NUMERIC_FIELDS.has(field)||!['0','1','2'].includes(type.format)))fail('finance_vat_cell_format_unsupported');
   return value;
  }};
 }
@@ -98,7 +98,7 @@ function fieldsOf(table,view,row,asOf){
    if(value===undefined||value===''||!dateFields.has(name))return value;
    const date=canonicalDate(value);
    // 表头所属期常以月首日期保存，日期字段本身保持原精度。
-   return ['period','taxPeriod','eligibleFrom','eligibleThrough'].includes(name)?date.slice(0,7):date;
+   return ['period','taxPeriod','eligibleFrom','eligibleThrough','effectiveThrough'].includes(name)?date.slice(0,7):date;
   }
   const isForecastPeriod=name==='period'&&table.kind==='month'&&isMonth(location.assume)&&read('basis')==='forecast';
   if(!isForecastPeriod&&(!Object.hasOwn(allowedAssumptions,name)||location.assume!==allowedAssumptions[name]))fail('finance_vat_assumption_not_allowed');
@@ -114,6 +114,11 @@ function fieldsOf(table,view,row,asOf){
  if(!knownAt)fail('finance_vat_known_date_required');
  if(cutoff(knownAt)>asOf)return null;
  if(statusUnresolved)fail('finance_vat_row_status_unresolved');
+ if(table.kind==='month'){
+  for(const [a,b] of [['invoicedOutputVat','uninvoicedOutputVat'],['invoicedSales','uninvoicedSales']]){
+   if(fields[a]&&fields[b]&&digest(fields[a])===digest(fields[b]))fail('finance_vat_overlapping_month_components');
+  }
+ }
  const fact={};
  for(const name of Object.keys(fields)){
   let value=read(name);
@@ -126,7 +131,11 @@ function fieldsOf(table,view,row,asOf){
   fact[name]=value;
  }
  // 门户操作的所属期可以早于实际操作月。未来操作不能成为已确认事实。
- if(table.kind==='confirmation'&&fact.operationDate&&cutoff(fact.operationDate)>asOf)return null;
+ if(['confirmation','event'].includes(table.kind)&&fact.operationDate&&cutoff(fact.operationDate)>asOf)return null;
+ if(table.kind==='sale'){
+  if(fact.taxPointDate&&cutoff(fact.taxPointDate)>asOf)return null;
+  if(fact.billingDate&&cutoff(fact.billingDate)>asOf)delete fact.billingDate;
+ }
  if(table.kind==='filing'&&!isMonth(fact.period))fail('finance_vat_known_date_required');
  if(table.kind==='month'&&fact.basis==='actual'&&fact.period>asOf.slice(0,7))return null;
  if(table.kind==='invoice'){
@@ -166,9 +175,9 @@ export function readVatFacts(args,binding,auditDir){
     if(++rowsRead>4000)fail('finance_vat_source_limit');
     let data,issue;
     try{data=fieldsOf(table,view,row,args.asOf);}catch(error){
-     if(!['finance_vat_row_status_unresolved','finance_vat_known_date_required','finance_vat_translation_unresolved','finance_vat_cell_format_unsupported','finance_prebook_pointer_missing'].includes(error.code))throw error;
+     if(!['finance_vat_row_status_unresolved','finance_vat_known_date_required','finance_vat_translation_unresolved','finance_vat_cell_format_unsupported','finance_prebook_pointer_missing','finance_vat_overlapping_month_components'].includes(error.code))throw error;
      issue=error.code;data={};
-     for(const name of ['issuer','invoiceNumber']){
+     for(const name of ['issuer','invoiceNumber','period']){
       try{const value=view.read(table.fields[name],row,name);if(typeof value==='string')data[name]=value;}catch{}
      }
     }

@@ -18,9 +18,17 @@ const saveInput=({inputPath,input})=>writeFileSync(inputPath,JSON.stringify(inpu
 const refreshDigest=source=>{source.sha256=digest(readFileSync(source.path));};
 test('一般纳税人无本期账库即可核对，非零VAT及库存/资金独立预期',async()=>{
  const input=fixture(),before=digest(readFileSync(input.originalPath)),r=await run(input),local=full(r);assert.equal(r.status,'ready_for_bookkeeping_review');assert.equal(r.tax.amounts.due,1200);assert.equal(r.tax.burdenPercent,6);assert.equal(local.funds[0].difference,'0.00');assert.equal(local.inventory[0].calculatedClosingUnits,'25000000');assert.equal(r.review.posted,false);assert.equal(r.review.submittable,false);assert.equal(digest(readFileSync(input.originalPath)),before);
- const html=readFileSync(r.evidence.reviewPath,'utf8');for(const text of ['库存数量核对','上期往来','本期条件应纳额','1200.00'])assert(html.includes(text));const handoff=JSON.parse(readFileSync(r.evidence.handoffPath));assert.equal(handoff.version,'finance-prebook-handoff/1');assert(handoff.sourceRefs.length>30);assert(handoff.sourceRefs.every(ref=>ref.sourceType==='agent_observation'&&ref.verification==='source_digest_matched'));assert(local.tax.rules.length);assert(local.tax.conditions.length);
+ const html=readFileSync(r.evidence.reviewPath,'utf8');for(const text of ['库存数量核对','上期往来','本期条件应补税额','预缴抵减前应纳额','1200.00'])assert(html.includes(text));const handoff=JSON.parse(readFileSync(r.evidence.handoffPath));assert.equal(handoff.version,'finance-prebook-handoff/1');assert(handoff.sourceRefs.length>30);assert(handoff.sourceRefs.every(ref=>ref.sourceType==='agent_observation'&&ref.verification==='source_digest_matched'));assert(local.tax.rules.length);assert(local.tax.conditions.length);
  const index=JSON.parse(readFileSync(join(dirname(r.evidence.reviewPath),'evidence-index.json'),'utf8')),source=index.files.find(file=>file.kind==='original');assert.equal(source.sha256,before);assert.equal(source.snapshot,undefined);assert(index.files.some(file=>file.kind==='prepared_input'&&file.snapshot));
  const projected=JSON.stringify(r);for(const text of ['SYNTHETIC-ENTERPRISE','SUPPLIER-A','CUSTOMER-A',input.originalPath,'INPUT-001'])assert(!projected.includes(text));assert.equal(JSON.parse(readFileSync(join(audit,r.evidence.callRef,'end.json'))).status,'returned');
+});
+test('所属期税负分子不因预缴而下降，剩余应补单列',async()=>{
+ const facts=prebookFacts();facts.opening.prepaidVat='400.00';
+ const result=await run(fixture(facts));
+ assert.equal(result.tax.amounts.dueBeforePrepayment,1200);
+ assert.equal(result.tax.amounts.due,800);
+ assert.equal(result.tax.burdenPercent,6);
+ assert.equal(full(result).tax.burden.dueBeforePrepayment,'1200.00');
 });
 test('小规模包含未开票销售，非零税额按原生条件规则计算',async()=>{
  const facts=prebookFacts('small');facts.sales.push({id:'S2',businessId:'SELL-2',date:'2026-03-11',netAmount:'10000.00',invoiceKind:'uninvoiced',status:'valid'});const r=await run(fixture(facts));assert.equal(r.tax.amounts.due,2100);assert.equal(r.tax.amounts.salesExcludingVat,210000);assert.equal(r.tax.burdenPercent,1);assert.equal(r.status,'ready_for_bookkeeping_review');
