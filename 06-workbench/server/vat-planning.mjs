@@ -18,6 +18,16 @@ function refFor(row,scope){
  return 'vat-'+digest([scope.databaseInstanceId,scope.enterpriseKey,scope.accountSetId,row.issuer,row.invoiceNumber]).slice(0,24);
 }
 const latest=(...periods)=>periods.filter(Boolean).sort().at(-1);
+function latestPortalObservations(reports){
+ // 月度资料到月末可知。仅记录到日或分钟时，保留所有可能为最后一条的观察。
+ const intervals=reports.map(row=>{
+  const time=row.data.knownAt;
+  const day=cutoff(time),clock=time.slice(11).replace(/[:.]/g,'');
+  return {row,from:day+clock.padEnd(9,'0'),through:day+clock.padEnd(9,'9')};
+ });
+ const lastStart=latest(...intervals.map(range=>range.from));
+ return intervals.filter(range=>range.through>=lastStart).map(range=>range.row);
+}
 function coalesce(rows,key,gaps){
  const result={sources:[]};
  for(const row of rows){
@@ -52,6 +62,7 @@ function currentReceipts(rows,key,gaps){
   if(!supersedes)continue;
   const prior=indexed.get(supersedes);
   if(typeof receiptId!=='string'||!prior||receiptId===supersedes||
+   confirmationState==='revoked'&&(!isMonth(r.data.taxPeriod)||prior.some(p=>p.data.taxPeriod!==r.data.taxPeriod))||
    prior.some(p=>(p.data.operationDate??p.data.knownAt)>(r.data.operationDate??r.data.knownAt))||
    replaced.has(supersedes)&&replaced.get(supersedes)!==receiptId){
    recordIssue(r);continue;
@@ -131,6 +142,12 @@ function inventory(facts,scope,gaps){
   const fixed=coalesce(confirmedRows,{invoiceRef},gaps);
   const confirmed=confirmedRows.length>0;
   if(confirmed&&fixed.taxAmount!==undefined&&bill.taxAmount!==undefined&&fixed.taxAmount!==bill.taxAmount)gaps.push({code:'source_conflict',field:'taxAmount',invoiceRef,sources:fixed.sources});
+  if(bill.issueDate&&fixed.issueDate){
+   const precision=isMonth(bill.issueDate)||isMonth(fixed.issueDate)?7:10;
+   if(bill.issueDate.slice(0,precision)!==fixed.issueDate.slice(0,precision)){
+    gaps.push({code:'source_conflict',field:'issueDate',invoiceRef,sources:[...bill.sources,...fixed.sources]});
+   }
+  }
   const taxAmount=bill.taxAmount??fixed.taxAmount,eligibility=bill.eligibility??(confirmed?'eligible':undefined);
   const reportedTaxAmounts=[...new Set([...rows.filter(r=>r.kind==='invoice'),...confirmedRows].map(r=>amount(r.data.taxAmount)).filter(v=>v!==null))].sort();
   const receiptPeriod=bill.receipt?.slice(0,7),issued=(bill.issueDate??fixed.issueDate)?.slice(0,7);
@@ -140,7 +157,7 @@ function inventory(facts,scope,gaps){
   const portal={},early=[];
   const windows=groups(rows.filter(r=>r.kind==='portal'),r=>r.data.period);
   for(const [period,reports] of windows){
-   const known=latest(...reports.map(r=>r.data.knownAt)),current=reports.filter(r=>r.data.knownAt===known);
+   const current=latestPortalObservations(reports),known=cutoff(current[0].data.knownAt);
    const states=new Set(current.map(r=>r.data.portalStatus));
    if(!isMonth(period)||states.size!==1||!['selectable','closed'].includes([...states][0])){
     gaps.push({code:'portal_window_unverified',invoiceRef,sources:current.map(r=>r.source)});continue;
