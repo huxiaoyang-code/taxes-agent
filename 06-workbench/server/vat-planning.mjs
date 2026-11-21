@@ -5,7 +5,7 @@ import {calculateFinanceSummary,summaryRules,FINANCE_SUMMARY_RULE_VERSION} from 
 import {money,cents} from './agency-tax-rules.mjs';
 import {readVatFacts,fail,isMonth,cutoff} from './vat-planning-evidence.mjs';
 import {VAT_NUMERIC_FIELDS} from './vat-planning-contracts.mjs';
-import {amount,VAT_SALES_FIELDS,salesByPeriod,readActivity,adjustedInput,openingHistory,addBurdens,readAgreement,recommend,cashLedger} from './vat-planning-ledgers.mjs';
+import {amount,VAT_SALES_FIELDS,salesByPeriod,readActivity,adjustedInput,openingHistory,addBurdens,readAgreement,recommend,cashLedger,paymentEvidence} from './vat-planning-ledgers.mjs';
 
 export const VAT_PLAN_ALL_INVOICES=Symbol('vat_plan_all_invoices');
 
@@ -86,7 +86,8 @@ function calendar(rows,filings,periods,asOf,sales,gaps){
   const filed=filings.filter(f=>f.data.period===period);
   if(filed.length){
    const summary=coalesce(currentReceipts(filed,{period},gaps),{period},gaps);
-   month.state='filed';month.declaredDue=summary.declaredDue;month.sources.push(...filed.map(f=>f.source));
+   month.state='filed';month.declaredDue=summary.declaredDue;month.declaredDueBeforePrepayment=summary.declaredDueBeforePrepayment;
+   month.sources.push(...filed.map(f=>f.source));
   }
   for(const [total,invoiced,uninvoiced] of [['outputVat','invoicedOutputVat','uninvoicedOutputVat'],['salesExcludingVat','invoicedSales','uninvoicedSales']]){
    if(month[invoiced]===undefined&&month[uninvoiced]===undefined)continue;
@@ -131,6 +132,7 @@ function inventory(facts,scope,gaps){
   const confirmed=confirmedRows.length>0;
   if(confirmed&&fixed.taxAmount!==undefined&&bill.taxAmount!==undefined&&fixed.taxAmount!==bill.taxAmount)gaps.push({code:'source_conflict',field:'taxAmount',invoiceRef,sources:fixed.sources});
   const taxAmount=bill.taxAmount??fixed.taxAmount,eligibility=bill.eligibility??(confirmed?'eligible':undefined);
+  const reportedTaxAmounts=[...new Set([...rows.filter(r=>r.kind==='invoice'),...confirmedRows].map(r=>amount(r.data.taxAmount)).filter(v=>v!==null))].sort();
   const receiptPeriod=bill.receipt?.slice(0,7),issued=(bill.issueDate??fixed.issueDate)?.slice(0,7);
   if(taxAmount===undefined||!['eligible','ineligible'].includes(eligibility)||(!confirmed&&!isMonth(receiptPeriod))||
    (bill.eligibleFrom!==undefined&&!isMonth(bill.eligibleFrom))||(bill.eligibleThrough!==undefined&&!isMonth(bill.eligibleThrough)))gaps.push({code:'invoice_missing_or_unsupported',invoiceRef,sources:bill.sources});
@@ -152,12 +154,16 @@ function inventory(facts,scope,gaps){
   const fixedOutside=confirmed&&((issued&&fixed.taxPeriod<issued)||(bill.eligibleFrom&&fixed.taxPeriod<bill.eligibleFrom)||(bill.eligibleThrough&&fixed.taxPeriod>bill.eligibleThrough)||confirmedRows.some(r=>fixed.taxPeriod>(r.data.operationDate??r.data.knownAt).slice(0,7)));
   if(confirmed&&(!isMonth(fixed.taxPeriod)||eligibility!=='eligible'||fixedOutside)||bill.eligibleThrough&&bill.eligibleThrough<firstPeriod)gaps.push({code:'confirmation_or_window_unresolved',invoiceRef,sources:[...bill.sources,...fixed.sources]});
   invoices.set(invoiceRef,{invoiceRef,taxAmount,eligibility:['eligible','ineligible','red'].includes(eligibility)?eligibility:'unknown',receipt:bill.receipt,issueDate:bill.issueDate??fixed.issueDate,
-   resolved:gaps.length===initialGaps,
+   resolved:gaps.length===initialGaps,reportedTaxAmounts,
    firstPeriod,regularFrom,portal,earlyPeriods:early.sort(),lastPeriod:bill.eligibleThrough??null,fixedPeriod:fixed.taxPeriod??null,operationDate:fixed.operationDate??null,
    confirmationState:confirmed?'confirmed':activeRows.length?'revoked':null,
    sources:[...bill.sources,...confirmationHistory.map(r=>r.source),...rows.filter(r=>r.kind==='portal').map(r=>r.source)]});
  }
  return invoices;
+}
+function selectable(bill,period,month){
+ return month?.state==='open'&&!bill.fixedPeriod&&bill.eligibility==='eligible'&&bill.firstPeriod<=period&&(!bill.lastPeriod||period<=bill.lastPeriod)&&
+  bill.portal[period]!=='closed'&&(period>=bill.regularFrom||bill.earlyPeriods.includes(period))&&adjustedInput(bill,period)>0n;
 }
 function selections(entries,book,months){
  const choices=new Map();
@@ -165,17 +171,18 @@ function selections(entries,book,months){
   const bill=book.get(invoiceRef);
   if(!bill||choices.has(invoiceRef))fail('finance_vat_selection_unknown_or_duplicate');
   if(bill.fixedPeriod||months.get(period)?.state==='filed')fail('finance_vat_selection_already_fixed');
-  if(bill.eligibility!=='eligible'||!months.has(period)||bill.firstPeriod>period||bill.lastPeriod&&period>bill.lastPeriod||
-     bill.portal[period]==='closed'||period<bill.regularFrom&&!bill.earlyPeriods.includes(period)||
-     adjustedInput(bill,period)<=0n)fail('finance_vat_selection_period_unavailable');
+  if(!selectable(bill,period,months.get(period)))fail('finance_vat_selection_period_unavailable');
   choices.set(invoiceRef,period);
  }
  return choices;
 }
-function remaining(book,choices,period){
- let count=0,total=0n,expired=0n,unknownCount=0,unknown=0n;
+function remaining(book,choices,period,month){
+ let count=0,total=0n,expired=0n,unknownCount=0,unknown=0n,selectableUnusedCount=0,selectableUnused=0n;
  for(const bill of book.values()){
   const used=bill.fixedPeriod??choices.get(bill.invoiceRef);
+  if((!used||used>period)&&selectable(bill,period,month)){
+   selectableUnusedCount++;selectableUnused+=adjustedInput(bill,period);
+  }
   const arrived=latest(bill.receipt?.slice(0,7),bill.issueDate?.slice(0,7));
   if(bill.eligibility!=='eligible'||arrived>period||used&&used<=period)continue;
   if(!bill.receipt&&!(bill.operationDate&&bill.operationDate.slice(0,7)<=period)){
@@ -186,10 +193,27 @@ function remaining(book,choices,period){
   if(bill.lastPeriod&&bill.lastPeriod<=period){expired+=available;continue;}
   count++;total+=available;
  }
- return {unusedCount:count,unusedVat:money(total),expiredUnusedVat:money(expired),holdingUnknownCount:unknownCount,holdingUnknownVat:money(unknown)};
+ return {unusedCount:count,unusedVat:money(total),selectableUnusedCount,selectableUnusedVat:money(selectableUnused),
+  expiredUnusedVat:money(expired),holdingUnknownCount:unknownCount,holdingUnknownVat:money(unknown)};
 }
-function simulate(months,book,choices,opening,history,activity,yearEnd){
+function reconcileFiling(month,due,before,zeroPrepaymentVerified){
+ const declared=month.declaredDue,declaredBefore=month.declaredDueBeforePrepayment;
+ const balanceDifference=declared===undefined?null:money(cents(declared)-cents(due));
+ const beforeDifference=declaredBefore===undefined?null:money(cents(declaredBefore)-cents(before));
+ const inconsistent=declared!==undefined&&declaredBefore!==undefined&&
+  (cents(declaredBefore)<cents(declared)||zeroPrepaymentVerified&&declaredBefore!==declared);
+ const mismatch=inconsistent||[balanceDifference,beforeDifference].some(n=>n!==null&&cents(n)!==0n);
+ const verifiedZero=zeroPrepaymentVerified&&declared!==undefined;
+ const burdenNumerator=inconsistent?null:declaredBefore??(verifiedZero?declared:null);
+ const numeratorBasis=burdenNumerator===null?'unverified':declaredBefore!==undefined?'declared_before_prepayment':'declared_balance_with_verified_zero_prepayment';
+ return {status:month.state!=='filed'?'unfiled':mismatch?'difference':declared===undefined&&declaredBefore===undefined?'declared_amount_missing':'matched',
+  balanceDifference,beforeDifference,burdenNumerator,numeratorBasis,
+  balanceStatus:balanceDifference===null?'missing':cents(balanceDifference)===0n?'matched':'difference',
+  beforeStatus:beforeDifference===null?'missing':cents(beforeDifference)===0n?'matched':'difference'};
+}
+function simulate(months,book,choices,opening,history,activity,yearEnd,payments,asOf){
  let carry=opening.carryCredit,prepayment=cents(opening.prepaymentBalance??'0'),yearDue=0n,yearPaid=0n,totalDue=0n,atYearEnd=null,firstCarryUse=null;
+ let zeroPrepaymentVerified=opening.prepaymentBalance==='0.00';
  const rows=[];
  for(const [period,month] of months){
   let input=0n,adjustedTransfer=0n;
@@ -218,11 +242,15 @@ function simulate(months,book,choices,opening,history,activity,yearEnd){
   const {due,dueBeforePrepayment,carryCredit,prepaymentUsed,unusedPrepayment}=result.amounts,paymentMonth=month.paymentDate?.slice(0,7)??monthOffset(period,1);
   const paid=sum('payment'),obligation=cents(month.declaredDue??due);
   const outstanding=obligation>paid?obligation-paid:0n;
+  const actualPaidEvidence=paymentEvidence(payments,events,'tax_period',period,asOf);
+  zeroPrepaymentVerified=zeroPrepaymentVerified&&availablePrepayment===0n&&!month.sources.some(source=>source.assumptions.includes('prepaidVat'));
+  const filingReconciliation=reconcileFiling(month,due,dueBeforePrepayment,zeroPrepaymentVerified);
   rows.push({period,basis:month.basis,state:month.state,outputVat:month.outputVat,openingCarryCredit:carry,selectedAndFixedInput:money(input),
    salesExcludingVat:month.salesExcludingVat??null,invoicedOutputVat:month.invoicedOutputVat,uninvoicedOutputVat:month.uninvoicedOutputVat,
    inputVatTransferOut:money(transfer),refundApproved:money(refund),refundRequested:money(sum('refund_requested')),openingPrepayment:money(prepayment),
    prepaidVat:money(legacyPrepaid+prepaidReceipt),prepaymentUsed,endingPrepayment:unusedPrepayment,dueBeforePrepayment,due,declaredDue:month.declaredDue??null,
-   declaredDifference:month.declaredDue===undefined?null:money(cents(month.declaredDue)-cents(due)),
+   declaredDifference:filingReconciliation.balanceDifference,declaredDueBeforePrepayment:month.declaredDueBeforePrepayment??null,filingReconciliation,
+   actualPaidEvidence,expectedPaymentBasis:actualPaidEvidence.status==='complete_as_of'?'verified_payments_at_cutoff':'assuming_no_additional_payments',
    actualPaid:money(paid),excessPaidPendingReview:money(paid>obligation?paid-obligation:0n),paymentMonth,expectedPayment:money(outstanding),
    endingCarryCredit:carryCredit,sources:[...month.sources,...events.flatMap(e=>e.sources)]});
   prepayment=cents(unusedPrepayment);
@@ -231,7 +259,7 @@ function simulate(months,book,choices,opening,history,activity,yearEnd){
   if(period<=yearEnd)yearDue+=cents(due);
   if(paymentMonth<=yearEnd)yearPaid+=outstanding;
   for(const e of events)if(['payment','prepayment'].includes(e.eventType)&&e.operationDate.slice(0,7)<=yearEnd)yearPaid+=cents(e.amount);
-  if(period===yearEnd)atYearEnd={period,dueFromStart:money(yearDue),paymentsFromSimulatedPeriods:money(yearPaid),carryCredit:carry,...remaining(book,choices,period)};
+  if(period===yearEnd)atYearEnd={period,dueFromStart:money(yearDue),paymentsFromSimulatedPeriods:money(yearPaid),carryCredit:carry,...remaining(book,choices,period,month)};
  }
  const through=rows.at(-1).period;
  addBurdens(rows,history);
@@ -239,7 +267,7 @@ function simulate(months,book,choices,opening,history,activity,yearEnd){
   const december=rows.find(row=>row.period===yearEnd);
   atYearEnd.burden=december.burden.ytd;atYearEnd.endingPrepayment=december.endingPrepayment;
  }
- return {months:rows,cashByMonth:cashLedger(rows,activity,rows[0].period,through),yearEnd:atYearEnd,horizon:{through,dueFromStart:money(totalDue),carryCredit:carry,endingPrepayment:money(prepayment),...remaining(book,choices,through)},
+ return {months:rows,cashByMonth:cashLedger(rows,activity,rows[0].period,through,payments,asOf),yearEnd:atYearEnd,horizon:{through,dueFromStart:money(totalDue),carryCredit:carry,endingPrepayment:money(prepayment),...remaining(book,choices,through,months.get(through))},
   nextYear:rows.find(r=>r.period>yearEnd)??null,
   nextYearUse:{through,firstNetOutputUsingCarry:firstCarryUse,firstScheduledInvoiceUse:[...choices.values()].filter(p=>p>yearEnd&&p<=through).sort()[0]??null,
    coverage:through>yearEnd?'forecast_window':yearEnd==='2027-12'?'beyond_supported_rule_window':'not_simulated'}};
@@ -250,7 +278,7 @@ export function runVatPlanning(args){
  if(args.through<yearEnd||args.asOf.slice(0,7)<start)fail('finance_vat_planning_range_invalid');
  const binding=resolveDirectFinanceTarget(args.target);
  const facts=readVatFacts(args,binding,financeAuditDirectory()),gaps=[];
- for(const f of facts.filter(f=>f.issue&&!['invoice','confirmation','portal','history','agreement'].includes(f.kind)))gaps.push({code:f.issue,period:isMonth(f.data.period)?f.data.period:start,sources:[f.source]});
+ for(const f of facts.filter(f=>f.issue&&!['invoice','confirmation','portal','history','agreement','paymentCoverage'].includes(f.kind)))gaps.push({code:f.issue,period:isMonth(f.data.period)?f.data.period:start,sources:[f.source]});
  const periods=[];
  for(let p=start;p<=args.through;p=monthOffset(p,1))periods.push(p);
  const openingGaps=[];
@@ -277,7 +305,8 @@ export function runVatPlanning(args){
  const comparable=new Map([...months].filter(([period])=>!firstGap||period<firstGap));
  if(!comparable.size)return finish({...common,status:'needs_inputs',gaps});
  const resolved=new Map([...book].filter(([,bill])=>bill.resolved));
- const compare=periods=>[args.baseline,args.plan].map(entries=>simulate(periods,resolved,selections(entries??[],resolved,months),opening,history,activity,yearEnd));
+ const payments=facts.filter(f=>f.kind==='paymentCoverage');
+ const compare=periods=>[args.baseline,args.plan].map(entries=>simulate(periods,resolved,selections(entries??[],resolved,months),opening,history,activity,yearEnd,payments,args.asOf));
  let [baseline,plan]=compare(comparable);
  if(baseline.gap||plan.gap){
   const problems=[baseline.gap,plan.gap].filter(Boolean);
@@ -293,10 +322,20 @@ export function runVatPlanning(args){
  const yearVat=sim=>sim.months.filter(r=>r.period<=yearEnd).reduce((sum,r)=>sum+cents(r.dueBeforePrepayment),0n);
  const delta={yearEndAfterVatCash:baseline.yearEnd?money(cashByMonth.filter(r=>r.paymentMonth<=yearEnd).reduce((sum,r)=>sum+cents(r.afterVatCash),0n)):null,
   yearAttributedVat:baseline.yearEnd?money(yearVat(plan)-yearVat(baseline)):null,yearEndCarryCredit:yearly('carryCredit'),
-  yearEndUnusedVat:yearly('unusedVat'),horizonDue:difference(plan.horizon.dueFromStart,baseline.horizon.dueFromStart),
+  yearEndUnusedVat:yearly('unusedVat'),yearEndSelectableUnusedVat:yearly('selectableUnusedVat'),horizonDue:difference(plan.horizon.dueFromStart,baseline.horizon.dueFromStart),
   byPaymentMonth:cashByMonth};
- if(gaps.length)return finish({...common,status:'partial_known_invoices',gaps,knownSubset:{baseline,plan,delta,
-  condition:'仅反映已核票据和连续可测期间。待核票被排除，后续缺口前截断，完整应纳、留抵及实际差额仍待核实。'}});
  const recommendation=Object.hasOwn(args,'baseline')||Object.hasOwn(args,'plan')?recommend(baseline,plan,agreement):{choice:null,reason:'awaiting_agent_options',agreement};
+ if(gaps.length){
+  const excluded=[...book.values()].filter(b=>!b.resolved);
+  const subsetRecommendation={...recommendation,scope:'submitted_options_on_known_invoices_only',provisional:true,
+   knownInvoices:resolved.size,excludedInvoiceCount:excluded.length,excludedInvoices:excluded.slice(offset,offset+limit).map(b=>({
+    invoiceRef:b.invoiceRef,reportedTaxAmounts:b.reportedTaxAmounts,amountStatus:b.reportedTaxAmounts.length>1?'conflicting_reports':b.reportedTaxAmounts.length?'unverified':'missing'})),
+   unidentifiedSourceRows:facts.filter(f=>['invoice','portal','confirmation'].includes(f.kind)&&(!refFor(f.data,binding.scope)||f.issue)).length,
+   comparedThrough:plan.horizon.through,requestedThrough:args.through,
+   limitations:['仅比较已提交的两组选择和已核明细。待核进项可能改变应纳、累计门槛、留抵与现金差额。',
+    '所列待核票金额为原件各自报告的票面额。抵扣资格、可用额与总影响仍待核。缺失期间之后的累计及付款另行重算。']};
+  return finish({...common,status:'partial_known_invoices',gaps,knownSubset:{baseline,plan,delta,recommendation:subsetRecommendation,
+   condition:'仅反映已核票据和连续可测期间。待核票被排除，后续缺口前截断，完整应纳、留抵及实际差额仍待核实。'}});
+ }
  return finish({...common,status:'conditional_calculated',baseline,plan,delta,recommendation});
 }
