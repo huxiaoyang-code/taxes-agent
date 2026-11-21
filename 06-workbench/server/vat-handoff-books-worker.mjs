@@ -35,18 +35,32 @@ try {
  books.bank=[];
  if(bankQueries.length){
   try{
-   const lookup=db.prepare(`SELECT t.id,t.txn_date,t.bank_ref_id,t.amount_cents,t.direction,t.batch_id,t.row_index,b.content_sha256,
-    m.voucher_id,m.entry_id,v.status AS voucher_status
+   const lookup=db.prepare(`SELECT t.id,t.txn_date,t.bank_ref_id,t.amount_cents,t.direction,t.batch_id,t.row_index,b.content_sha256
     FROM bank_transactions t JOIN bank_batches b ON t.account_set_id=b.account_set_id AND t.bank_account_id=b.bank_account_id AND t.batch_id=b.batch_id
-    LEFT JOIN bank_matches m ON m.account_set_id=t.account_set_id AND m.bank_account_id=t.bank_account_id AND m.transaction_id=t.id AND m.status='confirmed'
-    LEFT JOIN vouchers v ON v.id=m.voucher_id AND v.account_set_id=t.account_set_id
     WHERE t.account_set_id=? AND t.currency='CNY' AND t.txn_date=? AND t.amount_cents=? AND t.direction=? ORDER BY t.id LIMIT 21`);
+   let linkedVoucher;
+   try{
+    linkedVoucher=db.prepare(`SELECT v.id AS voucher_id,e.id AS entry_id,v.status,e.debit,e.credit FROM bank_matches m
+     JOIN bank_accounts a ON a.account_set_id=m.account_set_id AND a.bank_account_id=m.bank_account_id AND a.currency=m.currency
+     JOIN vouchers v ON v.id=m.voucher_id AND v.account_set_id=m.account_set_id AND v.status='posted'
+     JOIN voucher_entries e ON e.id=m.entry_id AND e.voucher_id=v.id AND e.code=a.gl_account_code
+     WHERE m.account_set_id=? AND m.transaction_id=? AND m.currency='CNY' AND m.status='confirmed'`);
+   }catch{books.issues.push('银行流水的凭证核销明细缺失');}
    for(const q of bankQueries){
     const rows=lookup.all(Number(id),q.day,BigInt(q.amount.replace('.','')),q.direction);
     const exact=rows.filter(r=>r.bank_ref_id===q.receiptId);
     // 同日同额只能形成候选。银行单号一致且候选未截断时才关联。
     const linked=rows.length<21&&exact.length===1;
     const match=linked?exact[0]:null;
+    if(match&&linkedVoucher){
+     const linkedEntries=linkedVoucher.all(Number(id),match.id);
+     if(linkedEntries.length===1){
+      const e=linkedEntries[0],debit=storedCents(e.debit),credit=storedCents(e.credit);
+      if((q.direction==='outflow'&&debit===0n&&credit===BigInt(match.amount_cents))||(q.direction==='inflow'&&credit===0n&&debit===BigInt(match.amount_cents))){
+       Object.assign(match,{voucher_id:e.voucher_id,entry_id:e.entry_id,voucher_status:e.status});
+      }
+     }
+    }
     books.bank.push({eventRef:q.eventRef,day:q.day,amount:q.amount,receiptId:q.receiptId,
      state:linked?'流水号、日期、币种、方向及金额相符':rows.length?'有同日同额流水，单号待核':'未见对应银行流水',
      candidates:rows.slice(0,20).map(r=>r.id),truncated:rows.length>20,match});

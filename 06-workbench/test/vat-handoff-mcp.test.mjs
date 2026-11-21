@@ -93,8 +93,12 @@ test('同日同额银行流水只作候选，按单号核到批次、行和同�
  CREATE TABLE bank_transactions(id,account_set_id,bank_account_id,batch_id,currency,txn_date,bank_ref_id,amount_cents,direction,row_index);
  INSERT INTO bank_transactions VALUES (4,1,'acct','batch','CNY','2026-12-10','receipt-confirmed',3000,'outflow',3);
  INSERT INTO bank_transactions VALUES (5,2,'acct','batch','CNY','2026-12-10','other',3000,'outflow',4);
- CREATE TABLE bank_matches(account_set_id,bank_account_id,transaction_id,status,voucher_id,entry_id);
- INSERT INTO bank_matches VALUES (1,'acct',4,'confirmed',88,12);
+ CREATE TABLE bank_accounts(account_set_id,bank_account_id,gl_account_code,currency);
+ INSERT INTO bank_accounts VALUES(1,'acct','1002','CNY');
+ CREATE TABLE voucher_entries(id,voucher_id,code,debit,credit);
+ INSERT INTO voucher_entries VALUES(12,88,'1002',0,30);
+ CREATE TABLE bank_matches(account_set_id,bank_account_id,transaction_id,status,voucher_id,entry_id,currency);
+ INSERT INTO bank_matches VALUES (1,'acct',4,'confirmed',88,12,'CNY');
  `);db.close();
  const scope={databaseInstanceId:'instance-a',accountSetId:1,enterpriseKey:'synthetic',period:'2026-12'};
  const check={eventRef:'test',day:'2026-12-10',amount:'30.00',direction:'outflow'};
