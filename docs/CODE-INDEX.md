@@ -188,6 +188,8 @@
 
 ## Windows 运行与交付
 
+Windows 完整源码包的第 2 版清单包含四宿主生成器、财税 MCP、当前与兼容技能、模板和出处。解包后在 `06-workbench` 运行 `npm ci`，再按[宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)选择应用。第 1 版清单仍可按发布时的摘要核验和复制。
+
 - 运行资格与目录探针：[windows-runtime-check.mjs](../06-workbench/scripts/windows-runtime-check.mjs) 的 `decideRuntimeVersion`、`runRuntimeCheck`；发布清单 / 验收：[windows-delivery-check.mjs](../06-workbench/scripts/windows-delivery-check.mjs) 的 `inspectReleaseBundle`、`copyReleaseWhitelist`、`main`。版本条件和阶段限制直接查看这些实现与 `--help`。
 - 从 `06-workbench` 运行 `node scripts/windows-runtime-check.mjs --help`、`node scripts/windows-delivery-check.mjs --help` 查看参数。
 - 启动：[windows-start.ps1](../06-workbench/scripts/windows-start.ps1)。从 `06-workbench` 运行 `powershell -NoProfile -File scripts\windows-start.ps1 -NodePath <node.exe绝对路径> -DataDir <显式数据目录> -Port 0`；脚本帮助包含手工启动方法。
