@@ -13,7 +13,7 @@
  * 后端：FINANCE_API_BASE，默认 http://127.0.0.1:8787
  */
 import { createInterface } from "node:readline";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
@@ -48,8 +48,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
 const CATALOG = JSON.parse(readFileSync(join(RECON, "catalog.json"), "utf8"));
 // 技能源固定在服务所属仓库，历史工具面仅选择仓库内专用目录。
+const PLUGIN_SKILLS_DIR = join(RECON, "..", "plugins", "finance", "skills");
 const SKILLS_DIR = ACTIVE_PROFILE === "direct"
-  ? join(RECON, "..", "plugins", "finance", "skills")
+  ? PLUGIN_SKILLS_DIR
   : join(RECON, "codex", "skills");
 if (process.env.FINANCE_SKILLS_DIR !== undefined && (!isAbsolute(process.env.FINANCE_SKILLS_DIR) || resolve(process.env.FINANCE_SKILLS_DIR) !== resolve(SKILLS_DIR))) {
   throw new Error("finance_external_skills_not_supported");
@@ -75,8 +76,27 @@ function listSkillFiles() {
   catch { throw new ToolCallError("skill_not_found", "skill_not_found"); }
 }
 
+// 旧顾问和申报技能保留原入口，三份重复正文由插件的一份规范源供给。
+const sharedTaxReferences = new Map([
+  ['taxes-company-advisor/references/planning-cash.md', 'tax-review/references/planning-cash.md'],
+  ['tax-filing/references/summary-calculation.md', 'tax-review/references/summary-calculation.md'],
+  ['tax-filing/references/supported-obligations.md', 'tax-review/references/supported-obligations.md'],
+]);
 function readSkill(resource) {
   const normalized = String(resource || "").replaceAll("\\", "/").split(/[?#]/)[0];
+  if (ACTIVE_PROFILE !== 'direct') {
+    const shared = sharedTaxReferences.get(normalized) ?? normalized;
+    if (/^tax-review\/(?:references|agents|templates|examples)\/[a-z0-9][a-z0-9_-]*\.md$/.test(shared)) {
+      try {
+        const taxReview = realpathSync(join(PLUGIN_SKILLS_DIR, 'tax-review'));
+        const full = realpathSync(join(PLUGIN_SKILLS_DIR, shared));
+        if (taxReview === resolve(PLUGIN_SKILLS_DIR, 'tax-review') && full === resolve(PLUGIN_SKILLS_DIR, shared)) {
+          return readFileSync(full, 'utf8');
+        }
+      } catch { /* 兼容资源只读本仓库规范源。 */ }
+      throw new ToolCallError('skill_not_found', 'skill_not_found');
+    }
+  }
   const root = resolve(SKILLS_DIR);
   const full = resolve(root, normalized);
   // Windows 下环境变量常用正斜杠，join 会输出反斜杠，直接用 startsWith 会误判；用 resolve + 分隔符比较。

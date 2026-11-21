@@ -30,6 +30,8 @@ description: 做账前接续上期账，核对本期采购库存、进销项和�
 
 核对细节和可借鉴范围见 [上游方法适配](references/adapted-methods.md)。本入口内置一般／小规模增值税条件试算；附加、所得税等其他税种按实际资料继续使用现有 `finance_tax_summary_calculate`、`finance_tax_calculate` 与 [税费核对](../tax-review/SKILL.md)，不能把增值税算出写成全部税费完成。工具的 `needs_inputs`、`unsupported` 或条件说明原样保留；工具处理成功不等于整期资料已核。独立可核的部分可以继续。
 
+需要比较已核票在不同可选属期的影响时，将本期交接资料、历史未用票和税务账户证据交给[抵扣方案比较](../tax-review/references/vat-planning.md)，付款安排读[税款现金简报](../tax-review/references/tax-cash-brief.md)。本月账税交付接续[当期与全年准备](../tax-review/references/tax-organizer.md)。
+
 ## 问老板、补件、重新核对
 
 先展示影响最大的事项，每项带具体业务、差异、需要老板说明的内容及应补资料。合并重复问题，一次给出可执行清单。例如已付款缺票，先说明是否已经找到上期应付、收货或预付款依据，再问具体未明事实；不笼统要求“补足成本票”。

@@ -25,6 +25,8 @@
 
 已有账套按实际绑定使用其本机 `MEMORY.md`，沿用本期适用的口径。首次接手或口径变化时按[账套记忆技能](skills/company-baseline/SKILL.md)查相关事实，再用宿主文件工具编辑受影响的条目。本期余额、合同进度及业务参数按实际资料取数，旧方法和历史税负按需查。
 
+“做完本月账”可从同一整期入口进入[逐票抵扣比较](skills/tax-review/references/vat-planning.md)、[税款现金简报](skills/tax-review/references/tax-cash-brief.md)和[申报准备及交接](skills/tax-review/references/tax-organizer.md)。
+
 ## 账前核对：资料到做账交接
 
 上期及本期资料 → 核对与问询 → 收到解释或补件 → 重新核对 → 交接做账。

@@ -1,6 +1,6 @@
 ---
 name: tax-period
-description: 完成一家企业本期账税、申报准备或接上次补件继续时的整期入口，按实际资料和产物接续账前核对、账务、税费及交付；单项税额、凭证或查询使用对应技能。
+description: “做完本月账”“完成本月账”、整期账税、申报准备或接上次补件的入口，核对账务和税费，比较逐票抵扣及付款方案，交付会计底稿。
 ---
 
 # 企业整期账税与申报准备
@@ -12,6 +12,8 @@ description: 完成一家企业本期账税、申报准备或接上次补件继�
 核实账套和月份，沿用其 `MEMORY.md` 中当期适用的口径。缺少或变化的条目按[账套记忆](../company-baseline/SKILL.md)调查核实。整期完成须核本期实际账表、来源和未决事项。
 
 本期出现新业务、优惠到期、地区或适用期间变化时，用 `finance_rules` 搜公开政策词并打开相关官方原文，按[官方政策核查](../tax-review/references/official-policy.md)记录本期采用的条款和适用条件。
+
+处理“做完本月账”时，获取本期进销项、历史锁定与客户口径后，按[逐票抵扣与方案比较](../tax-review/references/vat-planning.md)提出并复算选择，按[税款现金简报](../tax-review/references/tax-cash-brief.md)说明应纳与实际或预计付款，再按[当期／全年会计交接](../tax-review/references/tax-organizer.md)把账表、税费、原票和回执勾稽。按身份、资料和任务范围进入适用分支。
 
 ## 按任务选择阶段
 
@@ -25,8 +27,8 @@ description: 完成一家企业本期账税、申报准备或接上次补件继�
 |---|---|---|---|
 | 任务范围与接续 | 当前授权、企业／账套／期间、当期适用口径、上次实际交付和未决事项 | `account_context`、绑定账套的 `MEMORY.md`；接续时用 `finance_period_review` 查同范围调用记录 | 核实身份、账期、实际产物及未完成事项 |
 | 资料与账前核对 | 有日期的上期余额、本期采购/收货/销售/发票/流水/盘点及覆盖范围 | [账前核对](../prebook-review/SKILL.md)，先读 `finance_record_contract` 的 prebook 合同，再用 `finance_prebook_review`；有账后按 [对账](../reconciliation/SKILL.md) 用 `finance_query` / `ledger_query` | 实际报告及交接资料、差额和问询清单；补件重算的输入摘要/问题状态可核。声明不能替代证据，`ready_for_bookkeeping_review` 仅支持后续做账复核 |
-| 收入成本与跨期口径 | 合同履约、交付/验收、采购收发、库存成本、费用受益期及适用准则；有出租房租收入/预收或承租租赁事项再读 [租赁与方案分支](references/planning-cash.md#租赁与跨期) | [凭证编制](../journal-entry/SKILL.md)、[对账](../reconciliation/SKILL.md)；`finance_workpaper` 或自主计算，需记录脚本时用 `finance_calculation_run`；草稿用 `voucher_check`，正式写账仅用现有受控工具 | 可复算收入成本、期末结转及账税差异；原件和计算版本可追查，草稿/已入账分开。库存不足或跨期待核影响利润与税基时，相关金额保持未知或暂列 |
-| 税费及合法方案 | 纳税身份、地区、有效规则、真实扣除/抵扣、优惠、亏损、预缴/实缴和法定选择条件 | [税费复核](../tax-review/SKILL.md)；`finance_rules`、`finance_record_contract`，选择 `finance_tax_calculate` / `finance_tax_summary_calculate` / `finance_annual_workpaper` 或有来源的自主计算；交付前读 [合法方案与税后现金](references/planning-cash.md) | 各税种应纳/计提/已申报/实缴分列；候选方案先核可行性，再比较本期、全年及合同全周期影响，区分真实减税与递延。未核资格保留条件，不套默认税率 |
+| 收入成本与跨期口径 | 合同履约、交付/验收、采购收发、库存成本、费用受益期及适用准则；有出租房租收入/预收或承租租赁事项再读 [租赁与方案分支](../tax-review/references/planning-cash.md#租赁与跨期) | [凭证编制](../journal-entry/SKILL.md)、[对账](../reconciliation/SKILL.md)；`finance_workpaper` 或自主计算，需记录脚本时用 `finance_calculation_run`；草稿用 `voucher_check`，正式写账仅用现有受控工具 | 可复算收入成本、期末结转及账税差异；原件和计算版本可追查，草稿/已入账分开。库存不足或跨期待核影响利润与税基时，相关金额保持未知或暂列 |
+| 税费及合法方案 | 纳税身份、地区、有效规则、真实扣除/抵扣、优惠、亏损、预缴/实缴和法定选择条件 | [税费复核](../tax-review/SKILL.md)；`finance_rules`、`finance_record_contract`，选择 `finance_tax_calculate` / `finance_tax_summary_calculate` / `finance_annual_workpaper` 或有来源的自主计算；交付前读 [合法方案与税后现金](../tax-review/references/planning-cash.md) | 各税种应纳/计提/已申报/实缴分列；候选方案先核可行性，再比较本期、全年及合同全周期影响，区分真实减税与递延。未核资格保留条件，不套默认税率 |
 | 交付与补件接续 | 上述实际账表、底稿、工具结果、有效规则与未决项；有账时勾稽账簿 | [财务报表](../financial-statements/SKILL.md)、[账期交付](../shared/references/quarter-review.md)；支持范围内用 `finance_quarter_review`，自主计算可用 `finance_calculation_run` 的可选卡片；`finance_period_review` 作已有记录复查 | 用户可打开的实际产物、金额与异常、规则依据、未完事项及下一动作齐备；目标内各分支分别说明已核/条件完成/待补/不支持，不能把只读记录投影或脚本成功当整期通过 |
 
 缺件只影响依赖它的收入、成本、税种或交付分支，独立可核部分继续；明确“缺什么、影响哪个金额/期间、补后重算什么”。工具字段不能表达、尚未披露合同、真实资料缺失与资格待核分别说明，不能从工具报错断言企业没有资格。
@@ -37,7 +39,7 @@ description: 完成一家企业本期账税、申报准备或接上次补件继�
 
 ## 交付前主动检查
 
-按真实业务复查可扣除支出及凭证条件、进项用途与抵扣/留抵、小型微利等优惠资格、可弥补亏损及有效期、预缴余额、可依法选择的处理方法。先以事实和有效规则筛出可行选项；无备选就说明原因，不强造方案。不能按目标税负补造成本、倒推发票、改变既定交易或为了利润转正随意改跨期。详细比较与租赁分口径见 [方案参考](references/planning-cash.md)。
+按真实业务复查可扣除支出及凭证条件、进项用途与抵扣/留抵、小型微利等优惠资格、可弥补亏损及有效期、预缴余额、可依法选择的处理方法。先以事实和有效规则筛出可行选项；无备选就说明原因，不强造方案。不能按目标税负补造成本、倒推发票、改变既定交易或为了利润转正随意改跨期。详细比较与租赁分口径见 [方案参考](../tax-review/references/planning-cash.md)。
 
 ## 中断、补件与更正
 
