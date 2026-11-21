@@ -33,6 +33,8 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 四宿主共用的 `finance_vat_plan` 从明确账套、决策日与本机来源映射构造逐票候选，按 Agent 给出的两个计划逐月调用一般计税算式。来源索引、预测条件和账期结果可按调用编号复核。模拟只读打开现库；正式确认、申报及缴款由业务的实际回执证明。
 
+已绑定工作区的调用记录按账库文件、实例和账套隔离，换月后从同一目录取回会计交接。宿主会话及其 MCP 使用绑定中核实的 `auditDir`。既有明确目录和绑定前已产生的资料沿用原址，接续步骤见[启动指南](../05-reconstruction/codex/hosts/START-HERE.md)。
+
 默认 direct 通过 `finance_rules` 查询政策。Agent 用 `action=search` 向中国政府网政策文件库、财政部和国家税务总局的公开检索入口提交公开关键词，按来源取得候选与状态。知道官方链接时可直接 `action=open`，按页读取正文并以 SHA 核对续页版本。实际引用以已读文件、条款、适用期间及本机业务事实为准。索引遗漏、关键附件未读或来源不可用时，相关结论保留待核。无 action 的历史调用继续读取本机计算规则目录，按 ruleId 和 revision 核实原生公式覆盖与历史版本。在线查询的内容和状态随调用保存，计算器版本沿用既有发布机制。见[官方政策核查](../plugins/finance/skills/tax-review/references/official-policy.md)。
 
 `finance_record_contract` 按类型披露字段、已有示例及完整度，区分仅通用引用、已核字段和只能由原生生成的记录，不能据此假定所有类型都有完整示例。`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。`finance_tax_summary_calculate` 是独立条件试算：汇总输入逐值绑定原件JSON位置，完整结果另存summary产物；不放宽原完整底稿路径，也不把试算当作已核完整账、资格或实缴。模型仍自主选择工具，无新增登记流程。

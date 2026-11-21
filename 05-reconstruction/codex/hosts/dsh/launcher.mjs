@@ -35,6 +35,6 @@ export async function runDsh(nodePath,workspaceUrl,args,bound){
  const workspace=fileURLToPath(workspaceUrl);
  if(!bound&&existsSync(sessionPath(workspace)))bound=await prepareBoundBusinessSession(workspace);
  const spec=buildLaunchSpec(nodePath,workspace,options,bound?.memoryPath);
- const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:bound?{...process.env,...bound.config.mcpEnv}:process.env,windowsHide:true,shell:false,stdio:'inherit'});
+ const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:bound?{...process.env,...bound.config.mcpEnv,FINANCE_AUDIT_DIR:bound.session.auditDir}:process.env,windowsHide:true,shell:false,stdio:'inherit'});
  process.exitCode=await new Promise((ok,no)=>{child.once('error',no);child.once('close',(code,signal)=>ok(signal?1:code??1));});
 }

@@ -15,6 +15,6 @@ export async function runZcode(workspaceUrl,args,bound){
  if(options['--check']){const {session,memoryPath}=loadBoundBusinessSession(workspace);console.log(JSON.stringify({status:'checked',scope:session.scope,memoryPath,readOnly:true,modelInvoked:false}));return;}
  const value=bound??await prepareBoundBusinessSession(workspace),native=['--cwd',workspace,'--mode','build'];
  const command=/\.exe$/i.test(cli)?cli:value.config.nodePath,argsOut=/\.exe$/i.test(cli)?native:[cli,...native];
- const child=spawn(command,argsOut,{cwd:workspace,env:{...process.env,...value.config.mcpEnv},windowsHide:true,shell:false,stdio:'inherit'});
+ const child=spawn(command,argsOut,{cwd:workspace,env:{...process.env,...value.config.mcpEnv,FINANCE_AUDIT_DIR:value.session.auditDir},windowsHide:true,shell:false,stdio:'inherit'});
  process.exitCode=await new Promise((ok,no)=>{child.once('error',no);child.once('close',(code,signal)=>ok(signal?1:code??1));});
 }

@@ -25,7 +25,7 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝
 - `--host` 可选 `pi`、`claude-code`、`dsh` 或 `zcode`。
 - `--source-root` 指定已有获准原件目录。Agent 在宿主中使用已有文件或脚本权限读取。
 - 需要运行 Python 计算时，加 `--python '<python.exe绝对路径>'`；JavaScript 计算无需此项。
-- 处理记录默认保存在新工作区的 `finance-call-records`，可用 `--audit-dir '<绝对目录>'` 改位置。由 Agent 生成的账前整理件及回复写在审计根下的 `agent-materials`。
+- 完成账套绑定后，处理记录默认保存在 `<账库目录>/.finance-call-records/<账库文件名>/<实例编号>/<账套ID>`。同一账套的下月工作区可直接查回上月交接。未绑定的工作区使用本地 `finance-call-records`；若首次绑定前已在该目录留存资料，继续使用原址。整理件及回复写在实际记录目录的 `agent-materials`。
 
 生成器使用本仓库技能，不覆盖已有工作区、不启动模型，也不创建账套。
 
@@ -38,7 +38,7 @@ node ./start-business-session.mjs --account-set-id <实际账套ID> --period 202
 node ./start-business-session.mjs --check
 ```
 
-`--prepare-only` 准备本机会话绑定，`--check` 只读核实绑定及记忆路径。每个工作区固定实际账库、企业、账套和本期，换月份用新工作区，同一账套跨月指向同一份 `MEMORY.md`。详见[账套记忆](BUSINESS-MEMORY.md)。
+`--prepare-only` 准备本机会话绑定，`--check` 只读显示 `auditDir` 和 `memoryPath`。接续旧工作区、绑定前留有资料的工作区或自选记录目录时，读取上期 `.finance/business-session.json` 中的 `auditDir`，在生成新工作区的命令加 `--audit-dir '<上期 auditDir 绝对路径>'`。绑定后核对新旧 `auditDir` 一致，再分页查回上期记录。每个工作区固定实际账库、企业、账套和本期，换月份用新工作区，同一账套跨月指向同一份 `MEMORY.md`。详见[账套记忆](BUSINESS-MEMORY.md)。
 
 Claude Code 通过原生 Auto Memory 使用已绑定账套的 `MEMORY.md`。Pi、dsh 和 ZCode 使用宿主文件工具读取绑定里的 `memoryPath`。首次接手或有新口径时，按[账套记忆技能](../../../plugins/finance/skills/company-baseline/SKILL.md)核实际账和相关资料，再编辑有变化的条目。
 

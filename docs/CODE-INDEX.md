@@ -2,6 +2,8 @@
 
 月度抵扣的会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 生成，本机报告由 [vat-handoff-html.mjs](../06-workbench/server/vat-handoff-html.mjs) 排版，后续会话通过 [期间复核](../06-workbench/server/finance-period-review.mjs) 取回。
 
+换月时由[宿主会话绑定](../05-reconstruction/codex/hosts/shared/business-session.mjs)核定本账套的调用目录，实际记录和资料整理使用绑定回执的 `auditDir`。[跨工作区交接回归](../06-workbench/test/vat-handoff-mcp.test.mjs)覆盖次月分页查回以及沿用旧目录。
+
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
 ## 当前 direct 默认调用链
