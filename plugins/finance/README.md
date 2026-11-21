@@ -54,7 +54,9 @@ claude plugin marketplace add ./
 claude plugin install finance@taxes-agent
 ```
 
-使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。运行 `claude plugin details finance@taxes-agent` 可查看技能清单，`claude mcp list` 应显示 `plugin:finance:finance` 已连接。
+使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。账前核对、逐票抵扣等需要读取原件的业务，还要在启动 Claude 的终端设置本次授权的原件目录。PowerShell 示例为 `$env:FINANCE_SOURCE_ROOT = (Resolve-Path '<本期原件目录>').Path`。更换目录后，退出已运行的 Claude 并从该终端重新启动，让财税服务继承新值。
+
+运行 `claude plugin details finance@taxes-agent` 可查看技能清单，`claude mcp list` 应显示 `plugin:finance:finance` 已连接。实际读取某份原件时，服务会核验该文件是否位于获准目录内。
 
 本地目录安装随同一仓库更新，在新会话或运行 `/reload-plugins` 后加载。若原来从 Git 市场安装，先将本机后端更新至同一版本，再运行 `claude plugin marketplace update taxes-agent` 和 `claude plugin update finance@taxes-agent`，重新启动会话。可用 `claude plugin list --json` 核对版本及实际读取目录。
 
