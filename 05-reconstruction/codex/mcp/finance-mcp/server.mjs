@@ -82,20 +82,29 @@ const sharedTaxReferences = new Map([
   ['tax-filing/references/summary-calculation.md', 'tax-review/references/summary-calculation.md'],
   ['tax-filing/references/supported-obligations.md', 'tax-review/references/supported-obligations.md'],
 ]);
+let pluginMarkdown;
+function sharedResource(resource) {
+  if (ACTIVE_PROFILE === 'direct') return null;
+  const normalized = String(resource || '').replaceAll('\\','/').split(/[?#]/)[0];
+  if (sharedTaxReferences.has(normalized)) return sharedTaxReferences.get(normalized);
+  if (!/^[a-z0-9-]+\/(?:[a-z0-9_-]+\/)*[A-Za-z0-9_-]+\.md$/.test(normalized)) return null;
+  if (existsSync(join(SKILLS_DIR, normalized))) return null;
+  pluginMarkdown ??= new Set(listSkillFilesUnsafe(PLUGIN_SKILLS_DIR, PLUGIN_SKILLS_DIR));
+  if (pluginMarkdown.has(normalized)) return normalized;
+  // 旧客户端有时相对旧别名继续打开模板、角色或参考；已有的旧资源优先。
+  const alias = normalized.replace(/^(?:taxes-company-advisor|tax-filing)\//, 'tax-review/');
+  return pluginMarkdown.has(alias) ? alias : null;
+}
+
 function readSkill(resource) {
   const normalized = String(resource || "").replaceAll("\\", "/").split(/[?#]/)[0];
-  if (ACTIVE_PROFILE !== 'direct') {
-    const shared = sharedTaxReferences.get(normalized) ?? normalized;
-    if (/^tax-review\/(?:references|agents|templates|examples)\/[a-z0-9][a-z0-9_-]*\.md$/.test(shared)) {
-      try {
-        const taxReview = realpathSync(join(PLUGIN_SKILLS_DIR, 'tax-review'));
-        const full = realpathSync(join(PLUGIN_SKILLS_DIR, shared));
-        if (taxReview === resolve(PLUGIN_SKILLS_DIR, 'tax-review') && full === resolve(PLUGIN_SKILLS_DIR, shared)) {
-          return readFileSync(full, 'utf8');
-        }
-      } catch { /* 兼容资源只读本仓库规范源。 */ }
-      throw new ToolCallError('skill_not_found', 'skill_not_found');
-    }
+  const shared = sharedResource(normalized);
+  if (shared) {
+    try {
+      const path = resolve(PLUGIN_SKILLS_DIR,shared);
+      if (realpathSync(path) === path) return readFileSync(path,'utf8');
+    } catch { /* 不接受缺失的规范源或指向别处的链接。 */ }
+    throw new ToolCallError('skill_not_found', 'skill_not_found');
   }
   const root = resolve(SKILLS_DIR);
   const full = resolve(root, normalized);
@@ -177,7 +186,10 @@ async function callTool(name, args = {}, executionOptions={}) {
     const entries=files.filter(file=>/(?:^|\/)SKILL\.md$/.test(file)).map(file=>skillMetadata(file,readSkill(file)));
     return { files, labels, entries };
   }
-  if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
+  if (name === "skills_read") {
+    const canonical = sharedResource(args.resource);
+    return { resource:args.resource, ...(canonical && {resolvedResource:canonical}), markdown:readSkill(args.resource) };
+  }
   if (HARNESS_TOOL_NAMES.has(name)) {
     try {
       const { callHarnessTool } = await import('../../../../06-workbench/server/harness-runtime.mjs');
@@ -370,7 +382,11 @@ rl.on("line", async (line) => {
   if (method === "resources/read") {
     const uri = String(params?.uri || "").replace(/^skill:\/\//, "");
     // 失败只回固定文案：不四显请求路径或原始异常。
-    try { return ok(id, { contents: [{ uri: params?.uri, mimeType: "text/markdown", text: readSkill(uri) }] }); }
+    try {
+      const canonical=sharedResource(uri);
+      return ok(id,{contents:[{uri:params?.uri,mimeType:"text/markdown",text:readSkill(uri),
+        ...(canonical && {_meta:{resolvedResource:canonical}})}]});
+    }
     catch { return err(id, -32002, "skill_not_found"); }
   }
   if (method === "prompts/list") return ok(id, { prompts: [] });

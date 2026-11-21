@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,posix} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createContext,writeBundle,repoRoot} from '../../05-reconstruction/codex/hosts/shared/config.mjs';
 import {buildConfig} from '../../05-reconstruction/codex/hosts/claude-code/adapter.mjs';
@@ -94,6 +94,25 @@ for(const profile of [undefined,'direct','harness','legacy']){
       const old=await client.call('skills_read',{resource:'taxes-company-advisor/references/planning-cash.md'});
       const canonical=await client.call('skills_read',{resource:'tax-review/references/planning-cash.md'});
       assert.equal(old.isError,false);assert.equal(old.data.markdown,canonical.data.markdown);
+      assert.equal(old.data.resolvedResource,'tax-review/references/planning-cash.md');
+      const queue=[old.data.resolvedResource,'tax-review/references/tax-organizer.md'],checked=new Set();
+      while(queue.length){
+        const path=queue.pop();
+        if(checked.has(path))continue;
+        checked.add(path);
+        const result=await client.call('skills_read',{resource:path});
+        assert.equal(result.isError,false,path);
+        assert.equal(result.data.markdown,readFileSync(join(repoRoot,'plugins/finance/skills',path),'utf8'),path);
+        for(const [,href] of result.data.markdown.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)){
+          const relative=href.split('#')[0];
+          if(!relative.endsWith('.md')||relative.includes(':'))continue;
+          const target=posix.normalize(posix.join(posix.dirname(path),relative));
+          if(!target.startsWith('../'))queue.push(target);
+        }
+      }
+      assert.ok(checked.has('company-baseline/SKILL.md')&&checked.has('prebook-review/SKILL.md'));
+      const oldLink=await client.call('skills_read',{resource:'taxes-company-advisor/references/vat-planning.md'});
+      assert.equal(oldLink.data.resolvedResource,'tax-review/references/vat-planning.md');
       assert.equal((await client.call('skills_read',{resource:'tax-review/references/../../.mcp.json'})).isError,true);
     }
     assert.ok((await client.rpc('resources/list')).result.resources.some(r=>r.uri==='skill://'+resource));
