@@ -106,7 +106,7 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 ## 整期任务入口与接续
 
-月结按实际问题调用同一份[逐票抵扣规划](../plugins/finance/skills/tax-review/references/vat-planning.md)、[跨期现金简报](../plugins/finance/skills/tax-review/references/tax-cash-brief.md)和[当期及年度申报准备](../plugins/finance/skills/tax-review/references/tax-organizer.md)。角色、模板、示例和两个固定上游版本的改编位置列在[来源清单](../plugins/finance/SOURCES.md)。旧申报与顾问配置可按原资源名读回完整的共用正文，也可读插件 tax-review 目录的 Markdown 参考、角色、模板和示例。各配置的默认技能列表仍按自身入口发现。
+月结按实际问题调用同一份[逐票抵扣规划](../plugins/finance/skills/tax-review/references/vat-planning.md)、[跨期现金简报](../plugins/finance/skills/tax-review/references/tax-cash-brief.md)和[当期及年度申报准备](../plugins/finance/skills/tax-review/references/tax-organizer.md)。角色、模板、示例和两个固定上游版本的改编位置列在[来源清单](../plugins/finance/SOURCES.md)。旧申报与顾问配置可按原资源名读回完整的共用正文，随后按返回的规范资源名解析相对链接，沿工作流读取同仓插件已发布的 Markdown 参考、角色、示例及其业务依赖。各配置的默认技能列表仍按自身入口发现。
 
 `tax-period/SKILL.md` 处理“完成本期账税/申报准备、接上次补件继续”的整期目标，五阶段表按实际资料和产物选择起点；单项税额、凭证或查询直接进入相应技能。它复用既有账前、凭证、对账、税费、报表技能，按需读取合法税费方案、租赁三口径及税后现金分支，不引入事实登记或任务 DAG。交付前先核真实扣除、优惠、亏损及法定选择的可行性，再区分本期/全年/合同全周期、永久减税/递延；不能按目标税负造成本或改既定事实。
 
