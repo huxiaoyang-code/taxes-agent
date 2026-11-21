@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { loadAgencyMaterials, buildAgencyWorkpaper, buildAgencyAnnualWorkpaper } from './agency-business.mjs';
 import { readAgencySession, agencyEvidenceArchiveRecords } from './agency-business-evidence.mjs';
 import { listAgencyRules, getAgencyRuleDetail, resolveAgencyRuleTrace } from './agency-rule-catalog.mjs';
-import { validateDirectInput, DIRECT_RECORD, directRecordContract } from './direct-finance-contracts.mjs';
+import { validateDirectInput, DIRECT_RECORD, directRecordContract, FINANCE_RULES_INPUT_SCHEMA } from './direct-finance-contracts.mjs';
 import { currentFinanceCall, financeAuditDirectory, annotateFinanceCall } from './finance-call-chain.mjs';
 import { PROJECTION_NUMBER_LIMIT } from './finance-output-policy.mjs';
 import { resolveDirectFinanceTarget } from './direct-finance-target.mjs';
@@ -14,6 +14,8 @@ import { callFinanceTaxSummaryCalculate } from './finance-summary.mjs';
 import { financeSummaryContract } from './finance-summary-contracts.mjs';
 import {registerWorkpaperDetails,workpaperDetails} from './direct-finance-details.mjs';
 import {prebookContract} from './finance-prebook-contracts.mjs';
+import {VAT_HANDOFF_SCHEMA,handoffGuidance} from './vat-period-handoff-contract.mjs';
+import {vatPlanningContract} from './vat-planning-contracts.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fail=(code,details)=>{throw Object.assign(new Error(code),{code,details});};
 const json=value=>JSON.stringify(value,null,2)+'\n';
@@ -80,6 +82,16 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args,options={}){
+ if(name==='finance_vat_plan'){
+  const {runVatPlanning,VAT_PLAN_ALL_INVOICES}=await import('./vat-planning.mjs');
+  const {saveVatHandoff}=await import('./vat-period-handoff.mjs');
+  const result=runVatPlanning(args);
+  return saveVatHandoff(args,result,result[VAT_PLAN_ALL_INVOICES]);
+ }
+ if(name==='finance_record_contract'&&args.recordType==='vat_planning'){
+  const contract=vatPlanningContract();
+  return {...contract,schema:{...contract.schema,properties:{...contract.schema.properties,handoff:VAT_HANDOFF_SCHEMA}},guidance:[...contract.guidance,handoffGuidance]};
+ }
  if(name==='finance_baseline_materials'){
   const {readBaselineMaterials}=await import('./business-baseline.mjs');return readBaselineMaterials(args,options);
  }
@@ -93,7 +105,16 @@ export async function callDirectFinanceTool(name,args,options={}){
  if(name==='finance_quarter_review'){const {buildQuarterReview}=await import('./quarter-review.mjs');return buildQuarterReview({target:args.target});}
  if(name==='finance_tax_summary_calculate')return callFinanceTaxSummaryCalculate(args);
  if(name==='finance_record_contract')return args.recordType==='baseline'?baselineMaterialContract():args.recordType==='prebook'?prebookContract():args.recordType==='tax_summary'?financeSummaryContract():directRecordContract(args.recordType);
- if(name==='finance_rules'){const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});return result;}
+ if(name==='finance_rules'){
+  validateDirectInput(FINANCE_RULES_INPUT_SCHEMA,args);
+  if(args.action!==undefined){
+   const {runOfficialPolicyOnline}=await import('./official-policy-online.mjs');
+   return runOfficialPolicyOnline(args);
+  }
+  const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});
+  annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});
+  return result;
+ }
  if(name==='finance_workpaper'||name==='finance_tax_calculate'){
   const artifact=newArtifact(),session=loadInput(args,artifact),dbPath=args.dbPath??(args.target?process.env.FINANCE_DATABASE_PATH:undefined),workpaper=buildAgencyWorkpaper(session,{...(dbPath?{dbPath}:{})});
   return workpaperSummary(workpaper,artifact,name==='finance_tax_calculate'?args.obligationIds:undefined,{records:readAgencySession(session).records});

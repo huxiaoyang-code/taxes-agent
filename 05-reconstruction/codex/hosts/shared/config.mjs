@@ -21,6 +21,7 @@ export function createContext({nodePath,apiBase,databasePath,outputDir,auditDir,
   const serverPath=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),skillsDir=existing(join(plugin,'skills'),'plugin_skills','directory');
   const traceRoot=auditDir===undefined?join(out,'finance-call-records'):absolute(auditDir,'audit_directory');
   const mcpEnv={FINANCE_MCP_PROFILE:'direct',FINANCE_API_BASE:url.origin,FINANCE_DATABASE_PATH:db,FINANCE_AUDIT_DIR:traceRoot,FINANCE_BUSINESS_SESSION:join(out,'.finance/business-session.json')};
+  if(auditDir===undefined)mcpEnv.FINANCE_AUDIT_MODE='bound_account';
   if(sourceRoot!==undefined)mcpEnv.FINANCE_SOURCE_ROOT=existing(sourceRoot,'source_root','directory');
   if(pythonPath!==undefined)mcpEnv.FINANCE_PYTHON_PATH=existing(pythonPath,'python','file');
   return {repoRoot,nodePath,serverPath,skillsDir,auditDir:traceRoot,apiBase:url.origin,databasePath:db,outputDir:out,mcpEnv,mcp:{command:nodePath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};

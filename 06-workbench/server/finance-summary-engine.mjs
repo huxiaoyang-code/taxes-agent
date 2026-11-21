@@ -58,7 +58,7 @@ export function calculateFinanceSummary(kind,inputs,scope){
    const input=own(inputs,'certifiedInputVat')?read('certifiedInputVat'):documentVat('goodsPurchaseDocuments').tax+(own(inputs,'otherInputVatAmounts')?read('otherInputVatAmounts'):0n),transfer=optional('inputVatTransferOut'),opening=optional('openingCarryCredit'),prepaid=optional('prepaidVat'),credit=input+opening-transfer;
    if(output<0n)return unsupported('negative_output_vat_special_handling');
    if(inputs.goodsReturnDocuments)condition('red_invoice_original_sale_unreviewed','退货数量/原销售单价及红字确认按有来源明细作条件，原单追溯/红字法定生效未审定。');
-   if(credit<0n)return unsupported('negative_available_input_credit');const before=max0(output-credit),carry=max0(credit-output),used=min(before,prepaid),due=before-used;
+   if(credit<0n&&inputs.tracedTransferOut!==true)return unsupported('negative_available_input_credit');const before=max0(output-credit),carry=max0(credit-output),used=min(before,prepaid),due=before-used;
    step('available_credit','certifiedInputVat + openingCarryCredit - inputVatTransferOut',{certifiedInputVat:input,openingCarryCredit:opening,inputVatTransferOut:transfer},credit);
    step('due_before_prepayment','max(outputVat - availableCredit, 0)',{outputVat:output,availableCredit:credit},before);step('due','dueBeforePrepayment - min(prepaidVat, dueBeforePrepayment)',{dueBeforePrepayment:before,prepaidVat:prepaid},due);
    set(out.amounts,{outputVat:output,certifiedInputVat:input,...(salesExcludingVat===undefined?{}:{salesExcludingVat}),availableCredit:credit,dueBeforePrepayment:before,prepaymentUsed:used,due,carryCredit:carry,unusedPrepayment:prepaid-used});condition('input_credit_eligibility_unreviewed','certifiedInputVat按有来源汇总作可抵扣条件，逐票资格/用途/认证及期初留抵未审定。');}

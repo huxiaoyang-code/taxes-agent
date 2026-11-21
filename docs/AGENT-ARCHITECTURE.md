@@ -31,11 +31,19 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 | 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`tool-profile.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
 | 原生业务 | `06-workbench/server/direct-finance.mjs`、`agency-business.mjs`、`accounting.mjs` | 已支持的底稿/税费/凭证/账簿/报表计算与受控写入 |
 
-默认 direct 仅暴露实际可用的直接业务工具与普通会计模型通道，不暴露 Harness 生命周期、原始税务占位或本机原值读取通道。`finance_rules` 提供规则范围及官方链接，`finance_record_contract` 按类型披露字段、已有示例及完整度，区分仅通用引用、已核字段和只能由原生生成的记录，不能据此假定所有类型都有完整示例。`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。`finance_tax_summary_calculate` 是独立条件试算：汇总输入逐值绑定原件JSON位置，完整结果另存summary产物；不放宽原完整底稿路径，也不把试算当作已核完整账、资格或实缴。模型仍自主选择工具，无新增登记流程。
+四宿主共用的 `finance_vat_plan` 从明确账套、决策日与本机来源映射构造逐票候选，按 Agent 给出的两个计划逐月调用一般计税算式。来源索引、预测条件和账期结果可按调用编号复核。模拟只读打开现库；正式确认、申报及缴款由业务的实际回执证明。
+
+已绑定工作区的调用记录按账库文件、实例和账套隔离，换月后从同一目录取回会计交接。宿主会话及其 MCP 使用绑定中核实的 `auditDir`。既有明确目录和绑定前已产生的资料沿用原址，接续步骤见[启动指南](../05-reconstruction/codex/hosts/START-HERE.md)。
+
+默认 direct 通过 `finance_rules` 查询政策。Agent 用 `action=search` 向中国政府网政策文件库、财政部和国家税务总局的公开检索入口提交公开关键词，按来源取得候选与状态。知道官方链接时可直接 `action=open`，按页读取正文并以 SHA 核对续页版本。实际引用以已读文件、条款、适用期间及本机业务事实为准。索引遗漏、关键附件未读或来源不可用时，相关结论保留待核。无 action 的历史调用继续读取本机计算规则目录，按 ruleId 和 revision 核实原生公式覆盖与历史版本。在线查询的内容和状态随调用保存，计算器版本沿用既有发布机制。见[官方政策核查](../plugins/finance/skills/tax-review/references/official-policy.md)。
+
+`finance_record_contract` 按类型披露字段、已有示例及完整度，区分仅通用引用、已核字段和只能由原生生成的记录，不能据此假定所有类型都有完整示例。`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。`finance_tax_summary_calculate` 是独立条件试算：汇总输入逐值绑定原件JSON位置，完整结果另存summary产物；不放宽原完整底稿路径，也不把试算当作已核完整账、资格或实缴。模型仍自主选择工具，无新增登记流程。
 
 客户原件与 Agent 整理的业务记录必须区分。目录和字段示例不是客户事实；原件未提供的日期、资格、用途、收付关联不得猜填。工具返回缺件、条件受限或不支持时，保留实际状态，独立可核分支继续。
 
 ## 账前资料核对与做账交接
+
+账前与月度方案的所属期增值税税负共用同一金额口径。一般计税按预缴抵减前应纳额除以可比不含税销售额，预计应补按可用预缴抵减后另列。方案接受同口径期初累计或连续逐月历史、本期未开票销项和逐票门户资料，再按已知的更正、收付及预测滚算。试算保留客户约定、实际与预测的边界，以及每个已提交方案的单月和累计结果。
 
 `plugins/finance/skills/prebook-review` 将 small-business 的单据整理、采购收货匹配、资金起点、异常问询与报告方法适配到同仓库后端。它与既有做账流程共享资料来源和规则能力，但不要求本期账已完成，也不创建正式凭证或账库。
 
@@ -52,7 +60,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 `finance-call-chain.mjs` 在最外层包裹每次 MCP 工具调用，记录参数拒绝、业务错误及成功返回。每次调用在 `FINANCE_AUDIT_DIR/<callId>/` 独立保存：
 
 - `begin.json`：工具、时间、范围、输入文件摘要、观察到的原件摘要和记录器代码版本。
-- `input.json`：经认证字段脱敏的完整调用输入，本机保存。
+- `input.json`：业务工具在本机保存经认证字段脱敏的调用输入。在线政策查询只记录通过公开请求校验的规范化参数；被拒参数使用固定占位，记录不附账套范围或已配置的账库地址。
 - `result.json` 或 `error.json`：完整返回或诊断，本机保存。
 - `end.json`：结束时间、耗时、状态、结果摘要、规则/代码版本以及调用期间来源变化。
 
@@ -102,6 +110,8 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 ## 整期任务入口与接续
 
+月结按实际问题调用同一份[逐票抵扣规划](../plugins/finance/skills/tax-review/references/vat-planning.md)、[跨期现金简报](../plugins/finance/skills/tax-review/references/tax-cash-brief.md)和[当期及年度申报准备](../plugins/finance/skills/tax-review/references/tax-organizer.md)。角色、模板、示例和两个固定上游版本的改编位置列在[来源清单](../plugins/finance/SOURCES.md)。旧申报与顾问配置可按原资源名读回完整的共用正文，随后按返回的规范资源名解析相对链接，沿工作流读取同仓插件已发布的 Markdown 参考、角色、示例及其业务依赖。各配置的默认技能列表仍按自身入口发现。
+
 `tax-period/SKILL.md` 处理“完成本期账税/申报准备、接上次补件继续”的整期目标，五阶段表按实际资料和产物选择起点；单项税额、凭证或查询直接进入相应技能。它复用既有账前、凭证、对账、税费、报表技能，按需读取合法税费方案、租赁三口径及税后现金分支，不引入事实登记或任务 DAG。交付前先核真实扣除、优惠、亏损及法定选择的可行性，再区分本期/全年/合同全周期、永久减税/递延；不能按目标税负造成本或改既定事实。
 
 `hosts/shared/task-routing.mjs` 提供四宿主同一短路由。Pi 的 `--append-system-prompt` 与 MCP 描述、Claude 的 `CLAUDE.md`、ZCode 的 `AGENTS.md`、dsh 的显式 `start-dsh.mjs` 任务前缀分别接入已知入口；dsh 不添加未经核实的提示配置 API。Pi 保留原生 tool-search、skills_read 初始可用和其余工具 deferred 注册。配置和提示装配的静态测试不证明模型已读 Skill；实际模型调用轨迹和业务产物另行验收。
@@ -112,7 +122,9 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 ## 历史兼容与验证
 
-十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+有实际账套绑定的抵扣测算在本机生成按调用编号保留的会计交接包。包内列明逐票选择、月度税款及付款、已取得的申报和付款材料、政策引用、账表及差额。新进程通过期间复核按同一账套取回，检查来源和文件摘要；后来补件形成新版本，原方案和当时的依据可追溯。
+
+十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录。`skills_list` 的文件和标签来自当前 profile 的仓库内技能根。direct 的 MCP 握手随 `instructions` 发送与四宿主相同的整期入口。独立连接该服务的 Codex 客户端也能收到这条路由。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。
 
 旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 

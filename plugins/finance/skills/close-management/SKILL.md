@@ -29,6 +29,8 @@ T+n只是上游日历的参考表达，不是法定期限、固定工期或强�
 
 ## 月结与年度工具
 
+月结复核遇到政策续期、税会差异或适用口径不清时，用 `finance_rules` 的 `action=search` 查公开政策词，`action=open` 核对应期间的官方条款。将已核依据与本期事实写入底稿，待核项目标明影响。见[官方政策核查](../tax-review/references/official-policy.md)。
+
 自主选择Python、表格公式或已有计算器，完成月结/年度计算与底稿；可选 `finance_workpaper`、`finance_tax_calculate`、`finance_annual_workpaper`。使用原生工具时按需读取支持期间和资料合同。真实账库查询、凭证写入、资产和期末操作保持正常业务控制。年度计算、年度关账、会计审定和申报提交是不同状态，不能因十二个月有结果就称年度完成。
 
 ## 复核与输出

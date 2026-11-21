@@ -2,6 +2,31 @@
 import { validateSchemaValue } from './harness-schema-validation.mjs';
 import { nativeRecordTypes, nativeRecordGuide } from './direct-finance-records.mjs';
 const text={type:'string',minLength:1};
+const catalogFields = {
+ ruleId:text, revision:text,
+ filters:{type:'object',additionalProperties:false,properties:{
+  obligationId:text,kind:text,region:text,entityKind:text,from:text,through:text,
+  offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}
+ }}
+};
+export const FINANCE_RULES_INPUT_SCHEMA = {
+ type:'object',additionalProperties:false,properties:{
+  ...catalogFields,
+  action:{type:'string',enum:['search','open']},
+  query:{type:'string',minLength:2,maxLength:160,description:'仅限公开政策词、文号、地区与期间。不要输入客户名称、税号、合同、凭据、账套或本机路径。'},
+  page:{type:'integer',minimum:1,maximum:20},
+  limit:{type:'integer',minimum:1,maximum:12000,description:'search 为每个来源栏目的候选条数（默认5、最多20），open 为正文字符数（默认6000、最多12000）。'},
+  url:{type:'string',minLength:1,maxLength:4096,description:'无凭据的 gov.cn 机关公开原文或附件 HTTPS 地址。'},
+  offset:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},
+  expectedSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}
+ },
+ oneOf:[
+  // 旧调用可携带 MCP 记录器的原件映射；在线分支仅接受公开检索或阅读所需字段。
+  {propertyNames:{enum:[...Object.keys(catalogFields),'businessEvidence']}},
+  {properties:{action:{const:'search'},limit:{maximum:20}},required:['action','query'],propertyNames:{enum:['action','query','page','limit']}},
+  {properties:{action:{const:'open'}},required:['action','url'],propertyNames:{enum:['action','url','offset','limit','expectedSha256']}}
+ ]
+};
 export const DIRECT_SCOPE={type:'object',additionalProperties:false,required:['enterpriseKey','accountSetId','databaseInstanceId','period','currency'],properties:{enterpriseKey:text,accountSetId:{type:'integer',minimum:1},databaseInstanceId:text,period:{type:'string',pattern:'^202[67]-(0[1-9]|1[0-2])$'},currency:{const:'CNY'}}};
 export const DIRECT_ORIGINAL={type:'object',additionalProperties:false,required:['id','path'],properties:{id:text,path:text,sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}}};
 const ref={type:'object',required:['originalId','locator','extractionReason'],properties:{originalId:text,locator:text,extractionReason:text},additionalProperties:true};

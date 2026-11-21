@@ -8,9 +8,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { syntheticVoucherEvidence } from './helpers/synthetic-posting-evidence.mjs';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'wb-report-export-'));
 process.env.WORKBENCH_DATA_DIR = dataDir;
+const sourceRoot = join(dataDir, 'originals');
+process.env.FINANCE_SOURCE_ROOT = sourceRoot;
 let db;
 const results = [];
 async function test(name, fn) {
@@ -42,7 +45,9 @@ try {
   const A = await import('../server/accounting.mjs');
   const { buildReportExport, pairedBalanceRows } = await import('../server/report-export.mjs');
   const make = (name = '合成验收账套', start_period = '2025-12') => identityFixtureCreate(A, { name, start_period }).id;
-  const voucher = (s, period, entries, extra = {}) => A.createVoucher(s, { period, status: 'posted', entries, ...extra });
+  const voucher = (s, period, entries, extra = {}) => A.createVoucher(
+    s, syntheticVoucherEvidence({ period, status: 'posted', entries, ...extra }, sourceRoot)
+  );
   const out = (s, kind, period = '2026-01', extra = {}) => buildReportExport(s, { kind, period, ...extra });
   const report = (s, kind, period, extra) => out(s, kind, period, extra).report;
   const s = make();
@@ -72,7 +77,12 @@ try {
       entries.push(e('1002', i === 0 ? 900000000000.01 : 0.01));
     }
     opening.push(e('3001', 0, 900000000010)); A.setOpeningBalances(id, opening);
-    entries.push(e('3001', 0, 900000000010)); voucher(id, '2025-12', entries);
+    // 按原件映射数分四张平衡凭证，报表仍汇总全部一千条现金分录。
+    for (let start = 0; start < entries.length; start += 250) {
+      const group = entries.slice(start, start + 250);
+      const totalCents = group.reduce((sum, entry) => sum + Math.round(entry.debit * 100), 0);
+      voucher(id, '2025-12', [...group, e('3001', 0, totalCents / 100)]);
+    }
     voucher(id, '2026-01', [e('1002', 0.03), e('3001', 0, 0.03)]);
     const dec = report(id, 'trial-balance', '2025-12');
     for (const field of ['opening_debit', 'opening_credit', 'period_debit', 'period_credit', 'ytd_debit', 'ytd_credit']) assert.equal(dec.data.totals[field], 900000000010, field);

@@ -141,7 +141,7 @@ test("complete source bundle has exact version, canonical hashes, directories an
   for (const path of REQUIRED_BUNDLE_FILES) assert(manifest.files.some((entry) => entry.path === path));
   assert(!fs.existsSync(join(cold.workbenchDir, "node_modules")));
   assert(!fs.existsSync(join(cold.workbenchDir, "data")));
-  assert(!fs.existsSync(join(cold.destRoot, "05-reconstruction/codex/skills")));
+  assert(fs.existsSync(join(cold.destRoot, "05-reconstruction/codex/skills/tax-filing/SKILL.md")));
   assert.deepEqual(inspectRelease(cold.destRoot, { fullBundle: true }).bundleManifest, manifest);
 });
 
@@ -156,8 +156,15 @@ test("full-bundle CLI flag is explicit; old packaged-tooling gate keeps its own 
 });
 
 test("every fixed required file is mandatory, even when the historical optional list would allow it", () => {
+  const source = coldSource();
   for (const rel of REQUIRED_BUNDLE_FILES) {
-    const source = coldSource();
+    const manifest = structuredClone(source.bundleManifest);
+    manifest.files = manifest.files.filter(entry => entry.path !== rel);
+    resign(manifest);
+    assert.throws(() => validateReleaseManifest(manifest), {code:"bundle_manifest_required_missing"});
+  }
+  for (const rel of ["06-workbench/scripts/local-batch.mjs", "05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs",
+    "plugins/finance/skills/tax-review/references/vat-planning.md", "05-reconstruction/codex/hosts/shared/task-routing.mjs"]) {
     const file = join(cold.destRoot, rel);
     const held = next("held");
     fs.renameSync(file, held);
@@ -362,7 +369,52 @@ test("legacy core-only release remains usable and is never promoted to complete 
   assert.throws(() => inspectReleaseBundle(legacy));
 });
 
+test("第 1 版已发布源码包可原样核验与复制", () => {
+  const legacy = next("published-v1");
+  fs.mkdirSync(legacy);
+  const oldExtras = new Set([
+    "scripts/local-backup.mjs", "scripts/windows-runtime-check.mjs", "scripts/windows-start.ps1",
+    "scripts/windows-delivery-check.mjs", "test/windows-delivery.test.mjs", "scripts/bank-reconcile.mjs",
+    "scripts/local-auxiliary.mjs", "scripts/local-audit.mjs", "scripts/local-batch.mjs"
+  ].map(path => "06-workbench/" + path));
+  const manifest = structuredClone(cold.bundleManifest);
+  manifest.schemaVersion = 1;
+  manifest.files = manifest.files.filter(({path}) => oldExtras.has(path) || path === "05-reconstruction/catalog.json"
+    || /^06-workbench\/(server\/|public\/|package(?:-lock)?\.json$)/.test(path)
+    || /^05-reconstruction\/codex\/mcp\/finance-mcp\/(server|backend|tools|tax-tools|finance-model-transport)\.mjs$/.test(path)
+    || path === "05-reconstruction/codex/mcp/finance-mcp/package.json");
+  resign(manifest);
+  for (const {path} of manifest.files) {
+    const target = join(legacy, path);
+    fs.mkdirSync(dirname(target), {recursive:true});
+    fs.copyFileSync(join(cold.destRoot, path), target);
+  }
+  fs.writeFileSync(join(legacy, RELEASE_BUNDLE_MANIFEST), JSON.stringify(manifest));
+  const inspected = inspectReleaseBundle(legacy);
+  assert.deepEqual(inspected.bundleManifest, manifest);
+  const copy = copyReleaseWhitelist(inspected, next("v1-copy"));
+  assert.deepEqual(copy.bundleManifest, manifest);
+  assert(!fs.existsSync(join(copy.workbenchDir, "scripts/finance-host-config.mjs")));
+});
+
+test("第 2 版拒绝将业务现场产物收入发行源码", () => {
+  const fixture = cloneCold("source-with-generated-files");
+  for (const rel of ["server/票据.jsonl", "public/税务明细.xlsx", "server/finance-call-records"]) {
+    const path = join(fixture.workbenchDir, rel);
+    if (rel.endsWith("records")) fs.mkdirSync(path);
+    else fs.writeFileSync(path, "synthetic");
+    assert.throws(() => inspectReleaseBundle(fixture.destRoot), {code:"bundle_path_invalid"});
+    fs.renameSync(path, next("excluded-synthetic"));
+  }
+});
+
 test("cold-copy five local CLIs and MCP initialize / list load without a default database", async () => {
+  // 从当前锁文件对应的已安装依赖构建测试环境。源码包本身始终不携带依赖或现场数据。
+  const packages = JSON.parse(fs.readFileSync(join(cold.workbenchDir, "package-lock.json"), "utf8")).packages;
+  for (const name of Object.keys(packages).filter(name => /^node_modules\/(?:@[^/]+\/)?[^/]+$/.test(name))) {
+    const installed = join(WORKBENCH, name);
+    if (fs.existsSync(installed)) fs.cpSync(installed, join(cold.workbenchDir, name), {recursive:true});
+  }
   const script = (file) => join(cold.workbenchDir, "scripts", file);
   for (const name of ["local-backup.mjs", "bank-reconcile.mjs", "local-auxiliary.mjs", "local-batch.mjs"]) {
     const result = await child(script(name), ["help"]);
@@ -384,17 +436,30 @@ test("cold-copy five local CLIs and MCP initialize / list load without a default
   const aux = await child(script("local-auxiliary.mjs"), ["entries", "--db", missingDb, "--input", input]);
   assert.equal(aux.exitCode, 2);
   assert.equal(JSON.parse(aux.stdout).ok, false);
-  const mcp = await child(join(cold.destRoot, "05-reconstruction/codex/mcp/finance-mcp/server.mjs"), [], [
-    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "w2a-fixture", version: "1" } } },
-    { jsonrpc: "2.0", method: "notifications/initialized" },
-    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-  ].map((request) => JSON.stringify(request)).join("\n") + "\n");
-  assert.equal(mcp.exitCode, 0, mcp.stderr);
-  const messages = mcp.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
-  assert.equal(messages.find((message) => message.id === 1).result.serverInfo.name, "finance-mcp");
-  const tools = messages.find((message) => message.id === 2).result.tools;
-  assert(tools.some((tool) => tool.name === "finance_query_catalog"));
-  assert(tools.length > 0);
+  const workspace = next("host-workspace");
+  const configured = await child(script("finance-host-config.mjs"), ["--host", "claude-code", "--node", process.execPath,
+    "--api-base", "http://127.0.0.1:1", "--database", missingDb, "--out", workspace]);
+  assert.equal(configured.exitCode, 0, configured.stderr);
+  const {mcpServers} = JSON.parse(fs.readFileSync(join(workspace, ".mcp.json"), "utf8"));
+  const launch = Object.values(mcpServers)[0];
+  assert.equal(launch.args[0], join(cold.destRoot, "05-reconstruction/codex/mcp/finance-mcp/server.mjs"));
+  const {McpStdioClient} = await import("../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs");
+  const client = new McpStdioClient(launch.args[0], {env:launch.env, timeoutMs:30000}).start();
+  try {
+    await client.initialize();
+    const tools = (await client.rpc("tools/list", {})).result.tools;
+    for (const tool of ["skills_read", "finance_vat_plan", "finance_rules", "finance_period_review"]) {
+      assert(tools.some(item => item.name === tool), tool);
+    }
+    const monthly = await client.call("skills_read", {resource:"tax-period/SKILL.md"});
+    assert.equal(monthly.isError, false);
+    for (const method of ["vat-planning", "tax-cash-brief", "tax-organizer"]) {
+      const ref = "tax-review/references/" + method + ".md";
+      assert(monthly.text.includes(ref));
+      assert.equal((await client.call("skills_read", {resource:ref})).isError, false);
+    }
+    assert.equal((await client.call("finance_record_contract", {recordType:"vat_planning"})).isError, false);
+  } finally { await client.close(); }
   assert(!fs.existsSync(missingDb));
   assert(!fs.existsSync(dirname(missingDb)));
   assert(!fs.existsSync(process.env.WORKBENCH_DATA_DIR));

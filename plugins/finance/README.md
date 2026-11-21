@@ -13,7 +13,7 @@
 | [账目核对](skills/reconciliation/SKILL.md) | 比对总账、往来、银行、库存和资产资料，定位差异 |
 | [财务报表](skills/financial-statements/SKILL.md) | 按适用准则编制资产负债表、利润表和现金流量表，核对账表关系 |
 | [差异分析](skills/variance-analysis/SKILL.md) | 比较期间或预算，拆分价格、数量、结构、跨期等影响，保留待调查原因 |
-| [税费复核](skills/tax-review/SKILL.md) | 核对增值税、所得税、工资个税、印花税等适用条件，形成税费底稿与依据 |
+| [税费复核](skills/tax-review/SKILL.md) | 在线查阅官方政策原文，核对增值税、所得税、工资个税、印花税等适用条件，形成税费底稿与依据 |
 | [内控复核](skills/internal-control-review/SKILL.md) | 对收入、采购付款、凭证和期末处理取样检查，列异常及整改建议 |
 | [凭证编制参考](skills/journal-entry-prep/SKILL.md) | 为计提、摊销、折旧、工资、收入和存货处理补充资料要求与复核要点 |
 | [月结与年度核对](skills/close-management/SKILL.md) | 按资料及账务依赖安排工作先后，梳理期末处理和未决事项 |
@@ -24,6 +24,8 @@
 “完成这家企业本期账税”“把本季申报准备好”“接上次补件继续”先读 `tax-period/SKILL.md`，再按目标加载已有专项技能；单项税额、凭证或查询直接进入对应技能。整期交付前主动检查真实扣除、优惠、亏损及法定选择，比较本期、全年和合同全周期的税额及现金影响，区分减税与递延。补件接续以同范围实际产物和来源版本为据，`finance_period_review` 只复查已有调用记录，不把模型说完成或新一次调用成功当整期通过。
 
 已有账套按实际绑定使用其本机 `MEMORY.md`，沿用本期适用的口径。首次接手或口径变化时按[账套记忆技能](skills/company-baseline/SKILL.md)查相关事实，再用宿主文件工具编辑受影响的条目。本期余额、合同进度及业务参数按实际资料取数，旧方法和历史税负按需查。
+
+“做完本月账”可从同一整期入口进入[逐票抵扣比较](skills/tax-review/references/vat-planning.md)、[税款现金简报](skills/tax-review/references/tax-cash-brief.md)和[申报准备及交接](skills/tax-review/references/tax-organizer.md)。
 
 ## 账前核对：资料到做账交接
 
@@ -48,11 +50,17 @@
 Claude Code 也可在仓库根安装本地插件：
 
 ```sh
-claude plugin marketplace add .
+claude plugin marketplace add ./
 claude plugin install finance@taxes-agent
 ```
 
-使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。
+使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。账前核对、逐票抵扣等需要读取原件的业务，还要在启动 Claude 的终端设置本次授权的原件目录。PowerShell 示例为 `$env:FINANCE_SOURCE_ROOT = (Resolve-Path '<本期原件目录>').Path`。更换目录后，退出已运行的 Claude 并从该终端重新启动，让财税服务继承新值。
+
+运行 `claude plugin details finance@taxes-agent` 可查看技能清单，`claude mcp list` 应显示 `plugin:finance:finance` 已连接。实际读取某份原件时，服务会核验该文件是否位于获准目录内。
+
+本地目录安装随同一仓库更新，在新会话或运行 `/reload-plugins` 后加载。若原来从 Git 市场安装，先将本机后端更新至同一版本，再运行 `claude plugin marketplace update taxes-agent` 和 `claude plugin update finance@taxes-agent`，重新启动会话。可用 `claude plugin list --json` 核对版本及实际读取目录。
+
+Codex CLI 可按 [MCP 配置示例](../../05-reconstruction/codex/config.toml)登记同一本机服务。处理“做完本月账”时读 `tax-period/SKILL.md`，再按账套和期间选择相应工作流。
 
 ## 来源与许可
 

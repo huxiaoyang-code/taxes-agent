@@ -141,6 +141,7 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     const shared = related('sharedStrings'); let strings = [];
     if (shared) { const n = xml(shared); tree(n, MAIN, ['sst', 'si', 't']); check(n.name === 'sst' && n.children.every(c => c.name === 'si')); strings = n.children.map(simpleString); }
     const styles = related('styles'); let formats = ['0'];
+    const formatCodes = new Map();
     if (styles) {
       const n = xml(styles);
       const ext = one(n, 'extLst', false);
@@ -158,6 +159,7 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
       }
       tree(n, MAIN, ['styleSheet', 'numFmts', 'numFmt', 'fonts', 'font', 'sz', 'color', 'name', 'family', 'scheme', 'b', 'i', 'u', 'strike', 'vertAlign', 'charset', 'fills', 'fill', 'patternFill', 'fgColor', 'bgColor', 'borders', 'border', 'left', 'right', 'top', 'bottom', 'diagonal', 'start', 'end', 'cellStyleXfs', 'cellXfs', 'xf', 'alignment', 'protection', 'cellStyles', 'cellStyle', 'dxfs', 'tableStyles']);
       check(n.name === 'styleSheet'); const xfs = one(n, 'cellXfs'); check(xfs.children.every(c => c.name === 'xf')); formats = xfs.children.map(x => x.attrs.numFmtId ?? '0');
+      for (const f of one(n, 'numFmts', false)?.children ?? []) formatCodes.set(f.attrs.numFmtId, f.attrs.formatCode);
     }
     const sheet = xml(entries.get(sheetRel.path));
     tree(sheet, MAIN, ['worksheet', 'sheetPr', 'outlinePr', 'pageSetUpPr', 'dimension', 'sheetViews', 'sheetView', 'selection', 'pane', 'sheetFormatPr', 'cols', 'col', 'sheetData', 'row', 'c', 'v', 'is', 't', 'f', 'pageMargins', 'pageSetup', 'printOptions', 'headerFooter', 'oddHeader', 'oddFooter', 'evenHeader', 'evenFooter', 'firstHeader', 'firstFooter']);
@@ -185,7 +187,8 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
       records.push({ rowNumber, cells: Array.from({ length: cells.length }, (_, i) => cells[i] ?? ''), types });
     }
     // 仅供本机受限字段适配器使用；仍执行上方完整安全解析与公式拒绝，模型投影由调用方负责。
-    if (structureOnly) return {sheetIndex:mapping.sheetIndex,sheetCount:sheets.length,rows:records};
+    if (structureOnly) return {sheetIndex:mapping.sheetIndex,sheetCount:sheets.length,rows:records,
+      date1904:['1','true'].includes(one(wb,'workbookPr',false)?.attrs.date1904),formatCodes};
     const header = records.find(r => r.rowNumber === mapping.headerRow); check(header, 'xlsx_header_missing');
     const index = new Map();
     for (const [key, label] of Object.entries(mapping.columns)) {

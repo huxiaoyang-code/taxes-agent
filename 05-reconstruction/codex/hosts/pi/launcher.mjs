@@ -44,6 +44,7 @@ export async function runPi(configUrl,args,bound){
   const configPath=fileURLToPath(configUrl),workspace=dirname(configPath),config=JSON.parse(readFileSync(configPath,'utf8'));
   if(!bound&&existsSync(sessionPath(workspace)))bound=options['--check']?loadBoundBusinessSession(workspace):await prepareBoundBusinessSession(workspace);
   const spec=buildLaunchSpec(config,workspace,options,bound?.memoryPath);
+  if(bound)spec.env.FINANCE_AUDIT_DIR=bound.session.auditDir;
   // 此隔离目录从空目录开始：禁止预置凭据、会话或用户设置。
   if(!options['--check'])mkdirSync(spec.env.PI_CODING_AGENT_DIR,{recursive:true});
   const child=spawn(spec.command,spec.args,{cwd:spec.cwd,env:spec.env,windowsHide:true,shell:false,stdio:'inherit'});

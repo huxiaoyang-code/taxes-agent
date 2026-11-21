@@ -46,7 +46,7 @@ export function buildClaudeLaunchSpec(workspace,options){
  const settings=JSON.stringify({autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
  // 原生--allowedTools等选项是variadic，提示词必须在明确的选项终止符之后。
  const args=['--strict-mcp-config','--mcp-config',mcp,'--settings',settings,'--setting-sources','project',...(options['--resume']?['--resume',sessionId]:['--session-id',sessionId]),...options.extra,...(options.prompt===undefined?[]:['--',options.prompt])];
- const env={...process.env,...config.mcpEnv,FINANCE_BUSINESS_SESSION:sessionPath(workspace),FINANCE_CLAUDE_LAUNCH_ID:sessionId};
+ const env={...process.env,...config.mcpEnv,FINANCE_AUDIT_DIR:session.auditDir,FINANCE_BUSINESS_SESSION:sessionPath(workspace),FINANCE_CLAUDE_LAUNCH_ID:sessionId};
  for(const key of Object.keys(env))if(MEMORY_ENV.has(key.toUpperCase()))delete env[key];
  return {command:/\.exe$/i.test(cli)?cli:config.nodePath,args:/\.exe$/i.test(cli)?args:[cli,...args],cwd:workspace,env,scope:session.scope,sessionId,memoryPath,modelInvoked:options['--check']?false:'only after an explicit task or interactive input'};
 }

@@ -10,13 +10,15 @@ description: 核对中国企业本期税费、抵扣与账税差异，给出申�
 ## 工作流程
 
 1. 核实主体、税务身份、申报频次、期间、地区、资格和原件。福建漳州不自动确定市区分类或所有地方参数。
-2. 用`finance_rules`核实适用规则、来源、支持期间和边界；按业务通过`finance_record_contract`读取字段。
+2. 核实适用政策和业务期间时，用 `finance_rules` 的 search 和 open 检索、阅读官文。历史计算器的规则版本可按原底稿查询。工具字段从 `finance_record_contract` 取得。
 3. 自主选Python、表格或已有计算器并保留实际执行与适用依据，通用脚本可用`finance_calculation_run`留证。原生税费分支可用`finance_tax_calculate`实际计算；原始业务整体用`finance_workpaper`，全年原件用`finance_annual_workpaper`。缺件和未覆盖保留状态，不填假的完整资料。
    已有带来源税务汇总而无完整账时，可按需选独立`finance_tax_summary_calculate`；先读`finance_record_contract(recordType=tax_summary)`取得支持分支及字段。输入绑定原件精确JSON位置，条件试算与完整账、资格核验分开；见[汇总条件试算](references/summary-calculation.md)。
 4. 核账面交易税、计提、法定应纳和实缴的区别。引用实际工具结果；模型推导单列，不把工具未返回的due补成0。
 5. 按[报告顺序](../harness/references/reporting.md)给账本金额、凭证/抵扣清单和计算、规则依据。说明本月为何这样处理，哪些仍不能确定。调用与原件深入索引始终保存。
 
 ## 按需参考
+
+遇到历史未用进项、本月与累计税负约定或年度资料交接，通过 `skills_read` 读 `tax-review/references/vat-planning.md`、`tax-review/references/tax-cash-brief.md` 或 `tax-review/references/tax-organizer.md`。这三份资源与月结入口共用。继续按下表处理各税种原有申报、问询和更正事项。
 
 - [企业税费](references/enterprise-tax.md)：一般VAT销项抵扣、留抵、附加、小规模季度和企业所得税。
 - [工资等个税](references/individual-income-tax.md)：逐人累计扣缴及合法扣除。

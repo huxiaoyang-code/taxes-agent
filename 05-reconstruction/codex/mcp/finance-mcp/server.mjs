@@ -13,7 +13,7 @@
  * 后端：FINANCE_API_BASE，默认 http://127.0.0.1:8787
  */
 import { createInterface } from "node:readline";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
@@ -27,6 +27,7 @@ import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 import {toolsForProfile} from './tool-profile.mjs';
+import {PERIOD_TASK_ROUTING} from '../../hosts/shared/task-routing.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
 import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
@@ -41,6 +42,14 @@ import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBus
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
 const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
+// 四宿主在生成配置时尚未选择账套。MCP 启动后以已核实的会话统一定位本次调用和会计交接。
+if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINESS_SESSION&&existsSync(process.env.FINANCE_BUSINESS_SESSION)){
+  const {loadBoundBusinessSession}=await import('../../hosts/shared/business-session.mjs');
+  const workspace=dirname(dirname(process.env.FINANCE_BUSINESS_SESSION));
+  const bound=loadBoundBusinessSession(workspace);
+  if(resolve(bound.path)!==resolve(process.env.FINANCE_BUSINESS_SESSION)||resolve(bound.session.databasePath)!==resolve(process.env.FINANCE_DATABASE_PATH))throw Error('host_business_binding_mismatch');
+  process.env.FINANCE_AUDIT_DIR=bound.session.auditDir;
+}
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
 const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
 
@@ -48,8 +57,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
 const CATALOG = JSON.parse(readFileSync(join(RECON, "catalog.json"), "utf8"));
 // 技能源固定在服务所属仓库，历史工具面仅选择仓库内专用目录。
+const PLUGIN_SKILLS_DIR = join(RECON, "..", "plugins", "finance", "skills");
 const SKILLS_DIR = ACTIVE_PROFILE === "direct"
-  ? join(RECON, "..", "plugins", "finance", "skills")
+  ? PLUGIN_SKILLS_DIR
   : join(RECON, "codex", "skills");
 if (process.env.FINANCE_SKILLS_DIR !== undefined && (!isAbsolute(process.env.FINANCE_SKILLS_DIR) || resolve(process.env.FINANCE_SKILLS_DIR) !== resolve(SKILLS_DIR))) {
   throw new Error("finance_external_skills_not_supported");
@@ -75,8 +85,36 @@ function listSkillFiles() {
   catch { throw new ToolCallError("skill_not_found", "skill_not_found"); }
 }
 
+// 旧顾问和申报技能保留原入口，三份重复正文由插件的一份规范源供给。
+const sharedTaxReferences = new Map([
+  ['taxes-company-advisor/references/planning-cash.md', 'tax-review/references/planning-cash.md'],
+  ['tax-filing/references/summary-calculation.md', 'tax-review/references/summary-calculation.md'],
+  ['tax-filing/references/supported-obligations.md', 'tax-review/references/supported-obligations.md'],
+]);
+let pluginMarkdown;
+function sharedResource(resource) {
+  if (ACTIVE_PROFILE === 'direct') return null;
+  const normalized = String(resource || '').replaceAll('\\','/').split(/[?#]/)[0];
+  if (sharedTaxReferences.has(normalized)) return sharedTaxReferences.get(normalized);
+  if (!/^[a-z0-9-]+\/(?:[a-z0-9_-]+\/)*[A-Za-z0-9_-]+\.md$/.test(normalized)) return null;
+  if (existsSync(join(SKILLS_DIR, normalized))) return null;
+  pluginMarkdown ??= new Set(listSkillFilesUnsafe(PLUGIN_SKILLS_DIR, PLUGIN_SKILLS_DIR));
+  if (pluginMarkdown.has(normalized)) return normalized;
+  // 旧客户端有时相对旧别名继续打开模板、角色或参考；已有的旧资源优先。
+  const alias = normalized.replace(/^(?:taxes-company-advisor|tax-filing)\//, 'tax-review/');
+  return pluginMarkdown.has(alias) ? alias : null;
+}
+
 function readSkill(resource) {
   const normalized = String(resource || "").replaceAll("\\", "/").split(/[?#]/)[0];
+  const shared = sharedResource(normalized);
+  if (shared) {
+    try {
+      const path = resolve(PLUGIN_SKILLS_DIR,shared);
+      if (realpathSync(path) === path) return readFileSync(path,'utf8');
+    } catch { /* 不接受缺失的规范源或指向别处的链接。 */ }
+    throw new ToolCallError('skill_not_found', 'skill_not_found');
+  }
   const root = resolve(SKILLS_DIR);
   const full = resolve(root, normalized);
   // Windows 下环境变量常用正斜杠，join 会输出反斜杠，直接用 startsWith 会误判；用 resolve + 分隔符比较。
@@ -109,7 +147,7 @@ function preflightTool(name,args={}) {
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
-  const domainProblems=hasDomainManagedSources(name)?validateSchemaValue(spec.inputSchema,args):undefined;
+  const domainProblems=hasDomainManagedSources(name)||name==='finance_rules'?validateSchemaValue(spec.inputSchema,args):undefined;
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length||domainProblems?.length) {
     const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args)):undefined;
@@ -157,7 +195,10 @@ async function callTool(name, args = {}, executionOptions={}) {
     const entries=files.filter(file=>/(?:^|\/)SKILL\.md$/.test(file)).map(file=>skillMetadata(file,readSkill(file)));
     return { files, labels, entries };
   }
-  if (name === "skills_read") return { resource: args.resource, markdown: readSkill(args.resource) };
+  if (name === "skills_read") {
+    const canonical = sharedResource(args.resource);
+    return { resource:args.resource, ...(canonical && {resolvedResource:canonical}), markdown:readSkill(args.resource) };
+  }
   if (HARNESS_TOOL_NAMES.has(name)) {
     try {
       const { callHarnessTool } = await import('../../../../06-workbench/server/harness-runtime.mjs');
@@ -305,7 +346,8 @@ rl.on("line", async (line) => {
     return ok(id, {
       protocolVersion: PROTOCOL,
       capabilities: { tools: {}, resources: {} },
-      serverInfo: SERVER
+      serverInfo: SERVER,
+      ...(ACTIVE_PROFILE === 'direct' ? {instructions: PERIOD_TASK_ROUTING} : {})
     });
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
@@ -331,7 +373,8 @@ rl.on("line", async (line) => {
       }
       const compactContract=params?.name==='finance_record_contract'&&['baseline','prebook'].includes(params?.arguments?.recordType);
       const text=HARNESS_TOOL_NAMES.has(params?.name)||compactContract?JSON.stringify(result):JSON.stringify(result,null,2);
-      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{})}));
+      const failed=['failed','unknown'].includes(result?.status)||params?.name==='finance_rules'&&result?.status==='unavailable';
+      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(failed?{isError:true}:{})}:{})}));
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, withReference(transportFailureResult(e.failure)));
       if(e?.code==='finance_call_recording_failed')return ok(id,withReference({isError:true,content:[{type:'text',text:JSON.stringify({code:e.code,writeOutcome:'unknown',retryable:false,executionCompleted:e.executionCompleted===true})}]}));
@@ -349,7 +392,11 @@ rl.on("line", async (line) => {
   if (method === "resources/read") {
     const uri = String(params?.uri || "").replace(/^skill:\/\//, "");
     // 失败只回固定文案：不四显请求路径或原始异常。
-    try { return ok(id, { contents: [{ uri: params?.uri, mimeType: "text/markdown", text: readSkill(uri) }] }); }
+    try {
+      const canonical=sharedResource(uri);
+      return ok(id,{contents:[{uri:params?.uri,mimeType:"text/markdown",text:readSkill(uri),
+        ...(canonical && {_meta:{resolvedResource:canonical}})}]});
+    }
     catch { return err(id, -32002, "skill_not_found"); }
   }
   if (method === "prompts/list") return ok(id, { prompts: [] });

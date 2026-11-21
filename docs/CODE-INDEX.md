@@ -1,8 +1,20 @@
 # 代码索引
 
+月度抵扣的会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 生成，本机报告由 [vat-handoff-html.mjs](../06-workbench/server/vat-handoff-html.mjs) 排版，后续会话通过 [期间复核](../06-workbench/server/finance-period-review.mjs) 取回。
+
+换月时由[宿主会话绑定](../05-reconstruction/codex/hosts/shared/business-session.mjs)核定本账套的调用目录，实际记录和资料整理使用绑定回执的 `auditDir`。[跨工作区交接回归](../06-workbench/test/vat-handoff-mcp.test.mjs)覆盖次月分页查回以及沿用旧目录。
+
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
 ## 当前 direct 默认调用链
+
+会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 汇集原件、官文、税额与两套方案，[账簿读取](../06-workbench/server/vat-handoff-books-worker.mjs) 取已过账凭证、银行匹配和四张报表。交接回读、变更和独立文件校验见 [stdio 验收](../06-workbench/test/vat-handoff-mcp.test.mjs)。
+
+抵扣规划的客户约定、历史累计、调整回执、预缴与收付按月在 [vat-planning-ledgers.mjs](../06-workbench/server/vat-planning-ledgers.mjs) 核算。单月和累计税负使用可比销售额和预缴前应纳额，账前入口也按此口径显示。
+
+- 月度进项方案的来源合同、按决策日取数及跨月计算依次见 [vat-planning-contracts.mjs](../06-workbench/server/vat-planning-contracts.mjs)、[vat-planning-evidence.mjs](../06-workbench/server/vat-planning-evidence.mjs) 和 [vat-planning.mjs](../06-workbench/server/vat-planning.mjs)。实际 stdio 入口的合成回归见 [vat-planning-mcp.test.mjs](../06-workbench/test/vat-planning-mcp.test.mjs)。
+
+三个中国化工作流及其模板、角色和示例由 [tax-review](../plugins/finance/skills/tax-review/SKILL.md) 维护。用[上游文件对照](../plugins/finance/SOURCES.md)查迁移来源，用[宿主回归](../06-workbench/test/finance-host-config.test.mjs)查旧资源名兼容。
 
 日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。
 
@@ -14,7 +26,7 @@
 
 - 规范事实本机取数：[business-baseline.mjs](../06-workbench/server/business-baseline.mjs) 的 `resolveBaselineCalculationFacts`，入口／SHA／格式由 materials 的 `calculationReader` 披露，不注册原值 MCP；[finance-calculation.mjs](../06-workbench/server/finance-calculation.mjs) 父进程装配本机 `input.financeContext`。JS 子脚本按真实材料引用／scope／SHA 取规范值并计算，reader／来源摘要写派生底稿，MCP 只给执行与产物引用，不能回显原值／本机上下文给模型。
 - 整期入口：[tax-period/SKILL.md](../plugins/finance/skills/tax-period/SKILL.md)，按实际产物选五阶段并复用既有专项技能；合法方案、租赁口径和税后现金参考在同目录 references。单项任务不强制整期流程。
-- 共享宿主路由：`05-reconstruction/codex/hosts/shared/task-routing.mjs`；Pi 启动提示、Claude CLAUDE.md、ZCode AGENTS.md、dsh `hosts/dsh/launcher.mjs` 生成的显式任务包装共用，静态装配与模型实际读取分别验收。
+- [共享宿主路由](../05-reconstruction/codex/hosts/shared/task-routing.mjs)用于 Pi 启动提示、Claude CLAUDE.md、ZCode AGENTS.md 和 dsh 启动包装。direct MCP 在 `initialize` 的 `instructions` 中提供同一整期路由，供按[示例](../05-reconstruction/codex/config.toml)注册的 Codex 等客户端接收。
 - 企业方法记忆：`06-workbench/server/business-memory-storage.mjs`（不可变版本/案例、组件迁移、只读/备份恢复、整账级联）、`business-memory-bootstrap.mjs`（初始化及live只读来源观察）、`business-memory-contracts.mjs`（objectScope/JSON匹配及参数合同）、`business-memory.mjs`（摘要/方法/案例/候选/按版本执行、对象匹配及有效区间）、`06-workbench/scripts/review-business-method.mjs`（本机TTY选择，展示受影响版本，不接受模型自批）。direct MCP工具名与实际合同见 `direct-tools.mjs`，企业scope由 `direct-finance-target.mjs` 从实际DB推导。
 - 企业历史自动接续：`05-reconstruction/codex/mcp/finance-mcp/server.mjs` 的 `executeRecordedTool` 核已绑定普通计算scope、原生写成功同步，以及完整计算/方法执行记录落盘后的后台同步；`06-workbench/server/finance-direct-method-result.mjs` 保留原生VAT/季度等安全业务结果/产物。读取的cache差异不当作业务失效，跨获准来源/记录根保留不可访问旧依据，known changed/missing仍阻断。
 - 方法适用/取数边界：`business-memory.mjs` 的 `matchingState` 不忽略额外自由scope/conditions，`parametersFor` 固定constant保存值，`bindNativeObjectSources` 仅为原生summary originals分支绑定已匹配路径/SHA/原件ID；其他native business_object明确not_supported。`finance-calculation.mjs` 按后端expectedSourceVersions核实际snapshot，版本不符不向子脚本放行；方法记录保留matchedSources，计算记录保留methodSourceVersionChecks，后置变化/未知副作用核原执行。资产/结转方法的结构化account_set与解释notes见bootstrap。
@@ -23,6 +35,7 @@
 - 相关验证：[账库方法存储](../06-workbench/test/business-memory-storage.test.mjs)、[账库方法端到端](../06-workbench/test/business-memory-e2e.test.mjs)、[Claude argv](../06-workbench/test/host-claude-argv.test.mjs)。宿主参数配置与模型实际原生读写分别验证。
 - 接续投影：`06-workbench/server/finance-period-review-contracts.mjs`、`finance-period-review.mjs` 与 direct MCP 注册；同范围固定只读投影、分页覆盖、未知及未决保留，未绑定记录分支不确认企业或整期状态。发现元数据：`05-reconstruction/codex/mcp/finance-mcp/skill-metadata.mjs` 解析实际 frontmatter，`skills_list.entries` 保留有效性状态。
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
+- 官方政策查询经 [official-policy-online.mjs](../06-workbench/server/official-policy-online.mjs) 分派在线检索与原文读取。[核查指引](../plugins/finance/skills/tax-review/references/official-policy.md)说明引用、适用期和历史复算。[合成 stdio 回归](../06-workbench/test/official-policy-mcp.test.mjs)覆盖工具发现、查询、读取、失败与旧调用兼容。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
 - 独立账前核对：`plugins/finance/skills/prebook-review/SKILL.md`；后端 `06-workbench/server/finance-prebook-contracts.mjs`、`finance-prebook-evidence.mjs`、`finance-prebook.mjs`。`finance_prebook_review`核对上期及本期基础资料、一般／小规模VAT条件试算、老板声明与补件重算，不写正式账；`finance_record_contract(recordType=prebook)`披露实际输入及回复合同。
 - 账前合成演示：`plugins/finance/skills/prebook-review/scripts/demo.mjs`，调用真实MCP执行缺票→回复→补件重算和小规模非零税额；插件 `tests/structure.test.mjs`核验同一路径和技能可读。原始资料映射、状态与交接范围见该技能的`references/input-and-tools.md`。
@@ -176,6 +189,8 @@
 <a id="windows"></a>
 
 ## Windows 运行与交付
+
+Windows 完整源码包的第 2 版清单包含四宿主生成器、财税 MCP、当前与兼容技能、模板和出处。解包后在 `06-workbench` 运行 `npm ci`，再按[宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)选择应用。第 1 版清单仍可按发布时的摘要核验和复制。
 
 - 运行资格与目录探针：[windows-runtime-check.mjs](../06-workbench/scripts/windows-runtime-check.mjs) 的 `decideRuntimeVersion`、`runRuntimeCheck`；发布清单 / 验收：[windows-delivery-check.mjs](../06-workbench/scripts/windows-delivery-check.mjs) 的 `inspectReleaseBundle`、`copyReleaseWhitelist`、`main`。版本条件和阶段限制直接查看这些实现与 `--help`。
 - 从 `06-workbench` 运行 `node scripts/windows-runtime-check.mjs --help`、`node scripts/windows-delivery-check.mjs --help` 查看参数。

@@ -1,18 +1,20 @@
-# Codex MCP 配置（已验证格式）
+# 在仓库根用 PowerShell 注册本机服务。将尖括号占位替换为实际值。
+# $nodePath = (Get-Command node.exe).Source
+# $serverPath = (Resolve-Path './05-reconstruction/codex/mcp/finance-mcp/server.mjs').Path
+# codex mcp add finance --env FINANCE_MCP_PROFILE=direct --env 'FINANCE_API_BASE=http://127.0.0.1:<本机后端端口>' --env 'FINANCE_DATABASE_PATH=<账库文件绝对路径>' --env 'FINANCE_AUDIT_DIR=<本机处理记录目录绝对路径>' --env 'FINANCE_SOURCE_ROOT=<获准原件目录绝对路径>' -- $nodePath $serverPath
+# codex mcp get finance --json
 #
-# 推荐直接用官方命令注册，避免手改 TOML：
-#
-#   codex mcp add finance \
-#     --env FINANCE_API_BASE=http://127.0.0.1:8787 \
-#     -- "D:\\node.exe" "D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"
-#
-# 下面是与 `codex mcp add` 生成一致的配置，供手工合并到 %USERPROFILE%\.codex\config.toml。
-# Windows 下 command 建议用绝对路径（node 不在 Codex 的 PATH 里）。
-# 技能源固定为该 server 所属仓库的 plugins/finance/skills，不配置外部技能目录。
+# 也可填写下列表格并合并到 Codex 的 config.toml。使用同一版仓库、
+# 已安装依赖的本机后端和已获准的账库。重新启动会话以加载配置。
+# 技能由此服务读取仓库内的 plugins/finance/skills。
 
 [mcp_servers.finance]
-command = 'D:\node.exe'
-args = ["D:/有数云fork/05-reconstruction/codex/mcp/finance-mcp/server.mjs"]
+command = '<node.exe 绝对路径>'
+args = ['<仓库绝对路径>/05-reconstruction/codex/mcp/finance-mcp/server.mjs']
 
 [mcp_servers.finance.env]
-FINANCE_API_BASE = "http://127.0.0.1:8787"
+FINANCE_MCP_PROFILE = 'direct'
+FINANCE_API_BASE = 'http://127.0.0.1:<本机后端端口>'
+FINANCE_DATABASE_PATH = '<账库文件绝对路径>'
+FINANCE_AUDIT_DIR = '<本机处理记录目录绝对路径>'
+FINANCE_SOURCE_ROOT = '<获准原件目录绝对路径>'

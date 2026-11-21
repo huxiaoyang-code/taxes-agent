@@ -736,23 +736,91 @@ const OPTIONAL_RELEASE_FILES = [
 ];
 
 // 这是源码包，不是离线依赖包。路径相对于仓库根目录。
-export const RELEASE_BUNDLE_SCHEMA_VERSION = 1;
+export const RELEASE_BUNDLE_SCHEMA_VERSION = 2;
 export const RELEASE_BUNDLE_MANIFEST = "windows-release-manifest.json";
-export const REQUIRED_BUNDLE_FILES = Object.freeze([
+const backendBundleFiles = Object.freeze([
   "06-workbench/package.json", "06-workbench/package-lock.json",
   ...OPTIONAL_RELEASE_FILES.map((file) => `06-workbench/${file}`),
   ...["bank-reconcile.mjs", "local-auxiliary.mjs", "local-audit.mjs", "local-batch.mjs"].map((file) => `06-workbench/scripts/${file}`),
   "05-reconstruction/catalog.json",
   ...["server.mjs", "backend.mjs", "tools.mjs", "tax-tools.mjs", "finance-model-transport.mjs", "package.json"].map((file) => `05-reconstruction/codex/mcp/finance-mcp/${file}`),
 ]);
+// 完整发行仅收录已审阅的宿主、MCP 和技能资产；现场目录内的额外文件不随包分发。
+const agentBundleGroups = {
+  ".claude-plugin": "marketplace.json",
+  "05-reconstruction/codex/hosts": "BUSINESS-MEMORY.md README.md START-HERE.md",
+  "05-reconstruction/codex/hosts/claude-code": "README.md adapter.mjs business-memory-hook.mjs launcher.mjs",
+  "05-reconstruction/codex/hosts/dsh": "README.md adapter.mjs launcher.mjs",
+  "05-reconstruction/codex/hosts/pi": "README.md adapter.mjs launcher.mjs",
+  "05-reconstruction/codex/hosts/shared": "business-session.mjs config.mjs task-routing.mjs",
+  "05-reconstruction/codex/hosts/zcode": "README.md adapter.mjs launcher.mjs",
+  "05-reconstruction/codex/mcp/finance-mcp": "direct-recovery.mjs direct-tools.mjs disclosure-contracts.mjs manifest-evidence-guard.mjs mcp-stdio-client.mjs receipt-presentation.mjs skill-metadata.mjs tool-profile.mjs",
+  "05-reconstruction/codex/pi": "finance-direct.ts",
+  "05-reconstruction/codex/skills/annual-close": "LICENSE SKILL.md SOURCES.md",
+  "05-reconstruction/codex/skills/bookkeeping": "SKILL.md",
+  "05-reconstruction/codex/skills/bookkeeping/references": "bank-transaction-bookkeeping.md fixed-asset-bookkeeping.md invoice-bookkeeping.md other-business-bookkeeping.md payroll-bookkeeping.md period-end-bookkeeping.md reimbursement-bookkeeping.md",
+  "05-reconstruction/codex/skills/harness": "SKILL.md",
+  "05-reconstruction/codex/skills/harness/references": "accounting.md adapters.md agency-input.md analysis.md calculation.md materials.md recovery.md reporting.md review.md tax.md",
+  "05-reconstruction/codex/skills/individual-income-tax-filing": "SKILL.md",
+  "05-reconstruction/codex/skills/individual-income-tax-filing/references": "native-tool-map.md workflow-state.md",
+  "05-reconstruction/codex/skills/invoice-issuing": "SKILL.md",
+  "05-reconstruction/codex/skills/invoice-issuing/references": "native-tool-map.md tax-code-filtering.md",
+  "05-reconstruction/codex/skills/legacy-book-import": "SKILL.md",
+  "05-reconstruction/codex/skills/legacy-book-import/references": "import-rules.md",
+  "05-reconstruction/codex/skills/tax-filing": "SKILL.md",
+  "05-reconstruction/codex/skills/tax-filing/references": "annual-tax.md correction-cancel.md declaration-data-query.md enterprise-tax.md individual-income-tax.md summary-calculation.md supported-obligations.md",
+  "05-reconstruction/codex/skills/taxes-company-advisor": "SKILL.md",
+  "05-reconstruction/codex/skills/taxes-company-advisor/agents": "openai.yaml",
+  "05-reconstruction/codex/skills/taxes-company-advisor/assets": "synthetic-case.md synthetic-expected.md",
+  "05-reconstruction/codex/skills/taxes-company-advisor/references": "harness-handoff.md intake.md investigation.md planning-cash.md",
+  "06-workbench/scripts": "accountant-review-q2.mjs direct-pi-probe.mjs finance-host-config.mjs inventory-tax-browser.mjs offline-period-plan.mjs offline-vat-pair.mjs offline-vat-q2.mjs",
+  "plugins/finance/.claude-plugin": "plugin.json",
+  "plugins/finance": ".mcp.json CONNECTORS.md LICENSE LICENSE.knowledge-work-plugins README.md SOURCES.md",
+  "plugins/finance/skills/audit-support": "SKILL.md",
+  "plugins/finance/skills/close-management": "SKILL.md",
+  "plugins/finance/skills/company-baseline": "SKILL.md",
+  "plugins/finance/skills/company-baseline/references": "material-adaptation.md materials-and-save.md",
+  "plugins/finance/skills/financial-statements": "SKILL.md",
+  "plugins/finance/skills/internal-control-review": "SKILL.md",
+  "plugins/finance/skills/journal-entry-prep": "SKILL.md",
+  "plugins/finance/skills/journal-entry": "SKILL.md",
+  "plugins/finance/skills/prebook-review": "SKILL.md",
+  "plugins/finance/skills/prebook-review/references": "adapted-methods.md input-and-tools.md",
+  "plugins/finance/skills/prebook-review/scripts": "demo.mjs",
+  "plugins/finance/skills/reconciliation": "SKILL.md",
+  "plugins/finance/skills/shared/references": "business-memory.md connectors.md control-testing-methods.md financial-controls.md journal-support.md quarter-review.md reconciliation-methods.md reporting.md variance-methods.md",
+  "plugins/finance/skills/tax-period": "SKILL.md",
+  "plugins/finance/skills/tax-period/references": "planning-cash.md",
+  "plugins/finance/skills/tax-review": "SKILL.md",
+  "plugins/finance/skills/tax-review/agents": "tax-source-extract.md vat-data-review.md",
+  "plugins/finance/skills/tax-review/examples": "annual-handoff.md period-estimate.md",
+  "plugins/finance/skills/tax-review/references": "corporate-income.md official-policy.md planning-cash.md salary.md stamp.md summary-calculation.md supported-obligations.md tax-cash-brief.md tax-exceptions.md tax-organizer.md tax-sources.md vat-calculation.md vat-general.md vat-planning.md vat-small.md",
+  "plugins/finance/skills/tax-review/templates": "tax-handoff.md vat-comparison.md vat-decision.md",
+  "plugins/finance/skills/variance-analysis": "SKILL.md",
+};
+export const REQUIRED_BUNDLE_FILES = Object.freeze([
+  ...backendBundleFiles,
+  "README.md", "docs/CODE-INDEX.md", "docs/AGENT-ARCHITECTURE.md", "05-reconstruction/codex/config.toml",
+  ...Object.entries(agentBundleGroups).flatMap(([dir, files]) => files.split(" ").map(file => dir + "/" + file)),
+]);
 const BUNDLE_KIND = "local-product-source-bundle";
 const bundleCompare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const bundleError = (code, path = null) => new StageError(code, { details: path === null ? null : { path } });
-function bundlePathAllowed(path) {
+const generatedDirectory = name => /^\.|^(?:finance-call-records|agent-materials|artifacts|outputs)$/i.test(name);
+function bundlePathWellFormed(path) {
   if (typeof path !== "string" || !path || /[\\:\x00-\x1f]/.test(path)) return false;
   const parts = path.split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[. ]$/.test(part) || isForbiddenName(part))) return false;
-  return REQUIRED_BUNDLE_FILES.includes(path) || /^06-workbench\/(server|public)\/.+/.test(path);
+  return true;
+}
+function bundlePathAllowed(path, schemaVersion) {
+  if (!bundlePathWellFormed(path)) return false;
+  const backendSource = /^06-workbench\/(server|public)\/.+/.test(path);
+  if (schemaVersion === 1) return backendBundleFiles.includes(path) || backendSource;
+  if (REQUIRED_BUNDLE_FILES.includes(path)) return true;
+  if (!backendSource || path.split("/").some(generatedDirectory)) return false;
+  return /^06-workbench\/server\/.+\.mjs$/.test(path)
+    || /^06-workbench\/public\/(?:app\.js|index\.html|styles\.css)$/.test(path);
 }
 function sameFileIdentity(a, b) {
   return a.isFile() && b.isFile() && a.nlink === 1 && b.nlink === 1
@@ -762,7 +830,7 @@ function sameFileIdentity(a, b) {
 
 /** 仅通过自有描述符读取普通单链接文件；读取前后都校验路径。 */
 function readBundleFile(root, rel) {
-  if (!bundlePathAllowed(rel) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
+  if (!bundlePathAllowed(rel, 1) && !bundlePathAllowed(rel, RELEASE_BUNDLE_SCHEMA_VERSION) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
   const path = join(root, ...rel.split("/"));
   const check = () => {
     const chain = auditAncestorChain(dirname(path));
@@ -791,20 +859,21 @@ const exactKeys = (object, names) => object && typeof object === "object" && !Ar
 /** 查询文件系统之前，先拒绝未知字段、别名、路径及非规范列表。 */
 export function validateReleaseManifest(manifest) {
   if (!exactKeys(manifest, ["schemaVersion", "kind", "packageVersion", "files", "digest"])
-    || manifest.schemaVersion !== RELEASE_BUNDLE_SCHEMA_VERSION || manifest.kind !== BUNDLE_KIND
+    || ![1, RELEASE_BUNDLE_SCHEMA_VERSION].includes(manifest.schemaVersion) || manifest.kind !== BUNDLE_KIND
     || typeof manifest.packageVersion !== "string" || !manifest.packageVersion.trim()
     || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 40000
     || typeof manifest.digest !== "string" || !/^[a-f0-9]{64}$/.test(manifest.digest)) throw bundleError("bundle_manifest_invalid");
   let previous = "";
   const seen = new Set();
   for (const entry of manifest.files) {
-    if (!exactKeys(entry, ["path", "bytes", "sha256"]) || !bundlePathAllowed(entry.path)
+    if (!exactKeys(entry, ["path", "bytes", "sha256"]) || !bundlePathAllowed(entry.path, manifest.schemaVersion)
       || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)
       || (previous && bundleCompare(previous, entry.path) >= 0) || seen.has(entry.path.toLowerCase())) throw bundleError("bundle_manifest_invalid");
     seen.add(entry.path.toLowerCase());
     previous = entry.path;
   }
-  for (const rel of [...REQUIRED_BUNDLE_FILES, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
+  const required = manifest.schemaVersion === 1 ? backendBundleFiles : REQUIRED_BUNDLE_FILES;
+  for (const rel of [...required, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
     if (!seen.has(rel.toLowerCase())) throw bundleError("bundle_manifest_required_missing", rel);
   }
   if (manifest.digest !== bundleDigest(manifest)) throw bundleError("bundle_manifest_digest_mismatch");
@@ -828,18 +897,20 @@ export function inspectReleaseBundle(releasePath) {
     catch { throw bundleError("bundle_manifest_invalid"); }
     validateReleaseManifest(publishedManifest);
   }
-  const paths = [...REQUIRED_BUNDLE_FILES];
+  const schemaVersion = publishedManifest?.schemaVersion ?? RELEASE_BUNDLE_SCHEMA_VERSION;
+  const paths = schemaVersion === 1 ? [...backendBundleFiles] : [...REQUIRED_BUNDLE_FILES];
   const walk = (rel, depth = 0) => {
     const path = join(root, ...rel.split("/"));
     const audit = auditDirectoryRoot(path, "bundle_source_directory");
     if (!audit.ok || depth > 14) throw bundleError("bundle_directory_refused", rel);
     for (const name of readdirSync(path).sort(bundleCompare)) {
       const child = `${rel}/${name}`;
-      if (!bundlePathAllowed(`${child}/placeholder`) && !bundlePathAllowed(child)) throw bundleError("bundle_path_invalid", child);
+      if (!bundlePathWellFormed(child) || (schemaVersion >= 2 && generatedDirectory(name))) throw bundleError("bundle_path_invalid", child);
       const stat = lstatSync(join(path, name));
       if (stat.isSymbolicLink()) throw bundleError("bundle_file_refused", child);
       if (stat.isDirectory()) walk(child, depth + 1);
-      else if (stat.isFile()) paths.push(child);
+      else if (stat.isFile() && bundlePathAllowed(child, schemaVersion)) paths.push(child);
+      else if (stat.isFile()) throw bundleError("bundle_path_invalid", child);
       else throw bundleError("bundle_file_refused", child);
       if (paths.length > 40000) throw bundleError("bundle_too_large");
     }
@@ -851,7 +922,7 @@ export function inspectReleaseBundle(releasePath) {
     return { path: rel, bytes: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") };
   });
   const packageJson = JSON.parse(readBundleFile(root, "06-workbench/package.json").toString("utf8"));
-  const bundleManifest = { schemaVersion: RELEASE_BUNDLE_SCHEMA_VERSION, kind: BUNDLE_KIND, packageVersion: String(packageJson.version ?? ""), files };
+  const bundleManifest = { schemaVersion, kind: BUNDLE_KIND, packageVersion: String(packageJson.version ?? ""), files };
   bundleManifest.digest = bundleDigest(bundleManifest);
   validateReleaseManifest(bundleManifest);
   if (publishedManifest !== null && (publishedManifest.digest !== bundleManifest.digest
@@ -904,9 +975,9 @@ function copyReleaseBundle(inspected, destRoot) {
     writeOwned(entry.path, buffer);
   }
   assertBundleMatches(inspected);
+  writeOwned(RELEASE_BUNDLE_MANIFEST, Buffer.from(`${JSON.stringify(source.bundleManifest, null, 2)}\n`));
   const copied = inspectReleaseBundle(dest);
   if (copied.bundleDigest !== source.bundleDigest || copied.digest !== source.digest) throw bundleError("bundle_copy_digest_mismatch");
-  writeOwned(RELEASE_BUNDLE_MANIFEST, Buffer.from(`${JSON.stringify(source.bundleManifest, null, 2)}\n`));
   return { destRoot: dest, workbenchDir: copied.workbenchDir, copied: source.bundleManifest.files.map((entry) => entry.path), optionalMissing: [],
     digest: copied.digest, bundleDigest: copied.bundleDigest, bundleManifest: copied.bundleManifest, manifestPath: join(dest, RELEASE_BUNDLE_MANIFEST) };
 }
@@ -2375,7 +2446,8 @@ async function installStart(run, options, paths) {
       run.assert("preflight.full_bundle", copied.bundleDigest === release.bundleDigest && copied.optionalMissing.length === 0,
         { code: "full_bundle_incomplete" });
       jsonWrite(join(run.outDir, "artifacts", RELEASE_BUNDLE_MANIFEST), copied.bundleManifest);
-      run.note("preflight.bundle_manifest", "complete_source_bundle", { schemaVersion: RELEASE_BUNDLE_SCHEMA_VERSION,
+      run.note("preflight.bundle_manifest", "complete_source_bundle", { schemaVersion: copied.bundleManifest.schemaVersion,
+        sourceContents: copied.bundleManifest.schemaVersion === 1 ? "backend" : "backend_and_agent",
         packageVersion: release.packageVersion, bundleDigest: copied.bundleDigest, coreDigest: copied.digest,
         files: copied.bundleManifest.files.length, manifest: `artifacts/${RELEASE_BUNDLE_MANIFEST}` });
     }

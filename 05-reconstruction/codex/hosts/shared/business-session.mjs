@@ -41,15 +41,20 @@ function memoryLocation({dbPath,scope}){
 export function assertSameScope(expected,actual){
  if(!expected||!actual||['enterpriseKey','databaseInstanceId','accountSetId','period','currency'].some(key=>expected[key]!==actual[key]))fail('host_business_scope_mismatch');
 }
+function accountAuditDirectory(binding){
+ return join(dirname(binding.dbPath),'.finance-call-records',basename(binding.dbPath),binding.scope.databaseInstanceId,String(binding.scope.accountSetId));
+}
 export function loadBoundBusinessSession(workspace){
  const config=loadBusinessHost(workspace),path=sessionPath(workspace);
  if(!existsSync(path))fail('host_business_binding_required');
  const session=readHostJson(path);
- if(session.version!==SESSION_VERSION||session.host!==config.host||!samePath(session.workspace,realpathSync(workspace))||!samePath(session.databasePath,config.databasePath)||!samePath(session.auditDir,config.auditDir)||(session.sourceRoot??null)!==(config.mcpEnv.FINANCE_SOURCE_ROOT??null))fail('host_business_binding_mismatch');
+ if(session.version!==SESSION_VERSION||session.host!==config.host||!samePath(session.workspace,realpathSync(workspace))||!samePath(session.databasePath,config.databasePath)||(session.sourceRoot??null)!==(config.mcpEnv.FINANCE_SOURCE_ROOT??null))fail('host_business_binding_mismatch');
  const target={accountSetId:session.scope?.accountSetId,period:session.scope?.period};
  assertRestoreOpenPath(config.databasePath);
  const binding=resolveDirectFinanceTarget(target,config.databasePath);assertSameScope(session.scope,binding.scope);
  const memory=memoryLocation(binding);
+ const expectedAudit=session.auditMode==='bound_account'&&config.mcpEnv.FINANCE_AUDIT_MODE==='bound_account'?accountAuditDirectory(binding):config.auditDir;
+ if(!samePath(session.auditDir,expectedAudit))fail('host_business_binding_mismatch');
  if(session.memoryPath!==undefined&&session.memoryPath!==memory.memoryPath)fail('host_business_memory_path_mismatch');
  return {config,session,path,target,...memory};
 }
@@ -65,8 +70,11 @@ export async function prepareBoundBusinessSession(workspace,target){
  const config=loadBusinessHost(workspace);
  assertRestoreOpenPath(config.databasePath);
  const binding=resolveDirectFinanceTarget(target,config.databasePath),memory=memoryLocation(binding);
+ // 未绑定工作区已有调用或整理件时继续使用原址，避免交接引用在首次绑定时失效。
+ const useAccountAudit=config.mcpEnv.FINANCE_AUDIT_MODE==='bound_account'&&!existsSync(config.auditDir);
  const session={version:SESSION_VERSION,host:config.host,workspace:realpathSync(workspace),databasePath:binding.dbPath,scope:binding.scope,
-  sourceRoot:config.mcpEnv.FINANCE_SOURCE_ROOT??null,auditDir:config.auditDir,memoryPath:memory.memoryPath};
+  sourceRoot:config.mcpEnv.FINANCE_SOURCE_ROOT??null,auditDir:useAccountAudit?accountAuditDirectory(binding):config.auditDir,
+  ...(useAccountAudit?{auditMode:'bound_account'}:{}),memoryPath:memory.memoryPath};
  mkdirSync(memory.memoryDirectory,{recursive:true,mode:0o700});
  writeFileSync(path,JSON.stringify(session,null,2)+'\n',{encoding:'utf8',flag:'wx',mode:0o600});
  return {config,session,path,target,...memory};
@@ -101,7 +109,7 @@ export async function runBusinessSession(workspaceUrl,args){
  if(options['--check']){
   const bound=loadBoundBusinessSession(workspace);
   if(options.target&&(options.target.accountSetId!==bound.target.accountSetId||options.target.period!==bound.target.period))fail('host_business_binding_mismatch');
-  console.log(JSON.stringify({status:'checked',scope:bound.session.scope,memoryPath:bound.memoryPath,modelInvoked:false,readOnly:true},null,2));return;
+  console.log(JSON.stringify({status:'checked',scope:bound.session.scope,auditDir:bound.session.auditDir,memoryPath:bound.memoryPath,modelInvoked:false,readOnly:true},null,2));return;
  }
  const hostName=loadBusinessHost(workspace).host;
  if(!options['--prepare-only']&&hostName==='claude-code'){
@@ -110,7 +118,7 @@ export async function runBusinessSession(workspaceUrl,args){
   if(nativeOptions['--resume'])buildClaudeLaunchSpec(workspace,nativeOptions);
  }
  const bound=await prepareBoundBusinessSession(workspace,options.target);
- if(options['--prepare-only']){console.log(JSON.stringify({status:'prepared',scope:bound.session.scope,memoryPath:bound.memoryPath,modelInvoked:false,readOnly:false},null,2));return;}
+ if(options['--prepare-only']){console.log(JSON.stringify({status:'prepared',scope:bound.session.scope,auditDir:bound.session.auditDir,memoryPath:bound.memoryPath,modelInvoked:false,readOnly:false},null,2));return;}
  const host=bound.config.host;
  if(host==='pi'){const {runPi}=await import('../pi/launcher.mjs');await runPi(pathToFileURL(join(workspace,'pi-host.json')),options.hostArgs,bound);}
  else if(host==='dsh'){const {runDsh}=await import('../dsh/launcher.mjs');await runDsh(bound.config.nodePath,workspaceUrl,options.hostArgs,bound);}
