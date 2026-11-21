@@ -144,6 +144,11 @@ function projection(root,record,versions,scopeVerified,currentBooks){
   ...(kind==='vat_planning'&&scopeVerified&&record.integrity==='verified'?{planning:{
    books,basis:o.basis,asOf:o.asOf,through:o.through,period:o.start,invoiceCount:o.pagination.total,
    recommendation:['baseline','plan'].includes(o.recommendation?.choice)?o.recommendation.choice:null,
+   ...(o.status==='partial_known_invoices'&&o.knownSubset?.recommendation?{knownSubsetRecommendation:{
+    choice:['baseline','plan'].includes(o.knownSubset.recommendation.choice)?o.knownSubset.recommendation.choice:null,
+    through:/^20\d{2}-(0[1-9]|1[0-2])$/.test(o.knownSubset.plan?.horizon?.through)?o.knownSubset.plan.horizon.through:null,
+    coverage:'known_invoices_and_contiguous_periods_only',
+   }}:{}),
    previousCallId:idPattern.test(o.handoff?.previousCallId??'')?o.handoff.previousCallId:null,
    ...(artifact==='verified'&&o.handoff?.version==='vat-accountant-handoff/1'?{reportPath:join(root,record.callId,handoffFiles.report),dataPath:join(root,record.callId,handoffFiles.data)}:{}),
    currentness:stale||books==='unknown'||sources.state!=='unchanged'||artifact!=='verified'?'recheck_before_use':'recorded_snapshot',executed:false,

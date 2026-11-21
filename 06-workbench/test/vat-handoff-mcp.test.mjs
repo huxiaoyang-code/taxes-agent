@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-import {withFinanceCall,currentFinanceCall} from '../server/finance-call-chain.mjs';
+import ExcelJS from 'exceljs';
 import {syntheticVoucherEvidence} from './helpers/synthetic-posting-evidence.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 
@@ -19,61 +19,106 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
  const prepared=join(audit,'agent-materials');for(const d of [prepared,originals,ledger])mkdirSync(d,{recursive:true});
  process.env.WORKBENCH_DATA_DIR=ledger;process.env.FINANCE_SOURCE_ROOT=originals;
  const {db}=await import('../server/db.mjs'),A=await import('../server/accounting.mjs');
- const enterpriseKey='SYNTHETIC-VAT-HANDOFF',period='2026-12';
+ const enterpriseKey='SYNTHETIC-VAT-HANDOFF',period='2026-06';
  const set=A.createAccountSet({enterprise:{enterpriseKey},name:'交接合成企业',taxpayer_type:'一般纳税人',start_period:period,accounting_standard:'小企业会计准则'});
  A.createVoucher(set.id,syntheticVoucherEvidence({period,status:'posted',entries:[{code:'1002',debit:1000},{code:'5001',credit:1000}]},originals));
  const target={accountSetId:set.id,period},actualKey=db.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(set.id).enterprise_key;
  db.close();
  const dbPath=join(ledger,'workbench.db'),source=join(originals,'交易与试点资料.json'),inputPath=join(prepared,'定位.json');
- const doc={owner:actualKey,knownAt:'2026-12-31',prior:'2026-11',scope:'monthly_general_domestic',inventoryCoverage:'complete',credit:0,
-  validFrom:'2026-11-01',validThrough:'2026-12-31',participant:false,transaction:'2026-12-15',
-  months:[{period,basis:'actual',knownAt:'2026-12-31',state:'open',otherEffects:'none',inputVatTransferOut:0,prepaidVat:0,outputVat:100}],
-  bills:[{issuer:'合成卖方',invoiceNumber:'TEST-1',receipt:'2026-12-01',issueDate:'2026-12-01',eligibility:'eligible',taxAmount:30}]};
+ const doc={owner:actualKey,knownAt:'2026-06-30',prior:'2026-05',scope:'monthly_general_domestic',inventoryCoverage:'complete',credit:0,
+  validFrom:'2026-05-01',validThrough:'2026-06-30',participant:false,transaction:'2026-06-15',
+  months:[{period,basis:'actual',knownAt:'2026-06-30',state:'open',otherEffects:'none',inputVatTransferOut:0,prepaidVat:0,outputVat:100}],
+  bills:[{issuer:'合成卖方',invoiceNumber:'TEST-1',receipt:'2026-06-01',issueDate:'2026-06-01',eligibility:'eligible',taxAmount:30}]};
+ for(let month=7;month<=12;month++)doc.months.push({...doc.months[0],period:'2026-'+String(month).padStart(2,'0'),basis:'forecast'});
  const tables=[
   {kind:'opening',fields:{period:ptr('/prior'),scope:ptr('/scope'),inventoryCoverage:ptr('/inventoryCoverage'),carryCredit:ptr('/credit'),knownAt:ptr('/knownAt')}},
   {kind:'month',rowsPointer:'/months',fields:keys('period','basis','knownAt','state','otherEffects','inputVatTransferOut','prepaidVat','outputVat')},
   {kind:'invoice',rowsPointer:'/bills',fields:keys('issuer','invoiceNumber','receipt','issueDate','eligibility','taxAmount')},
  ];
- const refresh=()=>{json(source,doc);json(inputPath,{version:'finance-vat-planning-materials/1',sources:[{path:source,sha256:sha(readFileSync(source)),ownerField:'enterpriseKey',owner:ptr('/owner'),tables}]});};
+ // 同一份原件另有期初承接和试点名单。首张工作表为封面，名单在已核的第二张表。
+ const xlsx=join(originals,'承接与试点.xlsx'),wb=new ExcelJS.Workbook();
+ wb.addWorksheet('封面').addRow(['封面']);
+ const sh=wb.addWorksheet('企业登记'),day=s=>new Date(s+'T00:00:00Z');
+ sh.addRow([actualKey,'2026-06-30','2026-05',0,'monthly_general_domestic','complete']);
+ sh.addRow(['企业键','是否试点','首次可知日','有效起日','有效止日','业务日','备注','备注']);
+ for(const [owner,known,from] of [[actualKey,'2026-06-29','2026-06-01'],['OTHER-ENTITY','2026-06-29','2026-06-01'],[actualKey,'2026-06-29','2026-07-01'],[actualKey,'2026-07-02','2026-06-01']]){
+  const r=sh.addRow([owner,'已纳入',day(known),day(from),day('2026-08-31'),day('2026-06-15'),'A','B']);
+  for(const col of [3,4,5,6])r.getCell(col).numFmt='yyyy-mm-dd';
+ }
+ await wb.xlsx.writeFile(xlsx);
+ const at=column=>({row:1,column});
+ const xSource={path:xlsx,sha256:sha(readFileSync(xlsx)),sheetIndex:1,ownerField:'enterpriseKey',owner:at(1),tables:[{kind:'opening',fields:{knownAt:at(2),period:at(3),carryCredit:at(4),scope:at(5),inventoryCoverage:at(6)}}]};
+ const refresh=()=>{json(source,doc);json(inputPath,{version:'finance-vat-planning-materials/1',sources:[{path:source,sha256:sha(readFileSync(source)),ownerField:'enterpriseKey',owner:ptr('/owner'),tables},xSource]});};
  refresh();
  const server=fileURLToPath(new URL('../../05-reconstruction/codex/mcp/finance-mcp/server.mjs',import.meta.url));
- const start=()=>new McpStdioClient(server,{cwd:root,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SOURCE_ROOT:originals,FINANCE_DATABASE_PATH:dbPath,FINANCE_AUDIT_DIR:audit,FINANCE_API_BASE:'http://127.0.0.1:1'}}).start();
+ const transport=fileURLToPath(new URL('./helpers/official-policy-stdio.mjs',import.meta.url));
+ const start=(entry=server)=>new McpStdioClient(entry,{cwd:root,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SOURCE_ROOT:originals,FINANCE_DATABASE_PATH:dbPath,FINANCE_AUDIT_DIR:audit,FINANCE_API_BASE:'http://127.0.0.1:1'}}).start();
  const ok=async(c,tool,args)=>{const r=await c.call(tool,args);assert.equal(r.isError,false,r.text);return r.data;};
- const args={target,through:period,asOf:'2026-12-31',inputPath},one=start();
- const text='合成试点实施。自2026年12月1日施行。第二阶段自2027年1月1日施行。';
- // 用可校验的本机 open 调用记录测交接消费者，网络读取器由其专用回归覆盖。
- let callId;
- await withFinanceCall({tool:'finance_rules',args:{action:'open'},auditDir:audit},()=>{
-  callId=currentFinanceCall().callId;return {status:'read',source:{url:'https://www.mof.gov.cn/synthetic',title:'合成公告',sha256:sha('fixture'),retrievedAt:'2027-01-03T12:00:00Z',publishedOn:'2026-11-08',observedStatus:'有效'},text,offset:0};
- });
+ const args={target,through:'2026-12',asOf:'2026-06-30',inputPath},one=start(transport);
  const condition={source:0,valuePointer:'/participant',equals:true,knownAtPointer:'/knownAt',validFromPointer:'/validFrom',validThroughPointer:'/validThrough',transactionDatePointer:'/transaction'};
- const policy={callId,passage:'合成试点实施',question:'试点是否适用',interpretation:'合成交易按名单判断',condition,appliesWhenMatched:true,validity:{from:'2026-12-01',fromPassage:'自2026年12月1日施行'}};
- const policies=[policy,{...policy,validity:{from:'2027-01-01',fromPassage:'第二阶段自2027年1月1日施行'}},{...policy,passage:'原文没有这段话'}];
- let first,firstDoc,choice;
+ let first,firstDoc,choice,policy;
  try{
-  await one.initialize();const inventory=await ok(one,'finance_vat_plan',args);
+  await one.initialize();
+  const url='https://www.gov.cn/zhengce/synthetic-vat-pilot.htm';
+  const opened=await one.rpc('tools/call',{name:'finance_rules',arguments:{action:'open',url}});
+  assert.notEqual(opened.result.isError,true);
+  const article=opened.result.structuredContent,callId=opened.result._meta.financeCall.callId;
+  assert.equal(article.status,'read');assert.equal(article.source.requestedUrl,url);
+  assert.equal(sha(readFileSync(join(audit,callId,'result.json'))),JSON.parse(readFileSync(join(audit,callId,'end.json'))).output.sha256);
+  policy={callId,passage:'合成试点实施',question:'试点是否适用',interpretation:'按原件试点名单判断',condition,appliesWhenMatched:true,validity:{from:'2026-06-01',fromPassage:'自2026年6月1日施行'}};
+  const invalid=await one.rpc('tools/call',{name:'finance_rules',arguments:{action:'open'}});
+  assert.equal(invalid.result.isError,true);
+  const invalidId=invalid.result._meta.financeCall.callId;
+  assert.deepEqual(JSON.parse(readFileSync(join(audit,invalidId,'input.json'))),{inputRedacted:true});
+  const policies=[policy,{...policy,validity:{from:'2026-07-01',fromPassage:'第二阶段自2026年7月1日施行'}},{...policy,passage:'原文没有这段话'},{...policy,callId:invalidId}];
+  const columns={owner:'企业键',value:{header:'是否试点',column:2},knownAt:'首次可知日',validFrom:'有效起日',validThrough:'有效止日',transactionDate:'业务日'};
+  const sheetReview=(row,override={})=>({...policy,condition:{source:1,equals:'已纳入',sheet:{sheetIndex:1,row,headerRow:2,columns,...override}}});
+  policies.push(sheetReview(3),sheetReview(4),sheetReview(5),sheetReview(6),sheetReview(3,{columns:{...columns,value:'名单中缺少的列'}}),sheetReview(3,{sheetIndex:0}),sheetReview(3,{columns:{...columns,value:'备注'}}));
+  const inventory=await ok(one,'finance_vat_plan',args);
   assert.equal(inventory.delivery,'invoice_inventory');assert.equal(inventory.handoff,undefined);assert.equal(inventory.recommendation,null);
   choice=[{invoiceRef:inventory.invoices[0].invoiceRef,period}];
   first=await ok(one,'finance_vat_plan',{...args,plan:choice,handoff:{policyReviews:policies}});
   firstDoc=JSON.parse(readFileSync(first.handoff.dataPath));
   assert.equal(firstDoc.scope.enterpriseKey,actualKey);assert.equal(firstDoc.invoices[0].invoiceNumber,'TEST-1');assert.equal(firstDoc.invoices[0].plan,period);
   assert.equal(firstDoc.scenarios.plan.months[0].due,'70.00');assert.equal(firstDoc.months[0].filingStatus,'缺申报回执');
+  assert(firstDoc.cash.length);assert(firstDoc.cash.every(row=>row.observedActualPaid===null));
+  assert(firstDoc.yearHistory.months.every(m=>m.payments.length===0));
   assert.equal(firstDoc.books.sales,1000);assert.equal(Object.keys(firstDoc.books.reports).length,4);
   assert.match(readFileSync(join(dirname(first.handoff.dataPath),'income-statement.csv'),'utf8'),/营业收入/);
-  assert.match(firstDoc.policy[0].state,/判断不适用/);assert.match(firstDoc.policy[0].timing,/事后/);assert.match(firstDoc.policy[1].state,/不在该规则/);
-  assert.equal(firstDoc.policy[2].state,'引用片段未读或不匹配');assert.equal(firstDoc.yearHistory.months.length,12);
-  const html=readFileSync(first.handoff.reportPath,'utf8');for(const content of ['TEST-1','合成卖方','70.00','income-statement.csv','税后现金变化','实际缴付日期','事后取得'])assert(html.includes(content),content);
+  assert.match(firstDoc.policy[0].state,/判断不适用/);assert.equal(firstDoc.policy[0].source.sha256,article.source.sha256);
+  const timing=article.source.retrievedAt.slice(0,10)>args.asOf?'事后取得':'决策日前已读取';
+  assert(firstDoc.policy[0].timing.startsWith(timing));assert.match(firstDoc.policy[1].state,/不在该规则/);
+  assert.equal(firstDoc.policy[2].state,'引用片段未读或不匹配');assert.equal(firstDoc.policy[3].state,'引用待核');assert.equal(firstDoc.policy[3].source,undefined);assert.equal(firstDoc.yearHistory.months.length,12);
+  const [yes,wrongOwner,early,late,noColumn,wrongSheet,duplicate]=firstDoc.policy.slice(4);
+  assert.match(yes.state,/判断适用/);assert.equal(yes.condition.known,'2026-06-29');assert.equal(yes.condition.event,'2026-06-15');
+  assert.equal(yes.condition.sha256,xSource.sha256);assert.equal(yes.condition.sheetIndex,1);assert.equal(yes.condition.columns.value,2);
+  for(const pending of [wrongOwner,early,late,noColumn,wrongSheet,duplicate]){assert.match(pending.state,/企业适用性待核/);assert.equal(pending.condition.matched,undefined);}
+  assert.match(wrongOwner.condition.state,/主体不匹配/);assert.match(early.condition.state,/判断窗口/);assert.match(late.condition.state,/判断窗口/);assert.match(noColumn.condition.state,/表头/);assert.match(duplicate.condition.state,/重复/);assert.match(wrongSheet.condition.state,/工作表/);
+  const html=readFileSync(first.handoff.reportPath,'utf8');for(const content of ['TEST-1','合成卖方','70.00','income-statement.csv','税后现金变化','实际缴付日期','有据已缴','预计付款依据','所属期可选未用金额','工作表 2／第 3 行／第 2 列',timing])assert(html.includes(content),content);
  }finally{await one.close();}
  const two=start();try{
   await two.initialize();
   const review=async(extra={})=>(await ok(two,'finance_period_review',{target,callIds:[first.callRef],...extra})).records[0];
-  const fresh=await review({target:{...target,period:'2027-01'},precedingPlanPeriod:period});assert.equal(fresh.kind,'vat_planning');assert.equal(fresh.artifactIntegrity,'verified');assert.equal(fresh.versions.code,'unchanged');assert.equal(fresh.planning.reportPath,first.handoff.reportPath);assert.equal(fresh.evidence.filingVerified,false);
+  const fresh=await review({target:{...target,period:'2026-07'},precedingPlanPeriod:period});assert.equal(fresh.kind,'vat_planning');assert.equal(fresh.artifactIntegrity,'verified');assert.equal(fresh.versions.code,'unchanged');assert.equal(fresh.planning.reportPath,first.handoff.reportPath);assert.equal(fresh.evidence.filingVerified,false);
   const unbound=await ok(two,'finance_period_review',{unboundCalls:{callIds:[first.callRef]}});assert.equal(unbound.records[0].planning,undefined);
   doc.bills[0].taxAmount=40;doc.participant=true;refresh();
   const stale=await review();assert(stale.flags.stale);assert(stale.nextSteps.some(s=>s.tool==='finance_vat_plan'));
   const second=await ok(two,'finance_vat_plan',{...args,plan:choice,handoff:{previousCallId:first.callRef,policyReviews:[policy]}});
   const newer=JSON.parse(readFileSync(second.handoff.dataPath));assert.notEqual(first.handoff.dataPath,second.handoff.dataPath);assert.equal(newer.previous.status,'verified_record');assert.equal(newer.previous.changes[0].dueChange,'-10.00');assert.match(newer.policy[0].state,/判断适用/);assert.equal(newer.previous.policyChanges[0].oldState,firstDoc.policy[0].state);
   assert.equal(sha(readFileSync(first.handoff.dataPath)),first.handoff.digests.data);
+  // 另一张票冲突且七月资料缺失，六月已核票的暂定选择仍可跨进程查阅。
+  const uncertain={...doc.bills[0],invoiceNumber:'PENDING',taxAmount:10};
+  doc.bills.push(uncertain,{...uncertain,taxAmount:11});
+  doc.months[1].otherEffects='unsupported';refresh();
+  const partial=await ok(two,'finance_vat_plan',{...args,plan:choice});
+  assert.equal(partial.status,'partial_known_invoices');
+  const partialPack=JSON.parse(readFileSync(partial.handoff.dataPath));
+  assert.equal(partialPack.recommendationScope,'known_subset');assert.equal(partialPack.recommendation.choice,'plan');
+  assert.equal(partialPack.recommendation.comparedThrough,period);
+  assert.equal(partialPack.invoices.find(i=>i.invoiceNumber==='PENDING').recommendedPeriod,null);
+  assert.equal(partialPack.invoices.find(i=>i.invoiceNumber==='TEST-1').recommendedPeriod,period);
+  assert(readFileSync(partial.handoff.reportPath,'utf8').includes('截至 '+period+' 的连续可核月份'));
+  const scopedReview=await review({callIds:[partial.callRef]});assert.equal(scopedReview.planning.recommendation,null);assert.equal(scopedReview.planning.knownSubsetRecommendation.choice,'plan');
   writeFileSync(first.handoff.reportPath,'替换');const altered=await review();assert.equal(altered.artifactIntegrity,'changed');assert.equal(altered.planning.reportPath,undefined);
  }finally{await two.close();}
 });

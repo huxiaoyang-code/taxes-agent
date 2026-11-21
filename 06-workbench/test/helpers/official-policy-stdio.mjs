@@ -6,6 +6,10 @@ const articleUrl='https://www.gov.cn/zhengce/synthetic-example.htm';
 globalThis.fetch=async (input,options={})=>{
  const url=new URL(input instanceof Request?input.url:input);
  appendFileSync(join(process.cwd(),'requests.jsonl'),JSON.stringify({url:url.href,method:options.method??'GET',headers:Object.fromEntries(new Headers(options.headers)),body:options.body??null})+'\n');
+ if(url.href==='https://www.gov.cn/zhengce/synthetic-vat-pilot.htm'){
+  const html='<html><head><meta name="ArticleTitle" content="合成试点公告"><meta name="PubDate" content="2026-05-08"></head><body><article><p>合成试点实施。自2026年6月1日施行。第二阶段自2026年7月1日施行。</p></article></body></html>';
+  return new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8'}});
+ }
  if(url.href===articleUrl){
   const html='<html><head><meta name="ArticleTitle" content="合成税务公告"><meta name="PubDate" content="2026-01-10"></head><body><article><p>第一条 合成条文仅供程序验证。</p><p>第二条 合成文件有效期间另见附件。</p><a href="/zhengce/synthetic.pdf">合成公告附件</a></article></body></html>';
   return new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8'}});

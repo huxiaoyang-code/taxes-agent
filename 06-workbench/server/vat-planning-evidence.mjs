@@ -31,7 +31,7 @@ export function cutoff(value){
  return value.slice(0,10);
 }
 
-function sheetView(bytes,sheetIndex){
+export function sheetView(bytes,sheetIndex){
  let layout;
  try{layout=readXlsxStructure(bytes,{sheetIndex});}catch{fail('finance_vat_spreadsheet_layout_unsupported');}
  const rows=new Map(layout.rows.map(row=>[row.rowNumber,row]));
