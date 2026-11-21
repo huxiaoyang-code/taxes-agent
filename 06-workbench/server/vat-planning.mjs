@@ -18,15 +18,20 @@ function refFor(row,scope){
  return 'vat-'+digest([scope.databaseInstanceId,scope.enterpriseKey,scope.accountSetId,row.issuer,row.invoiceNumber]).slice(0,24);
 }
 const latest=(...periods)=>periods.filter(Boolean).sort().at(-1);
+function observationRange(time){
+ const day=cutoff(time),clock=time.slice(11).replace(/[:.]/g,'');
+ return {from:day+clock.padEnd(9,'0'),through:day+clock.padEnd(9,'9')};
+}
 function latestPortalObservations(reports){
  // 月度资料到月末可知。仅记录到日或分钟时，保留所有可能为最后一条的观察。
- const intervals=reports.map(row=>{
-  const time=row.data.knownAt;
-  const day=cutoff(time),clock=time.slice(11).replace(/[:.]/g,'');
-  return {row,from:day+clock.padEnd(9,'0'),through:day+clock.padEnd(9,'9')};
- });
+ const intervals=reports.map(row=>({row,...observationRange(row.data.knownAt)}));
  const lastStart=latest(...intervals.map(range=>range.from));
  return intervals.filter(range=>range.through>=lastStart).map(range=>range.row);
+}
+function portalCoversReceipt(observed,receipt){
+ // 双方均记录时刻时，较粗的精度不能证明同一分钟内的先后。仅到日或月的原件沿用日期口径。
+ if(observed.length<=10||receipt.length<=10)return cutoff(observed)>=cutoff(receipt);
+ return observed===receipt||observationRange(observed).from>=observationRange(receipt).through;
 }
 function coalesce(rows,key,gaps){
  const result={sources:[]};
@@ -157,13 +162,13 @@ function inventory(facts,scope,gaps){
   const portal={},early=[];
   const windows=groups(rows.filter(r=>r.kind==='portal'),r=>r.data.period);
   for(const [period,reports] of windows){
-   const current=latestPortalObservations(reports),known=cutoff(current[0].data.knownAt);
+   const current=latestPortalObservations(reports);
    const states=new Set(current.map(r=>r.data.portalStatus));
    if(!isMonth(period)||states.size!==1||!['selectable','closed'].includes([...states][0])){
     gaps.push({code:'portal_window_unverified',invoiceRef,sources:current.map(r=>r.source)});continue;
    }
    portal[period]=[...states][0];
-   if(portal[period]==='selectable'&&bill.receipt&&issued&&issued<=period&&cutoff(known)>=cutoff(bill.receipt)&&
+   if(portal[period]==='selectable'&&bill.receipt&&issued&&issued<=period&&current.some(r=>portalCoversReceipt(r.data.knownAt,bill.receipt))&&
       (!bill.eligibleFrom||bill.eligibleFrom<=period)&&(!bill.eligibleThrough||bill.eligibleThrough>=period))early.push(period);
   }
   const firstPeriod=[regularFrom,...early].filter(Boolean).sort()[0];

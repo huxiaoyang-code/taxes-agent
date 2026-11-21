@@ -325,6 +325,28 @@ test('门户按首次可知精度取最近观察；晚收票遇到关窗不能�
  }finally{await f.client.close();}
 });
 
+test('晚收票提前选择须有覆盖收件时刻的门户观察，其他票仍可独立选择',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),period='2026-11';
+  doc.invoice[0].receipt='2026-12-02 18:30:22';
+  doc.portal[0].knownAt='2026-12-02 08:00:00';bind();
+  const inventory=await f.ok({});
+  const late=inventory.invoices.find(i=>i.taxAmount==='3000.00');
+  const other=inventory.invoices.find(i=>i.taxAmount==='2000.00');
+  const select=invoice=>({plan:[{invoiceRef:invoice.invoiceRef,period}]});
+  assert.equal(late.firstPeriod,'2026-12');
+  assert.match((await f.call(select(late))).text,/period_unavailable/);
+  assert.equal((await f.ok(select(other))).plan.months[0].selectedAndFixedInput,'2000.00');
+  doc.portal[0].knownAt='2026-12-02 18:30';bind();
+  assert.match((await f.call(select(late))).text,/period_unavailable/);
+  doc.portal[0].knownAt='2026-12-02 18:30:23';bind();
+  assert.equal((await f.ok(select(late))).plan.months[0].selectedAndFixedInput,'3000.00');
+  doc.invoice[0].receipt='2026-12-02';doc.portal[0].knownAt='2026-12-02';bind();
+  assert.equal((await f.ok(select(late))).plan.months[0].selectedAndFixedInput,'3000.00');
+ }finally{await f.client.close();}
+});
+
 test('原票与确认回执的开票日期冲突，以及错属期撤销，均需核实原票',async()=>{
  const f=await fixture();
  try{
