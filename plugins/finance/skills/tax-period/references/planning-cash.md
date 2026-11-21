@@ -9,3 +9,7 @@
 ## 三个现金层次
 
 见[企业现金、可安排资金与个人税后现金](../../tax-review/references/planning-cash.md#三个现金层次)。
+
+## 逐票比较增值税
+
+见[抵扣选期、单月与累计比较](../../tax-review/references/vat-planning.md)和[付款月份与现金](../../tax-review/references/tax-cash-brief.md)。

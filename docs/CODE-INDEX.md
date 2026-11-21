@@ -6,6 +6,8 @@
 
 ## 当前 direct 默认调用链
 
+会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 汇集原件、官文、税额与两套方案，[账簿读取](../06-workbench/server/vat-handoff-books-worker.mjs) 取已过账凭证、银行匹配和四张报表。交接回读、变更和独立文件校验见 [stdio 验收](../06-workbench/test/vat-handoff-mcp.test.mjs)。
+
 抵扣规划的客户约定、历史累计、调整回执、预缴与收付按月在 [vat-planning-ledgers.mjs](../06-workbench/server/vat-planning-ledgers.mjs) 核算。单月和累计税负使用可比销售额和预缴前应纳额，账前入口也按此口径显示。
 
 - 月度进项方案的来源合同、按决策日取数及跨月计算依次见 [vat-planning-contracts.mjs](../06-workbench/server/vat-planning-contracts.mjs)、[vat-planning-evidence.mjs](../06-workbench/server/vat-planning-evidence.mjs) 和 [vat-planning.mjs](../06-workbench/server/vat-planning.mjs)。实际 stdio 入口的合成回归见 [vat-planning-mcp.test.mjs](../06-workbench/test/vat-planning-mcp.test.mjs)。
