@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { loadAgencyMaterials, buildAgencyWorkpaper, buildAgencyAnnualWorkpaper } from './agency-business.mjs';
 import { readAgencySession, agencyEvidenceArchiveRecords } from './agency-business-evidence.mjs';
 import { listAgencyRules, getAgencyRuleDetail, resolveAgencyRuleTrace } from './agency-rule-catalog.mjs';
-import { validateDirectInput, DIRECT_RECORD, directRecordContract } from './direct-finance-contracts.mjs';
+import { validateDirectInput, DIRECT_RECORD, directRecordContract, FINANCE_RULES_INPUT_SCHEMA } from './direct-finance-contracts.mjs';
 import { currentFinanceCall, financeAuditDirectory, annotateFinanceCall } from './finance-call-chain.mjs';
 import { PROJECTION_NUMBER_LIMIT } from './finance-output-policy.mjs';
 import { resolveDirectFinanceTarget } from './direct-finance-target.mjs';
@@ -96,7 +96,16 @@ export async function callDirectFinanceTool(name,args,options={}){
  if(name==='finance_quarter_review'){const {buildQuarterReview}=await import('./quarter-review.mjs');return buildQuarterReview({target:args.target});}
  if(name==='finance_tax_summary_calculate')return callFinanceTaxSummaryCalculate(args);
  if(name==='finance_record_contract')return args.recordType==='baseline'?baselineMaterialContract():args.recordType==='prebook'?prebookContract():args.recordType==='tax_summary'?financeSummaryContract():directRecordContract(args.recordType);
- if(name==='finance_rules'){const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});return result;}
+ if(name==='finance_rules'){
+  validateDirectInput(FINANCE_RULES_INPUT_SCHEMA,args);
+  if(args.action!==undefined){
+   const {runOfficialPolicyOnline}=await import('./official-policy-online.mjs');
+   return runOfficialPolicyOnline(args);
+  }
+  const result=args.ruleId?getAgencyRuleDetail(args.ruleId,args.revision??'1'):listAgencyRules(args.filters??{});
+  annotateFinanceCall({ruleVersion:result.version,catalogDigest:result.catalogDigest});
+  return result;
+ }
  if(name==='finance_workpaper'||name==='finance_tax_calculate'){
   const artifact=newArtifact(),session=loadInput(args,artifact),dbPath=args.dbPath??(args.target?process.env.FINANCE_DATABASE_PATH:undefined),workpaper=buildAgencyWorkpaper(session,{...(dbPath?{dbPath}:{})});
   return workpaperSummary(workpaper,artifact,name==='finance_tax_calculate'?args.obligationIds:undefined,{records:readAgencySession(session).records});

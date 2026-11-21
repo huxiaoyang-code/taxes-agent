@@ -69,7 +69,8 @@ async function load(path) {
   return readFile(path);
 }
 function sourceDescriptors(options) {
-  if(hasDomainManagedSources(options.tool))return [];
+  // 政策查询没有本机文件参数。合同外的路径不应被记录器提前读取。
+  if(hasDomainManagedSources(options.tool)||options.tool==='finance_rules')return [];
   const found = [...(Array.isArray(options.sources) ? options.sources : [])];
   for (const key of ['manifestPath','inputPath','sourcePath']) if (typeof options.args?.[key] === 'string') found.push({path:options.args[key], locator:key});
   for (const path of Array.isArray(options.args?.manifestPaths)?options.args.manifestPaths:[]) if(typeof path==='string')found.push({path,locator:'annual_manifest'});
@@ -91,6 +92,35 @@ const scopeOf = options => snapshot(options.scope ?? options.args?.scope ?? opti
 let recorderDigest;
 async function recorderVersion() { return recorderDigest ??= sha(await readFile(fileURLToPath(import.meta.url))); }
 export function currentFinanceCall() { return context.getStore() ?? null; }
+
+const localRuleFields = new Set(['ruleId','revision','filters','businessEvidence']);
+async function policyInputForAudit({tool,args={}}) {
+  if (tool !== 'finance_rules') return null;
+  if (args && typeof args === 'object' && !Array.isArray(args)
+    && Object.keys(args).every(key => localRuleFields.has(key))) return null;
+
+  // 记录器在 preflight 前写入 input/begin。只保存与实际公开请求相同的规范化参数。
+  const {FINANCE_RULES_INPUT_SCHEMA,validateDirectInput}=await import('./direct-finance-contracts.mjs');
+  try {
+    validateDirectInput(FINANCE_RULES_INPUT_SCHEMA,args);
+    if (args.action === 'search') {
+      const {publicPolicyQuery}=await import('./official-policy-query.mjs');
+      const query=publicPolicyQuery(args.query);
+      if (query) return {...args,query};
+    } else if (args.action === 'open') {
+      const {officialPolicyUrl}=await import('./official-policy-reader.mjs');
+      return {...args,url:officialPolicyUrl(args.url).href};
+    }
+  } catch { /* 拒绝记录仅留占位，实际参数由工具合同给出诊断。 */ }
+  return {inputRedacted:true};
+}
+
+function rejectedPolicyOutcome(error,value) {
+  // 原始错误、字段名和返回的 URL 均可能包含被拒绝的输入。
+  const code=error?.code??value?.code;
+  const safeCodes=['invalid_arguments','finance_input_invalid','invalid_url','unofficial_url','credential_in_url'];
+  return {inputRedacted:true,...(safeCodes.includes(code)?{code}:{}),...(value?.status==='unavailable'?{status:'unavailable'}:{})};
+}
 export function annotateFinanceCall(values) {
   const active=context.getStore();if(!active)return false;
   for(const key of ['scope','ruleVersion','codeDigest','catalogDigest','artifactRefs','nativeOperationId','configuredTarget','businessBaselineMaterials','financeCalculationContext'])if(values?.[key]!==undefined)active.metadata[key]=snapshot(values[key]);
@@ -108,11 +138,12 @@ export async function withFinanceCall(options, fn) {
   const root = await rootDirectory(options.auditDir), callId = `${new Date().toISOString().replace(/[-:.]/g,'')}_${randomUUID()}`;
   const directory = join(root, callId);
   await mkdir(directory, {mode:0o700});
+  const policyInput=await policyInputForAudit(options);
   const descriptors = sourceDescriptors(options), sources = await sourceState(descriptors), startedAt = new Date().toISOString(), start = performance.now();
-  const input = await save(join(directory,'input.json'), snapshot(options.args ?? {}));
-  const initialScope=scopeOf(options);
+  const input = await save(join(directory,'input.json'), snapshot(policyInput ?? options.args ?? {}));
+  const initialScope=policyInput?{}:scopeOf(options);
   const begin = {version:'finance-call-record/1', callId, tool:options.tool, startedAt, scope:initialScope, scopeState:Object.keys(initialScope??{}).length?'provided':'unknown', input, sources,
-    configuredTarget:snapshot({databasePath:process.env.FINANCE_DATABASE_PATH??null,apiBase:process.env.FINANCE_API_BASE??null,verification:'configured_only_not_runtime_proof'}),
+    configuredTarget:policyInput?null:snapshot({databasePath:process.env.FINANCE_DATABASE_PATH??null,apiBase:process.env.FINANCE_API_BASE??null,verification:'configured_only_not_runtime_proof'}),
     recorderCodeDigest:await recorderVersion(), parentCallId:context.getStore()?.callId ?? null,
     evidenceMeaning:'本机文件与调用记录可核验；不证明原件真实、业务判断正确或已获人审。'};
   const beginRef = await save(join(directory,'begin.json'), begin);
@@ -122,7 +153,7 @@ export async function withFinanceCall(options, fn) {
     if(typeof options.validate==='function')await options.validate();
     const businessEvidence=options.args?.businessEvidence??(options.tool==='finance_tax_summary_calculate'?summaryBusinessEvidence(options.args):undefined);
     // 凭证由领域写入边界核对，post 的映射针对已存草稿字段；不能在运输层猜字段。
-    if(businessEvidence!==undefined&&options.tool!=='voucher_post'&&!hasDomainManagedSources(options.tool)){
+    if(!policyInput&&businessEvidence!==undefined&&options.tool!=='voucher_post'&&!hasDomainManagedSources(options.tool)){
       const evidence=captureBusinessEvidence(options.args,businessEvidence);
       reference.metadata.businessEvidence=await save(join(directory,'business-evidence.json'),snapshot(evidence));
       annotateFinanceCall({sources:[...evidence.mappings,...evidence.cashFlowAllocations].flatMap(m=>m.sources).flatMap(s=>[s,...(s.dependencies??[])]).map(s=>({path:s.path,locator:s.location??s.locator,sha256:s.sha256,bytes:s.bytes}))});
@@ -132,7 +163,8 @@ export async function withFinanceCall(options, fn) {
   }); completed = true; }
   catch (caught) { error = caught; }
   try {
-    const output = await save(join(directory, error ? 'error.json' : 'result.json'), error ? errorInfo(error) : snapshot(value));
+    const recordedOutcome=policyInput?.inputRedacted?rejectedPolicyOutcome(error,value):error?errorInfo(error):snapshot(value);
+    const output = await save(join(directory, error ? 'error.json' : 'result.json'), recordedOutcome);
     const loadedSources=(reference.metadata.sources??[]).map(source=>({path:source.path,locator:source.locator??'',
       state:/^[a-f0-9]{64}$/.test(source.sha256??source.digest??'')?'observed':'unverified',sha256:source.sha256??source.digest??null,
       ...(source.bytes!==undefined?{bytes:source.bytes}:{}),observedAt:source.observedAt,observationStage:'native_loaded'}));
