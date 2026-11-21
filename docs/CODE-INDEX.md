@@ -1,5 +1,7 @@
 # 代码索引
 
+月度抵扣的会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 生成，本机报告由 [vat-handoff-html.mjs](../06-workbench/server/vat-handoff-html.mjs) 排版，后续会话通过 [期间复核](../06-workbench/server/finance-period-review.mjs) 取回。
+
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
 ## 当前 direct 默认调用链
