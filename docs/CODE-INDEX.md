@@ -4,6 +4,8 @@
 
 ## 当前 direct 默认调用链
 
+抵扣规划的客户约定、历史累计、调整回执、预缴与收付按月在 [vat-planning-ledgers.mjs](../06-workbench/server/vat-planning-ledgers.mjs) 核算。单月和累计税负使用可比销售额和预缴前应纳额，账前入口也按此口径显示。
+
 - 月度进项方案的来源合同、按决策日取数及跨月计算依次见 [vat-planning-contracts.mjs](../06-workbench/server/vat-planning-contracts.mjs)、[vat-planning-evidence.mjs](../06-workbench/server/vat-planning-evidence.mjs) 和 [vat-planning.mjs](../06-workbench/server/vat-planning.mjs)。实际 stdio 入口的合成回归见 [vat-planning-mcp.test.mjs](../06-workbench/test/vat-planning-mcp.test.mjs)。
 
 日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。

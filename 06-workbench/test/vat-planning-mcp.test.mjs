@@ -182,3 +182,165 @@ test('已申报月拒绝改选，缺口和不支持金额不默认为零，隔�
   assert.match((await f.call({})).text,/source_changed/);
  }finally{await f.client.close();}
 });
+
+function pairedMaterials(f){
+ const start='2026-11',next='2026-12',knownAt='2026-12-02';
+ const doc={owner,opening:[{period:'2026-10',knownAt,carryCredit:0,scope:'monthly_general_domestic',inventoryCoverage:'complete',
+  ytdSalesExcludingVat:900000,ytdDueBeforePrepayment:31000,ytdComparable:true,prepaymentBalance:0}],
+  invoice:[3000,2000].map((taxAmount,i)=>({issuer:'合成销方',invoiceNumber:'T'+i,taxAmount,receipt:'2026-12-01',issueDate:'2026-11-12',eligibility:'eligible'})),
+  portal:[0,1].map(i=>({issuer:'合成销方',invoiceNumber:'T'+i,knownAt,period:start,portalStatus:'selectable'})),
+  month:[start,next,'2027-01'].map((period,i)=>({period,knownAt,basis:i?'forecast':'actual',state:'open',invoicedOutputVat:i?10000:4000,uninvoicedOutputVat:i?0:2000,
+   invoicedSales:i?100000:80000,uninvoicedSales:i?0:20000,inputVatTransferOut:0,prepaidVat:0,otherEffects:'none'})),
+  agreement:[{period:start,knownAt,burdenMode:'monthly',minimumPercent:3}]};
+ const data=join(f.dbPath,'..','配对资料.json');
+ const bind=()=>{
+  write(data,doc);
+  const tables=Object.entries(doc).filter(([,rows])=>Array.isArray(rows)&&rows.length).map(([kind,rows])=>({
+   kind,rowsPointer:'/'+kind,fields:fields([...new Set(rows.flatMap(Object.keys))]),
+  }));
+  write(f.inputPath,{version:'finance-vat-planning-materials/1',sources:[{path:data,sha256:sha(readFileSync(data)),ownerField:'name',owner:ptr('/owner'),tables}]});
+ };
+ bind();return {doc,bind};
+}
+
+test('同一对 Agent 选票只换客户约定；逐分核对当月、累计、付款月及延后回收',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),start='2026-11',next='2026-12';
+  const seen=await f.ok({}),[a,b]=seen.invoices.map(i=>i.invoiceRef);
+  assert.equal(seen.invoices[1].firstPeriod,start);
+  const choice=(invoiceRef,period)=>({invoiceRef,period});
+  const args={baseline:[choice(a,start),choice(b,next)],plan:[choice(a,start),choice(b,start)]};
+  const run=await f.ok(args),base=run.baseline.months[0],plan=run.plan.months[0];
+  assert.equal(run.recommendation.choice,'baseline');
+  assert.deepEqual([base.burden.monthly.percent,base.burden.ytd.percent,plan.burden.monthly.percent,plan.burden.ytd.percent],[3,3.4,1,3.2]);
+  assert.deepEqual([base.dueBeforePrepayment,plan.dueBeforePrepayment,plan.salesExcludingVat],['3000.00','1000.00','100000.00']);
+  assert.deepEqual(run.delta.byPaymentMonth.map(r=>r.afterVatCash),['2000.00','-2000.00','0.00']);
+  assert.equal(run.plan.nextYear.burden.ytd.percent,10);
+  doc.agreement[0].burdenMode='ytd';bind();
+  const ytd=await f.ok(args);assert.equal(ytd.recommendation.choice,'plan');assert.deepEqual(ytd.baseline.months,run.baseline.months);
+  assert.deepEqual((await f.ok(args)).recommendation,ytd.recommendation);
+  delete doc.agreement[0].burdenMode;bind();
+  assert.equal((await f.ok(args)).recommendation.reason,'clarify_customer_burden_mode');
+  doc.agreement[0].burdenMode='monthly';doc.agreement[0].minimumPercent=8;bind();
+  assert.equal((await f.ok(args)).recommendation.reason,'customer_minimum_unattained_among_options');
+  doc.portal.push({...doc.portal[1],knownAt:'2026-12-03',portalStatus:'closed'});bind();
+  assert.match((await f.call(args)).text,/period_unavailable/);assert.equal((await f.ok({asOf:'2026-12-02',...args})).recommendation.choice,'baseline');
+  doc.portal.pop();doc.invoice[1].issueDate='2026-12-01';bind();assert.match((await f.call(args)).text,/period_unavailable/);
+  doc.invoice[1].issueDate='2026-11-12';doc.filing=[{period:start,knownAt:'2026-12-03',declaredDue:6000}];bind();
+  assert.match((await f.call(args)).text,/already_fixed/);assert.equal((await f.ok({})).plan.months[0].declaredDue,'6000.00');
+  delete doc.filing;doc.opening[0].ytdComparable=false;doc.agreement[0].burdenMode='ytd';bind();
+  const gap=await f.ok(args);assert.equal(gap.plan.months[0].burden.ytd.percent,null);assert.equal(gap.plan.months[0].burden.monthly.percent,1);assert.equal(gap.recommendation.choice,null);
+  doc.history=Array.from({length:10},(_,i)=>({knownAt:'2026-11-01',period:'2026-'+String(i+1).padStart(2,'0'),salesExcludingVat:90000,dueBeforePrepayment:3100,ytdComparable:true}));bind();
+  assert.equal((await f.ok(args)).plan.months[0].burden.ytd.percent,3.2);
+  doc.month[0].invoicedSales=0;doc.month[0].uninvoicedSales=0;bind();
+  const noSales=await f.ok(args);assert.equal(noSales.plan.months[0].burden.monthly.reason,'zero_sales');
+  doc.month[0].outputVat=6000;bind();assert.equal((await f.ok(args)).status,'needs_inputs');
+ }finally{await f.client.close();}
+});
+
+test('按原票及回执分开计转出、留抵核准、实际收付、预缴结转及更正重算',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),period='2026-11',knownAt='2026-12-03';
+  const evt=(eventId,eventType,amount,operationDate,extra={})=>({eventId,eventType,amount,period,operationDate,knownAt,...extra});
+  // 上期已抵扣，本期按票做红字及用途调整，取消未抵扣的另一张票。
+  doc.invoice.forEach(b=>{b.issueDate='2026-09-01';b.receipt='2026-09-08';});
+  const original={issuer:doc.invoice[0].issuer,invoiceNumber:'T0'};
+  doc.confirmation=[{...original,knownAt:'2026-10-10',taxPeriod:'2026-09'}];
+  doc.opening[0].carryCredit=1000;doc.opening[0].prepaymentBalance=500;
+  doc.month[0].paymentDate='2026-12-16';
+  doc.event=[
+   evt('red','red_input',1200,'2026-11-11',original),evt('out','transfer_out',300,'2026-11-13',original),
+   evt('other-red','red_input',2000,'2026-11-14',{...original,invoiceNumber:'T1'}),
+   evt('prepay','prepayment',8000,'2026-11-15'),evt('refund-ask','refund_requested',600,'2026-11-05',{caseId:'留抵事项'}),
+   evt('refund-ok','refund_approved',500,'2026-11-20',{caseId:'留抵事项'}),evt('refund-in','refund_received',400,'2026-12-02',{caseId:'留抵事项'}),
+   evt('prior','payment',200,'2026-11-01',{period:'2026-09'}),
+  ];
+  doc.event.push({...doc.event[3]});
+  bind();const r=await f.ok({});assert.equal(r.status,'conditional_calculated',JSON.stringify(r.gaps));
+  const m=r.plan.months[0];assert.deepEqual([m.dueBeforePrepayment,m.prepaidVat,m.prepaymentUsed,m.due,m.endingPrepayment,m.refundApproved],['7000.00','8000.00','7000.00','0.00','1500.00','500.00']);
+  assert.equal(m.burden.monthly.percent,7);assert.equal(r.plan.months[1].due,'8500.00');
+  const [nov,dec]=r.plan.cashByMonth;assert.deepEqual([nov.actualPaid,nov.prepaid,nov.netCashOutflow,dec.refundReceived,dec.netCashOutflow],['200.00','8000.00','8200.00','400.00','-400.00']);
+  assert.equal(r.activity.filter(e=>e.eventType==='prepayment').length,1);
+  assert.match((await f.call({plan:[{invoiceRef:r.invoices[1].invoiceRef,period}]})).text,/period_unavailable/);
+  doc.event.push(evt('fix','prepayment',1000,'2026-11-25',{supersedes:'prepay'}));bind();
+  const fixed=await f.ok({});assert.equal(fixed.plan.months[0].due,'5500.00');assert.equal(fixed.plan.months[1].due,'10000.00');
+  doc.filing=[{period,knownAt,declaredDue:5500}];doc.event.push(evt('paid','payment',1000,'2026-12-01'));bind();
+  const paid=await f.ok({});assert.equal(paid.plan.months[0].expectedPayment,'4500.00');
+  assert.equal(paid.plan.cashByMonth.find(r=>r.paymentMonth==='2026-12').netCashOutflow,'5100.00');
+  doc.event.push({...doc.event.at(-1),amount:1001});bind();assert.equal((await f.ok({})).status,'needs_inputs');
+ }finally{await f.client.close();}
+});
+
+
+test('整段客户约定、年末现金和近期付款分别比较；未来经营变化能翻转建议',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),target={period:'2026-10',accountSetId:1},periods=['2026-10','2026-11','2026-12','2027-01'];
+  doc.opening[0].period='2026-09';doc.agreement[0].period=target.period;
+  for(const inv of doc.invoice){inv.issueDate='2026-09-12';inv.receipt='2026-10-01';}
+  delete doc.portal;doc.month=periods.map((period,i)=>({period,knownAt:'2026-12-02',basis:i?'forecast':'actual',state:'open',
+   outputVat:i===1?4500:6000,salesExcludingVat:100000,inputVatTransferOut:0,prepaidVat:0,otherEffects:'none'}));
+  bind();const [a,b]=(await f.ok({target})).invoices.map(r=>r.invoiceRef);
+  const options={target,baseline:[{invoiceRef:b,period:periods[0]},{invoiceRef:a,period:periods[3]}],plan:[{invoiceRef:a,period:periods[1]},{invoiceRef:b,period:periods[3]}]};
+  const short=(await f.ok(options)).recommendation;
+  assert.equal(short.choice,'plan');assert.equal(short.checks.length,1);
+  assert.equal(short.cashComparison.planYearEndCashRetained,'1000.00');assert.equal(short.cashComparison.firstDifference.planCashRetained,'-2000.00');
+  assert.equal(short.cashComparison.equivalentThroughLastPayment,true);
+  doc.agreement[0].effectiveThrough='2026-12';bind();
+  const constrained=(await f.ok(options)).recommendation;
+  assert.equal(constrained.choice,'baseline');assert.equal(constrained.checks[1].plan.shortfall,'1500.00');assert.equal(constrained.checks[1].basis,'forecast');
+  doc.month[1].outputVat=7000;bind();assert.equal((await f.ok(options)).recommendation.choice,'plan');
+  delete doc.agreement[0].effectiveThrough;doc.month[1].outputVat=300;bind();assert.equal((await f.ok(options)).recommendation.choice,'baseline');
+  doc.month[0].salesExcludingVat=-100;bind();const loss=await f.ok(options);
+  assert.equal(loss.status,'conditional_calculated');assert.equal(loss.plan.months[0].burden.monthly.reason,'negative_sales');assert.equal(loss.plan.months[1].burden.monthly.percent,0);
+ }finally{await f.client.close();}
+});
+
+test('正式更正用途确认及申报回执保留历史链，撤销时只解开该票且尊重已报月',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),taxPeriod='2026-11';
+  const ref={invoiceNumber:'T0',issuer:'合成销方',taxPeriod};
+  doc.confirmation=[{...ref,knownAt:'2026-12-01',operationDate:'2026-12-01',receiptId:'原确认',confirmationState:'confirmed'},
+   {...ref,knownAt:'2026-12-03',operationDate:'2026-12-03',receiptId:'撤销确认',supersedes:'原确认',confirmationState:'revoked'}];bind();
+  const before=await f.ok({asOf:'2026-12-02'}),after=await f.ok({});
+  assert.equal(before.invoices[0].fixedPeriod,taxPeriod);assert.equal(after.invoices[0].fixedPeriod,null);assert.equal(after.invoices[0].confirmationState,'revoked');
+  const plan=[{invoiceRef:after.invoices[0].invoiceRef,period:taxPeriod}];assert.equal((await f.ok({plan})).plan.months[0].due,'3000.00');
+  doc.filing=[{period:taxPeriod,knownAt:'2026-12-01',receiptId:'原申报',declaredDue:3000},
+   {period:taxPeriod,knownAt:'2026-12-04',receiptId:'更正申报',supersedes:'原申报',declaredDue:6000}];bind();
+  assert.equal((await f.ok({})).plan.months[0].declaredDue,'6000.00');
+  assert.match((await f.call({plan})).text,/already_fixed/);
+ }finally{await f.client.close();}
+});
+
+
+test('跨月补开同一交易、红字原交易及新生效客户约定按原件重算',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),period='2026-11',knownAt='2026-12-01';
+  const nov={transactionId:'销售-1',taxPointDate:'2026-11-15',knownAt,salesExcludingVat:100000,outputVat:6000};
+  doc.sale=[nov,{...nov,billingDate:'2026-12-12',knownAt:'2026-12-12'},
+   {transactionId:'销售-2',taxPointDate:'2026-12-18',knownAt:'2026-12-18',salesExcludingVat:10000,outputVat:600},
+   {transactionId:'红字-1',originalTransactionId:'销售-1',taxPointDate:'2026-12-10',knownAt:'2026-12-10',billingDate:'2026-12-10',salesExcludingVat:5000,outputVat:300}];
+  for(const row of doc.month.slice(0,2)){
+   for(const key of ['invoicedSales','uninvoicedSales','invoicedOutputVat','uninvoicedOutputVat'])delete row[key];
+   row.salesCoverage='complete_transactions';row.basis='actual';
+  }
+  // 12月实绩在1月可见；先前仍使用当时的预测，之后以实绩替换。
+  doc.month[1].knownAt='2027-01-02';
+  doc.month.push({period:'2026-12',knownAt,basis:'forecast',state:'open',outputVat:4500,salesExcludingVat:100000,inputVatTransferOut:0,prepaidVat:0,otherEffects:'none'});
+  doc.agreement[0].effectiveThrough=period;doc.agreement.push({period:'2026-12',effectiveThrough:'2026-12',knownAt,burdenMode:'ytd',minimumPercent:2});
+  bind();const old=await f.ok({baseline:[],plan:[]});
+  assert.equal(old.baseline.months[1].outputVat,'4500.00');
+  assert.deepEqual(old.recommendation.checks.map(r=>[r.period,r.burdenMode]),[[period,'monthly'],['2026-12','ytd']]);
+  const now=await f.ok({asOf:'2027-01-04',baseline:[],plan:[]});assert.equal(now.status,'conditional_calculated',JSON.stringify(now.gaps));
+  assert.deepEqual(now.plan.months.slice(0,2).map(r=>[r.salesExcludingVat,r.outputVat]),[['100000.00','6000.00'],['5000.00','300.00']]);
+  assert.equal(now.plan.months[0].uninvoicedOutputVat,'6000.00');assert.equal(now.plan.months[1].basis,'actual');
+  doc.sale[1].taxPointDate='2026-12-12';bind();
+  assert((await f.ok({asOf:'2027-01-04'})).gaps.some(g=>g.code==='conflicting_recognition_of_same_transaction'));
+  doc.sale[1].taxPointDate='2026-11-15';doc.sale[3].originalTransactionId='无原单';bind();
+  assert((await f.ok({asOf:'2027-01-04'})).gaps.some(g=>g.code==='red_sale_original_or_amount_unverified'));
+ }finally{await f.client.close();}
+});

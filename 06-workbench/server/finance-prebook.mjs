@@ -7,7 +7,7 @@ import {readFileSync} from 'node:fs';
 import {PREBOOK_INPUT_SCHEMA,PREBOOK_REPLIES_SCHEMA,PREBOOK_TOOL_SCHEMA} from './finance-prebook-contracts.mjs';
 import {validateSchemaValue} from './harness-schema-validation.mjs';
 import {readPreparedSource,parseJson,bindEvidence,digest,stable,reject} from './finance-prebook-evidence.mjs';
-import {cents,money,quantity,calculateAgencyOutputVat} from './agency-tax-rules.mjs';
+import {cents,money,quantity,calculateAgencyOutputVat,roundRatio} from './agency-tax-rules.mjs';
 import {calculateFinanceSummary,FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
 import {currentFinanceCall,withFinanceCall,annotateFinanceCall} from './finance-call-chain.mjs';
 import {PROJECTION_NUMBER_LIMIT} from './finance-output-policy.mjs';
@@ -153,14 +153,20 @@ export function inspectPrebookFacts(facts,evidence){
  if(tax.status==='needs_inputs')issue('tax_inputs_missing','税费试算缺少必要资料，详见税费缺件清单。',['tax']);
  if(tax.status==='unsupported')issue('tax_scope_unsupported','本期业务超出普通增值税条件试算范围，需按独立税务流程核实。',['tax']);
  if(taxpayer.ordinaryDomesticScopeConfirmed!==true)issue('tax_scope_unconfirmed','请核实普通境内业务适用范围，不按默认条件视为已确认。',['taxpayer']);
- const due=tax.amounts?.due,burden=due!==undefined&&salesTotal>0n&&facts.coverage.sales==='complete'&&sourceValid?{numerator:'VAT_due',denominator:'sales_excluding_VAT',salesExcludingVat:money(salesTotal),due,percent:Number(cents(due)*1000000n/salesTotal)/10000}:null;
+ // 预缴改变本次应补和支付月份。所属期税负以预缴抵减前的应纳和同口径净销售额计算。
+ const due=tax.amounts?.due;
+ const attributedVat=taxpayer.vatStatus==='general'?tax.amounts?.dueBeforePrepayment:due;
+ const burden=attributedVat!==undefined&&salesTotal>0n&&facts.coverage.sales==='complete'&&sourceValid
+  ? {numerator:'VAT_due_before_prepayment',denominator:'sales_excluding_VAT',salesExcludingVat:money(salesTotal),
+     due,dueBeforePrepayment:attributedVat,percent:Number(roundRatio(cents(attributedVat)*1000000n,salesTotal))/10000}
+  : null;
  return {scope,bounds,records,sourceRefs,declarations:evidence.declarations??[],internalIds:evidence.internalIds??[],deduplicated,issues,relations,priorSettlements,funds,inventory,tax:{...tax,derivedInputs:taxInputs,salesTaxDerivations,burden},status:tax.status==='unsupported'?'unsupported':issues.length?'needs_inputs':'ready_for_bookkeeping_review',review:{booksVerified:false,accountantApproval:'pending',posted:false,submittable:false,authorizesExecution:false}};
 }
 
 function renderReview(result){
  const table=(headers,rows)=>`<table><thead><tr>${headers.map(x=>`<th>${escape(x)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(x=>`<td>${escape(x)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
  const states={ready_for_bookkeeping_review:'可交会计继续整理做账',needs_inputs:'待补件或核实',unsupported:'需转独立税务处理',conditional_calculated:'条件试算，待会计复核'};
- const labels={outputVat:'销项税额',certifiedInputVat:'条件可抵扣进项',availableCredit:'可用抵扣额',dueBeforePrepayment:'预缴抵减前应纳额',prepaymentUsed:'本期使用预缴',due:'本期条件应纳额',carryCredit:'期末留抵',unusedPrepayment:'未使用预缴',salesExcludingVat:'不含税销售额',specialInvoiceVat:'专票税额',threshold:'起征点比较金额',ordinaryTax:'普通销售税额'};
+ const labels={outputVat:'销项税额',certifiedInputVat:'条件可抵扣进项',availableCredit:'可用抵扣额',dueBeforePrepayment:'预缴抵减前应纳额',prepaymentUsed:'本期使用预缴',due:'本期条件应补税额',carryCredit:'期末留抵',unusedPrepayment:'未使用预缴',salesExcludingVat:'不含税销售额',specialInvoiceVat:'专票税额',threshold:'起征点比较金额',ordinaryTax:'普通销售税额'};
  const units=value=>{if(value===null)return '未知';let n=BigInt(value);const sign=n<0n?'-':'';if(n<0n)n=-n;return sign+`${n/1000000n}.${String(n%1000000n).padStart(6,'0')}`.replace(/\.?0+$/,'');};
  const refs=result.sourceRefs.map(r=>({field:r.inputPointer,original:r.originalId,location:own(r.locator,'headerRow')?`Agent观察为空表，表头行 ${r.locator.headerRow}`:JSON.stringify(r.locator),sha256:r.sha256}));
  const body=[`<h1>账前资料核对</h1><p>${escape(result.scope.enterpriseKey)}，${escape(result.bounds.from)} 至 ${escape(result.bounds.through)}。${escape(states[result.status])}。金额单位为人民币元。</p><p>原件字段来自 Agent 本机观察。来源索引核对字节摘要，供会计复核位置、观察值及适用条件。正式记账与申报需依各自审定流程。</p>`,
@@ -168,7 +174,7 @@ function renderReview(result){
  '<h2>采购、发票和付款关联</h2>',`<p>已去重 ${result.deduplicated.length} 条；按显式业务编号关联。</p>`,table(['采购单','业务','发票','收货','付款'],result.relations.map(r=>[r.purchaseIds.join('、'),r.businessId,r.invoiceIds.join('、'),r.receiptIds.join('、'),r.paymentIds.join('、')])),
  '<h2>上期往来与本期收付</h2>',table(['类型','上期业务','上期余额','本期收付','剩余余额','流水'],result.priorSettlements.map(r=>[r.kind==='payables'?'应付':'应收',r.businessId,r.openingAmount,r.settledAmount,r.remainingAmount,r.paymentIds.join('、')])),
  '<h2>库存数量核对</h2>',table(['商品','上期数量','收货','销售','推算期末','实际期末','数量差异'],result.inventory.map(r=>[r.itemId,r.openingQuantity,units(r.receivedUnits),units(r.soldUnits),units(r.calculatedClosingUnits),r.actualClosingQuantity,units(r.differenceUnits)])),
- '<h2>增值税条件试算</h2>',`<p>${escape(states[result.tax.status])}。税负口径为增值税应纳额／不含税销售额：${result.tax.burden?escape(result.tax.burden.percent)+'%':'资料不足或无适用分母'}。</p>`,table(['项目','金额'],Object.entries(result.tax.amounts??{}).map(([k,v])=>[labels[k]??k,v])),
+ '<h2>增值税条件试算</h2>',`<p>${escape(states[result.tax.status])}。所属期税负按预缴抵减前应纳增值税除以可比不含税销售额计算：${result.tax.burden?escape(result.tax.burden.percent)+'%':'资料不足或无适用分母'}。</p>`,table(['项目','金额'],Object.entries(result.tax.amounts??{}).map(([k,v])=>[labels[k]??k,v])),
  ...(result.tax.salesTaxDerivations.length?['<h3>原生销项税额计算</h3>',table(['销售记录','净额','业务税目','原生税率','派生税额'],result.tax.salesTaxDerivations.map(r=>[r.recordId,r.netAmount,r.category,`${r.rateBasisPoints/100}%`,r.taxAmount]))]:[]),
  ...(result.tax.scenarios??[]).map(s=>`<h3>${escape(s.scenario==='ordinary_reduced'?'适用减征条件':s.scenario==='ordinary_waived'?'放弃减征条件':s.scenario)}</h3>${table(['项目','金额'],Object.entries(s.amounts).map(([k,v])=>[labels[k]??k,v]))}`),
  '<h3>成立条件及缺件</h3>',table(['事项','说明'],[...(result.tax.conditions??[]).map(c=>[c.code,c.meaning]),...(result.tax.needsInputs??[]).map(c=>[c.field,'缺少有来源的输入，不能视作零'])]),

@@ -39,6 +39,8 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 账前资料核对与做账交接
 
+账前与月度方案的所属期增值税税负共用同一金额口径。一般计税按预缴抵减前应纳额除以可比不含税销售额，预计应补按可用预缴抵减后另列。方案接受同口径期初累计或连续逐月历史、本期未开票销项和逐票门户资料，再按已知的更正、收付及预测滚算。试算保留客户约定、实际与预测的边界，以及每个已提交方案的单月和累计结果。
+
 `plugins/finance/skills/prebook-review` 将 small-business 的单据整理、采购收货匹配、资金起点、异常问询与报告方法适配到同仓库后端。它与既有做账流程共享资料来源和规则能力，但不要求本期账已完成，也不创建正式凭证或账库。
 
 `finance_record_contract(recordType=prebook)` 披露当前账前合同。Agent 在获准的本机宿主读取原件，按实际来源、期间、身份、库存和业务语义组织 `finance-prebook-input/2`。整理件和回复文件写入审计根的 `agent-materials`。 `finance_prebook_review({inputPath,repliesPath?})` 接整理件路径，核实际原件 SHA、观察值与 `facts` 的绑定、声明的主体和期间。 `observedValue` 及原位置记为 Agent 观察。未绑定或不支持的内容保留具体缺口。 `valueMap` 用于合同允许的有限语义映射，`declarations` 记录提供者说明或操作者映射。
