@@ -9,6 +9,7 @@ const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-
 const steps = [
   { name: 'vat-planning-mcp', file: join(WORKBENCH, 'test', 'vat-planning-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   ...['official-policy-search','official-policy-mof','official-policy-sta','official-policy-reader','official-policy-mcp'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH,nodeArgs:['--test']})),
+  { name: 'vat-handoff-mcp', file: join(WORKBENCH, 'test', 'vat-handoff-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-period-review', file: join(WORKBENCH, 'test', 'finance-period-review.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'tax-period-rental', file: join(WORKBENCH, 'test', 'tax-period-rental.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook', file: join(WORKBENCH, 'test', 'finance-prebook.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },

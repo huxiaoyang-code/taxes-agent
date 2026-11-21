@@ -14,6 +14,7 @@ import { callFinanceTaxSummaryCalculate } from './finance-summary.mjs';
 import { financeSummaryContract } from './finance-summary-contracts.mjs';
 import {registerWorkpaperDetails,workpaperDetails} from './direct-finance-details.mjs';
 import {prebookContract} from './finance-prebook-contracts.mjs';
+import {VAT_HANDOFF_SCHEMA,handoffGuidance} from './vat-period-handoff-contract.mjs';
 import {vatPlanningContract} from './vat-planning-contracts.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fail=(code,details)=>{throw Object.assign(new Error(code),{code,details});};
@@ -81,8 +82,16 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args,options={}){
- if(name==='finance_vat_plan'){const {runVatPlanning}=await import('./vat-planning.mjs');return runVatPlanning(args);}
- if(name==='finance_record_contract'&&args.recordType==='vat_planning')return vatPlanningContract();
+ if(name==='finance_vat_plan'){
+  const {runVatPlanning,VAT_PLAN_ALL_INVOICES}=await import('./vat-planning.mjs');
+  const {saveVatHandoff}=await import('./vat-period-handoff.mjs');
+  const result=runVatPlanning(args);
+  return saveVatHandoff(args,result,result[VAT_PLAN_ALL_INVOICES]);
+ }
+ if(name==='finance_record_contract'&&args.recordType==='vat_planning'){
+  const contract=vatPlanningContract();
+  return {...contract,schema:{...contract.schema,properties:{...contract.schema.properties,handoff:VAT_HANDOFF_SCHEMA}},guidance:[...contract.guidance,handoffGuidance]};
+ }
  if(name==='finance_baseline_materials'){
   const {readBaselineMaterials}=await import('./business-baseline.mjs');return readBaselineMaterials(args,options);
  }
