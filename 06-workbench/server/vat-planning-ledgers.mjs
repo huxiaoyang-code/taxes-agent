@@ -1,7 +1,7 @@
 // 客户约定、逐期累计与真实业务回执，均按来源取值。
 import {cents,money,roundRatio} from './agency-tax-rules.mjs';
 import {digest} from './finance-prebook-evidence.mjs';
-import {isMonth} from './vat-planning-evidence.mjs';
+import {isMonth,cutoff} from './vat-planning-evidence.mjs';
 
 export const VAT_SALES_FIELDS=new Set(['salesExcludingVat','invoicedSales','uninvoicedSales','ytdSalesExcludingVat']);
 export function amount(value,signed=false){
@@ -140,18 +140,26 @@ function ratio(due,sales,reason){
  const percent=sales>0n&&due!==null?Number(roundRatio(due*1000000n,sales))/10000:null;
  return {salesExcludingVat:sales===null?null:money(sales),dueBeforePrepayment:due===null?null:money(due),percent,reason:percent===null?reason??(sales<0n?'negative_sales':'zero_sales'):null};
 }
-export function addBurdens(months,opening){
+function assignBurdens(months,opening,field){
  let {sales,due,reason}=opening,containsForecast=false;
  for(const row of months){
   if(row.period.endsWith('-01')){sales=0n;due=0n;reason=null;containsForecast=false;}
   if(row.basis==='forecast')containsForecast=true;
-  const tax=cents(row.dueBeforePrepayment),current=row.salesExcludingVat==null?null:cents(row.salesExcludingVat);
+  const useFiling=field==='burden'&&row.state==='filed';
+  const taxValue=useFiling?row.filingReconciliation.burdenNumerator:row.dueBeforePrepayment;
+  const tax=taxValue===null?null:cents(taxValue),current=row.salesExcludingVat==null?null:cents(row.salesExcludingVat);
+  const monthReason=tax===null?'filed_pre_offset_tax_unverified':current===null?'sales_required':null;
+  if(tax===null)reason??=monthReason;
   if(current===null)reason??='sales_required';
-  due=due==null?null:due+tax;
+  due=due==null||tax===null?null:due+tax;
   sales=sales==null||current===null?null:sales+current;
-  row.burden={monthly:{...ratio(tax,current,current===null?'sales_required':null),basis:row.basis},
-   ytd:{...ratio(due,sales,reason),basis:containsForecast?'includes_forecast':'actual'}};
+  row[field]={monthly:{...ratio(tax,current,monthReason),basis:useFiling?'filing':row.basis==='forecast'?'forecast':'simulated_from_actual_inputs'},
+   ytd:{...ratio(due,sales,reason),basis:containsForecast?'includes_forecast':field==='simulatedBurden'?'simulated_from_actual_inputs':'to_date'}};
  }
+}
+export function addBurdens(months,opening){
+ assignBurdens(months,opening,'burden');
+ assignBurdens(months,opening,'simulatedBurden');
 }
 export function readAgreement(facts,start,horizon){
  const rows=facts.filter(r=>r.kind==='agreement'&&(r.issue||!r.data.period||r.data.period<=horizon));
@@ -177,6 +185,7 @@ function cashMetrics(sim,yearEnd){
  const beyond=sim.months.filter(r=>r.period<=yearEnd&&r.paymentMonth>yearEnd);
  return {start:sim.months[0].period,yearEnd,simulationThrough:sim.horizon.through,throughYearEnd:sim.yearEnd?money(cashThrough(yearEnd)):null,
   throughLastPayment:money(cashThrough('9999-12')),yearEndCarryCredit:sim.yearEnd?.carryCredit??null,yearEndUnusedInput:sim.yearEnd?.unusedVat??null,
+  yearEndSelectableUnusedInput:sim.yearEnd?.selectableUnusedVat??null,
   yearEndPrepayment:sim.yearEnd?.endingPrepayment??null,yearEndYtdBurden:sim.yearEnd?.burden??null,
   yearAccruedOutstandingAfterYearEnd:sim.yearEnd?money(beyond.reduce((sum,r)=>sum+cents(r.expectedPayment),0n)):null};
 }
@@ -213,6 +222,8 @@ function burdenCheck(row,mode,minimum){
 export function recommend(baseline,plan,agreement,cashComparison=compareCash(baseline,plan)){
  const cashChoice=cashComparison.choice;
  const base={scope:'submitted_options',choice:null,reason:null,agreement,cashChoice,cashComparison};
+ const filingDifferences=[...new Set([...baseline.months,...plan.months].filter(r=>r.filingReconciliation.status==='difference').map(r=>r.period))];
+ if(filingDifferences.length)return {...base,reason:'filing_reconciliation_required',periods:filingDifferences,provisional:true};
  if(agreement.status!=='active')return {...base,reason:agreement.status==='unverified'?'agreement_unverified':'cash_comparison_without_confirmed_target',choice:agreement.status==='unspecified'?cashChoice:null};
  const unknownModes=agreement.schedule.filter(rule=>!rule.burdenMode);
  if(unknownModes.length>1)return {...base,reason:'clarify_multiple_customer_burden_modes'};
@@ -225,19 +236,20 @@ export function recommend(baseline,plan,agreement,cashComparison=compareCash(bas
   if(byMode.monthly!==byMode.ytd)return {...base,reason:'clarify_customer_burden_mode',byMode,paymentDifference:money(cents(baseline.months[0].expectedPayment)-cents(plan.months[0].expectedPayment))};
   return {...base,reason:'same_choice_under_both_burden_modes',choice:byMode.monthly,byMode};
  }
- const checks=[],start=baseline.months[0].period;
- const end=rule=>rule.through??(rule.from>start?rule.from:start);
+ const checks=[];
+ const versions=agreement.schedule.toReversed();
  for(const [i,row] of baseline.months.entries()){
-  const rule=agreement.schedule.find(v=>v.from<=row.period&&row.period<=end(v));
-  if(!rule)continue;
+  const rule=versions.find(v=>v.from<=row.period);
+  if(!rule||rule.through&&rule.through<row.period)continue;
   const minimum=cents(rule.minimumPercent),mode=rule.burdenMode;
   checks.push({period:row.period,basis:row.basis,burdenMode:mode,minimumPercent:rule.minimumPercent,sources:row.sources,
    baseline:burdenCheck(row,mode,minimum),plan:burdenCheck(plan.months[i],mode,minimum)});
  }
- const through=agreement.schedule.map(end).sort().at(-1),checkedThrough=checks.at(-1)?.period??null;
+ const through=versions[0].through??baseline.horizon.through,checkedThrough=checks.at(-1)?.period??null;
  const summary={...base,checks,checkedThrough,uncoveredThrough:!checkedThrough||checkedThrough<through?through:null};
  const known=checks.filter(r=>r.baseline.state!=='unknown'&&r.plan.state!=='unknown');
- if(!known.length)return {...summary,reason:'agreement_basis_incomplete'};
+ const missingBasis=checks.some(r=>[r.baseline,r.plan].some(b=>b.state==='unknown'&&!['negative_sales','zero_sales'].includes(b.reason)));
+ if(!known.length||missingBasis)return {...summary,reason:'agreement_basis_incomplete'};
  const shortfalls=['baseline','plan'].map(key=>known.map(r=>cents(r[key].shortfall)));
  const largest=shortfalls.map(series=>series.reduce((max,v)=>v>max?v:max,0n));
  const meets=largest.map(v=>v===0n);
@@ -247,10 +259,23 @@ export function recommend(baseline,plan,agreement,cashComparison=compareCash(bas
  const sign=cmp(largest[0],largest[1]);
  return {...summary,choice:sign===0?cashChoice:sign<0?'baseline':'plan',reason:'customer_minimum_unattained_among_options',meets,provisional};
 }
-export function cashLedger(rows,events,start,through){
+export function paymentEvidence(facts,events,scope,period,asOf){
+ const reports=facts.filter(f=>f.kind==='paymentCoverage'&&f.data.period===period&&f.data.coverageScope===scope);
+ const dates=reports.filter(r=>!r.issue&&r.data.coveredThrough&&cutoff(r.data.coveredThrough)<=cutoff(r.data.knownAt)).map(r=>cutoff(r.data.coveredThrough)).sort();
+ const coveredThrough=dates.at(-1)??null;
+ const lastDay=cutoff(period),required=scope==='cash_month'&&lastDay<asOf?lastDay:asOf;
+ const receipts=events.filter(e=>e.eventType==='payment'&&(scope==='tax_period'?e.period:e.operationDate.slice(0,7))===period);
+ let status='not_provided';
+ if(period>asOf.slice(0,7))status='future_payment_month';
+ else if(coveredThrough&&coveredThrough>=required)status='complete_as_of';
+ else if(receipts.length)status='documented_receipts_only';
+ else if(reports.length)status='coverage_incomplete';
+ return {scope,period,asOf,coveredThrough,status,sources:[...reports.map(f=>f.source),...receipts.flatMap(e=>e.sources)]};
+}
+export function cashLedger(rows,events,start,through,payments,asOf){
  const ledger=new Map();
  const get=period=>{
-  if(!ledger.has(period))ledger.set(period,{paymentMonth:period,actualPaid:0n,prepaid:0n,refundReceived:0n,expectedOutstanding:0n,sources:[]});
+  if(!ledger.has(period))ledger.set(period,{paymentMonth:period,actualPaid:0n,prepaid:0n,refundReceived:0n,expectedOutstanding:0n,scheduled:false,conditionalPayment:false,sources:[]});
   return ledger.get(period);
  };
  const fields={payment:'actualPaid',prepayment:'prepaid',refund_received:'refundReceived'};
@@ -261,10 +286,13 @@ export function cashLedger(rows,events,start,through){
   const entry=get(month);entry[fields[event.eventType]]+=cents(event.amount);entry.sources.push(...event.sources);
  }
  for(const row of rows){
-  const entry=get(row.paymentMonth);entry.expectedOutstanding+=cents(row.expectedPayment);entry.sources.push(...row.sources);
+  const entry=get(row.paymentMonth);entry.scheduled=true;entry.expectedOutstanding+=cents(row.expectedPayment);entry.sources.push(...row.sources);
+  if(row.expectedPaymentBasis==='assuming_no_additional_payments')entry.conditionalPayment=true;
  }
  return [...ledger.values()].sort((a,b)=>a.paymentMonth.localeCompare(b.paymentMonth)).map(r=>({
-  paymentMonth:r.paymentMonth,actualPaid:money(r.actualPaid),prepaid:money(r.prepaid),refundReceived:money(r.refundReceived),expectedOutstanding:money(r.expectedOutstanding),
+  paymentMonth:r.paymentMonth,actualPaid:money(r.actualPaid),actualPaidEvidence:paymentEvidence(payments,events,'cash_month',r.paymentMonth,asOf),
+  expectedPaymentBasis:!r.scheduled?'no_scheduled_payment':r.conditionalPayment?'assuming_no_additional_payments':'verified_payments_at_cutoff',
+  prepaid:money(r.prepaid),refundReceived:money(r.refundReceived),expectedOutstanding:money(r.expectedOutstanding),
   netCashOutflow:money(r.actualPaid+r.prepaid+r.expectedOutstanding-r.refundReceived),sources:r.sources,
  }));
 }

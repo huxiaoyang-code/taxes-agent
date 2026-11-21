@@ -12,7 +12,7 @@ import {annotateFinanceCall,currentFinanceCall} from './finance-call-chain.mjs';
 
 export const fail=code=>{throw Object.assign(Error(code),{code});};
 export const isMonth=v=>typeof v==='string'&&/^20\d\d-(0[1-9]|1[0-2])$/.test(v);
-const dateFields=new Set(['period','knownAt','issueDate','receipt','operationDate','taxPeriod','eligibleFrom','eligibleThrough','effectiveThrough','paymentDate','taxPointDate','billingDate']);
+const dateFields=new Set(['period','knownAt','issueDate','receipt','operationDate','taxPeriod','eligibleFrom','eligibleThrough','effectiveThrough','paymentDate','taxPointDate','billingDate','coveredThrough']);
 function canonicalDate(value){
  const text=String(value);
  if(/^20\d{2}(0[1-9]|1[0-2])$/.test(text))return text.slice(0,4)+'-'+text.slice(4);
