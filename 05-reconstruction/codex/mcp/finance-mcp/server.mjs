@@ -27,6 +27,7 @@ import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 import {toolsForProfile} from './tool-profile.mjs';
+import {PERIOD_TASK_ROUTING} from '../../hosts/shared/task-routing.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
 import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
@@ -337,7 +338,8 @@ rl.on("line", async (line) => {
     return ok(id, {
       protocolVersion: PROTOCOL,
       capabilities: { tools: {}, resources: {} },
-      serverInfo: SERVER
+      serverInfo: SERVER,
+      ...(ACTIVE_PROFILE === 'direct' ? {instructions: PERIOD_TASK_ROUTING} : {})
     });
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
