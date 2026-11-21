@@ -136,11 +136,11 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
  const two=start(july);try{
   await two.initialize();
   const found=[];
-  let offset=0;
+  let cursor;
   do{
-   const page=await ok(two,'finance_period_review',{target:next,precedingPlanPeriod:period,offset,limit:2});
-   found.push(...page.records);offset=page.pagination.nextOffset;
-  }while(offset!==null);
+   const page=await ok(two,'finance_period_review',{target:next,precedingPlanPeriod:period,...(cursor?{beforeCallId:cursor}:{}),limit:2});
+   found.push(...page.records);cursor=page.pagination.nextBeforeCallId;
+  }while(cursor!==null);
   const resumed=found.find(record=>record.callId===first.callRef);
   assert.equal(resumed?.planning.reportPath,first.handoff.reportPath);assert.equal(resumed.planning.books,'unchanged');
   const review=async(extra={})=>(await ok(two,'finance_period_review',{target,callIds:[first.callRef],...extra})).records[0];

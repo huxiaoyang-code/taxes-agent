@@ -196,10 +196,17 @@ export async function reviewFinancePeriod(args){
  if(args.precedingPlanPeriod&&args.precedingPlanPeriod>=args.target.period)fail('finance_period_review_input_invalid');
  const selectedBinding=args.precedingPlanPeriod?{...binding,scope:{...binding.scope,period:args.precedingPlanPeriod}}:binding;
  if(binding)annotateFinanceCall({scope:binding.scope});
- let names=[],excludedSelfCalls=0,unscannedDirectories=0,totalCandidateDirectories=0;
- try{checkDirectory(root);const candidates=readdirSync(root,{withFileTypes:true}).filter(e=>e.isDirectory()&&idPattern.test(e.name)).map(e=>e.name).sort();
-  totalCandidateDirectories=candidates.length;unscannedDirectories=Math.max(0,candidates.length-10000);
-  for(const id of candidates.slice(0,10000)){
+ const explicit=args.unboundCalls?.callIds??args.callIds,offset=args.offset??0,limit=args.limit??20;
+ const newestFirst=!!args.precedingPlanPeriod&&!explicit;
+ const inventoryLimit=10000;
+ // 目录名用于排序和定位。游标页只检查本页及最多五十个被排除的调用，偏移页保留既有检查上限。
+ const inspectionLimit=newestFirst?Math.min(inventoryLimit,offset+limit+50):inventoryLimit;
+ let names=[],excludedSelfCalls=0,unscannedDirectories=0,totalCandidateDirectories=0,lastExamined=null,examined=0;
+ try{checkDirectory(root);const candidates=readdirSync(root,{withFileTypes:true}).filter(e=>e.isDirectory()&&idPattern.test(e.name)&&(!args.beforeCallId||e.name<args.beforeCallId)).map(e=>e.name).sort();
+  if(newestFirst)candidates.reverse();
+  totalCandidateDirectories=candidates.length;
+  for(const id of candidates.slice(0,inspectionLimit)){
+   examined++;lastExamined=id;
    if(id===currentFinanceCall()?.callId){excludedSelfCalls++;continue;}
    // 名称只是筛选候选；仅完整校验的历史自身调用可排除，损坏/未结束记录继续呈现。
    try{if(JSON.parse(safeFile(join(root,id,'begin.json'),256*1024)).tool==='finance_period_review'){
@@ -207,10 +214,13 @@ export async function reviewFinancePeriod(args){
     if(historical.tool==='finance_period_review'&&historical.integrity==='verified'){excludedSelfCalls++;continue;}
    }}catch{}
    names.push(id);
-  }}
+   if(newestFirst&&names.length>=offset+limit)break;
+  }
+  unscannedDirectories=totalCandidateDirectories-examined;
+ }
  catch(error){if(error.code!=='ENOENT')fail('finance_period_review_records_unavailable');}
- const explicit=args.unboundCalls?.callIds??args.callIds,offset=args.offset??0,selected=explicit??names.slice(offset,offset+(args.limit??20));
- const remaining=explicit?null:Math.max(0,names.length-offset-selected.length),records=[],excluded={scopeConflict:0,scopeUnverified:0,unreadable:0,incomplete:0,integrityUnverified:0};
+ const selected=explicit??names.slice(offset,offset+limit);
+ const remaining=explicit?null:newestFirst?unscannedDirectories:Math.max(0,names.length-offset-selected.length),records=[],excluded={scopeConflict:0,scopeUnverified:0,unreadable:0,incomplete:0,integrityUnverified:0};
  const versions=currentVersions();
  const books=new Map();
  const currentBooks=record=>{
@@ -231,9 +241,11 @@ export async function reviewFinancePeriod(args){
   }
   records.push(projection(root,record,versions,!unbound,currentBooks));
  }
- const pagination={selection:explicit?'explicit_calls':'directory_page',totalDirectories:names.length,totalCandidateDirectories,excludedSelfCalls,unscannedDirectories,offset:explicit?null:offset,scanned:selected.length,remainingDirectories:remaining,nextOffset:!explicit&&remaining?offset+selected.length:null,
-  coverage:explicit?'selected_calls_only':remaining||offset||unscannedDirectories?'partial_scan':'all_current_directories',directoryOrder:'call_id_ascending',snapshotStableAcrossPages:false,excluded,
-  limits:{directoryInventory:10000,recordsPerPage:50,recordFileBytes:10485760,sourcesPerRecord:2000,sourceBytesPerRecord:52428800}};
+ const pagination={selection:explicit?'explicit_calls':'directory_page',totalDirectories:newestFirst?totalCandidateDirectories:names.length,totalCandidateDirectories,excludedSelfCalls,unscannedDirectories,offset:explicit||args.beforeCallId?null:offset,scanned:selected.length,remainingDirectories:remaining,
+  nextOffset:!explicit&&remaining&&!args.beforeCallId&&(!newestFirst||selected.length&&examined<inspectionLimit)?offset+selected.length:null,
+  ...(newestFirst?{nextBeforeCallId:remaining?lastExamined:null,directoryCountBasis:'candidate_directories_before_self_verification',examined}:{}),
+  coverage:explicit?'selected_calls_only':remaining||offset||args.beforeCallId||unscannedDirectories?'partial_scan':'all_current_directories',directoryOrder:newestFirst?'call_id_descending':'call_id_ascending',snapshotStableAcrossPages:false,excluded,
+  limits:{directoryInventory:inventoryLimit,recordsPerPage:50,recordFileBytes:10485760,sourcesPerRecord:2000,sourceBytesPerRecord:52428800}};
  const base={version:'finance-period-review/1',mode:unbound?'unbound_call_review':'bound_period_review',executionStatus:'reviewed',scopeVerified:!unbound,
   businessStatus:unbound?'identity_unverified':'requires_goal_review',periodComplete:false,authorizesExecution:false,pagination,records,
   limitations:['local_record_hashes_do_not_prove_business_correctness','older_issues_retained_without_verified_supersession','user_goal_coverage_not_asserted','environment_lock_unknown']};
