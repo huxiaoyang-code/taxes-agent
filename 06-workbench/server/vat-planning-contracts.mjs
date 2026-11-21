@@ -29,12 +29,13 @@ export const VAT_FIELDS={
  invoice:['knownAt','invoiceNumber','issuer','taxAmount','receipt','issueDate','eligibility','eligibleFrom','eligibleThrough'],
  portal:['knownAt','invoiceNumber','issuer','period','portalStatus'],
  confirmation:['knownAt','invoiceNumber','issuer','taxPeriod','operationDate','issueDate','taxAmount','receiptId','supersedes','confirmationState'],
- filing:['period','knownAt','declaredDue','receiptId','supersedes'],
+ filing:['period','knownAt','declaredDue','declaredDueBeforePrepayment','receiptId','supersedes'],
+ paymentCoverage:['period','knownAt','coveredThrough','coverageScope'],
  event:['knownAt','eventId','eventType','period','operationDate','amount','issuer','invoiceNumber','caseId','supersedes'],
  sale:['knownAt','transactionId','originalTransactionId','taxPointDate','salesExcludingVat','outputVat','billingDate'],
  month:['knownAt','period','basis','state','outputVat','invoicedOutputVat','uninvoicedOutputVat','salesExcludingVat','invoicedSales','uninvoicedSales','salesCoverage','inputVatTransferOut','otherInputVatTransferOut','prepaidVat','otherEffects','paymentDate'],
 };
-export const VAT_NUMERIC_FIELDS=new Set(['carryCredit','taxAmount','outputVat','inputVatTransferOut','otherInputVatTransferOut','prepaidVat','declaredDue','invoicedOutputVat','uninvoicedOutputVat','salesExcludingVat','invoicedSales','uninvoicedSales','amount','prepaymentBalance','dueBeforePrepayment','ytdSalesExcludingVat','ytdDueBeforePrepayment','minimumPercent']);
+export const VAT_NUMERIC_FIELDS=new Set(['carryCredit','taxAmount','outputVat','inputVatTransferOut','otherInputVatTransferOut','prepaidVat','declaredDue','declaredDueBeforePrepayment','invoicedOutputVat','uninvoicedOutputVat','salesExcludingVat','invoicedSales','uninvoicedSales','amount','prepaymentBalance','dueBeforePrepayment','ytdSalesExcludingVat','ytdDueBeforePrepayment','minimumPercent']);
 const fields=object(Object.fromEntries([...new Set(Object.values(VAT_FIELDS).flat())].map(k=>[k,readField])));
 const table=object({
  kind:{enum:Object.keys(VAT_FIELDS)},fields,rowsPointer:pointer,firstRow:index,lastRow:index,
@@ -51,10 +52,14 @@ export const VAT_INPUT_SCHEMA=object({
 export function vatPlanningContract(){return {
  recordType:'vat_planning',tool:'finance_vat_plan',schema:VAT_PLANNING_SCHEMA,inputSchema:VAT_INPUT_SCHEMA,fields:VAT_FIELDS,
  guidance:[
+ '部分票据或后续月份待核时，knownSubset.recommendation 仅比较已核票据在连续可测期间的两种已提交方案。excludedInvoices 分页列出冲突票的各份报送额；这些数值为同一张票的不同来源。依据不足时返回差额、可核月份和需补的材料。',
  '逐交易核对销项时，月报用 salesCoverage=complete_transactions 替代销售额及销项汇总。sale.transactionId 绑定同一合同履约/成交明细，taxPointDate 取依法核实的纳税义务发生日，销售额和销项为正向绝对额。补开票保留原交易号、原税点和原金额，只新增 billingDate；同笔业务只入原期一次。红字调整用新交易号、originalTransactionId 指向原业务和已核调整日期。多笔冲减不得超过原额。同一期若还提供汇总数，工具拒绝叠加。',
  '有正式用途确认撤销或更正时，用 confirmation.receiptId、supersedes 绑定原确认回执和新回执；撤销用 confirmationState=revoked、原税期和实际操作日期，核实的替代确认用 confirmed。更正申报的 filing 可同样依 receiptId/supersedes 替代原申报金额。无更正链、已申报或其他冲突状态保留锁或待核。',
  '单月及累计税负的分子是预缴抵减前应纳，分母为同口径不含税销售额；各期以原件绑定 salesExcludingVat。年中起点可用上月底 opening.ytdSalesExcludingVat/ytdDueBeforePrepayment、ytdComparable=true，或用 history 按当年一月至上月的每期已核发生额、ytdComparable=true。零销售与历史口径不齐时仍计算各期可核金额。跨年重新累计。',
- 'agreement 从确认的客户约定读取 period（生效所属期）、可选 effectiveThrough、burdenMode=monthly/ytd、minimumPercent（百分数例如 3）。本工具专用于一般计税增值税应纳/可比不含税销售的内部最低参考；其他税种、分子或分母另行核对。两方案由 Agent 分别传入，按明确适用期逐期复核门槛及预测条件，未注明终期仅评价本期门槛。可行方案先比较年底尚保留的现金，再比较近期付款及较早使用进项。均未达时显示缺额，按最大单期缺额较小者比较。单月和累计会改变推荐且约定未明确时列缺口。',
+ 'agreement 从确认的客户约定读取 period（生效所属期）、可选 effectiveThrough、burdenMode=monthly/ytd、minimumPercent（百分数例如 3）。本工具专用于一般计税增值税应纳/可比不含税销售的内部最低参考；其他税种、分子或分母另行核对。两方案由 Agent 分别传入，按明确适用期逐期复核门槛及预测条件。未注明终期的约定跨月跨年沿用，直至下一版生效；仅一个月适用时须以来源绑定相同的起止月份。可行方案先比较年底尚保留的现金，再比较近期付款及较早使用进项。均未达时显示缺额，按最大单期缺额较小者比较。单月和累计会改变推荐且约定未明确时列缺口。',
+ 'yearEnd.unusedVat 表示截至年末已经持有且可继续结转的未用票额。selectableUnusedVat 单列在本次决策日仍可选该年末所属期、尚未使用的票额，包含次年收件并有该期门户窗口证据的原票。',
+ 'filing.declaredDue 为申报应补（预缴抵减后），declaredDueBeforePrepayment 为申报抵减前应纳。分别与同口径测算额核对。已申报期进入税负的分子来自申报原额，或在可核零预缴时取申报应补。月度和累计 simulatedBurden 单列方案值。出现同口径差额时保留资料和条件现金测算，查清并更正后再推荐。',
+ 'actualPaid 为已提供的支付回执小计。依据完税及缴付清单确有完整覆盖时，以 paymentCoverage 绑定 period、knownAt、coveredThrough、coverageScope（tax_period 为税款所属期全量支付；cash_month 为付款月全量支付）。无声明或只覆盖较早日期时，零笔回执和实际零缴付分别标明，预计尚待付款以无其他已付为条件。',
  'portal 与原票通过 issuer/invoiceNumber 关联，period 是门户明示可选择的纳税所属期，portalStatus=selectable/closed；按 knownAt 取截止日最近状态。上期已开、下月收件，原票日期和门户可选记录齐备，才可提前到相应所属期。实际确认、已报及不可抵用途继续锁定。',
  'month 的 outputVat 与 invoicedOutputVat+uninvoicedOutputVat 互斥，salesExcludingVat 与 invoicedSales+uninvoicedSales 互斥。拆分形式的两项均需提供，分项包含当期义务已发生的未开票业务及后续开票对原所属期的核销。paymentDate 可从缴款安排读取，默认次月预测。',
  'event 需有单据唯一 eventId、eventType、period（影响所属期）、operationDate（真实操作日期）、knownAt 和正金额 amount。payment 是已缴本期应补，prepayment 是有完税凭证、已核实可抵该主体普通增值税的预缴，refund_approved 是核准且本所属期应冲减留抵，refund_received 是到账（同一退税 caseId），refund_requested 为已申请尚待核准；tax_credit_increase、red_input、transfer_out 需绑定原票 issuer 和 invoiceNumber，按核实适用的所属期和调整税额出具。eventId 重复只计一次；有更正单时以新 eventId 和 supersedes 指向被替代的同类单据。事件与月报的同一金额只选一个来源，冲减进项有逐笔事件时其余转出另绑 otherInputVatTransferOut 或显式零。原始材料应保留调整前后版本。',
