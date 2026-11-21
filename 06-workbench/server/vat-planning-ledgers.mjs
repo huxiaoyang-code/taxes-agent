@@ -199,7 +199,7 @@ function compareCash(baseline,plan){
   const difference=cash(baseline)-cash(plan);
   if(difference!==0n&&!firstDifference)firstDifference={paymentMonth:date,planCashRetained:money(difference)};
   cumulative+=difference;
-  if(firstDifference&&!firstRecovery&&cumulative===0n)firstRecovery=date;
+  if(firstDifference&&!firstRecovery&&cmp(cumulative,0n)!==cmp(cents(firstDifference.planCashRetained),0n))firstRecovery=date;
  }
  const yearDifference=left.throughYearEnd===null?null:cents(left.throughYearEnd)-cents(right.throughYearEnd);
  const result={baseline:left,plan:right,firstDifference,firstRecovery,planYearEndCashRetained:yearDifference===null?null:money(yearDifference),

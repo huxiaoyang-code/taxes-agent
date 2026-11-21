@@ -287,6 +287,7 @@ test('整段客户约定、年末现金和近期付款分别比较；未来经�
   const short=(await f.ok(options)).recommendation;
   assert.equal(short.choice,'plan');assert.equal(short.checks.length,1);
   assert.equal(short.cashComparison.planYearEndCashRetained,'1000.00');assert.equal(short.cashComparison.firstDifference.planCashRetained,'-2000.00');
+  assert.equal(short.cashComparison.firstRecovery,'2026-12');
   assert.equal(short.cashComparison.equivalentThroughLastPayment,true);
   delete doc.agreement[0].effectiveThrough;bind();
   const inherited=(await f.ok(options)).recommendation;
@@ -305,6 +306,40 @@ test('整段客户约定、年末现金和近期付款分别比较；未来经�
   delete doc.agreement[0].effectiveThrough;doc.month[1].outputVat=300;bind();assert.equal((await f.ok(options)).recommendation.choice,'baseline');
   doc.month[0].salesExcludingVat=-100;bind();const loss=await f.ok(options);
   assert.equal(loss.status,'conditional_calculated');assert.equal(loss.plan.months[0].burden.monthly.reason,'negative_sales');assert.equal(loss.plan.months[1].burden.monthly.percent,0);
+ }finally{await f.client.close();}
+});
+
+test('门户按首次可知精度取最近观察；晚收票遇到关窗不能再选上期',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),asOf='2027-01-02',period='2026-11';
+  const view=await f.ok({asOf}),invoiceRef=view.invoices[0].invoiceRef;
+  doc.portal.push({...doc.portal[0],knownAt:'2026-12',portalStatus:'closed'});bind();
+  assert.match((await f.call({asOf,plan:[{invoiceRef,period}]})).text,/period_unavailable/);
+  assert.equal((await f.ok({asOf:'2026-12-30',plan:[{invoiceRef,period}]})).plan.months[0].selectedAndFixedInput,'3000.00');
+  doc.portal.push({...doc.portal[0],knownAt:'2026-12-31 13:05:00'});bind();
+  const ambiguous=await f.ok({asOf});
+  assert(ambiguous.gaps.some(g=>g.code==='portal_window_unverified'&&g.invoiceRef===invoiceRef));
+  doc.portal[2].knownAt='2026-12-31 13:04:00';bind();
+  assert.equal((await f.ok({asOf,plan:[{invoiceRef,period}]})).plan.months[0].selectedAndFixedInput,'3000.00');
+ }finally{await f.client.close();}
+});
+
+test('原票与确认回执的开票日期冲突，以及错属期撤销，均需核实原票',async()=>{
+ const f=await fixture();
+ try{
+  const {doc,bind}=pairedMaterials(f),taxPeriod='2026-11';
+  const confirmation={issuer:doc.invoice[0].issuer,invoiceNumber:doc.invoice[0].invoiceNumber,taxPeriod,
+   knownAt:'2026-12-02',operationDate:'2026-12-02',confirmationState:'confirmed',receiptId:'确认原件'};
+  doc.confirmation=[{...confirmation,issueDate:'2026-12-01'}];bind();
+  const conflict=await f.ok({});
+  assert.equal(conflict.invoices[0].resolved,false);
+  assert.equal(conflict.status,'partial_known_invoices');
+  doc.confirmation=[confirmation,{...confirmation,taxPeriod:'2026-12',knownAt:'2026-12-03',operationDate:'2026-12-03',
+   receiptId:'撤销原件',supersedes:'确认原件',confirmationState:'revoked'}];bind();
+  const wrongPeriod=await f.ok({});
+  assert.equal(wrongPeriod.invoices[0].resolved,false);
+  assert.match((await f.call({plan:[{invoiceRef:wrongPeriod.invoices[0].invoiceRef,period:'2026-12'}]})).text,/selection_unknown_or_duplicate/);
  }finally{await f.client.close();}
 });
 
