@@ -50,11 +50,15 @@
 Claude Code 也可在仓库根安装本地插件：
 
 ```sh
-claude plugin marketplace add .
+claude plugin marketplace add ./
 claude plugin install finance@taxes-agent
 ```
 
-使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。
+使用插件安装方式时，按[连接说明](CONNECTORS.md)设置本机后端和账库，`TAXES_AGENT_ROOT` 指向当前仓库绝对路径。运行 `claude plugin details finance@taxes-agent` 可查看技能清单，`claude mcp list` 应显示 `plugin:finance:finance` 已连接。
+
+本地目录安装随同一仓库更新，在新会话或运行 `/reload-plugins` 后加载。若原来从 Git 市场安装，先将本机后端更新至同一版本，再运行 `claude plugin marketplace update taxes-agent` 和 `claude plugin update finance@taxes-agent`，重新启动会话。可用 `claude plugin list --json` 核对版本及实际读取目录。
+
+Codex CLI 可按 [MCP 配置示例](../../05-reconstruction/codex/config.toml)登记同一本机服务。处理“做完本月账”时读 `tax-period/SKILL.md`，再按账套和期间选择相应工作流。
 
 ## 来源与许可
 

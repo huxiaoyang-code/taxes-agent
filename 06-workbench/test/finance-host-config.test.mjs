@@ -76,7 +76,11 @@ const server=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs')
 for(const profile of [undefined,'direct','harness','legacy']){
   const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
   try{
-    await client.initialize();const names=(await client.rpc('tools/list')).result.tools.map(t=>t.name);assert.deepEqual(new Set(names),new Set(toolsForProfile(profile).map(t=>t.name)));
+    const {result:handshake}=await client.initialize();
+    const direct=profile===undefined||profile==='direct';
+    assert.equal(handshake.instructions,direct?PERIOD_TASK_ROUTING:undefined);
+    if(direct)assert.match(handshake.instructions,/做完本月账/);
+    const names=(await client.rpc('tools/list')).result.tools.map(t=>t.name);assert.deepEqual(new Set(names),new Set(toolsForProfile(profile).map(t=>t.name)));
     assert.equal((await client.call('synthetic_unknown_tool')).isError,true);
     const legacy=profile==='harness'||profile==='legacy';assert.equal((await client.call('harness_discover')).isError,!legacy);
     assert.equal((await client.call('finance_rules',{})).isError,profile==='harness');

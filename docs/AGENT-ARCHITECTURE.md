@@ -122,7 +122,7 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 有实际账套绑定的抵扣测算在本机生成按调用编号保留的会计交接包。包内列明逐票选择、月度税款及付款、已取得的申报和付款材料、政策引用、账表及差额。新进程通过期间复核按同一账套取回，检查来源和文件摘要；后来补件形成新版本，原方案和当时的依据可追溯。
 
-十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录；`skills_list` 的文件和标签只来自当前 profile 的仓库内技能根。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。插件 MCP 不接受缓存目录或其他技能路径；不按 `CLAUDE_PLUGIN_ROOT` 推算后端。
+十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录。`skills_list` 的文件和标签来自当前 profile 的仓库内技能根。direct 的 MCP 握手随 `instructions` 发送与四宿主相同的整期入口。独立连接该服务的 Codex 客户端也能收到这条路由。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。
 
 旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
 
