@@ -4,6 +4,8 @@
 
 ## 当前 direct 默认调用链
 
+三个中国化工作流及其模板、角色和示例由 [tax-review](../plugins/finance/skills/tax-review/SKILL.md) 维护。用[上游文件对照](../plugins/finance/SOURCES.md)查迁移来源，用[宿主回归](../06-workbench/test/finance-host-config.test.mjs)查旧资源名兼容。
+
 日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。
 
 - 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十二个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。

@@ -1,6 +1,6 @@
 ---
 name: tax-review
-description: 查询中国财税官方政策、修订和适用期，按企业税务身份及交易核对增值税、所得税、工资个税、印花税等税费、申报依据与账税差异。
+description: 查询中国财税官方政策、修订和适用期，核对增值税、所得税、工资个税及印花税，比较逐票抵扣、单月及累计税负和纳税现金，准备当期申报或全年会计交接。
 argument-hint: "<税种或核对事项> <期间>"
 ---
 
@@ -22,8 +22,14 @@ argument-hint: "<税种或核对事项> <期间>"
 
 现行政策、政策变化或历史期间的法规效力，默认用 `finance_rules` 的 `action=search` 搜公开政策词，再用 `action=open` 核官方原文。已有原文链接可直接打开。按[官方政策核查](references/official-policy.md)核对文号、条款、适用期、主体及地区。原生计算器的支持范围和历史复算按无 action 的本机目录及旧底稿核对，所需字段按 `finance_record_contract` 确认。按事项选读下表。
 
+逐票选期、现金预测和交接的工作方法按下表读取。对余额、预测和申报回执分来源取数，会计可从推荐结论追到原票、账表和付款记录。
+
 | 事项 | 参考 |
 |---|---|
+| 客户税负口径、逐票选期、当前与备选结果 | [抵扣方案比较](references/vat-planning.md) |
+| 本期、年初累计、预计付款和现金差额 | [税款现金简报](references/tax-cash-brief.md) |
+| 关账核对、当期准备、全年会计交接 | [申报准备与交接](references/tax-organizer.md) |
+| 租赁、所得税、经营及股东税后现金 | [合法方案与税后现金](references/planning-cash.md) |
 | 一般纳税人销项、抵扣及留抵 | [一般VAT](references/vat-general.md) |
 | 小规模季度、专票及补记收入 | [小规模VAT](references/vat-small.md) |
 | 企业所得税预缴与年度调整 | [企业所得税](references/corporate-income.md) |

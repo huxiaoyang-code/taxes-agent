@@ -84,6 +84,18 @@ for(const profile of [undefined,'direct','harness','legacy']){
     const resource=legacy?'harness/SKILL.md':'tax-period/SKILL.md';assert.ok(listed.data.files.includes(resource));assert.equal((await client.call('skills_read',{resource})).isError,false);
     if(!legacy){const entry=listed.data.entries.find(e=>e.resource===resource);assert.equal(entry.name,'tax-period');assert.equal(entry.metadataState,'valid');assert.equal((await client.call('skills_read',{resource:'tax-period/references/planning-cash.md'})).isError,false);assert.equal(listed.data.entries.find(e=>e.name==='company-baseline').resource,'company-baseline/SKILL.md');assert.equal((await client.call('skills_read',{resource:'company-baseline/SKILL.md'})).isError,false);}
     assert.equal(listed.data.files.includes(legacy?'tax-review/SKILL.md':'harness/SKILL.md'),false);
+    if(legacy){
+      for(const file of ['vat-planning','tax-cash-brief','tax-organizer']){
+        const method='tax-review/references/'+file+'.md';
+        const shared=await client.call('skills_read',{resource:method});
+        assert.equal(shared.data?.markdown,readFileSync(join(repoRoot,'plugins/finance/skills',method),'utf8'));
+        assert.equal(listed.data.files.includes(method),false);
+      }
+      const old=await client.call('skills_read',{resource:'taxes-company-advisor/references/planning-cash.md'});
+      const canonical=await client.call('skills_read',{resource:'tax-review/references/planning-cash.md'});
+      assert.equal(old.isError,false);assert.equal(old.data.markdown,canonical.data.markdown);
+      assert.equal((await client.call('skills_read',{resource:'tax-review/references/../../.mcp.json'})).isError,true);
+    }
     assert.ok((await client.rpc('resources/list')).result.resources.some(r=>r.uri==='skill://'+resource));
     if(!legacy)assert.equal(names.some(name=>name.startsWith('harness_')),false);
   }finally{await client.close();}

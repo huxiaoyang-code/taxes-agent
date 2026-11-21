@@ -58,6 +58,16 @@ test('上游许可原文与迁入来源完整，普通clone无需旧仓库Git对
  for(const sha of ['2574e29377c7173d0cecffef29a6ecbd7f8ccb5d','de879f81f2963547b5d92fc6d4d9db1b4487ea08','f8b0ea50bf0aa9318d2efe8abfab16a1a330ae24'])assert.ok(sources.includes(sha));
  assert.ok(sources.includes('84d8efdb6e80e2b26898e5c3109d13eddde97761'));
  assert.match(sources,/2026-10-30修改/);assert.match(sources,/huxiaoyang-code\/taxes-agent/);
+ const organizerLicense=read(join(finance,'LICENSE.knowledge-work-plugins')).replaceAll('\r\n','\n');
+ assert.equal(createHash('sha256').update(organizerLicense).digest('hex'),'a6946284993aeec75c7d75906064b66210c46051e562077efb30eb6dcfe72e26');
+ for(const sha of ['486da32be7ea606e30b6901134efacc62c1c3ed2','0e0fcacddcc892eb92a1b7873ff9d68159c47571'])assert.ok(sources.includes(sha));
+ const migration=sources.slice(sources.indexOf('## 2026-11-21 三项工作流及文件归属'));
+ for(const file of ['skills/portfolio-rebalance-review/SKILL.md','templates/drift-analysis.md','templates/rebalance-rationale-memo.md','agents/holdings-sanity.md','skills/alts-brief/SKILL.md','agents/source-extract.md','tax-season-organizer/SKILL.md','tax-prep/SKILL.md','reference/calculation-assumptions.md','reference/connector-queries.md','reference/output-formats.md','reference/gotchas.md','reference/examples/quarterly-estimate.md','reference/examples/year-end-1099.md']){
+  const mapping=migration.split('\n').find(line=>line.startsWith('|')&&line.includes(file));
+  assert.ok(mapping,'缺少上游文件归属 '+file);
+  const destination=mapping.match(/\]\((skills\/[^)]+)\)/)?.[1];
+  assert.ok(destination&&existsSync(join(finance,destination)),'缺少本地改编正文 '+file);
+ }
 });
 
 test('账前合成资料经真实MCP完成问询、回复、补件重算与两类纳税人测算', {timeout:60000},async()=>{
@@ -150,6 +160,13 @@ test('every business document is actually readable through restricted MCP skills
    const content=read(join(skills,entry.resource)),frontmatter=content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
    assert.equal(entry.metadataState,'valid');assert.equal(entry.name,frontmatter.match(/^name:\s*(.+)$/m)[1]);assert.equal(entry.description,frontmatter.match(/^description:\s*(.+)$/m)[1]);
   }
+  const period=listed.data.entries.find(entry=>entry.name==='tax-period');
+  assert.match(period.description,/做完本月账/);
+  const workflows=['vat-planning','tax-cash-brief','tax-organizer'];
+  for(const entry of ['tax-period','tax-review','prebook-review']){
+   const page=(await client.call('skills_read',{resource:entry+'/SKILL.md'})).data.markdown;
+   for(const workflow of workflows)assert.ok(page.includes('references/'+workflow+'.md'),entry+'缺少 '+workflow+' 的正常入口');
+  }
   assert.equal(Object.keys(listed.data.labels).some(p=>p.startsWith('harness/')),false);
   for(const p of markdown){const resource=relative(skills,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});assert.equal(r.isError,false,`${resource}: ${r.text}`);assert.equal(r.data?.markdown,read(p),`${resource} did not return actual document`);}
   const blocked=await client.call('skills_read',{resource:'../../finance/.mcp.json'});assert.equal(blocked.isError,true,'file boundary must remain restricted');
@@ -168,6 +185,18 @@ test('仓库内专用技能在显式legacy工具面可读，仍引用现有业�
  const {McpStdioClient}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs')));
  const scratch=mkdtempSync(join(tmpdir(),'finance-cn-legacy-skills-'));
  const client=new McpStdioClient(join(backend,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:backend,env:{FINANCE_MCP_PROFILE:'legacy',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(scratch,'audit'),FINANCE_DATABASE_PATH:join(scratch,'not-opened.db'),FINANCE_API_BASE:'http://127.0.0.1:1'},timeoutMs:10000}).start();
- try{await client.initialize('finance-cn-legacy-reference-test');for(const p of docs){const resource=relative(root,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});assert.equal(r.isError,false,`${resource}: ${r.text}`);assert.equal(r.data?.markdown,read(p));}}
+ const sharedResources={
+  'taxes-company-advisor/references/planning-cash.md':'tax-review/references/planning-cash.md',
+  'tax-filing/references/summary-calculation.md':'tax-review/references/summary-calculation.md',
+  'tax-filing/references/supported-obligations.md':'tax-review/references/supported-obligations.md'
+ };
+ try{
+  await client.initialize('finance-cn-legacy-reference-test');
+  for(const p of docs){
+   const resource=relative(root,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});
+   assert.equal(r.isError,false,`${resource}: ${r.text}`);
+   assert.equal(r.data?.markdown,read(sharedResources[resource]?join(skills,sharedResources[resource]):p),resource);
+  }
+ }
  finally{await client.close();}
 });
