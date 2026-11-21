@@ -96,6 +96,46 @@ test('超过100条的扫描按固定页前进，排除与剩余数量可见，�
   const last=await reviewFinancePeriod({target,offset:100,limit:50});assert.equal(last.pagination.remainingDirectories,0);assert.equal(last.pagination.coverage,'partial_scan');assert.equal(last.coverage.matchedRecords,1);assert(last.records.some(r=>r.callId===finalId));noSecrets(last);
  }finally{process.env.FINANCE_AUDIT_DIR=previous;}
 });
+test('上期规划在万条目录中先查最新，游标越过首个窗口并排除翻页后的新调用',{timeout:90000},async t=>{
+ const separate=join(root,'long-period-history'),previous=process.env.FINANCE_AUDIT_DIR;
+ const args={target:{...target,period:'2026-04'},precedingPlanPeriod:target.period,limit:1};
+ const plan=()=>withFinanceCall({tool:'finance_vat_plan',args:{},auditDir:separate},()=>{
+  const callRef=currentFinanceCall().callId;
+  annotateFinanceCall({scope,configuredTarget:{bindingOrigin:'existing_database_identity',accountSetId:1,period:target.period}});
+  return {version:'finance-vat-planning/1',status:'conditional_calculated',callRef,basis:'a'.repeat(64),asOf:'2026-03-31',start:target.period,through:'2026-12',invoices:[],pagination:{total:0},posted:false,submittable:false};
+ });
+ process.env.FINANCE_AUDIT_DIR=separate;
+ try{
+  t.mock.timers.enable({apis:['Date'],now:Date.UTC(2026,3,1)});
+  const oldest=(await plan()).callRef;
+  for(let i=0;i<10001;i++)mkdirSync(join(separate,'20260402T000000000Z_00000000-0000-0000-0000-'+String(i).padStart(12,'0')));
+  t.mock.timers.setTime(Date.UTC(2026,3,3));
+  const newest=(await plan()).callRef;
+  const first=await reviewFinancePeriod(args);
+  assert.equal(first.pagination.totalCandidateDirectories,10003);
+  assert.equal(first.pagination.examined,1);assert.equal(first.pagination.directoryOrder,'call_id_descending');
+  assert.equal(first.records[0].callId,newest);assert.equal(first.records[0].kind,'vat_planning');
+  t.mock.timers.setTime(Date.UTC(2026,3,4));const added=(await plan()).callRef;
+  const next=await reviewFinancePeriod({...args,beforeCallId:first.pagination.nextBeforeCallId});
+  assert.equal(next.records[0].callId,'20260402T000000000Z_00000000-0000-0000-0000-000000010000');
+  // 既有 offset 可在窗口内定位；到单次检查上限后，继续使用回执游标。
+  const end=await reviewFinancePeriod({...args,offset:9999});
+  assert.equal(end.pagination.examined,10000);assert.equal(end.pagination.nextOffset,null);
+  const rest=await reviewFinancePeriod({...args,beforeCallId:end.pagination.nextBeforeCallId,limit:10});
+  assert.equal(rest.records.at(-1).callId,oldest);assert.equal(rest.records.at(-1).scopeVerified,true);
+  assert.equal(rest.pagination.nextBeforeCallId,null);assert.equal(rest.pagination.remainingDirectories,0);
+  t.mock.timers.setTime(Date.UTC(2026,3,5));
+  for(let i=0;i<53;i++)await withFinanceCall({tool:'finance_period_review',args:{},auditDir:separate},()=>({status:'reviewed'}));
+  const onlyReviews=await reviewFinancePeriod(args);
+  assert.equal(onlyReviews.records.length,0);assert.equal(onlyReviews.pagination.examined,51);
+  assert(onlyReviews.pagination.nextBeforeCallId);assert.equal(onlyReviews.pagination.nextOffset,null);
+  const resumed=await reviewFinancePeriod({...args,beforeCallId:onlyReviews.pagination.nextBeforeCallId});
+  assert.equal(resumed.records[0].callId,added);
+  for(const invalid of [{target,beforeCallId:newest},{...args,beforeCallId:newest,offset:0},{...args,beforeCallId:newest,callIds:[oldest]},{...args,beforeCallId:'../invalid'}]){
+   await assert.rejects(reviewFinancePeriod(invalid),/finance_period_review_input_invalid/);
+  }
+ }finally{t.mock.timers.reset();process.env.FINANCE_AUDIT_DIR=previous;}
+});
 test('历史调用改名不能隐藏损坏或未结束记录，真实MCP仅排除已验证自身调用',{timeout:30000},async()=>{
  const separate=join(root,'self-integrity-audit');let renamed,incomplete;
  await withFinanceCall({tool:'finance_workpaper',args:{},auditDir:separate},()=>{renamed=currentFinanceCall().callId;annotateFinanceCall({scope,configuredTarget:{bindingOrigin:'existing_database_identity',accountSetId:1,period:'2026-03'}});return {status:'partial'};});
