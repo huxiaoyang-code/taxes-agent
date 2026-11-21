@@ -397,6 +397,17 @@ test("第 1 版已发布源码包可原样核验与复制", () => {
   assert(!fs.existsSync(join(copy.workbenchDir, "scripts/finance-host-config.mjs")));
 });
 
+test("第 2 版拒绝将业务现场产物收入发行源码", () => {
+  const fixture = cloneCold("source-with-generated-files");
+  for (const rel of ["server/票据.jsonl", "public/税务明细.xlsx", "server/finance-call-records"]) {
+    const path = join(fixture.workbenchDir, rel);
+    if (rel.endsWith("records")) fs.mkdirSync(path);
+    else fs.writeFileSync(path, "synthetic");
+    assert.throws(() => inspectReleaseBundle(fixture.destRoot), {code:"bundle_path_invalid"});
+    fs.renameSync(path, next("excluded-synthetic"));
+  }
+});
+
 test("cold-copy five local CLIs and MCP initialize / list load without a default database", async () => {
   // 从当前锁文件对应的已安装依赖构建测试环境。源码包本身始终不携带依赖或现场数据。
   const packages = JSON.parse(fs.readFileSync(join(cold.workbenchDir, "package-lock.json"), "utf8")).packages;

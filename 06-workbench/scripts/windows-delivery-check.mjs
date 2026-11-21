@@ -800,16 +800,27 @@ const agentBundleGroups = {
 };
 export const REQUIRED_BUNDLE_FILES = Object.freeze([
   ...backendBundleFiles,
+  "README.md", "docs/CODE-INDEX.md", "docs/AGENT-ARCHITECTURE.md", "05-reconstruction/codex/config.toml",
   ...Object.entries(agentBundleGroups).flatMap(([dir, files]) => files.split(" ").map(file => dir + "/" + file)),
 ]);
 const BUNDLE_KIND = "local-product-source-bundle";
 const bundleCompare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const bundleError = (code, path = null) => new StageError(code, { details: path === null ? null : { path } });
-function bundlePathAllowed(path) {
+const generatedDirectory = name => /^\.|^(?:finance-call-records|agent-materials|artifacts|outputs)$/i.test(name);
+function bundlePathWellFormed(path) {
   if (typeof path !== "string" || !path || /[\\:\x00-\x1f]/.test(path)) return false;
   const parts = path.split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[. ]$/.test(part) || isForbiddenName(part))) return false;
-  return REQUIRED_BUNDLE_FILES.includes(path) || /^06-workbench\/(server|public)\/.+/.test(path);
+  return true;
+}
+function bundlePathAllowed(path, schemaVersion) {
+  if (!bundlePathWellFormed(path)) return false;
+  const backendSource = /^06-workbench\/(server|public)\/.+/.test(path);
+  if (schemaVersion === 1) return backendBundleFiles.includes(path) || backendSource;
+  if (REQUIRED_BUNDLE_FILES.includes(path)) return true;
+  if (!backendSource || path.split("/").some(generatedDirectory)) return false;
+  return /^06-workbench\/server\/.+\.mjs$/.test(path)
+    || /^06-workbench\/public\/(?:app\.js|index\.html|styles\.css)$/.test(path);
 }
 function sameFileIdentity(a, b) {
   return a.isFile() && b.isFile() && a.nlink === 1 && b.nlink === 1
@@ -819,7 +830,7 @@ function sameFileIdentity(a, b) {
 
 /** 仅通过自有描述符读取普通单链接文件；读取前后都校验路径。 */
 function readBundleFile(root, rel) {
-  if (!bundlePathAllowed(rel) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
+  if (!bundlePathAllowed(rel, 1) && !bundlePathAllowed(rel, RELEASE_BUNDLE_SCHEMA_VERSION) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
   const path = join(root, ...rel.split("/"));
   const check = () => {
     const chain = auditAncestorChain(dirname(path));
@@ -855,15 +866,13 @@ export function validateReleaseManifest(manifest) {
   let previous = "";
   const seen = new Set();
   for (const entry of manifest.files) {
-    if (!exactKeys(entry, ["path", "bytes", "sha256"]) || !bundlePathAllowed(entry.path)
+    if (!exactKeys(entry, ["path", "bytes", "sha256"]) || !bundlePathAllowed(entry.path, manifest.schemaVersion)
       || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)
       || (previous && bundleCompare(previous, entry.path) >= 0) || seen.has(entry.path.toLowerCase())) throw bundleError("bundle_manifest_invalid");
     seen.add(entry.path.toLowerCase());
     previous = entry.path;
   }
   const required = manifest.schemaVersion === 1 ? backendBundleFiles : REQUIRED_BUNDLE_FILES;
-  if (manifest.schemaVersion === 1 && manifest.files.some(entry =>
-    !backendBundleFiles.includes(entry.path) && !/^06-workbench\/(server|public)\//.test(entry.path))) throw bundleError("bundle_manifest_invalid");
   for (const rel of [...required, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
     if (!seen.has(rel.toLowerCase())) throw bundleError("bundle_manifest_required_missing", rel);
   }
@@ -896,11 +905,12 @@ export function inspectReleaseBundle(releasePath) {
     if (!audit.ok || depth > 14) throw bundleError("bundle_directory_refused", rel);
     for (const name of readdirSync(path).sort(bundleCompare)) {
       const child = `${rel}/${name}`;
-      if (!bundlePathAllowed(`${child}/placeholder`) && !bundlePathAllowed(child)) throw bundleError("bundle_path_invalid", child);
+      if (!bundlePathWellFormed(child) || (schemaVersion >= 2 && generatedDirectory(name))) throw bundleError("bundle_path_invalid", child);
       const stat = lstatSync(join(path, name));
       if (stat.isSymbolicLink()) throw bundleError("bundle_file_refused", child);
       if (stat.isDirectory()) walk(child, depth + 1);
-      else if (stat.isFile()) paths.push(child);
+      else if (stat.isFile() && bundlePathAllowed(child, schemaVersion)) paths.push(child);
+      else if (stat.isFile()) throw bundleError("bundle_path_invalid", child);
       else throw bundleError("bundle_file_refused", child);
       if (paths.length > 40000) throw bundleError("bundle_too_large");
     }
@@ -2436,7 +2446,8 @@ async function installStart(run, options, paths) {
       run.assert("preflight.full_bundle", copied.bundleDigest === release.bundleDigest && copied.optionalMissing.length === 0,
         { code: "full_bundle_incomplete" });
       jsonWrite(join(run.outDir, "artifacts", RELEASE_BUNDLE_MANIFEST), copied.bundleManifest);
-      run.note("preflight.bundle_manifest", "complete_source_bundle", { schemaVersion: RELEASE_BUNDLE_SCHEMA_VERSION,
+      run.note("preflight.bundle_manifest", "complete_source_bundle", { schemaVersion: copied.bundleManifest.schemaVersion,
+        sourceContents: copied.bundleManifest.schemaVersion === 1 ? "backend" : "backend_and_agent",
         packageVersion: release.packageVersion, bundleDigest: copied.bundleDigest, coreDigest: copied.digest,
         files: copied.bundleManifest.files.length, manifest: `artifacts/${RELEASE_BUNDLE_MANIFEST}` });
     }
