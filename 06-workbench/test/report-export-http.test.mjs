@@ -11,21 +11,25 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { syntheticVoucherEvidence } from "./helpers/synthetic-posting-evidence.mjs";
 
 const directory = mkdtempSync(join(tmpdir(), "wb-report-http-"));
 process.env.WORKBENCH_DATA_DIR = directory;
+const sourceRoot = join(directory, "originals");
+process.env.FINANCE_SOURCE_ROOT = sourceRoot;
 const { db } = await import("../server/db.mjs");
 const A = await import("../server/accounting.mjs");
+const createVoucher = (id, voucher) => A.createVoucher(id, syntheticVoucherEvidence(voucher, sourceRoot));
 const set = identityFixtureCreate(A, { name: '合成中文公司";\r\nX-Fake: yes/\\', start_period: "2026-01" });
 const empty = identityFixtureCreate(A, { name: "合成空账套", start_period: "2026-01" });
 A.setOpeningBalances(set.id, [{ code: "1002", debit: 1000 }, { code: "3001", credit: 1000 }]);
-A.createVoucher(set.id, { period: "2026-01", status: "posted", summary: "合成收入", entries: [
+createVoucher(set.id, { period: "2026-01", status: "posted", summary: "合成收入", entries: [
   { code: "1002", debit: 200 }, { code: "5001", credit: 200 },
 ] });
 // LOCAL-02 封账前置：本期有损益发生，封账前必须先结转本期损益。
 A.carryForwardProfit(set.id, "2026-01");
 A.setPeriodStatus(set.id, "2026-01", "closed");
-A.createVoucher(set.id, { period: "2026-02", status: "posted", summary: "二月合成收入", entries: [
+createVoucher(set.id, { period: "2026-02", status: "posted", summary: "二月合成收入", entries: [
   { code: "1002", debit: 50 }, { code: "5001", credit: 50 },
 ] });
 const metadataSets = [
@@ -37,7 +41,7 @@ const metadataSets = [
   for (const [summary, entries] of [
     ["合成收入", [{ code: "1002", debit: 123.45 }, { code: revenue, credit: 123.45 }]],
     ["合成费用", [{ code: expense, debit: 23.45 }, { code: "1002", credit: 23.45 }]],
-  ]) A.createVoucher(fixture.id, { period: "2026-01", status: "posted", summary, entries });
+  ]) createVoucher(fixture.id, { period: "2026-01", status: "posted", summary, entries });
   return { id: fixture.id, profile };
 });
 const snapshot = () => Object.fromEntries(db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({ name }) => {
