@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import ExcelJS from 'exceljs';
 import {syntheticVoucherEvidence} from './helpers/synthetic-posting-evidence.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
@@ -15,16 +16,30 @@ const ptr=jsonPointer=>({jsonPointer});
 const keys=(...names)=>Object.fromEntries(names.map(name=>[name,{key:name}]));
 const json=(f,data)=>writeFileSync(f,JSON.stringify(data));
 test('规划、次月新进程、会计四表、政策窗口配对及补证留版',async()=>{
- const root=mkdtempSync(join(tmpdir(),'synthetic-vat-handoff-')),audit=join(root,'audit'),originals=join(root,'originals'),ledger=join(root,'books');
- const prepared=join(audit,'agent-materials');for(const d of [prepared,originals,ledger])mkdirSync(d,{recursive:true});
+ const root=mkdtempSync(join(tmpdir(),'synthetic-vat-handoff-')),originals=join(root,'originals'),ledger=join(root,'books');
+ for(const d of [originals,ledger])mkdirSync(d,{recursive:true});
  process.env.WORKBENCH_DATA_DIR=ledger;process.env.FINANCE_SOURCE_ROOT=originals;
  const {db}=await import('../server/db.mjs'),A=await import('../server/accounting.mjs');
  const enterpriseKey='SYNTHETIC-VAT-HANDOFF',period='2026-06';
  const set=A.createAccountSet({enterprise:{enterpriseKey},name:'交接合成企业',taxpayer_type:'一般纳税人',start_period:period,accounting_standard:'小企业会计准则'});
  A.createVoucher(set.id,syntheticVoucherEvidence({period,status:'posted',entries:[{code:'1002',debit:1000},{code:'5001',credit:1000}]},originals));
  const target={accountSetId:set.id,period},actualKey=db.prepare('SELECT enterprise_key FROM import_enterprise_account_sets WHERE account_set_id=?').get(set.id).enterprise_key;
+ const other=A.createAccountSet({enterprise:{enterpriseKey:'OTHER-HANDOFF'},name:'另一合成账套',start_period:period});
  db.close();
- const dbPath=join(ledger,'workbench.db'),source=join(originals,'交易与试点资料.json'),inputPath=join(prepared,'定位.json');
+ const dbPath=join(ledger,'workbench.db'),generator=fileURLToPath(new URL('../scripts/finance-host-config.mjs',import.meta.url));
+ const run=(script,...args)=>JSON.parse(execFileSync(process.execPath,[script,...args],{encoding:'utf8',windowsHide:true}));
+ const workspace=(name,boundTarget,extra=[],preboundMaterials=false)=>{
+  const dir=join(root,name);
+  run(generator,'--host','claude-code','--node',process.execPath,'--api-base','http://127.0.0.1:1','--database',dbPath,'--source-root',originals,'--out',dir,...extra);
+  const launcher=join(dir,'start-business-session.mjs');
+  if(preboundMaterials)mkdirSync(join(dir,'finance-call-records','agent-materials'),{recursive:true});
+  const bound=run(launcher,'--account-set-id',String(boundTarget.accountSetId),'--period',boundTarget.period,'--prepare-only');
+  assert.equal(run(launcher,'--check').auditDir,bound.auditDir);
+  return {auditDir:bound.auditDir,env:JSON.parse(readFileSync(join(dir,'.mcp.json'))).mcpServers.finance.env};
+ };
+ const june=workspace('六月工作区',target),audit=june.auditDir,prepared=join(audit,'agent-materials');
+ mkdirSync(prepared,{recursive:true});
+ const source=join(originals,'交易与试点资料.json'),inputPath=join(prepared,'定位.json');
  const doc={owner:actualKey,knownAt:'2026-06-30',prior:'2026-05',scope:'monthly_general_domestic',inventoryCoverage:'complete',credit:0,
   validFrom:'2026-05-01',validThrough:'2026-06-30',participant:false,transaction:'2026-06-15',
   months:[{period,basis:'actual',knownAt:'2026-06-30',state:'open',otherEffects:'none',inputVatTransferOut:0,prepaidVat:0,outputVat:100}],
@@ -52,9 +67,9 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
  refresh();
  const server=fileURLToPath(new URL('../../05-reconstruction/codex/mcp/finance-mcp/server.mjs',import.meta.url));
  const transport=fileURLToPath(new URL('./helpers/official-policy-stdio.mjs',import.meta.url));
- const start=(entry=server)=>new McpStdioClient(entry,{cwd:root,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SOURCE_ROOT:originals,FINANCE_DATABASE_PATH:dbPath,FINANCE_AUDIT_DIR:audit,FINANCE_API_BASE:'http://127.0.0.1:1'}}).start();
+ const start=(workspace,entry=server)=>new McpStdioClient(entry,{cwd:root,env:workspace.env}).start();
  const ok=async(c,tool,args)=>{const r=await c.call(tool,args);assert.equal(r.isError,false,r.text);return r.data;};
- const args={target,through:'2026-12',asOf:'2026-06-30',inputPath},one=start(transport);
+ const args={target,through:'2026-12',asOf:'2026-06-30',inputPath},one=start(june,transport);
  const condition={source:0,valuePointer:'/participant',equals:true,knownAtPointer:'/knownAt',validFromPointer:'/validFrom',validThroughPointer:'/validThrough',transactionDatePointer:'/transaction'};
  let first,firstDoc,choice,policy;
  try{
@@ -76,6 +91,9 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
   policies.push(sheetReview(3),sheetReview(4),sheetReview(5),sheetReview(6),sheetReview(3,{columns:{...columns,value:'名单中缺少的列'}}),sheetReview(3,{sheetIndex:0}),sheetReview(3,{columns:{...columns,value:'备注'}}));
   const inventory=await ok(one,'finance_vat_plan',args);
   assert.equal(inventory.delivery,'invoice_inventory');assert.equal(inventory.handoff,undefined);assert.equal(inventory.recommendation,null);
+  const withoutPlan=await ok(one,'finance_vat_plan',{...args,handoff:{}});
+  const inventoryPack=JSON.parse(readFileSync(withoutPlan.handoff.dataPath));
+  assert.equal(inventoryPack.recommendation,null);assert.equal(inventoryPack.invoices[0].recommendedPeriod,null);
   choice=[{invoiceRef:inventory.invoices[0].invoiceRef,period}];
   first=await ok(one,'finance_vat_plan',{...args,plan:choice,handoff:{policyReviews:policies}});
   firstDoc=JSON.parse(readFileSync(first.handoff.dataPath));
@@ -96,8 +114,35 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
   assert.match(wrongOwner.condition.state,/主体不匹配/);assert.match(early.condition.state,/判断窗口/);assert.match(late.condition.state,/判断窗口/);assert.match(noColumn.condition.state,/表头/);assert.match(duplicate.condition.state,/重复/);assert.match(wrongSheet.condition.state,/工作表/);
   const html=readFileSync(first.handoff.reportPath,'utf8');for(const content of ['TEST-1','合成卖方','70.00','income-statement.csv','税后现金变化','实际缴付日期','有据已缴','预计付款依据','所属期可选未用金额','工作表 2／第 3 行／第 2 列',timing])assert(html.includes(content),content);
  }finally{await one.close();}
- const two=start();try{
+ const next={...target,period:'2026-07'};
+ const july=workspace('七月新工作区',next);assert.equal(july.auditDir,audit);
+ assert.notEqual(workspace('同库第二账套',{...next,accountSetId:other.id}).auditDir,audit);
+ // 保留未绑定工作区的已有整理件，旧目录可按生成器 --audit-dir 原址交给次月。
+ const legacy=workspace('先行账前调查',target,[],true);
+ assert.equal(legacy.auditDir,join(root,'先行账前调查','finance-call-records'));
+ const legacyInput=join(legacy.auditDir,'agent-materials','旧定位.json');writeFileSync(legacyInput,readFileSync(inputPath));
+ const oldClient=start(legacy);
+ let oldHandoff;
+ try{await oldClient.initialize();oldHandoff=await ok(oldClient,'finance_vat_plan',{...args,inputPath:legacyInput,plan:choice});}
+ finally{await oldClient.close();}
+ const successor=workspace('旧现场七月',next,['--audit-dir',legacy.auditDir]);
+ assert.equal(successor.auditDir,legacy.auditDir);
+ const oldReview=start(successor);
+ try{
+  await oldReview.initialize();
+  const page=await ok(oldReview,'finance_period_review',{target:next,precedingPlanPeriod:period});
+  assert.equal(page.records.find(r=>r.callId===oldHandoff.callRef)?.planning.reportPath,oldHandoff.handoff.reportPath);
+ }finally{await oldReview.close();}
+ const two=start(july);try{
   await two.initialize();
+  const found=[];
+  let offset=0;
+  do{
+   const page=await ok(two,'finance_period_review',{target:next,precedingPlanPeriod:period,offset,limit:2});
+   found.push(...page.records);offset=page.pagination.nextOffset;
+  }while(offset!==null);
+  const resumed=found.find(record=>record.callId===first.callRef);
+  assert.equal(resumed?.planning.reportPath,first.handoff.reportPath);assert.equal(resumed.planning.books,'unchanged');
   const review=async(extra={})=>(await ok(two,'finance_period_review',{target,callIds:[first.callRef],...extra})).records[0];
   const fresh=await review({target:{...target,period:'2026-07'},precedingPlanPeriod:period});assert.equal(fresh.kind,'vat_planning');assert.equal(fresh.artifactIntegrity,'verified');assert.equal(fresh.versions.code,'unchanged');assert.equal(fresh.planning.reportPath,first.handoff.reportPath);assert.equal(fresh.evidence.filingVerified,false);
   const unbound=await ok(two,'finance_period_review',{unboundCalls:{callIds:[first.callRef]}});assert.equal(unbound.records[0].planning,undefined);

@@ -41,6 +41,14 @@ import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBus
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
 const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
+// 四宿主在生成配置时尚未选择账套。MCP 启动后以已核实的会话统一定位本次调用和会计交接。
+if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINESS_SESSION&&existsSync(process.env.FINANCE_BUSINESS_SESSION)){
+  const {loadBoundBusinessSession}=await import('../../hosts/shared/business-session.mjs');
+  const workspace=dirname(dirname(process.env.FINANCE_BUSINESS_SESSION));
+  const bound=loadBoundBusinessSession(workspace);
+  if(resolve(bound.path)!==resolve(process.env.FINANCE_BUSINESS_SESSION)||resolve(bound.session.databasePath)!==resolve(process.env.FINANCE_DATABASE_PATH))throw Error('host_business_binding_mismatch');
+  process.env.FINANCE_AUDIT_DIR=bound.session.auditDir;
+}
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
 const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
 
