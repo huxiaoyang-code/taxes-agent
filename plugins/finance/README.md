@@ -13,7 +13,7 @@
 | [账目核对](skills/reconciliation/SKILL.md) | 比对总账、往来、银行、库存和资产资料，定位差异 |
 | [财务报表](skills/financial-statements/SKILL.md) | 按适用准则编制资产负债表、利润表和现金流量表，核对账表关系 |
 | [差异分析](skills/variance-analysis/SKILL.md) | 比较期间或预算，拆分价格、数量、结构、跨期等影响，保留待调查原因 |
-| [税费复核](skills/tax-review/SKILL.md) | 核对增值税、所得税、工资个税、印花税等适用条件，形成税费底稿与依据 |
+| [税费复核](skills/tax-review/SKILL.md) | 在线查阅官方政策原文，核对增值税、所得税、工资个税、印花税等适用条件，形成税费底稿与依据 |
 | [内控复核](skills/internal-control-review/SKILL.md) | 对收入、采购付款、凭证和期末处理取样检查，列异常及整改建议 |
 | [凭证编制参考](skills/journal-entry-prep/SKILL.md) | 为计提、摊销、折旧、工资、收入和存货处理补充资料要求与复核要点 |
 | [月结与年度核对](skills/close-management/SKILL.md) | 按资料及账务依赖安排工作先后，梳理期末处理和未决事项 |

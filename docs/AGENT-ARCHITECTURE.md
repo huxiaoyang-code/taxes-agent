@@ -31,7 +31,9 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 | 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`tool-profile.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
 | 原生业务 | `06-workbench/server/direct-finance.mjs`、`agency-business.mjs`、`accounting.mjs` | 已支持的底稿/税费/凭证/账簿/报表计算与受控写入 |
 
-默认 direct 仅暴露实际可用的直接业务工具与普通会计模型通道，不暴露 Harness 生命周期、原始税务占位或本机原值读取通道。`finance_rules` 提供规则范围及官方链接，`finance_record_contract` 按类型披露字段、已有示例及完整度，区分仅通用引用、已核字段和只能由原生生成的记录，不能据此假定所有类型都有完整示例。`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。`finance_tax_summary_calculate` 是独立条件试算：汇总输入逐值绑定原件JSON位置，完整结果另存summary产物；不放宽原完整底稿路径，也不把试算当作已核完整账、资格或实缴。模型仍自主选择工具，无新增登记流程。
+默认 direct 通过 `finance_rules` 查询政策。Agent 用 `action=search` 向中国政府网政策文件库、财政部和国家税务总局的公开检索入口提交公开关键词，按来源取得候选与状态。知道官方链接时可直接 `action=open`，按页读取正文并以 SHA 核对续页版本。实际引用以已读文件、条款、适用期间及本机业务事实为准。索引遗漏、关键附件未读或来源不可用时，相关结论保留待核。无 action 的历史调用继续读取本机计算规则目录，按 ruleId 和 revision 核实原生公式覆盖与历史版本。在线查询的内容和状态随调用保存，计算器版本沿用既有发布机制。见[官方政策核查](../plugins/finance/skills/tax-review/references/official-policy.md)。
+
+`finance_record_contract` 按类型披露字段、已有示例及完整度，区分仅通用引用、已核字段和只能由原生生成的记录，不能据此假定所有类型都有完整示例。`finance_workpaper`、`finance_annual_workpaper` 与 `finance_tax_calculate` 直接调用原生计算。`finance_tax_summary_calculate` 是独立条件试算：汇总输入逐值绑定原件JSON位置，完整结果另存summary产物；不放宽原完整底稿路径，也不把试算当作已核完整账、资格或实缴。模型仍自主选择工具，无新增登记流程。
 
 客户原件与 Agent 整理的业务记录必须区分。目录和字段示例不是客户事实；原件未提供的日期、资格、用途、收付关联不得猜填。工具返回缺件、条件受限或不支持时，保留实际状态，独立可核分支继续。
 
@@ -52,7 +54,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 `finance-call-chain.mjs` 在最外层包裹每次 MCP 工具调用，记录参数拒绝、业务错误及成功返回。每次调用在 `FINANCE_AUDIT_DIR/<callId>/` 独立保存：
 
 - `begin.json`：工具、时间、范围、输入文件摘要、观察到的原件摘要和记录器代码版本。
-- `input.json`：经认证字段脱敏的完整调用输入，本机保存。
+- `input.json`：业务工具在本机保存经认证字段脱敏的调用输入。在线政策查询只记录通过公开请求校验的规范化参数；被拒参数使用固定占位，记录不附账套范围或已配置的账库地址。
 - `result.json` 或 `error.json`：完整返回或诊断，本机保存。
 - `end.json`：结束时间、耗时、状态、结果摘要、规则/代码版本以及调用期间来源变化。
 

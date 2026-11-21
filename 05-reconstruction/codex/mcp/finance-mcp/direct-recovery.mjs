@@ -1,6 +1,6 @@
 // 恢复导航只取固定工具与文档，不读取原件、异常正文或自由 recordType。
 import {BASELINE_FACT_VALUES,BASELINE_FIELDS} from '../../../../06-workbench/server/business-baseline-contracts.mjs';
-export const DIRECT_MATERIAL_DIAGNOSTIC_TOOLS=new Set(['finance_baseline_materials','finance_prebook_review','finance_calculation_run']);
+export const DIRECT_MATERIAL_DIAGNOSTIC_TOOLS=new Set(['finance_baseline_materials','finance_prebook_review','finance_calculation_run','finance_rules']);
 const baselineContract=()=>[{code:'inspect_baseline_observation_contract',tool:'finance_record_contract',arguments:{recordType:'baseline'}}];
 const schemaHints={required:['required field','补齐该字段；业务事实须来自实际材料。'],additionalProperties:['only declared properties','删除未声明字段，按当前工具 schema 重试。'],type:['declared type','按 schema 使用声明类型，不自动转换原值。'],enum:['declared enum','选用当前 schema 声明的枚举。'],const:['declared constant','使用 schema 声明的固定标识。']};
 // 路径只保留 schema 中声明的键与数组序号；未知键可能就是姓名、税号，不能回显。
@@ -17,7 +17,7 @@ export function directSchemaDiagnostics(schema,problems,root='arguments'){
  return {problems:visible,errorInventory:{total:all.length,shown:visible.length,omitted:all.length-visible.length}};
 }
 export function directErrorCode(code){
- return /^(?:finance|agency)_[a-z0-9_]+$/.test(code??'')?code:'finance_direct_call_failed';
+ return code==='invalid_arguments'||/^(?:finance|agency)_[a-z0-9_]+$/.test(code??'')?code:'finance_direct_call_failed';
 }
 export function directInterpretationDiagnostics(value){
  const boundedIndex=index=>Number.isInteger(index)&&index>=0&&index<1000;
@@ -40,6 +40,12 @@ const guides={
  finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'close-management/SKILL.md'}]
 };
 export function directRecovery(name,{code,status,args}={}){
+ if(name==='finance_rules'&&['invalid_arguments','finance_input_invalid'].includes(code)){
+  return [{code:'choose_policy_operation',tool:'finance_rules',hint:'在线检索传 action=search 和公开政策 query，或传 action=open 与官方 url。旧目录的 ruleId、revision、filters 只用于本机计算支持范围和历史版本。'}];
+ }
+ if(name==='finance_rules'&&['no_results','partial','unavailable'].includes(status)){
+  return [{tool:'skills_read',arguments:{resource:'tax-review/references/official-policy.md'},hint:'核实来源状态。有候选时打开正文，缺少可用结果时用文号或其他公开政策词重查，或直接打开已知官方链接。正文及适用效力仍缺时标明待核。'}];
+ }
  if(name==='finance_baseline_materials'&&code==='finance_baseline_projection_item_limit')return projectionRecovery(args);
  if(name==='finance_baseline_materials'&&code==='finance_baseline_interpretation_invalid')return baselineContract().map(step=>({...step,hint:'按 details.interpretation 找到观察产物中 records 的字段，核对原件位置和允许枚举，修正本机产物后重试。'}));
  if(typeof code==='string'&&(code.startsWith('finance_target_')||code==='finance_period_review_scope_conflict'||code==='finance_period_review_scope_unverified'))

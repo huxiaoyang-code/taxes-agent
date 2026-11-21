@@ -23,6 +23,7 @@
 - 相关验证：[账库方法存储](../06-workbench/test/business-memory-storage.test.mjs)、[账库方法端到端](../06-workbench/test/business-memory-e2e.test.mjs)、[Claude argv](../06-workbench/test/host-claude-argv.test.mjs)。宿主参数配置与模型实际原生读写分别验证。
 - 接续投影：`06-workbench/server/finance-period-review-contracts.mjs`、`finance-period-review.mjs` 与 direct MCP 注册；同范围固定只读投影、分页覆盖、未知及未决保留，未绑定记录分支不确认企业或整期状态。发现元数据：`05-reconstruction/codex/mcp/finance-mcp/skill-metadata.mjs` 解析实际 frontmatter，`skills_list.entries` 保留有效性状态。
 - 直接业务合同与分派：`05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`、`06-workbench/server/direct-finance-contracts.mjs`、`direct-finance.mjs`。
+- 官方政策查询经 [official-policy-online.mjs](../06-workbench/server/official-policy-online.mjs) 分派在线检索与原文读取。[核查指引](../plugins/finance/skills/tax-review/references/official-policy.md)说明引用、适用期和历史复算。[合成 stdio 回归](../06-workbench/test/official-policy-mcp.test.mjs)覆盖工具发现、查询、读取、失败与旧调用兼容。
 - 独立有来源税务汇总条件试算：`06-workbench/server/finance-summary-contracts.mjs`、`finance-summary-engine.mjs`、`finance-summary.mjs`；由同一MCP入口自动记录，summary产物与完整账务workpaper分开。
 - 独立账前核对：`plugins/finance/skills/prebook-review/SKILL.md`；后端 `06-workbench/server/finance-prebook-contracts.mjs`、`finance-prebook-evidence.mjs`、`finance-prebook.mjs`。`finance_prebook_review`核对上期及本期基础资料、一般／小规模VAT条件试算、老板声明与补件重算，不写正式账；`finance_record_contract(recordType=prebook)`披露实际输入及回复合同。
 - 账前合成演示：`plugins/finance/skills/prebook-review/scripts/demo.mjs`，调用真实MCP执行缺票→回复→补件重算和小规模非零税额；插件 `tests/structure.test.mjs`核验同一路径和技能可读。原始资料映射、状态与交接范围见该技能的`references/input-and-tools.md`。

@@ -109,7 +109,7 @@ function preflightTool(name,args={}) {
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
-  const domainProblems=hasDomainManagedSources(name)?validateSchemaValue(spec.inputSchema,args):undefined;
+  const domainProblems=hasDomainManagedSources(name)||name==='finance_rules'?validateSchemaValue(spec.inputSchema,args):undefined;
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length||domainProblems?.length) {
     const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args)):undefined;
@@ -331,7 +331,8 @@ rl.on("line", async (line) => {
       }
       const compactContract=params?.name==='finance_record_contract'&&['baseline','prebook'].includes(params?.arguments?.recordType);
       const text=HARNESS_TOOL_NAMES.has(params?.name)||compactContract?JSON.stringify(result):JSON.stringify(result,null,2);
-      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(['failed','unknown'].includes(result?.status)?{isError:true}:{})}:{})}));
+      const failed=['failed','unknown'].includes(result?.status)||params?.name==='finance_rules'&&result?.status==='unavailable';
+      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(failed?{isError:true}:{})}:{})}));
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, withReference(transportFailureResult(e.failure)));
       if(e?.code==='finance_call_recording_failed')return ok(id,withReference({isError:true,content:[{type:'text',text:JSON.stringify({code:e.code,writeOutcome:'unknown',retryable:false,executionCompleted:e.executionCompleted===true})}]}));
