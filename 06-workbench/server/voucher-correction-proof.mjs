@@ -222,6 +222,7 @@ function verifyBank({before,after,proof,bytes,sourceRoot,accountName,previousEvi
     }
     for(const [row,record] of table??[]){
       if(selected.has(row) || !record.date || (!record.inflow && !record.outflow)) continue;
+      if(!norm(record.party) && /^(?:(?:本页|当页|本期|本月|本日|本年|累计|交易)?(?:小计|合计|总计)|total)$/i.test(norm(record.date))) continue;
       const date=canonicalDate(record.date);
       if(!changedDate && date!==after.voucher_date) continue;
       const net=cents(record.inflow,true)-cents(record.outflow,true);

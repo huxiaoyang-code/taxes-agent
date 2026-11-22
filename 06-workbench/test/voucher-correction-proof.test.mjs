@@ -62,6 +62,7 @@ test('倒排银行 XLSX 以交易日和相邻余额验算，同表翻转收付�
   sheet.addRow([new Date('2026-03-16T00:00:00Z'),'甲工厂',250,null,1600]);
   sheet.addRow([new Date('2026-03-15T00:00:00Z'),'甲工厂',350,null,1350]);
   sheet.addRow([null,null,null,null,1000]);
+  sheet.addRow(['本页合计',null,600,null,null]);
   for(const row of [2,3])sheet.getCell('A'+row).numFmt='yyyy-mm-dd';
   writeFileSync(path,Buffer.from(await workbook.xlsx.writeBuffer()));
   f.originals=captureCorrectionSources(f.sourceRoot,{paths:[path]});
