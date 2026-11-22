@@ -20,7 +20,10 @@ export function buildConfig(c){
     'finance_query','ledger_query','account_list','period_list','period_end_check','voucher_correct']);
   const allowed=t=>t.annotations?.readOnlyHint===true||(env.FINANCE_CORRECTION_SOURCE_DIGEST&&correctionTools.has(t.name));
   const allow=tools.filter(allowed).map(t=>'mcp__finance__'+t.name);
-  const delivery=c.correctionManifest?'交付会计的核对表和结果说明写入本工作区 outputs/ 下的 CSV 或 Markdown 文件，交付前读回文件，向会计给出实际路径。':'';
+  const delivery=c.correctionManifest?[
+    '交付会计的核对表和结果说明写入本工作区 outputs/ 下的 CSV 或 Markdown 文件。交付前读回文件，向会计给出实际路径。',
+    '逐项复核要求客户处理的事项。回到相应原件，核对行标、交易标识和原值，再与账簿、核对表及报告正文中的处理结果交叉核对。行号无法核实时用可查的业务标识定位。已有依据的合理时点差列入已解释事项，只有仍需客户补证或处理的具体差异才列为客户待办。'
+  ].join('\n\n'):'';
   const deny=[];
   if(delivery) {
     const sourceRoot=env.FINANCE_SOURCE_ROOT, source=readPathPattern(sourceRoot);

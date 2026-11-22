@@ -79,6 +79,8 @@ function workspace(root,name,dbPath,source,apiBase,accountSetId,delegated) {
   run(join(output,'start-business-session.mjs'),'--account-set-id',String(accountSetId),'--period',period,'--prepare-only');
   const read=(path)=>JSON.parse(readFileSync(join(output,path),'utf8'));
   const permissions=read('.claude/settings.json').permissions;
+  const instructions=readFileSync(join(output,'CLAUDE.md'),'utf8');
+  assert.equal(/客户处理的事项[\s\S]*行标、交易标识和原值[\s\S]*行号无法核实[\s\S]*时点差列入已解释/.test(instructions),delegated);
   assert.equal(permissions.allow.includes('mcp__finance__voucher_correct'),delegated);
   assert.equal(permissions.allow.includes('mcp__finance__finance_query'),delegated);
   assert(![...permissions.allow,...permissions.ask].includes('mcp__finance__ledger_query'));
@@ -117,6 +119,9 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
     summary:'合成记账凭证',entries,status:'posted',operationId:randomUUID()},source));
   const delegatedEnv=workspace(root,'bookkeeping',dbPath,source,apiBase,accountSetId,true);
   const formal=await open(delegatedEnv);
+  const reconciliation=await formal.call('skills_read',{resource:'reconciliation/SKILL.md'});
+  assert.equal(reconciliation.isError,false);
+  assert.match(reconciliation.text,/原表行标[\s\S]*单号、流水号[\s\S]*调节说明列为已解释/);
   const preview=await open(workspace(root,'preview',dbPath,source,apiBase,accountSetId,false));
   const ids=[];
   for(const args of wrong){const posted=await success(formal,'voucher_create',args);assert.equal(posted.projection.status,'posted');ids.push(posted.projection.voucherId);}
