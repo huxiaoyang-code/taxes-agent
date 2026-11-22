@@ -1,6 +1,8 @@
 import {parseImportAmount} from './import-amount.mjs';
 export {parseImportAmount};
-import { withPostingAttempt, inspectPosting, restorePostingResult, registerPostingDatabase } from './posting-evidence-guard.mjs';
+import { withPostingAttempt, inspectPosting, restorePostingResult, registerPostingDatabase,
+  indexVoucherCorrectionOrigins, readVoucherCorrectionOrigin } from './posting-evidence-guard.mjs';
+import { verifyCorrectionProof } from './voucher-correction-proof.mjs';
 import { randomUUID as demoOperationId } from 'node:crypto';
 import { lockCreatedAccountSet,acquireWriteResources,releaseWriteResources,withWriteResources } from './local-write-lock.mjs';
 import { types as nodeTypes } from "node:util";
@@ -9,7 +11,7 @@ import { types as nodeTypes } from "node:util";
 // 金额规则（LOCAL-02）：所有金额以「整数分」计算（money.mjs），落库 / 出参统一两位小数；
 // 舍入唯一 ROUND_HALF_UP；合计在分上累加后再转换，禁止把两位小数用浮点求和。
 import { db } from "./db.mjs";
-import { runDomainOperation, readDomainOperationBinding,runAuditedBatchStage,copyDomainRequest } from "./local-audit-coordinator.mjs";
+import { runDomainOperation, readDomainOperationBinding,runAuditedBatchStage,copyDomainRequest,currentRequestMetadata } from "./local-audit-coordinator.mjs";
 import { withAuditSavepoint } from "./local-audit-storage.mjs";
 import { auditCanonicalDigest, auditError } from "./local-audit.mjs";
 import {
@@ -45,12 +47,13 @@ import {
   cardMoney,
   carryForwardSemanticsConflicts,
   expectedDepreciationCents,
+  laterProfitCarryforwards,
   postedEntryRows,
   sumNaturalByPrefix,
 } from "./period-end-controls.mjs";
 
 import { normalizeEnterpriseIdentity, identityError } from "./enterprise-identity.mjs";
-import { getEnterpriseAccountSet, getAccountSetEnterprise, insertEnterpriseAccountSet } from "./import-storage.mjs";
+import { getEnterpriseAccountSet, getAccountSetEnterprise, insertEnterpriseAccountSet,persistedVoucherFingerprint } from "./import-storage.mjs";
 
 const now = () => new Date().toISOString();
 const EPS = 0.005;
@@ -584,6 +587,7 @@ function createVoucherBody(setId,v={},options={}) {
     validateVoucherCreation(setId,v,options);
     const guard=inspectPosting(db,setId,v,{formal:v.status==='posted',derived:options[DERIVED_POSTING]??null});
     const result=createVoucherStored(setId,v,options);
+    if(guard.postingEvidenceDigest)result.postingEvidenceDigest=guard.postingEvidenceDigest;
     return guard.status==='needs_review'?{...result,postingGuard:{...guard,nextAction:'human_review'}}:result;
   });
 }
@@ -621,10 +625,10 @@ export function listVouchers(setId, { period, status } = {}) {
   );
   return vs.map(hydrate);
 }
-const hydrate = (v) => {
-  const entries = rows(
+const hydrate = (v) => voucherWithTotals(v, rows(
     `SELECT line_no, code, summary, debit, credit FROM voucher_entries WHERE voucher_id=? ORDER BY line_no`, v.id,
-  );
+));
+function voucherWithTotals(v, entries) {
   // 损坏库上的非法金额不能被静默当成 0 合计：只累加合法项，并标记 amounts_valid=false，
   // 让调用方（过账 / 报表）先做出判断，而不是展示一个看似正常的总数。
   let debit = 0n, credit = 0n, amountsValid = true;
@@ -649,12 +653,151 @@ const hydrate = (v) => {
     total_credit: totalCredit,
     amounts_valid: amountsValid,
   };
-};
+}
 
 export function getVoucher(setId, id) {
   const v = row(`SELECT * FROM vouchers WHERE account_set_id=? AND id=?`, setId, id);
   if (!v) throw new Error("voucher_not_found");
   return hydrate(v);
+}
+
+// context 仅来自原生工作区绑定。公开工具参数无权声明自己的委托范围或原件目录。
+function assertCorrectionScope(setId,args,context) {
+  const scope=context?.scope;
+  const instance=row('SELECT instance_id FROM audit_database_instances WHERE is_active=1');
+  const enterprise=getAccountSetEnterprise(db,setId);
+  if(!scope||!enterprise||!instance||scope.accountSetId!==setId||scope.period!==requirePeriod(args.period)||
+    scope.databaseInstanceId!==instance.instance_id||scope.enterpriseKey!==enterprise.enterprise_key) {
+    throw Error('voucher_correction_scope_conflict');
+  }
+  if(!Number.isSafeInteger(args.voucherId)||args.voucherId<1)throw Error('voucher_correction_target_invalid');
+}
+
+function correctionFingerprint(voucher,operationId) {
+  return auditCanonicalDigest([voucher.id,voucher.account_set_id,operationId,persistedVoucherFingerprint(voucher,voucher.entries)]);
+}
+
+function correctionState(setId,args,context) {
+  assertCorrectionScope(setId,args,context);
+  const v=getVoucher(setId,args.voucherId);
+  if(v.period!==args.period)throw Error('voucher_correction_scope_conflict');
+  if(v.kind!=='normal'||v.status!=='posted')throw Error('voucher_correction_target_invalid');
+  if(periodStatus(setId,v.period)==='closed')throw Error('period_closed');
+  const history=rows(`SELECT o.operation_id,o.action,o.actor,o.request_digest,o.receipt_json,o.parent_operation_id
+    FROM audit_events e JOIN audit_operations o ON o.terminal_event_id=e.event_id
+    WHERE e.database_instance_id=? AND e.account_set_id=? AND e.voucher_id=? AND o.state='succeeded'
+      AND o.action IN ('voucher.create','voucher.create_posted','voucher.post','voucher.unpost','voucher.correct')
+    ORDER BY e.seq`,context.scope.databaseInstanceId,setId,v.id);
+  const creation=history[0],last=history.at(-1);
+  if(!['voucher.create','voucher.create_posted'].includes(creation?.action)||
+     history.some(h=>!['agent','mcp'].includes(h.actor)||h.parent_operation_id!==null)||
+     !['voucher.create_posted','voucher.post','voucher.correct'].includes(last.action)) {
+    throw Error('voucher_correction_not_agent_owned');
+  }
+  const origin=readVoucherCorrectionOrigin(db,setId,v.id,last);
+  const recorded=last.action==='voucher.correct'?origin.output.after:origin.output;
+  if(persistedVoucherFingerprint(v,v.entries)!==persistedVoucherFingerprint(recorded,recorded.entries)) {
+    throw Error('voucher_correction_target_changed');
+  }
+  // 若草稿单独过账时未重传证据，回溯有已提交回执的创建请求。
+  const evidence=origin.evidence??(last.action==='voucher.post'?readVoucherCorrectionOrigin(db,setId,v.id,creation).evidence:null);
+  return {voucher:v,evidence,fingerprint:correctionFingerprint(v,last.operation_id)};
+}
+
+export function inspectVoucherCorrection(setId,args,context) {
+  const {voucher,fingerprint}=correctionState(setId,args,context);
+  return {...voucher,voucherId:voucher.id,fingerprint};
+}
+
+function assertCorrectionDependencies(setId,voucher,proposed) {
+  const oldTouches=voucherTouches(setId,voucher),newTouches=voucherTouches(setId,proposed);
+  const touches={profit:oldTouches.profit||newTouches.profit,depreciation:false};
+  assertPeriodMutable(db,setId,voucher.period,{operation:'correct_voucher',touches});
+  if(touches.profit&&laterProfitCarryforwards(db,setId,voucher.period,{inclusive:true}).length)throw Error('voucher_correction_carryforward_dependency');
+  if(row('SELECT 1 FROM import_voucher_sources WHERE account_set_id=? AND voucher_id=?',setId,voucher.id)||
+    row('SELECT 1 FROM asset_depreciation_runs WHERE account_set_id=? AND voucher_id=?',setId,voucher.id)) {
+    throw Error('voucher_correction_linked_voucher');
+  }
+  const tableExists=name=>row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",name);
+  if(tableExists('bank_matches')&&row("SELECT 1 FROM bank_matches WHERE account_set_id=? AND voucher_id=? AND status='confirmed'",setId,voucher.id)) {
+    throw Error('voucher_correction_bank_match_dependency');
+  }
+  if(tableExists('aux_allocations')&&row(`SELECT 1 FROM aux_allocations a JOIN voucher_entries e ON a.entry_id=e.id
+    WHERE a.account_set_id=? AND e.voucher_id=?`,setId,voucher.id))throw Error('voucher_correction_aux_dependency');
+}
+
+function correctionPeers(setId,before,context) {
+  const peers=listVouchers(setId,{period:before.period,status:'posted'}).filter(v=>v.id!==before.id&&v.kind==='normal');
+  if(!peers.length)return [];
+  const operations=rows(`SELECT e.voucher_id,o.operation_id,o.action,o.receipt_json,o.request_digest
+    FROM audit_events e JOIN audit_operations o ON o.terminal_event_id=e.event_id
+      JOIN vouchers v ON v.id=e.voucher_id AND v.account_set_id=e.account_set_id
+    WHERE e.database_instance_id=? AND e.account_set_id=? AND v.id<>? AND v.period=? AND v.status='posted'
+      AND o.state='succeeded' AND o.action IN ('voucher.create_posted','voucher.post','voucher.correct')
+    ORDER BY e.seq`,context.scope.databaseInstanceId,setId,before.id,before.period);
+  const latest=new Map(operations.map(op=>[op.voucher_id,op]));
+  const index=indexVoucherCorrectionOrigins(db,setId,new Set([...latest.values()].map(op=>op.operation_id)));
+  return peers.map(peer=>{
+    const op=latest.get(peer.id);
+    if(!op)return peer;
+    let origin;
+    try{origin=readVoucherCorrectionOrigin(db,setId,peer.id,op,index);}catch(error){
+      if(error.message!=='voucher_correction_origin_unavailable')throw error;
+      return peer;
+    }
+    const snapshot=op.action==='voucher.correct'?origin.output.after:origin.output;
+    return persistedVoucherFingerprint(peer,peer.entries)===persistedVoucherFingerprint(snapshot,snapshot.entries)
+      ? {...peer,previousEvidence:origin.evidence}:peer;
+  });
+}
+
+export function correctVoucher(setId,request,context) {
+  const args=copyDomainRequest(request);
+  assertCorrectionScope(setId,args,context);
+  const op=currentRequestMetadata();
+  if(!['agent','mcp'].includes(op?.actor)||!op.explicit||op.operationId!==args.operationId) {
+    throw Error('voucher_correction_operation_required');
+  }
+  registerPostingDatabase(db);
+  const fallback=()=>{throw Error('voucher_correction_receipt_unavailable');};
+  // 库内变更和成功审计回执同一事务提交。完整前后快照先持久化，重试按操作摘要返回原结果。
+  return accountingWrite('voucher.correct',[setId,args],()=>withPostingAttempt(db,setId,'voucher.correct',args,()=>{
+    const {voucher:before,fingerprint, evidence}=correctionState(setId,args,context);
+    if(args.expectedFingerprint!==fingerprint)throw Error('voucher_correction_target_changed');
+    if(!args.businessEvidence||!args.proof)throw Error('voucher_correction_evidence_required');
+    const proposed={period:before.period,word:before.word,number:before.number,kind:'normal',status:'posted',
+      voucher_date:args.voucher_date,summary:args.summary,entries:args.entries,businessEvidence:args.businessEvidence};
+    const {entries}=validateVoucherCreation(setId,proposed);
+    assertCorrectionDependencies(setId,before,proposed);
+    const guard=inspectPosting(db,setId,proposed,{formal:true,voucherId:before.id});
+    const expected=voucherWithTotals({...before,voucher_date:proposed.voucher_date,summary:proposed.summary},
+      entries.map((e,index)=>({...e,summary:e.summary||proposed.summary||'',line_no:index+1})));
+    const expectedContent=persistedVoucherFingerprint(expected,expected.entries);
+    if(expectedContent===persistedVoucherFingerprint(before,before.entries))throw Error('voucher_correction_no_change');
+    const proofReceipt=verifyCorrectionProof({before,after:expected,proof:args.proof,setId,period:before.period,
+      sourceRoot:context.sourceRoot,originals:context.originals,businessEvidence:args.businessEvidence,previousEvidence:evidence,
+      getPeers:()=>correctionPeers(setId,before,context),
+      accountName:code=>row('SELECT name FROM accounts WHERE account_set_id=? AND code=?',setId,code)?.name});
+    const keys=proofReceipt.claimKeys;
+    if(!Array.isArray(keys)||!keys.length||new Set(keys).size!==keys.length||keys.some(key=>!/^[a-f0-9]{64}$/.test(key))) {
+      throw Error('voucher_correction_claim_invalid');
+    }
+    run('DELETE FROM voucher_correction_claims WHERE account_set_id=? AND voucher_id=?',setId,before.id);
+    const claim=db.prepare('INSERT INTO voucher_correction_claims(account_set_id,claim_key,voucher_id) VALUES(?,?,?)');
+    for(const key of keys) {
+      if(row('SELECT 1 FROM voucher_correction_claims WHERE account_set_id=? AND claim_key=?',setId,key))throw Error('voucher_correction_source_already_used');
+      claim.run(setId,key,before.id);
+    }
+    run('UPDATE vouchers SET voucher_date=?,summary=? WHERE account_set_id=? AND id=?',expected.voucher_date,expected.summary,setId,before.id);
+    run('DELETE FROM voucher_entries WHERE voucher_id=?',before.id);
+    const insert=db.prepare('INSERT INTO voucher_entries(voucher_id,line_no,code,summary,debit,credit) VALUES(?,?,?,?,?,?)');
+    for(const e of expected.entries)insert.run(before.id,e.line_no,e.code,e.summary,e.debit,e.credit);
+    const after=getVoucher(setId,before.id);
+    if(after.status!=='posted'||expectedContent!==persistedVoucherFingerprint(after,after.entries))throw Error('voucher_correction_readback_failed');
+    return {voucherId:after.id,period:after.period,status:after.status,operationId:op.operationId,beforeFingerprint:fingerprint,
+      afterFingerprint:correctionFingerprint(after,op.operationId),before,after,proofReceipt,postingEvidenceDigest:guard.postingEvidenceDigest};
+  }),{targets:{voucherId:args.voucherId,period:args.period},refs:()=>resultId('voucher',args.voucherId),
+    rebuild:()=>restorePostingResult(db,setId,args.voucherId,fallback)});
 }
 
 /**
@@ -804,7 +947,7 @@ function postVoucherBody(setId, id, options={}) {
   );
   const chk = checkVoucher(setId, entries);
   if (!chk.ok) { const e = new Error("voucher_invalid"); e.details = chk; throw e; }
-  inspectPosting(db,setId,{...raw,entries,businessEvidence:options.businessEvidence},{formal:true,voucherId:id});
+  const guard=inspectPosting(db,setId,{...raw,entries,businessEvidence:options.businessEvidence},{formal:true,voucherId:id});
   // 先给「旧草稿是否仍符合卡片当前定义」与金额诊断（重过账会把累计推过可计提额），
   // 再给期间依赖顺序：三者都是只读断言，失败时全库不变。
   assertDepreciationRunsCurrent(setId, { id: raw.id, kind: raw.kind, period: raw.period });
@@ -815,7 +958,9 @@ function postVoucherBody(setId, id, options={}) {
   });
   return withSavepoint(() => {
     run(`UPDATE vouchers SET status='posted' WHERE id=?`, id);
-    return getVoucher(setId, id);
+    const result=getVoucher(setId,id);
+    if(guard.postingEvidenceDigest)result.postingEvidenceDigest=guard.postingEvidenceDigest;
+    return result;
   });
 }
 function unpostVoucherBody(setId, id) {
@@ -3063,7 +3208,7 @@ export function setOpeningBalances(...args) {const input=admissionInput(args);if
 export function ensurePeriod(...args) {return accountingWrite('period.ensure',args,ensurePeriodBody,{rebuild:()=>row('SELECT period,status FROM periods WHERE account_set_id=? AND period=?',...args)});}
 export function setPeriodStatus(...args) {return accountingWrite(args[2]==='closed'?'period.close':'period.reopen',args,setPeriodStatusBody,{rebuild:()=>row('SELECT period,status FROM periods WHERE account_set_id=? AND period=?',args[0],args[1])});}
 export function createVoucher(...args) {return withPostingAttempt(db,args[0],'voucher.create',args[1],()=>{const input=admissionInput(args);const action=input.value[1]?.status==='posted'?'voucher.create_posted':'voucher.create';if(!admissionBinding(action))preflightInput(input,validateVoucherCreation);return accountingWrite(args[1]?.status==='posted'?'voucher.create_posted':'voucher.create',args,createVoucherBody,{refs:v=>resultId('voucher',v.id),targets:v=>({voucherId:v.id,period:v.period}),rebuild:r=>{const id=r.resultRefs.find(x=>x.type==='voucher').id;return restorePostingResult(db,args[0],id,()=>getVoucher(args[0],id));}});});}
-export function postVoucher(...args) {return withPostingAttempt(db,args[0],'voucher.post',{voucherId:args[1],options:args[2]},()=>{let unchanged=false;return accountingWrite('voucher.post',args,(...a)=>{unchanged=row('SELECT status FROM vouchers WHERE account_set_id=? AND id=?',a[0],a[1])?.status==='posted';return postVoucherBody(...a);},{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),classify:()=>unchanged?'no_change':'succeeded',rebuild:()=>getVoucher(args[0],args[1])});});}
+export function postVoucher(...args) {return withPostingAttempt(db,args[0],'voucher.post',{voucherId:args[1],options:args[2]},()=>{let unchanged=false;return accountingWrite('voucher.post',args,(...a)=>{unchanged=row('SELECT status FROM vouchers WHERE account_set_id=? AND id=?',a[0],a[1])?.status==='posted';return postVoucherBody(...a);},{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),classify:()=>unchanged?'no_change':'succeeded',rebuild:()=>restorePostingResult(db,args[0],args[1],()=>getVoucher(args[0],args[1]))});});}
 export function unpostVoucher(...args) {return accountingWrite('voucher.unpost',args,unpostVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>getVoucher(args[0],args[1])});}
 export function deleteVoucher(...args) {return accountingWrite('voucher.delete',args,deleteVoucherBody,{targets:{voucherId:args[1]},refs:()=>resultId('voucher',args[1]),rebuild:()=>({deleted:args[1]})});}
 export function carryForwardProfit(...args) {return accountingWrite('profit.carry_forward',args,carryForwardProfitBody,{refs:v=>[...resultId('voucher',v?.voucher?.id),...resultId('year_end_voucher',v?.yearEndVoucher?.id),...(v?.supersededVoucherIds??[]).map(id=>({type:'superseded_voucher',id}))]});}

@@ -23,11 +23,13 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝
 ```
 
 - `--host` 可选 `pi`、`claude-code`、`dsh` 或 `zcode`。
-- `--source-root` 指定已有获准原件目录。Agent 在宿主中使用已有文件或脚本权限读取。
+- `--source-root` 指定已有获准原件目录。Claude 正式更正委托允许从该目录查找和读取本期原件、交接表和登记簿。`--correction-original` 单独指定可以用来证明更正的原件。其他现场沿用已有的宿主文件权限。
 - 需要运行 Python 计算时，加 `--python '<python.exe绝对路径>'`；JavaScript 计算无需此项。
 - 完成账套绑定后，处理记录默认保存在 `<账库目录>/.finance-call-records/<账库文件名>/<实例编号>/<账套ID>`。同一账套的下月工作区可直接查回上月交接。未绑定的工作区使用本地 `finance-call-records`；若首次绑定前已在该目录留存资料，继续使用原址。整理件及回复写在实际记录目录的 `agent-materials`。
 
 生成器使用本仓库技能，不覆盖已有工作区、不启动模型，也不创建账套。
+
+正式做账委托包含“自行更正本期错账”时，在生成命令指定 `--voucher-corrections delegated` 与获准的 `--source-root`。工具在绑定本期后可跨会话接续，无需逐张确认。Claude 正式委托在新工作区的 `outputs/` 目录交付 CSV 核对表和 Markdown 说明。单纯试算、出报表使用原命令。现场原件选择、旧现场升级及实账读回见[自主更正](../../../plugins/finance/skills/reconciliation/references/voucher-correction.md)。
 
 ## 3. 绑定已有账套并启动
 

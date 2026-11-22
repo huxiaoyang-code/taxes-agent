@@ -1,5 +1,6 @@
 // 恢复导航只取固定工具与文档，不读取原件、异常正文或自由 recordType。
 import {BASELINE_FACT_VALUES,BASELINE_FIELDS} from '../../../../06-workbench/server/business-baseline-contracts.mjs';
+import {isIdentitySourceCountError} from '../../../../06-workbench/server/business-evidence.mjs';
 export const DIRECT_MATERIAL_DIAGNOSTIC_TOOLS=new Set(['finance_baseline_materials','finance_prebook_review','finance_calculation_run','finance_vat_plan','finance_rules']);
 const baselineContract=()=>[{code:'inspect_baseline_observation_contract',tool:'finance_record_contract',arguments:{recordType:'baseline'}}];
 const schemaHints={required:['required field','补齐该字段；业务事实须来自实际材料。'],additionalProperties:['only declared properties','删除未声明字段，按当前工具 schema 重试。'],type:['declared type','按 schema 使用声明类型，不自动转换原值。'],enum:['declared enum','选用当前 schema 声明的枚举。'],const:['declared constant','使用 schema 声明的固定标识。']};
@@ -18,6 +19,17 @@ export function directSchemaDiagnostics(schema,problems,root='arguments'){
 }
 export function directErrorCode(code){
  return code==='invalid_arguments'||/^(?:finance|agency)_[a-z0-9_]+$/.test(code??'')?code:'finance_direct_call_failed';
+}
+export function voucherCorrectionDiagnostics(schema,problems,args){
+ const invalidSources=problems.filter(problem=>isIdentitySourceCountError(problem,args?.businessEvidence?.mappings));
+ const diagnostics=directSchemaDiagnostics(schema,problems);
+ if(!invalidSources.length) return diagnostics;
+ // 同一字段可能同时超过通用上限和 identity 上限。仅返回有界、去重的实际参数位置。
+ const pointers=[...new Set(invalidSources.map(problem=>problem.inputPointer))];
+ return {...diagnostics,nextSteps:[{
+   code:'repair_identity_source_count',inputPointers:pointers.slice(0,6),total:pointers.length,
+   hint:'逐项修正列出的 sources，每条 identity 只保留直接产生该参数原值的一处来源。金额取原始金额字段，日期取原始日期字段。对方及业务身份在 proof 或相应字段中说明。修正后按已核实的原件重试。'
+ }]};
 }
 export function directInterpretationDiagnostics(value){
  const boundedIndex=index=>Number.isInteger(index)&&index>=0&&index<1000;
@@ -40,6 +52,17 @@ const guides={
  finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'close-management/SKILL.md'}]
 };
 export function directRecovery(name,{code,status,args}={}){
+ if(name==='voucher_correct'){
+  const guide={tool:'skills_read',arguments:{resource:'reconciliation/references/voucher-correction.md'}};
+  if(code==='finance_correction_correction_tax_receipt_required')return [{
+    ...guide,code:'reconcile_tax_receipt_and_bank_dates',
+    hint:'在已授权原件中找到对应完税凭据或缴款回单，按税种、所属期、金额和凭证号匹配银行扣款与原账。分别核对扣款日、税款入库日及原凭证采用的日期依据。若金额和凭证日期均有依据，保留原凭证并在对账说明列明两个日期及清算时差。证据仍有缺口时记录具体缺件并继续其余核对；单凭银行扣款日不能改写税款凭证日期。'
+  }];
+  if(code==='finance_correction_posting_correction_required')return [{
+    ...guide,code:'verify_correction_posting_evidence',
+    hint:'复读原凭证及已委托的原件。逐项核对 voucher_date、科目、每条非零借贷金额与 businessEvidence 的来源行列、转换和收付方向，确认 proof 指向同一笔业务。原件支持原账时保留并说明；确有错账时，按已核实的字段修正映射和分录，重新 inspect，再以新操作号提交修正后的参数。证据不足时列明待核字段并继续其余凭证。'
+  }];
+ }
  if(name==='finance_vat_plan'&&(code||status==='needs_inputs'||status==='unsupported'))return [{code:'inspect_vat_planning_evidence',tool:'finance_record_contract',arguments:{recordType:'vat_planning'},skill:'tax-period/SKILL.md'}];
  if(name==='finance_rules'&&['invalid_arguments','finance_input_invalid'].includes(code)){
   return [{code:'choose_policy_operation',tool:'finance_rules',hint:'在线检索传 action=search 和公开政策 query，或传 action=open 与官方 url。旧目录的 ruleId、revision、filters 只用于本机计算支持范围和历史版本。'}];

@@ -6,6 +6,7 @@ import { types } from 'node:util';
 import { mkdirSync, lstatSync, openSync, writeFileSync, fsyncSync, closeSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseMoney, formatCents } from './money.mjs';
+import {auditCanonicalDigest,auditResultDigest} from './local-audit.mjs';
 import { captureBusinessEvidence } from './business-evidence.mjs';
 import { currentRequestMetadata, currentDomainOperationMetadata, operationErrorEvidence, markOperationOutcomeUnknown } from './local-audit-coordinator.mjs';
 
@@ -140,7 +141,8 @@ export function inspectPosting(db,setId,v,{formal=false,voucherId,derived=null}=
   const approval=formal&&!issues.some(i=>i.code==='voucher_date_missing')?accepted(db,attempt,attempt.binding):null;
   attempt.approval=approval;
   if(formal&&issues.length&&!approval)throw recordFailure(Error('posting_needs_review'),'needs_review',issues,attempt);
-  return {status:issues.length&&!approval?'needs_review':'checked',attemptId:attempt.id,issues,...(approval?{approval}:{})};
+  const postingEvidenceDigest=captured?.mappings?.length?hash(captured):null;
+  return {status:issues.length&&!approval?'needs_review':'checked',attemptId:attempt.id,issues,postingEvidenceDigest,...(approval?{approval}:{})};
 }
 export function withPostingAttempt(db,setId,action,input,fn) {
   if(active.getStore())return fn();
@@ -210,4 +212,56 @@ export function restorePostingResult(db,setId,voucherId,fallback) {
     if(end.databaseInstanceId===s.databaseInstanceId&&end.accountSetId===setId&&end.enterpriseKey===s.enterpriseKey&&end.operationId===operationId&&end.voucherId===voucherId&&end.output)return end.output;
   }
   return fallback();
+}
+
+// 一次核对同一期间的多张凭证时，原始凭证操作目录只枚举一次。
+export function indexVoucherCorrectionOrigins(db,setId,operationIds) {
+  const s=scope(db,setId), byOperation=new Map();
+  for(const name of readdirSync(s.root).filter(n=>/^[a-f0-9-]{36}$/.test(n))) {
+    const dir=join(s.root,name);
+    let end;
+    try{end=load(join(dir,'result.json'));}catch{continue;}
+    if(!operationIds.has(end.operationId)||!end.output||end.databaseInstanceId!==s.databaseInstanceId||
+       end.accountSetId!==setId||end.enterpriseKey!==s.enterpriseKey)continue;
+    const records=byOperation.get(end.operationId)??[];
+    records.push({dir,end});
+    byOperation.set(end.operationId,records);
+  }
+  return byOperation;
+}
+
+// 只采信当前账库已提交的操作。文件既要对上原始请求摘要，也要对上事务回执的结果摘要。
+export function readVoucherCorrectionOrigin(db,setId,voucherId,operation,
+    index=indexVoucherCorrectionOrigins(db,setId,new Set([operation.operation_id]))) {
+  const receipt=JSON.parse(operation.receipt_json);
+  for(const {dir,end} of index.get(operation.operation_id)??[]) {
+    if(end.voucherId!==voucherId||auditResultDigest(end.output)!==receipt.resultDigest)continue;
+    const raw=restoredInput(load(join(dir,'begin.json')).input);
+    const requests=operation.action==='voucher.post'
+      ? [[setId,raw.voucherId,raw.options],...(raw.options===undefined?[[setId,raw.voucherId]]:[])]
+      : [[setId,raw]];
+    if(!requests.some(args=>auditCanonicalDigest(['audit-request-v1',operation.action,
+      {domainRequestDigest:auditResultDigest(args)}])===operation.request_digest))continue;
+    const mappings=[];
+    if(end.output.postingEvidenceDigest){
+      if(!/^validation-\d+\.json$/.test(end.validation?.file))continue; // 重放回执沿用原操作的采集文件
+      const {evidence}=load(join(dir,end.validation.file));
+      if(hash(evidence)!==end.output.postingEvidenceDigest)throw Error('voucher_correction_origin_unavailable');
+      for(const mapping of evidence.mappings){
+        const sources=mapping.sources.filter(s=>s.path&&s.sha256).map(s=>({
+          path:s.path,sha256:s.sha256,sheet:s.sheet??undefined,
+          row:Number(/^第(\d+)行$/.exec(s.rows?.[0]?.rowLabel)?.[1])||undefined,
+          jsonPointer:s.format==='json'?(s.location==='根节点'?'':s.location):undefined,
+        }));
+        mappings.push({inputPointer:mapping.inputPointer,sources});
+      }
+    }
+    if(operation.action==='voucher.correct' && raw.proof?.kind==='bank_statement' &&
+       end.output.proofReceipt?.sha256===raw.proof.sha256){
+      const sources=(end.output.proofReceipt.rows??[]).map(row=>({path:raw.proof.path,sha256:raw.proof.sha256,sheet:raw.proof.sheet,row}));
+      mappings.push({inputPointer:'/entries/verified-bank-rows',sources});
+    }
+    return {output:end.output,evidence:mappings.length?{mappings}:null};
+  }
+  throw Error('voucher_correction_origin_unavailable');
 }

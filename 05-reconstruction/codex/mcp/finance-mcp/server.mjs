@@ -37,7 +37,7 @@ import {validateDirectInput} from '../../../../06-workbench/server/direct-financ
 import {withFinanceCall,currentFinanceCall,annotateFinanceCall,hasDomainManagedSources} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
 import {skillMetadata} from './skill-metadata.mjs';
-import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
+import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,voucherCorrectionDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
 import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
@@ -52,6 +52,22 @@ if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINES
 }
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
 const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
+
+// Claude Code 会过滤根带组合关键字的工具。恒真的 if 使 then 中的原约束仍对整个参数对象生效。
+// 只调整 tools/list 的展示；tools/call 和嵌套原生调用继续按 TOOL_BY_NAME 的原合同校验。
+function listedTool({name, description, inputSchema, annotations}) {
+  if (['oneOf', 'anyOf', 'allOf'].some(key => Object.hasOwn(inputSchema, key))) {
+    const root = {...inputSchema}, constraints = {};
+    for (const key of ['oneOf', 'anyOf', 'allOf', 'if', 'then', 'else']) {
+      if (Object.hasOwn(root, key)) {
+        constraints[key] = root[key];
+        delete root[key];
+      }
+    }
+    inputSchema = {...root, if: {}, then: constraints};
+  }
+  return {name, description, inputSchema, ...(annotations ? {annotations} : {})};
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
@@ -150,7 +166,9 @@ function preflightTool(name,args={}) {
   const domainProblems=hasDomainManagedSources(name)||name==='finance_rules'?validateSchemaValue(spec.inputSchema,args):undefined;
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length||domainProblems?.length) {
-    const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args)):undefined;
+    let diagnostics;
+    if(name==='voucher_correct') diagnostics=voucherCorrectionDiagnostics(spec.inputSchema,domainProblems,args);
+    else if(DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)) diagnostics=directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args));
     throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, ...(diagnostics??{problems:name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems}) });
   }
   if (spec.status === "unavailable") {
@@ -238,6 +256,16 @@ async function callTool(name, args = {}, executionOptions={}) {
   }
 
   // 普通财务工具 → 固定模型通道（返回已校验信封）；税务 / 目录 → 既有原始通道。
+  if (ACTIVE_PROFILE === 'direct' && process.env.FINANCE_CORRECTION_SOURCE_DIGEST
+      && MODEL_PLAIN_TOOL_NAMES.includes(name) && payload.accountSetId !== undefined) {
+    const binding = resolveBusinessSessionBinding();
+    if (!binding || Number(payload.accountSetId) !== binding.scope.accountSetId) {
+      throw new ToolCallError('finance_memory_session_conflict','finance_memory_session_conflict');
+    }
+    // 更正在本机账库执行，账簿及报表则经 HTTP 读取。两条路径须由后端核对同一企业和库实例。
+    payload.accountSetId = binding.scope.accountSetId;
+    executionOptions = { ...executionOptions, expectedScope: binding.scope };
+  }
   const result = await callBackend(name, payload, CATALOG, executionOptions);
   // 后端明确回报未实现时，同样升级为工具错误，避免“成功返回 not_implemented”。
   if (result && typeof result === "object" && result.not_implemented === true) {
@@ -352,7 +380,7 @@ rl.on("line", async (line) => {
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
   if (method === "ping") return ok(id, {});
-  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
+  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map(listedTool) });
   if (method === "tools/call") {
     let callReference,memoryRefresh;
     const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId},...(memoryRefresh?{financeMemory:memoryRefresh}:{})}}:result;

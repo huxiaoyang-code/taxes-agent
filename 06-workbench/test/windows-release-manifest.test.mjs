@@ -139,6 +139,7 @@ test("complete source bundle has exact version, canonical hashes, directories an
     assert.equal(fs.lstatSync(join(cold.destRoot, entry.path)).nlink, 1);
   }
   for (const path of REQUIRED_BUNDLE_FILES) assert(manifest.files.some((entry) => entry.path === path));
+  assert(manifest.files.some(entry => entry.path === "06-workbench/scripts/claude-direct-discovery.mjs"));
   assert(!fs.existsSync(join(cold.workbenchDir, "node_modules")));
   assert(!fs.existsSync(join(cold.workbenchDir, "data")));
   assert(fs.existsSync(join(cold.destRoot, "05-reconstruction/codex/skills/tax-filing/SKILL.md")));
@@ -448,8 +449,12 @@ test("cold-copy five local CLIs and MCP initialize / list load without a default
   try {
     await client.initialize();
     const tools = (await client.rpc("tools/list", {})).result.tools;
-    for (const tool of ["skills_read", "finance_vat_plan", "finance_rules", "finance_period_review"]) {
+    for (const tool of ["skills_read", "finance_vat_plan", "finance_rules", "finance_period_review", "voucher_correct",
+      "finance_workpaper", "finance_tax_calculate", "finance_tax_summary_calculate"]) {
       assert(tools.some(item => item.name === tool), tool);
+    }
+    for (const {name, inputSchema} of tools) {
+      assert(["anyOf", "oneOf", "allOf"].every(key => !Object.hasOwn(inputSchema, key)), name);
     }
     const monthly = await client.call("skills_read", {resource:"tax-period/SKILL.md"});
     assert.equal(monthly.isError, false);

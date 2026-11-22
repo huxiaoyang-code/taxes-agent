@@ -2,7 +2,11 @@
 
 既有业务 Skill 采用 Anthropic 官方插件的任务说明、输入资料、处理步骤、检查清单与输出格式；账套口径由各宿主读写同一份本机 Markdown。中国税会算法、账库与调用记录属于本项目后端实现；上游方法不是中国税法依据或准确率背书。
 
+正式做账现场可在生成宿主时委托普通凭证自主更正。[自主更正](../plugins/finance/skills/reconciliation/references/voucher-correction.md)将委托时选定的原件、实际绑定账套和账期带入本机校验。成功回执及账簿读回支持接续重算；只读核对和报表测算仍可独立使用。
+
 ## 正常调用链
+
+MCP 的 `tools/list` 将根层的组合约束放入恒真条件的 `then` 中。Claude Code 2.1.309 因此可以发现含分支的工具，客户端也可校验原有的分支必填、互斥条件及取值范围。`tools/call` 按对应 profile、原始输入合同和账套委托执行。[MCP 工具协议](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) · [JSON Schema 条件校验](https://json-schema.org/understanding-json-schema/reference/conditionals)
 
 ```mermaid
 flowchart TD

@@ -8,7 +8,7 @@ import {captureBusinessEvidence,summaryBusinessEvidence} from './business-eviden
 
 const context = new AsyncLocalStorage();
 // 结构接收工具由领域先核准路径和范围，再登记实际来源。
-const domainManagedSources = new Set(['finance_baseline_materials','finance_prebook_review','finance_vat_plan']);
+const domainManagedSources = new Set(['finance_baseline_materials','finance_prebook_review','finance_vat_plan','voucher_correct']);
 export const hasDomainManagedSources=tool=>domainManagedSources.has(tool);
 const sha = value => createHash('sha256').update(value).digest('hex');
 const encode = value => JSON.stringify(value, null, 2) + '\n';

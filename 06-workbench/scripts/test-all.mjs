@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const WORKBENCH = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MCP = join(WORKBENCH, "..", "05-reconstruction", "codex", "mcp", "finance-mcp");
 const steps = [
+  { name: 'mcp-listed-contracts', file: join(WORKBENCH, 'test', 'mcp-listed-contracts.test.mjs'), cwd: WORKBENCH },
+  ...['voucher-correction-proof','voucher-correction-mcp','voucher-correction-image','voucher-correction-document-accounting'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH,nodeArgs:['--test']})),
   { name: 'vat-planning-mcp', file: join(WORKBENCH, 'test', 'vat-planning-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   ...['official-policy-search','official-policy-mof','official-policy-sta','official-policy-reader','official-policy-mcp'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH,nodeArgs:['--test']})),
   { name: 'vat-handoff-mcp', file: join(WORKBENCH, 'test', 'vat-handoff-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },

@@ -1,5 +1,7 @@
 # 代码索引
 
+普通凭证自主更正使用[工具合同](../06-workbench/server/voucher-correction-contract.mjs)、[原件复核](../06-workbench/server/voucher-correction-proof.mjs)和[实际入口验收](../06-workbench/test/voucher-correction-mcp.test.mjs)。现场配置及业务操作见[自主更正说明](../plugins/finance/skills/reconciliation/references/voucher-correction.md)。
+
 月度抵扣的会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 生成，本机报告由 [vat-handoff-html.mjs](../06-workbench/server/vat-handoff-html.mjs) 排版，后续会话通过 [期间复核](../06-workbench/server/finance-period-review.mjs) 取回。
 
 换月时由[宿主会话绑定](../05-reconstruction/codex/hosts/shared/business-session.mjs)核定本账套的调用目录，实际记录和资料整理使用绑定回执的 `auditDir`。[跨工作区交接回归](../06-workbench/test/vat-handoff-mcp.test.mjs)覆盖次月分页查回以及沿用旧目录。
@@ -7,6 +9,8 @@
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
 ## 当前 direct 默认调用链
+
+工具列举及调用见 [MCP 服务](../05-reconstruction/codex/mcp/finance-mcp/server.mjs)。六项分支合同由 [stdio 正反例](../06-workbench/test/mcp-listed-contracts.test.mjs) 检查。发布前在 `06-workbench` 运行 `npm run check:claude-direct -- --claude-cli "<已安装 Claude Code 的可执行文件或 JS 入口绝对路径>"`，用宿主的 `mcp_status` 对照 direct 工具全名。[宿主检查脚本](../06-workbench/scripts/claude-direct-discovery.mjs)
 
 会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 汇集原件、官文、税额与两套方案，[账簿读取](../06-workbench/server/vat-handoff-books-worker.mjs) 取已过账凭证、银行匹配和四张报表。交接回读、变更和独立文件校验见 [stdio 验收](../06-workbench/test/vat-handoff-mcp.test.mjs)。
 
