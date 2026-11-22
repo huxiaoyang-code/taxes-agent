@@ -70,6 +70,22 @@ async function verifyListedContracts(t, discovery) {
   t.after(() => client.close());
   await client.initialize('synthetic-host-contract');
   const published = (await client.rpc('tools/list')).result.tools;
+  await t.test('银行工具分别说明用途和本机草稿来源', () => {
+    const bank = published.filter(tool => tool.name.startsWith('bank_'));
+    assert.equal(new Set(bank.map(tool => tool.description)).size, bank.length);
+    for (const tool of bank) {
+      assert.ok(tool.inputSchema.required.includes('draftRef'), tool.name);
+      assert.match(tool.inputSchema.properties.draftRef.description, /本机.*账套.*操作/, tool.name);
+    }
+    // 检查披露中足以分辨六种相近意图的业务词，实际搜索排名另由宿主决定。
+    for (const [intent, expected] of [
+      [/列映射/, 'bank_import_preview'], [/写入银行模块/, 'bank_import'],
+      [/匹配候选/, 'bank_candidates'], [/建立匹配/, 'bank_confirm'],
+      [/撤销一条.*匹配/, 'bank_cancel'], [/余额调节表/, 'bank_reconcile'],
+    ]) {
+      assert.deepEqual(bank.filter(tool => intent.test(tool.description)).map(tool => tool.name), [expected]);
+    }
+  });
   const direct = toolsForProfile('direct');
   const canonical = discovery === 'canonical' ? direct.filter(tool => tool.name !== 'ledger_query') : direct;
   assert.equal(published.some(tool => tool.name === 'ledger_query'), discovery !== 'canonical');

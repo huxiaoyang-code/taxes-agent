@@ -8,7 +8,7 @@
 
 两种使用方式：
 
-1. 已配置本仓库 finance MCP：用 `skills_list` 找 `taxes-company-advisor/SKILL.md`，用 `skills_read` 按需读取。该路径属于 MCP 资源，**不会仅因拉取仓库就成为 Codex 原生已安装技能**。
+1. 在 `legacy` 或 `harness` 模式的 finance MCP 中，用 `skills_list` 找 `taxes-company-advisor/SKILL.md`，再用 `skills_read` 读取。默认 `direct` 工作区接手账套时读 `company-baseline/SKILL.md`，处理整期业务时读 `tax-period/SKILL.md`。
 2. 要在 Codex 用 `$taxes-company-advisor`：把整个 `05-reconstruction/codex/skills/taxes-company-advisor` 目录复制到自己的 `~/.agents/skills/taxes-company-advisor`，保留 references/assets/agents；或让 `$skill-installer` 从本仓库该路径、团队选定提交安装。不要只复制 SKILL.md，也不要无提示覆盖已有个人修改。安装后检查技能列表；未出现时重启 Codex。原生发现位置参见 [OpenAI 技能文档](https://learn.chatgpt.com/docs/build-skills)。
 
 技能说明自包含；业务执行另需同事本机工作台及 finance MCP。配置方法见[代码索引 MCP](CODE-INDEX.md#mcp)和[Windows 启动](CODE-INDEX.md#windows)，使用本人机器的 Node/脚本路径及显式数据目录。没有连接时仍可制定调查和补件计划，不能报告已执行核算或已入库。真实资料仅放本机可信界面，模型输出边界见技能正文。

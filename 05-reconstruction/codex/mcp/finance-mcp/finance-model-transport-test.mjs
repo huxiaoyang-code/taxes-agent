@@ -163,6 +163,13 @@ await test('有意义的成功信封能通过（不是“总是拒绝”）：�
   assert.equal(validateModelEnvelope({ ...degraded, needsLocalReview: false, applied: 'unknown' }, REGISTRY).ok, false);
 
   assert.equal(catalog.ok, true);
+  const available = catalog.catalog.available.filter(id => id !== 'voucher.generated.summary');
+  const canonical = {...catalog, catalog:{...catalog.catalog, available}, projection:{...catalog.projection, availableCount:available.length}};
+  const canonicalView = {...REGISTRY, canonicalQueryCatalog:true};
+  assert.equal(validateModelEnvelope(canonical, canonicalView).ok, true);
+  expectFailure(validateModelEnvelope(canonical, REGISTRY), 'envelope_invalid');
+  expectFailure(validateModelEnvelope(catalog, canonicalView), 'envelope_invalid');
+  expectFailure(validateModelEnvelope({...canonical, catalog:{...canonical.catalog, available:available.slice(1)}}, canonicalView), 'envelope_invalid');
   assert.equal(context.ok, true);
   assert.equal(plan.ok, true);
 

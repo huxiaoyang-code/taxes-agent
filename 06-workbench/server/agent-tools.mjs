@@ -202,17 +202,17 @@ function requireEntries(args = {}) {
 // ------------------------------------------------------------------ 查询能力
 // 只登记「本地真的实现」的 nodeId；未登记的一律 not_implemented。
 // 可用性分类（原站 21 项中哪 11 项不可用）由 MCP 层依据原站 catalog 判定。
+const postedVouchers = {
+  period: true,
+  run: (setId, a) => A.listVouchers(setId, { period: a.period, status: "posted" }),
+};
 const QUERY = dict({
   "enterprise_account.account_set": { run: (setId) => A.getAccountSet(setId) },
   "enterprise_account.subject_system.all": { run: (setId) => A.listAccounts(setId) },
-  "voucher.generated.list": {
-    period: true,
-    run: (setId, a) => A.listVouchers(setId, { period: a.period, status: "posted" }),
-  },
+  "voucher.generated.list": postedVouchers,
   "voucher.generated.summary": {
-    period: true,
+    ...postedVouchers,
     note: "当前与 voucher.generated.list 相同：返回已过账凭证列表，尚无独立汇总实现",
-    run: (setId, a) => A.listVouchers(setId, { period: a.period, status: "posted" }),
   },
   "voucher.draft.summary": {
     period: true,

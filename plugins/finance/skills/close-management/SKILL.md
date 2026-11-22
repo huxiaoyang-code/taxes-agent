@@ -1,6 +1,6 @@
 ---
 name: close-management
-description: 组织中国企业月结和年度核对，按实际资料、账务依赖及复核情况选择工作先后，显示已完成和未决事项。
+description: 整期账税的辅助参考。在 tax-period 中安排月结顺序、检查结转依赖或梳理年末未决事项时读取。
 user-invocable: false
 ---
 

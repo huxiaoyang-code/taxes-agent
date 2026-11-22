@@ -160,6 +160,28 @@ test('every business document is actually readable through restricted MCP skills
    const content=read(join(skills,entry.resource)),frontmatter=content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
    assert.equal(entry.metadataState,'valid');assert.equal(entry.name,frontmatter.match(/^name:\s*(.+)$/m)[1]);assert.equal(entry.description,frontmatter.match(/^description:\s*(.+)$/m)[1]);
   }
+  const entries = new Map(listed.data.entries.map(entry => [entry.name, entry]));
+  const main = listed.data.entries.filter(entry => entry.role === 'primary');
+  assert.equal(main.length, 9);
+  for (const [task, support] of [
+   ['journal-entry', 'journal-entry-prep'], ['internal-control-review', 'audit-support'], ['tax-period', 'close-management'],
+  ]) {
+   const entry = entries.get(task), ref = entries.get(support);
+   assert.equal(entry.role, 'primary');
+   assert.equal(ref.role, 'reference');
+   assert.ok(entry.description.includes(support));
+   const page = (await client.call('skills_read', {resource:entry.resource})).data.markdown;
+   assert.ok(page.includes('](../' + ref.resource + ')'));
+  }
+  const reconcile = entries.get('reconciliation');
+  assert.match(reconcile.description, /原件.*逐笔对账/);
+  assert.match(reconcile.description, /导入银行 CSV.*匹配流水/);
+  const guide = (await client.call('skills_read', {resource:reconcile.resource})).data.markdown;
+  const tools = (await client.rpc('tools/list')).result.tools;
+  for (const name of ['bank_import_preview','bank_import','bank_candidates','bank_confirm','bank_reconcile']) {
+   assert.ok(guide.includes('`' + name + '`'));
+   assert.deepEqual(tools.find(tool => tool.name === name).inputSchema.required, ['accountSetId','draftRef']);
+  }
   const period=listed.data.entries.find(entry=>entry.name==='tax-period');
   assert.match(period.description,/做完本月账/);
   const workflows=['vat-planning','tax-cash-brief','tax-organizer'];
@@ -192,6 +214,9 @@ test('仓库内专用技能在显式legacy工具面可读，仍引用现有业�
  };
  try{
   await client.initialize('finance-cn-legacy-reference-test');
+  const listed = (await client.call('skills_list', {})).data;
+  assert.deepEqual(listed.entries.map(item => item.resource).sort(), entry.map(p => relative(root,p).replaceAll('\\','/')).sort());
+  assert.ok(listed.entries.every(item => !Object.hasOwn(item,'role')));
   for(const p of docs){
    const resource=relative(root,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});
    assert.equal(r.isError,false,`${resource}: ${r.text}`);

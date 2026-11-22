@@ -1,6 +1,6 @@
 ---
 name: journal-entry-prep
-description: 为中国会计凭证编制提供原件、归类、计算支持和复核要点，适用于计提、摊销、折旧、工资、收入和存货等业务。
+description: 凭证编制的辅助参考。在 journal-entry 中核实计提、摊销、折旧、工资、收入或存货的原件和计算依据时读取。
 user-invocable: false
 ---
 

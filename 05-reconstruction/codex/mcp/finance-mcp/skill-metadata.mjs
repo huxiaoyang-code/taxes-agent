@@ -1,6 +1,6 @@
 // 只解析目录所需的 YAML 标量子集；不执行标签、锚点或隐式类型转换。
 // 不支持的 frontmatter 明确标为 invalid，正文仍经原 skills_read 按需读取。
-export function skillMetadata(resource, markdown) {
+export function skillMetadata(resource, markdown, {includeRole = false} = {}) {
   const invalid = {resource, name:null, description:null, metadataState:'invalid'};
   if (typeof markdown !== 'string' || !markdown.replace(/^\uFEFF/, '').startsWith('---\n') && !markdown.replace(/^\uFEFF/, '').startsWith('---\r\n'))
     return {...invalid, metadataState:'missing'};
@@ -23,5 +23,12 @@ export function skillMetadata(resource, markdown) {
   }
   const name=values.get('name'),description=values.get('description');
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name??'') || name.length>80 || !description?.trim() || description.length>2048) return invalid;
-  return {resource,name,description,metadataState:'valid'};
+  const entry = {resource, name, description, metadataState:'valid'};
+  if (includeRole) {
+    // 本插件用 user-invocable: false 标识辅助参考。role 说明阅读顺序，执行权限仍由业务工具决定。
+    const invocable = values.get('user-invocable');
+    if (invocable !== undefined && invocable !== 'true' && invocable !== 'false') return invalid;
+    entry.role = invocable === 'false' ? 'reference' : 'primary';
+  }
+  return entry;
 }
