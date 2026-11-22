@@ -40,6 +40,17 @@ const guides={
  finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'close-management/SKILL.md'}]
 };
 export function directRecovery(name,{code,status,args}={}){
+ if(name==='voucher_correct'){
+  const guide={tool:'skills_read',arguments:{resource:'reconciliation/references/voucher-correction.md'}};
+  if(code==='finance_correction_correction_tax_receipt_required')return [{
+    ...guide,code:'reconcile_tax_receipt_and_bank_dates',
+    hint:'在已授权原件中找到对应完税凭据或缴款回单，按税种、所属期、金额和凭证号匹配银行扣款与原账。分别核对扣款日、税款入库日及原凭证采用的日期依据。若金额和凭证日期均有依据，保留原凭证并在对账说明列明两个日期及清算时差。证据仍有缺口时记录具体缺件并继续其余核对；单凭银行扣款日不能改写税款凭证日期。'
+  }];
+  if(code==='finance_correction_posting_correction_required')return [{
+    ...guide,code:'verify_correction_posting_evidence',
+    hint:'复读原凭证及已委托的原件。逐项核对 voucher_date、科目、每条非零借贷金额与 businessEvidence 的来源行列、转换和收付方向，确认 proof 指向同一笔业务。原件支持原账时保留并说明；确有错账时，按已核实的字段修正映射和分录，重新 inspect，再以新操作号提交修正后的参数。证据不足时列明待核字段并继续其余凭证。'
+  }];
+ }
  if(name==='finance_vat_plan'&&(code||status==='needs_inputs'||status==='unsupported'))return [{code:'inspect_vat_planning_evidence',tool:'finance_record_contract',arguments:{recordType:'vat_planning'},skill:'tax-period/SKILL.md'}];
  if(name==='finance_rules'&&['invalid_arguments','finance_input_invalid'].includes(code)){
   return [{code:'choose_policy_operation',tool:'finance_rules',hint:'在线检索传 action=search 和公开政策 query，或传 action=open 与官方 url。旧目录的 ruleId、revision、filters 只用于本机计算支持范围和历史版本。'}];

@@ -46,6 +46,7 @@ async function rejected(client,args,expectedError) {
   assert.ok(result.isError || result.data?.ok === false, '错误的更正竟然成功：'+result.text);
   assert.notEqual(result.data?.applied,true,result.text);
   if(expectedError) assert.match(result.text,expectedError);
+  return result.structured;
 }
 
 function voucherSnapshot(db,id) {
@@ -147,9 +148,22 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
   }
   const plan=await Promise.all(changes.map(request));
 
+  await t.test('原件金额映射指错行时给出普通入账核对步骤，保留原分录',async()=>{
+    const before=voucherSnapshot(db,ids[0]);
+    const args=structuredClone(plan[0]);
+    args.operationId=randomUUID();
+    args.businessEvidence.mappings[1].sources[0].row=3;
+    const {error,details}=await rejected(formal,args);
+    assert.equal(error,'finance_correction_posting_correction_required');
+    assert.deepEqual(details.nextSteps.map(step=>step.code),['verify_correction_posting_evidence']);
+    assert.match(details.nextSteps[0].hint,/businessEvidence/);
+    assert.deepEqual(voucherSnapshot(db,ids[0]),before);
+  });
+
   await t.test('未委托、跨账套、跨期间、篡改来源或转用另一方收款行不写账',async()=>{
     const args=plan[0],before=voucherSnapshot(db,ids[0]);
-    await rejected(preview,args);
+    const denied=await rejected(preview,args);
+    assert.equal(denied.details?.nextSteps,undefined);
     await rejected(formal,{...args,accountSetId:other.accountSetId});
     await rejected(formal,{...args,period:'2026-01'});
     await rejected(formal,{...args,operationId:randomUUID(),proof:{...args.proof,sha256:'0'.repeat(64)}});
@@ -189,7 +203,13 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
   });
   for(const args of plan.slice(1))await success(formal,'voucher_correct',args);
   const taxChange=await request(single(5,'20',10,'2221',8,true));
-  await rejected(formal,taxChange,/correction_tax_receipt_required/);
+  const refusedTax=await rejected(formal,taxChange);
+  assert.equal(refusedTax.error,'finance_correction_correction_tax_receipt_required');
+  const [next]=refusedTax.details.nextSteps;
+  assert.equal(next.code,'reconcile_tax_receipt_and_bank_dates');
+  assert.equal(next.tool,'skills_read');
+  assert.equal((await formal.call(next.tool,next.arguments)).isError,false);
+  assert.match(next.hint,/完税凭据.*扣款日.*入库日.*保留原凭证/);
   assert.deepEqual(voucherSnapshot(db,ids[5]),tax);
   assert.deepEqual([net(bank),net(alpha),net(beta),net(supplier),net('2203')],[699,-495,-714,500,0]);
   for(const change of changes) assert.deepEqual(voucherSnapshot(db,ids[change.index]),{
