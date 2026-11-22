@@ -2607,23 +2607,8 @@ export function cashFlowStatement(setId, period) {
 
 const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/[\s_\u3000]/g, "");
 
-export function parseCsv(text) {
-  const s = String(text ?? "").replace(/^\uFEFF/, "");
-  const rows = [];
-  let row = [], field = "", inQ = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inQ) {
-      if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
-      else field += c;
-    } else if (c === '"') inQ = true;
-    else if (c === ",") { row.push(field); field = ""; }
-    else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
-    else if (c !== "\r") field += c;
-  }
-  if (field !== "" || row.length) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.some((x) => String(x).trim() !== ""));
-}
+export {parseCsv} from './csv-rows.mjs';
+import {parseCsv} from './csv-rows.mjs';
 
 const DIRECTIONS = { 借: "debit", debit: "debit", d: "debit", 借方: "debit", 贷: "credit", credit: "credit", c: "credit", 贷方: "credit" };
 

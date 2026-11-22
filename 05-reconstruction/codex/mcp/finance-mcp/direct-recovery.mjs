@@ -52,6 +52,11 @@ const guides={
  finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'tax-period/references/close-management.md'}]
 };
 export function directRecovery(name,{code,status,args}={}){
+ if(name==='finance_workpaper_details'&&['finance_details_version_changed','finance_details_source_changed','finance_details_source_invalid','finance_details_artifact_changed','finance_details_record_changed','finance_details_reference_expired','finance_details_file_missing'].includes(code)){
+  const call=/^finance-artifact:(\d{8}T\d{9}Z_[a-f0-9-]{36})\/workpaper\.json$/.exec(args?.artifactRef);
+  if(call&&args.target)return [{code:'review_recorded_workpaper_and_recompute',tool:'finance_period_review',arguments:{target:args.target,callIds:[call[1]]},
+   hint:'核对原调用采用的来源与本期版本。原件已变化时用更新的业务记录重算，再用新底稿引用核对明细。'}];
+ }
  if(name==='voucher_correct'){
   const guide={tool:'skills_read',arguments:{resource:'reconciliation/references/voucher-correction.md'}};
   if(code==='finance_correction_correction_tax_receipt_required')return [{

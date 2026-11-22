@@ -85,7 +85,7 @@ function workspace(root,name,dbPath,source,apiBase,accountSetId,delegated) {
   assert.equal(permissions.allow.includes('mcp__finance__voucher_correct'),delegated);
   assert.equal(permissions.allow.includes('mcp__finance__finance_query'),delegated);
   assert(![...permissions.allow,...permissions.ask].includes('mcp__finance__ledger_query'));
-  assert.equal(existsSync(join(output,'outputs')),delegated);
+  assert.ok(existsSync(join(output,'outputs')),'交付目录由生成器建立，账务写权限仍按委托验证');
   for(const rule of ['Edit(/outputs/*.csv)','Edit(/outputs/*.md)']) assert.equal(permissions.allow.includes(rule),delegated);
   for(const guarded of ['voucher_unpost','voucher_delete']) assert.ok(permissions.ask.includes('mcp__finance__'+guarded));
   return read('.mcp.json').mcpServers.finance.env;

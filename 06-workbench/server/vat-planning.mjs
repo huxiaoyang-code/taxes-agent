@@ -3,6 +3,7 @@ import {currentFinanceCall,financeAuditDirectory} from './finance-call-chain.mjs
 import {digest} from './finance-prebook-evidence.mjs';
 import {calculateFinanceSummary,summaryRules,FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
 import {money,cents} from './agency-tax-rules.mjs';
+import {currentReceipts} from './vat-receipt-chain.mjs';
 import {readVatFacts,fail,isMonth,cutoff} from './vat-planning-evidence.mjs';
 import {VAT_NUMERIC_FIELDS} from './vat-planning-contracts.mjs';
 import {amount,VAT_SALES_FIELDS,salesByPeriod,readActivity,adjustedInput,openingHistory,addBurdens,readAgreement,recommend,cashLedger,paymentEvidence} from './vat-planning-ledgers.mjs';
@@ -55,33 +56,6 @@ function groups(rows,key){
   out.get(id).push(row);
  }
  return out;
-}
-// 原确认、撤销及更正需由同一票（或同一税期）内的回执链明确关联。
-function currentReceipts(rows,key,gaps){
- const indexed=groups(rows.filter(r=>r.data.receiptId),r=>r.data.receiptId),replaced=new Map();
- const recordIssue=r=>gaps.push({code:'receipt_correction_chain_unverified',...key,sources:[r.source]});
- for(const r of rows){
-  const {receiptId,supersedes,confirmationState}=r.data;
-  if(confirmationState!==undefined&&!['confirmed','revoked'].includes(confirmationState)||
-     confirmationState==='revoked'&&(!supersedes||!r.data.operationDate))recordIssue(r);
-  if(!supersedes)continue;
-  const prior=indexed.get(supersedes);
-  if(typeof receiptId!=='string'||!prior||receiptId===supersedes||
-   confirmationState==='revoked'&&(!isMonth(r.data.taxPeriod)||prior.some(p=>p.data.taxPeriod!==r.data.taxPeriod))||
-   prior.some(p=>(p.data.operationDate??p.data.knownAt)>(r.data.operationDate??r.data.knownAt))||
-   replaced.has(supersedes)&&replaced.get(supersedes)!==receiptId){
-   recordIssue(r);continue;
-  }
-  replaced.set(supersedes,receiptId);
- }
- for(const id of replaced.keys()){
-  const seen=new Set([id]);let next=replaced.get(id);
-  while(next){
-   if(seen.has(next)){recordIssue(indexed.get(id)[0]);break;}
-   seen.add(next);next=replaced.get(next);
-  }
- }
- return rows.filter(r=>!replaced.has(r.data.receiptId));
 }
 function calendar(rows,filings,periods,asOf,sales,gaps){
  const byPeriod=groups(rows,r=>r.data.period),months=new Map();
@@ -318,6 +292,7 @@ export function runVatPlanning(args){
  const offset=args.offset??0,limit=args.limit??50;
  const common={version:'finance-vat-planning/1',basis,asOf:args.asOf,start,through:args.through,ruleVersion:FINANCE_SUMMARY_RULE_VERSION,
   activity,agreement,history:{reason:history.reason??null,sources:history.sources},decisions:{baseline:args.baseline??[],plan:args.plan??[]},
+  earliestEligibleOption:{plan:{strategy:'earliest_eligible'}},
   rules:summaryRules('vat_general'),openingSources:opening.sources,callRef:currentFinanceCall()?.callId,localEvidence:'vat-planning-evidence.json',
   invoices:[...book.values()].slice(offset,offset+limit),pagination:{total:book.size,offset,next:offset+limit<book.size?offset+limit:null},
   conditions:['月度境内一般计税，逐票用途、未用票覆盖、身份与预测取决于来源。','应纳在抵预缴前；应补和实缴分别按测算、申报及付款回执取数。未给付款安排时按次月估计。客户约定仅用于方案比较。','期末留抵及未用票不计作现金。跨期累计含标明的预测期，企业现金另需其他收支与期初余额。'],
@@ -328,7 +303,17 @@ export function runVatPlanning(args){
  if(!comparable.size)return finish({...common,status:'needs_inputs',gaps});
  const resolved=new Map([...book].filter(([,bill])=>bill.resolved));
  const payments=facts.filter(f=>f.kind==='paymentCoverage');
- const compare=periods=>[args.baseline,args.plan].map(entries=>simulate(periods,resolved,selections(entries??[],resolved,months),opening,history,activity,yearEnd,payments,args.asOf));
+ const earliest=args.plan?.strategy==='earliest_eligible';
+ function compare(periods){
+  const earlyChoices=new Map();
+  for(const bill of resolved.values()){
+   const first=[...periods].find(([period,month])=>selectable(bill,period,month));
+   bill.earliestSelectablePeriod=first?.[0]??null;
+   if(first)earlyChoices.set(bill.invoiceRef,first[0]);
+  }
+  const choices=[selections(args.baseline??[],resolved,months),earliest?earlyChoices:selections(args.plan??[],resolved,months)];
+  return choices.map(choice=>simulate(periods,resolved,choice,opening,history,activity,yearEnd,payments,args.asOf));
+ }
  let [baseline,plan]=compare(comparable);
  if(baseline.gap||plan.gap){
   const problems=[baseline.gap,plan.gap].filter(Boolean);

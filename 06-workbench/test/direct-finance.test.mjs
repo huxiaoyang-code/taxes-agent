@@ -4,6 +4,8 @@ import {mkdtempSync,writeFileSync,readFileSync,readdirSync,existsSync} from 'nod
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {DatabaseSync} from 'node:sqlite';
+import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {evaluateAgencyAccounting,replayAgencyFinancials} from '../server/agency-business-rules.mjs';
 import {callDirectFinanceTool} from '../server/direct-finance.mjs';
 import {withFinanceCall,readFinanceCall} from '../server/finance-call-chain.mjs';
@@ -199,6 +201,47 @@ test('年度凭证覆盖11月与12月，不只展示年末月',async()=>{
  const original=join(dir,'original.json'),entityRaw=join(dir,'entity.json');writeFileSync(original,JSON.stringify({synthetic:true,records:all}));writeFileSync(entityRaw,JSON.stringify({version:'agency-raw-facts/1',scope:{...scope,period:'2026-11'},records:[e]}));
  for(const [i,month] of ['11','12'].entries()){const s={...scope,period:`2026-${month}`},raw=join(dir,`raw-${month}.json`),manifest=join(dir,`manifest-${month}.json`);writeFileSync(raw,JSON.stringify({version:'agency-raw-facts/1',scope:s,records:[all[i+1]]}));writeFileSync(manifest,JSON.stringify({version:'agency-business-materials/1',scope:s,originals:[{id:'original',path:original}],sources:[{path:entityRaw},{path:raw}]}));manifests.push(manifest);}
  const args={manifestPaths:manifests},auditDir=join(root,'annual-two-audit'),result=await withFinanceCall({tool:'finance_annual_workpaper',args,auditDir},()=>callDirectFinanceTool('finance_annual_workpaper',args));assert.equal(result.vouchers.count,2);assert.equal(result.ledgerAmounts.profitBeforeTax,-200);const report=readFileSync(join(auditDir,'artifacts',result.evidence.callRef,'review.md'),'utf8');assert(report.includes('EXP-11'));assert(report.includes('EXP-12'));
+ const dbPath=join(dir,'scope.db'),db=new DatabaseSync(dbPath);
+ db.exec('CREATE TABLE audit_database_instances(instance_id TEXT,is_active INTEGER);CREATE TABLE account_sets(id INTEGER);CREATE TABLE import_enterprise_account_sets(account_set_id INTEGER,enterprise_key TEXT)');
+ db.prepare('INSERT INTO audit_database_instances VALUES(?,1)').run(scope.databaseInstanceId);
+ for(const id of [scope.accountSetId,2]){
+  db.prepare('INSERT INTO account_sets VALUES(?)').run(id);
+  db.prepare('INSERT INTO import_enterprise_account_sets VALUES(?,?)').run(id,id===scope.accountSetId?scope.enterpriseKey:'SYNTHETIC-OTHER');
+ }
+ db.close();
+ const env={FINANCE_AUDIT_DIR:auditDir,FINANCE_DATABASE_PATH:dbPath,FINANCE_SOURCE_ROOT:dir};
+ const start=()=>new McpStdioClient(resolve(import.meta.dirname,'../../05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:dir,env}).start();
+ let callId,artifactRef;
+ const first=start();try{
+  await first.initialize();const created=await first.call('finance_annual_workpaper',args);assert.equal(created.isError,false,created.text);
+  callId=created.data.evidence.callRef;artifactRef=created.data.vouchers.detailRef;
+ }finally{await first.close();}
+ const next=start(),target={accountSetId:scope.accountSetId,period:'2026-12'};
+ try{
+  await next.initialize();
+  const read=async()=>{const r=await next.call('finance_period_review',{target,callIds:[callId]});assert.equal(r.isError,false,r.text);return r.data.records[0];};
+  const current=await read();assert.equal(current.kind,'annual_workpaper');assert.equal(current.artifactIntegrity,'verified');
+  assert.equal(current.annual.recordedAmounts.profitBeforeTax,-200);assert.equal(current.annual.year, '2026');assert.equal(current.annual.nextYearCarryPresent,true);
+  const endPath=join(auditDir,callId,'end.json'),end=JSON.parse(readFileSync(endPath));
+  // 即使结果文件摘要仍与 end 相符，期间复核也要检查摘要金额是否与原生年度工件一致。
+  const outputPath=join(auditDir,callId,'result.json'),originalOutput=readFileSync(outputPath),altered=JSON.parse(originalOutput);
+  altered.ledgerAmounts.profitBeforeTax=-1;
+  const wrongBytes=Buffer.from(JSON.stringify(altered));writeFileSync(outputPath,wrongBytes);
+  writeFileSync(endPath,JSON.stringify({...end,output:{...end.output,bytes:wrongBytes.length,sha256:hash(wrongBytes)}}));
+  const wrong=await read();assert.equal(wrong.artifactIntegrity,'changed');assert.equal(wrong.annual,undefined);
+  writeFileSync(outputPath,originalOutput);
+  // 旧版年度工具只保存调用配置的账库路径和底稿内的真实 scope。
+  delete end.metadata.configuredTarget;writeFileSync(endPath,JSON.stringify(end));
+  assert.equal((await read()).annual.recordedAmounts.profitBeforeTax,-200);
+  const page=await next.call('finance_workpaper_details',{target,artifactRef,section:'vouchers',offset:1,limit:1});assert.equal(page.isError,false,page.text);assert.equal(page.data.rows[0].sourceRecordIndex,2);assert.equal(page.data.rows[0].period,'2026-12');
+  for(const other of [{...target,period:'2026-11'},{...target,accountSetId:2}]){
+   const r=await next.call('finance_period_review',{target:other,callIds:[callId]});assert.equal(r.isError,true);
+  }
+  const unbound=await next.call('finance_period_review',{unboundCalls:{callIds:[callId]}});assert.equal(unbound.data.records[0].annual,undefined);
+  writeFileSync(original,JSON.stringify({synthetic:true,records:all},null,2));const stale=await read();
+  assert.equal(stale.flags.stale,true);assert.deepEqual(stale.annual.affectedInputMonths,['2026-11','2026-12']);assert.equal(stale.annual.currentness,'recheck_before_use');assert(stale.nextSteps.some(s=>s.tool==='finance_annual_workpaper'));
+  const failed=await next.call('finance_workpaper_details',{target,artifactRef,section:'vouchers'});assert.equal(failed.isError,true);assert.match(failed.text,/finance_details_source_changed/);assert.deepEqual(failed.data.details.nextSteps[0].arguments,{target,callIds:[callId]});
+ }finally{await next.close();}
 });
 test('HTTP真实返回身份只本机记录，存在原生ID也不冒充成功',async()=>{
  const previous=globalThis.fetch;let sent;

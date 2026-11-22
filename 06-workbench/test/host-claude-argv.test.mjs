@@ -56,6 +56,8 @@ test('提示词放在variadic allowedTools之后，实际argv仍以选项终止�
  const {permissions,...memory}=JSON.parse(received.argv[received.argv.indexOf('--settings')+1]);
  assert.deepEqual(memory,{autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
  assert.ok(['finance_query','account_list'].every(name=>permissions.allow.includes('mcp__finance__'+name)));
+ assert.ok(permissions.allow.includes('Edit(/outputs/*.csv)'));
+ assert.ok(permissions.allow.includes('Edit(/outputs/*.md)'));
  assert.ok(!permissions.allow.includes('mcp__finance__voucher_correct'));
  assert.equal(launch.env.FINANCE_REQUIRE_BOUND_READS,'1');
  assert.equal(launch.memoryPath,join(memoryDirectory,'MEMORY.md'));

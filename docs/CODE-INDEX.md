@@ -152,6 +152,8 @@
 
 ## 年度结算与汇算
 
+- Direct 年度核算与复核经 [direct-finance.mjs](../06-workbench/server/direct-finance.mjs) 和 [finance-period-review.mjs](../06-workbench/server/finance-period-review.mjs) 核对原生年度工件及金额。跨进程凭证、库存与成本明细复用 [direct-finance-details.mjs](../06-workbench/server/direct-finance-details.mjs) 的来源校验。税费预测与回执变化按 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 的版本差额读回。
+
 - 年度 Skill：[annual-close/SKILL.md](../05-reconstruction/codex/skills/annual-close/SKILL.md)，官方改编来源与 Apache-2.0 许可保留在同目录。只读证据适配：[annual-close.mjs](../06-workbench/server/annual-close.mjs)，复用实际年累计报表、期末检查与账簿能力，不复制所得税或账务公式。
 - 通过 Harness MCP 工具发现/计划/执行 `annual.inspect`（year scope、只读）。年度税会计算使用已发布 `agency.annual-calculation`，以实际任务版本与跨 Store 依赖绑定历史、年度核对与次年任务；执行、会计复核和全年业务完成分别列示。缺件、未实现调整或未审定事项保留未完成。
 - 合成验证：在 `06-workbench` 运行 `node test/annual-close.test.mjs`（独立全年/历史金额及更正/辅助分配失效）与 `node test/annual-close-harness.test.mjs`（真实 stdio MCP＋原生 Harness 联调，脚本不构成 Agent 验收）。后者的 `prepare <全新绝对目录>` 仅生成合成既有账簿、全年原件/manifest、scope/target、独立手算与 goal.txt，不调用 Harness 或模型；可供另一 Agent 逐步通过 MCP 独立验收并记录剩余限制。
