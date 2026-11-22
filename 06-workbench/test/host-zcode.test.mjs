@@ -18,7 +18,7 @@ assert.deepEqual(config.mcp.servers.finance,{type:'stdio',...context.mcp,enabled
 assert.equal(bundle.files.some(f=>f.path.includes('/agents/')),false);assert.match(file('AGENTS.md'),/账本金额→凭证\/计算结果→规则依据→工具调用→输入与原件/);
 assert.ok(file('AGENTS.md').includes(PERIOD_TASK_ROUTING));
 assert.ok(file('AGENTS.md').includes(BUSINESS_MEMORY_ROUTING));assert.match(BUSINESS_MEMORY_ROUTING,/memoryPath.*MEMORY\.md/);
-const native=config.mcp.servers.finance,client=new McpStdioClient(native.args[0],{cwd:native.cwd,env:{...native.env,NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
+const native=config.mcp.servers.finance,client=new McpStdioClient(native.args[0],{cwd:native.cwd,env:{...native.env,FINANCE_QUERY_DISCOVERY:undefined,NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
 try{
   await client.initialize('zcode-config-protocol-probe');const listed=(await client.rpc('tools/list')).result.tools;
   assert.deepEqual(listed.map(t=>t.name).sort(),toolsForProfile('direct').map(t=>t.name).sort());assert.equal(listed.some(t=>t.name.startsWith('harness_')),false);

@@ -86,7 +86,7 @@ for(const args of [[],['--pi-root','relative'],['--pi-root',root,'--check','--js
 assert.equal(parsePiArgs(['--help'])['--help'],true);
 const server=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs');
 for(const profile of [undefined,'direct','harness','legacy']){
-  const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
+  const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_QUERY_DISCOVERY:undefined,FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
   try{
     const {result:handshake}=await client.initialize();
     const direct=profile===undefined||profile==='direct';
