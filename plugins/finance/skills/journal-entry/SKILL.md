@@ -1,10 +1,12 @@
 ---
 name: journal-entry
-description: 根据采购销售、费用、工资等原件编制凭证草稿。计提、折旧或摊销需要核实原件和计算依据时，查 journal-entry-prep。
+description: 有采购、销售、工资或费用等业务依据，需要制单、计提、折旧或摊销时，编制借贷分录并复核归属期间、科目、原件和金额。
 argument-hint: "<业务类型> [期间]"
 ---
 
 # 凭证编制
+
+已有分录与银行回单不符时，进入[对账](../reconciliation/SKILL.md)调查差异和更正依据。
 
 本文件由 Anthropic 官方同名 Skill 中国化改编，来源和修改说明见 [SOURCES.md](../../SOURCES.md)。连接类别见 [CONNECTORS.md](../shared/references/connectors.md)。
 
@@ -27,7 +29,7 @@ argument-hint: "<业务类型> [期间]"
 ### 2. 核对并计算
 
 - 原始业务可用Python、表格公式或已有计算器计算并生成分录草稿，保留原件、参数语义和实际公式/脚本；选择 `finance_workpaper` 时按实际合同提供目标、原件和记录。
-- 计提、折旧、摊销等业务需要确定原件或复算金额时，查[凭证编制参考](../journal-entry-prep/SKILL.md)。
+- 计提、折旧、摊销等业务需要确定原件或复算金额时，查[凭证编制参考](references/journal-entry-prep.md)。
 - 已有明确分录时用 `voucher_check` 检查金额、科目和借贷。按账套和月份用 `finance_query` 查账。查已过账凭证清单用 `voucher.generated.list`，查科目明细账用 `ledger.general` 并传 `params.code` 科目编码。
 - 自主计算和判断单列依据、条件及未决项，不改写原件，不把推导称作原生工具结果。
 - 中国税费可选 `finance_tax_calculate`；适用规则按需通过 `finance_rules` 或已核官方资料读取，不在本 Skill 另维护税率表。

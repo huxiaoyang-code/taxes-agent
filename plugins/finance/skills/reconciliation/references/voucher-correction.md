@@ -9,7 +9,7 @@
 ## 从分录回到原件
 
 1. 从银行结单、回单、原始凭证和账簿分别取值，定位错在哪个字段及其对方。流水的金额和余额两栏可互相检验；OCR 两次结果冲突时回读原图字段。有多笔收款合并入账时，保留每一笔及其客户。核实应收、预收等科目和真实对方。扣款日与税款入库日有不同业务意义，先核完税凭据。
-2. 对确需更正的凭证，调用 `voucher_correct`，传 `action:"inspect"`、`accountSetId`、`period`、`voucherId`。使用返回的 `fingerprint`。从本工作区的 `.finance/correction-sources.json` 取宿主已固定的原件路径和 SHA-256，与实际读取的原件对应。历史人工凭证和系统派生凭证应根据各自依据及已有更正流程处理。
+2. 从已绑定账套同期间的 `finance_query` 节点 `voucher.generated.list`（`params.view="index"`）取得真实 `voucherId`，用 `voucher.detail` 的 `params.view="check"` 核分录及原件线索。对确需更正的凭证，调用 `voucher_correct`，传 `action:"inspect"`、`accountSetId`、`period`、`voucherId`。使用返回的 `fingerprint`。从本工作区的 `.finance/correction-sources.json` 取宿主已固定的原件路径和 SHA-256，与实际读取的原件对应。历史人工凭证和系统派生凭证应根据各自依据及已有更正流程处理。
 3. 用同一个 `voucherId` 提交 `action:"apply"`，带上 `expectedFingerprint`、唯一 `operationId`、完整新分录 `entries`、`voucher_date`、`summary`、原件映射 `businessEvidence` 和独立复核 `proof`。复用 `voucher_create` 的正式入账字段映射。检查对象已变时重新读账；同一次调用中断则先按原操作号、原参数查询或重试。
 4. 成功后按回执核对凭证号和更正后指纹。使用 `finance_query` 查银行科目及受影响的客户、供应商明细，按科目传 `nodeId="ledger.general"`、`accountSetId`、`period` 和 `params.code`；重出受影响的底稿、报表及税费测算。回执或账簿结果缺失时保留未完成状态。无需另外执行反过账、删除或重新编号。
 

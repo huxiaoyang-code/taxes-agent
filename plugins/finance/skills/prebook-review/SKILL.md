@@ -1,9 +1,11 @@
 ---
 name: prebook-review
-description: 做账前用原件接续上期余额，核对本期采购收货、发票、流水及库存。按一般纳税人或小规模做增值税条件试算，列出问询，补件后重算并交接做账。
+description: 做账前接上期余额，用本期采购、验收、发票、流水及库存核对票货款，列出具体问询，补件后重算并交接制单。
 ---
 
 # 账前整理与核对
+
+已有已过账分录、需要拿结单核实到账对象和余额时，进入[对账](../reconciliation/SKILL.md)。
 
 由 Anthropic small-business 的 `ap-processor`、`month-end-prep`、`cash-flow-snapshot`、`report-builder` 和库存资料核验方法适配，见 [来源](../../SOURCES.md)。用同仓库本机后端完成核对，保留中国税会口径。本期不含补货预测、采购下单、催收、付款或税局网页登录。
 

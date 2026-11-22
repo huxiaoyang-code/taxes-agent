@@ -1,10 +1,12 @@
 ---
 name: financial-statements
-description: 按中国企业实际采用的会计准则生成资产负债表、利润表和现金流量表，核对账簿、期间比较及报表差异。
+description: 需要出月报、季报、年报或三张财务报表时，按本企业适用准则从账簿和可核资料制表，读回报表金额、期间及勾稽关系。
 argument-hint: "<monthly|quarterly|annual|ytd> <期间>"
 ---
 
 # 财务报表
+
+已有报表、只需解释利润或费用较上月、预算的变动时，进入[差异分析](../variance-analysis/SKILL.md)。
 
 由 Anthropic 官方同名 Skill 中国化改编，见 [来源](../../SOURCES.md)。保留收集资料、列报、比较、差异分析与期末调整方法；中国报表格式、科目映射和公式以已核准则及企业事实为准，不直接采用上游 ASC/IAS 示例。
 

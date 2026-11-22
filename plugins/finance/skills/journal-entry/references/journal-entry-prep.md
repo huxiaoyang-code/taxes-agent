@@ -6,7 +6,7 @@ user-invocable: false
 
 # 凭证编制参考
 
-由 Anthropic 官方同名 Skill 改编，见 [来源](../../SOURCES.md)。仅在选中具体业务时读取本参考，不向上下文展开所有税费或科目规则。
+由 Anthropic 官方同名 Skill 改编，见 [来源](../../../SOURCES.md)。仅在选中具体业务时读取本参考，不向上下文展开所有税费或科目规则。
 
 ## 常见业务
 
@@ -31,6 +31,6 @@ user-invocable: false
 
 金额与数量应能追溯原件；科目符合实际用途；预计与已确认值分开；应纳、计提、已缴分别列示。按《小企业会计准则》或《企业会计准则》确定本次处理；历史处理可作为线索，不能代替当前事实。没有实际审阅者则写待复核；冲回、重分类和更正均保留原业务与原凭证关联。
 
-交付顺序和单位见 [报告顺序](../shared/references/reporting.md)。
+交付顺序和单位见 [报告顺序](../../shared/references/reporting.md)。
 
-具体方法和支持模板仅在需要时读取：[按需参考](../shared/references/journal-support.md)。
+具体方法和支持模板仅在需要时读取：[按需参考](../../shared/references/journal-support.md)。

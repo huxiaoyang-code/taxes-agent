@@ -22,11 +22,11 @@
 
 | 在哪项业务中使用 | 何时读取 |
 |---|---|
-| 凭证编制 | 计提、摊销、折旧等分录需要核实原件和计算依据时，查[凭证编制参考](skills/journal-entry-prep/SKILL.md) |
-| 整期账税与申报准备 | 安排月结顺序、检查结转依赖或梳理年末未决事项时，查[月结与年度核对](skills/close-management/SKILL.md) |
-| 内控复核 | 需要编制抽样底稿或为审计整理样本、证据和问题记录时，查[财务与内控复核支持](skills/audit-support/SKILL.md) |
+| 凭证编制 | 计提、摊销、折旧等分录需要核实原件和计算依据时，查[凭证编制参考](skills/journal-entry/references/journal-entry-prep.md) |
+| 整期账税与申报准备 | 安排月结顺序、检查结转依赖或梳理年末未决事项时，查[月结与年度核对](skills/tax-period/references/close-management.md) |
+| 内控复核 | 需要编制抽样底稿或为审计整理样本、证据和问题记录时，查[财务与内控复核支持](skills/internal-control-review/references/audit-support.md) |
 
-默认 direct 服务的 `skills_list` 在每个入口的 `role` 标明主入口（`primary`）或辅助参考（`reference`）。选定业务后，将该项的 `resource` 传给 `skills_read` 读取正文。
+新版 direct 配置 `FINANCE_SKILL_DISCOVERY=focused` 时，`skills_list({})` 和 MCP 资源目录先给九个业务入口。按返回路径用 `skills_read` 或 `resources/read` 打开正文。查看模板、角色和共享参考用 `skills_list({view:"full"})`。旧配置继续返回 `files/labels/entries`，三份辅助的旧 `SKILL.md` 路径仍可读；按响应的 `resolvedResource` 定位现在的正文和相对引用。
 
 ## 整期与跨月接续
 

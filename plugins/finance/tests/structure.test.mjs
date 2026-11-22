@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync,readdirSync,mkdtempSync,existsSync} from 'node:fs';
+import {readFileSync,readdirSync,mkdtempSync,existsSync,symlinkSync,mkdirSync,cpSync,writeFileSync} from 'node:fs';
 import {resolve,dirname,relative,join,isAbsolute,sep} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {tmpdir} from 'node:os';
@@ -12,13 +12,19 @@ const walk=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()
 const skillFiles=walk(skills).filter(p=>p.endsWith(`${sep}SKILL.md`));
 const markdown=walk(skills).filter(p=>p.endsWith('.md'));
 const backend=repo;
-const expected=['audit-support','close-management','company-baseline','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-period','tax-review','variance-analysis'];
+const oldNames=['audit-support','close-management','company-baseline','financial-statements','internal-control-review','journal-entry','journal-entry-prep','prebook-review','reconciliation','tax-period','tax-review','variance-analysis'];
+const moved = {
+ 'audit-support/SKILL.md':'internal-control-review/references/audit-support.md',
+ 'close-management/SKILL.md':'tax-period/references/close-management.md',
+ 'journal-entry-prep/SKILL.md':'journal-entry/references/journal-entry-prep.md',
+};
+const expected = oldNames.filter(name => !(name+'/SKILL.md' in moved));
 const localLinks=p=>[...read(p).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(m=>m[1]).filter(x=>!/^https?:|^mailto:|^#/.test(x)).map(x=>resolve(dirname(p),x.split('#')[0]));
 
 test('既有财税与整期入口可发现，名称匹配实际frontmatter',()=>{
  const names=skillFiles.map(p=>{const s=read(p),m=s.match(/^---\r?\n([\s\S]*?)\r?\n---/);assert.ok(m,`frontmatter ${p}`);const name=m[1].match(/^name:\s*(.+)$/m)?.[1];assert.equal(name,dirname(p).split(sep).at(-1));assert.ok(m[1].match(/^description:\s*\S.+$/m));assert.ok(s.includes('报告顺序')||s.includes('报告'));assert.ok(!/harness_(?:source_register|facts_register|plan|run|status)/.test(s));return name;});
  assert.deepEqual(names.sort(),expected);
- for(const name of ['audit-support','close-management','journal-entry-prep'])assert.match(read(join(skills,name,'SKILL.md')),/user-invocable: false/);
+ for(const [alias,resource] of Object.entries(moved)){assert.ok(!existsSync(join(skills,alias)));assert.ok(existsSync(join(skills,resource)));}
  assert.ok(!existsSync(join(skills,'sox-testing','SKILL.md')));
 });
 
@@ -46,7 +52,7 @@ test('human reporting order and full deep evidence are both explicit',()=>{
  const parts=['账本金额','凭证与计算结果','规则依据','工具调用','输入与原件'];
  const positions=parts.map(x=>text.indexOf(x));assert.ok(positions.every(x=>x>=0));assert.deepEqual([...positions].sort((a,b)=>a-b),positions);
  assert.match(text,/完整记录不可/);assert.match(text,/未知/);assert.match(text,/不等于|不能保证/);
- const close=read(join(skills,'close-management','SKILL.md'));assert.match(close,/T\+1/);assert.match(close,/T\+5/);assert.match(close,/不转化为运行时 DAG/);
+ const close=read(join(skills,moved['close-management/SKILL.md']));assert.match(close,/T\+1/);assert.match(close,/T\+5/);assert.match(close,/不转化为运行时 DAG/);
  const internal=read(join(skills,'internal-control-review','SKILL.md'));assert.match(internal,/不将 SOX404/);
 });
 
@@ -154,33 +160,31 @@ test('every business document is actually readable through restricted MCP skills
  const client=new McpStdioClient(join(backend,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:backend,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(scratch,'audit'),FINANCE_DATABASE_PATH:join(scratch,'not-opened.db'),FINANCE_API_BASE:'http://127.0.0.1:1'},timeoutMs:10000}).start();
  try{
   await client.initialize('finance-cn-skill-reference-test');
-  const listed=await client.call('skills_list',{});assert.deepEqual(listed.data.files.sort(),markdown.map(p=>relative(skills,p).replaceAll('\\','/')).sort());assert.deepEqual(Object.keys(listed.data.labels).sort(),listed.data.files);
-  assert.deepEqual(listed.data.entries.map(e=>e.resource).sort(),expected.map(name=>name+'/SKILL.md').sort());
+  const listed=await client.call('skills_list',{view:'full'});
+  const expectedFiles=[...markdown.map(p=>relative(skills,p).replaceAll('\\','/')), ...Object.keys(moved)].sort();
+  assert.deepEqual(listed.data.files,expectedFiles);
+  assert.deepEqual(Object.keys(listed.data.labels).sort(),expectedFiles);
+  assert.deepEqual(listed.data.entries.map(e=>e.resource).sort(),oldNames.map(name=>name+'/SKILL.md').sort());
   for(const entry of listed.data.entries){
-   const content=read(join(skills,entry.resource)),frontmatter=content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
+   const canonical = moved[entry.resource] ?? entry.resource;
+   const content=read(join(skills,canonical)),frontmatter=content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
    assert.equal(entry.metadataState,'valid');assert.equal(entry.name,frontmatter.match(/^name:\s*(.+)$/m)[1]);assert.equal(entry.description,frontmatter.match(/^description:\s*(.+)$/m)[1]);
+   assert.equal(entry.role,canonical===entry.resource?'primary':'reference');
   }
   const entries = new Map(listed.data.entries.map(entry => [entry.name, entry]));
-  const main = listed.data.entries.filter(entry => entry.role === 'primary');
-  assert.equal(main.length, 9);
-  for (const [task, support] of [
-   ['journal-entry', 'journal-entry-prep'], ['internal-control-review', 'audit-support'], ['tax-period', 'close-management'],
-  ]) {
-   const entry = entries.get(task), ref = entries.get(support);
-   assert.equal(entry.role, 'primary');
-   assert.equal(ref.role, 'reference');
-   assert.ok(entry.description.includes(support));
-   const page = (await client.call('skills_read', {resource:entry.resource})).data.markdown;
-   assert.ok(page.includes('](../' + ref.resource + ')'));
+  for (const [alias,canonical] of Object.entries(moved)) {
+   const parent = entries.get(canonical.split('/')[0]);
+   const page = (await client.call('skills_read', {resource:parent.resource})).data.markdown;
+   assert.ok(page.includes('](' + canonical.slice(canonical.indexOf('/') + 1) + ')'));
+   const resolved = (await client.call('skills_read', {resource:alias})).data;
+   assert.equal(resolved.resolvedResource, canonical);
+   assert.equal(resolved.markdown, read(join(skills,canonical)));
   }
-  const reconcile = entries.get('reconciliation');
-  assert.match(reconcile.description, /原件.*逐笔对账/);
-  assert.match(reconcile.description, /导入银行 CSV.*匹配流水/);
-  const guide = (await client.call('skills_read', {resource:reconcile.resource})).data.markdown;
+  const guide = (await client.call('skills_read', {resource:'reconciliation/references/bank-workbench.md'})).data.markdown;
   const tools = (await client.rpc('tools/list')).result.tools;
-  for (const name of ['bank_import_preview','bank_import','bank_candidates','bank_confirm','bank_reconcile']) {
+  for (const {name,inputSchema} of tools.filter(tool=>tool.name.startsWith('bank_'))) {
    assert.ok(guide.includes('`' + name + '`'));
-   assert.deepEqual(tools.find(tool => tool.name === name).inputSchema.required, ['accountSetId','draftRef']);
+   assert.deepEqual(inputSchema.required, ['accountSetId','draftRef']);
   }
   const period=listed.data.entries.find(entry=>entry.name==='tax-period');
   assert.match(period.description,/做完本月账/);
@@ -191,10 +195,104 @@ test('every business document is actually readable through restricted MCP skills
   }
   assert.equal(Object.keys(listed.data.labels).some(p=>p.startsWith('harness/')),false);
   for(const p of markdown){const resource=relative(skills,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});assert.equal(r.isError,false,`${resource}: ${r.text}`);assert.equal(r.data?.markdown,read(p),`${resource} did not return actual document`);}
-  const blocked=await client.call('skills_read',{resource:'../../finance/.mcp.json'});assert.equal(blocked.isError,true,'file boundary must remain restricted');
+  for(const resource of ['../../finance/.mcp.json','prebook-review/scripts/demo.mjs','tax-review/private-notes.md','tax-review/references/../private.md','tax-review/SKILL.md:stream']){
+   assert.equal((await client.call('skills_read',{resource})).isError,true,resource);
+   assert.equal((await client.rpc('resources/read',{uri:'skill://'+resource})).error?.message,'skill_not_found',resource);
+  }
  }finally{await client.close();}
 });
 
+
+test('九个主入口可递归到随包参考、共享模板及可执行演示', async()=>{
+ const {PLUGIN_SKILL_FILES}=await import('../../../06-workbench/server/finance-skill-assets.mjs');
+ const seen=new Set(),pending=[...skillFiles];
+ while(pending.length){
+  const page=pending.pop();
+  if(seen.has(page))continue;
+  seen.add(page);
+  if(page.endsWith('.md'))pending.push(...localLinks(page).filter(path=>path.startsWith(skills+sep)));
+ }
+ assert.deepEqual([...seen].sort(),PLUGIN_SKILL_FILES.map(file=>join(skills,file)).sort());
+});
+
+test('新 direct 首次仅发现九个目标，历史 profile、资源 URI 与旧方法保留规范正文', async()=>{
+ const {McpStdioClient}=await import('../../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs');
+ const api=join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs');
+ const scratch=mkdtempSync(join(tmpdir(),'finance-skill-modes-'));
+ const aliases={...moved,
+  'taxes-company-advisor/references/planning-cash.md':'tax-review/references/planning-cash.md',
+  'tax-filing/references/summary-calculation.md':'tax-review/references/summary-calculation.md',
+  'tax-filing/references/supported-obligations.md':'tax-review/references/supported-obligations.md',
+ };
+ for(const profile of ['direct','legacy','harness']){
+  const client=new McpStdioClient(api,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_SKILL_DISCOVERY:'focused',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(scratch,profile)}}).start();
+  try{
+   await client.initialize();
+   const catalog=(await client.call('skills_list')).data;
+   const resources=(await client.rpc('resources/list')).result.resources;
+   if(profile==='direct'){
+    assert.deepEqual(Object.keys(catalog),['entries']);
+    assert.deepEqual(catalog.entries.map(e=>e.name),expected);
+    assert.ok(catalog.entries.every(e=>Object.keys(e).sort().join(',')==='description,name,resource'));
+    assert.deepEqual(resources.map(r=>r.uri),catalog.entries.map(e=>'skill://'+e.resource));
+    const full=(await client.call('skills_list',{view:'full'})).data;
+    assert.equal(full.entries.filter(e=>e.role==='reference').length,3);
+    assert.deepEqual(Object.keys(full.labels).sort(),full.files);
+    assert.ok(full.files.includes('tax-review/templates/tax-handoff.md'));
+   }else{
+    assert.ok(catalog.files.includes('harness/SKILL.md'));
+    assert.deepEqual(resources.map(r=>r.name),catalog.files);
+   }
+   for(const [alias,canonical] of Object.entries(aliases)){
+    const expectedBody=read(join(skills,canonical));
+    const historical=await client.call('skills_read',{resource:alias+'#旧方法'});
+    assert.equal(historical.data.resolvedResource,canonical);
+    assert.equal(historical.data.markdown,expectedBody);
+    const uri='skill://'+alias;
+    const contents=(await client.rpc('resources/read',{uri})).result.contents;
+    assert.deepEqual(contents,[{uri,mimeType:'text/markdown',text:expectedBody,_meta:{resolvedResource:canonical}}]);
+    for(const target of localLinks(join(skills,canonical)).filter(path=>path.startsWith(skills+sep)&&path.endsWith('.md'))){
+     const next=await client.call('skills_read',{resource:relative(skills,target).split(sep).join('/')});
+     assert.equal(next.data.markdown,read(target),target);
+    }
+   }
+  }finally{await client.close();}
+ }
+});
+
+test('包内未登记文档、指向包外的目录链接及脚本均无法经 MCP 读取',async()=>{
+ const {McpStdioClient}=await import('../../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs');
+ const root=mkdtempSync(join(tmpdir(),'finance-skill-boundary-'));
+ const engine='05-reconstruction/codex/mcp/finance-mcp';
+ mkdirSync(join(root,engine),{recursive:true});
+ for(const name of readdirSync(join(repo,engine)).filter(name=>name.endsWith('.mjs')||name==='package.json')){
+  cpSync(join(repo,engine,name),join(root,engine,name));
+ }
+ cpSync(join(repo,'05-reconstruction/catalog.json'),join(root,'05-reconstruction/catalog.json'));
+ const linkDirectory=(target,link)=>symlinkSync(target,link,process.platform==='win32'?'junction':'dir');
+ linkDirectory(join(repo,'06-workbench'),join(root,'06-workbench'));
+ linkDirectory(join(repo,'05-reconstruction/codex/hosts'),join(root,'05-reconstruction/codex/hosts'));
+ const published=join(root,'plugins/finance/skills');
+ for(const entry of skillFiles){
+  const target=join(published,relative(skills,entry));
+  mkdirSync(dirname(target),{recursive:true});cpSync(entry,target);
+ }
+ const outside=join(root,'outside');mkdirSync(outside);
+ const marker='SYNTHETIC-UNPUBLISHED-PRIVATE-TEXT';
+ writeFileSync(join(outside,'vat-general.md'),marker);
+ writeFileSync(join(published,'tax-review','private.md'),marker);
+ linkDirectory(outside,join(published,'tax-review/references'));
+ const client=new McpStdioClient(join(root,engine,'server.mjs'),{env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SKILL_DISCOVERY:'focused',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'calls')}}).start();
+ try{
+  await client.initialize();
+  assert.deepEqual((await client.call('skills_list')).data.entries.map(e=>e.name),expected,'发现主入口无需遍历参考正文');
+  for(const resource of ['tax-review/private.md','tax-review/references/vat-general.md','prebook-review/scripts/demo.mjs']){
+   const tool=await client.call('skills_read',{resource}),rpc=await client.rpc('resources/read',{uri:'skill://'+resource});
+   assert.equal(tool.isError,true);assert.equal(rpc.error.message,'skill_not_found');
+   assert.ok(!JSON.stringify([tool,rpc]).includes(marker));
+  }
+ }finally{await client.close();}
+});
 
 test('仓库内专用技能在显式legacy工具面可读，仍引用现有业务合同', {timeout:30000},async()=>{
  const root=join(backend,'05-reconstruction/codex/skills'),docs=walk(root).filter(p=>p.endsWith('.md'));

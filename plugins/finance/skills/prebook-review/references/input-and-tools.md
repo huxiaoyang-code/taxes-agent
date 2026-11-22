@@ -79,7 +79,7 @@
 
 ## 合成演示
 
-演示只生成虚构企业资料并调用真实 direct MCP，不使用模型、真实账库或税局凭据。仓库已按后端要求安装 Node 和锁定依赖后，在仓库根运行：
+[合成演示脚本](../scripts/demo.mjs)只生成虚构企业资料并调用真实 direct MCP，不使用模型、真实账库或税局凭据。仓库已按后端要求安装 Node 和锁定依赖后，在仓库根运行：
 
 ```powershell
 node plugins/finance/skills/prebook-review/scripts/demo.mjs '<已存在父目录/全新演示目录>'
