@@ -53,6 +53,22 @@ if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINES
 const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
 const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
 
+// Claude Code 会过滤根带组合关键字的工具。恒真的 if 使 then 中的原约束仍对整个参数对象生效。
+// 只调整 tools/list 的展示；tools/call 和嵌套原生调用继续按 TOOL_BY_NAME 的原合同校验。
+function listedTool({name, description, inputSchema, annotations}) {
+  if (['oneOf', 'anyOf', 'allOf'].some(key => Object.hasOwn(inputSchema, key))) {
+    const root = {...inputSchema}, constraints = {};
+    for (const key of ['oneOf', 'anyOf', 'allOf', 'if', 'then', 'else']) {
+      if (Object.hasOwn(root, key)) {
+        constraints[key] = root[key];
+        delete root[key];
+      }
+    }
+    inputSchema = {...root, if: {}, then: constraints};
+  }
+  return {name, description, inputSchema, ...(annotations ? {annotations} : {})};
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
 const CATALOG = JSON.parse(readFileSync(join(RECON, "catalog.json"), "utf8"));
@@ -362,7 +378,7 @@ rl.on("line", async (line) => {
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
   if (method === "ping") return ok(id, {});
-  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,...(t.annotations?{annotations:t.annotations}:{}) })) });
+  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map(listedTool) });
   if (method === "tools/call") {
     let callReference,memoryRefresh;
     const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId},...(memoryRefresh?{financeMemory:memoryRefresh}:{})}}:result;

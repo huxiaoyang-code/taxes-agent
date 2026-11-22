@@ -807,6 +807,7 @@ export const REQUIRED_BUNDLE_FILES = Object.freeze([
 const correctionModule = "06-workbench/server/voucher-correction-proof.mjs";
 const correctionGuide = "plugins/finance/skills/reconciliation/references/voucher-correction.md";
 const correctionOcr = "06-workbench/server/voucher-correction-ocr.ps1";
+const claudeDiscoveryCheck = "06-workbench/scripts/claude-direct-discovery.mjs";
 const BUNDLE_KIND = "local-product-source-bundle";
 const bundleCompare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const bundleError = (code, path = null) => new StageError(code, { details: path === null ? null : { path } });
@@ -821,7 +822,7 @@ function bundlePathAllowed(path, schemaVersion) {
   if (!bundlePathWellFormed(path)) return false;
   const backendSource = /^06-workbench\/(server|public)\/.+/.test(path);
   if (schemaVersion === 1) return backendBundleFiles.includes(path) || backendSource;
-  if (REQUIRED_BUNDLE_FILES.includes(path) || path === correctionGuide || path === correctionOcr) return true;
+  if (REQUIRED_BUNDLE_FILES.includes(path) || path === correctionGuide || path === correctionOcr || path === claudeDiscoveryCheck) return true;
   if (!backendSource || path.split("/").some(generatedDirectory)) return false;
   return /^06-workbench\/server\/.+\.mjs$/.test(path)
     || /^06-workbench\/public\/(?:app\.js|index\.html|styles\.css)$/.test(path);
@@ -904,6 +905,9 @@ export function inspectReleaseBundle(releasePath) {
   }
   const schemaVersion = publishedManifest?.schemaVersion ?? RELEASE_BUNDLE_SCHEMA_VERSION;
   const paths = schemaVersion === 1 ? [...backendBundleFiles] : [...REQUIRED_BUNDLE_FILES];
+  const packageJson = JSON.parse(readBundleFile(root, "06-workbench/package.json").toString("utf8"));
+  // 新包随 npm 命令交付真实宿主检查；旧 v2 包仍按其既有入口验真。
+  if (schemaVersion >= 2 && packageJson.scripts?.['check:claude-direct']) paths.push(claudeDiscoveryCheck);
   if (schemaVersion >= 2 && existsSync(join(root, correctionModule))) paths.push(correctionGuide);
   const walk = (rel, depth = 0) => {
     const path = join(root, ...rel.split("/"));
@@ -927,7 +931,6 @@ export function inspectReleaseBundle(releasePath) {
     const buffer = readBundleFile(root, rel);
     return { path: rel, bytes: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") };
   });
-  const packageJson = JSON.parse(readBundleFile(root, "06-workbench/package.json").toString("utf8"));
   const bundleManifest = { schemaVersion, kind: BUNDLE_KIND, packageVersion: String(packageJson.version ?? ""), files };
   bundleManifest.digest = bundleDigest(bundleManifest);
   validateReleaseManifest(bundleManifest);

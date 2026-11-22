@@ -10,6 +10,8 @@
 
 ## 当前 direct 默认调用链
 
+工具列举及调用见 [MCP 服务](../05-reconstruction/codex/mcp/finance-mcp/server.mjs)。六项分支合同由 [stdio 正反例](../06-workbench/test/mcp-listed-contracts.test.mjs) 检查。发布前在 `06-workbench` 运行 `npm run check:claude-direct -- --claude-cli "<已安装 Claude Code 的可执行文件或 JS 入口绝对路径>"`，用宿主的 `mcp_status` 对照 direct 工具全名。[宿主检查脚本](../06-workbench/scripts/claude-direct-discovery.mjs)
+
 会计交接由 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 汇集原件、官文、税额与两套方案，[账簿读取](../06-workbench/server/vat-handoff-books-worker.mjs) 取已过账凭证、银行匹配和四张报表。交接回读、变更和独立文件校验见 [stdio 验收](../06-workbench/test/vat-handoff-mcp.test.mjs)。
 
 抵扣规划的客户约定、历史累计、调整回执、预缴与收付按月在 [vat-planning-ledgers.mjs](../06-workbench/server/vat-planning-ledgers.mjs) 核算。单月和累计税负使用可比销售额和预缴前应纳额，账前入口也按此口径显示。

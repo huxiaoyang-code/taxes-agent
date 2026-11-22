@@ -6,6 +6,8 @@
 
 ## 正常调用链
 
+MCP 的 `tools/list` 将根层的组合约束放入恒真条件的 `then` 中。Claude Code 2.1.309 因此可以发现含分支的工具，客户端也可校验原有的分支必填、互斥条件及取值范围。`tools/call` 按对应 profile、原始输入合同和账套委托执行。[MCP 工具协议](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) · [JSON Schema 条件校验](https://json-schema.org/understanding-json-schema/reference/conditionals)
+
 ```mermaid
 flowchart TD
   U[业务目标与获准原件] --> A[Pi / Claude Code / dsh / ZCode]
