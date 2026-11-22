@@ -1,5 +1,6 @@
 // 恢复导航只取固定工具与文档，不读取原件、异常正文或自由 recordType。
 import {BASELINE_FACT_VALUES,BASELINE_FIELDS} from '../../../../06-workbench/server/business-baseline-contracts.mjs';
+import {isIdentitySourceCountError} from '../../../../06-workbench/server/business-evidence.mjs';
 export const DIRECT_MATERIAL_DIAGNOSTIC_TOOLS=new Set(['finance_baseline_materials','finance_prebook_review','finance_calculation_run','finance_vat_plan','finance_rules']);
 const baselineContract=()=>[{code:'inspect_baseline_observation_contract',tool:'finance_record_contract',arguments:{recordType:'baseline'}}];
 const schemaHints={required:['required field','补齐该字段；业务事实须来自实际材料。'],additionalProperties:['only declared properties','删除未声明字段，按当前工具 schema 重试。'],type:['declared type','按 schema 使用声明类型，不自动转换原值。'],enum:['declared enum','选用当前 schema 声明的枚举。'],const:['declared constant','使用 schema 声明的固定标识。']};
@@ -18,6 +19,17 @@ export function directSchemaDiagnostics(schema,problems,root='arguments'){
 }
 export function directErrorCode(code){
  return code==='invalid_arguments'||/^(?:finance|agency)_[a-z0-9_]+$/.test(code??'')?code:'finance_direct_call_failed';
+}
+export function voucherCorrectionDiagnostics(schema,problems,args){
+ const invalidSources=problems.filter(problem=>isIdentitySourceCountError(problem,args?.businessEvidence?.mappings));
+ const diagnostics=directSchemaDiagnostics(schema,problems);
+ if(!invalidSources.length) return diagnostics;
+ // 同一字段可能同时超过通用上限和 identity 上限。仅返回有界、去重的实际参数位置。
+ const pointers=[...new Set(invalidSources.map(problem=>problem.inputPointer))];
+ return {...diagnostics,nextSteps:[{
+   code:'repair_identity_source_count',inputPointers:pointers.slice(0,6),total:pointers.length,
+   hint:'逐项修正列出的 sources，每条 identity 只保留直接产生该参数原值的一处来源。金额取原始金额字段，日期取原始日期字段。对方及业务身份在 proof 或相应字段中说明。修正后按已核实的原件重试。'
+ }]};
 }
 export function directInterpretationDiagnostics(value){
  const boundedIndex=index=>Number.isInteger(index)&&index>=0&&index<1000;

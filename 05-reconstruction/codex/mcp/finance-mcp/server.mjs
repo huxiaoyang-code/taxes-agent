@@ -37,7 +37,7 @@ import {validateDirectInput} from '../../../../06-workbench/server/direct-financ
 import {withFinanceCall,currentFinanceCall,annotateFinanceCall,hasDomainManagedSources} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
 import {skillMetadata} from './skill-metadata.mjs';
-import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
+import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,voucherCorrectionDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
 import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
@@ -166,7 +166,9 @@ function preflightTool(name,args={}) {
   const domainProblems=hasDomainManagedSources(name)||name==='finance_rules'?validateSchemaValue(spec.inputSchema,args):undefined;
   if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length||domainProblems?.length) {
-    const diagnostics=DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)?directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args)):undefined;
+    let diagnostics;
+    if(name==='voucher_correct') diagnostics=voucherCorrectionDiagnostics(spec.inputSchema,domainProblems,args);
+    else if(DIRECT_MATERIAL_DIAGNOSTIC_TOOLS.has(name)) diagnostics=directSchemaDiagnostics(spec.inputSchema,domainProblems??validateSchemaValue(spec.inputSchema,args));
     throw new ToolCallError("invalid_arguments", "invalid_arguments", { tool: spec.name, ...(diagnostics??{problems:name==='finance_tax_summary_calculate'?['finance_summary_arguments_invalid']:problems}) });
   }
   if (spec.status === "unavailable") {
