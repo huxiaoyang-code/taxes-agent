@@ -15,6 +15,7 @@ import { COA, STANDARDS } from "./coa.mjs";
 import { callAgentTool, callAgentModelTool, decodeFiles, ToolError, taxBrowserSessions, AUXILIARY_ACTION_TO_TOOL, prepareBankDraft } from "./agent-tools.mjs";
 import { readLocalReference, computeLocalReference } from "./finance-model-entry.mjs";
 import { db } from './db.mjs';
+import {needsBoundQuery} from './query-view-contract.mjs';
 import { isLoopbackAddress, checkLocalOrigin } from "./tax-local-boundary.mjs";
 
 import { BANK_ACTION_TO_TOOL, bankLocalDrafts, BankDraftError } from "./bank-local-drafts.mjs";
@@ -404,7 +405,7 @@ async function api(req, res, url, m) {
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
       return json(res, 400, { error: "request_body_invalid" });
     }
-    if(['x-workbench-expected-database-instance','x-workbench-expected-enterprise-key','x-workbench-expected-account-set'].some(key=>req.headers[key]!==undefined)){
+    if(needsBoundQuery(name,body) || ['x-workbench-expected-database-instance','x-workbench-expected-enterprise-key','x-workbench-expected-account-set'].some(key=>req.headers[key]!==undefined)){
       // 方法来自某个真实账库版本；HTTP地址和相同整数账套ID不足以证明当前后端身份。
       let matched=false;
       try{

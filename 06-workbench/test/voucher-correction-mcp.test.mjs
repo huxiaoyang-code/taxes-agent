@@ -144,7 +144,10 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
       lines:[[6,alpha],[7,beta]],evidence:bankEvidence(statement,6,[
         ['/entries/0/debit','收入',6,7],['/entries/1/credit','收入',6],['/entries/2/credit','收入',7]])},
   ];
-  const target=(index)=>({accountSetId,period,voucherId:ids[index]});
+  const indexReceipt=await success(preview,'finance_query',{accountSetId,period,nodeId:'voucher.generated.list',params:{view:'index'}});
+  const indexed=indexReceipt.projection.rows.map(row=>row.voucherId);
+  assert.deepEqual(indexed,ids);
+  const target=(index)=>({accountSetId,period,voucherId:indexed[index]});
   async function request(change) {
     const scope=target(change.index);
     const inspection=await success(formal,'voucher_correct',{...scope,action:'inspect'});

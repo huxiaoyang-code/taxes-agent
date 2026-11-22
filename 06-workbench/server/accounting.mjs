@@ -1601,8 +1601,8 @@ export function generalLedger(setId, code, period) {
   if (!acc) throw new Error("account_not_found");
   // 父科目明细账：若存在下级科目，一并纳入（保持返回结构不变，仍逐笔展示）。
   const children = rows(
-    `SELECT code FROM accounts WHERE account_set_id=? AND code<>? AND code LIKE ? ORDER BY code`,
-    setId, code, `${code}%`
+    `SELECT code FROM accounts WHERE account_set_id=? AND code<>? AND substr(code,1,length(?))=? ORDER BY code`,
+    setId, code, code, code
   ).map((r) => r.code);
   const group = [code, ...children];
   const ph = group.map(() => "?").join(",");

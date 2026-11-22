@@ -13,6 +13,7 @@ import { extractOperationMetadata,withRequestMetadata,operationErrorEvidence,ban
 // 普通财务工具送模型时必须走下面的 `callAgentModelTool`（投影信封）；两者互不递归适配。
 // raw 入口本身不做脱敏，MCP 普通工具不得再到达 `/agent/tools/*`。
 import * as A from "./accounting.mjs";
+import {accountIndex, postedVoucherIndex, voucherCheckPage, resolveLedgerCode} from "./ledger-query-views.mjs";
 import * as BANK from "./bank-reconciliation.mjs";
 import * as BANK_STORAGE from "./bank-storage.mjs";
 import * as BANK_BACKUP from "./local-backup.mjs";
@@ -202,13 +203,25 @@ function requireEntries(args = {}) {
 // ------------------------------------------------------------------ 查询能力
 // 只登记「本地真的实现」的 nodeId；未登记的一律 not_implemented。
 // 可用性分类（原站 21 项中哪 11 项不可用）由 MCP 层依据原站 catalog 判定。
+function accountsForQuery(setId, options = {}) {
+  if (options.view === undefined) return A.listAccounts(setId);
+  if (options.view !== 'index') throw new ToolError('query_page_invalid');
+  A.getAccountSet(setId);
+  return accountIndex(setId, options);
+}
+
 const postedVouchers = {
   period: true,
-  run: (setId, a) => A.listVouchers(setId, { period: a.period, status: "posted" }),
+  run: (setId, a) => {
+    if (a.params?.view === undefined) return A.listVouchers(setId, {period:a.period, status:'posted'});
+    if (a.params.view !== 'index') throw new ToolError('query_page_invalid');
+    A.getAccountSet(setId);
+    return postedVoucherIndex(setId, a.period, a.params);
+  },
 };
 const QUERY = dict({
   "enterprise_account.account_set": { run: (setId) => A.getAccountSet(setId) },
-  "enterprise_account.subject_system.all": { run: (setId) => A.listAccounts(setId) },
+  "enterprise_account.subject_system.all": { run: (setId, a) => accountsForQuery(setId, a.params) },
   "voucher.generated.list": postedVouchers,
   "voucher.generated.summary": {
     ...postedVouchers,
@@ -218,7 +231,14 @@ const QUERY = dict({
     period: true,
     run: (setId, a) => A.listVouchers(setId, { period: a.period, status: "draft" }),
   },
-  "voucher.detail": { run: (setId, a) => A.getVoucher(setId, requireVoucherId(a)) },
+  "voucher.detail": { run: (setId, a) => {
+    const voucherId = requireVoucherId(a);
+    if (a.params?.view === 'check') return voucherCheckPage(setId, requirePeriod(a), voucherId, a.params);
+    if (a.params?.view !== undefined) throw new ToolError('query_page_invalid');
+    const voucher = A.getVoucher(setId, voucherId);
+    if (a.period !== undefined && voucher.period !== requirePeriod(a)) throw new ToolError('voucher_not_found');
+    return voucher;
+  } },
   "report.balance_sheet": { period: true, run: (setId, a) => A.balanceSheet(setId, a.period) },
   "report.income_statement": { period: true, run: (setId, a) => A.incomeStatement(setId, a.period) },
   "report.cash_flow_statement": { period: true, run: (setId, a) => A.cashFlowStatement(setId, a.period) },
@@ -232,7 +252,7 @@ const QUERY = dict({
     period: true,
     local: true,
     requiresCode: true,
-    run: (setId, a) => A.generalLedger(setId, str(a.params?.code ?? a.code), a.period),
+    run: (setId, a) => A.generalLedger(setId, resolveLedgerCode(setId, a.params, str(a.params?.code ?? a.code)), a.period),
   },
 });
 
@@ -287,7 +307,7 @@ function financeQuery(args = {}) {
   const out = { nodeId, label: (own(QUERY_LABELS, nodeId) && QUERY_LABELS[nodeId]) || "查询财务数据" };
   if (entry.local) out.origin = "local";
   if (entry.note) out.note = entry.note;
-  if (entry.requiresCode && !str(args.params?.code ?? args.code)) {
+  if (entry.requiresCode && args.params?.accountId === undefined && !str(args.params?.code ?? args.code)) {
     throw new ToolError("code_required", `查询 ${nodeId} 必须提供 params.code（科目编码）`);
   }
   out.data = entry.run(setId, { ...args, period });
@@ -518,7 +538,9 @@ const HANDLERS = dict({
   },
   account_list: (args) => {
     const setId = requireAccountSetId(args);
-    return { accountSetId: setId, items: A.listAccounts(setId) };
+    const {accountSetId,account_set_id,...options} = args;
+    const result = accountsForQuery(setId, options);
+    return args.view === undefined ? {accountSetId:setId, items:result} : result;
   },
   account_create: (args) => {
     const setId = requireAccountSetId(args);
