@@ -10,6 +10,7 @@ import {createContext,writeBundle} from '../../05-reconstruction/codex/hosts/sha
 import {loadBoundBusinessSession,prepareBoundBusinessSession} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import {buildConfig} from '../../05-reconstruction/codex/hosts/claude-code/adapter.mjs';
 import {parseClaudeArgs,buildClaudeLaunchSpec} from '../../05-reconstruction/codex/hosts/claude-code/launcher.mjs';
+import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {resolveDirectFinanceTarget} from '../server/direct-finance-target.mjs';
 
 const root=mkdtempSync(join(tmpdir(),'claude-argv-合成 ')),dbPath=join(root,'identity.db'),cli=join(root,'synthetic-claude.mjs');
@@ -52,9 +53,47 @@ test('提示词放在variadic allowedTools之后，实际argv仍以选项终止�
  assert.equal(received.autoMemoryDisabled,false);assert.equal(received.memoryPathOverridden,false);assert.equal(received.cwd,config.outputDir);
  assert.equal(received.argv[received.argv.indexOf('--mcp-config')+1],join(config.outputDir,'.mcp.json'));
  const memoryDirectory=join(root,'.finance-memory','identity.db',databaseInstanceId,'1');
- assert.deepEqual(JSON.parse(received.argv[received.argv.indexOf('--settings')+1]),{autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
+ const {permissions,...memory}=JSON.parse(received.argv[received.argv.indexOf('--settings')+1]);
+ assert.deepEqual(memory,{autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
+ assert.ok(['finance_query','account_list'].every(name=>permissions.allow.includes('mcp__finance__'+name)));
+ assert.ok(!permissions.allow.includes('mcp__finance__voucher_correct'));
+ assert.equal(launch.env.FINANCE_REQUIRE_BOUND_READS,'1');
  assert.equal(launch.memoryPath,join(memoryDirectory,'MEMORY.md'));
  assert.equal(received.argv[received.argv.indexOf('--setting-sources')+1],'project');
+});
+
+test('已核启动后绑定丢失时账套查询拒绝，随包技能仍可从 MCP 读取',async()=>{
+ const launch=spec(['--print',prompt]);
+ const client=new McpStdioClient(config.serverPath,{env:{
+  ...launch.env,FINANCE_BUSINESS_SESSION:join(root,'missing-session.json'),FINANCE_AUDIT_DIR:join(root,'lost-binding-audit')
+ }}).start();
+ try{
+  await client.initialize();
+  for(const [name,args] of [['account_list',{accountSetId:1}],['finance_query',{accountSetId:1,nodeId:'ledger.general',period:'2026-02',params:{code:'1002'}}]]){
+   const result=await client.call(name,args);assert.equal(result.isError,true);
+   assert.match(result.text,/finance_memory_session_required/);
+  }
+  assert.equal((await client.call('skills_read',{resource:'reconciliation/SKILL.md'})).isError,false);
+ }finally{await client.close();}
+});
+
+test('旧会话配置可按原权限及 MCP 技能目录接续',async()=>{
+ const old=createContext({nodePath:process.execPath,apiBase:config.apiBase,databasePath:dbPath,outputDir:join(root,'old-workspace')});
+ delete old.mcpEnv.FINANCE_SKILL_DISCOVERY;
+ const bundle=buildConfig(old);
+ bundle.files=bundle.files.filter(file=>!file.path.startsWith('.claude/skills/') && file.path!=='.finance/skill-source.json');
+ writeBundle(old,bundle);
+ await prepareBoundBusinessSession(old.outputDir,{accountSetId:1,period:'2026-02'});
+ const launch=buildClaudeLaunchSpec(old.outputDir,parse(['--print',prompt]));
+ assert.equal(JSON.parse(launch.args[launch.args.indexOf('--settings')+1]).permissions,undefined);
+ const client=new McpStdioClient(old.serverPath,{env:{...launch.env,FINANCE_SKILL_DISCOVERY:undefined}}).start();
+ try{
+  await client.initialize();
+  const listing=await client.call('skills_list',{});assert.equal(listing.isError,false);
+  assert.ok(listing.data.files.includes('close-management/SKILL.md'));
+  const oldMethod=await client.call('skills_read',{resource:'close-management/SKILL.md'});
+  assert.equal(oldMethod.data.resolvedResource,'tax-period/references/close-management.md');
+ }finally{await client.close();}
 });
 
 test('同目录下直接复制的账库保留实例标识，但记忆路径彼此隔离',async()=>{

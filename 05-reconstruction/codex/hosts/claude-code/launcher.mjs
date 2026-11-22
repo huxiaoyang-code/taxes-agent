@@ -43,10 +43,16 @@ export function buildClaudeLaunchSpec(workspace,options){
  const sessionId=options['--resume']??randomUUID();
  if(options['--resume'])assertClaudeSessionBinding(workspace,sessionId,session);
  // 只给本次原生进程指定账套记忆目录，权限和会话守卫从项目设置加载。
- const settings=JSON.stringify({autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
+ const overrides={autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory};
+ // 老工作区继续使用原有权限；新版仅在上方绑定核验通过后补上纯查询许可。
+ if(config.mcpEnv.FINANCE_SKILL_DISCOVERY==='focused'){
+   overrides.permissions={allow:[...new Set([...native.permissions.allow,'mcp__finance__account_list','mcp__finance__finance_query'])]};
+ }
+ const settings=JSON.stringify(overrides);
  // 原生--allowedTools等选项是variadic，提示词必须在明确的选项终止符之后。
  const args=['--strict-mcp-config','--mcp-config',mcp,'--settings',settings,'--setting-sources','project',...(options['--resume']?['--resume',sessionId]:['--session-id',sessionId]),...options.extra,...(options.prompt===undefined?[]:['--',options.prompt])];
  const env={...process.env,...config.mcpEnv,FINANCE_AUDIT_DIR:session.auditDir,FINANCE_BUSINESS_SESSION:sessionPath(workspace),FINANCE_CLAUDE_LAUNCH_ID:sessionId};
+ if(config.mcpEnv.FINANCE_SKILL_DISCOVERY==='focused')env.FINANCE_REQUIRE_BOUND_READS='1';
  for(const key of Object.keys(env))if(MEMORY_ENV.has(key.toUpperCase()))delete env[key];
  return {command:/\.exe$/i.test(cli)?cli:config.nodePath,args:/\.exe$/i.test(cli)?args:[cli,...args],cwd:workspace,env,scope:session.scope,sessionId,memoryPath,modelInvoked:options['--check']?false:'only after an explicit task or interactive input'};
 }

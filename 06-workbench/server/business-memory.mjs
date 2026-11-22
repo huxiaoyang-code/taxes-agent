@@ -48,7 +48,10 @@ export function resolveBusinessSessionBinding(options={}){
 }
 export function assertBusinessSessionToolTarget(name,args,options={}){
  const sessionPath=options.sessionPath??process.env.FINANCE_BUSINESS_SESSION;
- if(!sessionPath||!existsSync(sessionPath))return;
+ if(!sessionPath||!existsSync(sessionPath)){
+  if(process.env.FINANCE_REQUIRE_BOUND_READS==='1'&&['finance_query','account_list'].includes(name))fail('finance_memory_session_required');
+  return;
+ }
  if(['account_context','finance_query_catalog','skills_list','skills_read','finance_rules','finance_record_contract'].includes(name))return;
  let session;try{session=JSON.parse(safeBytes(sessionPath,64*1024));}catch{fail('finance_memory_session_invalid');}
  const expected=resolveBusinessMemoryTarget({accountSetId:session.scope?.accountSetId,period:session.scope?.period},{...options,dbPath:options.dbPath??process.env.FINANCE_DATABASE_PATH??session.databasePath,sessionPath}).scope;
