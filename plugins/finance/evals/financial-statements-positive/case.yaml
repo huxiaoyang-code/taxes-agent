@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: financial-statements-positive
+tags: [routing, positive]
+execution:
+  prompt: "十月已过账，请从账簿编制资产负债表和利润表并检查勾稽。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?financial-statements"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?variance-analysis"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '资产负债|利润表'

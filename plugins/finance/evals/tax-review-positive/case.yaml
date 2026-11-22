@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: tax-review-positive
+tags: [routing, positive]
+execution:
+  prompt: "这月有新票和上期未用进项，比较单月与累计方案，按已约定口径建议。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?tax-review"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?prebook-review"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '抵扣|进项|留抵'

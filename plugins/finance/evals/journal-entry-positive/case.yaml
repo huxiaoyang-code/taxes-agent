@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: journal-entry-positive
+tags: [routing, positive]
+execution:
+  prompt: "收到付款申请、采购验收和发票三份附件，按原始业务判断日期、借贷科目和金额，列出制单复核依据。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?journal-entry"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?financial-statements"'
+    min: 0
+    max: 0
+    arm: both
+  - name: consulted-reference
+    type: tool_used
+    tool: Read
+    input_match: 'journal-entry-prep\.md'
+    min: 1
+    arm: with-only
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '借|贷|分录'

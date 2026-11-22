@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: prebook-review-positive
+tags: [routing, positive]
+execution:
+  prompt: "原件刚到，先检查重复、矛盾和确实缺的资料，给我一份能交接的清单。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?prebook-review"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?tax-review"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '资料|原件|证据'

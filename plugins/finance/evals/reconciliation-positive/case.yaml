@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: reconciliation-positive
+tags: [routing, positive]
+execution:
+  prompt: "流水总额对得上，但两位客户各自的金额对不上，请核对并解释差异。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?reconciliation"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?internal-control-review"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '流水|客户|差异'
