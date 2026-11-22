@@ -8,6 +8,7 @@ import {loadRecord,safeFile} from './finance-period-review.mjs';
 import {handoffFiles,hashBytes,vatCodeVersion,bookSnapshot} from './vat-handoff-versions.mjs';
 import {officialPolicyUrl} from './official-policy-reader.mjs';
 import {sheetView} from './vat-planning-evidence.mjs';
+import {currentReceipts} from './vat-receipt-chain.mjs';
 import {renderVatHandoff} from './vat-handoff-html.mjs';
 
 function datesIn(text){
@@ -130,9 +131,10 @@ function invoiceRows(invoices,evidence,scope,result,args){
   const ref='vat-'+digest([scope.databaseInstanceId,scope.enterpriseKey,scope.accountSetId,row.data.issuer,row.data.invoiceNumber]).slice(0,24);
   byRef.set(ref,{issuer:row.data.issuer,invoiceNumber:row.data.invoiceNumber});
  }
- const choice=(result.recommendation??result.knownSubset?.recommendation)?.choice,selection=Object.fromEntries(Object.keys(labels).map(k=>[k,new Map((result.decisions?.[k]??args[k]??[]).map(x=>[x.invoiceRef,x.period]))]));
+ const choice=(result.recommendation??result.knownSubset?.recommendation)?.choice;
+ const selection=Object.fromEntries(Object.keys(labels).map(k=>[k,new Map((Array.isArray(args[k])?args[k]:[]).map(x=>[x.invoiceRef,x.period]))]));
  return invoices.map(row=>{
-  const moves={baseline:selection.baseline.get(row.invoiceRef)??null,plan:selection.plan.get(row.invoiceRef)??null};
+  const moves={baseline:selection.baseline.get(row.invoiceRef)??null,plan:args.plan?.strategy==='earliest_eligible'?row.earliestSelectablePeriod??null:selection.plan.get(row.invoiceRef)??null};
   const proposed=moves[choice]??null,through=result.knownSubset?.[choice]?.horizon?.through;
   const beyond=!!(proposed&&through&&proposed>through),target=beyond?null:proposed;
   const reason=!row.resolved?'票据来源或用途有未决问题':row.fixedPeriod?'沿用原确认所属期':row.eligibility!=='eligible'?'未满足可抵条件':beyond?'所选月份超出连续可核月份，须补足中间资料后重算':!labels[choice]?'比较方案待选，可选窗口见原件':target?'按'+labels[choice]+'列入 '+target+(target>scope.period?'，延后期间见现金比较':' 所属期'):'推荐方案保留此票，后续结合窗口和应纳复算';
@@ -146,17 +148,54 @@ function monthlyRows(result,evidence,books,choice){
   const m=sim?.months.find(r=>r.period===period)??{},current=period===result.start;
   const filings=evidence.facts.filter(f=>f.kind==='filing'&&!f.issue&&f.data.period===period);
   const boundFilings=filings.filter(f=>f.source.verification==='source_value_bound');
-  const replaced=new Set(boundFilings.map(f=>f.data.supersedes).filter(Boolean));
-  const amounts=[...new Set(boundFilings.filter(f=>!replaced.has(f.data.receiptId)&&/^\d{1,12}(?:\.\d{1,2})?$/.test(String(f.data.declaredDue))).map(f=>money(cents(String(f.data.declaredDue)))))];
-  const declared=amounts.length===1&&(!Object.hasOwn(m,'declaredDue')||m.declaredDue===amounts[0])?amounts[0]:null;
+  const chainGaps=[];
+  const effective=currentReceipts(boundFilings,{period},chainGaps);
+  const amounts=[...new Set(effective.filter(f=>/^\d{1,12}(?:\.\d{1,2})?$/.test(String(f.data.declaredDue))).map(f=>money(cents(String(f.data.declaredDue)))))];
+  const receiptConflict=chainGaps.length>0||(result.gaps??[]).some(g=>g.period===period&&['receipt_correction_chain_unverified','source_conflict'].includes(g.code));
+  const declared=!receiptConflict&&amounts.length===1&&(!Object.hasOwn(m,'declaredDue')||m.declaredDue===amounts[0])?amounts[0]:null;
   const output=current?books.taxAccounts.find(r=>r.type==='outputVat')?.amount??null:null;
   const input=current?books.taxAccounts.find(r=>r.type==='inputVat')?.amount??null:null;
   return {...m,period,ledgerOutputVat:output,ledgerInputVat:input,
    outputDifference:difference(output,m.outputVat),inputDifference:difference(input,m.selectedAndFixedInput),
    reportedRevenue:current?books.sales:null,revenueDifference:current?difference(books.sales,m.salesExcludingVat):null,
-   filingEvidence:filings.map(f=>f.source),declaredDue:declared,filingDifference:difference(declared,m.due),filingStatus:filings.length?'有独立申报资料，核对回执类型与所属期':'缺申报回执',
-   filedAmountConflict:amounts.length>1};
+   filingEvidence:filings.map(f=>f.source),declaredDue:declared,filingDifference:difference(declared,m.due),filingStatus:receiptConflict?'申报回执更正链未核，需原回执及更正依据':filings.length?'有独立申报资料，核对回执类型与所属期':'缺申报回执',
+   filedAmountConflict:receiptConflict||amounts.length>1};
  });
+}
+// 新旧版本均按业务值比较。单个原件的字节变化可以覆盖多行，也可能只改变排版。
+function recalculationImpact(prior,current){
+ const fields=(row,keys)=>keys.map(k=>row[k]??null);
+ function changedRows(oldRows,newRows,key,select){
+  const index=rows=>new Map(rows.map(row=>[row[key],digest(select(row))]));
+  const old=index(oldRows),next=index(newRows);
+  return [...new Set([...old.keys(),...next.keys()])].filter(id=>old.get(id)!==next.get(id)).sort();
+ }
+ const monthFields=['basis','state','salesExcludingVat','outputVat','openingCarryCredit','selectedAndFixedInput','inputVatTransferOut',
+  'dueBeforePrepayment','due','endingCarryCredit','endingPrepayment','declaredDue','declaredDueBeforePrepayment','filingReconciliation',
+  'paymentMonth','expectedPayment','expectedPaymentBasis','actualPaid','burden','simulatedBurden'];
+ const taxPeriods=changedRows(prior.months,current.months,'period',m=>fields(m,monthFields));
+ const cashMonths=changedRows(prior.cash,current.cash,'paymentMonth',m=>[...fields(m,['netCashOutflow','expectedOutstanding','observedActualPaid','observedPrepaid','observedRefund']),m.actualPaidEvidence?.status??null]);
+ const invoiceRefs=changedRows(prior.invoices,current.invoices,'invoiceRef',r=>fields(r,['taxAmount','eligibility','resolved','fixedPeriod','confirmationState','firstPeriod','lastPeriod','portal','baseline','plan','recommendedPeriod']));
+ const receiptIndex=pack=>{
+  const groups=new Map();
+  function add(period,value){if(!groups.has(period))groups.set(period,[]);groups.get(period).push(digest(value));}
+  for(const r of pack.filingHistory)add(r.data.period,['filing',r.data,r.source.verification]);
+  for(const e of pack.activities)if(['payment','prepayment','refund_received'].includes(e.eventType))add(e.period,[e.eventType,e.eventRef,e.operationDate,e.amount,e.sources.map(s=>s.verification)]);
+  return [...groups].map(([period,values])=>({period,values:values.sort()}));
+ };
+ const receiptPeriods=changedRows(receiptIndex(prior),receiptIndex(current),'period',r=>r.values);
+ const agreement=pack=>(pack.recommendation?.agreement?.schedule??[]).map(r=>fields(r,['burdenMode','minimumPercent','from','through']));
+ const agreementChanged=digest(agreement(prior))!==digest(agreement(current));
+ const policy=pack=>pack.policy.map(p=>[p.source?.sha256??null,p.question,p.passage,p.state,p.interpretation,p.validity??null,p.condition?.value??null,p.appliesWhenMatched??null]);
+ const policyChanged=digest(policy(prior))!==digest(policy(current));
+ const outputs=[];
+ if(invoiceRefs.length)outputs.push('invoice_inventory');
+ if(taxPeriods.length)outputs.push('monthly_tax_calculation');
+ if(cashMonths.length)outputs.push('payment_month_cash');
+ if(receiptPeriods.length)outputs.push('receipt_reconciliation');
+ if(agreementChanged||policyChanged||prior.recommendation?.choice!==current.recommendation?.choice)outputs.push('planning_recommendation');
+ if(digest(prior.yearEnd)!==digest(current.yearEnd))outputs.push('year_end_forecast');
+ return {taxPeriods,cashMonths,receiptPeriods,invoiceRefs,agreementChanged,policyChanged,outputs,coverage:'compared_handoff_versions'};
 }
 async function previousVersion(id,current,root){
  if(!id)return null;
@@ -190,13 +229,14 @@ async function previousVersion(id,current,root){
   const oldCash=new Map((old?.cash??[]).map(r=>[r.paymentMonth,r.netCashOutflow]));
   const newCash=new Map(current.cash.map(r=>[r.paymentMonth,r.netCashOutflow]));
   const cashChanges=[...new Set([...oldCash.keys(),...newCash.keys()])].sort().map(paymentMonth=>({paymentMonth,previous:oldCash.get(paymentMonth)??null,current:newCash.get(paymentMonth)??null,change:difference(newCash.get(paymentMonth),oldCash.get(paymentMonth))}));
-  return {cashChanges,callId:id,status:'verified_record',scopePeriod:scope.period,sourceCurrentness:r.sourceCurrentness,basisChanged:r.output.basis!==current.basis,sourceChanges,policyChanges,changes};
+  const impact=old?recalculationImpact(old,current):null;
+  return {impact,cashChanges,callId:id,status:'verified_record',scopePeriod:scope.period,sourceCurrentness:r.sourceCurrentness,basisChanged:r.output.basis!==current.basis,sourceChanges,policyChanges,changes};
  }catch{return {callId:id,status:'版本或账套未核对，未引用前版数据'};}
 }
 export async function saveVatHandoff(args,result,allInvoices){
  const call=currentFinanceCall();if(!call)return result;
  const evidenceBytes=safeFile(join(call.recordPath,handoffFiles.evidence),48*1024*1024);
- const proposed=Array.isArray(args.baseline)||Array.isArray(args.plan);
+ const proposed=Object.hasOwn(args,'baseline')||Object.hasOwn(args,'plan');
  if(!proposed)result={...result,recommendation:null,...(result.knownSubset?{knownSubset:{...result.knownSubset,recommendation:null}}:{})};
  if(!args.handoff&&(!proposed||args.offset>0)){
   return {...result,delivery:'invoice_inventory',evidenceDigest:hashBytes(evidenceBytes),codeDigest:vatCodeVersion()};

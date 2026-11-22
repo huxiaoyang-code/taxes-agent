@@ -8,7 +8,7 @@ export const hashBytes=bytes=>createHash('sha256').update(bytes).digest('hex');
 // 文件名来自产品，历史记录只能提供摘要。
 export function vatCodeVersion(){
  const code=createHash('sha256');
- for(const name of ['vat-planning.mjs','vat-planning-contracts.mjs','vat-planning-evidence.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','vat-period-handoff.mjs','vat-handoff-html.mjs','vat-handoff-books-worker.mjs','vat-handoff-versions.mjs','vat-period-handoff-contract.mjs']){
+ for(const name of ['vat-planning.mjs','vat-planning-contracts.mjs','vat-receipt-chain.mjs','vat-planning-evidence.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','money.mjs','agency-rule-catalog.mjs','vat-period-handoff.mjs','vat-handoff-html.mjs','vat-handoff-books-worker.mjs','vat-handoff-versions.mjs','vat-period-handoff-contract.mjs']){
   code.update(name).update(readFileSync(fileURLToPath(new URL('./'+name,import.meta.url))));
  }
  const ledgers=new URL('./vat-planning-ledgers.mjs',import.meta.url);

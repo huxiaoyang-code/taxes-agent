@@ -150,6 +150,14 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
   const stale=await review();assert(stale.flags.stale);assert(stale.nextSteps.some(s=>s.tool==='finance_vat_plan'));
   const second=await ok(two,'finance_vat_plan',{...args,plan:choice,handoff:{previousCallId:first.callRef,policyReviews:[policy]}});
   const newer=JSON.parse(readFileSync(second.handoff.dataPath));assert.notEqual(first.handoff.dataPath,second.handoff.dataPath);assert.equal(newer.previous.status,'verified_record');assert.equal(newer.previous.changes[0].dueChange,'-10.00');assert.match(newer.policy[0].state,/判断适用/);assert.equal(newer.previous.policyChanges[0].oldState,firstDoc.policy[0].state);
+  assert.deepEqual(newer.previous.impact.taxPeriods,[period]);assert.deepEqual(newer.previous.impact.cashMonths,['2026-07']);assert.equal(newer.previous.impact.invoiceRefs.length,1);assert.equal(newer.previous.impact.policyChanged,true);
+  const checked=await review({callIds:[second.callRef]});
+  assert.equal(checked.planning.decisionBasis.declaredDue,null);assert.equal(checked.planning.decisionBasis.observedPaidInCashMonth,null);
+  assert.deepEqual(checked.planning.decisionBasis.forecastPeriods,doc.months.slice(1).map(m=>m.period));
+  assert.deepEqual(checked.planning.recalculation.taxPeriods,[period]);
+  const early=await ok(two,'finance_vat_plan',{...args,baseline:[],plan:{strategy:'earliest_eligible'}});
+  assert.equal(early.plan.months[0].due,'60.00');assert.equal(early.baseline.months[0].due,'100.00');assert.equal(early.recommendation.choice,'plan');
+  const earlyPack=JSON.parse(readFileSync(early.handoff.dataPath));assert.equal(earlyPack.invoices[0].recommendedPeriod,period);
   assert.equal(sha(readFileSync(first.handoff.dataPath)),first.handoff.digests.data);
   // 另一张票冲突且七月资料缺失，六月已核票的暂定选择仍可跨进程查阅。
   const uncertain={...doc.bills[0],invoiceNumber:'PENDING',taxAmount:10};
@@ -164,6 +172,42 @@ test('规划、次月新进程、会计四表、政策窗口配对及补证留�
   assert.equal(partialPack.invoices.find(i=>i.invoiceNumber==='TEST-1').recommendedPeriod,period);
   assert(readFileSync(partial.handoff.reportPath,'utf8').includes('截至 '+period+' 的连续可核月份'));
   const scopedReview=await review({callIds:[partial.callRef]});assert.equal(scopedReview.planning.recommendation,null);assert.equal(scopedReview.planning.knownSubsetRecommendation.choice,'plan');
+  // 同笔费用六月受益，七月收专票、六月门户已关，八月付供应商。税款另有六月申报及七月支付回单。
+  doc.bills.splice(1);doc.bills[0].receipt='2026-07-05';doc.months[1].otherEffects='none';
+  doc.months[1].basis='actual';doc.months[1].knownAt='2026-07-31';
+  doc.portals=[{issuer:doc.bills[0].issuer,invoiceNumber:'TEST-1',period,knownAt:'2026-07-05',portalStatus:'closed'}];
+  doc.filings=[{period,knownAt:'2026-07-08',receiptId:'JUNE-FILING',declaredDue:100},
+   {period:'2026-05',knownAt:'2026-07-02',receiptId:'MAY-CORRECTION',supersedes:'MISSING-MAY-ORIGINAL',declaredDue:9001}];
+  doc.payments=[{eventType:'payment',period,knownAt:'2026-07-10',operationDate:'2026-07-10',eventId:'JUNE-PAYMENT',amount:100}];
+  tables.push({kind:'portal',rowsPointer:'/portals',fields:keys('issuer','invoiceNumber','period','knownAt','portalStatus')},
+   {kind:'filing',rowsPointer:'/filings',fields:keys('period','knownAt','receiptId','supersedes','declaredDue')},
+   {kind:'event',rowsPointer:'/payments',fields:keys('eventType','period','knownAt','operationDate','eventId','amount')});
+  const entity={kind:'company',industry:'service',profileId:'small-2011-basic-v1',businessStartDate:'2026-06-01',vatStatus:'general',vatPeriod:'monthly',vatReliefWaived:false,incomeLevyMethod:'actual_accounts',bookkeepingMethod:'double_entry'};
+  const fact=(type,id,date,fields)=>({id,type,date,enterpriseKey:actualKey,businessIdentity:{issuerKey:'SYNTHETIC',documentNumber:id,event:type},originalRefs:[{originalId:'doc',locator:'/business/'+id,extractionReason:'合成服务验收、发票及付款事实'}],...fields});
+  doc.business={E:fact('entity','E','2026-06-01',{entity}),C:fact('expense','C','2026-06-30',{use:'admin',benefitPeriod:period,net:'1000.00',gross:'1040.00',invoiceTax:'40.00',invoiceKind:'special',inputVatTreatment:'deductible',certifiedDate:'2026-07-15',settlement:'unpaid'}),P:fact('supplier_payment','P','2026-08-03',{relatedFactId:'C',bankAccountId:'SYNTH-BANK',bankReference:'VENDOR-AUG',amount:'1040.00'})};
+  refresh();
+  const recalc=await ok(two,'finance_vat_plan',{...args,asOf:'2026-08-03',baseline:[],plan:{strategy:'earliest_eligible'},handoff:{previousCallId:early.callRef}});
+  assert.equal(recalc.plan.months[0].selectedAndFixedInput,'0.00');assert.equal(recalc.plan.months[1].selectedAndFixedInput,'40.00');assert.equal(recalc.plan.months[1].due,'60.00');
+  const reconciled=await review({callIds:[recalc.callRef]});
+  assert.equal(reconciled.planning.decisionBasis.declaredDue,'100.00');assert.equal(reconciled.planning.decisionBasis.filingAmountMatched,true);assert.equal(reconciled.planning.decisionBasis.observedPaidInCashMonth,null);
+  assert.deepEqual(reconciled.planning.recalculation.receiptPeriods,['2026-05',period]);
+  const detail=JSON.parse(readFileSync(recalc.handoff.dataPath));assert.equal(detail.cash.find(c=>c.paymentMonth==='2026-07').observedActualPaid,'100.00');
+  assert.equal(detail.invoices.find(i=>i.invoiceNumber==='TEST-1').earliestSelectablePeriod,'2026-07');
+  const may=detail.months.find(m=>m.period==='2026-05');
+  assert.equal(may.declaredDue,null);assert.equal(may.filedAmountConflict,true);assert.match(may.filingStatus,/原回执/);
+  const august={...target,period:'2026-08'},aug=start(workspace('八月费用核对',august));try{
+   await aug.initialize();
+   const parts=[[period,[doc.business.E,doc.business.C]],[august.period,[doc.business.P]]].map(([m,records])=>{
+    const path=join(prepared,'业务记录-'+m+'.json');json(path,{version:'agency-raw-facts/1',scope:{...firstDoc.scope,period:m},records});return {path};
+   });
+   const manifestPath=join(prepared,'六月受益八月付款.json');
+   json(manifestPath,{version:'agency-business-materials/1',scope:{...firstDoc.scope,period:august.period},originals:[{id:'doc',path:source}],sources:parts});
+   const expense=await ok(aug,'finance_workpaper',{manifestPath});
+   const paper=JSON.parse(readFileSync(join(audit,'artifacts',expense.evidence.callRef,'workpaper.json')));
+   const accrued=paper.accounting.historicalVouchers.find(v=>v.factId==='C'),payment=paper.accounting.vouchers.find(v=>v.factId==='P');
+   assert.equal(accrued.period,period);assert.equal(accrued.entries.find(e=>e.code==='5602').debit,'1000.00');
+   assert.equal(payment.period,'2026-08');assert.equal(payment.entries.find(e=>e.code==='1002').credit,'1040.00');assert.equal(expense.ledgerAmounts.payable,0);
+  }finally{await aug.close();}
   writeFileSync(first.handoff.reportPath,'替换');const altered=await review();assert.equal(altered.artifactIntegrity,'changed');assert.equal(altered.planning.reportPath,undefined);
  }finally{await two.close();}
 });

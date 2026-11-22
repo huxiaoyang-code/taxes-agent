@@ -46,7 +46,7 @@ export function buildClaudeLaunchSpec(workspace,options){
  const overrides={autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory};
  // 老工作区继续使用原有权限；新版仅在上方绑定核验通过后补上纯查询许可。
  if(config.mcpEnv.FINANCE_SKILL_DISCOVERY==='focused'){
-   overrides.permissions={allow:[...new Set([...native.permissions.allow,'mcp__finance__account_list','mcp__finance__finance_query'])]};
+   overrides.permissions={allow:[...new Set([...native.permissions.allow,'mcp__finance__account_list','mcp__finance__finance_query','Edit(/outputs/*.csv)','Edit(/outputs/*.md)'])]};
  }
  const settings=JSON.stringify(overrides);
  // 原生--allowedTools等选项是variadic，提示词必须在明确的选项终止符之后。

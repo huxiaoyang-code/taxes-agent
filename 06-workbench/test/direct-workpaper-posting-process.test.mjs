@@ -40,13 +40,25 @@ test('实际 MCP 底稿跨 HTTP 正式入账，持久来源校验与拒绝边界
  const voucherIndex=paper.accounting.vouchers.findIndex(v=>v.entries.some(e=>Number(e.debit)>0)),voucher=paper.accounting.vouchers[voucherIndex];assert(voucher);
  const reference=(entryIndex,field)=>({artifactRef:result.vouchers.detailRef,voucherIndex,entryIndex,field}),first=voucher.entries.findIndex(e=>Number(e.debit)>0),ref=reference(first,'debit');
  const privateContext={dbPath},capture=(r=ref,tgt=target)=>captureWorkpaperAmount(tgt,r,privateContext);
- await t.test('另一进程的成功持久引用可核验，公共分页仍不开放持久读取',async()=>{
+ await t.test('新 MCP 从审计目录读回分页明细，仍核对当前账套和金额',async()=>{
   const record=await readFinanceCall({auditDir,callId});assert.equal(record.integrity,'verified');assert.equal(record.sourceCurrentness,'unchanged');
-  assert.equal(capture().selectedValue,Number(voucher.entries[first].debit));assert.throws(()=>workpaperDetails({target,artifactRef:ref.artifactRef,section:'vouchers'}),{code:'finance_details_reference_untrusted'});
+  assert.equal(capture().selectedValue,Number(voucher.entries[first].debit));const second=mcp(server.url);
+  try{
+   for(const section of ['vouchers','inventory','return_costs']){
+    const page=await second.call('finance_workpaper_details',{target,artifactRef:ref.artifactRef,section,offset:0,limit:1});
+    assert(!page.isError,JSON.stringify(page));assert.equal(page.structuredContent.provenance.callId,callId);assert.equal(page.structuredContent.provenance.books,'unchanged');
+    if(section==='vouchers')assert.equal(page.structuredContent.rows[0].entries[first].debit,Number(voucher.entries[first].debit));
+   }
+   const wrong=await second.call('finance_workpaper_details',{target:{...target,accountSetId:other.id},artifactRef:ref.artifactRef,section:'vouchers'});
+   assert(wrong.isError);assert.match(JSON.stringify(wrong),/finance_details_scope_conflict/);
+  }finally{second.child.kill();}
  });
+ const readDetail=()=>workpaperDetails({target,artifactRef:ref.artifactRef,section:'vouchers'},{annotate:false});
+ process.env.FINANCE_DATABASE_PATH=dbPath;
  const args={accountSetId:set.id,period:'2026-03',voucher_date:'2026-03-15',status:'posted',summary:'合成实际费用入账',entries:voucher.entries.map(e=>({code:e.code,debit:e.debit,credit:e.credit})),businessEvidence:{businessLabel:'合成费用',method:'原生底稿逐项取数，日期取原件',mappings:[{inputPointer:'/voucher_date',parameterLabel:'凭证日期',transform:'identity',sources:[{path:original,jsonPointer:'/凭证日期'}]},...voucher.entries.flatMap((e,i)=>['debit','credit'].filter(field=>Number(e[field])!==0).map(field=>({inputPointer:`/entries/${i}/${field}`,parameterLabel:'原生分录金额',transform:'identity',sources:[{calculation:reference(i,field)}]})))]}};
  await t.test('真实 MCP→HTTP 写账通过，后端不依赖 FINANCE_DATABASE_PATH 环境猜实际库',async()=>{
   const posted=await client.call('voucher_create',args);assert(!posted.isError,JSON.stringify(posted));const envelope=posted.structuredContent??JSON.parse(posted.content[0].text);assert(validateModelEnvelope(envelope).ok,JSON.stringify(envelope));assert.equal(envelope.ok,true);assert.equal(envelope.applied,true);assert.equal(envelope.projection.status,'posted');assert.equal(A.listVouchers(set.id,{period:'2026-03'}).filter(v=>v.status==='posted').length,1);
+  const history=readDetail();assert.equal(history.provenance.books,'changed');assert.equal(history.nextSteps[0].tool,'finance_workpaper');
  });
  await t.test('账套或期间不同、伪造引用及越界引用均拒绝',()=>{
   assert.throws(()=>capture(ref,{...target,accountSetId:other.id}),{code:'finance_details_scope_conflict'});assert.throws(()=>capture(ref,{...target,period:'2026-04'}),{code:'finance_details_scope_conflict'});
@@ -56,7 +68,7 @@ test('实际 MCP 底稿跨 HTTP 正式入账，持久来源校验与拒绝边界
  await t.test('未配置共享审计根不会接受请求自带路径',()=>{delete process.env.FINANCE_AUDIT_DIR;try{assert.throws(()=>capture({...ref,auditDir}),{code:'finance_details_audit_root_required'});}finally{process.env.FINANCE_AUDIT_DIR=auditDir;}});
  const mutate=(path,fn,check)=>{const old=readFileSync(path);try{writeFileSync(path,fn(old));check();}finally{writeFileSync(path,old);}};
  await t.test('原件变化与底稿变化分别拒绝',()=>{
-  mutate(original,b=>Buffer.concat([b,Buffer.from('\n')]),()=>assert.throws(capture,{code:'finance_details_source_changed'}));
+  mutate(original,b=>Buffer.concat([b,Buffer.from('\n')]),()=>{assert.throws(capture,{code:'finance_details_source_changed'});assert.throws(readDetail,{code:'finance_details_source_changed'});});
   mutate(artifactPath,b=>Buffer.concat([b,Buffer.from('\n')]),()=>assert.throws(capture,{code:'finance_details_artifact_changed'}));
  });
  await t.test('失败调用、错误签发工具、记录摘要破损均拒绝',()=>{
@@ -72,7 +84,7 @@ test('实际 MCP 底稿跨 HTTP 正式入账，持久来源校验与拒绝边界
  await t.test('规则版本、数据库实例与有效期独立核验',()=>{
   const beginPath=join(auditDir,callId,'begin.json'),endPath=join(auditDir,callId,'end.json'),resultPath=join(auditDir,callId,'result.json');
   mutate(endPath,b=>JSON.stringify({...JSON.parse(b),ruleVersion:'伪造规则版本'}),()=>assert.throws(capture,{code:'finance_details_record_changed'}));
-  mutate(beginPath,b=>JSON.stringify({...JSON.parse(b),startedAt:'2020-01-01T00:00:00Z'}),()=>mutate(endPath,b=>JSON.stringify({...JSON.parse(b),beginSha256:hash(readFileSync(beginPath))}),()=>assert.throws(capture,{code:'finance_details_reference_expired'})));
+  mutate(beginPath,b=>JSON.stringify({...JSON.parse(b),startedAt:'2020-01-01T00:00:00Z'}),()=>mutate(endPath,b=>JSON.stringify({...JSON.parse(b),beginSha256:hash(readFileSync(beginPath))}),()=>{assert.throws(capture,{code:'finance_details_reference_expired'});assert.equal(readDetail().rows[0].entries[first].debit,Number(voucher.entries[first].debit));}));
   const old=[artifactPath,resultPath,endPath].map(path=>[path,readFileSync(path)]);
   try{
    const fakePaper=JSON.parse(old[0][1]);fakePaper.scope.databaseInstanceId='synthetic-wrong-instance';writeFileSync(artifactPath,JSON.stringify(fakePaper));

@@ -6,10 +6,13 @@ import {createHash} from 'node:crypto';
 import {readFinanceCall,financeAuditDirectory,annotateFinanceCall,currentFinanceCall} from './finance-call-chain.mjs';
 import {resolveDirectFinanceTarget} from './direct-finance-target.mjs';
 import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {reviewDeliveryFiles} from './finance-delivery-check.mjs';
 import {FINANCE_PERIOD_REVIEW_SCHEMA} from './finance-period-review-contracts.mjs';
 import {digest as vatDigest} from './finance-prebook-evidence.mjs';
 import {handoffFiles,vatCodeVersion,bookSnapshot} from './vat-handoff-versions.mjs';
 import {captureAgencyCode} from './agency-business-evidence.mjs';
+import {workpaperBookState} from './direct-finance-details.mjs';
+import {workpaperLedgerAmounts,taxSummary} from './direct-finance.mjs';
 import {AGENCY_RULE_VERSION} from './agency-business.mjs';
 import {FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
 
@@ -22,7 +25,7 @@ const array=value=>Array.isArray(value)?value:[];
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const count=value=>Number.isSafeInteger(value)&&value>=0?value:0;
 const states=new Set(['partial','partial_known_invoices','calculated_draft','conditional_calculated','needs_inputs','unsupported','ready_for_bookkeeping_review','executed','failed']);
-const tools={finance_vat_plan:'vat_planning',finance_workpaper:'native_workpaper',finance_annual_workpaper:'native_workpaper',finance_tax_calculate:'native_workpaper',finance_tax_summary_calculate:'tax_summary',finance_prebook_review:'prebook',finance_calculation_run:'calculation'};
+const tools={finance_vat_plan:'vat_planning',finance_workpaper:'native_workpaper',finance_annual_workpaper:'annual_workpaper',finance_tax_calculate:'native_workpaper',finance_tax_summary_calculate:'tax_summary',finance_prebook_review:'prebook',finance_calculation_run:'calculation'};
 const summaryFiles=['finance-summary.mjs','finance-summary-contracts.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','agency-rule-catalog.mjs','money.mjs','direct-finance-target.mjs','finance-call-chain.mjs'];
 // 代码只允许来自固定生产模块中的常量。保存记录中的任意新字符串不能成为模型输出。
 const issueCodes=new Set();
@@ -51,12 +54,19 @@ function currentVersions(){
 }
 const compare=(old,current)=>typeof old!=='string'||!current?'unknown':old===current?'unchanged':'changed';
 function versionState(record,kind,versions){
- const expectedRule=kind==='native_workpaper'?AGENCY_RULE_VERSION:['tax_summary','prebook','vat_planning'].includes(kind)?FINANCE_SUMMARY_RULE_VERSION:null;
- return {recorder:compare(record.begin.recorderCodeDigest,versions.recorder),code:compare(record.end?.codeDigest,kind==='native_workpaper'?versions.native:kind==='tax_summary'?versions.summary:kind==='vat_planning'?versions.vat:null),
+ const expectedRule=['native_workpaper','annual_workpaper'].includes(kind)?AGENCY_RULE_VERSION:['tax_summary','prebook','vat_planning'].includes(kind)?FINANCE_SUMMARY_RULE_VERSION:null;
+ return {recorder:compare(record.begin.recorderCodeDigest,versions.recorder),code:compare(record.end?.codeDigest,['native_workpaper','annual_workpaper'].includes(kind)?versions.native:kind==='tax_summary'?versions.summary:kind==='vat_planning'?versions.vat:null),
   rules:compare(record.end?.ruleVersion,expectedRule),environment:'unknown',meaning:'recorded_versions_only_not_business_correctness'};
 }
 function recognized(record){
- const o=record.output,kind=tools[record.tool];if(!o||typeof o!=='object'||!states.has(o.status))return null;
+ const o=record.output,kind=tools[record.tool];if(!object(o))return null;
+ if(kind==='annual_workpaper'){
+  const scope=record.end?.scope;
+  return o.version==='finance-annual-result/1'&&o.resultOrigin==='native_engine'&&/^(2026|2027)$/.test(o.period)&&scope?.period===o.period+'-12'&&
+   ['annual_calculation_draft','incomplete'].includes(o.status)&&o.annualCalculation?.status===o.status&&o.review?.submittable===false&&o.vouchers?.scope==='provided_annual_months'&&
+   o.evidence?.callRef===record.callId&&Array.isArray(o.review.issues)&&Array.isArray(o.calculationResults?.taxes)&&o.calculationResults.taxes.every(t=>object(t)&&typeof t.status==='string')?kind:null;
+ }
+ if(!states.has(o.status))return null;
  if(kind==='native_workpaper'&&o.version==='finance-business-result/1'&&o.resultOrigin==='native_engine'&&object(o.review)&&Array.isArray(o.review.issues)&&object(o.calculationResults)&&Array.isArray(o.calculationResults.taxes)&&o.calculationResults.taxes.every(t=>object(t)&&typeof t.status==='string'))return kind;
  if(kind==='tax_summary'&&o.version==='finance-tax-summary-result/1'&&o.resultOrigin==='conditional_summary_engine'&&Array.isArray(o.conditions)&&Array.isArray(o.needsInputs))return kind;
  if(kind==='prebook'&&o.version==='finance-prebook-projection/1'&&Array.isArray(o.issues)&&o.tax&&o.review)return kind;
@@ -64,8 +74,20 @@ function recognized(record){
  if(kind==='calculation'&&o.kind==='derived_calculation'&&/^[a-f0-9-]{36}$/.test(o.runId??'')&&o.businessStatus==='unreviewed'&&Array.isArray(o.outputs))return kind;
  return null;
 }
+function annualMatches(record,paper){
+ const o=record.output,ref='finance-artifact:'+record.callId+'/workpaper.json',scope=record.end.scope;
+ const {contentDigest,...body}=paper;
+ const months=array(paper.dependencies).filter(d=>d.kind!=='native_asset_context');
+ return paper.entrypoint==='buildAgencyAnnualWorkpaper'&&contentDigest===sha(stable(body))&&stable(paper.scope)===stable(scope)&&
+  paper.year===o.period&&paper.status===o.status&&o.evidence.result.artifactRef===ref&&o.vouchers.detailRef===ref&&
+  months.length>0&&months.every(d=>d.codeDigest===record.end.codeDigest&&d.period?.startsWith(o.period+'-'))&&
+  paper.ruleVersion===record.end.ruleVersion&&paper.ruleVersion===o.rules?.ruleVersion&&o.rules.codeDigest===record.end.codeDigest&&
+  stable(workpaperLedgerAmounts(paper))===stable(o.ledgerAmounts)&&stable(taxSummary(paper.obligations))===stable(o.calculationResults.taxes)&&
+  o.vouchers.count===array(paper.accounting?.vouchers).length+array(paper.accounting?.historicalVouchers).length&&
+  o.annualCalculation.yearEndAdjustmentsPresent===(paper.yearEndAdjustments!==undefined)&&o.annualCalculation.nextYearCarryPresent===(paper.nextYearCarryState!==undefined);
+}
 // 工件路径只由已验证 callId/runId 和固定文件名构造，不消费记录内的自由路径。
-function artifactState(root,record,kind){
+function artifactState(root,record,kind,verified){
  if(!kind)return 'unknown';
  const o=record.output;
  try{
@@ -80,17 +102,28 @@ function artifactState(root,record,kind){
     if(sha(bytes)!==h.digests?.[key])return 'changed';
     if(key==='data')pack=JSON.parse(bytes);
    }
-   if(pack?.callId!==record.callId||pack.basis!==o.basis)return 'changed';
+   if(pack?.callId!==record.callId||pack.basis!==o.basis||stable(pack.scope)!==stable(record.end.scope)||pack.asOf!==o.asOf||pack.through!==o.through)return 'changed';
    for(const kind of ['trial-balance','balance-sheet','income-statement','cash-flow-statement']){
     const report=pack.books?.reports?.[kind];
     if(report&&sha(safeFile(join(root,record.callId,kind+'.csv'),48*1024*1024))!==report.sha256)return 'changed';
    }
+   verified.handoff=pack;
    return 'verified';
   }
-  if(kind==='native_workpaper'||kind==='tax_summary'){
-   path=join(root,'artifacts',record.callId,kind==='native_workpaper'?'workpaper.json':'summary.json');expected=o.evidence?.result?.sha256;
+  if(['native_workpaper','annual_workpaper','tax_summary'].includes(kind)){
+   path=join(root,'artifacts',record.callId,kind==='tax_summary'?'summary.json':'workpaper.json');expected=o.evidence?.result?.sha256;
    const bytes=safeFile(path);if(!/^[a-f0-9]{64}$/.test(expected??''))return 'unverified';
-   return sha(bytes)===expected?'verified':'changed';
+   if(sha(bytes)!==expected)return 'changed';
+   if(kind!=='tax_summary'){
+    const paper=JSON.parse(bytes);
+    if(kind==='annual_workpaper'&&(bytes.length!==o.evidence.result.bytes||!annualMatches(record,paper)))return 'changed';
+    verified.nativeAssetContext=paper.nativeAssetContext;
+    if(kind==='annual_workpaper'){
+     const changed=new Set([...record.changedSources,...record.unverifiedSources,...array(record.end.sourceChanges).map(s=>s.path)]);
+     verified.affectedInputMonths=periodList(paper.dependencies.filter(d=>array(d.sourceRefs).some(s=>changed.has(s.locator))).map(d=>d.period)).sort();
+    }
+   }
+   return 'verified';
   }
   path=kind==='prebook'?join(root,'prebook',record.callId,'prebook.json'):join(root,'calculations',o.runId,'record.json');
   const saved=JSON.parse(safeFile(path));
@@ -108,10 +141,31 @@ function sourceState(record){
   unverifiedBaselines:unknownBaselines,
   meaning:'file_bytes_only_not_authenticity'};
 }
-function projection(root,record,versions,scopeVerified,currentBooks){
- const kind=recognized(record),o=record.output??{},sources=sourceState(record),versionsState=versionState(record,kind,versions),artifact=artifactState(root,record,kind);
+const periodList=values=>array(values).filter(p=>typeof p==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(p)).slice(0,25);
+const yuan=value=>typeof value==='string'&&/^-?\d{1,13}\.\d{2}$/.test(value)?value:null;
+function planningReadback(pack){
+ const current=array(pack.months).find(r=>r.period===pack.scope.period);
+ const cash=array(pack.cash).find(r=>r.paymentMonth===pack.scope.period);
+ const filings=array(pack.filingHistory).filter(f=>f.data?.period===pack.scope.period);
+ const receipts=filings.filter(f=>f.source?.verification==='source_value_bound');
+ const amount=receipts.length&&receipts.length===filings.length?yuan(current?.declaredDue):null;
+ const burden=current?.burden,impact=pack.previous?.impact;
+ const supportedOutputs=['invoice_inventory','monthly_tax_calculation','payment_month_cash','receipt_reconciliation','planning_recommendation','year_end_forecast'];
+ return {decisionBasis:{
+  observedPeriods:periodList(pack.yearHistory?.coverage?.observedPeriods),forecastPeriods:periodList(pack.yearHistory?.coverage?.forecastPeriods),
+  agreementMode:['monthly','ytd'].includes(pack.recommendation?.agreement?.burdenMode)?pack.recommendation.agreement.burdenMode:null,
+  monthlyBurdenPercent:Number.isFinite(burden?.monthly?.percent)?burden.monthly.percent:null,ytdBurdenPercent:Number.isFinite(burden?.ytd?.percent)?burden.ytd.percent:null,
+  projectedYearEndDueFromStart:yuan(pack.yearEnd?.dueFromStart),expectedPaymentForPeriod:yuan(current?.expectedPayment),expectedPaymentMonth:periodList([current?.paymentMonth])[0]??null,
+  declaredDue:amount,filingReceiptCount:receipts.length,filingAmountMatched:amount!==null&&current?.filingReconciliation?.balanceStatus==='matched',
+  observedPaidInCashMonth:yuan(cash?.observedActualPaid),paymentCoverage:['complete_as_of','documented_receipts_only','coverage_incomplete','future_payment_month'].includes(cash?.actualPaidEvidence?.status)?cash.actualPaidEvidence.status:'not_provided',
+ },...(impact?{recalculation:{taxPeriods:periodList(impact.taxPeriods),cashMonths:periodList(impact.cashMonths),receiptPeriods:periodList(impact.receiptPeriods),
+  changedInvoiceCount:array(impact.invoiceRefs).length,outputs:array(impact.outputs).filter(o=>supportedOutputs.includes(o)),policyChanged:impact.policyChanged===true,agreementChanged:impact.agreementChanged===true}}:{})};
+}
+function projection(root,record,versions,binding,currentBooks){
+ const scopeVerified=!!binding;
+ const verified={},kind=recognized(record),o=record.output??{},sources=sourceState(record),versionsState=versionState(record,kind,versions),artifact=artifactState(root,record,kind,verified);
  let codes=[],unresolved=0,business='unrecognized',conditions=0,needsInputs=0,unrecognizedTaxStatuses=0,taxStatusUnverified=false;
- if(kind==='native_workpaper'){
+ if(kind==='native_workpaper'||kind==='annual_workpaper'){
   codes=array(o.review.issues).map(i=>i?.code);unresolved=Math.max(codes.length,count(o.review.issueCount));
   const taxes=o.calculationResults.taxes;
   unrecognizedTaxStatuses=taxes.filter(t=>!['calculated','not_applicable','missing','unknown','uncovered','pending_period_end'].includes(t.status)).length;
@@ -120,6 +174,7 @@ function projection(root,record,versions,scopeVerified,currentBooks){
   taxStatusUnverified=pending+uncovered+unknown>0;
   business=unresolved||needsInputs?'needs_inputs':uncovered?'unsupported':pending?'pending_period_end':unknown?'unverified':'draft';
   unresolved=Math.max(unresolved,needsInputs+pending+uncovered+unknown);
+  if(kind==='annual_workpaper'&&o.status==='incomplete'){business='needs_inputs';unresolved=Math.max(unresolved,1);}
  }else if(kind==='tax_summary'){
   conditions=o.conditions.length;needsInputs=o.needsInputs.length;codes=o.conditions.map(i=>i?.code);unresolved=needsInputs+conditions+(o.status==='unsupported'?1:0);
   business=o.status==='unsupported'?'unsupported':needsInputs?'needs_inputs':o.delivery==='invoice_inventory'?'inventory_read':'conditional';
@@ -133,16 +188,23 @@ function projection(root,record,versions,scopeVerified,currentBooks){
  }else if(kind==='calculation'){business='unreviewed';}
  if(record.status==='incomplete')business='incomplete';else if(record.status==='unknown')business='unknown';else if(['failed','rejected','tool_error'].includes(record.status)||o.status==='failed')business='failed';
  let books='unknown';
+ if(binding&&['native_workpaper','annual_workpaper'].includes(kind)&&artifact==='verified')books=workpaperBookState(binding,verified.nativeAssetContext);
  if(kind==='vat_planning'&&scopeVerified&&artifact==='verified'&&o.handoff?.bookDigest&&currentBooks){
-  const snapshot=currentBooks(record);
+  const snapshot=currentBooks(verified.handoff);
   books=snapshot?compare(o.handoff.bookDigest,vatDigest(snapshot)):'unknown';
  }
- const stale=books==='changed'||sources.state==='changed'||['changed','missing'].includes(artifact)||Object.values(versionsState).includes('changed');
- const unverified=!scopeVerified||taxStatusUnverified||business==='unverified'||record.integrity!=='verified'||['unverified','unknown'].includes(sources.state)||artifact!=='verified'||['code','rules','recorder'].some(k=>versionsState[k]==='unknown');
+ const stale=books==='changed'||sources.state==='changed'||sources.missing>0||['changed','missing'].includes(artifact)||Object.values(versionsState).includes('changed');
+ const unverified=!scopeVerified||books==='unverified'||taxStatusUnverified||business==='unverified'||record.integrity!=='verified'||['unverified','unknown'].includes(sources.state)||artifact!=='verified'||['code','rules','recorder'].some(k=>versionsState[k]==='unknown');
  return {callId:record.callId,tool:Object.hasOwn(tools,record.tool)?record.tool:'unrecognized_tool',kind:kind??'unrecognized',scopeVerified,
   execution:{status:['returned','failed','unknown','rejected','tool_error','incomplete'].includes(record.status)?record.status:'unknown',completed:record.end?.executionCompleted===true},
+  ...(scopeVerified&&['annual_workpaper','native_workpaper'].includes(kind)?{books}:{}),
+  ...(kind==='annual_workpaper'&&scopeVerified&&record.integrity==='verified'&&artifact==='verified'?{annual:{
+   year:o.period,through:o.ledgerAmounts.through,replayFrom:periodList([o.ledgerAmounts.replayFrom])[0]??null,affectedInputMonths:verified.affectedInputMonths,recordedAmounts:{revenue:o.ledgerAmounts.revenue,profitBeforeTax:o.ledgerAmounts.profitBeforeTax,inventory:o.ledgerAmounts.inventory},
+   currentness:stale||books==='unverified'||sources.state!=='unchanged'?'recheck_before_use':'recorded_snapshot',detailRef:o.vouchers.detailRef,
+   yearEndAdjustmentsPresent:o.annualCalculation.yearEndAdjustmentsPresent,nextYearCarryPresent:o.annualCalculation.nextYearCarryPresent}}:{}),
   ...(kind==='vat_planning'&&scopeVerified&&record.integrity==='verified'?{planning:{
    books,basis:o.basis,asOf:o.asOf,through:o.through,period:o.start,invoiceCount:o.pagination.total,
+   ...(verified.handoff?planningReadback(verified.handoff):{}),
    recommendation:['baseline','plan'].includes(o.recommendation?.choice)?o.recommendation.choice:null,
    ...(o.status==='partial_known_invoices'&&o.knownSubset?.recommendation?{knownSubsetRecommendation:{
     choice:['baseline','plan'].includes(o.knownSubset.recommendation.choice)?o.knownSubset.recommendation.choice:null,
@@ -155,7 +217,7 @@ function projection(root,record,versions,scopeVerified,currentBooks){
   }}:{}),recordIntegrity:record.integrity,artifactIntegrity:artifact,sources,versions:versionsState,businessStatus:business,...(!kind?{diagnostic:'result_shape_unrecognized'}:{}),
   flags:{stale,unverified,incomplete:record.status==='incomplete',failed:business==='failed'},
   evidence:{coverage:'recorded_local_result_only',unresolvedCount:unresolved,issueCodes:codeCounts(codes),conditionCount:conditions,needsInputCount:needsInputs,unrecognizedTaxStatusCount:unrecognizedTaxStatuses,
-   accountingCoverageDeclared:kind==='native_workpaper'&&o.ledgerAmounts?.coverageVerified===true,approvalVerified:false,postedVerified:false,filingVerified:false},
+   accountingCoverageDeclared:['native_workpaper','annual_workpaper'].includes(kind)&&o.ledgerAmounts?.coverageVerified===true,approvalVerified:false,postedVerified:false,filingVerified:false},
   nextSteps:nextSteps(kind,{stale,unverified,business,unresolved,executionUncertain:record.status!=='returned'||record.end?.executionCompleted!==true||record.integrity!=='verified'})};
 }
 function nextSteps(kind,{stale,unverified,business,unresolved,executionUncertain}){
@@ -167,19 +229,26 @@ function nextSteps(kind,{stale,unverified,business,unresolved,executionUncertain
   return steps;
  }
  if(business==='inventory_read')steps.push({code:'compare_invoice_period_choices',tool:'finance_vat_plan'});
- if(stale)steps.push({code:'recompute_after_source_or_version_change',tool:kind==='vat_planning'?'finance_vat_plan':kind==='tax_summary'?'finance_tax_summary_calculate':kind==='prebook'?'finance_prebook_review':kind==='calculation'?'finance_calculation_run':'finance_workpaper'});
+ if(stale)steps.push({code:'recompute_after_source_or_version_change',tool:kind==='vat_planning'?'finance_vat_plan':kind==='tax_summary'?'finance_tax_summary_calculate':kind==='prebook'?'finance_prebook_review':kind==='calculation'?'finance_calculation_run':kind==='annual_workpaper'?'finance_annual_workpaper':'finance_workpaper'});
  if(unresolved)steps.push({code:'supplement_evidence_then_recompute',tool:kind==='vat_planning'?'finance_vat_plan':kind==='prebook'?'finance_prebook_review':kind==='tax_summary'?'finance_tax_summary_calculate':'finance_record_contract',skill:kind==='prebook'?'prebook-review/SKILL.md':'tax-review/SKILL.md'});
  if(unverified)steps.push({code:'verify_local_sources_and_business_scope',skill:'internal-control-review/references/audit-support.md'});
  if(!steps.length)steps.push({code:'continue_remaining_goal_checks',skill:'tax-period/references/close-management.md'});
  return steps;
 }
-function bindingState(record,binding){
+function bindingState(record,binding,root){
  const scope=binding.scope;
  const recorded=record.end?.scope??record.begin.scope;
  if(!recorded||['enterpriseKey','accountSetId','databaseInstanceId','period'].some(k=>recorded[k]===undefined))return 'unverified';
  if(['enterpriseKey','accountSetId','databaseInstanceId','period','currency'].some(k=>recorded[k]!==scope[k]))return 'conflict';
  const observed=record.end?.metadata?.configuredTarget;
- return record.end?.scopeState==='observed'&&record.integrity==='verified'&&observed?.bindingOrigin==='existing_database_identity'&&observed.accountSetId===scope.accountSetId&&observed.period===scope.period?'matched':'unverified';
+ if(record.end?.scopeState!=='observed'||record.integrity!=='verified')return 'unverified';
+ const path=observed?.databasePath??record.input?.dbPath??record.begin.configuredTarget?.databasePath;
+ if(typeof path!=='string')return 'unverified';
+ if(resolve(path).toLowerCase()!==resolve(binding.dbPath).toLowerCase())return 'conflict';
+ if(observed?.bindingOrigin==='existing_database_identity'&&observed.accountSetId===scope.accountSetId&&observed.period===scope.period)return 'matched';
+ // 旧年度调用仅留账库路径及原生年度工件。按当前账库解析身份，并核验原生范围、依赖、金额和版本。
+ if(!observed&&recognized(record)==='annual_workpaper'&&artifactState(root,record,'annual_workpaper',{})==='verified')return 'matched';
+ return 'unverified';
 }
 export async function loadRecord(root,callId){
  // 重用既有绑定/摘要/原件校验前先限制核心记录大小，坏记录仅生成固定诊断。
@@ -223,8 +292,7 @@ export async function reviewFinancePeriod(args){
  const remaining=explicit?null:newestFirst?unscannedDirectories:Math.max(0,names.length-offset-selected.length),records=[],excluded={scopeConflict:0,scopeUnverified:0,unreadable:0,incomplete:0,integrityUnverified:0};
  const versions=currentVersions();
  const books=new Map();
- const currentBooks=record=>{
-  const pack=JSON.parse(safeFile(join(root,record.callId,handoffFiles.data),48*1024*1024));
+ const currentBooks=pack=>{
   const queries=pack.bankQueries??[],key=vatDigest(queries);
   if(!books.has(key)){
    const raw=bookSnapshot({databasePath:selectedBinding.dbPath,scope:selectedBinding.scope},queries);
@@ -236,10 +304,10 @@ export async function reviewFinancePeriod(args){
   let record;try{record=await loadRecord(root,callId);}catch{
    excluded.unreadable++;excluded.integrityUnverified++;records.push({callId,kind:'unrecognized',scopeVerified:false,recordIntegrity:'unverified',businessStatus:'unknown',flags:{stale:false,unverified:true,incomplete:false,failed:false},diagnostic:'record_unreadable',nextSteps:[{code:'inspect_original_record_locally',tool:'finance_period_review'}]});continue;
   }
-  if(!unbound){const state=args.precedingPlanPeriod&&record.tool!=='finance_vat_plan'?'conflict':bindingState(record,selectedBinding);
+  if(!unbound){const state=args.precedingPlanPeriod&&record.tool!=='finance_vat_plan'?'conflict':bindingState(record,selectedBinding,root);
    if(state!=='matched'){if(explicit)fail(state==='conflict'?'finance_period_review_scope_conflict':'finance_period_review_scope_unverified');excluded[state==='conflict'?'scopeConflict':'scopeUnverified']++;if(record.status==='incomplete')excluded.incomplete++;if(record.integrity!=='verified')excluded.integrityUnverified++;continue;}
   }
-  records.push(projection(root,record,versions,!unbound,currentBooks));
+  records.push(projection(root,record,versions,selectedBinding,currentBooks));
  }
  const pagination={selection:explicit?'explicit_calls':'directory_page',totalDirectories:newestFirst?totalCandidateDirectories:names.length,totalCandidateDirectories,excludedSelfCalls,unscannedDirectories,offset:explicit||args.beforeCallId?null:offset,scanned:selected.length,remainingDirectories:remaining,
   nextOffset:!explicit&&remaining&&!args.beforeCallId&&(!newestFirst||selected.length&&examined<inspectionLimit)?offset+selected.length:null,
@@ -250,7 +318,7 @@ export async function reviewFinancePeriod(args){
   businessStatus:unbound?'identity_unverified':'requires_goal_review',periodComplete:false,authorizesExecution:false,pagination,records,
   limitations:['local_record_hashes_do_not_prove_business_correctness','older_issues_retained_without_verified_supersession','user_goal_coverage_not_asserted','environment_lock_unknown']};
  if(unbound)return base;
- return {...base,...(args.precedingPlanPeriod?{precedingPlanPeriod:args.precedingPlanPeriod}:{}),target:{accountSetId:args.target.accountSetId,period:args.target.period},
+ return {...base,...(args.deliveryCheck?{delivery:reviewDeliveryFiles(binding,args.deliveryCheck,safeFile)}:{}),...(args.precedingPlanPeriod?{precedingPlanPeriod:args.precedingPlanPeriod}:{}),target:{accountSetId:args.target.accountSetId,period:args.target.period},
   coverage:{matchedRecords:records.filter(r=>r.scopeVerified).length,unresolvedCount:records.reduce((n,r)=>n+(r.evidence?.unresolvedCount??0),0),stale:records.filter(r=>r.flags.stale).length,unverified:records.filter(r=>r.flags.unverified).length,incomplete:records.filter(r=>r.flags.incomplete).length,failed:records.filter(r=>r.flags.failed).length,
    meaning:'this_page_only_not_period_completion'}};
 }

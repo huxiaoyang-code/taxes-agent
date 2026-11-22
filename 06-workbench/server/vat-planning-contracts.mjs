@@ -11,7 +11,7 @@ const sha={type:'string',pattern:'^[a-f0-9]{64}$'};
 const selection=object({invoiceRef:{type:'string',pattern:'^vat-[a-f0-9]{24}$'},period:month},['invoiceRef','period']);
 export const VAT_PLANNING_SCHEMA=object({
  target:MEMORY_TARGET_SCHEMA,inputPath:text,asOf:{type:'string',format:'calendar-date'},through:month,
- baseline:list(selection,1500),plan:list(selection,1500),expectedBasis:sha,
+ baseline:list(selection,1500),plan:{oneOf:[list(selection,1500),object({strategy:{const:'earliest_eligible'}},['strategy'])]},expectedBasis:sha,
  offset:{type:'integer',minimum:0,maximum:4000},limit:{type:'integer',minimum:1,maximum:100},
 },['target','inputPath','asOf','through']);
 
@@ -54,6 +54,7 @@ export function vatPlanningContract(){return {
  guidance:[
  '部分票据或后续月份待核时，knownSubset.recommendation 仅比较已核票据在连续可测期间的两种已提交方案。excludedInvoices 分页列出冲突票的各份报送额；这些数值为同一张票的不同来源。依据不足时返回差额、可核月份和需补的材料。',
  '逐交易核对销项时，月报用 salesCoverage=complete_transactions 替代销售额及销项汇总。sale.transactionId 绑定同一合同履约/成交明细，taxPointDate 取依法核实的纳税义务发生日，销售额和销项为正向绝对额。补开票保留原交易号、原税点和原金额，只新增 billingDate；同笔业务只入原期一次。红字调整用新交易号、originalTransactionId 指向原业务和已核调整日期。多笔冲减不得超过原额。同一期若还提供汇总数，工具拒绝叠加。',
+ '用 plan:{strategy:"earliest_eligible"} 与 baseline 对比时，程序按每张已核可抵票实际开放的首个可选所属期试算。已确认、已锁和条件不明的票按原状态处理。',
  '有正式用途确认撤销或更正时，用 confirmation.receiptId、supersedes 绑定原确认回执和新回执；撤销用 confirmationState=revoked、原税期和实际操作日期，核实的替代确认用 confirmed。更正申报的 filing 可同样依 receiptId/supersedes 替代原申报金额。无更正链、已申报或其他冲突状态保留锁或待核。',
  '单月及累计税负的分子是预缴抵减前应纳，分母为同口径不含税销售额；各期以原件绑定 salesExcludingVat。年中起点可用上月底 opening.ytdSalesExcludingVat/ytdDueBeforePrepayment、ytdComparable=true，或用 history 按当年一月至上月的每期已核发生额、ytdComparable=true。零销售与历史口径不齐时仍计算各期可核金额。跨年重新累计。',
  'agreement 从确认的客户约定读取 period（生效所属期）、可选 effectiveThrough、burdenMode=monthly/ytd、minimumPercent（百分数例如 3）。本工具专用于一般计税增值税应纳/可比不含税销售的内部最低参考；其他税种、分子或分母另行核对。两方案由 Agent 分别传入，按明确适用期逐期复核门槛及预测条件。未注明终期的约定跨月跨年沿用，直至下一版生效；仅一个月适用时须以来源绑定相同的起止月份。可行方案先比较年底尚保留的现金，再比较近期付款及较早使用进项。均未达时显示缺额，按最大单期缺额较小者比较。单月和累计会改变推荐且约定未明确时列缺口。',
