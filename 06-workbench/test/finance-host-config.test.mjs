@@ -29,6 +29,29 @@ assert.ok(registrations[0].config.description.includes(PERIOD_TASK_ROUTING));
 assert.ok(!permissions.allow.includes('mcp__finance__*'));assert.equal([...permissions.allow,...permissions.ask].some(x=>x.startsWith('mcp__finance__harness_')),false);
 assert.deepEqual(new Set([...permissions.allow,...permissions.ask]),new Set(toolsForProfile('direct').map(t=>'mcp__finance__'+t.name)));
 for(const tool of toolsForProfile('direct').filter(t=>t.annotations?.readOnlyHint!==true))assert.ok(permissions.ask.includes('mcp__finance__'+tool.name));
+// 读取范围由正式委托的原件目录确定。只选一份校验证明时仍需读取目录内的辅助登记簿。
+const sourceRoot=join(root,'甲公司 原件 (一)[01]');
+mkdirSync(sourceRoot);
+const proof=join(sourceRoot,'回单.json');
+writeFileSync(proof,'{}');
+writeFileSync(join(sourceRoot,'交接.md'),'合成交接');
+function sourcePermissions(changes) {
+  const context=createContext({...options,outputDir:join(root,'source-config'),sourceRoot,...changes});
+  const settings=buildConfig(context).files.find(file=>file.path==='.claude/settings.json');
+  return JSON.parse(settings.content).permissions;
+}
+const delegated={voucherCorrections:'delegated',correctionOriginals:[proof]};
+const scoped=sourcePermissions(delegated);
+const rootPattern='/'+root.replaceAll('\\','/').replace(/^([a-z]):/i,(_,drive)=>'/'+drive.toLowerCase());
+const sourcePattern=rootPattern+'/甲公司 原件 (一)\\[01\\]';
+assert.deepEqual(scoped.allow.filter(rule=>rule.startsWith('Read(')),['Read('+sourcePattern+')','Read('+sourcePattern+'/**)']);
+assert.deepEqual(scoped.allow.filter(rule=>rule.startsWith('Edit(')),['Edit(/outputs/*.csv)','Edit(/outputs/*.md)']);
+assert.equal(scoped.defaultMode,'default');
+assert.equal(scoped.additionalDirectories,undefined);
+assert.equal(scoped.deny,undefined);
+const mixed=sourcePermissions({...delegated,databasePath:join(sourceRoot,'账套.db')});
+assert.deepEqual(mixed.deny,['','-wal','-shm','-journal'].map(suffix=>'Read('+sourcePattern+'/账套.db'+suffix+')'));
+assert.deepEqual(sourcePermissions({}).allow,permissions.allow);
 assert.equal(bundle.files.some(f=>f.path.startsWith('.claude/agents/')),false);
 // 四宿主真实CLI均固定同仓库技能，旧外部参数明确拒绝。
 for(const host of ['pi','claude-code','dsh','zcode']){

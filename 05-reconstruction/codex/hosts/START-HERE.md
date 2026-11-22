@@ -23,7 +23,7 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝
 ```
 
 - `--host` 可选 `pi`、`claude-code`、`dsh` 或 `zcode`。
-- `--source-root` 指定已有获准原件目录。Agent 在宿主中使用已有文件或脚本权限读取。
+- `--source-root` 指定已有获准原件目录。Claude 正式更正委托允许从该目录查找和读取本期原件、交接表和登记簿。`--correction-original` 单独指定可以用来证明更正的原件。其他现场沿用已有的宿主文件权限。
 - 需要运行 Python 计算时，加 `--python '<python.exe绝对路径>'`；JavaScript 计算无需此项。
 - 完成账套绑定后，处理记录默认保存在 `<账库目录>/.finance-call-records/<账库文件名>/<实例编号>/<账套ID>`。同一账套的下月工作区可直接查回上月交接。未绑定的工作区使用本地 `finance-call-records`；若首次绑定前已在该目录留存资料，继续使用原址。整理件及回复写在实际记录目录的 `agent-materials`。
 
