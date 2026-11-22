@@ -187,9 +187,9 @@
 - 合成披露/事实/恢复回归：`node test/harness-disclosure.test.mjs`（工作目录06-workbench）；税额口径与详情导航回归：`node test/harness-tax-presentation.test.mjs`；本地工具输入合同回归：`node test/harness-local-tool-contract.test.mjs`。真实 pi 验收准备与固定条件日志：[harness-disclosure-acceptance.mjs](../06-workbench/scripts/harness-disclosure-acceptance.mjs) 的 prepare/supplement/correct/recover/run；准备不调用模型，run仅使用本人已授权官方DeepSeek环境变量，记录实际源码/资料哈希及text/structured体积，人工介入和无效源码调查待验收者实际审查，不能按调用次数直接判通过。
 - 历史 Harness 验证：[harness-contract](../06-workbench/test/harness-contract.test.mjs)、[harness-lifecycle](../06-workbench/test/harness-lifecycle.test.mjs)、[harness-mcp](../05-reconstruction/codex/mcp/finance-mcp/harness-test.mjs)、[历史无模型原生MCP探针](../06-workbench/scripts/harness-pi-probe.mjs)。[Pi 扩展说明](../05-reconstruction/codex/pi/README.md)保留历史流程；陌生合成资料演示准备从 `06-workbench` 运行 `node scripts/harness-demo.mjs prepare <全新绝对目录>`，不调用模型，也不构成 Agent 演示。历史模型复现仍须获当次测试授权并保留模型/MCP/解析与业务回执；`assess` 仅核查真实账务结果，解析委派是否等价需单独核实。当前 direct 接入及无模型检查使用[统一入口](../05-reconstruction/codex/hosts/START-HERE.md)与[Pi 宿主说明](../05-reconstruction/codex/hosts/pi/README.md)。
 
-- stdio 分派：[server.mjs](../05-reconstruction/codex/mcp/finance-mcp/server.mjs) 的 `callTool`、`listSkillFiles`、`readSkill`，协议入口 `tools/list`、`tools/call`、`resources/list`、`resources/read`。
+- stdio 分派：[server.mjs](../05-reconstruction/codex/mcp/finance-mcp/server.mjs) 的 `callTool`、`listSkills`、`skillLocation`、`readSkill`，协议入口 `tools/list`、`tools/call`、`resources/list`、`resources/read`。
 - 工具契约：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs) 的 `TOOLS`、`TOOL_BY_NAME`、`validateArgs`；HTTP 适配：[backend.mjs](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)；配置示例：[config.toml](../05-reconstruction/codex/config.toml)。客户端配置使用本机实际 Node / 脚本绝对路径，按实际后端设置 `FINANCE_API_BASE`；技能固定在该服务所属仓库，不设置外部技能目录。
-- 运行资源：[catalog.json](../05-reconstruction/catalog.json)、[skills](../05-reconstruction/codex/skills/)；通过 `skills_list` / `skills_read` 或 MCP resources 读取，Skill 相对引用保留在同目录树。`catalog.source_bundle` 是历史来源元数据。
+- 技能资源和旧路径映射见[随包清单](../06-workbench/server/finance-skill-assets.mjs)。direct 使用[插件技能](../plugins/finance/skills/)，历史工具面保留[原目录](../05-reconstruction/codex/skills/)。`skills_read` 与 MCP `resources/read` 使用相同的已登记 Markdown 和别名。
 - MCP 测试：[contract-test](../05-reconstruction/codex/mcp/finance-mcp/contract-test.mjs)、[workflow-test](../05-reconstruction/codex/mcp/finance-mcp/workflow-test.mjs)、[tax-contract-test](../05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs)。
 - 合成旧账示例：[legacy-book](../05-reconstruction/examples/legacy-book/)；导入脚本：[import-demo.mjs](../05-reconstruction/codex/mcp/finance-mcp/import-demo.mjs)。工作台启动后，从仓库根运行 `node 05-reconstruction/codex/mcp/finance-mcp/import-demo.mjs`（会向所配置的后端写入示例账套，只用于测试后端）。
 - Excel 转换：[xlsx-to-csv.py](../05-reconstruction/tools/xlsx-to-csv.py)。从仓库根运行 `python 05-reconstruction/tools/xlsx-to-csv.py --help`；示例：`python 05-reconstruction/tools/xlsx-to-csv.py 旧账.xlsx -o out/ --map openings=科目余额表 --map vouchers=凭证分录`。
@@ -198,7 +198,7 @@
 
 ## Windows 运行与交付
 
-Windows 完整源码包的第 2 版清单包含四宿主生成器、财税 MCP、当前与兼容技能、模板和出处。解包后在 `06-workbench` 运行 `npm ci`，再按[宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)选择应用。第 1 版清单仍可按发布时的摘要核验和复制。
+Windows 完整源码包的第 3 版清单包含四宿主生成器、财税 MCP、当前与兼容技能、模板和出处。解包后在 `06-workbench` 运行 `npm ci`，再按[宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)选择应用。第 1、2 版清单仍可按发布时的摘要核验和复制。
 
 - 运行资格与目录探针：[windows-runtime-check.mjs](../06-workbench/scripts/windows-runtime-check.mjs) 的 `decideRuntimeVersion`、`runRuntimeCheck`；发布清单 / 验收：[windows-delivery-check.mjs](../06-workbench/scripts/windows-delivery-check.mjs) 的 `inspectReleaseBundle`、`copyReleaseWhitelist`、`main`。版本条件和阶段限制直接查看这些实现与 `--help`。
 - 从 `06-workbench` 运行 `node scripts/windows-runtime-check.mjs --help`、`node scripts/windows-delivery-check.mjs --help` 查看参数。

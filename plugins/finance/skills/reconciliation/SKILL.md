@@ -1,6 +1,6 @@
 ---
 name: reconciliation
-description: 已有账簿时，将结单、回单等原件与分录逐笔对账，核对往来、资产及库存。要导入银行 CSV、匹配流水或保存余额调节结果时，走本机银行草稿。
+description: 有账簿及结单、回单或往来明细时，逐笔核对收付、余额与业务对象，交付可定位的差异及调节说明。受托导入流水、保存银行匹配或调节结果时也使用本技能。
 argument-hint: "<账户或业务对象> [期间]"
 ---
 
@@ -14,13 +14,13 @@ argument-hint: "<账户或业务对象> [期间]"
 
 ### 1. 确定同口径资料
 
-核实企业、账套、截止日、币种、元/万元、期初及账面状态。查科目明细账用 `~~erp` 的 `finance_query`，指定 `nodeId="ledger.general"`、`accountSetId`、`period` 和 `params.code`。按期初、借贷发生额和期末余额复核，逐笔原值见本机引用。原件和第三方明细来自本次获准的资料。也可直接使用获准文件，以Python或表格作总分核对、两侧银行调节、往来与账龄分析，保留算式和未解释差异。不同期间、含税口径、草稿/过账状态不可直接相减后宣称差错。
+核实企业、账套、截止日、币种、元/万元、期初及账面状态。查科目明细账用 `~~erp` 的 `finance_query`，指定 `nodeId="ledger.general"`、`accountSetId`、`period` 和已核的 `params.code`；未知科目编码时，用 `account_list` 的 `view:"index"` 按 `nameContains` 或 `codePrefix` 在所绑账套筛选，使用返回的 `rows[].accountId` 作为 `ledger.general` 的 `params.accountId`。按期初、借贷发生额和期末余额复核，逐笔原值见本机引用。原件和第三方明细来自本次获准的资料。也可直接使用获准文件，以Python或表格作总分核对、两侧银行调节、往来与账龄分析，保留算式和未解释差异。不同期间、含税口径、草稿/过账状态不可直接相减后宣称差错。
 
 ### 2. 选择核对对象
 
 - 总账对明细：应收应付、存货、固定资产、预付及计提，先核同一账户的期初、本期发生和期末。
-- 原件对账。在获准目录读取结单、回单，按上一步查银行科目明细。查本月已过账凭证清单用 `finance_query` 的 `voucher.generated.list`。逐笔勾稽日期、对方、金额和业务依据，形成差异表。有原件和账簿即可开展这项核对。
-- 导入与匹配。需要把流水导入账套或保存匹配、余额调节结果时，在本机工作台的“本机银行流水与余额调节”选择银行账户、期间、CSV 和列映射。用 `bank_import_preview` 预检，通过并在本机确认后用 `bank_import` 导入。已导入的流水用 `bank_candidates` 查凭证分录候选，人工核实并选定后用 `bank_confirm` 保存匹配。要保存截止日调节结果，核实结单覆盖期和期初、截止余额后用 `bank_reconcile`。各工具接收同账套、对应操作的 `accountSetId` 和 `draftRef`，CSV 与行明细留在本机。
+- 原件对账。在获准目录读取结单、回单，按上一步查银行科目明细。查本月已过账凭证用 `finance_query` 的 `voucher.generated.list`，同一账套及期间传 `params:{view:"index",limit:10}`，在 `projection.rows` 取实际 `voucherId`。有续页时沿用快照 `snapshot`，以 `nextOffset` 为下一页的 `offset`。将标识传入 `voucher.detail` 的 `params:{view:"check",voucherId}` 核日期、科目及逐行借贷；需要比对已知原件片段时再给 `partyText` 或 `basisText`。命中标记只说明片段出现在可比字段，交易归属按独立原件核实。逐笔勾稽日期、对方、金额和业务依据，形成差异表。有原件和账簿即可开展这项核对。
+- 委托包括导入流水、匹配或保存调节时，按[银行工作台办理](references/bank-workbench.md)从当前核对结果接续。
 - 往来核销：按原业务及收付款证据关联，不以金额相同认定同一业务；汇总收付可支持算术参考，但不能伪造逐笔核销。
 - 库存与资产：核数量、批次、成本、卡片及总账。指定批次退货应与原件批次相符。盘点未核不妨碍按有来源的账面期初推算，须明示计算条件，不能冒称盘点通过。
 

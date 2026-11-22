@@ -13,9 +13,9 @@
  * 后端：FINANCE_API_BASE，默认 http://127.0.0.1:8787
  */
 import { createInterface } from "node:readline";
-import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, openSync, closeSync, fstatSync, lstatSync, readSync, realpathSync, constants } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
+import { dirname, join, resolve, isAbsolute, posix } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { CANONICAL_QUERY_NODES, isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES } from "./tools.mjs";
@@ -27,7 +27,7 @@ import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
 import {listedToolsForProfile,toolsForProfile} from './tool-profile.mjs';
-import {PERIOD_TASK_ROUTING} from '../../hosts/shared/task-routing.mjs';
+import {FINANCE_MCP_DISCOVERY} from '../../hosts/shared/task-routing.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
 import {getFinanceSummarySafeDiagnostics} from '../../../../06-workbench/server/finance-summary.mjs';
@@ -36,6 +36,7 @@ import {BASELINE_OBSERVATIONS_SCHEMA} from '../../../../06-workbench/server/busi
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
 import {withFinanceCall,currentFinanceCall,annotateFinanceCall,hasDomainManagedSources} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
+import {PLUGIN_SKILL_FILES, HISTORICAL_SKILL_FILES, MOVED_SKILL_REFERENCES} from '../../../../06-workbench/server/finance-skill-assets.mjs';
 import {skillMetadata} from './skill-metadata.mjs';
 import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,voucherCorrectionDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
 import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
@@ -87,62 +88,72 @@ const SERVER = { name: "finance-mcp", version: "0.2.0" };
 const PROTOCOL = "2025-06-18";
 
 // ------------------------------------------------------------------ 资源读取
-function listSkillFilesUnsafe(dir = SKILLS_DIR, base = SKILLS_DIR) {
-  if (!existsSync(dir)) return [];
-  const out = [];
-  for (const ent of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, ent.name);
-    if (ent.isDirectory()) out.push(...listSkillFilesUnsafe(p, base));
-    else if (ent.name.endsWith(".md")) out.push(relative(base, p).replaceAll("\\", "/"));
-  }
-  return out;
-}
+const directSkills = ACTIVE_PROFILE === 'direct';
+const focusedSkills = directSkills && process.env.FINANCE_SKILL_DISCOVERY === 'focused';
+const pluginMarkdown = new Set(PLUGIN_SKILL_FILES.filter(file => file.endsWith('.md')));
+const historicalMarkdown = new Set(HISTORICAL_SKILL_FILES.filter(file => file.endsWith('.md')));
+const primaryResources = [...pluginMarkdown].filter(file => file.endsWith('/SKILL.md'));
 
-function listSkillFiles() {
-  try { return listSkillFilesUnsafe(); }
-  catch { throw new ToolCallError("skill_not_found", "skill_not_found"); }
-}
-
-// 旧顾问和申报技能保留原入口，三份重复正文由插件的一份规范源供给。
+// 在旧目录内已存在的专用正文有优先权，三份历史税务路径明确指向同一插件正文。
 const sharedTaxReferences = new Map([
   ['taxes-company-advisor/references/planning-cash.md', 'tax-review/references/planning-cash.md'],
   ['tax-filing/references/summary-calculation.md', 'tax-review/references/summary-calculation.md'],
   ['tax-filing/references/supported-obligations.md', 'tax-review/references/supported-obligations.md'],
 ]);
-let pluginMarkdown;
-function sharedResource(resource) {
-  if (ACTIVE_PROFILE === 'direct') return null;
-  const normalized = String(resource || '').replaceAll('\\','/').split(/[?#]/)[0];
-  if (sharedTaxReferences.has(normalized)) return sharedTaxReferences.get(normalized);
-  if (!/^[a-z0-9-]+\/(?:[a-z0-9_-]+\/)*[A-Za-z0-9_-]+\.md$/.test(normalized)) return null;
-  if (existsSync(join(SKILLS_DIR, normalized))) return null;
-  pluginMarkdown ??= new Set(listSkillFilesUnsafe(PLUGIN_SKILLS_DIR, PLUGIN_SKILLS_DIR));
-  if (pluginMarkdown.has(normalized)) return normalized;
-  // 旧客户端有时相对旧别名继续打开模板、角色或参考；已有的旧资源优先。
-  const alias = normalized.replace(/^(?:taxes-company-advisor|tax-filing)\//, 'tax-review/');
-  return pluginMarkdown.has(alias) ? alias : null;
+
+function listSkillFiles() {
+  if (!directSkills) return [...historicalMarkdown];
+  return [...pluginMarkdown, ...Object.keys(MOVED_SKILL_REFERENCES)].sort();
 }
 
-function readSkill(resource) {
-  const normalized = String(resource || "").replaceAll("\\", "/").split(/[?#]/)[0];
-  const shared = sharedResource(normalized);
-  if (shared) {
-    try {
-      const path = resolve(PLUGIN_SKILLS_DIR,shared);
-      if (realpathSync(path) === path) return readFileSync(path,'utf8');
-    } catch { /* 不接受缺失的规范源或指向别处的链接。 */ }
-    throw new ToolCallError('skill_not_found', 'skill_not_found');
+function skillLocation(resource) {
+  const name = posix.normalize(String(resource || '').replaceAll('\\', '/').split(/[?#]/)[0]);
+  let canonical = Object.hasOwn(MOVED_SKILL_REFERENCES, name) ? MOVED_SKILL_REFERENCES[name] : sharedTaxReferences.get(name);
+  if (!canonical && !directSkills && historicalMarkdown.has(name)) return {root: SKILLS_DIR, file:name};
+  if (!canonical && !directSkills) {
+    // 历史税务正文中的相对模板、角色等仍可按原目录下钻。
+    const alias = name.replace(/^(?:taxes-company-advisor|tax-filing)\//, 'tax-review/');
+    if (pluginMarkdown.has(alias)) canonical = alias;
   }
-  const root = resolve(SKILLS_DIR);
-  const full = resolve(root, normalized);
-  // Windows 下环境变量常用正斜杠，join 会输出反斜杠，直接用 startsWith 会误判；用 resolve + 分隔符比较。
-  // 失败信息只回固定常量：不四显请求路径，也不带原始异常。
-  if (full !== root && !full.startsWith(root + sep)) {
-    throw new ToolCallError("skill_not_found", "skill_not_found");
+  const file = canonical ?? name;
+  if (!pluginMarkdown.has(file)) throw new ToolCallError('skill_not_found', 'skill_not_found');
+  return {root: PLUGIN_SKILLS_DIR, file, ...(canonical && {resolvedResource:canonical})};
+}
+
+function readSkill({root, file}, headerOnly = false) {
+  const path = join(root, file);
+  let fd;
+  try {
+    // 只读取已随包登记的普通文件，目录链接、替换文件及指向外部的硬链接均不披露。
+    if (realpathSync(path) !== path) throw Error();
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.nlink !== 1) throw Error();
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1 || opened.ino !== stat.ino || opened.dev !== stat.dev || realpathSync(path) !== path) throw Error();
+    if (!headerOnly) return readFileSync(fd, 'utf8');
+    const prefix = Buffer.alloc(Math.min(opened.size, 16384));
+    const length = readSync(fd, prefix, 0, prefix.length, 0);
+    return prefix.toString('utf8', 0, length);
+  } catch { throw new ToolCallError('skill_not_found', 'skill_not_found'); }
+  finally { if (fd !== undefined) closeSync(fd); }
+}
+
+function listSkills(view) {
+  if (directSkills && (view === 'focused' || (!view && focusedSkills))) {
+    const entries = primaryResources.map(resource => {
+      const {name, description} = skillMetadata(resource, readSkill(skillLocation(resource), true));
+      return {name, description, resource};
+    });
+    return {entries};
   }
-  if (!existsSync(full)) throw new ToolCallError("skill_not_found", "skill_not_found");
-  try { return readFileSync(full, "utf8"); }
-  catch { throw new ToolCallError("skill_not_found", "skill_not_found"); }
+  const files = listSkillFiles(), labels = {}, entries = [];
+  for (const file of files) {
+    const header = readSkill(skillLocation(file), true);
+    labels[file] = header.match(/^#\s+(.+)$/m)?.[1]?.trim() || file;
+    if (file.endsWith('/SKILL.md')) entries.push(skillMetadata(file, header, {includeRole:directSkills}));
+  }
+  return {files, labels, entries};
 }
 
 // ------------------------------------------------------------------ 工具实现
@@ -208,22 +219,10 @@ async function callTool(name, args = {}, executionOptions={}) {
   }
 
   // ---- 纯本地资源工具（只读本机 skill 文件；不是业务原文通道）----
-  if (name === "skills_list") {
-    const files = listSkillFiles();
-    // 标签来自当前profile可读文档，不混入另一技能根的名称。
-    const labels = {}, entries = [];
-    for (const file of files) {
-      const markdown = readSkill(file);
-      labels[file] = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || file;
-      if (/(?:^|\/)SKILL\.md$/.test(file)) {
-        entries.push(skillMetadata(file, markdown, {includeRole: ACTIVE_PROFILE === 'direct'}));
-      }
-    }
-    return { files, labels, entries };
-  }
+  if (name === "skills_list") return listSkills(args.view);
   if (name === "skills_read") {
-    const canonical = sharedResource(args.resource);
-    return { resource:args.resource, ...(canonical && {resolvedResource:canonical}), markdown:readSkill(args.resource) };
+    const location = skillLocation(args.resource);
+    return {resource:args.resource, ...(location.resolvedResource && {resolvedResource:location.resolvedResource}), markdown:readSkill(location)};
   }
   if (HARNESS_TOOL_NAMES.has(name)) {
     try {
@@ -402,7 +401,7 @@ rl.on("line", async (line) => {
       protocolVersion: PROTOCOL,
       capabilities: { tools: {}, resources: {} },
       serverInfo: SERVER,
-      ...(ACTIVE_PROFILE === 'direct' ? {instructions: PERIOD_TASK_ROUTING} : {})
+      ...(ACTIVE_PROFILE === 'direct' ? {instructions: FINANCE_MCP_DISCOVERY} : {})
     });
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
@@ -439,7 +438,7 @@ rl.on("line", async (line) => {
   }
   if (method === "resources/list") {
     try {
-      return ok(id, { resources: listSkillFiles().map((uri) => ({
+      return ok(id, { resources: (focusedSkills ? primaryResources : listSkillFiles()).map((uri) => ({
         uri: `skill://${uri}`, name: uri, mimeType: "text/markdown"
       })) });
     } catch { return err(id, -32002, "skill_not_found"); }
@@ -448,9 +447,9 @@ rl.on("line", async (line) => {
     const uri = String(params?.uri || "").replace(/^skill:\/\//, "");
     // 失败只回固定文案：不四显请求路径或原始异常。
     try {
-      const canonical=sharedResource(uri);
-      return ok(id,{contents:[{uri:params?.uri,mimeType:"text/markdown",text:readSkill(uri),
-        ...(canonical && {_meta:{resolvedResource:canonical}})}]});
+      const location = skillLocation(uri);
+      return ok(id,{contents:[{uri:params?.uri,mimeType:"text/markdown",text:readSkill(location),
+        ...(location.resolvedResource && {_meta:{resolvedResource:location.resolvedResource}})}]});
     }
     catch { return err(id, -32002, "skill_not_found"); }
   }

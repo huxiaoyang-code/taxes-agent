@@ -399,7 +399,9 @@ const CATALOG_TOOLS = [
 /** 纯本地工具（不经后端）。 */
 const LOCAL_TOOLS = [
   available("finance_query_catalog", "列出可用、未实现及本地扩展的财务查询 nodeId 与计数。查询已过账凭证用 voucher.generated.list。", obj({}), "local"),
-  available("skills_list", "按业务查技能的名称、适用场景和资源路径。默认 direct 目录用 role 区分主入口与辅助参考。将选定项的 resource 交给 skills_read 读取正文。", obj({}), "local"),
+  available("skills_list", "按业务查技能名称、适用场景和资源路径。新版 direct 首次只列业务入口；需要查辅助参考、模板或旧名称时选完整目录。", obj({
+    view: {type:"string", enum:["focused","full"], description:"direct 的 focused 列出主入口，full 返回 files、labels 和 entries。省略时沿用工作区配置。"}
+  }), "local"),
   available("skills_read", "读取业务规则(Skill) Markdown 正文。",
     obj({ resource: { type: "string", description: "相对于技能根目录的文件路径。使用 skills_list 返回的 resource 或 files 中的参考文件路径。" } }, ["resource"]), "local"),
 ];

@@ -6,7 +6,7 @@ user-invocable: false
 
 # 财务与内控复核支持
 
-由 Anthropic 官方 audit-support 改编，见 [来源](../../SOURCES.md)。保留取样、工作底稿和证据组织方法；本技能不把 SOX404、美国审计判断或示例样本量作为中国企业法定义务。
+由 Anthropic 官方 audit-support 改编，见 [来源](../../../SOURCES.md)。保留取样、工作底稿和证据组织方法；本技能不把 SOX404、美国审计判断或示例样本量作为中国企业法定义务。
 
 ## 确定范围
 
@@ -24,6 +24,6 @@ user-invocable: false
 
 ## 交付
 
-日常复核按 [报告顺序](../shared/references/reporting.md)先看金额和异常，凭证、规则及采用参数按需查看；完整账期使用系统生成的固定卡片，不另写重复说明或索引。需要深入调查时再展开自动调用链和输入原件。卡片不代表审计意见。完整材料留在本机授权目录，客户原件、凭据及个人信息不得写入仓库或PR。
+日常复核按 [报告顺序](../../shared/references/reporting.md)先看金额和异常，凭证、规则及采用参数按需查看；完整账期使用系统生成的固定卡片，不另写重复说明或索引。需要深入调查时再展开自动调用链和输入原件。卡片不代表审计意见。完整材料留在本机授权目录，客户原件、凭据及个人信息不得写入仓库或PR。
 
-具体方法和支持模板仅在需要时读取：[按需参考](../shared/references/control-testing-methods.md)。
+具体方法和支持模板仅在需要时读取：[按需参考](../../shared/references/control-testing-methods.md)。

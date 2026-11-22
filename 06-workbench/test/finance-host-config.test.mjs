@@ -9,7 +9,7 @@ import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/too
 import {TOOLS} from '../../05-reconstruction/codex/mcp/finance-mcp/tools.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {parseArgs as parsePiArgs,buildLaunchSpec,MAIN_TOOLS,DEFAULT_TOOL_MODIFIERS} from '../../05-reconstruction/codex/hosts/pi/launcher.mjs';
-import {PERIOD_TASK_ROUTING} from '../../05-reconstruction/codex/hosts/shared/task-routing.mjs';
+import {PERIOD_TASK_ROUTING, FINANCE_MCP_DISCOVERY} from '../../05-reconstruction/codex/hosts/shared/task-routing.mjs';
 import {BUSINESS_MEMORY_ROUTING} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import financeDirect from '../../05-reconstruction/codex/pi/finance-direct.ts';
 const root=mkdtempSync(join(tmpdir(),'finance-hosts-')),options={nodePath:process.execPath,apiBase:'http://127.0.0.1:8787',databasePath:join(root,'synthetic.db'),outputDir:join(root,'claude')};
@@ -25,7 +25,7 @@ assert.ok(readFileSync(join(c.outputDir,'CLAUDE.md'),'utf8').includes(PERIOD_TAS
 const registrations=[];financeDirect({registerMcpServer:(name,config)=>registrations.push({name,config})});
 assert.equal(registrations.length,1);assert.equal(registrations[0].name,'finance');
 assert.equal(registrations[0].config.toolExposure.skills_read,'direct');assert.equal(registrations[0].config.toolExposure.finance_rules,'direct');assert.equal(registrations[0].config.toolExposure['*'],'deferred');
-assert.ok(registrations[0].config.description.includes(PERIOD_TASK_ROUTING));
+assert.ok(registrations[0].config.description.includes(FINANCE_MCP_DISCOVERY));
 assert.ok(!permissions.allow.includes('mcp__finance__*'));assert.equal([...permissions.allow,...permissions.ask].some(x=>x.startsWith('mcp__finance__harness_')),false);
 const generatedTools=toolsForProfile('direct').filter(t=>t.name!=='ledger_query');
 assert.deepEqual(new Set([...permissions.allow,...permissions.ask]),new Set(generatedTools.map(t=>'mcp__finance__'+t.name)));
@@ -113,8 +113,8 @@ for(const profile of [undefined,'direct','harness','legacy']){
   try{
     const {result:handshake}=await client.initialize();
     const direct=profile===undefined||profile==='direct';
-    assert.equal(handshake.instructions,direct?PERIOD_TASK_ROUTING:undefined);
-    if(direct)assert.match(handshake.instructions,/做完本月账/);
+    assert.equal(handshake.instructions,direct?FINANCE_MCP_DISCOVERY:undefined);
+    if(direct)assert.doesNotMatch(handshake.instructions,/bank_import_preview|voucher_correct/);
     const names=(await client.rpc('tools/list')).result.tools.map(t=>t.name);assert.deepEqual(new Set(names),new Set(toolsForProfile(profile).map(t=>t.name)));
     assert.equal(names.includes('ledger_query'),profile!=='harness','原有宿主的工具清单');
     assert.equal((await client.call('synthetic_unknown_tool')).isError,true);

@@ -64,6 +64,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { PLUGIN_SKILL_FILES, HISTORICAL_SKILL_FILES, MOVED_SKILL_REFERENCES } from "../server/finance-skill-assets.mjs";
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -736,7 +737,7 @@ const OPTIONAL_RELEASE_FILES = [
 ];
 
 // 这是源码包，不是离线依赖包。路径相对于仓库根目录。
-export const RELEASE_BUNDLE_SCHEMA_VERSION = 2;
+export const RELEASE_BUNDLE_SCHEMA_VERSION = 3;
 export const RELEASE_BUNDLE_MANIFEST = "windows-release-manifest.json";
 const backendBundleFiles = Object.freeze([
   "06-workbench/package.json", "06-workbench/package-lock.json",
@@ -756,53 +757,32 @@ const agentBundleGroups = {
   "05-reconstruction/codex/hosts/zcode": "README.md adapter.mjs launcher.mjs",
   "05-reconstruction/codex/mcp/finance-mcp": "direct-recovery.mjs direct-tools.mjs disclosure-contracts.mjs manifest-evidence-guard.mjs mcp-stdio-client.mjs receipt-presentation.mjs skill-metadata.mjs tool-profile.mjs",
   "05-reconstruction/codex/pi": "finance-direct.ts",
-  "05-reconstruction/codex/skills/annual-close": "LICENSE SKILL.md SOURCES.md",
-  "05-reconstruction/codex/skills/bookkeeping": "SKILL.md",
-  "05-reconstruction/codex/skills/bookkeeping/references": "bank-transaction-bookkeeping.md fixed-asset-bookkeeping.md invoice-bookkeeping.md other-business-bookkeeping.md payroll-bookkeeping.md period-end-bookkeeping.md reimbursement-bookkeeping.md",
-  "05-reconstruction/codex/skills/harness": "SKILL.md",
-  "05-reconstruction/codex/skills/harness/references": "accounting.md adapters.md agency-input.md analysis.md calculation.md materials.md recovery.md reporting.md review.md tax.md",
-  "05-reconstruction/codex/skills/individual-income-tax-filing": "SKILL.md",
-  "05-reconstruction/codex/skills/individual-income-tax-filing/references": "native-tool-map.md workflow-state.md",
-  "05-reconstruction/codex/skills/invoice-issuing": "SKILL.md",
-  "05-reconstruction/codex/skills/invoice-issuing/references": "native-tool-map.md tax-code-filtering.md",
-  "05-reconstruction/codex/skills/legacy-book-import": "SKILL.md",
-  "05-reconstruction/codex/skills/legacy-book-import/references": "import-rules.md",
-  "05-reconstruction/codex/skills/tax-filing": "SKILL.md",
-  "05-reconstruction/codex/skills/tax-filing/references": "annual-tax.md correction-cancel.md declaration-data-query.md enterprise-tax.md individual-income-tax.md summary-calculation.md supported-obligations.md",
-  "05-reconstruction/codex/skills/taxes-company-advisor": "SKILL.md",
-  "05-reconstruction/codex/skills/taxes-company-advisor/agents": "openai.yaml",
-  "05-reconstruction/codex/skills/taxes-company-advisor/assets": "synthetic-case.md synthetic-expected.md",
-  "05-reconstruction/codex/skills/taxes-company-advisor/references": "harness-handoff.md intake.md investigation.md planning-cash.md",
   "06-workbench/scripts": "accountant-review-q2.mjs direct-pi-probe.mjs finance-host-config.mjs inventory-tax-browser.mjs offline-period-plan.mjs offline-vat-pair.mjs offline-vat-q2.mjs",
   "plugins/finance/.claude-plugin": "plugin.json",
   "plugins/finance": ".mcp.json CONNECTORS.md LICENSE LICENSE.knowledge-work-plugins README.md SOURCES.md",
-  "plugins/finance/skills/audit-support": "SKILL.md",
-  "plugins/finance/skills/close-management": "SKILL.md",
-  "plugins/finance/skills/company-baseline": "SKILL.md",
-  "plugins/finance/skills/company-baseline/references": "material-adaptation.md materials-and-save.md",
-  "plugins/finance/skills/financial-statements": "SKILL.md",
-  "plugins/finance/skills/internal-control-review": "SKILL.md",
-  "plugins/finance/skills/journal-entry-prep": "SKILL.md",
-  "plugins/finance/skills/journal-entry": "SKILL.md",
-  "plugins/finance/skills/prebook-review": "SKILL.md",
-  "plugins/finance/skills/prebook-review/references": "adapted-methods.md input-and-tools.md",
-  "plugins/finance/skills/prebook-review/scripts": "demo.mjs",
-  "plugins/finance/skills/reconciliation": "SKILL.md",
-  "plugins/finance/skills/shared/references": "business-memory.md connectors.md control-testing-methods.md financial-controls.md journal-support.md quarter-review.md reconciliation-methods.md reporting.md variance-methods.md",
-  "plugins/finance/skills/tax-period": "SKILL.md",
-  "plugins/finance/skills/tax-period/references": "planning-cash.md",
-  "plugins/finance/skills/tax-review": "SKILL.md",
-  "plugins/finance/skills/tax-review/agents": "tax-source-extract.md vat-data-review.md",
-  "plugins/finance/skills/tax-review/examples": "annual-handoff.md period-estimate.md",
-  "plugins/finance/skills/tax-review/references": "corporate-income.md official-policy.md planning-cash.md salary.md stamp.md summary-calculation.md supported-obligations.md tax-cash-brief.md tax-exceptions.md tax-organizer.md tax-sources.md vat-calculation.md vat-general.md vat-planning.md vat-small.md",
-  "plugins/finance/skills/tax-review/templates": "tax-handoff.md vat-comparison.md vat-decision.md",
-  "plugins/finance/skills/variance-analysis": "SKILL.md",
 };
-export const REQUIRED_BUNDLE_FILES = Object.freeze([
+const hostBundleFiles = [
   ...backendBundleFiles,
   "README.md", "docs/CODE-INDEX.md", "docs/AGENT-ARCHITECTURE.md", "05-reconstruction/codex/config.toml",
   ...Object.entries(agentBundleGroups).flatMap(([dir, files]) => files.split(" ").map(file => dir + "/" + file)),
+  ...HISTORICAL_SKILL_FILES.map(file => "05-reconstruction/codex/skills/" + file),
+];
+const pluginBundle = files => files.map(file => "plugins/finance/skills/" + file);
+const correctionReference = "reconciliation/references/voucher-correction.md";
+const movedReferences = new Set(Object.values(MOVED_SKILL_REFERENCES));
+// v2 已发布包用迁移前的三个正文。自主更正参考在其中按功能随包交付。
+const v2PluginFiles = [...PLUGIN_SKILL_FILES.filter(file =>
+  !movedReferences.has(file) && file !== "reconciliation/references/bank-workbench.md" && file !== correctionReference
+), ...Object.keys(MOVED_SKILL_REFERENCES)];
+const v2RequiredFiles = [...hostBundleFiles, ...pluginBundle(v2PluginFiles)];
+export const REQUIRED_BUNDLE_FILES = Object.freeze([
+  ...hostBundleFiles, ...pluginBundle(PLUGIN_SKILL_FILES), "06-workbench/server/finance-skill-assets.mjs",
 ]);
+function requiredBundleFiles(version) {
+  if (version === 1) return backendBundleFiles;
+  return version === 2 ? v2RequiredFiles : REQUIRED_BUNDLE_FILES;
+}
+
 // 旧版 v2 清单仍可验真；含自主更正模块的新包须同时交付本机 OCR 与技能说明。
 const correctionModule = "06-workbench/server/voucher-correction-proof.mjs";
 const correctionGuide = "plugins/finance/skills/reconciliation/references/voucher-correction.md";
@@ -822,7 +802,7 @@ function bundlePathAllowed(path, schemaVersion) {
   if (!bundlePathWellFormed(path)) return false;
   const backendSource = /^06-workbench\/(server|public)\/.+/.test(path);
   if (schemaVersion === 1) return backendBundleFiles.includes(path) || backendSource;
-  if (REQUIRED_BUNDLE_FILES.includes(path) || path === correctionGuide || path === correctionOcr || path === claudeDiscoveryCheck) return true;
+  if (requiredBundleFiles(schemaVersion).includes(path) || path === correctionGuide || path === correctionOcr || path === claudeDiscoveryCheck) return true;
   if (!backendSource || path.split("/").some(generatedDirectory)) return false;
   return /^06-workbench\/server\/.+\.mjs$/.test(path)
     || /^06-workbench\/public\/(?:app\.js|index\.html|styles\.css)$/.test(path);
@@ -835,7 +815,7 @@ function sameFileIdentity(a, b) {
 
 /** 仅通过自有描述符读取普通单链接文件；读取前后都校验路径。 */
 function readBundleFile(root, rel) {
-  if (!bundlePathAllowed(rel, 1) && !bundlePathAllowed(rel, RELEASE_BUNDLE_SCHEMA_VERSION) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
+  if (!bundlePathAllowed(rel, 1) && !bundlePathAllowed(rel, 2) && !bundlePathAllowed(rel, RELEASE_BUNDLE_SCHEMA_VERSION) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
   const path = join(root, ...rel.split("/"));
   const check = () => {
     const chain = auditAncestorChain(dirname(path));
@@ -864,7 +844,7 @@ const exactKeys = (object, names) => object && typeof object === "object" && !Ar
 /** 查询文件系统之前，先拒绝未知字段、别名、路径及非规范列表。 */
 export function validateReleaseManifest(manifest) {
   if (!exactKeys(manifest, ["schemaVersion", "kind", "packageVersion", "files", "digest"])
-    || ![1, RELEASE_BUNDLE_SCHEMA_VERSION].includes(manifest.schemaVersion) || manifest.kind !== BUNDLE_KIND
+    || ![1, 2, RELEASE_BUNDLE_SCHEMA_VERSION].includes(manifest.schemaVersion) || manifest.kind !== BUNDLE_KIND
     || typeof manifest.packageVersion !== "string" || !manifest.packageVersion.trim()
     || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 40000
     || typeof manifest.digest !== "string" || !/^[a-f0-9]{64}$/.test(manifest.digest)) throw bundleError("bundle_manifest_invalid");
@@ -877,7 +857,7 @@ export function validateReleaseManifest(manifest) {
     seen.add(entry.path.toLowerCase());
     previous = entry.path;
   }
-  const required = manifest.schemaVersion === 1 ? backendBundleFiles : REQUIRED_BUNDLE_FILES;
+  const required = requiredBundleFiles(manifest.schemaVersion);
   const featureFiles = manifest.schemaVersion >= 2 && seen.has(correctionModule) ? [correctionGuide, correctionOcr] : [];
   for (const rel of [...required, ...featureFiles, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
     if (!seen.has(rel.toLowerCase())) throw bundleError("bundle_manifest_required_missing", rel);
@@ -904,11 +884,11 @@ export function inspectReleaseBundle(releasePath) {
     validateReleaseManifest(publishedManifest);
   }
   const schemaVersion = publishedManifest?.schemaVersion ?? RELEASE_BUNDLE_SCHEMA_VERSION;
-  const paths = schemaVersion === 1 ? [...backendBundleFiles] : [...REQUIRED_BUNDLE_FILES];
+  const paths = [...requiredBundleFiles(schemaVersion)];
   const packageJson = JSON.parse(readBundleFile(root, "06-workbench/package.json").toString("utf8"));
   // 新包随 npm 命令交付真实宿主检查；旧 v2 包仍按其既有入口验真。
   if (schemaVersion >= 2 && packageJson.scripts?.['check:claude-direct']) paths.push(claudeDiscoveryCheck);
-  if (schemaVersion >= 2 && existsSync(join(root, correctionModule))) paths.push(correctionGuide);
+  if (schemaVersion === 2 && existsSync(join(root, correctionModule))) paths.push(correctionGuide);
   const walk = (rel, depth = 0) => {
     const path = join(root, ...rel.split("/"));
     const audit = auditDirectoryRoot(path, "bundle_source_directory");
@@ -927,7 +907,7 @@ export function inspectReleaseBundle(releasePath) {
   };
   walk("06-workbench/server");
   walk("06-workbench/public");
-  const files = paths.sort(bundleCompare).map((rel) => {
+  const files = [...new Set(paths)].sort(bundleCompare).map((rel) => {
     const buffer = readBundleFile(root, rel);
     return { path: rel, bytes: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") };
   });

@@ -398,6 +398,33 @@ test("第 1 版已发布源码包可原样核验与复制", () => {
   assert(!fs.existsSync(join(copy.workbenchDir, "scripts/finance-host-config.mjs")));
 });
 
+test("第 2 版旧技能路径的已发布清单可核验与复制", () => {
+  const legacy = next("published-v2");
+  const renamed = new Map([
+    ["internal-control-review/references/audit-support.md", "audit-support/SKILL.md"],
+    ["journal-entry/references/journal-entry-prep.md", "journal-entry-prep/SKILL.md"],
+    ["tax-period/references/close-management.md", "close-management/SKILL.md"],
+  ].map(([from,to]) => ["plugins/finance/skills/" + from, "plugins/finance/skills/" + to]));
+  const manifest = structuredClone(cold.bundleManifest);
+  manifest.schemaVersion = 2;
+  manifest.files = manifest.files.filter(entry => ![
+    "plugins/finance/skills/reconciliation/references/bank-workbench.md", "06-workbench/server/finance-skill-assets.mjs",
+  ].includes(entry.path));
+  for (const entry of manifest.files) {
+    const from = join(cold.destRoot, entry.path);
+    entry.path = renamed.get(entry.path) ?? entry.path;
+    const to = join(legacy, entry.path);
+    fs.mkdirSync(dirname(to), {recursive:true});
+    fs.copyFileSync(from, to);
+  }
+  manifest.files.sort((a,b) => a.path < b.path ? -1 : 1);
+  resign(manifest);
+  fs.writeFileSync(join(legacy, RELEASE_BUNDLE_MANIFEST), JSON.stringify(manifest));
+  const inspected = inspectReleaseBundle(legacy);
+  assert.deepEqual(inspected.bundleManifest, manifest);
+  assert.deepEqual(copyReleaseWhitelist(inspected, next("v2-copy"), {fullBundle:true}).bundleManifest, manifest);
+});
+
 test("第 2 版拒绝将业务现场产物收入发行源码", () => {
   const fixture = cloneCold("source-with-generated-files");
   for (const rel of ["server/票据.jsonl", "public/税务明细.xlsx", "server/finance-call-records"]) {

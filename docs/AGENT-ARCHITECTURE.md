@@ -88,7 +88,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 宿主与渐进披露
 
-`skills_list` 在 direct 目录中区分业务主入口和辅助参考。核对已有收付款，从对账技能查银行原件、已有凭证和科目明细；办理银行流水导入或匹配，从本机选定草稿后调用相应银行工具。已过账凭证清单在新工作区的查询目录中以 `voucher.generated.list` 为入口，历史调用可继续使用旧节点。
+九个原生主技能各保留一个 `SKILL.md`。direct MCP 在 `FINANCE_SKILL_DISCOVERY=focused` 时从已登记的主入口读取名称和用途，按需通过完整目录查辅助方法、模板和共享参考。旧目录和已保存的技能路径仍指向包内规范正文。MCP 与宿主分别说明工具发现和长期业务委托。原件核账与银行工作台保存操作的条件见[对账技能](../plugins/finance/skills/reconciliation/SKILL.md)。
 
 `finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 

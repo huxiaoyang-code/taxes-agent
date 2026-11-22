@@ -44,12 +44,12 @@ function projectionRecovery(args){
  return baselineContract().map(step=>({...step,hint:'保留已成功的材料引用。按合同选择更少的观察字段，或分次查询 coverage/facts 并沿实际 next 续读。'}));
 }
 const guides={
- finance_calculation_run:[{code:'inspect_original_calculation_locally_before_retry',tool:'finance_period_review',skill:'audit-support/SKILL.md'}],
+ finance_calculation_run:[{code:'inspect_original_calculation_locally_before_retry',tool:'finance_period_review',skill:'internal-control-review/references/audit-support.md'}],
  finance_prebook_review:[{code:'inspect_prebook_contract_and_source_bindings',tool:'finance_record_contract',arguments:{recordType:'prebook'},skill:'prebook-review/SKILL.md'}],
  finance_tax_summary_calculate:[{code:'inspect_summary_contract_and_source_bindings',tool:'finance_record_contract',arguments:{recordType:'tax_summary'},skill:'tax-review/SKILL.md'}],
  finance_workpaper:[{code:'inspect_native_record_contracts_and_missing_evidence',tool:'finance_record_contract',skill:'journal-entry/SKILL.md'}],
  finance_tax_calculate:[{code:'inspect_native_record_contracts_and_tax_scope',tool:'finance_record_contract',skill:'tax-review/SKILL.md'}],
- finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'close-management/SKILL.md'}]
+ finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'tax-period/references/close-management.md'}]
 };
 export function directRecovery(name,{code,status,args}={}){
  if(name==='voucher_correct'){
@@ -73,7 +73,7 @@ export function directRecovery(name,{code,status,args}={}){
  if(name==='finance_baseline_materials'&&code==='finance_baseline_projection_item_limit')return projectionRecovery(args);
  if(name==='finance_baseline_materials'&&code==='finance_baseline_interpretation_invalid')return baselineContract().map(step=>({...step,hint:'按 details.interpretation 找到观察产物中 records 的字段，核对原件位置和允许枚举，修正本机产物后重试。'}));
  if(typeof code==='string'&&(code.startsWith('finance_target_')||code==='finance_period_review_scope_conflict'||code==='finance_period_review_scope_unverified'))
-  return [{code:'verify_configured_database_identity_and_selected_calls_locally',tool:'finance_period_review',skill:'audit-support/SKILL.md'}];
+  return [{code:'verify_configured_database_identity_and_selected_calls_locally',tool:'finance_period_review',skill:'internal-control-review/references/audit-support.md'}];
  if(name==='finance_baseline_materials'){
   if(/source_(?:changed|forbidden)|material_changed|generated_not_original|owner|scope|finance_memory_/.test(code??''))return [{code:'verify_original_scope_permission_and_outcome',action:'inspect_existing_local_binding_and_call_before_retry',hint:'先核实实际账套、权限、原件 SHA 和原调用终态，再决定补充本机观察或重试。'}];
   if(['invalid_arguments','finance_input_invalid'].includes(code)||/^finance_baseline_(?:observations_|input_|locator_|original_missing|field_)/.test(code??'')){

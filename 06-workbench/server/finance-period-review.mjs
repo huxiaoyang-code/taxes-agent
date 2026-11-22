@@ -163,14 +163,14 @@ function nextSteps(kind,{stale,unverified,business,unresolved,executionUncertain
  // 失败或未核执行可能已有副作用；来源变更不能成为直接重跑原操作的依据。
  if(executionUncertain||['incomplete','failed','unknown','unrecognized'].includes(business)){
   steps.push({code:'inspect_original_execution_locally_before_retry',tool:'finance_period_review'});
-  if(unverified||stale)steps.push({code:'verify_local_sources_and_business_scope',skill:'audit-support/SKILL.md'});
+  if(unverified||stale)steps.push({code:'verify_local_sources_and_business_scope',skill:'internal-control-review/references/audit-support.md'});
   return steps;
  }
  if(business==='inventory_read')steps.push({code:'compare_invoice_period_choices',tool:'finance_vat_plan'});
  if(stale)steps.push({code:'recompute_after_source_or_version_change',tool:kind==='vat_planning'?'finance_vat_plan':kind==='tax_summary'?'finance_tax_summary_calculate':kind==='prebook'?'finance_prebook_review':kind==='calculation'?'finance_calculation_run':'finance_workpaper'});
  if(unresolved)steps.push({code:'supplement_evidence_then_recompute',tool:kind==='vat_planning'?'finance_vat_plan':kind==='prebook'?'finance_prebook_review':kind==='tax_summary'?'finance_tax_summary_calculate':'finance_record_contract',skill:kind==='prebook'?'prebook-review/SKILL.md':'tax-review/SKILL.md'});
- if(unverified)steps.push({code:'verify_local_sources_and_business_scope',skill:'audit-support/SKILL.md'});
- if(!steps.length)steps.push({code:'continue_remaining_goal_checks',skill:'close-management/SKILL.md'});
+ if(unverified)steps.push({code:'verify_local_sources_and_business_scope',skill:'internal-control-review/references/audit-support.md'});
+ if(!steps.length)steps.push({code:'continue_remaining_goal_checks',skill:'tax-period/references/close-management.md'});
  return steps;
 }
 function bindingState(record,binding){
