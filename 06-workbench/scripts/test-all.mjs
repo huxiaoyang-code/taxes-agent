@@ -19,6 +19,7 @@ const steps = [
   { name: 'tax-period-rental', file: join(WORKBENCH, 'test', 'tax-period-rental.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook', file: join(WORKBENCH, 'test', 'finance-prebook.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook-mcp', file: join(WORKBENCH, 'test', 'finance-prebook-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
+  { name: 'finance-plugin-routing-evals', file: join(WORKBENCH,'..','plugins','finance','tests','eval-routing.test.mjs'), cwd: WORKBENCH, nodeArgs:['--test'] },
   { name: 'finance-plugin', file: join(WORKBENCH, '..', 'plugins', 'finance', 'tests', 'structure.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   ...["posting-evidence-guard", "posting-guard-mcp", "red-voucher-downstream", "direct-workpaper-posting-process"].map(name=>({name,file:join(WORKBENCH,"test",name+".test.mjs"),cwd:WORKBENCH})),
   { name: 'finance-review-card', file: join(WORKBENCH, 'test', 'finance-review-card.test.mjs'), cwd: WORKBENCH },

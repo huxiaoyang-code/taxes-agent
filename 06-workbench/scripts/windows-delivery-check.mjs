@@ -778,6 +778,8 @@ const v2RequiredFiles = [...hostBundleFiles, ...pluginBundle(v2PluginFiles)];
 export const REQUIRED_BUNDLE_FILES = Object.freeze([
   ...hostBundleFiles, ...pluginBundle(PLUGIN_SKILL_FILES), "06-workbench/server/finance-skill-assets.mjs",
   "05-reconstruction/codex/hosts/claude-code/project-skills.mjs",
+  ...PLUGIN_SKILL_FILES.filter(file=>/^[^/]+\/SKILL\.md$/.test(file)).flatMap(file=>
+    ["positive","neighbor"].map(kind=>"plugins/finance/evals/"+file.split("/")[0]+"-"+kind+"/case.yaml")),
 ]);
 function requiredBundleFiles(version) {
   if (version === 1) return backendBundleFiles;

@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: internal-control-review-positive
+tags: [routing, positive]
+execution:
+  prompt: "抽查采购付款授权是否执行，把样本、证据索引、控制缺陷及后续复测列成交给审计的底稿。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?internal-control-review"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?tax-period"'
+    min: 0
+    max: 0
+    arm: both
+  - name: consulted-reference
+    type: tool_used
+    tool: Read
+    input_match: 'audit-support\.md'
+    min: 1
+    arm: with-only
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '控制|复核|授权'

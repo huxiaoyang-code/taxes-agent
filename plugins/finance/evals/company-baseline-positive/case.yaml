@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: company-baseline-positive
+tags: [routing, positive]
+execution:
+  prompt: "接手一家企业，上任会计已认可的存货计价和成本分配口径从哪里接续？"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?company-baseline"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?journal-entry"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '口径|历史|承接'

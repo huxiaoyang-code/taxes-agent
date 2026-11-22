@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: variance-analysis-positive
+tags: [routing, positive]
+execution:
+  prompt: "给你两个季度的毛利数据，帮我拆出数量、售价和单位成本的影响。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?variance-analysis"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?company-baseline"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '数量|售价|成本'

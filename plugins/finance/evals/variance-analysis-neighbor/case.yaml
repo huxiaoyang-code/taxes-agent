@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: variance-analysis-neighbor
+tags: [routing, neighbor]
+execution:
+  prompt: "这家公司原会计认可的成本分摊规则要持续沿用，请找回依据和适用范围。"
+  allowed_tools: [Read, Skill]
+graders:
+  - name: selected
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?company-baseline"'
+    min: 1
+  - name: avoided-neighbor
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?variance-analysis"'
+    min: 0
+    max: 0
+    arm: both
+  - name: business-output
+    type: regex
+    target: last_message
+    pattern: '口径|历史|承接'
