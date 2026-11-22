@@ -10,6 +10,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {REPO_ROOT, startBackend} from './helpers/business-memory-e2e-fixture.mjs';
 import {syntheticVoucherEvidence} from './helpers/synthetic-posting-evidence.mjs';
+import {validateSchemaValue} from '../server/harness-schema-validation.mjs';
 
 const period = '2026-02';
 const bank = '100201', alpha = '112201', beta = '112202', supplier = '220201';
@@ -206,7 +207,37 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
     await rejected(resumed,{...plan[0],voucher_date:period+'-04'});
     assert.equal(net(alpha),-475);
   });
-  for(const args of plan.slice(1))await success(formal,'voucher_correct',args);
+  await t.test('identity 多来源在公开合同及执行前拒绝，定位实际索引，修正映射后落库',async()=>{
+    const args=structuredClone(plan[1]),before=voucherSnapshot(db,args.voucherId);
+    const tools=(await formal.rpc('tools/list')).result.tools;
+    const schema=tools.find(tool=>tool.name==='voucher_correct').inputSchema;
+    const mappings=args.businessEvidence.mappings;
+    for(const index of [0,2]){
+      mappings[index].parameterLabel='PRIVATE-MAPPING-LABEL';
+      mappings[index].sources.push({...mappings[index].sources[0],column:'对方户名'});
+    }
+    const pointers=['/businessEvidence/mappings/0/sources','/businessEvidence/mappings/2/sources'];
+    assert.deepEqual(validateSchemaValue(schema,args).filter(p=>p.keyword==='maxItems').map(p=>p.inputPointer),pointers);
+    const itemSchema=schema.properties.businessEvidence.properties.mappings.items;
+    for(const transform of ['sum','difference','product','selection']){
+      assert.deepEqual(validateSchemaValue(itemSchema,{...mappings[2],transform,reason:'合成合同校验'}),[]);
+    }
+    const rejectedCall=await rejected(formal,args);
+    assert.equal(rejectedCall.error,'invalid_arguments');
+    const [step]=rejectedCall.details.nextSteps;
+    assert.equal(step.code,'repair_identity_source_count');
+    assert.deepEqual(step.inputPointers,pointers);
+    assert.equal(step.total,2);
+    assert.match(step.hint,/原始金额.*原始日期.*proof/);
+    assert(!JSON.stringify(rejectedCall).includes('PRIVATE-MAPPING-LABEL'));
+    assert(!JSON.stringify(rejectedCall).includes(statement));
+    assert.deepEqual(voucherSnapshot(db,args.voucherId),before);
+    for(const index of [0,2]) mappings[index].sources.pop();
+    assert.deepEqual(validateSchemaValue(schema,args),[]);
+    await success(formal,'voucher_correct',args);
+    assert.deepEqual(voucherSnapshot(db,args.voucherId),{date:args.voucher_date,status:'posted',entries:args.entries.map(e=>[e.code,e.debit??0,e.credit??0])});
+  });
+  for(const args of plan.slice(2))await success(formal,'voucher_correct',args);
   const taxChange=await request(single(5,'20',10,'2221',8,true));
   const refusedTax=await rejected(formal,taxChange);
   assert.equal(refusedTax.error,'finance_correction_correction_tax_receipt_required');

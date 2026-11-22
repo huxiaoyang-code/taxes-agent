@@ -13,10 +13,16 @@ export const BUSINESS_EVIDENCE_SCHEMA={type:'object',additionalProperties:false,
  businessLabel:text,method:text,rules:{type:'array',maxItems:30,items:{type:'object',additionalProperties:false,required:['title','reason'],properties:{title:text,locator:text,url:text,reason:text}}},
  cashFlowAllocations:{type:'array',maxItems:100,items:{type:'object',additionalProperties:false,required:['item','amount','sources','reason'],properties:{item:text,amount:{anyOf:[{type:'number'},{type:'string',pattern:'^\\d+(\\.\\d{1,2})?$'}]},sources:{type:'array',minItems:1,maxItems:100,items:sourceSchema},reason:text}}},
  mappings:{type:'array',minItems:1,maxItems:400,items:{type:'object',additionalProperties:false,required:['inputPointer','parameterLabel','sources','transform'],properties:{
-  inputPointer:{type:'string',pattern:'^/.*$'},parameterLabel:text,unit:text,reason:text,transform:{enum:['identity','sum','difference','product','selection']},
+  inputPointer:{type:'string',pattern:'^/.*$'},parameterLabel:text,unit:text,reason:text,transform:{enum:['identity','sum','difference','product','selection'],description:'identity 将一个原始字段直接映射到当前参数。金额、日期与对方各自取据，金额和对方不能并列为同一 identity 的来源。'},
   sources:{type:'array',minItems:1,maxItems:100,items:mappedSourceSchema}
- }}}
+ },if:{required:['transform'],properties:{transform:{const:'identity'}}},then:{properties:{sources:{maxItems:1}}}}}
 }};
+// 位置仅取自固定的合同字段及数组下标。
+export function isIdentitySourceCountError(problem,mappings){
+ if(!['minItems','maxItems'].includes(problem.keyword)) return false;
+ const at=/^(?:\/businessEvidence)?\/mappings\/(\d+)\/sources$/.exec(problem.inputPointer);
+ return Boolean(at && mappings?.[Number(at[1])]?.transform==='identity');
+}
 const fail=(code,message)=>{throw Object.assign(new Error(message),{code});};
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 export function readEvidencePointer(value,path){
@@ -81,7 +87,9 @@ function trustedParameter(args,pointer){
  return {label:PARAMETER_LABELS[leaf]??'工具字段含义尚未中文登记，需查看实际字段定义',field:pointer,origin:PARAMETER_LABELS[leaf]?'fixed_tool_contract':'unknown'};
 }
 export function captureBusinessEvidence(args,evidence,{sourceRoot=process.env.FINANCE_SOURCE_ROOT,calculationContext}={}){
- const errors=validateSchemaValue(BUSINESS_EVIDENCE_SCHEMA,evidence);if(errors.length)fail('finance_evidence_invalid','业务字段映射缺少必要信息或结构不正确。');
+ const errors=validateSchemaValue(BUSINESS_EVIDENCE_SCHEMA,evidence);
+ if(errors.some(problem=>problem.keyword==='maxItems' && isIdentitySourceCountError(problem,evidence?.mappings)))fail('finance_evidence_transform_invalid','直接取值必须唯一定位一个原始值。');
+ if(errors.length)fail('finance_evidence_invalid','业务字段映射缺少必要信息或结构不正确。');
  const fileCache=new Map();if(evidence.mappings.reduce((n,m)=>n+m.sources.length,0)+(evidence.cashFlowAllocations??[]).reduce((n,m)=>n+m.sources.length,0)>2000)fail('finance_evidence_source_limit','本次字段映射数量过多，请按实际业务拆分。');
  const mappings=evidence.mappings.map(mapping=>{
   const sources=mapping.sources.map(source=>source.calculation?captureWorkpaperAmount(args.target??{accountSetId:args.accountSetId,period:args.period},source.calculation,calculationContext):captureEvidenceSource(source,{sourceRoot,fileCache})),actual=readEvidencePointer(args,mapping.inputPointer);let valueMatched=null;
