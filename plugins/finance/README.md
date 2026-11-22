@@ -2,7 +2,9 @@
 
 让 Agent 按中国企业的会计与税务业务处理资料，完成账前核对、凭证编制、对账、报表、税费和内控复核，交付可检查的账表、底稿与问题清单。
 
-## 按业务选择技能
+## 九个主入口
+
+可直接说明业务，例如“核对本月采购、发票和流水，列出要问老板的问题”。Claude Code 安装插件后也可用 `/finance:prebook-review`、`/finance:journal-entry` 等技能命令。
 
 | 业务 | 能做什么 |
 |---|---|
@@ -10,16 +12,23 @@
 | [账套记忆](skills/company-baseline/SKILL.md) | 从实际账套和相关依据提炼少量可跨月沿用的做账口径，保存在该账套的本机 `MEMORY.md` |
 | [账前整理与核对](skills/prebook-review/SKILL.md) | 接续上期账，核对采购、收货、发票、收付款与库存，列出问询及补件事项 |
 | [凭证编制](skills/journal-entry/SKILL.md) | 按采购销售、费用、资产、工资等业务编制分录草稿，核对科目与计算支持 |
-| [账目核对](skills/reconciliation/SKILL.md) | 比对总账、往来、银行、库存和资产资料，定位差异 |
+| [账目核对](skills/reconciliation/SKILL.md) | 已有账簿时，将结单等原件与分录逐笔核对。需要把银行 CSV 导入账套、匹配流水时，在本机银行工作台预检并确认 |
 | [财务报表](skills/financial-statements/SKILL.md) | 按适用准则编制资产负债表、利润表和现金流量表，核对账表关系 |
 | [差异分析](skills/variance-analysis/SKILL.md) | 比较期间或预算，拆分价格、数量、结构、跨期等影响，保留待调查原因 |
 | [税费复核](skills/tax-review/SKILL.md) | 在线查阅官方政策原文，核对增值税、所得税、工资个税、印花税等适用条件，形成税费底稿与依据 |
 | [内控复核](skills/internal-control-review/SKILL.md) | 对收入、采购付款、凭证和期末处理取样检查，列异常及整改建议 |
-| [凭证编制参考](skills/journal-entry-prep/SKILL.md) | 为计提、摊销、折旧、工资、收入和存货处理补充资料要求与复核要点 |
-| [月结与年度核对](skills/close-management/SKILL.md) | 按资料及账务依赖安排工作先后，梳理期末处理和未决事项 |
-| [财务与内控复核支持](skills/audit-support/SKILL.md) | 为会计复核、内部检查或外部审计整理样本、证据及问题底稿 |
 
-可直接用中文说明任务，例如“核对本月采购、发票和流水，列出要问老板的问题”。安装到 Claude Code 后，也可使用 `/finance:prebook-review`、`/finance:journal-entry` 等技能命令；表中最后三项由 Agent 在相关任务中按需读取。
+## 三份辅助参考
+
+| 在哪项业务中使用 | 何时读取 |
+|---|---|
+| 凭证编制 | 计提、摊销、折旧等分录需要核实原件和计算依据时，查[凭证编制参考](skills/journal-entry-prep/SKILL.md) |
+| 整期账税与申报准备 | 安排月结顺序、检查结转依赖或梳理年末未决事项时，查[月结与年度核对](skills/close-management/SKILL.md) |
+| 内控复核 | 需要编制抽样底稿或为审计整理样本、证据和问题记录时，查[财务与内控复核支持](skills/audit-support/SKILL.md) |
+
+默认 direct 服务的 `skills_list` 在每个入口的 `role` 标明主入口（`primary`）或辅助参考（`reference`）。选定业务后，将该项的 `resource` 传给 `skills_read` 读取正文。
+
+## 整期与跨月接续
 
 “完成这家企业本期账税”“把本季申报准备好”“接上次补件继续”先读 `tax-period/SKILL.md`，再按目标加载已有专项技能；单项税额、凭证或查询直接进入对应技能。整期交付前主动检查真实扣除、优惠、亏损及法定选择，比较本期、全年和合同全周期的税额及现金影响，区分减税与递延。补件接续以同范围实际产物和来源版本为据，`finance_period_review` 只复查已有调用记录，不把模型说完成或新一次调用成功当整期通过。
 

@@ -1,6 +1,6 @@
 ---
 name: tax-period
-description: “做完本月账”“完成本月账”、整期账税、申报准备或接上次补件的入口，核对账务和税费，比较逐票抵扣及付款方案，交付会计底稿。
+description: “做完本月账”“完成本月账”、整期账税、申报准备或接上次补件的入口。核对账务和税费，比较逐票抵扣及付款方案。安排月结顺序或梳理年末未决事项时查 close-management。
 ---
 
 # 企业整期账税与申报准备
@@ -19,6 +19,8 @@ description: “做完本月账”“完成本月账”、整期账税、申报�
 
 ## 按任务选择阶段
 
+需要安排月结顺序或梳理年末未决事项时，查[月结与年度核对](../close-management/SKILL.md)，确认哪些工作已有资料、哪些依赖上一步的实际结果。
+
 从当前实际产物确定起点，执行本次目标需要的阶段；已有有效结果可复用，资料变化则重算受影响部分。下面是业务判断提示，不是新增任务 DAG、事实登记或状态库。客户提供基础资料，Agent 负责整理、计算和判断，不让客户先填内部 JSON、编凭证或给最终税额。
 
 把用户本次明确要求逐项映射到实际交付与完成条件，不能只按五阶段标题宣称完成。季度或年度委托按实际所需月份、申报频次及税种检查覆盖；`finance_period_review.target.period` 是单月，只复查该月记录，须分别核对所需月份，不能用末月记录或累计金额冒充全季/全年覆盖。月度、季度和年度结果状态分开，缺月保留对期初承接、利润、累计税基和报表的影响；年度任务还需全年调整与亏损等年度条件，不能把季度预缴当年度汇算完成。
@@ -28,7 +30,7 @@ description: “做完本月账”“完成本月账”、整期账税、申报�
 | 阶段 | 当前读取 | 实际工具与按需技能 | 支持推进的可观察结果 |
 |---|---|---|---|
 | 任务范围与接续 | 当前授权、企业／账套／期间、当期适用口径、上次实际交付和未决事项 | `account_context`、绑定账套的 `MEMORY.md`；接续时用 `finance_period_review` 查同范围调用记录 | 核实身份、账期、实际产物及未完成事项 |
-| 资料与账前核对 | 有日期的上期余额、本期采购/收货/销售/发票/流水/盘点及覆盖范围 | [账前核对](../prebook-review/SKILL.md)，先读 `finance_record_contract` 的 prebook 合同，再用 `finance_prebook_review`；有账后按 [对账](../reconciliation/SKILL.md) 用 `finance_query` / `ledger_query` | 实际报告及交接资料、差额和问询清单；补件重算的输入摘要/问题状态可核。声明不能替代证据，`ready_for_bookkeeping_review` 仅支持后续做账复核 |
+| 资料与账前核对 | 有日期的上期余额、本期采购/收货/销售/发票/流水/盘点及覆盖范围 | [账前核对](../prebook-review/SKILL.md)，先读 `finance_record_contract` 的 prebook 合同，再用 `finance_prebook_review`；有账后按 [对账](../reconciliation/SKILL.md) 用 `finance_query` 的 `ledger.general` 核对科目明细账 | 实际报告及交接资料、差额和问询清单；补件重算的输入摘要/问题状态可核。声明不能替代证据，`ready_for_bookkeeping_review` 仅支持后续做账复核 |
 | 收入成本与跨期口径 | 合同履约、交付/验收、采购收发、库存成本、费用受益期及适用准则；有出租房租收入/预收或承租租赁事项再读 [租赁与方案分支](../tax-review/references/planning-cash.md#租赁与跨期) | [凭证编制](../journal-entry/SKILL.md)、[对账](../reconciliation/SKILL.md)；`finance_workpaper` 或自主计算，需记录脚本时用 `finance_calculation_run`；草稿用 `voucher_check`，正式写账仅用现有受控工具 | 可复算收入成本、期末结转及账税差异；原件和计算版本可追查，草稿/已入账分开。库存不足或跨期待核影响利润与税基时，相关金额保持未知或暂列 |
 | 税费及合法方案 | 纳税身份、地区、有效规则、真实扣除/抵扣、优惠、亏损、预缴/实缴和法定选择条件 | [税费复核](../tax-review/SKILL.md)；`finance_rules`、`finance_record_contract`，选择 `finance_tax_calculate` / `finance_tax_summary_calculate` / `finance_annual_workpaper` 或有来源的自主计算；交付前读 [合法方案与税后现金](../tax-review/references/planning-cash.md) | 各税种应纳/计提/已申报/实缴分列；候选方案先核可行性，再比较本期、全年及合同全周期影响，区分真实减税与递延。未核资格保留条件，不套默认税率 |
 | 交付与补件接续 | 上述实际账表、底稿、工具结果、有效规则与未决项；有账时勾稽账簿 | [财务报表](../financial-statements/SKILL.md)、[账期交付](../shared/references/quarter-review.md)；支持范围内用 `finance_quarter_review`，自主计算可用 `finance_calculation_run` 的可选卡片；`finance_period_review` 作已有记录复查 | 用户可打开的实际产物、金额与异常、规则依据、未完事项及下一动作齐备；目标内各分支分别说明已核/条件完成/待补/不支持，不能把只读记录投影或脚本成功当整期通过 |

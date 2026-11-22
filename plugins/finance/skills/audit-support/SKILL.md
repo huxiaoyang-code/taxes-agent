@@ -1,6 +1,6 @@
 ---
 name: audit-support
-description: 支持中国企业财务与内控复核的资料取样、证据整理和问题记录，适用于会计复核、内部检查及外部审计资料准备。
+description: 内控复核的辅助参考。在 internal-control-review 中编制抽样底稿、整理审计证据或记录样本问题时读取。
 user-invocable: false
 ---
 

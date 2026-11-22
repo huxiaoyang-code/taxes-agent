@@ -1,6 +1,6 @@
 ---
 name: journal-entry
-description: 根据中国企业原始业务资料编制凭证草稿与计算支持，适用于采购销售、费用报销、资产、工资、计提与收入成本核对。
+description: 根据采购销售、费用、工资等原件编制凭证草稿。计提、折旧或摊销需要核实原件和计算依据时，查 journal-entry-prep。
 argument-hint: "<业务类型> [期间]"
 ---
 
@@ -27,7 +27,8 @@ argument-hint: "<业务类型> [期间]"
 ### 2. 核对并计算
 
 - 原始业务可用Python、表格公式或已有计算器计算并生成分录草稿，保留原件、参数语义和实际公式/脚本；选择 `finance_workpaper` 时按实际合同提供目标、原件和记录。
-- 已有明确分录时用 `voucher_check` 检查金额、科目和借贷；账簿查询使用 `finance_query` 或 `ledger_query`。
+- 计提、折旧、摊销等业务需要确定原件或复算金额时，查[凭证编制参考](../journal-entry-prep/SKILL.md)。
+- 已有明确分录时用 `voucher_check` 检查金额、科目和借贷。按账套和月份用 `finance_query` 查账。查已过账凭证清单用 `voucher.generated.list`，查科目明细账用 `ledger.general` 并传 `params.code` 科目编码。
 - 自主计算和判断单列依据、条件及未决项，不改写原件，不把推导称作原生工具结果。
 - 中国税费可选 `finance_tax_calculate`；适用规则按需通过 `finance_rules` 或已核官方资料读取，不在本 Skill 另维护税率表。
 

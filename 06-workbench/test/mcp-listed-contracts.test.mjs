@@ -61,16 +61,34 @@ const cases = {
   finance_tax_calculate: {...materials, valid: [...materials.valid, {...material, obligationIds: ['vat']}]}
 };
 
-test('direct 工具列举满足宿主限制，并在 stdio 调用中执行原始分支约束', async t => {
+async function verifyListedContracts(t, discovery) {
   const client = new McpStdioClient(server, {cwd: root, env: {
-    FINANCE_MCP_PROFILE: 'direct', FINANCE_API_BASE: 'http://127.0.0.1:9', FINANCE_DATABASE_PATH: '',
+    FINANCE_MCP_PROFILE: 'direct', FINANCE_QUERY_DISCOVERY: discovery, FINANCE_API_BASE: 'http://127.0.0.1:9', FINANCE_DATABASE_PATH: '',
     FINANCE_BUSINESS_SESSION: '', FINANCE_AUDIT_MODE: '', FINANCE_AUDIT_DIR: join(root, 'audit'),
     WORKBENCH_DATA_DIR: join(root, 'data'), FINANCE_SOURCE_ROOT: root
   }}).start();
   t.after(() => client.close());
   await client.initialize('synthetic-host-contract');
   const published = (await client.rpc('tools/list')).result.tools;
-  const canonical = toolsForProfile('direct');
+  await t.test('银行工具分别说明用途和本机草稿来源', () => {
+    const bank = published.filter(tool => tool.name.startsWith('bank_'));
+    assert.equal(new Set(bank.map(tool => tool.description)).size, bank.length);
+    for (const tool of bank) {
+      assert.ok(tool.inputSchema.required.includes('draftRef'), tool.name);
+      assert.match(tool.inputSchema.properties.draftRef.description, /本机.*账套.*操作/, tool.name);
+    }
+    // 检查披露中足以分辨六种相近意图的业务词，实际搜索排名另由宿主决定。
+    for (const [intent, expected] of [
+      [/列映射/, 'bank_import_preview'], [/写入银行模块/, 'bank_import'],
+      [/匹配候选/, 'bank_candidates'], [/建立匹配/, 'bank_confirm'],
+      [/撤销一条.*匹配/, 'bank_cancel'], [/余额调节表/, 'bank_reconcile'],
+    ]) {
+      assert.deepEqual(bank.filter(tool => intent.test(tool.description)).map(tool => tool.name), [expected]);
+    }
+  });
+  const direct = toolsForProfile('direct');
+  const canonical = discovery === 'canonical' ? direct.filter(tool => tool.name !== 'ledger_query') : direct;
+  assert.equal(published.some(tool => tool.name === 'ledger_query'), discovery !== 'canonical');
   assert.deepEqual(published.map(tool => tool.name), canonical.map(tool => tool.name));
   const combinations = ['oneOf', 'anyOf', 'allOf'];
   for (const [index, {name, description, annotations, inputSchema}] of canonical.entries()) {
@@ -105,4 +123,7 @@ test('direct 工具列举满足宿主限制，并在 stdio 调用中执行原始
     assert.equal(result.isError, false, result.text);
     assert.equal(result.structured.resultOrigin, 'native_engine');
   }
-});
+}
+
+test('新工作区的精简工具清单保留各业务输入分支', t => verifyListedContracts(t, 'canonical'));
+test('旧工作区的完整工具清单保留各业务输入分支', t => verifyListedContracts(t));

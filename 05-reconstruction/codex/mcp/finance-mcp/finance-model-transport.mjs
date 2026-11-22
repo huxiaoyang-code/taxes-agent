@@ -147,6 +147,8 @@ const FINANCE_QUERY_AVAILABLE = Object.freeze([
   "report.trial_balance",
   "ledger.general",
 ]);
+// 新工作区按业务能力发现；历史 nodeId 仍在上面的执行登记表内。
+export const CANONICAL_QUERY_NODES = Object.freeze(FINANCE_QUERY_AVAILABLE.filter(id => id !== "voucher.generated.summary"));
 const FINANCE_QUERY_UNIMPLEMENTED = Object.freeze([
   "enterprise_account.bank",
   "enterprise_account.business",
@@ -705,11 +707,11 @@ function validateStatusFields(data) {
   return typeof reason === "string" && APPLIED_REASONS.has(reason);
 }
 
-function validateCatalog(catalog) {
+function validateCatalog(catalog, availableNodes) {
   if (!isPlainObject(catalog)) return false;
   for (const key of Object.keys(catalog)) if (!CATALOG_KEYS.has(key)) return false;
   for (const key of CATALOG_KEYS) if (!own(catalog, key)) return false;
-  return sameStringList(prop(catalog, "available"), FINANCE_QUERY_AVAILABLE)
+  return sameStringList(prop(catalog, "available"), availableNodes)
     && sameStringList(prop(catalog, "unimplemented"), FINANCE_QUERY_UNIMPLEMENTED)
     && sameStringList(prop(catalog, "localExtensions"), FINANCE_QUERY_LOCAL_EXTENSIONS);
 }
@@ -953,7 +955,7 @@ function validateEnvelopeInner(data, registries) {
     if (!ok || category !== "static" || toolName !== "finance_query_catalog") {
       return invalid("envelope_unexpected_field");
     }
-    if (!validateCatalog(prop(data, "catalog"))) return invalid("envelope_invalid");
+    if (!validateCatalog(prop(data, "catalog"), registries.availableNodes)) return invalid("envelope_invalid");
   }
 
   return { ok: true, envelope: data };
@@ -966,6 +968,7 @@ function validateEnvelopeInner(data, registries) {
 export function createModelEnvelopeValidator(options = {}) {
   if (!isPlainObject(options)) throw new TypeError("finance-model-transport: options 必须是对象");
   const registries = {
+    availableNodes: prop(options, "canonicalQueryCatalog") === true ? CANONICAL_QUERY_NODES : FINANCE_QUERY_AVAILABLE,
     operations: registryOf(prop(options, "operations")),
     tools: registryOf(prop(options, "tools")),
     nodeIds: registryOf(prop(options, "nodeIds")),

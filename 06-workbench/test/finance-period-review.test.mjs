@@ -32,6 +32,14 @@ async function stored({recordScope=scope,issue=true,observed=true,sourcePath,out
 test('frontmatter解析实际标量与折叠文本，坏/恶意元数据固定拒绝、不回显正文',()=>{
  assert.deepEqual(skillMetadata('x/SKILL.md','---\nname: x\ndescription: 中文入口\n---\n# 正文'),{resource:'x/SKILL.md',name:'x',description:'中文入口',metadataState:'valid'});
  assert.equal(skillMetadata('x/SKILL.md','---\nname: x\ndescription: >-\n  第一行\n  第二行\n---\n正文').description,'第一行 第二行');
+ const direct = flag => skillMetadata('x/SKILL.md', `---\nname: x\ndescription: 中文入口\n${flag}\n---\n正文`, {includeRole:true});
+ assert.equal(direct('').role, 'primary');
+ assert.equal(direct('user-invocable: true').role, 'primary');
+ assert.equal(direct('user-invocable: false').role, 'reference');
+ const invalidFlag = direct('user-invocable: PRIVATE-OWNER-TEXT');
+ assert.equal(invalidFlag.metadataState, 'invalid');
+ assert.equal(Object.hasOwn(invalidFlag,'role'), false);
+ noSecrets(invalidFlag);
  for(const fm of ['name: x\nname: evil\ndescription: PRIVATE-OWNER-TEXT','name: x\ndescription: !!js/function PRIVATE-OWNER-TEXT','name: x\ndescription: &evil PRIVATE-OWNER-TEXT','name: x\ndescription: [PRIVATE-OWNER-TEXT]','name: x\ndescription: "unterminated']){
   const result=skillMetadata('x/SKILL.md',`---\n${fm}\n---\n正文`);assert.equal(result.metadataState,'invalid');assert.equal(result.description,null);noSecrets(result);
  }
@@ -62,7 +70,7 @@ test('真实MCP发现frontmatter入口与只读合同，新进程接续summary/p
   for(const id of [prebookId,nativeId]){const rejected=await second.call('finance_period_review',{target,callIds:[id]});assert.equal(rejected.isError,true);assert.match(rejected.text,/finance_period_review_scope_unverified/);noSecrets(rejected);}
   for(const args of [{target,unboundCalls:{callIds:[summaryId]}},{unboundCalls:{callIds:[summaryId]},limit:1},{target,callIds:[summaryId],offset:1},{target,auditDir:'PRIVATE-OWNER-TEXT'},{target,dbPath:'PRIVATE-OWNER-TEXT'},{target,callIds:['../../PRIVATE-OWNER-TEXT']}]){const r=await second.call('finance_period_review',args);assert.equal(r.isError,true);noSecrets(r);}
  }finally{await second.close();}
- const legacy=client('harness');try{await legacy.initialize();const skills=(await legacy.call('skills_list')).data;assert(skills.entries.some(e=>e.resource==='harness/SKILL.md'&&e.name==='finance-tools'));assert(!skills.entries.some(e=>e.name==='prebook-review'));}finally{await legacy.close();}
+ const legacy=client('harness');try{await legacy.initialize();const skills=(await legacy.call('skills_list')).data;assert(skills.entries.some(e=>e.resource==='harness/SKILL.md'&&e.name==='finance-tools'));assert(!skills.entries.some(e=>e.name==='prebook-review'));assert(skills.entries.every(e=>!Object.hasOwn(e,'role')));}finally{await legacy.close();}
  assert.equal(sha(readFileSync(dbPath)),before);
 });
 test('同企业仍核实例/账套/期间；历史缺件不被后成功覆盖；不识别未知形状',async()=>{

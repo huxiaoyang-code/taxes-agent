@@ -17,7 +17,7 @@ import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
-import { isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
+import { CANONICAL_QUERY_NODES, isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES } from "./tools.mjs";
 import { HARNESS_TOOL_NAMES } from './tools.mjs';
 import {validateFact} from '../../../../06-workbench/server/harness-contract.mjs';
@@ -26,7 +26,7 @@ import {validateSchemaValue} from '../../../../06-workbench/server/harness-schem
 import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
-import {toolsForProfile} from './tool-profile.mjs';
+import {listedToolsForProfile,toolsForProfile} from './tool-profile.mjs';
 import {PERIOD_TASK_ROUTING} from '../../hosts/shared/task-routing.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
@@ -50,8 +50,9 @@ if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINES
   if(resolve(bound.path)!==resolve(process.env.FINANCE_BUSINESS_SESSION)||resolve(bound.session.databasePath)!==resolve(process.env.FINANCE_DATABASE_PATH))throw Error('host_business_binding_mismatch');
   process.env.FINANCE_AUDIT_DIR=bound.session.auditDir;
 }
-const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
-const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
+const LISTED_TOOLS = listedToolsForProfile(ACTIVE_PROFILE, process.env.FINANCE_QUERY_DISCOVERY);
+const catalogView = {canonicalQueryCatalog: ACTIVE_PROFILE === 'direct' && process.env.FINANCE_QUERY_DISCOVERY === 'canonical'};
+const CALLABLE_TOOL_NAMES = new Set(toolsForProfile(ACTIVE_PROFILE).map(t => t.name));
 
 // Claude Code 会过滤根带组合关键字的工具。恒真的 if 使 then 中的原约束仍对整个参数对象生效。
 // 只调整 tools/list 的展示；tools/call 和嵌套原生调用继续按 TOOL_BY_NAME 的原合同校验。
@@ -159,7 +160,7 @@ function readPathTexts(args) {
 function preflightTool(name,args={}) {
   const spec = TOOL_BY_NAME.get(name);
   if (!spec) throw new ToolCallError("unknown_tool", "unknown_tool");
-  if (!EXPOSED_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
+  if (!CALLABLE_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
@@ -209,8 +210,14 @@ async function callTool(name, args = {}, executionOptions={}) {
   if (name === "skills_list") {
     const files = listSkillFiles();
     // 标签来自当前profile可读文档，不混入另一技能根的名称。
-    const labels = Object.fromEntries(files.map(file => [file, readSkill(file).match(/^#\s+(.+)$/m)?.[1]?.trim() || file]));
-    const entries=files.filter(file=>/(?:^|\/)SKILL\.md$/.test(file)).map(file=>skillMetadata(file,readSkill(file)));
+    const labels = {}, entries = [];
+    for (const file of files) {
+      const markdown = readSkill(file);
+      labels[file] = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || file;
+      if (/(?:^|\/)SKILL\.md$/.test(file)) {
+        entries.push(skillMetadata(file, markdown, {includeRole: ACTIVE_PROFILE === 'direct'}));
+      }
+    }
     return { files, labels, entries };
   }
   if (name === "skills_read") {
@@ -270,6 +277,14 @@ async function callTool(name, args = {}, executionOptions={}) {
   // 后端明确回报未实现时，同样升级为工具错误，避免“成功返回 not_implemented”。
   if (result && typeof result === "object" && result.not_implemented === true) {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
+  }
+  // HTTP 已校验完整运行时目录。按本工作区的发现设置生成实际记录和返回的目录。
+  if (name === "finance_query_catalog" && catalogView.canonicalQueryCatalog && result.ok && result.catalog) {
+    return {
+      ...result,
+      catalog: {...result.catalog, available: CANONICAL_QUERY_NODES},
+      projection: {...result.projection, availableCount: CANONICAL_QUERY_NODES.length},
+    };
   }
   return result;
 }
@@ -380,15 +395,15 @@ rl.on("line", async (line) => {
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
   if (method === "ping") return ok(id, {});
-  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map(listedTool) });
+  if (method === "tools/list") return ok(id, { tools: LISTED_TOOLS.map(listedTool) });
   if (method === "tools/call") {
     let callReference,memoryRefresh;
     const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId},...(memoryRefresh?{financeMemory:memoryRefresh}:{})}}:result;
     try {
       const executed=await executeRecordedTool(params?.name??'unknown',params?.arguments??{},reference=>{callReference=reference;}),result=executed.result;memoryRefresh=executed.memoryRefresh;
-      if (isModelEnvelope(result)) {
+      if (params?.name === "finance_query_catalog" || isModelEnvelope(result)) {
         // 防御性重校：只把不过的固定失败码交给模型，绝不透传未校验对象。
-        const checked = validateModelEnvelope(result);
+        const checked = validateModelEnvelope(result, catalogView);
         if (!checked.ok) {
           const failure = checked.failure;
           // 信封校验失败本身无法证明写未发生：按写场景保守处理。

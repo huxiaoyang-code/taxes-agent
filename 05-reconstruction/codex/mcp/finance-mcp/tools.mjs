@@ -102,23 +102,29 @@ const limited = (name, description, inputSchema, origin = "upstream") =>
 const unavailable = (name, description, origin = "upstream") =>
   ({ name, description, inputSchema: obj({}), status: "unavailable", origin });
 
+const bankDraftSchema = auxObject({
+  accountSetId: { type: "integer", minimum: 1 },
+  draftRef: { type: "string", pattern: "^bankdraft_[a-f0-9]{48}$", description: "本机银行模块为指定账套和当前操作签发的银行草稿引用。写操作须经本机确认。" },
+}, ["accountSetId", "draftRef"]);
+const bankTool = (name, description) => available(name, `${description}需提供本机银行草稿 draftRef。`, bankDraftSchema, "local");
+
 /** 后端已实现（含本轮正式注册的 4 个扩展工具与 11 个新增管理工具）。 */
 const BACKEND_TOOLS = [
-  available("bank_accounts", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_import_preview", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_batches", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_transactions", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_ambiguities", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_candidates", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_matches", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_status", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_audit", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_account_register", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_import", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_ambiguity_resolve", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_confirm", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_cancel", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
-  available("bank_reconcile", "本机已选银行草稿执行；模型仅固定状态、计数及受控金额，原文在本机。", auxObject({accountSetId:{type:"integer",minimum:1},draftRef:{type:"string",pattern:"^bankdraft_[a-f0-9]{48}$"}},["accountSetId","draftRef"]), "local"),
+  bankTool("bank_accounts", "查账套已登记的银行账户，返回账户数量。"),
+  bankTool("bank_import_preview", "预检待导入的银行流水 CSV 及列映射，返回有效行数和错误数。预检通过后可在本机确认导入。"),
+  bankTool("bank_batches", "查指定银行账户的流水导入批次，按完成、待复核、失败等状态统计本页批次。"),
+  bankTool("bank_transactions", "查看已导入的银行流水，汇总本页收支金额、已匹配和未匹配笔数。查询时会重验已有匹配并记录失效。"),
+  bankTool("bank_ambiguities", "查询银行流水导入时发现的疑似重复行，返回本页行数及待处理数。"),
+  bankTool("bank_candidates", "为一笔已导入的银行流水查找已过账凭证分录中的匹配候选，返回候选数和选择状态。查询时会重验已有匹配并记录失效。"),
+  bankTool("bank_matches", "查询流水与凭证分录的匹配记录，统计本页已确认、已撤销和已失效的笔数。查询时会重验已有匹配并记录失效。"),
+  bankTool("bank_status", "查看银行账户的对账进度，汇总导入批次、未匹配流水、待处理重复行和最近一次对账状态。查询时会重验已有匹配并记录失效。"),
+  bankTool("bank_audit", "查询指定银行账户的操作历史，按事件类型统计本页审计记录。"),
+  bankTool("bank_account_register", "按本机确认登记人民币银行账户，绑定来源标识和账套内的银行存款末级科目。"),
+  bankTool("bank_import", "将通过 CSV 预检且已在本机确认的流水写入银行模块，返回新增、复用和疑似重复行数。使用确认导入时新签发的草稿。"),
+  bankTool("bank_ambiguity_resolve", "按本机确认处理一条疑似重复的导入行，记录复用已有流水或作为独立流水的决定和理由。"),
+  bankTool("bank_confirm", "按本机确认把选定的一笔银行流水与一条已过账凭证分录建立匹配，保存匹配记录。"),
+  bankTool("bank_cancel", "按本机确认撤销一条流水与凭证分录的已有匹配，记录撤销理由。"),
+  bankTool("bank_reconcile", "编制银行存款余额调节表。依据已导入流水、账面分录及对账单起止余额计算未达账项和调节后差额，按本机确认保存对账记录。核对银行原件与已有凭证时，先查凭证列表和分录明细，逐笔比对。"),
   available("auxiliary_entities", "辅助实体目录固定计数摘要；本机引用保留维度明细。", auxSchema({kind:AUX_KIND}), "local"),
   available("auxiliary_entries", "查询真实总账分录ID与来源，模型仅行数及借贷合计。", auxSchema({voucherId:AUX_ID,period:PERIOD}), "local"),
   available("auxiliary_ledger", "按三维事实聚合辅助账簿，模型返回期间及固定六金额合计。", auxSchema({period:PERIOD,code:{type:"string"},groupBy:{type:"array",items:AUX_KIND}},["period"]), "local"),
@@ -128,19 +134,19 @@ const BACKEND_TOOLS = [
   available("auxiliary_allocate", "显式替换真实分录或期初完整分配；必须使用真实ID。", auxSchema({entryId:AUX_ID,openingCode:{type:"string"},allocations:AUX_ALLOCATIONS,requestId:{type:"string"},reason:{type:"string"}},["allocations","requestId","reason"]), "local"),
   available("auxiliary_requirement_set", "显式设置科目辅助完整性要求，复用期间守卫。", auxSchema({code:{type:"string"},project:{type:"boolean"},department:{type:"boolean"},party:{type:"boolean"},reason:{type:"string"}},["code","reason"]), "local"),
 
-  available("account_context", "列出账套（可选带出某账套的期间）。本地不保存“当前账套”，不返回选中状态。",
+  available("account_context", "查找本机账套目录，按页列出可选账套；传入 accountSetId 可查看该账套的期间。选择账套后由宿主建立工作区绑定。",
     obj({
       accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
       limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
       offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
     })),
-  available("finance_context_resolve", "account_context 的兼容别名：列出账套与可选期间。",
+  available("finance_context_resolve", "沿用旧上下文调用查询账套与期间。工作区已绑定时，传入的账套须与会话绑定一致；查找可选账套目录用 account_context。",
     obj({
       accountSetId: { ...ACCOUNT_SET_ID, description: "可选：一并返回该账套的期间" },
       limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
       offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
     })),
-  available("finance_query", "查询财务数据。必须显式提供 accountSetId；期间类能力必须显式提供 period。可用能力见 finance_query_catalog。",
+  available("finance_query", "查询科目明细账、凭证及报表。查账或核对科目余额时用 nodeId=ledger.general，传入账套 accountSetId、月份 period 和科目编码 params.code，返回期初、借贷发生额和期末余额。其他查询节点见 finance_query_catalog。",
     obj({
       nodeId: { type: "string", description: "查询能力 ID，例如 report.balance_sheet" },
       accountSetId: ACCOUNT_SET_ID,
@@ -377,10 +383,10 @@ const CATALOG_TOOLS = [
 
 /** 纯本地工具（不经后端）。 */
 const LOCAL_TOOLS = [
-  available("finance_query_catalog", "列出财务查询能力的安全静态目录：可用 / 未实现 / 本地扩展 nodeId 与计数（代码常量，无业务数据）。", obj({}), "local"),
-  available("skills_list", "按需发现财税业务Skill入口及真实frontmatter名称、描述和资源路径；保留文件/标签目录，正文用skills_read读取。", obj({}), "local"),
+  available("finance_query_catalog", "列出可用、未实现及本地扩展的财务查询 nodeId 与计数。查询已过账凭证用 voucher.generated.list。", obj({}), "local"),
+  available("skills_list", "按业务查技能的名称、适用场景和资源路径。默认 direct 目录用 role 区分主入口与辅助参考。将选定项的 resource 交给 skills_read 读取正文。", obj({}), "local"),
   available("skills_read", "读取业务规则(Skill) Markdown 正文。",
-    obj({ resource: { type: "string", description: "Skill 相对路径，例如 bookkeeping/SKILL.md" } }, ["resource"]), "local"),
+    obj({ resource: { type: "string", description: "相对于技能根目录的文件路径。使用 skills_list 返回的 resource 或 files 中的参考文件路径。" } }, ["resource"]), "local"),
 ];
 
 /**
