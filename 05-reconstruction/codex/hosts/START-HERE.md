@@ -29,7 +29,7 @@ node 06-workbench/scripts/finance-host-config.mjs --host pi --node '<node.exe绝
 
 生成器使用本仓库技能，不覆盖已有工作区、不启动模型，也不创建账套。
 
-正式做账委托包含“自行更正本期错账”时，在生成命令指定 `--voucher-corrections delegated` 与获准的 `--source-root`。工具在绑定本期后可跨会话接续，无需逐张确认。单纯试算、出报表使用原命令。现场原件选择、旧现场升级及实账读回见[自主更正](../../../plugins/finance/skills/reconciliation/references/voucher-correction.md)。
+正式做账委托包含“自行更正本期错账”时，在生成命令指定 `--voucher-corrections delegated` 与获准的 `--source-root`。工具在绑定本期后可跨会话接续，无需逐张确认。Claude 正式委托在新工作区的 `outputs/` 目录交付 CSV 核对表和 Markdown 说明。单纯试算、出报表使用原命令。现场原件选择、旧现场升级及实账读回见[自主更正](../../../plugins/finance/skills/reconciliation/references/voucher-correction.md)。
 
 ## 3. 绑定已有账套并启动
 

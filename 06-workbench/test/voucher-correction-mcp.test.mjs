@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {mkdtempSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -79,6 +79,8 @@ function workspace(root,name,dbPath,source,apiBase,accountSetId,delegated) {
   const read=(path)=>JSON.parse(readFileSync(join(output,path),'utf8'));
   const permissions=read('.claude/settings.json').permissions;
   assert.equal(permissions.allow.includes('mcp__finance__voucher_correct'),delegated);
+  assert.equal(existsSync(join(output,'outputs')),delegated);
+  for(const rule of ['Edit(/outputs/*.csv)','Edit(/outputs/*.md)']) assert.equal(permissions.allow.includes(rule),delegated);
   for(const guarded of ['voucher_unpost','voucher_delete']) assert.ok(permissions.ask.includes('mcp__finance__'+guarded));
   return read('.mcp.json').mcpServers.finance.env;
 }

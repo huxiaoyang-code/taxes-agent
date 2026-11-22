@@ -46,6 +46,7 @@ export function writeBundle(context,bundle){
     const path=resolve(context.outputDir,file.path),rel=relative(context.outputDir,path);if(rel.startsWith('..'+sep)||isAbsolute(rel)||names.has(path.toLowerCase()))fail('host_file_invalid');names.add(path.toLowerCase());
   }
   mkdirSync(context.outputDir); // 仅允许全新独占输出，绝不合并到用户配置。
+  if(bundle.host==='claude-code' && context.correctionManifest) mkdirSync(join(context.outputDir,'outputs'));
   for(const file of files){const path=join(context.outputDir,file.path);mkdirSync(dirname(path),{recursive:true});writeFileSync(path,file.content,{encoding:'utf8',flag:'wx'});}
   return {outputDir:context.outputDir,files:files.map(f=>f.path),notes:bundle.notes??[],modelInvoked:false};
 }
