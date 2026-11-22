@@ -39,6 +39,7 @@ import {
 } from "./finance-output-policy.mjs";
 
 import { bankCallArgs } from "./bank-local-drafts.mjs";
+import {queryRecovery, validQueryView} from './query-view-contract.mjs';
 export const MODEL_ADAPTER_VERSION = "finance-model-adapter/v1";
 /** 全局上下文（account_context）分页上限：必须显式有界，避免一次吐出全部账套。 */
 export const MAX_CONTEXT_PAGE_SIZE = 32;
@@ -612,6 +613,20 @@ function envelopeFromSafeError(base, { tool: toolName, category, scope, accountS
   return envelope;
 }
 
+function requestedView(args, operation, dto, accountSetId) {
+  const options = operation === 'account_list' ? args : args.params;
+  if (options?.view === undefined && prop(dto,'queryView') === undefined) return false;
+  const view = prop(dto,'queryView');
+  if (!view || !validQueryView(operation,view)
+      || (view.view === 'voucher_check' ? 'check' : 'index') !== options?.view
+      || prop(dto,'accountSetId') !== accountSetId
+      || (view.period !== undefined && view.period !== args.period)
+      || (view.voucherId !== undefined && view.voucherId !== Number(args.voucherId ?? args.voucher_id ?? options.voucherId))) {
+    throw policyError('model_result_invalid');
+  }
+  return true;
+}
+
 function failureFromError(error, context = {}) {
   // safeErrorProjection 自己按固定 allowlist 读取 code / message 作为查表键，永不回声原文。
   const registered = typeof context.operation === "string" && REGISTERED_OPERATIONS.has(context.operation)
@@ -619,6 +634,8 @@ function failureFromError(error, context = {}) {
     : undefined;
   const result=envelopeFromSafeError(safeErrorProjection(error,registered?{operation:registered}:{}),context);
   const audit=operationErrorEvidence(error);if(audit){result.applied=audit.applied;result.needsLocalReview=audit.applied===true?audit.needsLocalReview:true;if(audit.applied===true){delete result.appliedReason;result.localRef=null;result.refPersistence='none';result.refUnavailable='summary_unavailable';}}
+  const recovery=queryRecovery(context.operation,result.error.code);
+  if(recovery)result.recovery=recovery;
   const posting=postingFailureProjection(error);if(posting)Object.assign(result,posting);
   return result;
 }
@@ -822,7 +839,7 @@ export function createFinanceModelAdapter(options = {}) {
       const echoed = resolveEchoedAccountSetId(value);
       if (echoed !== null && echoed !== accountSetId) throw policyError("model_scope_mismatch");
       const shape = PLAIN_QUERY_SHAPES[operation];
-      if (typeof shape !== "function" || !shape(value)) throw policyError("model_result_invalid");
+      if (!requestedView(args,operation,value,accountSetId) && (typeof shape !== "function" || !shape(value))) throw policyError("model_result_invalid");
       // 已知带账套字段的普通查询 DTO：逐行核对归属（wrapper 回显一致也不代表行数据同属一个账套）。
       const scopeProbe = PLAIN_QUERY_DATA_SCOPE[operation];
       if (typeof scopeProbe === "function") {
@@ -876,7 +893,7 @@ export function createFinanceModelAdapter(options = {}) {
       if (echoed !== null && echoed !== accountSetId) throw policyError("model_scope_mismatch");
       const data = prop(result, "data");
       const shape = FINANCE_QUERY_SHAPES[nodeId];
-      if (typeof shape !== "function" || !shape(data)) throw policyError("model_result_invalid");
+      if (!requestedView(args,operation,data,accountSetId) && (typeof shape !== "function" || !shape(data))) throw policyError("model_result_invalid");
       // wrapper 没有账套字段：按具体 node 的可信 data 字段核对归属，不匹配则不建引用。
       const probe = FINANCE_QUERY_DATA_SCOPE[nodeId];
       if (typeof probe === "function") {

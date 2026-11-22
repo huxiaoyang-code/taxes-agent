@@ -5,8 +5,8 @@
 //
 //   1) 模型通道 wrapQuery / wrapWrite / resolveForModel
 //      只输出**默认拒绝**的白名单 projection：有限数值、布尔、状态 token、期间，
-//      外加一个不可猜测的本地引用。企业名、科目名/编码、摘要、往来、人员、
-//      凭证行、源文件路径一律不出模型通道（靠显式字段白名单，不是敏感词黑名单）。
+//      外加一个绑定账套的本地引用。显式逐笔视图只允许限定的标识、科目编码、金额和命中状态。
+//      客户名称、业务摘要、原件路径保留在本机。
 //
 //   2) 本机通道 localRead / localCompute
 //      必须持有本机签发的 capability channel 对象才能凭同一引用取回**原数据**，
@@ -35,6 +35,7 @@
 import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
 import { storedCents, centsToNumber } from "./money.mjs";
+import {validQueryView} from './query-view-contract.mjs';
 
 export const OUTPUT_POLICY_VERSION = "finance-output-policy/v1";
 export const REF_PERSISTENCE = "process_memory";
@@ -578,17 +579,29 @@ const ledgerSummary = (value) => {
   const direction = requireEnumToken(DIRECTION_TOKENS, ledger, "direction");
   const items = requireArray(ledger, "items");
   const opening = requireRecord(ledger, "opening");
-  const openingDebit = requireNum(opening, "debit");
-  const openingCredit = requireNum(opening, "credit");
-  const periodDebit = sumField(items, "debit");
-  const periodCredit = sumField(items, "credit");
+  // 原生明细从建账期累计到查询月，历史分录结转到月初余额。
+  let openingDebit = storedCents(requireNum(opening,"debit")), openingCredit = storedCents(requireNum(opening,"credit"));
+  let periodDebit = 0n, periodCredit = 0n, itemCount = 0;
+  for (let i = 0; i < listLen(items); i++) {
+    const row = at(prop(items,i)), month = requirePeriod(row,"period");
+    const debit = storedCents(requireNum(row,"debit")), credit = storedCents(requireNum(row,"credit"));
+    if (month > period) throw invalidSummary("period");
+    if (month < period) {
+      openingDebit += debit;
+      openingCredit += credit;
+    } else {
+      periodDebit += debit;
+      periodCredit += credit;
+      itemCount++;
+    }
+  }
+  const openingNet = openingDebit - openingCredit;
   return {
-    period,
-    direction,
-    itemCount: listLen(items),
-    openingDebit: money(openingDebit), openingCredit: money(openingCredit),
-    periodDebit: money(periodDebit), periodCredit: money(periodCredit),
-    closingBalance: money(openingDebit - openingCredit + periodDebit - periodCredit),
+    period, direction, itemCount,
+    openingDebit:centsToNumber(openingNet > 0n ? openingNet : 0n),
+    openingCredit:centsToNumber(openingNet < 0n ? -openingNet : 0n),
+    periodDebit:centsToNumber(periodDebit), periodCredit:centsToNumber(periodCredit),
+    closingBalance:centsToNumber(openingNet + periodDebit - periodCredit),
   };
 };
 // 期初余额读取：只给条数与借贷合计（含是否平衡），不返回科目编码或逐项金额。
@@ -1328,10 +1341,17 @@ function technicalWriteIds(operation, value) {
  * 只返回白名单 projection：不创建引用、不返回原值，未知 operation 仍拒绝。
  * 反射失败不抛异常（调用方通常已将“未能绑定引用”降级），用 summaryUnavailable 标记。
  */
+function projectQuery(operation, value, summarize) {
+  const view = prop(at(value), 'queryView');
+  if (view === undefined) return sanitizeProjection(summarize(value));
+  if (!validQueryView(operation,view)) throw invalidSummary('queryView');
+  return {value:freezeDeep(structuredClone(view)),dropped:0};
+}
+
 export function summarizeQueryResult(operation, value) {
   const summarize = requireSpec(QUERY_SPECS, operation, "query");
   try {
-    const sanitized = sanitizeProjection(summarize(value));
+    const sanitized = projectQuery(operation,value,summarize);
     return { projection: sanitized.value, projectionDropped: sanitized.dropped, summaryUnavailable: false };
   } catch {
     return { projection: freezeDeep({}), projectionDropped: 0, summaryUnavailable: true };
@@ -1530,6 +1550,9 @@ const ERROR_CODES = dict({
   account_set_id_required: "account_set",
   account_set_id_invalid: "account_set",
   code_required: "account",
+  query_snapshot_changed: "input",
+  query_snapshot_required: "input",
+  query_page_invalid: "input",
   entries_required: "voucher",
   name_required: "input",
   start_period_invalid: "input",
@@ -1773,7 +1796,7 @@ export class FinanceOutputPolicy {
     // ③ 摘要函数只读自有 data 属性；反射阶段抛错（恶意对象）归一为安全拒绝。
     let projection;
     try {
-      projection = sanitizeProjection(summarize(value));
+      projection = projectQuery(operation,value,summarize);
     } catch (error) {
       throw asSafeReadError(error);
     }

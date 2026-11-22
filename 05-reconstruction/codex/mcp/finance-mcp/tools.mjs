@@ -11,6 +11,16 @@
  *   - unavailable ：本地未实现，调用必须返回 isError，绝不伪装成功。
  */
 import { TAX_TOOLS } from "./tax-tools.mjs";
+import {PAGE_LIMIT} from '../../../../06-workbench/server/query-view-contract.mjs';
+const queryPage = {
+  limit:{type:'integer',minimum:1,maximum:PAGE_LIMIT,description:'每页条数，默认 10。'},
+  offset:{type:'integer',minimum:0,description:'使用回执的 nextOffset。'},
+  snapshot:{type:'string',pattern:'^[a-f0-9]{64}$',description:'续页、重读传入首屏 snapshot；版本变化时从首页重查。'},
+};
+const accountFilters = {
+  nameContains:{type:'string',minLength:1,maxLength:120,description:'按已知科目名称片段查找。'},
+  codePrefix:{type:'string',minLength:1,maxLength:120,description:'按科目编码前缀筛选。'},
+};
 import { DIRECT_TOOLS } from './direct-tools.mjs';
 import { BUSINESS_EVIDENCE_SCHEMA } from '../../../../06-workbench/server/business-evidence.mjs';
 import { hasDomainManagedSources } from '../../../../06-workbench/server/finance-call-chain.mjs';
@@ -151,7 +161,12 @@ const BACKEND_TOOLS = [
       nodeId: { type: "string", description: "查询能力 ID，例如 report.balance_sheet" },
       accountSetId: ACCOUNT_SET_ID,
       period: PERIOD,
-      params: { type: "object", description: "附加参数，如 voucher.detail 的 { voucherId }、ledger.general 的 { code }" },
+      params: { type: "object", description: "已绑定账套的 voucher.generated.list 用 view=index 取得实际 voucherId；voucher.detail 用同期间 voucherId、view=check 核分录及摘要文字。ledger.general 传 code 或 account_list 选出的 accountId。", properties:{
+        view:{type:'string',enum:['index','check']},...queryPage,...accountFilters,
+        voucherId:{type:['integer','string']},code:{type:['string','integer']},accountId:{type:'integer',minimum:1},
+        partyText:{type:'string',minLength:1,maxLength:120,description:'原件中的往来名称片段，只返回是否出现于凭证、分录摘要或科目名。'},
+        basisText:{type:'string',minLength:1,maxLength:120,description:'原件中的业务依据片段，只返回是否出现于凭证或分录摘要。'},
+      } },
     }, ["nodeId", "accountSetId"])),
 
   available("voucher_check", "只校验凭证分录（借贷平衡、科目存在），不落库。",
@@ -217,8 +232,8 @@ const BACKEND_TOOLS = [
       taxpayer_type: { type: "string", description: "缺省 小规模纳税人" },
       accounting_standard: { type: "string", description: "缺省 小企业会计准则" },
     }, ["name", "start_period", "enterprise"]), "local"),
-  available("account_list", "列出账套下的科目。",
-    obj({ accountSetId: ACCOUNT_SET_ID }, ["accountSetId"]), "local"),
+  available("account_list", "查询账套科目。默认返回分类统计；已绑定账套可按名称或编码前缀用 view=index 取得可传给 ledger.general 的 accountId。",
+    obj({accountSetId:ACCOUNT_SET_ID,view:{type:'string',enum:['index']},...queryPage,...accountFilters}, ["accountSetId"]), "local"),
   available("account_create", "新增明细科目。",
     obj({
       accountSetId: ACCOUNT_SET_ID,

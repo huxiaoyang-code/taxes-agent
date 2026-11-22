@@ -39,6 +39,7 @@ import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../0
 import {skillMetadata} from './skill-metadata.mjs';
 import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,voucherCorrectionDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
 import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
+import {needsBoundQuery} from '../../../../06-workbench/server/query-view-contract.mjs';
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
 const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
@@ -249,6 +250,17 @@ async function callTool(name, args = {}, executionOptions={}) {
 
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
   const payload = { ...args };
+  const scopedView = needsBoundQuery(name,args);
+  if (scopedView || (name === 'finance_query' && args.nodeId === 'voucher.detail')) {
+    const binding = resolveBusinessSessionBinding();
+    if (!binding && scopedView) throw new ToolCallError('query_session_required','先绑定本机账套与期间，再读取逐笔索引或核对明细。');
+    if (binding) {
+      if (Number(payload.accountSetId) !== binding.scope.accountSetId) throw new ToolCallError('finance_memory_session_conflict','finance_memory_session_conflict');
+      payload.accountSetId = binding.scope.accountSetId;
+      if (args.nodeId === 'voucher.detail' && payload.period === undefined) payload.period = binding.scope.period;
+      executionOptions = {...executionOptions,expectedScope:binding.scope};
+    }
+  }
   if (name === "legacy_book_import" || name === "book_import_incremental") {
     if (args.paths && typeof args.paths === "object") {
       try {

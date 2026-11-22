@@ -18,6 +18,7 @@ import {
   transportFailure,
 } from "./finance-model-transport.mjs";
 import { MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES } from "./tools.mjs";
+import {matchesRequestedQuery} from "../../../../06-workbench/server/query-view-contract.mjs";
 import { annotateFinanceCall } from '../../../../06-workbench/server/finance-call-chain.mjs';
 
 const API_BASE = String(process.env.FINANCE_API_BASE ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
@@ -139,6 +140,7 @@ export async function callBackend(name, args, catalog, options={}) {
     if (!res.ok) throw modelFailure("backend_http_error", forWrite);
     const parsed = parseModelEnvelope(text);
     if (!parsed.ok) throw modelFailure(parsed.failure.error.code, forWrite);
+    if (!matchesRequestedQuery(name,args,parsed.envelope)) throw modelFailure("envelope_projection_invalid",forWrite);
     return parsed.envelope;
   }
 

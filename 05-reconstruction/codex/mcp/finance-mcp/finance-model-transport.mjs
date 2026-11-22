@@ -5,13 +5,14 @@
 //   2) 把运输层失败（不可达 / 超时 / 非 2xx / 非 JSON / 畸形信封）转换成固定错误常量；
 //   3) 保证任何原始 message / details / stack / 路径 / API_BASE / 额外字段都不会穿出。
 //
-// 本模块**不打开业务数据库、不发网络请求、不 import 06-workbench 服务端模块**，
+// 本模块只引用纯数据合同，不打开业务数据库或访问网络，
 // 不复制会计算法，也不知道业务字段——它只认识信封契约本身。
 // 为了不把安全交给“调用方记得传完整登记表”，operation / tool / nodeId / 错误码 / 目录
 // 都内置固定登记语义；调用方仍可传登记表作为额外的收紧（必须同时命中）。
 //
 // 本模块及其单元测试只验证信封合同；完整 MCP/HTTP 接线由 backend.mjs、server.mjs
 // 及对应集成测试验证。普通财务结果须通过模型信封校验，税务/目录仍走各自既有通道。
+import {queryRecovery, validQueryView} from "../../../../06-workbench/server/query-view-contract.mjs";
 export const TRANSPORT_VERSION = "finance-model-transport/v1";
 export const MODEL_ENVELOPE_VERSION = "finance-output-policy/v1";
 export const MODEL_ADAPTER_VERSION = "finance-model-adapter/v1";
@@ -111,7 +112,7 @@ const ENVELOPE_KEYS = new Set([
   "ok", "outputPolicy", "adapter", "channel", "operation", "operationCategory", "accountSetId",
   "accountSetIdSource", "tool", "scope", "nodeId", "projection", "projectionDropped", "localRef",
   "refPersistence", "refExpiresAt", "refUnavailable", "applied", "appliedReason", "needsLocalReview", "postingGuard", "nextAction",
-  "rawValuesIncluded", "error", "rawErrorIncluded", "catalog",
+  "rawValuesIncluded", "error", "rawErrorIncluded", "catalog", "recovery",
 ]);
 /** 即使将来有人放宽未知字段，这些名字也永远不允许出现（它们正是原文泄漏面）。 */
 const SENSITIVE_KEYS = new Set([
@@ -432,6 +433,9 @@ const ERROR_CATEGORY_BY_CODE = Object.freeze({
   account_set_id_required: "account_set",
   account_set_id_invalid: "account_set",
   code_required: "account",
+  query_snapshot_changed: "input",
+  query_snapshot_required: "input",
+  query_page_invalid: "input",
   entries_required: "voucher",
   name_required: "input",
   start_period_invalid: "input",
@@ -914,7 +918,14 @@ function validateEnvelopeInner(data, registries) {
   if(own(data,'postingGuard')&&(!writeLike||ok||prop(data,'applied')!==false||!validPostingGuard(data)))return invalid('envelope_unexpected_field');
   if(own(data,'nextAction')&&!own(data,'postingGuard')&&!(writeLike&&!ok&&prop(data,'applied')==='unknown'&&prop(data,'nextAction')==='query_original_operation'))return invalid('envelope_unexpected_field');
   // ⑧ projection / projectionDropped：**每个出现的键都独立校验**，不依赖伴随键。
-  if (hasProjection && !validProjection(prop(data, "projection"))) return invalid("envelope_projection_invalid");
+  if (hasProjection) {
+    const p = prop(data,'projection');
+    if (p && own(p,'view') ? !validQueryView(operation,p) : !validProjection(p)) return invalid('envelope_projection_invalid');
+  }
+  if (own(data,'recovery')) {
+    const recovery = !ok && queryRecovery(operation,prop(prop(data,'error'),'code'));
+    if (!recovery || JSON.stringify(plainSnapshot(prop(data,'recovery'))) !== JSON.stringify(recovery)) return invalid('envelope_unexpected_field');
+  }
   if (hasDropped) {
     const dropped = prop(data, "projectionDropped");
     if (!validNumberField(dropped, { integer: true, max: 1e6 }) || dropped < 0) {
