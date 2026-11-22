@@ -7,6 +7,8 @@
       ],
       "env": {
         "FINANCE_MCP_PROFILE": "direct",
+        "FINANCE_QUERY_DISCOVERY": "canonical",
+        "FINANCE_SKILL_DISCOVERY": "focused",
         "FINANCE_DATABASE_PATH": "${FINANCE_DATABASE_PATH}",
         "FINANCE_AUDIT_DIR": "${FINANCE_AUDIT_DIR}",
         "FINANCE_API_BASE": "${FINANCE_API_BASE}"

@@ -3,6 +3,7 @@ import {mkdtempSync,readFileSync,existsSync,mkdirSync,writeFileSync} from 'node:
 import {tmpdir} from 'node:os';
 import {join,posix} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {PLUGIN_SKILL_FILES} from '../server/finance-skill-assets.mjs';
 import {createContext,writeBundle,repoRoot} from '../../05-reconstruction/codex/hosts/shared/config.mjs';
 import {buildConfig} from '../../05-reconstruction/codex/hosts/claude-code/adapter.mjs';
 import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
@@ -28,8 +29,15 @@ assert.equal(registrations[0].config.toolExposure.skills_read,'direct');assert.e
 assert.ok(registrations[0].config.description.includes(FINANCE_MCP_DISCOVERY));
 assert.ok(!permissions.allow.includes('mcp__finance__*'));assert.equal([...permissions.allow,...permissions.ask].some(x=>x.startsWith('mcp__finance__harness_')),false);
 const generatedTools=toolsForProfile('direct').filter(t=>t.name!=='ledger_query');
-assert.deepEqual(new Set([...permissions.allow,...permissions.ask]),new Set(generatedTools.map(t=>'mcp__finance__'+t.name)));
-for(const tool of generatedTools.filter(t=>t.annotations?.readOnlyHint!==true))assert.ok(permissions.ask.includes('mcp__finance__'+tool.name));
+const boundReads=['account_list','finance_query'].map(name=>'mcp__finance__'+name);
+const discovery=['skills_list','skills_read','finance_query_catalog'].map(name=>'mcp__finance__'+name);
+assert.deepEqual(new Set([...permissions.allow,...permissions.ask,...boundReads]),new Set(generatedTools.map(t=>'mcp__finance__'+t.name)));
+assert.ok(boundReads.every(name=>!permissions.allow.includes(name)&&!permissions.ask.includes(name)));
+assert.ok(discovery.every(name=>permissions.allow.includes(name)));
+for(const tool of generatedTools.filter(t=>t.annotations?.readOnlyHint!==true)){
+ const rule='mcp__finance__'+tool.name;
+ assert.ok([...boundReads,...discovery].includes(rule)||permissions.ask.includes(rule));
+}
 // 读取范围由正式委托的原件目录确定。只选一份校验证明时仍需读取目录内的辅助登记簿。
 const sourceRoot=join(root,'甲公司 原件 (一)[01]');
 mkdirSync(sourceRoot);
@@ -64,6 +72,7 @@ for(const host of ['pi','claude-code','dsh','zcode']){
  const server=host==='pi'?{env:config.mcpEnv}:host==='claude-code'?config.mcpServers.finance:host==='dsh'?config.flatMap(p=>p.insert??[]).find(p=>p.id==='finance-direct-mcp').config:config.mcp.servers.finance;
  assert.equal(Object.hasOwn(server.env,'FINANCE_SKILLS_DIR'),false);
  assert.equal(server.env.FINANCE_QUERY_DISCOVERY,'canonical',host);
+ assert.equal(server.env.FINANCE_SKILL_DISCOVERY,'focused',host);
  const client=new McpStdioClient(c.serverPath,{env:server.env}).start();
  try {
    await client.initialize();
@@ -71,11 +80,29 @@ for(const host of ['pi','claude-code','dsh','zcode']){
    assert.deepEqual(tools.map(t=>t.name),generatedTools.map(t=>t.name),host);
    const query=tools.find(t=>t.name==='finance_query');
    assert.match(query.description,/科目明细账.*ledger\.general.*params\.code/);
+   const catalog=await client.call('skills_list',{});
+   assert.deepEqual(Object.keys(catalog.data),['entries']);
+   assert.equal(catalog.data.entries.length,9);
    const skill=await client.call('skills_read',{resource:'reconciliation/SKILL.md'});
    assert.match(skill.data.markdown,/finance_query.*ledger\.general.*params\.code/);
  } finally { await client.close(); }
  if(host==='pi')assert.equal(config.skillsDir,expected);
- if(host==='claude-code')assert.ok(readFileSync(join(out,'CLAUDE.md'),'utf8').includes(expected));
+ if(host==='claude-code'){
+   assert.match(readFileSync(join(out,'CLAUDE.md'),'utf8'),/\.claude\/skills.*原生 Skill/);
+   const source=JSON.parse(readFileSync(join(out,'.finance/skill-source.json'),'utf8'));
+   assert.equal(source.source,'project');
+   assert.equal(source.version,JSON.parse(readFileSync(join(repoRoot,'plugins/finance/.claude-plugin/plugin.json'),'utf8')).version);
+   assert.deepEqual(source.skills,PLUGIN_SKILL_FILES.filter(file=>file.endsWith('/SKILL.md')).map(file=>file.split('/')[0]));
+   for(const file of PLUGIN_SKILL_FILES.filter(file=>file.endsWith('.md'))){
+     assert.ok(readFileSync(join(out,'.claude/skills',file)).equals(readFileSync(join(expected,file))),file);
+   }
+   for(const file of ['SOURCES.md','LICENSE','LICENSE.knowledge-work-plugins','CONNECTORS.md']){
+     assert.ok(readFileSync(join(out,'.claude',file)).equals(readFileSync(join(repoRoot,'plugins/finance',file))),file);
+   }
+   const demo=spawnSync(process.execPath,[join(out,'.claude/skills/prebook-review/scripts/demo.mjs'),join(out,'synthetic-demo')],{encoding:'utf8',windowsHide:true,timeout:30000});
+   assert.equal(demo.status,0,demo.stderr);
+   assert.equal(JSON.parse(demo.stdout).runs.length,4);
+ }
  if(host==='dsh')assert.deepEqual(config.find(p=>p.id==='skill-filesystem').config.customSkillDirs,[expected]);
  if(host==='zcode')assert.deepEqual(config.skills.roots,[expected]);
  const rejected=spawnSync(process.execPath,[...args,'--plugin-root',root],{encoding:'utf8',windowsHide:true,timeout:15000});assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/host_arguments_invalid/);
@@ -109,7 +136,7 @@ for(const args of [[],['--pi-root','relative'],['--pi-root',root,'--check','--js
 assert.equal(parsePiArgs(['--help'])['--help'],true);
 const server=join(repoRoot,'05-reconstruction/codex/mcp/finance-mcp/server.mjs');
 for(const profile of [undefined,'direct','harness','legacy']){
-  const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_QUERY_DISCOVERY:undefined,FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
+  const client=new McpStdioClient(server,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_QUERY_DISCOVERY:undefined,FINANCE_SKILL_DISCOVERY:undefined,FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(root,'records-'+(profile??'default')),NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
   try{
     const {result:handshake}=await client.initialize();
     const direct=profile===undefined||profile==='direct';

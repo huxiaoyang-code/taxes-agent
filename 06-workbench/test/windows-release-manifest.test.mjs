@@ -409,6 +409,7 @@ test("第 2 版旧技能路径的已发布清单可核验与复制", () => {
   manifest.schemaVersion = 2;
   manifest.files = manifest.files.filter(entry => ![
     "plugins/finance/skills/reconciliation/references/bank-workbench.md", "06-workbench/server/finance-skill-assets.mjs",
+    "05-reconstruction/codex/hosts/claude-code/project-skills.mjs",
   ].includes(entry.path));
   for (const entry of manifest.files) {
     const from = join(cold.destRoot, entry.path);

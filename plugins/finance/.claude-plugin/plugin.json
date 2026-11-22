@@ -1,6 +1,6 @@
 {
   "name": "finance",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "中国企业账前资料核对、补件交接、凭证、报表、税费依据和内控复核；一般纳税人与小规模按实际合同处理，直接连接本机工具并自动留痕。",
   "author": {
     "name": "huxiaoyang-code / 中国财税插件贡献者"
