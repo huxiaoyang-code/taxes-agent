@@ -140,7 +140,7 @@ const BACKEND_TOOLS = [
       limit: { type: "integer", minimum: 1, maximum: 32, description: "可选：账套列表分页大小（默认 10，上限 32）" },
       offset: { type: "integer", minimum: 0, description: "可选：账套列表分页偏移（用于有界翻页后选择账套）" },
     })),
-  available("finance_query", "查询财务数据。必须显式提供 accountSetId；期间类能力必须显式提供 period。可用能力见 finance_query_catalog。",
+  available("finance_query", "查询科目明细账、凭证及报表。查账或核对科目余额时用 nodeId=ledger.general，传入账套 accountSetId、月份 period 和科目编码 params.code，返回期初、借贷发生额和期末余额。其他查询节点见 finance_query_catalog。",
     obj({
       nodeId: { type: "string", description: "查询能力 ID，例如 report.balance_sheet" },
       accountSetId: ACCOUNT_SET_ID,

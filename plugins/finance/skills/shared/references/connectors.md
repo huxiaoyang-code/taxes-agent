@@ -21,7 +21,7 @@
 ## 按任务选择工具
 
 - 做账前整理资料用`finance_record_contract(recordType=prebook)`读取实际输入／回复合同，再用`finance_prebook_review`核对。设置获准的`FINANCE_SOURCE_ROOT`，原始文件、适配输入和回复均在该根内；不要求本期已有账库。见[账前输入](../../prebook-review/references/input-and-tools.md)。
-- 已有账库任务用`account_context`核实账套，`finance_query`或`ledger_query`取实际账簿。
+- 已有账库任务用`account_context`核实账套，查科目明细账用 `finance_query`，传入 `nodeId="ledger.general"`、`accountSetId`、`period` 和 `params.code`。
 - `finance_record_contract`按需要取得某种业务记录合同；可选`finance_workpaper`计算原件支持的业务，不先做元数据编排。
 - 中国财税政策用 `finance_rules` 的 `action=search` 搜公开关键词，再用 `action=open` 读取官方条款、核实期间及条件。本机旧版本用于复算。见[官方政策核查](../../tax-review/references/official-policy.md)。
 - `finance_tax_summary_calculate`独立处理有来源税务汇总的条件试算；按需读`finance_record_contract(recordType=tax_summary)`，输入绑定精确JSON位置，试算不等于完整账、资格或实缴已核，见[汇总条件试算](../../tax-review/references/summary-calculation.md)。

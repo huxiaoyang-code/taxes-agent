@@ -26,7 +26,7 @@ import {validateSchemaValue} from '../../../../06-workbench/server/harness-schem
 import {discoverySummary} from './disclosure-contracts.mjs';
 import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
 import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
-import {toolsForProfile} from './tool-profile.mjs';
+import {listedToolsForProfile,toolsForProfile} from './tool-profile.mjs';
 import {PERIOD_TASK_ROUTING} from '../../hosts/shared/task-routing.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
@@ -50,8 +50,8 @@ if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINES
   if(resolve(bound.path)!==resolve(process.env.FINANCE_BUSINESS_SESSION)||resolve(bound.session.databasePath)!==resolve(process.env.FINANCE_DATABASE_PATH))throw Error('host_business_binding_mismatch');
   process.env.FINANCE_AUDIT_DIR=bound.session.auditDir;
 }
-const EXPOSED_TOOLS = toolsForProfile(ACTIVE_PROFILE);
-const EXPOSED_TOOL_NAMES = new Set(EXPOSED_TOOLS.map(t => t.name));
+const LISTED_TOOLS = listedToolsForProfile(ACTIVE_PROFILE, process.env.FINANCE_QUERY_DISCOVERY);
+const CALLABLE_TOOL_NAMES = new Set(toolsForProfile(ACTIVE_PROFILE).map(t => t.name));
 
 // Claude Code 会过滤根带组合关键字的工具。恒真的 if 使 then 中的原约束仍对整个参数对象生效。
 // 只调整 tools/list 的展示；tools/call 和嵌套原生调用继续按 TOOL_BY_NAME 的原合同校验。
@@ -159,7 +159,7 @@ function readPathTexts(args) {
 function preflightTool(name,args={}) {
   const spec = TOOL_BY_NAME.get(name);
   if (!spec) throw new ToolCallError("unknown_tool", "unknown_tool");
-  if (!EXPOSED_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
+  if (!CALLABLE_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
@@ -378,7 +378,7 @@ rl.on("line", async (line) => {
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
   if (method === "ping") return ok(id, {});
-  if (method === "tools/list") return ok(id, { tools: EXPOSED_TOOLS.map(listedTool) });
+  if (method === "tools/list") return ok(id, { tools: LISTED_TOOLS.map(listedTool) });
   if (method === "tools/call") {
     let callReference,memoryRefresh;
     const withReference=result=>callReference?{...result,_meta:{...(result?._meta??{}),financeCall:{callId:callReference.callId},...(memoryRefresh?{financeMemory:memoryRefresh}:{})}}:result;

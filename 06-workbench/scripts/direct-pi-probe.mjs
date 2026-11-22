@@ -20,6 +20,7 @@ const connection=new McpServerConnection({entry:{name:'finance',config:registere
 try{
   await connection.getClient();assert.equal(connection.state,'connected');
   const names=connection.tools.map(tool=>tool.name);assert.ok(names.includes('finance_workpaper'));assert.ok(names.includes('finance_rules'));assert.equal(names.some(name=>name.startsWith('harness_')),false);
+  assert.equal(names.includes('ledger_query'),process.env.FINANCE_QUERY_DISCOVERY!=='canonical','工作区发现设置须传到 Pi 的真实 MCP 子进程');
   const resources=await connection.callTool('skills_list',{},{});assert.notEqual(resources.isError,true);
   const sdk=await import(pathToFileURL(join(piRoot,'dist/index.js')).href),{builtInExtensions}=await import(pathToFileURL(join(piRoot,'dist/extensions/index.js')).href);
   const {parseArgs}=await import(pathToFileURL(join(piRoot,'dist/cli/args.js')).href);
@@ -36,10 +37,14 @@ try{
     assert.ok(session.getAllTools().some(tool=>tool.name==='mcp__finance__finance_workpaper'),'CLI tools option must not suppress deferred MCP registration');
     const initial=session.getActiveToolNames();assert.equal(initial.includes('mcp__finance__finance_workpaper'),false);assert.ok(initial.includes('tool_search'));assert.ok(initial.every(name=>MAIN_TOOLS.includes(name)),'only the configured initial tool set may be exposed');
     const require=createRequire(join(piRoot,'package.json')),corePackage=require.resolve('@earendil-works/pi-agent-core/package.json'),{runToolCall}=await import(pathToFileURL(join(dirname(corePackage),'dist/index.js')).href);
-    const toolCall={type:'toolCall',id:'native-cli-probe-search',name:'tool_search',arguments:{query:'finance_workpaper',limit:3}};
-    const assistantMessage={role:'assistant',content:[toolCall],api:'openai-completions',provider:'synthetic-no-model',model:'synthetic-no-model',stopReason:'toolUse',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
-    const outcome=await runToolCall(toolCall,{tools:session.agent.state.tools,assistantMessage,context:{messages:session.agent.state.messages,tools:session.agent.state.tools},beforeToolCall:session.agent.beforeToolCall,afterToolCall:session.agent.afterToolCall,signal:AbortSignal.timeout(15000)});
-    assert.equal(outcome.isError,false);assert.ok(session.getActiveToolNames().includes('mcp__finance__finance_workpaper'),'real native tool_search must activate the deferred business tool');
+    // 中文业务指引用具体工具名，Pi 1.1.0 的原生搜索按英文字母与数字分词。
+    for (const query of ['finance_workpaper','finance_query']) {
+      const toolCall={type:'toolCall',id:'native-cli-probe-'+query,name:'tool_search',arguments:{query,limit:3}};
+      const assistantMessage={role:'assistant',content:[toolCall],api:'openai-completions',provider:'synthetic-no-model',model:'synthetic-no-model',stopReason:'toolUse',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
+      const outcome=await runToolCall(toolCall,{tools:session.agent.state.tools,assistantMessage,context:{messages:session.agent.state.messages,tools:session.agent.state.tools},beforeToolCall:session.agent.beforeToolCall,afterToolCall:session.agent.afterToolCall,signal:AbortSignal.timeout(15000)});
+      assert.equal(outcome.isError,false);
+      assert.ok(session.getActiveToolNames().includes('mcp__finance__'+query),'原生搜索应激活 '+query);
+    }
     console.log(JSON.stringify({status:'passed',piVersion:pkg.version,extension,toolCount:names.length,cliTools:parsed.tools,initialActiveTools:initial,deferredRegisteredBeforeSearch:true,deferredActivatedAfterSearch:true,modelInvoked:false,agentTaskInvoked:false,scope:'actual CLI tools parsing → SDK session registration → native MCP → runToolCall tool_search; no model or business calculation'}));
   }finally{await session.extensionRunner.emit({type:'session_shutdown'});session.dispose();}
 }finally{await connection.close();}

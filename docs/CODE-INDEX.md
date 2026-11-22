@@ -8,6 +8,8 @@
 
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
+科目明细账的[发现列表与旧名兼容](../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs)由[四宿主配置及真实 stdio 回归](../06-workbench/test/finance-host-config.test.mjs)和[绑定账套的金额核对](../06-workbench/test/business-memory-domain.test.mjs)覆盖。
+
 ## 当前 direct 默认调用链
 
 工具列举及调用见 [MCP 服务](../05-reconstruction/codex/mcp/finance-mcp/server.mjs)。六项分支合同由 [stdio 正反例](../06-workbench/test/mcp-listed-contracts.test.mjs) 检查。发布前在 `06-workbench` 运行 `npm run check:claude-direct -- --claude-cli "<已安装 Claude Code 的可执行文件或 JS 入口绝对路径>"`，用宿主的 `mcp_status` 对照 direct 工具全名。[宿主检查脚本](../06-workbench/scripts/claude-direct-discovery.mjs)

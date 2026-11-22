@@ -48,7 +48,7 @@ test('企业方法固定投影、选择、同版本跨期真实执行、原生�
  let client,backend,base,candidate,selected;
  const script="import fs from 'node:fs'; const i=JSON.parse(fs.readFileSync(process.argv[2])); const rows=JSON.parse(fs.readFileSync(i.sources[0].snapshotPath)); const unique=new Map(rows.map(r=>[r.invoice_number,r])); const amount=[...unique.values()].filter(r=>r.period===i.parameters.period).reduce((n,r)=>n+r.net_rent,0)*i.parameters.ratio; fs.writeFileSync(i.outputDir+'/rent.json',JSON.stringify({amount,period:i.parameters.period}));";
  const definition={title:'PRIVATE-租赁取数方法',applicability:{objectScope:'account_set',dateField:'service_period',amountBasis:'tax_exclusive',deduplicateBy:'invoice_number',businessView:'accounting',requiredConditions:['contract_overlaps_period']},inputs:[{key:'ratio',meaning:'ratio',field:'allocation_ratio',sourceRole:'lease_contract',type:'number',required:true,source:'current_parameters'}],transformation:{kind:'proportional_allocation',allocationBasis:'fixed_ratio',rounding:'half_up_cent',missingValues:'reject',steps:[{op:'deduplicate',inputs:['rows'],keys:['invoice_number'],output:'unique_rows'},{op:'filter_period',inputs:['unique_rows'],periodField:'period',output:'current_rows'},{op:'sum',inputs:['current_rows'],amountField:'net_rent',output:'total'},{op:'allocate',inputs:['total','ratio'],unit:'fixed_ratio',output:'recognized_rent'}]},accounts:[{role:'main_income',code:'500101',side:'credit'}],execution:{kind:'script',engine:'javascript',script},gaps:['policy_unverified']};
- const startClient=(session='')=>new McpStdioClient(join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:root,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_DATABASE_PATH:dbPath,FINANCE_SOURCE_ROOT:sources,FINANCE_AUDIT_DIR:audit,FINANCE_API_BASE:base??'http://127.0.0.1:1',FINANCE_BUSINESS_SESSION:session},timeoutMs:20000}).start();
+ const startClient=(session='',queryDiscovery)=>new McpStdioClient(join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:root,env:{FINANCE_MCP_PROFILE:'direct',FINANCE_QUERY_DISCOVERY:queryDiscovery,FINANCE_DATABASE_PATH:dbPath,FINANCE_SOURCE_ROOT:sources,FINANCE_AUDIT_DIR:audit,FINANCE_API_BASE:base??'http://127.0.0.1:1',FINANCE_BUSINESS_SESSION:session},timeoutMs:20000}).start();
  try{
   await t.test('未准备只读上下文不建表；准备后真实MCP读取实际历史分录与业务方法',async()=>{
    assert.equal((await M.readCompanyContext({target},options)).status,'unprepared');assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='business_memory_state'").get(),undefined);
@@ -176,8 +176,18 @@ test('企业方法固定投影、选择、同版本跨期真实执行、原生�
    backend=spawn(process.execPath,[join(repo,'06-workbench/server/server.mjs')],{env:{...process.env,HOST:'127.0.0.1',PORT:'0',FINANCE_BUSINESS_SESSION:''},stdio:['ignore','pipe','pipe'],windowsHide:true});let diagnostic='';backend.stderr.on('data',d=>{diagnostic+=d;});
    base=await new Promise((resolve,reject)=>{let out='';const timer=setTimeout(()=>reject(Error('synthetic_backend_timeout '+diagnostic)),15000);backend.stdout.on('data',d=>{out+=d;const match=/http:\/\/127\.0\.0\.1:\d+/.exec(out);if(match){clearTimeout(timer);resolve(match[0]);}});backend.on('exit',()=>{clearTimeout(timer);reject(Error('synthetic_backend_exit '+diagnostic));});});
    const session=join(root,'session.json'),binding=M.resolveBusinessMemoryTarget(target,options);writeFileSync(session,JSON.stringify({version:'finance-business-session/1',databasePath:dbPath,scope:binding.scope}));
-   client=startClient(session);await client.initialize();
+   client=startClient(session,'canonical');await client.initialize();
+   const listed=(await client.rpc('tools/list')).result.tools;
+   assert(listed.some(t=>t.name==='finance_query')&&!listed.some(t=>t.name==='ledger_query'));
+   const queryLedger=accountSetId=>client.call('finance_query',{nodeId:'ledger.general',accountSetId,period:'2026-01',params:{code:'1002'}});
+   const canonical=await queryLedger(a);
+   assert.equal(canonical.isError,false,canonical.text);
+   assert.equal(canonical.data.operation,'finance_query:ledger.general');
+   assert.equal(canonical.data.rawValuesIncluded,false);
    const historyLedger=await client.call('ledger_query',{accountSetId:a,code:'1002',period:'2026-01'});assert.equal(historyLedger.isError,false,historyLedger.text);assert.equal(historyLedger.data.projection.closingBalance,1200);
+   assert.deepEqual(canonical.data.projection,historyLedger.data.projection);
+   const wrongSet=await queryLedger(b);
+   assert.equal(wrongSet.isError,true);assert.match(wrongSet.text,/finance_memory_session_conflict/);
    const historyQuery=await client.call('finance_query',{accountSetId:a,nodeId:'report.trial_balance',period:'2026-01'});assert.equal(historyQuery.isError,false,historyQuery.text);assert.equal(historyQuery.data.operation,'finance_query:report.trial_balance');
    const historyCheck=await client.call('period_end_check',{accountSetId:a,period:'2026-01'});assert.equal(historyCheck.isError,false,historyCheck.text);
    const crossHistory=await client.call('ledger_query',{accountSetId:b,code:'1002',period:'2026-01'});assert.equal(crossHistory.isError,true);assert.match(crossHistory.text,/finance_memory_session_conflict/);

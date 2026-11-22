@@ -3,6 +3,13 @@ import { DIRECT_TOOL_NAMES } from './direct-tools.mjs';
 const directNames=new Set([...MODEL_PLAIN_TOOL_NAMES,...DIRECT_TOOL_NAMES,'skills_list','skills_read','finance_query_catalog']);
 
 // 这里只限制 MCP 工具暴露面，不授予文件系统或数据库权限。
+// 新工作区只列出一个科目明细账入口。已有脚本和会计方法仍按原工具名校验、执行和留痕。
+export function listedToolsForProfile(profile, queryDiscovery) {
+  const tools = toolsForProfile(profile);
+  if (profile === 'direct' && queryDiscovery === 'canonical') return tools.filter(tool => tool.name !== 'ledger_query');
+  return tools;
+}
+
 export function toolsForProfile(profile) {
   // 日常业务默认直接调用；legacy 明确保留旧客户端全量工具面。
   if (profile === 'legacy') return TOOLS;

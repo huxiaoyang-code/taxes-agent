@@ -27,8 +27,9 @@ assert.equal(registrations.length,1);assert.equal(registrations[0].name,'finance
 assert.equal(registrations[0].config.toolExposure.skills_read,'direct');assert.equal(registrations[0].config.toolExposure.finance_rules,'direct');assert.equal(registrations[0].config.toolExposure['*'],'deferred');
 assert.ok(registrations[0].config.description.includes(PERIOD_TASK_ROUTING));
 assert.ok(!permissions.allow.includes('mcp__finance__*'));assert.equal([...permissions.allow,...permissions.ask].some(x=>x.startsWith('mcp__finance__harness_')),false);
-assert.deepEqual(new Set([...permissions.allow,...permissions.ask]),new Set(toolsForProfile('direct').map(t=>'mcp__finance__'+t.name)));
-for(const tool of toolsForProfile('direct').filter(t=>t.annotations?.readOnlyHint!==true))assert.ok(permissions.ask.includes('mcp__finance__'+tool.name));
+const generatedTools=toolsForProfile('direct').filter(t=>t.name!=='ledger_query');
+assert.deepEqual(new Set([...permissions.allow,...permissions.ask]),new Set(generatedTools.map(t=>'mcp__finance__'+t.name)));
+for(const tool of generatedTools.filter(t=>t.annotations?.readOnlyHint!==true))assert.ok(permissions.ask.includes('mcp__finance__'+tool.name));
 assert.equal(bundle.files.some(f=>f.path.startsWith('.claude/agents/')),false);
 // 四宿主真实CLI均固定同仓库技能，旧外部参数明确拒绝。
 for(const host of ['pi','claude-code','dsh','zcode']){
@@ -39,6 +40,17 @@ for(const host of ['pi','claude-code','dsh','zcode']){
  const config=JSON.parse(readFileSync(join(out,file),'utf8'));
  const server=host==='pi'?{env:config.mcpEnv}:host==='claude-code'?config.mcpServers.finance:host==='dsh'?config.flatMap(p=>p.insert??[]).find(p=>p.id==='finance-direct-mcp').config:config.mcp.servers.finance;
  assert.equal(Object.hasOwn(server.env,'FINANCE_SKILLS_DIR'),false);
+ assert.equal(server.env.FINANCE_QUERY_DISCOVERY,'canonical',host);
+ const client=new McpStdioClient(c.serverPath,{env:server.env}).start();
+ try {
+   await client.initialize();
+   const {result:{tools}}=await client.rpc('tools/list');
+   assert.deepEqual(tools.map(t=>t.name),generatedTools.map(t=>t.name),host);
+   const query=tools.find(t=>t.name==='finance_query');
+   assert.match(query.description,/科目明细账.*ledger\.general.*params\.code/);
+   const skill=await client.call('skills_read',{resource:'reconciliation/SKILL.md'});
+   assert.match(skill.data.markdown,/finance_query.*ledger\.general.*params\.code/);
+ } finally { await client.close(); }
  if(host==='pi')assert.equal(config.skillsDir,expected);
  if(host==='claude-code')assert.ok(readFileSync(join(out,'CLAUDE.md'),'utf8').includes(expected));
  if(host==='dsh')assert.deepEqual(config.find(p=>p.id==='skill-filesystem').config.customSkillDirs,[expected]);
@@ -81,6 +93,7 @@ for(const profile of [undefined,'direct','harness','legacy']){
     assert.equal(handshake.instructions,direct?PERIOD_TASK_ROUTING:undefined);
     if(direct)assert.match(handshake.instructions,/做完本月账/);
     const names=(await client.rpc('tools/list')).result.tools.map(t=>t.name);assert.deepEqual(new Set(names),new Set(toolsForProfile(profile).map(t=>t.name)));
+    assert.equal(names.includes('ledger_query'),profile!=='harness','原有宿主的工具清单');
     assert.equal((await client.call('synthetic_unknown_tool')).isError,true);
     const legacy=profile==='harness'||profile==='legacy';assert.equal((await client.call('harness_discover')).isError,!legacy);
     assert.equal((await client.call('finance_rules',{})).isError,profile==='harness');

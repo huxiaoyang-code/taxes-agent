@@ -27,7 +27,7 @@ argument-hint: "<业务类型> [期间]"
 ### 2. 核对并计算
 
 - 原始业务可用Python、表格公式或已有计算器计算并生成分录草稿，保留原件、参数语义和实际公式/脚本；选择 `finance_workpaper` 时按实际合同提供目标、原件和记录。
-- 已有明确分录时用 `voucher_check` 检查金额、科目和借贷；账簿查询使用 `finance_query` 或 `ledger_query`。
+- 已有明确分录时用 `voucher_check` 检查金额、科目和借贷；查询科目明细账用 `finance_query` 的 `ledger.general`，提供账套、月份和 `params.code` 科目编码。
 - 自主计算和判断单列依据、条件及未决项，不改写原件，不把推导称作原生工具结果。
 - 中国税费可选 `finance_tax_calculate`；适用规则按需通过 `finance_rules` 或已核官方资料读取，不在本 Skill 另维护税率表。
 

@@ -80,6 +80,8 @@ function workspace(root,name,dbPath,source,apiBase,accountSetId,delegated) {
   const read=(path)=>JSON.parse(readFileSync(join(output,path),'utf8'));
   const permissions=read('.claude/settings.json').permissions;
   assert.equal(permissions.allow.includes('mcp__finance__voucher_correct'),delegated);
+  assert.equal(permissions.allow.includes('mcp__finance__finance_query'),delegated);
+  assert(![...permissions.allow,...permissions.ask].includes('mcp__finance__ledger_query'));
   assert.equal(existsSync(join(output,'outputs')),delegated);
   for(const rule of ['Edit(/outputs/*.csv)','Edit(/outputs/*.md)']) assert.equal(permissions.allow.includes(rule),delegated);
   for(const guarded of ['voucher_unpost','voucher_delete']) assert.ok(permissions.ask.includes('mcp__finance__'+guarded));
@@ -218,7 +220,7 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
     for(const [code,periodDebit,periodCredit,closingBalance] of [
       [bank,1209,510,699],[alpha,0,495,-495],[beta,0,714,-714],[supplier,500,0,500],['2203',0,0,0],
     ]){
-      const {projection:p}=await success(formal,'ledger_query',{accountSetId,period,code});
+      const {projection:p}=await success(formal,'finance_query',{nodeId:'ledger.general',accountSetId,period,params:{code}});
       assert.deepEqual([p.periodDebit,p.periodCredit,p.closingBalance],[periodDebit,periodCredit,closingBalance],code);
     }
     const tb=await success(formal,'finance_query',{accountSetId,period,nodeId:'report.trial_balance'});
@@ -237,7 +239,7 @@ test('整期委托自动更正五张流水凭证，保留正常清算时差，�
     assert.equal(shadow.accountSetId,accountSetId);
     await success(unbound,'ledger_query',{accountSetId,period,code:'1002'});
     const crossed=await open({...delegatedEnv,FINANCE_API_BASE:remote.apiBase});
-    for(const [tool,args] of [['ledger_query',{code:'1002'}],['finance_query',{nodeId:'report.trial_balance'}]]){
+    for(const [tool,args] of [['ledger_query',{code:'1002'}],['finance_query',{nodeId:'ledger.general',params:{code:'1002'}}],['finance_query',{nodeId:'report.trial_balance'}]]){
       const reply=await crossed.call(tool,{accountSetId,period,...args});
       assert.equal(reply.isError,true);
       assert.match(reply.text,/backend_http_error/);

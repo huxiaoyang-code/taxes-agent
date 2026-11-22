@@ -1,11 +1,11 @@
 import {PERIOD_TASK_ROUTING} from '../shared/task-routing.mjs';
-import {toolsForProfile} from '../../mcp/finance-mcp/tool-profile.mjs';
+import {listedToolsForProfile} from '../../mcp/finance-mcp/tool-profile.mjs';
 import {BUSINESS_MEMORY_ROUTING} from '../shared/business-session.mjs';
 import {claudeBusinessHooks} from './business-memory-hook.mjs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 export function buildConfig(c){
-  const {command,args,env}=c.mcp,tools=toolsForProfile('direct');
+  const {command,args,env}=c.mcp,tools=listedToolsForProfile('direct',env.FINANCE_QUERY_DISCOVERY);
   // 部分既有只读合同缺少 MCP readOnlyHint。正式委托需能读取依据和账簿、验收更正。
   const correctionTools=new Set(['skills_list','skills_read','account_context','finance_query_catalog',
     'finance_query','ledger_query','account_list','period_list','period_end_check','voucher_correct']);
