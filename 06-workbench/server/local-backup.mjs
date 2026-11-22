@@ -459,6 +459,17 @@ const STRUCTURE_V4 = Object.freeze({
 /** 版本 -> 独立结构契约。不在本表里的版本一律拒绝（更旧 outdated / 更新 unsupported）。 */
 const STRUCTURE_V5 = Object.freeze({
   ...STRUCTURE_V4,
+  // 历史 v5 快照可无此表。存在时，按同一套主键、外键及备份内容摘要校验。
+  voucher_correction_claims: {
+    columns: { account_set_id: "INTEGER NOT NULL", claim_key: "TEXT NOT NULL", voucher_id: "INTEGER NOT NULL" },
+    primaryKey: ["account_set_id", "claim_key"],
+    rowidAlias: false,
+    unique: [uniqueConstraint("pk", collationKey("account_set_id"), collationKey("claim_key"))],
+    foreignKeys: [
+      { from: ["account_set_id"], table: "account_sets", to: ["id"] },
+      { from: ["voucher_id"], table: "vouchers", to: ["id"] },
+    ],
+  },
   account_sets: {
     ...TABLE_STRUCTURE_COMMON.account_sets,
     columns: {

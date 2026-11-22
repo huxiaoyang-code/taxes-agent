@@ -9,7 +9,10 @@ const str={type:'string',minLength:1};
 const spec=(name,description,properties={},required=[],extra={})=>({name,description,status:'available',origin:'local',inputSchema:{type:'object',additionalProperties:false,properties,required,...extra},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false,idempotentHint:true}});
 import {VAT_HANDOFF_SCHEMA} from '../../../../06-workbench/server/vat-period-handoff-contract.mjs';
 import {VAT_PLANNING_SCHEMA} from '../../../../06-workbench/server/vat-planning-contracts.mjs';
+import {VOUCHER_CORRECTION_SCHEMA} from '../../../../06-workbench/server/voucher-correction-contract.mjs';
 export const DIRECT_TOOLS=[
+ {...spec('voucher_correct','已委托的当前账期内更正本 Agent 已过账的普通凭证。inspect 读回旧凭证指纹；apply 提交原件证明和改正分录，一次留痕完成。通过读回指纹和分录核实结果。'),inputSchema:VOUCHER_CORRECTION_SCHEMA,
+   annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:false,idempotentHint:true}},
  {...spec('finance_vat_plan','一般计税月结进项方案。按决策日从原件取候选、已确认及留抵；按逐票自选月份多次比较基准、当前现金、年度与跨年结果。先读 finance_record_contract(recordType=vat_planning)。'),inputSchema:{...VAT_PLANNING_SCHEMA,properties:{...VAT_PLANNING_SCHEMA.properties,handoff:VAT_HANDOFF_SCHEMA}}},
  {...spec('finance_baseline_materials','按需查询账库及已接收的本机观察。由宿主读取确有需要的原件，按 finance_record_contract(recordType=baseline) 交付本机 inputPath，或复用实际 materialRefs。section:calculation 供既有计算器取数，section:tax 供历史税负对照，分页沿实际 next。'),inputSchema:BUSINESS_BASELINE_SCHEMAS.finance_baseline_materials},
  ...[

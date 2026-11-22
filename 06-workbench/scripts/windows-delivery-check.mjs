@@ -803,6 +803,10 @@ export const REQUIRED_BUNDLE_FILES = Object.freeze([
   "README.md", "docs/CODE-INDEX.md", "docs/AGENT-ARCHITECTURE.md", "05-reconstruction/codex/config.toml",
   ...Object.entries(agentBundleGroups).flatMap(([dir, files]) => files.split(" ").map(file => dir + "/" + file)),
 ]);
+// 旧版 v2 清单仍可验真；含自主更正模块的新包须同时交付本机 OCR 与技能说明。
+const correctionModule = "06-workbench/server/voucher-correction-proof.mjs";
+const correctionGuide = "plugins/finance/skills/reconciliation/references/voucher-correction.md";
+const correctionOcr = "06-workbench/server/voucher-correction-ocr.ps1";
 const BUNDLE_KIND = "local-product-source-bundle";
 const bundleCompare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const bundleError = (code, path = null) => new StageError(code, { details: path === null ? null : { path } });
@@ -817,7 +821,7 @@ function bundlePathAllowed(path, schemaVersion) {
   if (!bundlePathWellFormed(path)) return false;
   const backendSource = /^06-workbench\/(server|public)\/.+/.test(path);
   if (schemaVersion === 1) return backendBundleFiles.includes(path) || backendSource;
-  if (REQUIRED_BUNDLE_FILES.includes(path)) return true;
+  if (REQUIRED_BUNDLE_FILES.includes(path) || path === correctionGuide || path === correctionOcr) return true;
   if (!backendSource || path.split("/").some(generatedDirectory)) return false;
   return /^06-workbench\/server\/.+\.mjs$/.test(path)
     || /^06-workbench\/public\/(?:app\.js|index\.html|styles\.css)$/.test(path);
@@ -873,7 +877,8 @@ export function validateReleaseManifest(manifest) {
     previous = entry.path;
   }
   const required = manifest.schemaVersion === 1 ? backendBundleFiles : REQUIRED_BUNDLE_FILES;
-  for (const rel of [...required, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
+  const featureFiles = manifest.schemaVersion >= 2 && seen.has(correctionModule) ? [correctionGuide, correctionOcr] : [];
+  for (const rel of [...required, ...featureFiles, "06-workbench/server/server.mjs", "06-workbench/public/index.html"]) {
     if (!seen.has(rel.toLowerCase())) throw bundleError("bundle_manifest_required_missing", rel);
   }
   if (manifest.digest !== bundleDigest(manifest)) throw bundleError("bundle_manifest_digest_mismatch");
@@ -899,6 +904,7 @@ export function inspectReleaseBundle(releasePath) {
   }
   const schemaVersion = publishedManifest?.schemaVersion ?? RELEASE_BUNDLE_SCHEMA_VERSION;
   const paths = schemaVersion === 1 ? [...backendBundleFiles] : [...REQUIRED_BUNDLE_FILES];
+  if (schemaVersion >= 2 && existsSync(join(root, correctionModule))) paths.push(correctionGuide);
   const walk = (rel, depth = 0) => {
     const path = join(root, ...rel.split("/"));
     const audit = auditDirectoryRoot(path, "bundle_source_directory");

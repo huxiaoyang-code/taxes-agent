@@ -1,13 +1,15 @@
 import {existsSync, statSync, realpathSync, mkdirSync, writeFileSync} from 'node:fs';
 import {isAbsolute, resolve, dirname, join, relative, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
 import {businessSessionFiles} from './business-session.mjs';
+import {captureCorrectionSources} from '../../../../06-workbench/server/voucher-correction-proof.mjs';
 
 export const repoRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../../../..');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 function absolute(value,label){if(typeof value!=='string'||!isAbsolute(value)||/[\0\r\n]/.test(value))fail('host_'+label+'_absolute_required');return resolve(value);}
 function existing(value,label,kind){const path=absolute(value,label);if(!existsSync(path)||!(kind==='file'?statSync(path).isFile():statSync(path).isDirectory()))fail('host_'+label+'_missing');return realpathSync(path);}
-export function createContext({nodePath,apiBase,databasePath,outputDir,auditDir,sourceRoot,pythonPath,...unsupported}){
+export function createContext({nodePath,apiBase,databasePath,outputDir,auditDir,sourceRoot,pythonPath,voucherCorrections,correctionOriginals,...unsupported}){
   if(Object.keys(unsupported).some(key=>key!=='host'))fail('host_arguments_invalid');
   nodePath=existing(nodePath,'node','file');
   const db=absolute(databasePath,'database'),out=absolute(outputDir,'output');
@@ -24,11 +26,20 @@ export function createContext({nodePath,apiBase,databasePath,outputDir,auditDir,
   if(auditDir===undefined)mcpEnv.FINANCE_AUDIT_MODE='bound_account';
   if(sourceRoot!==undefined)mcpEnv.FINANCE_SOURCE_ROOT=existing(sourceRoot,'source_root','directory');
   if(pythonPath!==undefined)mcpEnv.FINANCE_PYTHON_PATH=existing(pythonPath,'python','file');
-  return {repoRoot,nodePath,serverPath,skillsDir,auditDir:traceRoot,apiBase:url.origin,databasePath:db,outputDir:out,mcpEnv,mcp:{command:nodePath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};
+  let correctionManifest;
+  if(correctionOriginals!==undefined&&voucherCorrections!=='delegated')fail('host_correction_delegation_required');
+  if(voucherCorrections!==undefined){
+    if(voucherCorrections!=='delegated'||!mcpEnv.FINANCE_SOURCE_ROOT)fail('host_correction_delegation_invalid');
+    const originals=captureCorrectionSources(mcpEnv.FINANCE_SOURCE_ROOT,correctionOriginals?{paths:correctionOriginals}:{});
+    correctionManifest=JSON.stringify({databasePath:db,sourceRoot:mcpEnv.FINANCE_SOURCE_ROOT,originals})+'\n';
+    mcpEnv.FINANCE_CORRECTION_SOURCE_DIGEST=createHash('sha256').update(correctionManifest).digest('hex');
+  }
+  return {repoRoot,nodePath,serverPath,skillsDir,auditDir:traceRoot,apiBase:url.origin,databasePath:db,outputDir:out,mcpEnv,correctionManifest,mcp:{command:nodePath,args:[serverPath],env:mcpEnv,cwd:repoRoot}};
 }
 export function writeBundle(context,bundle){
   if(!Array.isArray(bundle?.files)||!bundle.files.length)fail('host_files_required');
   const files=[...bundle.files,...(bundle.host?businessSessionFiles({...context,host:bundle.host}):[])];
+  if(context.correctionManifest)files.push({path:'.finance/correction-sources.json',content:context.correctionManifest});
   const names=new Set();
   for(const file of files){
     if(typeof file.path!=='string'||!file.path||isAbsolute(file.path)||file.path.includes('\\')||file.path.split('/').some(p=>!p||p==='.'||p==='..')||/[\0\r\n:]/.test(file.path)||typeof file.content!=='string')fail('host_file_invalid');

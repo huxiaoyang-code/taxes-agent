@@ -83,6 +83,7 @@ export const AUDIT_ACTIONS = Object.freeze([
   "import.append",
   "import.legacy",
   "voucher.post",
+  "voucher.correct",
   "voucher.unpost",
   "period.close",
   "period.reopen",

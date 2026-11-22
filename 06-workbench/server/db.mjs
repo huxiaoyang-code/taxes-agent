@@ -192,4 +192,11 @@ if (!READ_ONLY) try {
   const { randomUUID } = await import('node:crypto');
   await installAuditSchema(db,{dbPath:DB_FILE,outDir:join(DATA_DIR,`audit-install-${randomUUID()}`)});
   await installBatchSchema(db,{dbPath:DB_FILE,outDir:join(DATA_DIR,`batch-${randomUUID()}`)});
+  // 已核对的原件流水逐行占用；与纠错记账在同一数据库事务增删。历史账库首次启用时为空。
+  db.exec(`CREATE TABLE IF NOT EXISTS voucher_correction_claims (
+    account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+    claim_key TEXT NOT NULL CHECK(length(claim_key)=64),
+    voucher_id INTEGER NOT NULL REFERENCES vouchers(id) ON DELETE CASCADE,
+    PRIMARY KEY(account_set_id,claim_key)
+  )`);
 } catch(error) { try { db.close(); } catch {} throw error; }

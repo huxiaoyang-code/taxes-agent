@@ -6,8 +6,12 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 export function buildConfig(c){
   const {command,args,env}=c.mcp,tools=toolsForProfile('direct');
-  const allow=tools.filter(t=>t.annotations?.readOnlyHint===true).map(t=>'mcp__finance__'+t.name);
-  const ask=tools.filter(t=>t.annotations?.readOnlyHint!==true).map(t=>'mcp__finance__'+t.name);
+  // 部分既有只读合同缺少 MCP readOnlyHint。正式委托需能读取依据和账簿、验收更正。
+  const correctionTools=new Set(['skills_list','skills_read','account_context','finance_query_catalog',
+    'finance_query','ledger_query','account_list','period_list','period_end_check','voucher_correct']);
+  const allowed=t=>t.annotations?.readOnlyHint===true||(env.FINANCE_CORRECTION_SOURCE_DIGEST&&correctionTools.has(t.name));
+  const allow=tools.filter(allowed).map(t=>'mcp__finance__'+t.name);
+  const ask=tools.filter(t=>!allowed(t)).map(t=>'mcp__finance__'+t.name);
   return {host:'claude-code',files:[
     {path:'.mcp.json',content:JSON.stringify({mcpServers:{finance:{command,args,env}}},null,2)+'\n'},
     {path:'.claude/settings.json',content:JSON.stringify({autoMemoryEnabled:false,hooks:claudeBusinessHooks(c.nodePath,c.outputDir),permissions:{defaultMode:'default',allow,ask}},null,2)+'\n'},

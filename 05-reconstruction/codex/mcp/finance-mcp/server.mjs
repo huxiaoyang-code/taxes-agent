@@ -238,6 +238,16 @@ async function callTool(name, args = {}, executionOptions={}) {
   }
 
   // 普通财务工具 → 固定模型通道（返回已校验信封）；税务 / 目录 → 既有原始通道。
+  if (ACTIVE_PROFILE === 'direct' && process.env.FINANCE_CORRECTION_SOURCE_DIGEST
+      && MODEL_PLAIN_TOOL_NAMES.includes(name) && payload.accountSetId !== undefined) {
+    const binding = resolveBusinessSessionBinding();
+    if (!binding || Number(payload.accountSetId) !== binding.scope.accountSetId) {
+      throw new ToolCallError('finance_memory_session_conflict','finance_memory_session_conflict');
+    }
+    // 更正在本机账库执行，账簿及报表则经 HTTP 读取。两条路径须由后端核对同一企业和库实例。
+    payload.accountSetId = binding.scope.accountSetId;
+    executionOptions = { ...executionOptions, expectedScope: binding.scope };
+  }
   const result = await callBackend(name, payload, CATALOG, executionOptions);
   // 后端明确回报未实现时，同样升级为工具错误，避免“成功返回 not_implemented”。
   if (result && typeof result === "object" && result.not_implemented === true) {

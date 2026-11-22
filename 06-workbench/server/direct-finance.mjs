@@ -82,6 +82,10 @@ function workpaperSummary(workpaper,artifact,ids,{annual=false,ruleSelection,cod
   evidence:{result:full,callRef:currentFinanceCall()?.callId??null,indexRef:`${artifact.ref}/evidence-index.json`,humanReviewRef:`${artifact.ref}/review.md`,sourceSemantics:'原件哈希和位置匹配不证明模型提取含义正确；完整原值仅留本机。'}};
 }
 export async function callDirectFinanceTool(name,args,options={}){
+ if(name==='voucher_correct'){
+  const {runDelegatedCorrection}=await import('./voucher-correction-runtime.mjs');
+  return runDelegatedCorrection(args);
+ }
  if(name==='finance_vat_plan'){
   const {runVatPlanning,VAT_PLAN_ALL_INVOICES}=await import('./vat-planning.mjs');
   const {saveVatHandoff}=await import('./vat-period-handoff.mjs');
