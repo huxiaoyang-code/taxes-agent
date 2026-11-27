@@ -70,13 +70,14 @@ const PARENTS = {
   sheetPr: ['outlinePr', 'pageSetUpPr'], sheetViews: ['sheetView'], sheetView: ['selection', 'pane'], cols: ['col'], sheetData: ['row'], row: ['c'], c: ['v', 'is', 'f'],
   headerFooter: ['oddHeader', 'oddFooter', 'evenHeader', 'evenFooter', 'firstHeader', 'firstFooter'],
 };
+const DELIVERY_CHILDREN = {worksheet: ['mergeCells', 'autoFilter'], mergeCells: ['mergeCell']};
 const REPEATED = new Set(['Relationship', 'Default', 'Override', 'workbookView', 'sheet', 'si', 'numFmt', 'font', 'fill', 'border', 'xf', 'cellStyle', 'sheetView', 'selection', 'col', 'row', 'c']);
-function tree(n, uri, allowed) {
+function tree(n, uri, allowed, delivery = false) {
   check(n.uri === uri && allowed.includes(n.name));
   if (!['t', 'v', 'f'].includes(n.name)) check(n.text.trim() === '');
   const seen = new Set();
   for (const c of n.children) {
-    check((PARENTS[n.name] ?? []).includes(c.name) && (!seen.has(c.name) || REPEATED.has(c.name))); seen.add(c.name); tree(c, uri, allowed);
+    check(((PARENTS[n.name] ?? []).includes(c.name) || delivery && DELIVERY_CHILDREN[n.name]?.includes(c.name)) && (!seen.has(c.name) || REPEATED.has(c.name) || delivery && c.name === 'mergeCell')); seen.add(c.name); tree(c, uri, allowed, delivery);
   }
 }
 function relations(bytes, base) {
@@ -104,7 +105,74 @@ const cellPosition = a => {
 const a1 = column => { let s = ''; for (let n = column; n; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
 const simpleString = n => { check(n && n.children.every(c => c.name === 't') && n.children.length === 1); const t = n.children[0]; check(!t.children.length && t.text.length <= 4096, 'xlsx_limit'); check(!/_x[0-9A-Fa-f]{4}_/.test(t.text), 'xlsx_string_escape_unsupported'); return t.text; };
 
-function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false, structureOnly = false) {
+// 原生财报用本页打印区域及重复标题行排版。这两个本页静态范围不参与金额计算。
+function consumePrintRanges(wb) {
+  const names=one(wb,'definedNames',false);
+  if(!names)return;
+  const sheets=one(wb,'sheets').children,seen=new Set();
+  check(names.uri===MAIN && !names.text.trim() && !Object.keys(names.attrs).length && names.children.length<=sheets.length*2);
+  for(const entry of names.children){
+    const {name,localSheetId}=entry.attrs;
+    check(entry.uri===MAIN && entry.name==='definedName' && !entry.children.length && Object.keys(entry.attrs).length===2);
+    check(name==='_xlnm.Print_Area'||name==='_xlnm.Print_Titles');
+    check(/^(?:0|[1-9]\d?)$/.test(localSheetId)&&Number(localSheetId)<sheets.length);
+    const key=localSheetId+'/'+name;
+    check(!seen.has(key));seen.add(key);
+    const prefix="'"+sheets[Number(localSheetId)].attrs.name.replaceAll("'","''")+"'!";
+    check(entry.text.startsWith(prefix));
+    const range=entry.text.slice(prefix.length);
+    if(name==='_xlnm.Print_Area'){
+      check(/^\$[A-Z]{1,3}\$?[1-9]\d{0,4}:\$[A-Z]{1,3}\$?[1-9]\d{0,4}$/.test(range));
+      const [a,b]=range.replaceAll('$','').split(':').map(cellPosition);
+      check(a.row<=b.row&&a.column<=b.column);
+    }else{
+      const m=/^\$([1-9]\d{0,4}):\$([1-9]\d{0,4})$/.exec(range);
+      check(m&&Number(m[1])<=Number(m[2])&&Number(m[2])<=10000);
+    }
+  }
+  wb.children=wb.children.filter(child=>child!==names);
+}
+
+function worksheetRows(selected, rels, entries, formats, strings, delivery, formatCodes) {
+  const sheetRel = rels.get(selected.attrs[`{${DOCREL}}id`]); check(sheetRel?.type === DOCREL + '/worksheet');
+  const sheet = xml(entries.get(sheetRel.path));
+  tree(sheet, MAIN, ['worksheet', 'sheetPr', 'outlinePr', 'pageSetUpPr', 'dimension', 'sheetViews', 'sheetView', 'selection', 'pane', 'sheetFormatPr', 'cols', 'col', 'sheetData', 'row', 'c', 'v', 'is', 't', 'f', 'pageMargins', 'pageSetup', 'printOptions', 'headerFooter', 'oddHeader', 'oddFooter', 'evenHeader', 'evenFooter', 'firstHeader', 'firstFooter', ...(delivery ? ['mergeCells', 'mergeCell', 'autoFilter'] : [])], delivery);
+  check(sheet.name === 'worksheet'); const rows = one(sheet, 'sheetData').children; const seenRows = new Set(), records = [];
+  for (const row of rows) {
+    check(row.name === 'row' && /^[1-9]\d{0,4}$/.test(row.attrs.r ?? ''), 'xlsx_cell_invalid'); const rowNumber = Number(row.attrs.r);
+    check(rowNumber <= 10000 && !seenRows.has(rowNumber), 'xlsx_limit'); seenRows.add(rowNumber);
+    const cells = [], types = [], formulas = [], seenCells = new Set();
+    for (const c of row.children) {
+      check(c.name === 'c' && Object.keys(c.attrs).every(k => ['r', 's', 't'].includes(k)), 'xlsx_cell_invalid');
+      const pos = cellPosition(c.attrs.r); check(pos.row === rowNumber && !seenCells.has(pos.column), 'xlsx_cell_invalid'); seenCells.add(pos.column);
+      const formula = one(c, 'f', false);
+      check(!formula || delivery, 'xlsx_formula_unsupported');
+      if (formula) formulas.push(pos.column - 1);
+      const type = c.attrs.t ?? 'n'; check(['s', 'inlineStr', 'n'].includes(type), 'xlsx_cell_type_unsupported');
+      check(c.children.every(n => n.name === 'v' || n.name === 'is' || delivery && n.name === 'f'), 'xlsx_cell_invalid');
+      const v = one(c, 'v', false), inline = one(c, 'is', false); let value;
+      if (type === 'inlineStr') { check(inline && !v); value = simpleString(inline); }
+      else {
+        check(!inline); const raw = v?.text ?? ''; check(!v?.children.length && raw.length <= 4096, 'xlsx_cell_invalid');
+        if (type === 's') { check(/^(0|[1-9]\d*)$/.test(raw) && Number(raw) < strings.length, 'xlsx_cell_invalid'); value = strings[Number(raw)]; }
+        else value = raw;
+      }
+      const style = c.attrs.s ?? '0'; check(/^(0|[1-9]\d*)$/.test(style) && Number(style) < formats.length, 'xlsx_cell_invalid');
+      cells[pos.column - 1] = value; types[pos.column - 1] = { type, format: formats[Number(style)] };
+    }
+    if (delivery) {
+      const cellFormats={};
+      for(const [index,style] of types.entries()) if(style?.type==='n' && style.format!=='0') {
+        cellFormats[index]=formatCodes.get(style.format) ?? Number(style.format);
+      }
+      records.push({number:rowNumber,cells:Array.from(cells,value=>value==='' || value===undefined ? null : value),formulas,cellFormats});
+    }
+    else records.push({rowNumber, cells: Array.from(cells, value => value ?? ''), types});
+  }
+  return records;
+}
+
+function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = false, structureOnly = false, delivery = false) {
   try {
     const entries = unpack(bytes);
     for (const [name, content] of entries) if (name.endsWith('.rels')) {
@@ -131,12 +199,10 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     }
     check([...entries.keys()].every(name => name.endsWith('/') || ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/sharedStrings.xml', 'docProps/core.xml', 'docProps/app.xml'].includes(name) || /^docProps\/thumbnail\.(?:wmf|emf|jpeg|jpg|png)$/.test(name) || /^xl\/(?:worksheets\/sheet\d+|theme\/theme\d+)\.xml$/.test(name)), 'xlsx_structure_unsupported');
     const wb = xml(entries.get('xl/workbook.xml'));
+    if(delivery)consumePrintRanges(wb);
     tree(wb, MAIN, ['workbook', 'fileVersion', 'workbookPr', 'bookViews', 'workbookView', 'sheets', 'sheet', 'calcPr']); check(wb.name === 'workbook');
     const rels = relations(entries.get('xl/_rels/workbook.xml.rels'), 'xl/');
     const sheets = one(wb, 'sheets').children; check(sheets.every(s => s.name === 'sheet') && new Set(sheets.map(s => s.attrs.name)).size === sheets.length && new Set(sheets.map(s => s.attrs.sheetId)).size === sheets.length && new Set(sheets.map(s => s.attrs[`{${DOCREL}}id`])).size === sheets.length);
-    const matches = structureOnly && !mapping.sheet ? sheets.filter((s,i) => i === mapping.sheetIndex) : sheets.filter(s => s.attrs.name === mapping.sheet); check(matches.length === 1, 'xlsx_sheet_missing');
-    const selected = matches[0]; check(!selected.attrs.state || selected.attrs.state === 'visible', 'xlsx_structure_unsupported');
-    const sheetRel = rels.get(selected.attrs[`{${DOCREL}}id`]); check(sheetRel?.type === DOCREL + '/worksheet');
     const related = type => { const found = [...rels.values()].filter(r => r.type === DOCREL + '/' + type); check(found.length <= 1); return found[0] && entries.get(found[0].path); };
     const shared = related('sharedStrings'); let strings = [];
     if (shared) { const n = xml(shared); tree(n, MAIN, ['sst', 'si', 't']); check(n.name === 'sst' && n.children.every(c => c.name === 'si')); strings = n.children.map(simpleString); }
@@ -161,31 +227,17 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
       check(n.name === 'styleSheet'); const xfs = one(n, 'cellXfs'); check(xfs.children.every(c => c.name === 'xf')); formats = xfs.children.map(x => x.attrs.numFmtId ?? '0');
       for (const f of one(n, 'numFmts', false)?.children ?? []) formatCodes.set(f.attrs.numFmtId, f.attrs.formatCode);
     }
-    const sheet = xml(entries.get(sheetRel.path));
-    tree(sheet, MAIN, ['worksheet', 'sheetPr', 'outlinePr', 'pageSetUpPr', 'dimension', 'sheetViews', 'sheetView', 'selection', 'pane', 'sheetFormatPr', 'cols', 'col', 'sheetData', 'row', 'c', 'v', 'is', 't', 'f', 'pageMargins', 'pageSetup', 'printOptions', 'headerFooter', 'oddHeader', 'oddFooter', 'evenHeader', 'evenFooter', 'firstHeader', 'firstFooter']);
-    check(sheet.name === 'worksheet'); const rows = one(sheet, 'sheetData').children; const seenRows = new Set(), records = [];
-    for (const row of rows) {
-      check(row.name === 'row' && /^[1-9]\d{0,4}$/.test(row.attrs.r ?? ''), 'xlsx_cell_invalid'); const rowNumber = Number(row.attrs.r);
-      check(rowNumber <= 10000 && !seenRows.has(rowNumber), 'xlsx_limit'); seenRows.add(rowNumber);
-      const cells = [], types = [], seenCells = new Set();
-      for (const c of row.children) {
-        check(c.name === 'c' && Object.keys(c.attrs).every(k => ['r', 's', 't'].includes(k)), 'xlsx_cell_invalid');
-        const pos = cellPosition(c.attrs.r); check(pos.row === rowNumber && !seenCells.has(pos.column), 'xlsx_cell_invalid'); seenCells.add(pos.column);
-        check(!c.children.some(n => n.name === 'f'), 'xlsx_formula_unsupported');
-        const type = c.attrs.t ?? 'n'; check(['s', 'inlineStr', 'n'].includes(type), 'xlsx_cell_type_unsupported');
-        check(c.children.every(n => n.name === 'v' || n.name === 'is'), 'xlsx_cell_invalid');
-        const v = one(c, 'v', false), inline = one(c, 'is', false); let value;
-        if (type === 'inlineStr') { check(inline && !v); value = simpleString(inline); }
-        else {
-          check(!inline); const raw = v?.text ?? ''; check(!v?.children.length && raw.length <= 4096, 'xlsx_cell_invalid');
-          if (type === 's') { check(/^(0|[1-9]\d*)$/.test(raw) && Number(raw) < strings.length, 'xlsx_cell_invalid'); value = strings[Number(raw)]; }
-          else value = raw;
-        }
-        const style = c.attrs.s ?? '0'; check(/^(0|[1-9]\d*)$/.test(style) && Number(style) < formats.length, 'xlsx_cell_invalid');
-        cells[pos.column - 1] = value; types[pos.column - 1] = { type, format: formats[Number(style)] };
-      }
-      records.push({ rowNumber, cells: Array.from({ length: cells.length }, (_, i) => cells[i] ?? ''), types });
+    if (delivery) {
+      check(sheets.length > 0 && sheets.length <= 64, 'xlsx_limit');
+      return sheets.map(sheet => ({
+        name: sheet.attrs.name,
+        date1904:['1','true'].includes(one(wb,'workbookPr',false)?.attrs.date1904),
+        rows: worksheetRows(sheet, rels, entries, formats, strings, true, formatCodes).sort((a,b) => a.number - b.number),
+      }));
     }
+    const matches = structureOnly && !mapping.sheet ? sheets.filter((s,i) => i === mapping.sheetIndex) : sheets.filter(s => s.attrs.name === mapping.sheet); check(matches.length === 1, 'xlsx_sheet_missing');
+    const selected = matches[0]; check(!selected.attrs.state || selected.attrs.state === 'visible', 'xlsx_structure_unsupported');
+    const records = worksheetRows(selected, rels, entries, formats, strings, false);
     // 仅供本机受限字段适配器使用；仍执行上方完整安全解析与公式拒绝，模型投影由调用方负责。
     if (structureOnly) return {sheetIndex:sheets.indexOf(selected),sheetCount:sheets.length,rows:records,
       date1904:['1','true'].includes(one(wb,'workbookPr',false)?.attrs.date1904),formatCodes};
@@ -223,3 +275,6 @@ export const readXlsxStructure = (bytes, {sheetIndex=0,sheet}={}) => {
   check(Number.isSafeInteger(sheetIndex) && sheetIndex>=0 && sheetIndex<8,'xlsx_limit');
   return readMappedXlsx(bytes,{sheetIndex,sheet},[],false,true);
 };
+
+// 交付复核一次遍历全工作簿，保留公式缓存的存在性，不执行公式。
+export const readDeliveryWorkbook = bytes => readMappedXlsx(bytes, {}, [], false, false, true);

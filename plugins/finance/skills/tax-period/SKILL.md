@@ -39,6 +39,10 @@ description: 做完本月账、准备整期账税申报，或补件后接续整�
 
 ## 交付前主动检查
 
+在已绑定的整期工作区，把本版实际文件放进 `outputs/`，用 `finance_period_review({delivery:{}})` 送审。程序按同版账库、原件和文件核资产负债表、进销存及增值税。遇到 `blocked`，按 `delivery:{version,issue}` 展开一类证据。接手方可用 `delivery:{role:"bookkeeper"}`（或 `product`、`accountant`）取自己的返工项，修正后重新送审。
+
+`awaiting_independent_review` 时，只把回执中的版号交给独立复核会话。该会话使用同一工具的 `delivery:{reviewVersion:版号}` 重新取数。收到 `ready_for_accountant` 后，将返回的版本目录交会计，并说明其他委托项目的实际覆盖。需要核原文时，用 `delivery:{version,evidence:true}` 打开同版的本机取证目录。
+
 在已绑定的工作区交付科目余额核对表时，把实际导出放在 `outputs/`，余额 CSV 文件名带所属期。产品导出的原生科目余额表可直接复核元数据、借贷栏、本年累计、总计和试算平衡。会计自制表的表头包含科目编码、期初方向、期初余额、本期借方、本期贷方、期末方向、期末余额；每个有余额或发生额的科目逐行列示，附按类别计算的小计。交接 Markdown 写明本月与次月。对于需要核实的事项，在同一行注明“已解释”或“待办”、相对于已绑定原件目录的文件路径和业务标识。
 
 以 `finance_period_review` 的 `target` 和 `deliveryCheck:{balanceFile,handoffFile,references}` 复算。每条原件引用含 `file`、从 1 开始的 `line`、可唯一定位的 `id` 和处置 `disposition`（`explained` 或 `outstanding`）。交易标识使用原件完整字段值。引用行有金额主张时，给该引用附 `amounts:[{column,value}]`，从原 CSV 表头选对应金额列。确实缺原件的具名事项可列 `missingMaterials`，写明业务标识 `id`、受影响月份 `period` 和具体影响 `impact`，在交接原文同一行注明待办。`needs_repair` 时按返回的行号、字段和账库金额改正，重新读回；`partial` 和 `needs_materials` 要在交接说明剩余影响。
@@ -47,7 +51,7 @@ description: 做完本月账、准备整期账税申报，或补件后接续整�
 
 ## 中断、补件与更正
 
-从同企业、账套、期间的实际账表/报告、调用结果及原件版本恢复。`finance_period_review` 是已有调用记录的只读投影，记录缺失、范围不匹配、未结束及未解决事项保留未知；它不维护任务状态，也不证明原件、政策适用或整个期间已正确。首次无账库的账前任务仍可先进行资料核对，不能为读接续结果而伪建账套。
+从同企业、账套、期间的实际账表、原件和送审版本恢复。查询既有调用记录时使用下列历史记录入口。记录缺失、范围不匹配、执行未结束及业务未证实的部分保留未知。首次无账库的账前任务可直接核对资料。
 
 有账套时读取当前工具合同后传 `target:{accountSetId,period}`，可用 `callIds` 限定已知记录，或用 `offset` / `limit` 分页，两种选择互斥；ID 来自实际账套查询，期间采用工具支持的月度值。仅有账前或自主计算记录时，可单独传 `unboundCalls:{callIds:[实际调用编号]}`，与 target、顶层 callIds 及分页互斥。该分支 `mode=unbound_call_review`、`scopeVerified=false`，只逐条检查已知执行记录，不能据此声称已核企业身份或汇总整期结果。没有旧编号就从现有实际产物调查，不猜编号或任意日志路径。
 

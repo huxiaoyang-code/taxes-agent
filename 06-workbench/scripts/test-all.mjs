@@ -16,6 +16,7 @@ const steps = [
   { name: 'vat-handoff-mcp', file: join(WORKBENCH, 'test', 'vat-handoff-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-delivery-check', file: join(WORKBENCH,'test','finance-delivery-check.test.mjs'), cwd: WORKBENCH, nodeArgs:['--test'] },
   { name: 'finance-period-review', file: join(WORKBENCH, 'test', 'finance-period-review.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
+  ...['delivery-books-review','delivery-release','delivery-stock-review','delivery-stock-invoices','delivery-vat-review','period-delivery'].map(name=>({name,file:join(WORKBENCH,'test',name+'.test.mjs'),cwd:WORKBENCH,nodeArgs:['--test']})),
   { name: 'tax-period-rental', file: join(WORKBENCH, 'test', 'tax-period-rental.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook', file: join(WORKBENCH, 'test', 'finance-prebook.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
   { name: 'finance-prebook-mcp', file: join(WORKBENCH, 'test', 'finance-prebook-mcp.test.mjs'), cwd: WORKBENCH, nodeArgs: ['--test'] },
