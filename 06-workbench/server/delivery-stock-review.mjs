@@ -174,6 +174,11 @@ function scanStock(sheet,file,form,review) {
   const countBefore=items.length;
   const {fields,index}=form;
   const headers=sheet.rows[index];
+  // 有些模板在滚动台账右侧另列复核结果。只验列义明确的连续三栏，不假设它属于哪期。
+  const bound=new Set(fields.values()), priceColumns=[];
+  for(let i=1;i<headers.cells.length-1;i++){
+    if(!bound.has(i) && header(headers.cells[i-1])==='数量' && header(headers.cells[i])==='单价' && header(headers.cells[i+1])==='金额')priceColumns.push(i);
+  }
   let finalTotalSeen=false;
   const seen = new Set();
   for (const row of sheet.rows.slice(index+1)) {
@@ -207,6 +212,17 @@ function scanStock(sheet,file,form,review) {
     if (seen.has(keyOf(item))) issue('inventory_item_ambiguous','accountant',at,'同一工作表内的商品识别字段重复，请提供可区分的编码或原件行号');
     seen.add(keyOf(item));
     checkPrices(item,issue);
+    for(const col of priceColumns){
+      const price=priceDetail(row,col);
+      if(price.state!=='value' || !hasValue(row.cells[col-1]) || !hasValue(row.cells[col+1]))continue;
+      let qty,amount;
+      try{qty=decimal(row.cells[col-1]);amount=decimal(row.cells[col+1]);}catch{continue;}
+      if(qty===0n && amount===0n)continue;
+      if(qty===0n || abs(price.value*qty-amount*scale)*2n>abs(qty)*price.step+centScale*scale){
+        issue('inventory_auxiliary_price_mismatch','bookkeeper',{...at,column:col+1,field:'附列单价'},
+          '按此组数量和金额重算单价。数量为零且金额非零时须保留无法计算状态。',display(price.value),qty===0n?'无法计算':display(amount*scale/qty));
+      }
+    }
     items.push(item);
     for (const key of metrics) sums[key]+=item[key];
     for (const suffix of ['Qty','Amount']) {
@@ -464,8 +480,16 @@ export function reviewInventory({files=[],sources=[],inventoryMinor=null,period}
   coverage.workbookOpeningMinor=roundedMinor(sum('openingAmount')).toString();
   const ledger=inventoryMinor && typeof inventoryMinor==='object' ? inventoryMinor : {closing:inventoryMinor};
   const amounts={opening:sum('openingAmount'),debit:sum('purchaseAmount')+sum('estimateAmount'),credit:sum('saleAmount'),closing:sum('closingAmount')};
-  reviewStockInvoiceLinks({files,sources,items:review.items,listSheets:file=>loadSheetList(file,()=>{},'invoice'),decimal,display,issue,coverage,period,periodChecks});
+  reviewStockInvoiceLinks({files,sources,items:review.items,listSheets:file=>loadSheetList(file,()=>{},'invoice'),decimal,display,issue,coverage,period,periodChecks,
+    purchasePostings:ledger.purchasePostings,purchaseBuyer:ledger.purchaseBuyer,expensePostings:ledger.expensePostings});
   const explained=explainOpening(ledger,amounts,coverage,issues);
+  const openingBridge=coverage.openingReconciliation;
+  // 逐行期初已经复算一致，账簿却与原件总额不同。应查承接记录，反复改交付表无法消差。
+  const needsOpeningEvidence=openingBridge && openingBridge.ledgerMinusRoundedSourceMinor!=='0' &&
+    coverage.openingSourceRows>0 && coverage.openingRowsMatched===coverage.openingSourceRows &&
+    coverage.sourceOpeningPrecision.everyRowRounded &&
+    amounts.opening===BigInt(coverage.sourceOpeningLineRoundedMinor)*centScale &&
+    !issues.some(i=>['inventory_opening_row_unproved','inventory_opening_identity_mismatch','inventory_opening_quantity_mismatch'].includes(i.code));
   const paired=validMinor(ledger.debit) && validMinor(ledger.credit);
   if(paired) {
     const debit=BigInt(ledger.debit),credit=BigInt(ledger.credit),net=debit-credit;
@@ -488,7 +512,17 @@ export function reviewInventory({files=[],sources=[],inventoryMinor=null,period}
     if (key==='closing') coverage.ledgerEndingMinor=ledgerValue.toString();
     if (!explained && roundedMinor(amount)!==ledgerValue) {
       const field={opening:'期初余额',debit:'本期借方',credit:'本期贷方',closing:'期末余额'}[key];
-      issue('inventory_ledger_mismatch','bookkeeper',{field:'库存商品'+field},'工作簿合计与同版正式库存账不符；期初原件逐行及整体取分值见复核覆盖记录',display(amount),display(ledgerValue*centScale));
+      const carried=key==='closing' && needsOpeningEvidence &&
+        ledgerValue-roundedMinor(amount)===BigInt(openingBridge.ledgerMinusWorkbookMinor) &&
+        roundedMinor(amounts.debit-amounts.credit)===BigInt(ledger.debit)-BigInt(ledger.credit);
+      if(needsOpeningEvidence && (key==='opening'||carried)){
+        const gap=display(BigInt(openingBridge.ledgerMinusRoundedSourceMinor)*centScale);
+        issue('inventory_opening_ledger_evidence_required','accountant',{field:'库存商品'+field},
+          '工作簿已按期初原件逐行核对。正式期初减原件整体取分差 '+gap+' 元，须核上期结转凭证、期末明细及本期承接记录。',
+          display(amount),display(ledgerValue*centScale));
+      }else{
+        issue('inventory_ledger_mismatch','bookkeeper',{field:'库存商品'+field},'工作簿合计与同版正式库存账不符；期初原件逐行及整体取分值见复核覆盖记录',display(amount),display(ledgerValue*centScale));
+      }
     }
   }
   return {issues,coverage};

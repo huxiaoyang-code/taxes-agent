@@ -16,6 +16,10 @@
 
 整期送审从 [period-delivery.mjs](../06-workbench/server/period-delivery.mjs) 进入。[账库与资产负债表](../06-workbench/server/delivery-books-review.mjs)、[库存](../06-workbench/server/delivery-stock-review.mjs)、[增值税](../06-workbench/server/delivery-vat-review.mjs) 读取同版证据，[本机复核包](../06-workbench/server/delivery-release.mjs) 只发布通过的版本。完整记录按绑定保存在本机；默认工具回执只包含结论及有界的变化摘要。
 
+[凭证返工回归](../06-workbench/test/delivery-voucher-rework.test.mjs) 从已过账的错误科目走正常授权更正入口，验证沿用旧报表会继续退回，再从新账库重出报表并由独立角色发布。
+
+[库存票行账载归属](../06-workbench/server/delivery-stock-expense-proof.mjs) 核对原票与已过账凭证，分别指出已查实的入账科目和仍缺的库存依据。[归属与反例测试](../06-workbench/test/delivery-stock-expense-proof.test.mjs)
+
 一般纳税人原表支持有主体、期间、栏次、项目和一般项目本月数的原始 CSV，以及可定位到相同表头的文本 PDF。PDF 读取用宿主配置的 Python 或系统 Python 3.11+ 及 pdfplumber。无法解析、即征即退另有发生等情形保留待核。已受理的原表、交付底稿与会计账载值分别取数。[字段复核测试](../06-workbench/test/delivery-vat-review.test.mjs)
 
 工具列举及调用见 [MCP 服务](../05-reconstruction/codex/mcp/finance-mcp/server.mjs)。六项分支合同由 [stdio 正反例](../06-workbench/test/mcp-listed-contracts.test.mjs) 检查。发布前在 `06-workbench` 运行 `npm run check:claude-direct -- --claude-cli "<已安装 Claude Code 的可执行文件或 JS 入口绝对路径>"`，用宿主的 `mcp_status` 对照 direct 工具全名。[宿主检查脚本](../06-workbench/scripts/claude-direct-discovery.mjs)

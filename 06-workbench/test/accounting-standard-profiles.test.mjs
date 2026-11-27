@@ -1558,6 +1558,29 @@ test("独审P1：无已核实列示规则的相反余额给 incomplete，不静�
   assert.equal(payable.totals.assets, 10000);
 });
 
+test("小企报表按货币资金与其他应付款账面合计，异常仍逐笔待核，固定资产清理两种方向均列示", () => {
+  const accounts = [...catalogOf(SMALL), A("224111", "负债", "credit"), A("224112", "负债", "credit")];
+  const result = bs(SMALL, accounts, money([
+    ["1001", -125], ["1002", 1000], ["224111", 475], ["224112", -300],
+    ["1606", -50], ["1801", -100], ["3001", -900],
+  ]));
+  assert.equal(rowValue(result, "cash"), 875);
+  assert.equal(rowValue(result, "other-payables"), -175);
+  assert.equal(rowValue(result, "asset-disposal"), -50);
+  assert.equal(result.totals.assets, 825);
+  assert.equal(result.totals.liabilitiesAndEquity, 725);
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.diagnostics.map(d => [d.accountCode, d.presentedRowId ?? null]).sort(),
+    [["1001", "cash"], ["1801", null], ["224111", "other-payables"]]);
+  const debit = bs(SMALL, accounts, money([["1606", 123], ["3001", -123]]));
+  assert.equal(debit.complete, true);
+  assert.equal(rowValue(debit, "asset-disposal"), 123);
+  assert.equal(classifyAccountingCashCounterpart(SMALL, A("160601", "资产", "debit")).category, "investing");
+  const enterprise = bs(ENTERPRISE, catalogOf(ENTERPRISE), money([["1606", -50], ["1001", -100]]));
+  assert.equal(enterprise.diagnostics.length, 2);
+  assert(enterprise.diagnostics.every(d => !d.presentedRowId));
+});
+
 test("独审二轮P2：小企应交税费借方按附录第73页(28)负号列示，资产负债勾稽完整", () => {
   const result = bs(
     SMALL,
@@ -1578,6 +1601,7 @@ test("独审二轮P2：小企应交税费借方按附录第73页(28)负号列示
   assert.deepStrictEqual(result.reclassifications, []);
   const rules = getAccountingReportRules(SMALL);
   assert.deepStrictEqual(rules.balanceSheet.negativePresentation, {
+    "1606": { reason: "small-enterprise-appendix-p71-item-17-disposal-credit-negative" },
     "2221": {
       reason: "small-enterprise-appendix-p73-item-28-taxes-payable-debit-negative",
     },

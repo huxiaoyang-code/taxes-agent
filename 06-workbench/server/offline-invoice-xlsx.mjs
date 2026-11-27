@@ -151,7 +151,10 @@ function worksheetRows(selected, rels, entries, formats, strings, delivery, form
       const type = c.attrs.t ?? 'n'; check(['s', 'inlineStr', 'n'].includes(type), 'xlsx_cell_type_unsupported');
       check(c.children.every(n => n.name === 'v' || n.name === 'is' || delivery && n.name === 'f'), 'xlsx_cell_invalid');
       const v = one(c, 'v', false), inline = one(c, 'is', false); let value;
-      if (type === 'inlineStr') { check(inline && !v); value = simpleString(inline); }
+      if (type === 'inlineStr') {
+        check(!v && (inline || delivery && c.children.length === 0));
+        value = inline ? simpleString(inline) : '';
+      }
       else {
         check(!inline); const raw = v?.text ?? ''; check(!v?.children.length && raw.length <= 4096, 'xlsx_cell_invalid');
         if (type === 's') { check(/^(0|[1-9]\d*)$/.test(raw) && Number(raw) < strings.length, 'xlsx_cell_invalid'); value = strings[Number(raw)]; }
@@ -210,6 +213,18 @@ function readMappedXlsx(bytes, mapping, numericKeys, strictNumericLexical = fals
     const formatCodes = new Map();
     if (styles) {
       const n = xml(styles);
+      // ISO/IEC 29500-1 §18.8.27 的索引颜色表可由写表软件显式写出，不参与数值取数。
+      const palette = one(n, 'colors', false);
+      if (palette) {
+        const indexed = one(palette, 'indexedColors');
+        check(palette.uri === MAIN && !palette.text.trim() && !Object.keys(palette.attrs).length && palette.children.length === 1);
+        check(indexed.uri === MAIN && !indexed.text.trim() && !Object.keys(indexed.attrs).length);
+        for (const color of indexed.children) {
+          check(color.uri === MAIN && color.name === 'rgbColor' && !color.children.length && !color.text.trim() &&
+            Object.keys(color.attrs).length === 1 && /^[a-f\d]{8}$/i.test(color.attrs.rgb));
+        }
+        n.children = n.children.filter(child => child !== palette);
+      }
       const ext = one(n, 'extLst', false);
       if (ext) {
         check(ext.uri === MAIN && ext.text.trim() === '' && ext.children.length <= 2);

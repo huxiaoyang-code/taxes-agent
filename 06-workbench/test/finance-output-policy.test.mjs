@@ -1416,6 +1416,7 @@ await test('all write technical IDs survive malformed DTOs; accessor and inherit
 await test('B2: persistent report profile/status diagnostics are fixed summaries; unknown metadata fails closed', () => {
   for (const [profileId, coaVersion, reportMappingVersion, profile, legacy] of [
     ['small-2011-basic-v1', 'small-2011-coa-basic-v1', 'small-2011-report-basic-v1', 'small_basic_v1', false],
+    ['small-2011-basic-v1', 'small-2011-coa-basic-v1', 'small-2011-report-basic-v2', 'small_basic_v1', false],
     ['enterprise-2019-general-basic-v1', 'enterprise-2019-general-coa-basic-v1', 'enterprise-2019-general-report-basic-v1', 'enterprise_basic_v1', false],
     ['legacy-small-coa-v1', 'legacy-small-coa-baseline-v1', 'legacy-small-coa-report-compat-v1', 'legacy_small_v1', true],
   ]) {

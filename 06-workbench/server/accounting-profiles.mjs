@@ -55,7 +55,7 @@ const SOURCE_SMALL_APPENDIX = {
   url: "https://kjs.mof.gov.cn/zhengcefabu/201111/P020111118325852734144.pdf",
   pageCount: 85,
   applicableScope:
-    "小企业基础科目条目与内部报表行项目基础（附录共85页：第69页(4)应收账款贷方余额列预收账款、第70页(5)预付账款贷方余额列应付账款、第72页(25)(26)应付账款借方列预付账款与预收账款借方列应收账款、第73页(28)应交税费借方余额以负号填列、第80-82页现金流量表分类说明（第81页3.(2)⑤明确购建长期资产现金不包括资本化借款费用与在建工程人员薪酬））；科目编号为参考编号",
+    "小企业基础科目条目与内部报表行项目基础（附录共85页：第69页(1)货币资金按三个科目余额合计、第71页(17)固定资产清理贷方余额以负号列示、第73页(31)其他应付款按科目期末余额填列、第80–81页投资活动(2)③处置长期资产现金净额、第69页(4)应收账款贷方余额列预收账款、第70页(5)预付账款贷方余额列应付账款、第72页(25)(26)应付账款借方列预付账款与预收账款借方列应收账款、第73页(28)应交税费借方余额以负号填列、第80-82页现金流量表分类说明（第81页3.(2)⑤明确购建长期资产现金不包括资本化借款费用与在建工程人员薪酬））；科目编号为参考编号",
   checkedAt: CHECKED_AT,
 };
 
@@ -256,7 +256,7 @@ const SMALL_COA = [
     name: "固定资产清理",
     category: "资产",
     direction: "debit",
-    scope: scope("requires_detail", "disposal-in-progress-requires-detail"),
+    scope: MAPPED,
   },
   { code: "1701", name: "无形资产", category: "资产", direction: "debit", scope: MAPPED },
   {
@@ -566,7 +566,7 @@ defineProfile({
   creationAllowed: true,
   legacy: false,
   coaVersion: "small-2011-coa-basic-v1",
-  reportMappingVersion: "small-2011-report-basic-v1",
+  reportMappingVersion: "small-2011-report-basic-v2",
   scope: {
     supported: Object.freeze([
       "现金 / 银行 / 其他货币资金",
@@ -585,6 +585,7 @@ defineProfile({
       "新建账套时省略准则默认本 profile；未登记准则的旧账套应迁为 legacy，不是本 profile。",
       "科目编号为参考编号，规则按 profile 角色解析，不依赖名称或编码尾号。",
       "往来反向余额按官方附录按明细科目方向列示，不先把同一行明细净额相加；未定义列示行的相反余额给 incomplete，不冒充完整，也不等同于流动 / 非流动期限重分类。",
+      "货币资金、其他应付款按账簿余额合计，反向余额须核查现金或债权债务实质；固定资产清理贷方按附录第71页(17)负号列示。",
       "小企应交税费 2221 期末借方余额按附录第73页(28)以负号列示，属已核实的合法负列示；不把该规则扩张到未核实科目或其他 profile。",
       "在建工程 1604 的现金流用途不明时（可能是购建支出、资本化借款利息或工程人员薪酬）返回 unknown，不统一列为投资活动。",
       ...COMMON_SCOPE_NOTES,

@@ -1,4 +1,5 @@
 // 独立读取原票和交付索引，票面销售额只与索引核对，库存销售金额是结转成本。
+import {expenseEvidence,reviewExpenseMappings} from './delivery-stock-expense-proof.mjs';
 const txt=value=>String(value??'').trim();
 const norm=value=>txt(value).normalize('NFKC').toUpperCase().replace(/\s+/gu,'');
 const base=name=>name.split(/[\\/]/u).at(-1);
@@ -65,6 +66,13 @@ function numericExcelDate(raw,format,date1904) {
   if(!date1904 && serial===60)return null;
   return new Date(Date.UTC(date1904?1904:1899,date1904?0:11,date1904?1:serial<60?31:30)+serial*86400000).toISOString().slice(0,10);
 }
+function invoiceDate(row,headers,sheet) {
+  const i=headers.indexOf('开票日期'),raw=txt(row.cells[i]);
+  const value=numericExcelDate(raw,row.cellFormats?.[i],sheet.date1904)??raw.normalize('NFKC');
+  const day=/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?(?:$|[T\s])/u.exec(value)??/^(\d{4})(\d{2})(\d{2})$/u.exec(value);
+  if(!day)return '';
+  return [day[1],day[2].padStart(2,'0'),day[3].padStart(2,'0')].join('-');
+}
 export function checkStockPeriod({period,file,sheet,row,headers,issue,headerNumber,periodChecks,priorClosing=false,kind='业务单据'}) {
   if(!period)return 'unchecked';
   const expected=priorClosing?previousStockPeriod(period):period;
@@ -105,7 +113,7 @@ export function checkStockPeriod({period,file,sheet,row,headers,issue,headerNumb
   return state;
 }
 function collectSources({sources,listSheets,decimal,issue,period,periodChecks}) {
-  const originals=new Map(), proof=[], summary=new Set(), seen=new Set(), binaryOriginals=[];
+  const originals=new Map(), proof=[], summary=new Set(), seen=new Set(), binaryOriginals=[], deductionClaims=new Set(),purchaseHeaders=new Map();
   for(const file of sources) {
     if(!/\.(csv|xlsx)$/iu.test(file.name)) {
       if(/\.(pdf|ofd|xml|xls)$/iu.test(file.name) && /发票|原票|[进销]项票/u.test(file.name) && !/申报表|申报底稿/u.test(file.name))binaryOriginals.push(file);
@@ -114,12 +122,21 @@ function collectSources({sources,listSheets,decimal,issue,period,periodChecks}) 
     const name=base(file.name);
     if(/模板|复算|逐行重算|旧稿/u.test(name)) continue;
     const isProof=/别名|映射|分配|拆分|豁免|排除|签认|对应|转换/u.test(name);
-    if(!isProof && /原字段日期|余额表|凭证|用途确认|分类编码/u.test(name)) continue;
+    if(!isProof && /原字段日期|余额表|凭证|分类编码/u.test(name)) continue;
     const hinted=invoiceDirection(name);
     const sheets=listSheets(file);
     if(!sheets.length && hinted && /发票|销项|进项/u.test(name)) summary.add(hinted);
     for(const sheet of sheets) {
       const doc=name+'/'+sheet.name;
+      const uses=headerRow(sheet,has=>has(numbered) && has(['勾选状态']) && has(['有效抵扣税额']));
+      if(uses) {
+        for(const row of sheet.rows.slice(uses.index+1)) {
+          const g=names=>get(row.cells,uses.h,names);
+          if(g(['勾选状态'])==='已勾选' || readNum(decimal,g(['有效抵扣税额']))>0n)deductionClaims.add(g(numbered));
+        }
+        continue;
+      }
+      if(/用途确认/u.test(name))continue;
       const confirm=headerRow(sheet,has=>has(basisNames) && (has(['原表规格','库存规格','目标规格','业务票规格/票号']) || has(kindNames) && has(numbered)));
       if(confirm && (isProof || /确认|别名|分配|对应/u.test(sheet.name))) {
         for(const row of sheet.rows.slice(confirm.index+1)) {
@@ -134,7 +151,17 @@ function collectSources({sources,listSheets,decimal,issue,period,periodChecks}) 
         continue;
       }
       if(isProof || /底稿|测试依据|复核|映射|索引/u.test(doc) || /发票基础信息|票头/u.test(name)) {
-        if(/发票基础信息|票头/u.test(name) && hinted) summary.add(hinted);
+        if(!isProof && /发票基础信息|票头/u.test(name) && hinted){
+          summary.add(hinted);
+          const header=hinted==='purchase' && headerRow(sheet,has=>has(numbered) && has(amountNames) && has(['税额']) && has(['价税合计']));
+          if(header)for(const row of sheet.rows.slice(header.index+1)){
+            const g=names=>get(row.cells,header.h,names),number=g(numbered);
+            if(number)indexed(purchaseHeaders,number,{amount:readNum(decimal,g(amountNames),true),tax:readNum(decimal,g(['税额']),true),
+              gross:readNum(decimal,g(['价税合计']),true),seller:g(['销方名称','销售方名称']),buyer:g(['购方名称','购买方名称']),
+              buyerId:g(['购方识别号','购买方纳税人识别号']),sellerId:g(['销方识别号','销售方纳税人识别号']),status:g(['发票状态','状态']),
+              date:invoiceDate(row,header.h,sheet)});
+          }
+        }
         continue;
       }
       const form=headerRow(sheet,has=>has(numbered) && has(qtyNames) && has(unitNames) && (has(specNames) || has(skuNames) || has(['货物或应税劳务名称','商品名称','品名'])) && !has(targetLines));
@@ -157,10 +184,18 @@ function collectSources({sources,listSheets,decimal,issue,period,periodChecks}) 
         const key=ticket(side,number,line);
         const product=g(['货物或应税劳务名称','商品名称','品名','货物名称']),qty=g(qtyNames),net=g(amountNames);
         const item={key,side,number,line,product,unit:g(unitNames),spec:g(specNames),sku:g(skuNames),qty:readNum(decimal,qty,true),amount:readNum(decimal,net,true),status:g(['发票状态','状态']),at:pos};
+        Object.assign(item,{quantityBlank:qty==='',positive:g(['是否正数发票']),order:g(['订单号','订单编号','备注']),
+          taxCode:g(['税收分类编码']),rate:g(['税率']),tax:readNum(decimal,g(['税额']),true),gross:readNum(decimal,g(['价税合计']),true),
+          buyer:g(['购买方名称','购方名称']),buyerId:g(['购方识别号','购买方纳税人识别号']),
+          seller:g(['销方名称','销售方名称','销售方纳税人名称']),sellerId:g(['销方识别号','销售方纳税人识别号']),
+          date:invoiceDate(row,form.h,sheet),invoiceType:g(['发票票种','票种'])});
         if((qty && item.qty===null) || (net && item.amount===null))issue('inventory_invoice_source_value_invalid','accountant',pos,'原票数量或金额无法解析');
         if(originals.has(key)) {
           const previous=originals.get(key);
-          if(['spec','sku','unit','qty','amount','product','status'].some(k=>previous[k]!==item[k])) issue('inventory_invoice_source_conflict','accountant',pos,'同票同行的两份原件记录冲突');
+          if(Object.keys(item).some(k=>k!=='at' && previous[k]!==item[k])) {
+            previous.conflict=true;
+            issue('inventory_invoice_source_conflict','accountant',pos,'同票同行的两份原件记录冲突');
+          }
         } else originals.set(key,item);
         seen.add(side);
       }
@@ -170,7 +205,48 @@ function collectSources({sources,listSheets,decimal,issue,period,periodChecks}) 
     issue('inventory_invoice_binary_unverified','accountant',{file:file.name},'该发票原件的票内行尚未取得可复核的数据');
   }
   for(const side of summary) if(!seen.has(side))issue('inventory_invoice_lines_missing','accountant',{field:side==='purchase'?'购进发票':'销售发票'},'有发票资料但缺少可定位的票内明细');
-  return {originals,proof};
+  return {originals,proof,deductionClaims,purchaseHeaders};
+}
+
+function normalPurchase(row) {
+  return row.side==='purchase' && !row.conflict && row.status==='正常' && row.positive==='是' &&
+    row.amount!==null && row.tax!==null && row.gross===row.amount+row.tax;
+}
+// 由原票唯一货物、订单引用及两行价税金额认定金额调整。归属表只定位库存行。
+function purchaseEvidence(originals,postings,purchaseBuyer,deductionClaims,decimal) {
+  const invoices=new Map(),discounts=new Map(),costs=new Map(),grossInvoices=new Map();
+  const boundBuyer=row=>Boolean(purchaseBuyer?.name && row.buyer===purchaseBuyer.name &&
+    !(row.buyerId && purchaseBuyer.taxpayerId && row.buyerId!==purchaseBuyer.taxpayerId));
+  for(const row of originals.values())if(row.side==='purchase')indexed(invoices,row.number,row);
+  const purchaseKey=(date,seller,gross)=>JSON.stringify([date,seller,String(gross)]);
+  for(const rows of invoices.values()){
+    const [first]=rows;
+    if(first.seller && first.date && rows.every(r=>r.gross!==null && r.seller===first.seller && r.date===first.date)){
+      indexed(grossInvoices,purchaseKey(first.date,first.seller,rows.reduce((sum,r)=>sum+r.gross,0n)),rows);
+    }
+    if(rows.length!==2 || !rows.every(normalPurchase))continue;
+    const goods=rows.find(r=>r.qty>0n && r.unit && (r.spec || r.sku) && r.amount>0n && r.tax>0n);
+    const adjustment=rows.find(r=>r.quantityBlank && !r.unit && !r.spec && r.amount<0n && r.tax<0n);
+    if(!goods || !adjustment || goods.amount+adjustment.amount<0n || goods.tax+adjustment.tax<0n)continue;
+    if(!boundBuyer(goods) || !goods.seller || !goods.date || !goods.product || !/\d/u.test(goods.order) || !goods.taxCode || !goods.rate ||
+      ['product','order','taxCode','rate','date','seller','buyer','buyerId','sku'].some(k=>goods[k]!==adjustment[k]))continue;
+    discounts.set(adjustment.key,goods.key);
+  }
+  const byVoucher=new Map();
+  for(const v of postings)indexed(byVoucher,purchaseKey(v.date,v.seller,BigInt(v.grossMinor)*decimal('0.01')),v);
+  for(const [key,invoicesAtPrice] of grossInvoices){
+    if(invoicesAtPrice.length!==1 || invoicesAtPrice[0].length!==1)continue;
+    const [r]=invoicesAtPrice[0],candidates=byVoucher.get(key);
+    if(!normalPurchase(r) || !boundBuyer(r) ||
+      r.qty<=0n || !r.unit || r.amount<=0n || r.tax<=0n ||
+      !/普通发票/u.test(r.invoiceType) || deductionClaims.has(r.number) || candidates?.length!==1)continue;
+    const [v]=candidates;
+    const product=r.product.replace(/^\*[^*]+\*/u,'');
+    if(product && v.summary.includes(product) && /(?:^|[（(，,、；;])税额不抵扣[）)]?$/u.test(v.summary)){
+      costs.set(r.key,{gross:r.gross,voucherId:v.voucherId});
+    }
+  }
+  return {discounts,costs};
 }
 function mappingTables(files,listSheets) {
   const tables=[];
@@ -191,9 +267,10 @@ function corresponds(proof,source,target) {
   return !!(proof.original || proof.number && proof.line) && !!(proof.target || proof.sheet && proof.row);
 }
 function reviewTable({file,sheet,form},ctx) {
-  const {originals,items,proof,issue,coverage,decimal,display}=ctx;
+  const {originals,items,proof,issue,coverage,decimal,display,discounts,costs,expenseByLine}=ctx;
   const itemIndex=new Map(items.map(item=>[cell(item.at.sheet,item.at.row),item]));
   const allocations=new Map(), movements=new Map(), families=new Map();
+  const excludedRows=[],prepaidGroups=new Map();
   for(const row of sheet.rows.slice(form.index+1)) {
     if(!row.cells.some(v=>txt(v))) continue;
     const g=names=>get(row.cells,form.h,names),pos=at(file,sheet,row);
@@ -203,19 +280,29 @@ function reviewTable({file,sheet,form},ctx) {
     coverage.invoiceLinksChecked++;
     const method=g(kindNames),sheetName=g(sheetNames),rowNumber=g(targetLines);
     const excluded=!maybeTarget(sheetName) && !maybeTarget(rowNumber);
-    const spec=g(specNames),unit=g(unitNames),qty=readNum(decimal,g(['分配数量','映射数量',...qtyNames]),true);
+    const spec=g(specNames),unit=g(unitNames),rawQty=g(['分配数量','映射数量',...qtyNames]),qty=readNum(decimal,rawQty,true);
     const portion=readNum(decimal,g(['分配金额',...amountNames]),true);
-    const entry={qty,portion,excluded,pos};
+    const entry={qty,quantityBlank:!rawQty,portion,excluded,pos,source,
+      voucherId:g(['凭证ID','凭证编号ID']),voucherNumber:g(['凭证号','凭证序号'])};
     indexed(allocations,key,entry);
     if((spec || source.spec) && norm(spec)!==norm(source.spec) || unit!==source.unit) issue('inventory_invoice_map_source_fields','bookkeeper',pos,'索引规格或单位与原票不同',[spec,unit].join(' / '),[source.spec,source.unit].join(' / '));
     if(excluded){
-      const intrinsic=/作废/u.test(source.status) || /折扣|折让|服务费|运输服务|建筑服务|旅客运输|通行费|金融服务/u.test(source.product);
-      if(!intrinsic && !proof.some(p=>corresponds(p,source,null))) issue('inventory_invoice_exclusion_unproved','accountant',pos,'票行未入库存，需提供折让、退货、服务或其他排除依据');
+      if(discounts.has(key)){
+        issue('inventory_invoice_discount_target_unverified','bookkeeper',pos,'原票金额调整须并入同票唯一货物对应的购入成本');continue;
+      }
+      const intrinsic=/作废/u.test(source.status) || /服务费|运输服务|建筑服务|旅客运输|通行费|金融服务/u.test(source.product) ||
+        side==='sale' && /折扣|折让/u.test(source.product);
+      if(!intrinsic && !proof.some(p=>corresponds(p,source,null)))excludedRows.push(entry);
+      if(side==='purchase' && entry.voucherId)indexed(prepaidGroups,entry.voucherId,entry);
       continue;
     }
     if(!positiveLine(rowNumber) || !itemIndex.has(cell(sheetName,rowNumber))){issue('inventory_invoice_target_missing','bookkeeper',pos,'索引指向的库存工作表或商品行不存在',sheetName+'/'+rowNumber);continue;}
     const item=itemIndex.get(cell(sheetName,rowNumber)), support=proof.filter(p=>corresponds(p,source,item));
     entry.item=item;entry.support=support;
+    if(discounts.has(key))continue;
+    if(source.side==='purchase' && source.quantityBlank && source.amount<0n && !expenseByLine.get(key)?.red){
+      issue('inventory_invoice_adjustment_unverified','accountant',pos,'负金额无数量行缺少同票唯一货物、订单及价税勾稽依据');continue;
+    }
     const skuConflict=!!(source.sku && item.id && source.sku!==item.id);
     if(skuConflict)issue('inventory_invoice_sku_conflict','accountant',pos,'票面商品编码与目标库存商品编码不同，请核对编码体系及对应原件',source.sku,item.id);
     const exact=source.spec && norm(source.spec)===norm(item.spec) || source.sku && source.sku===item.id && (!source.spec || !item.spec);
@@ -227,17 +314,23 @@ function reviewTable({file,sheet,form},ctx) {
       if(!conversion) issue('inventory_invoice_unit_unverified','accountant',pos,'原票与库存单位需核对换算关系',source.unit,item.unit);
       else if(qty!==null) mappedQty=qty*conversion.factor/decimal('1');
     }
-    if(mappedQty!==null) {
+    if(mappedQty!==null && !expenseByLine.get(key)?.red) {
       const movementKey=JSON.stringify([side,item.at.sheet,item.at.row]);
       const group=movements.get(movementKey)??{total:0n,amount:0n,priced:true};
       group.total+=mappedQty;
-      group.amount+=portion??0n;
+      const cost=costs.get(key);
+      if(cost && portion===source.amount && qty===source.qty){
+        group.amount+=cost.gross;
+        coverage.invoicePurchaseCostEvidence.push({invoice:source.number,line:source.line,source:source.at,voucherId:cost.voucherId,
+          net:display(source.amount),tax:display(source.tax),gross:display(cost.gross),target:item.at});
+      }else group.amount+=portion??0n;
       group.priced &&= portion!==null;
       movements.set(movementKey,group);
     }
     const fkey=cell(item.at.sheet,item.at.row),family=families.get(fkey)??{item,specs:new Set(),uncertain:false};
     if(source.spec)family.specs.add(norm(source.spec));family.uncertain ||= !confirmed || skuConflict;families.set(fkey,family);
   }
+  reviewExpenseMappings(ctx,allocations,excludedRows,prepaidGroups);
   for(const src of originals.values()) {
     const rows=allocations.get(src.key);
     if(!rows){issue('inventory_invoice_line_unmapped','accountant',src.at,'原票行缺少库存映射或排除依据',src.number+'/'+src.line);continue;}
@@ -248,6 +341,21 @@ function reviewTable({file,sheet,form},ctx) {
       const values=rows.map(r=>r[field]);if(stated===null && values.every(v=>v===null))continue;
       if(stated===null || values.some(v=>v===null) || values.reduce((a,b)=>a+b,0n)!==stated) {
         issue('inventory_invoice_map_total_mismatch','bookkeeper',{...src.at,field:title},'同一票行全部映射和排除项合计与原件不符',values.some(v=>v===null)?'缺值':display(values.reduce((a,b)=>a+b,0n)),stated===null?'原票缺值':display(stated));
+      }
+    }
+    const goodsKey=discounts.get(src.key);
+    if(goodsKey && !rows.some(r=>r.excluded)) {
+      const anchors=allocations.get(goodsKey)??[],entry=rows[0],goods=originals.get(goodsKey);
+      if(rows.length!==1 || !entry.item || anchors.length!==1 || entry.item!==anchors[0].item ||
+        !entry.quantityBlank || entry.portion!==src.amount || anchors[0].qty!==goods.qty || anchors[0].portion!==goods.amount){
+        issue('inventory_invoice_discount_target_unverified','bookkeeper',entry.pos,'金额调整应按原票金额归入同票货物唯一对应的库存行，数量及单位沿用原票空值');continue;
+      }
+      const target=entry.item.at;
+      const group=movements.get(JSON.stringify(['purchase',target.sheet,target.row]));
+      if(group){
+        group.amount+=src.amount;
+        coverage.invoiceDiscountEvidence.push({invoice:src.number,goods:goods.at,adjustment:src.at,target,
+          goodsAmount:display(goods.amount),adjustmentAmount:display(src.amount),netCost:display(goods.amount+src.amount)});
       }
     }
   }
@@ -325,13 +433,16 @@ function checkFlows(ctx,tableMovements) {
     }
   }
 }
-export function reviewStockInvoiceLinks({files,sources,items,listSheets,decimal,display,issue,coverage,period,periodChecks}) {
-  Object.assign(coverage,{invoiceOriginalLines:0,invoiceMappingTables:0,invoiceLinksChecked:0});
-  const {originals,proof}=collectSources({sources,listSheets,decimal,issue,period,periodChecks});
+export function reviewStockInvoiceLinks({files,sources,items,listSheets,decimal,display,issue,coverage,period,periodChecks,purchasePostings=[],purchaseBuyer,expensePostings=[]}) {
+  Object.assign(coverage,{invoiceOriginalLines:0,invoiceMappingTables:0,invoiceLinksChecked:0,invoiceDiscountEvidence:[],invoicePurchaseCostEvidence:[],invoiceExpenseEvidence:[]});
+  const {originals,proof,deductionClaims,purchaseHeaders}=collectSources({sources,listSheets,decimal,issue,period,periodChecks});
   const tables=mappingTables(files,listSheets);
   coverage.invoiceOriginalLines=originals.size;
   coverage.invoiceMappingTables=tables.length;
   if(originals.size && !tables.length) issue('inventory_invoice_mapping_missing','accountant',{field:'票行与库存行'},'有购销票行原件，缺少按票号、票内行定位的库存映射或排除表');
-  const ctx={originals,proof,items,coverage,decimal,display,issue,sources,listSheets,period,periodChecks};
+  const ctx={originals,proof,items,coverage,decimal,display,issue,sources,listSheets,period,periodChecks,
+    expensePostings,expenseContext:{period,buyer:purchaseBuyer,cent:decimal('0.01'),claims:deductionClaims},
+    expenseByLine:expenseEvidence(originals,expensePostings,purchaseBuyer,period,decimal('0.01'),deductionClaims,purchaseHeaders),
+    ...purchaseEvidence(originals,purchasePostings,purchaseBuyer,deductionClaims,decimal)};
   checkFlows(ctx,tables.map(table=>reviewTable(table,ctx)));
 }

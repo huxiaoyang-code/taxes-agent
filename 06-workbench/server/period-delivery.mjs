@@ -15,7 +15,7 @@ const encode=value=>JSON.stringify(value,(_k,v)=>typeof v==='bigint'?v.toString(
 const fail=code=>{throw Object.assign(Error(code),{code});};
 const ruleFiles=['period-delivery.mjs','delivery-stock-review.mjs','delivery-books-review.mjs','delivery-vat-review.mjs',
   'delivery-vat-pdf.py','delivery-workbook.mjs','offline-invoice-xlsx.mjs','accounting-report-rules.mjs',
-  'delivery-release.mjs','delivery-stock-invoices.mjs','delivery-trial-review.mjs','finance-delivery-check.mjs',
+  'delivery-release.mjs','delivery-stock-invoices.mjs','delivery-stock-expense-proof.mjs','delivery-trial-review.mjs','finance-delivery-check.mjs',
   'accounting-profiles.mjs','period-end-controls.mjs','csv-rows.mjs','money.mjs'];
 const rules=digest(encode(ruleFiles.map(f=>digest(readFileSync(new URL(f,import.meta.url))))));
 const roleAction={

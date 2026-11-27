@@ -2,12 +2,13 @@
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {parseCsv} from './csv-rows.mjs';
-import {parseMoney,storedCents} from './money.mjs';
+import {formatCents,parseMoney,storedCents} from './money.mjs';
 import {accountSetProfileForControls} from './period-end-controls.mjs';
-import {getAccountingReportRules,resolveAccountingAccountRule,evaluateAccountingStatement} from './accounting-report-rules.mjs';
+import {balanceReviewSource,getAccountingReportRules,resolveAccountingAccountRule,evaluateAccountingStatement} from './accounting-report-rules.mjs';
 import {readDeliveryWorkbook} from './delivery-workbook.mjs';
 import {nativeBooks} from './finance-delivery-check.mjs';
 import {identifyTrialBalances,reviewTrialBalances} from './delivery-trial-review.mjs';
+import {expensePostings} from './delivery-stock-expense-proof.mjs';
 
 const numberMinor = cents => {
   const n = Number(cents);
@@ -33,7 +34,8 @@ function readSnapshot(db,binding,withNativeTrial) {
   const accounts = db.prepare('SELECT code,name,direction,category,contra FROM accounts WHERE account_set_id=? ORDER BY code').all(accountSetId).map(row=>({...row,contra:!!row.contra}));
   const opening = db.prepare('SELECT code,debit,credit FROM opening_balances WHERE account_set_id=? ORDER BY code').all(accountSetId);
   // 以凭证作左表，保留零分录凭证，并让凭证状态及分录变更进入相同版本摘要。
-  const entries = db.prepare(`SELECT v.id AS voucherId,v.period,v.voucher_date,v.kind,v.status,v.word,v.number,e.line_no AS line,e.code,e.debit,e.credit
+  const voucherSummary=db.prepare('PRAGMA table_info(vouchers)').all().some(c=>c.name==='summary')?'v.summary':'NULL';
+  const entries = db.prepare(`SELECT v.id AS voucherId,v.period,v.voucher_date,v.kind,v.status,v.word,v.number,${voucherSummary} AS voucherSummary,e.line_no AS line,e.code,e.debit,e.credit
     FROM vouchers v LEFT JOIN voucher_entries e ON v.id=e.voucher_id
     WHERE v.account_set_id=? AND v.period<=? ORDER BY v.period,v.id,e.line_no`).all(accountSetId,period);
   const taxIds = ['taxpayer_id','taxpayer_number','taxpayer_no','credit_code','tax_id'].map(k=>set[k]).filter(v=>typeof v === 'string' && v.trim());
@@ -58,7 +60,7 @@ function buildBalances(snapshot,add) {
   const vouchers = new Map();
   for (const entry of entries) {
     const {voucherId,code,status,line} = entry;
-    const voucher = vouchers.get(voucherId) ?? {status,period:entry.period,debit:0n,credit:0n,lines:[]};
+    const voucher = vouchers.get(voucherId) ?? {status,period:entry.period,date:entry.voucher_date,number:entry.number,summary:entry.voucherSummary??'',debit:0n,credit:0n,lines:[]};
     vouchers.set(voucherId,voucher);
     if (line == null || status !== 'posted') continue;
     const debit = storedCents(entry.debit), credit = storedCents(entry.credit);
@@ -85,6 +87,26 @@ function buildBalances(snapshot,add) {
     }
   }
   return {amounts,vouchers,posted,pending};
+}
+
+function inventoryPurchasePostings(snapshot,vouchers,goods) {
+  const inventory=new Set(goods.map(a=>a.code));
+  const payable=snapshot.profile.coa.find(a=>a.name==='应付账款' && a.scope?.status==='mapped');
+  if(!payable)return [];
+  const suppliers=new Map(snapshot.accounts.filter(a=>a.code.startsWith(payable.code) &&
+    /^\d+$/u.test(a.code.slice(payable.code.length))).map(a=>[a.code,a.name]));
+  const postings=[];
+  for(const [voucherId,v] of vouchers) {
+    if(v.status!=='posted' || v.period!==snapshot.period)continue;
+    for(const line of v.lines){
+      const seller=suppliers.get(line.code);
+      if(!seller || line.credit<=0n)continue;
+      const simple=v.lines.length===2 && v.debit===line.credit && v.credit===line.credit && line.debit===0n &&
+        v.lines.some(l=>inventory.has(l.code) && l.debit===line.credit && l.credit===0n);
+      postings.push({voucherId,date:v.date,seller,grossMinor:String(line.credit),summary:simple?v.summary:''});
+    }
+  }
+  return postings;
 }
 
 function vatBridge(snapshot,amounts,vouchers) {
@@ -158,25 +180,46 @@ function evaluateWindow(snapshot,amounts,window,rules,uses,coverage,add) {
   const report=evaluateAccountingStatement(profileId,{kind:'balance-sheet',accounts,amounts:active.map(a=>({code:a.code,netMinor:numberMinor(amounts.get(a.code)[window])}))});
   const failures=new Map(report.diagnostics.map(d=>[d.accountCode,d]));
   const reclass = new Map(report.reclassifications.map(r=>[r.accountCode,r.toRowId]));
+  let omittedForDetail=0n, hasUnexplainedMapping=false;
+  const missingDetails=[];
   for(const account of active){
     const resolved=resolveAccountingAccountRule(profileId,account), diagnosis=failures.get(account.code);
     const net=amounts.get(account.code)[window], location=window+'/'+account.code;
     const matches=rules.rows.filter(r=>r.roots?.includes(resolved.matchedRoot));
     const rowId=reclass.get(account.code) ?? resolved.statements.balanceSheet?.rowId ?? null;
     const use=uses.get(rowId);
-    const reason=diagnosis?.code ?? (!rowId || !matches.length || !use ? 'native_account_omitted' :
-      matches.length!==1 || use.count!==1 || use.weight!==1 ? 'native_account_multiple_or_wrong_sign' : null);
-    coverage.push({window,account:account.code,accountName:account.name,category:account.category,direction:account.direction,netMinor:String(net),root:resolved.matchedRoot,row:reason?null:rowId,
+    const rowError=!rowId || !matches.length || !use ? 'native_account_omitted' :
+      matches.length!==1 || use.count!==1 || use.weight!==1 ? 'native_account_multiple_or_wrong_sign' : null;
+    const reason=diagnosis?.code ?? rowError;
+    const presented=diagnosis ? diagnosis.presentedRowId===rowId && !rowError : !rowError;
+    if (diagnosis?.presentedRowId && rowError) add(rowError,'product',location,String(net));
+    coverage.push({window,account:account.code,accountName:account.name,category:account.category,direction:account.direction,netMinor:String(net),root:resolved.matchedRoot,row:presented ? rowId : null,
       ...(reason?{reason}:{}),...(reclass.has(account.code)?{reclassifiedFrom:resolved.statements.balanceSheet?.rowId}:{})});
     if(reason){
       const owner=diagnosis && ['account_direction_conflict','account_category_conflict','account_contra_conflict'].includes(reason)?'bookkeeper':
         ['account_reverse_balance_requires_detail','account_requires_detail'].includes(reason)?'accountant':'product';
-      add(reason,owner,location,String(net),undefined,diagnosis?.reason);
+      if (!presented) {
+        if (owner==='accountant' && diagnosis && !diagnosis.presentedRowId) {
+          omittedForDetail+=net;
+          missingDetails.push(account.code);
+        } else hasUnexplainedMapping=true;
+      }
+      const rowLabel=presented ? matches[0]?.label : null;
+      const note=owner==='accountant'
+        ? (rowLabel ? `已按账面列入「${rowLabel}」。` : '余额尚待列报。')+balanceReviewSource(diagnosis?.reason)
+        : diagnosis?.reason;
+      add(reason,owner,location,String(net),undefined,note);
     }
   }
   const trial=[...amounts.values()].reduce((sum,amount)=>sum+amount[window],0n);
   if(trial!==0n)add('book_trial_balance_difference','bookkeeper',window,String(trial),'0');
-  if(!balanced(report))add('native_balance_sheet_unbalanced','product',window,String(report.totals.assets),String(BigInt(report.totals.liabilities)+BigInt(report.totals.equity)));
+  if(!balanced(report)){
+    const assets=BigInt(report.totals.assets), funding=BigInt(report.totals.liabilities)+BigInt(report.totals.equity);
+    // 仅当试算平衡、其余行正确且待明细净额逐分解释差额，才由会计查明原因。
+    const detailExplains=trial===0n && !hasUnexplainedMapping && missingDetails.length>0 && assets-funding===-omittedForDetail;
+    add(detailExplains?'native_balance_sheet_detail_gap':'native_balance_sheet_unbalanced',detailExplains?'accountant':'product',window,String(assets),String(funding),
+      detailExplains?`差额由 ${missingDetails.length} 项待明细科目的未列金额解释（借正贷负合计 ${omittedForDetail} 分），见同期间逐科目待核项。`:undefined);
+  }
   return report;
 }
 
@@ -189,6 +232,31 @@ function compareValue(raw,expected,location,add) {
   const actual=asMinor(raw);
   if(actual===null || actual!==String(expected)) add('statement_amount_mismatch','bookkeeper',location,actual??'金额缺失或精度未核',String(expected));
   return actual;
+}
+
+// 交接页也可能以一段文字重复列示本期三项总额，只核完整、同口径且明确以元计的数列。
+const summaryMoney=String.raw`\s*[:=]?\s*([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*元?`;
+const summarySep=String.raw`\s*[;，,、|]\s*`;
+const statementClaim=new RegExp('^(?:(?:本期|期末|本期末|资产负债表|账面底稿|账面|原生报表|本期账载)[: ]*)*资产(?:总计|合计)?'+summaryMoney+summarySep+'负债(?:总计|合计)?'+summaryMoney+summarySep+'(?:所有者)?权益(?:总计|合计)?'+summaryMoney+'(?=$|[;，,、|。])','u');
+const statedGap=new RegExp('^'+summarySep+'(?:平衡差额|平衡|资产减负债及权益)'+summaryMoney+'(?=$|[;，,、|。])','u');
+function reviewRepeatedTotals(name,rows,state,add){
+  for(const row of rows){
+    if(row.cells.some(c=>typeof c==='string' && /期初|上期|上月|上年|历史|原版|旧版|修前|假设|测算|预算|调整前|万元|亿元/u.test(c)))continue;
+    for(const [column,cell] of row.cells.entries()){
+      if(typeof cell!=='string'||!cell.includes('资产')||!cell.includes('权益'))continue;
+      const line=cell.trim().normalize('NFKC'),match=statementClaim.exec(line);
+      if(!match)continue;
+      for(const [i,key] of ['assets','liabilities','equity'].entries()){
+        const claimed=asMinor(match[i+1]),expected=state.current.totals[key];
+        if(claimed!==String(expected))add('statement_repeated_total_mismatch','bookkeeper',name+'/'+row.number+'/'+(column+1),
+          match[i+1]+' 元',formatCents(BigInt(expected))+' 元','修订附表中重复列出的'+['资产总计','负债合计','所有者权益合计'][i]+'，并重读各处引用。');
+      }
+      const gap=statedGap.exec(line.slice(match[0].length));
+      const balance=BigInt(state.current.totals.assets)-BigInt(state.current.totals.liabilitiesAndEquity);
+      if(gap && asMinor(gap[1])!==String(balance))add('statement_repeated_total_mismatch','bookkeeper',name+'/'+row.number+'/'+(column+1),
+        gap[1]+' 元',formatCents(balance)+' 元','按本期原生报表重算附表所列平衡差额。');
+    }
+  }
 }
 
 function reviewSheet(name,rows,state,seenDocuments,add) {
@@ -291,12 +359,15 @@ function compareDocuments(files,state,add){
   for(const file of files) {
     if(/\.csv$/i.test(file.name)){
       const numbers=[],parsed=parseCsv(file.bytes.toString('utf8'),numbers);
+      const rows=parsed.map((cells,i)=>({cells,number:numbers[i]}));
+      reviewRepeatedTotals(file.name,rows,state,add);
       if(!/资产负债|balance[-_ ]?sheet/i.test(file.name) && !parsed.some(r=>r.includes('资产总计')||r[0]==='assets'||r.includes('资产负债表')))continue;
-      reviewSheet(file.name,parsed.map((cells,i)=>({cells,number:numbers[i]})),state,documents,add);
+      reviewSheet(file.name,rows,state,documents,add);
     } else if(/\.xlsx$/i.test(file.name)){
       let sheets;
       const named=/财务报表|资产负债|statements?|balance.?sheet/i.test(file.name);
       try {sheets=readDeliveryWorkbook(file.bytes);} catch {if(named)add('statement_workbook_unreadable','bookkeeper',file.name);continue;}
+      for(const sheet of sheets)reviewRepeatedTotals(file.name+'/'+sheet.name,sheet.rows,state,add);
       const matches=sheets.filter(sh=>/资产负债|balance.?sheet/i.test(sh.name) || sh.rows.some(r=>r.cells.includes('资产总计')));
       if(!matches.length){if(named)add('statement_workbook_sheet_missing','bookkeeper',file.name);continue;}
       for(const sheet of matches)reviewSheet(file.name+'/'+sheet.name,sheet.rows,state,documents,add);
@@ -345,6 +416,9 @@ export function readDeliveryBooks(binding,files) {
     result.inventoryLedger=Object.fromEntries(['opening','debit','credit','closing'].map(key=>
       [key,String(goods.reduce((sum,a)=>sum+amounts.get(a.code)[key],0n))]));
     result.inventoryMinor=result.inventoryLedger.closing;
+    result.inventoryLedger.purchasePostings=inventoryPurchasePostings(snapshot,vouchers,goods);
+    result.inventoryLedger.expensePostings=expensePostings(snapshot,vouchers);
+    result.inventoryLedger.purchaseBuyer={name:enterpriseName,taxpayerId:result.taxpayerId};
   }
   const activeRows=new Set(result.coverage.accounts.filter(a=>a.row).map(a=>a.row));
   const sections=new Map(),byId=new Map(rules.rows.map(r=>[r.rowId,r]));

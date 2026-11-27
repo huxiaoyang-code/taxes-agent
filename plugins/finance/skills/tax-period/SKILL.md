@@ -39,7 +39,7 @@ description: 做完本月账、准备整期账税申报，或补件后接续整�
 
 ## 交付前主动检查
 
-在已绑定的整期工作区，把本版实际文件放进 `outputs/`，用 `finance_period_review({delivery:{}})` 送审。程序按同版账库、原件和文件核资产负债表、进销存及增值税。遇到 `blocked`，按 `delivery:{version,issue}` 展开一类证据。接手方可用 `delivery:{role:"bookkeeper"}`（或 `product`、`accountant`）取自己的返工项，修正后重新送审。
+在已绑定的整期工作区，把本版实际文件放进 `outputs/`，用 `finance_period_review({delivery:{}})` 送审。遇到 `blocked`，用 `delivery:{role:"bookkeeper"}`（或 `product`、`accountant`）领取本角色的问题，需要行级证据时才展开 `delivery:{version,issue}`。账错按原件更正凭证，表错修生成规则或取数，再从更正后的账库和原件重出全部受影响文件。重新送审后，只把新版号交给独立复核方。缺业务依据时，在交接中写明差额、待补原件和受影响的项目。查询返回 `backend_unreachable` 时先恢复本机服务，再重试原查询。
 
 `awaiting_independent_review` 时，只把回执中的版号交给独立复核会话。该会话使用同一工具的 `delivery:{reviewVersion:版号}` 重新取数。收到 `ready_for_accountant` 后，将返回的版本目录交会计，并说明其他委托项目的实际覆盖。需要核原文时，用 `delivery:{version,evidence:true}` 打开同版的本机取证目录。
 

@@ -14,6 +14,21 @@ const vatLedger={currentMinor:'2000',openingMinor:'-100',paidMinor:'2000',closin
 const run=(source=form,work=paper,ledger=vatLedger)=>reviewDeliveryVat({period,enterpriseName:name,vatLedger:ledger,
   sources:[{name:'申报原表.csv',bytes:Buffer.from(source)}],files:[{name:'税费核对.csv',bytes:Buffer.from(work)}]});
 
+test('正式底稿正确时也核库存附页及交接说明重复的未标口径税差',async()=>{
+  const {default:ExcelJS}=await import('exceljs'),wb=new ExcelJS.Workbook();
+  const phrase='账载应交税费1,002.51，与申报1,002.49差0.02';
+  const s=wb.addWorksheet('交接结果');s.addRows([['项目','说明'],['税费',phrase],['历史记录',phrase]]);
+  const check=async(note)=>reviewDeliveryVat({period,enterpriseName:name,vatLedger,
+    sources:[{name:'申报原表.csv',bytes:Buffer.from(form)}],
+    files:[{name:'税费.csv',bytes:Buffer.from(paper)},{name:'周转表.xlsx',bytes:Buffer.from(await wb.xlsx.writeBuffer())},{name:'交接.md',bytes:Buffer.from(note)}]});
+  const bad=await check('九月交接\n'+phrase);
+  assert.deepEqual(bad.issues.map(i=>[i.code,i.location]),[
+    ['vat_summary_basis_unverified','周转表.xlsx / 交接结果 / 第2行'],['vat_summary_basis_unverified','交接.md / 第2行']]);
+  const clear='见税费底稿。应交增值税本期发生20元，对申报第24栏20元。期末未缴均为-1元。';
+  s.getCell('B2').value=clear;
+  assert.deepEqual((await check(clear)).issues,[]);
+});
+
 test('以主体、期间、唯一栏次、表内名称与账载口径取数，同额错栏保留问题',()=>{
   assert.deepEqual(run().issues,[]);
   assert.deepEqual(run(form,paper.replace('本期应纳,24','本期应纳,27')).issues.map(i=>i.code),['vat_field_binding_mismatch']);
@@ -35,4 +50,15 @@ test('分别报告期初和期末差异；传统底稿的发生／余额错配�
   assert.equal(result.issues.filter(i=>i.code==='vat_ledger_reconciliation').length,2);
   assert.equal(result.issues.filter(i=>i.code==='vat_field_binding_mismatch').length,1);
   assert(!result.issues.some(i=>i.code==='vat_workpaper_comparison_missing'));
+});
+
+test('返工直接定位 CSV 和 Markdown 的物理行，并给出原表和账簿各自的金额',()=>{
+  const wrong=paper.replace('本期应纳,24,20,本期应纳,20','本期应纳,24,99,本期应纳,88');
+  const csv=run(form,'\n\n'+wrong).issues.find(i=>i.code==='vat_workpaper_value_mismatch');
+  assert.match(csv.location,/第4行/);
+  assert.deepEqual([csv.actual,csv.expected],['申报 99 元 / 账载 88 元','原表 20.00 元 / 账库 20.00 元']);
+  const text=['# 本期税费','','已据原件复算。','',...wrong.split('\n').map(r=>'|'+r.replaceAll(',','|')+'|')].join('\n');
+  const result=reviewDeliveryVat({period,enterpriseName:name,vatLedger,
+    sources:[{name:'申报原表.csv',bytes:Buffer.from(form)}],files:[{name:'税费底稿.md',bytes:Buffer.from(text)}]});
+  assert.match(result.issues[0].location,/税费底稿.md .*第6行/);
 });

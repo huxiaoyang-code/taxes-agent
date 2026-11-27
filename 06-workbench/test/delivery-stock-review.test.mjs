@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
+import {strFromU8,strToU8,unzipSync,zipSync} from 'fflate';
 import {readXlsxStructure} from '../server/offline-invoice-xlsx.mjs';
 import {readDeliveryWorkbook} from '../server/delivery-workbook.mjs';
 import {reviewInventory} from '../server/delivery-stock-review.mjs';
@@ -24,6 +25,20 @@ const stockReceipts=(ids=['A'])=>asCsv('原始收发单.csv',[warehouseHeader,..
   ['P-'+id,'采购入库',id,'配件'+id,'型号'+id,'件',5,55],['T-'+id,'暂估入库',id,'配件'+id,'型号'+id,'件',1,12],['S-'+id,'销售出库',id,'配件'+id,'型号'+id,'件',4,40]])]);
 const codes=result=>result.issues.map(issue=>issue.code);
 const run=(file,sources=[original()],inventoryMinor='12700',rest=[])=>reviewInventory({files:[file,...rest],sources,inventoryMinor});
+
+test('保存返工工作簿后，标准索引色板及显式空文本单元格不影响库存复算',async()=>{
+  const file=await xlsx(w=>flat(w));
+  const parts=unzipSync(file.bytes),style='xl/styles.xml',sheet='xl/worksheets/sheet1.xml';
+  const stylesheet=strFromU8(parts[style]);
+  const palette='<colors><indexedColors><rgbColor rgb="00FFFFFF"/><rgbColor rgb="FF000000"/></indexedColors></colors>';
+  parts[style]=strToU8(stylesheet.replace('</styleSheet>',palette+'</styleSheet>'));
+  parts[sheet]=strToU8(strFromU8(parts[sheet]).replace('</sheetData>','<row r="3"><c r="A3" t="inlineStr"/></row></sheetData>'));
+  const workbook=Buffer.from(zipSync(parts));
+  assert.equal(readDeliveryWorkbook(workbook)[0].rows[2].cells[0],null);
+  assert.deepEqual(run({...file,bytes:workbook},[original(),stockReceipts()],{opening:10000,debit:6700,credit:4000,closing:12700}).issues,[]);
+  parts[style]=strToU8(stylesheet.replace('</styleSheet>',palette.replace('00FFFFFF','非法色值')+'</styleSheet>'));
+  assert.throws(()=>readDeliveryWorkbook(zipSync(parts)),/xlsx_structure_unsupported/);
+});
 
 test('按字段识别简单进销存，独立核对数量、暂估、分位金额、总账与期初原件',async()=>{
   const wb=await xlsx(w=>{const s=flat(w);s.addRow(['合计',null,null,null,10,100,5,55,1,12,4,40,12,127]);});
@@ -144,7 +159,11 @@ test('逐行取位、期初原件、正式四栏与本期原始收发全可重�
   const partial=run(file,docs,{...amounts,opening:378,closing:8478});
   assert.deepEqual(partial.coverage.explained,[]);
   assert.equal(partial.coverage.openingReconciliation.ledgerMinusRoundedSourceMinor,'8');
-  assert.equal(partial.issues.filter(i=>i.code==='inventory_ledger_mismatch').length,2);
+  const missingProof=partial.issues.filter(i=>i.code==='inventory_opening_ledger_evidence_required');
+  assert.equal(missingProof.length,2);
+  assert(missingProof.every(i=>i.owner==='accountant' && i.note.includes('0.08 元')));
+  const newMovement=run(file,docs,{...amounts,opening:378,debit:20000,closing:8378});
+  assert(newMovement.issues.some(i=>i.code==='inventory_ledger_mismatch' && i.owner==='bookkeeper' && i.location.field.endsWith('期末余额')));
   const unsupported=run(file,[source],amounts);
   assert.deepEqual(unsupported.coverage.explained,[]);
   const turnover=run(file,docs,{...amounts,debit:20130,credit:12030});
@@ -183,4 +202,14 @@ test('期初必须对上绑定月份，接受有明确日期的上期末承接�
   const prior=[...oh.slice(0,4),'期末数量','期末金额','期末日期'];
   assert.deepEqual((await check('2026-08期末库存.csv',prior,[...vals,'2026-08-31'])).issues,[]);
   assert.ok(codes(await check('2026-08期末库存.csv',prior,[...vals,'2026-08-15'])).includes('inventory_source_period_unverified'));
+});
+test('未标期间的辅助数量、单价、金额三栏独立复核，零数量不强造零单价',async()=>{
+  const check=async(qty,price,amount)=>{
+    const sheet=await xlsx(w=>w.addWorksheet('库存').addRows([[...columns,'数量','单价','金额'],[...item(),qty,price,amount]]));
+    return run(sheet,[original(),stockReceipts()],12700).issues.filter(i=>i.code==='inventory_auxiliary_price_mismatch');
+  };
+  assert.deepEqual(await check(4,1.0675,4.27),[]);
+  assert.equal((await check(4,1.06,4.27))[0].expected,'1.0675');
+  assert.equal((await check(0,0,77))[0].expected,'无法计算');
+  assert.deepEqual(await check(0,'无法计算',77),[]);
 });

@@ -32,6 +32,24 @@ function fixture(){
   return {db,dbPath,scope};
 }
 const localFile=(name,text)=>({name,bytes:Buffer.from(text)});
+test('库存进项取证只从绑定本期的已过账凭证提取，供应商名称取应付明细',()=>{
+  const f=fixture();
+  try{
+    f.db.exec(`ALTER TABLE vouchers ADD COLUMN summary;
+      INSERT INTO accounts VALUES(1,'220201','合成供应商','credit','负债',0);
+      INSERT INTO vouchers VALUES
+      (3,1,'2026-09','2026-09-10','ordinary','posted','记',3,'采购货品（税额不抵扣）'),
+      (4,1,'2026-09','2026-09-10','ordinary','draft','记',4,'相同草稿'),
+      (5,1,'2026-08','2026-08-10','ordinary','posted','记',5,'前期'),
+      (6,2,'2026-09','2026-09-10','ordinary','posted','记',6,'其他账套');
+      INSERT INTO voucher_entries SELECT id,1,'1405',113,0 FROM vouchers WHERE id>=3;
+      INSERT INTO voucher_entries SELECT id,2,'220201',0,113 FROM vouchers WHERE id>=3;`);
+    const get=()=>readDeliveryBooks(f,[]).inventoryLedger.purchasePostings;
+    assert.deepEqual(get(),[{voucherId:3,date:'2026-09-10',seller:'合成供应商',grossMinor:'11300',summary:'采购货品（税额不抵扣）'}]);
+    f.db.exec("UPDATE voucher_entries SET code='1403' WHERE voucher_id=3 AND line_no=1");
+    assert.equal(get()[0].summary,'');
+  }finally{f.db.close();}
+});
 const draft='类别,项目,金额（元）\n资产,货币资金,83\n资产,其他应收款,2\n资产,存货,60\n资产,资产总计,145\n负债,应交税费,18\n负债,负债合计,18\n权益,实收资本,145\n权益,未结转损益,-18\n权益,所有者权益合计,127\n检查,负债和所有者权益总计,145';
 const summary='项目,金额（元）/值\nassets,145\nliabilities,18\nequity,127\nbalanced,true\ncomplete,true\ncash,83';
 test('派生余额表复核全量有效行，认可借正贷负及方向配绝对额，合计错误逐栏返回',()=>{
@@ -74,6 +92,54 @@ test('期初和已过账发生额逐科目归至原生行，库存商品与全�
     assert(changed.issues.some(i=>i.code==='book_voucher_not_posted'));
     assert.equal(changed.vatLedger.paidMinor,'0');
     assert.throws(()=>readDeliveryBooks({...f,scope:{...scope,enterpriseKey:'other'}},files),/identity_changed/);
+  }finally{f.db.close();}
+});
+
+test('按账面计入报表的反向余额参与勾稽且独立复核继续逐笔阻断',()=>{
+  const f=fixture();
+  try {
+    f.db.exec("INSERT INTO accounts VALUES(1,'1001','库存现金','debit','资产',0),(1,'224111','往来甲','credit','负债',0); INSERT INTO opening_balances VALUES(1,'1001',0,7),(1,'224111',7,0)");
+    const r=readDeliveryBooks(f,[]);
+    const closing=r.coverage.accounts.filter(a=>a.window==='closing'&&['1001','224111'].includes(a.account));
+    assert.deepEqual(closing.map(a=>[a.account,a.row,a.netMinor]),[['1001','cash','-700'],['224111','other-payables','700']]);
+    for(const row of closing){
+      const issue=r.issues.find(i=>i.code==='account_reverse_balance_requires_detail'&&i.location==='closing/'+row.account);
+      assert.equal(issue.owner,'accountant');
+      assert.match(issue.note,row.account==='1001'?/货币资金.*现金日记账/:/其他应付款.*合同/);
+    }
+    assert(!r.issues.some(i=>i.code==='native_balance_sheet_unbalanced'));
+    f.db.exec("INSERT INTO accounts VALUES(1,'180177','待核项目','debit','资产',0); INSERT INTO opening_balances VALUES(1,'180177',0,4),(1,'1002',4,0)");
+    const explained=readDeliveryBooks(f,[]);
+    const closingIssue=result=>result.issues.find(i=>['native_balance_sheet_detail_gap','native_balance_sheet_unbalanced'].includes(i.code)&&i.location==='closing');
+    assert.equal(closingIssue(explained).owner,'accountant');
+    assert.match(closingIssue(explained).note,/-400 分/);
+    // 期初需要会计查跨期，期末又出现产品缺映射，必须能同时退给不同责任人。
+    f.db.exec("INSERT INTO accounts VALUES(1,'9889','本期新科目','debit','资产',0); UPDATE voucher_entries SET code='9889' WHERE code='1221'");
+    const mixed=readDeliveryBooks(f,[]);
+    assert(mixed.issues.some(i=>i.code==='native_balance_sheet_detail_gap'&&i.location==='opening'&&i.owner==='accountant'));
+    assert(mixed.issues.some(i=>i.code==='native_balance_sheet_unbalanced'&&i.location==='closing'&&i.owner==='product'));
+    f.db.exec("INSERT INTO accounts VALUES(1,'9888','未知借方','debit','资产',0); INSERT INTO opening_balances VALUES(1,'9888',1,0),(1,'3001',0,1)");
+    assert.equal(closingIssue(readDeliveryBooks(f,[])).owner,'product');
+  }finally{f.db.close();}
+});
+
+test('附表重复的结构化总额及差额需重出，历史和预测说明保留原口径',async()=>{
+  const f=fixture();
+  try{
+    const {default:ExcelJS}=await import('exceljs');
+    const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('月末交接');
+    sheet.addRows([['科目','交接说明'],
+      ['财表','账面底稿：资产140；负债18；权益127；平衡0.00'],
+      ['历史试算','资产140；负债18；权益127'],
+      ['本期','本期原生报表：资产145元，负债18元，权益127元，资产减负债及权益3.00元。'],
+      ['预算','资产300万元，负债200万元，权益100万元']]);
+    const review=async()=>readDeliveryBooks(f,[{name:'月末库存汇总.xlsx',bytes:Buffer.from(await workbook.xlsx.writeBuffer())},localFile('资产负债表.csv',draft)]);
+    const errors=(await review()).issues.filter(i=>i.code==='statement_repeated_total_mismatch');
+    assert.deepEqual(errors.map(i=>[i.location,i.actual,i.expected]),[
+      ['月末库存汇总.xlsx/月末交接/2/2','140 元','145.00 元'],['月末库存汇总.xlsx/月末交接/4/2','3.00 元','0.00 元']]);
+    sheet.getCell('B2').value='账面底稿：资产145；负债18；权益127；平衡0.00';
+    sheet.getCell('B4').value='本期报表见资产负债表.csv';
+    assert.deepEqual((await review()).issues,[]);
   }finally{f.db.close();}
 });
 

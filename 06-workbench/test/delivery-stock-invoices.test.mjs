@@ -107,3 +107,74 @@ test('跨期原票、仓单及文件与实际业务日期冲突不可据以核�
   assert.equal(r.coverage.invoiceOriginalLines,1);
   assert.equal(r.coverage.warehouseItemGroups,0);
 });
+
+const purchaseHeaders=['票号','品名','规格','单位','数量','金额','税额','价税合计','税率','税收分类编码','订单号','发票状态','是否正数发票','销方名称','开票日期','发票票种','购买方名称','购方识别号'];
+const goods=['P01','*用具*水壶','X','件',2,100,13,113,'13%','T1','PO123','正常','是','合成供应商','2026-09-01','数电发票（普通发票）','合成采购商','BUY01'];
+const discount=[...goods];
+Object.assign(discount,{2:'',3:'',4:'',5:-20,6:-2.6,7:-22.6});
+const goodsMap=['进项','P01',1,'X','件',2,100,'货品',2,'精确匹配',''];
+const discountMap=['进项','P01',2,'','','',-20,'货品',2,'同票金额调整',''];
+async function purchaseCheck({rows=[goods,discount],map=[goodsMap,discountMap],amount=80,qty=2,postings=[],extra=[]}={}){
+  const wb=new ExcelJS.Workbook();
+  wb.addWorksheet('货品').addRows([h,['X','商品','X','件',10,100,qty,amount,0,0,10+qty,100+amount],
+    ['Y','商品','Y','件',10,100,0,0,0,0,10,100]]);
+  return reviewInventory({files:[{name:'库存.xlsx',bytes:Buffer.from(await wb.xlsx.writeBuffer())},ix(map)],
+    sources:[opening,csv('原件/进项发票明细.csv',[purchaseHeaders,...rows]),...extra],
+    inventoryMinor:{closing:(200+amount)*100,purchasePostings:postings,purchaseBuyer:{name:'合成采购商',taxpayerId:'BUY01'}}});
+}
+test('原票的同票唯一货品、订单及价税均可核对时，负行只减少成本',async()=>{
+  const r=await purchaseCheck({map:[discountMap,goodsMap]});
+  assert.deepEqual(r.issues,[]);
+  assert.equal(r.coverage.invoiceDiscountEvidence[0].netCost,'80');
+  assert.equal(count(await purchaseCheck({amount:100}),'inventory_purchase_amount_unreconciled'),1);
+  for(const [index,value] of [[1,'另一货物'],[7,-24],[10,'PO124'],[10,''],[12,'否']]){
+    const other=[...discount];other[index]=value;
+    const bad=await purchaseCheck({rows:[goods,other]});
+    assert.equal(count(bad,'inventory_invoice_adjustment_unverified'),1);
+    assert.equal(bad.coverage.invoiceDiscountEvidence.length,0);
+  }
+  const duplicate=await purchaseCheck({rows:[goods,discount,goods]});
+  assert.equal(count(duplicate,'inventory_invoice_adjustment_unverified'),1);
+  for(const fields of [{13:''},{16:'另一家企业'},{17:'OTHER01'}]){
+    const foreignRows=[goods,discount].map(row=>Object.assign([...row],fields));
+    assert.equal(count(await purchaseCheck({rows:foreignRows}),'inventory_invoice_adjustment_unverified'),1);
+  }
+  const differentTicket=[...discount],differentMap=[...discountMap];
+  differentTicket[0]='P02';Object.assign(differentMap,{1:'P02',2:1});
+  assert.equal(count(await purchaseCheck({rows:[goods,differentTicket],map:[goodsMap,differentMap]}),'inventory_invoice_adjustment_unverified'),1);
+  for(const overrides of [{8:3},{7:'—',8:'—'},{5:1},{5:'金额行'},{6:-19}]){
+    const wrong=Object.assign([...discountMap],overrides);
+    assert.equal(count(await purchaseCheck({map:[goodsMap,wrong]}),'inventory_invoice_discount_target_unverified'),1);
+  }
+  const labelled=Object.assign([...discount],{1:'折扣'});
+  const excluded=Object.assign([...discountMap],{7:'—',8:'—'});
+  assert.equal(count(await purchaseCheck({rows:[goods,labelled],map:[goodsMap,excluded],amount:100}),'inventory_invoice_exclusion_unproved'),1);
+  const alias=[...goods];alias[2]='来源别名';
+  const mappedAlias=[...goodsMap];mappedAlias[3]=alias[2];
+  assert.equal(count(await purchaseCheck({rows:[alias,discount],map:[mappedAlias,discountMap]}),'inventory_invoice_spec_unverified'),1);
+  const returned=Object.assign([...discount],{2:'X',3:'件',4:-1});
+  const returnMap=Object.assign([...discountMap],{3:'X',4:'件',5:-1});
+  const actualReturn=await purchaseCheck({rows:[goods,returned],map:[goodsMap,returnMap],qty:1});
+  assert.deepEqual(actualReturn.issues,[]);
+  assert.equal(actualReturn.coverage.invoiceDiscountEvidence.length,0);
+});
+test('普通票含税成本需按供应商、日期及金额唯一对应账载购入与不抵扣摘要',async()=>{
+  const v={voucherId:11,date:'2026-09-01',seller:'合成供应商',grossMinor:'11300',summary:'采购水壶（普通发票，税额不抵扣）'};
+  const args={rows:[goods],map:[goodsMap],amount:113,postings:[v]};
+  const good=await purchaseCheck(args);
+  assert.deepEqual(good.issues,[]);
+  assert.equal(good.coverage.invoicePurchaseCostEvidence[0].voucherId,11);
+  const otherInvoice=Object.assign([...goods],{0:'P02'});
+  const claims=csv('用途确认.csv',[['票号','勾选状态','有效抵扣税额'],['P01','已勾选',13]]);
+  for(const override of [{postings:[]},{postings:[v,v]},{postings:[{...v,date:'2026-09-02'}]},
+    {postings:[{...v,seller:'其他供应商'}]},{postings:[{...v,summary:'采购水壶'}]},
+    {postings:[{...v,summary:'采购货架，税额不抵扣'}]},{rows:[goods,otherInvoice]},
+    {rows:[Object.assign([...goods],{7:114})]},{rows:[Object.assign([...goods],{15:'增值税专用发票'})]},
+    {rows:[Object.assign([...goods],{16:'其他采购商'})]},{rows:[Object.assign([...goods],{17:'BUY02'})]},{extra:[claims]}]){
+    const r=await purchaseCheck({...args,...override});
+    assert.equal(count(r,'inventory_purchase_amount_unreconciled'),1);
+    assert.equal(r.coverage.invoicePurchaseCostEvidence.length,0);
+  }
+  const noTax=await purchaseCheck({...args,amount:100});
+  assert.equal(count(noTax,'inventory_purchase_amount_unreconciled'),1);
+});

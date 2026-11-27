@@ -2,7 +2,7 @@
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {parseCsv} from './csv-rows.mjs';
-import {parseMoney} from './money.mjs';
+import {parseMoney,formatCents} from './money.mjs';
 import {readDeliveryWorkbook} from './delivery-workbook.mjs';
 
 const lines = [
@@ -45,13 +45,35 @@ function readForm(file,timeLeft) {
   }
   return null;
 }
+// 交接摘要把未标口径的应交税费与申报合计作差时，需要回到发生额、期末余额及申报栏次。
+const amountText=String.raw`([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)`;
+const vagueTaxBridge=new RegExp('账[载面](?:应交税费|应交增值税)[:=]?'+amountText+'元?[,，、]?(?:与|对比)(?:本期)?申报(?:数|合计)?[:=]?'+amountText+'元?[,，、]?(?:仅差|差额|相差|差)[:=]?'+amountText+'元?(?![.\\d])','u');
+function vagueComparison(row){
+  if(row.some(c=>typeof c==='string' && /历史|旧版|修前|原错误|原误|假设/u.test(c)))return null;
+  for(const cell of row){
+    if(typeof cell!=='string' || !cell.includes('申报'))continue;
+    const match=vagueTaxBridge.exec(norm(cell));
+    if(match)return match;
+  }
+  return null;
+}
 function tables(file) {
   if (/\.xlsx$/i.test(file.name)) return readDeliveryWorkbook(file.bytes)
-    .filter(s=>/税费|增值税|账税/.test(s.name)||s.rows.some(r=>r.cells.some(c=>norm(c)==='税种')))
-    .map(s=>({name:file.name+' / '+s.name,rows:s.rows.map(r=>r.cells)}));
-  if (/\.csv$/i.test(file.name)) return [{name:file.name,rows:parseCsv(file.bytes.toString('utf8'))}];
-  if (/\.md$/i.test(file.name)) return [{name:file.name,rows:file.bytes.toString('utf8').split(/\r?\n/)
-    .map(line=>line.trim()).filter(line=>line.startsWith('|')).map(line=>line.replace(/^\||\|$/g,'').split('|').map(s=>s.trim()))}];
+    .filter(s=>/税费|增值税|账税/.test(s.name)||s.rows.some(r=>r.cells.some(c=>norm(c)==='税种')||vagueComparison(r.cells)))
+    .map(s=>({name:file.name+' / '+s.name,rows:s.rows.map(r=>r.cells),numbers:s.rows.map(r=>r.number)}));
+  if (/\.csv$/i.test(file.name)) {
+    const numbers=[];
+    return [{name:file.name,rows:parseCsv(file.bytes.toString('utf8'),numbers),numbers}];
+  }
+  if (/\.md$/i.test(file.name)) {
+    const rows=[],numbers=[];
+    for(const [index,text] of file.bytes.toString('utf8').split(/\r?\n/).entries()){
+      const line=text.trim();
+      if(line.startsWith('|')){rows.push(line.replace(/^\||\|$/g,'').split('|').map(s=>s.trim()));numbers.push(index+1);}
+      else if(vagueComparison([line])){rows.push([line]);numbers.push(index+1);}
+    }
+    return [{name:file.name,rows,numbers}];
+  }
   return [];
 }
 export function reviewDeliveryVat({files,sources,vatLedger,period,enterpriseName,enterpriseKey,taxpayerId}) {
@@ -113,10 +135,10 @@ export function reviewDeliveryVat({files,sources,vatLedger,period,enterpriseName
   }
   for (const file of files) {
     if(!/\.(?:xlsx|csv|md)$/i.test(file.name))continue;
-    if(!/\.xlsx$/i.test(file.name)&&!file.bytes.includes(Buffer.from('税种')))continue;
+    if(!/\.xlsx$/i.test(file.name)&&!['税种','应交税费','应交增值税'].some(term=>file.bytes.includes(Buffer.from(term))))continue;
     let docs;
     try { docs=tables(file); } catch { if(/税费|财务报表|增值税/.test(file.name))add('vat_workbook_unreadable',file.name,'product');continue; }
-    for (const {name,rows} of docs) {
+    for (const {name,rows,numbers} of docs) {
       const seen=new Set();let matched=false,cols,legacy,firstRow=0;
       function finishBlock(){
         if(matched){
@@ -127,9 +149,13 @@ export function reviewDeliveryVat({files,sources,vatLedger,period,enterpriseName
         seen.clear();matched=false;
       }
       for(const [index,row] of rows.entries()){
+        const vague=vagueComparison(row);
+        if(vague)add('vat_summary_basis_unverified',name+' / 第'+numbers[index]+'行','bookkeeper',{
+          actual:'账 '+vague[1]+' 元 / 申报 '+vague[2]+' 元',expected:'本期发生对本期申报，期末余额对期末未缴',
+          note:'摘要未指明账载口径与申报栏次。分别注明发生额、余额和各自差额，或引用已核底稿。'});
         const header=[['税种'],['核对项目','申报项目'],['申报栏次','栏次'],['申报金额','申报数'],['账载项目','账载口径'],['账载金额','账载数']].map(k=>field(row,k));
         if(row.some(c=>norm(c)==='税种')){
-          finishBlock();firstRow=index+1;
+          finishBlock();firstRow=numbers[index];
           legacy={flow:row.findIndex(c=>/^申报.*应纳/.test(norm(c))),books:row.findIndex(c=>/^账载/.test(norm(c))),
             end:row.some(c=>/^账载期末/.test(norm(c))),period:field(row,['所属期','税款所属期']),subject:field(row,['企业名称','纳税人名称'])};
           cols=header.includes(-1)?undefined:header;
@@ -137,7 +163,7 @@ export function reviewDeliveryVat({files,sources,vatLedger,period,enterpriseName
         }
         if(cols?norm(row[cols[0]])!=='增值税':!row.some(c=>norm(c)==='增值税'))continue;
         matched=true;
-        const location=name+' / 增值税第'+(index+1)+'行';
+        const location=name+' / 增值税第'+numbers[index]+'行';
         const statedPeriod=legacy?.period>=0?norm(row[legacy.period]):null;
         if(legacy?.period>=0&&statedPeriod!==period)add('vat_workpaper_period_mismatch',location,'bookkeeper',{actual:statedPeriod,expected:period});
         if(legacy?.subject>=0&&![enterpriseName,enterpriseKey].filter(Boolean).map(norm).includes(norm(row[legacy.subject])))
@@ -160,8 +186,13 @@ export function reviewDeliveryVat({files,sources,vatLedger,period,enterpriseName
           add('vat_field_binding_mismatch',location,'bookkeeper',{actual:line+' / '+bookLabel,
             expected:definition?definition[0]+' / '+label:label,note:'更正源栏次与账载字段绑定，重新生成使用该绑定的底稿。'});continue;
         }
-        if(!forms.length||minor(claimed)!==amounts[definition[0]]||vatLedger?.[definition[2]]==null||minor(bookValue)!==String(vatLedger[definition[2]]))
-          add('vat_workpaper_value_mismatch',location);
+        const declared=amounts[definition[0]],posted=vatLedger?.[definition[2]];
+        if(!forms.length||minor(claimed)!==declared||posted==null||minor(bookValue)!==String(posted)){
+          add('vat_workpaper_value_mismatch',location,'bookkeeper',{
+            actual:'申报 '+claimed+' 元 / 账载 '+bookValue+' 元',
+            expected:'原表 '+(declared==null?'待核':formatCents(declared)+' 元')+' / 账库 '+(posted==null?'待核':formatCents(posted)+' 元'),
+            note:'按'+(forms[0]?.name??'本期原表')+'第'+definition[0]+'栏和同期账库的'+label+'分别重算。'});
+        }
       }
       finishBlock();
     }
