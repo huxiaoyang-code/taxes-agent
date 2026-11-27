@@ -214,4 +214,29 @@ test('全额红冲的蓝票折扣由明确引用的唯一红票核对，另验�
   for(const docs of [[receipt],[line(receipt,{6:'另一张票'}),back],[receipt,line(back,{0:'R1'})]]){
     assert.equal(count(await withDocs(docs),'inventory_invoice_reversal_warehouse_unverified'),1);
   }
+  // 同期另有未建库存商品的全额冲销。三行原票与有库存目标的一组均须独立核验。
+  const blue2='26000000000000001988',red2='26000000000000001989',spec='仓库表内无此型号';
+  const otherRows=[line(red,{0:red2,2:spec,18:'对应正数发票号码:'+blue2}),line(blueGoods,{0:blue2,2:spec}),line(blueDiscount,{0:blue2})];
+  const excluded=map.map((m,i)=>line(m,{1:i===0?red2:blue2,3:i===1?'':spec,7:'—',8:'—'}));
+  const noTarget=(mapped,extra=[])=>checkRed(otherRows,{map:mapped,extra});
+  const both=await checkRed([red,blueGoods,blueDiscount,...otherRows],{map:[...excluded,...map]});
+  assert.deepEqual(both.issues.map(i=>[i.code,i.owner]),Array(2).fill(['inventory_invoice_reversal_warehouse_unverified','accountant']));
+  assert.equal(both.coverage.invoiceDiscountEvidence.filter(e=>e.target===null && e.reversal.blueInvoice===blue2).length,1);
+  for(const [index,edit] of [[0,{6:-79}],[1,{6:-19}],[1,{5:'错误数量'}],[2,{5:1}],[0,{3:'错误规格'}],
+    [2,{7:'货品',8:2}],[0,{7:'货品',8:3}],[1,{7:'货品',8:2}]]){
+    const changed=excluded.map((e,i)=>i===index?line(e,edit):e);
+    const result=await noTarget(changed);
+    assert.equal(result.coverage.invoiceDiscountEvidence.length,0);
+    assert.equal(count(result,'inventory_invoice_discount_target_unverified'),1);
+  }
+  const proofDocs=[header,line(receipt,{2:spec,6:blue2}),line(back,{2:spec,6:red2})];
+  assert.deepEqual((await noTarget(excluded,[csv('仓库收退单.csv',proofDocs)])).issues,[]);
+  const wrongDocs=[header,proofDocs[1],line(proofDocs[2],{6:'另一个红票号'})];
+  assert.equal(count(await noTarget(excluded,[csv('仓库收退单.csv',wrongDocs)]),'inventory_invoice_reversal_warehouse_unverified'),1);
+  const short=await noTarget(excluded.slice(0,2));
+  assert.equal(count(short,'inventory_invoice_line_unmapped'),1);
+  assert.equal(short.coverage.invoiceDiscountEvidence.length,0);
+  const unproven=await checkRed([line(otherRows[0],{18:''}),...otherRows.slice(1)],{map:excluded});
+  assert.equal(unproven.coverage.invoiceDiscountEvidence.length,0);
+  assert.ok(count(unproven,'inventory_invoice_exclusion_unproved'));
 });

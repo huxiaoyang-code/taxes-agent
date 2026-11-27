@@ -298,7 +298,7 @@ function reviewTable({file,sheet,form},ctx) {
   const {originals,items,proof,issue,coverage,decimal,display,discounts,costs,expenseByLine}=ctx;
   const itemIndex=new Map(items.map(item=>[cell(item.at.sheet,item.at.row),item]));
   const allocations=new Map(), movements=new Map(), families=new Map();
-  const excludedRows=[],prepaidGroups=new Map();
+  const excludedRows=[],prepaidGroups=new Map(),reviewedExclusions=new Set();
   for(const row of sheet.rows.slice(form.index+1)) {
     if(!row.cells.some(v=>txt(v))) continue;
     const g=names=>get(row.cells,form.h,names),pos=at(file,sheet,row);
@@ -310,14 +310,13 @@ function reviewTable({file,sheet,form},ctx) {
     const excluded=!maybeTarget(sheetName) && !maybeTarget(rowNumber);
     const spec=g(specNames),unit=g(unitNames),rawQty=g(['分配数量','映射数量',...qtyNames]),qty=readNum(decimal,rawQty,true);
     const portion=readNum(decimal,g(['分配金额',...amountNames]),true);
-    const entry={qty,quantityBlank:!rawQty,portion,excluded,pos,source,
+    const sourceFieldsMatch=norm(spec)===norm(source.spec) && unit===source.unit;
+    const entry={qty,quantityBlank:!rawQty,portion,excluded,pos,source,sourceFieldsMatch,
       voucherId:g(['凭证ID','凭证编号ID']),voucherNumber:g(['凭证号','凭证序号'])};
     indexed(allocations,key,entry);
-    if((spec || source.spec) && norm(spec)!==norm(source.spec) || unit!==source.unit) issue('inventory_invoice_map_source_fields','bookkeeper',pos,'索引规格或单位与原票不同',[spec,unit].join(' / '),[source.spec,source.unit].join(' / '));
+    if(!sourceFieldsMatch) issue('inventory_invoice_map_source_fields','bookkeeper',pos,'索引规格或单位与原票不同',[spec,unit].join(' / '),[source.spec,source.unit].join(' / '));
     if(excluded){
-      if(discounts.has(key)){
-        issue('inventory_invoice_discount_target_unverified','bookkeeper',pos,'原票金额调整须并入同票唯一货物对应的购入成本');continue;
-      }
+      if(discounts.has(key))continue;
       const intrinsic=/作废/u.test(source.status) || /服务费|运输服务|建筑服务|旅客运输|通行费|金融服务/u.test(source.product) ||
         side==='sale' && /折扣|折让/u.test(source.product);
       if(!intrinsic && !proof.some(p=>corresponds(p,source,null)))excludedRows.push(entry);
@@ -358,7 +357,6 @@ function reviewTable({file,sheet,form},ctx) {
     const fkey=cell(item.at.sheet,item.at.row),family=families.get(fkey)??{item,specs:new Set(),uncertain:false};
     if(source.spec)family.specs.add(norm(source.spec));family.uncertain ||= !confirmed || skuConflict;families.set(fkey,family);
   }
-  reviewExpenseMappings(ctx,allocations,excludedRows,prepaidGroups);
   for(const src of originals.values()) {
     const rows=allocations.get(src.key);
     if(!rows){issue('inventory_invoice_line_unmapped','accountant',src.at,'原票行缺少库存映射或排除依据',src.number+'/'+src.line);continue;}
@@ -372,26 +370,35 @@ function reviewTable({file,sheet,form},ctx) {
       }
     }
     const discount=discounts.get(src.key);
-    if(discount && !rows.some(r=>r.excluded)) {
+    if(discount) {
       const {goods,red}=discount;
       const anchors=allocations.get(goods.key)??[],entry=rows[0],returns=red && allocations.get(red.key);
-      if(rows.length!==1 || !entry.item || anchors.length!==1 || entry.item!==anchors[0].item ||
-        !entry.quantityBlank || entry.portion!==src.amount || anchors[0].qty!==goods.qty || anchors[0].portion!==goods.amount ||
-        red && (returns?.length!==1 || returns[0].item!==entry.item || returns[0].qty!==red.qty || returns[0].portion!==red.amount)){
-        issue('inventory_invoice_discount_target_unverified','bookkeeper',entry.pos,'金额调整须归入同票货物唯一对应的库存行，数量及单位沿用原票空值；全额红票须逐行对应同一库存目标');continue;
+      const exact=rows.length===1 && anchors.length===1 && (!red || returns?.length===1) &&
+        entry.quantityBlank && entry.portion===src.amount && anchors[0].qty===goods.qty && anchors[0].portion===goods.amount &&
+        (!red || returns[0].qty===red.qty && returns[0].portion===red.amount);
+      const chain=[entry,...anchors,...(returns||[])];
+      const excludedChain=exact && red && chain.every(e=>e.excluded && e.sourceFieldsMatch);
+      const sameItem=exact && entry.item && chain.every(e=>e.item===entry.item && e.sourceFieldsMatch);
+      if(!excludedChain && !sameItem){
+        issue('inventory_invoice_discount_target_unverified','bookkeeper',entry.pos,'核对金额调整各行。全额冲销的三行应按原票逐行同归一项或全部列为未分配，且须分别保留原数量及金额。');continue;
       }
-      const target=entry.item.at;
-      const group=movements.get(JSON.stringify(['purchase',target.sheet,target.row]));
-      if(group){
+      const target=entry.item?.at;
+      if(excludedChain){
+        for(const e of chain)reviewedExclusions.add(e);
+        ctx.unassignedReversals.push({goods,red,at:entry.pos});
+      }else{
+        const group=movements.get(JSON.stringify(['purchase',target.sheet,target.row]));
+        if(!group)continue;
         group.amount+=src.amount;
         if(red)(group.reversals??=[]).push({goods,red});
-        coverage.invoiceDiscountEvidence.push({invoice:src.number,goods:goods.at,adjustment:src.at,target,
-          goodsAmount:display(goods.amount),adjustmentAmount:display(src.amount),netCost:display(goods.amount+src.amount),
-          ...(red && {reversal:{invoice:red.number,blueInvoice:goods.number,source:red.at,quantity:display(red.qty),amount:display(red.amount),
-            tax:display(red.tax),gross:display(red.gross),netAfterReversal:'0'}})});
       }
+      coverage.invoiceDiscountEvidence.push({invoice:src.number,goods:goods.at,adjustment:src.at,target:target??null,
+        goodsAmount:display(goods.amount),adjustmentAmount:display(src.amount),netCost:display(goods.amount+src.amount),
+        ...(red && {reversal:{invoice:red.number,blueInvoice:goods.number,source:red.at,quantity:display(red.qty),amount:display(red.amount),
+          tax:display(red.tax),gross:display(red.gross),netAfterReversal:'0'}})});
     }
   }
+  reviewExpenseMappings(ctx,allocations,excludedRows.filter(e=>!reviewedExclusions.has(e)),prepaidGroups);
   for(const {item,specs,uncertain} of families.values()) if(specs.size>1 && uncertain) {
     issue('inventory_invoice_many_specs_unverified','accountant',item.at,'多种票面规格集中在此库存行，部分归属缺独立依据',String(specs.size));
   }
@@ -399,8 +406,9 @@ function reviewTable({file,sheet,form},ctx) {
 }
 const purchaseReturn=value=>/采购退货|采购退出|购货退回|退供应商/u.test(value);
 const flowKind=value=>/暂估|未收进项|未收票.*入库/u.test(value)?'estimate':purchaseReturn(value)?'purchase':/销售出库|领料|发货|出库/u.test(value)?'sale':/采购入库|购入|采购收货|收货|收料|入库/u.test(value)?'purchase':'';
-function warehouseEvidence({sources,items,listSheets,decimal,issue,period,periodChecks}) {
+function warehouseEvidence({sources,items,listSheets,decimal,issue,period,periodChecks,unassignedReversals},unassignedDocuments) {
   const results=new Map(), seen=new Set();
+  const unassignedByNumber=new Map(unassignedReversals.flatMap(({goods,red})=>[[goods.number,goods],[red.number,red]]));
   for(const file of sources) {
     if(!/\.(xlsx|csv)$/iu.test(file.name) || /映射|底稿|复算|模板|票行|测试依据|假设/u.test(file.name))continue;
     for(const sheet of listSheets(file)) {
@@ -417,20 +425,25 @@ function warehouseEvidence({sources,items,listSheets,decimal,issue,period,period
         const reference=g(['单据号','单据编号','单号','入库单号','出库单号','收货单号','退货单号','来源单号','凭证号','凭证ID']) || (g(['原表']) && g(['行号']) ? g(['原表'])+'/'+g(['行号']) : '');
         const qty=readNum(decimal,g(['实收数量','实发数量','实退数量','数量','原表未收进项数量'])), raw=g(['成本金额','不含税金额','金额']), amount=readNum(decimal,raw,true);
         const found=items.filter(item=>(sku?item.id===sku:spec && norm(spec)===norm(item.spec)) && (!name || item.name===name) && (!spec || norm(spec)===norm(item.spec)) && unit && unit===item.unit);
-        if(!side || !reference || found.length!==1 || qty===null || raw && amount===null){
+        const linkedInvoice=g(['关联发票号码','关联票号','对应发票号码','对应票号']),original=unassignedByNumber.get(linkedInvoice);
+        const unassigned=original && !!spec && norm(spec)===norm(original.spec) && unit===original.unit &&
+          (!sku || !original.sku || sku===original.sku) && (!g(['销方名称','供应商名称']) || g(['销方名称','供应商名称'])===original.seller);
+        if(!side || !reference || found.length!==1 && !unassigned || qty===null || raw && amount===null){
           issue('inventory_warehouse_line_unverified','accountant',pos,'收发原件的单号、商品、单位、数量或金额不能唯一核对');continue;
         }
-        const item=found[0],key=JSON.stringify([side,item.at.sheet,item.at.row]);
+        const item=found.length===1 && found[0],key=item?JSON.stringify([side,item.at.sheet,item.at.row]):JSON.stringify([side,spec,unit]);
         const evidenceKey=JSON.stringify([key,reference,g(['单据行号','明细行号','行号'])]);
         if(seen.has(evidenceKey)){issue('inventory_warehouse_duplicate','accountant',pos,'同一单据及明细定位重复，需核对是否重复登记');continue;}
         seen.add(evidenceKey);
-        const sum=results.get(key)??{quantity:0n,amount:0n,priced:true,unbilled:true,linked:new Map()};
         const returned=purchaseReturn(business),signedQty=returned && qty>0n?-qty:qty;
+        const linked=linkedInvoice && side==='purchase' && !/作废|撤销|草稿|待审|取消|未收|未退|未过账/u.test(g(['单据状态','状态'])) &&
+          (returned || /采购收货|收货|收料|入库/u.test(business));
+        const movement={qty:signedQty,returned,reference,at:pos};
+        if(linked && unassigned)indexed(unassignedDocuments,linkedInvoice,movement);
+        if(!item)continue;
+        const sum=results.get(key)??{quantity:0n,amount:0n,priced:true,unbilled:true,linked:new Map()};
         sum.quantity+=signedQty;sum.amount+=returned && amount>0n?-amount:amount??0n;sum.priced &&= amount!==null;
-        const linkedInvoice=g(['关联发票号码','关联票号','对应发票号码','对应票号']);
-        if(linkedInvoice && side==='purchase' && !/作废|撤销|草稿|待审|取消|未收|未退|未过账/u.test(g(['单据状态','状态'])) &&
-          (returned || /采购收货|收货|收料|入库/u.test(business)))
-          indexed(sum.linked,linkedInvoice,{qty:signedQty,returned,reference,at:pos});
+        if(linked)indexed(sum.linked,linkedInvoice,movement);
         sum.unbilled &&= /未开票|无票|未收票/u.test(g(['票据状态','收票状态','开票状态','业务类型']));
         results.set(key,sum);
       }
@@ -438,9 +451,18 @@ function warehouseEvidence({sources,items,listSheets,decimal,issue,period,period
   }
   return results;
 }
+function checkReversalMovement({goods,red},unit,linked,at,issue){
+  const receipts=linked?.get(goods.number)??[],returns=linked?.get(red.number)??[];
+  const received=receipts.every(r=>!r.returned && r.qty>0n) && receipts.reduce((s,r)=>s+r.qty,0n)===goods.qty;
+  const sentBack=returns.every(r=>r.returned && r.qty<0n) && returns.reduce((s,r)=>s+r.qty,0n)===red.qty;
+  if(unit!==goods.unit || !received || !sentBack || returns.some(r=>receipts.some(b=>b.reference===r.reference)))
+    issue('inventory_invoice_reversal_warehouse_unverified','accountant',{...at,field:'红冲收退货依据'},
+      `蓝票 ${goods.number} 与红票 ${red.number} 的票面数量、价税已全额抵销。请查对应收货、退货单，或未实际交割的撤单、更票依据，以确定是否有实物收退。`);
+}
 function checkFlows(ctx,tableMovements) {
   const {items,issue,display,coverage}=ctx;
-  const evidence=warehouseEvidence(ctx);
+  const unassignedDocuments=new Map(),evidence=warehouseEvidence(ctx,unassignedDocuments);
+  for(const reversal of ctx.unassignedReversals)checkReversalMovement(reversal,reversal.goods.unit,unassignedDocuments,reversal.at,issue);
   coverage.warehouseItemGroups=evidence.size;
   for(const item of items)for(const side of ['purchase','sale','estimate']) {
     const qty=item[side+'Qty'],amount=item[side+'Amount'];
@@ -461,14 +483,7 @@ function checkFlows(ctx,tableMovements) {
       if(!document.priced && side==='estimate')issue('inventory_estimate_price_unproved','accountant',{...item.at,field:'暂估金额'},'收货数量已对应，需补暂估计价及金额依据',display(amount));
     }
     for(const mapping of mappings) {
-      for(const {goods,red} of mapping.reversals??[]){
-        const receipts=document?.linked.get(goods.number)??[],returns=document?.linked.get(red.number)??[];
-        const received=receipts.every(r=>!r.returned && r.qty>0n) && receipts.reduce((s,r)=>s+r.qty,0n)===goods.qty;
-        const sentBack=returns.every(r=>r.returned && r.qty<0n) && returns.reduce((s,r)=>s+r.qty,0n)===red.qty;
-        if(item.unit!==goods.unit || !received || !sentBack || returns.some(r=>receipts.some(b=>b.reference===r.reference)))
-          issue('inventory_invoice_reversal_warehouse_unverified','accountant',{...item.at,field:'红冲收退货依据'},
-            `蓝票 ${goods.number} 与红票 ${red.number} 的票面数量、价税已全额抵销。请查对应收货、退货单，或未实际交割的撤单、更票依据，以确定是否有实物收退。`);
-      }
+      for(const reversal of mapping.reversals??[])checkReversalMovement(reversal,item.unit,document?.linked,item.at,issue);
       const mappedQty=mapping.total+(disjoint?document.quantity:0n);
       if(mappedQty!==qty)issue('inventory_invoice_stock_qty_difference','accountant',{...item.at,field:field+'数量'},
         disjoint?'票行与单列未开票原件的数量合计与库存发生量不符':'票行归属数量与库存发生量不符，另有收发单仍需逐项解释',display(mappedQty),display(qty));
@@ -488,7 +503,7 @@ export function reviewStockInvoiceLinks({files,sources,items,listSheets,decimal,
   coverage.invoiceMappingTables=tables.length;
   if(originals.size && !tables.length) issue('inventory_invoice_mapping_missing','accountant',{field:'票行与库存行'},'有购销票行原件，缺少按票号、票内行定位的库存映射或排除表');
   const ctx={originals,proof,items,coverage,decimal,display,issue,sources,listSheets,period,periodChecks,
-    expensePostings,expenseContext:{period,buyer:purchaseBuyer,cent:decimal('0.01'),claims:deductionClaims},
+    unassignedReversals:[],expensePostings,expenseContext:{period,buyer:purchaseBuyer,cent:decimal('0.01'),claims:deductionClaims},
     expenseByLine:expenseEvidence(originals,expensePostings,purchaseBuyer,period,decimal('0.01'),deductionClaims,purchaseHeaders),
     ...purchaseEvidence(originals,purchasePostings,purchaseBuyer,deductionClaims,decimal)};
   checkFlows(ctx,tables.map(table=>reviewTable(table,ctx)));
