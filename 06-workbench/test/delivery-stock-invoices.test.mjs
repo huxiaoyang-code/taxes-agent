@@ -108,7 +108,7 @@ test('跨期原票、仓单及文件与实际业务日期冲突不可据以核�
   assert.equal(r.coverage.warehouseItemGroups,0);
 });
 
-const purchaseHeaders=['票号','品名','规格','单位','数量','金额','税额','价税合计','税率','税收分类编码','订单号','发票状态','是否正数发票','销方名称','开票日期','发票票种','购买方名称','购方识别号'];
+const purchaseHeaders=['票号','品名','规格','单位','数量','金额','税额','价税合计','税率','税收分类编码','订单号','发票状态','是否正数发票','销方名称','开票日期','发票票种','购买方名称','购方识别号','备注','销方识别号'];
 const goods=['P01','*用具*水壶','X','件',2,100,13,113,'13%','T1','PO123','正常','是','合成供应商','2026-09-01','数电发票（普通发票）','合成采购商','BUY01'];
 const discount=[...goods];
 Object.assign(discount,{2:'',3:'',4:'',5:-20,6:-2.6,7:-22.6});
@@ -177,4 +177,41 @@ test('普通票含税成本需按供应商、日期及金额唯一对应账载�
   }
   const noTax=await purchaseCheck({...args,amount:100});
   assert.equal(count(noTax,'inventory_purchase_amount_unreconciled'),1);
+});
+
+test('全额红冲的蓝票折扣由明确引用的唯一红票核对，另验实际收退资料',async()=>{
+  const blueNo='26000000000000008801',redNo='26000000000000008803';
+  const line=(r,fields)=>Object.assign([...r],fields);
+  const blueGoods=line(goods,{0:blueNo,11:'已红冲-全额',14:'2026-09-01 10:00:00',19:'SELL01'});
+  const blueDiscount=line(discount,{0:blueNo,11:'已红冲-全额',14:blueGoods[14],19:'SELL01'});
+  const red=line(blueGoods,{0:redNo,4:-2,5:-80,6:-10.4,7:-90.4,11:'正常',12:'否',14:'2026-09-03',
+    18:`被红冲蓝字数电发票号码: ${blueNo} 对应正数发票号码:${blueNo}`});
+  const redMap=line(goodsMap,{1:redNo,5:-2,6:-80});
+  const map=[redMap,line(discountMap,{1:blueNo}),line(goodsMap,{1:blueNo})];
+  const checkRed=(rows,opts={})=>purchaseCheck({rows,map,qty:0,amount:0,...opts});
+  const r=await checkRed([red,blueGoods,blueDiscount]);
+  assert.deepEqual(r.issues.map(i=>i.code),['inventory_invoice_reversal_warehouse_unverified']);
+  assert.deepEqual(r.coverage.invoiceDiscountEvidence[0].reversal,{blueInvoice:blueNo,invoice:redNo,
+    source:{file:'原件/进项发票明细.csv',row:2},quantity:'-2',amount:'-80',tax:'-10.4',gross:'-90.4',netAfterReversal:'0'});
+  for(const edits of [{18:''},{18:'金额相等并已冲销'},{18:red[18].replace('对应正数发票号码:'+blueNo,'对应正数发票号码:12345678')},
+    {4:-1},{5:-40,6:-5.2,7:-45.2},{6:-10.3,7:-90.3},{7:-90.41},{11:'作废'},{12:'是'},
+    {13:'另一个供应商'},{16:'第三方购货人'},{19:'SELL02'},{8:'9%'},{9:'T2'},{2:'不同规格'},{3:'包'},
+    {14:'2026-08-31'},{14:'2026-10-01'},{14:'2026-09-01 08:00:00'}]){
+    const failed=await checkRed([blueGoods,blueDiscount,line(red,edits)]);
+    assert.equal(failed.coverage.invoiceDiscountEvidence.length,0);
+    assert.equal(count(failed,'inventory_invoice_adjustment_unverified'),1);
+  }
+  for(const rows of [[blueGoods,blueDiscount,red,line(red,{0:'26000000000000009999'})],
+    [blueGoods,blueDiscount,red,red],[line(blueGoods,{11:'已红冲-部分'}),line(blueDiscount,{11:'已红冲-部分'}),red]]){
+    assert.equal((await checkRed(rows)).coverage.invoiceDiscountEvidence.length,0);
+  }
+  const misplaced=await checkRed([blueGoods,blueDiscount,red],{map:[line(redMap,{8:3}),...map.slice(1)]});
+  assert.equal(count(misplaced,'inventory_invoice_discount_target_unverified'),1);
+  const header=['单号','业务类型','规格','单位','数量','成本金额','关联发票号码'];
+  const receipt=['R1','采购收货','X','件',2,80,blueNo],back=['R2','采购退货','X','件',2,80,redNo];
+  const withDocs=docs=>checkRed([red,blueGoods,blueDiscount],{extra:[csv('仓库收发原件.csv',[header,...docs])]});
+  assert.deepEqual((await withDocs([receipt,back])).issues,[]);
+  for(const docs of [[receipt],[line(receipt,{6:'另一张票'}),back],[receipt,line(back,{0:'R1'})]]){
+    assert.equal(count(await withDocs(docs),'inventory_invoice_reversal_warehouse_unverified'),1);
+  }
 });
