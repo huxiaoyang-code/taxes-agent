@@ -695,9 +695,9 @@ const batchAuditSummary = (value) => {
 };
 
 const PROFILE_SUMMARIES = dict({
-  "legacy-small-coa-v1": ["legacy_small_v1", "legacy-small-coa-baseline-v1", "legacy-small-coa-report-compat-v1", true],
-  "small-2011-basic-v1": ["small_basic_v1", "small-2011-coa-basic-v1", "small-2011-report-basic-v1", false],
-  "enterprise-2019-general-basic-v1": ["enterprise_basic_v1", "enterprise-2019-general-coa-basic-v1", "enterprise-2019-general-report-basic-v1", false],
+  "legacy-small-coa-v1": ["legacy_small_v1", "legacy-small-coa-baseline-v1", ["legacy-small-coa-report-compat-v1"], true],
+  "small-2011-basic-v1": ["small_basic_v1", "small-2011-coa-basic-v1", ["small-2011-report-basic-v1", "small-2011-report-basic-v2"], false],
+  "enterprise-2019-general-basic-v1": ["enterprise_basic_v1", "enterprise-2019-general-coa-basic-v1", ["enterprise-2019-general-report-basic-v1"], false],
 });
 const REPORT_DIAGNOSTICS = dict({
   report_account_unmapped: "unmapped", report_account_requires_detail: "requiresDetail",
@@ -708,7 +708,7 @@ function reportMappingSummary(value) {
   const context = requireRecord(value, "accountingContext");
   const profile = prop(PROFILE_SUMMARIES, requireText(context, "profileId"));
   if (!profile || requireText(context, "coaVersion") !== profile[1]
-    || requireText(context, "reportMappingVersion") !== profile[2]
+    || !profile[2].includes(requireText(context, "reportMappingVersion"))
     || requireBoolean(context, "legacy") !== profile[3]) throw invalidSummary("accountingContext");
   const status = requireRecord(value, "reportStatus");
   const mappingStatus = requireChoice(status, "status", ["complete", "incomplete", "legacy_compatibility"]);

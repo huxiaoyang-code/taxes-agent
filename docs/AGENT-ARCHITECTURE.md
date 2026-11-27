@@ -6,6 +6,14 @@
 
 ## 正常调用链
 
+已绑定整期工作区用 `finance_period_review({delivery:{}})` 一次送审。服务从 SQLite 一致性快照读取已过账分录、库存和税费，重开 `outputs/` 并核授权原件。版本随账库、文件和规则变化。返工按角色与同类诊断归集，首屏有界，按版本、问题及偏移取证，重提自动复验。连续两次返工没有新依据且证据仍相同的项目转负责人。通过三项检查后在 `reviewed/<version>/` 原子发布可打开的本机复核包；账务签认由会计完成。
+
+独立 Codex 可用同一绑定配置启动第二个 Direct stdio，并在该进程设置 `FINANCE_DIRECT_ROLE=delivery_reviewer`。该角色仅发现和调用期间复核、查询目录及受绑定约束的账务查询。案件队列的 `role` 是筛选条件；凭证更正与规则修改仍使用各自的实际授权。
+
+做账会话送审通过后得到 `awaiting_independent_review`。交接只传版号。复核会话用 `delivery.reviewVersion` 再取同版账库、原件与文件。任一输入改变就退回重新送审。只有独立复核进程可发布同版交付包。
+
+多个账套共用一库时，原件读取范围限定为已授权原件根下以绑定的 `enterpriseKey` 命名的目录，也可直接绑定该目录。原件范围无法确定会阻止交付，此时历史取证包只含本账套的账簿及本工作区的交付文件。单账套使用已绑定的原件目录。
+
 MCP 的 `tools/list` 将根层的组合约束放入恒真条件的 `then` 中。Claude Code 2.1.309 因此可以发现含分支的工具，客户端也可校验原有的分支必填、互斥条件及取值范围。`tools/call` 按对应 profile、原始输入合同和账套委托执行。[MCP 工具协议](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) · [JSON Schema 条件校验](https://json-schema.org/understanding-json-schema/reference/conditionals)
 
 ```mermaid

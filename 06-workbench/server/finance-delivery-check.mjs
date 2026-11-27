@@ -84,7 +84,7 @@ const emptyAmounts=()=>Array(nativeFields.length).fill(0n);
 const splitBalance=net=>net>=0n?[net,0n]:[0n,-net];
 // 原生 CSV 会给可能触发公式的文本加单引号。按真正导出值核对，保留原始编码与名称。
 const exportedText=s=>/^[\s\uFEFF]*[=+\-@]|^[\t\r\n]/u.test(s)?"'"+s:s;
-function nativeBooks(db,setId,period){
+export function nativeBooks(db,setId,period){
  const set=db.prepare('SELECT name,start_period FROM account_sets WHERE id=?').get(setId);
  const yearStart=[set.start_period,period.slice(0,4)+'-01'].sort().at(-1);
  const rows=db.prepare('SELECT code,name,direction FROM accounts WHERE account_set_id=?').all(setId);
@@ -114,7 +114,9 @@ function nativeMoney(raw){
  return parsed.ok?parsed.cents:null;
 }
 function checkNativeBalances(rows,lines,binding,issues){
- const {accounts,totals,metadata}=readBoundBooks(binding,nativeBooks);
+ return checkNativeBalanceRows(rows,lines,readBoundBooks(binding,nativeBooks),issues);
+}
+export function checkNativeBalanceRows(rows,lines,{accounts,totals,metadata},issues){
  const index=rows.findIndex(row=>row.length===nativeHeader.length&&nativeHeader.every((v,i)=>row[i]===v));
  if(index<0){issues.add('balance_header_invalid');return {accounts:0,subtotals:0};}
  const before=rows.slice(0,index);

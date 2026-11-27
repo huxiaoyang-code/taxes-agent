@@ -95,6 +95,7 @@ function smallBalanceSheetRows(plRoots) {
       t("fixed-assets-cost"),
       t("accumulated-depreciation"),
     ]),
+    accountsRow("asset-disposal", "固定资产清理", "debit", ["1606"]),
     accountsRow("construction-in-progress", "在建工程", "debit", ["1604"]),
     accountsRow("intangible-assets-cost", "无形资产原价", "debit", ["1701"]),
     accountsRow("accumulated-amortization", "减：累计摊销", "debit", ["1702"]),
@@ -115,6 +116,7 @@ function smallBalanceSheetRows(plRoots) {
       t("other-receivables"),
       t("inventory"),
       t("fixed-assets-net"),
+      t("asset-disposal"),
       t("construction-in-progress"),
       t("intangible-assets-net"),
       t("long-term-deferred-expenses"),
@@ -329,9 +331,31 @@ const RECIPROCAL_BALANCE_RULES = {
 // 合法负列示：只登记已核实允许以负号保留在本行的科目，单独于往来反向重分类处理。
 // 小企附录第73页(28)明确应交税费期末借方余额以“－”号填列；备抵常规余额按有符号金额
 // 进入净值，权益亏损 / 损益红冲不进入资产 / 负债 / 成本反向分支。企业 profile 未核实对应条目，不扩张。
+// 指定按科目期末余额合计填表的项目。账实或债权债务性质尚待核实的反向余额
+// 参加原账项目合计，同时阻断复核。附录第69页(1)、第73页(31)。
+const BOOK_BALANCE_REVIEW_RULES = {
+  "small-2011-basic-v1": {
+    "1001": "cash-on-hand-credit-needs-cashbook-and-count",
+    "1002": "bank-credit-needs-reconciliation-and-overdraft-terms",
+    "1012": "other-monetary-funds-credit-needs-statement",
+    "2241": "other-payables-debit-needs-counterparty-and-obligation",
+  },
+};
+const balanceReviewSources = {
+  "cash-on-hand-credit-needs-cashbook-and-count": "核对现金日记账、现金盘点及收付凭据",
+  "bank-credit-needs-reconciliation-and-overdraft-terms": "核对银行对账单、调节表及透支条款",
+  "other-monetary-funds-credit-needs-statement": "核对相关资金账户的对账单及收付凭据",
+  "other-payables-debit-needs-counterparty-and-obligation": "核对往来对账与形成款项的合同、收付款凭据",
+  "receivable-credit-balance-contract-liability-vs-advance-requires-detail": "核对合同、收款和履约明细，确认预收款或合同负债的列报",
+  "advance-receipt-debit-balance-receivable-vs-contract-asset-requires-detail": "核对合同、结算与履约明细，确认应收款或合同资产的列报",
+};
+export function balanceReviewSource(reason) {
+  return balanceReviewSources[reason] ?? "核对该科目的期初明细、本期分录与对应原件，查实余额性质";
+}
 const NEGATIVE_PRESENTATION_RULES = {
   "individual-bookkeeping-semantic-v1": Object.fromEntries(['1122', '2203', '2202', '1123', '2221', '1606', '3001'].map(code => [code, { reason: 'official-individual-A06534-signed-presentation' }])),
   "small-2011-basic-v1": {
+    "1606": { reason: "small-enterprise-appendix-p71-item-17-disposal-credit-negative" },
     "2221": {
       reason: "small-enterprise-appendix-p73-item-28-taxes-payable-debit-negative",
     },
@@ -441,7 +465,7 @@ const CASH_FLOW_RULES = {
       "5602",
       "5801",
     ],
-    investingRoots: ["1101", "1131", "1132", "1601", "1602", "1701", "1702", "5111"],
+    investingRoots: ["1101", "1131", "1132", "1601", "1602", "1606", "1701", "1702", "5111"],
     financingRoots: ["2001", "2232", "2501", "2701", "3001", "3002", "3101", "3103", "3104"],
     ambiguousRoots: [
       { root: "1604", reason: "construction-in-progress-purpose-ambiguous" },
@@ -644,6 +668,7 @@ function buildRules(profile) {
       requiredDetails,
       reciprocal,
       negativePresentation,
+      bookBalanceReview: BOOK_BALANCE_REVIEW_RULES[profile.id] ?? {},
     },
     incomeStatement: {
       engineMode: "profile-rules",
@@ -1134,7 +1159,19 @@ export function evaluateAccountingStatement(profileId, options = {}) {
       if (reverseBalance && reverseSensitive) {
         const negativePresentation =
           statement.negativePresentation?.[resolved.matchedRoot];
-        if (!negativePresentation) {
+        const bookReview = statement.bookBalanceReview[resolved.matchedRoot];
+        if (bookReview) {
+          diagnostics.push({
+            code: "account_reverse_balance_requires_detail",
+            severity: "error",
+            message: `科目 ${item.code} 按账面余额计入本行，反向余额的业务依据待核实`,
+            accountCode: item.code,
+            matchedRoot: resolved.matchedRoot,
+            presentedRowId: usage.rowId,
+            amountMinor: item.netMinor,
+            reason: bookReview,
+          });
+        } else if (!negativePresentation) {
           const mapping = statement.reciprocal?.[resolved.matchedRoot];
           if (mapping && mapping.targetRowId) {
             const targetRow = statement.rows.find(

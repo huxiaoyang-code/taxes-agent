@@ -1,6 +1,7 @@
 // 内部报表下载；读取已有账簿不代表完整性认证或申报认证。
 import { db } from "./db.mjs";
 import { storedCents, centsToNumber, formatCents } from "./money.mjs";
+import { balanceReviewSource } from "./accounting-report-rules.mjs";
 import { balanceSheet, incomeStatement, cashFlowStatement, accountSetProfile } from "./accounting.mjs";
 
 const KINDS = ["balance-sheet", "income-statement", "cash-flow-statement", "trial-balance", "ledger"];
@@ -206,6 +207,23 @@ function toCsv(report) {
   return `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`;
 }
 
+// 各种下载格式共用同一组待核说明。保留账面正负号，并区分已入行与尚待归类的金额。
+function balanceReviewWarnings(statement, window) {
+  const warnings = [];
+  for (const item of statement.bookBalanceReview ?? []) {
+    const line = statement.rows.find(row => row.id === item.rowId);
+    const amount = formatCents(BigInt(item.amountMinor));
+    warnings.push({code: "reported_book_balance_needs_review",
+      message: `${window}科目 ${item.accountCode} 账面余额 ${amount} 元（借正贷负）已计入「${line.label}」。${balanceReviewSource(item.reason)}。`});
+  }
+  for (const item of statement.unresolvedAmounts ?? []) {
+    const amount = formatCents(BigInt(item.amountMinor));
+    warnings.push({code: "unresolved_balance_excluded",
+      message: `${window}科目 ${item.accountCode} 账面余额 ${amount} 元（借正贷负）尚未列入报表合计。`});
+  }
+  return warnings;
+}
+
 /** 生成本机内部 CSV 下载，不写记账数据。 */
 export function buildReportExport(setId, options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) fail("report_options_invalid");
@@ -253,6 +271,7 @@ export function buildReportExport(setId, options = {}) {
   if (kind === "ledger") report.data = buildLedger(id, period, account, trial);
   if (kind === "balance-sheet") {
     report.data = { ...balanceSheet(id, period), opening: balanceSheet(id, previousPeriod(period)) };
+    report.warnings = report.warnings.concat(balanceReviewWarnings(report.data.opening, "期间期初"), balanceReviewWarnings(report.data, "期末"));
     report.checks.balanceSheet = report.data.balanced;
     report.checks.balanceSheetOpening = report.data.opening.balanced;
   }
@@ -274,7 +293,7 @@ export function buildReportExport(setId, options = {}) {
     report.warnings.push({ code: "accounting_mapping_scope", message: report.accountingContext.legacy
       ? "旧账兼容路径；映射完整性未核实，请核对原账。"
       : "仅已核实的准则基础业务子集；映射状态与来源完整性分别列示，不代表法定完整财务报表。" });
-    if (report.reportStatus.partialValues) report.warnings.push({ code: "report_partial_values", message: "本报表含部分金额；未分类或缺明细金额未计入相关合计，请查看映射诊断。" });
+    if (report.reportStatus.partialValues) report.warnings.push({ code: "report_partial_values", message: "本报表存在待核项目。已按账面列入的异常余额与未列入合计的金额见相应诊断。" });
   }
   // JSON 会静默把 Infinity/NaN 转为 null；输出任何文件前先拒绝损坏金额。
   requireFiniteNumbers(report);

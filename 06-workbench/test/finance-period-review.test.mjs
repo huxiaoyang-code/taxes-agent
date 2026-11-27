@@ -48,7 +48,7 @@ test('frontmatter解析实际标量与折叠文本，坏/恶意元数据固定�
 test('真实MCP发现frontmatter入口与只读合同，新进程接续summary/prebook/calculation/native固定投影',{timeout:60000},async()=>{
  const first=client();let summaryId,prebookId,calculationId,nativeId,nativeMissingTaxCount;
  try{
-  await first.initialize();const list=(await first.rpc('tools/list')).result.tools,spec=list.find(t=>t.name==='finance_period_review');assert(spec);assert.equal(spec.annotations.readOnlyHint,true);assert.equal(spec.annotations.destructiveHint,false);
+  await first.initialize();const list=(await first.rpc('tools/list')).result.tools,spec=list.find(t=>t.name==='finance_period_review');assert(spec);assert.equal(spec.annotations.readOnlyHint,false);assert.equal(spec.annotations.destructiveHint,false);
   const skills=(await first.call('skills_list')).data;assert(skills.entries.some(e=>e.name==='prebook-review'&&e.description.includes('做账前')&&e.resource==='prebook-review/SKILL.md'));assert(skills.files.includes('tax-review/SKILL.md'));assert(skills.labels['tax-review/SKILL.md']);assert(skills.entries.every(e=>e.metadataState==='valid'));assert(!JSON.stringify(skills).includes('harness/SKILL.md'));
   const inputs={outputVat:20000,certifiedInputVat:10000,inputVatTransferOut:100,openingCarryCredit:300,prepaidVat:200},source=join(root,'summary-original.json');writeFileSync(source,JSON.stringify({scope,inputs,privateText:'PRIVATE-OWNER-TEXT'}));
   const summary=await first.call('finance_tax_summary_calculate',{target,kind:'vat_general',inputs,originals:[{id:'source',path:source}],bindings:[{inputPointer:'',originalId:'source',locator:{jsonPointer:'/inputs'}}]});assert.equal(summary.isError,false,summary.text);assert.equal(summary.data.amounts.due,9600);summaryId=summary.data.evidence.callRef;

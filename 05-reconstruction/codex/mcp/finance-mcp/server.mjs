@@ -52,13 +52,22 @@ if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINES
   if(resolve(bound.path)!==resolve(process.env.FINANCE_BUSINESS_SESSION)||resolve(bound.session.databasePath)!==resolve(process.env.FINANCE_DATABASE_PATH))throw Error('host_business_binding_mismatch');
   process.env.FINANCE_AUDIT_DIR=bound.session.auditDir;
 }
-const LISTED_TOOLS = listedToolsForProfile(ACTIVE_PROFILE, process.env.FINANCE_QUERY_DISCOVERY);
+const reviewOnly=process.env.FINANCE_DIRECT_ROLE==='delivery_reviewer';
+if(process.env.FINANCE_DIRECT_ROLE&&!reviewOnly)throw Error('finance_direct_role_invalid');
+if(reviewOnly&&(ACTIVE_PROFILE!=='direct'||!process.env.FINANCE_BUSINESS_SESSION))throw Error('finance_delivery_session_required');
+const reviewTools=new Set(['finance_period_review','finance_query','finance_query_catalog']);
+const availableForRole=tool=>!reviewOnly||reviewTools.has(tool.name);
+const LISTED_TOOLS = listedToolsForProfile(ACTIVE_PROFILE, process.env.FINANCE_QUERY_DISCOVERY).filter(availableForRole);
 const catalogView = {canonicalQueryCatalog: ACTIVE_PROFILE === 'direct' && process.env.FINANCE_QUERY_DISCOVERY === 'canonical'};
-const CALLABLE_TOOL_NAMES = new Set(toolsForProfile(ACTIVE_PROFILE).map(t => t.name));
+const CALLABLE_TOOL_NAMES = new Set(toolsForProfile(ACTIVE_PROFILE).filter(availableForRole).map(t => t.name));
 
 // Claude Code 会过滤根带组合关键字的工具。恒真的 if 使 then 中的原约束仍对整个参数对象生效。
 // 只调整 tools/list 的展示；tools/call 和嵌套原生调用继续按 TOOL_BY_NAME 的原合同校验。
 function listedTool({name, description, inputSchema, annotations}) {
+  if(reviewOnly&&name==='finance_period_review'){
+    description='用 delivery.reviewVersion 复算指定送审版，{delivery:{}} 核最近送审版。返回 package 且 outstanding=0 即结束并交会计。仅 blocked 时按队列中的 issue 取证，按 role 接返工。';
+    inputSchema={type:'object',additionalProperties:false,required:['delivery'],properties:{delivery:inputSchema.properties.delivery}};
+  }
   if (['oneOf', 'anyOf', 'allOf'].some(key => Object.hasOwn(inputSchema, key))) {
     const root = {...inputSchema}, constraints = {};
     for (const key of ['oneOf', 'anyOf', 'allOf', 'if', 'then', 'else']) {
@@ -173,6 +182,7 @@ function preflightTool(name,args={}) {
   const spec = TOOL_BY_NAME.get(name);
   if (!spec) throw new ToolCallError("unknown_tool", "unknown_tool");
   if (!CALLABLE_TOOL_NAMES.has(name)) throw new ToolCallError('tool_not_available', 'tool_not_available');
+  if(reviewOnly&&name==='finance_period_review'&&!args?.delivery)throw new ToolCallError('invalid_arguments','invalid_arguments');
 
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
@@ -188,7 +198,7 @@ function preflightTool(name,args={}) {
     throw new ToolCallError("not_implemented", "not_implemented", { tool: spec.name });
   }
   const memoryScopeTools=new Set(['finance_memory_prepare','finance_company_context','finance_method_read','finance_case_search','finance_memory_propose','finance_method_run']);
-  const allowHistoricalPeriod=!memoryScopeTools.has(name)&&!MODEL_WRITE_TOOL_NAMES.includes(name)&&(MODEL_PLAIN_TOOL_NAMES.includes(name)||spec.annotations?.readOnlyHint===true);
+  const allowHistoricalPeriod=!memoryScopeTools.has(name)&&!MODEL_WRITE_TOOL_NAMES.includes(name)&&(MODEL_PLAIN_TOOL_NAMES.includes(name)||spec.annotations?.readOnlyHint===true||(name==='finance_period_review'&&!args?.delivery));
   try{assertBusinessSessionToolTarget(name,args,{allowHistoricalPeriod});}catch(error){throw new ToolCallError(/^finance_memory_[a-z0-9_]+$/.test(error?.code)?error.code:'finance_memory_session_invalid','finance_memory_session_invalid');}
   return spec;
 }

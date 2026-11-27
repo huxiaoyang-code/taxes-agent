@@ -1074,7 +1074,7 @@ const BS_ASSET_ROW_IDS = new Set([
   "dividends-receivable", "interest-receivable", "other-receivables", "inventory",
   "fixed-assets-cost", "accumulated-depreciation", "fixed-assets-net", "construction-in-progress",
   "intangible-assets-cost", "accumulated-amortization", "intangible-assets-net",
-  "long-term-deferred-expenses", "total-assets",
+  "long-term-deferred-expenses", "asset-disposal", "total-assets",
 ]);
 
 // 阶段 A 诊断码 → 稳定外层码（不把内部 message / 名称 / 金额原值透传给模型或导出元数据）。
@@ -1368,6 +1368,10 @@ export function balanceSheet(setId, period) {
     rows: evaluation.rows.map((row) => ({ id: row.id, label: row.label, valueMinor: row.valueMinor })),
     reclassifications: evaluation.reclassifications,
     unresolvedAmounts: unresolvedAmountFacts("balance-sheet", evaluation),
+    bookBalanceReview: evaluation.diagnostics.filter(item => item.presentedRowId).map(item => ({
+      accountCode: item.accountCode, rowId: item.presentedRowId,
+      amountMinor: item.amountMinor, reason: item.reason,
+    })),
     diagnostics: reportStatus.diagnostics,
     assets,
     liabilities,
@@ -1491,7 +1495,7 @@ function unresolvedAmountFacts(kind, evaluation) {
   const out = [];
   const index = new Map();
   for (const diagnostic of evaluation?.diagnostics ?? []) {
-    if (!Number.isSafeInteger(diagnostic?.amountMinor)) continue;
+    if (diagnostic?.presentedRowId || !Number.isSafeInteger(diagnostic?.amountMinor)) continue;
     const accountCode = typeof diagnostic.accountCode === "string" ? diagnostic.accountCode : null;
     const matchedRoot = typeof diagnostic.matchedRoot === "string" ? diagnostic.matchedRoot : null;
     const key = `${accountCode ?? ""}|${matchedRoot ?? ""}|${diagnostic.amountMinor}`;

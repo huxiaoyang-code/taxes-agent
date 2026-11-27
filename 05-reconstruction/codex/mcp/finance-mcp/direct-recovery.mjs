@@ -52,6 +52,21 @@ const guides={
  finance_annual_workpaper:[{code:'inspect_provided_months_and_native_record_contracts',tool:'finance_record_contract',skill:'tax-period/references/close-management.md'}]
 };
 export function directRecovery(name,{code,status,args}={}){
+ if(name==='finance_period_review'&&args?.delivery){
+  if(code==='finance_delivery_submission_required')return [{code:'await_bookkeeper_submission',action:'request_current_submission',hint:'当前工作区尚无送审版，请做账方提交后传回版号。'}];
+  if(code==='finance_delivery_submission_changed')return [{code:'return_to_submitter',action:'request_current_submission',hint:'账库、规则、文件或当前送审版已变。做账方重新送审后，复核方使用新版号。'}];
+  if(code==='finance_delivery_reviewer_required')return [{code:'handoff_to_independent_reviewer',action:'use_bound_delivery_reviewer',hint:'将此版号交给已绑定的独立复核会话。'}];
+  if(['finance_delivery_inputs_changed','finance_delivery_concurrent_submission'].includes(code))return [{
+    code:'resubmit_stable_delivery',tool:name,arguments:{delivery:{}},hint:'本次取数期间账库、文件或送审版发生变化。等本次保存完成后提交当前版本。'}];
+  if(code==='finance_delivery_version_unknown')return [{code:'locate_bound_delivery_version',
+    hint:'核对账套、当前工作区与已有送审编号；本期尚无版本时，由做账方提交交付文件。'}];
+  if(code==='finance_delivery_issue_unknown')return [{
+    code:'read_bound_delivery_queue',tool:name,arguments:{delivery:{version:args.delivery.version,role:args.delivery.role??'bookkeeper'}},hint:'核对此版本中属于本角色的问题编号。'}];
+  if(code==='finance_delivery_volume_limit')return [{code:'inspect_bound_review_directories',
+    hint:'核对已绑定原件目录与 outputs 的交付范围；超过读取上限的文件仍待核。'}];
+  if(code==='finance_delivery_package_damaged'||code==='finance_delivery_version_damaged')return [{
+    code:'recover_reviewed_version_locally',hint:'封存内容与指纹不符，停止交付，按此版本核对本机备份。'}];
+ }
  if(name==='finance_workpaper_details'&&['finance_details_version_changed','finance_details_source_changed','finance_details_source_invalid','finance_details_artifact_changed','finance_details_record_changed','finance_details_reference_expired','finance_details_file_missing'].includes(code)){
   const call=/^finance-artifact:(\d{8}T\d{9}Z_[a-f0-9-]{36})\/workpaper\.json$/.exec(args?.artifactRef);
   if(call&&args.target)return [{code:'review_recorded_workpaper_and_recompute',tool:'finance_period_review',arguments:{target:args.target,callIds:[call[1]]},

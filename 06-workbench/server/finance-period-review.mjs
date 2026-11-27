@@ -261,6 +261,11 @@ export async function loadRecord(root,callId){
 }
 export async function reviewFinancePeriod(args){
  if(validateSchemaValue(FINANCE_PERIOD_REVIEW_SCHEMA,args).length)fail('finance_period_review_input_invalid');
+ if(args.delivery){
+  if(Object.keys(args).length!==1)fail('finance_period_review_input_invalid');
+  const {reviewBoundDelivery}=await import('./period-delivery.mjs');
+  return reviewBoundDelivery(args.delivery,safeFile);
+ }
  const unbound=!!args.unboundCalls,binding=unbound?null:resolveDirectFinanceTarget(args.target),root=financeAuditDirectory();
  if(args.precedingPlanPeriod&&args.precedingPlanPeriod>=args.target.period)fail('finance_period_review_input_invalid');
  const selectedBinding=args.precedingPlanPeriod?{...binding,scope:{...binding.scope,period:args.precedingPlanPeriod}}:binding;
