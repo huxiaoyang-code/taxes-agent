@@ -1,5 +1,5 @@
 // 中国化业务工具的按需合同；这是本项目适配器，不是上游插件的财税实现。
-import { validateSchemaValue } from './harness-schema-validation.mjs';
+import { validateSchemaValue } from './schema-validation.mjs';
 import { nativeRecordTypes, nativeRecordGuide } from './direct-finance-records.mjs';
 const text={type:'string',minLength:1};
 const catalogFields = {

@@ -143,7 +143,11 @@ try{
 const cli=join(root,'synthetic-claude.mjs');writeFileSync(cli,'console.log(JSON.stringify({argv:process.argv.slice(2),disableAutoMemory:process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,session:process.env.FINANCE_BUSINESS_SESSION,cwd:process.cwd()}));');
 const spec=buildClaudeLaunchSpec(claude,parseClaudeArgs(['--claude-cli',cli,'--resume',id]));assert.equal(spec.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,undefined);assert(spec.args.includes('--strict-mcp-config'));assert.equal(spec.args[spec.args.indexOf('--setting-sources')+1],'project');
 const launch=ok(run(claude,['--claude-cli',cli,'--resume',id],'start-claude.mjs'));assert.equal(launch.disableAutoMemory,undefined);assert.equal(launch.cwd,claude);assert.equal(launch.session,join(claude,'.finance/business-session.json'));
-assert.deepEqual(JSON.parse(launch.argv[launch.argv.indexOf('--settings')+1]),{autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
+const {permissions: boundPermissions, ...memorySettings} = JSON.parse(launch.argv[launch.argv.indexOf('--settings')+1]);
+assert.deepEqual(memorySettings,{autoMemoryEnabled:true,autoMemoryDirectory:memoryDirectory});
+assert.deepEqual(boundPermissions, {allow: [...new Set([...settings.permissions.allow,
+  'mcp__finance__account_list', 'mcp__finance__finance_query', 'Edit(/outputs/*.csv)', 'Edit(/outputs/*.md)',
+])]});
 for(const override of ['--settings','--setting-sources','--mcp-config','--strict-mcp-config','--cwd','--resume','--continue','--session-id','--dangerously-skip-permissions','--plugin-dir'])assert.throws(()=>parseClaudeArgs(['--claude-cli',cli,'--',override,'elsewhere']),/claude_launch_override_rejected/);
 assert.throws(()=>buildClaudeLaunchSpec(claude,parseClaudeArgs(['--claude-cli',cli,'--resume',unknown])),/claude_business_resume_unbound/);
 // 用另一个真实企业工作区恢复旧ID；复制sidecar也不能改变它原始scope。

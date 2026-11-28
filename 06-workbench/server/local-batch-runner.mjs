@@ -322,7 +322,9 @@ export async function executeJob({
   allowSnapshotOnly = false,
 } = {}) {
   if (!job) throw batchError("job_required", {});
+  // 旧作业由独立维护仓库恢复。先于认领、恢复和发布检查，保留原阶段与证据。
   storage.assertBatchRunnable(db,{jobId:job.id});
+  storage.assertDirectBatchJob(db, job);
   const lock = { resourceKey: `job:${job.id}`, instance };
   let jobResources;
   try {
@@ -443,15 +445,7 @@ export async function executeJob({
           };
           let result;
           try {
-            if(stage.stage_key.startsWith('harness:')){
-              // 业务 worker 取得已有会计资源锁。
-              // 保留持久阶段认领和作业隔离栏，仅释放单项锁。
-              releaseItemLocks(itemLocks);itemLocks=null;
-              let bridge;
-              try{bridge=actions.queryHarnessBatchTask(ctx,'execute');if(hooks?.afterHarnessEffect)hooks.afterHarnessEffect({stage:claim.stage,bridge});}
-              finally{itemLocks=acquireItemLocks({item:currentItem,instance,pid,parent:jobResources});ctx.resources=itemLocks;}
-              result=actions.checkpointHarnessBatchTask(ctx,bridge);
-            }else result = actions.executeStage(ctx);
+            result = actions.executeStage(ctx);
             if (result?.accountSetId && !currentItem.account_set_id) {
               // 受审计外层已持久化解析后的账套及其锁。
               bindingItem=storage.getItem(db,item.id);

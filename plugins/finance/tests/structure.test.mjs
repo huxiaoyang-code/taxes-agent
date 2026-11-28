@@ -131,7 +131,7 @@ test('Chinese obligation guide matches all current native tax tools and limits',
 
 test('documented fixed-card example is accepted by the discoverable optional MCP contract',async()=>{
  const {DIRECT_TOOLS}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs')));
- const {validateSchemaValue}=await import(pathToFileURL(join(backend,'06-workbench/server/harness-schema-validation.mjs')));
+ const {validateSchemaValue}=await import(pathToFileURL(join(backend,'06-workbench/server/schema-validation.mjs')));
  const schema=DIRECT_TOOLS.find(t=>t.name==='finance_calculation_run').inputSchema;
  const reference=read(join(skills,'shared','references','connectors.md'));
  const example=JSON.parse(reference.match(/```json\s*([\s\S]*?)```/)[1]);
@@ -143,7 +143,7 @@ test('documented fixed-card example is accepted by the discoverable optional MCP
 
 test('基线生成与本期计算示例符合真实合同，入口可由业务技能发现',async()=>{
  const {DIRECT_TOOLS}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs')));
- const {validateSchemaValue}=await import(pathToFileURL(join(backend,'06-workbench/server/harness-schema-validation.mjs')));
+ const {validateSchemaValue}=await import(pathToFileURL(join(backend,'06-workbench/server/schema-validation.mjs')));
  const reference=read(join(skills,'company-baseline/references/materials-and-save.md'));
  const examples=[...reference.matchAll(/```json\s*([\s\S]*?)```/g)].map(match=>JSON.parse(match[1]));
  const schema=DIRECT_TOOLS.find(t=>t.name==='finance_baseline_materials')?.inputSchema;
@@ -215,7 +215,7 @@ test('九个主入口可递归到随包参考、共享模板及可执行演示',
  assert.deepEqual([...seen].sort(),PLUGIN_SKILL_FILES.map(file=>join(skills,file)).sort());
 });
 
-test('新 direct 首次仅发现九个目标，历史 profile、资源 URI 与旧方法保留规范正文', async()=>{
+test('新 direct 首次仅发现九个目标，历史资源 URI 与旧方法保留规范正文', async()=>{
  const {McpStdioClient}=await import('../../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs');
  const api=join(repo,'05-reconstruction/codex/mcp/finance-mcp/server.mjs');
  const scratch=mkdtempSync(join(tmpdir(),'finance-skill-modes-'));
@@ -224,13 +224,12 @@ test('新 direct 首次仅发现九个目标，历史 profile、资源 URI 与�
   'tax-filing/references/summary-calculation.md':'tax-review/references/summary-calculation.md',
   'tax-filing/references/supported-obligations.md':'tax-review/references/supported-obligations.md',
  };
- for(const profile of ['direct','legacy','harness']){
-  const client=new McpStdioClient(api,{env:{FINANCE_MCP_PROFILE:profile,FINANCE_SKILL_DISCOVERY:'focused',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(scratch,profile)}}).start();
+ {
+  const client=new McpStdioClient(api,{env:{FINANCE_MCP_PROFILE:'direct',FINANCE_SKILL_DISCOVERY:'focused',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(scratch,'direct')}}).start();
   try{
    await client.initialize();
    const catalog=(await client.call('skills_list')).data;
    const resources=(await client.rpc('resources/list')).result.resources;
-   if(profile==='direct'){
     assert.deepEqual(Object.keys(catalog),['entries']);
     assert.deepEqual(catalog.entries.map(e=>e.name),expected);
     assert.ok(catalog.entries.every(e=>Object.keys(e).sort().join(',')==='description,name,resource'));
@@ -239,10 +238,6 @@ test('新 direct 首次仅发现九个目标，历史 profile、资源 URI 与�
     assert.equal(full.entries.filter(e=>e.role==='reference').length,3);
     assert.deepEqual(Object.keys(full.labels).sort(),full.files);
     assert.ok(full.files.includes('tax-review/templates/tax-handoff.md'));
-   }else{
-    assert.ok(catalog.files.includes('harness/SKILL.md'));
-    assert.deepEqual(resources.map(r=>r.name),catalog.files);
-   }
    for(const [alias,canonical] of Object.entries(aliases)){
     const expectedBody=read(join(skills,canonical));
     const historical=await client.call('skills_read',{resource:alias+'#旧方法'});
@@ -292,34 +287,4 @@ test('包内未登记文档、指向包外的目录链接及脚本均无法经 M
    assert.ok(!JSON.stringify([tool,rpc]).includes(marker));
   }
  }finally{await client.close();}
-});
-
-test('仓库内专用技能在显式legacy工具面可读，仍引用现有业务合同', {timeout:30000},async()=>{
- const root=join(backend,'05-reconstruction/codex/skills'),docs=walk(root).filter(p=>p.endsWith('.md'));
- const entry=docs.filter(p=>p.endsWith(`${sep}SKILL.md`));assert.equal(entry.length,8);
- for(const p of docs){
-  assert.ok(!/`harness_(?:source_register|facts_register|plan|run|status|init|feedback|receipt_read)/.test(read(p)),`legacy orchestration instruction: ${p}`);
-  assert.ok(!read(p).includes('TODO：补全规则正文'),`unfinished historical rule: ${p}`);
-  for(const target of localLinks(p))assert.ok(existsSync(target),`${p} -> ${target}`);
- }
- const {McpStdioClient}=await import(pathToFileURL(join(backend,'05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs')));
- const scratch=mkdtempSync(join(tmpdir(),'finance-cn-legacy-skills-'));
- const client=new McpStdioClient(join(backend,'05-reconstruction/codex/mcp/finance-mcp/server.mjs'),{cwd:backend,env:{FINANCE_MCP_PROFILE:'legacy',FINANCE_SKILLS_DIR:undefined,FINANCE_AUDIT_DIR:join(scratch,'audit'),FINANCE_DATABASE_PATH:join(scratch,'not-opened.db'),FINANCE_API_BASE:'http://127.0.0.1:1'},timeoutMs:10000}).start();
- const sharedResources={
-  'taxes-company-advisor/references/planning-cash.md':'tax-review/references/planning-cash.md',
-  'tax-filing/references/summary-calculation.md':'tax-review/references/summary-calculation.md',
-  'tax-filing/references/supported-obligations.md':'tax-review/references/supported-obligations.md'
- };
- try{
-  await client.initialize('finance-cn-legacy-reference-test');
-  const listed = (await client.call('skills_list', {})).data;
-  assert.deepEqual(listed.entries.map(item => item.resource).sort(), entry.map(p => relative(root,p).replaceAll('\\','/')).sort());
-  assert.ok(listed.entries.every(item => !Object.hasOwn(item,'role')));
-  for(const p of docs){
-   const resource=relative(root,p).replaceAll('\\','/'),r=await client.call('skills_read',{resource});
-   assert.equal(r.isError,false,`${resource}: ${r.text}`);
-   assert.equal(r.data?.markdown,read(sharedResources[resource]?join(skills,sharedResources[resource]):p),resource);
-  }
- }
- finally{await client.close();}
 });

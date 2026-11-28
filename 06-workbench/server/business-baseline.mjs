@@ -3,7 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {join,dirname,basename,extname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {writeFileSync,readFileSync} from 'node:fs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {resolveBusinessMemoryTarget} from './business-memory.mjs';
 import {currentFinanceCall,withFinanceCall,annotateFinanceCall,financeAuditDirectory,readFinanceCall} from './finance-call-chain.mjs';
 import * as storage from './business-memory-storage.mjs';

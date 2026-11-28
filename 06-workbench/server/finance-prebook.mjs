@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {readFileSync} from 'node:fs';
 import {PREBOOK_INPUT_SCHEMA,PREBOOK_REPLIES_SCHEMA,PREBOOK_TOOL_SCHEMA} from './finance-prebook-contracts.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {readPreparedSource,parseJson,bindEvidence,digest,stable,reject} from './finance-prebook-evidence.mjs';
 import {cents,money,quantity,calculateAgencyOutputVat,roundRatio} from './agency-tax-rules.mjs';
 import {calculateFinanceSummary,FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
@@ -20,7 +20,7 @@ function check(schema,value,code='finance_prebook_input_invalid'){
  if(problems.length)throw Object.assign(Error(code),{code,details:{problems}});
 }
 // 固定模块加载时的计算与规则版本；长驻MCP不能让旧逻辑配上新文件摘要。
-const codePaths=['finance-prebook.mjs','finance-prebook-evidence.mjs','finance-prebook-contracts.mjs','business-baseline-contracts.mjs','business-baseline-materials.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','agency-rule-catalog.mjs','agency-extended-tax-rules.mjs','agency-regional-rules.mjs','money.mjs','offline-material-adapters.mjs','accounting-profiles.mjs','harness-schema-validation.mjs','finance-output-policy.mjs','finance-call-chain.mjs','../package-lock.json'];
+const codePaths=['finance-prebook.mjs','finance-prebook-evidence.mjs','finance-prebook-contracts.mjs','business-baseline-contracts.mjs','business-baseline-materials.mjs','finance-summary-engine.mjs','agency-tax-rules.mjs','agency-rule-catalog.mjs','agency-extended-tax-rules.mjs','agency-regional-rules.mjs','money.mjs','offline-material-adapters.mjs','accounting-profiles.mjs','schema-validation.mjs','finance-output-policy.mjs','finance-call-chain.mjs','../package-lock.json'];
 const codeSnapshot=()=>codePaths.map(name=>{const path=fileURLToPath(new URL(name,import.meta.url)),bytes=readFileSync(path);return {path,bytes,sha256:digest(bytes),kind:'code'};});
 const loadedCode=codeSnapshot();
 function periodBounds(scope){const [year,month]=scope.period.split('-').map(Number);if(scope.periodType==='quarterly'&&month%3!==0)reject('finance_prebook_quarter_not_ended');const startMonth=scope.periodType==='quarterly'?month-2:month,from=`${year}-${String(startMonth).padStart(2,'0')}-01`,through=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10),prior=new Date(Date.UTC(year,startMonth-1,0)).toISOString().slice(0,10);return {from,through,prior};}

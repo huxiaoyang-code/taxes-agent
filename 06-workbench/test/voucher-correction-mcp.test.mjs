@@ -10,7 +10,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {REPO_ROOT, startBackend} from './helpers/business-memory-e2e-fixture.mjs';
 import {syntheticVoucherEvidence} from './helpers/synthetic-posting-evidence.mjs';
-import {validateSchemaValue} from '../server/harness-schema-validation.mjs';
+import {validateSchemaValue} from '../server/schema-validation.mjs';
 
 const period = '2026-02';
 const bank = '100201', alpha = '112201', beta = '112202', supplier = '220201';

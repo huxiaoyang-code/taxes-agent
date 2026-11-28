@@ -5,7 +5,7 @@ import {dirname,join,resolve} from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {loadBoundBusinessSession} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
 import {annotateFinanceCall,currentFinanceCall} from './finance-call-chain.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {VOUCHER_CORRECTION_SCHEMA} from './voucher-correction-contract.mjs';
 
 const fail=code=>{throw Object.assign(new Error(code),{code});};

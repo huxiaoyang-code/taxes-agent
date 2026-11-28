@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {FINANCE_SUMMARY_INPUT_SCHEMA,isFinanceSummaryAmountPointer} from './finance-summary-contracts.mjs';
 import {calculateFinanceSummary,FINANCE_SUMMARY_RULE_VERSION} from './finance-summary-engine.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {resolveDirectFinanceTarget} from './direct-finance-target.mjs';
 import {currentFinanceCall,withFinanceCall,annotateFinanceCall} from './finance-call-chain.mjs';
 import {PROJECTION_NUMBER_LIMIT} from './finance-output-policy.mjs';

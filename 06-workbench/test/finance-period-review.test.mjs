@@ -70,7 +70,6 @@ test('真实MCP发现frontmatter入口与只读合同，新进程接续summary/p
   for(const id of [prebookId,nativeId]){const rejected=await second.call('finance_period_review',{target,callIds:[id]});assert.equal(rejected.isError,true);assert.match(rejected.text,/finance_period_review_scope_unverified/);noSecrets(rejected);}
   for(const args of [{target,unboundCalls:{callIds:[summaryId]}},{unboundCalls:{callIds:[summaryId]},limit:1},{target,callIds:[summaryId],offset:1},{target,auditDir:'PRIVATE-OWNER-TEXT'},{target,dbPath:'PRIVATE-OWNER-TEXT'},{target,callIds:['../../PRIVATE-OWNER-TEXT']}]){const r=await second.call('finance_period_review',args);assert.equal(r.isError,true);noSecrets(r);}
  }finally{await second.close();}
- const legacy=client('harness');try{await legacy.initialize();const skills=(await legacy.call('skills_list')).data;assert(skills.entries.some(e=>e.resource==='harness/SKILL.md'&&e.name==='finance-tools'));assert(!skills.entries.some(e=>e.name==='prebook-review'));assert(skills.entries.every(e=>!Object.hasOwn(e,'role')));}finally{await legacy.close();}
  assert.equal(sha(readFileSync(dbPath)),before);
 });
 test('同企业仍核实例/账套/期间；历史缺件不被后成功覆盖；不识别未知形状',async()=>{

@@ -3,7 +3,7 @@ import {readFileSync,lstatSync,realpathSync} from 'node:fs';
 import {resolve,relative,isAbsolute,dirname,extname,basename} from 'node:path';
 import {createHash} from 'node:crypto';
 import {readInvoiceXlsx} from './offline-invoice-xlsx.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {captureWorkpaperAmount} from './direct-finance-details.mjs';
 
 const text={type:'string',minLength:1,maxLength:2000};

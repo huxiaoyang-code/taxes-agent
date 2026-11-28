@@ -25,22 +25,9 @@ const steps = [
   ...["posting-evidence-guard", "posting-guard-mcp", "red-voucher-downstream", "direct-workpaper-posting-process"].map(name=>({name,file:join(WORKBENCH,"test",name+".test.mjs"),cwd:WORKBENCH})),
   { name: 'finance-review-card', file: join(WORKBENCH, 'test', 'finance-review-card.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-calculation', file: join(WORKBENCH, 'test', 'finance-calculation.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-boundary', file: join(WORKBENCH, 'test', 'harness2-boundary.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-budget', file: join(WORKBENCH, 'test', 'harness2-budget.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-hosts', file: join(WORKBENCH, 'test', 'harness2-hosts.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-research-mcp', file: join(WORKBENCH, 'test', 'harness2-research-mcp.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-recovery', file: join(WORKBENCH, 'test', 'harness2-recovery.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-launcher', file: join(WORKBENCH, 'test', 'harness2-launcher.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-codex-proposer', file: join(WORKBENCH, 'test', 'harness2-codex-proposer.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness2-assessment', file: join(WORKBENCH, 'test', 'harness2-assessment.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-host-config', file: join(WORKBENCH, 'test', 'finance-host-config.test.mjs'), cwd: WORKBENCH },
   { name: 'host-dsh', file: join(WORKBENCH, 'test', 'host-dsh.test.mjs'), cwd: WORKBENCH },
   { name: 'host-zcode', file: join(WORKBENCH, 'test', 'host-zcode.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-tool-engineering', file: join(WORKBENCH, 'test', 'harness-tool-engineering.test.mjs'), cwd: WORKBENCH },
-  { name: 'comprehensive-analysis', file: join(WORKBENCH, 'test', 'comprehensive-analysis.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-contract', file: join(WORKBENCH, 'test', 'harness-contract.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-lifecycle', file: join(WORKBENCH, 'test', 'harness-lifecycle.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-mcp', file: join(MCP, 'harness-test.mjs'), cwd: WORKBENCH },
   { name: "guards", file: join(WORKBENCH, "test", "accounting-guards.test.mjs"), cwd: WORKBENCH },
   { name: "derived", file: join(WORKBENCH, "test", "accounting-derived.test.mjs"), cwd: WORKBENCH },
   { name: "import-strict", file: join(WORKBENCH, "test", "import-strict.test.mjs"), cwd: WORKBENCH },
@@ -50,7 +37,6 @@ const steps = [
   { name: "smoke", file: join(WORKBENCH, "test", "smoke.test.mjs"), cwd: WORKBENCH },
   { name: "contract", file: join(MCP, "contract-test.mjs"), cwd: MCP },
   { name: "workflow", file: join(MCP, "workflow-test.mjs"), cwd: MCP },
-  { name: "tax", file: join(MCP, "tax-contract-test.mjs"), cwd: MCP },
   { name: "voucher-amount-guards", file: join(WORKBENCH, "test", "voucher-amount-guards.test.mjs"), cwd: WORKBENCH },
   { name: "tax-acquisition", file: join(WORKBENCH, "test", "tax-acquisition.test.mjs"), cwd: WORKBENCH },
   { name: "tax-browser-session", file: join(WORKBENCH, "test", "tax-browser-session.test.mjs"), cwd: WORKBENCH },
@@ -76,14 +62,9 @@ const steps = [
   { name: "observe-tax-navigation-cleanup", file: join(WORKBENCH, "test", "observe-tax-navigation-cleanup.test.mjs"), cwd: WORKBENCH },
   { name: "tax-navigation-recovery-chain", file: join(WORKBENCH, "test", "tax-navigation-recovery-chain.test.mjs"), cwd: WORKBENCH },
   { name: "tax-portal-bootstrap", file: join(WORKBENCH, "test", "tax-portal-bootstrap.test.mjs"), cwd: WORKBENCH },
-  { name: "tax-live-collection-mcp", file: join(MCP, "tax-live-collection-test.mjs"), cwd: MCP },
-  { name: "tax-history-mcp", file: join(MCP, "tax-history-test.mjs"), cwd: MCP },
-  { name: "tax-browser-session-mcp", file: join(MCP, "tax-browser-session-test.mjs"), cwd: MCP },
   { name: "tax-preparation", file: join(WORKBENCH, "test", "tax-preparation.test.mjs"), cwd: WORKBENCH },
   { name: "tax-api-catalog", file: join(WORKBENCH, "test", "tax-api-catalog.test.mjs"), cwd: WORKBENCH },
   { name: "tax-api-catalog-http", file: join(WORKBENCH, "test", "tax-api-catalog-http.test.mjs"), cwd: WORKBENCH },
-  { name: "tax-api-catalog-mcp", file: join(MCP, "tax-api-catalog-test.mjs"), cwd: MCP },
-  { name: "tax-acquisition-mcp", file: join(MCP, "tax-acquisition-test.mjs"), cwd: MCP },
   { name: "server-local-boundary", file: join(WORKBENCH, "test", "server-local-boundary.test.mjs"), cwd: WORKBENCH },
   // LOCAL-01 增量导入：领域层 + HTTP / Agent 真实入口 + MCP 真实链路（仅追加）
   { name: "import-incremental", file: join(WORKBENCH, "test", "import-incremental.test.mjs"), cwd: WORKBENCH },
@@ -105,10 +86,10 @@ const steps = [
   // LOCAL-08 入口接线（Agent 组装层 / 真实 HTTP / MCP 端到端；仅末尾追加，不改上方原有 56 个套件的内容与顺序）
   { name: "finance-model-entry", file: join(WORKBENCH, "test", "finance-model-entry.test.mjs"), cwd: WORKBENCH },
   { name: "finance-model-http", file: join(WORKBENCH, "test", "finance-model-http.test.mjs"), cwd: WORKBENCH },
-  { name: "finance-model-entry-mcp", file: join(MCP, "finance-model-entry-test.mjs"), cwd: MCP },
   // LOCAL-07 B1 已合 PR65 的持久化与 CLI 套件；仅末尾追加，原 59 套完整保留。
   { name: "local-batch-persistence", file: join(WORKBENCH, "test", "local-batch-persistence.test.mjs"), cwd: WORKBENCH },
   { name: "local-batch-cli", file: join(WORKBENCH, "test", "local-batch-cli.test.mjs"), cwd: WORKBENCH },
+  { name: "direct-batch-boundary", file: join(WORKBENCH, "test", "direct-batch-boundary.test.mjs"), cwd: WORKBENCH },
   // LOCAL-04 银行组件；仅末尾追加，原 main 61 套逐字原序保留。
   { name: "bank-import", file: join(WORKBENCH, "test", "bank-import.test.mjs"), cwd: WORKBENCH },
   { name: "bank-reconciliation", file: join(WORKBENCH, "test", "bank-reconciliation.test.mjs"), cwd: WORKBENCH },
@@ -162,18 +143,6 @@ const steps = [
   { name: "local-restore-audit", file: join(WORKBENCH, "test", "local-restore-audit.test.mjs"), cwd: WORKBENCH },
   { name: "local-restore-batch", file: join(WORKBENCH, "test", "local-restore-batch.test.mjs"), cwd: WORKBENCH },
   { name: "local-restore-path-binding", file: join(WORKBENCH, "test", "local-restore-path-binding.test.mjs"), cwd: WORKBENCH },
-  { name: 'annual-close', file: join(WORKBENCH, 'test', 'annual-close.test.mjs'), cwd: WORKBENCH },
-  { name: 'annual-close-harness', file: join(WORKBENCH, 'test', 'annual-close-harness.test.mjs'), cwd: WORKBENCH },
-  { name: 'period-business', file: join(WORKBENCH, 'test', 'period-business.test.mjs'), cwd: WORKBENCH },
-  { name: 'period-batch', file: join(WORKBENCH, 'test', 'period-batch.test.mjs'), cwd: WORKBENCH },
-  { name: 'period-interruption', file: join(WORKBENCH, 'test', 'period-interruption.test.mjs'), cwd: WORKBENCH },
-  { name: 'period-proof', file: join(WORKBENCH, 'test', 'period-proof.test.mjs'), cwd: WORKBENCH },
-  { name: 'period-correction-dates', file: join(WORKBENCH, 'test', 'period-correction-dates.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-disclosure', file: join(WORKBENCH, 'test', 'harness-disclosure.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-batch-partial-effects', file: join(WORKBENCH, 'test', 'harness-batch-partial-effects.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-tax-presentation', file: join(WORKBENCH, 'test', 'harness-tax-presentation.test.mjs'), cwd: WORKBENCH },
-  { name: 'harness-local-tool-contract', file: join(WORKBENCH, 'test', 'harness-local-tool-contract.test.mjs'), cwd: WORKBENCH },
-  { name: 'sol-pi-integration', file: join(WORKBENCH, 'test', 'sol-pi-integration.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-call-chain', file: join(WORKBENCH, 'test', 'finance-call-chain.test.mjs'), cwd: WORKBENCH },
   { name: 'direct-finance', file: join(WORKBENCH, 'test', 'direct-finance.test.mjs'), cwd: WORKBENCH },
   { name: 'finance-summary', file: join(WORKBENCH, 'test', 'finance-summary.test.mjs'), cwd: WORKBENCH },
@@ -195,8 +164,7 @@ for (const step of steps) {
     results.push({ name: step.name, status: 1 });
     continue;
   }
-  // 原MCP协议套件保留旧全量契约；新默认direct及拒绝由直接业务/宿主套件单独实测。
-  const env = step.cwd === MCP ? {...process.env, FINANCE_MCP_PROFILE:'legacy'} : process.env;
+  const env = {...process.env, FINANCE_MCP_PROFILE: 'direct'};
   const r = spawnSync(process.execPath, [...(step.nodeArgs || []), step.file], { stdio: "inherit", cwd: step.cwd, env });
   if (r.error) console.error(`启动失败：${r.error.message}`);
   results.push({ name: step.name, status: r.status ?? 1 });

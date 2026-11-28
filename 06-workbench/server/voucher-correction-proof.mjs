@@ -7,7 +7,7 @@ import {readXlsxStructure} from './offline-invoice-xlsx.mjs';
 import {verifyDocument} from './voucher-correction-document.mjs';
 import {parseMoney} from './money.mjs';
 import {readBankImageRows} from './voucher-correction-image.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 
 const string = {type:'string', minLength:1, maxLength:2000};
 const index = {type:'integer', minimum:1, maximum:10000};

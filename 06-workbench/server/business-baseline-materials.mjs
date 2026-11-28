@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {readFileSync,lstatSync,realpathSync,openSync,fstatSync,closeSync,readdirSync,opendirSync} from 'node:fs';
 import {resolve,relative,isAbsolute,dirname,basename,extname,join} from 'node:path';
 import {readEvidencePointer} from './business-evidence.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {registeredMaterialIdentity,matchMaterialParty} from './material-identity.mjs';
 import {canonicalEnterpriseKey} from './enterprise-identity.mjs';
 import {getAccountingRoles,getAccountingProfile} from './accounting-profiles.mjs';

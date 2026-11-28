@@ -1,5 +1,5 @@
 import {PERIOD_TASK_ROUTING} from '../shared/task-routing.mjs';
-import {listedToolsForProfile} from '../../mcp/finance-mcp/tool-profile.mjs';
+import {listDirectTools} from '../../mcp/finance-mcp/direct-tool-catalog.mjs';
 import {BUSINESS_MEMORY_ROUTING} from '../shared/business-session.mjs';
 import {projectSkillFiles} from './project-skills.mjs';
 import {claudeBusinessHooks} from './business-memory-hook.mjs';
@@ -15,7 +15,7 @@ function readPathPattern(path) {
 }
 
 export function buildConfig(c){
-  const {command,args,env}=c.mcp,tools=listedToolsForProfile('direct',env.FINANCE_QUERY_DISCOVERY);
+  const {command,args,env}=c.mcp,tools=listDirectTools(env.FINANCE_QUERY_DISCOVERY);
   // 部分既有只读合同缺少 MCP readOnlyHint。正式委托需能读取依据和账簿、验收更正。
   const correctionTools=new Set(['skills_list','skills_read','account_context','finance_query_catalog',
     'finance_query','ledger_query','account_list','period_list','period_end_check','voucher_correct']);
@@ -44,6 +44,6 @@ export function buildConfig(c){
     {path:'.mcp.json',content:JSON.stringify({mcpServers:{finance:{command,args,env}}},null,2)+'\n'},
     {path:'.claude/settings.json',content:JSON.stringify({enabledPlugins:{'finance@taxes-agent':false},autoMemoryEnabled:false,hooks:claudeBusinessHooks(c.nodePath,c.outputDir),permissions:{defaultMode:'default',allow,ask,...(deny.length?{deny}:{})}},null,2)+'\n'},
     {path:'start-claude.mjs',content:`#!/usr/bin/env node\nimport {runClaude} from ${JSON.stringify(pathToFileURL(join(c.repoRoot,'05-reconstruction/codex/hosts/claude-code/launcher.mjs')).href)};\nawait runClaude(new URL('.',import.meta.url),process.argv.slice(2));\n`},
-    {path:'CLAUDE.md',content:`# 中国财税工作区\n\n${PERIOD_TASK_ROUTING}\n\n${BUSINESS_MEMORY_ROUTING}\n\n${delivery}\n\n模型可自主选Python、JavaScript、表格或既有计算器；需自动记录脚本执行时使用finance_calculation_run，独立派生账表可直接交付。记录器不调用记账接口；脚本按当前用户权限执行，非安全沙箱，不授予改原件、账库或读凭据权限。计算记录索引不是业务报告，中文业务账表与规则说明由脚本或表格另行生成。\n\n从本项目 .claude/skills 的原生 Skill 按要交付的业务结果选择；原生入口不可用时，用 skills_list 查入口、skills_read 读正文。技能版本见 .finance/skill-source.json。使用本项目绑定的 finance MCP。后端 ${c.apiBase}，明确账库 ${c.databasePath}。先核实企业、账套和期间，不猜默认身份。\n\n不要求来源登记、事实登记、DAG或Harness Store。来源、输入、结果和操作身份由工具在会话绑定中的 auditDir 自动保存。未绑定时使用 ${c.auditDir}。实际写入仍遵守工具的人审、期间和防重复约束，状态未知时核查原操作。\n\n交付顺序：账本金额→凭证/计算结果→规则依据→工具调用→输入与原件。日常展示前三项，严重或多项错误时按需展开后两项；完整后台记录始终保留。未知不填零，不将引用/哈希或模型解释当真人复核与业务正确证明。真实资料只按当前明确授权披露，凭据不进模型或日志。\n`},
-  ],notes:['本工作区使用原生MCP配置与中国化业务Skill；配置不授予账务写入或资料外发权限。','只读工具可自动允许，其他工具保留宿主审批；不自动启用旧Harness。']};
+    {path:'CLAUDE.md',content:`# 中国财税工作区\n\n${PERIOD_TASK_ROUTING}\n\n${BUSINESS_MEMORY_ROUTING}\n\n${delivery}\n\n模型可自主选Python、JavaScript、表格或既有计算器；需自动记录脚本执行时使用finance_calculation_run，独立派生账表可直接交付。记录器不调用记账接口；脚本按当前用户权限执行，非安全沙箱，不授予改原件、账库或读凭据权限。计算记录索引不是业务报告，中文业务账表与规则说明由脚本或表格另行生成。\n\n从本项目 .claude/skills 的原生 Skill 按要交付的业务结果选择；原生入口不可用时，用 skills_list 查入口、skills_read 读正文。技能版本见 .finance/skill-source.json。使用本项目绑定的 finance MCP。后端 ${c.apiBase}，明确账库 ${c.databasePath}。先核实企业、账套和期间，不猜默认身份。\n\n来源、输入、结果和操作身份由工具在会话绑定中的 auditDir 自动保存。未绑定时使用 ${c.auditDir}。实际写入仍遵守工具的人审、期间和防重复约束，状态未知时核查原操作。\n\n交付顺序：账本金额→凭证/计算结果→规则依据→工具调用→输入与原件。日常展示前三项，严重或多项错误时按需展开后两项；完整后台记录始终保留。未知不填零，不将引用/哈希或模型解释当真人复核与业务正确证明。真实资料只按当前明确授权披露，凭据不进模型或日志。\n`},
+  ],notes:['本工作区使用原生MCP配置与中国化业务Skill；配置不授予账务写入或资料外发权限。','只读工具可自动允许，其他工具保留宿主审批。']};
 }

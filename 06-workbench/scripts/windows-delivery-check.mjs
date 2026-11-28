@@ -64,7 +64,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { PLUGIN_SKILL_FILES, HISTORICAL_SKILL_FILES, MOVED_SKILL_REFERENCES } from "../server/finance-skill-assets.mjs";
+import { PLUGIN_SKILL_FILES } from "../server/finance-skill-assets.mjs";
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -737,7 +737,7 @@ const OPTIONAL_RELEASE_FILES = [
 ];
 
 // 这是源码包，不是离线依赖包。路径相对于仓库根目录。
-export const RELEASE_BUNDLE_SCHEMA_VERSION = 3;
+export const RELEASE_BUNDLE_SCHEMA_VERSION = 4;
 export const RELEASE_BUNDLE_MANIFEST = "windows-release-manifest.json";
 const backendBundleFiles = Object.freeze([
   "06-workbench/package.json", "06-workbench/package-lock.json",
@@ -755,7 +755,7 @@ const agentBundleGroups = {
   "05-reconstruction/codex/hosts/pi": "README.md adapter.mjs launcher.mjs",
   "05-reconstruction/codex/hosts/shared": "business-session.mjs config.mjs task-routing.mjs",
   "05-reconstruction/codex/hosts/zcode": "README.md adapter.mjs launcher.mjs",
-  "05-reconstruction/codex/mcp/finance-mcp": "direct-recovery.mjs direct-tools.mjs disclosure-contracts.mjs manifest-evidence-guard.mjs mcp-stdio-client.mjs receipt-presentation.mjs skill-metadata.mjs tool-profile.mjs",
+  "05-reconstruction/codex/mcp/finance-mcp": "direct-recovery.mjs direct-tools.mjs direct-tool-catalog.mjs mcp-stdio-client.mjs skill-metadata.mjs",
   "05-reconstruction/codex/pi": "finance-direct.ts",
   "06-workbench/scripts": "accountant-review-q2.mjs direct-pi-probe.mjs finance-host-config.mjs inventory-tax-browser.mjs offline-period-plan.mjs offline-vat-pair.mjs offline-vat-q2.mjs",
   "plugins/finance/.claude-plugin": "plugin.json",
@@ -763,30 +763,23 @@ const agentBundleGroups = {
 };
 const hostBundleFiles = [
   ...backendBundleFiles,
-  "README.md", "docs/CODE-INDEX.md", "docs/AGENT-ARCHITECTURE.md", "05-reconstruction/codex/config.toml",
+  "README.md", "docs/CODE-INDEX.md", "docs/AGENT-ARCHITECTURE.md", "docs/AGENT-TOOL-DESIGN.md", "docs/REPOSITORY-DEPENDENCIES.md",
+  "05-reconstruction/codex/config.toml",
   ...Object.entries(agentBundleGroups).flatMap(([dir, files]) => files.split(" ").map(file => dir + "/" + file)),
-  ...HISTORICAL_SKILL_FILES.map(file => "05-reconstruction/codex/skills/" + file),
 ];
 const pluginBundle = files => files.map(file => "plugins/finance/skills/" + file);
-const correctionReference = "reconciliation/references/voucher-correction.md";
-const movedReferences = new Set(Object.values(MOVED_SKILL_REFERENCES));
-// v2 已发布包用迁移前的三个正文。自主更正参考在其中按功能随包交付。
-const v2PluginFiles = [...PLUGIN_SKILL_FILES.filter(file =>
-  !movedReferences.has(file) && file !== "reconciliation/references/bank-workbench.md" && file !== correctionReference
-), ...Object.keys(MOVED_SKILL_REFERENCES)];
-const v2RequiredFiles = [...hostBundleFiles, ...pluginBundle(v2PluginFiles)];
 export const REQUIRED_BUNDLE_FILES = Object.freeze([
   ...hostBundleFiles, ...pluginBundle(PLUGIN_SKILL_FILES), "06-workbench/server/finance-skill-assets.mjs",
-  "05-reconstruction/codex/hosts/claude-code/project-skills.mjs",
+  "05-reconstruction/codex/hosts/claude-code/project-skills.mjs", "06-workbench/server/delivery-vat-pdf.py",
   ...PLUGIN_SKILL_FILES.filter(file=>/^[^/]+\/SKILL\.md$/.test(file)).flatMap(file=>
     ["positive","neighbor"].map(kind=>"plugins/finance/evals/"+file.split("/")[0]+"-"+kind+"/case.yaml")),
 ]);
 function requiredBundleFiles(version) {
   if (version === 1) return backendBundleFiles;
-  return version === 2 ? v2RequiredFiles : REQUIRED_BUNDLE_FILES;
+  return REQUIRED_BUNDLE_FILES;
 }
 
-// 旧版 v2 清单仍可验真；含自主更正模块的新包须同时交付本机 OCR 与技能说明。
+// 含自主更正模块的源码包同时交付本机 OCR 与技能说明。
 const correctionModule = "06-workbench/server/voucher-correction-proof.mjs";
 const correctionGuide = "plugins/finance/skills/reconciliation/references/voucher-correction.md";
 const correctionOcr = "06-workbench/server/voucher-correction-ocr.ps1";
@@ -818,7 +811,7 @@ function sameFileIdentity(a, b) {
 
 /** 仅通过自有描述符读取普通单链接文件；读取前后都校验路径。 */
 function readBundleFile(root, rel) {
-  if (!bundlePathAllowed(rel, 1) && !bundlePathAllowed(rel, 2) && !bundlePathAllowed(rel, RELEASE_BUNDLE_SCHEMA_VERSION) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
+  if (!bundlePathAllowed(rel, 1) && !bundlePathAllowed(rel, RELEASE_BUNDLE_SCHEMA_VERSION) && rel !== RELEASE_BUNDLE_MANIFEST) throw bundleError("bundle_path_invalid", rel);
   const path = join(root, ...rel.split("/"));
   const check = () => {
     const chain = auditAncestorChain(dirname(path));
@@ -846,8 +839,9 @@ const exactKeys = (object, names) => object && typeof object === "object" && !Ar
 
 /** 查询文件系统之前，先拒绝未知字段、别名、路径及非规范列表。 */
 export function validateReleaseManifest(manifest) {
+  if ([2, 3].includes(manifest?.schemaVersion)) throw bundleError('bundle_legacy_repository_required');
   if (!exactKeys(manifest, ["schemaVersion", "kind", "packageVersion", "files", "digest"])
-    || ![1, 2, RELEASE_BUNDLE_SCHEMA_VERSION].includes(manifest.schemaVersion) || manifest.kind !== BUNDLE_KIND
+    || ![1, RELEASE_BUNDLE_SCHEMA_VERSION].includes(manifest.schemaVersion) || manifest.kind !== BUNDLE_KIND
     || typeof manifest.packageVersion !== "string" || !manifest.packageVersion.trim()
     || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 40000
     || typeof manifest.digest !== "string" || !/^[a-f0-9]{64}$/.test(manifest.digest)) throw bundleError("bundle_manifest_invalid");
@@ -889,9 +883,8 @@ export function inspectReleaseBundle(releasePath) {
   const schemaVersion = publishedManifest?.schemaVersion ?? RELEASE_BUNDLE_SCHEMA_VERSION;
   const paths = [...requiredBundleFiles(schemaVersion)];
   const packageJson = JSON.parse(readBundleFile(root, "06-workbench/package.json").toString("utf8"));
-  // 新包随 npm 命令交付真实宿主检查；旧 v2 包仍按其既有入口验真。
+  // 新包随 npm 命令交付真实宿主检查。
   if (schemaVersion >= 2 && packageJson.scripts?.['check:claude-direct']) paths.push(claudeDiscoveryCheck);
-  if (schemaVersion === 2 && existsSync(join(root, correctionModule))) paths.push(correctionGuide);
   const walk = (rel, depth = 0) => {
     const path = join(root, ...rel.split("/"));
     const audit = auditDirectoryRoot(path, "bundle_source_directory");

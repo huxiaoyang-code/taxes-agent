@@ -1,7 +1,3 @@
-import {committedBridgeObservation} from './harness-batch-effects.mjs';
-import { captureHarnessCode } from './harness-code.mjs';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { withWriteResources, withWriteStageFence } from './local-write-lock.mjs';
 import { runAuditedBatchStage } from './local-audit-coordinator.mjs';
 import { assertFence,stageAuditOperationId,assertClaimedStage } from './local-batch-storage.mjs';
@@ -947,10 +943,6 @@ export function verifyStageEvidence({ stage, item, outputDir = null, allowSnapsh
       }
       return { ok: false, reason: "enterprise_binding_missing" };
     }
-    if(key.startsWith('harness:')){
-      const current=queryHarnessBatchTask({db,item,stage,spec:safeParse(stage.spec_json)},'query');
-      return current.status==='succeeded'&&current.operationId===evidence.bridge?.operationId?{ok:true}:{ok:false,reason:current.code??'batch_harness_result_changed'};
-    }
     if (key.startsWith(IMPORT_STAGE_PREFIX)) {
       const batch = getImportBatch(evidence.batchId);
       if (!batch?.batch || batch.batch.status !== "completed") return { ok: false, reason: "import_batch_state_changed" };
@@ -1119,33 +1111,4 @@ function executeLockedStage(ctx) {
   if(result?.accountSetId&&!ctx.item.account_set_id){const changed=ctx.db.prepare('UPDATE local_batch_items SET account_set_id=? WHERE id=? AND account_set_id IS NULL').run(result.accountSetId,ctx.item.id);if(changed.changes!==1)throw domainError('enterprise_binding_mismatch');}
   assertFence(ctx.db,ctx.lock);const finalOwner=ctx.db.prepare('SELECT owner_instance,fencing_token,attempt FROM local_batch_stages WHERE id=?').get(ctx.stage.id);if(!finalOwner||finalOwner.owner_instance!==ctx.lock.instance||finalOwner.fencing_token!==ctx.lock.token||finalOwner.attempt!==ctx.attempt)throw domainError('fence_lost');return result;
  });
-}
-
-/** 范围及版本由固定子进程核验，不接受外部可执行路径。 */
-const loadedHarnessBridgeCode=captureHarnessCode(['./local-batch-harness-worker.mjs']).digest;
-export function queryHarnessBatchTask(ctx,phase='query'){
- const {db,item,stage,spec}=ctx;
- const instance=db.prepare('SELECT instance_id FROM audit_database_instances WHERE is_active=1').get()?.instance_id;
- const scope={enterpriseKey:item.enterprise_key,accountSetId:item.account_set_id,databaseInstanceId:instance,currency:'CNY'};
- const env={...process.env,NODE_NO_WARNINGS:'1'};for(const key of Object.keys(env))if(['NODE_OPTIONS','NODE_PATH','WORKBENCH_DATA_DIR'].includes(key.toUpperCase()))delete env[key];
- const child=spawnSync(process.execPath,[fileURLToPath(new URL('./local-batch-harness-worker.mjs',import.meta.url))],{input:JSON.stringify({phase,spec,scope,period:stage.period,bridgeCodeDigest:loadedHarnessBridgeCode}),encoding:'utf8',env,windowsHide:true,timeout:120000,maxBuffer:16*1024*1024});
- if(child.error||child.signal||child.status!==0||child.stderr)return {status:'needs_review',code:'batch_harness_worker_unavailable'};
- try{return JSON.parse(child.stdout);}catch{return {status:'needs_review',code:'batch_harness_response_invalid'};}
-}
-export function checkpointHarnessBatchTask(ctx,bridge){
- return withWriteResources(ctx.db,ctx.resources,()=>withWriteStageFence(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt},()=>{
-  resolveItemBinding({db:ctx.db,item:ctx.item,stage:ctx.stage});
-  const expectedIdentity={...ctx.spec,period:ctx.stage.period};
-  const previousCommitted=committedBridgeObservation(bridge,expectedIdentity)??committedBridgeObservation(safeParse(ctx.stage.evidence_json).bridge,expectedIdentity);
-  const current=queryHarnessBatchTask(ctx,'query');
-  if(bridge.status==='succeeded'&&(current.status!=='succeeded'||current.operationId!==bridge.operationId))bridge={...current,status:'needs_review',code:current.code??'batch_harness_result_changed'};
-  // 当前观察暂时不可用时，保留实际前次已提交证据。
-  // 这些仅是历史；needs_review、当前性、确认及重试守卫均不变。
-  if(previousCommitted&&!committedBridgeObservation(bridge,expectedIdentity))bridge={...bridge,taskIdentity:expectedIdentity,priorCommittedObservation:previousCommitted};
-  const evidence={accountSetId:ctx.item.account_set_id,bridge};
-  return runAuditedBatchStage(ctx.db,{action:'batch.stage',operationId:stageAuditOperationId(ctx.stage),scope:{kind:'account_set',value:ctx.item.account_set_id},request:{jobId:ctx.item.job_id,itemId:ctx.item.id,stageId:ctx.stage.id,attempt:ctx.attempt,spec:ctx.spec},context:{jobId:String(ctx.item.job_id),itemId:String(ctx.item.id),stageId:String(ctx.stage.id),period:ctx.stage.period}},[],()=>{
-   const ok=writeStageResult(ctx.db,{stageId:ctx.stage.id,instance:ctx.lock.instance,token:ctx.lock.token,attempt:ctx.attempt,status:bridge.status==='succeeded'?STAGE_STATUS.SUCCEEDED:STAGE_STATUS.NEEDS_REVIEW,outcomeHash:sha256(canonicalJson(evidence)),evidence,errorCode:bridge.code??null});
-   if(!ok)throw domainError('stage_result_rejected');return {status:bridge.status,errorCode:bridge.code??null,operationState:bridge.operationState,resultCurrent:bridge.resultCurrent};
-  });
- }));
 }
