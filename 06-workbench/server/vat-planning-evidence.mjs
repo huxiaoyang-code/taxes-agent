@@ -7,7 +7,7 @@ import {registeredMaterialIdentity,matchMaterialParty} from './material-identity
 import {readXlsxStructure} from './offline-invoice-xlsx.mjs';
 import {readPreparedSource,parseJson,pointer,digest} from './finance-prebook-evidence.mjs';
 import {VAT_INPUT_SCHEMA,VAT_FIELDS,VAT_NUMERIC_FIELDS} from './vat-planning-contracts.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {annotateFinanceCall,currentFinanceCall} from './finance-call-chain.mjs';
 
 export const fail=code=>{throw Object.assign(Error(code),{code});};

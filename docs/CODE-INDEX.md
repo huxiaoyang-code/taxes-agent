@@ -8,7 +8,7 @@
 
 从任务定位入口与测试；行为、规则和支持范围直接查看对应源码及工具契约。当前需求在 [Issues](https://github.com/huxiaoyang-code/taxes-agent/issues)，未完工作参见 [#76](https://github.com/huxiaoyang-code/taxes-agent/issues/76) 及相关 Issue / PR。
 
-科目明细账的[发现列表与旧名兼容](../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs)由[四宿主配置及真实 stdio 回归](../06-workbench/test/finance-host-config.test.mjs)和[绑定账套的金额核对](../06-workbench/test/business-memory-domain.test.mjs)覆盖。
+科目明细账的[发现列表与旧名兼容](../05-reconstruction/codex/mcp/finance-mcp/direct-tool-catalog.mjs)由[四宿主配置及真实 stdio 回归](../06-workbench/test/finance-host-config.test.mjs)和[绑定账套的金额核对](../06-workbench/test/business-memory-domain.test.mjs)覆盖。
 
 财税 Skill 的主入口和辅助参考见[业务技能目录](../plugins/finance/README.md)。四宿主使用同一份[任务入口指引](../05-reconstruction/codex/hosts/shared/task-routing.mjs)区分银行原件对账与流水导入、匹配。[凭证清单回归](../06-workbench/test/query-catalog-discovery.test.mjs)覆盖新旧目录可见性、查询金额、调用记录和账套隔离。
 
@@ -32,9 +32,9 @@
 
 三个中国化工作流及其模板、角色和示例由 [tax-review](../plugins/finance/skills/tax-review/SKILL.md) 维护。用[上游文件对照](../plugins/finance/SOURCES.md)查迁移来源，用[宿主回归](../06-workbench/test/finance-host-config.test.mjs)查旧资源名兼容。
 
-日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方 Harness 与 SQLite 基线条目供既有流程兼容和源码调查。
+日常走业务 Skill、宿主文件能力和财税工具。MCP 业务与计算自动记录，账套口径直接由宿主通过本机 Markdown 接续。下方条目可继续定位原生实现与验证。
 
-- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含十二个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
+- 默认中文业务插件：[plugins/finance](../plugins/finance/README.md)，包含九个 Skill、共享与税务参考、官方 manifest/MCP 配置、[许可来源](../plugins/finance/SOURCES.md)；结构、真实合同与 MCP 全文读取验证：`plugins/finance/tests/structure.test.mjs`，已接入 `test-all.mjs`。
 - 账套口径与格式：[账套记忆 Skill](../plugins/finance/skills/company-baseline/SKILL.md)及[宿主手册](../05-reconstruction/codex/hosts/BUSINESS-MEMORY.md)。每个账套一份本机 `MEMORY.md`，按已确认口径和适用期填写统一结构，修改后读回验证。
 - 宿主原件读取：[原件读取参考](../plugins/finance/skills/company-baseline/references/material-adaptation.md)。账前 `finance-prebook-input/2` 接收带实际原件位置的 `observedValue`，既有计算流程需要结构化取数时可按合同使用 `finance_baseline_materials`。
 - 合成资料适配：[material-intake-e2e.test.mjs](../06-workbench/test/material-intake-e2e.test.mjs) 提供混合格式资料、旧 XLS GBK 对照与结构化材料入口的验证参考。
@@ -60,22 +60,10 @@
 - 验证：`06-workbench/test/finance-host-config.test.mjs`、`host-dsh.test.mjs`、`host-zcode.test.mjs`；`scripts/direct-pi-probe.mjs`仅无模型程序加载。
 - 人读顺序：账本金额→凭证/计算结果→规则依据→工具调用→输入与原件；日常前三项、异常按需深查，完整记录不裁剪。
 
-## 按调用链阅读（含历史兼容源码）
+## 按调用链阅读
 
-本仓库面向中国财税 Agent 开发。业务入口、流程编排、交付结果、工具连接均已有实现；下列路线用于找到实际代码，不是功能完成清单。首次阅读先看[中文架构与调用链](AGENT-ARCHITECTURE.md)，配置与启动继续使用[四宿主统一入口](../05-reconstruction/codex/hosts/START-HERE.md)。
-
-| 阅读层次 | 先看什么 | 再追到哪里 |
-|---|---|---|
-| 业务目标与技能 | [企业顾问技能](../05-reconstruction/codex/skills/taxes-company-advisor/SKILL.md)、[Harness 技能](../05-reconstruction/codex/skills/harness/SKILL.md) | Agent 判断适用性、调查资料和构造请求；技能正文不是账务执行代码 |
-| MCP 连接与分派 | [MCP 服务的 callTool](../05-reconstruction/codex/mcp/finance-mcp/server.mjs)、[工具清单](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs) | Harness 在 MCP 进程内调用运行层；普通财务工具经 [HTTP 适配器](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)走模型投影通道；税务/目录另走兼容通道 |
-| 任务与证据编排 | [运行层](../06-workbench/server/harness-runtime.mjs)、[证据存储](../06-workbench/server/harness-store.mjs)、[共享合同](../06-workbench/server/harness-contract.mjs) | 事实→依赖计划→当前版本与阻塞→执行意图→原生回执→复核/恢复 |
-| 确定性业务执行 | [固定能力注册与适配](../06-workbench/server/harness-adapters.mjs)、[领域工作进程](../06-workbench/server/harness-domain-worker.mjs) | 以下各业务章节中的会计、税费、对账、报表模块及测试 |
-| 结果与复核 | [回执保存与摘要](../05-reconstruction/codex/mcp/finance-mcp/receipt-presentation.mjs)、[会计复核](#review-feedback) | 实际数字与来源、当前性、待确认及未覆盖事项；按引用读取完整结果 |
-| 可选研究 | [Harness²](HARNESS2-INTEGRATION.md)、[SoL-Pi](SOL-PI-INTEGRATION.md) | 均默认关闭；优化/效率研究与日常财税业务编排分开，当前不允许组合 |
-
-文件名和程序符号保持原名，章节标题使用中文；下方显式保留原英文锚点，已有链接可继续定位。
-
-<a id="入口"></a>
+- [四宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)绑定本机账套、账期、记忆文件和自动记录目录。
+- [MCP stdio 入口](../05-reconstruction/codex/mcp/finance-mcp/server.mjs)发现并分派工具。原生写账与报表经本机 HTTP，其他 direct 计算与复核按工具合同调用对应领域模块。
 
 ## 服务与网页入口
 
@@ -87,8 +75,6 @@
 
 ## 企业接手、账套与账务导入
 
-- Codex 顾问技能：[taxes-company-advisor/SKILL.md](../05-reconstruction/codex/skills/taxes-company-advisor/SKILL.md)，[同事安装与使用](COMPANY-ADVISOR-SKILL.md)。按需组织陌生企业接手、历史整理、疑点复核和税费/税后现金方案；复用下列执行入口，不新增工具或计算支持。
-- Codex 首次接手、整理和迁入历史账务：[legacy-book-import/SKILL.md](../05-reconstruction/codex/skills/legacy-book-import/SKILL.md)，[内部导入格式及create/append边界](../05-reconstruction/codex/skills/legacy-book-import/references/import-rules.md)。优先稳定企业/来源/批次的增量导入；原件、派生输入与正式账务分别保存，核对真实目标后通过 direct 工具持续核算，Harness 仅供显式历史兼容。没有统一接管包自动验收入口。
 - 账套、凭证与导入：[accounting.mjs](../06-workbench/server/accounting.mjs) 的 `createAccountSet`、`createVoucher`、`parseImportTexts`、`validateImportPayload`、`importAccountSet`；[accounting-profiles.mjs](../06-workbench/server/accounting-profiles.mjs) 的 `getAccountingProfile`；[enterprise-identity.mjs](../06-workbench/server/enterprise-identity.mjs) 的 `normalizeEnterpriseIdentity`。
 - 增量导入：[import-incremental.mjs](../06-workbench/server/import-incremental.mjs) 的 `importIncremental`；数据库与迁移：[db.mjs](../06-workbench/server/db.mjs)，科目：[coa.mjs](../06-workbench/server/coa.mjs)。
 - 测试：[import-strict](../06-workbench/test/import-strict.test.mjs)、[import-incremental](../06-workbench/test/import-incremental.test.mjs)、[accounting-standard-profiles](../06-workbench/test/accounting-standard-profiles.test.mjs)、[enterprise-identity](../06-workbench/test/enterprise-identity.test.mjs)。
@@ -150,23 +136,12 @@
 - 复核包：[accountant-review.mjs](../06-workbench/server/accountant-review.mjs) 的 `createAccountantReview`；[accountant-review-store.mjs](../06-workbench/server/accountant-review-store.mjs) 的 `registerReview`、`recordReviewFeedback`；[accountant-review-feedback.mjs](../06-workbench/server/accountant-review-feedback.mjs) 的 `validateFeedback`；[accountant-review-q2.mjs](../06-workbench/server/accountant-review-q2.mjs) 的 `runAccountantReviewQ2`。
 - 命令行入口（CLI）：[accountant-review](../06-workbench/scripts/accountant-review.mjs)、[accountant-review-feedback](../06-workbench/scripts/accountant-review-feedback.mjs)、[accountant-review-q2](../06-workbench/scripts/accountant-review-q2.mjs)。测试：[accountant-review](../06-workbench/test/accountant-review.test.mjs)、[accountant-review-feedback](../06-workbench/test/accountant-review-feedback.test.mjs)、[accountant-review-q2](../06-workbench/test/accountant-review-q2.test.mjs)。
 
-<a id="comprehensive-analysis"></a>
-
-## 月度综合分析
-
-- 可选月度综合分析：`analysis.comprehensive`，固定只读实现 [comprehensive-analysis.mjs](../06-workbench/server/comprehensive-analysis.mjs)，步骤提示词、输入及一期边界见 [Harness 综合分析指引](../05-reconstruction/codex/skills/harness/references/analysis.md)。复用原生多期账表、原件税费底稿、来源/任务/复核与失效机制，不新增 MCP 工具；规划限条件性应收回收，税费影响和税后现金未支持。实际 stdio/临时合成验证 [comprehensive-analysis.test.mjs](../06-workbench/test/comprehensive-analysis.test.mjs)。
-
 <a id="annual-close"></a>
 
-## 年度结算与汇算
+## 年度核算与复核
 
-- Direct 年度核算与复核经 [direct-finance.mjs](../06-workbench/server/direct-finance.mjs) 和 [finance-period-review.mjs](../06-workbench/server/finance-period-review.mjs) 核对原生年度工件及金额。跨进程凭证、库存与成本明细复用 [direct-finance-details.mjs](../06-workbench/server/direct-finance-details.mjs) 的来源校验。税费预测与回执变化按 [vat-period-handoff.mjs](../06-workbench/server/vat-period-handoff.mjs) 的版本差额读回。
-
-- 年度 Skill：[annual-close/SKILL.md](../05-reconstruction/codex/skills/annual-close/SKILL.md)，官方改编来源与 Apache-2.0 许可保留在同目录。只读证据适配：[annual-close.mjs](../06-workbench/server/annual-close.mjs)，复用实际年累计报表、期末检查与账簿能力，不复制所得税或账务公式。
-- 通过 Harness MCP 工具发现/计划/执行 `annual.inspect`（year scope、只读）。年度税会计算使用已发布 `agency.annual-calculation`，以实际任务版本与跨 Store 依赖绑定历史、年度核对与次年任务；执行、会计复核和全年业务完成分别列示。缺件、未实现调整或未审定事项保留未完成。
-- 合成验证：在 `06-workbench` 运行 `node test/annual-close.test.mjs`（独立全年/历史金额及更正/辅助分配失效）与 `node test/annual-close-harness.test.mjs`（真实 stdio MCP＋原生 Harness 联调，脚本不构成 Agent 验收）。后者的 `prepare <全新绝对目录>` 仅生成合成既有账簿、全年原件/manifest、scope/target、独立手算与 goal.txt，不调用 Harness 或模型；可供另一 Agent 逐步通过 MCP 独立验收并记录剩余限制。
-
-<a id="audit-lock-batch-backup-restore"></a>
+- `finance_annual_workpaper` 通过 [direct-finance.mjs](../06-workbench/server/direct-finance.mjs) 调用 [agency-business.mjs](../06-workbench/server/agency-business.mjs) 的原生年度工作底稿。全年账表另由 [accounting.mjs](../06-workbench/server/accounting.mjs) 读取。
+- 按[财务报表](../plugins/finance/skills/financial-statements/SKILL.md)及[税费复核](../plugins/finance/skills/tax-review/SKILL.md)核对适用范围、缺件、报表和计算结果。
 
 ## 审计、写锁、批处理与备份恢复
 
@@ -183,32 +158,19 @@
 
 <a id="mcp"></a>
 
-## 工具连接、业务编排与宿主接入
+## direct 工具、Skill 与宿主接入
 
-- 可选 Google Research Harness²：[设计与运行](HARNESS2-INTEGRATION.md)、[Python BenchmarkAdapter/Substrate](../05-reconstruction/codex/harness2/finance_adapter.py)、[Codex优化器](../05-reconstruction/codex/harness2/codex_proposer.py)、[本人Codex外层worker](../05-reconstruction/codex/harness2/codex-proposer-worker.mjs)、[Linux候选namespace](../05-reconstruction/codex/harness2/sandbox.py)、[仅执行模型relay](../05-reconstruction/codex/harness2/budget-gateway.mjs)、[Node桥](../05-reconstruction/codex/harness2/bridge.mjs)。研究入口 [harness2-run.mjs](../06-workbench/scripts/harness2-run.mjs) 与 [harness2-google.py](../06-workbench/scripts/harness2-google.py)。Codex负责优化，Pi＋DS等宿主执行；本人认证/default model与执行账本分开。Node合同/worker/relay回归登记在统一测试入口；真实Google核心、原生探针、模拟传输和真实完整循环按运行文档分别验证。
-
-- 多宿主：[Pi、Claude Code、dsh、ZCode 主 Agent 统一入口](../05-reconstruction/codex/hosts/START-HERE.md)，[接入与实测范围](../05-reconstruction/codex/hosts/README.md)，配置生成入口 [finance-host-config.mjs](../06-workbench/scripts/finance-host-config.mjs)（`--host pi|claude-code|dsh|zcode`），共享验证 [finance-host-config.test.mjs](../06-workbench/test/finance-host-config.test.mjs)。默认或未设置profile时为direct；旧Harness仅在显式 `FINANCE_MCP_PROFILE=harness` 时由 [tool-profile.mjs](../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs)提供兼容列表与调用。配置生成、宿主无模型连接和业务验收分别记录。
-
-- Harness：共享声明契约 [harness-contract.mjs](../06-workbench/server/harness-contract.mjs)，固定业务注册 [harness-adapters.mjs](../06-workbench/server/harness-adapters.mjs)，生命周期 [harness-runtime.mjs](../06-workbench/server/harness-runtime.mjs)、元数据证据日志 [harness-store.mjs](../06-workbench/server/harness-store.mjs)。企业特例调用现有审计 accounting API，批处理复用既有 runner；均显式绑定本机目标。
-- 代账接线：复用 [agency-business.mjs](../06-workbench/server/agency-business.mjs) 的 getAgencyCapabilities、buildAgencyWorkpaper、prepare/execute/queryAgencyPosting 与 buildAgencyAnnualWorkpaper，经既有 Harness domain worker 隔离目标，原生人审材料和 archive 身份恢复；年度计算不是年度关账。集中增量验证：`node test/harness-lifecycle.test.mjs --agency-capabilities`，使用独立合成原件/临时库。
-- Harness MCP 工具：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs)；渐进式入口 [harness/SKILL.md](../05-reconstruction/codex/skills/harness/SKILL.md)。pi 1.1.0 原生 MCP 与禁止递归的解析委派扩展 [finance-harness.ts](../05-reconstruction/codex/pi/finance-harness.ts)。其他宿主仍使用标准 stdio。
-- 工具工程与依据：[HARNESS-TOOL-DESIGN.md](HARNESS-TOOL-DESIGN.md)；共享可执行能力合同：[harness-input-contracts.mjs](../06-workbench/server/harness-input-contracts.mjs)，递归校验：[harness-schema-validation.mjs](../06-workbench/server/harness-schema-validation.mjs)。显式 requestFactId、返回 factBindings、轻量领域/查询/分页目录的合成回归：`node test/harness-tool-engineering.test.mjs`。批次原生效果三态投影与缺反馈恢复：`node test/harness-batch-partial-effects.test.mjs`（真实三凭证、原审计事件、MCP 摘要/完整回执）。
-- 渐进披露：[disclosure-contracts.mjs](../05-reconstruction/codex/mcp/finance-mcp/disclosure-contracts.mjs) 提供选中能力的 schema/最小示例/恢复；[receipt-presentation.mjs](../05-reconstruction/codex/mcp/finance-mcp/receipt-presentation.mjs) 同时压缩 MCP text/structuredContent、完整保存并按 receiptRef/pointer 分页。显式 responseMode=full 兼容原生对象。事实证据：[harness-fact-evidence.mjs](../06-workbench/server/harness-fact-evidence.mjs)，关键地区/缴款值的 MCP 边界：[manifest-evidence-guard.mjs](../05-reconstruction/codex/mcp/finance-mcp/manifest-evidence-guard.mjs)。旧 sourceRefs-only 调用仍标未验证，直接原生API不受该MCP guard约束；精确值绑定也不保证语义理解。
-- 合成披露/事实/恢复回归：`node test/harness-disclosure.test.mjs`（工作目录06-workbench）；税额口径与详情导航回归：`node test/harness-tax-presentation.test.mjs`；本地工具输入合同回归：`node test/harness-local-tool-contract.test.mjs`。真实 pi 验收准备与固定条件日志：[harness-disclosure-acceptance.mjs](../06-workbench/scripts/harness-disclosure-acceptance.mjs) 的 prepare/supplement/correct/recover/run；准备不调用模型，run仅使用本人已授权官方DeepSeek环境变量，记录实际源码/资料哈希及text/structured体积，人工介入和无效源码调查待验收者实际审查，不能按调用次数直接判通过。
-- 历史 Harness 验证：[harness-contract](../06-workbench/test/harness-contract.test.mjs)、[harness-lifecycle](../06-workbench/test/harness-lifecycle.test.mjs)、[harness-mcp](../05-reconstruction/codex/mcp/finance-mcp/harness-test.mjs)、[历史无模型原生MCP探针](../06-workbench/scripts/harness-pi-probe.mjs)。[Pi 扩展说明](../05-reconstruction/codex/pi/README.md)保留历史流程；陌生合成资料演示准备从 `06-workbench` 运行 `node scripts/harness-demo.mjs prepare <全新绝对目录>`，不调用模型，也不构成 Agent 演示。历史模型复现仍须获当次测试授权并保留模型/MCP/解析与业务回执；`assess` 仅核查真实账务结果，解析委派是否等价需单独核实。当前 direct 接入及无模型检查使用[统一入口](../05-reconstruction/codex/hosts/START-HERE.md)与[Pi 宿主说明](../05-reconstruction/codex/hosts/pi/README.md)。
-
-- stdio 分派：[server.mjs](../05-reconstruction/codex/mcp/finance-mcp/server.mjs) 的 `callTool`、`listSkills`、`skillLocation`、`readSkill`，协议入口 `tools/list`、`tools/call`、`resources/list`、`resources/read`。
-- 工具契约：[tools.mjs](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs) 的 `TOOLS`、`TOOL_BY_NAME`、`validateArgs`；HTTP 适配：[backend.mjs](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)；配置示例：[config.toml](../05-reconstruction/codex/config.toml)。客户端配置使用本机实际 Node / 脚本绝对路径，按实际后端设置 `FINANCE_API_BASE`；技能固定在该服务所属仓库，不设置外部技能目录。
-- 技能资源和旧路径映射见[随包清单](../06-workbench/server/finance-skill-assets.mjs)。direct 使用[插件技能](../plugins/finance/skills/)，历史工具面保留[原目录](../05-reconstruction/codex/skills/)。`skills_read` 与 MCP `resources/read` 使用相同的已登记 Markdown 和别名。
-- MCP 测试：[contract-test](../05-reconstruction/codex/mcp/finance-mcp/contract-test.mjs)、[workflow-test](../05-reconstruction/codex/mcp/finance-mcp/workflow-test.mjs)、[tax-contract-test](../05-reconstruction/codex/mcp/finance-mcp/tax-contract-test.mjs)。
-- 合成旧账示例：[legacy-book](../05-reconstruction/examples/legacy-book/)；导入脚本：[import-demo.mjs](../05-reconstruction/codex/mcp/finance-mcp/import-demo.mjs)。工作台启动后，从仓库根运行 `node 05-reconstruction/codex/mcp/finance-mcp/import-demo.mjs`（会向所配置的后端写入示例账套，只用于测试后端）。
-- Excel 转换：[xlsx-to-csv.py](../05-reconstruction/tools/xlsx-to-csv.py)。从仓库根运行 `python 05-reconstruction/tools/xlsx-to-csv.py --help`；示例：`python 05-reconstruction/tools/xlsx-to-csv.py 旧账.xlsx -o out/ --map openings=科目余额表 --map vouchers=凭证分录`。
+- [工具目录](../05-reconstruction/codex/mcp/finance-mcp/direct-tool-catalog.mjs)定义 direct 可见、可调用的工具。新工作区通过 `finance_query` 发现科目明细账。已有 `ledger_query` 继续按原合同执行。
+- [业务工具合同](../05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs)、[模型工具合同](../05-reconstruction/codex/mcp/finance-mcp/tools.mjs)、[字段校验](../06-workbench/server/schema-validation.mjs)和 [HTTP 适配](../05-reconstruction/codex/mcp/finance-mcp/backend.mjs)分工。真实入口见 [stdio 正反例](../06-workbench/test/mcp-listed-contracts.test.mjs)和[四宿主测试](../06-workbench/test/finance-host-config.test.mjs)。
+- `skills_read` 和 `resources/read` 共同使用[随包清单](../06-workbench/server/finance-skill-assets.mjs)。[财税 Skill](../plugins/finance/README.md)提供业务任务入口，支持通过登记的旧资源名继续读包内参考。
+- 工程与验收依据见[Agent 工程规范](AGENT-TOOL-DESIGN.md)，跨模块引用见[direct 依赖体检](REPOSITORY-DEPENDENCIES.md)。
+- [合成旧账示例](../05-reconstruction/examples/legacy-book/)与[转换工具](../05-reconstruction/tools/xlsx-to-csv.py)支持迁入历史账务。
 
 <a id="windows"></a>
 
 ## Windows 运行与交付
 
-Windows 完整源码包的第 3 版清单包含四宿主生成器、财税 MCP、当前与兼容技能、模板和出处。解包后在 `06-workbench` 运行 `npm ci`，再按[宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)选择应用。第 1、2 版清单仍可按发布时的摘要核验和复制。
+Windows 完整源码包的第 4 版清单包含四宿主生成器、direct MCP、中文业务 Skill、模板和出处。解包后在 `06-workbench` 运行 `npm ci`，再按[宿主配置与启动](../05-reconstruction/codex/hosts/START-HERE.md)选择应用。第 1 版原生后端清单仍可核验。第 2、3 版由[旧版维护仓库](https://github.com/huxiaoyang-code/taxes-agent-legacy-harness)按发布时的清单核验和复制。
 
 - 运行资格与目录探针：[windows-runtime-check.mjs](../06-workbench/scripts/windows-runtime-check.mjs) 的 `decideRuntimeVersion`、`runRuntimeCheck`；发布清单 / 验收：[windows-delivery-check.mjs](../06-workbench/scripts/windows-delivery-check.mjs) 的 `inspectReleaseBundle`、`copyReleaseWhitelist`、`main`。版本条件和阶段限制直接查看这些实现与 `--help`。
 - 从 `06-workbench` 运行 `node scripts/windows-runtime-check.mjs --help`、`node scripts/windows-delivery-check.mjs --help` 查看参数。
@@ -222,14 +184,6 @@ Windows 完整源码包的第 3 版清单包含四宿主生成器、财税 MCP�
 统一入口：[scripts/test-all.mjs](../06-workbench/scripts/test-all.mjs)，在 `06-workbench` 运行 `npm test`；单套件按索引路径使用 `node test/对应文件.test.mjs`。套件参数以统一入口为准，部分套件需要额外 Node 参数。
 
 合成数据和独立预期保留在 [test/fixtures](../06-workbench/test/fixtures/)；测试辅助入口在 [test/helpers](../06-workbench/test/helpers/)。验证报告写实际运行结果与未验证范围，不以索引中的链接推断测试通过。
-
-<a id="sol-pi"></a>
-
-## Pi 可选运行效率层
-
-- Pi 可选 ObservationPack 接入默认 `off`：[使用与固定依赖](SOL-PI-INTEGRATION.md)、[独立入口](../06-workbench/scripts/sol-pi-run.mjs)、[选择/验证/启动接口](../05-reconstruction/codex/sol-pi/runtime.mjs)、[官方 factory 窄适配](../05-reconstruction/codex/sol-pi/extension.ts)。只允许 Pi，其他机制与 Harness² 组合明确拒绝。
-- 从仓库根运行 `node 06-workbench/test/sol-pi-integration.test.mjs` 验证默认与拒绝合同；准备文档指定的完整锁工具目录后，运行 `node 06-workbench/scripts/sol-pi-probe.mjs --tool-root <绝对工具目录> --archive-root <绝对合成归档目录> --account-set-id synthetic_account`。探针使用实际 Pi/MCP/官方扩展，不调用模型，不代替业务或收益验收。
-
 
 ### 季度中文复核包
 
@@ -249,7 +203,7 @@ Windows 完整源码包的第 3 版清单包含四宿主生成器、财税 MCP�
 - `05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs`与`06-workbench/server/direct-finance.mjs`：正常direct发现及调用；非只读工具注解，配置支持可选`--source-root`、`--python`。
 - `06-workbench/scripts/quarter-host.mjs`：通用脚本参数历史期不当作写账期间，实际凭证期间保护保留。
 - `06-workbench/test/finance-calculation.test.mjs`：无账套/HTTP的真实stdio比例计算、Python中文产物、未知保留、结构留证、失败/超时、版本追加、边界拒绝及宿主注解。
-- 业务方法与合同：`05-reconstruction/codex/skills/harness/references/calculation.md`；脚本输出是独立派生账表，原生季度导出不是唯一产物路径。
+- 业务方法与合同：`plugins/finance/skills/shared/references/calculation.md`；脚本输出是独立派生账表，原生季度导出不是唯一产物路径。
 
 - 固定账务卡片：`06-workbench/server/finance-review-card.mjs` 的 `buildFinanceReviewCard` / `renderFinanceReviewCard`，明确季度JSON适配、独立流水/盘点比对、固定中文模板与按需追溯；由 `finance-calculation.mjs` 执行后自动生成并关联版本。测试 `06-workbench/test/finance-review-card.test.mjs` 覆盖真实执行、缺值/异常值、季度月份、越界路径、独立来源、重复汇总、税费点击和打印。
 

@@ -48,7 +48,7 @@ node 06-workbench/scripts/quarter-read.mjs --workspace '<业务目录>' --file '
 
 ## 报告与工作簿
 
-优先通过`finance_calculation_run`的可选`reviewCard`声明交付固定中文卡片，明确支持的数据格式见[自主计算合同](../../05-reconstruction/codex/skills/harness/references/calculation.md)。最终卡片由后台取数，不要求模型自写重复报告；这不是做账或专用工具的前置。
+优先通过`finance_calculation_run`的可选`reviewCard`声明交付固定中文卡片，明确支持的数据格式见[自主计算合同](../../plugins/finance/skills/shared/references/calculation.md)。最终卡片由后台取数，不要求模型自写重复报告；这不是做账或专用工具的前置。
 
 需要原生账库快照时可选按正常合同调用`finance_quarter_review`，例如`target:{accountSetId,period:'2026-03'}`，原生账库在一致时点生成三月和季度账表、HTML与机器bundle。完整科目余额、利润、资产负债、现金流量及中文映射状态都要核对；缺项和未分类不补零或用差额造分录。以下原生导出路径需要本次原生`bundleRef`；自主脚本/表格生成的独立工作簿无需先取得此引用：
 

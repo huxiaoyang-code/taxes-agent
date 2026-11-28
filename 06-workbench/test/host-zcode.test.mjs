@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {resolve,dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {buildConfig} from '../../05-reconstruction/codex/hosts/zcode/adapter.mjs';
-import {listedToolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
+import {listDirectTools} from '../../05-reconstruction/codex/mcp/finance-mcp/direct-tool-catalog.mjs';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
 import {PERIOD_TASK_ROUTING} from '../../05-reconstruction/codex/hosts/shared/task-routing.mjs';
 import {BUSINESS_MEMORY_ROUTING} from '../../05-reconstruction/codex/hosts/shared/business-session.mjs';
@@ -21,7 +21,7 @@ assert.ok(file('AGENTS.md').includes(BUSINESS_MEMORY_ROUTING));assert.match(BUSI
 const native=config.mcp.servers.finance,client=new McpStdioClient(native.args[0],{cwd:native.cwd,env:{...native.env,NODE_NO_WARNINGS:'1'},timeoutMs:30000}).start();
 try{
   await client.initialize('zcode-config-protocol-probe');const listed=(await client.rpc('tools/list')).result.tools;
-  assert.deepEqual(listed.map(t=>t.name).sort(),listedToolsForProfile('direct',native.env.FINANCE_QUERY_DISCOVERY).map(t=>t.name).sort());assert.equal(listed.some(t=>t.name.startsWith('harness_')),false);
+  assert.deepEqual(listed.map(t=>t.name).sort(),listDirectTools(native.env.FINANCE_QUERY_DISCOVERY).map(t=>t.name).sort());assert.equal(listed.some(t=>t.name.startsWith('harness_')),false);
   assert.equal((await client.call('harness_init',{})).isError,true);
   const rules=await client.call('finance_rules',{});assert.equal(rules.isError,false,rules.text);
   const skills=await client.call('skills_list',{});assert.equal(skills.isError,false);

@@ -5,7 +5,6 @@
  * 工具契约见 tools.mjs；默认 direct 工具面直接调用业务，自动记录每次调用：
  *   - skills_list / skills_read：本进程读取本机 Skill 资源；
  *   - finance_* 新业务工具：直接复用固定核算模块，输出模型受限摘要和本机人读底稿；
- *   - harness_*：仅显式 harness/legacy 兼容工具面保留旧执行和历史恢复；
  *   - 其他工具：经 backend.mjs 转发 HTTP，普通财务工具走模型摘要通道，税务/目录走既有通道。
  * 原则：工具描述与调用结果必须真实——未实现的工具返回 isError，绝不伪装成功。
  *
@@ -19,14 +18,8 @@ import { dirname, join, resolve, isAbsolute, posix } from "node:path";
 import { callBackend, backendInfo, BackendError, ModelTransportError } from "./backend.mjs";
 import { CANONICAL_QUERY_NODES, isModelEnvelope, validateModelEnvelope } from "./finance-model-transport.mjs";
 import { TOOL_BY_NAME, validateArgs, ToolCallError, MODEL_PLAIN_TOOL_NAMES, MODEL_WRITE_TOOL_NAMES } from "./tools.mjs";
-import { HARNESS_TOOL_NAMES } from './tools.mjs';
-import {validateFact} from '../../../../06-workbench/server/harness-contract.mjs';
-import {factEvidenceError} from '../../../../06-workbench/server/harness-fact-evidence.mjs';
-import {validateSchemaValue} from '../../../../06-workbench/server/harness-schema-validation.mjs';
-import {discoverySummary} from './disclosure-contracts.mjs';
-import {readHarnessReceipt,summarizeHarnessReceipt} from './receipt-presentation.mjs';
-import {guardHarnessBoundary} from './manifest-evidence-guard.mjs';
-import {listedToolsForProfile,toolsForProfile} from './tool-profile.mjs';
+import {validateSchemaValue} from '../../../../06-workbench/server/schema-validation.mjs';
+import {listDirectTools,directTools} from './direct-tool-catalog.mjs';
 import {FINANCE_MCP_DISCOVERY} from '../../hosts/shared/task-routing.mjs';
 import {DIRECT_TOOL_NAMES} from './direct-tools.mjs';
 import {callDirectFinanceTool} from '../../../../06-workbench/server/direct-finance.mjs';
@@ -36,14 +29,17 @@ import {BASELINE_OBSERVATIONS_SCHEMA} from '../../../../06-workbench/server/busi
 import {validateDirectInput} from '../../../../06-workbench/server/direct-finance-contracts.mjs';
 import {withFinanceCall,currentFinanceCall,annotateFinanceCall,hasDomainManagedSources} from '../../../../06-workbench/server/finance-call-chain.mjs';
 import {resolveDirectFinanceTarget,nativeVoucherObservation} from '../../../../06-workbench/server/direct-finance-target.mjs';
-import {PLUGIN_SKILL_FILES, HISTORICAL_SKILL_FILES, MOVED_SKILL_REFERENCES} from '../../../../06-workbench/server/finance-skill-assets.mjs';
+import {PLUGIN_SKILL_FILES, MOVED_SKILL_REFERENCES} from '../../../../06-workbench/server/finance-skill-assets.mjs';
 import {skillMetadata} from './skill-metadata.mjs';
 import {directRecovery,directErrorCode,directSchemaDiagnostics,directInterpretationDiagnostics,voucherCorrectionDiagnostics,DIRECT_MATERIAL_DIAGNOSTIC_TOOLS} from './direct-recovery.mjs';
 import {assertBusinessSessionToolTarget,resolveBusinessSessionBinding,prepareBusinessMemory} from '../../../../06-workbench/server/business-memory.mjs';
 import {needsBoundQuery} from '../../../../06-workbench/server/query-view-contract.mjs';
 import {retainDirectMethodProjection} from '../../../../06-workbench/server/finance-direct-method-result.mjs';
 
-const ACTIVE_PROFILE = process.env.FINANCE_MCP_PROFILE ?? 'direct';
+// 已生成的工作区仍可显式断言 direct。旧配置留在独立仓库。
+if ((process.env.FINANCE_MCP_PROFILE ?? 'direct') !== 'direct') {
+  throw new Error('finance_mcp_profile_invalid: use the direct host configuration');
+}
 // 四宿主在生成配置时尚未选择账套。MCP 启动后以已核实的会话统一定位本次调用和会计交接。
 if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINESS_SESSION&&existsSync(process.env.FINANCE_BUSINESS_SESSION)){
   const {loadBoundBusinessSession}=await import('../../hosts/shared/business-session.mjs');
@@ -54,12 +50,12 @@ if(process.env.FINANCE_AUDIT_MODE==='bound_account'&&process.env.FINANCE_BUSINES
 }
 const reviewOnly=process.env.FINANCE_DIRECT_ROLE==='delivery_reviewer';
 if(process.env.FINANCE_DIRECT_ROLE&&!reviewOnly)throw Error('finance_direct_role_invalid');
-if(reviewOnly&&(ACTIVE_PROFILE!=='direct'||!process.env.FINANCE_BUSINESS_SESSION))throw Error('finance_delivery_session_required');
+if(reviewOnly&&!process.env.FINANCE_BUSINESS_SESSION)throw Error('finance_delivery_session_required');
 const reviewTools=new Set(['finance_period_review','finance_query','finance_query_catalog']);
 const availableForRole=tool=>!reviewOnly||reviewTools.has(tool.name);
-const LISTED_TOOLS = listedToolsForProfile(ACTIVE_PROFILE, process.env.FINANCE_QUERY_DISCOVERY).filter(availableForRole);
-const catalogView = {canonicalQueryCatalog: ACTIVE_PROFILE === 'direct' && process.env.FINANCE_QUERY_DISCOVERY === 'canonical'};
-const CALLABLE_TOOL_NAMES = new Set(toolsForProfile(ACTIVE_PROFILE).filter(availableForRole).map(t => t.name));
+const LISTED_TOOLS = listDirectTools(process.env.FINANCE_QUERY_DISCOVERY).filter(availableForRole);
+const catalogView = {canonicalQueryCatalog: process.env.FINANCE_QUERY_DISCOVERY === 'canonical'};
+const CALLABLE_TOOL_NAMES = new Set(directTools.filter(availableForRole).map(t => t.name));
 
 // Claude Code 会过滤根带组合关键字的工具。恒真的 if 使 then 中的原约束仍对整个参数对象生效。
 // 只调整 tools/list 的展示；tools/call 和嵌套原生调用继续按 TOOL_BY_NAME 的原合同校验。
@@ -84,12 +80,9 @@ function listedTool({name, description, inputSchema, annotations}) {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RECON = join(__dirname, "..", "..", ".."); // 05-reconstruction/
 const CATALOG = JSON.parse(readFileSync(join(RECON, "catalog.json"), "utf8"));
-// 技能源固定在服务所属仓库，历史工具面仅选择仓库内专用目录。
+// 技能源固定在服务所属仓库。
 const PLUGIN_SKILLS_DIR = join(RECON, "..", "plugins", "finance", "skills");
-const SKILLS_DIR = ACTIVE_PROFILE === "direct"
-  ? PLUGIN_SKILLS_DIR
-  : join(RECON, "codex", "skills");
-if (process.env.FINANCE_SKILLS_DIR !== undefined && (!isAbsolute(process.env.FINANCE_SKILLS_DIR) || resolve(process.env.FINANCE_SKILLS_DIR) !== resolve(SKILLS_DIR))) {
+if (process.env.FINANCE_SKILLS_DIR !== undefined && (!isAbsolute(process.env.FINANCE_SKILLS_DIR) || resolve(process.env.FINANCE_SKILLS_DIR) !== resolve(PLUGIN_SKILLS_DIR))) {
   throw new Error("finance_external_skills_not_supported");
 }
 
@@ -97,10 +90,8 @@ const SERVER = { name: "finance-mcp", version: "0.2.0" };
 const PROTOCOL = "2025-06-18";
 
 // ------------------------------------------------------------------ 资源读取
-const directSkills = ACTIVE_PROFILE === 'direct';
-const focusedSkills = directSkills && process.env.FINANCE_SKILL_DISCOVERY === 'focused';
+const focusedSkills = process.env.FINANCE_SKILL_DISCOVERY === 'focused';
 const pluginMarkdown = new Set(PLUGIN_SKILL_FILES.filter(file => file.endsWith('.md')));
-const historicalMarkdown = new Set(HISTORICAL_SKILL_FILES.filter(file => file.endsWith('.md')));
 const primaryResources = [...pluginMarkdown].filter(file => file.endsWith('/SKILL.md'));
 
 // 在旧目录内已存在的专用正文有优先权，三份历史税务路径明确指向同一插件正文。
@@ -111,19 +102,12 @@ const sharedTaxReferences = new Map([
 ]);
 
 function listSkillFiles() {
-  if (!directSkills) return [...historicalMarkdown];
   return [...pluginMarkdown, ...Object.keys(MOVED_SKILL_REFERENCES)].sort();
 }
 
 function skillLocation(resource) {
   const name = posix.normalize(String(resource || '').replaceAll('\\', '/').split(/[?#]/)[0]);
-  let canonical = Object.hasOwn(MOVED_SKILL_REFERENCES, name) ? MOVED_SKILL_REFERENCES[name] : sharedTaxReferences.get(name);
-  if (!canonical && !directSkills && historicalMarkdown.has(name)) return {root: SKILLS_DIR, file:name};
-  if (!canonical && !directSkills) {
-    // 历史税务正文中的相对模板、角色等仍可按原目录下钻。
-    const alias = name.replace(/^(?:taxes-company-advisor|tax-filing)\//, 'tax-review/');
-    if (pluginMarkdown.has(alias)) canonical = alias;
-  }
+  const canonical = Object.hasOwn(MOVED_SKILL_REFERENCES, name) ? MOVED_SKILL_REFERENCES[name] : sharedTaxReferences.get(name);
   const file = canonical ?? name;
   if (!pluginMarkdown.has(file)) throw new ToolCallError('skill_not_found', 'skill_not_found');
   return {root: PLUGIN_SKILLS_DIR, file, ...(canonical && {resolvedResource:canonical})};
@@ -149,7 +133,7 @@ function readSkill({root, file}, headerOnly = false) {
 }
 
 function listSkills(view) {
-  if (directSkills && (view === 'focused' || (!view && focusedSkills))) {
+  if (view === 'focused' || (!view && focusedSkills)) {
     const entries = primaryResources.map(resource => {
       const {name, description} = skillMetadata(resource, readSkill(skillLocation(resource), true));
       return {name, description, resource};
@@ -160,7 +144,7 @@ function listSkills(view) {
   for (const file of files) {
     const header = readSkill(skillLocation(file), true);
     labels[file] = header.match(/^#\s+(.+)$/m)?.[1]?.trim() || file;
-    if (file.endsWith('/SKILL.md')) entries.push(skillMetadata(file, header, {includeRole:directSkills}));
+    if (file.endsWith('/SKILL.md')) entries.push(skillMetadata(file, header, {includeRole:true}));
   }
   return {files, labels, entries};
 }
@@ -187,7 +171,6 @@ function preflightTool(name,args={}) {
   // schema 前置拒绝：只回字段名 / 枚举常量，不四显调用参数值。
   const problems = validateArgs(spec.inputSchema, args);
   const domainProblems=hasDomainManagedSources(name)||name==='finance_rules'?validateSchemaValue(spec.inputSchema,args):undefined;
-  if(HARNESS_TOOL_NAMES.has(name)&&args&&typeof args==='object'&&Object.keys(args).some(k=>!Object.hasOwn(spec.inputSchema.properties,k)))problems.push('harness_unknown_argument');
   if (problems.length||domainProblems?.length) {
     let diagnostics;
     if(name==='voucher_correct') diagnostics=voucherCorrectionDiagnostics(spec.inputSchema,domainProblems,args);
@@ -234,29 +217,6 @@ async function callTool(name, args = {}, executionOptions={}) {
     const location = skillLocation(args.resource);
     return {resource:args.resource, ...(location.resolvedResource && {resolvedResource:location.resolvedResource}), markdown:readSkill(location)};
   }
-  if (HARNESS_TOOL_NAMES.has(name)) {
-    try {
-      const { callHarnessTool } = await import('../../../../06-workbench/server/harness-runtime.mjs');
-      const {responseMode,capabilityId,factEvidencePolicy,domain,query,offset,limit,...nativeArgs}=args;
-      const schemaProblems=validateSchemaValue(spec.inputSchema,args);
-      if(schemaProblems.length){
-        // 保留已有的字段级诊断，期间不读取业务输入。
-        if(['harness_source_register','harness_request_materials'].includes(name))await guardHarnessBoundary(name,args);
-        if(name==='harness_facts_register'&&Array.isArray(args.facts))for(const fact of args.facts)try{validateFact(fact);}catch(e){throw factEvidenceError(e,fact,{field:'fact'});}
-        throw new ToolCallError('harness_tool_input_invalid','harness_tool_input_invalid',{tool:name,problems:schemaProblems,errorInventory:{total:schemaProblems.length,shown:schemaProblems.length,omitted:0}});
-      }
-      if(name==='harness_receipt_read')return await readHarnessReceipt(args);
-      const evidenceIssues=await guardHarnessBoundary(name,args);
-      const result=await callHarnessTool(name,nativeArgs);
-      if(evidenceIssues.some(i=>i.layer!=='input_contract'))result.evidenceIssues=evidenceIssues.filter(i=>i.layer!=='input_contract');
-      if(evidenceIssues.some(i=>i.layer==='input_contract'))result.contractIssues=evidenceIssues.filter(i=>i.layer==='input_contract');
-      if(name==='harness_discover')return responseMode==='full'&&!capabilityId&&domain===undefined&&query===undefined&&offset===undefined&&limit===undefined?result:discoverySummary(result,capabilityId,responseMode==='full',{domain,query,offset,limit});
-      if(!args.storePath||responseMode==='full')return result;
-      try{return await summarizeHarnessReceipt(args.storePath,name,result);}
-      catch(e){return {status:'unknown',code:'harness_receipt_persistence_failed',nativeStatus:result?.status??null,operationState:result?.operationState??result?.receipt?.executionState??null,resultCurrent:result?.resultCurrent??null,confirmationCurrent:result?.confirmationCurrent??null,operationId:result?.receipt?.operationId??null,taskId:args.taskId??null,outcome:'native_call_may_have_completed',retryBlockedBy:'query_original_operation',nextSteps:[{tool:args.taskId?'harness_run':'harness_status',...(args.taskId?{phase:'query',taskId:args.taskId}:{})}],details:{nativeJournalPreserved:true,presentationError:e.code??'receipt_storage_unavailable'}};}
-    } catch(e) {throw new ToolCallError(/^harness_[a-z0-9_]+$/.test(e?.code)?e.code:'harness_operation_failed','harness_operation_failed',e.details);}
-  }
-
   // ---- legacy_book_import：本机路径读盘 + 默认预检 ----
   const payload = { ...args };
   const scopedView = needsBoundQuery(name,args);
@@ -284,7 +244,7 @@ async function callTool(name, args = {}, executionOptions={}) {
   }
 
   // 普通财务工具 → 固定模型通道（返回已校验信封）；税务 / 目录 → 既有原始通道。
-  if (ACTIVE_PROFILE === 'direct' && process.env.FINANCE_CORRECTION_SOURCE_DIGEST
+  if (process.env.FINANCE_CORRECTION_SOURCE_DIGEST
       && MODEL_PLAIN_TOOL_NAMES.includes(name) && payload.accountSetId !== undefined) {
     const binding = resolveBusinessSessionBinding();
     if (!binding || Number(payload.accountSetId) !== binding.scope.accountSetId) {
@@ -358,21 +318,18 @@ const ok = (id, result) => send({ jsonrpc: "2.0", id, result });
 const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
 
 /** 失败统一返回结构化内容 + isError: true。 */
-function errorResult(e) {
+function errorResult(e, name, args) {
+  if (DIRECT_TOOL_NAMES.has(name)) {
+    const nextSteps = directRecovery(name, {code: e?.code, args});
+    if (nextSteps.length) {
+      e = new ToolCallError(e.code, e.message, {...(e.details ?? {}), nextSteps});
+    }
+  }
   const payload = { error: e?.code || "tool_error", message: typeof e?.message === "string" && e.message ? e.message : "tool_error" };
   if (e?.tool) payload.tool = e.tool;
   if (e?.details !== undefined && e?.details !== null) payload.details = e.details;
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
 }
-async function harnessErrorResult(e,name,args){
-  if(DIRECT_TOOL_NAMES.has(name)){const nextSteps=directRecovery(name,{code:e?.code,args});if(nextSteps.length)return errorResult(new ToolCallError(e.code,e.message,{...(e.details??{}),nextSteps}));}
-  if(!HARNESS_TOOL_NAMES.has(name)||!args?.storePath||!e?.details||args.responseMode==='full')return errorResult(e);
-  const native={status:'failed',code:e.code??'harness_operation_failed',blockers:e.details.evidenceIssues??e.details.problems??e.details.blockers??[],details:e.details,...(e.details.contractIssues?{contractIssues:e.details.contractIssues}:{}),nextSteps:e.details.contract?[{action:'inspect_selected_contract_and_repair_indicated_fields',...e.details.contract,hint:e.details.hint}]:[{action:e.code==='harness_phase_unsupported'?'choose_supported_phase':'resolve_indicated_facts_or_evidence',tool:e.code==='harness_phase_unsupported'?'harness_discover':'harness_facts_register',...(e.details.capabilityId?{capabilityId:e.details.capabilityId}:{}),hint:e.details.hint??'Resolve the specific field/source problems above; preserve unknown original writes and use query before retry.'}]};
-  try{const payload=await summarizeHarnessReceipt(args.storePath,name,native);return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload,isError:true};}
-  catch{return errorResult(new ToolCallError(e.code??'harness_operation_failed','harness_operation_failed',{fullErrorPersistenceFailed:true,errorCount:native.blockers.length,nextStep:'Inspect local native journal and resolve the original error; do not blindly repeat a write.'}));}
-}
-
-/** 模型通道运输失败：只回固定常量，不带响应片段 / 地址 / 原始异常。 */
 function transportFailureResult(failure) {
   const payload = {
     error: failure.error.code,
@@ -411,7 +368,7 @@ rl.on("line", async (line) => {
       protocolVersion: PROTOCOL,
       capabilities: { tools: {}, resources: {} },
       serverInfo: SERVER,
-      ...(ACTIVE_PROFILE === 'direct' ? {instructions: FINANCE_MCP_DISCOVERY} : {})
+      instructions: FINANCE_MCP_DISCOVERY
     });
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
@@ -436,13 +393,13 @@ rl.on("line", async (line) => {
         return ok(id, withReference(envelopeResult(checked.envelope)));
       }
       const compactContract=params?.name==='finance_record_contract'&&['baseline','prebook'].includes(params?.arguments?.recordType);
-      const text=HARNESS_TOOL_NAMES.has(params?.name)||compactContract?JSON.stringify(result):JSON.stringify(result,null,2);
+      const text=compactContract?JSON.stringify(result):JSON.stringify(result,null,2);
       const failed=['failed','unknown'].includes(result?.status)||params?.name==='finance_rules'&&result?.status==='unavailable';
-      return ok(id, withReference({content:[{type:'text',text}],...((HARNESS_TOOL_NAMES.has(params?.name)||DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(failed?{isError:true}:{})}:{})}));
+      return ok(id, withReference({content:[{type:'text',text}],...((DIRECT_TOOL_NAMES.has(params?.name))?{structuredContent:result,...(failed?{isError:true}:{})}:{})}));
     } catch (e) {
       if (e instanceof ModelTransportError) return ok(id, withReference(transportFailureResult(e.failure)));
       if(e?.code==='finance_call_recording_failed')return ok(id,withReference({isError:true,content:[{type:'text',text:JSON.stringify({code:e.code,writeOutcome:'unknown',retryable:false,executionCompleted:e.executionCompleted===true})}]}));
-      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, withReference(await harnessErrorResult(e,params?.name,params?.arguments)));
+      if (e instanceof BackendError || e instanceof ToolCallError) return ok(id, withReference(errorResult(e, params?.name, params?.arguments)));
       return ok(id, withReference(errorResult(new ToolCallError("tool_error", "tool_error"))));
     }
   }

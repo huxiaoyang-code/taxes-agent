@@ -524,11 +524,11 @@ try {
     assert.equal(after.projection.accountSetCount, before.projection.accountSetCount);
   });
 
-  await test("边界：未实现的发票/申报/exec 工具如实返回 isError", async () => {
+  await test("边界：旧发票/申报/exec 工具在 direct 返回 isError", async () => {
     for (const name of ["invoice_issue", "invoice_collect", "declaration_query", "exec"]) {
       const r = await client.call(name, {});
       assert.equal(r.isError, true, `${name} 应 isError`);
-      assert.equal(r.data?.error, "not_implemented", `${name} 应 not_implemented`);
+      assert.equal(r.data?.error, "tool_not_available", `${name} 应在 direct 拒绝`);
     }
   });
 

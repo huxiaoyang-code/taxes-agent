@@ -6,7 +6,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {captureEvidenceSource,parseEvidenceCsv} from './business-evidence.mjs';
 import {currentFinanceCall,financeAuditDirectory,annotateFinanceCall} from './finance-call-chain.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {REVIEW_CARD_SCHEMA,buildFinanceReviewCard,renderFinanceReviewCard} from './finance-review-card.mjs';
 
 const text={type:'string',minLength:1,maxLength:8000};

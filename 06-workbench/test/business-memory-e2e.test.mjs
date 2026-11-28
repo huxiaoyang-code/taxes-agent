@@ -111,7 +111,13 @@ test('R01-R14 企业方法真实贯通、两企业两月、重启、来源迁移
    const cleared=randomUUID();for(const source of ['clear','resume'])assert.deepEqual(nodeOk(runNode(workspace,['--claude-hook'],'business-memory-context.mjs',JSON.stringify(hook(source,cleared)))),{});
    assert.equal(readFileSync(prepared.memoryPath,'utf8'),memory);assert.equal(logicalSnapshot(f.dbPath),snapshot);
    const unknown=randomUUID(),refused=nodeOk(runNode(workspace,['--claude-hook'],'business-memory-context.mjs',JSON.stringify(hook('resume',unknown))));assert.equal(refused.continue,false);assert.match(refused.stopReason,/claude_business_resume_unbound/);assert.equal(runNode(workspace,['--claude-guard'],'business-memory-context.mjs',JSON.stringify({hook_event_name:'UserPromptSubmit',cwd:workspace,session_id:unknown})).status,2);
-   const spec=buildClaudeLaunchSpec(workspace,parseClaudeArgs(['--claude-cli',join(workspace,'business-memory-context.mjs')]));assert.equal(spec.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,undefined);assert.deepEqual(JSON.parse(spec.args[spec.args.indexOf('--settings')+1]),{autoMemoryEnabled:true,autoMemoryDirectory:dirname(prepared.memoryPath)});for(const override of ['--settings','--setting-sources','--mcp-config'])assert.throws(()=>parseClaudeArgs(['--claude-cli',join(workspace,'business-memory-context.mjs'),'--',override,'anything']),/claude_launch_override_rejected/);
+   const spec=buildClaudeLaunchSpec(workspace,parseClaudeArgs(['--claude-cli',join(workspace,'business-memory-context.mjs')]));assert.equal(spec.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,undefined);
+   const {permissions: boundPermissions, ...memorySettings} = JSON.parse(spec.args[spec.args.indexOf('--settings')+1]);
+   assert.deepEqual(memorySettings, {autoMemoryEnabled:true,autoMemoryDirectory:dirname(prepared.memoryPath)});
+   assert.deepEqual(boundPermissions, {allow: [...new Set([...settings.permissions.allow,
+     'mcp__finance__account_list', 'mcp__finance__finance_query', 'Edit(/outputs/*.csv)', 'Edit(/outputs/*.md)',
+   ])]});
+   for(const override of ['--settings','--setting-sources','--mcp-config'])assert.throws(()=>parseClaudeArgs(['--claude-cli',join(workspace,'business-memory-context.mjs'),'--',override,'anything']),/claude_launch_override_rejected/);
    boundMcp=await startMcp(f,{sourceRoot:f.sourceB,auditDir:f.auditB,sessionPath:join(workspace,'.finance/business-session.json')});assert.equal((await boundMcp.call('finance_company_context',{target:targetB})).isError,true);assert.equal((await boundMcp.call('finance_company_context',{target:september})).isError,true);
    report.workspace=workspace;report.nodeHookLifecycle={startup:true,resume:true,clear:true,compact:true,additionalContext:false,realClaude:false};
   });

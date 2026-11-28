@@ -134,10 +134,10 @@ try {
       "opening_balance_get", "opening_balance_set",
       "period_list", "period_set_status",
       "voucher_post", "voucher_unpost", "voucher_delete",
-      "ledger_query", "update_plan",
-      "invoice_issue", "declaration_query", "tax_declaration_query", "exec", "finance_task_status",
+      "ledger_query",
     ];
     for (const n of required) assert.ok(names.includes(n), `缺少工具 ${n}`);
+    assert.equal(names.some(name => ["update_plan", "invoice_issue", "declaration_query", "exec", "finance_task_status"].includes(name)), false);
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema?.type, "object", `${t.name} 应有 object schema`);
       assert.ok(t.description && t.description.length > 4, `${t.name} 应有描述`);
@@ -508,23 +508,14 @@ try {
     assert.equal(r.data.error.code, "account_set_not_found");
   });
 
-  await test("未实现工具（发票/申报/exec/任务状态）返回 isError", async () => {
+  await test("非 direct 工具在进入后端前结构化拒绝", async () => {
     for (const name of ["invoice_issue", "invoice_precheck", "invoice_tax_code",
-      "declaration_query", "tax_declaration_query", "exec", "finance_task_status"]) {
+      "declaration_query", "tax_declaration_query", "exec", "finance_task_status", "update_plan"]) {
       const r = await client.call(name, {});
       assert.equal(r.isError, true, `${name} 应 isError`);
-      assert.equal(r.data?.error, "not_implemented", `${name} 应结构化 not_implemented`);
-      assert.ok(r.structured?.error === "not_implemented", `${name} 应有 structuredContent`);
+      assert.equal(r.data?.error, "tool_not_available", `${name} 应在 direct 拒绝`);
+      assert.equal(r.structured?.error, "tool_not_available", `${name} 应有 structuredContent`);
     }
-  });
-
-  await test("update_plan 不谎报持久化、不回显计划文本", async () => {
-    const r = await client.call("update_plan", { plan: ["导入旧账", "出报表"] });
-    assert.equal(r.isError, false, r.text);
-    assert.equal(r.data.projection.saved, false);
-    assert.equal(r.data.projection.persisted, false);
-    assert.equal(r.data.projection.planItemCount, 2);
-    assert.equal(r.text.includes("导入旧账"), false);
   });
 
   await test("account_context 不保存当前账套且不做写操作", async () => {

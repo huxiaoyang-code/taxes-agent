@@ -11,7 +11,7 @@ import {callDirectFinanceTool} from '../server/direct-finance.mjs';
 import {withFinanceCall,readFinanceCall} from '../server/finance-call-chain.mjs';
 import {DIRECT_RECORD,RECORD_EXAMPLES,validateDirectInput} from '../server/direct-finance-contracts.mjs';
 import {DIRECT_TOOLS} from '../../05-reconstruction/codex/mcp/finance-mcp/direct-tools.mjs';
-import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
+import {directTools} from '../../05-reconstruction/codex/mcp/finance-mcp/direct-tool-catalog.mjs';
 import {resolveDirectFinanceTarget} from '../server/direct-finance-target.mjs';
 import {currentFinanceCall} from '../server/finance-call-chain.mjs';
 import {captureBusinessEvidence} from '../server/business-evidence.mjs';
@@ -62,9 +62,8 @@ test('坏第二行/非法结算/超应收拒绝整笔，库存VAT和后续有效
  }
 });
 test('direct默认只暴露真实可用直接业务，不带Harness或占位接口',()=>{
- const names=toolsForProfile().map(t=>t.name);for(const t of DIRECT_TOOLS)assert(names.includes(t.name));
+ const names=directTools.map(t=>t.name);for(const t of DIRECT_TOOLS)assert(names.includes(t.name));
  assert(names.includes('voucher_create'));assert(names.includes('finance_query'));assert(!names.some(n=>n.startsWith('harness_')));assert(!names.includes('invoice_issue'));assert(!names.includes('update_plan'));
- assert(toolsForProfile('harness').some(t=>t.name==='harness_run'));assert(toolsForProfile('legacy').some(t=>t.name==='harness_run'));
 });
 test('字段类型错误在计算前定位；不把金额字符串转为boolean',()=>{
  const contract={...fixture()[0],type:'contract',separatelyStatedVat:'13000.00'};

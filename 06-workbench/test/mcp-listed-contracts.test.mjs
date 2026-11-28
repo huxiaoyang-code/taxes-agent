@@ -5,8 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {McpStdioClient} from '../../05-reconstruction/codex/mcp/finance-mcp/mcp-stdio-client.mjs';
-import {toolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
-import {validateSchemaValue} from '../server/harness-schema-validation.mjs';
+import {directTools} from '../../05-reconstruction/codex/mcp/finance-mcp/direct-tool-catalog.mjs';
+import {validateSchemaValue} from '../server/schema-validation.mjs';
 
 const server = fileURLToPath(new URL('../../05-reconstruction/codex/mcp/finance-mcp/server.mjs', import.meta.url));
 const root = mkdtempSync(join(tmpdir(), 'mcp-listed-contracts-'));
@@ -86,7 +86,7 @@ async function verifyListedContracts(t, discovery) {
       assert.deepEqual(bank.filter(tool => intent.test(tool.description)).map(tool => tool.name), [expected]);
     }
   });
-  const direct = toolsForProfile('direct');
+  const direct = directTools;
   const canonical = discovery === 'canonical' ? direct.filter(tool => tool.name !== 'ledger_query') : direct;
   assert.equal(published.some(tool => tool.name === 'ledger_query'), discovery !== 'canonical');
   assert.deepEqual(published.map(tool => tool.name), canonical.map(tool => tool.name));

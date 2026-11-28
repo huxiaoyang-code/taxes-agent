@@ -727,7 +727,7 @@ function batchContentValid(db,version) {
  if(component.length!==1||component[0].component!==LOCAL_BATCH_COMPONENT||component[0].version!==version||!batchIso(component[0].updated_at)||(component[0].note!==null&&typeof component[0].note!=='string'))return false;
  const jobs=db.prepare('SELECT * FROM local_batch_jobs').all(),items=db.prepare('SELECT * FROM local_batch_items').all();
  const jobMap=new Map(),itemMap=new Map(items.map(r=>[r.id,r]));
- for(const j of jobs){const m=readSavedJson(j.manifest_json),validated=validateManifest(m);if(!validated.ok||canonicalJson(validated.manifest)!==j.manifest_json||!positive(j.id)||!batchTech(j.job_key)||!batchDigest(j.manifest_hash)||sha256(j.manifest_json)!==j.manifest_hash||m.jobKey!==j.job_key||m.schemaVersion!==1||!Array.isArray(m.items)||m.concurrency!==j.concurrency||!Number.isInteger(j.concurrency)||j.concurrency<1||j.concurrency>8||!batchPath(j.output_dir)||!Object.values(JOB_STATUS).includes(j.status)||![0,1].includes(j.cancel_requested)||!batchIso(j.created_at)||!batchIso(j.updated_at))return false;jobMap.set(j.id,{...j,manifest:m});}
+ for(const j of jobs){const m=readSavedJson(j.manifest_json),validated=parseManifest(m, true);if(!validated.ok||canonicalJson(validated.manifest)!==j.manifest_json||!positive(j.id)||!batchTech(j.job_key)||!batchDigest(j.manifest_hash)||sha256(j.manifest_json)!==j.manifest_hash||m.jobKey!==j.job_key||m.schemaVersion!==1||!Array.isArray(m.items)||m.concurrency!==j.concurrency||!Number.isInteger(j.concurrency)||j.concurrency<1||j.concurrency>8||!batchPath(j.output_dir)||!Object.values(JOB_STATUS).includes(j.status)||![0,1].includes(j.cancel_requested)||!batchIso(j.created_at)||!batchIso(j.updated_at))return false;jobMap.set(j.id,{...j,manifest:m});}
  for(const r of items){const j=jobMap.get(r.job_id),m=j?.manifest.items.find(i=>i.itemKey===r.item_key);if(!positive(r.id)||!m||m.source?.enterpriseKey!==r.enterprise_key||m.source?.system!==r.source_system||m.source?.enterpriseName!==r.enterprise_name||!Object.values(ITEM_STATUS).includes(r.status)||!batchIso(r.created_at)||!batchIso(r.updated_at)||(r.account_set_id!==null&&!positive(r.account_set_id)))return false;}
  for(const j of jobMap.values())if(j.manifest.items.length!==items.filter(i=>i.job_id===j.id).length)return false;
  const inputs=db.prepare('SELECT * FROM local_batch_inputs').all(),inputMap=new Map(inputs.map(r=>[r.input_key,r]));
@@ -744,7 +744,7 @@ function batchContentValid(db,version) {
    const saved=inputMap.get(j.id+':'+item.id+':'+imp.batchId);if(!saved||saved.period!==period.period)return false;
    imp.payloadFile=null;imp.payload=JSON.parse(Buffer.from(saved.content).toString('utf8'));
   }
-  for(const plan of buildPlan({manifest:copy,manifestDir:'.'}).plans) {
+  for(const plan of buildManifestPlan({manifest:copy,manifestDir:'.'}, true).plans) {
    const item=items.find(i=>i.job_id===j.id&&i.item_key===plan.itemKey);
    for(const stage of plan.stages) {
     if(stage.stageKey.startsWith('import:'))stage.spec.payloadHash=inputMap.get(j.id+':'+item.id+':'+stage.spec.batchId).source_hash;
@@ -957,7 +957,7 @@ const ALLOWED = {
   root: ["schemaVersion", "jobKey", "concurrency", "items"],
   item: ["itemKey", "source", "accountSetId", "periods"],
   source: ["system", "enterpriseKey", "enterpriseName"],
-  period: ["period", "imports", "post", "depreciation", "carryforward", "periodCheck", "close", "reports", "harnessTasks"],
+  period: ["period", "imports", "post", "depreciation", "carryforward", "periodCheck", "close", "reports"],
   import: ["batchId", "mode", "payloadFile", "payload", "confirmNewBinding"],
   post: ["vouchers"],
   voucherRef: ["voucherId", "sourceVoucherId"],
@@ -965,8 +965,10 @@ const ALLOWED = {
   report: ["kind", "formats", "code"],
 };
 
+// 复算历史阶段稳定键，仅供持久化结构核验。
 const harnessStoreIdentity=path=>process.platform==='win32'?resolve(path).toLowerCase():resolve(path);
-export const harnessBatchStageKey=task=>`harness:${task.taskId}:${sha256(canonicalJson({storePath:harnessStoreIdentity(task.storePath),taskId:task.taskId}))}`;
+const harnessBatchStageKey=task=>`harness:${task.taskId}:${sha256(canonicalJson({storePath:harnessStoreIdentity(task.storePath),taskId:task.taskId}))}`;
+
 function rejectUnknownKeys(raw, allowed, where, errors) {
   for (const key of Object.keys(raw)) {
     if (!allowed.includes(key)) errors.push(`${where} 含未知字段：${key}（schemaVersion=1 只接受白名单字段）`);
@@ -993,6 +995,10 @@ function text(raw, where, errors, { required = false, max = 128 } = {}) {
  * 不访问数据库、不读取 payload 文件内容（读取字节与指纹由调用方在同一份字节上完成）。
  */
 export function validateManifest(raw) {
+  return parseManifest(raw, false);
+}
+
+function parseManifest(raw, readHistoricalStages) {
   const errors = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ["manifest 必须是 JSON 对象"], manifest: null };
   rejectUnknownKeys(raw, ALLOWED.root, "manifest", errors);
@@ -1049,7 +1055,8 @@ export function validateManifest(raw) {
     (Array.isArray(rawItem.periods) ? rawItem.periods : []).forEach((rawPeriod, pIndex) => {
       const pWhere = `${where}.periods[${pIndex}]`;
       if (!isPlainObject(rawPeriod)) { errors.push(`${pWhere} 必须是对象`); return; }
-      rejectUnknownKeys(rawPeriod, ALLOWED.period, pWhere, errors);
+      const allowedPeriod = readHistoricalStages ? [...ALLOWED.period, "harnessTasks"] : ALLOWED.period;
+      rejectUnknownKeys(rawPeriod, allowedPeriod, pWhere, errors);
       const period = text(rawPeriod.period, `${pWhere}.period`, errors, { required: true, max: 7 });
       if (period && !PERIOD_RE.test(period)) errors.push(`${pWhere}.period 必须是合法的 YYYY-MM（月份 01-12）`);
       if (period) {
@@ -1177,7 +1184,7 @@ export function validateManifest(raw) {
         });
       }
       const harnessTasks=[];
-      if(rawPeriod.harnessTasks!==undefined){
+      if(readHistoricalStages && rawPeriod.harnessTasks!==undefined){
        if(!Array.isArray(rawPeriod.harnessTasks)||rawPeriod.harnessTasks.length>200)errors.push(`${pWhere}.harnessTasks must be an array of at most 200 current native Harness task bindings`);
        else for(const t of rawPeriod.harnessTasks){
         if(!isPlainObject(t)||Object.keys(t).some(k=>!['storePath','taskId','capabilityId','dependencyDigest'].includes(k))||typeof t.storePath!=='string'||!isAbsolute(t.storePath)||!JOB_KEY_RE.test(t.taskId??'')||!['agency.workpaper','agency.posting','agency.annual-calculation','annual.inspect','period.inspect','period.impact','period.carryforward','period.close','period.reopen','period.unpost-derived'].includes(t.capabilityId)||!/^[a-f0-9]{64}$/.test(t.dependencyDigest??''))errors.push(`${pWhere}.harnessTasks invalid explicit task identity/version`);
@@ -1200,7 +1207,7 @@ export function validateManifest(raw) {
         periodCheck: rawPeriod.periodCheck === true,
         close: rawPeriod.close === true,
         reports,
-        ...(harnessTasks.length?{harnessTasks}:{}),
+        ...(harnessTasks.length ? {harnessTasks} : {}),
       });
     });
     items.push({ itemKey, source: sourceValue, accountSetId, periods });
@@ -1702,7 +1709,11 @@ function assertPayloadObject(bytes, label) {
  * 把已校验的 manifest 展开为 items / stages / 输入快照（纯函数，不写库）。
  * 阶段顺序固定：import(s) → post → depreciation → carryforward → period-check → close → reports。
  */
-export function buildPlan({ manifest, manifestDir }) {
+export function buildPlan(options) {
+  return buildManifestPlan(options, false);
+}
+
+function buildManifestPlan({ manifest, manifestDir }, readHistoricalStages) {
   const plans = [];
   const inputs = [];
   for (const item of manifest.items) {
@@ -1717,7 +1728,12 @@ export function buildPlan({ manifest, manifestDir }) {
     }));
     for (const periodSpec of item.periods) {
       const period = periodSpec.period;
-      for(const task of periodSpec.harnessTasks??[]){const stageKey=harnessBatchStageKey(task);push(period,stageKey,task,stageHash(period,stageKey,task));}
+      if (readHistoricalStages) {
+        for (const task of periodSpec.harnessTasks ?? []) {
+          const stageKey = harnessBatchStageKey(task);
+          push(period, stageKey, task, stageHash(period, stageKey, task));
+        }
+      }
       for (const raw of periodSpec.imports) {
         let bytes;
         let sourcePath = null;
@@ -1779,6 +1795,14 @@ export function newInstanceId(pid = process.pid) {
   return `runner-${pid}-${randomUUID().slice(0, 8)}`;
 }
 
+// 保留已迁出的任务阶段供只读查询，任何阶段推进交由旧版维护仓库。
+export function assertDirectBatchJob(db, job) {
+  const archivedStage = db.prepare(`SELECT 1 FROM local_batch_stages AS stage
+    JOIN local_batch_items AS item ON item.id=stage.item_id
+    WHERE item.job_id=? AND stage.stage_key GLOB 'harness:*' LIMIT 1`).get(job.id);
+  if (archivedStage) FAIL('legacy_harness_repository_required', {jobKey: job.job_key});
+}
+
 // ---------------------------------------------------------------- 取消 / 重试
 /**
  * 请求取消：只登记用户意图。正在执行（running）的阶段不会被伪报 cancelled，
@@ -1789,6 +1813,7 @@ export function requestCancel(db, jobKey, { pid = process.pid, instance = newIns
   assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) FAIL("job_not_found", { jobKey });
+  assertDirectBatchJob(db, job);
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(`UPDATE local_batch_jobs SET cancel_requested=1, updated_at=? WHERE id=?`).run(nowIso(), job.id);
@@ -1835,6 +1860,7 @@ export function resetStagesForRetry(db, { jobKey, itemKey = null, period = null,
   assertBatchRunnable(db);
   const job = getJobByKey(db, jobKey);
   if (!job) FAIL("job_not_found", { jobKey });
+  assertDirectBatchJob(db, job);
   const manifest = safeJson(job.manifest_json);
   const items = listItems(db, job.id).filter((item) => !itemKey || item.item_key === itemKey);
   if (itemKey && !items.length) FAIL("job_item_not_found", { jobKey, itemKey });

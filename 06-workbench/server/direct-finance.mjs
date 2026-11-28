@@ -1,5 +1,5 @@
 import {baselineMaterialContract} from './business-baseline-contracts.mjs';
-// 直接业务适配：复用固定中国核算模块，不经过 Harness 的事实、任务或依赖图。
+// 直接业务适配复用原生核算模块与实际账套。
 import { mkdirSync, writeFileSync, readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { resolve, dirname, join, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';

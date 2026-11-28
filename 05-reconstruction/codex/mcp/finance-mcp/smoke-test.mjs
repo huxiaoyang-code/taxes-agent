@@ -97,15 +97,15 @@ try {
 
   const skills = await client.call("skills_list");
   console.log("skill files:", skills.data?.files?.length);
-  const read = await client.call("skills_read", { resource: "bookkeeping/SKILL.md" });
-  check("skills_read bookkeeping/SKILL.md", !read.isError && (read.data?.markdown || "").length > 0, read.text?.slice(0, 80));
+  const read = await client.call("skills_read", { resource: "journal-entry/SKILL.md" });
+  check("skills_read journal-entry/SKILL.md", !read.isError && (read.data?.markdown || "").length > 0, read.text?.slice(0, 80));
   const missing = await client.call("skills_read", { resource: "../secret.md" });
   check("skills_read 越界路径返回 isError", missing.isError === true);
   check("skills_read 越界不回显路径", missing.isError === true && !missing.text.includes("../secret.md"));
 
   for (const t of ["invoice_issue", "declaration_query", "exec", "finance_task_status"]) {
     const r = await client.call(t, {});
-    check(`${t} 返回 isError 且结构化`, r.isError === true && r.data?.error === "not_implemented", r.text?.slice(0, 120));
+    check(`${t} 返回 isError 且结构化`, r.isError === true && r.data?.error === "tool_not_available", r.text?.slice(0, 120));
   }
   const unknown = await client.call("no_such_tool", {});
   check("未知工具返回 isError", unknown.isError === true && unknown.data?.error === "unknown_tool");

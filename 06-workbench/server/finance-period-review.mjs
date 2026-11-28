@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {readFinanceCall,financeAuditDirectory,annotateFinanceCall,currentFinanceCall} from './finance-call-chain.mjs';
 import {resolveDirectFinanceTarget} from './direct-finance-target.mjs';
-import {validateSchemaValue} from './harness-schema-validation.mjs';
+import {validateSchemaValue} from './schema-validation.mjs';
 import {reviewDeliveryFiles} from './finance-delivery-check.mjs';
 import {FINANCE_PERIOD_REVIEW_SCHEMA} from './finance-period-review-contracts.mjs';
 import {digest as vatDigest} from './finance-prebook-evidence.mjs';

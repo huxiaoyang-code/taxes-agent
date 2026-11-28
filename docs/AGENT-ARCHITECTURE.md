@@ -42,7 +42,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 | 入口 | 实现 | 职责 |
 |---|---|---|
 | Skill 与宿主 | `plugins/finance/skills/`、`05-reconstruction/codex/hosts/`、Pi `finance-direct.ts` | 业务方法与按需披露，选择计算载体与业务方法，明确规则来源和适用性 |
-| 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`tool-profile.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
+| 财税 MCP | `mcp/finance-mcp/server.mjs`、`direct-tools.mjs`、`direct-tool-catalog.mjs` | 默认 direct 工具面、输入校验、真实模块分派、模型投影 |
 | 原生业务 | `06-workbench/server/direct-finance.mjs`、`agency-business.mjs`、`accounting.mjs` | 已支持的底稿/税费/凭证/账簿/报表计算与受控写入 |
 
 四宿主共用的 `finance_vat_plan` 从明确账套、决策日与本机来源映射构造逐票候选，按 Agent 给出的两个计划逐月调用一般计税算式。来源索引、预测条件和账期结果可按调用编号复核。模拟只读打开现库；正式确认、申报及缴款由业务的实际回执证明。
@@ -96,7 +96,7 @@ Agent 根据目标自主调查与选择工具；后台没有为它建立新的�
 
 ## 宿主与渐进披露
 
-九个原生主技能各保留一个 `SKILL.md`。direct MCP 在 `FINANCE_SKILL_DISCOVERY=focused` 时从已登记的主入口读取名称和用途，按需通过完整目录查辅助方法、模板和共享参考。旧目录和已保存的技能路径仍指向包内规范正文。MCP 与宿主分别说明工具发现和长期业务委托。原件核账与银行工作台保存操作的条件见[对账技能](../plugins/finance/skills/reconciliation/SKILL.md)。
+九个原生主技能各保留一个 `SKILL.md`。direct MCP 在 `FINANCE_SKILL_DISCOVERY=focused` 时从已登记的主入口读取名称和用途，按需通过完整目录查辅助方法、模板和共享参考。仍在使用的历史资源名通过登记的别名读取包内规范正文。MCP 与宿主分别说明工具发现和长期业务委托。原件核账与银行工作台保存操作的条件见[对账技能](../plugins/finance/skills/reconciliation/SKILL.md)。
 
 `finance-host-config.mjs` 生成全新工作区，默认 profile=direct，技能来自同仓库 `plugins/finance/skills`；不接受外部插件路径，`--audit-dir` 可指定本机记录目录。Pi 使用原生 MCP 与 tool-search，初始只披露规则查询和 Skill 读取，其余工具按需加载；Claude Code、dsh、ZCode 使用各自原生 MCP/Skill 格式。工具面不是文件系统沙箱，生成配置不授予写账或资料外发权限。
 
@@ -126,7 +126,7 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 ## 整期任务入口与接续
 
-月结按实际问题调用同一份[逐票抵扣规划](../plugins/finance/skills/tax-review/references/vat-planning.md)、[跨期现金简报](../plugins/finance/skills/tax-review/references/tax-cash-brief.md)和[当期及年度申报准备](../plugins/finance/skills/tax-review/references/tax-organizer.md)。角色、模板、示例和两个固定上游版本的改编位置列在[来源清单](../plugins/finance/SOURCES.md)。旧申报与顾问配置可按原资源名读回完整的共用正文，随后按返回的规范资源名解析相对链接，沿工作流读取同仓插件已发布的 Markdown 参考、角色、示例及其业务依赖。各配置的默认技能列表仍按自身入口发现。
+月结按实际问题调用同一份[逐票抵扣规划](../plugins/finance/skills/tax-review/references/vat-planning.md)、[跨期现金简报](../plugins/finance/skills/tax-review/references/tax-cash-brief.md)和[当期及年度申报准备](../plugins/finance/skills/tax-review/references/tax-organizer.md)。角色、模板、示例和两个固定上游版本的改编位置列在[来源清单](../plugins/finance/SOURCES.md)。旧申报与顾问配置可按原资源名读回完整的共用正文，随后按返回的规范资源名解析相对链接，沿工作流读取同仓插件已发布的 Markdown 参考、角色、示例及其业务依赖。四宿主使用同一组主技能入口。
 
 `tax-period/SKILL.md` 处理“完成本期账税/申报准备、接上次补件继续”的整期目标，五阶段表按实际资料和产物选择起点；单项税额、凭证或查询直接进入相应技能。它复用既有账前、凭证、对账、税费、报表技能，按需读取合法税费方案、租赁三口径及税后现金分支，不引入事实登记或任务 DAG。交付前先核真实扣除、优惠、亏损及法定选择的可行性，再区分本期/全年/合同全周期、永久减税/递延；不能按目标税负造成本或改既定事实。
 
@@ -142,14 +142,11 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 有实际账套绑定的抵扣测算在本机生成按调用编号保留的会计交接包。包内列明逐票选择、月度税款及付款、已取得的申报和付款材料、政策引用、账表及差额。新进程通过期间复核按同一账套取回，检查来源和文件摘要；后来补件形成新版本，原方案和当时的依据可追溯。
 
-十二个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录。`skills_list` 的文件和标签来自当前 profile 的仓库内技能根。direct 的 MCP 握手随 `instructions` 发送与四宿主相同的整期入口。独立连接该服务的 Codex 客户端也能收到这条路由。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。
+九个业务 Skill、共享参考、官方插件清单、MCP 配置、许可和来源记录统一维护于 `plugins/finance`。MCP direct 及四宿主生成器均读取此目录。`skills_list` 的文件和标签来自仓库内已登记的技能根。direct 的 MCP 握手随 `instructions` 发送与四宿主相同的整期入口。独立连接该服务的 Codex 客户端也能收到这条路由。Claude 使用本仓库本地 marketplace 原位加载插件，`TAXES_AGENT_ROOT` 明确指向同一 clone 提供后端。
 
-旧 `05-reconstruction/codex/skills` 的八个专用/兼容技能保持原处；harness/legacy MCP 固定使用该目录，direct 固定使用中文插件。遗留 `FINANCE_SKILLS_DIR` 仅允许断言对应内置绝对路径，不能更改来源；外部与相对目录启动即拒绝。季度 CLI 的插件同样固定为所选 productRoot 的 `plugins/finance`，只记录和锁定一个主仓库版本；旧外部插件参数和旧工作区插件路径配置明确拒绝。
+四宿主与季度 CLI 的技能资源固定为所选产品源码里的 `plugins/finance`。`FINANCE_SKILLS_DIR` 只接受该内置绝对路径。已生成的 direct 工作区继续使用原参数与账套绑定。
 
-旧 Harness 源码、回执和回归保留为显式 `FINANCE_MCP_PROFILE=harness`；旧全量工具面须显式选 `legacy`。研究用 Harness² / SoL-Pi 默认关闭，不构成新日常业务依赖。历史元数据模型测试不能替代 direct 业务验收。
-
-回归分别验证直接工具合同、实际业务结果、自动记录完整性、四宿主配置和原生写入控制；合成数据与临时账库是自动测试边界。Pi 模型只在全部改造、审查及 PR 后按既定测试集运行。
-
+旧编排的任务状态、回执与批次恢复使用[独立维护仓库](https://github.com/huxiaoyang-code/taxes-agent-legacy-harness)里的历史入口。当前产品仅启动 direct，`FINANCE_MCP_PROFILE=harness` 或 `legacy` 会明确拒绝。已有旧批次的执行入口会在认领阶段之前拒绝，原状态和证据可留在受控本机位置供旧版复核。
 
 ## 季度账表复核与渐进披露
 
@@ -178,7 +175,7 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 结果身份为`derived_calculation`、业务状态为`unreviewed`，可独立交付，不是`finance_quarter_review`快照。中文业务账表、规则、参数和缺件影响由脚本或宿主表格产出；自动HTML只叫计算记录与文件索引，不能充当完成的业务报告。原生季度报告及其专用导出保留为可选路径。
 
-脚本使用明确程序和参数，禁用shell字符串；子进程环境不继承模型凭据或 `FINANCE_*`。已配置实际账库时，父进程把可信 `dbPath/sourceRoot/auditDir/sessionPath` 写入本机 `input.financeContext` 供只读取数，caller parameters 不能覆盖，该上下文不经 MCP 回传。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../05-reconstruction/codex/skills/harness/references/calculation.md)。
+脚本使用明确程序和参数，禁用shell字符串；子进程环境不继承模型凭据或 `FINANCE_*`。已配置实际账库时，父进程把可信 `dbPath/sourceRoot/auditDir/sessionPath` 写入本机 `input.financeContext` 供只读取数，caller parameters 不能覆盖，该上下文不经 MCP 回传。此工具按操作系统用户权限运行，不是安全沙箱；不保证任意脚本无副作用，超时也不约束后代进程和内存。记录器本身不调用写账接口，工具注解明确非只读。未通过此工具的宿主Python/表格操作不声称已被自动观测。具体配置与大小边界见[自主计算合同](../plugins/finance/skills/shared/references/calculation.md)。
 
 ## 固定账务卡片交付层
 
@@ -186,7 +183,7 @@ Claude Code 的[启动器](../05-reconstruction/codex/hosts/claude-code/launcher
 
 固定卡片默认看科目余额、银行与现金、税费及三报表，规则参数和技术记录按需追查。后台自动比较借贷、余额滚算、凭证发生、税费滚算、银行及现金独立输入差额；不判断税法适用或宣称审计通过。外部人工复核记录明确区分，未提供保持未知。金额点击保留原字段值，无法逐格映射就显示缺口。打印保留金额和待核事项。
 
-实际计算记录关联输入输出、模板版本、数据/渲染器/spec/HTML摘要及runId/callId；成功reviewPath只指主卡片，失败独立记录并回退执行索引。旧Harness编排默认关闭，正式账库权限、人审、期间、防重复和审计控制继续独立。`quarter-review-worker.mjs` 的摘要覆盖实际scope、完整月份报表与结转前重建值，前期调账导致本季期初或累计变化时摘要随之变化；捕获时间不参与业务摘要。
+实际计算记录关联输入输出、模板版本、数据/渲染器/spec/HTML摘要及runId/callId；成功reviewPath只指主卡片，失败独立记录并回退执行索引。正式账库权限、人审、期间、防重复和审计控制继续独立。`quarter-review-worker.mjs` 的摘要覆盖实际scope、完整月份报表与结转前重建值，前期调账导致本季期初或累计变化时摘要随之变化；捕获时间不参与业务摘要。
 
 
 ## 正式入账的日期、金额与来源兜底

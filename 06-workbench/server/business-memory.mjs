@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, lstatSync, realpathSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve, relative, isAbsolute, join, dirname } from 'node:path';
 import { resolveDirectFinanceTarget } from './direct-finance-target.mjs';
-import { validateSchemaValue } from './harness-schema-validation.mjs';
+import { validateSchemaValue } from './schema-validation.mjs';
 import { annotateFinanceCall, currentFinanceCall, financeAuditDirectory, withFinanceCall } from './finance-call-chain.mjs';
 import { PROJECTION_NUMBER_LIMIT } from './finance-output-policy.mjs';
 import { getAccountingRoles } from './accounting-profiles.mjs';

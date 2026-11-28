@@ -8,7 +8,7 @@ import {createHash} from 'node:crypto';
 import {callFinanceTaxSummaryCalculate,getFinanceSummarySafeDiagnostics} from '../server/finance-summary.mjs';
 import {calculateFinanceSummary} from '../server/finance-summary-engine.mjs';
 import {financeSummaryContract,FINANCE_SUMMARY_INPUT_SCHEMA,isFinanceSummaryAmountPointer} from '../server/finance-summary-contracts.mjs';
-import {validateSchemaValue} from '../server/harness-schema-validation.mjs';
+import {validateSchemaValue} from '../server/schema-validation.mjs';
 const root=mkdtempSync(join(tmpdir(),'finance-summary-synthetic-')),dbPath=join(root,'synthetic.db'),auditDir=join(root,'audit');
 const db=new DatabaseSync(dbPath);db.exec('CREATE TABLE audit_database_instances(instance_id TEXT,is_active INTEGER); CREATE TABLE account_sets(id INTEGER); CREATE TABLE import_enterprise_account_sets(account_set_id INTEGER,enterprise_key TEXT)');db.prepare('INSERT INTO audit_database_instances VALUES(?,1)').run('SYNTHETIC-INSTANCE');for(const id of [1,2]){db.prepare('INSERT INTO account_sets VALUES(?)').run(id);db.prepare('INSERT INTO import_enterprise_account_sets VALUES(?,?)').run(id,`PRIVATE-SUBJECT-${id}`);}db.close();
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex'),dbBefore=sha(readFileSync(dbPath));let counter=0;

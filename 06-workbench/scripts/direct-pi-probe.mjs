@@ -5,7 +5,7 @@ import {readFileSync,mkdirSync} from 'node:fs';
 import {resolve,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
-import {listedToolsForProfile} from '../../05-reconstruction/codex/mcp/finance-mcp/tool-profile.mjs';
+import {listDirectTools} from '../../05-reconstruction/codex/mcp/finance-mcp/direct-tool-catalog.mjs';
 import {DEFAULT_TOOL_MODIFIERS,MAIN_TOOLS} from '../../05-reconstruction/codex/hosts/pi/launcher.mjs';
 const piRoot=process.argv[2];if(!piRoot||!isAbsolute(piRoot))throw Error('explicit_pi_package_root_required');
 const pkg=JSON.parse(readFileSync(join(piRoot,'package.json'),'utf8'));assert.equal(pkg.name,'@earendil-works/pi-coding-agent');assert.equal(pkg.version,'1.1.0');
@@ -22,7 +22,7 @@ try{
   await connection.getClient();assert.equal(connection.state,'connected');
   const names=connection.tools.map(tool=>tool.name);assert.ok(names.includes('finance_workpaper'));assert.ok(names.includes('finance_rules'));assert.equal(names.some(name=>name.startsWith('harness_')),false);
   assert.equal(names.includes('ledger_query'),process.env.FINANCE_QUERY_DISCOVERY!=='canonical','工作区发现设置须传到 Pi 的真实 MCP 子进程');
-  const expectedTools=listedToolsForProfile('direct',process.env.FINANCE_QUERY_DISCOVERY).map(tool=>tool.name).sort();
+  const expectedTools=listDirectTools(process.env.FINANCE_QUERY_DISCOVERY).map(tool=>tool.name).sort();
   assert.deepEqual([...names].sort(),expectedTools);
   const resources=await connection.callTool('skills_list',{},{});assert.notEqual(resources.isError,true);
   const catalog=JSON.parse(resources.content[0].text);
