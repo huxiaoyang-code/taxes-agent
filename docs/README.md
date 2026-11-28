@@ -6,6 +6,7 @@
 | --- | --- |
 | 项目开工入口 | [AGENTS.md](../AGENTS.md) |
 | 分工、worktree、PR、独立验收与数据边界 | [开发与协作规范](DEVELOPMENT.md) |
+| 核心目录、模块调用关系和修复热点 | [仓库架构地图](architecture-map.md) |
 | 当前 direct 调用、留痕、记忆和正式入账 | [架构与调用链](AGENT-ARCHITECTURE.md) |
 | 按业务定位实现、协议、脚本和测试 | [代码索引](CODE-INDEX.md) |
 | 模块依赖、循环和高耦合文件 | [仓库依赖体检](REPOSITORY-DEPENDENCIES.md) |
